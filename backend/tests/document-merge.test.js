@@ -223,10 +223,13 @@ test('document_edit merge fast-path: non-docx sources fall back to extracted tex
 
 test('document_edit NON-merge instruction still uses the normal editors', async () => {
   const pa = path.join(os.tmpdir(), `merge-n1-${Date.now()}.docx`);
-  fs.writeFileSync(pa, await makeDocx(['hola']));
   const pb = path.join(os.tmpdir(), `merge-n2-${Date.now()}.docx`);
-  fs.writeFileSync(pb, await makeDocx(['mundo']));
+  const originals = [await makeDocx(['Holaa']), await makeDocx(['Mundoo'])];
+  fs.writeFileSync(pa, originals[0]);
+  fs.writeFileSync(pb, originals[1]);
+  const corrected = { 'a.docx': 'Hola', 'b.docx': 'Mundo' };
   const docAgentCalls = [];
+  const events = [];
   const tool = buildDocumentEditTool({
     prisma: fakePrisma([
       { id: 'f1', userId: 'u1', path: pa, originalName: 'a.docx', filename: 'a.docx' },
@@ -235,21 +238,63 @@ test('document_edit NON-merge instruction still uses the normal editors', async 
     sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => null },
     runDocumentAgent: async (options) => {
       docAgentCalls.push(options);
-      return { stoppedReason: 'final', outputs: options.files.map((file) => ({
-        name: `edited-${file.name}`, buffer: Buffer.from(`edited:${file.name}`), valid: true,
-      })) };
+      return { stoppedReason: 'final', outputs: await Promise.all(options.files.map(async (file) => ({
+        name: `edited-${file.name}`, buffer: await makeDocx([corrected[file.name]]), valid: true,
+      }))) };
     },
   });
-  const out = await tool.execute(
-    { instruction: 'corrige la ortografía de ambos documentos' },
-    { userId: 'u1', chatId: 'c1', fileIds: ['f1', 'f2'], signal: new AbortController().signal, onEvent: () => {} },
-  );
-  assert.equal(docAgentCalls.length, 2, 'non-merge edits validate each original separately');
-  assert.ok(docAgentCalls.every((call) => call.files.length === 1));
-  assert.equal(out.ok, true);
-  assert.equal(out.edited.length, 2);
-  fs.rmSync(pa, { force: true });
-  fs.rmSync(pb, { force: true });
+  try {
+    const out = await tool.execute(
+      { instruction: 'corrige la ortografía de ambos documentos' },
+      { userId: 'u1', chatId: 'c1', fileIds: ['f1', 'f2'], signal: new AbortController().signal, onEvent: (event) => events.push(event) },
+    );
+    assert.equal(docAgentCalls.length, 2, 'non-merge edits validate each original separately');
+    assert.ok(docAgentCalls.every((call) => call.files.length === 1));
+    assert.equal(out.ok, true);
+    assert.equal(out.edited.length, 2);
+    const cards = events.filter((event) => event.type === 'file_artifact');
+    assert.equal(cards.length, 2, 'both readable Word files produce download cards');
+    for (const card of cards) {
+      const sourceName = card.artifact.filename.replace(/^edited-/, '');
+      const binaryName = fs.readdirSync(ARTIFACT_DIR).find((name) => name.endsWith(`-${card.artifact.filename}`));
+      assert.ok(binaryName, 'the delivered Word bytes are persisted');
+      const { value: text } = await mammoth.extractRawText({ buffer: fs.readFileSync(path.join(ARTIFACT_DIR, binaryName)) });
+      assert.equal(text.trim(), corrected[sourceName]);
+    }
+    assert.deepEqual(fs.readFileSync(pa), originals[0], 'the first original remains intact');
+    assert.deepEqual(fs.readFileSync(pb), originals[1], 'the second original remains intact');
+  } finally {
+    fs.rmSync(pa, { force: true });
+    fs.rmSync(pb, { force: true });
+  }
+});
+
+test('document_edit rejects plaintext marked valid as a Word output without download cards', async () => {
+  const pa = path.join(os.tmpdir(), `merge-invalid-${Date.now()}.docx`);
+  const original = await makeDocx(['Holaa']);
+  fs.writeFileSync(pa, original);
+  const beforeArtifacts = fs.readdirSync(ARTIFACT_DIR).sort();
+  const events = [];
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: pa, originalName: 'a.docx', filename: 'a.docx' }]),
+    sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => null },
+    runDocumentAgent: async (options) => ({ stoppedReason: 'final', outputs: options.files.map((file) => ({
+      name: `fake-${file.name}`, buffer: Buffer.from(`edited:${file.name}`), valid: true,
+    })) }),
+  });
+  try {
+    const out = await tool.execute(
+      { instruction: 'corrige la ortografía del documento' },
+      { userId: 'u1', chatId: 'c1', fileIds: ['f1'], signal: new AbortController().signal, onEvent: (event) => events.push(event) },
+    );
+    assert.equal(out.ok, false, 'valid=true cannot certify arbitrary bytes as Word');
+    assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+    assert.ok(out.edited.every((file) => !file.downloadUrl));
+    assert.deepEqual(fs.readdirSync(ARTIFACT_DIR).sort(), beforeArtifacts, 'invalid bytes are not persisted');
+    assert.deepEqual(fs.readFileSync(pa), original, 'the original Word remains intact');
+  } finally {
+    fs.rmSync(pa, { force: true });
+  }
 });
 
 // ─── Routing gate ───────────────────────────────────────────────────────────

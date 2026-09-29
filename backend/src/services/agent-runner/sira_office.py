@@ -41,8 +41,11 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from xml.sax.saxutils import escape as xml_escape
+from xml.parsers import expat
 
 from lxml import etree
 
@@ -2440,8 +2443,8 @@ def semantic_changes(before: str, after: str) -> List[Dict[str, Any]]:
     return []
 
 
-def recalc_values(path: str, cells: List[str]) -> Dict[str, Any]:
-    """Recalcula una COPIA con LibreOffice y devuelve los valores de `cells` ("Hoja1!C5" o "C5")."""
+def _recalc_workbook(path: str, cells: List[str]) -> Tuple[Dict[str, Any], OfficePackage]:
+    """Recalcula una copia; conserva sus bytes para sincronizar cachés después del proof."""
     tmp = tempfile.mkdtemp(prefix="sira-recalc-")
     try:
         src = os.path.join(tmp, "in_" + os.path.basename(path))
@@ -2459,9 +2462,217 @@ def recalc_values(path: str, cells: List[str]) -> Dict[str, Any]:
                 continue
             c = _xl_get_cell(pkg.xml(part), ref, create=False)
             res[spec] = _xl_cell_value(c, _xl_shared_strings(pkg))[0] if c is not None else None
-        return res
+        return res, pkg
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def recalc_values(path: str, cells: List[str]) -> Dict[str, Any]:
+    """Consulta de solo lectura: nunca reemplaza el documento original con la copia de LibreOffice."""
+    return _recalc_workbook(path, cells)[0]
+
+
+def _formula_cache_cells(root: etree._Element) -> set:
+    all_cells = root.findall(f"{S('sheetData')}/{S('row')}/{S('c')}")
+    if any(c.find(S('f')) is not None for c in all_cells) and any(not c.get('r') for c in all_cells):
+        # r is optional in OOXML, but implicit positions cannot be mapped
+        # safely to the recalculated copy by this surgical editor.
+        raise EditError('la hoja contiene referencias de celda implícitas; no se pueden guardar sus resultados con precisión')
+    source_cells = [c for c in all_cells if c.get("r")]
+    cells = {c.get("r"): c for c in source_cells}
+    if len(cells) != len(source_cells):
+        raise EditError("referencia de celda duplicada en la hoja")
+    targets, ranges = set(), []
+    for ref, cell in cells.items():
+        formula = cell.find(S("f"))
+        if formula is None:
+            continue
+        targets.add(ref)
+        if formula.get("t") == "array" and formula.get("ref"):
+            bounds = formula.get("ref").split(":")
+            first = parse_ref(bounds[0]); last = parse_ref(bounds[-1])
+            ranges.append((first[2], last[2], first[1], last[1]))
+    # Only array ranges have result-only cells. Shared followers each have
+    # their own <f>; a manual override within ref must stay untouched.
+    # Visit existing cells, never expand a huge range into new rows/cells.
+    ordered = sorted((parse_ref(ref)[2], parse_ref(ref)[1], ref) for ref in cells)
+    row_numbers = [item[0] for item in ordered]
+    visits = 0
+    for top, bottom, left, right in ranges:
+        if top > bottom or left > right:
+            raise EditError("rango de fórmula inválido")
+        for _, column, ref in ordered[bisect_left(row_numbers, top):bisect_right(row_numbers, bottom)]:
+            visits += 1
+            if visits > 200_000:
+                raise EditError("el libro supera el límite de sincronización de cachés de fórmulas")
+            if left <= column <= right:
+                targets.add(ref)
+    return targets
+
+
+def _worksheet_cell_spans(xml: bytes) -> List[Dict[str, Any]]:
+    """Expat locates real spreadsheet children without rewriting any XML bytes."""
+    parser = expat.ParserCreate(namespace_separator='}')
+    stack, cells = [], []
+    active = None
+    names = {name: S(name)[1:] for name in ('worksheet', 'sheetData', 'row', 'c', 'f', 'v')}
+
+    def tag_end(start):
+        quote, pos = None, start
+        while pos < len(xml):
+            char = xml[pos:pos + 1]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in (b'"', b"'"):
+                quote = char
+            elif char == b'>':
+                return pos + 1
+            pos += 1
+        raise EditError('etiqueta XML incompleta')
+
+    def start(name, attrs):
+        nonlocal active
+        if name == names['c'] and stack == [names['worksheet'], names['sheetData'], names['row']]:
+            offset = parser.CurrentByteIndex
+            end = tag_end(offset)
+            tag = re.match(rb'<([^\s/>]+)', xml[offset:end])
+            active = {'start': offset, 'open_end': end, 'self_closing': xml[end - 2:end] == b'/>',
+                      'tag': tag.group(1), 'attrs_start': offset + tag.end(),
+                      'attrs_end': end - (2 if xml[end - 2:end] == b'/>' else 1), 'ref': attrs.get('r')}
+        elif active is not None and len(stack) == 4 and name in (names['f'], names['v']):
+            key = 'f' if name == names['f'] else 'v'
+            if key in active:
+                raise EditError('fórmula o valor duplicado en la celda')
+            offset = parser.CurrentByteIndex
+            end = tag_end(offset)
+            active[key] = {'start': offset, 'self_closing': xml[end - 2:end] == b'/>'}
+        stack.append(name)
+
+    def finish(name):
+        nonlocal active
+        if active is not None and len(stack) == 5 and name in (names['f'], names['v']):
+            key = 'f' if name == names['f'] else 'v'
+            span = active[key]
+            span['end'] = parser.CurrentByteIndex if span['self_closing'] else tag_end(parser.CurrentByteIndex)
+        elif active is not None and len(stack) == 4 and name == names['c']:
+            active['close_start'] = active['open_end'] if active['self_closing'] else parser.CurrentByteIndex
+            active['end'] = parser.CurrentByteIndex if active['self_closing'] else tag_end(parser.CurrentByteIndex)
+            cells.append(active); active = None
+        stack.pop()
+
+    def reject_doctype(*_):
+        raise EditError('DTD no permitido en la hoja de cálculo')
+    parser.StartElementHandler, parser.EndElementHandler = start, finish
+    parser.StartDoctypeDeclHandler = reject_doctype
+    try:
+        parser.Parse(xml, True)
+    except expat.ExpatError as exc:
+        raise EditError(f'XML de hoja inválido: {exc}') from exc
+    return cells
+
+
+def _sync_formula_caches(path: str, calculated: OfficePackage) -> Dict[str, Any]:
+    """Copia solo <v>/tipo de resultado; fórmulas, estilos y demás XML conservan sus bytes."""
+    original = OfficePackage(path)
+    calculated_sheets = {s["name"]: s["part"] for s in xl_sheets(calculated)}
+    strings = _xl_shared_strings(calculated)
+    attribute_pattern = re.compile(rb'''(?P<name>[^\s=<>/"']+)\s*=\s*(?P<quote>["'])(?P<value>.*?)(?P=quote)''', re.S)
+    def attributes_of(attrs):
+        # Consume complete quoted attributes, never search inside their values.
+        found, pos = {}, 0
+        while pos < len(attrs):
+            while pos < len(attrs) and attrs[pos:pos + 1].isspace():
+                pos += 1
+            if pos == len(attrs):
+                break
+            match = attribute_pattern.match(attrs, pos)
+            if match is None:
+                raise EditError("no se pudieron localizar los atributos XML de la celda")
+            found[match.group('name')] = match
+            pos = match.end()
+        return found
+    changes, changed_parts = [], []
+    for sheet in xl_sheets(original):
+        targets = _formula_cache_cells(original.xml(sheet["part"]))
+        if not targets:
+            continue
+        calculated_part = calculated_sheets.get(sheet["name"])
+        if not calculated_part:
+            raise EditError(f"no se recalculó la hoja «{sheet['name']}»")
+        computed_cells = calculated.xml(calculated_part).findall(f"{S('sheetData')}/{S('row')}/{S('c')}")
+        computed = {c.get("r"): c for c in computed_cells}
+        if len(computed) != len(computed_cells):
+            raise EditError('referencia duplicada en el libro recalculado')
+        results = {}
+        for ref in targets:
+            cell = computed.get(ref)
+            if cell is None:
+                raise EditError(f"falta el resultado recalculado de {sheet['name']}!{ref}")
+            kind = cell.get("t", "n")
+            value = cell.find(S("v"))
+            text = value.text or "" if value is not None else None
+            if kind in ("s", "inlineStr"):
+                if kind == "s" and (text is None or not text.isdigit() or int(text) >= len(strings)):
+                    raise EditError(f"caché de texto inválida en {ref}")
+                text = str(_xl_cell_value(cell, strings)[0] or ""); kind = "str"
+            try:
+                valid_number = kind != "n" or bool(text) and math.isfinite(float(text))
+            except (ValueError, TypeError):
+                valid_number = False
+            if kind not in ("n", "str", "b", "e") or text is None or not valid_number or (kind == "b" and text not in ("0", "1")):
+                raise EditError(f"caché de fórmula inválida en {ref}")
+            results[ref] = (kind, text)
+        seen = set()
+        before = original.data[sheet["part"]]
+
+        def patch_cell(cell):
+            attrs = before[cell['attrs_start']:cell['attrs_end']]
+            body = before[cell['open_end']:cell['close_start']]
+            attributes = attributes_of(attrs)
+            ref = cell['ref']
+            if ref in seen:
+                raise EditError("referencia de fórmula duplicada en la hoja")
+            seen.add(ref)
+            kind, text = results[ref]
+            existing_type = attributes.get(b't')
+            if existing_type:
+                attrs = attrs[:existing_type.start('value')] + kind.encode("ascii") + attrs[existing_type.end('value'):]
+            elif kind != "n":
+                attrs += b' t="' + kind.encode("ascii") + b'"'
+            prefix = cell['tag'].rsplit(b':', 1)[0] + b':' if b':' in cell['tag'] else b''
+            cache = b"<" + prefix + b"v>" + xml_escape(text).encode("utf-8") + b"</" + prefix + b"v>"
+            value = cell.get('v')
+            if value:
+                body = body[:value['start'] - cell['open_end']] + cache + body[value['end'] - cell['open_end']:]
+            else:
+                formula = cell.get('f')
+                at = formula['end'] - cell['open_end'] if formula else 0
+                body = body[:at] + cache + body[at:]
+            closing = before[cell['close_start']:cell['end']] if not cell['self_closing'] else b"</" + prefix + b"c>"
+            replacement = b"<" + prefix + b"c" + attrs + b">" + body + closing
+            if replacement != before[cell['start']:cell['end']]:
+                changes.append(f"{sheet['name']}!{ref}")
+            return replacement
+
+        # Only direct worksheet/sheetData/row/c children in Excel's namespace.
+        replacements = [(cell['start'], cell['end'], patch_cell(cell))
+                        for cell in _worksheet_cell_spans(before) if cell['ref'] in results]
+        cursor, chunks = 0, []
+        for start, end, replacement in replacements:
+            chunks.extend((before[cursor:start], replacement)); cursor = end
+        chunks.append(before[cursor:])
+        after = b''.join(chunks)
+        if seen != targets:
+            raise EditError("no se pudo sincronizar cada caché de fórmula sin reescribir la hoja")
+        if after != before:
+            # Save raw patched bytes: serializing a full tree would change
+            # unrelated namespace declarations/whitespace in the worksheet.
+            original.data[sheet["part"]] = after
+            changed_parts.append(sheet["part"])
+    if changed_parts:
+        original.save(path)
+    return {"updated": len(changes), "cells": changes, "parts": changed_parts}
 
 
 def _norm_ws(s: str) -> str:
@@ -2519,7 +2730,8 @@ def make_thumb(png: str, out_jpg: str, width: int = 360, quality: int = 72) -> s
 
 
 def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expect: Optional[Dict[str, Any]] = None,
-           max_composites: int = 3, scan_threshold_pages: int = 12, max_detail_pages: int = 8) -> Dict[str, Any]:
+           max_composites: int = 3, scan_threshold_pages: int = 12, max_detail_pages: int = 8,
+           persist_formula_cache: bool = False) -> Dict[str, Any]:
     """
     Verifica `after` contra `before` (o solo `after` si es un documento nuevo).
     Documentos largos: primero un barrido rápido a 36 ppp de TODAS las páginas y comparación
@@ -2626,8 +2838,9 @@ def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expec
         vb = report["visual"]
         checks.append({"check": "misma cantidad de páginas", "ok": vb["page_count_before"] == vb["page_count_after"],
                        "detail": f"{vb['page_count_before']} → {vb['page_count_after']}"})
+    calculated = None
     if expect.get("cells") and fmt == "xlsx":
-        vals = recalc_values(after, list(expect["cells"].keys()))
+        vals, calculated = _recalc_workbook(after, list(expect["cells"].keys()))
         for spec, want in expect["cells"].items():
             got = vals.get(spec)
             if isinstance(want, (int, float)) and isinstance(got, (int, float)):
@@ -2642,6 +2855,16 @@ def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expec
                        "detail": f"otras partes: {bad}" if bad else None})
     report["checks"] = checks
     report["ok"] = all(c["ok"] for c in checks)
+    if report["ok"] and fmt == "xlsx" and persist_formula_cache:
+        # Check the user's permitted edit before persisting derived results.
+        # LibreOffice's rewritten workbook is never used as the deliverable.
+        pkg = OfficePackage(after)
+        if any(_formula_cache_cells(pkg.xml(s["part"])) for s in xl_sheets(pkg)):
+            if calculated is None:
+                _, calculated = _recalc_workbook(after, [])
+            report["formula_cache"] = _sync_formula_caches(after, calculated)
+            if before:
+                report["delivery_parts"] = part_diff(before, after)
     report["summary"] = summarize(report)
     return report
 
@@ -2706,6 +2929,8 @@ def summarize(report: Dict[str, Any]) -> str:
     if report.get("checks"):
         L.append("• Checks: " + " · ".join(("✓ " if c["ok"] else "✗ ") + c["check"] + (f" ({c['detail']})" if c.get("detail") and not c["ok"] else "")
                                          for c in report["checks"]))
+    if report.get("formula_cache"):
+        L.append(f"• Resultados de fórmulas guardados: {report['formula_cache']['updated']} celda(s); fórmulas y estilos conservados.")
     L.append("• Resultado: " + ("OK" if report.get("ok") else "REVISAR — hay checks fallidos"))
     if report.get("composites"):
         L.append("• Imagen antes/después: " + ", ".join(report["composites"]))
@@ -2732,7 +2957,8 @@ def _dispatch(cmd: str, args: Dict[str, Any]) -> Dict[str, Any]:
         rep.pop("checks", None)
         return rep
     if cmd == "verify":
-        return verify(args.get("before"), args["after"], args["outdir"], int(args.get("dpi", 110)), args.get("expect"))
+        return verify(args.get("before"), args["after"], args["outdir"], int(args.get("dpi", 110)), args.get("expect"),
+                      persist_formula_cache=bool(args.get("persist_formula_cache", False)))
     if cmd == "recalc":
         return {"ok": True, "values": recalc_values(args["path"], args.get("cells", []))}
     raise EditError(f"comando desconocido «{cmd}» (inspect, edit, render, diff, verify, recalc)")

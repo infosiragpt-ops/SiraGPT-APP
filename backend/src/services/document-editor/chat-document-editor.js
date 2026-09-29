@@ -473,7 +473,7 @@ async function editDocxImage({ wordFile, imageEdit, instruction, prisma, userId,
   if (proof?.passed !== true) return { ok: false, code: 'NO_VALID_OUTPUT', message: MESSAGES.NO_VALID_OUTPUT };
   signal?.throwIfAborted();
   const validation = { passed: true, format: 'docx', checks: proof.checks, details: proof.details };
-  const saved = deps.saveArtifact({ filename: wordFile.name, base64: edited.buffer.toString('base64'), mime: MIME_BY_EXT.docx,
+  const saved = await deps.saveArtifact({ filename: wordFile.name, base64: edited.buffer.toString('base64'), mime: MIME_BY_EXT.docx,
     ownerUserId: userId, chatId, category: 'agent_artifact', validation });
   const artifact = savedArtifact(saved, saved.validation || validation);
   return { ok: true, artifacts: [artifact], summary: `Listo. ${imageEdit.kind === 'recolor_image' ? 'Recoloreé' : 'Reemplacé'} la imagen indicada en ${wordFile.name}, conservando el resto del documento. El original se conserva.` };
@@ -688,6 +688,7 @@ function sourceLineage(source) {
 }
 
 function savedArtifact(saved, validation) {
+  validation = saved.validation || validation;
   return { id: saved.id, filename: saved.filename, format: saved.format, mime: saved.mime,
     sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl, ...(validation ? { validation } : {}) };
 }
@@ -732,7 +733,7 @@ async function prepareAndPublishDocumentBatch(options, sources, files, deps) {
   options.signal?.throwIfAborted();
   const artifacts = [];
   try {
-    for (const input of prepared) artifacts.push(savedArtifact(deps.saveArtifact(input), input.validation));
+    for (const input of prepared) artifacts.push(savedArtifact(await deps.saveArtifact(input), input.validation));
   } catch (err) {
     // Artifact storage is not transactional. Surface already published files
     // rather than falsely claiming rollback or hiding their usable identity.
@@ -851,9 +852,10 @@ async function runResolvedDocumentEdit({
     const files = resolved?.files || await loadSourceFiles(sources, deps);
     if (sources.length > 1) return runDocumentEditBatch({ prisma, userId, chatId, fileIds, instruction, llm, signal, precisionOnly, onEvent }, sources, files, deps);
     const originalSaveArtifact = deps.saveArtifact;
-    deps.saveArtifact = (input) => {
+    deps.saveArtifact = async (input) => {
       const validation = { ...input.validation, documentEdit: sourceLineage(sources[0]) };
-      return { ...originalSaveArtifact({ ...input, validation }), validation };
+      const saved = await originalSaveArtifact({ ...input, validation });
+      return { ...saved, validation: saved.validation || validation };
     };
     const batchContext = resolved?.batchNames
       ? `Este paso edita únicamente ${JSON.stringify(sources[0].name)} del conjunto ${JSON.stringify(resolved.batchNames)}. Los demás archivos se procesan en pasos separados y se entregan juntos; no afirmes que faltan ni pidas volver a adjuntarlos. Aplica solo los cambios autorizados para este archivo. Si un cambio concreto exige datos de otro documento que no están en este paso, identifica esa dependencia específica sin inventar contenido.`
@@ -869,7 +871,7 @@ async function runResolvedDocumentEdit({
           return precisionFailure({ code: 'DOCX_EDIT_VALIDATION_FAILED', message: MESSAGES.NO_VALID_OUTPUT });
         }
         emit({ label: 'Verificando el archivo editado' });
-        const saved = deps.saveArtifact({
+        const saved = await deps.saveArtifact({
           filename: files[0].name,
           base64: edited.buffer.toString('base64'),
           mime: MIME_BY_EXT.docx,
@@ -903,7 +905,7 @@ async function runResolvedDocumentEdit({
         requestText: precisionInstruction(instruction) });
       if (titleEdit) {
         signal?.throwIfAborted();
-        const saved = deps.saveArtifact({ filename: wordFile.name, base64: titleEdit.buffer.toString('base64'),
+        const saved = await deps.saveArtifact({ filename: wordFile.name, base64: titleEdit.buffer.toString('base64'),
           mime: MIME_BY_EXT.docx, ownerUserId: userId, chatId, category: 'agent_artifact', validation: titleEdit.validation });
         return { ok: true, artifacts: [savedArtifact(saved, saved.validation)],
           summary: `Apliqué el cambio literal en el título de ${wordFile.name}, conservando el resto del documento.` };
@@ -953,7 +955,7 @@ async function runResolvedDocumentEdit({
         ...edited.verification,
         changes: (edited.changes || []).filter((change) => change.op !== 'warning').slice(0, 60),
       };
-      const saved = deps.saveArtifact({
+      const saved = await deps.saveArtifact({
         filename: edited.filename,
         base64: edited.buffer.toString('base64'),
         mime: edited.mime,
@@ -1061,24 +1063,37 @@ async function runResolvedDocumentEdit({
         message: MESSAGES.DOCUMENT_EDIT_INCOMPLETE };
     }
 
-    const artifacts = outputs.map((out) => {
+    // PDF readers are asynchronous: retain the real readback object through
+    // the synchronous store, including the batch's prepare-only store.
+    const pdfReadbacks = new Map();
+    for (const out of outputs.filter((output) => extensionOf(output.name) === 'pdf')) {
+      const structure = await require('../agents/artifact-delivery-validation').validateArtifactBytes('pdf', out.buffer);
+      if (!structure.passed) return { ok: false, code: 'NO_VALID_OUTPUT', message: MESSAGES.NO_VALID_OUTPUT };
+      pdfReadbacks.set(out, structure);
+    }
+    const artifacts = [];
+    for (const out of outputs) {
       const ext = extensionOf(out.name);
       // Follow-ups on a delivered version get v2, v3… instead of the same
       // "-editado" name every time.
       const versioned = followUpOnDelivered && sources.length === 1
         ? (deps.docxEngine.editedFilename || require('../docx-engine').editedFilename)(sources[0].name.replace(/\.[^.]+$/, `.${ext}`))
         : out.name;
-      const saved = deps.saveArtifact({
+      const saved = await deps.saveArtifact({
         filename: versioned,
         base64: out.buffer.toString('base64'),
         mime: MIME_BY_EXT[ext] || 'application/octet-stream',
         ownerUserId: userId,
         chatId,
         category: 'agent_artifact',
-        validation: { passed: true, ...(out.changeReport ? { changes: out.changeReport } : {}) },
+        validation: { passed: true, ...(pdfReadbacks.has(out) ? { structure: pdfReadbacks.get(out) } : {}),
+          ...(out.changeReport ? { changes: out.changeReport } : {}) },
       });
-      return savedArtifact(saved, saved.validation);
-    });
+      artifacts.push(savedArtifact(saved, saved.validation));
+    }
+    if (artifacts.some((artifact) => artifact.validation?.passed === false)) {
+      return { ok: false, code: 'NO_VALID_OUTPUT', message: MESSAGES.NO_VALID_OUTPUT };
+    }
     const names = artifacts.map((artifact) => artifact.filename).join(', ');
     const summary = cleanSummary(result.finalText) || `Listo. Apliqué los cambios y te dejo el archivo editado: ${names}.`;
     return { ok: true, artifacts, summary };
@@ -1116,7 +1131,7 @@ function resolveDeps(injected) {
     objectStorage: lazy('objectStorage', () => require('../object-storage')),
     readSourceBuffer: lazy('readSourceBuffer', () => require('../source-preserving-document-edit').readSourceBuffer),
     extractFileIds: lazy('extractFileIds', () => require('../message-attachments').extractFileIdsFromMessageFiles),
-    saveArtifact: lazy('saveArtifact', () => require('../agents/task-tools').saveArtifact),
+    saveArtifact: lazy('saveArtifact', () => require('../agents/task-tools').saveVerifiedArtifact),
     // Edición milimétrica (Fase G): Excel / PowerPoint run on the AgentRunner
     // office engine; PDFs and other formats keep the sandbox doc-agent loop
     // (its PDF skills). SIRAGPT_DOCUMENT_EDITOR_ENGINE=legacy keeps that loop

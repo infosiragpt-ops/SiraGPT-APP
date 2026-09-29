@@ -31,7 +31,7 @@ async function pairOutputs(suffix) {
   }, sav);
   assert.equal(verdict.ok, true);
   sav.validation = verdict.validation;
-  return [sav, { name: `muestra-${suffix}.xlsx`, buffer: Buffer.from(`xlsx-${suffix}`), valid: true }];
+  return [sav, { name: `muestra-${suffix}.xlsx`, buffer: fs.readFileSync(path.join(__dirname, 'fixtures/office/presupuesto_demo.xlsx')), valid: true }];
 }
 
 function metadataForOwner(ownerUserId) {

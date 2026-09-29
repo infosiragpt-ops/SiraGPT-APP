@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const PizZip = require('pizzip');
 const {
   runAdvancedDocumentPipeline,
@@ -175,4 +177,36 @@ test('document pipeline generates a validated XLSX without missing runtime depen
   assert.match(sheetXml, /conditionalFormatting/, 'expected conditional formatting');
   assert.match(sheetXml, /dataValidation/, 'expected data validation');
   assert.match(sheetXml, /<pane\b/, 'expected frozen pane');
+
+  // Reopen the delivered bytes with the native workbook parser: an XML marker
+  // alone does not prove a usable validation rule, range or error action.
+  const readbackPath = path.join(outputDir, 'delivered-readback.xlsx');
+  await fs.writeFile(readbackPath, result.buffer);
+  const { stdout } = await promisify(execFile)(process.env.SANDBOX_PYTHON || 'python3', ['-c', `
+import json, sys
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+book = load_workbook(sys.argv[1], data_only=False)
+sheet = book.worksheets[0]
+numeric = [get_column_letter(col) for col in range(1, sheet.max_column + 1)
+           if any(isinstance(sheet.cell(row, col).value, (int, float)) and not isinstance(sheet.cell(row, col).value, bool)
+                  for row in range(2, sheet.max_row + 1))]
+rules = [{"range": str(rule.sqref), "type": rule.type, "formula": rule.formula1,
+          "allowBlank": rule.allowBlank, "showError": rule.showErrorMessage,
+          "errorStyle": rule.errorStyle, "error": rule.error}
+         for rule in sheet.data_validations.dataValidation]
+print(json.dumps({"numericColumns": numeric, "rules": rules}))
+`, readbackPath], { timeout: 10_000, maxBuffer: 64 * 1024 });
+  const reopened = JSON.parse(stdout);
+  assert.ok(reopened.numericColumns.length > 0);
+  assert.deepEqual(reopened.rules.map((rule) => rule.range).sort(), reopened.numericColumns.map((col) => `${col}2:${col}1048576`).sort());
+  for (const rule of reopened.rules) {
+    const col = /^([A-Z]+)2:/.exec(rule.range)?.[1];
+    assert.equal(rule.type, 'custom');
+    assert.equal(rule.formula, `ISNUMBER(${col}2)`);
+    assert.equal(rule.allowBlank, true);
+    assert.equal(rule.showError, true);
+    assert.equal(rule.errorStyle, 'stop');
+    assert.match(rule.error, /número/);
+  }
 });

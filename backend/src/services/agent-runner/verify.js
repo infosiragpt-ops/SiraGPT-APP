@@ -112,6 +112,14 @@ function isSavMutation(step) {
     && step.changedOutputs.every((path) => SAV_PATH_RE.test(outputPath(path)));
 }
 
+function isDataMutation(step) {
+  if (!isRealEdit(step)) return false;
+  const paths = EXEC_TOOLS.has(step.tool) ? step.changedOutputs
+    : ['write_file', 'str_replace', 'edit_file'].includes(step.tool) ? [step.args?.path] : [];
+  return Array.isArray(paths) && paths.length > 0
+    && paths.every((path) => /\.(?:json|xml|ya?ml|csv|txt|md|sps)$/i.test(outputPath(path)));
+}
+
 function legacyGate(steps) {
   const lastEdit = lastIndex(steps, (s) => EDIT_TOOLS.has(s.tool) && s.ok !== false);
   if (lastEdit === -1) return { needed: false, reason: null };
@@ -181,7 +189,9 @@ function needsVerification(steps = [], { strict = officeEngineOn() } = {}) {
   // outputs exclusively; collectValidOutputs reopens those exact bytes with
   // pyreadstat before persistence. Office and other outputs still need their
   // own verification, regardless of the order in which SAV was generated.
-  const lastEdit = lastIndex(list, (step) => isRealEdit(step) && !isSavMutation(step));
+  // Data files have no visual canvas. Their real parser readback is enforced
+  // by collectValidOutputs/persistOutputs; a preview cannot verify JSON cells.
+  const lastEdit = lastIndex(list, (step) => isRealEdit(step) && !isSavMutation(step) && !isDataMutation(step));
   if (lastEdit === -1 || lastEdit <= lastOfficeEdit) return { needed: false, reason: null };
   const lastCheck = lastIndex(list, (s) => s && (s.tool === 'render_preview' || s.tool === VISUAL_VERIFY));
   if (lastCheck < lastEdit) return { needed: true, reason: 'missing_preview' };

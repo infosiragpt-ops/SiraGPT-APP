@@ -4,16 +4,35 @@ const FORMAT_SPECS = [
   { format: 'docx', label: 'Word', pattern: /\b(docx|word)\b/i },
   { format: 'xlsx', label: 'Excel', pattern: /\b(xlsx|excel|hoja\s+de\s+c[aá]lculo)\b/i },
   { format: 'sav', label: 'SPSS (.sav)', pattern: /\b(?:spss|sav)\b/i },
+  { format: 'sps', label: 'Sintaxis SPSS (.sps)', pattern: /\bsps\b/i },
   { format: 'pptx', label: 'PowerPoint', pattern: /\b(pptx?|power\s*point|diapositivas?|slides?)\b/i },
   { format: 'pdf', label: 'PDF', pattern: /\bpdf\b/i },
   { format: 'csv', label: 'CSV', pattern: /\bcsv\b/i },
   { format: 'svg', label: 'SVG', pattern: /\bsvg\b/i },
   { format: 'md', label: 'Markdown', pattern: /\b(markdown|\.md)\b/i },
   { format: 'txt', label: 'texto', pattern: /\b(txt|archivo\s+de\s+texto)\b/i },
+  { format: 'json', label: 'JSON', pattern: /\bjson\b/i },
+  { format: 'html', label: 'HTML', pattern: /\bhtml?\b/i },
+  { format: 'rtf', label: 'RTF', pattern: /\brtf\b/i },
+  { format: 'odt', label: 'OpenDocument de texto', pattern: /\bodt\b/i },
+  { format: 'ods', label: 'OpenDocument de cálculo', pattern: /\bods\b/i },
+  { format: 'odp', label: 'OpenDocument de presentación', pattern: /\bodp\b/i },
+  { format: 'yaml', label: 'YAML', pattern: /\bya?ml\b/i },
+  { format: 'xml', label: 'XML', pattern: /\bxml\b/i },
+  { format: 'zip', label: 'ZIP', pattern: /\bzip\b/i },
+  { format: 'png', label: 'PNG', pattern: /\bpng\b/i },
+  { format: 'jpg', label: 'JPEG', pattern: /\bjpe?g\b/i },
+  { format: 'gif', label: 'GIF', pattern: /\bgif\b/i },
+  { format: 'webp', label: 'WebP', pattern: /\bwebp\b/i },
+  { format: 'ico', label: 'ICO', pattern: /\bico\b/i },
+  { format: 'wav', label: 'WAV', pattern: /\bwav\b/i },
+  { format: 'mp3', label: 'MP3', pattern: /\bmp3\b/i },
+  { format: 'mp4', label: 'MP4', pattern: /\bmp4\b/i },
+  { format: 'webm', label: 'WebM', pattern: /\bwebm\b/i },
 ];
 
-const DELIVERABLE_ACTION = /\b(crea(?:r|me)?|genera(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|arma(?:r|me)?|construye(?:r|me)?|redacta(?:r|me)?|exporta(?:r|me)?|convierte|descargable|entr[eé]ga(?:r|me)?|dame)\b/i;
-const DELIVERABLE_NOUN = /\b(archivos?|documentos?|entregables?|versiones?|formatos?|informe|reporte|presentaci[oó]n|word|excel|spss|sav|power\s*point|pptx?|pdf|csv|svg|markdown|docx|xlsx)\b/i;
+const DELIVERABLE_ACTION = /\b(crea(?:r|me)?|genera(?:r|me)?|prepara(?:r|me)?|elabora(?:r|me)?|arma(?:r|me)?|construye(?:r|me)?|redacta(?:r|me)?|exporta(?:r|me)?|edita(?:r|me)?|modifica(?:r|me)?|devu[eé]lve(?:me|nos)?|convierte|descargables?|entr[eé]ga(?:r|me)?|dame)\b/i;
+const DELIVERABLE_NOUN = /\b(archivos?|documentos?|entregables?|versiones?|formatos?|informe|reporte|presentaci[oó]n|word|excel|spss|sav|power\s*point|pptx?|pdf|csv|svg|markdown|docx|xlsx|json|html?|rtf|odt|ods|odp)\b/i;
 const COUNT_WORDS = Object.freeze({ un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7, ocho: 8 });
 
 function parseCount(value) {
@@ -25,10 +44,10 @@ function parseCount(value) {
 
 function extensionOf(artifact) {
   const explicit = String(artifact?.format || '').trim().toLowerCase().replace(/^\./, '');
-  if (explicit) return explicit === 'ppt' ? 'pptx' : explicit;
+  if (explicit) return ({ ppt: 'pptx', jpeg: 'jpg', yml: 'yaml', htm: 'html', markdown: 'md' })[explicit] || explicit;
   const match = String(artifact?.filename || '').toLowerCase().match(/\.([a-z0-9]{1,8})$/);
   if (!match) return '';
-  return match[1] === 'ppt' ? 'pptx' : match[1];
+  return ({ ppt: 'pptx', jpeg: 'jpg', yml: 'yaml', htm: 'html', markdown: 'md' })[match[1]] || match[1];
 }
 
 function parseActionArgs(value) {
@@ -62,10 +81,14 @@ function requestedSavXlsxMatrix(text, requested) {
 
 function buildArtifactDeliveryContract(prompt, policy = {}) {
   const text = String(prompt || '');
+  // Literal replacement content is data, not an output count. Keep indices
+  // stable so counts before a format enumeration can still be distinguished.
+  const countText = text.replace(/“[^”]*”|«[^»]*»|"[^"]*"|'[^']*'/g, (literal) => ' '.repeat(literal.length));
   // SPSS + Excel is an explicit two-file request even in the default chat.
   // Requiring the configured multi-artifact capability here would let a
   // lone Excel pass as the complete result of this specific request.
   const explicitSpssExcel = FORMAT_SPECS.find((spec) => spec.format === 'sav').pattern.test(text)
+    && !(/\bsps\b/i.test(text) && !/\bsav\b/i.test(text))
     && FORMAT_SPECS.find((spec) => spec.format === 'xlsx').pattern.test(text);
   const pairEdit = explicitSpssExcel && require('./generated-artifact-followup').isSavXlsxPairEditRequest(text);
   if ((!policy.multipleArtifacts && !explicitSpssExcel) || (!DELIVERABLE_ACTION.test(text) && !pairEdit)
@@ -74,18 +97,31 @@ function buildArtifactDeliveryContract(prompt, policy = {}) {
   }
 
   const maxArtifacts = Math.max(1, Math.min(8, Number(policy.maxArtifactsPerTurn) || 6));
+  const totalMatch = countText.match(/\b(\d+|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\s+(?:archivos?|documentos?|entregables?|versiones?|copias?)\b/i);
+  const requestedTotal = Math.max(0, parseCount(totalMatch?.[1]) || 0);
   const requested = FORMAT_SPECS
-    .filter((spec) => spec.pattern.test(text))
-    .map((spec) => ({ format: spec.format, label: spec.label, count: 1 }));
+    .filter((spec) => spec.pattern.test(text)
+      && !(spec.format === 'sav' && /\bsps\b/i.test(text) && !/\bsav\b/i.test(text)))
+    .map((spec) => {
+      const countMatch = countText.match(new RegExp(`\\b(\\d+|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\\s+(?:(?:archivos?|documentos?|entregables?|versiones?|copias?)\\s+(?:en\\s+)?)?(?:${spec.pattern.source})`, 'i'));
+      const tail = countMatch ? countText.slice(countMatch.index + countMatch[0].length) : '';
+      // «tres archivos Word, Excel y PowerPoint» counts the enumerated batch.
+      // «dos documentos Word y un Excel» gives independent format counts.
+      const listTail = tail.match(/^\s*(?:,|\b(?:y|e)\b)\s*([^,.;]+)/i)?.[1] || '';
+      const totalBeforeList = countMatch && totalMatch && countMatch.index === totalMatch.index
+        && listTail && !/^(?:\d+|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\b/i.test(listTail)
+        && FORMAT_SPECS.some((other) => other.format !== spec.format && other.pattern.test(listTail));
+      return { format: spec.format, label: spec.label, count: Math.min(maxArtifacts, Math.max(1, totalBeforeList ? 1 : parseCount(countMatch?.[1]) || 1)) };
+    });
 
   if (requested.length === 1) {
-    const countMatch = text.match(/\b(\d+|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\s+(?:archivos?|documentos?|entregables?|versiones?|copias?)\b/i);
+    const countMatch = totalMatch;
     const count = parseCount(countMatch?.[1]);
     if (count && count > 1) requested[0].count = Math.min(maxArtifacts, count);
   }
 
   if (requested.length === 0) {
-    const countMatch = text.match(/\b(\d+|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\s+(?:archivos?|documentos?|entregables?|versiones?|copias?)\b/i);
+    const countMatch = totalMatch;
     const count = Math.max(1, parseCount(countMatch?.[1]) || 1);
     requested.push({ format: null, label: 'archivo', count: Math.min(maxArtifacts, count) });
   }
@@ -98,7 +134,10 @@ function buildArtifactDeliveryContract(prompt, policy = {}) {
     bounded.push({ ...item, count });
     remaining -= count;
   }
-  const expectedCount = bounded.reduce((sum, item) => sum + item.count, 0);
+  // Preserve an explicit total even when only some formats were named. A
+  // bounded turn can report its limit, but cannot call six files a completed
+  // request for more files. Counts refer to deliverables, not data rows.
+  const expectedCount = Math.max(requestedTotal, bounded.reduce((sum, item) => sum + item.count, 0));
   return {
     active: expectedCount > 1,
     expectedCount,
@@ -108,13 +147,32 @@ function buildArtifactDeliveryContract(prompt, policy = {}) {
   };
 }
 
+function assessArtifactDeliveryCounts(contract, artifacts = []) {
+  const delivered = (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => artifact?.downloadUrl);
+  const remaining = delivered.slice().reverse();
+  const selected = []; const missing = [];
+  for (const request of contract?.requested || []) {
+    const candidates = remaining.filter((artifact) => !request.format || extensionOf(artifact) === request.format);
+    const chosen = candidates.slice(0, request.count);
+    selected.push(...chosen);
+    for (const artifact of chosen) remaining.splice(remaining.indexOf(artifact), 1);
+    if (chosen.length < request.count) missing.push({ ...request, count: request.count - chosen.length });
+  }
+  const additional = Math.max(0, (contract?.expectedCount || 0) - selected.length - missing.reduce((sum, request) => sum + request.count, 0));
+  const chosen = remaining.slice(0, additional);
+  selected.push(...chosen);
+  if (chosen.length < additional) missing.push({ format: null, label: 'archivo', count: additional - chosen.length });
+  return { selected, missing };
+}
+
 function successfulVerificationIds(steps = []) {
   const ids = new Set();
   for (const step of steps || []) {
     for (const action of step?.actions || []) {
       if (action?.tool !== 'verify_artifact') continue;
       const observation = action.observation || {};
-      if (observation.error || observation.ok === false) continue;
+      if (observation.error || observation.ok !== true || observation.warning
+        || observation.validation?.passed === false || observation.validation?.ok === false) continue;
       const args = parseActionArgs(action.args);
       const candidates = [
         args.artifactId,
@@ -137,26 +195,7 @@ function validateArtifactDelivery(contract, { artifacts = [], steps = [], unavai
     return { ok: true, active: true, degraded: true, unavailableTools: Array.from(unavailable) };
   }
 
-  const delivered = (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => artifact?.downloadUrl);
-  const deliveredByFormat = new Map();
-  for (const artifact of delivered) {
-    const format = extensionOf(artifact);
-    if (!deliveredByFormat.has(format)) deliveredByFormat.set(format, []);
-    deliveredByFormat.get(format).push(artifact);
-  }
-
-  const selected = [];
-  const missing = [];
-  for (const request of contract.requested || []) {
-    // A repair creates a newer artifact in the same format. Validate the
-    // newest candidate so an obsolete file cannot pass (or block) delivery.
-    const candidates = (request.format ? (deliveredByFormat.get(request.format) || []) : delivered).slice().reverse();
-    const available = candidates.filter((artifact) => !selected.includes(artifact));
-    selected.push(...available.slice(0, request.count));
-    if (available.length < request.count) {
-      missing.push({ format: request.format, label: request.label, count: request.count - available.length });
-    }
-  }
+  const { selected, missing } = assessArtifactDeliveryCounts(contract, artifacts);
 
   if (missing.length > 0) {
     const detail = missing.map((item) => `${item.count} ${item.label}`).join(', ');
@@ -296,6 +335,7 @@ function buildArtifactDeliveryPrompt(contract) {
 module.exports = {
   FORMAT_SPECS,
   buildArtifactDeliveryContract,
+  assessArtifactDeliveryCounts,
   buildArtifactDeliveryPrompt,
   extensionOf,
   parseActionArgs,

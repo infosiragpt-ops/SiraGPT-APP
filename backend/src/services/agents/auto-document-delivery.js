@@ -48,6 +48,9 @@ async function generateAutoDocument({
 
   const mime = result.artifact?.mime || EXTENSION_TO_MIME[format] || 'application/octet-stream';
   const filename = result.artifact?.filename || `siragpt_document.${format}`;
+  const structure = await require('./artifact-delivery-validation').validateArtifactBytes(format, result.buffer);
+  if (!structure.passed) throw new Error(structure.error);
+  result.validation = { ...(result.validation || {}), structure };
   const artifact = saveArtifact({
     filename,
     base64: result.buffer.toString('base64'),
@@ -56,6 +59,7 @@ async function generateAutoDocument({
     chatId: task.chatId,
     validation: result.validation,
   });
+  result.validation = artifact.validation || result.validation;
 
   let previewHtml = null;
   if (['docx', 'xlsx', 'csv'].includes(format)) {

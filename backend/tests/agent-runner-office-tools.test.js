@@ -15,6 +15,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const ExcelJS = require('exceljs');
+const PizZip = require('pizzip');
 
 const { createSandbox } = require('../src/services/doc-agent/sandbox');
 const office = require('../src/services/agent-runner/tools.office');
@@ -183,6 +185,54 @@ test('verify_visual: un XLSX nuevo se verifica sin before y falla ante un valor 
     assert.match(wrong, /^ERROR: verificación fallida/);
   } finally { await sandbox.destroy(); }
 });
+
+test('verify_visual: el XLSX entregado guarda 900 y 2231, conserva fórmulas y estilos y deja intacto el original',
+  { skip: (!HAS_PY || !HAS_RENDER) && 'requiere soffice + pdftoppm' }, async () => {
+    const sandbox = await freshSandbox();
+    try {
+      const sourceBytes = fs.readFileSync(path.join(FIXTURES, 'presupuesto_demo.xlsx'));
+      const ex = office.makeOfficeToolExecutors(sandbox);
+      const edited = JSON.parse(await ex.office_edit({ src: 'uploads/presupuesto_demo.xlsx',
+        ops: [{ op: 'set_cell', sheet: 'Presupuesto', ref: 'B4', value: 15 }] }));
+      assert.equal(edited.ok, true);
+      const beforeBytes = await sandbox.readFile(edited.dst);
+      const result = await ex.verify_visual({ before: 'uploads/presupuesto_demo.xlsx', after: edited.dst,
+        checklist: ['Cantidad 15, subtotal 900 y total 2231', 'Conservar fórmulas y formato'],
+        expect: { cells: { 'Presupuesto!D4': 900, 'Presupuesto!D6': 2231, 'Resumen!B1': 2231 } } });
+      assert.match(result, /VEREDICTO: VERIFICADO/);
+      const deliveredBytes = await sandbox.readFile(edited.dst);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(deliveredBytes);
+      const budget = workbook.getWorksheet('Presupuesto');
+      assert.equal(budget.getCell('B4').value, 15);
+      assert.equal(budget.getCell('D4').formula, 'B4*C4');
+      assert.equal(budget.getCell('D4').result, 900, 'el visor nativo debe recibir el resultado en el XLSX real');
+      assert.equal(budget.getCell('D6').formula, 'SUM(D2:D5)');
+      assert.equal(budget.getCell('D6').result, 2231);
+      assert.equal(workbook.getWorksheet('Resumen').getCell('B1').result, 2231);
+      const beforeZip = new PizZip(beforeBytes), deliveredZip = new PizZip(deliveredBytes);
+      assert.deepEqual(Object.keys(deliveredZip.files), Object.keys(beforeZip.files));
+      for (const name of Object.keys(beforeZip.files)) {
+        if (beforeZip.files[name].dir) continue;
+        const original = beforeZip.file(name).asNodeBuffer(), final = deliveredZip.file(name).asNodeBuffer();
+        if (/^xl\/worksheets\/sheet\d+\.xml$/.test(name)) {
+          const omitCache = (bytes) => bytes.toString().replace(/<v(?:\s[^>]*)?(?:\/>|>.*?<\/v>)/gs, '');
+          assert.equal(omitCache(final), omitCache(original), `XML fuera de los valores calculados: ${name}`);
+        } else {
+          assert.deepEqual(final, original, `parte original intacta: ${name}`);
+        }
+      }
+      assert.deepEqual(await sandbox.readFile('uploads/presupuesto_demo.xlsx'), sourceBytes);
+      const stable = await sandbox.readFile(edited.dst);
+      const failed = await ex.verify_visual({ after: edited.dst, checklist: ['Total 1'],
+        expect: { cells: { 'Presupuesto!D6': 1 } } });
+      assert.match(failed, /^ERROR: verificación fallida/);
+      assert.deepEqual(await sandbox.readFile(edited.dst), stable, 'una prueba fallida no publica nuevos cachés');
+      await ex.verify_visual({ after: 'uploads/presupuesto_demo.xlsx', checklist: ['Subtotal 720'],
+        expect: { cells: { 'Presupuesto!D4': 720 } } });
+      assert.deepEqual(await sandbox.readFile('uploads/presupuesto_demo.xlsx'), sourceBytes, 'verificar uploads es de sólo lectura');
+    } finally { await sandbox.destroy(); }
+  });
 
 test('visual-verifier: JSON con cercas o texto alrededor; sin JSON → ok:null', async () => {
   assert.deepEqual(parseJsonLoose('bla ```json\n{"a":1}\n``` fin'), { a: 1 });

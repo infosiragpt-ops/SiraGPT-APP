@@ -5,7 +5,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { PDFDocument } = require('pdf-lib');
 const { runChatDocumentEdit, resolveEditSources, toAssistantFiles } = require('../src/services/document-editor/chat-document-editor');
+
+// Routing/lineage units can use textual stubs for their injected Office
+// engines. PDF delivery now reopens bytes, so its positive fixtures must be
+// actual PDFs. The subject records the test content and the page displays it.
+async function fixtureBytes(name, content) {
+  if (!/\.pdf$/i.test(name)) return Buffer.from(content);
+  const pdf = await PDFDocument.create();
+  pdf.setSubject(content);
+  pdf.addPage().drawText(content, { x: 20, y: 700, size: 9 });
+  return Buffer.from(await pdf.save());
+}
+async function fixtureContent(file) {
+  return /\.pdf$/i.test(file.name)
+    ? (await PDFDocument.load(file.buffer)).getSubject() : file.buffer.toString();
+}
 
 function fixture(t, names = ['Ventas.xlsx', 'Informe.pptx']) {
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-batch-'));
@@ -26,15 +42,15 @@ function fixture(t, names = ['Ventas.xlsx', 'Informe.pptx']) {
   const deps = {
     env: {}, artifactDir, log: () => {},
     extractFileIds: (files) => (files || []).map((f) => f.id).filter(Boolean),
-    readSourceBuffer: async (row) => { calls.reads.push(row.id); return { buffer: Buffer.from(`original:${row.id}`), cleanup: async () => {} }; },
+    readSourceBuffer: async (row) => { calls.reads.push(row.id); return { buffer: await fixtureBytes(row.originalName, `original:${row.id}`), cleanup: async () => {} }; },
     parseDocxPrecisionRequest: () => null, parseDocxImageRequest: () => null,
     isReformateoRequest: () => false, tryDeterministicEdit: async () => null,
     docxEngine: { docxEngineEnabled: () => false },
     runDocumentAgent: async (options) => {
       calls.edits.push(options);
-      return { stoppedReason: 'final', finalText: 'Cambios completos.', outputs: options.files.map((file) => ({
-        name: file.name, valid: true, buffer: Buffer.concat([file.buffer, Buffer.from('|edit')]),
-      })) };
+      return { stoppedReason: 'final', finalText: 'Cambios completos.', outputs: await Promise.all(options.files.map(async (file) => ({
+        name: file.name, valid: true, buffer: await fixtureBytes(file.name, `${await fixtureContent(file)}|edit`),
+      }))) };
     },
     saveArtifact: (input) => {
       calls.saved.push(input);
@@ -288,24 +304,25 @@ for (const [scope, nextPrompt] of [
   const firstPrompt = 'Prueba QA múltiple: edita los 4 documentos adjuntos. En cada uno cambia el título “Proyecto inicial” por “Proyecto revisado” y el estado “Pendiente” por “Aprobado”. Conserva CONTROL_SIN_CAMBIOS, formatos, encabezados y, en Excel, números y fórmula. Devuélveme los 4 archivos editados en su formato original.';
   const engineCalls = [];
   f.deps.parseDocxPrecisionRequest = require('../src/services/document-editing/docx-precision-intent').parseDocxPrecisionRequest;
-  f.deps.readSourceBuffer = async (row) => ({ buffer: Buffer.from(`original:${row.id}|Proyecto inicial|Pendiente|CONTROL_SIN_CAMBIOS`), cleanup: async () => {} });
+  f.deps.readSourceBuffer = async (row) => ({ buffer: await fixtureBytes(row.originalName, `original:${row.id}|Proyecto inicial|Pendiente|CONTROL_SIN_CAMBIOS`), cleanup: async () => {} });
   f.deps.applyDocxPrecisionEdit = () => assert.fail('a single replacement must not consume the compound request');
   f.deps.tryApplyLiteralDocxTitleEdit = async () => null;
-  const apply = (options, file) => {
-    engineCalls.push({ model: options.model, instruction: options.instruction, source: file.buffer.toString(), name: file.name });
+  const apply = async (options, file) => {
+    const source = await fixtureContent(file);
+    engineCalls.push({ model: options.model, instruction: options.instruction, source, name: file.name });
     const isFirst = options.instruction.startsWith(firstPrompt);
     assert.ok(isFirst || options.instruction.startsWith(nextPrompt), 'the selected engine receives the whole original request');
-    let content = file.buffer.toString();
+    let content = source;
     content = isFirst ? content.replace('Proyecto inicial', 'Proyecto revisado').replace('Pendiente', 'Aprobado')
       : content.replace('Proyecto revisado', 'Proyecto final');
-    return Buffer.from(content);
+    return fixtureBytes(file.name, content);
   };
   f.deps.docxEngine = { docxEngineEnabled: () => true, editWordDocument: async (options) => ({
-    ok: true, filename: options.filename, buffer: apply(options, { name: options.filename, buffer: options.buffer }),
+    ok: true, filename: options.filename, buffer: await apply(options, { name: options.filename, buffer: options.buffer }),
     verification: { ok: true }, changes: [], summary: 'Cambios completos.',
   }) };
   f.deps.runDocumentAgent = async (options) => ({ stoppedReason: 'final', finalText: 'Cambios completos.',
-    outputs: options.files.map((file) => ({ name: file.name, valid: true, buffer: apply(options, file) })) });
+    outputs: await Promise.all(options.files.map(async (file) => ({ name: file.name, valid: true, buffer: await apply(options, file) }))) });
   const first = await f.run({ instruction: firstPrompt });
   assert.equal(first.ok, true, first.message);
   assert.equal(first.artifacts.length, 4);
@@ -316,7 +333,9 @@ for (const [scope, nextPrompt] of [
   assert.equal(engineCalls.length, 8);
   assert.ok(engineCalls.every((call) => call.model === 'picked'));
   assert.ok(engineCalls.slice(4).every((call) => call.source.includes('Proyecto revisado|Aprobado|CONTROL_SIN_CAMBIOS')));
-  assert.ok(f.calls.saved.slice(-4).every((saved) => Buffer.from(saved.base64, 'base64').toString().includes('Proyecto final|Aprobado|CONTROL_SIN_CAMBIOS')));
+  for (const saved of f.calls.saved.slice(-4)) {
+    assert.ok((await fixtureContent({ name: saved.filename, buffer: Buffer.from(saved.base64, 'base64') })).includes('Proyecto final|Aprobado|CONTROL_SIN_CAMBIOS'));
+  }
 });
 
 test('a numbered batch never guesses a subset when the requested document count differs', async (t) => {

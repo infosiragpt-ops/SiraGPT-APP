@@ -20,6 +20,8 @@ const path = require('path');
 const fs = require('fs');
 const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
+const { EXTENSION_TO_MIME } = require('./artifact-format-registry');
+const { validateArtifactStructure, validateArtifactBytes, hasArtifactReadback, bindArtifactReadback } = require('./artifact-delivery-validation');
 const objectStorage = require('../object-storage');
 const sandbox = require('./code-sandbox');
 const { materializeArtifactSource, readArtifactMetadata } = require('./artifact-local-source');
@@ -59,35 +61,6 @@ function ensureArtifactDir() {
 function artifactIdFor(buf, scope = '') {
   return crypto.createHash('sha1').update(scope).update(buf).digest('hex').slice(0, 16);
 }
-
-const EXTENSION_TO_MIME = {
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  sav:  'application/x-spss-sav',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  pdf:  'application/pdf',
-  svg:  'image/svg+xml',
-  csv:  'text/csv',
-  txt:  'text/plain',
-  json: 'application/json',
-  md:   'text/markdown',
-  html: 'text/html',
-  htm:  'text/html',
-  xml:  'application/xml',
-  yaml: 'application/yaml',
-  yml:  'application/yaml',
-  png:  'image/png',
-  jpg:  'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif:  'image/gif',
-  webp: 'image/webp',
-  ico:  'image/x-icon',
-  mp4:  'video/mp4',
-  webm: 'video/webm',
-  mp3:  'audio/mpeg',
-  wav:  'audio/wav',
-  zip:  'application/zip',
-};
 
 const ADVANCED_DOCUMENT_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'pdf', 'csv', 'html', 'md']);
 
@@ -201,6 +174,20 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   const buf = Buffer.from(base64 || '', 'base64');
   const ext = path.extname(clean).slice(1).toLowerCase() || 'bin';
   assertArtifactSizeWithinLimit(ext, buf);
+  if (validation?.passed === true || validation?.ok === true) {
+    // Direct storage callers cannot mark text renamed to a structured file,
+    // or an unknown extension, as validated. Binary formats with dedicated
+    // asynchronous readers keep their caller's existing readback proof.
+    const structure = validateArtifactStructure(ext, buf);
+    const readback = hasArtifactReadback(validation, ext, buf);
+    const readerRequired = ['docx', 'xlsx', 'pptx'].includes(ext) || structure.reason === 'format_reader_required';
+    if (readerRequired && !readback) {
+      validation = { ...validation, ok: false, passed: false, reason: 'artifact_readback_missing', structure };
+    } else if (structure.reason !== 'format_reader_required') {
+      validation = structure.passed ? { ...validation, structure: readback ? validation.structure || validation : structure }
+        : { ...validation, ok: false, passed: false, reason: structure.reason, structure };
+    }
+  }
   const scope = `${ownerUserId || 'anonymous'}:${chatId || 'no-chat'}:`;
   const id = artifactIdFor(Buffer.concat([Buffer.from(clean), buf]), scope);
   // Version lineage lives with the existing artifact; it cannot override
@@ -225,7 +212,7 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   const full = path.join(targetDir, stored);
   const storedRelPath = safeFolder ? path.posix.join(safeFolder, stored) : stored;
   fs.writeFileSync(full, buf);
-  const resolvedMime = mime || EXTENSION_TO_MIME[ext] || 'application/octet-stream';
+  const resolvedMime = EXTENSION_TO_MIME[ext] || mime || 'application/octet-stream';
   // When R2 is enabled the binary is offloaded off the VM disk; record the
   // deterministic R2 ref in metadata so the serving route can stream it once
   // the local copy is gone. The key is derived purely from storedRelPath so
@@ -277,9 +264,27 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     category: category || null,
     brandLabel: brandLabel || null,
     kind: kind || null,
+    validation: validation || null,
     downloadUrl: `/api/agent/artifact/${id}?name=${encodeURIComponent(clean)}`,
     ...imageVersion,
   };
+}
+
+// Async delivery callers reopen files before synchronous storage. Keep their
+// semantic/contract checks, adding only proof that these exact bytes open.
+async function saveVerifiedArtifact(input, { signal } = {}) {
+  const clean = sanitizeArtifactFilename(input.filename);
+  const ext = path.extname(clean).slice(1).toLowerCase();
+  const buffer = Buffer.from(input.base64 || '', 'base64');
+  assertArtifactSizeWithinLimit(ext, buffer);
+  const structure = await validateArtifactBytes(ext, buffer, { signal, validation: input.validation });
+  if (!structure.passed) {
+    const error = new Error(structure.error);
+    error.code = structure.code;
+    error.validation = structure;
+    throw error;
+  }
+  return saveArtifact({ ...input, validation: { ...input.validation, passed: input.validation?.passed !== false, structure } });
 }
 
 // Magic-byte signatures for binary formats. The default text validator
@@ -317,6 +322,12 @@ function bufferHasMagic(buffer, ext) {
 
 function validateAgentArtifactBuffer(ext, buffer) {
   const normalizedExt = ext === 'markdown' ? 'md' : String(ext || '').toLowerCase();
+  // Quality expectations never substitute for a readable file in the
+  // requested format. PDF/SAV/images also have an asynchronous reader gate.
+  if (!['pdf', 'sav', ...Object.keys(BINARY_MAGIC_SIGNATURES)].includes(normalizedExt)) {
+    const structure = validateArtifactStructure(normalizedExt, buffer);
+    if (!structure.passed || !ADVANCED_DOCUMENT_FORMATS.has(normalizedExt)) return structure;
+  }
   if (ADVANCED_DOCUMENT_FORMATS.has(normalizedExt)) {
     return validateDocument({
       format: normalizedExt,
@@ -344,41 +355,13 @@ function validateAgentArtifactBuffer(ext, buffer) {
     };
   }
 
-  const text = buffer.toString('utf8');
-  if (normalizedExt === 'svg') {
-    // Beyond <script>, the common SVG XSS vectors are inline event
-    // handlers (onload/onerror/etc) and javascript: hrefs. Flag those
-    // so a "valid SVG" with active content doesn't sneak past.
-    const checks = {
-      notEmpty: buffer.length > 60,
-      svgOpen: /<svg[\s>]/i.test(text),
-      svgClose: /<\/svg>/i.test(text),
-      noScript: !/<script[\s>]/i.test(text),
-      noEventHandlers: !/\son(?:load|error|click|mouseover|mouseout|focus|blur|keydown|keyup)\s*=/i.test(text),
-      noJavascriptHref: !/(?:href|xlink:href)\s*=\s*["']?\s*javascript:/i.test(text),
-    };
-    const score = Math.round((Object.values(checks).filter(Boolean).length / Object.values(checks).length) * 100);
-    return { format: 'svg', checks, technicalScore: score, qualityScore: score, integrityScore: Math.min(100, Math.round(buffer.length / 100)), overallScore: score, passed: score >= 90 };
-  }
-
-  if (normalizedExt === 'json') {
-    try {
-      JSON.parse(text);
-      return { format: 'json', checks: { parseable: true, notEmpty: buffer.length > 2 }, technicalScore: 100, qualityScore: 90, integrityScore: 90, overallScore: 96, passed: true };
-    } catch (err) {
-      return { format: 'json', checks: { parseable: false, notEmpty: buffer.length > 2 }, technicalScore: 50, qualityScore: 40, integrityScore: 50, overallScore: 47, passed: false, details: { error: err.message } };
-    }
-  }
-
-  const checks = { notEmpty: buffer.length > 20, readable: /\S/.test(text), lineCount: text.split(/\r?\n/).length >= 1 };
-  const score = Math.round((Object.values(checks).filter(Boolean).length / Object.values(checks).length) * 100);
-  return { format: normalizedExt || 'bin', checks, technicalScore: score, qualityScore: score, integrityScore: Math.min(100, Math.round(buffer.length / 100)), overallScore: score, passed: score >= 80 };
+  return validateArtifactStructure(normalizedExt, buffer);
 }
 
 function assertArtifactValidation(ext, buffer) {
   const validation = validateAgentArtifactBuffer(ext, buffer);
   if (!validation.passed || validation.technicalScore < MIN_TECHNICAL_SCORE || validation.qualityScore < MIN_QUALITY_SCORE) {
-    const err = new Error(`artifact validation failed: technical ${validation.technicalScore}/100, quality ${validation.qualityScore}/100`);
+    const err = new Error(validation.error || `artifact validation failed: technical ${validation.technicalScore}/100, quality ${validation.qualityScore}/100`);
     err.validation = validation;
     throw err;
   }
@@ -696,6 +679,50 @@ const webSearch = {
 // works but skips the second LLM call — the main agent already has
 // enough context to write the script itself.
 
+function rejectContractArtifact({ contractReview, ext, validation = null, stdout = '', ctx }) {
+  ctx.onEvent?.({
+    type: 'contract_review',
+    stepId: ctx.currentStepId,
+    artifactId: null,
+    passed: false,
+    testsPassed: contractReview.testsPassed,
+    testsTotal: contractReview.testsTotal,
+    failedTests: contractReview.failedTests,
+  });
+  const repairHint = `Contract tests FAILED (${contractReview.failedTests.length}): ${contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | ')}. Regenerate with a corrected script that satisfies every failed test before calling finalize.`;
+  ctx.onEvent?.({
+    type: 'tool_output',
+    tool: 'create_document',
+    ok: false,
+    preview: `Archivo bloqueado por contrato ${contractReview.testsPassed}/${contractReview.testsTotal} ✗`,
+  });
+  return {
+    ok: false,
+    error: 'artifact blocked by Format Sovereignty Engine',
+    validation,
+    contractReview: {
+      passed: false,
+      testsTotal: contractReview.testsTotal,
+      testsPassed: contractReview.testsPassed,
+      failedTests: contractReview.failedTests,
+      extDetected: contractReview.ext,
+      mimeSniffed: contractReview.mimeSniffed,
+    },
+    failureReport: {
+      failed_stage: 'format_validation',
+      expected_output: ctx.taskContract?.required_extension ? `.${String(ctx.taskContract.required_extension).replace(/^\./, '')}` : 'contract-compliant artifact',
+      actual_output: `.${ext || 'unknown'}`,
+      root_cause: contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | '),
+      repair_strategy: 'Regenerate the artifact with the exact required extension, MIME and structure from the contract.',
+      retry_count: 0,
+      tests_reexecuted: contractReview.tests.map(t => t.id),
+      release_decision: 'blocked',
+    },
+    repairHint,
+    stdout: previewText(stdout, 1200),
+  };
+}
+
 const createDocument = {
   name: 'create_document',
   description: 'Execute a Python script that writes a downloadable file (.xlsx / .docx / .pptx / .pdf / .csv / .svg / .md / .txt / .sav) to the path in the env var OUT_PATH. The framework will pick up the file and register it as a user-downloadable artifact. Use python-docx, openpyxl, python-pptx, reportlab — all pre-installed. For SPSS .sav use pyreadstat.write_sav(dataframe, os.environ["OUT_PATH"]); DataFrame.to_spss does not exist. SPSS requires pyreadstat in the execution environment and fails explicitly if unavailable. The script MUST write to os.environ["OUT_PATH"]. '
@@ -708,7 +735,7 @@ const createDocument = {
   parameters: {
     type: 'object',
     properties: {
-      filename: { type: 'string', description: 'Filename including extension (xlsx/docx/pptx/pdf/csv/svg/md/txt/sav). Max 120 chars.' },
+      filename: { type: 'string', description: 'Filename including a supported extension (xlsx/docx/pptx/pdf/csv/svg/md/txt/sav/json/html/rtf/odt/ods/odp). Max 120 chars. Unknown formats cannot be verified.' },
       python:   { type: 'string', description: 'Full Python source. It must write the final file to os.environ["OUT_PATH"].' },
       description: { type: 'string', description: 'One-line human-readable description for the step card.' },
       timeoutMs: { type: 'integer', minimum: 1000, maximum: 60000 },
@@ -738,6 +765,24 @@ const createDocument = {
     // would clobber the other's artifact mid-write.
     const tmpOut = path.join(ARTIFACT_DIR, `pending-${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${cleanName}`);
     const ext = path.extname(cleanName).slice(1).toLowerCase();
+
+    // Filename requirements are metadata checks: reject a different format
+    // before executing code or reading bytes. Matching names still require
+    // the real reader and the complete content contract below.
+    const formatTests = (Array.isArray(ctx.taskContract?.success_tests) ? ctx.taskContract.success_tests : []).filter(test =>
+      test.type === 'deterministic' && (test.check || test.id) === 'extension_match');
+    if (ctx.taskContract?.required_extension && formatTests.length === 0) {
+      formatTests.push({ id: 'extension_match', type: 'deterministic', check: 'extension_match',
+        parameters: { value: String(ctx.taskContract.required_extension).replace(/^\./, '').toLowerCase() } });
+    }
+    if (formatTests.length > 0) {
+      const { reviewArtifact } = require('./artifact-reviewer');
+      const formatReview = reviewArtifact({
+        contract: { ...ctx.taskContract, success_tests: formatTests },
+        artifact: { filename: cleanName, buffer: Buffer.alloc(0) },
+      });
+      if (!formatReview.passed) return rejectContractArtifact({ contractReview: formatReview, ext, ctx });
+    }
 
     if (ext === 'sav') {
       const dependency = await sandbox.run({
@@ -813,6 +858,15 @@ const createDocument = {
     ctx.onEvent?.({ type: 'stage', label: 'Procesando archivo generado', pct: 85 });
     const raw = fs.readFileSync(tmpOut);
 
+    // A passing TaskContract cannot excuse corrupt or mislabeled bytes.
+    // SPSS uses the existing full read_sav inspection below.
+    const structure = ext === 'sav' ? null : await validateArtifactBytes(ext, raw);
+    if (structure && !structure.passed) {
+      try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
+      ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: structure.error });
+      return { ok: false, code: structure.code, error: structure.error, validation: structure };
+    }
+
     // Heuristic validation is now advisory: it runs, but it does NOT
     // short-circuit. The TaskContract deterministic tests are the
     // authoritative gate; without them we fall back to the heuristic
@@ -854,7 +908,13 @@ const createDocument = {
         return { ok: false, error: savInspection.error, validation };
       }
       validation.spss = savInspection;
+      if (!raw.equals(fs.readFileSync(tmpOut))) {
+        try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
+        return { ok: false, code: 'E_PARAMS', error: 'El archivo SPSS cambió durante su verificación. Vuelve a generarlo antes de entregarlo.' };
+      }
+      bindArtifactReadback(validation, ext, raw);
     }
+    if (structure) validation = { ...validation, structure };
     // TaskContract review: every produced artifact is tested against
     // the contract's deterministic success_tests. If any fail the
     // tool_result carries the failure list so the agent repairs before
@@ -871,17 +931,6 @@ const createDocument = {
             buffer: raw,
           },
         });
-        if (!contractReview.passed) {
-          ctx.onEvent?.({
-            type: 'contract_review',
-            stepId: ctx.currentStepId,
-            artifactId: null,
-            passed: false,
-            testsPassed: contractReview.testsPassed,
-            testsTotal: contractReview.testsTotal,
-            failedTests: contractReview.failedTests,
-          });
-        }
       } catch (revErr) {
         console.warn('[create_document] reviewer threw:', revErr?.message);
       }
@@ -889,40 +938,12 @@ const createDocument = {
 
     if (contractReview && !contractReview.passed) {
       try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
-      const repairHint = `Contract tests FAILED (${contractReview.failedTests.length}): ${contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | ')}. Regenerate with a corrected script that satisfies every failed test before calling finalize.`;
-      ctx.onEvent?.({
-        type: 'tool_output',
-        tool: 'create_document',
-        ok: false,
-        preview: `Archivo bloqueado por contrato ${contractReview.testsPassed}/${contractReview.testsTotal} ✗`,
-      });
-      return {
-        ok: false,
-        error: 'artifact blocked by Format Sovereignty Engine',
-        validation,
-        contractReview: {
-          passed: false,
-          testsTotal: contractReview.testsTotal,
-          testsPassed: contractReview.testsPassed,
-          failedTests: contractReview.failedTests,
-          extDetected: contractReview.ext,
-          mimeSniffed: contractReview.mimeSniffed,
-        },
-        failureReport: {
-          failed_stage: 'format_validation',
-          expected_output: ctx.taskContract?.required_extension ? `.${ctx.taskContract.required_extension}` : 'contract-compliant artifact',
-          actual_output: `.${ext || 'unknown'}`,
-          root_cause: contractReview.failedTests.map(f => `${f.id}: ${f.detail}`).join(' | '),
-          repair_strategy: 'Regenerate the artifact with the exact required extension, MIME and structure from the contract.',
-          retry_count: 0,
-          tests_reexecuted: contractReview.tests.map(t => t.id),
-          release_decision: 'blocked',
-        },
-        repairHint,
-        stdout: previewText(r.stdout || '', 1200),
-      };
+      return rejectContractArtifact({ contractReview, ext, validation, stdout: r.stdout || '', ctx });
     }
 
+    // Preserve the exact-byte reader proof, including SAV's private proof.
+    // Copying this verdict would discard its WeakMap identity.
+    if (contractReview) validation.contractReview = contractReview;
     const b64 = raw.toString('base64');
     const artifact = saveArtifact({
       filename: cleanName,
@@ -930,7 +951,7 @@ const createDocument = {
       mime: EXTENSION_TO_MIME[ext],
       ownerUserId: ctx.userId,
       chatId: ctx.chatId,
-      validation: contractReview ? { ...validation, contractReview } : validation,
+      validation,
       folderCode: ctx.folderCode || null,
     });
     try { fs.unlinkSync(tmpOut); } catch { /* may have been moved */ }
@@ -1821,144 +1842,32 @@ const verifyArtifact = {
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;
 
+    if (ext !== 'sav') {
+      const inspection = await validateArtifactBytes(ext, fs.readFileSync(full));
+      const details = { ext, sizeBytes, filename: metadata?.filename || entry.slice(id.length + 1), artifactId: id };
+      if (!inspection.passed) {
+        const summary = { ...details, ok: false, code: inspection.code, error: inspection.error, validation: inspection };
+        ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: inspection.error });
+        return summary;
+      }
+      if (metadata?.mime && metadata.mime !== inspection.mime) {
+        return { ...details, ok: false, code: 'E_PARAMS', error: 'El tipo MIME guardado no coincide con el formato del archivo.', validation: { ...inspection, ok: false, passed: false, reason: 'artifact_mime_mismatch' } };
+      }
+      const summary = { ...details, ...inspection.summary, ok: true, validation: inspection };
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: true, preview: summarisePreview(summary) });
+      return summary;
+    }
+
     if (ext === 'sav') {
       const summary = await inspectSavArtifact(full, ctx.signal);
       summary.ext = ext;
       summary.sizeBytes = sizeBytes;
       summary.filename = metadata?.filename || entry.slice(id.length + 1);
       summary.artifactId = id;
-      summary.validation = metadata?.validation || null;
+      summary.validation = { ...(metadata?.validation || {}), ok: Boolean(summary.ok), passed: Boolean(summary.ok), scope: 'full_sav_read' };
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: Boolean(summary.ok), preview: summarisePreview(summary) });
       return summary;
     }
-
-    // Stdlib-only Python: openpyxl/python-docx might be missing in
-    // some environments; we degrade gracefully and still return
-    // size + extension so the agent at least confirms the file exists.
-    const py = `
-import sys, json, os
-path = ${JSON.stringify(full)}
-ext = ${JSON.stringify(ext)}
-result = {"ok": True, "ext": ext, "sizeBytes": os.path.getsize(path)}
-try:
-    if ext == "xlsx":
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-            sheets = []
-            for name in wb.sheetnames:
-                ws = wb[name]
-                # max_row/max_column include trailing empties; they're
-                # still the truth the user cares about ("how many rows
-                # are in my Excel right now").
-                rows = ws.max_row or 0
-                cols = ws.max_column or 0
-                headers = []
-                if rows > 0 and cols > 0:
-                    for c in range(1, min(cols, 30) + 1):
-                        v = ws.cell(row=1, column=c).value
-                        headers.append(None if v is None else str(v))
-                sheets.append({"name": name, "rows": rows, "columns": cols, "headers": headers})
-            result["sheets"] = sheets
-            result["totalRows"] = sum(s["rows"] for s in sheets)
-        except ImportError as e:
-            result["warning"] = f"openpyxl not installed ({e}); reported size only"
-    elif ext == "docx":
-        try:
-            from docx import Document
-            doc = Document(path)
-            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-            result["paragraphCount"] = len(paragraphs)
-            result["firstParagraphs"] = paragraphs[:5]
-        except ImportError as e:
-            result["warning"] = f"python-docx not installed ({e}); reported size only"
-    elif ext == "pptx":
-        try:
-            from pptx import Presentation
-            prs = Presentation(path)
-            slides = []
-            for i, slide in enumerate(prs.slides, 1):
-                texts = []
-                for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        for para in shape.text_frame.paragraphs:
-                            t = "".join(run.text for run in para.runs).strip()
-                            if t: texts.append(t)
-                slides.append({"slide": i, "textPreview": texts[:3]})
-            result["slideCount"] = len(slides)
-            result["slides"] = slides[:10]
-        except ImportError as e:
-            result["warning"] = f"python-pptx not installed ({e}); reported size only"
-    elif ext == "csv":
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        result["lineCount"] = len(lines)
-        if lines:
-            header = lines[0].rstrip("\\n").split(",")
-            result["columns"] = header
-            result["firstDataRow"] = lines[1].rstrip("\\n") if len(lines) > 1 else None
-    elif ext == "json":
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            result["arrayLength"] = len(data)
-            result["firstItem"] = data[0] if data else None
-        elif isinstance(data, dict):
-            result["topLevelKeys"] = list(data.keys())[:50]
-        else:
-            result["scalar"] = repr(data)[:200]
-    elif ext in ("txt", "md", "svg"):
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-        result["charCount"] = len(text)
-        result["lineCount"] = text.count("\\n") + 1
-        result["firstChars"] = text[:240]
-    elif ext == "pdf":
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(path)
-            result["pageCount"] = len(reader.pages)
-        except ImportError as e:
-            result["warning"] = f"pypdf not installed ({e}); reported size only"
-    else:
-        result["warning"] = f"no specialised verifier for .{ext} — reported size only"
-except Exception as e:
-    result = {"ok": False, "error": str(e), "ext": ext, "sizeBytes": os.path.getsize(path)}
-print(json.dumps(result))
-`;
-    const r = await sandbox.run({ language: 'python', source: py, timeoutMs: 12000, signal: ctx.signal });
-    let summary;
-    const lastLine = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
-    if (!lastLine) {
-      // No stdout at all — likely Python interpreter unavailable, or
-      // the sandbox aborted before the script ran. Surface the
-      // sandbox status so the caller can react instead of pretending
-      // the file passed verification.
-      summary = {
-        ok: false,
-        error: r.timedOut ? 'verifier timed out' : (r.aborted ? 'verifier aborted' : 'verifier produced no output'),
-        ext, sizeBytes,
-        stdout: previewText(r.stdout || '', 600),
-        stderr: previewText(r.stderr || '', 600),
-      };
-    } else {
-      try {
-        summary = JSON.parse(lastLine);
-      } catch {
-        summary = { ok: false, error: 'verifier output was not valid JSON', stdout: previewText(r.stdout || '', 600), stderr: previewText(r.stderr || '', 600) };
-      }
-    }
-    summary.sizeBytes = summary.sizeBytes || sizeBytes;
-    summary.filename = entry.slice(id.length + 1);
-    summary.artifactId = id;
-    summary.validation = metadata?.validation || null;
-    ctx.onEvent?.({
-      type: 'tool_output',
-      tool: 'verify_artifact',
-      ok: Boolean(summary.ok),
-      preview: summarisePreview(summary),
-    });
-    return summary;
   },
 };
 
@@ -2303,6 +2212,7 @@ function listArtifactsByOwner(ownerUserId, { categories, max = 5000 } = {}) {
 module.exports = {
   buildTaskTools,
   saveArtifact,
+  saveVerifiedArtifact,
   listArtifactsByOwner,
   categorizeArtifact,
   ARTIFACT_DIR,

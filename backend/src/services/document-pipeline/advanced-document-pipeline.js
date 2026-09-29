@@ -2197,6 +2197,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.chart import BarChart, Reference, LineChart
 from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 
 OUT_PATH = ${JSON.stringify(outputPath)}
@@ -2251,6 +2252,23 @@ for idx, header in enumerate(headers):
     if fmt:
         for r in range(2, last_row + 1):
             ws.cell(row=r, column=idx + 1).number_format = fmt
+
+# Native input validation, rather than a visual indication of quality.
+# Numeric columns accept numbers (including negatives/decimals) and blanks;
+# no business-specific limits are invented from the illustrative dataset.
+# Relative references protect future rows too without allocating new cells.
+for idx in numeric_cols:
+    letter = get_column_letter(idx + 1)
+    validation = DataValidation(type="custom", formula1=f"ISNUMBER({letter}2)", allow_blank=True)
+    validation.errorStyle = "stop"
+    validation.showErrorMessage = True
+    validation.errorTitle = "Valor numérico requerido"
+    validation.error = "Introduce un número o deja la celda vacía."
+    validation.showInputMessage = True
+    validation.promptTitle = str(headers[idx])[:32]
+    validation.prompt = "Esta columna acepta valores numéricos."
+    ws.add_data_validation(validation)
+    validation.add(f"{letter}2:{letter}1048576")
 
 tab = Table(displayName="TablaDatos", ref=f"A1:{last_col}{last_row}")
 tab.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True, showColumnStripes=False)
@@ -3465,6 +3483,17 @@ async function runAdvancedDocumentPipeline({
     }
   } catch { /* never blocks delivery */ }
 
+  // A quality score or a ZIP signature is not a readable file. This is a
+  // real format reader; preserve its exact-byte proof for synchronous storage.
+  const structure = await require('../agents/artifact-delivery-validation').validateArtifactBytes(plan.format, artifact.buffer, { signal });
+  if (!structure.passed) {
+    try { if (artifact.outputPath) await fsp.unlink(artifact.outputPath); } catch { /* cleanup */ }
+    const error = new Error(structure.error);
+    error.code = structure.code;
+    throw error;
+  }
+  validation.structure = structure;
+
   if (!events.some((event) => event.role === 'qa')) {
     emit(events, 'qa', validation.passed ? 'complete' : 'warning', validation.passed ? 'QA sin fallos bloqueantes' : 'QA detectó advertencias persistentes', { passed: validation.passed });
   }
@@ -3495,7 +3524,6 @@ async function runAdvancedDocumentPipeline({
     attempts: attemptRecords,
     durationMs: Date.now() - startedAt,
   };
-  const telemetryPath = await writeTelemetry(record, telemetryDir);
 
   if (groundedResearchDeck && !validation.passed) {
     try {
@@ -3517,26 +3545,6 @@ async function runAdvancedDocumentPipeline({
   // (see `routes/agent-task.js GET /api/agent/artifact/:id`). We
   // reuse it here so the doc pipeline shares the same delivery
   // contract as agent-task artifacts.
-  let url = null;
-  let dataUrl = null;
-  try {
-    const { saveArtifact } = require('../agents/task-tools');
-    const persisted = saveArtifact({
-      filename: artifact.filename,
-      base64: artifact.buffer.toString('base64'),
-      mime: artifact.mime,
-      ownerUserId: userId || null,
-      chatId: chatId || null,
-      validation,
-    });
-    url = persisted.downloadUrl;
-  } catch (err) {
-    // If the artifact store is unavailable we fall back to the
-    // inline data URL channel so the user still gets the file.
-    console.warn('[document-pipeline] saveArtifact failed; falling back to dataUrl:', err?.message);
-    dataUrl = `data:${artifact.mime};base64,${artifact.buffer.toString('base64')}`;
-  }
-
   // The pipeline writes a working copy to outputDir while building the file;
   // the durable bytes now live via saveArtifact (offloaded to R2 when
   // enabled) or the inline dataUrl fallback. Drop the temp copy so it doesn't
@@ -3637,6 +3645,23 @@ async function runAdvancedDocumentPipeline({
       validation.checks = validation.checks || {};
       validation.checks.xlsx_workbook = true;
     }
+  }
+
+  // Persist the final verdict only after every format-specific check. The
+  // metadata must not keep an earlier "passed" result if a later reader fails.
+  const telemetryPath = await writeTelemetry(record, telemetryDir);
+  let url = null;
+  let dataUrl = null;
+  try {
+    const { saveArtifact } = require('../agents/task-tools');
+    const persisted = saveArtifact({
+      filename: artifact.filename, base64: artifact.buffer.toString('base64'), mime: artifact.mime,
+      ownerUserId: userId || null, chatId: chatId || null, validation,
+    });
+    url = persisted.downloadUrl;
+  } catch (err) {
+    console.warn('[document-pipeline] saveArtifact failed; falling back to dataUrl:', err?.message);
+    dataUrl = `data:${artifact.mime};base64,${artifact.buffer.toString('base64')}`;
   }
 
   return {

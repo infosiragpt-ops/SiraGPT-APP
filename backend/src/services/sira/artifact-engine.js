@@ -19,7 +19,7 @@ const {
 } = require("../xlsx-safe-workbook");
 
 const {
-  saveArtifact,
+  saveVerifiedArtifact: saveArtifact,
   EXTENSION_TO_MIME,
   INTERNAL: { validateAgentArtifactBuffer },
 } = require("../agents/task-tools");
@@ -68,7 +68,7 @@ async function executeArtifactTool(toolName, input = {}, context = {}) {
     context,
   });
   const validation = validateAgentArtifactBuffer(format === "markdown" ? "md" : format, rendered.buffer);
-  const saved = saveArtifact({
+  const saved = await saveArtifact({
     filename,
     base64: rendered.buffer.toString("base64"),
     mime: rendered.mime,

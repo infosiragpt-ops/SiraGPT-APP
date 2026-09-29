@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const REAL_DOCX = fs.readFileSync(path.join(__dirname, 'fixtures/office/tesis_demo.docx'));
 
 // Isolate the artifact store BEFORE task-tools is (transitively) required.
 const ARTIFACT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-edit-artifacts-'));
@@ -233,7 +234,7 @@ test('happy path: ownership-scoped lookup, agent gets bytes, artifact card emitt
     runDocumentAgent: async (opts) => {
       agentArgs = opts;
       return {
-        outputs: [{ name: 'informe-editado.docx', buffer: Buffer.from('edited-bytes'), valid: true }],
+        outputs: [{ name: 'informe-editado.docx', buffer: REAL_DOCX, valid: true }],
         finalText: 'Cambié el título.',
         iterations: 3,
         stoppedReason: 'final',
@@ -282,7 +283,7 @@ test('model-named IDs outside the turn fall back to the REAL attachments (never 
     ], capture),
     runDocumentAgent: async (opts) => {
       agentFiles = opts.files;
-      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' };
+      return { outputs: [{ name: 'e.docx', buffer: REAL_DOCX, valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' };
     },
   });
   // The model invents an ID ("foreign" is NOT attached) → resolve to the
@@ -389,7 +390,7 @@ test('per-turn call budget: the 4th call on the SAME ctx is refused', async () =
   const tool = buildDocumentEditTool({
     sourcePreservingEdit: SP_NULL,
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a' }]),
-    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' }),
+    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: REAL_DOCX, valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' }),
   });
   const ctx = baseCtx();
   for (let i = 0; i < MAX_CALLS_PER_TURN; i += 1) {
@@ -856,7 +857,7 @@ test('in-process fast path falls through to the sandbox when the editor returns 
     sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => null },
     runDocumentAgent: async () => {
       sandboxCalls += 1;
-      return { outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' };
+      return { outputs: [{ name: 'e.docx', buffer: REAL_DOCX, valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' };
     },
   });
   const outNull = await toolNull.execute({ instruction: 'edita algo' }, baseCtx());
@@ -868,7 +869,7 @@ test('in-process fast path falls through to the sandbox when the editor returns 
   const toolThrow = buildDocumentEditTool({
     prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: inputPath, originalName: 'x.docx', filename: 'x.docx' }]),
     sourcePreservingEdit: { tryGenerateSourcePreservingDocumentEdit: async () => { throw new Error('necesito un archivo DOCX con la sección solicitada'); } },
-    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: Buffer.from('y'), valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' }),
+    runDocumentAgent: async () => ({ outputs: [{ name: 'e.docx', buffer: REAL_DOCX, valid: true }], iterations: 1, driver: 'local', finalText: 'ok', stoppedReason: 'final' }),
   });
   const outThrow = await toolThrow.execute({ instruction: 'edita algo' }, baseCtx());
   assert.equal(outThrow.ok, true, 'a throw from the in-process editor must not fail the tool — sandbox takes over');
@@ -905,7 +906,7 @@ test('sandbox path materializes r2: attachments instead of fs.readFile on the re
     runDocumentAgent: async (opts) => {
       agentArgs = opts;
       return {
-        outputs: [{ name: 'informe-editado.docx', buffer: Buffer.from('edited'), valid: true }],
+        outputs: [{ name: 'informe-editado.docx', buffer: REAL_DOCX, valid: true }],
         finalText: 'ok',
         stoppedReason: 'final',
         iterations: 1,

@@ -118,6 +118,36 @@ test('attached documents are edited by the picked model client and saved as chat
   assert.deepEqual(stages.map((s) => s.label), ['Abriendo el documento', 'Editando el documento']);
 });
 
+test('real PDF editing preserves asynchronous readback through the actual artifact store', async () => {
+  const { PDFDocument } = require('pdf-lib');
+  const doc = await PDFDocument.create();
+  doc.addPage().drawText('Proyecto revisado. CONTROL_SIN_CAMBIOS.');
+  const pdf = Buffer.from(await doc.save());
+  const { saveArtifact, ARTIFACT_DIR } = require('../src/services/agents/task-tools');
+  const { deps } = baseDeps({
+    saveArtifact,
+    readSourceBuffer: async () => ({ buffer: pdf, cleanup: async () => {} }),
+    runDocumentAgent: async () => ({ outputs: [{ name: 'informe-editado.pdf', buffer: pdf, valid: true }],
+      stoppedReason: 'final', finalText: 'Apliqué los cambios verificados por el editor.' }),
+  });
+  const prisma = fakePrisma({ files: [{ id: 'pdf1', userId: USER, originalName: 'informe.pdf', path: 'r2:uploads/pdf1' }] });
+  const result = await runChatDocumentEdit({ prisma, userId: USER, chatId: 'pdf-real-reader', fileIds: ['pdf1'],
+    instruction: 'En el PDF cambia el título.', llm: { client: { chat: { completions: { create: async () => ({}) } } }, model: 'test-model' }, deps });
+  try {
+    assert.equal(result.ok, true);
+    assert.equal(result.artifacts.length, 1);
+    assert.equal(result.artifacts[0].validation.passed, true);
+    assert.equal(result.artifacts[0].validation.structure.summary.pageCount, 1);
+    assert.ok(result.artifacts[0].downloadUrl);
+  } finally {
+    for (const artifact of result.artifacts || []) {
+      const metadata = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${artifact.id}.json`), 'utf8'));
+      fs.rmSync(path.join(ARTIFACT_DIR, metadata.storedRelPath), { force: true });
+      fs.rmSync(path.join(ARTIFACT_DIR, `${artifact.id}.json`), { force: true });
+    }
+  }
+});
+
 test('provider-level failures never switch away from the selected client or model', async () => {
   const failing = { chat: { completions: { create: async () => { const err = new Error('credit'); err.status = 402; throw err; } } } };
   const ladder = { chat: { completions: { create: async (payload) => ({ choices: [{ message: { content: `ladder=${payload.model}` } }] }) } } };

@@ -353,8 +353,8 @@ function buildDocumentEditTool(deps = {}) {
             );
           }
           if (buffer) {
-            const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveArtifact;
-            const saved = saveArtifact({
+            const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveVerifiedArtifact;
+            const saved = await saveArtifact({
               filename: merge.mergedFilename(ordered.map((row) => ({ name: row.originalName || row.filename }))),
               base64: buffer.toString('base64'),
               mime: merge.DOCX_MIME,
@@ -645,15 +645,23 @@ function buildDocumentEditTool(deps = {}) {
       }
 
       // Persist + announce every deliverable through the existing card plumbing.
-      const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveArtifact;
+      const saveArtifact = deps.saveArtifact || require('../../agents/task-tools').saveVerifiedArtifact;
       const edited = [];
       for (const [index, out] of validatedOutputs.entries()) {
         const ext = String(out.name).split('.').pop().toLowerCase();
         const validation = { ok: true, passed: true,
           documentEdit: { sourceFileId: rows[index].id, sourceFilename: files[index].name, parentArtifactId: null } };
+        if (ext === 'pdf') {
+          const structure = await require('../../agents/artifact-delivery-validation').validateArtifactBytes(ext, out.buffer);
+          if (!structure.passed) {
+            edited.push({ filename: out.name, error: 'validation_failed', reason: structure.reason });
+            continue;
+          }
+          validation.structure = structure;
+        }
         let saved;
         try {
-          saved = saveArtifact({
+          saved = await saveArtifact({
             filename: out.name,
             base64: out.buffer.toString('base64'),
             mime: MIME_BY_EXT[ext] || 'application/octet-stream',
@@ -662,6 +670,10 @@ function buildDocumentEditTool(deps = {}) {
             category: 'agent_artifact',
             validation,
           });
+          if (saved.validation?.passed === false) {
+            edited.push({ filename: out.name, error: 'validation_failed', reason: saved.validation.reason });
+            continue;
+          }
         } catch (err) {
           edited.push({ filename: out.name, error: 'persist_failed', message: String(err && err.message || err).slice(0, 160) });
           continue;
