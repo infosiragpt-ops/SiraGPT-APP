@@ -204,6 +204,82 @@ test('semantic Word follow-up never chooses the first of several historical arti
   assert.equal(agentCalls[0].files[0].buffer.toString(), 'B');
 });
 
+test('a named older document is edited instead of the most recent unrelated upload', async (t) => {
+  const prisma = fakePrisma({
+    files: [
+      { id: 'new', userId: USER, originalName: 'nuevo.docx' },
+      { id: 'thesis', userId: USER, originalName: 'tesis.docx' },
+    ],
+    messages: [
+      { role: 'USER', files: [{ id: 'new' }] },
+      { role: 'USER', files: [{ id: 'thesis' }] },
+    ],
+  });
+  const { deps, agentCalls } = baseDeps({ readSourceBuffer: async (row) => ({ buffer: Buffer.from(row.id), cleanup: async () => {} }) });
+  t.after(() => fs.rmSync(deps.artifactDir, { recursive: true, force: true }));
+  const result = await runChatDocumentEdit({ prisma, userId: USER, chatId: 'c',
+    instruction: 'Mejora la redacción de tesis.docx', llm: { client: {}, model: 'chosen' }, deps });
+  assert.equal(result.ok, true);
+  assert.deepEqual(agentCalls[0].files.map((file) => [file.name, file.buffer.toString()]), [['tesis.docx', 'thesis']]);
+});
+
+test('named history selection keeps latest owned lineage and never treats a replacement value as a selector', async (t) => {
+  const artifactDir = tempArtifactDir({
+    abc123: { metadata: { filename: 'tesis (editado).docx', ownerUserId: USER,
+      validation: { documentEdit: { sourceFileId: 'thesis', sourceFilename: 'tesis.docx' } } }, bytes: Buffer.from('thesis-v2') },
+  });
+  t.after(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({
+    files: [{ id: 'new', userId: USER, originalName: 'nuevo.docx' }, { id: 'thesis', userId: USER, originalName: 'tesis.docx' }],
+    messages: [
+      { role: 'USER', files: [{ id: 'new' }] },
+      { role: 'ASSISTANT', files: [{ artifactId: 'abc123' }] },
+      { role: 'USER', files: [{ id: 'thesis' }] },
+    ],
+  });
+  const { deps } = baseDeps({ artifactDir });
+  const named = await resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Mejora la redacción de tesis.docx', deps });
+  assert.equal(named[0].artifactId, 'abc123');
+  const quotedName = await resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Mejora "tesis.docx"', deps });
+  assert.equal(quotedName[0].artifactId, 'abc123', 'quoting the target filename does not turn it into replacement text');
+  const quoted = await resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Reemplaza "tesis.docx" por "informe.docx"', deps });
+  assert.equal(quoted[0].row.id, 'new');
+  const formatOnly = await resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Mejora la redacción y devuelve el formato .docx', deps });
+  assert.equal(formatOnly[0].row.id, 'new', 'a file extension alone does not identify a different source');
+  await assert.rejects(resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Mejora tesis.docx y ausente.docx', deps }),
+    (err) => err.code === 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
+  const pinned = await resolveEditSources({ prisma, userId: USER, chatId: 'c', fileIds: ['new'], instruction: 'Mejora la redacción de tesis.docx', deps });
+  assert.equal(pinned[0].row.id, 'new', 'explicit attached identities retain priority over history inference');
+  fs.writeFileSync(path.join(artifactDir, 'abc123.json'), JSON.stringify({ filename: 'tesis (editado).docx', ownerUserId: USER }));
+  const legacy = await resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Mejora la redacción de tesis.docx', deps });
+  assert.equal(legacy[0].artifactId, 'abc123', 'a uniquely derived legacy copy keeps the previous edits too');
+});
+
+test('a missing or ambiguous named historical source never falls back to the newest document', async (t) => {
+  const artifactDir = tempArtifactDir({
+    bad123: { metadata: { filename: 'ajeno.docx', ownerUserId: 'other-user' }, bytes: Buffer.from('private') },
+  });
+  t.after(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({
+    files: [
+      { id: 'new', userId: USER, originalName: 'nuevo.docx' },
+      { id: 'first', userId: USER, originalName: 'tesis.docx' },
+      { id: 'second', userId: USER, originalName: 'tesis.docx' },
+    ],
+    messages: [
+      { role: 'USER', files: [{ id: 'new' }] },
+      { role: 'ASSISTANT', files: [{ artifactId: 'bad123' }] },
+      { role: 'USER', files: [{ id: 'first' }] },
+      { role: 'USER', files: [{ id: 'second' }] },
+    ],
+  });
+  const { deps } = baseDeps({ artifactDir });
+  for (const name of ['ausente.docx', 'ajeno.docx', 'tesis.docx']) {
+    await assert.rejects(resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: `Mejora la redacción de ${name}`, deps }),
+      (err) => err.code === 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
+  }
+});
+
 test('semantic Word edits cannot use legacy annex fallback when the selected model is absent or fails', async () => {
   const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'formulario.docx' }] });
   let deterministicCalls = 0;

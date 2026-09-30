@@ -26,6 +26,7 @@ const { resolveMaxRuntimeMs } = require('../../doc-agent');
 const { isLlmCreditError } = require('../loop');
 const { logProviderFailure } = require('../provider-failure-diagnostics');
 const { resolveTurnFiles, assertSelectedSavXlsxInputs, persistOutputs } = require('../artifacts');
+const { loadConversationContext } = require('../conversation-context');
 const { createBlackboard } = require('./blackboard');
 const { rolePrompt, roleLabel, HIGH_STAKES_ROLES, CREATION_BUDGET_ROLES } = require('./roles');
 const {
@@ -178,6 +179,7 @@ function nodeSummary(node, result) {
 async function runOrchestrator({
   files = [],
   instruction,
+  conversationContext = null,
   model,
   pickedModel = null,
   client,
@@ -271,6 +273,7 @@ async function runOrchestrator({
       const raw = await planner({
         phase,
         instruction: task,
+        conversationContext,
         fileNames,
         client: plannerClient,
         model: resolvedModel,
@@ -375,6 +378,7 @@ async function runOrchestrator({
         const run = await runner.runAgentRunner({
           files: nodeFiles,
           instruction: buildNodeInstruction({ node, blackboard, originalGoal: task }),
+          conversationContext,
           model: resolvedModel,
           client: nodeClient,
           onEvent: (ev) => emit(ev && typeof ev === 'object' ? { ...ev, node: node.id, role: node.role } : ev),
@@ -527,6 +531,7 @@ async function runOrchestratorForChat({
   fileIds = [],
   attachedFiles = [],
   instruction,
+  conversationContext,
   model,
   pickedModel = null,
   client,
@@ -557,6 +562,9 @@ async function runOrchestratorForChat({
   const run = await runOrchestrator({
     files: resolved.files,
     instruction,
+    conversationContext: conversationContext === undefined
+      ? await loadConversationContext({ prisma, userId, chatId, instruction })
+      : conversationContext,
     model,
     pickedModel,
     client,

@@ -217,6 +217,7 @@ async function defaultPlanner(context) {
   const {
     phase = 'initial',
     instruction,
+    conversationContext = null,
     fileNames = [],
     client,
     model,
@@ -234,6 +235,7 @@ async function defaultPlanner(context) {
     model,
     messages: [
       { role: 'system', content: buildPlannerSystemPrompt({ maxNodes }) },
+      ...[require('../conversation-context').conversationContextMessage(conversationContext)].filter(Boolean),
       { role: 'user', content: user },
     ],
     max_tokens: PLANNER_MAX_TOKENS,
