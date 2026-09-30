@@ -10,8 +10,9 @@ const binding = require('../src/services/codex/project-chat-binding');
 
 function makeDb(rows = []) {
   return {
+    chat: { findFirst: async ({ where }) => where.userId === 'u1' && /^chat-|^c1$/.test(where.id) ? { id: where.id } : null },
     codexProject: {
-      findMany: async ({ where }) => rows.filter((r) => r.userId === where.userId),
+      findMany: async ({ where }) => rows.filter((r) => r.userId === where.userId && r.brief?.chatId === where.brief.equals),
     },
   };
 }
@@ -106,8 +107,66 @@ test('findOrCreateProjectForChat valida entradas', async () => {
   );
 });
 
-test('sin store la búsqueda falla cerrado (null), no explota', async () => {
+test('store failure propagates instead of masquerading as an absent binding', async () => {
   const projects = makeProjects([]);
-  const hit = await binding.findProjectForChat({ userId: 'u1', chatId: 'c1', db: null, projects });
-  assert.equal(hit, null);
+  await assert.rejects(binding.findProjectForChat({ userId: 'u1', chatId: 'c1', db: null, projects }), { code: 'codex_store_unavailable' });
+  const db = makeDb();
+  db.codexProject.findMany = async () => { throw new Error('db down'); };
+  await assert.rejects(binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'c1', db, projects }), /db down/);
+});
+
+
+test('binding query finds an older chat beyond 50 projects and filters in the database', async () => {
+  const rows = Array.from({ length: 80 }, (_, i) => ({ id: `p${i}`, userId: 'u1', brief: { chatId: `chat-${i}` } }));
+  let query;
+  const db = makeDb(rows);
+  const read = db.codexProject.findMany;
+  db.codexProject.findMany = async (args) => { query = args; return read(args); };
+  assert.equal(await binding.findProjectIdForChat({ userId: 'u1', chatId: 'chat-79', db }), 'p79');
+  assert.deepEqual(query.where, { userId: 'u1', deletedAt: null, brief: { path: ['chatId'], equals: 'chat-79' } });
+  assert.equal(query.take, 1);
+});
+
+test('binding creation refuses an unowned chat before allocating any workspace', async () => {
+  const store = [], db = makeDb(), projects = makeProjects(store);
+  await assert.rejects(binding.findOrCreateProjectForChat({ userId: 'u2', chatId: 'chat-1', db, projects }), { code: 'coding_chat_not_found' });
+  assert.equal(store.length, 0);
+});
+
+test('concurrent create requests provision once, then reuse the durable binding', async () => {
+  const store = [], db = makeDb(), projects = makeProjects(store);
+  db.codexProject.findMany = async ({ where }) => store.filter((row) => row.userId === where.userId && row.brief.chatId === where.brief.equals);
+  const create = projects.createProject;
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  let entered;
+  const started = new Promise((resolve) => { entered = resolve; });
+  let count = 0;
+  projects.createProject = async (args) => { count++; entered(); await hold; return create(args); };
+  const first = binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'chat-1', name: 'CRM', instructions: 'backend con login', db, projects });
+  await started;
+  const second = binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'chat-1', db, projects });
+  release();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(count, 1);
+  assert.equal(a.project.id, b.project.id);
+  assert.equal(a.reused, false);
+  assert.equal(b.reused, true);
+  assert.equal(store[0].brief.instructions, 'frontend y backend');
+  const afterRestart = await binding.findProjectForChat({ userId: 'u1', chatId: 'chat-1', db, projects });
+  assert.equal(afterRestart.id, a.project.id);
+});
+
+test('production binding creation uses the PostgreSQL advisory transaction and its client', async () => {
+  const store = [], db = makeDb(), projects = makeProjects(store), calls = [];
+  const tx = makeDb();
+  db.$queryRawUnsafe = () => { throw new Error('lock must run on transaction'); };
+  db.$transaction = async (work) => { calls.push('transaction'); return work(tx); };
+  tx.$queryRawUnsafe = async (sql, ...args) => { calls.push({ sql, args }); return [{ locked: 1 }]; };
+  projects.createProject = async (args) => { assert.equal(args.db, tx); return { id: 'p1', status: 'ready', brief: args.brief }; };
+  const result = await binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'chat-1', db, projects });
+  assert.equal(result.project.id, 'p1');
+  assert.equal(calls[0], 'transaction');
+  assert.match(calls[1].sql, /WITH _lock.*pg_advisory_xact_lock/);
+  assert.equal(calls[1].args.length, 2);
 });

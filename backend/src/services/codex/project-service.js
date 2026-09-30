@@ -82,9 +82,10 @@ function requireDb(db) {
  * project creation must make the same provisioning decision in every worker.
  */
 function hasFullStackIntent(brief) {
-  if (typeof brief !== 'string') return false;
+  const instructions = typeof brief === 'string' ? brief : (brief && typeof brief === 'object' && !Array.isArray(brief) ? brief.instructions : null);
+  if (typeof instructions !== 'string') return false;
 
-  const text = brief
+  const text = instructions
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()

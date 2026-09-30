@@ -40,6 +40,17 @@ test('coding tool surface contains only project-scoped tools, never host or alte
   for (const tool of tools) { assert.match(tool.name, /^project_/); assert.equal(typeof tool.execute, 'function'); }
 });
 
+test('coding research reuses only audited read-only public web tools', async () => {
+  const { baseWebTools } = require('../src/services/agentic-chat-stream')._internal;
+  const tools = codingTools({ researchTools: [...baseWebTools(), { name: 'host_bash', readOnly: true }, { name: 'browser_type', readOnly: true }] });
+  assert.deepEqual(tools.filter((tool) => !tool.name.startsWith('project_')).map((tool) => tool.name), ['web_search', 'read_url']);
+  const read = tools.find((tool) => tool.name === 'read_url');
+  for (const url of ['http://127.0.0.1/admin', 'http://169.254.169.254/latest/meta-data/', 'http://localhost/']) {
+    const result = await read.execute({ url }, { userId: 'u1' });
+    assert.ok(result.error || result.ok === false, 'non-public URL must be rejected');
+  }
+});
+
 test('project_list filters secrets and reports runner failure honestly', async () => {
   const context = { userId: 'u1', chatId: 'chat1', projectTools: { binding: deps.binding, runner: { exec: async () => ({ ok: true, stdout: 'src/app.js\n.env\nx/.env.local\n../escape\nid_ed25519\n' }) } } };
   assert.deepEqual((await projectListTool.execute({}, context)).files, ['src/app.js']);

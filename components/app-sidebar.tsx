@@ -119,6 +119,7 @@ import { ChatSearchDialog } from "./ChatSearchDialog"
 import type { SectionKey } from "@/components/settings/settings-panel"
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from "@/lib/chat/open-settings"
 import { SKILL_NEW_CHAT_EVENT } from "@/lib/chat/skills-events"
+import { useCloudCodingProjects } from "@/hooks/use-chat-coding-workspace"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
@@ -450,6 +451,7 @@ export function AppSidebar() {
   const t = useTranslations("sidebar")
   const bgStreams = useBackgroundStreams()
   const { user, logout } = useAuth()
+  const cloudCodingProjects = useCloudCodingProjects(user?.id)
   // Sidebar lee únicamente del ChatList context — durante un stream
   // sólo cambia `currentChat` (que vive en CurrentChatContext) y la
   // sidebar no se re-renderiza. Para el id/título del chat activo
@@ -1726,7 +1728,30 @@ export function AppSidebar() {
               data-sidebar-folders-list="1"
               className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
             >
-              {visibleChatFolders.length === 0 ? (
+              {cloudCodingProjects.map((project) => (
+                <div key={`cloud-project:${project.id}`} className="group flex w-full items-center gap-0.5">
+                  <button
+                    type="button"
+                    data-sidebar-cloud-project={project.id}
+                    aria-pressed={currentChatId === project.chatId}
+                    title={`Proyecto en la nube · ${project.name}`}
+                    onClick={() => {
+                      setSelectedFolder(null)
+                      handleChatClick(project.chatId!)
+                    }}
+                    className={cn(
+                      "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-sm text-foreground/85 transition-colors",
+                      "hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                      currentChatId === project.chatId && "bg-muted text-foreground",
+                    )}
+                  >
+                    <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{project.name}</span>
+                    <span className="ml-auto tabular-nums text-[11px] text-muted-foreground/70">1</span>
+                  </button>
+                </div>
+              ))}
+              {visibleChatFolders.length === 0 && cloudCodingProjects.length === 0 ? (
                 <p className="px-2 pb-1 text-[11px] leading-snug text-muted-foreground">
                   Crea una carpeta con + y envíale conversaciones.
                 </p>

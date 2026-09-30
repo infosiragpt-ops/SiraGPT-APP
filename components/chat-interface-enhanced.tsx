@@ -1,6 +1,7 @@
 "use client"
 
-import { projectsCodexApi } from "@/lib/codex/api/projects"
+import { detectCodingIntent } from "@/lib/software-build-intent"
+import { useChatCodingWorkspace } from "@/hooks/use-chat-coding-workspace"
 import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
 import dynamic from "next/dynamic"
@@ -1265,8 +1266,6 @@ const ActionsDropdown = ({
   setShowAudioPanel,
   setAudioTab,
   composerSkills,
-  openCodePanel,
-  codeOpening,
   handleAndUploadFiles,
   isUploading,
   isWebSearching,
@@ -1682,24 +1681,6 @@ const ActionsDropdown = ({
           />
           {/* Agent Skills (claude.ai style): right under «Subir documento». */}
           {composerSkills ? <SkillsMenu skills={composerSkills} /> : null}
-          <DropdownMenuItem
-            className="liquid-menu-item"
-            data-testid="composer-open-code"
-            onSelect={() => { setIsOpen(false); void openCodePanel(); }}
-            disabled={codeOpening}
-          >
-            <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
-                <Code2 className="h-4 w-4 text-gray-600 dark:text-gray-300" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="liquid-label font-medium text-sm">Editar código</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {codeOpening ? 'Abriendo…' : 'Archivos, editor y pruebas en el navegador'}
-                </div>
-              </div>
-            </div>
-          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -6655,19 +6636,11 @@ function ChatInterfaceContent() {
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
   const [codePanelOpen, setCodePanelOpen] = React.useState(false);
-  const [codeProjectReady, setCodeProjectReady] = React.useState(false);
   const [codeOpening, setCodeOpening] = React.useState(false);
-  const codingWorkspace = codeProjectReady && Boolean(currentChat?.id);
+  const { workspace: codeWorkspace, onProjectReady: onCodeProjectReady } = useChatCodingWorkspace(user?.id, currentChat?.id);
   React.useEffect(() => {
-    let cancelled = false;
-    setCodeProjectReady(false);
-    if (currentChat?.id) {
-      void projectsCodexApi.getProjectByChat(currentChat.id).then((project) => {
-        if (!cancelled) setCodeProjectReady(Boolean(project?.id));
-      }).catch(() => { /* ordinary chats have no code project */ });
-    }
-    return () => { cancelled = true; };
-  }, [currentChat?.id]);
+    setCodePanelOpen(false);
+  }, [user?.id, currentChat?.id]);
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
   const [computerBrowserMode, setComputerBrowserMode] = React.useState(false);
   const [computerNavigateUrl, setComputerNavigateUrl] = React.useState("");
@@ -10608,9 +10581,18 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const msg = rawMsg || buildFileOnlyPrompt(composerFiles);
+    const codingIntent = detectCodingIntent(msg, {
+      hasWorkspace: Boolean(codeWorkspace),
+      hasAttachments: composerFiles.length > 0,
+      modality: isImageGenerationActive || chatType === 'image' ? 'image'
+        : isVideoGenerationActive || chatType === 'video' ? 'video'
+          : isVoiceGenerationActive ? 'voice' : isMusicGenerationActive ? 'music' : null,
+    });
+    const codingWorkspace = codingIntent.active && !isWordConnectorActive && !isExcelConnectorActive
+      && !isGmailActive && !isGoogleCalendarActive && !isGoogleDriveActive && !isSpotifyActive && !isComputerUseActive;
     // Capture the visible document before a busy chat queues this turn. New
     // attachments win; Word/Excel connectors keep their own open document.
-    const sandboxDecision = isWordConnectorActive || isExcelConnectorActive
+    const sandboxDecision = codingWorkspace || isWordConnectorActive || isExcelConnectorActive
       ? { route: null, attachments: [] }
       : resolveDocumentSandboxAdmission(msg, {
         attachments: composerFiles,
@@ -11215,7 +11197,7 @@ REWRITTEN TEXT:`;
       || isVideoGenerationActive;
     // Word/Excel connector generation already returned above. Explicit edits
     // were admitted before those returns so they cannot be skipped here.
-    const documentSandboxRoute = resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route;
+    const documentSandboxRoute = codingWorkspace ? null : resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route;
     if (!hasMediaGenerator && (documentSandboxRoute === "edit" || documentSandboxRoute === "clarify")) {
       const documentPreflight = new AbortController();
       let documentChatId = currentChat?.id || null;
@@ -11547,6 +11529,7 @@ REWRITTEN TEXT:`;
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, {
             initialIntent: pipelineIntent,
+            codingWorkspace,
             ...imageSettings,
             ...webSearchSettings,
             ...skillSettings,
@@ -13108,12 +13091,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   }, [setCurrentChat]);
 
   const openCodePanel = React.useCallback(async () => {
-    if (codeOpening) return;
+    if (codeOpening || !codeWorkspace || codeWorkspace.chatId !== currentChatIdRef.current) return;
     setCodeOpening(true);
     try {
-      if (!currentChatIdRef.current) {
-        await createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
-      }
       setShowAudioPanel(false);
       setActiveSearchActivityId(null);
       setDocumentPreviewUrl(null);
@@ -13130,7 +13110,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el espacio de código");
     } finally { setCodeOpening(false); }
-  }, [codeOpening, createNewChat, closeArtifactPanel]);
+  }, [codeOpening, codeWorkspace, closeArtifactPanel]);
 
   const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string; agentNavigating?: boolean }) => {
     setShowAudioPanel(false);
@@ -13173,18 +13153,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }, [openComputerPanel]);
 
-  // The workspace opens from the existing composer tools menu or `?code=1`.
-  // With `?id=` wait for that chat so
-  // the panel binds to it instead of creating a new one.
+  // Old code links still open the existing project's editor after lookup.
+  // A normal request prepares the cloud project without opening this panel.
   const codeParamHandledRef = React.useRef(false);
   React.useEffect(() => {
     if (codeParamHandledRef.current || typeof window === "undefined") return;
     const code = new URLSearchParams(window.location.search).get("code");
     if (code !== "1" && code !== "true") { codeParamHandledRef.current = true; return; }
     if (conversationIdFromLocation(window.location.pathname, window.location.search) && !currentChat?.id) return;
+    if (!codeWorkspace) return;
     codeParamHandledRef.current = true;
     void openCodePanel();
-  }, [currentChat?.id, openCodePanel]);
+  }, [currentChat?.id, codeWorkspace, openCodePanel]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
@@ -13320,7 +13300,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive, setIsExcelConnectorActive,
     setShowAudioPanel,
     composerSkills,
-    openCodePanel, codeOpening,
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,
@@ -14648,6 +14627,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 />
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
+                {codeWorkspace && (
+                  <Button
+                    variant={codePanelOpen ? "secondary" : "ghost"}
+                    size="icon"
+                    onClick={() => codePanelOpen ? setCodePanelOpen(false) : void openCodePanel()}
+                    title={`Código · ${codeWorkspace.projectName}`}
+                    aria-label="Código"
+                    aria-pressed={codePanelOpen}
+                    data-testid="chat-code-button"
+                    disabled={codeOpening}
+                    className="chat-header-icon-btn h-9 w-9 rounded-md text-muted-foreground hover:text-foreground"
+                  >
+                    <Code2 className="h-[18px] w-[18px]" />
+                  </Button>
+                )}
                 <Button
                   variant={computerPanelOpen && !computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
@@ -15157,10 +15151,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               }}
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
-              {codePanelOpen && currentChat?.id && (
+              {codePanelOpen && codeWorkspace && currentChat?.id && (
                 <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id}
                   onClose={() => setCodePanelOpen(false)}
-                  onProjectReady={setCodeProjectReady} />
+                  onProjectReady={onCodeProjectReady} />
               )}
               {coworkPanelOpen && currentChat?.id && (
                 <CoworkPanel

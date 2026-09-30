@@ -188,3 +188,17 @@ test('publicProject: repo-public sin metadatos → sourceControl con nulls; kind
   const none = publicProject(row(null));
   assert.equal(none.chatId, undefined);
 });
+
+
+test('chat-bound brief instructions provision the full-stack starter without losing the binding', async () => {
+  const db = fakeDb(), runner = okRunner();
+  let files;
+  runner.writeFiles = async (_project, next) => { files = next; return { ok: true, written: next.length }; };
+  const brief = { chatId: 'chat-1', source: 'agentes', instructions: 'Crea una app CRM con PostgreSQL y autenticación' };
+  const project = await createProject({ userId: 'u1', name: 'CRM', brief, runner, db, env: {} });
+  assert.equal(project.status, 'ready');
+  assert.deepEqual(db.rows.get(project.id).brief, brief);
+  assert.ok(files.some((file) => file.path === 'server/index.js'));
+  assert.equal(hasFullStackIntent({ instructions: 'Landing estática' }), false);
+  assert.equal(hasFullStackIntent({ instructions: { toString: () => 'postgres' } }), false);
+});
