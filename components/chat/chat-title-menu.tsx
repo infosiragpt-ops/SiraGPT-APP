@@ -4,7 +4,6 @@ import * as React from "react"
 import {
   Archive,
   ChevronDown,
-  ChevronRight,
   Clock,
   Copy,
   FolderPlus,
@@ -319,10 +318,9 @@ export function ChatTitleMenu({
                 <DropdownMenuShortcut className={MENU_KEY}>R</DropdownMenuShortcut>
               </DropdownMenuItem>
               <DropdownMenuSub>
-                <DropdownMenuSubTrigger className={cn(MENU_ITEM, "[&>svg:last-child]:hidden")}>
+                <DropdownMenuSubTrigger className={cn(MENU_ITEM, "[&>svg:last-child]:ml-auto [&>svg:last-child]:text-muted-foreground/70")}>
                   <FolderPlus className={MENU_ICON} />
                   Añadir al proyecto
-                  <ChevronRight aria-hidden="true" className="ml-auto h-4 w-4 text-muted-foreground/70" />
                 </DropdownMenuSubTrigger>
                 <DropdownMenuPortal>
                   <DropdownMenuSubContent

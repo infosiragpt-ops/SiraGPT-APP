@@ -1837,6 +1837,10 @@ async function runAgentRunnerForDocRoute({
   userId,
   chatId = null,
   prompt,
+  // The user's own words when `prompt` was enriched with previous-turn
+  // context (previous-turn-document-context): routing classifies these, the runner
+  // executes `prompt`.
+  routingPrompt = null,
   fileIds = [],
   model,
   pickedModel = null,
@@ -1850,15 +1854,16 @@ async function runAgentRunnerForDocRoute({
 } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return null;
+  const routingText = String(routingPrompt || '').trim() || text;
   let prior = false;
   let priorArtifactFormat = null;
   if (prisma && userId && chatId) {
     try {
       prior = await hasConversationArtifacts(prisma, { userId, chatId });
-      if (prior) priorArtifactFormat = await getConversationArtifactFormat(prisma, { userId, chatId, instruction: text });
+      if (prior) priorArtifactFormat = await getConversationArtifactFormat(prisma, { userId, chatId, instruction: routingText });
     } catch (_) { /* routing falls back to what was read */ }
   }
-  if (!shouldRunAgentRunner({ fileIds, hasPriorArtifacts: prior, priorArtifactFormat, text })) return null;
+  if (!shouldRunAgentRunner({ fileIds, hasPriorArtifacts: prior, priorArtifactFormat, text: routingText })) return null;
   const ran = await executeAgentRunnerTurn({
     prisma,
     userId,

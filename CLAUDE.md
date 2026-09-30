@@ -1585,6 +1585,41 @@ saldo, transcripción, visión y atribución). Lo que seguía abierto:
   guardar en Admin → Conexiones las claves marcadas «ilegible».
 - Test: `backend/tests/provider-credit-classification.test.js`.
 
+## Word con la gráfica anterior + burbuja del pedido (added 2026-09-30)
+
+Reporte de Luis: «crea un word con esta información e incorpora esta gráfica en un word en
+una página» desapareció del chat mientras «Agente de documentos trabajando» y terminó en «el
+agente agotó sus pasos sin producir un archivo verificado».
+- **Contexto del turno anterior** (`backend/src/services/previous-turn-document-context.js`,
+  `collectPreviousTurnContext`): cuando el pedido apunta al turno previo (deícticos «esta/esa/
+  anterior/que generaste» + información/gráfica, o formas pronominales «ponlo/insértala/
+  expórtalo»), el runner recibe (1) la respuesta anterior y la descripción de la última
+  visualización (título, explicación, tabla de datos) dentro de `<SIRAGPT_SOURCE_CONTENT>`
+  (`buildPreviousContentDocumentPrompt`), y (2) la gráfica como PNG real: matplotlib (data URL),
+  `type:'chart'` (upload local) o recharts/chartjs/plotly dibujados en servidor
+  (`document-visual-embed.buildChartSvg` + `sharp`; líneas multi-serie con `buildMultiLineSvg`),
+  guardada como `File` del usuario en `uploads/images` y añadida a los `fileIds` del turno →
+  aparece en `/workspace/uploads` y la instrucción ordena insertarla. Sin gráfica renderizable
+  (d3/mermaid) viaja la tabla/código y se pide recrearla. Nunca lanza; sin referencia al turno
+  previo devuelve `applied:false`.
+- **Cableado**: `agents/agent-task-runner.js` (`resolveAgentRunnerTurnContext`, una vez por
+  claim, paso visible «Recuperando el contenido y la gráfica del mensaje anterior») y
+  `routes/doc.js` (stage + `routingPrompt`). El ruteo (claim/runner-only) sigue clasificando las
+  palabras originales; solo el runner ve la instrucción enriquecida
+  (`runAgentRunnerForDocRoute({ prompt, routingPrompt })`). Funciona también por la cola async.
+- **Burbuja**: `handleAgentTask` (`chat-interface-enhanced.tsx`) solo omitía la burbuja del
+  usuario si el chat ya tenía *cualquier* turno del usuario, así que en un chat con historial el
+  pedido no se veía hasta que el servidor lo persistía. Ahora `hasUserTurnForGoal`
+  (`lib/chat/agent-task-turn.ts`) comprueba que ESE texto sea el último turno del usuario.
+- **«Ir al final»**: el viewport del ScrollArea se re-resuelve tras cada render (antes solo al
+  cambiar de chat; un remontaje de la lista dejaba el elemento obsoleto sin eventos de scroll y la
+  píldora nunca aparecía).
+- Tests: `backend/tests/previous-turn-document-context.test.js` (11), `tests/lib/agent-task-turn.test.ts`,
+  `tests/chat-agent-task-user-bubble-source.test.ts`.
+- Gotcha de entorno: `next dev` con una caché `.next/cache/webpack` vieja sirvió `globals.css`
+  SIN el bloque «Premium chat finish» (borde celeste, memoria, liquid-pill) aunque el archivo lo
+  tenía; `rm -rf .next/cache/webpack` lo arregla. Producción compila desde cero en Docker.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

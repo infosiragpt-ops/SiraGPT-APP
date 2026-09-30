@@ -2868,13 +2868,55 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       && !deterministicVancouverRequest
       && !deterministicAttachmentAnswer;
     const agentRunnerText = String(displayGoal || goal || '');
+    // «Crea un word con esta información e incorpora esta gráfica»: the
+    // runner receives the previous answer (text + data) and the previous
+    // chart as a real PNG in the turn's files. Routing (claim / runner-only)
+    // keeps classifying the user's ORIGINAL words; only the runner sees the
+    // enriched instruction. Resolved lazily, once, on the first claim.
+    let agentRunnerInstruction = agentRunnerText;
+    let agentRunnerFileIds = files;
+    let agentRunnerContextResolved = false;
+    const resolveAgentRunnerTurnContext = async () => {
+      if (agentRunnerContextResolved) return;
+      agentRunnerContextResolved = true;
+      if (!prisma || !chatId) return;
+      try {
+        const turnContext = await require('../previous-turn-document-context').collectPreviousTurnContext({
+          prisma,
+          userId: user.id,
+          chatId,
+          instruction: agentRunnerText,
+          fileIds: files,
+        });
+        if (turnContext?.applied) {
+          agentRunnerInstruction = turnContext.instruction;
+          agentRunnerFileIds = turnContext.fileIds;
+          stepIdCounter += 1;
+          const contextStepId = `s${stepIdCounter}`;
+          emit({
+            type: 'step_start',
+            id: contextStepId,
+            label: turnContext.chart
+              ? 'Recuperando el contenido y la gráfica del mensaje anterior'
+              : 'Recuperando el contenido del mensaje anterior',
+            icon: 'search',
+          });
+          emit({ type: 'step_done', id: contextStepId, ok: true });
+          logDocRouting('agent_runner', `previous_turn_context_${turnContext.reason}`);
+        }
+      } catch (contextErr) {
+        if (controller.signal.aborted || externalSignal?.aborted) throw contextErr;
+        console.warn('[agent-task-runner] previous-turn context unavailable:', contextErr?.message || contextErr);
+      }
+    };
     // One AgentRunner turn: the finished task when it delivered a verified
     // file, else null with `agentRunnerFailure` set (never throws, except on
     // a user abort). Used by the preloop claim and by the follow-up edit of
     // the chat's latest file (preferRecentArtifact) below.
     const invokeAgentRunnerTurn = async () => {
       agentRunnerClaimedTurn = true;
-      const runnerText = agentRunnerText;
+      await resolveAgentRunnerTurnContext();
+      const runnerText = agentRunnerInstruction;
       try {
         const agentRunner = require('../agent-runner');
         stepIdCounter += 1;
@@ -2885,7 +2927,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           prisma,
           userId: user.id,
           chatId,
-          fileIds: files,
+          fileIds: agentRunnerFileIds,
           instruction: runnerText,
           // Engines follow the model picked in the composer (the ladder
           // only takes over on provider errors).

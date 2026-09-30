@@ -389,6 +389,7 @@ import { extractAudioMeta, extractVideoMeta, scheduleMediaMetadata } from "@/lib
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { COMPOSER_PREFILL_EVENT, consumeComposerPrefill, requestNavigation } from "@/lib/chat/chat-actions"
+import { hasUserTurnForGoal } from "@/lib/chat/agent-task-turn"
 import { useMemoryStatus } from "@/lib/chat/use-memory-status"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
@@ -6129,13 +6130,17 @@ function ChatInterfaceContent() {
   // very first render of a long chat falls back to a plain map (one
   // tick of full-list reconciliation, then Virtuoso owns it).
   const [radixViewport, setRadixViewport] = React.useState<HTMLElement | null>(null);
+  // Re-resolved after EVERY render (one querySelector; setState bails out on
+  // the same element). The ScrollArea remounts when the chat hydrates or the
+  // list switches renderer, so a viewport captured only on chat-id change
+  // went stale: no scroll events reached the tracker and «Ir al final» never
+  // showed after scrolling up.
   React.useEffect(() => {
-    if (!scrollAreaRef.current) return;
-    const viewport = scrollAreaRef.current.querySelector(
+    const viewport = scrollAreaRef.current?.querySelector(
       '[data-radix-scroll-area-viewport]'
     ) as HTMLElement | null;
-    if (viewport) setRadixViewport(viewport);
-  }, [currentChat?.id]);
+    if (viewport && viewport.isConnected && viewport !== radixViewport) setRadixViewport(viewport);
+  });
 
   // ── Scroll-to-bottom pill ────────────────────────────────────────
   // Tracks whether the user is currently at the bottom of the message
@@ -14357,7 +14362,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWebSearching(true); // reuse the busy flag — Stop button is wired the same way
     markLocalJobBusy(activeChat.id);
 
-    const isUserRole = (m: any) => String(m?.role || '').toUpperCase() === 'USER';
     const isTempChatId = (id: unknown) => typeof id === 'string' && id.startsWith('temp-chat-');
     const shouldAdoptTempOntoReal = (prev: any) => Boolean(
       prev &&
@@ -14366,7 +14370,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       !isTempChatId(activeChat.id) &&
       prev.id !== activeChat.id,
     );
-    const liveHasUserTurn = (currentChatRef.current?.messages || []).some(isUserRole);
+    // «Already added» means THIS goal is the latest user turn — a chat with
+    // history has plenty of older user messages that must not hide the new
+    // request until the server persists it.
+    const liveHasUserTurn = hasUserTurnForGoal(currentChatRef.current?.messages, displayGoal);
 
     try {
       // Graft a USER turn with files after createChat/selectChat even when the
@@ -14387,7 +14394,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           if (prev.id !== activeChat.id && !adoptingTemp) return prev;
           const baseMessages = prev.messages || [];
           const nextChat = adoptingTemp ? { ...activeChat, messages: baseMessages } : prev;
-          if (baseMessages.some(isUserRole)) return nextChat;
+          if (hasUserTurnForGoal(baseMessages, displayGoal)) return nextChat;
           return { ...nextChat, messages: [...baseMessages, userMessage] };
         });
       }
@@ -14437,7 +14444,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         const adoptingTemp = shouldAdoptTempOntoReal(prev);
         if (!prev) {
           const seeded = (currentChatRef.current?.messages || []).filter(Boolean);
-          const withUser = seeded.some(isUserRole)
+          const withUser = hasUserTurnForGoal(seeded, displayGoal)
             ? seeded
             : [...seeded, {
                 id: `msg-user-${Date.now()}`,
