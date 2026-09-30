@@ -51,7 +51,8 @@ function userIdOf(req) {
 function sendError(res, err, fallback) {
   const status = Number(err && err.status) || 500;
   const message = status < 500 && err && err.message ? err.message : fallback;
-  return res.status(status).json({ ok: false, error: message, code: err && err.code ? err.code : undefined });
+  const code = status < 500 && err && err.code ? err.code : undefined;
+  return res.status(status).json({ ok: false, error: message, code });
 }
 
 function createChatSkillsRouter({ auth = authenticateToken, skills = chatSkills, memorySignal = defaultMemorySignal } = {}) {

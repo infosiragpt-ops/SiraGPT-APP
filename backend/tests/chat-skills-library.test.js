@@ -243,3 +243,33 @@ test('HTTP: library, create, upload, switch off, install, download, discover and
     server.close();
   }
 });
+
+test('an own skill that predates a catalog name stays visible, editable and deletable', () => {
+  const skills = bound(tmpDir('sira-skills-'));
+  // Older Biblioteca skills (gateway) could take any valid name.
+  skills.store.persistUserSkill({ userId: 'u9', name: 'skill-creator', description: 'Mía', body: '# Mía' });
+  skills.store.persistUserSkill({ userId: 'u9', name: 'sql-avanzado', description: 'Mi SQL', body: '# SQL mío' });
+  const { mine, partners } = skills.listSkillLibrary({ userId: 'u9' });
+  assert.deepEqual(mine.map((s) => s.name).sort(), ['skill-creator', 'sql-avanzado']);
+  assert.ok(!partners.some((s) => s.name === 'skill-creator'), 'the shadowed catalog entry is hidden');
+  assert.equal(skills.loadChatSkill({ userId: 'u9', name: 'skill-creator' }).source, 'biblioteca');
+  const edited = skills.updateUserSkill({ userId: 'u9', name: 'sql-avanzado', description: 'Editada', body: '# v2' });
+  assert.equal(edited.description, 'Editada');
+  assert.deepEqual(skills.removeSkill({ userId: 'u9', name: 'sql-avanzado' }), { name: 'sql-avanzado', deleted: true });
+  assert.equal(skills.loadChatSkill({ userId: 'u9', name: 'sql-avanzado' }).source, 'catalog');
+});
+
+test('route segments are reserved skill names and disk failures are server errors', () => {
+  const skills = bound(tmpDir('sira-skills-'));
+  for (const name of ['library', 'discover']) {
+    assert.throws(() => skills.createUserSkill({ userId: 'u10', name, description: 'x', body: 'y' }), (e) => e.code === 'name_reserved');
+  }
+  const failing = {
+    ...skills.store,
+    persistUserSkill: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); },
+  };
+  assert.throws(
+    () => chatSkills.createUserSkill({ userId: 'u10', name: 'ok', description: 'x', body: 'y', persist: failing }),
+    (e) => e.status === 500 && e.code === 'persist_failed',
+  );
+});

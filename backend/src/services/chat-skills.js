@@ -364,8 +364,12 @@ function reservedSkillName(name) {
 /** «Tuyos»: what the user created, and what ships from SiraGPT (built-ins + installed catalog). */
 function listSkillLibrary({ userId = null, persist = null, root = undefined } = {}) {
   const state = getSkillState({ userId, persist, root });
-  const mine = listUserSkills({ userId, persist, root })
-    .filter((s) => !reservedSkillName(s.name))
+  // listUserSkills already drops built-in names; an own skill that shares a
+  // catalog name (older Biblioteca skills) stays visible and editable, and
+  // hides the catalog entry it shadows (the agent uses the own one).
+  const ownSkills = listUserSkills({ userId, persist, root });
+  const ownNames = new Set(ownSkills.map((s) => s.name));
+  const mine = ownSkills
     .map((s) => ({
       name: s.name,
       title: s.title,
@@ -389,7 +393,7 @@ function listSkillLibrary({ userId = null, persist = null, root = undefined } = 
     updatedAt: null,
     editable: false,
     removable: false,
-  })).concat(installedCatalogSkills(state).map((s) => ({
+  })).concat(installedCatalogSkills(state).filter((s) => !ownNames.has(s.name)).map((s) => ({
     ...s,
     author: SKILLS_AUTHOR,
     enabled: !state.disabled.has(s.name),
@@ -452,6 +456,9 @@ function discoverSkills({ userId = null, memoryText = '', query = '', category =
   };
 }
 
+// Path segments of /api/skills that a skill name must never shadow.
+const ROUTE_RESERVED_NAMES = new Set(['library', 'discover']);
+
 function validateSkillInput({ name, description, body }) {
   const clean = normalizeSkillName(name);
   if (!clean) throw skillError(400, 'invalid_name', 'El nombre solo puede tener minúsculas, números, guiones y guiones bajos (máx. 64).');
@@ -473,10 +480,16 @@ function createUserSkill({ userId, name, description, body, overwrite = false, p
   const uid = String(userId || '').trim();
   if (!uid) throw skillError(401, 'auth_required', 'Inicia sesión para guardar skills.');
   const input = validateSkillInput({ name, description, body });
-  if (reservedSkillName(input.name)) {
+  const exists = userSkillExists({ userId: uid, name: input.name, persist, root });
+  if (ROUTE_RESERVED_NAMES.has(input.name) && !exists) {
+    throw skillError(409, 'name_reserved', `«${input.name}» es un nombre reservado. Elige otro.`);
+  }
+  // Editing an own skill that predates the catalog keeps working; new
+  // skills can't take a SiraGPT name.
+  if (reservedSkillName(input.name) && !(overwrite && exists)) {
     throw skillError(409, 'name_reserved', `«${input.name}» ya es una skill de SiraGPT. Elige otro nombre.`);
   }
-  if (!overwrite && userSkillExists({ userId: uid, name: input.name, persist, root })) {
+  if (!overwrite && exists) {
     throw skillError(409, 'name_taken', `Ya tienes una skill llamada «${input.name}».`);
   }
   if (!overwrite && listUserSkills({ userId: uid, persist, root }).length >= MAX_USER_SKILLS) {
@@ -487,7 +500,9 @@ function createUserSkill({ userId, name, description, body, overwrite = false, p
   try {
     store.persistUserSkill(root ? { userId: uid, ...input, root } : { userId: uid, ...input });
   } catch (err) {
-    throw skillError(400, err && err.code ? err.code : 'persist_failed', 'No se pudo guardar la skill.');
+    const code = err && err.code;
+    if (code === 'payload_too_long' || code === 'invalid_skill_name') throw skillError(400, code, 'La skill no es válida.');
+    throw skillError(500, 'persist_failed', 'No se pudo guardar la skill.');
   }
   // A re-created skill comes back switched on.
   const state = getSkillState({ userId: uid, persist, root });
@@ -561,7 +576,7 @@ function removeSkill({ userId, name, persist = null, root = undefined } = {}) {
   if (!uid || !clean) throw skillError(400, 'invalid_name', 'Skill no válida.');
   if (BUILTIN_BY_NAME.has(clean)) throw skillError(400, 'builtin', 'Las skills integradas no se eliminan; puedes desactivarlas.');
   const state = getSkillState({ userId: uid, persist, root });
-  if (userSkillExists({ userId: uid, name: clean, persist, root }) && !reservedSkillName(clean)) {
+  if (userSkillExists({ userId: uid, name: clean, persist, root })) {
     const store = persistStore(persist);
     const res = store.deletePersistedSkill(root ? { userId: uid, name: clean, root } : { userId: uid, name: clean });
     if (!res || !res.ok) throw skillError(500, 'delete_failed', 'No se pudo eliminar la skill.');

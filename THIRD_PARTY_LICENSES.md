@@ -827,7 +827,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `boolean` | 3.2.0 | MIT | [link](https://github.com/thenativeweb/boolean) |
 | `bottleneck` | 2.19.5 | MIT | [link](https://github.com/SGrondin/bottleneck) |
 | `bowser` | 2.14.1 | MIT | [link](https://github.com/bowser-js/bowser) |
-| `brace-expansion` | 1.1.18, 2.1.4 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
+| `brace-expansion` | 1.1.21, 2.1.7 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
 | `braces` | 3.0.3 | MIT | [link](https://github.com/micromatch/braces) |
 | `brotli` | 1.3.3 | MIT | [link](https://github.com/devongovett/brotli.js) |
 | `browserslist` | 4.28.8 | MIT | [link](https://github.com/browserslist/browserslist) |
@@ -1235,7 +1235,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `node-gyp-build-optional-packages` | 5.2.2 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-releases` | 2.0.54 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
-| `nodemailer` | 9.1.1 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
+| `nodemailer` | 10.0.13 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
 | `nopt` | 1.0.10, 7.2.1 | MIT | [link](https://github.com/isaacs/nopt) |
 | `normalize-path` | 3.0.0 | MIT | [link](https://github.com/jonschlinkert/normalize-path) |
 | `nwsapi` | 2.2.23 | MIT | [link](https://github.com/dperini/nwsapi) |
