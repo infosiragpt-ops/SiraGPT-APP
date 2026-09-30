@@ -91,6 +91,17 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose, skills 
     return skillItems.concat(commands.map((command) => ({ kind: "command" as const, id: `cmd-${command.id}`, command })))
   }, [filter, skills, onSkillPick])
 
+  // A new filter starts from the best match; keyboard moves keep the
+  // highlighted row in view (up to 30 skills + commands in a short list).
+  React.useEffect(() => { setActiveIdx(0) }, [filter])
+  React.useEffect(() => {
+    if (!open) return
+    const item = visible[activeIdx]
+    if (!item || typeof document === "undefined") return
+    const id = item.kind === "skill" ? `slash-skill-${item.skill.name}` : `slash-cmd-${item.command.id}`
+    document.getElementById(id)?.scrollIntoView?.({ block: "nearest" })
+  }, [open, activeIdx, visible])
+
   const pick = React.useCallback((item: SlashItem) => {
     if (item.kind === "skill") onSkillPick?.(item.skill)
     else onCommandPick(item.command)

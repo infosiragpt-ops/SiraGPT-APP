@@ -442,7 +442,13 @@ function CatalogCard({
 // ─────────────────────────────────────────────────────────────
 
 export function SkillsSettings() {
-  const [tab, setTab] = React.useState<SkillsSettingsTab>(() => consumeSkillsTab() || "mine")
+  const [tab, setTab] = React.useState<SkillsSettingsTab>("mine")
+  // Read the tab requested by «Explorar habilidades» once, in an effect: a
+  // state initializer runs twice under StrictMode and would lose it.
+  React.useEffect(() => {
+    const requested = consumeSkillsTab()
+    if (requested) setTab(requested)
+  }, [])
   const [query, setQuery] = React.useState("")
   const [sortByName, setSortByName] = React.useState(false)
   const [library, setLibrary] = React.useState<{ mine: SkillLibraryItem[]; partners: SkillLibraryItem[] } | null>(null)

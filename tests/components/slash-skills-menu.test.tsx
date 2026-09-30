@@ -42,6 +42,15 @@ describe("«/» lists skills (claude.ai)", () => {
     expect(onCommandPick).not.toHaveBeenCalled()
   })
 
+  it("restarts the highlight at the best match when the filter changes", async () => {
+    const onSkillPick = vi.fn()
+    const { rerender } = render(<SlashCommandMenu open filter="" skills={skills} onSkillPick={onSkillPick} onCommandPick={() => {}} onClose={() => {}} />)
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}")
+    rerender(<SlashCommandMenu open filter="d" skills={skills} onSkillPick={onSkillPick} onCommandPick={() => {}} onClose={() => {}} />)
+    await userEvent.keyboard("{Enter}")
+    expect(onSkillPick).toHaveBeenCalledWith(skills[1])
+  })
+
   it("keeps the commands-only menu when no skill handler is given", () => {
     render(<SlashCommandMenu open filter="" skills={skills} onCommandPick={() => {}} onClose={() => {}} />)
     expect(screen.queryByTestId("slash-skill-docx")).toBeNull()
@@ -65,6 +74,15 @@ describe("composer skills hook", () => {
     window.sessionStorage.setItem("sira:try-skill", JSON.stringify({ skill: { name: "vieja" }, at: Date.now() - 10 * 60 * 1000 }))
     const { result } = renderHook(() => useComposerSkills())
     expect(result.current.selectedNames).toEqual([])
+  })
+
+  it("an empty server list (every skill switched off) replaces the built-in placeholder", async () => {
+    api.listChatSkills.mockResolvedValue({ ok: true, skills: [] })
+    const { result } = renderHook(() => useComposerSkills())
+    expect(result.current.catalog.length).toBeGreaterThan(0)
+    act(() => { result.current.ensureLoaded() })
+    await waitFor(() => expect(result.current.status).toBe("ready"))
+    expect(result.current.catalog).toEqual([])
   })
 
   it("reloads the catalog when Ajustes → Skills changes something", async () => {

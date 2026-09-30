@@ -66,8 +66,10 @@ export function useComposerSkills(): ComposerSkills {
     apiClient
       .listChatSkills()
       .then((res) => {
+        // The server already drops switched-off skills: an empty list means
+        // «no active skills», so it replaces the built-in placeholder.
         const list = Array.isArray(res?.skills) ? res.skills.filter((s) => s && typeof s.name === "string") : []
-        if (list.length) setCatalog(list)
+        setCatalog(list)
         setStatus("ready")
       })
       .catch(() => setStatus("error"))

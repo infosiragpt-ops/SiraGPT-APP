@@ -7768,7 +7768,8 @@ But first, you need to connect your Spotify account securely using the button be
     if (!skill) return;
     selectSkill(skill);
     setInput(match[2]);
-  }, [input, skillCatalog, selectSkill]);
+    chatDraft.save(match[2]);
+  }, [input, skillCatalog, selectSkill, chatDraft]);
 
   // Sync the slash menu's open state + filter with the live input value so
   // that pasting "/goal" or deleting the leading "/" toggles the menu
@@ -8783,6 +8784,7 @@ But first, you need to connect your Spotify account securely using the button be
           onSkillPick={(skill) => {
             composerSkills.select(skill);
             setInput("");
+            chatDraft.save("");
             setSlashMenuOpen(false);
             window.setTimeout(() => textareaRef.current?.focus(), 0);
           }}
