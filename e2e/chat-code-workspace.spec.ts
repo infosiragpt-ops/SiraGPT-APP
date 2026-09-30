@@ -6,7 +6,7 @@ test.use({ viewport: { width: 1440, height: 900 } })
 
 // UI flows use a stateful API double. The backend suite separately runs the
 // real ReAct loop, project tools and a real Node test against on-disk files.
-async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fresh?: boolean; menu?: boolean; twoProjects?: boolean } = {}) {
+async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fresh?: boolean; menu?: boolean; twoProjects?: boolean; open?: boolean; otherUnbound?: boolean } = {}) {
   const chat = { id: 'code-chat', title: 'Mi aplicación', model: 'grok-4.6', messages: [], createdAt: '2026-09-21T00:00:00Z', updatedAt: '2026-09-21T00:00:00Z' }
   const otherChat = { ...chat, id: 'other-chat', title: 'Otra aplicación' }
   const user = { id: 'code-user', name: 'Valeria', email: 'qa@example.com', plan: 'PRO', isAdmin: true }
@@ -17,7 +17,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   const otherFiles: Record<string, string> = { 'app.js': 'module.exports = 9;\n' }
   const generated: any[] = [], requests: string[] = [], errors: string[] = []
   let bound = opts.bound !== false, createdChat = !opts.fresh
-  page.on('pageerror', e => errors.push(e.message))
+  page.on('pageerror', e => errors.push(e.stack || e.message))
   await page.addInitScript(() => {
     localStorage.setItem('auth-token', 'coding-test')
     localStorage.setItem('selectedModel', 'grok-4.6')
@@ -39,12 +39,12 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
     else if (p.endsWith('/messages') && req.method() === 'POST') body = { message: { ...req.postDataJSON(), id: `msg-${requests.length}`, chatId: chat.id, timestamp: new Date().toISOString() } }
     else if (p === '/codex/health') body = { ok: true, enabled: true }
     else if (p === '/codex/access') body = { ok: true, enabled: true, canRun: opts.access !== false }
-    else if (p === '/codex/projects') body = { projects: bound ? (opts.twoProjects ? [project, otherProject] : [project]) : [] }
+    else if (p === '/codex/projects') body = { projects: bound ? (opts.twoProjects && !opts.otherUnbound ? [project, otherProject] : [project]) : [] }
     else if (p === `/codex/projects/by-chat/${chat.id}`) {
       if (req.method() === 'POST') bound = true
       body = { project: bound ? project : null, chatId: chat.id }
     }
-    else if (opts.twoProjects && p === `/codex/projects/by-chat/${otherChat.id}`) body = { project: otherProject, chatId: otherChat.id }
+    else if (opts.twoProjects && p === `/codex/projects/by-chat/${otherChat.id}`) body = { project: opts.otherUnbound ? null : otherProject, chatId: otherChat.id }
     else if (p === '/codex/projects/code-project/files' || (opts.twoProjects && p === '/codex/projects/other-project/files')) {
       if (req.method() === 'POST') { for (const f of req.postDataJSON().files) workspaceFiles[f.path] = f.content; body = { ok: true, written: req.postDataJSON().files.length } }
       else body = { files: Object.keys(workspaceFiles) }
@@ -68,27 +68,27 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
     else if (p === '/codex/projects/code-project/preview/start') body = { devUrl: '/qa-code-preview', previewUrl: '/qa-code-preview' }
     else if (p === '/codex/projects/code-project/preview/status') body = { running: true, previewUrl: '/qa-code-preview' }
     else if (p === '/ai/generate') {
-      generated.push(req.postDataJSON()); files['app.js'] = 'module.exports = 2;\n'
-      return route.fulfill({ contentType: 'text/event-stream', body: 'data: {"content":"Actualicé app.js y comprobé el resultado."}\n\ndata: [DONE]\n\n' })
+      const input = req.postDataJSON()
+      generated.push(input)
+      let workspaceFrame = ''
+      if (input.codingWorkspace) {
+        bound = true
+        if (opts.fresh) project.name = 'Café Aurora'
+        files['app.js'] = 'module.exports = 2;\n'
+        workspaceFrame = `data: ${JSON.stringify({ type: 'coding_workspace', chatId: input.chatId, projectId: project.id, projectName: project.name })}\n\n`
+      }
+      return route.fulfill({ contentType: 'text/event-stream', body: `${workspaceFrame}data: {"content":"Actualicé app.js y comprobé el resultado."}\n\ndata: [DONE]\n\n` })
     }
     return route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.route('**/qa-code-preview', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>Mi aplicación</h1>' }))
-  const menu = opts.menu !== false
-  await page.goto(opts.fresh ? `/agentes${menu ? '' : '?code=1'}` : `/agentes?id=code-chat${menu ? '' : '&code=1'}`, { waitUntil: 'domcontentloaded' })
-  if (menu) {
-    const composer = page.locator('[data-testid=chat-composer-surface]:visible').last()
-    await expect(composer).toBeVisible({ timeout: 90_000 })
-    const tools = composer.getByRole('button', { name: 'Adjuntar archivos y herramientas', exact: true })
-    // Next's development badge occupies the mobile plus-button coordinates.
-    // Use the same accessible button through real keyboard activation there.
-    if ((page.viewportSize()?.width ?? 1440) < 768) await tools.press('Enter')
-    else await tools.click()
-    await expect(page.getByTestId('composer-open-code')).toBeVisible()
-    if (opts.fresh || test.info().title.startsWith('opens beside')) {
-      await page.screenshot({ path: test.info().outputPath('coding-menu.png') })
-    }
-    await page.getByTestId('composer-open-code').click()
+  const legacyLink = opts.menu === false
+  await page.goto(opts.fresh ? '/agentes' : `/agentes?id=code-chat${legacyLink ? '&code=1' : ''}`, { waitUntil: 'domcontentloaded' })
+  await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
+  if (opts.open === false || opts.fresh) return { files, otherFiles, generated, requests, errors }
+  if (!legacyLink) {
+    await expect(page.getByTestId('chat-code-button')).toBeVisible({ timeout: 90_000 })
+    await page.getByTestId('chat-code-button').click()
   }
   if (opts.access === false) {
     await expect(page.getByTestId('chat-coding-panel-status')).toContainText('Solicita acceso al administrador', { timeout: 90_000 })
@@ -164,11 +164,19 @@ test('short chat follow-up targets the same project and preserves selected model
   expect(state.errors).toEqual([])
 })
 
-test('fresh mobile chat can create its bound project and return to the composer', async ({ page }, info) => {
+test('fresh mobile chat prepares its cloud project from the first ordinary message without opening the editor', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 })
   const state = await setup(page, { fresh: true, bound: false })
-  await page.getByTestId('agentes-coding-project-name').fill('Mi app móvil')
-  await page.getByTestId('agentes-coding-new-project').click()
+  await expect(page.getByTestId('chat-code-button')).toHaveCount(0)
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('Créame una web llamada "Café Aurora"')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'code-chat', codingWorkspace: true, model: 'grok-4.6' })
+  expect(state.generated[0].disableAgentic).not.toBe(true)
+  await expect(page.getByTestId('chat-code-button')).toBeVisible()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await page.getByTestId('chat-code-button').click()
   await expect(page.getByRole('button', { name: 'app.js', exact: true })).toBeVisible()
   await expect(page.getByTestId('agentes-coding-project-select')).toHaveCount(0)
   await page.screenshot({ path: info.outputPath('coding-mobile.png') })
@@ -176,13 +184,12 @@ test('fresh mobile chat can create its bound project and return to the composer'
   expect(overflow).toBe(false)
   await page.getByTestId('agentes-coding-ide-collapse').click()
   await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible()
-  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
   await composer.fill('Cambia el valor a 2')
   await composer.press('Enter')
-  await expect.poll(() => state.generated.length).toBe(1)
-  expect(state.generated[0].codingWorkspace).toBe(true)
+  await expect.poll(() => state.generated.length).toBe(2)
+  expect(state.generated[1].codingWorkspace).toBe(true)
   expect(state.requests).toContain('POST /chats')
-  expect(state.requests).toContain('POST /codex/projects/by-chat/code-chat')
+  expect(state.requests).not.toContain('POST /codex/projects/by-chat/code-chat')
   expect(state.errors).toEqual([])
 })
 
@@ -240,6 +247,65 @@ test('the existing code link stays compatible', async ({ page }) => {
   expect(new URL(page.url()).pathname).toBe('/agentes')
 })
 
+test('a natural first desktop request creates one named cloud project; reload restores the button and folder with the panel closed', async ({ page }, info) => {
+  const state = await setup(page, { fresh: true, bound: false, open: false })
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last()
+  await composer.locator('textarea').fill('Créame una web llamada "Café Aurora"')
+  await composer.locator('textarea').press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'code-chat', codingWorkspace: true, model: 'grok-4.6' })
+  expect(state.requests.filter((request) => request === 'POST /chats')).toHaveLength(1)
+  expect(state.requests.some((request) => /\/agent-task|\/doc\/generate|\/artifact\/generate|\/generate-webdev/.test(request))).toBe(false)
+  await expect(page.getByTestId('chat-code-button')).toHaveAttribute('title', 'Código · Café Aurora')
+  await expect(page.locator('[data-sidebar-cloud-project="code-project"]:visible')).toContainText('Café Aurora')
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await page.screenshot({ path: info.outputPath('coding-chat-native.png') })
+  await composer.getByRole('button', { name: 'Adjuntar archivos y herramientas', exact: true }).click()
+  await expect(page.getByTestId('composer-open-code')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByTestId('chat-code-button')).toHaveAttribute('title', 'Código · Café Aurora', { timeout: 90_000 })
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await page.getByTestId('chat-code-button').click()
+  await openFile(page)
+  await expect(page.locator('.monaco-editor').first()).toContainText('module.exports = 2;')
+  expect(state.generated).toHaveLength(1)
+  expect(state.errors).toEqual([])
+})
+
+test('a greeting inside a coding chat remains ordinary conversation without workspace tools', async ({ page }) => {
+  const state = await setup(page, { open: false })
+  await expect(page.getByTestId('chat-code-button')).toBeVisible()
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('hola')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0].codingWorkspace).not.toBe(true)
+  expect(state.generated[0].disableAgentic).toBe(true)
+  expect(state.files['app.js']).toBe('module.exports = 1;\n')
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  expect(state.errors).toEqual([])
+})
+
+test('switching to an ordinary chat drops the prior workspace and ignores the prior chat ready event', async ({ page }) => {
+  const state = await setup(page, { twoProjects: true, otherUnbound: true })
+  await page.getByText('Otra aplicación', { exact: true }).click()
+  await expect(page.getByTestId('chat-code-button')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('siragpt:coding-workspace-ready', {
+    detail: { userId: 'code-user', chatId: 'code-chat', projectId: 'code-project', projectName: 'Mi aplicación' },
+  })))
+  await expect(page.getByTestId('chat-code-button')).toHaveCount(0)
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('hola')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'other-chat', disableAgentic: true })
+  expect(state.generated[0].codingWorkspace).not.toBe(true)
+  expect(state.files['app.js']).toBe('module.exports = 1;\n')
+  expect(state.errors).toEqual([])
+})
+
 
 test('switching projects never reuses a discarded draft from a cached Monaco model', async ({ page }) => {
   const state = await setup(page, { twoProjects: true })
@@ -250,7 +316,9 @@ test('switching projects never reuses a discarded draft from a cached Monaco mod
   page.on('dialog', dialog => void dialog.accept())
   await page.getByRole('button', { name: 'b.js', exact: true }).click()
   await expect(page.locator('.monaco-editor').first()).toContainText('archivo b')
-  await page.getByText('Otra aplicación', { exact: true }).click()
+  await page.locator('[data-sidebar-cloud-project="other-project"]:visible').click()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await page.getByTestId('chat-code-button').click()
   await expect(page.getByTestId('agentes-coding-session-label')).toContainText('Otra aplicación')
   await openFile(page)
   await expect(page.locator('.monaco-editor').first()).toContainText('module.exports = 9;')

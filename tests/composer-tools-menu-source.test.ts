@@ -16,13 +16,16 @@ describe("composer tools menu", () => {
     assert.match(chat, /openSettingsSection\("capabilities"\)/)
   })
 
-  it("opens the existing coding workspace from the tools menu after Skills", () => {
+  it("keeps code out of the tools menu and opens the bound workspace from the right header", () => {
     const skills = chat.indexOf("<SkillsMenu skills={composerSkills}")
-    const editor = chat.indexOf('data-testid="composer-open-code"', skills)
-    const search = chat.indexOf("{/* Web Search */}", editor)
-    assert.ok(skills > 0 && editor > skills && search > editor)
-    assert.match(chat.slice(editor, search), /void openCodePanel\(\)/)
-    assert.match(chat.slice(editor, search), /disabled=\{codeOpening\}/)
+    const search = chat.indexOf("{/* Web Search */}", skills)
+    assert.ok(skills > 0 && search > skills)
+    assert.doesNotMatch(chat, /composer-open-code/)
+    const header = chat.slice(chat.indexOf('className="chat-header-actions'), chat.indexOf('{/* Complete Chat Share Button'))
+    assert.match(header, /codeWorkspace &&/)
+    assert.match(header, /data-testid="chat-code-button"/)
+    assert.match(header, /void openCodePanel\(\)/)
+    assert.match(header, /disabled=\{codeOpening\}/)
     assert.match(chat, /chatId=\{currentChat.id\} userId=\{user\?\.id\}/)
     assert.ok(chat.includes("key={`${user?.id || 'anon'}:${currentChat.id}`}"), "account changes must remount the access-gated editor")
   })

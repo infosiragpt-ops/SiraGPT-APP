@@ -2252,7 +2252,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         console.warn('[agentic-chat] prompted tool cap failed (using full set):', capErr && capErr.message);
       }
     }
-    if (codingWorkspace) tools = require('./codex/chat-coding-workspace').codingTools();
+    if (codingWorkspace) tools = require('./codex/chat-coding-workspace').codingTools({
+      researchTools: applyCustomGptCapabilityGates(baseWebTools(), customGptCapabilities),
+    });
     const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool

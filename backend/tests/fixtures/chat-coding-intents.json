@@ -1,0 +1,561 @@
+[
+  {
+    "text": "créame una web de ventas de bicicletas",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "crea una app con frontend, backend y login",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "quiero una página web de ventas",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "necesito un software de ventas",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "Build a bicycle shop with a backend",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "crea un script foo.py",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "genera una API de productos",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "crea una app para editar Word",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "crea una app de imágenes",
+    "options": {},
+    "kind": "create"
+  },
+  {
+    "text": "verifica mi código en el GitHub",
+    "options": {},
+    "kind": "repository"
+  },
+  {
+    "text": "revisa mi repositorio",
+    "options": {},
+    "kind": "repository"
+  },
+  {
+    "text": "clona https://github.com/example/bikes.git",
+    "options": {},
+    "kind": "repository"
+  },
+  {
+    "text": "revisa https://github.com/example/bikes/tree/main",
+    "options": {},
+    "kind": "repository"
+  },
+  {
+    "text": "corrige el error en repo example/bikes",
+    "options": {},
+    "kind": "repository"
+  },
+  {
+    "text": "corrige este error en mi sofware",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "fix checkout.ts",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "edita index.html",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "optimiza la función en Python",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "añade un gráfico de ventas a la app",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "revisa mi código",
+    "options": {},
+    "kind": "review"
+  },
+  {
+    "text": "review my codebase",
+    "options": {},
+    "kind": "review"
+  },
+  {
+    "text": "analiza checkout.ts",
+    "options": {},
+    "kind": "review"
+  },
+  {
+    "text": "añade un filtro de precios",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": "followup"
+  },
+  {
+    "text": "continúa",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": "followup"
+  },
+  {
+    "text": "ejecuta las pruebas",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": "followup"
+  },
+  {
+    "text": "cambia el botón a verde",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": "followup"
+  },
+  {
+    "text": "despliega",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": "followup"
+  },
+  {
+    "text": "hola",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "hola",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "gracias 👍",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "gracias 👍",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "ok",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "ok",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "explícame qué hace este código",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "explícame qué hace este código",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "cómo puedo crear una web",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "cómo puedo crear una web",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "qué es GitHub",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "qué es GitHub",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "no quiero que crees una app",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "no quiero que crees una app",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "crea un código QR",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "crea un código QR",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "revisa el código de verificación",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "revisa el código de verificación",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "hazme un PDF de propuesta",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "hazme un PDF de propuesta",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "crea un documento Word vacío",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "crea un documento Word vacío",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "genera un Excel con las ventas",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "genera un Excel con las ventas",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "edita mi tesis",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "edita mi tesis",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "revisa el documento adjunto",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "revisa el documento adjunto",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "crea una imagen de una app",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "crea una imagen de una app",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "genera un video de una web",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "genera un video de una web",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "analiza datos de ventas",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "analiza datos de ventas",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "crea un diagrama de la empresa",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "crea un diagrama de la empresa",
+    "options": {
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "añade un filtro de precios",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "continúa",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "dame una API key",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "genera una API key",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "revisa esto",
+    "options": {
+      "hasWorkspace": true,
+      "hasAttachments": true
+    },
+    "kind": null
+  },
+  {
+    "text": "crea una app",
+    "options": {
+      "modality": "image"
+    },
+    "kind": null
+  },
+  {
+    "text": "crea una app",
+    "options": {
+      "modality": "voice",
+      "hasWorkspace": true
+    },
+    "kind": null
+  },
+  {
+    "text": "Corrige esto:\n```python\ndef suma(a,b): return a-b\n```",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "Corrige este código:\n```js\n// no cambies la app\nconst text = \"crea un documento Word\";\n```",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "Explícame esto:\n```js\n// crea una app de ventas\nconst a = 1;\n```",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "Lee este mensaje:\n```text\ncrea una app de ventas\n```",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "Corrige este código:\n```js\nconst link = \"https://github.com/example/repo\";\n```",
+    "options": {},
+    "kind": "edit"
+  },
+  {
+    "text": "Revisa este código:\n```python\n# visita https://github.com/example/repo\nvalue = 1\n```",
+    "options": {},
+    "kind": "review"
+  },
+  {
+    "text": "Revisa este código:\n~~~python\n# visita https://github.com/example/repo\nvalue = 1\n~~~",
+    "options": {},
+    "kind": "review"
+  },
+  {
+    "text": "pon el fondo azul",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "que sea azul",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "quiero que se vea más moderno",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "añádele un carrito",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "agrégale un botón al formulario",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "ahora conecta la base de datos",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "haz que funcione el login",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "pon el fondo azul",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "que sea azul",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "quiero que se vea más moderno",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "añádele un carrito",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "conecta la base de datos",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "haz que funcione el login",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "pon el fondo azul en Word",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "añádele un carrito a la presentación",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "quiero que se vea más moderno el documento",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "Explícame cómo conecta la base de datos",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "No quiero que conectes la base de datos",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "No pongas el fondo azul",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "No quiero que se vea más moderno",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "hola",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "pon música",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "pon el fondo azul",
+    "options": { "hasWorkspace": true, "modality": "image" },
+    "kind": null
+  },
+  {
+    "text": "pon el fondo azul",
+    "options": { "hasWorkspace": true, "hasAttachments": true },
+    "kind": null
+  }
+]

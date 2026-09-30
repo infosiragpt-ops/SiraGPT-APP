@@ -16,6 +16,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Start coding from a normal chat message: named cloud project folders, an optional code button in the chat header, owner-scoped project preparation after quota/provider preflight, and repository import locking. Preserve the same project across edits and reconnects; see `docs/coding/chat-native-status.md` for validation and remaining capability limits.
+
 - RLCD document analysis phase 3: retrieval-score + page-citation
   evidence, warmer Spanish defer (ask for section/page, candidate pages
   from RAG), expanded offline eval harness
