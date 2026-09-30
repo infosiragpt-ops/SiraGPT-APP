@@ -8,6 +8,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Preserve the coding agent's real progress when execution degrades, and allow token-authorized cloud preview modules from opaque sandboxed frames without granting access to the parent application's session.
+
 - Production backend boot no longer `require()`s
   `backend/tests/fixtures/document-rlcd-eval.json` at import time of
   `rlcd/eval-harness.js` (that path is dockerignored; Lenovo publish of

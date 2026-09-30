@@ -388,7 +388,8 @@ test('wiring: the chat streams + collects runner stages and persists them with t
   assert.match(stream, /\.\.\.\(agentActivityTrace \? \{ agentActivityTrace \} : \{\}\)/);
 
   const ai = read('src/routes/ai.js');
-  assert.match(ai, /req\._agentActivityTrace = agenticResult\.agentActivityTrace \|\| null;/);
+  assert.match(ai, /req\._agentActivityTrace = agenticResult\?\.agentActivityTrace \|\| null;/);
+  assert.ok(ai.indexOf('req._agentActivityTrace = agenticResult?.agentActivityTrace') < ai.indexOf('const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult)'), 'preserve activity before success or degradation is decided');
   // AgentRunner trace first; a plain / agentic-chat turn persists its live
   // pipeline timeline (services/turn-progress) instead.
   assert.equal((ai.match(/activityTrace: req\._agentActivityTrace \|\| req\._turnProgress\?\.toMetadata\(\{ durationMs: __firstByteAt \? __firstByteAt - __generateStartedAt : null \}\) \|\| null/g) || []).length, 2, 'both generate save paths');

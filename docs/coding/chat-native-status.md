@@ -1,6 +1,6 @@
 # Desarrollo desde el chat
 
-Estado: conexión implementada y preparación de publicación autorizada por Luis. La publicación requiere CI del commit exacto y comprobación de la versión servida.
+Estado: PR #936 publicada en Lenovo con commit `20305ca0f1681c8ee5ceac3d120782fe2a68aa3a`, publicación `36775214681` y salud verificadas. La aceptación autenticada detectó problemas de continuidad y vista previa; la corrección posterior debe volver a pasar CI y comprobación de la versión servida.
 
 La experiencia solicitada comienza escribiendo una tarea de desarrollo en `/agentes`. Un proyecto con nombre aparece en Carpetas y el botón Código de la cabecera permite abrir sus archivos. El editor es opcional y ya no está en el menú +. No se cambia de interfaz ni se activa un modo por inferencia.
 
@@ -30,6 +30,8 @@ Las pruebas con infraestructura simulada verifican los controles de la ruta, per
 
 ## Validación realizada
 
+- Producción autenticada, DeepSeek V4 Pro: un primer mensaje normal creó la carpeta Bici Nube QA936 sin abrir el editor; el botón Código mostró archivos frontend/backend reales. `npm run build` terminó con código 0. El agente no dio la tarea por completada. La vista previa cargó HTML pero bloqueó módulos por CORS, y un seguimiento se desvió a una página HTML independiente; no se considera aceptación completa hasta comprobar ambas correcciones.
+- Corrección posterior: 187/187 pruebas backend enfocadas y 115/115 de detector/paridad frontend. El seguimiento «No crees otro proyecto» conserva el vínculo sin ignorar otras negaciones. Una regresión Chromium del mismo mensaje y otra con proxy real, módulos ES y POST JSON pasan; esta última verifica aislamiento del iframe y ausencia de cookies/autorización hacia el proyecto. Se preservan los pasos reales y el motivo seguro de una ejecución degradada.
 - Integración HTTP del handler real `/generate` y `/stop-stream`: 9/9 pruebas con DB/proveedor aislados, cubriendo primer evento, orden de preflights, cuota, permisos, proveedor definitivo, presupuesto, modelos sin herramientas y Stop. Los pedidos de apps interactivas llegan al agente con el mismo proyecto y modelo hasta el cierre SSE, sin desviarse al generador de HTML separado. La ejecución con modelo real se verifica en producción.
 - Detector compartido: 105/105 pruebas backend y 104/104 frontend/paridad. URLs dentro de bloques de código no importan repositorios; seguimientos naturales conservan el proyecto sin activar documentos o saludos.
 - Nueva comprobación Chromium: 13/13 casos de escritorio y móvil. Capturas fuera del repositorio; APIs simuladas y editor Monaco real.
