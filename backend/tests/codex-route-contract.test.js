@@ -8,6 +8,9 @@ const { once } = require('node:events');
 const express = require('express');
 const request = require('supertest');
 const WebSocket = require('ws');
+const cors = require('cors');
+const { createCredentialedCorsOptions } = require('../src/middleware/cors-policy');
+const { isOpaqueCodexPreviewRequest } = require('../src/services/code/preview-proxy');
 
 const { mockResolvedModule } = require('./http-test-utils');
 
@@ -129,10 +132,15 @@ beforeEach(() => {
   runnerMockPort = 5173;
 });
 
-function buildApp() {
+function buildApp({ globalCors = false } = {}) {
   const app = express();
+  if (globalCors) {
+    const credentialedCors = cors(createCredentialedCorsOptions(['http://localhost:3000']));
+    app.use((req, res, next) => isOpaqueCodexPreviewRequest(req) ? next() : credentialedCors(req, res, next));
+  }
   app.use(express.json());
   app.use('/api/codex', codexRoutes);
+  if (globalCors) app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code }));
   return app;
 }
 
@@ -820,6 +828,122 @@ test('tokenized preview proxy strips credentials and forces frame headers', asyn
     delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('tokenized preview forwards parsed JSON and untouched raw request bodies', async () => {
+  const upstreamHits = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      upstreamHits.push({ method: req.method, body: Buffer.concat(chunks), headers: req.headers });
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  runnerMockPort = server.address().port;
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${runnerMockPort}`;
+  try {
+    const app = buildApp({ globalCors: true });
+    const start = await request(app).post('/api/codex/projects/p1/preview/start');
+    assert.equal(start.status, 200);
+    const target = `${start.body.previewUrl}api/products`;
+    const jsonBody = { name: 'Bicicleta de montaña', price: 150, variants: ['rojo', 'azul'], stock: { available: true } };
+    for (const method of ['post', 'put', 'patch', 'delete']) {
+      const response = await request(app)[method](target).set('Origin', 'null').send(jsonBody);
+      assert.equal(response.status, 200);
+      const forwarded = upstreamHits.at(-1);
+      assert.equal(forwarded.method, method.toUpperCase());
+      assert.deepEqual(JSON.parse(forwarded.body.toString()), jsonBody);
+      assert.equal(Number(forwarded.headers['content-length']), forwarded.body.length);
+      assert.equal(forwarded.headers['content-type'], 'application/json; charset=utf-8');
+      assert.equal(forwarded.headers['content-encoding'], undefined);
+    }
+    for (const entry of [
+      { type: 'text/plain', body: 'texto sin transformar ñ' },
+      { type: 'application/octet-stream', body: Buffer.from([0, 1, 127, 255]) },
+      { type: 'application/x-www-form-urlencoded', body: 'name=Bicicleta&price=150' },
+      { type: 'multipart/form-data; boundary=preview-boundary', body: '--preview-boundary\r\nContent-Disposition: form-data; name="name"\r\n\r\nBicicleta\r\n--preview-boundary--\r\n' },
+    ]) {
+      const response = await request(app).post(target).set('Origin', 'null').set('Content-Type', entry.type).send(entry.body);
+      assert.equal(response.status, 200);
+      const forwarded = upstreamHits.at(-1);
+      assert.deepEqual(forwarded.body, Buffer.from(entry.body));
+      assert.equal(forwarded.headers['content-type'], entry.type);
+    }
+  } finally {
+    delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('opaque preview loads Vite modules after token verification without credentialed CORS', async () => {
+  const upstreamHits = [];
+  const server = http.createServer((req, res) => {
+    upstreamHits.push({ url: req.url, headers: req.headers });
+    res.setHeader('Content-Type', 'text/javascript');
+    res.setHeader('Set-Cookie', 'untrusted=unsafe');
+    res.setHeader('Access-Control-Allow-Origin', 'https://evil.example.com');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.end('export const ready = true;');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  runnerMockPort = server.address().port;
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${runnerMockPort}`;
+  try {
+    const app = buildApp({ globalCors: true });
+    const start = await request(app).post('/api/codex/projects/p1/preview/start');
+    assert.equal(start.status, 200);
+    for (const asset of ['@vite/client', 'src/main.tsx', 'node_modules/.vite/deps/react.js?v=1']) {
+      const response = await request(app).get(`${start.body.previewUrl}${asset}`).set('Origin', 'null').set('Cookie', 'sid=private').set('Authorization', 'Bearer private');
+      assert.equal(response.status, 200);
+      assert.match(response.text, /export const ready/);
+      assert.equal(response.headers['access-control-allow-origin'], '*');
+      assert.equal(response.headers['access-control-allow-credentials'], undefined);
+      assert.equal(response.headers['set-cookie'], undefined);
+      assert.equal(upstreamHits.at(-1).url, `${start.body.previewUrl}${asset}`);
+      assert.equal(upstreamHits.at(-1).headers.cookie, undefined);
+      assert.equal(upstreamHits.at(-1).headers.authorization, undefined);
+    }
+    for (const target of [start.body.previewUrl.replace('/p1/', '/p2/'), '/api/codex/projects/p1/preview/invalid.signature/app/src/main.tsx']) {
+      const response = await request(app).get(target).set('Origin', 'null');
+      assert.equal(response.status, 403);
+      assert.equal(response.headers['access-control-allow-origin'], undefined);
+    }
+    const foreign = await request(app).get(start.body.previewUrl).set('Origin', 'https://evil.example.com');
+    assert.equal(foreign.status, 403);
+    assert.equal(foreign.headers['access-control-allow-origin'], undefined);
+    const ordinary = await request(app).get('/api/codex/projects').set('Origin', 'null');
+    assert.equal(ordinary.status, 403);
+    assert.equal(upstreamHits.length, 3);
+  } finally {
+    delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('opaque preview preflight permits only project methods and content-type after token verification', async () => {
+  const app = buildApp({ globalCors: true });
+  const start = await request(app).post('/api/codex/projects/p1/preview/start');
+  assert.equal(start.status, 200);
+  const target = `${start.body.previewUrl}api/products`;
+  for (const method of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
+    const response = await request(app).options(target).set('Origin', 'null').set('Access-Control-Request-Method', method).set('Access-Control-Request-Headers', 'Content-Type');
+    assert.equal(response.status, 204);
+    assert.equal(response.headers['access-control-allow-origin'], '*');
+    assert.equal(response.headers['access-control-allow-credentials'], undefined);
+    assert.equal(response.headers['access-control-allow-methods'], method);
+    assert.equal(response.headers['access-control-allow-headers'], 'content-type');
+  }
+  for (const requestedHeader of ['Authorization', 'Cookie', 'X-Sira-Token']) {
+    const response = await request(app).options(target).set('Origin', 'null').set('Access-Control-Request-Method', 'POST').set('Access-Control-Request-Headers', requestedHeader);
+    assert.equal(response.status, 403);
+    assert.equal(response.headers['access-control-allow-origin'], undefined);
+  }
+  const invalid = await request(app).options('/api/codex/projects/p1/preview/invalid.signature/app/api/products').set('Origin', 'null').set('Access-Control-Request-Method', 'POST').set('Access-Control-Request-Headers', 'content-type');
+  assert.equal(invalid.status, 403);
+  assert.equal(invalid.headers['access-control-allow-origin'], undefined);
 });
 
 test('tokenized preview proxy can override Host header for Vite allowedHosts', async () => {

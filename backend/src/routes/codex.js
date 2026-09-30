@@ -61,6 +61,7 @@ const {
 } = require('../services/codex/preview-websocket-proxy');
 const {
   applyPreviewFrameHeaders: applyPreviewFramePolicy,
+  applyPreviewCorsHeaders,
   filterPreviewResponseHeaders,
   injectPreviewInteractionBridges,
   previewTokenFor: mintPreviewToken,
@@ -2426,6 +2427,18 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
   const payload = verifyPreviewToken(req.params.token);
   if (!payload || payload.projectId !== req.params.id) return res.status(403).json({ error: 'forbidden' });
 
+  if (req.method === 'OPTIONS' && req.headers.origin === 'null') {
+    const method = String(req.headers['access-control-request-method'] || '').toUpperCase();
+    const requestedHeaders = String(req.headers['access-control-request-headers'] || '').toLowerCase().split(',').map((header) => header.trim()).filter(Boolean);
+    if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+      || requestedHeaders.some((header) => header !== 'content-type')) {
+      return res.status(403).json({ error: 'preview_cors_forbidden' });
+    }
+    const headers = applyPreviewCorsHeaders({ 'cache-control': 'no-store', 'access-control-allow-methods': method }, req.headers.origin);
+    if (requestedHeaders.length) headers['access-control-allow-headers'] = 'content-type';
+    return res.set(headers).status(204).end();
+  }
+
   // Multi-project runner: target the port assigned to THIS project. Null
   // (unknown/not running) falls back to the configured base URL (legacy 5173).
   const projectPort = await resolvePreviewPort(req.params.id);
@@ -2445,6 +2458,16 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
     fwdHeaders[k] = v;
   }
   fwdHeaders.host = previewProxyHostHeader(upstreamBase);
+  const parsedJsonBody = req.method !== 'GET' && req.method !== 'HEAD'
+    && req.readableEnded && req.body !== undefined
+    && /^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type'] || ''))
+    ? Buffer.from(JSON.stringify(req.body), 'utf8')
+    : null;
+  if (parsedJsonBody) {
+    fwdHeaders['content-type'] = 'application/json; charset=utf-8';
+    fwdHeaders['content-length'] = String(parsedJsonBody.length);
+    delete fwdHeaders['content-encoding'];
+  }
 
   const transport = upstreamBase.protocol === 'https:' ? https : http;
   const upstream = transport.request(
@@ -2460,6 +2483,7 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
       const nonce = previewNonceFromRequest(req);
       const injectInteractions = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
       const headers = filterPreviewResponseHeaders(up.headers);
+      applyPreviewCorsHeaders(headers, req.headers.origin);
       if (injectInteractions) delete headers['content-length'];
       if (injectInteractions) {
         readPreviewBody(up).then((body) => {
@@ -2496,6 +2520,7 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
     }
   });
   if (req.method === 'GET' || req.method === 'HEAD') upstream.end();
+  else if (parsedJsonBody) upstream.end(parsedJsonBody);
   else req.pipe(upstream);
 });
 

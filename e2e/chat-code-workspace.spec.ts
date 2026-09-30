@@ -164,6 +164,27 @@ test('short chat follow-up targets the same project and preserves selected model
   expect(state.errors).toEqual([])
 })
 
+test('continuation forbidding a new project stays on the bound coding route without opening the editor', async ({ page }) => {
+  const state = await setup(page, { open: false })
+  await expect(page.getByTestId('chat-code-button')).toBeVisible()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  const prompt = 'Continúa en este mismo proyecto. Conserva lo ya creado, comprueba el backend y termina la validación. npm run build ya compiló correctamente. La vista previa está iniciada. No crees otro proyecto ni uses servicios de pago.'
+  await composer.fill(prompt)
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'code-chat', codingWorkspace: true, model: 'grok-4.6', prompt })
+  expect(state.generated[0].disableAgentic).not.toBe(true)
+  expect(state.requests.some(request => /\/(?:generate-webdev|generate-artifact|generate-viz|agent-task|classify-intent)/.test(request))).toBe(false)
+  expect(state.requests.some(request => request.startsWith('POST /codex/projects'))).toBe(false)
+  expect(state.requests).not.toContain('POST /chats')
+  await page.getByTestId('chat-code-button').click()
+  await openFile(page)
+  await expect(page.locator('.monaco-editor').first()).toContainText('2')
+  expect(state.requests).toContain('GET /codex/projects/code-project/file')
+  expect(state.errors).toEqual([])
+})
+
 test('fresh mobile chat prepares its cloud project from the first ordinary message without opening the editor', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 })
   const state = await setup(page, { fresh: true, bound: false })

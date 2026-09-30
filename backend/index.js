@@ -785,6 +785,7 @@ const {
 } = require('./src/middleware/saml-acs-ingress');
 const ALLOWED_ORIGINS = resolveAllowedOrigins(process.env);
 const credentialedCors = cors(createCredentialedCorsOptions(ALLOWED_ORIGINS));
+const { isOpaqueCodexPreviewRequest } = require('./src/services/code/preview-proxy');
 const CODE_RUNNER_TOKEN_APP_PATH_RE = /^\/api\/code-runner\/[a-zA-Z0-9_-]+\/[a-fA-F0-9]+\/app(?:\/|$)/;
 const globalCors = (req, res, next) => {
     // Sandboxed /code preview iframes have an opaque origin, so browser module
@@ -793,7 +794,7 @@ const globalCors = (req, res, next) => {
     // scoped CORS headers. Let those requests reach the proxy instead of being
     // rejected by the global credentialed app CORS policy.
     const path = req.path || req.originalUrl || '';
-    if (CODE_RUNNER_TOKEN_APP_PATH_RE.test(path)) return next();
+    if (CODE_RUNNER_TOKEN_APP_PATH_RE.test(path) || isOpaqueCodexPreviewRequest(req)) return next();
     return credentialedCors(req, res, next);
 };
 // Reject abusive exact-ACS requests in the shared distributed limiter before

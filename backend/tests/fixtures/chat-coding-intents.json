@@ -557,5 +557,60 @@
     "text": "pon el fondo azul",
     "options": { "hasWorkspace": true, "hasAttachments": true },
     "kind": null
+  },
+  {
+    "text": "Continúa en este mismo proyecto. Conserva lo ya creado, comprueba el backend y termina la validación. npm run build ya compiló correctamente. La vista previa está iniciada. No crees otro proyecto ni uses servicios de pago.",
+    "options": { "hasWorkspace": true },
+    "kind": "create"
+  },
+  {
+    "text": "Continúa en este mismo proyecto. No crees otro proyecto.",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "Continúa en este mismo proyecto",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
+  },
+  {
+    "text": "Continúa en este mismo proyecto. No crees otro proyecto.",
+    "options": {},
+    "kind": null
+  },
+  {
+    "text": "No crees otro proyecto",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "Continúa en este mismo proyecto. No modifiques el código.",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "Continúa en este mismo proyecto. No crees otro proyecto y no programes.",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "No crees código nuevo, solo revisa el backend.",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "Explícame este proyecto. No crees otro proyecto.",
+    "options": { "hasWorkspace": true },
+    "kind": null
+  },
+  {
+    "text": "Continúa en este mismo proyecto. No crees otro proyecto.",
+    "options": { "hasWorkspace": true, "modality": "image" },
+    "kind": null
+  },
+  {
+    "text": "Continue in this project. Don't create another project.",
+    "options": { "hasWorkspace": true },
+    "kind": "followup"
   }
 ]
