@@ -530,28 +530,18 @@ function isImageFile(file) {
 }
 
 // Word counts run on the request path for every attachment (50 × 1 MB is a
-// legal upload): scan at most this many characters per text, without
-// allocating, and extrapolate the rest («~N palabras»).
+// legal upload): scan at most this many characters per text and extrapolate
+// the rest («~N palabras»). Any temporary matches are bounded by this cap.
 const WORD_COUNT_SCAN_CHARS = 100_000;
-
-function isSpaceCode(c) {
-  // Exactly the characters `\s` matches.
-  return c === 32 || (c >= 9 && c <= 13) || c === 0xa0 || c === 0x1680
-    || (c >= 0x2000 && c <= 0x200a) || c === 0x2028 || c === 0x2029
-    || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff;
-}
 
 /** { words, approx } — exact up to `maxChars`, extrapolated beyond. */
 function countWordsBounded(text, maxChars = WORD_COUNT_SCAN_CHARS) {
   const s = typeof text === 'string' ? text : String(text || '');
   const len = s.length;
   const end = Math.min(len, Math.max(1, Number(maxChars) || WORD_COUNT_SCAN_CHARS));
-  let words = 0;
-  let inWord = false;
-  for (let i = 0; i < end; i += 1) {
-    if (isSpaceCode(s.charCodeAt(i))) inWord = false;
-    else if (!inWord) { inWord = true; words += 1; }
-  }
+  // Native matching avoids one instrumented JavaScript branch per character.
+  // Ceil preserves the former i < end scan when a caller supplies a fraction.
+  const words = (s.slice(0, Math.ceil(end)).match(/\S+/g) || []).length;
   if (end >= len) return { words, approx: false };
   return { words: Math.round(words * (len / end)), approx: true };
 }
