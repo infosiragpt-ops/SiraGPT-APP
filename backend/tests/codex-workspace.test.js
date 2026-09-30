@@ -52,3 +52,25 @@ test('gitCommitAll returns the trimmed HEAD sha', async () => {
   const sha = await gitCommitAll(runner, 'p9', 'feat: checkpoint');
   assert.equal(sha, 'abc123');
 });
+
+test('cancelled provisioning stops after init without writing starter files', async () => {
+  const runner = fakeRunner();
+  const controller = new AbortController();
+  const initialize = runner.initWorkspace;
+  runner.initWorkspace = async (project) => { const result = await initialize(project); controller.abort(); return result; };
+  await assert.rejects(provisionWorkspace({ project: 'p-cancel', runner, signal: controller.signal }), { name: 'AbortError' });
+  assert.deepEqual(runner.calls.map(([kind]) => kind), ['initWorkspace']);
+});
+
+test('Stop during git add propagates its signal and does not start a commit', async () => {
+  const controller = new AbortController();
+  const commands = [];
+  const runner = { exec: async (_project, command, options) => {
+    assert.equal(options.signal, controller.signal);
+    commands.push(command);
+    controller.abort();
+    return { exitCode: 0 };
+  } };
+  await assert.rejects(gitCommitAll(runner, 'p-cancel', 'initial', { signal: controller.signal }), { name: 'AbortError' });
+  assert.deepEqual(commands, [['git', 'add', '-A']]);
+});

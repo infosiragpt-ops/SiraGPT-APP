@@ -560,17 +560,22 @@ async function resolveStoredGithubToken(userId) {
   }
 }
 
-function sendGithubFlowError(res, err) {
+function githubFlowErrorResult(err) {
   const code = String(err?.code || 'codex_github_failed');
   const status = /^(invalid_|repository_|pull_request_sensitive_path)/.test(code) ? 400
     : code === 'pull_request_too_large' || code === 'pull_request_file_too_large' ? 413
       : code === 'github_auth_required' ? 401
         : code === 'base_branch_diverged' || code === 'checkpoint_not_current' ? 409
           : 502;
-  return res.status(status).json({
+  return { status, body: {
     error: code,
     message: String(err?.message || err || 'GitHub flow failed.').slice(0, 2_000),
-  });
+  } };
+}
+
+function sendGithubFlowError(res, err) {
+  const result = githubFlowErrorResult(err);
+  return res.status(result.status).json(result.body);
 }
 
 router.post(
@@ -603,109 +608,119 @@ router.post(
       return sendGithubFlowError(res, err);
     }
     try {
-      const organizationId = req.body.organizationId || null;
-      // Un chat abre exactamente un proyecto (mismo contrato que
-      // POST /projects/by-chat/:chatId). Con vínculo previo no se clona nada.
-      if (chatId) {
-        let boundProjectId = null;
-        try {
-          boundProjectId = await projectChatBinding.findProjectIdForChat({ userId: req.user.id, chatId, db: codexDb });
-        } catch (err) {
-          return sendBindingError(res, err);
-        }
-        if (boundProjectId) {
-          return res.status(409).json({
-            error: 'chat_already_bound',
-            message: 'Este chat ya tiene un proyecto vinculado.',
-            projectId: boundProjectId,
-          });
-        }
-      }
-      if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
-        userId: req.user.id,
-        organizationId,
-      }))) {
-        return res.status(404).json({ error: 'organization_not_found' });
-      }
-      // Authenticated path when the user's GitHub account is connected: reach
-      // private repos and learn the real default branch. Token stays in memory.
-      const stored = await resolveStoredGithubToken(req.user.id);
-      let meta = null;
-      if (stored) {
-        try {
-          meta = await githubApiService().getRepository(req.user.id, repository.owner, repository.repo);
-        } catch (err) {
-          if (Number(err?.status) === 404) {
-            return res.status(404).json({
-              error: 'repository_not_found',
-              message: 'El repositorio no existe o tu cuenta de GitHub no tiene acceso a él.',
-            });
+      // A chat-bound clone shares the durable owner+chat lock with automatic
+      // preparation and manual creation. Return a response descriptor from
+      // the transaction; never send 201 before its ready row has committed.
+      const cloneWorkspace = async (projectDb) => {
+        const organizationId = req.body.organizationId || null;
+        // Un chat abre exactamente un proyecto (mismo contrato que
+        // POST /projects/by-chat/:chatId). Con vínculo previo no se clona nada.
+        if (chatId) {
+          let boundProjectId = null;
+          try {
+            boundProjectId = await projectChatBinding.findProjectIdForChat({ userId: req.user.id, chatId, db: projectDb });
+          } catch (err) {
+            throw err;
           }
-          if (process.env.NODE_ENV !== 'test') {
-            console.warn('[codex github] repository metadata lookup failed, cloning blind:', err?.message || err);
+          if (boundProjectId) {
+            return { status: 409, body: {
+              error: 'chat_already_bound',
+              message: 'Este chat ya tiene un proyecto vinculado.',
+              projectId: boundProjectId,
+            } };
           }
         }
-      }
-      const branch = requestedBranch || (meta && meta.defaultBranch) || 'main';
-      const isPrivate = Boolean(meta && meta.private);
-      const row = await codexDb.codexProject.create({
-        data: {
+        if (organizationId && !(await companyAssociationService.hasOrganizationAccess(projectDb, {
           userId: req.user.id,
           organizationId,
-          name,
-          brief: {
-            kind: isPrivate ? 'repo-private' : 'repo-public',
-            repository: {
-              url: repository.cloneUrl,
-              webUrl: repository.webUrl,
+        }))) {
+          return { status: 404, body: { error: 'organization_not_found' } };
+        }
+        // Authenticated path when the user's GitHub account is connected: reach
+        // private repos and learn the real default branch. Token stays in memory.
+        const stored = await resolveStoredGithubToken(req.user.id);
+        let meta = null;
+        if (stored) {
+          try {
+            meta = await githubApiService().getRepository(req.user.id, repository.owner, repository.repo);
+          } catch (err) {
+            if (Number(err?.status) === 404) {
+              return { status: 404, body: {
+                error: 'repository_not_found',
+                message: 'El repositorio no existe o tu cuenta de GitHub no tiene acceso a él.',
+              } };
+            }
+            if (process.env.NODE_ENV !== 'test') {
+              console.warn('[codex github] repository metadata lookup failed, cloning blind:', err?.message || err);
+            }
+          }
+        }
+        const branch = requestedBranch || (meta && meta.defaultBranch) || 'main';
+        const isPrivate = Boolean(meta && meta.private);
+        const row = await projectDb.codexProject.create({
+          data: {
+            userId: req.user.id,
+            organizationId,
+            name,
+            brief: {
+              kind: isPrivate ? 'repo-private' : 'repo-public',
+              repository: {
+                url: repository.cloneUrl,
+                webUrl: repository.webUrl,
+                fullName: `${repository.owner}/${repository.repo}`,
+                private: isPrivate,
+                defaultBranch: (meta && meta.defaultBranch) || null,
+              },
+              sourceBranch: branch,
+              authenticated: Boolean(stored),
+              ...(chatId ? { chatId, source: 'agentes' } : {}),
+            },
+            status: 'provisioning',
+          },
+        });
+        try {
+          const runner = createSandboxClient();
+          const cloned = await opencodeHarness.clonePublicRepo({
+            runner,
+            projectId: row.id,
+            repoUrl: repository.cloneUrl,
+            branch,
+            accessToken: stored ? stored.accessToken : null,
+          });
+          const ready = await projectDb.codexProject.update({
+            where: { id: row.id },
+            data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
+          });
+          return { status: 201, body: {
+            // `row` conserva el brief recién creado (kind/repository/chatId) aunque
+            // el update devuelva una fila parcial: la proyección pública lo necesita.
+            project: projectService.publicProject({ ...row, ...ready }),
+            ...(chatId ? { chatId } : {}),
+            sourceControl: {
+              repository: repository.webUrl,
               fullName: `${repository.owner}/${repository.repo}`,
               private: isPrivate,
               defaultBranch: (meta && meta.defaultBranch) || null,
+              authenticated: cloned.authenticated === true,
+              sourceBranch: cloned.sourceBranch,
+              workBranch: cloned.workBranch,
+              commitSha: cloned.commitSha,
             },
-            sourceBranch: branch,
-            authenticated: Boolean(stored),
-            ...(chatId ? { chatId, source: 'agentes' } : {}),
-          },
-          status: 'provisioning',
-        },
-      });
-      try {
-        const runner = createSandboxClient();
-        const cloned = await opencodeHarness.clonePublicRepo({
-          runner,
-          projectId: row.id,
-          repoUrl: repository.cloneUrl,
-          branch,
-          accessToken: stored ? stored.accessToken : null,
-        });
-        const ready = await codexDb.codexProject.update({
-          where: { id: row.id },
-          data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
-        });
-        return res.status(201).json({
-          // `row` conserva el brief recién creado (kind/repository/chatId) aunque
-          // el update devuelva una fila parcial: la proyección pública lo necesita.
-          project: projectService.publicProject({ ...row, ...ready }),
-          ...(chatId ? { chatId } : {}),
-          sourceControl: {
-            repository: repository.webUrl,
-            fullName: `${repository.owner}/${repository.repo}`,
-            private: isPrivate,
-            defaultBranch: (meta && meta.defaultBranch) || null,
-            authenticated: cloned.authenticated === true,
-            sourceBranch: cloned.sourceBranch,
-            workBranch: cloned.workBranch,
-            commitSha: cloned.commitSha,
-          },
-        });
-      } catch (err) {
-        await codexDb.codexProject.update({
-          where: { id: row.id },
-          data: { status: 'error', error: String(err?.message || err).slice(0, 2_000) },
-        }).catch(() => null);
-        return sendGithubFlowError(res, err);
-      }
+          } };
+        } catch (err) {
+          await projectDb.codexProject.update({
+            where: { id: row.id },
+            data: { status: 'error', error: String(err?.message || err).slice(0, 2_000) },
+          }).catch(() => null);
+          return githubFlowErrorResult(err);
+        }
+      };
+      const result = chatId
+        ? await projectChatBinding.withChatProjectLock({ userId: req.user.id, chatId, db: codexDb }, cloneWorkspace)
+        : await cloneWorkspace(codexDb);
+      return res.status(result.status).json(result.body);
     } catch (err) {
+      if (err?.code === 'coding_chat_not_found' || err?.code === 'codex_store_unavailable') return sendBindingError(res, err);
       return res.status(500).json({ error: 'codex_clone_failed', message: String(err?.message || err).slice(0, 2_000) });
     }
   },

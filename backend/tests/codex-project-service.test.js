@@ -46,6 +46,20 @@ function okRunner() {
   };
 }
 
+test('cancelled project preparation retains a terminal binding without writing more files', async () => {
+  const db = fakeDb();
+  const controller = new AbortController();
+  let writes = 0;
+  const runner = okRunner();
+  runner.initWorkspace = async () => { controller.abort(); return { ok: true }; };
+  runner.writeFiles = async () => { writes += 1; return { ok: true }; };
+  const project = await createProject({ userId: 'u1', name: 'Cancelled', runner, db, signal: controller.signal });
+  assert.equal(project.status, 'error');
+  assert.match(project.error, /cancelada/);
+  assert.equal(db.rows.get(project.id).status, 'error');
+  assert.equal(writes, 0);
+});
+
 test('hasFullStackIntent detects Spanish and English server/data product briefs', () => {
   const fullStackBriefs = [
     'Crea una app con base de datos para guardar clientes',
@@ -187,4 +201,18 @@ test('publicProject: repo-public sin metadatos → sourceControl con nulls; kind
   assert.equal(plain.chatId, 'chat_9');
   const none = publicProject(row(null));
   assert.equal(none.chatId, undefined);
+});
+
+
+test('chat-bound brief instructions provision the full-stack starter without losing the binding', async () => {
+  const db = fakeDb(), runner = okRunner();
+  let files;
+  runner.writeFiles = async (_project, next) => { files = next; return { ok: true, written: next.length }; };
+  const brief = { chatId: 'chat-1', source: 'agentes', instructions: 'Crea una app CRM con PostgreSQL y autenticación' };
+  const project = await createProject({ userId: 'u1', name: 'CRM', brief, runner, db, env: {} });
+  assert.equal(project.status, 'ready');
+  assert.deepEqual(db.rows.get(project.id).brief, brief);
+  assert.ok(files.some((file) => file.path === 'server/index.js'));
+  assert.equal(hasFullStackIntent({ instructions: 'Landing estática' }), false);
+  assert.equal(hasFullStackIntent({ instructions: { toString: () => 'postgres' } }), false);
 });

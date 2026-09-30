@@ -2559,17 +2559,21 @@ router.post(
         }
       }
 
-      let verifiedCodingWorkspace = null;
-      if (req.body.codingWorkspace === true) {
-        try {
-          const access = await require('../services/codex/chat-coding-workspace').authorizeChatCoding({ user: req.user, chatId, db: prisma });
-          if (!access.ok) return res.status(access.status).json({ error: access.error, message: access.message });
-          if (req.body.disableAgentic === true) return res.status(409).json({ error: 'coding_tools_disabled', message: 'Activa las herramientas del chat para programar en el proyecto.' });
-          verifiedCodingWorkspace = { projectId: access.projectId };
-        } catch (_) {
-          return res.status(503).json({ error: 'coding_unavailable', message: 'No se pudo comprobar el proyecto. Reintenta en unos segundos.' });
-        }
-      }
+      const codingWorkspaceService = require('../services/codex/chat-coding-workspace');
+      const codingWorkspaceInput = {
+        user: req.user, chatId, db: prisma, prompt,
+        hasAttachments: Array.isArray(files) && files.length > 0,
+        modality: req.body.chip || req.body.modality || req.body.generationLane || req.body.lane || null,
+        disableAgentic: req.body.disableAgentic === true,
+        signal,
+      };
+      // Text is authoritative; a client flag cannot grant access or create a
+      // project. Authorization has no side effects until preflight passes.
+      const codingAccess = __publicWebReadonly
+        ? { ok: true, active: false }
+        : await codingWorkspaceService.prepareChatCodingWorkspace({ ...codingWorkspaceInput, provision: false });
+      if (!codingAccess.ok) return res.status(codingAccess.status).json({ error: codingAccess.error, message: codingAccess.message });
+      let verifiedCodingWorkspace = codingAccess.active ? { projectId: codingAccess.projectId } : null;
 
       try {
         const adQ = require('../services/agent-runner/engine-adapter');
@@ -3123,6 +3127,8 @@ router.post(
             res.setHeader('Connection', 'keep-alive');
             res.setHeader('X-Accel-Buffering', 'no');
             if (typeof res.flushHeaders === 'function') res.flushHeaders();
+            const readyWorkspaceEvent = codingWorkspaceService.codingWorkspaceEvent(chatId, codingAccess) || activeResume?.codingWorkspaceEvent;
+            if (readyWorkspaceEvent?.chatId === String(chatId)) res.write(`data: ${JSON.stringify(readyWorkspaceEvent)}\n\n`);
 
             const durableReplayStart = inclusiveReplayStartFromRing(record.chunks, resumeReplayPosition);
             const replay = record.chunks.slice(durableReplayStart);
@@ -7394,6 +7400,42 @@ router.post(
         generateLog.warnError('prompt.token_preflight_failed', preflightErr);
       }
 
+      if (verifiedCodingWorkspace) {
+        if (signal.aborted) return;
+        const codingAgenticStream = require('../services/agentic-chat-stream');
+        if (!codingAgenticStream.isEnabled()
+          || isSiraMiniAlias(actualModel)
+          || /^typesafe$/i.test(String(actualProvider || ''))
+          || codingAgenticStream.resolveToolCallMode(actualProvider, actualModel) === 'none') {
+          streamFailureMessage = 'El modelo seleccionado no puede ejecutar herramientas de programación. Selecciona un modelo compatible para continuar.';
+          closeGenerateSseWithError(res, { message: streamFailureMessage, code: 'coding_tools_unavailable', recovered: false });
+          return;
+        }
+        const preparingProject = turnProgress.begin('coding-workspace', 'Preparando el proyecto', { tool: 'pipeline' });
+        const prepared = await codingWorkspaceService.prepareChatCodingWorkspace(codingWorkspaceInput);
+        if (signal.aborted) return;
+        if (!prepared.ok || !prepared.active || !prepared.projectId) {
+          const code = prepared.error || 'coding_unavailable';
+          const message = prepared.message || 'No se pudo preparar el proyecto. Reintenta en unos segundos.';
+          preparingProject.fail(message);
+          streamFailureMessage = message;
+          closeGenerateSseWithError(res, { message, code, recovered: false });
+          return;
+        }
+        verifiedCodingWorkspace = { projectId: prepared.projectId };
+        preparingProject.done('Proyecto preparado');
+        const readyEvent = codingWorkspaceService.codingWorkspaceEvent(chatId, prepared);
+        res.write(`data: ${JSON.stringify(readyEvent)}\n\n`);
+        const active = resumeSession?.streamId && activeResumeStreams.get(resumeSession.streamId);
+        if (active) {
+          active.codingWorkspaceEvent = readyEvent;
+          for (const subscriber of active.subscribers) {
+            try { if (!subscriber.writableEnded) subscriber.write(`data: ${JSON.stringify(readyEvent)}\n\n`); } catch { active.subscribers.delete(subscriber); }
+          }
+        }
+        if (signal.aborted) return;
+      }
+
       // keepAlive interval was already started during the early SSE connection
       // phase (after quota check) so proxies/Replit edge don't time out while
       // enrichment runs. No second setInterval needed here.
@@ -7779,7 +7821,7 @@ router.post(
       // visualization instead. Falls through to the normal stream on
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
-      if (artifactGenerator.isArtifactRequest(prompt)) {
+      if (!verifiedCodingWorkspace && artifactGenerator.isArtifactRequest(prompt)) {
         turnProgress.settleAll();
         const __artifactHandle = turnProgress.begin('artifact', 'Diseñando la visualización interactiva', { tool: 'plan', kind: 'edit' });
         try {
@@ -8019,7 +8061,7 @@ router.post(
                 // decision adapter in aiService handles the whole turn.
                 && !/^typesafe$/i.test(String(actualProvider || ''))
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
-                && (!hasImages || documentEditRequested || createDocRequested)
+                && (!hasImages || Boolean(verifiedCodingWorkspace) || documentEditRequested || createDocRequested)
               );
               // F2 telemetry: a document turn (the AgentRunner would claim it)
               // that does NOT enter the agentic loop is logged as 'skipped'

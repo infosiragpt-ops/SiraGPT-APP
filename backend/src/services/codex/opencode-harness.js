@@ -1,5 +1,7 @@
 'use strict';
 
+const { throwIfAborted } = require('../../utils/abort-signal');
+
 /**
  * codex/opencode-harness — fusión del arnés de OpenCode en el backend Codex.
  *
@@ -213,8 +215,10 @@ function scrubCredential(text, accessToken) {
 }
 
 async function execGitOrThrow(runner, projectId, args, opts = {}) {
+  throwIfAborted(opts?.signal);
   const { accessToken = null, ...execOpts } = opts || {};
   const out = await runner.exec(projectId, ['git', ...args], execOpts);
+  throwIfAborted(opts?.signal);
   if (out?.exitCode === 0) return out;
   const err = new Error('repository bootstrap failed');
   err.code = 'git_operation_failed';
@@ -241,7 +245,9 @@ async function clonePublicRepo({
   runId = null,
   fetchTimeoutMs = 120_000,
   accessToken = null,
+  signal,
 } = {}) {
+  throwIfAborted(signal);
   if (!runner || typeof runner.initWorkspace !== 'function' || typeof runner.exec !== 'function') {
     throw new TypeError('runner.initWorkspace and runner.exec are required');
   }
@@ -264,23 +270,25 @@ async function clonePublicRepo({
   }
 
   await runner.initWorkspace(projectId);
-  const remote = await runner.exec(projectId, ['git', 'remote', 'get-url', 'origin']);
+  throwIfAborted(signal);
+  const remote = await runner.exec(projectId, ['git', 'remote', 'get-url', 'origin'], { signal });
+  throwIfAborted(signal);
   if (remote?.exitCode === 0) {
-    await execGitOrThrow(runner, projectId, ['remote', 'set-url', 'origin', repository.cloneUrl]);
+    await execGitOrThrow(runner, projectId, ['remote', 'set-url', 'origin', repository.cloneUrl], { signal });
   } else {
-    await execGitOrThrow(runner, projectId, ['remote', 'add', 'origin', repository.cloneUrl]);
+    await execGitOrThrow(runner, projectId, ['remote', 'add', 'origin', repository.cloneUrl], { signal });
   }
   await execGitOrThrow(
     runner,
     projectId,
     [...githubAuthConfigArgs(accessToken), 'fetch', '--depth=1', 'origin', `refs/heads/${baseBranch}`],
-    { timeoutMs: Math.max(10_000, Number(fetchTimeoutMs) || 120_000), accessToken },
+    { timeoutMs: Math.max(10_000, Number(fetchTimeoutMs) || 120_000), accessToken, signal },
   );
-  await execGitOrThrow(runner, projectId, ['checkout', '-B', baseBranch, 'FETCH_HEAD']);
+  await execGitOrThrow(runner, projectId, ['checkout', '-B', baseBranch, 'FETCH_HEAD'], { signal });
   if (workBranch) {
-    await execGitOrThrow(runner, projectId, ['switch', '-c', workBranch, baseBranch]);
+    await execGitOrThrow(runner, projectId, ['switch', '-c', workBranch, baseBranch], { signal });
   }
-  const head = await execGitOrThrow(runner, projectId, ['rev-parse', 'HEAD']);
+  const head = await execGitOrThrow(runner, projectId, ['rev-parse', 'HEAD'], { signal });
   return {
     ok: true,
     status: 'ready',

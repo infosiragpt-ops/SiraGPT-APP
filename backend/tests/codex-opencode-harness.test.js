@@ -5,6 +5,23 @@ const assert = require('node:assert/strict');
 
 const harness = require('../src/services/codex/opencode-harness');
 
+test('repository cancellation after fetch never checks out or starts another command', async () => {
+  const controller = new AbortController();
+  const commands = [];
+  const runner = {
+    initWorkspace: async () => ({}),
+    exec: async (_project, command, options) => {
+      assert.equal(options.signal, controller.signal);
+      commands.push(command);
+      if (command.includes('fetch')) controller.abort();
+      return { exitCode: 0, stdout: '' };
+    },
+  };
+  await assert.rejects(harness.clonePublicRepo({ runner, projectId: 'p-cancel', repoUrl: 'https://github.com/example/shop', signal: controller.signal }), { name: 'AbortError' });
+  assert.ok(commands.some((command) => command.includes('fetch')));
+  assert.ok(!commands.some((command) => command.includes('checkout')));
+});
+
 test('provenance points at sst/opencode MIT (attribution, no verbatim copy)', () => {
   assert.equal(harness.OPENCODE_PROVENANCE.upstream, 'https://github.com/sst/opencode');
   assert.equal(harness.OPENCODE_PROVENANCE.license, 'MIT');

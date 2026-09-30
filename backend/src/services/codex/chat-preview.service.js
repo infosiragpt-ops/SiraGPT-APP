@@ -19,6 +19,7 @@ const { canUseCodexAgent } = require('./access-control');
 const projectChatBinding = require('./project-chat-binding');
 const opencodeHarness = require('./opencode-harness');
 const { previewTokenFor, verifyPreviewToken } = require('../code/preview-proxy');
+const { throwIfAborted, isAbortError } = require('../../utils/abort-signal');
 
 const PUBLIC_URL_KEYS = ['PUBLIC_FRONTEND_URL', 'NEXT_PUBLIC_URL', 'FRONTEND_URL'];
 
@@ -67,7 +68,7 @@ function defaultDeps() {
 }
 
 function resolveDeps(deps = {}) {
-  const base = deps && (deps.db || deps.runner || deps.projectService) ? {} : defaultDeps();
+  const base = deps?.db && deps?.runner && deps?.projectService ? {} : defaultDeps();
   return {
     db: deps.db || base.db,
     projectService: deps.projectService || base.projectService,
@@ -117,11 +118,34 @@ async function storedGithubToken(githubApi, userId) {
  * chat). If the chat already has a project, nothing is cloned and the bound
  * project is returned with `reused: true`.
  */
-async function cloneRepoForChat({ userId, chatId, repoUrl, branch = '', name = '' } = {}, deps = {}) {
+async function cloneRepoForChat(args = {}, deps = {}) {
+  const { userId, chatId, signal } = args;
+  throwIfAborted(signal);
   const d = resolveDeps(deps);
+  const access = await assertCodexAccess({ userId, db: d.db, env: d.env });
+  throwIfAborted(signal);
+  if (!access.ok) return access;
+  if (!d.binding.cleanChatId(chatId)) return fail('no_chat_context', 'No hay chat de /agentes en este turno.');
+  try {
+    const result = await projectChatBinding.withChatProjectLock({ userId, chatId, db: d.db, signal }, (lockedDb) => (
+      cloneRepoForChatLocked(args, { ...d, db: lockedDb })
+    ));
+    throwIfAborted(signal);
+    return result;
+  } catch (err) {
+    throwIfAborted(signal);
+    if (isAbortError(err)) throw err;
+    const code = err?.code === 'coding_chat_not_found' ? 'coding_chat_not_found' : 'coding_unavailable';
+    return fail(code, code === 'coding_chat_not_found' ? 'No se encontró el chat.' : 'No se pudo preparar el proyecto. Reintenta en unos segundos.');
+  }
+}
+
+async function cloneRepoForChatLocked({ userId, chatId, repoUrl, branch = '', name = '', signal }, d) {
+  throwIfAborted(signal);
   const cleanChat = d.binding.cleanChatId(chatId);
   if (!cleanChat) return fail('no_chat_context', 'No hay chat de /agentes en este turno.');
   const access = await assertCodexAccess({ userId, db: d.db, env: d.env });
+  throwIfAborted(signal);
   if (!access.ok) return access;
 
   let repository;
@@ -137,28 +161,39 @@ async function cloneRepoForChat({ userId, chatId, repoUrl, branch = '', name = '
   } catch (err) {
     return fail('runner_unreachable', String(err?.message || err));
   }
+  throwIfAborted(signal);
   if (bound && bound.id) {
+    if (bound.status !== 'ready') return fail('coding_project_not_ready', 'El proyecto de este chat no está listo. Abre un chat nuevo y repite la solicitud después de resolver el error de preparación.');
+    let source = null;
+    try { source = d.harness.parsePublicGithubRepo(bound.sourceControl?.repository || bound.sourceControl?.webUrl); } catch { /* not a repository workspace */ }
+    if (!source || source.slug !== repository.slug) {
+      return fail('chat_already_bound', 'Este chat ya tiene otro proyecto. Abre un chat nuevo para trabajar con ese repositorio.');
+    }
     return {
       ok: true,
       reused: true,
-      project: { id: bound.id, name: bound.name || null, status: bound.status || null },
-      repository: { fullName: `${repository.owner}/${repository.repo}`, webUrl: repository.webUrl },
-      message: 'Este chat ya tiene un proyecto vinculado; no se clona de nuevo.',
+      project: { id: bound.id, name: bound.name || null, status: bound.status },
+      repository: { fullName: `${source.owner}/${source.repo}`, webUrl: source.webUrl },
+      message: 'Este chat ya tiene este repositorio vinculado; no se clona de nuevo.',
     };
   }
 
   const stored = await storedGithubToken(d.githubApi, userId);
+  throwIfAborted(signal);
   let meta = null;
   if (stored && d.githubApi && typeof d.githubApi.getRepository === 'function') {
     try {
       meta = await d.githubApi.getRepository(userId, repository.owner, repository.repo);
     } catch (err) {
+      throwIfAborted(signal);
+      if (isAbortError(err)) throw err;
       if (Number(err?.status) === 404) {
         return fail('repository_not_found', 'El repositorio no existe o tu cuenta de GitHub no tiene acceso a él.');
       }
       meta = null;
     }
   }
+  throwIfAborted(signal);
   const sourceBranch = String(branch || '').trim() || (meta && meta.defaultBranch) || 'main';
   const isPrivate = Boolean(meta && meta.private);
   const label = String(name || '').trim().slice(0, 80) || repository.repo;
@@ -192,13 +227,16 @@ async function cloneRepoForChat({ userId, chatId, repoUrl, branch = '', name = '
   }
 
   try {
+    throwIfAborted(signal);
     const cloned = await d.harness.clonePublicRepo({
       runner: d.runner,
       projectId: row.id,
       repoUrl: repository.cloneUrl,
       branch: sourceBranch,
       accessToken: stored ? stored.accessToken : null,
+      signal,
     });
+    throwIfAborted(signal);
     await d.db.codexProject.update({
       where: { id: row.id },
       data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
@@ -213,16 +251,18 @@ async function cloneRepoForChat({ userId, chatId, repoUrl, branch = '', name = '
       authenticated: Boolean(stored),
     };
   } catch (err) {
-    const message = String(err?.message || err);
+    const cancelled = signal?.aborted || isAbortError(err);
+    const message = cancelled ? 'La preparación del repositorio fue cancelada.' : String(err?.message || err);
     try {
       await d.db.codexProject.update({ where: { id: row.id }, data: { status: 'error', error: message.slice(0, 2000) } });
     } catch { /* best effort */ }
+    if (cancelled) return fail('coding_cancelled', message);
     const needsAuth = /could not read Username|Authentication failed|permission denied|403|401|repository not found/i.test(message)
       || (String(err?.code || '') === 'repository_bootstrap_failed' && !stored);
     if (needsAuth) {
-      return fail('github_auth_required', `GitHub no dejó leer ${repository.owner}/${repository.repo}: el repositorio es privado o no existe, y esta cuenta no tiene GitHub conectado. Pide al usuario que conecte su GitHub en Apps → GitHub (o que haga público el repo) y reintenta.`, { projectId: row.id, authenticated: Boolean(stored) });
+      return fail('github_auth_required', `GitHub no dejó leer ${repository.owner}/${repository.repo}. Revisa el acceso en Apps → GitHub y repite la solicitud en un chat nuevo.`, { projectId: row.id, authenticated: Boolean(stored) });
     }
-    return fail('clone_failed', `No se pudo clonar ${repository.owner}/${repository.repo}@${sourceBranch}: ${message}`, { projectId: row.id });
+    return fail('clone_failed', `No se pudo clonar ${repository.owner}/${repository.repo}@${sourceBranch}: ${message}. Resuelve el error y repite la solicitud en un chat nuevo.`, { projectId: row.id });
   }
 }
 
