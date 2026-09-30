@@ -598,7 +598,24 @@ function sanitizePinnedPort(value, { reserved = [] } = {}) {
   return n;
 }
 
+// One control operation mutates a workspace at a time. This covers terminal
+// tools as well as browser/API saves; a conflict is explicit, never queued
+// behind an unbounded command or hidden by a retry.
+function createWorkspaceMutationGuard() {
+  const active = new Set();
+  return {
+    async run(workspace, operation) {
+      if (active.has(workspace)) {
+        const error = new Error('file_busy'); error.code = 'file_busy'; throw error;
+      }
+      active.add(workspace);
+      try { return await operation(); } finally { active.delete(workspace); }
+    },
+  };
+}
+
 module.exports = {
+  createWorkspaceMutationGuard,
   pickInstallPlan,
   sanitizeDevEnv,
   sanitizePinnedPort,

@@ -141,6 +141,10 @@ function createRunnerClient({
           'GET',
           `/workspace/file${queryFor(projectFor(project), { path })}`,
         ),
+      readEditorFile: (project, path) =>
+        call('GET', `/workspace/file${queryFor(projectFor(project), { path, editor: 'true' })}`),
+      saveEditorFile: (project, file) =>
+        call('POST', '/workspace/write', bodyFor({ project: projectFor(project), editor: true, files: [file] })),
       readBinaryFile: (project, path) =>
         call(
           'GET',

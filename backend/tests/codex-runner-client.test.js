@@ -198,3 +198,16 @@ test('codexExportHostDir/Path default and honour env, picking the right separato
   // Windows override → backslash separator.
   assert.equal(codexExportHostPath('p1', { CODEX_EXPORT_HOST_DIR: 'D:\\git\\siraGPT\\.codex-workspaces' }), 'D:\\git\\siraGPT\\.codex-workspaces\\p1');
 });
+
+
+test('editor client preserves scope and revision on read/save without changing legacy imports', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true }));
+  const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  await client.readEditorFile('p1', 'src/a b.ts');
+  assert.equal(calls[0].url, 'http://runner:4097/workspace/file?project=p1&path=src%2Fa%20b.ts&editor=true');
+  const file = { path: 'src/app.ts', content: 'new', expectedRevision: 'a'.repeat(64) };
+  await client.saveEditorFile('p1', file);
+  assert.deepEqual(calls[1].body, { project: 'p1', editor: true, files: [file] });
+  await client.writeFiles('p1', [{ path: 'legacy.ts', content: 'imported' }]);
+  assert.deepEqual(calls[2].body, { project: 'p1', files: [{ path: 'legacy.ts', content: 'imported' }] });
+});

@@ -52,6 +52,45 @@ function toDeepSeekDirectModel(model) {
 }
 
 /**
+ * DeepSeek V4 defaults to thinking. Its direct API rejects required/named
+ * tool_choice while thinking is enabled (400); auto and none are supported.
+ * Keep the native tools and original transcript, and express narrowing in a
+ * request-only suffix. Reasoning strings stay byte-for-byte in assistant
+ * replay; null content/absent CoT fields use an empty native envelope.
+ * https://api-docs.deepseek.com/api/create-chat-completion/
+ */
+function prepareDeepSeekDirectToolRequest(body) {
+  if (!body || !/^(?:deepseek\/)?deepseek-(?:v4-(?:flash|pro)|flash)$/i.test(body.model || '')) return body;
+  const thinkingEnabled = body.thinking?.type !== 'disabled' && body.reasoning_effort !== 'none';
+  const named = body.tool_choice?.type === 'function' ? body.tool_choice.function?.name : null;
+  const forceName = typeof named === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(named) ? named : null;
+  const adaptChoice = thinkingEnabled && (body.tool_choice === 'required' || forceName);
+  const replayReasoning = thinkingEnabled && Array.isArray(body.tools) && body.tools.length > 0;
+  const needsAssistantFields = Array.isArray(body.messages) && body.messages.some((message) =>
+    message?.role === 'assistant' && (message.content == null || (replayReasoning && message.reasoning_content == null)));
+  if (!adaptChoice && !needsAssistantFields) return body;
+  const messages = (Array.isArray(body.messages) ? body.messages : []).map((message) => {
+    if (message?.role !== 'assistant') return message;
+    // Historical/non-thinking turns have no CoT to recover. An empty field
+    // provides the native envelope without inventing or replacing reasoning.
+    return {
+      ...message,
+      ...(message.content == null ? { content: '' } : {}),
+      ...(replayReasoning && message.reasoning_content == null ? { reasoning_content: '' } : {}),
+    };
+  });
+  if (adaptChoice) {
+    messages.push({
+      role: 'user',
+      content: forceName
+        ? `Tool protocol for this step: call the "${forceName}" function now using its declared arguments. Do not call another function or return a text-only answer.`
+        : 'Tool protocol for this step: call at least one provided function before answering. Do not return a text-only answer.',
+    });
+  }
+  return { ...body, messages, ...(adaptChoice ? { tool_choice: 'auto' } : {}) };
+}
+
+/**
  * Any OpenAI-compatible client pointed at api.deepseek.com: send native ids
  * whatever the caller passes (the chat stream path in ai-service uses its own
  * client, not the failover wrapper). Idempotent.
@@ -64,7 +103,8 @@ function withDeepSeekDirectModelIds(client) {
     const mapped = body && typeof body.model === 'string' && /^deepseek\//i.test(body.model)
       ? { ...body, model: toDeepSeekDirectModel(body.model) }
       : body;
-    return options === undefined ? create(mapped) : create(mapped, options);
+    const direct = prepareDeepSeekDirectToolRequest(mapped);
+    return options === undefined ? create(direct) : create(direct, options);
   };
   client.__deepseekDirectModelIds = true;
   return client;
@@ -125,9 +165,10 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
         log.warn?.(`[deepseek-failover] OpenRouter fallback failed (${fallbackErr && fallbackErr.message}); trying DeepSeek direct`);
       }
     }
-    const direct = body && typeof body.model === 'string' && /^deepseek\//i.test(body.model)
+    const directModel = body && typeof body.model === 'string' && /^deepseek\//i.test(body.model)
       ? { ...body, model: toDeepSeekDirectModel(body.model) }
       : body;
+    const direct = prepareDeepSeekDirectToolRequest(directModel);
     try {
       return options === undefined ? await primaryCreate(direct) : await primaryCreate(direct, options);
     } catch (err) {
@@ -148,4 +189,4 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
   return client;
 }
 
-module.exports = { wrapDeepSeekClient, withDeepSeekDirectModelIds, isBillingOrAuthError, toOpenRouterSlug, toDeepSeekDirectModel, isDirectFailureMemoised, snapshot, resetForTests, DEFAULT_MEMO_MS };
+module.exports = { prepareDeepSeekDirectToolRequest, wrapDeepSeekClient, withDeepSeekDirectModelIds, isBillingOrAuthError, toOpenRouterSlug, toDeepSeekDirectModel, isDirectFailureMemoised, snapshot, resetForTests, DEFAULT_MEMO_MS };
