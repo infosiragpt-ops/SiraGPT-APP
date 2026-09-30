@@ -26,6 +26,7 @@ const CRITICAL_SPECS = [
   "e2e/chat-computer-login-handoff.spec.ts",
   "e2e/voice-reference-layout.spec.ts",
   "e2e/chat-code-workspace.spec.ts",
+  "e2e/codex-preview-cors.spec.ts",
   "e2e/chat-media-preview-players.spec.ts",
 ]
 
