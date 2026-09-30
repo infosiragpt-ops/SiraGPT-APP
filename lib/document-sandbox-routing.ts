@@ -1,6 +1,6 @@
 import { shouldEditExistingDocument } from "./ai-service"
 import { parseMessageFiles } from "./chat/composer-files"
-import { documentAttachment, documentEditReference, looksLikeExplicitDocumentEdit, isExplicitDocumentEdit } from "./document-sandbox-client"
+import { documentAttachment, documentEditReference, looksLikeExplicitDocumentEdit, isExplicitDocumentEdit, isNewDocumentCreationRequest } from "./document-sandbox-client"
 import { isSavXlsxPairEditRequest } from "./generated-artifact-read-intent"
 
 export type DocumentSandboxRoute = "edit" | "clarify" | null
@@ -16,6 +16,7 @@ export interface DocumentSandboxAdmissionOptions {
 
 /** Never let an ambiguous legacy edit classification select an editor. */
 export function routeDocumentSandboxTurn(prompt: string, attachments: readonly unknown[]): "edit" | "clarify" | null {
+  if (isNewDocumentCreationRequest(prompt)) return null
   // F1 cannot edit .sav. Never select only the XLSX from a requested pair.
   if (isSavXlsxPairEditRequest(prompt)) return null
   if (!attachments.some(documentAttachment)) return null
@@ -64,6 +65,7 @@ export function resolveDocumentSandboxAdmission(
   prompt: string,
   options: DocumentSandboxAdmissionOptions = {},
 ): DocumentSandboxAdmission {
+  if (isNewDocumentCreationRequest(prompt)) return { route: null, attachments: [] }
   // The source-preserving agent must receive the SAV/XLSX pair together.
   // Filtering unsupported .sav from composer/history here would silently
   // start a one-file F1 edit and leave the SPSS output unchanged.

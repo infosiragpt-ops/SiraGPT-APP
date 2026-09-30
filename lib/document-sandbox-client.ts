@@ -110,17 +110,39 @@ export function snapshotDocumentEditTargets(attachments: readonly unknown[]): Ar
 // verb is not enough. Runs on lowercased, accent-free text.
 const HIGHLIGHT_EDIT_RE = /\b(?:resalt|subray)\w*\b[^.;\n]{0,60}?\b(?:celdas?|filas?|columnas?|titulos?|subtitulos?|encabezados?|parrafos?|palabra|frase|linea)\b|\b(?:resalt|subray)\w*\b[^.;\n]{0,60}?\ben\s+(?:amarillo|verde|rojo|azul|naranja|rosado|celeste|negrita|cursiva)\b|\b(?:resalt|subray)\w*\s+["'“«]/
 
+const EDIT_COURTESY_RE = /^(?:(?:por favor|ahora|quiero que|necesito que|te pido que|deseo que|quiero|necesito|puedes|podrias|podras|me puedes|me podrias)\s*[, :]?\s*)+/
+const QUOTED_EDIT_TEXT_RE = /"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|«[^»\n]*»/g
+
+/** "Crea un Word e incorpora la gráfica" creates a file; inclusion verbs describe its contents. */
+export function isNewDocumentCreationRequest(prompt: string): boolean {
+  const command = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .trim().replace(/^[¿¡]\s*/, "").replace(EDIT_COURTESY_RE, "")
+  return /^(?:crea(?:r|me)?|genera(?:r|me)?|elabora(?:r|me)?|prepara(?:r|me)?|redacta(?:r|me)?|arma(?:r|me)?|disena(?:r|me)?|haz(?:me)?)\s+(?:(?:un|una|el|la)\s+)?(?:(?:nuevo|nueva)\s+)?(?:word|docx|documento|informe|reporte|excel|xlsx|hoja de calculo|presentacion|powerpoint|pptx?|pdf)\b/.test(command)
+}
+
+function reviewRequestsCorrection(text: string): boolean {
+  // Inspect only the user's unquoted clauses. A quoted "y corrige…" remains
+  // document content, and explaining how to correct does not authorize edits.
+  const command = text.replace(QUOTED_EDIT_TEXT_RE, " ").replace(/^[¿¡]\s*/, "").replace(EDIT_COURTESY_RE, "")
+  if (!/^(?:revisa|analiza)\b/.test(command)) return false
+  const clauses = command.split(/(?:[,;.]\s*|\b(?:y|luego|despues)\s+)/)
+  return clauses.slice(1).some((clause) => clauseLooksLikeEdit(clause.trim().replace(/^(?:luego|despues)\s+/, "")))
+}
+
 /** Language-only explicit-edit detector. Attachments are resolved by the admission helper. */
 export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
   const text = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim()
   if (isGeneratedArtifactReadRequest(prompt)) return false
+  if (isNewDocumentCreationRequest(prompt)) return false
   if (/^no (?:cambies|cambiar|modifiques) nada\b/.test(text)) return true
+  if (reviewRequestsCorrection(text)) return true
   if (clauseLooksLikeEdit(text)) return true
-  if (HIGHLIGHT_EDIT_RE.test(text)) return true
+  if (HIGHLIGHT_EDIT_RE.test(text.replace(QUOTED_EDIT_TEXT_RE, '""'))) return true
   // Real follow-ups name the file first and ask later ("en el mismo documento
   // ## CARTA…_editado_.docx\n\nDOCX quiero que agregues observaciones…").
   // Drop file names/markdown and evaluate each sentence on its own.
   const cleaned = text
+    .replace(QUOTED_EDIT_TEXT_RE, " ")
     .replace(/\\_/g, "_")
     .replace(/#+\s*/g, " ")
     .replace(/\S+\.(?:docx?|xlsx?|xlsm|pptx?|pdf|odt|ods|odp|csv|rtf)\b/g, " ")
@@ -174,6 +196,7 @@ function fuzzyEditVerb(word: string): boolean {
 const FUZZY_NEW_DOC_RE = /\b(?:gener\w*|cre\w*|elabor\w*|produc\w*|haz(?:me)?|hacer|arma\w*|dise[nñ]\w*)\b[^.;\n]{0,60}\b(?:nuev[oa]s?|desde cero|otro|otra)\b|\b(?:nuev[oa]s?)\s+(?:documento|archivo|informe|word|excel|ppt|pptx|presentacion|reporte)\b/
 
 export function fuzzyLooksLikeDocumentEdit(prompt: string): boolean {
+  if (isNewDocumentCreationRequest(prompt)) return false
   const raw = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
   // «¿Puedes editar este Word?» asks about capability; quoted text is document
   // content, never an instruction.
@@ -194,7 +217,7 @@ function clauseLooksLikeEdit(text: string): boolean {
   let command = text.replace(/^[¿¡]\s*/, "").replace(/[?!]+$/, "").trim()
   if (/^(?:explica\b|describe\b|resume\b|analiza\b|revisa\b|que\b|como\b|por que\b|dime\b|no (?:edites|modifiques|reescribas)\b)/.test(command)) return false
   const polite = /^(?:puedes|podrias|podras|me puedes|me podrias)\s+/.test(command)
-  command = command.replace(/^(?:(?:por favor|ahora|quiero que|necesito que|te pido que|deseo que|quiero|necesito|puedes|podrias|podras|me puedes|me podrias)\s*[, :]?\s*)+/, "")
+  command = command.replace(EDIT_COURTESY_RE, "")
   // A location before the verb is still a direct instruction, not an inferred edit.
   command = command.replace(/^(?:en|sobre)\s+(?:el|la|los|las|mi|este|esta)\s+(?:mismo\s+)?(?:titulo|portada|documento|word|archivo|informe|tabla|celda|hoja|diapositiva|pdf)\b[^,;.!?\n]{0,100}?(?=\s+(?:cambi|edit|modific|corrig|correg|reempla|sustitu|mejor|actualiz|pon|coloc))\s*[, :]?\s*/, "")
   const action = /^(?:cambia(?:r|me|lo|la)?|cambies|edita(?:r|lo|la)?|edites|modifica(?:r|lo|la)?|modifiques|corrige(?:lo|la)?|corrijas|corregir|mejora(?:r|lo|la)?|mejores|reemplaza(?:r)?|reemplaces|sustituye|sustituyas|sustituir|renombra(?:r)?|renombres|borra(?:r)?|borres|elimina(?:r)?|elimines|quita(?:r)?|quites|agrega(?:r)?|agregues|anade|anadas|anadir|inserta(?:r)?|insertes|reescribe|reescribas|reescribir|actualiza(?:r)?|actualices|traduce|traduzcas|traducir|parafrasea(?:r)?|parafrasees|une|unas|unir|fusiona(?:r)?|fusiones|numera(?:r)?|numeres|rota(?:r)?|rotes|pon|poner|coloca(?:r)?|completa(?:r|lo|la|me)?|completes|llena(?:r|lo|la)?|llenes|rellena(?:r|lo|la)?|rellenes|marca(?:r|lo|la)?|marques|incorpora(?:r)?|incorpores|incluye|incluyas|replace|edit|modify|rewrite|rename|remove|merge|rotate|fill)\b/

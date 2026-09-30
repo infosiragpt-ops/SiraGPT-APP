@@ -264,7 +264,7 @@ test('F4: ensureVerifier appends ONE critic node after high-stakes deliverables'
   assert.equal(ensureVerifier(textOnly).nodes.length, 1);
   // Every role referenced by the orchestrator has a prompt.
   for (const role of KNOWN_ROLES) assert.ok(rolePrompt(role).includes('SUB-AGENT ROLE'));
-  assert.match(rolePrompt('researcher'), /NO web access/i);
+  assert.match(rolePrompt('researcher'), /use web_search and web_fetch if available/i);
 });
 
 /* ── Multi-step run: DAG in topo order + blackboard + auto verifier ──────── */
@@ -338,9 +338,10 @@ test('F4: multi-step goal runs the DAG in topo order, sub-agents ARE AgentRunner
   assert.match(docSystem, /investigacion\.md/, 'upstream artifact is a real file of the sub-agent sandbox');
   assert.match(docSystem, /SUB-AGENT ROLE: document_editor/, 'role prompt is appended to the runner system prompt');
 
-  // Researcher never gets web tools (F6): its role prompt forbids web access.
+  // The researcher can use the existing web tools when the task needs sources;
+  // unavailable tools must be reported rather than replaced with invented facts.
   const researchCall = client.calls.find((c) => c.role === 'researcher');
-  assert.match(String(researchCall.messages[0].content), /NO web access/i);
+  assert.match(String(researchCall.messages[0].content), /web tools are unavailable, report the limitation/i);
   assert.equal(researchCall.maxTokens, 2048, 'a researcher does not reserve the document-creation budget');
   assert.equal(docCall.maxTokens, 4096, 'the document producer receives the focused creation budget');
 

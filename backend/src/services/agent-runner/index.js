@@ -20,6 +20,7 @@ const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-age
 const { parseModelSpec, keyFor, resolveDocAgentCandidates, createFailoverClient, defaultCreateClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
+const { loadConversationContext, conversationContextMessage } = require('./conversation-context');
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
@@ -966,6 +967,7 @@ function dropIntermediateOutputs(outputs = [], steps = []) {
 async function runAgentRunner({
   files = [],
   instruction,
+  conversationContext = null,
   model,
   client,
   onEvent = () => {},
@@ -1177,6 +1179,7 @@ async function runAgentRunner({
       : baseSystem;
     const messages = [
       { role: 'system', content: system },
+      ...[conversationContextMessage(conversationContext)].filter(Boolean),
       { role: 'user', content: task },
     ];
 
@@ -1483,6 +1486,7 @@ async function runAgentRunnerForChat({
   fileIds = [],
   attachedFiles = [],
   instruction,
+  conversationContext,
   model,
   pickedModel = null,
   client,
@@ -1525,6 +1529,9 @@ async function runAgentRunnerForChat({
   const run = await runAgentRunner({
     files: resolved.files,
     instruction,
+    conversationContext: conversationContext === undefined
+      ? await loadConversationContext({ prisma, userId, chatId, instruction })
+      : conversationContext,
     model,
     pickedModel,
     client,
@@ -1712,6 +1719,11 @@ async function executeAgentRunnerTurnUnlocked(params = {}) {
       errorMessage: params.pickedModel || explicitRunnerModel() ? RUNNER_PROVIDER_MESSAGE : null,
     };
   }
+  // Resolve once before dispatch: queued workers and specialists see the same
+  // owner-scoped source, even if the conversation advances later.
+  if (params.conversationContext === undefined) {
+    params = { ...params, conversationContext: await loadConversationContext(params) };
+  }
   // F4 — genuinely multi-step goals run the hierarchical orchestrator
   // (planner → specialized sub-agents, each a full AgentRunner loop) instead
   // of one single-runner call. Same outcome contract: verified artifacts or
@@ -1762,6 +1774,7 @@ async function executeAgentRunnerTurnUnlocked(params = {}) {
         model: params.model,
         pickedModel: params.pickedModel || null,
         skills: Array.isArray(params.skills) ? params.skills : [],
+        conversationContext: params.conversationContext,
       }, { connection: params.queueConnection || connection });
       onEventSafe(params.onEvent, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner', jobId });
       return await waitForAgentRunnerJob({

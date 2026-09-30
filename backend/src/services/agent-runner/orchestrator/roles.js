@@ -5,8 +5,8 @@
  *
  * Every DAG node runs a FULL AgentRunner loop (same tools, same sandbox,
  * same verification contract); the role only adds a focused system-prompt
- * suffix. The researcher explicitly has NO web access — web_search/web_fetch
- * are F6, so it works from the provided files and its own knowledge only.
+ * suffix. Researchers use the existing web tools when source material is
+ * missing or the request needs current, attributable information.
  */
 
 const KNOWN_ROLES = Object.freeze([
@@ -52,7 +52,8 @@ ${SHARED_SUFFIX}
 
   researcher: `SUB-AGENT ROLE: researcher (specialist sub-agent of an orchestrated run).
 ${SHARED_SUFFIX}
-- You have NO web access and NO web_search/web_fetch tool. Work ONLY from the files in /workspace/uploads and your own knowledge.
+- Start with the provided files and reference material. When the task needs current information, sources, or facts absent from that material, use web_search and web_fetch if available; read the source before citing it. The code sandbox has no network; use these existing tools for research.
+- Keep URLs and source titles with each sourced finding so the document editor can cite them. If the web tools are unavailable, report the limitation; never replace requested research with invented sources or remembered claims presented as verified.
 - Read the provided files (read_file / execute_python for pdf/docx/xlsx) and synthesise concrete findings for your subtask.
 - Write your findings as a structured markdown file under /workspace/outputs (e.g. outputs/investigacion.md) AND summarise the key findings in your final answer so downstream nodes can build on them.
 - Never fabricate sources; when the provided material does not cover something, say so honestly.`,

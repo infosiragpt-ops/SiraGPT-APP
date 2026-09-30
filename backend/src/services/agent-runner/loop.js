@@ -885,8 +885,10 @@ function isLlmCreditError(err) {
 
 // Same-turn identical-call cache: never for tools that mutate files, and
 // never for tools whose result depends on files that may have changed since
-// (office inspect/render/verify) — a stale verification must not pass.
-const SAME_TURN_CACHE_EXCLUDE_RE = /^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_|office_|inspect_document|render_preview|verify_visual)/i;
+// (office inspect/render/verify or an exec readback) — a stale verification
+// must not pass. Exec calls also need fresh output snapshots to distinguish
+// read-only inspection from a new mutation after the last verification.
+const SAME_TURN_CACHE_EXCLUDE_RE = /^(computer_|write_|str_replace|apply_patch|execute_python|execute_bash|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_|office_|inspect_document|render_preview|verify_visual)/i;
 
 /**
  * Edición milimétrica (Fase B): every tool may carry `description`, a short
