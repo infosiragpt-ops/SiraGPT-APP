@@ -213,6 +213,22 @@
       "account": {
         "label": "Konto",
         "desc": "Profil twórcy"
+      },
+      "billing": {
+        "label": "Billing",
+        "desc": "Plan, payments and subscription"
+      },
+      "usage": {
+        "label": "Usage",
+        "desc": "Credits and consumption"
+      },
+      "capabilities": {
+        "label": "Capabilities",
+        "desc": "Memory, search, voice and code"
+      },
+      "skills": {
+        "label": "Skills",
+        "desc": "Your skills and the catalog to discover"
       }
     },
     "general": {

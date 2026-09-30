@@ -48,6 +48,21 @@ const catalog = [
   { name: "informe-ucv", title: "informe-ucv", description: "Formato UCV para informes de investigación.", source: "biblioteca" },
 ]
 
+const discoverCard = (name: string, title: string, category: string) => ({
+  name, title, description: `${title} para tu trabajo.`, category, added: "2026-09-30", featured: false, author: "SiraGPT", installed: false,
+})
+
+const discover = {
+  ok: true,
+  featured: { ...discoverCard("analisis-datos", "Análisis de datos", "Datos y análisis"), featured: true },
+  forYou: [discoverCard("citas-apa", "Citas y referencias APA 7", "Investigación")],
+  latest: [discoverCard("sql-avanzado", "SQL avanzado", "Datos y análisis")],
+  categories: [{ name: "Datos y análisis", count: 2 }, { name: "Investigación", count: 1 }],
+  items: [],
+  total: 3,
+  memoryUsed: true,
+}
+
 async function fulfillJson(route: Route, payload: unknown, status = 200) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(payload) })
 }
@@ -65,6 +80,14 @@ async function mockApi(page: Page, generateBodies: unknown[]) {
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
     if (path === "/ai/models") return fulfillJson(route, { models: [textModel] })
     if (path === "/skills") return fulfillJson(route, { ok: true, skills: catalog })
+    if (path === "/skills/library") {
+      return fulfillJson(route, {
+        ok: true,
+        mine: [{ ...catalog[5], author: "por ti", enabled: true, updatedAt: "2026-09-29T10:00:00.000Z", editable: true, removable: true }],
+        partners: catalog.slice(0, 5).map((s) => ({ ...s, author: "SiraGPT", enabled: true, updatedAt: null, editable: false, removable: false })),
+      })
+    }
+    if (path === "/skills/discover") return fulfillJson(route, discover)
     if (path === "/payments/subscription") {
       return fulfillJson(route, { plan: "PRO", status: "active", subscription: null, apiUsage: 0, monthlyLimit: 100_000 })
     }
@@ -154,3 +177,41 @@ for (const scenario of [
     await expect(page.getByTestId(`chat-skill-chip-${scenario.skill}`)).toHaveCount(0)
   })
 }
+
+test("«Explorar habilidades» opens Ajustes → Skills · Descubrir and «Probar» puts the skill in a new chat", async ({ page }) => {
+  await mockApi(page, [])
+  await openComposer(page)
+  await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).click()
+  await page.getByTestId("chat-skills-trigger").hover()
+  await expect(page.getByTestId("chat-skills-manage")).toBeVisible()
+  await page.getByTestId("chat-skills-explore").click()
+
+  await expect(page.getByTestId("skills-featured")).toContainText("Análisis de datos")
+  await expect(page.getByTestId("skills-tab-discover")).toHaveAttribute("aria-selected", "true")
+  await page.screenshot({ path: "test-results/skills-discover.png" })
+  await page.getByTestId("skills-tab-mine").click()
+  await expect(page.getByTestId("skill-row-informe-ucv")).toContainText("por ti")
+  await expect(page.getByTestId("skill-row-docx")).toContainText("de SiraGPT")
+  await page.screenshot({ path: "test-results/skills-mine.png" })
+
+  await page.getByTestId("skills-tab-discover").click()
+  await page.getByTestId("skill-card-citas-apa").getByRole("button", { name: /Probar/ }).click()
+  await expect(page.getByTestId("skills-settings")).toHaveCount(0)
+  await expect(page.getByTestId("chat-skill-chip-citas-apa")).toBeVisible()
+})
+
+test("«/» lists skills and «/xlsx » turns into a chip", async ({ page }) => {
+  await mockApi(page, [])
+  const composer = await openComposer(page)
+  const textarea = composer.locator("textarea").first()
+  await textarea.fill("/")
+  await expect(page.getByTestId("slash-skill-docx")).toBeVisible()
+  await page.screenshot({ path: "test-results/skills-slash.png" })
+  await page.getByTestId("slash-skill-pptx").click()
+  await expect(page.getByTestId("chat-skill-chip-pptx")).toBeVisible()
+  await expect(textarea).toHaveValue("")
+
+  await textarea.fill("/xlsx resume esta tabla")
+  await expect(page.getByTestId("chat-skill-chip-xlsx")).toBeVisible()
+  await expect(textarea).toHaveValue("resume esta tabla")
+})

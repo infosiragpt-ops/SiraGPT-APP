@@ -266,7 +266,42 @@ function sanitizeStreamError(raw: string): string {
 }
 
 /** One Agent Skill as listed by GET /api/skills (bodies load server-side). */
-export type ChatSkillSummary = { name: string; title: string; description: string; source: 'builtin' | 'biblioteca' }
+export type ChatSkillSummary = { name: string; title: string; description: string; source: 'builtin' | 'biblioteca' | 'catalog'; category?: string }
+
+/** A row of Ajustes → Skills «Tuyos». */
+export type SkillLibraryItem = ChatSkillSummary & {
+  author: string
+  enabled: boolean
+  updatedAt: string | null
+  editable: boolean
+  removable: boolean
+}
+
+/** A card of Ajustes → Skills «Descubrir». */
+export type SkillCatalogItem = {
+  name: string
+  title: string
+  description: string
+  category: string
+  added: string | null
+  featured: boolean
+  author: string
+  installed: boolean
+  personalised?: boolean
+}
+
+export type SkillsDiscoverResponse = {
+  ok: boolean
+  featured: SkillCatalogItem | null
+  forYou: SkillCatalogItem[]
+  latest: SkillCatalogItem[]
+  categories: { name: string; count: number }[]
+  items: SkillCatalogItem[]
+  total: number
+  memoryUsed: boolean
+}
+
+export type SkillDetail = ChatSkillSummary & { body: string; enabled?: boolean }
 
 export type GenerateStreamRequest = { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; skills?: string[] }
 
@@ -2188,9 +2223,48 @@ class ApiClient {
   // the 'confirm' permission tier. Auth headers are encrypted server-side
   // and NEVER returned by the API (the list only carries `hasHeaders`).
 
-  /** Agent Skills catalog for the composer «+ → Skills» (built-in + Biblioteca). */
+  /** Agent Skills catalog for the composer «+ → Skills» and «/» (enabled skills only). */
   async listChatSkills(): Promise<{ ok: boolean; skills: ChatSkillSummary[] }> {
     return this.request('/skills', { method: 'GET', suppressFailureLog: true });
+  }
+
+  /** Ajustes → Skills «Tuyos»: own skills + SiraGPT skills (built-in and installed). */
+  async getSkillLibrary(): Promise<{ ok: boolean; mine: SkillLibraryItem[]; partners: SkillLibraryItem[] }> {
+    return this.request('/skills/library', { method: 'GET' });
+  }
+
+  /** Ajustes → Skills «Descubrir»: catalog, «Para ti» (ranked with memory) and categories. */
+  async discoverSkills(params: { q?: string; category?: string } = {}): Promise<SkillsDiscoverResponse> {
+    const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
+    if (params.category) qs.set('category', params.category)
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return this.request(`/skills/discover${suffix}`, { method: 'GET' });
+  }
+
+  async getSkill(name: string): Promise<{ ok: boolean; skill: SkillDetail }> {
+    return this.request(`/skills/${encodeURIComponent(name)}`, { method: 'GET' });
+  }
+
+  /** «Escribir instrucciones» ({ name, description, body }) or «Subir una skill» ({ content, filename }). */
+  async createSkill(data: { name: string; description: string; body: string } | { content: string; filename?: string }): Promise<{ ok: boolean; skill: SkillDetail }> {
+    return this.request('/skills', { method: 'POST', body: JSON.stringify(data), maxRetries: 0 });
+  }
+
+  async updateSkill(name: string, data: { description: string; body: string }): Promise<{ ok: boolean; skill: SkillDetail }> {
+    return this.request(`/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data), maxRetries: 0 });
+  }
+
+  async setSkillEnabled(name: string, enabled: boolean): Promise<{ ok: boolean; name: string; enabled: boolean }> {
+    return this.request(`/skills/${encodeURIComponent(name)}`, { method: 'PATCH', body: JSON.stringify({ enabled }), maxRetries: 0 });
+  }
+
+  async installSkill(name: string): Promise<{ ok: boolean; name: string; installed: boolean }> {
+    return this.request(`/skills/${encodeURIComponent(name)}/install`, { method: 'POST', body: JSON.stringify({}), maxRetries: 0 });
+  }
+
+  async removeSkill(name: string): Promise<{ ok: boolean; name: string; deleted?: boolean; uninstalled?: boolean }> {
+    return this.request(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE', maxRetries: 0 });
   }
 
   async listMcpServers(): Promise<{ servers: McpServerInfo[] }> {

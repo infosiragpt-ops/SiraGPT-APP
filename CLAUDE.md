@@ -1401,6 +1401,36 @@ Pedido de Luis: «+ → Skills» justo bajo «Subir documento» y sin «Modo de 
 - **Tests**: `backend/tests/chat-skills.test.js`, `tests/lib/composer-skills.test.ts`,
   `tests/chat-skills-composer-source.test.ts`, `e2e/chat-skills-menu.spec.ts` (menú, chat, doc).
 
+### Ajustes → Skills, «Descubrir», «/» y memoria (added 2026-09-30)
+Paridad con claude.ai (pedido de Luis con capturas):
+- **Menú «+ → Skills»**: lista plana alfabética (ícono de pergamino + nombre) de las skills
+  ACTIVAS, y abajo «Gestionar habilidades» (Ajustes → Skills · Tuyos) y «Explorar habilidades»
+  (Descubrir). `openSettingsSection("skills", { skillsTab })` en `lib/chat/open-settings.ts`.
+- **«/» en el compositor**: `SlashCommandMenu` lista primero las skills («Skills») y luego los
+  comandos; elegir una la pone como chip. Escribir `/nombre ` también la convierte en chip.
+- **Ajustes → Skills** (`components/settings/skills-settings.tsx`, sección `skills` del panel):
+  pestañas **Tuyos** («Creado por ti» + «De SiraGPT»: integradas e instaladas; menú ⋮ con
+  Probar en un chat / Ver instrucciones / Editar / Desactivar / Eliminar o Quitar) y
+  **Descubrir** (destacada, «Para ti», «Nuevas habilidades», categorías con conteos reales).
+  «Añadir»: Crear con SiraGPT (chat nuevo con `skill-creator`), Escribir instrucciones,
+  Subir una skill (.md / .zip / .skill con SKILL.md, vía JSZip).
+- **Catálogo**: `backend/src/services/skills-catalog/*.md` (21 skills en español con
+  frontmatter name/title/description/category/added/featured) cargado por
+  `services/skills-catalog.js`. `skill-creator` viene instalada por defecto.
+- **Estado por usuario**: `.skills-state.json` junto a los SKILL.md del usuario
+  (`skills-persist` `readSkillState`/`writeSkillState`, escritura atómica): instaladas,
+  desactivadas y quitadas. Las desactivadas salen del menú, de «/» y de `use_skill`.
+- **API** (`routes/chat-skills.js`, CSRF): `GET /library`, `GET /discover`, `POST /`
+  (crear o subir), `GET|PUT|PATCH|DELETE /:name`, `POST /:name/install`, `GET /:name/download`.
+- **Memoria**: «Para ti» ordena el catálogo con lo que el usuario tiene en Ajustes → Memoria
+  (`memory/vault`); la herramienta `save_skill` (tier confirm) guarda skills creadas en el
+  chat (memoria procedimental) y la skill `importar-memoria` importa memorias de otro
+  asistente con `memory_search`/`memory_write`.
+- **Probar**: `startChatWithSkill` (`lib/chat/skills-events.ts`) cierra Ajustes, abre un chat
+  nuevo y deja la skill como chip (sessionStorage + evento en vivo).
+- **Tests**: `backend/tests/chat-skills-library.test.js`, `tests/components/skills-settings.test.tsx`,
+  `tests/components/slash-skills-menu.test.tsx`, casos nuevos en `e2e/chat-skills-menu.spec.ts`.
+
 ## Imágenes con el modelo elegido (added 2026-09-29)
 
 Pedido de Luis: un turno con imagen usa SOLO el modelo que el usuario eligió.

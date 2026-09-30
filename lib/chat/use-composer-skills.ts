@@ -9,9 +9,10 @@
  * are cleared after send, like Claude's skill chips.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { apiClient, type ChatSkillSummary } from "@/lib/api"
+import { consumeTrySkill, SKILLS_CHANGED_EVENT, TRY_SKILL_EVENT } from "@/lib/chat/skills-events"
 
 export const MAX_COMPOSER_SKILLS = 3
 
@@ -24,6 +25,7 @@ export type ComposerSkills = {
   selectedNames: string[]
   isSelected: (name: string) => boolean
   toggle: (skill: ChatSkillSummary) => void
+  select: (skill: ChatSkillSummary) => void
   remove: (name: string) => void
   clear: () => void
   ensureLoaded: () => void
@@ -82,6 +84,38 @@ export function useComposerSkills(): ComposerSkills {
     setSelected((current) => toggleSkillSelection(current, skill))
   }, [])
 
+  // Pick a skill without toggling it off when it is already chosen («Probar», «/»).
+  const select = useCallback((skill: ChatSkillSummary) => {
+    setSelected((current) => (current.some((s) => s.name === skill.name) ? current : toggleSkillSelection(current, skill)))
+  }, [])
+
+  // Ajustes → Skills changed something: refresh the catalog the next time
+  // (or right now, when it was already loaded) so «+ → Skills» and «/» match.
+  const statusRef = useRef(status)
+  statusRef.current = status
+  useEffect(() => {
+    const onChanged = () => {
+      if (statusRef.current === "idle") return
+      inFlight.current = false
+      load()
+    }
+    window.addEventListener(SKILLS_CHANGED_EVENT, onChanged)
+    return () => window.removeEventListener(SKILLS_CHANGED_EVENT, onChanged)
+  }, [load])
+
+  // «Probar» from Descubrir: a pending handoff on mount, or a live one.
+  useEffect(() => {
+    const pending = consumeTrySkill()
+    if (pending) select(pending)
+    const onTry = (event: Event) => {
+      const skill = (event as CustomEvent<ChatSkillSummary>).detail
+      consumeTrySkill()
+      if (skill?.name) select(skill)
+    }
+    window.addEventListener(TRY_SKILL_EVENT, onTry)
+    return () => window.removeEventListener(TRY_SKILL_EVENT, onTry)
+  }, [select])
+
   const remove = useCallback((name: string) => {
     setSelected((current) => current.filter((s) => s.name !== name))
   }, [])
@@ -98,6 +132,7 @@ export function useComposerSkills(): ComposerSkills {
     selectedNames,
     isSelected,
     toggle,
+    select,
     remove,
     clear,
     ensureLoaded,

@@ -978,6 +978,8 @@ app.use('/api/appshots/pair', requireCsrf);
 // model as /pair, so it gets the same CSRF gate. /capture stays exempt.
 app.use('/api/appshots/sessions', requireCsrf);
 app.use('/api/projects', requireCsrf);
+// Ajustes → Skills mutations (create/edit/install/delete) are cookie-auth too.
+app.use('/api/skills', requireCsrf);
 app.use('/api/payments', createPaymentsCsrfMiddleware(requireCsrf));
 app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);

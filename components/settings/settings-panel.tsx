@@ -25,7 +25,7 @@ import {
   ShieldCheck, UserCircle2, Star, Check, Monitor, Moon, MoonStar, Sun,
   LogOut, Download, Trash2, Github, Globe, Linkedin, Mail,
   ExternalLink, Search as SearchIcon, Camera, Plus,
-  AlertTriangle, Laptop, CreditCard, Gauge, Cpu} from "lucide-react"
+  AlertTriangle, Laptop, CreditCard, Gauge, Cpu, ScrollText} from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -41,6 +41,7 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { MemorySettingsCard } from "@/components/settings/MemorySettingsCard"
 import { McpServersCard } from "@/components/settings/McpServersCard"
 import { TotpSetupCard } from "@/components/settings/TotpSetupCard"
+import { SkillsSettings } from "@/components/settings/skills-settings"
 import { GmailConnectionCard } from "@/components/GmailConnectionCard"
 import GoogleServicesConnectionCard from "@/components/GoogleServicesConnectionCard"
 import { getMyCredits, type Credits } from "@/lib/credits-service"
@@ -52,7 +53,7 @@ export type SectionKey =
   | "general" | "models" | "notifications" | "personalization" | "apps"
   | "schedules" | "data" | "security" | "account"
   | "privacy" | "billing" | "usage" | "capabilities" | "connectors"
-  | "cowork"
+  | "cowork" | "skills"
 
 // Section metadata; labels and descriptions come from next-intl at
 // render time so a language switch flips the nav instantly.
@@ -63,7 +64,7 @@ function resolveSection(s: SectionKey | string | undefined): SectionKey {
   if (raw in ALIAS) return ALIAS[raw]
   const known: SectionKey[] = [
     "general","models","notifications","personalization","apps","schedules",
-    "data","security","account","billing","usage","capabilities","cowork",
+    "data","security","account","billing","usage","capabilities","cowork","skills",
   ]
   return (known as string[]).includes(raw) ? (raw as SectionKey) : "general"
 }
@@ -79,6 +80,7 @@ const SECTION_KEYS = [
   { key: "models" as const,          icon: Brain,       group: "personalize", keywords: "modelo default deepseek favorito" },
   { key: "personalization" as const, icon: Sparkles,    group: "personalize", keywords: "personalizar estilo tono memoria instrucciones voz lienzo busqueda" },
   { key: "capabilities" as const,    icon: Cpu,         group: "personalize", keywords: "capacidades memoria busqueda voz codigo lienzo conector" },
+  { key: "skills" as const,          icon: ScrollText,  group: "personalize", keywords: "skills habilidades descubrir catalogo instrucciones playbook skill-creator memoria" },
   { key: "apps" as const,            icon: Plug,        group: "personalize", keywords: "apps conectores gmail drive calendar slack github notion canva figma whatsapp mcp" },
   { key: "schedules" as const,       icon: Clock,       group: "personalize", keywords: "programar schedule cron tarea" },
 ]
@@ -205,6 +207,7 @@ export function SettingsPanel({
       {section === "usage" && <UsageSection />}
       {section === "capabilities" && <CapabilitiesSection />}
       {section === "cowork" && <CoworkSection />}
+      {section === "skills" && <SkillsSettings />}
     </>
   )
 
