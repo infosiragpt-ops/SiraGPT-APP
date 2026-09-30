@@ -449,10 +449,11 @@ export function MessageActionRail({
       <div
         role="toolbar"
         aria-label="Acciones del mensaje"
-        // Borderless rail — icons sit tight under the response. -ml-1
-        // aligns the first icon's optical center with the text edge above.
+        // Borderless rail with a clear breath below the answer (the icons
+        // used to sit glued to the last line). -ml-1 aligns the first
+        // icon's optical center with the text edge above.
         className={cn(
-          "mt-1 -ml-1 inline-flex items-center gap-0.5",
+          "mt-3 -ml-1 inline-flex items-center gap-1",
         )}
       >
         {showCopy && (

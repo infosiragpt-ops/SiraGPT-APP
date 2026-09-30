@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select"
 import { Brain, Plus, Trash2, Search as SearchIcon, Check, X, Pencil, Moon, Undo2 } from "lucide-react"
+import { setMemoryStatusCount } from "@/lib/chat/use-memory-status"
 import { toast } from "sonner"
 import { apiClient, type MemoryConsolidationReport } from "@/lib/api"
 
@@ -107,7 +108,9 @@ export function MemorySettingsCard() {
     setLoading(true)
     try {
       const data = await apiClient.getMemory()
-      setEntries(Array.isArray(data.entries) ? data.entries : [])
+      const list = Array.isArray(data.entries) ? data.entries : []
+      setEntries(list)
+      setMemoryStatusCount(list.length)
     } catch {
       setEntries([])
     } finally {
@@ -186,7 +189,21 @@ export function MemorySettingsCard() {
         <div className="flex items-start gap-2">
           <Brain className="h-5 w-5 mt-0.5 text-muted-foreground" />
           <div>
-            <h2 className="text-base font-semibold tracking-tight">Memoria persistente</h2>
+            <h2 className="flex flex-wrap items-center gap-2 text-base font-semibold tracking-tight">
+              Memoria persistente
+              {!loading && (
+                entries.length > 0 ? (
+                  <span className="sira-status-pill--celeste" data-testid="memory-active-pill">
+                    <Check className="h-3 w-3" strokeWidth={2.75} aria-hidden="true" />
+                    Memoria activa
+                  </span>
+                ) : (
+                  <span className="rounded-full border border-border/60 px-2 py-0.5 text-[11.5px] font-medium text-muted-foreground" data-testid="memory-empty-pill">
+                    Sin recuerdos todavía
+                  </span>
+                )
+              )}
+            </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
               SiraGPT aprende automáticamente lo que es duradero sobre ti en cada conversación. Aquí puedes ver, editar o borrar lo que recuerda.
             </p>

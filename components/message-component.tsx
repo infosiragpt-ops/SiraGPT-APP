@@ -3322,7 +3322,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             // Devices without hover (phones, tablets) always
                             // show the row; pointer devices keep the hover
                             // reveal, and keyboard focus reveals it too.
-                            <div className="mt-1 flex items-center gap-1 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <div className="mt-2 flex items-center gap-1 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                                 <Button
                                     variant="ghost"
                                     size="icon"
@@ -3491,7 +3491,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             streaming-only state). See MessageActionRail
                             for telemetry contract. */}
                         {!isVideoMessage && (
-                            <div className="flex flex-wrap items-center gap-2">
+                            <div className="msg-actions-row flex flex-wrap items-center gap-2">
                                 <MessageActionRail
                                     messageId={message.id}
                                     chatId={message.chatId}

@@ -28,21 +28,56 @@ describe("/agentes header · chat title menu (claude.ai style)", () => {
     assert.match(badge, /Computadora de este chat/)
   })
 
-  it("offers Fijar · Cambiar nombre · Compartir chat · Eliminar with P/R/D hints", () => {
-    assert.match(menu, /\{isPinned \? "Desfijar" : "Fijar"\}/)
-    assert.match(menu, /Cambiar nombre/)
-    assert.match(menu, /Compartir chat/)
-    assert.match(menu, /<DropdownMenuSeparator/)
+  it("offers the claude.ai menu in order: Programar · Convertir en habilidad · Copiar ID · Fijar · Cambiar nombre · Añadir al proyecto · Archivar · Eliminar", () => {
+    const order = ["Programar", "Convertir en habilidad", "Copiar ID de sesión", '{isPinned ? "Desfijar" : "Fijar"}', "Cambiar nombre", "Añadir al proyecto", "Archivar", "Eliminar"]
+    let cursor = menu.indexOf("<DropdownMenuContent")
+    for (const label of order) {
+      const at = menu.indexOf(label, cursor)
+      assert.ok(at > cursor, `menu item out of order or missing: ${label}`)
+      cursor = at
+    }
+    assert.match(menu, /<Clock className=\{MENU_ICON\} \/>\s*Programar/)
+    assert.match(menu, /<ScrollText className=\{MENU_ICON\} \/>\s*Convertir en habilidad/)
+    assert.match(menu, /<Copy className=\{MENU_ICON\} \/>\s*Copiar ID de sesión/)
+    assert.match(menu, /<FolderPlus className=\{MENU_ICON\} \/>\s*Añadir al proyecto/)
+    assert.match(menu, /<DropdownMenuSub>[\s\S]{0,400}Añadir al proyecto[\s\S]{0,1200}<DropdownMenuSubContent/)
+    assert.match(menu, /<Archive className=\{MENU_ICON\} \/>\s*Archivar\s*<DropdownMenuShortcut className=\{MENU_KEY\}>A<\/DropdownMenuShortcut>/)
     assert.match(menu, /Eliminar\s*<DropdownMenuShortcut[^>]*>D<\/DropdownMenuShortcut>/)
     assert.match(menu, /<DropdownMenuShortcut className=\{MENU_KEY\}>P<\/DropdownMenuShortcut>/)
     assert.match(menu, /<DropdownMenuShortcut className=\{MENU_KEY\}>R<\/DropdownMenuShortcut>/)
     assert.match(menu, /text-red-600/)
+    assert.doesNotMatch(menu, /Compartir chat/, "sharing stays on the header pill, as in claude.ai")
+  })
+
+  it("clicking the title starts the rename with a thin light-blue border; the chevron opens the menu", () => {
+    assert.match(menu, /data-testid="chat-title-rename-trigger"[\s\S]{0,200}onClick=\{chatId \? startRename : undefined\}|onClick=\{chatId \? startRename : undefined\}[\s\S]{0,400}data-testid="chat-title-rename-trigger"/)
+    assert.match(menu, /data-testid="chat-title-menu-trigger"[\s\S]{0,600}<ChevronDown/)
+    assert.match(menu, /chat-title-input--celeste/)
+    const css = source("app/globals.css")
+    assert.match(css, /--celeste: 199 89% 48%/)
+    assert.match(css, /\.chat-title-input--celeste \{\s*border: 1px solid hsl\(var\(--celeste\) \/ 0\.85\);/)
+    assert.doesNotMatch(chatInterface, /<ChatTitleMenu[^>]*onShare=/)
+  })
+
+  it("delegates Programar / Añadir al proyecto / Archivar to the sidebar, and Convertir en habilidad to skill-creator", () => {
+    assert.match(menu, /requestChatAction\(\{ action: "schedule", chatId, title \}\)/)
+    assert.match(menu, /requestChatAction\(\{ action: "archive", chatId, title \}\)/)
+    assert.match(menu, /requestChatAction\(\{ action: "folder", chatId, title, folder \}\)/)
+    assert.match(menu, /setComposerPrefill\(skillFromChatPrompt\(title, chatId\)\)/)
+    assert.match(menu, /startChatWithSkill\(SKILL_CREATOR\)/)
+    assert.match(menu, /copyTextSafe\(chatId\)/)
+    assert.match(sidebar, /window\.addEventListener\(CHAT_ACTION_EVENT, onAction\)/)
+    assert.match(sidebar, /if \(detail\.action === "schedule"\) current\.openScheduleDialog\(chat\)/)
+    assert.match(sidebar, /else if \(detail\.action === "archive"\) void current\.archiveChat\(chat\)/)
+    assert.match(sidebar, /else if \(detail\.action === "folder"\) current\.moveChatToFolder\(chat, detail\.folder \?\? null\)/)
+    assert.match(chatInterface, /window\.addEventListener\(COMPOSER_PREFILL_EVENT, onPrefill\)/)
   })
 
   it("single-key shortcuts only work while the menu is open, never globally", () => {
     assert.match(menu, /<DropdownMenuContent[\s\S]{0,200}onKeyDown=\{handleMenuKeyDown\}/)
     assert.match(menu, /if \(key === "p"\)/)
     assert.match(menu, /else if \(key === "r"\)/)
+    assert.match(menu, /else if \(key === "a"\)/)
     assert.match(menu, /else if \(key === "d"\)/)
     assert.doesNotMatch(menu, /addEventListener\("keydown"/)
   })
@@ -54,6 +89,7 @@ describe("/agentes header · chat title menu (claude.ai style)", () => {
     assert.match(menu, /event\.key === "Enter"/)
     assert.match(menu, /event\.key === "Escape"/)
     assert.match(menu, /onBlur=\{\(\) => \{ void finishRename\(true\) \}\}/)
+    assert.match(menu, /aria-label=\{chatId \? `Cambiar el nombre del chat: \$\{title\}` : title\}/)
     assert.match(menu, /<AlertDialog/)
     assert.match(menu, /<AlertDialogTitle>Eliminar chat<\/AlertDialogTitle>/)
     assert.match(menu, /max-w-\[48ch\] truncate/)

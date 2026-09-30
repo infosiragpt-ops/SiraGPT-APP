@@ -15,10 +15,17 @@ interface ImageWorkspaceProps {
   onClose: () => void
   onChanged?: () => void | Promise<void>
   onViewChat?: (asset: WorkspaceImage) => void
+  /**
+   * Plain lightbox (claude.ai style): the image on a dark backdrop with
+   * close/zoom/download only. The edit toolbar (Anotar, Comentar, Quitar
+   * fondo, Borrar, Tamaño) belongs to the image tool, not to a click on a
+   * picture in the conversation.
+   */
+  viewOnly?: boolean
 }
 
 /** Both entry points use the same source-bound requests and persisted versions. */
-export default function ImageWorkspace({ assets, initialAssetId, selectedModel, onClose, onChanged, onViewChat }: ImageWorkspaceProps) {
+export default function ImageWorkspace({ assets, initialAssetId, selectedModel, onClose, onChanged, onViewChat, viewOnly = false }: ImageWorkspaceProps) {
   const router = useRouter()
   const [images, setImages] = useState(assets)
   const [activeId, setActiveId] = useState(initialAssetId)
@@ -106,6 +113,7 @@ export default function ImageWorkspace({ assets, initialAssetId, selectedModel, 
 
   return <ImageModal
     isOpen onClose={onClose}
+    viewOnly={viewOnly}
     images={images}
     selectedIndex={Math.max(0, images.findIndex(asset => asset.id === activeId))}
     onSelect={index => setActiveId(images[index].id)}

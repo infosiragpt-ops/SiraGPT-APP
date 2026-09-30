@@ -65,6 +65,12 @@ export interface ImageModalProps {
   onAddReference?: (asset: ImageViewerAsset) => void
   initialQuality?: ImageViewerQuality
   unavailableOperations?: Partial<Record<ImageViewerOperation, string>>
+  /**
+   * Plain lightbox: dark backdrop, the image highlighted, close / zoom /
+   * download / share. No edit toolbar and no «Describir ediciones» composer —
+   * those belong to the image tool, not to a click on a picture in the chat.
+   */
+  viewOnly?: boolean
 }
 
 const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -83,7 +89,7 @@ export function ImageModal(props: ImageModalProps) {
   return createPortal(<ImageViewerSession {...props} images={images} />, document.body)
 }
 
-function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, onDownload, onShare, onDelete, onViewChat, onAddReference, initialQuality = "2K", unavailableOperations }: ImageModalProps & { images: ImageViewerAsset[] }) {
+function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, onDownload, onShare, onDelete, onViewChat, onAddReference, initialQuality = "2K", unavailableOperations, viewOnly = false }: ImageModalProps & { images: ImageViewerAsset[] }) {
   const [localIndex, setLocalIndex] = React.useState(selectedIndex ?? 0)
   const index = Math.max(0, Math.min(images.length - 1, selectedIndex ?? localIndex))
   const asset = images[index]
@@ -359,10 +365,10 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
   const modeHint = mode === "annotate" ? "Dibuja sobre la imagen. Se guardará una copia y conservarás el original." : mode === "comment" ? "Marca un punto y escribe tu comentario." : mode === "erase" ? "Arrastra sobre la zona que quieres borrar. El resto de la imagen se conserva." : mode === "resize" ? "Ajustar tamaño conserva todo el contenido; puede añadir transparencia para mantener las proporciones." : null
 
   return (
-    <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="image-viewer" className="fixed inset-0 z-[10000] flex flex-col overflow-hidden bg-white text-zinc-900" style={{ height: "100dvh", colorScheme: "light" }} onClick={() => { if (menu) setMenu(null) }}>
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-zinc-100 px-2 sm:h-16 sm:gap-3 sm:px-5">
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="image-viewer" data-view-only={viewOnly ? "true" : undefined} className={cn("fixed inset-0 z-[10000] flex flex-col overflow-hidden bg-white text-zinc-900", viewOnly && "image-lightbox")} style={{ height: "100dvh", colorScheme: viewOnly ? "dark" : "light" }} onClick={() => { if (menu) setMenu(null) }}>
+      <header className={cn("flex h-14 shrink-0 items-center gap-2 px-2 sm:h-16 sm:gap-3 sm:px-5", viewOnly ? "border-b border-white/10 [&_button]:text-current [&_button:hover]:bg-white/10" : "border-b border-zinc-100")}>
         <button ref={closeRef} type="button" className={iconButton} onClick={onClose} aria-label="Cerrar imagen"><X className="h-5 w-5" /></button>
-        <span className="hidden text-sm text-zinc-400 sm:inline">Biblioteca</span><span className="hidden text-zinc-300 sm:inline">/</span>
+        {!viewOnly && <><span className="hidden text-sm text-zinc-400 sm:inline">Biblioteca</span><span className="hidden text-zinc-300 sm:inline">/</span></>}
         <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium">{asset.name}</h2>
         <button type="button" className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-950 px-3 text-sm font-medium text-white transition hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-40 sm:px-4" disabled={busy} onClick={() => onShare ? void runAction(() => onShare(asset)) : setFeedback({ text: "Esta imagen todavía no admite enlaces para compartir. Puedes descargarla.", error: true })} aria-label="Compartir imagen"><Share2 className="h-4 w-4" /><span className="hidden sm:inline">Compartir</span></button>
         <button type="button" className={iconButton} disabled={busy} onClick={() => void download()} aria-label="Descargar imagen"><Download className="h-5 w-5" /></button>
@@ -376,7 +382,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
         </div>
       </header>
 
-      <div className="relative flex shrink-0 flex-col items-center gap-2 px-2 pt-3 sm:px-5 sm:pt-4">
+      {!viewOnly && <div className="relative flex shrink-0 flex-col items-center gap-2 px-2 pt-3 sm:px-5 sm:pt-4">
         <div role="toolbar" aria-label="Herramientas de imagen" className="flex max-w-full items-center gap-0.5 overflow-x-auto rounded-full border border-zinc-200 bg-white px-1 py-1 shadow-sm sm:gap-1 sm:px-2">
           <button type="button" className={cn(actionButton, mode === "annotate" && "bg-zinc-100")} disabled={busy} aria-pressed={mode === "annotate"} onClick={() => activate("annotate")}><Pencil className="h-4 w-4" />Anotar</button>
           <button type="button" className={cn(actionButton, mode === "comment" && "bg-zinc-100")} disabled={busy} aria-pressed={mode === "comment"} onClick={() => activate("comment")}><MessageSquarePlus className="h-4 w-4" />Comentar</button>
@@ -403,7 +409,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
           <label className="flex items-center gap-1">Ancho<input aria-label="Ancho en píxeles" type="number" min={64} max={8192} value={dimensions.width || ""} className="h-9 w-20 rounded-lg border border-zinc-200 px-2 text-base sm:text-sm" onChange={event => { setAspectRatio(undefined); setDimensions(previous => ({ ...previous, width: Number(event.target.value) })) }} /></label>
           <span aria-hidden="true">×</span><label className="flex items-center gap-1">Alto<input aria-label="Alto en píxeles" type="number" min={64} max={8192} value={dimensions.height || ""} className="h-9 w-20 rounded-lg border border-zinc-200 px-2 text-base sm:text-sm" onChange={event => { setAspectRatio(undefined); setDimensions(previous => ({ ...previous, height: Number(event.target.value) })) }} /></label><span className="text-zinc-400">px</span>
         </div>}
-      </div>
+      </div>}
 
       <div className="relative flex min-h-0 flex-1 flex-col sm:flex-row">
         {images.length > 1 && <nav aria-label="Imágenes del chat" className="order-2 flex shrink-0 items-center gap-2 overflow-x-auto px-3 py-2 sm:absolute sm:inset-y-0 sm:left-0 sm:z-10 sm:order-none sm:w-24 sm:flex-col sm:justify-start sm:overflow-y-auto sm:overflow-x-hidden sm:pt-6">
@@ -411,7 +417,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
         </nav>}
         <div ref={viewportRef} data-testid="image-viewer-canvas" className={cn("relative flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden", images.length > 1 && "sm:mx-24")} style={{ touchAction: "none", cursor: mode === "annotate" || mode === "erase" || mode === "comment" ? "crosshair" : scale > imageFitScale(naturalSize.width, naturalSize.height, viewport.width, viewport.height) ? "grab" : "default" }} onPointerDown={startGesture} onPointerMove={moveGesture} onPointerUp={event => { moveGesture(event); gesture.current = null; event.currentTarget.releasePointerCapture?.(event.pointerId) }} onPointerCancel={() => { gesture.current = null }} onDoubleClick={() => { if (mode === "edit") { setZoom(current => current === "fit" ? 1 : "fit"); setPan({ x: 0, y: 0 }) } }}>
           {imageError ? <div role="alert" className="max-w-sm p-6 text-center text-sm text-zinc-600">No se pudo cargar la imagen. Cierra esta vista y vuelve a abrirla.</div> : <div className="relative shrink-0 shadow-[0_8px_28px_rgba(0,0,0,0.09)]" style={{ width: imageReady ? displayedWidth : undefined, height: imageReady ? displayedHeight : undefined, transform: `translate(${pan.x}px, ${pan.y}px)` }}>
-            <img ref={imageRef} key={asset.url} src={asset.url} alt={asset.name} draggable={false} data-testid="image-viewer-image" data-scale={scale} style={{ width: imageReady ? displayedWidth : undefined, height: imageReady ? displayedHeight : undefined, maxWidth: imageReady ? "none" : "100%", maxHeight: imageReady ? "none" : "100%", imageRendering: "auto" }} className="block select-none object-contain" onLoad={event => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width > 0 && height > 0) { setNaturalSize({ width, height }); setDimensions({ width, height }) } }} onError={() => setImageError(true)} />
+            <img ref={imageRef} key={asset.url} src={asset.url} alt={asset.name} draggable={false} data-testid="image-viewer-image" data-scale={scale} style={{ width: imageReady ? displayedWidth : undefined, height: imageReady ? displayedHeight : undefined, maxWidth: imageReady ? "none" : "100%", maxHeight: imageReady ? "none" : "100%", imageRendering: "auto" }} className={cn("block select-none object-contain", viewOnly && "image-lightbox__frame")} onLoad={event => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width > 0 && height > 0) { setNaturalSize({ width, height }); setDimensions({ width, height }) } }} onError={() => setImageError(true)} />
             <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${Math.max(1, naturalSize.width)} ${Math.max(1, naturalSize.height)}`} preserveAspectRatio="none">
               {draft.strokes.map((stroke, i) => <polyline key={i} points={stroke.points.map(point => `${point.x * naturalSize.width / 100},${point.y * naturalSize.height / 100}`).join(" ")} fill="none" stroke={stroke.color} strokeWidth={Math.max(1, stroke.width * naturalSize.width / 100)} strokeLinecap="round" strokeLinejoin="round" />)}
               {mode === "erase" && draft.selection && <rect data-testid="image-viewer-selection" x={draft.selection.x * naturalSize.width / 100} y={draft.selection.y * naturalSize.height / 100} width={draft.selection.width * naturalSize.width / 100} height={draft.selection.height * naturalSize.height / 100} fill="rgba(165,165,165,0.18)" stroke="#6d6d6d" strokeWidth="2" strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />}
@@ -422,7 +428,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
         </div>
       </div>
 
-      <footer className="shrink-0 px-3 pb-3 pt-2 sm:px-6 sm:pb-6" style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}>
+      {viewOnly ? (feedback && !confirmDelete ? <p role={feedback.error ? "alert" : "status"} className={cn("mx-auto px-4 pb-4 pt-2 text-center text-sm", feedback.error ? "text-red-300" : "text-zinc-300")}>{feedback.text}</p> : null) : <footer className="shrink-0 px-3 pb-3 pt-2 sm:px-6 sm:pb-6" style={{ paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}>
         {feedback && !confirmDelete && <p role={feedback.error ? "alert" : "status"} className={cn("mx-auto mb-2 max-w-3xl text-center text-sm", feedback.error ? "text-red-700" : "text-zinc-600")}>{feedback.text}</p>}
         {busy && <p role="status" className="mb-2 text-center text-xs text-zinc-500">Aplicando a esta imagen…</p>}
         <form className="mx-auto flex max-w-4xl items-center gap-1 rounded-[28px] border border-zinc-200 bg-white px-2 py-2 shadow-[0_3px_18px_rgba(0,0,0,0.05)] sm:gap-2 sm:px-3" onSubmit={event => { event.preventDefault(); void submit() }}>
@@ -432,7 +438,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
           <button type="button" className={cn(iconButton, recording && "bg-red-50 text-red-600")} disabled={busy} aria-label={recording ? "Detener dictado" : "Dictar edición"} aria-pressed={recording} onClick={dictate}><Mic className="h-5 w-5" /></button>
           <button type="submit" aria-label={modeLabel} title={modeLabel} disabled={busy || ((mode === "edit" || mode === "comment") && !draft.prompt.trim())} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white transition hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:bg-zinc-200 disabled:text-zinc-400"><ArrowUp className="h-5 w-5" /></button>
         </form>
-      </footer>
+      </footer>}
 
       {confirmDelete && <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 p-5" onClick={() => { if (!busy) { setConfirmDelete(false); moreRef.current?.focus() } }}><div ref={deleteRef} role="alertdialog" aria-modal="true" aria-labelledby={`${titleId}-delete`} className="w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl" onClick={event => event.stopPropagation()}><h3 id={`${titleId}-delete`} className="text-lg font-semibold">Eliminar imagen</h3><p className="mt-2 text-sm text-zinc-500">Se eliminará «{asset.name}» de la biblioteca. El original se conserva.</p>{feedback?.error && <p role="alert" className="mt-3 text-sm text-red-700">{feedback.text}</p>}<div className="mt-5 flex justify-end gap-2"><button type="button" autoFocus className={actionButton} disabled={busy} onClick={() => { setConfirmDelete(false); moreRef.current?.focus() }}>Cancelar</button><button type="button" disabled={busy} className="rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50" onClick={() => void runAction(async () => { await onDelete?.(asset); if (mounted.current) { setConfirmDelete(false); moreRef.current?.focus() } })}>Eliminar</button></div></div></div>}
     </div>
