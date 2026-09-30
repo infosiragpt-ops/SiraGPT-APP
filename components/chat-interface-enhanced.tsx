@@ -1,7 +1,7 @@
 "use client"
 
 import { detectCodingIntent } from "@/lib/software-build-intent"
-import { useChatCodingWorkspace } from "@/hooks/use-chat-coding-workspace"
+import { useChatCodingWorkspace, useChatCodingPreview } from "@/hooks/use-chat-coding-workspace"
 import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
 import dynamic from "next/dynamic"
@@ -6694,8 +6694,10 @@ function ChatInterfaceContent() {
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
   const [codePanelOpen, setCodePanelOpen] = React.useState(false);
+  const [codePanelInitialPane, setCodePanelInitialPane] = React.useState<"editor" | "preview">("editor");
   const [codeOpening, setCodeOpening] = React.useState(false);
   const { workspace: codeWorkspace, onProjectReady: onCodeProjectReady } = useChatCodingWorkspace(user?.id, currentChat?.id);
+  const readyCodePreview = useChatCodingPreview(codeWorkspace);
   React.useEffect(() => {
     setCodePanelOpen(false);
   }, [user?.id, currentChat?.id]);
@@ -13148,7 +13150,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }).catch(() => { postedHandoffKeysRef.current.delete(postKey); });
   }, [setCurrentChat]);
 
-  const openCodePanel = React.useCallback(async () => {
+  const openCodePanel = React.useCallback(async (initialPane: "editor" | "preview" = "editor") => {
     if (codeOpening || !codeWorkspace || codeWorkspace.chatId !== currentChatIdRef.current) return;
     setCodeOpening(true);
     try {
@@ -13164,11 +13166,24 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       closeArtifactPanel();
       setCoworkPanelOpen(false);
       setComputerPanelOpen(false);
+      setCodePanelInitialPane(initialPane);
       setCodePanelOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el espacio de código");
     } finally { setCodeOpening(false); }
   }, [codeOpening, codeWorkspace, closeArtifactPanel]);
+
+  // An actual ready app opens once in the existing right pane. Never steal
+  // an editor draft or a login handoff, and do not reopen after manual close.
+  const presentedCodePreviewsRef = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    if (!readyCodePreview || readyCodePreview.chatId !== currentChatIdRef.current) return;
+    const key = JSON.stringify([readyCodePreview.userId, readyCodePreview.chatId, readyCodePreview.projectId, readyCodePreview.basePath]);
+    if (presentedCodePreviewsRef.current.has(key)) return;
+    if (loginHandoffActive) return;
+    presentedCodePreviewsRef.current.add(key);
+    if (!codePanelOpen) void openCodePanel("preview");
+  }, [readyCodePreview, codePanelOpen, loginHandoffActive, openCodePanel]);
 
   const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string; agentNavigating?: boolean }) => {
     setShowAudioPanel(false);
@@ -15211,7 +15226,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
               {codePanelOpen && codeWorkspace && currentChat?.id && (
-                <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id}
+                <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id} initialPane={codePanelInitialPane}
                   onClose={() => setCodePanelOpen(false)}
                   onProjectReady={onCodeProjectReady} />
               )}

@@ -2390,7 +2390,21 @@ router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentA
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
     const out = await createSandboxClient().devStatus(project.id);
-    return res.json({ ...out, devUrl: runnerDevUrl(process.env, Number.isInteger(out?.port) ? out.port : null) });
+    if (out?.project && out.project !== project.id) {
+      return res.json({ running: false, ready: false, project: project.id, basePath: null, devUrl: null, error: 'preview_project_mismatch' });
+    }
+    // A live process is not necessarily a usable preview: its base path can
+    // contain an expired capability. Do not auto-open that stale URL on reload.
+    let validBase = false;
+    try {
+      const parts = /^\/api\/codex\/projects\/([^/]+)\/preview\/([^/]+)\/app\/?$/.exec(String(out?.basePath || ''));
+      const claims = parts && verifyPreviewToken(decodeURIComponent(parts[2]));
+      validBase = Boolean(parts && decodeURIComponent(parts[1]) === project.id
+        && claims?.projectId === project.id && claims?.userId === req.user.id);
+    } catch (_) { /* malformed or expired capability stays unavailable */ }
+    return res.json({ ...out, project: project.id, ready: out?.ready === true && validBase,
+      basePath: validBase ? out.basePath : null, devUrl: validBase ? out.basePath : null,
+      previewExpired: Boolean(out?.running && !validBase) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }

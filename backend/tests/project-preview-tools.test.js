@@ -348,3 +348,23 @@ test('manual creation and repository import share one chat lock and never alloca
   assert.equal(locks.length, 2);
   assert.deepEqual(locks[0], locks[1], 'all workers serialize the same owner+chat key');
 });
+
+test('ready preview emits only owned chat/project metadata and never its access URL', async () => {
+  for (const tool of [tools.projectPreviewStartTool, tools.projectPreviewStatusTool]) {
+    const events = [];
+    const result = { ok: true, project: { id: 'p1' }, status: { ready: true, running: true }, previewUrl: 'https://siragpt.com/api/codex/projects/p1/preview/private-token/app/' };
+    const ctx = { userId: 'u1', chatId: 'c1', codingWorkspace: { projectId: 'p1' }, onEvent: event => events.push(event), projectTools: { previewService: { startPreviewForChat: async () => result, previewStatusForChat: async () => result } } };
+    await tool.execute({}, ctx);
+    assert.deepEqual(events, [{ type: 'coding_preview_ready', chatId: 'c1', projectId: 'p1' }]);
+  }
+});
+
+test('pending, stopped, foreign and cancelled previews never request automatic opening', async () => {
+  for (const scenario of ['pending', 'stopped', 'foreign', 'aborted', 'noncoding']) {
+    const events = [], controller = new AbortController();
+    const result = { ok: scenario !== 'pending', project: { id: scenario === 'foreign' ? 'p2' : 'p1' }, status: { ready: scenario !== 'pending', running: scenario !== 'stopped' } };
+    const ctx = { userId: 'u1', chatId: 'c1', codingWorkspace: scenario === 'noncoding' ? null : { projectId: 'p1' }, signal: controller.signal, onEvent: event => events.push(event), projectTools: { previewService: { startPreviewForChat: async () => { if (scenario === 'aborted') controller.abort(); return result; } } } };
+    await tools.projectPreviewStartTool.execute({}, ctx);
+    assert.deepEqual(events, [], scenario);
+  }
+});

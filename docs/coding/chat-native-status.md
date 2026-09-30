@@ -1,6 +1,6 @@
 # Desarrollo desde el chat
 
-Estado: PR #936 publicada en Lenovo con commit `20305ca0f1681c8ee5ceac3d120782fe2a68aa3a`, publicación `36775214681` y salud verificadas. La aceptación autenticada detectó problemas de continuidad y vista previa; la corrección posterior debe volver a pasar CI y comprobación de la versión servida.
+Base verificada: PR #941 publicada y servida dentro de `9bb17d90d41639a596a2fd70e9e12963e5db8014` (publicación `36788565094`). Esta corrección aborda el timeout observado con Grok, la apertura automática de la app y la conservación del resumen al compactar. Su publicación requiere CI y aceptación autenticada de la versión final.
 
 La experiencia solicitada comienza escribiendo una tarea de desarrollo en `/agentes`. Un proyecto con nombre aparece en Carpetas y el botón Código de la cabecera permite abrir sus archivos. El editor es opcional y ya no está en el menú +. No se cambia de interfaz ni se activa un modo por inferencia.
 
@@ -12,6 +12,21 @@ La experiencia solicitada comienza escribiendo una tarea de desarrollo en `/agen
 - Proyectos y carpetas recuperados desde el servidor. La interfaz sólo muestra un vínculo que corresponde a la cuenta y al chat activos.
 - Herramientas del mismo proyecto para archivos, pruebas, vista previa y propuesta de cambios; lectura web pública reutiliza `web_search` y `read_url` con controles SSRF existentes.
 - Admisión de código inline con lenguaje reconocido; un pedido sobre un repositorio requiere su URL si todavía no hay proyecto vinculado.
+
+## Corrección de ejecución y apertura de la app
+
+La ejecución de la captura terminó con `model_error: step_timeout_60000ms` después de 15 herramientas correctas, antes de escribir archivos o arrancar la vista previa. No fue agotamiento de pasos. El navegador manual que mostraba Google era una superficie distinta de la app del proyecto.
+
+- Los turnos nativos de código en Grok usan respuesta progresiva y salida acotada a 4.096 tokens. Cada llamada se ensambla y valida antes de ejecutarse. EOF sin cierre, JSON inválido y llamadas truncadas nunca escriben archivos. Una salida limitada consume un paso y pide dividir el trabajo; no amplía el timeout de 60 segundos ni cambia el modelo. Los demás proveedores conservan sus parámetros.
+- La aceptación general detectó una selección tardía al renombrar chats que reemplazaba letras ya escritas. El foco pendiente se cancela tras editar, interactuar, cerrar o cambiar de chat, conservando la selección inicial si todavía no se escribió.
+- El fallo queda registrado como fallido y conserva `E_TIMEOUT`; no se desvía a una respuesta de texto que aparente completar el proyecto.
+- `coding_preview_ready` transporta sólo chat y proyecto. El cliente consulta el estado autenticado y abre la pestaña Vista previa del panel existente únicamente con servidor listo, proyecto propio y enlace firmado válido. No interrumpe un editor abierto ni una entrega de acceso.
+- Recargar recupera el proyecto y su vista previa sin iniciar procesos. Cerrar el panel mantiene la app; Detener la detiene. El heartbeat renueva enlaces válidos y distingue un enlace caducado de un servidor detenido. El iframe conserva origen opaco.
+- El contexto compacto reserva espacio para el resumen canónico y el tramo reciente dentro del mismo presupuesto de 24.000 caracteres. El resumen sigue siendo evidencia citada, no instrucciones; no se reescribe el historial visible.
+
+Validación previa: 131/131 regresiones backend finales; 73/73 pruebas frontend enfocadas; 16/16 Chromium con APIs simuladas y editor real; 12.934/12.934 pruebas Node generales y 1.242/1.242 componentes en la suite completa. El ciclo de compactación modifica y ejecuta un archivo temporal, conservando proyecto, modelo y herramientas. Estas pruebas aisladas no reemplazan la ejecución con modelo/runner reales ni la aceptación autenticada de producción.
+
+Aceptación previa con proveedor real: Grok 4.7 finalizó una web de bicicletas en 74,768 segundos usando el candidato cargado sólo en un proceso QA y el runner de Lenovo. Escribió frontend/backend; el primer comando falló por dependencias ausentes y el modelo lo corrigió. La compilación independiente terminó con código 0. Se reabrieron los archivos y verificaron sus hashes; HTML, módulo frontend, `/api/bikes` y `/api/health` respondieron HTTP 200, con tres bicicletas de IDs únicos y la llamada frontend→API confirmada. Se detuvo únicamente la vista previa QA. El vínculo/propietario de esta prueba son sintéticos; falta la aceptación autenticada del commit publicado.
 
 ## Integración del envío real del chat
 
@@ -26,9 +41,10 @@ Las pruebas con infraestructura simulada verifican los controles de la ruta, per
 - Bóveda de variables: sólo propuesta, no implementada. Revisión automática exige aprobación específica y revisión de seguridad. El ejecutor compartido no acredita aislamiento para recibir secretos privados. No se amplían flags, attestation ni permisos.
 - Navegación: búsquedas y lecturas públicas habilitadas en el carril de código; acceso manual al navegador existente. No se agregan `computer_*`: su aislamiento/destinos y confirmación de pagos requieren correcciones antes de ampliar la automatización.
 - Adjuntos de código: el texto extraído puede perder espacios o etiquetas; no se presenta como importación fiel. Para esta entrega se usan GitHub o código pegado. Importar bytes originales y ZIP requiere una ruta owner-scoped con validación de archivos aparte.
+- No existe checkpoint durable de ejecución conectado al agente de código: los archivos y el proyecto persisten, pero no se garantiza reanudar cualquier proceso interrumpido.
 - Proponer cambios no equivale a publicarlos. No se hace merge, publicación ni pago desde una inferencia.
 
-## Validación realizada
+## Validación de las entregas anteriores
 
 - Producción autenticada, DeepSeek V4 Pro: un primer mensaje normal creó la carpeta Bici Nube QA936 sin abrir el editor; el botón Código mostró archivos frontend/backend reales. `npm run build` terminó con código 0. El agente no dio la tarea por completada. La vista previa cargó HTML pero bloqueó módulos por CORS, y un seguimiento se desvió a una página HTML independiente; no se considera aceptación completa hasta comprobar ambas correcciones.
 - Corrección posterior: 187/187 pruebas backend enfocadas y 115/115 de detector/paridad frontend. El seguimiento «No crees otro proyecto» conserva el vínculo sin ignorar otras negaciones. Una regresión Chromium del mismo mensaje y otra con proxy real, módulos ES y POST JSON pasan; esta última verifica aislamiento del iframe y ausencia de cookies/autorización hacia el proyecto. Se preservan los pasos reales y el motivo seguro de una ejecución degradada.

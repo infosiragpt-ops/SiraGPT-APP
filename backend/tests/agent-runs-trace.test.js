@@ -91,3 +91,16 @@ test('GET /api/agent-runs/:traceId — ownership, 404 on foreign, 400 on junk', 
     if (db.agentStep && origFindMany) db.agentStep.findMany = origFindMany;
   }
 });
+
+
+test('persisted run status distinguishes model/tool failures from successful and interrupted runs', async () => {
+  const { buildAgentMetadata } = require('../src/services/agent-harness/agent-steps-store');
+  for (const stoppedReason of ['model_error: step_timeout_60000ms', 'model_error: 503', 'max_steps', 'no_message', 'runtime_budget_exhausted', 'verification_failed:step_budget', 'tool_circuit_open']) {
+    assert.equal(buildAgentMetadata({ ...RUN, stoppedReason }).status, 'failed', stoppedReason);
+  }
+  for (const stoppedReason of ['finalized', 'plain_text_finalize', 'finalized_guard_breaker']) {
+    assert.equal(buildAgentMetadata({ ...RUN, stoppedReason }).status, 'completed', stoppedReason);
+  }
+  assert.equal(buildAgentMetadata({ ...RUN, stoppedReason: 'aborted' }).status, 'interrupted');
+  assert.equal(buildAgentMetadata({ ...RUN, interrupted: true, stoppedReason: 'model_error: Request was aborted.' }).status, 'interrupted');
+});

@@ -1488,6 +1488,11 @@ async function run(openai, opts) {
       if (ctx.signal.aborted) onParentAbort();
       else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
     }
+    // The observed Grok failure gets a bounded streaming transport. Preserve
+    // other providers' effort/output budgets and signed native transcripts.
+    const boundedCodingTurn = !prompted && Boolean(ctx?.codingWorkspace?.projectId)
+      && /^(?:xai|grok)$/i.test(String(activeProvider || ''));
+    const streamCodingTurn = boundedCodingTurn;
     let effortFields = {};
     try {
       effortFields = require('./ai-product-os/litellm-gateway').resolveProviderEffortFields({
@@ -1530,6 +1535,8 @@ async function run(openai, opts) {
           ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
           temperature: 0.3,
           ...effortFields,
+          ...(boundedCodingTurn ? require('./codex/coding-model-response').codingOutputFields(activeProvider, activeModel) : {}),
+          ...(streamCodingTurn ? { stream: true, stream_options: { include_usage: true } } : {}),
         };
         // Direct V4 thinking supports native tools, but not forced choices.
         // Preserve the shared transcript/schema; adapt only this request.
@@ -1537,6 +1544,12 @@ async function run(openai, opts) {
           ? require('./ai/deepseek-billing-failover').prepareDeepSeekDirectToolRequest(nativePayload)
           : nativePayload;
         resp = await activeOpenai.chat.completions.create(payload, { signal: stepCtl.signal });
+        if (streamCodingTurn) {
+          resp = await require('./codex/coding-model-response').collectCodingResponse(resp, {
+            signal: stepCtl.signal,
+            onFirstDelta: () => { modelTelemetryTtfbAt = Date.now(); },
+          });
+        }
       }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
@@ -1646,6 +1659,23 @@ async function run(openai, opts) {
         tokensOut: usage.outputTokens,
       });
     } catch { /* optional */ }
+
+    if (boundedCodingTurn && choice.finish_reason === 'length') {
+      // A truncated mutation must never reach a handler. Spend this step and
+      // refine the task; do not retry the same provider payload or accept an
+      // apparently valid prefix of a larger, unfinished write batch.
+      fireHook(onModelResponse, { step, durationMs: Date.now() - modelTelemetryStepStart, toolNames: [], finalize: false, failed: true, category: 'output_limit' });
+      const limitedStep = { step, thought: '', actions: [], usage };
+      steps.push(limitedStep);
+      onStep(limitedStep);
+      await onStepDone(limitedStep);
+      messages.push({ role: 'user', content: 'La respuesta alcanzó el límite de salida y NO se ejecutó ninguna herramienta de esa respuesta. Divide el cambio: escribe un solo archivo pequeño o componente por paso, sin repetir lecturas ya realizadas. Continúa con los archivos reales, ejecuta las pruebas y verifica la vista previa antes de finalizar.' });
+      if (typeof onCheckpoint === 'function') {
+        try { await onCheckpoint(buildCheckpoint(step + 1)); } catch { /* caller owns persistence */ }
+      }
+      stepDurations.push(Date.now() - stepStartedAt);
+      continue;
+    }
 
     // Normalise NATIVE tool-call formats → OpenAI `tool_calls`. Models like
     // Moonshot Kimi K2.6 (via OpenRouter) emit tool calls as tokens inside

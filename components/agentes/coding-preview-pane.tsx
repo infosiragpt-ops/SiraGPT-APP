@@ -4,7 +4,8 @@
  * Pestaña Vista previa del IDE de /agentes (MVP programación web, Etapa 4).
  * Arranca el dev server del proyecto vinculado (POST /preview/start, que ya
  * espera readiness en servidor hasta ~90s), muestra el proxy tokenizado en
- * un iframe y lo detiene al desmontar. Sin abrir-en-pestaña-nueva: el live
+ * un iframe. Cerrar conserva el servidor; Detener lo cierra explícitamente.
+ * Sin abrir-en-pestaña-nueva: el live
  * top-level heredaría el origen SiraGPT (ver preview-pane.tsx).
  * Hot-restart (Etapa 5 MVP): el IDE le pasa `fileVersion`, que sube cada vez
  * que el árbol/contenido del proyecto cambia de verdad; si el preview ya está
@@ -18,18 +19,19 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { projectsCodexApi } from "@/lib/codex/api/projects"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
 import { cn } from "@/lib/utils"
+import { readyCodingPreviewPath } from "@/lib/chat/coding-preview-event"
 
 type Phase = "idle" | "starting" | "ready" | "error"
 
 const HEARTBEAT_MS = 30_000
 
-function sandboxFor(url: string): string | undefined {
-  try {
-    if (/^https?:\/\//.test(url) && !url.startsWith(window.location.origin)) return undefined
-  } catch {
-    return undefined
+function unavailablePreviewNote(value: unknown): string {
+  const state = value && typeof value === "object" ? value as Record<string, unknown> : {}
+  if (state.previewExpired === true && state.running === true) {
+    return "El enlace de vista previa caducó. Pulsa Iniciar vista previa para renovarlo."
   }
-  return "allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
+  if (state.running === false) return "El servidor de vista previa se detuvo."
+  return "La vista previa todavía no está disponible. Vuelve a iniciarla para comprobar el proyecto."
 }
 
 export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: string | null; fileVersion?: number }) {
@@ -37,54 +39,85 @@ export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: s
   const [url, setUrl] = React.useState<string | null>(null)
   const [note, setNote] = React.useState("")
   const [frameKey, setFrameKey] = React.useState(0)
-  const startedRef = React.useRef(false)
+  const operationRef = React.useRef(0)
   const abortRef = React.useRef<AbortController | null>(null)
   const seenFileVersionRef = React.useRef(fileVersion)
 
   const stop = React.useCallback(async () => {
+    operationRef.current += 1
     abortRef.current?.abort()
     abortRef.current = null
-    if (startedRef.current && projectId) {
-      startedRef.current = false
-      try {
-        await projectsCodexApi.stopPreview(projectId)
-      } catch {
-        // best-effort: el reaper del runner limpia solo
-      }
-    }
     setPhase("idle")
     setUrl(null)
-  }, [projectId])
-
-  // Al desmontar (cambio de proyecto/cierre), detener lo que arrancamos.
-  React.useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-      if (startedRef.current && projectId) {
-        startedRef.current = false
-        void projectsCodexApi.stopPreview(projectId).catch(() => undefined)
-      }
+    if (projectId) {
+      try { await projectsCodexApi.stopPreview(projectId) }
+      catch { setNote("No se pudo confirmar la detención. Vuelve a abrir la vista previa para comprobar su estado.") }
     }
   }, [projectId])
 
-  // Heartbeat: si el dev server cae tras ready, volver a idle con nota.
+  // Recover the runner's current, owned URL. Mount/reload never starts an app;
+  // the agent or an explicit Iniciar does. A stale response cannot cross chats.
+  React.useEffect(() => {
+    const operation = ++operationRef.current
+    const controller = new AbortController()
+    setPhase("idle")
+    setUrl(null)
+    setNote("")
+    if (projectId) {
+      void (async () => {
+        try {
+          const status = await projectsCodexApi.previewStatus(projectId, controller.signal)
+          const base = readyCodingPreviewPath(status, projectId)
+          if (!base) {
+            if (!controller.signal.aborted && operation === operationRef.current && status?.previewExpired === true) {
+              setNote(unavailablePreviewNote(status))
+            }
+            return
+          }
+          const origin = await ensureCodexPreviewOrigin().catch(() => null)
+          if (controller.signal.aborted || operation !== operationRef.current) return
+          setUrl(`${origin || ""}${base}`)
+          setPhase("ready")
+        } catch { /* An unavailable/stopped runner stays explicitly idle. */ }
+      })()
+    }
+    return () => {
+      controller.abort()
+      operationRef.current += 1
+      abortRef.current?.abort()
+      // Hiding the pane is not Stop: another viewer or agent can use this server.
+    }
+  }, [projectId])
+
+  // Follow the owned runner URL if its capability was renewed elsewhere.
+  // Serialize reads; a late heartbeat never revives Stop or a different chat.
   React.useEffect(() => {
     if (phase !== "ready" || !projectId) return
+    let cancelled = false, inFlight = false
+    const operation = operationRef.current
+    const controller = new AbortController()
     const timer = window.setInterval(() => {
-      void projectsCodexApi
-        .previewStatus(projectId)
-        .then((st) => {
-          const running = Boolean((st as { running?: boolean })?.running ?? (st as { previewStatus?: { running?: boolean } })?.previewStatus?.running)
-          if (!running) {
-            startedRef.current = false
+      if (inFlight) return
+      inFlight = true
+      void (async () => {
+        try {
+          const status = await projectsCodexApi.previewStatus(projectId, controller.signal)
+          if (cancelled || operation !== operationRef.current) return
+          const base = readyCodingPreviewPath(status, projectId)
+          if (!base) {
             setPhase("idle")
             setUrl(null)
-            setNote("El servidor de vista previa se detuvo.")
+            setNote(unavailablePreviewNote(status))
+            return
           }
-        })
-        .catch(() => undefined)
+          const origin = await ensureCodexPreviewOrigin().catch(() => null)
+          if (cancelled || operation !== operationRef.current) return
+          setUrl(`${origin || ""}${base}`)
+        } catch { /* Keep the current frame during a transient read failure. */ }
+        finally { inFlight = false }
+      })()
     }, HEARTBEAT_MS)
-    return () => window.clearInterval(timer)
+    return () => { cancelled = true; controller.abort(); window.clearInterval(timer) }
   }, [phase, projectId])
 
   // Hot-restart: si los archivos del proyecto cambiaron (fileVersion del IDE)
@@ -99,6 +132,7 @@ export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: s
 
   async function start() {
     if (!projectId || phase === "starting") return
+    const operation = ++operationRef.current
     setPhase("starting")
     setNote("")
     const ctrl = new AbortController()
@@ -106,13 +140,13 @@ export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: s
     try {
       const previewOrigin = await ensureCodexPreviewOrigin().catch(() => null)
       const out = await projectsCodexApi.startPreview(projectId, ctrl.signal)
-      const base = out?.previewUrl || out?.basePath || ""
-      if (!base) throw new Error("El servidor no devolvió URL de vista previa.")
-      startedRef.current = true
+      const base = readyCodingPreviewPath(out, projectId)
+      if (!base) throw new Error("El servidor todavía no confirmó que la vista previa esté lista.")
+      if (ctrl.signal.aborted || operation !== operationRef.current) return
       setUrl(`${previewOrigin || ""}${base}`)
       setPhase("ready")
     } catch (err) {
-      if (ctrl.signal.aborted) return
+      if (ctrl.signal.aborted || operation !== operationRef.current) return
       const status = (err as { status?: number })?.status
       const message =
         status === 403
@@ -162,7 +196,7 @@ export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: s
           src={url}
           title="Vista previa del proyecto"
           className="min-h-0 flex-1 border-0 bg-white"
-          sandbox={sandboxFor(url)}
+          sandbox="allow-scripts allow-forms allow-popups allow-modals allow-pointer-lock"
           allow="clipboard-write"
         />
       </div>

@@ -78,6 +78,18 @@ function withPreviewHint(result) {
   };
 }
 
+// The UI resolves the tokenized URL through the authenticated status endpoint.
+// Never put that capability URL in the chat metadata event.
+function announceReadyPreview(ctx, result) {
+  if (!ctx?.codingWorkspace?.projectId || ctx.signal?.aborted || !result?.ok
+    || result.status?.ready !== true || result.status?.running !== true
+    || result.project?.id !== ctx.codingWorkspace.projectId
+    || !ctx.userId || !ctx.chatId || typeof ctx.onEvent !== 'function') return;
+  try {
+    ctx.onEvent({ type: 'coding_preview_ready', chatId: String(ctx.chatId), projectId: String(result.project.id) });
+  } catch (_) { /* a disconnected viewer does not invalidate a ready server */ }
+}
+
 async function cloneRepo(args, ctx) {
   const scope = chatScope(ctx);
   if (scope.error) return scope.error;
@@ -147,6 +159,7 @@ const projectPreviewStartTool = {
         waitMs: Number(args && args.waitMs) || undefined,
       }, depsFromCtx(ctx)));
       recordRlcdOutcome(ctx, out);
+      announceReadyPreview(ctx, out);
       return out;
     } catch (err) {
       return { ok: false, code: 'internal', message: String((err && err.message) || err) };
@@ -171,6 +184,7 @@ const projectPreviewStatusTool = {
       const svc = serviceFromCtx(ctx);
       const out = withPreviewHint(await svc.previewStatusForChat({ userId: scope.userId, chatId: scope.chatId, waitMs: Number(args && args.waitMs) || undefined }, depsFromCtx(ctx)));
       if (out && out.ok && out.status && out.status.ready) recordRlcdOutcome(ctx, out);
+      announceReadyPreview(ctx, out);
       return out;
     } catch (err) {
       return { ok: false, code: 'internal', message: String((err && err.message) || err) };
