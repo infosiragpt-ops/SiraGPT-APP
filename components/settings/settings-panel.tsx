@@ -29,6 +29,8 @@ import {
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
+import { useChatList } from "@/lib/chat-context-integrated"
+import { brandModelLabel, DEEPSEEK_PROVIDER_LABEL } from "@/lib/chat/brand-label"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
@@ -854,7 +856,7 @@ function ModelsSection() {
       </div>
 
       <SectionCard title="Modelo predeterminado" desc="Se usa cuando abres un chat nuevo">
-        <Row title={current?.displayName || "Sin seleccionar"} desc={current?.provider ? `${current.provider} · ${current.name}` : "—"}>
+        <Row title={current ? brandModelLabel(current) : "Sin seleccionar"} desc={current ? DEEPSEEK_PROVIDER_LABEL : "—"}>
           <Badge variant="secondary" className="gap-1"><Check className="h-3 w-3" />Por defecto</Badge>
         </Row>
       </SectionCard>
@@ -867,7 +869,7 @@ function ModelsSection() {
         Object.entries(byProvider).map(([provider, list]) => (
           <SectionCard key={provider} title={provider} desc={`${list.length} modelo(s)`}>
             {list.slice(0, 60).map((m) => (
-              <Row key={m.id} title={m.displayName || m.name} desc={m.description || m.name}>
+              <Row key={m.id} title={brandModelLabel(m)} desc={m.description || DEEPSEEK_PROVIDER_LABEL}>
                 <div className="flex items-center gap-1">
                   <Button
                     variant="ghost" size="icon" className="h-8 w-8"
@@ -1218,6 +1220,9 @@ function SchedulesSection() {
 function DataControlsSection() {
   const { settings, update } = useSettings()
   const D = settings.dataControls
+  // Bulk archive / trash change every chat server-side: refetch the list so
+  // the sidebar stops showing (and opening) chats that are gone.
+  const { resetChats, setCurrentChat } = useChatList()
   const [stats, setStats] = React.useState<{ total: number; archived: number; deleted: number; shared: number } | null>(null)
   const [exporting, setExporting] = React.useState(false)
   const [busy, setBusy] = React.useState<string | null>(null)
@@ -1254,6 +1259,7 @@ function DataControlsSection() {
     try {
       const r = await apiClient.archiveAllChats()
       toast.success(`${r.archived ?? 0} chat(s) archivado(s)`)
+      resetChats()
       reload()
     } catch { toast.error("No se pudieron archivar") } finally { setBusy(null) }
   }
@@ -1267,6 +1273,8 @@ function DataControlsSection() {
     try {
       const r = await apiClient.clearChatHistory()
       toast.success(`${r.deleted ?? 0} chat(s) movido(s) a papelera`)
+      setCurrentChat(null)
+      resetChats()
       reload()
     } catch { toast.error("No se pudo borrar el historial") } finally { setBusy(null) }
   }

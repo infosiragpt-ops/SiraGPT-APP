@@ -56,7 +56,7 @@ import {
   FORGET_CODEX_WORKSPACE_EVENT,
   type CodeNewChatDetail,
 } from "@/lib/code-workspace-context"
-import { useChat } from "@/lib/chat-context-integrated"
+import { useChatList } from "@/lib/chat-context-integrated"
 import {
   CODEX_UPDATED_EVENT,
   codexIdForProject,
@@ -115,7 +115,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const isOnCodePage = pathname?.startsWith("/code") ?? false
-  const { selectChat, currentChat } = useChat()
+  const { selectChat, currentChatId } = useChatList()
 
   const [folders, setFolders] = React.useState<Project[]>([])
   const [codexProjects, setCodexProjects] = React.useState<CodexProjectEntry[]>([])
@@ -857,7 +857,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
         workspaces={workspaceNodes}
         expandedIds={expandedIds}
         activeWorkspaceId={activeWorkspaceId}
-        activeChatId={currentChat?.id ?? null}
+        activeChatId={currentChatId}
         chatsByWorkspace={chatsByFolder}
         loading={loading}
         displayOptions={displayOptions}

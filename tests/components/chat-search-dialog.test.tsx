@@ -33,7 +33,9 @@ vi.mock('lucide-react', () => ({
 }))
 
 function IconStub(name: string) {
-  return (props: any) => <svg data-testid={`icon-${name}`} {...props} />
+  const Icon = (props: any) => <svg data-testid={`icon-${name}`} {...props} />
+  Icon.displayName = `IconStub(${name})`
+  return Icon
 }
 
 // UI primitives — minimal pass-throughs.
@@ -56,6 +58,7 @@ vi.mock('@/components/ui/thinking-indicator', () => ({
 
 const searchChatsMock = vi.fn()
 const listProjectsMock = vi.fn()
+const { selectChatMock } = vi.hoisted(() => ({ selectChatMock: vi.fn() }))
 vi.mock('@/lib/api', () => ({
   apiClient: {
     searchChats: (...args: any[]) => searchChatsMock(...args),
@@ -73,14 +76,18 @@ vi.mock('@/lib/chat-context-integrated', () => {
   const CHATS = [
     { id: 'c-local', title: 'Plan de tesis local', updatedAt: '2026-08-20T10:00:00Z', messages: [] },
   ]
+  // The dialog reads the list-only context (useChatList) so token flushes
+  // of the open chat never re-render it; useChat stays mocked for parity.
+  const api = () => ({
+    chats: CHATS,
+    selectChat: selectChatMock,
+    loadMoreChats: vi.fn(),
+    hasMoreChats: false,
+    isLoadingMore: false,
+  })
   return {
-    useChat: () => ({
-      chats: CHATS,
-      selectChat: vi.fn(),
-      loadMoreChats: vi.fn(),
-      hasMoreChats: false,
-      isLoadingMore: false,
-    }),
+    useChat: api,
+    useChatList: api,
   }
 })
 
@@ -91,6 +98,7 @@ describe('ChatSearchDialog full-text search wiring', () => {
     vi.useFakeTimers()
     searchChatsMock.mockReset()
     listProjectsMock.mockReset()
+    selectChatMock.mockReset()
     listProjectsMock.mockResolvedValue([])
     ;(HTMLElement.prototype as any).scrollIntoView = vi.fn()
   })
@@ -253,6 +261,55 @@ describe('ChatSearchDialog full-text search wiring', () => {
     expect(firstSignal.aborted).toBe(true)
     expect(searchChatsMock).toHaveBeenCalledTimes(2)
     void resolveFirst
+  })
+
+  it('keeps the spinner up while the request is in flight and never opens a stale row on Enter', async () => {
+    let resolveSearch: (value: any) => void = () => {}
+    searchChatsMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve
+        })
+    )
+
+    render(<ChatSearchDialog open onOpenChange={vi.fn()} />)
+    const input = screen.getByRole('textbox')
+    fireEvent.change(input, { target: { value: 'metodología' } })
+
+    // Debounce settles and the request starts: the recents from the empty
+    // query are still on screen, but the dialog must report it is searching.
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    expect(searchChatsMock).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('thinking')).toBeInTheDocument()
+
+    // Enter on the stale first row (the local recent) must not open it.
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(selectChatMock).not.toHaveBeenCalled()
+
+    await act(async () => {
+      resolveSearch({
+        query: 'metodología',
+        results: [
+          {
+            messageId: 'm-1',
+            chatId: 'c-1',
+            chatTitle: 'Tesis metodología',
+            role: 'USER',
+            snippet: 'mi <mark>metodología</mark>',
+            timestamp: '2026-08-01T10:00:00Z',
+            rank: 0.9,
+          },
+        ],
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByTestId('thinking')).toBeNull()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(selectChatMock).toHaveBeenCalledWith('c-1')
   })
 
   it('renders loaded recents without calling the server when the query is empty', async () => {

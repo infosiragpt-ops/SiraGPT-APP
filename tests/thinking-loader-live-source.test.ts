@@ -93,7 +93,10 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     const steps = source("components/agentic-steps.tsx")
     const reducer = source("lib/run-trace.ts")
 
-    assert.match(message, /if \(message\.role !== "ASSISTANT"\) return null;/)
+    // The markdown renderer is hoisted to module scope (stable identity), so
+    // the assistant-only guard reads the `role` prop fed from message.role.
+    assert.match(message, /if \(role !== "ASSISTANT"\) return null;/)
+    assert.match(message, /role=\{message\.role\}/)
     assert.match(steps, /shouldRenderRunTrace/)
     assert.match(steps, /if \(role && !assistantOk\) return null/)
     assert.match(reducer, /if \(role !== "ASSISTANT"\) return false/)

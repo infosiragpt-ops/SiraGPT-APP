@@ -118,6 +118,9 @@ export function ChatDecisionPanel({ request, onReply, onResolved }: ChatDecision
       aria-label="El agente necesita tu decisión"
       className="rounded-2xl border border-border/80 bg-background px-3.5 py-3 shadow-[0_8px_24px_-20px_hsl(220_24%_14%_/_0.28)]"
     >
+      <p className="sr-only" role="status" aria-live="polite">
+        {`El agente necesita tu decisión${total > 1 ? ` (${index + 1} de ${total})` : ""}: ${question.text}`}
+      </p>
       <header className="flex items-start gap-3">
         <h2 className="min-w-0 flex-1 text-[14.5px] font-medium leading-5 text-foreground">
           {question.text}
@@ -169,12 +172,13 @@ export function ChatDecisionPanel({ request, onReply, onResolved }: ChatDecision
               key={option.id}
               type="button"
               disabled={busy}
+              aria-pressed={isSelected}
               onClick={() => recordAndAdvance(option)}
               className={cn(
-                "flex w-full items-start gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors",
+                "flex w-full items-start gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                 optionIndex > 0 ? "mt-0.5" : "",
                 isSelected
-                  ? "bg-background shadow-[inset_0_0_0_1.5px_#3B82F6]"
+                  ? "bg-background shadow-[inset_0_0_0_1.5px_hsl(var(--foreground))]"
                   : "hover:bg-background/70",
               )}
             >

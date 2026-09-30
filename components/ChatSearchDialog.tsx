@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { useChat } from "@/lib/chat-context-integrated"
+import { useChatList } from "@/lib/chat-context-integrated"
 import { apiClient } from "@/lib/api"
 import { useTranslations } from "next-intl"
 import { useRouter, usePathname } from "next/navigation"
@@ -118,7 +118,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   const [searchQuery, setSearchQuery] = React.useState("")
   const [debouncedQuery, setDebouncedQuery] = React.useState("")
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([])
-  const [isSearching, setIsSearching] = React.useState(false)
+  const [isFetching, setIsFetching] = React.useState(false)
   const [activeIndex, setActiveIndex] = React.useState(0)
   const {
     chats,
@@ -126,13 +126,17 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     loadMoreChats,
     hasMoreChats,
     isLoadingMore,
-  } = useChat()
+  } = useChatList()
   const router = useRouter()
   const pathname = usePathname()
   const inputRef = React.useRef<HTMLInputElement>(null)
   const itemRefs = React.useRef<Map<number, HTMLButtonElement | null>>(new Map())
   const searchAbortRef = React.useRef<AbortController | null>(null)
   const [serverSearchFailed, setServerSearchFailed] = React.useState(false)
+  // Query the displayed results answer. A refetch of that same query (the
+  // chat list or projects changed) keeps the rows valid, so it neither
+  // shows the spinner nor blocks Enter.
+  const settledQueryRef = React.useRef("")
   const [projects, setProjects] = React.useState<Project[]>([])
 
   // Debounce search query
@@ -188,7 +192,8 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
           "recency",
         )
       )
-      setIsSearching(false)
+      settledQueryRef.current = ""
+      setIsFetching(false)
       return
     }
 
@@ -214,6 +219,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     const controller = new AbortController()
     searchAbortRef.current = controller
 
+    setIsFetching(settledQueryRef.current !== query)
     apiClient
       .searchChats(query, { limit: SEARCH_LIMIT, signal: controller.signal })
       .then((response) => {
@@ -242,14 +248,16 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
           )
         )
         setServerSearchFailed(false)
-        setIsSearching(false)
+        settledQueryRef.current = query
+        setIsFetching(false)
       })
       .catch((error) => {
         if (cancelled || controller.signal.aborted) return
         console.error("Full-text chat search failed; falling back to local titles:", error)
         setSearchResults(mergeSearchResults(localFallback(), mapProjectResults(projects, query), "rank"))
         setServerSearchFailed(true)
-        setIsSearching(false)
+        settledQueryRef.current = query
+        setIsFetching(false)
       })
 
     return () => {
@@ -257,12 +265,13 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     }
   }, [debouncedQuery, chats, projects])
 
-  // While the user is typing (query differs from the settled debounced value)
-  // show the inline spinner so the input feels responsive.
-  React.useEffect(() => {
-    if (searchQuery.trim() && searchQuery !== debouncedQuery) setIsSearching(true)
-    else setIsSearching(false)
-  }, [searchQuery, debouncedQuery])
+  // Spinner while the user is typing (query differs from the settled
+  // debounced value) AND while the full-text request is in flight, so the
+  // previous result set is never presented as the answer to the new query.
+  // Derived (not an effect) so it cannot get stuck when the debounce
+  // settles back to the same value.
+  const isSearching =
+    (searchQuery.trim() !== "" && searchQuery !== debouncedQuery) || isFetching
 
   // Reset keyboard cursor whenever the result set or query changes.
   React.useEffect(() => {
@@ -317,7 +326,11 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
       e.preventDefault()
       setActiveIndex((i) => Math.max(i - 1, 0))
     } else if (e.key === "Enter") {
+      // Enter that commits an IME composition must not open a row.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return
       e.preventDefault()
+      // Stale rows belong to the previous query: never open one of them.
+      if (isSearching) return
       const chat = searchResults[activeIndex]
       if (chat) handleChatSelect(chat)
     }

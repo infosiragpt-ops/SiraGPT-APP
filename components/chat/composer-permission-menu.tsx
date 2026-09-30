@@ -100,8 +100,8 @@ export function ComposerPermissionMenu() {
         sideOffset={8}
         className="composer-permission-menu w-[min(calc(100vw-1.5rem),22rem)] p-2"
       >
-        <p className="composer-permission-menu-kicker">Permisos</p>
-        <ul className="flex flex-col gap-0.5">
+        <p id="composer-permission-kicker" className="composer-permission-menu-kicker">Permisos</p>
+        <ul aria-labelledby="composer-permission-kicker" className="flex flex-col gap-0.5">
           {LEVELS.map((row, index) => {
             const RowIcon = row.icon
             const selected = row.id === level
@@ -111,12 +111,14 @@ export function ComposerPermissionMenu() {
                   type="button"
                   data-testid="composer-permission-option"
                   data-permission-level={row.id}
+                  aria-pressed={selected}
+                  aria-keyshortcuts={String(index + 1)}
                   className={cn("composer-permission-row", selected && "is-selected")}
                   onClick={() => {
                     select(row.id)
                   }}
                 >
-                  <RowIcon className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.8} />
+                  <RowIcon className="mt-0.5 h-4 w-4 shrink-0" strokeWidth={1.8} aria-hidden />
                   <span className="min-w-0 flex-1 text-left">
                     <span className="block text-[13px] font-medium text-foreground">{row.label}</span>
                     <span className="mt-0.5 block text-[12px] leading-snug text-muted-foreground">
@@ -124,8 +126,8 @@ export function ComposerPermissionMenu() {
                     </span>
                   </span>
                   <span className="flex w-8 shrink-0 items-center justify-end gap-1 text-[11px] text-muted-foreground">
-                    {selected ? <Check className="h-3.5 w-3.5 text-foreground" strokeWidth={2.2} /> : null}
-                    {index + 1}
+                    {selected ? <Check className="h-3.5 w-3.5 text-foreground" strokeWidth={2.2} aria-hidden /> : null}
+                    <span aria-hidden>{index + 1}</span>
                   </span>
                 </button>
               </li>

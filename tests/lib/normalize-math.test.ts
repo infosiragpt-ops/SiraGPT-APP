@@ -9,10 +9,27 @@ describe("normalizeMathDelimiters", () => {
     )
   })
 
-  it("converts display \\[ ... \\] to $$ ... $$", () => {
+  it("converts a whole-line display \\[ ... \\] to a $$ block on its own lines", () => {
     expect(normalizeMathDelimiters("\\[\\int_0^1 x^2\\,dx\\]")).toBe(
-      "$$\\int_0^1 x^2\\,dx$$",
+      "$$\n\\int_0^1 x^2\\,dx\n$$",
     )
+  })
+
+  it("keeps the indentation of a display block inside a list item", () => {
+    expect(normalizeMathDelimiters("- item\n  \\[x^2\\]")).toBe("- item\n  $$\n  x^2\n  $$")
+  })
+
+  it("turns a whole-line $$ ... $$ into a display block", () => {
+    expect(normalizeMathDelimiters("$$E=mc^2$$")).toBe("$$\nE=mc^2\n$$")
+  })
+
+  it("keeps a mid-sentence \\[ ... \\] on the same line", () => {
+    expect(normalizeMathDelimiters("a \\[x\\] b")).toBe("a $$x$$ b")
+  })
+
+  it("is idempotent on display block output", () => {
+    const once = normalizeMathDelimiters("\\[\\int_0^1 x^2\\,dx\\]")
+    expect(normalizeMathDelimiters(once)).toBe(once)
   })
 
   it("converts multiple inline expressions in one string", () => {
@@ -51,5 +68,36 @@ describe("normalizeMathDelimiters", () => {
   it("is idempotent", () => {
     const once = normalizeMathDelimiters("Energía \\(E=mc^2\\) fin.")
     expect(normalizeMathDelimiters(once)).toBe(once)
+  })
+
+  describe("currency dollars", () => {
+    it("escapes prices so they do not open inline math", () => {
+      expect(normalizeMathDelimiters("El plan Pro cuesta $10 al mes y el anterior $5")).toBe(
+        "El plan Pro cuesta \\$10 al mes y el anterior \\$5",
+      )
+      expect(normalizeMathDelimiters("$10 y $20")).toBe("\\$10 y \\$20")
+      expect(normalizeMathDelimiters("de $10-$20 al mes")).toBe("de \\$10-\\$20 al mes")
+    })
+
+    it("leaves real dollar math alone", () => {
+      expect(normalizeMathDelimiters("Sea $2x$ y $3 + 4$ ok")).toBe("Sea $2x$ y $3 + 4$ ok")
+      expect(normalizeMathDelimiters("$1$ y $2$")).toBe("$1$ y $2$")
+      expect(normalizeMathDelimiters("Vale \\(5\\) y cuesta $5")).toBe("Vale $5$ y cuesta \\$5")
+    })
+
+    it("does not touch prices inside inline code", () => {
+      expect(normalizeMathDelimiters("`$10 y $20`")).toBe("`$10 y $20`")
+    })
+
+    it("is idempotent", () => {
+      const once = normalizeMathDelimiters("El plan Pro cuesta $10 al mes y el anterior $5")
+      expect(normalizeMathDelimiters(once)).toBe(once)
+    })
+
+    it("keeps converted \\( … \\) math with a digit and trailing space on a second pass", () => {
+      const once = normalizeMathDelimiters("Sea \\(5 \\times 3 \\) ok")
+      expect(once).toBe("Sea $5 \\times 3$ ok")
+      expect(normalizeMathDelimiters(once)).toBe(once)
+    })
   })
 })

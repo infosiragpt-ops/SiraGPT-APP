@@ -1480,6 +1480,29 @@ selección/copia de registros consistente en los cuatro tabs de Admin → Logs.
   casos nuevos en los tests de componente de los paneles +
   `tests/admin-live-logs-source.test.ts` (los 4 tabs usan la barra común).
 
+## Pulido del chat /agentes — 107 hallazgos auditados (added 2026-09-30)
+
+Auditoría en 10 dimensiones (render, markdown en streaming, a11y, acabado visual,
+compositor, estados, móvil, lógica, superficies, carga) con verificación adversarial;
+107 hallazgos confirmados (≈91 distintos) aplicados y re-baselineados en el UI lock.
+- **Lista de mensajes**: la respuesta en vivo vive en la misma lista con key (sin remontar
+  al terminar); auto-seguimiento con intención (rueda/toque/PageUp lo sueltan); el foco no
+  sale del compositor al terminar una respuesta; el efecto de foco de imagen corre una vez.
+- **Streaming**: `lib/markdown/repair-streaming-tail.ts` repara la cola viva (`**` sin
+  cerrar, enlaces a medias, tablas sin fila delimitadora); `$10 y $20` ya no es KaTeX; el
+  caret no aparece en cada celda/ítem.
+- **Compositor**: borrador por chat sin fugas, ↑ con compositor vacío recupera el último
+  mensaje (o el de la cola), Enter del menú «/» no envía «/», quitar un adjunto en subida
+  aborta el XHR, autosize sin saltos, pegar desde Excel ya no adjunta una imagen.
+- **Detener**: no marca el chat como fallido ni añade texto en inglés.
+- **Carga**: WordConnector, ArtifactPanel/Sources/Voz/DocumentPreview perezosos; `docx`
+  perezoso en descargas; sin destello blanco en tema oscuro; la lista de chats no espera a
+  los modelos.
+- Tests: `tests/*-source.test.ts` nuevos (continuidad del stream, robustez del compositor,
+  resiliencia del contexto, popovers a11y, sidebar/ajustes, pulido del shell, estabilidad
+  del render), `tests/markdown-repair-streaming-tail.test.ts`, `tests/lib/markdown-block-split.test.ts`,
+  `tests/components/message-markdown-render.test.tsx`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

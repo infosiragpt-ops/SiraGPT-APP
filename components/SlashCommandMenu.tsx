@@ -78,7 +78,12 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
   React.useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {
+      // IME composition (CJK, dead keys): Enter/arrows belong to the IME.
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === "Escape") {
+        // Mark the key as consumed so the composer's own Esc handler
+        // (close tools / blur) does not also run.
+        e.preventDefault()
         onClose()
         return
       }
@@ -102,9 +107,19 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
   if (!open || visible.length === 0) return null
 
   return (
+    <>
+    {/* Focus stays in the composer textarea, so aria-activedescendant on the
+        listbox is never announced; a polite live region reads the highlighted
+        command as ↑/↓ move through the list. It sits outside the listbox,
+        whose children may only be options. */}
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {visible[activeIdx]
+        ? `/${visible[activeIdx].id}, ${visible[activeIdx].label}, ${activeIdx + 1} de ${visible.length}`
+        : ""}
+    </span>
     <div
       role="listbox"
-      aria-label="Slash commands"
+      aria-label="Comandos"
       aria-activedescendant={visible[activeIdx] ? `slash-cmd-${visible[activeIdx].id}` : undefined}
       tabIndex={-1}
       className="absolute bottom-full mb-2 left-2 right-2 max-w-md rounded-xl border border-border/60 bg-popover/95 shadow-xl backdrop-blur z-50 overflow-hidden"
@@ -145,6 +160,7 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
         ↑↓ navegar · Enter seleccionar · Esc cerrar
       </div>
     </div>
+    </>
   )
 }
 

@@ -99,7 +99,7 @@ export function ComposerDocumentRow({
       <button
         type="button"
         data-no-tap-target="true"
-        className="no-tap-expand inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7 sm:opacity-0 sm:group-hover/document:opacity-100 sm:group-focus-within/document:opacity-100"
+        className="no-tap-expand inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:h-7 sm:w-7 sm:[@media(hover:hover)]:opacity-0 sm:group-hover/document:opacity-100 sm:group-focus-within/document:opacity-100"
         aria-label={`${uploading ? "Cancelar subida de" : "Quitar"} ${name}`}
         title={uploading ? "Cancelar subida" : "Quitar archivo"}
         onClick={onRemove}

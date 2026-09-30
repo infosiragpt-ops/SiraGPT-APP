@@ -38,7 +38,7 @@ export const CHAT_KEYBOARD_SHORTCUTS: ShortcutDescriptor[] = [
   { keys: ["/"], description: "Abrir menú de comandos" },
   { keys: ["↑"], description: "Editar último mensaje (composer vacío)" },
   { keys: ["Esc"], description: "Cerrar herramientas / cancelar / desenfocar" },
-  { keys: ["⌘/Ctrl", "/"], description: "Mostrar esta ayuda" },
+  { keys: ["⌘/Ctrl", "?"], description: "Mostrar esta ayuda" },
   { keys: ["?"], description: "Mostrar esta ayuda (alternativo)" },
 ]
 

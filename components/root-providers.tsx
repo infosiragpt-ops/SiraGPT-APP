@@ -11,6 +11,7 @@
 // and silently truncates anything larger, breaking hydration).
 
 import * as React from "react"
+import { MotionConfig } from "framer-motion"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/lib/auth-context-integrated"
 import { SettingsProvider } from "@/lib/settings-context"
@@ -26,23 +27,28 @@ import { OfflineBanner } from "@/components/offline-banner"
 export function RootProviders({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
-      <AuthProvider>
-        <SettingsProvider>
-          <BackgroundStreamsProvider>
-            <ChatProvider>
-              <AppWrapper>
-                <ErrorBoundary label="root:app">
-                  {children}
-                </ErrorBoundary>
-              </AppWrapper>
-            </ChatProvider>
-          </BackgroundStreamsProvider>
-          <GlobalDropRedirector />
-          <KeyboardShortcutsProvider />
-          <OfflineBanner />
-          <Toaster />
-        </SettingsProvider>
-      </AuthProvider>
+      {/* framer-motion animates through inline styles, so the CSS
+          prefers-reduced-motion rule can't reach it; "user" makes every
+          motion component honour the OS setting. */}
+      <MotionConfig reducedMotion="user">
+        <AuthProvider>
+          <SettingsProvider>
+            <BackgroundStreamsProvider>
+              <ChatProvider>
+                <AppWrapper>
+                  <ErrorBoundary label="root:app">
+                    {children}
+                  </ErrorBoundary>
+                </AppWrapper>
+              </ChatProvider>
+            </BackgroundStreamsProvider>
+            <GlobalDropRedirector />
+            <KeyboardShortcutsProvider />
+            <OfflineBanner />
+            <Toaster />
+          </SettingsProvider>
+        </AuthProvider>
+      </MotionConfig>
     </ThemeProvider>
   )
 }

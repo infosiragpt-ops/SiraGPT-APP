@@ -201,11 +201,11 @@ export function ChatComposerPrimaryAction({
       )}
     >
       {pendingStop ? (
-        <ThinkingIndicator size="sm" className="relative z-[1] h-[15px] w-[15px] text-red-600" />
+        <ThinkingIndicator size="sm" className="relative z-[1] h-[15px] w-[15px]" />
       ) : (
         <span
           aria-hidden
-          className="composer-stop-icon relative z-[1] block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-red-600"
+          className="composer-stop-icon relative z-[1] block h-2.5 w-2.5 shrink-0 rounded-[2px]"
         />
       )}
     </Button>

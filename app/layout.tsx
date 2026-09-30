@@ -216,17 +216,23 @@ export default async function RootLayout({
           }}
         />
         {/*
-          Medianoche (OLED) theme boot — runs before first paint so a
-          midnight user never sees the regular dark canvas flash. The
-          flag lives outside next-themes ("midnight" is a flavor of the
-          dark theme, not a sensitive theme), and the CSS is scoped to
-          `.dark.midnight`, so the class is inert while in light mode.
+          Theme boot — runs before first paint. ThemeProvider (next-themes)
+          lives in RootProviders, which is mounted with ssr:false, so its
+          own no-flash script never reaches the HTML: without this, a dark
+          user sees a white canvas until the client chunk runs. We apply the
+          stored next-themes class here (localStorage "theme": light / dark /
+          system, defaultTheme light) plus color-scheme; next-themes takes
+          over once it mounts.
+          Medianoche (OLED) rides along: the flag lives outside next-themes
+          ("midnight" is a flavor of the dark theme, not a separate theme),
+          and the CSS is scoped to `.dark.midnight`, so the class is inert
+          while in light mode.
         */}
         <script
           suppressHydrationWarning
           dangerouslySetInnerHTML={{
             __html:
-              "try{if(localStorage.getItem('sira-theme-midnight')==='1'){document.documentElement.classList.add('midnight')}}catch(e){}",
+              "try{var d=document.documentElement,t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark'&&t!=='system')t='light';var k=t==='system'?(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):t;d.classList.add(k);d.style.colorScheme=k;if(localStorage.getItem('sira-theme-midnight')==='1'){d.classList.add('midnight')}}catch(e){}",
           }}
         />
         {/*

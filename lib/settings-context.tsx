@@ -221,7 +221,17 @@ export function useSettings(): Ctx {
 }
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
-  const [settings, setSettings] = React.useState<SettingsShape>(DEFAULT_SETTINGS)
+  // localStorage is read synchronously in the state initializer (the
+  // provider tree is client-only, ssr:false) so the first render already
+  // carries the user's font size / accessibility choices.
+  const [settings, setSettings] = React.useState<SettingsShape>(() => {
+    try {
+      const raw = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null
+      return raw ? mergeDeep(DEFAULT_SETTINGS, JSON.parse(raw)) : DEFAULT_SETTINGS
+    } catch {
+      return DEFAULT_SETTINGS
+    }
+  })
   const [loaded, setLoaded] = React.useState(false)
   const [saveStatus, setSaveStatus] = React.useState<Ctx['saveStatus']>('idle')
   const [savedAt, setSavedAt] = React.useState<number | null>(null)
@@ -230,19 +240,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   const { sessionStatus } = useAuth()
 
-  // Hydrate: localStorage first (instant), then the backend (authoritative)
-  // once there is a session. Anonymous visitors used to hit
-  // GET /users/settings → 401 on every page load (prod 2026-09-27).
-  React.useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        setSettings((prev) => mergeDeep(prev, parsed))
-      }
-    } catch { /* ignore */ }
-  }, [])
-
+  // Hydrate: localStorage is already applied by the state initializer
+  // above; the backend (authoritative) follows once there is a session.
+  // Anonymous visitors used to hit GET /users/settings → 401 on every page
+  // load (prod 2026-09-27).
   React.useEffect(() => {
     if (sessionStatus === "loading") return
     if (sessionStatus !== "authenticated") {
@@ -261,8 +262,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [sessionStatus])
 
   // Apply preview vars every time settings change — this is what makes
-  // theme/accent/density/fontSize flip live without a reload.
-  React.useEffect(() => { applyPreviewVars(settings) }, [settings])
+  // density/fontSize/accessibility classes flip live without a reload.
+  // Layout effect so the stored font size and reduce-motion class land
+  // before the first paint (no 16px frame followed by a rem reflow).
+  React.useLayoutEffect(() => { applyPreviewVars(settings) }, [settings])
 
   // Debounced persist: bundles rapid toggle chains into one PUT so a
   // user dragging a slider doesn't generate 50 network calls.

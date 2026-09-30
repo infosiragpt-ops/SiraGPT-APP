@@ -1,4 +1,6 @@
-import { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType } from 'docx';
+// docx is ~1.8 MB: load it only when a Word download is requested so it
+// stays out of the chat bundle that renders every message.
+import type { Paragraph as DocxParagraph } from 'docx';
 import { createXlsxBlob } from './xlsx-client';
 
 export interface TableData {
@@ -119,7 +121,8 @@ export async function generateExcel(tableData: TableData): Promise<Blob> {
 
 // Generate Word document
 export async function generateWord(content: string, tableData?: TableData): Promise<Blob> {
-  const paragraphs: Paragraph[] = [];
+  const { Document, Packer, Paragraph, Table, TableRow, TableCell, WidthType } = await import('docx');
+  const paragraphs: DocxParagraph[] = [];
 
   // Preserve original formatting - split by lines but don't clean content
   const lines = content.split('\n');
