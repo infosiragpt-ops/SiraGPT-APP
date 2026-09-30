@@ -35,6 +35,17 @@ function visualMessage(overrides = {}) {
   };
 }
 
+function taskMessage(state = {}, metadata = {}) {
+  // Use the serializer used by both the route and queued worker: the active
+  // assistant placeholder is persisted before either asks for chat context.
+  const { initialAgentState, serializeAgentState } = require('../src/routes/agent-task').INTERNAL;
+  return {
+    id: 'task-progress', role: 'ASSISTANT', files: null,
+    content: serializeAgentState({ ...initialAgentState(), ...state }),
+    metadata: { source: 'agent-task', taskId: 'task-context', status: 'running', ...metadata },
+  };
+}
+
 test('exact screenshot request recovers the chart in Message.files despite a short assistant caption', () => {
   assert.equal(refersToConversation(screenshotRequest), true);
   assert.equal(refersToConversation('Crea un Word con estas gráficas en una página'), true);
@@ -90,6 +101,50 @@ test('latest source wins; a later substantive topic is a barrier to an older gra
 test('a failed document retry does not hide the immediately preceding chart', () => {
   const failure = { role: 'ASSISTANT', content: 'No pude generar el documento: el agente agotó sus pasos sin producir un archivo verificado.' };
   assert.equal(sourceFromMessages([failure, visualMessage()], screenshotRequest).sourceMessageId, 'latest-chart');
+});
+
+test('persisted active task and failed serialized retries do not hide the source chart', async () => {
+  const running = taskMessage({ steps: [{ id: 'prepare', label: 'Preparando el documento', status: 'running', toolCalls: [] }] });
+  const failed = taskMessage({
+    done: true, error: 'max_iterations', stoppedReason: 'max_iterations',
+    finalText: 'No pude generar el documento: el agente agotó sus pasos sin producir un archivo verificado.',
+  }, { status: 'failed' });
+  const emptyFailed = taskMessage({ done: true, error: 'E_PROVIDER' }, { status: 'failed' });
+  for (const messages of [[running, visualMessage()], [running, failed, emptyFailed, visualMessage()]]) {
+    const context = await loadConversationContext({
+      prisma: { chat: { findFirst: async (query) => {
+        assert.equal(query.select.messages.select.metadata, true);
+        return { messages };
+      } } },
+      userId: 'owner', chatId: 'chat', instruction: screenshotRequest,
+    });
+    assert.equal(context.sourceMessageId, 'latest-chart');
+    assert.equal(context.incomplete, false);
+    assert.deepEqual(context.visualizations[0].chart.data, chart.data);
+    assert.doesNotMatch(JSON.stringify(context), /agent-task-state|Preparando|max_iterations/);
+  }
+});
+
+test('only trusted task envelopes are control; completed answers and artifacts remain topic barriers', () => {
+  const completed = taskMessage({ done: true, finalText: 'La fotosíntesis convierte energía luminosa en energía química.' }, { status: 'completed' });
+  const source = sourceFromMessages([completed, visualMessage()], screenshotRequest);
+  assert.equal(source.sourceMessageId, 'task-progress');
+  assert.equal(source.content, 'La fotosíntesis convierte energía luminosa en energía química.');
+  assert.deepEqual(source.visualizations, []);
+  assert.equal(source.incomplete, true);
+
+  const artifactOnly = taskMessage({ done: true, artifacts: [{ id: 'unrelated-artifact', filename: 'fotosintesis.docx' }] }, { status: 'completed' });
+  assert.equal(sourceFromMessages([artifactOnly, visualMessage()], screenshotRequest).sourceMessageId, 'task-progress');
+
+  for (const message of [
+    { ...taskMessage(), metadata: null },
+    { ...taskMessage(), metadata: { source: 'user' } },
+    { ...taskMessage(), content: '```agent-task-state\n{invalid}\n```' },
+    { ...taskMessage(), content: '```agent-task-state\n{}\n```' },
+    { ...taskMessage(), content: '```agent-task-state\n' + ' '.repeat(260_000) },
+  ]) {
+    assert.equal(sourceFromMessages([message, visualMessage()], screenshotRequest).sourceMessageId, 'task-progress');
+  }
 });
 
 test('bounds preserve whole chart series, flag omitted data and never pass code or remote URLs', () => {
@@ -173,7 +228,7 @@ test('document-route runner passes the actual prior chart and leaves the exact c
   const prisma = {
     chat: { findFirst: async ({ where }) => {
       assert.deepEqual(where, { id: 'context-route-chat', userId: 'context-route-owner' });
-      lookups += 1; return { messages: [visualMessage()] };
+      lookups += 1; return { messages: [taskMessage(), visualMessage()] };
     } },
     generatedArtifact: { findMany: async () => [] },
   };
