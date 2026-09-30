@@ -119,6 +119,7 @@ import { ChatSearchDialog } from "./ChatSearchDialog"
 import type { SectionKey } from "@/components/settings/settings-panel"
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from "@/lib/chat/open-settings"
 import { SKILL_NEW_CHAT_EVENT } from "@/lib/chat/skills-events"
+import { CHAT_ACTION_EVENT, NAVIGATE_EVENT, type ChatActionDetail } from "@/lib/chat/chat-actions"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
@@ -1135,6 +1136,35 @@ export function AppSidebar() {
     window.addEventListener(SKILL_NEW_CHAT_EVENT, onSkillChat)
     return () => window.removeEventListener(SKILL_NEW_CHAT_EVENT, onSkillChat)
   }, [])
+
+  // The /agentes header title menu (Programar · Añadir al proyecto ·
+  // Archivar) asks the sidebar to act — folders, archive and schedule state
+  // live here. Same for SPA navigation from components without a router.
+  const chatActionRef = React.useRef({ openScheduleDialog, archiveChat, moveChatToFolder, chats })
+  chatActionRef.current = { openScheduleDialog, archiveChat, moveChatToFolder, chats }
+  React.useEffect(() => {
+    const onAction = (event: Event) => {
+      const detail = (event as CustomEvent<ChatActionDetail>).detail
+      if (!detail?.chatId) return
+      const current = chatActionRef.current
+      const chat = (current.chats || []).find((item: any) => item?.id === detail.chatId) || { id: detail.chatId, title: detail.title || "" }
+      if (detail.action === "schedule") current.openScheduleDialog(chat)
+      else if (detail.action === "archive") void current.archiveChat(chat)
+      else if (detail.action === "folder") current.moveChatToFolder(chat, detail.folder ?? null)
+    }
+    const onNavigate = (event: Event) => {
+      const href = (event as CustomEvent<{ href?: string }>).detail?.href
+      if (!href) return
+      event.preventDefault()
+      router.push(href)
+    }
+    window.addEventListener(CHAT_ACTION_EVENT, onAction)
+    window.addEventListener(NAVIGATE_EVENT, onNavigate)
+    return () => {
+      window.removeEventListener(CHAT_ACTION_EVENT, onAction)
+      window.removeEventListener(NAVIGATE_EVENT, onNavigate)
+    }
+  }, [router])
 
   const handleTypeChange = (typeName: string) => {
     const type = generationTypes.find((t) => t.name === typeName)

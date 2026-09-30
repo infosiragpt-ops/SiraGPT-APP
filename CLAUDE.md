@@ -1533,6 +1533,36 @@ compositor, estados, móvil, lógica, superficies, carga) con verificación adve
   del render), `tests/markdown-repair-streaming-tail.test.ts`, `tests/lib/markdown-block-split.test.ts`,
   `tests/components/message-markdown-render.test.tsx`.
 
+## Acabado premium de /agentes — título, visor, memoria y Apps (added 2026-09-30)
+
+Pedido de Luis con capturas de claude.ai. UI lock re-baselineado para los archivos tocados.
+- **Título del chat** (`components/chat/chat-title-menu.tsx`): clic en el TÍTULO → renombrado
+  en línea con borde celeste fino (`.chat-title-input--celeste`); clic en la FLECHA → menú
+  claude.ai: Programar · Convertir en habilidad · Copiar ID de sesión · Fijar (P) · Cambiar
+  nombre (R) · Añadir al proyecto › (carpetas del sidebar) · Archivar (A) · Eliminar (D).
+  «Compartir» queda en la píldora del header. Carpetas/archivar/programar viven en el sidebar:
+  el menú los pide por evento (`lib/chat/chat-actions.ts` `requestChatAction`); «Convertir en
+  habilidad» abre un chat nuevo con `skill-creator` y un brief prellenado
+  (`setComposerPrefill` → `COMPOSER_PREFILL_EVENT`, consumido en `chat-interface-enhanced`).
+  `requestNavigation(href)` navega vía el router del sidebar (`NAVIGATE_EVENT`).
+- **Imágenes**: una imagen clicada en la conversación abre un lightbox plano (fondo oscuro,
+  cerrar/zoom/descargar/compartir) — `ImageWorkspace viewOnly` → `ImageModal viewOnly`. La
+  barra Anotar/Comentar/Quitar fondo/Borrar/Tamaño y «Describir ediciones» solo aparecen con la
+  herramienta Imágenes activa (`viewOnly={!isImageGenerationActive}`).
+- **Acabado**: «Ir al final» es una píldora *liquid glass* (`.liquid-pill`, acento al hacer
+  streaming); la barra de acciones (copiar, regenerar, me gusta…) respira bajo la respuesta
+  (`mt-3`, `gap-1`; acciones del usuario `mt-2`).
+- **Memoria**: `lib/chat/use-memory-status.ts` (una carga por página, `setMemoryStatusCount`
+  tras editar) → check celeste «Activa · N recuerdos» en «+ → Memoria» y píldora «Memoria
+  activa» en Ajustes → Memoria.
+- **Apps**: al pie de la lista de apps del «+» hay «Más apps · Conecta las aplicaciones que
+  SiraGPT puede usar» → `/conexiones`; en Apps, una app conectada muestra «Conectada» en VERDE
+  en su propio botón (`.sira-connected-btn`; clic = reconectar).
+- **Excepciones al monocromo (decisión de Luis)**: tokens `--celeste` (borde de edición y
+  check de memoria) y `--success-green` (app conectada) en `globals.css`; son CSS propio,
+  fuera del remapeo de paletas de Tailwind.
+- Tests: `tests/agentes-premium-finish-source.test.ts`, `tests/chat-header-title-menu-source.test.ts`.
+
 ## Errores de Admin → Logs — cuarto volcado (added 2026-09-30)
 
 Del volcado del 27–30 sep, la mayoría ya tenía corrección en `production-main`

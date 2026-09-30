@@ -109,19 +109,22 @@ function AppCard({
           </h3>
           {connected ? (
             <div className="flex shrink-0 items-center gap-1">
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[0.68rem] font-semibold text-emerald-700 dark:text-emerald-400">
-                <Check className="h-3 w-3" />
-                {CONNECT_COPY.connected}
-              </span>
-              <button
+              {/* The connect button itself turns green once the app has a
+                  valid token + health (never for merely opening a browser).
+                  Clicking it re-runs the connection. */}
+              <Button
                 type="button"
+                size="sm"
                 data-testid={`gpts-app-reconnect-${app.id}`}
+                data-connected="true"
                 disabled={connecting}
                 onClick={() => onConnect(app)}
-                className="rounded-full px-2 py-1 text-[0.72rem] font-medium text-zinc-500 hover:text-zinc-900 disabled:opacity-60 dark:hover:text-zinc-100"
+                title={CONNECT_COPY.reconnect}
+                className="sira-connected-btn h-8 shrink-0 rounded-full px-3 text-[0.78rem] font-semibold"
               >
-                {connecting ? CONNECT_COPY.connecting : CONNECT_COPY.reconnect}
-              </button>
+                <Check className="mr-1 h-3.5 w-3.5" strokeWidth={2.5} />
+                {connecting ? CONNECT_COPY.connecting : CONNECT_COPY.connected}
+              </Button>
               <button
                 type="button"
                 onClick={() => onDisconnect(app)}

@@ -55,6 +55,7 @@ import {
   BriefcaseBusiness,
   Maximize2,
   Minimize2,
+  MoreHorizontal,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -385,6 +386,8 @@ import { dedupeFiles } from "@/lib/attachments/file-hash"
 import { extractAudioMeta, extractVideoMeta, scheduleMediaMetadata } from "@/lib/attachments/media-meta"
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
+import { COMPOSER_PREFILL_EVENT, consumeComposerPrefill, requestNavigation } from "@/lib/chat/chat-actions"
+import { useMemoryStatus } from "@/lib/chat/use-memory-status"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
 import { shouldUseChunkedUpload } from "@/lib/composer/chunked-upload"
@@ -1447,6 +1450,10 @@ const ActionsDropdown = ({
     };
   }, []);
 
+  // «Memoria activa» (light-blue check) once the user has something in
+  // Ajustes → Memoria; fetched lazily the first time the menu opens.
+  const memoryStatus = useMemoryStatus(isOpen);
+
   const connectorItems = [
     {
       key: "gmail",
@@ -1611,6 +1618,25 @@ const ActionsDropdown = ({
   const renderAppsMenuContent = () => (
     <>
       {renderConnectorItems()}
+      <DropdownMenuItem
+        className="liquid-menu-item chat-app-menu-item chat-app-menu-more"
+        data-testid="chat-apps-menu-more"
+        onClick={() => {
+          setIsOpen(false);
+          window.setTimeout(() => requestNavigation("/conexiones"), 0);
+        }}
+      >
+        <div className="flex items-center gap-3 w-full">
+          <div className="liquid-icon w-8 h-8 rounded-lg flex items-center justify-center bg-muted/70">
+            <MoreHorizontal className="h-4 w-4 text-foreground/70" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="liquid-label truncate font-medium text-sm">Más apps</div>
+            <div className="truncate text-xs text-muted-foreground">Conecta las aplicaciones que SiraGPT puede usar</div>
+          </div>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+        </div>
+      </DropdownMenuItem>
       <div className="my-1 h-px bg-border/45" />
       <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
         Control
@@ -1886,9 +1912,15 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Memoria</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  Lo que Sira recuerda de ti
+                  {memoryStatus.active ? `Activa · ${memoryStatus.count} ${memoryStatus.count === 1 ? "recuerdo" : "recuerdos"}` : "Lo que Sira recuerda de ti"}
                 </div>
               </div>
+              {memoryStatus.active && (
+                <span className="sira-status-pill--celeste shrink-0" data-testid="composer-memory-active" aria-label="Memoria activa">
+                  <Check className="h-3 w-3" strokeWidth={2.75} aria-hidden="true" />
+                  Activa
+                </span>
+              )}
             </div>
           </DropdownMenuItem>
 
@@ -5488,6 +5520,27 @@ function ChatInterfaceContent() {
   // navigation. See hooks/use-chat-draft.ts for the contract.
   const chatDraft = useChatDraft(currentChat?.id, user?.id)
   const lastRestoredDraftScopeRef = React.useRef<string | null>(null)
+  // «Convertir en habilidad» (title menu) opens a fresh chat with a brief
+  // for skill-creator: pick it up on the new chat, or live if we are
+  // already on one. The new-chat reset fires on the next tick, so the live
+  // path waits a beat before writing the composer.
+  const applyPrefillRef = React.useRef<(text: string) => void>(() => {})
+  applyPrefillRef.current = (text: string) => {
+    const value = String(text || "").trim()
+    if (!value) return
+    setInput(value)
+    chatDraft.save(value)
+  }
+  React.useEffect(() => {
+    if (!currentChat?.id) applyPrefillRef.current(consumeComposerPrefill() || "")
+    const onPrefill = (event: Event) => {
+      const text = (event as CustomEvent<{ text?: string }>).detail?.text || ""
+      consumeComposerPrefill()
+      window.setTimeout(() => applyPrefillRef.current(text), 80)
+    }
+    window.addEventListener(COMPOSER_PREFILL_EVENT, onPrefill)
+    return () => window.removeEventListener(COMPOSER_PREFILL_EVENT, onPrefill)
+  }, [currentChat?.id])
   const [isRecording, setIsRecording] = React.useState(false)
   const [isDictationTranscribing, setIsDictationTranscribing] = React.useState(false)
   const inputRef = React.useRef("")
@@ -14622,7 +14675,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <ChatComputerBadge working={isStopButtonVisible} active={computerPanelOpen && !computerBrowserMode} onOpen={toggleComputerPanel} />
                 <ChatTitleMenu
                   chat={currentChat?.id ? { id: currentChat.id, title: currentChat.title, isPinned: (currentChat as any).isPinned } : null}
-                  onShare={currentChat?.messages?.length ? () => { void handleCompleteShare() } : undefined}
                 />
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
@@ -15014,10 +15066,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           aria-hidden={isAtBottom ? true : undefined}
                           aria-label={isCurrentChatStreaming ? "Nuevos mensajes, ir al final" : "Ir al final de la conversación"}
                           className={cn(
-                            "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
-                            "border bg-background/95 backdrop-blur-md",
-                            "text-[12.5px] font-medium",
-                            "shadow-[0_4px_14px_-4px_rgba(23,23,23,0.18),0_1px_2px_rgba(23,23,23,0.06)] dark:shadow-[0_12px_28px_-12px_rgba(0,0,0,0.55)]",
+                            // Liquid glass pill (app/globals.css .liquid-pill):
+                            // frosted surface + a highlight that sweeps on hover.
+                            "liquid-pill inline-flex h-9 items-center gap-1.5 rounded-full px-3.5",
+                            "text-[12.5px] font-medium tracking-[-0.01em]",
                             "transition-all duration-fast ease-smooth",
                             "hover:-translate-y-[1px]",
                             "active:translate-y-0 active:scale-[0.97]",
@@ -15028,8 +15080,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                             // reads as "there's new stuff" rather than a
                             // passive "go down".
                             isCurrentChatStreaming
-                              ? "border-primary/40 text-primary-foreground bg-primary/95 hover:bg-primary"
-                              : "border-border/55 text-foreground/80 hover:bg-background hover:border-border hover:text-foreground",
+                              ? "liquid-pill--accent"
+                              : "text-foreground/85 hover:text-foreground",
                           )}
                         >
                           {isCurrentChatStreaming && (
@@ -15332,6 +15384,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             key={`${imageWorkspaceTarget.chatId}:${imageWorkspaceTarget.id}`}
             assets={workspaceImages.some(image => image.id === imageWorkspaceTarget.id) ? workspaceImages : [...workspaceImages, imageWorkspaceTarget]}
             initialAssetId={imageWorkspaceTarget.id}
+            // A picture clicked in the conversation opens as a plain
+            // lightbox; the edit toolbar only comes with the image tool.
+            viewOnly={!isImageGenerationActive}
             selectedModel={selectedImageModel ? { name: selectedImageModel, provider: providerForSelectedImageModel(selectedImageModel) } : undefined}
             onClose={() => setImageWorkspaceTarget(null)}
             onChanged={async () => { if (currentChatIdRef.current === imageWorkspaceTarget.chatId) await selectChat(imageWorkspaceTarget.chatId || ''); }}
