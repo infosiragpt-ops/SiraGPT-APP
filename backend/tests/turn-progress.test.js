@@ -811,6 +811,33 @@ test('failure categories come from the error class, never its text', () => {
   assert.equal(tp.retryAfterSecondsOf(Object.assign(new Error('x'), { siraRetryAfterSeconds: 7.2 })), 8);
 });
 
+test('word counts retain ECMAScript whitespace and treat other Unicode characters as word content', () => {
+  const whitespace = [9, 10, 11, 12, 13, 32, 0xa0, 0x1680,
+    ...Array.from({ length: 11 }, (_, i) => 0x2000 + i), 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff];
+  for (const code of whitespace) {
+    const separator = String.fromCharCode(code);
+    assert.deepEqual(tp.countWordsBounded(`${separator}uno${separator}dos${separator}`), { words: 2, approx: false });
+    assert.deepEqual(tp.countWordsBounded(separator.repeat(3)), { words: 0, approx: false });
+  }
+  for (const content of ['\u0085', '\u180e', '\u200b', '\u200d', '\u2060', '😀', '漢']) {
+    assert.deepEqual(tp.countWordsBounded(`uno${content}dos`), { words: 1, approx: false });
+  }
+});
+
+test('bounded word counts preserve partial-word and fractional scan-boundary semantics', () => {
+  for (const text of ['', 'uno dos tres', '  uno\tdos\n', '😀\u2028agua\ufeffmar', ' '.repeat(100), 'x '.repeat(60_000)]) {
+    for (const cap of [0, -1, 1, 1.2, 2.9, 3, 4, 5, 100_000, Infinity, NaN]) {
+      const end = Math.min(text.length, Math.max(1, Number(cap) || 100_000));
+      const prefix = text.slice(0, Math.ceil(end)).trim();
+      const words = prefix ? prefix.split(/\s+/u).length : 0;
+      const expected = end >= text.length
+        ? { words, approx: false }
+        : { words: Math.round(words * (text.length / end)), approx: true };
+      assert.deepEqual(tp.countWordsBounded(text, cap), expected, `length=${text.length}, cap=${cap}`);
+    }
+  }
+});
+
 test('word counts are bounded on the request path and marked approximate beyond the cap', () => {
   assert.equal(tp.countWords('  uno\tdos\ntres cuatro  '), 4);
   assert.equal(tp.countWords(''), 0);

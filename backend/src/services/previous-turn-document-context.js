@@ -1,62 +1,29 @@
 'use strict';
 
-// previous-turn-document-context.js — «crea un word con esta información e incorpora
-// esta gráfica»: the previous assistant turn (its text AND its chart) must
-// reach the AgentRunner, on both document entry points (agent task + doc
-// route). Before this module the runner only received the bare instruction
-// and worked blind: it exhausted its steps without a verified file.
-//
-// What it does (best-effort, never throws):
-//   1. Detects that the request points at the previous turn («esta
-//      información», «esta gráfica», «el resultado anterior»…).
-//   2. Loads the chat's latest assistant messages (owner-scoped).
-//   3. Text: the previous answer (document-followup-context) plus a
-//      description of the latest visualisation (title, explanation, data
-//      table) so the model can write the body of the document.
-//   4. Chart: the latest `viz` / `chart` file is rendered to a real PNG
-//      (matplotlib data URL, a local chart image, or a recharts / chartjs /
-//      plotly spec drawn with document-visual-embed + sharp), stored as an
-//      owned File row and added to the turn's fileIds — the sandbox then
-//      sees it under /workspace/uploads and python-docx can insert it.
-//   5. Returns the enriched instruction (SOURCE_CONTENT block + a line that
-//      names the attached figure) and the merged fileIds.
+// Materialize figures from the SAME bounded source selected by the canonical
+// conversation context. User instructions never contain previous source text.
 
 const path = require('path');
 const fs = require('fs/promises');
 const crypto = require('crypto');
 
+const { normalizeForFollowup } = require('./document-followup-context');
 const {
-  findPreviousAssistantContent,
-  buildPreviousContentDocumentPrompt,
-  cleanAssistantContentForDocument,
-  normalizeForFollowup,
-  INTERNAL: followupInternals,
-} = require('./document-followup-context');
+  refersToConversation, sourceFromMessages, rechartsData,
+  MAX_SOURCE_MESSAGES, MAX_CHART_ROWS, MAX_CONTEXT_CHARS,
+} = require('./agent-runner/conversation-context');
 
-const MAX_ASSISTANT_MESSAGES = 16;
-const MAX_TABLE_ROWS = 60;
-const MAX_TABLE_SERIES = 8;
-const MAX_SNIPPET_CHARS = 4_000;
+const MAX_TABLE_SERIES = 12;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_FILES_CHARS = 8 * 1024 * 1024;
 const DEFAULT_UPLOADS_DIR = path.resolve(__dirname, '../../uploads/images');
 const UPLOADS_ROOT = path.resolve(__dirname, '../../uploads');
 
-// «esta / esa / la anterior / que generaste / de arriba…» — the request is
-// about something already in the conversation, not a new topic.
-const DEICTIC_RE = /\b(?:est[aeo]s?|es[aeo]s?|dich[ao]s?|mism[ao]s?|anterior(?:es)?|previ[ao]s?|de arriba|arriba|(?:que|lo que)\s+(?:generaste|hiciste|creaste|calculaste|mostraste|graficaste|acabas de (?:hacer|crear|generar))|ya (?:generad[ao]|hech[ao]|cread[ao])|reci[eé]n (?:generad[ao]|cread[ao]))\b/;
 const VISUAL_RE = /\b(?:gr[aá]fic[ao]s?|gr[aá]fica?s?\b|chart|charts|visualizaci[oó]n(?:es)?|diagrama|figura|plot|curva|barras|pastel|imagen|ilustraci[oó]n)\b/;
-const CONTENT_RE = /\b(?:informaci[oó]n|contenido|texto|resultados?|c[aá]lculos?|respuesta|datos|an[aá]lisis|proyecci[oó]n|tabla|resumen|explicaci[oó]n|desarrollo|todo lo (?:anterior|que))\b/;
-// «ponlo / pásalo / insértala / expórtalo en un word»: the pronoun IS the
-// previous answer (or its chart).
-const PRONOUN_VERB_RE = /\b(?:pon|pas|coloc|met|insert|incorpor|export|conviert|convert|guard|descarg|prepar|transform|llev|agreg|añad|anad|inclu)(?:a|e|ga|ya)?l[oa]s?\b/;
 
 function referencesPriorTurn(prompt = '') {
-  const text = normalizeForFollowup(prompt);
-  if (!text) return { content: false, visual: false };
-  const pronounVerb = PRONOUN_VERB_RE.test(text);
-  const deictic = DEICTIC_RE.test(text) || pronounVerb;
-  const visual = deictic && VISUAL_RE.test(text);
-  const content = (deictic && (CONTENT_RE.test(text) || visual)) || pronounVerb;
-  return { content, visual };
+  const content = refersToConversation(prompt);
+  return { content, visual: content && VISUAL_RE.test(normalizeForFollowup(prompt)) };
 }
 
 function inferRequestedFormat(prompt = '') {
@@ -68,17 +35,31 @@ function inferRequestedFormat(prompt = '') {
 }
 
 function toNumber(value) {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value.replace(/[^0-9.,+-]/g, '').replace(/,(?=\d{3}\b)/g, '').replace(',', '.'));
-    return Number.isFinite(parsed) ? parsed : null;
+  if (value === null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
   }
-  return null;
+  return undefined;
 }
 
-function labelOf(value, index) {
-  if (value === null || value === undefined || value === '') return `Ítem ${index + 1}`;
-  return String(value);
+function labelOf(value) {
+  return (typeof value === 'string' && value.length <= 500
+    || typeof value === 'number' && Number.isFinite(value)) ? String(value) : null;
+}
+
+function safeColor(value) {
+  return typeof value === 'string' && /^#(?:[a-f\d]{3}|[a-f\d]{4}|[a-f\d]{6}|[a-f\d]{8})$/i.test(value) ? value : undefined;
+}
+
+function boundedSeries(result) {
+  if (!result || !result.labels.length || result.labels.length > MAX_CHART_ROWS
+    || result.labels.some((label) => label === null)
+    || !result.series.length || result.series.length > MAX_TABLE_SERIES
+    || result.series.some((series) => typeof series.name !== 'string' || series.name.length > 200
+      || series.values.length !== result.labels.length || series.values.some((value) => value === undefined))) return null;
+  return JSON.stringify(result).length <= 18_000 ? result : null;
 }
 
 function isChartFile(file) {
@@ -96,59 +77,67 @@ function extractSeries(file) {
   const format = String(file.format || '').toLowerCase();
 
   if (format === 'recharts' && file.chart && typeof file.chart === 'object') {
-    const chart = file.chart;
-    const rows = Array.isArray(chart.data) ? chart.data.filter((row) => row && typeof row === 'object') : [];
-    if (!rows.length) return null;
-    const kind = String(chart.type || 'bar').toLowerCase();
+    const chart = rechartsData(file.chart);
+    if (!chart) return null;
+    const rows = chart.data;
+    const kind = chart.type;
     if (kind === 'pie') {
-      const labels = rows.map((row, i) => labelOf(row.name ?? row.label ?? row[chart.xKey], i));
-      const values = rows.map((row) => toNumber(row.value ?? row.y) ?? 0);
-      return { kind: 'pie', labels, series: [{ name: file.title || 'Valor', values }] };
+      const labels = rows.map((row) => labelOf(row.name));
+      const values = rows.map((row) => toNumber(row.value));
+      return boundedSeries({ kind: 'pie', labels, series: [{ name: chart.series[0]?.name || 'Valor', values }] });
     }
-    const xKey = chart.xKey || Object.keys(rows[0]).find((key) => typeof rows[0][key] === 'string') || Object.keys(rows[0])[0];
-    const declared = Array.isArray(chart.series) ? chart.series.filter((s) => s && s.key) : [];
-    const keys = declared.length
-      ? declared.map((s) => ({ key: s.key, name: s.name || s.key }))
-      : Object.keys(rows[0]).filter((key) => key !== xKey && toNumber(rows[0][key]) !== null).map((key) => ({ key, name: key }));
-    if (!keys.length) return null;
-    const labels = rows.map((row, i) => labelOf(row[xKey], i));
-    const series = keys.slice(0, MAX_TABLE_SERIES).map((s) => ({ name: String(s.name), values: rows.map((row) => toNumber(row[s.key]) ?? 0) }));
-    return { kind: kind === 'area' ? 'line' : kind, labels, series, stacked: Boolean(chart.stacked) };
+    const labels = rows.map((row) => labelOf(row[chart.xKey]));
+    const series = chart.series.map((s) => ({
+      name: s.name || s.key, values: rows.map((row) => toNumber(row[s.key])),
+      ...(safeColor(s.color) ? { color: safeColor(s.color) } : {}),
+    }));
+    return boundedSeries({ kind, labels, series, stacked: Boolean(chart.stacked) });
   }
 
   if (format === 'chartjs' && file.config && typeof file.config === 'object') {
     const config = file.config;
     const data = config.data && typeof config.data === 'object' ? config.data : {};
-    const datasets = Array.isArray(data.datasets) ? data.datasets.filter((d) => d && Array.isArray(d.data)) : [];
-    if (!datasets.length) return null;
+    const datasets = Array.isArray(data.datasets) ? data.datasets : [];
+    if (!datasets.length || datasets.length > MAX_TABLE_SERIES || datasets.some((d) => !d || !Array.isArray(d.data))) return null;
     const kind = String(config.type || 'bar').toLowerCase();
+    if (!['line', 'bar', 'pie', 'doughnut'].includes(kind) || datasets.some((d) => d.type && d.type !== kind)) return null;
     const first = datasets[0].data;
+    if (!first.length || first.length > MAX_CHART_ROWS
+      || datasets.some((dataset) => dataset.data.length !== first.length)) return null;
     const labels = Array.isArray(data.labels) && data.labels.length
-      ? data.labels.map((label, i) => labelOf(label, i))
-      : first.map((point, i) => labelOf(point && typeof point === 'object' ? point.x : null, i));
-    const series = datasets.slice(0, MAX_TABLE_SERIES).map((dataset, i) => ({
+      ? data.labels.map(labelOf)
+      : first.map((point) => labelOf(point && typeof point === 'object' ? point.x : null));
+    if (datasets.some((dataset) => dataset.data.some((point, i) => point && typeof point === 'object'
+      && Object.hasOwn(point, 'x') && labelOf(point.x) !== labels[i]))) return null;
+    const series = datasets.map((dataset, i) => ({
       name: String(dataset.label || `Serie ${i + 1}`),
-      values: dataset.data.map((point) => toNumber(point && typeof point === 'object' ? point.y : point) ?? 0),
+      values: dataset.data.map((point) => toNumber(point && typeof point === 'object' ? point.y : point)),
+      ...(safeColor(dataset.borderColor) ? { color: safeColor(dataset.borderColor) } : {}),
     }));
     const pie = kind === 'pie' || kind === 'doughnut';
-    return { kind: pie ? 'pie' : kind === 'line' ? 'line' : 'bar', labels, series: pie ? series.slice(0, 1) : series };
+    if (pie && series.length !== 1) return null;
+    return boundedSeries({ kind: kind === 'doughnut' ? 'donut' : kind, labels, series,
+      stacked: Boolean(config.options?.scales?.x?.stacked || config.options?.scales?.y?.stacked) });
   }
 
   if (format === 'plotly' && Array.isArray(file.data)) {
-    const traces = file.data.filter((trace) => trace && typeof trace === 'object');
-    if (!traces.length) return null;
+    const traces = file.data;
+    if (!traces.length || traces.length > MAX_TABLE_SERIES || traces.some((t) => !t || typeof t !== 'object')) return null;
     const pie = traces.find((trace) => String(trace.type || '').toLowerCase() === 'pie' && Array.isArray(trace.values));
     if (pie) {
-      const labels = (Array.isArray(pie.labels) ? pie.labels : pie.values).map((label, i) => labelOf(label, i));
-      return { kind: 'pie', labels, series: [{ name: pie.name || file.title || 'Valor', values: pie.values.map((v) => toNumber(v) ?? 0) }] };
+      if (traces.length !== 1 || !Array.isArray(pie.labels) || pie.values.length > MAX_CHART_ROWS) return null;
+      return boundedSeries({ kind: 'pie', labels: pie.labels.map(labelOf), series: [{ name: pie.name || 'Valor', values: pie.values.map(toNumber) }] });
     }
-    const xy = traces.filter((trace) => Array.isArray(trace.y));
-    if (!xy.length) return null;
+    const xy = traces;
+    if (xy.some((t) => !Array.isArray(t.y) || t.y.length > MAX_CHART_ROWS || !Array.isArray(t.x) || t.x.length !== t.y.length)) return null;
     const base = xy[0];
-    const labels = (Array.isArray(base.x) ? base.x : base.y).map((label, i) => labelOf(label, i));
-    const series = xy.slice(0, MAX_TABLE_SERIES).map((trace, i) => ({ name: String(trace.name || `Serie ${i + 1}`), values: trace.y.map((v) => toNumber(v) ?? 0) }));
+    const labels = base.x.map(labelOf);
+    if (xy.some((t) => JSON.stringify(t.x.map(labelOf)) !== JSON.stringify(labels))) return null;
+    const series = xy.map((trace, i) => ({ name: String(trace.name || `Serie ${i + 1}`), values: trace.y.map(toNumber), ...(safeColor(trace.line?.color || trace.marker?.color) ? { color: safeColor(trace.line?.color || trace.marker?.color) } : {}) }));
     const lineLike = xy.every((trace) => String(trace.type || 'scatter').toLowerCase() === 'scatter');
-    return { kind: lineLike ? 'line' : 'bar', labels, series };
+    if (!lineLike && !xy.every((t) => t.type === 'bar')) return null;
+    const kind = lineLike ? (xy.some((t) => t.mode && !String(t.mode).includes('lines')) ? 'scatter' : 'line') : 'bar';
+    return boundedSeries({ kind, labels, series });
   }
 
   return null;
@@ -156,11 +145,13 @@ function extractSeries(file) {
 
 function markdownTable(series) {
   if (!series || !series.labels?.length || !series.series?.length) return '';
-  const rows = series.labels.slice(0, MAX_TABLE_ROWS);
-  const head = series.kind === 'pie' ? ['Categoría', 'Valor'] : ['Categoría', ...series.series.map((s) => s.name)];
+  if (!boundedSeries(series)) return '';
+  const rows = series.labels;
+  const pie = series.kind === 'pie' || series.kind === 'donut';
+  const head = ['Categoría', ...series.series.map((s) => s.name)];
   const lines = [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`];
   rows.forEach((label, i) => {
-    const values = series.kind === 'pie'
+    const values = pie
       ? [series.series[0].values[i]]
       : series.series.map((s) => s.values[i]);
     lines.push(`| ${[label, ...values.map((v) => (Number.isFinite(v) ? String(v) : ''))].join(' | ')} |`);
@@ -202,7 +193,7 @@ function buildMultiLineSvg({ title, labels, series, theme }) {
     parts.push(`<text x="${x(i).toFixed(1)}" y="${(padTop + plotH + 22).toFixed(1)}" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="12" fill="${theme.axis}">${esc(label)}</text>`);
   });
   series.forEach((s, si) => {
-    const color = theme.palette[si % theme.palette.length];
+    const color = safeColor(s.color) || theme.palette[si % theme.palette.length];
     const points = s.values.map((v, i) => `${x(i).toFixed(1)},${y(Number.isFinite(v) ? v : minValue).toFixed(1)}`).join(' ');
     parts.push(`<polyline fill="none" stroke="${color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="${points}"/>`);
     s.values.forEach((v, i) => {
@@ -212,7 +203,7 @@ function buildMultiLineSvg({ title, labels, series, theme }) {
   const legendY = height - 34;
   let legendX = padLeft;
   series.forEach((s, si) => {
-    const color = theme.palette[si % theme.palette.length];
+    const color = safeColor(s.color) || theme.palette[si % theme.palette.length];
     parts.push(`<rect x="${legendX}" y="${legendY - 10}" width="14" height="14" rx="3" fill="${color}"/>`);
     parts.push(`<text x="${legendX + 20}" y="${legendY + 2}" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="${theme.text}">${esc(s.name)}</text>`);
     legendX += 40 + Math.min(220, s.name.length * 8);
@@ -223,8 +214,8 @@ function buildMultiLineSvg({ title, labels, series, theme }) {
 
 function chartSpecFor(series, title) {
   if (!series) return null;
-  if (series.kind === 'pie') {
-    return { type: 'pie', title, data: series.labels.map((label, i) => ({ label, value: series.series[0].values[i] })), width: 800, height: 480 };
+  if (series.kind === 'pie' || series.kind === 'donut') {
+    return { type: series.kind, title, data: series.labels.map((label, i) => ({ label, value: series.series[0].values[i] })), width: 800, height: 480 };
   }
   if (series.series.length === 1) {
     return {
@@ -246,33 +237,89 @@ function chartSpecFor(series, title) {
 }
 
 function decodeDataUrl(value) {
-  const match = String(value || '').match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
-  if (!match) return null;
+  // Bound the encoded input before allocating decoded bytes. Do not let
+  // Buffer.from silently ignore invalid characters or misplaced padding.
+  if (typeof value !== 'string' || value.length > 64 + 4 * Math.ceil(MAX_IMAGE_BYTES / 3)) return null;
+  const match = value.match(/^data:image\/(png|jpe?g|webp);base64,([A-Za-z0-9+/]+={0,2})$/i);
+  if (!match || match[2].length % 4 !== 0) return null;
   try {
-    const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
-    return buffer.length ? { buffer, ext: match[1].toLowerCase() === 'png' ? 'png' : match[1].toLowerCase().replace('jpeg', 'jpg') } : null;
+    const buffer = Buffer.from(match[2], 'base64');
+    if (!buffer.length || buffer.length > MAX_IMAGE_BYTES || buffer.toString('base64') !== match[2]) return null;
+    const ext = match[1].toLowerCase().replace('jpeg', 'jpg');
+    const validSignature = ext === 'png'
+      ? buffer.length >= 24 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+        && buffer.toString('ascii', 12, 16) === 'IHDR'
+      : ext === 'jpg'
+        ? buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
+        : buffer.length >= 16 && buffer.toString('ascii', 0, 4) === 'RIFF'
+          && buffer.toString('ascii', 8, 12) === 'WEBP';
+    return validSignature ? { buffer, ext } : null;
   } catch {
     return null;
   }
 }
 
-async function readLocalUpload(url, { uploadsRoot = UPLOADS_ROOT } = {}) {
-  let pathname = String(url || '').trim();
-  if (!pathname) return null;
+async function readLocalUpload(url, { uploadsRoot = UPLOADS_ROOT, prisma, userId } = {}) {
+  if (typeof url !== 'string' || url.length > 4096 || !userId || !prisma?.file?.findFirst) return null;
+  // A foreign URL with an uploads-shaped pathname is not a local file ref.
+  // Keep the path unnormalised until traversal and encoded separators are
+  // rejected; URL() would otherwise remove dot segments before validation.
+  const match = url.trim().match(/^\/(?:api\/)?uploads\/([^?#]+)(?:[?#].*)?$/);
+  if (!match || /%(?:2f|5c)/i.test(match[1])) return null;
+  let relative;
   try {
-    pathname = new URL(pathname, 'https://siragpt.local').pathname;
+    relative = decodeURIComponent(match[1]);
   } catch {
     return null;
   }
-  const match = pathname.match(/^\/(?:api\/)?uploads\/(.+)$/);
-  if (!match) return null;
-  const full = path.resolve(uploadsRoot, match[1]);
-  if (!full.startsWith(uploadsRoot + path.sep)) return null;
+  const segments = relative.split('/');
+  if (/[\\\x00-\x1f\x7f]/.test(relative) || segments.some((part) => !part || part === '.' || part === '..')) return null;
+  const root = path.resolve(uploadsRoot);
+  const full = path.resolve(root, relative);
+  if (!full.startsWith(root + path.sep)) return null;
+  let handle;
   try {
-    const buffer = await fs.readFile(full);
-    return buffer.length ? { buffer, ext: path.extname(full).replace('.', '').toLowerCase() || 'png' } : null;
+    // Ownership must be established by the exact stored path before any
+    // bytes are read. A path in a chat message is never ownership evidence.
+    const record = await prisma.file.findFirst({
+      where: { userId, path: full },
+      select: { id: true, userId: true, path: true, mimeType: true, size: true },
+    });
+    if (!record || record.userId !== userId || record.path !== full
+      || !/^image\/(?:png|jpeg|webp)$/i.test(String(record.mimeType || ''))
+      || !Number.isSafeInteger(record.size) || record.size <= 0 || record.size > MAX_IMAGE_BYTES) return null;
+    const rootReal = await fs.realpath(root);
+    let cursor = root;
+    for (const part of segments) {
+      cursor = path.join(cursor, part);
+      if ((await fs.lstat(cursor)).isSymbolicLink()) return null;
+    }
+    const real = await fs.realpath(full);
+    if (real !== path.join(rootReal, relative) || !real.startsWith(rootReal + path.sep)) return null;
+    const before = await fs.lstat(full);
+    if (!before.isFile() || before.size !== record.size) return null;
+    const { O_RDONLY, O_NOFOLLOW } = require('fs').constants;
+    handle = await fs.open(full, O_RDONLY | O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== record.size) return null;
+    const current = await fs.lstat(full);
+    if (current.isSymbolicLink() || current.dev !== opened.dev || current.ino !== opened.ino
+      || await fs.realpath(full) !== real) return null;
+    // Read at most the approved size plus one byte, including when a file
+    // grows concurrently. The open descriptor remains bound to this inode.
+    const bytes = Buffer.alloc(opened.size + 1);
+    let read = 0;
+    while (read < bytes.length) {
+      const result = await handle.read(bytes, read, bytes.length - read, read);
+      if (!result.bytesRead) break;
+      read += result.bytesRead;
+    }
+    if (read !== opened.size || (await handle.stat()).size !== opened.size) return null;
+    return decodeDataUrl(`data:${record.mimeType.toLowerCase()};base64,${bytes.subarray(0, read).toString('base64')}`);
   } catch {
     return null;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
   }
 }
 
@@ -280,47 +327,72 @@ async function readLocalUpload(url, { uploadsRoot = UPLOADS_ROOT } = {}) {
  * Render the chart file to image bytes. Returns { buffer, ext } or null when
  * the renderer cannot be reproduced server-side (d3 HTML, mermaid.ink).
  */
-async function materializeChartImage(file, { uploadsRoot, visualEmbed } = {}) {
+async function materializeChartImage(file, { uploadsRoot, visualEmbed, prisma, userId } = {}) {
   if (!isChartFile(file)) return null;
-  const direct = decodeDataUrl(file.imageUrl || file.url);
-  if (direct) return direct;
-  if (file.imageUrl || file.url) {
-    const local = await readLocalUpload(file.imageUrl || file.url, { uploadsRoot });
-    if (local) return local;
+  const structured = ['recharts', 'chartjs', 'plotly'].includes(file.format);
+  if (!structured) {
+    const image = decodeDataUrl(file.imageUrl || file.url)
+      || await readLocalUpload(file.imageUrl || file.url, { uploadsRoot, prisma, userId });
+    if (image) {
+      try {
+        const meta = await require('sharp')(image.buffer, { limitInputPixels: 40_000_000 }).metadata();
+        if (meta.width > 0 && meta.height > 0 && meta.width * meta.height <= 40_000_000
+          && ['png', 'jpeg', 'webp'].includes(meta.format)) return image;
+      } catch { /* invalid or excessively large raster */ }
+    }
   }
   const series = extractSeries(file);
-  if (!series) return null;
+  // The existing SVG renderer coerces missing values to zero. Leave complete
+  // structured data to the document agent when it cannot render faithfully.
+  if (!series || !['line', 'bar', 'pie', 'donut'].includes(series.kind)
+    || series.series.some((s) => s.values.some((value) => !Number.isFinite(value)))) return null;
+  // These fixed-size SVG layouts neither wrap labels nor paginate legends.
+  // Do not attach a lossy picture: the complete canonical data remains
+  // available to the document agent for a faithful rendering instead.
+  if (series.kind === 'bar') {
+    const grouped = series.series.length > 1;
+    if (series.series.some((s) => s.values.some((value) => value < 0))
+      || series.labels.some((label) => label.length > (grouped ? 12 : 14))
+      || grouped && (series.series.some((s) => s.name.length > 18)
+        || series.series.reduce((width, s) => width + 40 + s.name.length * 7, 56) > 876)) return null;
+  }
+  if (series.kind === 'pie' || series.kind === 'donut') {
+    const legendTop = file.title ? 64 : 36;
+    if (series.labels.length < 2
+      || series.labels.some((label) => label.length > 20)
+      || series.series[0].values.some((value) => value <= 0)
+      || legendTop + (series.labels.length - 1) * 22 + 14 > 480) return null;
+  }
+  if (series.kind === 'line') {
+    const longestLabel = Math.max(...series.labels.map((label) => label.length));
+    if (series.series.some((s) => s.name.length > 27)
+      || series.series.reduce((width, s) => width + 40 + s.name.length * 8, 72) > 868
+      || longestLabel * 8 > 796 / Math.max(1, series.labels.length - 1)
+      || series.labels.at(-1).length * 4 > 32) return null;
+  }
   const embed = visualEmbed || require('./document-visual-embed');
   const theme = embed.INTERNAL?.resolveTheme ? embed.INTERNAL.resolveTheme('corporate') : null;
-  const title = String(file.title || '').trim();
+  if (series.kind === 'line' && !theme) return null;
+  const title = String(file.title || '').trim().slice(0, 400);
   let svg;
-  if (series.kind === 'line' && series.series.length > 1 && theme) {
+  if (series.kind === 'line' && theme) {
     svg = buildMultiLineSvg({ title, labels: series.labels, series: series.series, theme });
   } else {
     const spec = chartSpecFor(series, title);
     if (!spec) return null;
     svg = embed.buildChartSvg(spec);
+    if (theme && series.kind === 'bar') {
+      // The shared renderer accepts named themes. Replace only color
+      // attributes, not source labels, to retain explicit series colors.
+      svg = svg.replace(/(fill|stroke)="(#[a-f\d]+)"/gi, (match, attr, color) => {
+        const index = theme.palette.findIndex((candidate) => candidate.toLowerCase() === color.toLowerCase());
+        return index >= 0 && safeColor(series.series[index]?.color)
+          ? `${attr}="${series.series[index].color}"` : match;
+      });
+    }
   }
   const buffer = await embed.svgToPng(svg, { density: 144 });
-  return buffer && buffer.length ? { buffer, ext: 'png' } : null;
-}
-
-function describeChartFile(file, series) {
-  const lines = [];
-  const title = String(file.title || '').trim();
-  const format = String(file.format || file.type || '').trim();
-  lines.push(`Gráfica del mensaje anterior${title ? `: «${title}»` : ''}${format ? ` (${format})` : ''}.`);
-  const explanation = String(file.explanation || '').trim();
-  if (explanation) lines.push(explanation);
-  const table = markdownTable(series);
-  if (table) {
-    lines.push('', 'Datos de la gráfica:', table);
-  } else if (file.code) {
-    lines.push('', 'Definición del diagrama:', '```', String(file.code).slice(0, MAX_SNIPPET_CHARS), '```');
-  } else if (file.pythonCode) {
-    lines.push('', 'Código que generó la figura:', '```python', String(file.pythonCode).slice(0, MAX_SNIPPET_CHARS), '```');
-  }
-  return lines.join('\n');
+  return buffer && buffer.length && buffer.length <= MAX_IMAGE_BYTES ? { buffer, ext: 'png' } : null;
 }
 
 function slugify(value) {
@@ -330,10 +402,10 @@ function slugify(value) {
     .slice(0, 48);
 }
 
-async function storeChartFile({ prisma, userId, image, title, uploadsDir = DEFAULT_UPLOADS_DIR, storage }) {
+async function storeChartFile({ prisma, userId, image, title, nameIndex = 1, uploadsDir = DEFAULT_UPLOADS_DIR, storage }) {
   const objectStorage = storage || require('./object-storage');
   const base = slugify(title) || 'grafica';
-  const originalName = `grafica-${base}.${image.ext}`;
+  const originalName = `grafica-${base}${nameIndex > 1 ? `-${nameIndex}` : ''}.${image.ext}`;
   const filename = `grafica-${base}-${crypto.randomBytes(4).toString('hex')}.${image.ext}`;
   await fs.mkdir(uploadsDir, { recursive: true });
   const localPath = path.join(uploadsDir, filename);
@@ -364,28 +436,63 @@ async function loadRecentAssistantMessages(prisma, { userId, chatId }) {
     select: {
       messages: {
         where: { deletedAt: null, role: 'ASSISTANT' },
-        select: { role: true, content: true, files: true, timestamp: true },
+        select: { id: true, role: true, content: true, files: true, metadata: true },
         orderBy: { timestamp: 'desc' },
-        take: MAX_ASSISTANT_MESSAGES,
+        take: MAX_SOURCE_MESSAGES,
       },
     },
   });
   return Array.isArray(chat?.messages) ? chat.messages : [];
 }
 
-function latestChartMessage(messages) {
-  for (const message of messages) {
-    const files = followupInternals.parseFiles(message?.files);
-    const chart = files.find(isChartFile);
-    if (chart) return { message, chart };
+function sourceFiles(value) {
+  if (!value) return { files: [], incomplete: false };
+  try {
+    if (typeof value === 'string' && value.length > MAX_FILES_CHARS) return { files: [], incomplete: true };
+    const files = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(files)
+      ? { files: files.slice(0, 8), incomplete: files.length > 8 }
+      : { files: [], incomplete: true };
+  } catch { return { files: [], incomplete: true }; }
+}
+
+function canonicalChartFile(file) {
+  if (!isChartFile(file)) return file;
+  const basic = { type: 'viz', format: file.format, title: file.title, explanation: file.explanation };
+  if (file.format === 'recharts') return { ...basic, chart: file.chart };
+  const series = extractSeries(file);
+  if (!series) return basic;
+  const pie = series.kind === 'pie' || series.kind === 'donut';
+  return {
+    ...basic, format: 'recharts',
+    chart: {
+      type: pie ? 'pie' : series.kind,
+      xKey: pie ? undefined : 'category',
+      series: series.series.map((s, index) => ({ key: pie ? 'value' : `series_${index}`, name: s.name, ...(s.color ? { color: s.color } : {}) })),
+      data: series.labels.map((label, row) => pie
+        ? { name: label, value: series.series[0].values[row] }
+        : Object.fromEntries([['category', label], ...series.series.map((s, index) => [`series_${index}`, s.values[row]])])),
+      stacked: series.stacked === true,
+    },
+  };
+}
+
+function fitContext(context) {
+  const size = () => JSON.stringify(context).replace(/[<>&]/g, '\\u0000').length;
+  while (size() > MAX_CONTEXT_CHARS && context.content.length) {
+    context.content = context.content.slice(0, Math.max(0, context.content.length - 1000));
+    context.incomplete = true;
   }
-  return null;
+  while (size() > MAX_CONTEXT_CHARS && context.visualizations.length) {
+    context.visualizations.pop();
+    context.incomplete = true;
+  }
+  return context;
 }
 
 /**
- * Enrich a document instruction with the previous turn. Returns the original
- * instruction/fileIds (applied=false) when the request is not about the
- * previous turn or nothing usable was found. Never throws.
+ * Keep the active instruction unchanged; prior content is an untrusted data
+ * snapshot. Materialize only figures belonging to that exact source message.
  */
 async function collectPreviousTurnContext({
   prisma,
@@ -399,10 +506,10 @@ async function collectPreviousTurnContext({
   visualEmbed,
   logger = console,
 } = {}) {
-  const prompt = String(instruction || '').trim();
+  const prompt = String(instruction || '');
   const baseIds = Array.isArray(fileIds) ? fileIds.filter((id) => typeof id === 'string' && id.trim()) : [];
-  const untouched = { instruction: prompt, fileIds: baseIds, applied: false, sourceContent: null, chart: null, reason: 'not_referenced' };
-  if (!prompt || !prisma || !userId || !chatId) return { ...untouched, reason: 'missing_context' };
+  const untouched = { instruction: prompt, fileIds: baseIds, applied: false, sourceContent: null, conversationContext: null, chart: null, reason: 'not_referenced' };
+  if (!prompt.trim() || !prisma || !userId || !chatId) return { ...untouched, reason: 'missing_context' };
   const refs = referencesPriorTurn(prompt);
   if (!refs.content && !refs.visual) return untouched;
 
@@ -415,57 +522,46 @@ async function collectPreviousTurnContext({
   }
   if (!messages.length) return { ...untouched, reason: 'no_assistant_turns' };
 
-  const chartHit = latestChartMessage(messages);
-  const sections = [];
+  const selected = sourceFromMessages(messages, prompt);
+  // IDs come from the ownership-scoped query, never from a client selection.
+  const sourceMessage = selected?.sourceMessageId
+    ? messages.find((message) => message.id === selected.sourceMessageId) : null;
+  if (!sourceMessage) return { ...untouched, reason: 'no_source_content' };
+  const parsed = sourceFiles(sourceMessage.files);
+  const context = sourceFromMessages([{ ...sourceMessage, files: parsed.files.map(canonicalChartFile) }], prompt);
+  if (!context) return { ...untouched, reason: 'no_source_content' };
+  context.incomplete ||= parsed.incomplete;
+  const attached = [];
   let chart = null;
-  let series = null;
-  if (chartHit && (refs.visual || messages[0] === chartHit.message)) {
-    series = extractSeries(chartHit.chart);
-    sections.push(describeChartFile(chartHit.chart, series));
+  for (const file of parsed.files.filter(isChartFile)) {
+    if (attached.length >= 2) { context.incomplete = true; break; }
     try {
-      const image = await materializeChartImage(chartHit.chart, { uploadsRoot, visualEmbed });
+      const image = await materializeChartImage(file, { uploadsRoot, visualEmbed, prisma, userId });
       if (image) {
-        chart = await storeChartFile({ prisma, userId, image, title: chartHit.chart.title, uploadsDir, storage });
-        chart.title = String(chartHit.chart.title || '').trim();
+        const stored = await storeChartFile({ prisma, userId, image, title: file.title, nameIndex: attached.length + 1, uploadsDir, storage });
+        chart ||= { ...stored, title: String(file.title || '').slice(0, 400) };
+        attached.push({
+          fileId: String(stored.fileId).slice(0, 120),
+          filename: stored.filename,
+          sourceMessageId: context.sourceMessageId,
+          title: String(file.title || '').slice(0, 400),
+          format: 'image',
+        });
       }
     } catch (err) {
       try { logger.warn?.('[document-turn-context] no pude materializar la gráfica:', err?.message || err); } catch (_) { /* ignore */ }
     }
   }
 
-  const previousText = findPreviousAssistantContent(messages);
-  if (previousText) sections.push(previousText);
-  if (!sections.length && chartHit) {
-    // The chart message itself is the only content: its text is short but
-    // still the best body we have.
-    const cleaned = cleanAssistantContentForDocument(chartHit.message);
-    if (cleaned) sections.push(cleaned);
-  }
-  if (!sections.length) return { ...untouched, reason: 'no_source_content' };
-
-  const sourceContent = sections.join('\n\n');
-  const format = inferRequestedFormat(prompt);
-  let enriched = buildPreviousContentDocumentPrompt({ prompt, sourceContent, format });
-  if (chart) {
-    enriched += [
-      '',
-      '',
-      `GRÁFICA ADJUNTA: el archivo «${chart.filename}» (en /workspace/uploads) es la gráfica${chart.title ? ` «${chart.title}»` : ''} del mensaje anterior, ya renderizada como imagen.`,
-      'Insértala en el documento como imagen (ancho de página, centrada, con su título como pie de figura) en el lugar donde el texto la menciona; no la describas en lugar de insertarla y no generes otra distinta.',
-    ].join('\n');
-  } else if (chartHit && series) {
-    enriched += [
-      '',
-      '',
-      'La gráfica del mensaje anterior no pudo adjuntarse como imagen: recréala en el documento a partir de la tabla de datos incluida en el contenido fuente (misma serie, mismos valores, mismo título).',
-    ].join('\n');
-  }
+  if (attached.length) context.attachedVisualizations = attached;
+  fitContext(context);
 
   return {
-    instruction: enriched,
-    fileIds: chart ? [...baseIds, chart.fileId] : baseIds,
+    instruction: prompt,
+    fileIds: [...new Set([...baseIds, ...attached.map((image) => image.fileId)])],
     applied: true,
-    sourceContent,
+    sourceContent: context.content,
+    conversationContext: context,
     chart,
     reason: chart ? 'previous_content_and_chart' : 'previous_content',
   };
@@ -484,9 +580,7 @@ module.exports = {
     buildMultiLineSvg,
     decodeDataUrl,
     readLocalUpload,
-    describeChartFile,
     storeChartFile,
-    latestChartMessage,
     slugify,
   },
 };
