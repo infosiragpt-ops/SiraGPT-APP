@@ -310,7 +310,7 @@ export function extractFromClipboardEvent(
       // Synthesize a filename for nameless blobs (clipboard screenshots).
       const f = blob.name
         ? blob
-        : blobToFile(blob, `pasted.${guessExtFromMime(blob.type) || "bin"}`)
+        : blobToFile(blob)
       const key = `${f.name}:${f.size}:${f.lastModified}`
       if (!seen.has(key)) { seen.add(key); files.push(f) }
     }

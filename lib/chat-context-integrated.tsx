@@ -925,6 +925,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const providerMountedRef = useRef(true)
   const [pagination, setPagination] = useState<PaginationInfo | null>(null)
   const [isLoadingMore, setIsLoadingMore] = useState(false)
+  // First-page chat-list fetch in flight (initial load / resetChats). Kept
+  // apart from `isLoading`, which tracks message streaming: the sidebar
+  // skeleton must show while the list loads, not during every reply.
+  const [isLoadingChatList, setIsLoadingChatList] = useState(false)
+  const chatListLoadsRef = useRef(0)
   const [hasMoreChats, setHasMoreChats] = useState(true)
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeStreamingChatIds, setActiveStreamingChatIds] = useState<string[]>([]);
@@ -1098,8 +1103,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const initializeChat = async () => {
     if (hasInitialized) return
 
+    // Chats and models are independent: start the sidebar list now so it
+    // doesn't wait a models round-trip, and still loads if /ai/models fails.
+    // loadUserChats catches its own errors, so this promise never rejects.
+    const chatsPromise = loadUserChats()
+
     try {
-      // Load available models first
       const modelsResponse = await apiClient.getAIModels(
         chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
       )
@@ -1122,13 +1131,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSelectedModel("")
         setSelectedProivder("")
       }
-
-      // Load chats
-      await loadUserChats()
-      setHasInitialized(true)
     } catch (error) {
-      console.error("Failed to initialize chat:", error)
+      // Transient catalog failure (deploy, 5xx, network blip): initialization
+      // still completes so refreshModels (focus / picker open / online) and
+      // the chatType effect can retry the catalog later.
+      console.error("Failed to initialize chat models:", error)
     }
+
+    await chatsPromise
+    setHasInitialized(true)
   }
 
   useEffect(() => {
@@ -1200,11 +1211,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (!hasInitialized) return;
     const onFocus = () => { void refreshModels(); };
     const onVisible = () => { if (document.visibilityState === 'visible') void refreshModels(); };
+    const onOnline = () => { void refreshModels(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
     };
   }, [refreshModels, hasInitialized]);
 
@@ -1217,21 +1231,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   //   }
   // }
   const loadUserChats = async (page: number = 1, limit: number = 20) => {
+    const isFirstPage = page === 1
+    if (isFirstPage) {
+      chatListLoadsRef.current += 1
+      setIsLoadingChatList(true)
+    }
     try {
       const response = await apiClient.getChats({ page, limit })
 
-      if (page === 1) {
+      if (isFirstPage) {
         // First page - replace all chats
         setChats(response.chats)
       } else {
-        // Subsequent pages - append to existing chats
-        setChats(prev => [...prev, ...response.chats])
+        // Subsequent pages - append, skipping chats already listed: pagination
+        // is offset-based, so a chat created meanwhile shifts the server order
+        // and the next page repeats rows (duplicate sidebar keys).
+        setChats(prev => {
+          const seen = new Set(prev.map((c: any) => c?.id))
+          return [...prev, ...(response.chats || []).filter((c: any) => c?.id && !seen.has(c.id))]
+        })
       }
 
       setPagination(response.pagination)
       setHasMoreChats(response.pagination.page < response.pagination.pages)
     } catch (error) {
       console.error("Failed to load chats:", error)
+    } finally {
+      if (isFirstPage) {
+        chatListLoadsRef.current = Math.max(0, chatListLoadsRef.current - 1)
+        if (chatListLoadsRef.current === 0) setIsLoadingChatList(false)
+      }
     }
   }
 
@@ -1320,8 +1349,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Flush any tokens still in the per-frame buffer so the user sees
-    // the full last batch before "(Generation stopped by user)" is
-    // appended below, then dispose the buffer so no later flush leaks.
+    // the full last batch before the Spanish "Generación detenida" marker
+    // is appended below, then dispose the buffer so no later flush leaks.
     if (targetChatId) {
       const buf = streamBuffersRef.current.get(targetChatId);
       if (buf) {
@@ -1331,25 +1360,29 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // Update the last AI message to show it was stopped
+    // Update the last AI message to show it was stopped, and settle the
+    // placeholder (activity steps, reasoning, progress stage) so nothing
+    // keeps shimmering "live" after Stop.
     setCurrentChat(prevChat => {
       if (!prevChat) return prevChat;
+      if (targetChatId && prevChat.id !== targetChatId) return prevChat;
       const lastMessageIndex = prevChat.messages.length - 1;
       if (lastMessageIndex >= 0 && prevChat.messages[lastMessageIndex].role === 'ASSISTANT') {
         const lastMessage = prevChat.messages[lastMessageIndex];
-        // Only update if content exists and doesn't already have stopped text
-        if (lastMessage.content !== undefined && !lastMessage.content.includes('(Generation stopped')) {
-          const updatedMessages = [...prevChat.messages];
-          const stoppedContent = lastMessage.content.trim() === ''
-            ? "(Generation stopped by user)"
-            : lastMessage.content + "\n\n(Generation stopped by user)";
-
-          updatedMessages[lastMessageIndex] = {
-            ...lastMessage,
-            content: stoppedContent
-          };
-          return { ...prevChat, messages: updatedMessages };
-        }
+        const current = typeof lastMessage.content === 'string' ? lastMessage.content : '';
+        // Accept the legacy English marker the backend still persists.
+        const alreadyMarked = current.includes('(Generation stopped') || current.includes('Generación detenida');
+        const stoppedContent = alreadyMarked
+          ? current
+          : current.trim() === ''
+            ? 'Generación detenida.'
+            : current + '\n\n_Generación detenida._';
+        const updatedMessages = [...prevChat.messages];
+        updatedMessages[lastMessageIndex] = {
+          ...finalizeAssistantPlaceholder(lastMessage),
+          content: stoppedContent,
+        };
+        return { ...prevChat, messages: updatedMessages };
       }
       return prevChat;
     });
@@ -2315,9 +2348,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                     : chat
                 )));
               }
-              // Mirror the failure into BackgroundStreams so the
-              // sidebar pill shows the error state for this chat.
-              bg.fail(activeChat.id, error?.message || 'stream failed');
+              // Mirror the outcome into BackgroundStreams: a user Stop clears
+              // the entry (no error dot); a real failure shows the error state.
+              if (isUserStopped()) {
+                bg.cancel(activeChat.id);
+              } else {
+                bg.fail(activeChat.id, error?.message || 'stream failed');
+              }
               finishReasoning();
 
               // One classification drives everything: the upgrade prompt is
@@ -2797,7 +2834,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       newChat.messages = [];
 
       setChats((prev) => [newChat, ...prev]);
-      localStorage.setItem('currentChatId', newChat.id);
+      try { localStorage.setItem('currentChatId', newChat.id) } catch { /* storage blocked/full */ }
       setCurrentChat(newChat);
       setUploadedFiles([]);
 
@@ -2950,6 +2987,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const targetIsStreaming = activeStreamingChatIdsRef.current.has(chatId)
         || bg.get(chatId)?.status === "streaming"
       const cachedChat = chatsRef.current.find(chat => chat?.id === chatId)
+      // Startup restore of the saved id (not a click): a dead id is cleared
+      // silently instead of greeting the user with an error toast.
+      let restoredFromStorage = false
+      try { restoredFromStorage = !cachedChat && localStorage.getItem('currentChatId') === chatId } catch { /* private mode */ }
       if (cachedChat) {
         setCurrentChat(prev => {
           if (prev?.id === chatId && (prev.messages?.length || 0) > 0) {
@@ -2979,7 +3020,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           }
           return restored
         })
-        localStorage.setItem('currentChatId', chatId)
+        try { localStorage.setItem('currentChatId', chatId) } catch { /* storage blocked/full */ }
         setUploadedFiles([])
         applyChatModelSelection(cachedChat)
       }
@@ -3033,7 +3074,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         })
 
         if (latestSelectedChatIdRef.current === chatId) {
-          localStorage.setItem('currentChatId', chatId)
+          try { localStorage.setItem('currentChatId', chatId) } catch { /* storage blocked/full */ }
           setUploadedFiles([])
           applyChatModelSelection(chat)
         }
@@ -3081,12 +3122,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         console.error("Failed to load chat:", error)
+        const status = (error as any)?.status ?? (error as any)?.statusCode
+        const stillSelected = latestSelectedChatIdRef.current === chatId
         // Stale/deleted chat id (e.g. restored from localStorage) → clear the
         // dead pointer so it isn't re-requested (and re-logged) on every load.
-        if ((error as any)?.status === 404 || (error as any)?.statusCode === 404) {
+        if (status === 404) {
           try { if (localStorage.getItem('currentChatId') === chatId) localStorage.removeItem('currentChatId') } catch { /* private mode */ }
           setCurrentChat((prev: any) => (prev?.id === chatId ? null : prev))
           setChats((prev: any[]) => prev.filter((c) => c && c.id !== chatId))
+          if (stillSelected && !restoredFromStorage) {
+            toast.error("Esta conversación ya no existe o no tienes acceso.", { id: `chat-load-${chatId}` })
+          }
+        } else if (stillSelected) {
+          // Otherwise the user is left with the 240-char list preview only.
+          toast.error("No se pudo cargar la conversación completa.", {
+            id: `chat-load-${chatId}`,
+            action: { label: "Reintentar", onClick: () => { void selectChatRef.current(chatId) } },
+          })
         }
       }
     },
@@ -3141,7 +3193,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       try {
         const refreshed = (await apiClient.getChat(chatId))?.chat
         if (refreshed?.id === chatId) {
-          setCurrentChat((prev) => (prev && prev.id === chatId ? refreshed : prev))
+          setCurrentChat((prev) => (prev && prev.id === chatId ? { ...prev, title: refreshed.title ?? title } : prev))
         }
       } catch { /* optimistic title stays */ }
       return true
@@ -4571,7 +4623,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     pagination,
     hasMoreChats,
     isLoadingMore,
-    isLoadingChats: isLoading,
+    isLoadingChats: isLoadingChatList,
     currentChatId,
     currentChatTitle,
     setCurrentChat,
@@ -4583,7 +4635,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     resetChats: stableResetChats,
     getCurrentChatSnapshot,
   }), [
-    chats, pagination, hasMoreChats, isLoadingMore, isLoading,
+    chats, pagination, hasMoreChats, isLoadingMore, isLoadingChatList,
     currentChatId, currentChatTitle,
     setCurrentChat, stableSelectChat, stableDeleteChat, stableRenameChat, stableCreateNewChat,
     stableLoadMoreChats, stableResetChats, getCurrentChatSnapshot,

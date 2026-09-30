@@ -203,7 +203,7 @@ exports[`KeyboardShortcutsModal (snapshot) > renders the shortcut list when open
           <kbd
             class="rounded-md border border-border/60 bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm"
           >
-            /
+            ?
           </kbd>
         </span>
       </li>

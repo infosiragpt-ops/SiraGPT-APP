@@ -16,7 +16,7 @@ import { useAuth } from "@/lib/auth-context-integrated"
 function AgentsHomeLoading() {
   return (
     <div
-      className="flex min-h-screen w-full items-center justify-center bg-background text-foreground"
+      className="flex h-[var(--app-viewport-height,100dvh)] w-full items-center justify-center bg-background text-foreground"
       role="status"
       aria-live="polite"
       aria-label="Cargando agentes"
@@ -40,9 +40,31 @@ const ChatInterface = dynamic(
   { ssr: false, loading: AgentsHomeLoading },
 )
 
+// Same module specifier as the dynamic() above: webpack serves both from one chunk.
+const prefetchChatInterface = () => import("@/components/chat-interface-enhanced")
+
+function hasStoredSession(): boolean {
+  try {
+    return Boolean(window.localStorage.getItem("auth-token"))
+  } catch {
+    // Storage blocked: assume a session may exist and let the prefetch run.
+    return true
+  }
+}
+
 export function AgentsHomeSurface() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
+
+  // Overlap the chat chunk download with the /auth/me round-trip instead of
+  // requesting it only after auth resolves (webpack dedupes the import, so
+  // the dynamic() above resolves from cache). Skipped for visitors with no
+  // session, who are about to be redirected to the login page.
+  React.useEffect(() => {
+    if (user || (isLoading && hasStoredSession())) {
+      void prefetchChatInterface().catch(() => {})
+    }
+  }, [isLoading, user])
 
   React.useEffect(() => {
     if (isLoading || user) return

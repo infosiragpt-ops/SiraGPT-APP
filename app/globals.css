@@ -3291,8 +3291,10 @@ details[open] > summary .think-chevron,
    * via padding. Skipped on text buttons (they already have
    * horizontal padding past the threshold).
    */
-  button[aria-label],
-  [role="button"][aria-label] {
+  /* :where() keeps this at zero specificity so Tailwind `absolute` /
+     `fixed` on overlay buttons (thumbnail remove X, video play overlay,
+     image comment pins) still win. */
+  :where(button[aria-label], [role="button"][aria-label]) {
     position: relative;
   }
   button[aria-label]:not(.no-tap-expand)::after,
@@ -3514,7 +3516,8 @@ details[open] > summary .think-chevron,
   overflow-anchor: none;
 }
 
-.streaming-message :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th):last-child::after {
+.streaming-message [data-sgpt-rich-copy-root] > :nth-last-child(2):is(p, h1, h2, h3, h4, h5, h6, blockquote)::after,
+.streaming-message [data-sgpt-rich-copy-root] > :nth-last-child(2):is(ul, ol) > li:last-child::after {
   content: "";
   display: inline-block;
   width: 0.55ch;
@@ -3533,8 +3536,25 @@ details[open] > summary .think-chevron,
   pointer-events: none;
 }
 
+/* The caret above is scoped to the answer body's final text block (the
+   explicit `.premium-caret` span is the root's last child, so that block
+   is `:nth-last-child(2)`). Table cells, inner list items and the
+   thinking/activity rails never get their own caret. When the answer
+   ends in text, the inline caret replaces the explicit span (which would
+   otherwise sit on its own line below the block); when it ends in code,
+   a table or nothing yet, the span stays as the fallback caret. The
+   final block also drops its bottom margin, as it will once the stream
+   resolves, so the message doesn't shrink when streaming ends. */
+.streaming-message [data-sgpt-rich-copy-root] > :is(p, h1, h2, h3, h4, h5, h6, blockquote, ul, ol) + .premium-caret {
+  display: none;
+}
+.streaming-message [data-sgpt-rich-copy-root] > :nth-last-child(2):is(p, ul, ol) {
+  margin-bottom: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .streaming-message :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th):last-child::after {
+  .streaming-message [data-sgpt-rich-copy-root] > :nth-last-child(2):is(p, h1, h2, h3, h4, h5, h6, blockquote)::after,
+  .streaming-message [data-sgpt-rich-copy-root] > :nth-last-child(2):is(ul, ol) > li:last-child::after {
     animation: none;
     background: hsl(var(--foreground) / 0.5);
   }
@@ -3886,9 +3906,10 @@ details[open] > summary .think-chevron,
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
-    /* Frozen transforms too — without this, `transform: scale(1.05)`
-       and the like still play on hover even with reduced motion on. */
-    transform: none !important;
+    /* No `transform: none` here: Radix Popper positions menus/tooltips
+       with an inline translate, dialogs centre with translate(-50%) and
+       switch thumbs slide with translate-x, so freezing transforms would
+       break layout, not just motion. Transitions are already instant. */
   }
 }
 
@@ -5965,12 +5986,12 @@ footer {
 }
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
 
-/* Stop keeps a 44px hit target while matching the compact 32px red reference. */
+/* Stop keeps a 44px hit target around a compact 32px ink disc. */
 .composer-stop-button {
   position: relative;
   isolation: isolate;
   order: 50;
-  color: #dc2626 !important;
+  color: hsl(var(--foreground)) !important;
   background: transparent !important;
   box-shadow: none !important;
 }
@@ -5990,8 +6011,10 @@ footer {
 .composer-stop-button:hover:not(:disabled)::before {
   background: #d5d5d5;
 }
+.dark .composer-stop-button::before { background: hsl(0 0% 100% / 0.14); }
+.dark .composer-stop-button:hover:not(:disabled)::before { background: hsl(0 0% 100% / 0.2); }
 .composer-stop-button:focus-visible {
-  outline: 2px solid hsl(0 72% 51% / 0.42);
+  outline: 2px solid hsl(var(--ring) / 0.45);
   outline-offset: 1px;
 }
 .composer-stop-button .composer-stop-icon {
@@ -6362,13 +6385,13 @@ footer {
 }
 .composer-fast-toggle.is-on {
   color: hsl(0 0% 46%);
-  background: hsl(4 70% 96%);
+  background: hsl(var(--foreground) / 0.07);
 }
 .composer-fast-toggle.is-on svg {
   color: hsl(var(--foreground));
 }
 .dark .composer-fast-toggle.is-on {
-  background: hsl(4 60% 50% / 0.16);
+  background: hsl(0 0% 100% / 0.1);
 }
 .composer-context-trigger {
   order: 10;
@@ -6429,7 +6452,7 @@ footer {
 }
 .composer-permission-row:hover,
 .composer-permission-row.is-selected {
-  background: hsl(0 0% 96%);
+  background: hsl(var(--accent));
 }
 .composer-context-menu {
   overflow: hidden;
@@ -7047,6 +7070,14 @@ button.anti-bribery-context-chip:not(:disabled):active {
   border-color: transparent;
   background-color: hsl(0 0% 100% / 0.08);
 }
+.dark .composer-permission-chip:hover,
+.dark .composer-permission-chip[data-state="open"],
+.dark .composer-effort-chip:not(.is-on):hover,
+.dark .composer-effort-chip:not(.is-on)[data-state="open"],
+.dark .composer-context-trigger:hover,
+.dark .composer-context-trigger[data-state="open"] {
+  background: hsl(0 0% 100% / 0.08);
+}
 .dark .composer-input-row .composer-model-inline .chat-model-trigger,
 .dark .composer-fast-toggle.is-on,
 .dark .composer-dictation-button:not([aria-pressed="true"]) {
@@ -7068,7 +7099,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   color: #f87171;
 }
 .dark .composer-fast-toggle.is-on svg {
-  color: #fca5a5;
+  color: hsl(var(--foreground));
 }
 
 /* ────────────────────────────────────────────────────────────

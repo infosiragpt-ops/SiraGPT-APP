@@ -174,7 +174,6 @@ function RailButton({
   pressed,
   loading,
   pulse,
-  destructive,
   glow,
 }: {
   label: string
@@ -186,7 +185,6 @@ function RailButton({
   loading?: boolean
   /** Subtle attention pulse for one-shot success feedback. */
   pulse?: "success" | "error" | null
-  destructive?: boolean
   /** Accent halo for live/streaming-style states (e.g. Speaking). */
   glow?: "accent" | null
 }) {
@@ -208,8 +206,7 @@ function RailButton({
             "hover:bg-muted hover:text-foreground",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
             "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground/70",
-            pressed && !destructive && "bg-muted text-foreground",
-            pressed && destructive && "bg-red-500/10 text-red-500 dark:text-red-400",
+            pressed && "bg-muted text-foreground",
             glow === "accent" && "text-sky-500 dark:text-sky-400",
             pulse === "success" && "text-emerald-500 dark:text-emerald-400",
             pulse === "error" && "text-red-500 dark:text-red-400",
@@ -507,7 +504,6 @@ export function MessageActionRail({
               disabled={allDisabled}
               loading={isSubmittingFeedback === "disliked"}
               pressed={localFeedback === "disliked"}
-              destructive={localFeedback === "disliked"}
               onClick={() => handleFeedbackClick("disliked")}
               icon={<ThumbsDown className="h-3.5 w-3.5" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
             />
@@ -536,6 +532,7 @@ export function MessageActionRail({
                 <DropdownMenuItem
                   disabled={allDisabled || isLoadingAudio}
                   onClick={handleSpeakClick}
+                  className="gap-2.5"
                   aria-label={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
                   title={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
                 >
@@ -547,6 +544,7 @@ export function MessageActionRail({
                 <DropdownMenuItem
                   disabled={allDisabled || isSharing}
                   onClick={handleShareClick}
+                  className="gap-2.5"
                   aria-label="Copiar enlace al mensaje"
                   title="Copiar enlace al mensaje"
                 >
@@ -558,6 +556,7 @@ export function MessageActionRail({
                 <DropdownMenuItem
                   disabled={allDisabled || isBranching}
                   onClick={handleBranchClick}
+                  className="gap-2.5"
                   aria-label="Bifurcar conversación"
                   title="Bifurcar conversación"
                 >
@@ -569,6 +568,7 @@ export function MessageActionRail({
                 <DropdownMenuItem
                   disabled={allDisabled || isRemembering}
                   onClick={handleRememberClick}
+                  className="gap-2.5"
                   aria-label={remembered ? "Guardado en memoria" : "Recordar esto"}
                   title={remembered ? "Guardado en memoria" : "Recordar esto"}
                 >

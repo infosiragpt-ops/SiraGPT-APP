@@ -1,5 +1,6 @@
 "use client"
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { useTranslations } from "next-intl"
 import { useBackgroundStreams } from "@/lib/background-streams-context"
 import {
@@ -91,6 +92,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { planDisplayName, isPaidPlanCode } from "@/lib/plans-catalog"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -114,7 +116,6 @@ import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
-import { SettingsDialog } from "@/components/settings/settings-dialog"
 import type { SectionKey } from "@/components/settings/settings-panel"
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from "@/lib/chat/open-settings"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
@@ -168,6 +169,11 @@ import {
   renameChatFolder,
 } from "@/lib/sidebar-chat-folders"
 
+// The settings modal (~1.6k lines plus its cards) only opens from the user
+// menu / ⌘, — keep it out of the render-blocking root chunk.
+const loadSettingsDialog = () => import("@/components/settings/settings-dialog")
+const SettingsDialog = dynamic(() => loadSettingsDialog().then((m) => m.SettingsDialog), { ssr: false })
+
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
 // as module constants avoids allocating a new string on every render
 // and lets both normal and destructive variants compose via cn().
@@ -180,7 +186,7 @@ const LG_ITEM = cn(
 const LG_SEP = "my-1 bg-border/60"
 
 const CHAT_ACTION_MENU = cn(
-  "relative isolate w-[214px] overflow-hidden rounded-[18px] p-1.5",
+  "relative isolate w-[214px] overflow-y-auto overflow-x-hidden overscroll-contain rounded-[18px] p-1.5",
   "border border-white/65 bg-white/72 text-zinc-800",
   "shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_50px_rgba(23,23,23,0.16)]",
   "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
@@ -265,7 +271,7 @@ const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
 const HEADER_ICON_BTN =
   "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
 const SIDEBAR_TIP =
-  "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
+  "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)] dark:bg-zinc-100 dark:text-zinc-950"
 const RECENT_TOOLBAR_ICON =
   "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
 const CHAT_ROW_SLOT =
@@ -275,11 +281,11 @@ const FOLDER_ADD_ICON = cn(
   "rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
 )
 const FILTER_POPOVER =
-  "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(23,23,23,0.14)]"
+  "w-[220px] rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[0_12px_40px_rgba(23,23,23,0.14)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.5)]"
 const FILTER_ROW =
-  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-zinc-800 transition-colors hover:bg-zinc-100"
+  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-muted"
 const FILTER_OPTION =
-  "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-zinc-100"
+  "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-muted"
 
 function SidebarChromeTooltip({
   label,
@@ -352,8 +358,13 @@ function SidebarNavItem({
             prefetch
             scroll={false}
             aria-current={active ? "page" : undefined}
-            className="focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border focus-visible:ring-offset-0"
-            onPointerDown={markIntent}
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-0 dark:focus-visible:ring-sidebar-ring"
+            onPointerDown={(event) => {
+              // Only a plain primary press navigates in this tab; modified,
+              // middle or right presses open a new tab / context menu.
+              if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+              markIntent()
+            }}
             onPointerEnter={() => prefetchOnHover(href)}
             onFocus={() => prefetchOnHover(href)}
             onKeyDown={(event) => {
@@ -457,6 +468,7 @@ export function AppSidebar() {
     pagination,
     isLoadingChats,
     getCurrentChatSnapshot,
+    renameChat,
   } = useChatList()
   const { selectedModel, setSelectedModel } = useModelsAndFiles()
   const router = useRouter()
@@ -556,6 +568,12 @@ export function AppSidebar() {
     setNewChatPending(true)
     markSharedNavigationIntent("/agentes", t("newChat"))
   }, [markSharedNavigationIntent, t])
+  // Pointer path: a modified/middle/right press opens a new tab or the
+  // context menu, so it must not swap this tab for the pending skeleton.
+  const markNewChatIntentFromPointer = React.useCallback((event: React.PointerEvent) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    markNewChatIntent()
+  }, [markNewChatIntent])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
   const [chatTypeFilter, setChatTypeFilter] = React.useState<RecentChatTypeFilter>("all")
@@ -568,8 +586,12 @@ export function AppSidebar() {
   // route still exists for deep-links / command palette).
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [settingsSection, setSettingsSection] = React.useState<SectionKey>("general")
+  // Mount the lazily loaded dialog on first open and keep it mounted so
+  // the close animation still plays.
+  const [settingsEverOpened, setSettingsEverOpened] = React.useState(false)
   const openSettings = React.useCallback((section: SectionKey = "general") => {
     setSettingsSection(section)
+    setSettingsEverOpened(true)
     setSettingsOpen(true)
   }, [])
 
@@ -691,6 +713,10 @@ export function AppSidebar() {
   // Scroll area ref for infinite scroll
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
   const editInputRef = React.useRef<HTMLInputElement>(null)
+  // Synchronous mirror of editingChatId: the input's onBlur can fire after
+  // Enter/Escape/cancel already closed the editor, and must not save twice
+  // (or save a cancelled edit).
+  const editingChatIdRef = React.useRef<string | null>(null)
 
   const handleLogout = () => {
     localStorage.setItem("currentChatId", "")
@@ -784,7 +810,7 @@ export function AppSidebar() {
     setPinnedChatOverrides((current) => ({ ...current, [chat.id]: nextPinned }))
     toast.success(nextPinned ? "Chat fijado" : "Chat desfijado")
     const { synced } = await setChatPinned(chat.id, nextPinned)
-    if (!synced) toast.warning("Guardado solo en este navegador; reinicia el backend para sincronizarlo.")
+    if (!synced) toast.warning("Guardado en este dispositivo; no se pudo sincronizar con tu cuenta.")
   }, [isChatPinned])
 
   const archiveChat = React.useCallback(async (chat: any) => {
@@ -792,19 +818,37 @@ export function AppSidebar() {
     persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => (
       current.includes(chat.id) ? current : [chat.id, ...current]
     ))
-    toast.success("Chat archivado")
+    toast.success("Chat archivado", {
+      action: {
+        label: "Deshacer",
+        onClick: () => {
+          persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => current.filter((id) => id !== chat.id))
+          void apiClient.archiveChat(chat.id, false).catch(() => {
+            toast.warning("Restaurado en este dispositivo; no se pudo sincronizar con tu cuenta.")
+          })
+        },
+      },
+    })
     try {
       await apiClient.archiveChat(chat.id, true)
     } catch (error) {
-      toast.warning("Archivado localmente; reinicia el backend para sincronizarlo.")
+      toast.warning("Archivado en este dispositivo; no se pudo sincronizar con tu cuenta.")
     }
   }, [persistArrayState])
 
   const hideChatLocally = React.useCallback((chat: any) => {
+    if (!chat?.id) return
     persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => (
       current.includes(chat.id) ? current : [chat.id, ...current]
     ))
-    toast.success("Chat ocultado")
+    // Hidden chats have no filter or menu to bring them back, so the
+    // toast is the recovery path for a mis-click.
+    toast.success("Chat ocultado", {
+      action: {
+        label: "Deshacer",
+        onClick: () => persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => current.filter((id) => id !== chat.id)),
+      },
+    })
   }, [persistArrayState])
 
   const persistChatFolders = React.useCallback((
@@ -1167,7 +1211,11 @@ export function AppSidebar() {
       router.push(agentsHomeHref(`id=${data.chat.id}`), { scroll: false })
       if (isMobile) setOpenMobile(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo abrir el GPT")
+      toast.error(
+        error instanceof TypeError
+          ? "Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo."
+          : (error instanceof Error && error.message) || "No se pudo abrir el GPT",
+      )
     }
   }
 
@@ -1197,6 +1245,7 @@ export function AppSidebar() {
       e.stopPropagation()
       e.preventDefault()
     }
+    editingChatIdRef.current = chat.id
     setEditingChatId(chat.id)
     setEditTitle(chat.title)
     // Small delay for smooth animation
@@ -1206,91 +1255,69 @@ export function AppSidebar() {
     }, 50)
   }
 
+  // Return keyboard focus to the chat row once the inline editor unmounts,
+  // instead of letting it fall to <body>.
+  const focusChatRow = (chatId: string) => {
+    if (typeof window === "undefined") return
+    window.requestAnimationFrame(() => {
+      const escaped = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(chatId) : chatId
+      document.querySelector<HTMLElement>(`[data-chat-row-id="${escaped}"]`)?.focus()
+    })
+  }
+
   // Handle save edited title
-  const handleSaveEdit = async (chatId: string) => {
-    if (!editTitle.trim()) {
-      setEditingChatId(null)
-      return
-    }
+  // `restoreFocus` is false for the blur path: the user clicked or tabbed
+  // somewhere else, and focus must stay there.
+  const handleSaveEdit = async (chatId: string, restoreFocus = true) => {
+    // Already closed (Enter/Escape/cancel ran first): nothing to save.
+    if (editingChatIdRef.current !== chatId) return
+    editingChatIdRef.current = null
 
     const newTitle = editTitle.trim()
     const originalTitle = chats.find(c => c.id === chatId)?.title || ""
-
-    // Optimistic update - update immediately
-    setOptimisticUpdates(prev => ({ ...prev, [chatId]: newTitle }))
-
-    // Update current chat immediately if it's the one being edited.
-    // Functional setState avoids reading `currentChat` here so the
-    // sidebar doesn't have to subscribe to it.
-    if (currentChatId === chatId) {
-      setCurrentChat(prev => (prev && prev.id === chatId ? { ...prev, title: newTitle } : prev))
-    }
-
     setEditingChatId(null)
     setEditTitle("")
+    if (restoreFocus) focusChatRow(chatId)
 
-    try {
-      // Call API to update on server
-      await apiClient.updateChat(chatId, { title: newTitle })
+    // Empty or unchanged title: close the editor without a request or toast.
+    if (!newTitle || newTitle === originalTitle) return
 
-      // Silently fetch updated chat to sync with server without navigation
-      try {
-        const chatResponse = await apiClient.getChat(chatId)
-        const refreshedChat = chatResponse.chat
-
-        // Update currentChat if it's the active one (without navigation)
-        if (currentChatId === chatId) {
-          setCurrentChat(refreshedChat)
-        }
-
-        // Note: The optimistic update will handle the display
-        // The chats array will sync naturally on next refresh or navigation
-        // We don't call selectChat to avoid navigation
-      } catch (refreshError) {
-        // If refresh fails, that's okay - optimistic update will handle display
-        // Chat refresh failed but update succeeded — no log to avoid noise
-      }
-
-      // Keep optimistic update active - it will persist until natural refresh
-      // This ensures the UI shows the updated title immediately and it persists
-      // The optimistic update will remain until page refresh or chat list reload
-
-      toast.success("Chat renombrado")
-    } catch (error) {
-      console.error('Failed to update chat title:', error)
-
-      // Revert optimistic update on error
-      setOptimisticUpdates(prev => {
-        const updated = { ...prev }
-        delete updated[chatId]
-        return updated
-      })
-
-      // Revert current chat if it was updated
-      if (currentChatId === chatId) {
-        setCurrentChat(prev => (prev && prev.id === chatId ? { ...prev, title: originalTitle } : prev))
-      }
-
-      toast.error('Failed to update chat title')
-    }
+    // renameChat patches the chat list (sidebar, ⌘K search, header) and
+    // the open chat optimistically, syncs with the server and reverts on
+    // failure, so the sidebar keeps no private title overlay.
+    setOptimisticUpdates(prev => {
+      if (!(chatId in prev)) return prev
+      const updated = { ...prev }
+      delete updated[chatId]
+      return updated
+    })
+    const ok = await renameChat(chatId, newTitle)
+    if (ok) toast.success("Chat renombrado")
+    else toast.error("No se pudo cambiar el nombre")
   }
 
   // Handle cancel edit
   const handleCancelEdit = () => {
+    const chatId = editingChatIdRef.current ?? editingChatId
+    editingChatIdRef.current = null
     setEditingChatId(null)
     setEditTitle("")
     // Remove any optimistic updates when canceling
-    if (editingChatId) {
+    if (chatId) {
       setOptimisticUpdates(prev => {
+        if (!(chatId in prev)) return prev
         const updated = { ...prev }
-        delete updated[editingChatId]
+        delete updated[chatId]
         return updated
       })
+      focusChatRow(chatId)
     }
   }
 
   // Handle key press in edit input
   const handleEditKeyDown = (e: React.KeyboardEvent, chatId: string) => {
+    // Enter / Escape that confirm or cancel an IME composition are not ours.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (e.key === 'Enter') {
       e.preventDefault()
       handleSaveEdit(chatId)
@@ -1299,6 +1326,46 @@ export function AppSidebar() {
       handleCancelEdit()
     }
   }
+
+  // Chats that survive the folder + recent filters. Computed once here (not
+  // only inside the render IIFE) so the auto-load effect below can see it.
+  const sidebarVisibleChats = React.useMemo(() => {
+    const titledChats = chats.map((chat) => ({
+      ...chat,
+      title: getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title,
+    }))
+    const scopedChats = filterChatsByFolder(titledChats, chatFolders, selectedFolder)
+    return filterRecentChats(scopedChats, {
+      type: chatTypeFilter,
+      status: chatStatusFilter,
+      activity: chatActivityFilter,
+      archivedIds: archivedChatIds,
+      hiddenIds: hiddenChatIds,
+      scheduledIds: scheduledChats,
+      isPinned: isChatPinned,
+    })
+  }, [chats, optimisticUpdates, chatFolders, selectedFolder, chatTypeFilter, chatStatusFilter, chatActivityFilter, archivedChatIds, hiddenChatIds, scheduledChats, isChatPinned])
+
+  // A folder / type / status view can match chats that live on pages not
+  // loaded yet (only the newest page comes first). Pull a few more pages
+  // automatically instead of claiming the folder is empty; the cap keeps a
+  // small or stale folder from fetching the whole history.
+  const SIDEBAR_AUTOLOAD_MAX_PAGES = 5
+  const narrowedChatList = Boolean(selectedFolder) || chatTypeFilter !== "all" || chatStatusFilter !== "active"
+  const [autoLoadedPages, setAutoLoadedPages] = React.useState(0)
+  React.useEffect(() => {
+    setAutoLoadedPages(0)
+  }, [selectedFolder, chatTypeFilter, chatStatusFilter])
+  React.useEffect(() => {
+    // Wait for the first page: before it lands (or right after resetChats)
+    // pagination is null and loadMoreChats is a no-op, which would burn the
+    // whole page budget without fetching anything.
+    if (!narrowedChatList || !hasMoreChats || isLoadingMore || isLoadingChats || !pagination || !loadMoreChats) return
+    if (sidebarVisibleChats.length >= 10 || autoLoadedPages >= SIDEBAR_AUTOLOAD_MAX_PAGES) return
+    setAutoLoadedPages((n) => n + 1)
+    void loadMoreChats()
+  }, [narrowedChatList, hasMoreChats, isLoadingMore, isLoadingChats, pagination, loadMoreChats, sidebarVisibleChats.length, autoLoadedPages, selectedFolder, chatTypeFilter, chatStatusFilter])
+  const searchingOlderChats = narrowedChatList && hasMoreChats && (isLoadingMore || isLoadingChats || autoLoadedPages < SIDEBAR_AUTOLOAD_MAX_PAGES)
 
   // Handle load more chats
   const handleLoadMore = () => {
@@ -1374,7 +1441,7 @@ export function AppSidebar() {
             <SidebarChromeTooltip label="Nuevo agente ⌘N">
               <button
                 type="button"
-                onPointerDown={markNewChatIntent}
+                onPointerDown={markNewChatIntentFromPointer}
                 onClick={handleNewChat}
                 aria-label="Nuevo agente ⌘N"
                 className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
@@ -1418,7 +1485,7 @@ export function AppSidebar() {
             <TooltipTrigger asChild>
               <button
                 type="button"
-                onPointerDown={markNewChatIntent}
+                onPointerDown={markNewChatIntentFromPointer}
                 onClick={handleNewChat}
                 data-sidebar="menu-button"
                 className={cn(
@@ -1840,24 +1907,29 @@ export function AppSidebar() {
                       </button>
                       {filterOpenRow === row.key && (
                         <div className="pb-1 pl-2">
-                          {row.options.map(([id, label]) => (
-                            <button
-                              key={id}
-                              type="button"
-                              className={cn(FILTER_OPTION, row.value === label && "bg-zinc-100 font-medium")}
-                              onClick={() => {
-                                row.set(id as never)
-                                setFilterOpenRow(null)
-                              }}
-                            >
-                              {label}
-                            </button>
-                          ))}
+                          {row.options.map(([id, label]) => {
+                            const selected = row.value === label
+                            return (
+                              <button
+                                key={id}
+                                type="button"
+                                aria-pressed={selected}
+                                className={cn(FILTER_OPTION, selected && "bg-muted font-medium")}
+                                onClick={() => {
+                                  row.set(id as never)
+                                  setFilterOpenRow(null)
+                                }}
+                              >
+                                {label}
+                                {selected && <Check className="ml-auto h-3.5 w-3.5" aria-hidden="true" />}
+                              </button>
+                            )
+                          })}
                         </div>
                       )}
                     </div>
                   ))}
-                  <div className="mx-2 my-1 h-px bg-zinc-200" />
+                  <div className="mx-2 my-1 h-px bg-border" />
                   <button
                     type="button"
                     className={FILTER_ROW}
@@ -1872,19 +1944,24 @@ export function AppSidebar() {
                   </button>
                   {filterOpenRow === "group" && (
                     <div className="pb-1 pl-2">
-                      {([["date", "Fecha"], ["none", "Ninguno"]] as const).map(([id, label]) => (
-                        <button
-                          key={id}
-                          type="button"
-                          className={cn(FILTER_OPTION, chatGroupBy === id && "bg-zinc-100 font-medium")}
-                          onClick={() => {
-                            setChatGroupBy(id)
-                            setFilterOpenRow(null)
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
+                      {([["date", "Fecha"], ["none", "Ninguno"]] as const).map(([id, label]) => {
+                        const selected = chatGroupBy === id
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            aria-pressed={selected}
+                            className={cn(FILTER_OPTION, selected && "bg-muted font-medium")}
+                            onClick={() => {
+                              setChatGroupBy(id)
+                              setFilterOpenRow(null)
+                            }}
+                          >
+                            {label}
+                            {selected && <Check className="ml-auto h-3.5 w-3.5" aria-hidden="true" />}
+                          </button>
+                        )
+                      })}
                     </div>
                   )}
                 </PopoverContent>
@@ -1933,20 +2010,9 @@ export function AppSidebar() {
                       // inline timestamp stays compact so the group
                       // header provides the coarse context and the row
                       // just shows the fine offset ("3h", "2d").
-                      const titledChats = chats.map((chat) => ({
-                        ...chat,
-                        title: getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title,
-                      }))
-                      const scopedChats = filterChatsByFolder(titledChats, chatFolders, selectedFolder)
-                      const visibleChats = filterRecentChats(scopedChats, {
-                        type: chatTypeFilter,
-                        status: chatStatusFilter,
-                        activity: chatActivityFilter,
-                        archivedIds: archivedChatIds,
-                        hiddenIds: hiddenChatIds,
-                        scheduledIds: scheduledChats,
-                        isPinned: isChatPinned,
-                      })
+                      // Folder + recent filters (filterChatsByFolder →
+                      // filterRecentChats), memoised above.
+                      const visibleChats = sidebarVisibleChats
                       const visibleById = new Map(visibleChats.map((chat) => [chat.id, chat]))
                       const serverPinnedIds = visibleChats
                         .filter((chat) => Boolean((chat as any)?.isPinned))
@@ -1998,7 +2064,7 @@ export function AppSidebar() {
                         return (
                           <SidebarMenuItem key={chat.id} className="chat-history-item">
                             <div
-                              className="flex w-full items-center gap-0.5 group"
+                              className="flex w-full items-center gap-0.5 group group/chat-row"
                               draggable={!isEditing}
                               onDragStart={(event) => {
                                 event.dataTransfer.setData("text/plain", encodeChatFolderDragId(chat.id))
@@ -2012,37 +2078,45 @@ export function AppSidebar() {
                                     value={editTitle}
                                     onChange={(e) => setEditTitle(e.target.value)}
                                     onKeyDown={(e) => handleEditKeyDown(e, chat.id)}
-                                    onBlur={() => handleSaveEdit(chat.id)}
+                                    onBlur={() => handleSaveEdit(chat.id, false)}
+                                    aria-label="Nombre del chat"
                                     className="h-7 text-sm flex-1 px-2 py-1"
                                     onClick={(e) => e.stopPropagation()}
                                     autoFocus
                                   />
+                                  {/* preventDefault on mousedown keeps focus in the input,
+                                      so its onBlur (save) does not run before the click. */}
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/20"
+                                    aria-label="Guardar nombre"
+                                    className="h-6 w-6 p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    onMouseDown={(e) => e.preventDefault()}
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       handleSaveEdit(chat.id)
                                     }}
                                   >
-                                    <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                                    <Check className="h-3.5 w-3.5" />
                                   </Button>
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/20"
+                                    aria-label="Cancelar cambio de nombre"
+                                    className="h-6 w-6 p-0 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    onMouseDown={(e) => e.preventDefault()}
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       handleCancelEdit()
                                     }}
                                   >
-                                    <X className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                                    <X className="h-3.5 w-3.5" />
                                   </Button>
                                 </div>
                               ) : (
                                 <>
                                   <SidebarMenuButton
+                                        data-chat-row-id={chat.id}
                                         isActive={currentChatId === chat.id && isAgentsHomePath(pathname)}
                                         aria-current={currentChatId === chat.id && isAgentsHomePath(pathname) ? 'page' : undefined}
                                         title={isTruncated ? displayTitle : undefined}
@@ -2110,7 +2184,7 @@ export function AppSidebar() {
                                                 the native browser tooltip keeps it free of layout
                                                 cost and works on touch via long-press. */}
                                             <span
-                                              className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover:opacity-0"
+                                              className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover/chat-row:opacity-0 group-has-[:focus-visible]/chat-row:opacity-0 group-has-[[data-state=open]]/chat-row:opacity-0"
                                               title={(() => {
                                                 try {
                                                   const d = new Date(chat.updatedAt)
@@ -2134,7 +2208,10 @@ export function AppSidebar() {
                                         size="sm"
                                         className={cn(
                                           CHAT_ROW_SLOT,
-                                          "opacity-100 text-muted-foreground md:opacity-0 transition-opacity md:group-hover:opacity-100",
+                                          // Reveal is keyed to hover capability (not width) so touch
+                                          // tablets always see it; keyboard focus inside the row and
+                                          // an open menu keep it visible on hover devices too.
+                                          "opacity-100 text-muted-foreground transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/chat-row:opacity-100 group-has-[:focus-visible]/chat-row:opacity-100 data-[state=open]:opacity-100",
                                         )}
                                         aria-label="Acciones del chat"
                                         onClick={(e) => e.stopPropagation()}
@@ -2261,6 +2338,15 @@ export function AppSidebar() {
                           </span>
                         </div>
                       )
+
+                      if (!hasVisibleChats && searchingOlderChats) {
+                        return (
+                          <div className="flex items-center justify-center gap-2 px-3 py-5 text-xs text-muted-foreground">
+                            <ThinkingIndicator size="xs" />
+                            Buscando en chats anteriores…
+                          </div>
+                        )
+                      }
 
                       if (!hasVisibleChats) {
                         return (
@@ -2397,12 +2483,16 @@ export function AppSidebar() {
                         state === "closed" && "hidden" ? "h-6 w-6" : "h-9 w-9",
                       )}
                     >
-                      <AvatarImage src={user?.avatar || "/placeholder.svg"} />
+                      {/* No placeholder image: without a photo Radix renders the initials. */}
+                      <AvatarImage src={user?.avatar || undefined} />
                       <AvatarFallback>
-                        {user?.name
-                          ?.split(" ")
+                        {(user?.name || user?.email || "")
+                          .split(/\s+/)
+                          .filter(Boolean)
+                          .slice(0, 2)
                           .map((n) => n[0])
-                          .join("") || "U"}
+                          .join("")
+                          .toUpperCase() || "U"}
                       </AvatarFallback>
                     </Avatar>
                     <div
@@ -2412,11 +2502,11 @@ export function AppSidebar() {
                       )}
                     >
                       <span className="text-sm font-medium truncate">
-                        {user?.name || "Admin User"}
+                        {user?.name || user?.email?.split("@")[0] || "Cuenta"}
                       </span>
                       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <span className="truncate">
-                          {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : user?.plan || t("freePlan")}
+                          {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : isPaidPlanCode(user?.plan) ? planDisplayName(user?.plan) : t("freePlan")}
                         </span>
                         <CreditsBadge />
                       </span>
@@ -2468,6 +2558,8 @@ export function AppSidebar() {
                       if (isMobile) setOpenMobile(false)
                       setTimeout(() => openSettings("general"), 0)
                     }}
+                    onPointerEnter={() => { void loadSettingsDialog() }}
+                    onFocus={() => { void loadSettingsDialog() }}
                     className={LG_ITEM}
                   >
                     <Settings className="mr-2 h-4 w-4" />
@@ -2567,7 +2659,9 @@ export function AppSidebar() {
       />
 
       {/* Floating settings modal (Claude-style) — opened from the user menu */}
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
+      {settingsEverOpened && (
+        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
+      )}
 
       {/* #44 — Confirmación accesible de borrado de chat. Sustituye al
           window.confirm() nativo: foco teclado correcto, ESC y click

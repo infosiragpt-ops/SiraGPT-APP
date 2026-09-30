@@ -291,12 +291,32 @@ import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import { useSidebar } from "@/components/ui/sidebar"
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
-import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
-import { SourcesPanel } from "@/components/sources-panel"
-import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
-import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
+import type { DocumentPreviewTarget } from "./document-preview"
 import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
-import { CodePreview } from "./code-preview"
+// Paneles condicionales (artefacto, fuentes, voz, vista previa de
+// documento y de código): ninguno es visible al abrir /agentes, así que
+// salen del bundle inicial y se cargan al abrirse.
+const SidePanelLoading = () => <div className="h-full border-l border-border/40 bg-background" />
+const ArtifactPanel = dynamic(
+  () => import("@/components/chat/ArtifactPanel").then(m => m.ArtifactPanel),
+  { ssr: false, loading: SidePanelLoading },
+)
+const SourcesPanel = dynamic(
+  () => import("@/components/sources-panel").then(m => m.SourcesPanel),
+  { ssr: false, loading: SidePanelLoading },
+)
+const GrokVoicePanel = dynamic(
+  () => import("@/components/chat/grok-voice-panel").then(m => m.GrokVoicePanel),
+  { ssr: false, loading: SidePanelLoading },
+)
+const DocumentPreview = dynamic(
+  () => import("./document-preview").then(m => m.DocumentPreview),
+  { ssr: false, loading: () => null },
+)
+const CodePreview = dynamic(
+  () => import("./code-preview").then(m => m.CodePreview),
+  { ssr: false, loading: () => null },
+)
 import SpotifyResults from "./spotify-results"
 // Panel "Computer Use": solo aparece cuando el usuario activa esa
 // herramienta. Lo bajamos a dynamic para sacarlo del bundle inicial.
@@ -315,7 +335,19 @@ const ChatAgentComputerPanel = dynamic(
 )
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
-import { WordConnector } from "./WordConnector"
+// Conector de Word: forwardRef pesado (TipTap/ProseMirror). Igual que
+// Excel: React.lazy (reenvía refs) + Suspense en el callsite, con prefetch
+// al pasar por el interruptor del menú.
+const WordConnector = React.lazy(() =>
+  import("./WordConnector").then(m => ({ default: m.WordConnector })),
+)
+let __wordConnectorModulePromise: Promise<typeof import("./WordConnector")> | null = null
+function prefetchWordConnector() {
+  if (typeof window === "undefined") return
+  if (!__wordConnectorModulePromise) {
+    __wordConnectorModulePromise = import("./WordConnector")
+  }
+}
 // Conector de Excel: forwardRef pesado. next/dynamic no propaga refs,
 // así que usamos React.lazy + Suspense en el callsite. La carga se
 // dispara cuando el usuario activa la herramienta o pasa el ratón
@@ -1150,10 +1182,11 @@ function SearchActivityPanel({ activity, onClose, onSave }: { activity: SearchAc
               <div key={entry.id} className="relative pl-6">
                 <span className={cn(
                   "absolute left-0 top-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-background",
-                  entry.status === "complete" && "bg-emerald-500",
-                  entry.status === "running" && "bg-sky-500",
-                  entry.status === "warning" && "bg-amber-500",
-                  entry.status === "error" && "bg-red-500",
+                  // Monochrome: status reads from fill/shape, color only for errors.
+                  entry.status === "complete" && "bg-foreground",
+                  entry.status === "running" && "bg-foreground/40 motion-safe:animate-pulse",
+                  entry.status === "warning" && "border-2 border-foreground bg-background",
+                  entry.status === "error" && "bg-destructive",
                 )} />
                 {entryIndex < activity.entries.length - 1 && (
                   <span className="absolute left-[4px] top-5 h-[calc(100%+0.75rem)] w-px bg-border/60" />
@@ -3015,7 +3048,12 @@ const ActiveToolsDisplay = ({
           <Switch checked={isSpotifyActive} onCheckedChange={handleSpotifyToggle} />
         </div>
       </DropdownMenuItem>
-      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
+      <DropdownMenuItem
+        className="chat-active-apps-menu-item"
+        onSelect={(e) => e.preventDefault()}
+        onMouseEnter={prefetchWordConnector}
+        onFocus={prefetchWordConnector}
+      >
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
             <OfficeFileIcon kind="word" size={16} className="h-4 w-4 shrink-0" title="Word" />
@@ -4072,7 +4110,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       localStorage.setItem("currentChatId", data.chat.id);
       window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat");
+      toast.error(error instanceof TypeError ? "Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo." : (error instanceof Error && error.message) || "No se pudo crear el chat");
     }
   }, [currentChat?.customGpt?.id, currentChat?.customGptId]);
 
@@ -4285,7 +4323,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       localStorage.setItem("currentChatId", data.chat.id);
       window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat de la empresa");
+      toast.error(error instanceof TypeError ? "Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo." : (error instanceof Error && error.message) || "No se pudo crear el chat de la empresa");
     }
   }, [currentChat?.project?.id, currentChat?.projectId, projectName, activeProjectModelName]);
 
@@ -5240,6 +5278,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 const WORK_MODE_STORAGE_KEY = 'sira:chat:work-mode';
 
 const EMPTY_CHAT_MESSAGES: any[] = []
+const EMPTY_WORKSPACE_IMAGES: readonly WorkspaceImage[] = Object.freeze([])
+type VoiceStudioChatFile = { id: string; name: string; mimeType: string | null; size?: number | null }
+const EMPTY_VOICE_STUDIO_CHAT_FILES: readonly VoiceStudioChatFile[] = Object.freeze([])
 
 type ChatMessageListProps = {
   messages: any[]
@@ -5297,89 +5338,88 @@ const ChatMessageList = React.memo(function ChatMessageList({
 
     return { stableMessages: stable, streamingMessage: streaming }
   }, [isStreaming, rawMessages])
+  // The live answer is appended to the SAME keyed list as the settled
+  // messages, so when the stream ends it keeps its fiber (no remount, no
+  // flash, no iframe/image reload, no lost trace/fold state). The Virtuoso
+  // threshold counts the live item too, so the renderer never switches at
+  // completion.
+  const renderItems = React.useMemo(
+    () => (streamingMessage ? [...stableMessages, streamingMessage] : stableMessages),
+    [stableMessages, streamingMessage],
+  )
+  const liveMessageId = streamingMessage?.id ?? null
   const imageMessageScrollRef = React.useRef<import('react-virtuoso').VirtuosoHandle>(null)
+  // `renderItems` is a new array on every token flush, so the focus request
+  // is handled once per `request`; otherwise it would re-center the old image
+  // and steal focus from the composer on every streaming frame.
+  const handledImageFocusRef = React.useRef<number | null>(null)
+  const imageFocusFrameRef = React.useRef<number | null>(null)
+  React.useEffect(() => () => {
+    if (imageFocusFrameRef.current !== null) cancelAnimationFrame(imageFocusFrameRef.current)
+  }, [])
   React.useEffect(() => {
-    if (!focusImageMessage) return
-    const index = stableMessages.findIndex(message => message.id === focusImageMessage.id)
+    if (!focusImageMessage || handledImageFocusRef.current === focusImageMessage.request) return
+    const index = renderItems.findIndex(message => message.id === focusImageMessage.id)
     if (index < 0) return
+    handledImageFocusRef.current = focusImageMessage.request
     imageMessageScrollRef.current?.scrollToIndex({ index, align: 'center', behavior: 'auto' })
-    const frame = requestAnimationFrame(() => {
-      const element = Array.from(document.querySelectorAll<HTMLElement>('[data-message-id]')).find(node => node.dataset.messageId === focusImageMessage.id)
+    const targetId = focusImageMessage.id
+    if (imageFocusFrameRef.current !== null) cancelAnimationFrame(imageFocusFrameRef.current)
+    imageFocusFrameRef.current = requestAnimationFrame(() => {
+      imageFocusFrameRef.current = null
+      const element = Array.from(document.querySelectorAll<HTMLElement>('[data-message-id]')).find(node => node.dataset.messageId === targetId)
       element?.scrollIntoView({ block: 'center', behavior: 'auto' })
       element?.focus({ preventScroll: true })
     })
-    return () => cancelAnimationFrame(frame)
-  }, [focusImageMessage, stableMessages])
+  }, [focusImageMessage, renderItems])
+
+  const renderItem = (message: any) => {
+    const live = message.id === liveMessageId
+    // Same element type at every keyed position: only the class and the
+    // aria attributes toggle. No nested aria-live here: the parent
+    // role="log" already announces additions (and is aria-busy while
+    // streaming), so screen readers do not read every frame twice.
+    return (
+      <div
+        key={message.id}
+        className={live ? "streaming-message" : undefined}
+        role={live ? "region" : undefined}
+        aria-busy={live || undefined}
+        aria-label={live ? "Respuesta del asistente en progreso" : undefined}
+      >
+        <ErrorBoundary label={`message:${message.id}`}>
+          <MessageComponent
+            message={message}
+            user={user}
+            onRegenerate={onRegenerate}
+            onBranch={live ? undefined : onBranch}
+            updateMessageInChat={updateMessageInChat}
+            isStreaming={live}
+            onToggleSplitView={onToggleSplitView}
+            onDocumentPreview={onDocumentPreview}
+            onAttachmentPreview={onAttachmentPreview}
+            onImagePreview={onImagePreview}
+            onOpenSources={live ? undefined : onOpenSources}
+          />
+        </ErrorBoundary>
+      </div>
+    )
+  }
 
   return (
     <>
-      {radixViewport && stableMessages.length > 40 ? (
+      {radixViewport && renderItems.length > 40 ? (
         <Virtuoso
           ref={imageMessageScrollRef}
-          data={stableMessages}
+          data={renderItems}
           customScrollParent={radixViewport}
+          initialTopMostItemIndex={{ index: 'LAST', align: 'end' }}
           computeItemKey={(_, message) => message.id}
           increaseViewportBy={400}
-          itemContent={(_, message) => (
-            <ErrorBoundary key={message.id} label={`message:${message.id}`}>
-              <MessageComponent
-                message={message}
-                user={user}
-                onRegenerate={onRegenerate}
-                onBranch={onBranch}
-                updateMessageInChat={updateMessageInChat}
-                isStreaming={false}
-                onToggleSplitView={onToggleSplitView}
-                onDocumentPreview={onDocumentPreview}
-                onAttachmentPreview={onAttachmentPreview}
-                onImagePreview={onImagePreview}
-                onOpenSources={onOpenSources}
-              />
-            </ErrorBoundary>
-          )}
+          itemContent={(_, message) => renderItem(message)}
         />
       ) : (
-        stableMessages.map((message) => (
-          <ErrorBoundary key={message.id} label={`message:${message.id}`}>
-            <MessageComponent
-              message={message}
-              user={user}
-              onRegenerate={onRegenerate}
-              onBranch={onBranch}
-              updateMessageInChat={updateMessageInChat}
-              isStreaming={false}
-              onToggleSplitView={onToggleSplitView}
-              onDocumentPreview={onDocumentPreview}
-              onAttachmentPreview={onAttachmentPreview}
-                onImagePreview={onImagePreview}
-              onOpenSources={onOpenSources}
-            />
-          </ErrorBoundary>
-        ))
-      )}
-      {streamingMessage && (
-        <div
-          className="streaming-message"
-          role="region"
-          aria-live="polite"
-          aria-atomic="false"
-          aria-label="Respuesta del asistente en progreso"
-        >
-          <ErrorBoundary label={`message:${streamingMessage.id}:stream`}>
-            <MessageComponent
-              key={streamingMessage.id}
-              message={streamingMessage}
-              user={user}
-              onRegenerate={onRegenerate}
-              updateMessageInChat={updateMessageInChat}
-              isStreaming={true}
-              onToggleSplitView={onToggleSplitView}
-              onDocumentPreview={onDocumentPreview}
-              onAttachmentPreview={onAttachmentPreview}
-                onImagePreview={onImagePreview}
-            />
-          </ErrorBoundary>
-        </div>
+        renderItems.map(renderItem)
       )}
     </>
   )
@@ -5519,13 +5559,42 @@ function ChatInterfaceContent() {
   // Runs AFTER the project-prefill effect so an explicit project draft
   // still wins. Each chat id is restored at most once per mount; further
   // typing is captured by handleTextareaChange below.
+  // Leaving a real conversation swaps in the destination's own draft (or
+  // empty): the previous chat's text is already saved under its own key
+  // (useChatDraft snapshots the key on save), and carrying it over would
+  // save/send it in the wrong chat. New chat → created chat keeps today's
+  // carry-over, except an untouched `__new__` draft restored while the
+  // chat was still loading (reload of /agentes/<id>), which is replaced.
+  const restoredNewDraftRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const scope = currentChat?.id ?? "__new__"
-    if (lastRestoredDraftScopeRef.current === scope) return
+    const previousScope = lastRestoredDraftScopeRef.current
+    if (previousScope === scope) return
     lastRestoredDraftScopeRef.current = scope
     const saved = chatDraft.loadInitial()
+    const untouchedNewDraft = restoredNewDraftRef.current
+    restoredNewDraftRef.current = null
+    const isRealScope = (value: string | null) =>
+      !!value && value !== "__new__" && !value.startsWith("temp-chat-")
+    if (isRealScope(previousScope)) {
+      setInput(saved && saved.trim() ? saved : "")
+      // Real chat → "__new__" (e.g. while the next chat loads): mark the
+      // restored new-chat draft as untouched so the destination's own draft
+      // replaces it instead of the new-chat text leaking into that chat.
+      if (scope === "__new__" && saved && saved.trim()) restoredNewDraftRef.current = saved
+      return
+    }
+    if (previousScope === "__new__" && isRealScope(scope) && untouchedNewDraft) {
+      setInput(prev => {
+        if (prev === untouchedNewDraft) return saved && saved.trim() ? saved : ""
+        return prev.trim() || !(saved && saved.trim()) ? prev : saved
+      })
+      return
+    }
     if (saved && saved.trim()) {
+      // Only an exact match with this value counts as "untouched" later.
+      if (scope === "__new__") restoredNewDraftRef.current = saved
       setInput(prev => (prev.trim() ? prev : saved))
     }
   }, [currentChat?.id, chatDraft])
@@ -5747,6 +5816,9 @@ function ChatInterfaceContent() {
   // Universal-ingest bookkeeping: chips cancelled mid-upload (their XHR
   // result must not resurrect them) + content-hash dedup of attachments.
   const cancelledTempIdsRef = React.useRef<Set<string>>(new Set());
+  // In-flight upload requests keyed by chip tempId, so removing the chip
+  // ("Cancelar subida") actually aborts the transfer instead of hiding it.
+  const uploadAbortByTempRef = React.useRef(new Map<string, { controller: AbortController; tempIds: string[] }>());
   const attachmentHashesRef = React.useRef<Set<string>>(new Set());
   const attachmentHashByIdRef = React.useRef<Map<string, string>>(new Map());
 
@@ -5958,15 +6030,29 @@ function ChatInterfaceContent() {
   // during composition or it scrambles the in-flight character.
   const isComposingRef = React.useRef(false);
 
+  // Stick-to-bottom intent. True while the conversation should follow new
+  // content; any upward gesture (wheel, touch drag, PageUp/ArrowUp/Home)
+  // detaches it at once, and it re-arms only when the user returns to the
+  // very bottom or presses the pill / sends / switches chat.
+  const followRef = React.useRef(true);
+  // Epoch ms of the last upward gesture: a scroll event that lands a few
+  // pixels from the bottom right after it must not re-arm the follow.
+  const lastDetachAtRef = React.useRef(0);
+  // While streaming (Infinity) and ~1.5 s after it ends, content that grows
+  // without a scroll event (final renderers, images, Shiki) stays pinned.
+  const followUntilRef = React.useRef(0);
+
   // Auto-scroll to bottom function
   const scrollToBottom = React.useCallback(() => {
+    followRef.current = true;
     if (scrollAreaRef.current) {
       const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
       if (scrollContainer) {
-        // Use setTimeout to ensure the DOM has updated before scrolling
-        setTimeout(() => {
+        // Next frame: the DOM has updated and the scroll lands before paint
+        // (setTimeout could paint one frame short of the bottom).
+        requestAnimationFrame(() => {
           scrollContainer.scrollTop = scrollContainer.scrollHeight;
-        }, 0);
+        });
       }
     }
   }, []);
@@ -6006,18 +6092,67 @@ function ChatInterfaceContent() {
   const [isAtBottom, setIsAtBottom] = React.useState(true);
   React.useEffect(() => {
     if (!radixViewport) return;
+    const detach = () => {
+      followRef.current = false;
+      lastDetachAtRef.current = Date.now();
+    };
+    let lastTop = radixViewport.scrollTop;
+    let lastHeight = radixViewport.scrollHeight;
     const onScroll = () => {
-      const distance = radixViewport.scrollHeight - radixViewport.scrollTop - radixViewport.clientHeight;
+      const { scrollTop, scrollHeight, clientHeight } = radixViewport;
+      const distance = scrollHeight - scrollTop - clientHeight;
+      // Scrollbar-thumb drags, Space/Shift+Space, find-in-page and
+      // scrollIntoView (image focus) move the view up without a wheel,
+      // touch or key event on the viewport. Any upward move away from the
+      // bottom detaches, except the browser clamping/anchoring after the
+      // content shrank.
+      if (scrollTop < lastTop - 1 && scrollHeight >= lastHeight && distance > 4) detach();
+      lastTop = scrollTop;
+      lastHeight = scrollHeight;
       setIsAtBottom(distance < 96);
+      if (distance < 4 && Date.now() - lastDetachAtRef.current > 250) followRef.current = true;
+    };
+    const onResize = () => {
+      // Content grew or shrank without a scroll event: keep following while
+      // streaming or just after it, and refresh isAtBottom so the pill shows
+      // when the end of the answer is out of view.
+      if (followRef.current && Date.now() < followUntilRef.current) {
+        radixViewport.scrollTop = radixViewport.scrollHeight;
+      }
+      onScroll();
+    };
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) detach(); };
+    let touchStartY: number | null = null;
+    const onTouchStart = (e: TouchEvent) => { touchStartY = e.touches[0]?.clientY ?? null; };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY;
+      // Finger moving down = content moving up to earlier text.
+      if (touchStartY !== null && typeof y === 'number' && y > touchStartY + 2) detach();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      // Caret keys inside an editable field (inline message edit) do not scroll.
+      const target = e.target as HTMLElement | null;
+      if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
+      if (e.key === 'PageUp' || e.key === 'ArrowUp' || e.key === 'Home') detach();
     };
     onScroll();
     radixViewport.addEventListener('scroll', onScroll, { passive: true });
+    radixViewport.addEventListener('wheel', onWheel, { passive: true });
+    radixViewport.addEventListener('touchstart', onTouchStart, { passive: true });
+    radixViewport.addEventListener('touchmove', onTouchMove, { passive: true });
+    radixViewport.addEventListener('keydown', onKey);
     const ro = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(onScroll)
+      ? new ResizeObserver(onResize)
       : null;
     ro?.observe(radixViewport);
+    const content = radixViewport.firstElementChild;
+    if (content) ro?.observe(content);
     return () => {
       radixViewport.removeEventListener('scroll', onScroll);
+      radixViewport.removeEventListener('wheel', onWheel);
+      radixViewport.removeEventListener('touchstart', onTouchStart);
+      radixViewport.removeEventListener('touchmove', onTouchMove);
+      radixViewport.removeEventListener('keydown', onKey);
       ro?.disconnect();
     };
   }, [radixViewport]);
@@ -6025,10 +6160,11 @@ function ChatInterfaceContent() {
   // Lote D · #26 — Smart auto-scroll durante streaming.
   // Si el usuario YA está al final cuando llegan tokens nuevos, lo
   // pegamos al fondo automáticamente para que la respuesta se vea
-  // creciendo. Si subió a leer mensajes anteriores (isAtBottom=false),
-  // NO lo arrastramos al fondo — el pill "Nuevos mensajes" ya le da
-  // el control de cuándo volver. En cuanto vuelve manualmente al
-  // fondo, isAtBottom pasa a true y este efecto reanuda el follow.
+  // creciendo. Al primer gesto hacia arriba (rueda, arrastre táctil,
+  // RePág/↑/Inicio) followRef se suelta y NO lo arrastramos al fondo —
+  // el pill "Nuevos mensajes" ya le da el control de cuándo volver. En
+  // cuanto vuelve manualmente al fondo (o pulsa el pill), el follow se
+  // reanuda.
   //
   // Disparador: el contenido de la última burbuja (la que está
   // recibiendo tokens). Usamos su longitud como proxy barato sin
@@ -6042,15 +6178,27 @@ function ChatInterfaceContent() {
   }, [isCurrentChatStreaming, currentChat?.messages]);
 
   React.useEffect(() => {
-    if (!isCurrentChatStreaming) return;
-    if (!isAtBottom) return;
-    scrollToBottom();
-  }, [streamingContentLen, isCurrentChatStreaming, isAtBottom, scrollToBottom]);
+    if (!isCurrentChatStreaming || !radixViewport) return;
+    if (!followRef.current) return;
+    const id = requestAnimationFrame(() => {
+      // Re-checked in the frame: a wheel-up between the token and the frame wins.
+      if (followRef.current) radixViewport.scrollTop = radixViewport.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [streamingContentLen, isCurrentChatStreaming, radixViewport]);
 
   React.useEffect(() => {
+    if (isCurrentChatStreaming) followUntilRef.current = Number.POSITIVE_INFINITY;
+    else if (wasStreamingRef.current) followUntilRef.current = Date.now() + 1500;
     if (wasStreamingRef.current && !isCurrentChatStreaming) {
       try {
-        chatLogEndRef.current?.focus({ preventScroll: true })
+        // Only move focus to the end of the log when nothing else owns it:
+        // a user typing the next prompt keeps the composer (and the mobile
+        // keyboard stays open).
+        const active = (typeof document !== 'undefined' ? document.activeElement : null) as HTMLElement | null
+        const typing = !!active && (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName) || active.isContentEditable)
+        const focusIsIdle = !active || active === document.body || !!scrollAreaRef.current?.contains(active)
+        if (!typing && focusIsIdle) chatLogEndRef.current?.focus({ preventScroll: true })
       } catch { /* ignore */ }
     }
     wasStreamingRef.current = isCurrentChatStreaming
@@ -6576,6 +6724,14 @@ function ChatInterfaceContent() {
     if (html === '<p></p>' && chat.wordContent) target.updateContent(chat.wordContent);
     return true;
   }, []);
+  // The Word editor is lazy-loaded, so its handle can arrive after the
+  // hydration timers fired; it is also re-assigned once TipTap mounts
+  // (useImperativeHandle deps are [editor]). Hydrate on each assignment.
+  const setWordConnectorRef = React.useCallback((handle: NonNullable<typeof wordConnectorRef.current> | null) => {
+    wordConnectorRef.current = handle;
+    const chat = currentChatRef.current as any;
+    if (handle && chat?.isWordConnectorChat && chat.wordContent) hydrateWordConnector(chat);
+  }, [hydrateWordConnector]);
   const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
   const [isRewriting, setIsRewriting] = React.useState(false);
 
@@ -7162,7 +7318,14 @@ But first, you need to connect your Spotify account securely using the button be
   const [documentPreviewUrl, setDocumentPreviewUrl] = React.useState<DocumentPreviewTarget | null>(null);
   const [imageWorkspaceTarget, setImageWorkspaceTarget] = React.useState<WorkspaceImage | null>(null);
   const [imageMessageFocus, setImageMessageFocus] = React.useState<{ id: string; request: number } | null>(null);
-  const workspaceImages = React.useMemo(() => imageAssetsFromMessages(currentChat?.messages || [], currentChat?.id), [currentChat?.messages, currentChat?.id]);
+  // Only parse the conversation's images while the workspace is open: messages
+  // change identity on every streamed token flush.
+  const workspaceImages = React.useMemo(
+    () => imageWorkspaceTarget
+      ? imageAssetsFromMessages(currentChat?.messages || [], currentChat?.id)
+      : (EMPTY_WORKSPACE_IMAGES as WorkspaceImage[]),
+    [imageWorkspaceTarget, currentChat?.messages, currentChat?.id],
+  );
   const openImageWorkspace = React.useCallback((asset: WorkspaceImage) => setImageWorkspaceTarget(asset), []);
   const focusImageMessage = React.useCallback((asset: WorkspaceImage) => {
     setImageWorkspaceTarget(null);
@@ -7476,7 +7639,7 @@ But first, you need to connect your Spotify account securely using the button be
   const [shareUrl, setShareUrl] = React.useState<string | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
 
-  // Global Cmd/Ctrl + / opens the keyboard shortcuts help modal. We attach
+  // Global Cmd/Ctrl + ? opens the keyboard shortcuts help modal. We attach
   // at the window level so it works regardless of which child has focus,
   // and skip when the user is mid-IME composition or inside a
   // contenteditable that should claim the slash key.
@@ -7484,7 +7647,10 @@ But first, you need to connect your Spotify account securely using the button be
     function onKey(e: KeyboardEvent) {
       const isAccel = e.metaKey || e.ctrlKey;
       if (!isAccel) return;
-      if (e.key !== "/" && e.key !== "?") return;
+      // Cmd/Ctrl + / belongs to the global KeyboardShortcutsProvider (theme
+      // toggle). The chat help uses Cmd/Ctrl + ? (Shift + /) so the two never
+      // fire together.
+      if (e.key !== "?" && !(e.key === "/" && e.shiftKey)) return;
       // Avoid stealing the chord while typing inside a textarea where the
       // user might want a literal "/" — but only if no modifier is held.
       // (Here both modifiers are required, so we always toggle.)
@@ -7844,6 +8010,10 @@ But first, you need to connect your Spotify account securely using the button be
 
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
     const currentlyStacked = surface?.dataset.composerStacked === "true";
+    // Collapsing to 0px resets the internal scroll; remember where the user was
+    // so editing an earlier line of a long draft doesn't jump to the end.
+    const prevScrollTop = textarea.scrollTop;
+    const caretAtEnd = (textarea.selectionEnd ?? textarea.value.length) >= textarea.value.length;
     textarea.style.height = "0px";
     let contentScrollHeight = textarea.scrollHeight;
     let measured = applyComposerTextareaMetrics(
@@ -7875,8 +8045,10 @@ But first, you need to connect your Spotify account securely using the button be
     if (heightChanged || overflowChanged) {
       textareaLayoutRef.current = { height: measured.height, overflowY: measured.overflowY };
     }
-    if (measured.overflowY === "auto" && document.activeElement === textarea) {
-      textarea.scrollTop = textarea.scrollHeight;
+    if (measured.overflowY === "auto") {
+      textarea.scrollTop = caretAtEnd && document.activeElement === textarea
+        ? textarea.scrollHeight
+        : prevScrollTop;
     }
 
     const nextOverflow = shouldShowComposerExpandControl({
@@ -8769,7 +8941,20 @@ But first, you need to connect your Spotify account securely using the button be
             shouldPrioritizeStopButton={shouldPrioritizeStopButton}
             pendingStop={pendingStop}
             isCurrentChatStreaming={isCurrentChatStreaming}
-            onSend={handleSend}
+            onSend={() => {
+              void handleSend();
+              // Keep the caret in the composer after a mouse send (pointer
+              // devices only, so phones don't pop the keyboard back up).
+              if (typeof window === "undefined") return;
+              if (!window.matchMedia?.("(hover: hover) and (pointer: fine)").matches) return;
+              window.requestAnimationFrame(() => {
+                const active = document.activeElement as HTMLElement | null;
+                // Only reclaim focus if it was dropped (body) or is still on the
+                // send/stop disc; never steal it from a dialog handleSend opened.
+                if (active && active !== document.body && !active.closest(".composer-send-button, .composer-stop-button")) return;
+                textareaRef.current?.focus({ preventScroll: true });
+              });
+            }}
             onStop={stopActiveGeneration}
           />
         </div>
@@ -8956,29 +9141,42 @@ But first, you need to connect your Spotify account securely using the button be
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isWordConnectorActive, currentChat?.id, hydrateWordConnector]);
 
+  // URL → chat sync. The conversation id in the URL (/agentes/<id> or ?id=)
+  // is applied once per distinct value, so a later pick in the sidebar or
+  // "Nuevo chat" is not undone by the URL still pointing at the old chat.
+  // Runs every render (a cheap string parse) so an in-app navigation that
+  // only changes the query string is still seen.
+  const consumedUrlChatIdRef = React.useRef<string | null>(null);
+  const pendingUrlChatIdRef = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (chatCreationInitiated.current) {
-      return;
-    }
-
-    const urlChatId = typeof window !== 'undefined'
-      ? conversationIdFromLocation(window.location.pathname, window.location.search)
-      : null;
-    if (urlChatId && currentChat?.id !== urlChatId) {
+    if (chatCreationInitiated.current || typeof window === 'undefined') return;
+    const urlChatId = conversationIdFromLocation(window.location.pathname, window.location.search);
+    // A URL without a chat id (e.g. /agentes after "Nuevo chat") forgets the
+    // consumed one, so Back to /agentes/<same id> selects it again.
+    if (!urlChatId) consumedUrlChatIdRef.current = null;
+    if (!urlChatId || urlChatId === consumedUrlChatIdRef.current) return;
+    consumedUrlChatIdRef.current = urlChatId;
+    if (currentChat?.id !== urlChatId) {
+      pendingUrlChatIdRef.current = urlChatId;
       selectChat(urlChatId);
-      return;
     }
+  });
 
-    if (currentChat) {
+  // Fallback: no chat open and no URL chat loading → reopen the last chat.
+  React.useEffect(() => {
+    if (chatCreationInitiated.current) return;
+    if (currentChat?.id) {
+      // A chat is open (the URL one or one the user picked): nothing pending.
+      pendingUrlChatIdRef.current = null;
       return;
     }
+    // A URL chat is still loading: don't race it with the saved one.
+    if (pendingUrlChatIdRef.current) return;
 
-    const savedChatId = localStorage.getItem('currentChatId');
-    if (savedChatId) {
-      selectChat(savedChatId)
-      return;
-    }
-  }, [currentChat, createNewChat, availableModels, selectedModel, selectChat]);
+    let savedChatId: string | null = null;
+    try { savedChatId = localStorage.getItem('currentChatId'); } catch { /* storage blocked */ }
+    if (savedChatId) selectChat(savedChatId);
+  }, [currentChat?.id, selectChat]);
 
   // Note: Legacy shared chat handling has been removed.
   // Shared content is now handled exclusively by the /share pages which
@@ -9165,6 +9363,11 @@ But first, you need to connect your Spotify account securely using the button be
         const chunk = uploadChunks[chunkIndex];
         const chunkTemps = chunk.temps;
         const chunkTempIds = new Set(chunkTemps.map(tf => tf.tempId));
+        // Every chip of this sub-batch was removed before it started: skip it.
+        if (chunkTemps.length > 0 && chunkTemps.every(tf => cancelledTempIdsRef.current.has(tf.tempId))) continue;
+        const chunkAbort = new AbortController();
+        const chunkAbortEntry = { controller: chunkAbort, tempIds: chunkTemps.map(tf => tf.tempId) };
+        chunkTemps.forEach(tf => uploadAbortByTempRef.current.set(tf.tempId, chunkAbortEntry));
 
         try {
           // Real upload progress via XHR (see lib/api.ts uploadFiles).
@@ -9180,12 +9383,14 @@ But first, you need to connect your Spotify account securely using the button be
           const response: any = chunk.isolated && chunk.files.length === 1 && shouldUseChunkedUpload(chunk.files[0])
             ? await apiClient.uploadFileChunked(chunk.files[0], {
               sourceChannel,
+              signal: chunkAbort.signal,
               onProgress: reportChunkProgress,
             })
             : await apiClient.uploadFiles(filesToFileList(chunk.files), {
               sourceChannel,
               idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
               asyncProcessing: true,
+              signal: chunkAbort.signal,
               onProgress: reportChunkProgress,
             });
 
@@ -9244,10 +9449,23 @@ But first, you need to connect your Spotify account securely using the button be
           // do not resurrect it when the XHR completes.
           }).filter((m: any, idx: number) => !cancelledTempIdsRef.current.has(chunkTemps[idx]?.tempId));
           setUploadedFiles((cur: any[]) => {
-            const next = [
-              ...cur.filter((f: any) => !chunkTempIds.has(f.tempId)),
-              ...merged,
-            ];
+            const byTemp = new Map(merged.map((m: any) => [m.tempId, m]));
+            // Swap each temp chip in place and only if it is still in the
+            // composer, so drop order and manual reordering are kept, and a
+            // chip removed or cleared (e.g. by Nuevo chat) is never brought back.
+            let keptChunkTemp = false;
+            const next = cur.map((f: any) => {
+              if (!chunkTempIds.has(f.tempId)) return f;
+              keptChunkTemp = true;
+              return byTemp.get(f.tempId)
+                ?? { ...f, status: 'failed', uploadError: 'Respuesta sin archivos' };
+            });
+            // Server entries with no temp chip of their own (more files than
+            // were sent) are still appended, as before, while the batch is
+            // still in the composer.
+            if (keptChunkTemp) {
+              merged.forEach((m: any) => { if (!chunkTempIds.has(m.tempId)) next.push(m); });
+            }
             uploadedFilesRef.current = next;
             return next;
           });
@@ -9286,6 +9504,9 @@ But first, you need to connect your Spotify account securely using the button be
             });
           }, 500);
         } catch (chunkError: any) {
+          // Cancelled by the user (every chip removed): no failure toast, the
+          // chips are already gone.
+          if (chunkError?.name === 'AbortError' && chunkTemps.every(tf => cancelledTempIdsRef.current.has(tf.tempId))) continue;
           failedChunkCount += 1;
           console.error('File upload chunk failed:', chunkError);
           const reason = chunkError?.message || 'Error de subida';
@@ -9295,6 +9516,8 @@ But first, you need to connect your Spotify account securely using the button be
             return next;
           });
           toast.error(reason);
+        } finally {
+          chunkTemps.forEach(tf => uploadAbortByTempRef.current.delete(tf.tempId));
         }
       }
 
@@ -9389,7 +9612,14 @@ But first, you need to connect your Spotify account securely using the button be
   // Drag and Drop event handlers with drag counter to prevent flickering
   const dragCounter = React.useRef(0);
 
+  // Only real file drags show the drop overlay; dragging selected text or a
+  // link into the composer keeps the browser's native insertion.
+  const dtHasFiles = (dt: DataTransfer | null | undefined) => !!dt?.types && Array.from(dt.types).includes('Files');
+  const isEditableDropTarget = (t: EventTarget | null) =>
+    t instanceof HTMLElement && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable);
+
   const handleDrag = (e: React.DragEvent) => {
+    if (!dtHasFiles(e.dataTransfer) && isEditableDropTarget(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
   };
@@ -9398,7 +9628,7 @@ But first, you need to connect your Spotify account securely using the button be
     e.preventDefault();
     e.stopPropagation();
     dragCounter.current++;
-    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+    if (dtHasFiles(e.dataTransfer)) {
       setIsDragging(true);
     }
   };
@@ -9413,6 +9643,11 @@ But first, you need to connect your Spotify account securely using the button be
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    if (!dtHasFiles(e.dataTransfer)) {
+      setIsDragging(false);
+      dragCounter.current = 0;
+      if (isEditableDropTarget(e.target)) return; // native text/URL insertion
+    }
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
@@ -9485,6 +9720,12 @@ But first, you need to connect your Spotify account securely using the button be
     };
     const onDrop = (e: DragEvent) => {
       if (!e.dataTransfer) return;
+      const target = e.target;
+      if (
+        !Array.from(e.dataTransfer.types || []).includes('Files') &&
+        target instanceof HTMLElement &&
+        (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable)
+      ) return;
       e.preventDefault();
       setIsDragging(false);
       dragCounter.current = 0;
@@ -9577,7 +9818,18 @@ But first, you need to connect your Spotify account securely using the button be
     const cd = native.clipboardData;
     if (!cd) return;
 
-    const { files, text, html } = extractFromClipboardEvent(native, { includeHtml: true });
+    const extracted = extractFromClipboardEvent(native, { includeHtml: true });
+    const { text, html } = extracted;
+    // Excel/Office copies carry a PNG rendition of the cells next to
+    // text/plain + text/html. Treat that as a text/table paste (Markdown
+    // table or long-paste chip), not as an image attachment. Only nameless
+    // clipboard blobs qualify ("pasted…" synthesized, or Chrome's "image.png").
+    const officeRendition =
+      extracted.files.length === 1 &&
+      extracted.files[0].type.startsWith('image/') &&
+      /^(pasted[.-]|image\.[a-z0-9]+$)/i.test(extracted.files[0].name) &&
+      !!html && !!text?.trim();
+    const files = officeRendition ? [] : extracted.files;
 
     // ─── No files — route by content through the universal router ────
     if (files.length === 0) {
@@ -9684,7 +9936,11 @@ But first, you need to connect your Spotify account securely using the button be
       // Prevent default so the OS file path string doesn't get pasted
       // as text next to the file. Then handle text ourselves if present.
       if ('preventDefault' in e) e.preventDefault();
-      if (text) insertTextAtCaret(text);
+      // Finder/Explorer copies carry the file name(s) as text/plain — don't echo them.
+      const acceptedNames = new Set(accepted.map(f => f.name));
+      const echoesNames = !!text && text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+        .every(line => acceptedNames.has(line) || acceptedNames.has(line.split(/[\\/]/).pop() || ''));
+      if (text && !echoesNames) insertTextAtCaret(text);
       handleAndUploadFiles(filesToFileList(accepted), channel);
     }
   }, [handleAndUploadFiles, insertTextAtCaret]);
@@ -9711,6 +9967,13 @@ But first, you need to connect your Spotify account securely using the button be
       // text paste), we don't want the doc-level handler stealing it.
       const target = e.target as HTMLElement | null;
       if (target && (target as HTMLTextAreaElement) === textareaRef.current) return;
+      // Only act as a fallback when no other editable field has focus, so a
+      // screenshot pasted into the edit-message textarea, a dialog input or a
+      // contenteditable is never stolen into the composer.
+      if (target instanceof Element && (
+        (target as HTMLElement).isContentEditable ||
+        target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
+      )) return;
 
       const cd = e.clipboardData;
       if (!cd) return;
@@ -9814,10 +10077,24 @@ But first, you need to connect your Spotify account securely using the button be
     if (!item) return;
     persistComposerQueue();
     syncQueuedCount(chatId);
-    setInput(item.msg);
-    chatDraft.save(item.msg);
-    uploadedFilesRef.current = item.files;
-    setUploadedFiles(item.files);
+    // Merge with what the user is composing right now instead of overwriting
+    // it: the queued message goes first, the in-progress draft after it.
+    const currentDraft = inputRef.current ?? "";
+    const nextInput = currentDraft.trim() ? `${item.msg}\n\n${currentDraft}` : item.msg;
+    inputRef.current = nextInput;
+    setInput(nextInput);
+    chatDraft.save(nextInput);
+    const currentFiles = uploadedFilesRef.current || [];
+    const seenFileIds = new Set<string>();
+    const mergedFiles = [...(item.files || []), ...currentFiles].filter((file: any) => {
+      const id = resolveUploadFileId(file);
+      if (!id) return true;
+      if (seenFileIds.has(id)) return false;
+      seenFileIds.add(id);
+      return true;
+    });
+    uploadedFilesRef.current = mergedFiles;
+    setUploadedFiles(mergedFiles);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   }, [chatDraft, persistComposerQueue, setUploadedFiles, syncQueuedCount]);
 
@@ -10046,11 +10323,13 @@ But first, you need to connect your Spotify account securely using the button be
   //
   // `/goal` remains a meta-action. `/research` creates or reuses a chat and
   // persists both the query and the scientific result card.
-  const runSlashCommand = React.useCallback(async (slash: { command: string; remainder: string }) => {
+  // Resolves true only when the command produced its result; false tells
+  // handleSend to give the user's text back to the composer.
+  const runSlashCommand = React.useCallback(async (slash: { command: string; remainder: string }): Promise<boolean> => {
     const query = slash.remainder.trim();
     if (!query) {
-      toast.info(`Add a query after /${slash.command} (e.g. /${slash.command} latest progress in X)`);
-      return;
+      toast.info(`Escribe una consulta después de /${slash.command} (p. ej. /${slash.command} avances en X)`);
+      return false;
     }
     const token = (typeof window !== "undefined" ? localStorage.getItem("token") : null) || "";
 
@@ -10089,7 +10368,7 @@ But first, you need to connect your Spotify account securely using the button be
             body: JSON.stringify({ query, limit: 25, unpaywall: true }),
           });
           const res = await authenticatedFetch(url, request);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
           const data = await res.json();
           // Rank by citations (most-cited first) for the student; nulls last.
           const ranked = Array.isArray(data.papers)
@@ -10117,12 +10396,13 @@ But first, you need to connect your Spotify account securely using the button be
               duration: 4000,
               description: "Ordenados por número de citas ↓",
             });
-          } else {
-            toast.error(`Sin resultados para “${query}”. Prueba términos en inglés o más específicos.`, {
-              id: toastId,
-              duration: 6000,
-            });
+            return true;
           }
+          toast.error(`Sin resultados para “${query}”. Prueba términos en inglés o más específicos.`, {
+            id: toastId,
+            duration: 6000,
+          });
+          return false;
         } else {
           // /goal → SSE stream the agent phases
           const request = await apiClient.prepareMutatingFetch({
@@ -10131,7 +10411,7 @@ But first, you need to connect your Spotify account securely using the button be
             body: JSON.stringify({ query, depth: "standard" }),
           });
           const res = await authenticatedFetch(url, request);
-          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+          if (!res.ok || !res.body) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
           const reader = res.body.getReader();
           const decoder = new TextDecoder();
           let buf = "";
@@ -10168,23 +10448,29 @@ But first, you need to connect your Spotify account securely using the button be
               description: "Reporte copiado al portapapeles — pégalo en el chat para discutirlo.",
             });
             await copyTextSafe(lastReport.report);
-          } else {
-            toast.error(`⚠️ Goal terminado sin reporte`, { id: toastId });
+            return true;
           }
+          toast.error(`⚠️ Goal terminado sin reporte`, { id: toastId });
+          return false;
         }
       } catch (err: any) {
-        toast.error(`/${slash.command} failed: ${err?.message || err}`, { id: toastId, duration: 6000 });
+        // Never leak the transport status ("HTTP 502") or English copy.
+        const msg = /^HTTP \d+$/.test(String(err?.message || "")) || !err?.message
+          ? `No se pudo completar /${slash.command}. Vuelve a intentarlo en unos segundos.`
+          : friendlyGenerateError(err);
+        toast.error(msg, { id: toastId, duration: 6000 });
+        return false;
       }
-      return;
     }
 
     if (slash.command === "summarize") {
       toast.info(`/summarize "${query.slice(0, 80)}..."`);
       // Future: route to a summarization endpoint with current chat + attachments
-      return;
+      return false;
     }
 
     toast.error(`Comando desconocido: /${slash.command}`);
+    return false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectChat]);
 
@@ -10224,12 +10510,16 @@ But first, you need to connect your Spotify account securely using the button be
     const slash = parseSlashPrefix(rawMsg);
     if (slash) {
       setInput("");
+      let ok = false;
       try {
-        await runSlashCommand(slash);
-        markQueuedSendSucceeded();
+        ok = await runSlashCommand(slash);
       } catch (err: any) {
-        toast.error(`Slash command failed: ${err?.message || err}`);
+        toast.error(friendlyGenerateError(err) || `No se pudo completar /${slash.command}.`);
       }
+      // A queued slash is consumed either way (retrying it would loop).
+      if (ok || queuedSend) markQueuedSendSucceeded();
+      // Give the text back when the command did not produce a result.
+      if (!ok) setInput(prev => prev || rawMsg);
       return;
     }
 
@@ -12395,12 +12685,45 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (isComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
       return
     }
+    // A capture-phase popover (slash menu, @-mention picker) already consumed this key.
+    if (e.nativeEvent.defaultPrevented) return
     // El textarea queda libre durante el streaming (paridad Claude); Enter
     // no dispara un segundo turno mientras el actual sigue en curso.
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
       if (isCurrentChatLocalJobBusy) return
       handleSend()
+    } else if (
+      e.key === "ArrowUp" &&
+      !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey &&
+      !input &&
+      (uploadedFiles?.length ?? 0) === 0
+    ) {
+      // ↑ con el compositor vacío: recupera el último mensaje en cola o, si
+      // no hay cola, el último mensaje enviado para editarlo y reenviarlo.
+      const chatId = currentChatIdRef.current ?? null
+      const hasQueued = pendingMsgQueueRef.current.some(
+        (q) => q.chatId === chatId && !queueDrainClaimsRef.current.has(q.id),
+      )
+      if (hasQueued) {
+        e.preventDefault()
+        restoreLastQueuedMessage()
+        return
+      }
+      const messages = Array.isArray(currentChat?.messages) ? currentChat.messages : []
+      const lastUser = [...messages]
+        .reverse()
+        .find((m: any) => m?.role === "user" && typeof m.content === "string" && m.content.trim())
+      if (!lastUser) return
+      e.preventDefault()
+      const text = lastUser.content as string
+      inputRef.current = text
+      setInput(text)
+      chatDraft.save(text)
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (el) el.setSelectionRange(text.length, text.length)
+      })
     } else if (e.key === "Escape") {
       // Esc cascade — peel one layer of context per press so the user
       // can back out without reaching for the mouse:
@@ -12428,6 +12751,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // the XHR completion merge doesn't resurrect the chip, and free its
       // dedup hash so the user can re-attach the same file later.
       if (removed?.tempId) cancelledTempIdsRef.current.add(removed.tempId);
+      // Abort the transfer once every chip sharing its request is removed
+      // (large media always travels alone, so it aborts at once).
+      const inflight = removed?.tempId ? uploadAbortByTempRef.current.get(removed.tempId) : undefined;
+      if (inflight && inflight.tempIds.every(id => cancelledTempIdsRef.current.has(id))) inflight.controller.abort();
       const removedHash = removed ? attachmentHashByIdRef.current.get(removed.tempId || removed.id) : null;
       if (removedHash) {
         attachmentHashesRef.current.delete(removedHash);
@@ -12616,7 +12943,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
-  const coworkMobileFullscreen = Boolean((codePanelOpen || coworkPanelOpen || computerPanelOpen) && isSidebarMobile);
+  // On phones every right-pane tenant (Fuentes, search activity, audio,
+  // Word/Excel, artifacts) takes the full screen: a desktop split cannot fit.
+  const coworkMobileFullscreen = Boolean(rightPanelActive && isSidebarMobile);
   const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
@@ -12701,6 +13030,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeArtifact,
   ]);
 
+  // Handoff bookkeeping: each takeover posts its chat message once and opens
+  // the computer panel once (the poll re-reports an active takeover every tick).
+  const postedHandoffKeysRef = React.useRef(new Set<string>());
+  const openedHandoffKeyRef = React.useRef<string | null>(null);
+
   const injectHandoffChat = React.useCallback((detail: LoginHandoffDetail) => {
     const chatId = String(detail.conversationId || currentChatIdRef.current || "").trim();
     if (!detail.active || !chatId) return;
@@ -12714,12 +13048,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         messages: [...(prev.messages || []), buildHandoffAssistantMessage(chatId, chatMessage, detail)],
       };
     });
+    const postKey = `login-handoff:${chatId}:${detail.kind || "gate"}`;
+    if (postedHandoffKeysRef.current.has(postKey)) return;
+    postedHandoffKeysRef.current.add(postKey);
     void apiClient.addMessage(chatId, {
       role: "ASSISTANT",
       content: chatMessage,
       metadata: { type: "computer_login_handoff", kind: detail.kind, site: detail.site },
-      idempotencyKey: `login-handoff:${chatId}:${detail.kind || "gate"}`,
-    }).catch(() => undefined);
+      idempotencyKey: postKey,
+    }).catch(() => { postedHandoffKeysRef.current.delete(postKey); });
   }, [setCurrentChat]);
 
   const openCodePanel = React.useCallback(async () => {
@@ -12827,9 +13164,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         setLoginHandoffActive(true);
         if (detail.site) setLoginHandoffSite(String(detail.site));
         if (detail.kind) setLoginHandoffKind(String(detail.kind));
-        openComputerPanel();
+        // Open the panel only when this takeover first becomes active, so a
+        // user who closes it is not forced back on every poll tick.
+        const openKey = `${id || openId}:${detail.kind || "gate"}`;
+        if (openedHandoffKeyRef.current !== openKey) {
+          openedHandoffKeyRef.current = openKey;
+          openComputerPanel();
+        }
         injectHandoffChat(detail);
       } else {
+        openedHandoffKeyRef.current = null;
         setLoginHandoffActive(false);
       }
     };
@@ -12841,7 +13185,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const chatId = String(currentChat?.id || "").trim();
     if (!chatId || typeof window === "undefined") return;
     let cancelled = false;
+    let inFlight = false;
     const pull = async () => {
+      // One request at a time (the 12 s timeout outlives the interval), and
+      // none while the tab is hidden or the device is offline.
+      if (inFlight || cancelled) return;
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+      inFlight = true;
       try {
         const api = getSameOriginApiBaseUrl().replace(/\/+$/, "");
         const res = await authenticatedFetch(
@@ -12854,7 +13205,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           setLoginHandoffActive(true);
           if (body.site) setLoginHandoffSite(String(body.site));
           if (body.kind) setLoginHandoffKind(String(body.kind));
-          openComputerPanel();
+          const openKey = `${chatId}:${body.kind ? String(body.kind) : "gate"}`;
+          if (openedHandoffKeyRef.current !== openKey) {
+            openedHandoffKeyRef.current = openKey;
+            openComputerPanel();
+          }
           const detail = {
             active: true,
             conversationId: chatId,
@@ -12867,18 +13222,31 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           };
           emitLoginHandoff(detail);
           injectHandoffChat(detail);
+        } else if (body && body.active === false) {
+          // A later takeover opens the panel again.
+          openedHandoffKeyRef.current = null;
         }
       } catch {
         /* handoff poll is best-effort */
+      } finally {
+        inFlight = false;
       }
     };
+    // Poll fast only while a takeover can actually happen (computer panel
+    // open, computer use on, a turn streaming or a takeover in progress).
+    const fast = computerPanelOpen || isComputerUseActive || isCurrentChatStreaming || loginHandoffActive;
     void pull();
-    const timer = window.setInterval(() => void pull(), 2500);
+    const timer = window.setInterval(() => void pull(), fast ? 2500 : 15000);
+    const onWake = () => { if (document.visibilityState !== "hidden") void pull(); };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
     };
-  }, [currentChat?.id, openComputerPanel, computerPanelOpen, injectHandoffChat]);
+  }, [currentChat?.id, openComputerPanel, computerPanelOpen, isComputerUseActive, isCurrentChatStreaming, loginHandoffActive, injectHandoffChat]);
 
   // Shared props bundle for <ActionsDropdown /> (the "+" tools button).
   // It renders in two spots: inline with the textarea while NO tool is
@@ -12960,7 +13328,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     syncChatLayoutVars();
 
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(scheduleSync);
+      const readStacked = () =>
+        (textareaRef.current?.closest("[data-testid='chat-composer-surface']") as HTMLElement | null)?.dataset.composerStacked;
+      let lastTextareaWidth = textareaRef.current?.clientWidth ?? 0;
+      let lastStacked = readStacked();
+      resizeObserver = new ResizeObserver(() => {
+        const width = textareaRef.current?.clientWidth ?? 0;
+        const stacked = readStacked();
+        if (width !== lastTextareaWidth) {
+          // Re-measure the draft only for external width changes (panel,
+          // sidebar, window) so re-wrapped lines are never clipped; skip the
+          // width change caused by our own stacked-layout toggle.
+          if (stacked === lastStacked) scheduleComposerTextareaResize();
+          lastTextareaWidth = width;
+        }
+        lastStacked = stacked;
+        scheduleSync();
+      });
       if (chatHeaderRef.current) resizeObserver.observe(chatHeaderRef.current);
       if (chatComposerDockRef.current) resizeObserver.observe(chatComposerDockRef.current);
       if (textareaRef.current) resizeObserver.observe(textareaRef.current);
@@ -12975,7 +13359,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       window.removeEventListener("resize", scheduleSync);
       window.removeEventListener("orientationchange", scheduleSync);
     };
-  }, [syncChatLayoutVars, isInitial, hasActiveTools, rightPanelActive]);
+  }, [syncChatLayoutVars, scheduleComposerTextareaResize, isInitial, hasActiveTools, rightPanelActive]);
 
   const handleWebSearch = async (searchQuery: string) => {
     if (!searchQuery) {
@@ -13413,7 +13797,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // Files already attached in this chat (chunked uploads included) so the
   // studio can dub/transcribe media above the direct-upload limit.
   const voiceStudioChatFiles = React.useMemo(() => {
-    const out: Array<{ id: string; name: string; mimeType: string | null; size?: number | null }> = []
+    // Closed studio: skip the per-frame parse of every message's files.
+    if (!voiceStudioOpen) return EMPTY_VOICE_STUDIO_CHAT_FILES as VoiceStudioChatFile[]
+    const out: VoiceStudioChatFile[] = []
     const seen = new Set<string>()
     for (const message of currentChat?.messages || []) {
       for (const file of parseMessageFilesForRender((message as any)?.files) as any[]) {
@@ -13429,7 +13815,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
     }
     return out
-  }, [currentChat?.messages])
+  }, [voiceStudioOpen, currentChat?.messages])
   const ensureVoiceStudioChatId = React.useCallback(async (): Promise<string | null> => {
     if (currentChat?.id) return currentChat.id
     try {
@@ -14510,6 +14896,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       role="log"
                       aria-live="polite"
                       aria-relevant="additions"
+                      aria-busy={isCurrentChatStreaming}
                       className="chat-log chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full"
                     >
                       <ChatMessageList
@@ -14531,7 +14918,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         ref={chatLogEndRef}
                         className="chat-log-end sr-only"
                         tabIndex={-1}
-                        aria-hidden="true"
                       />
                     </div>
                   </ScrollArea>
@@ -14876,17 +15262,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 />
               )}
               {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isWordConnectorActive && (
-                <WordConnector
-                  ref={wordConnectorRef}
-                  onClose={() => setIsWordConnectorActive(false)}
-                  selectedModel={selectedModel}
-                  selectProvider={selectProvider}
-                  isGeneratingExternal={isGeneratingWord}
-                  isFullPage={true}
-                  onTextSelected={(text) => {
-                    setSelectedWordText(text);
-                  }}
-                />
+                <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>
+                  <WordConnector
+                    ref={setWordConnectorRef}
+                    onClose={() => setIsWordConnectorActive(false)}
+                    selectedModel={selectedModel}
+                    selectProvider={selectProvider}
+                    isGeneratingExternal={isGeneratingWord}
+                    isFullPage={true}
+                    onTextSelected={(text) => {
+                      setSelectedWordText(text);
+                    }}
+                  />
+                </React.Suspense>
               )}
               {!codePanelOpen && !coworkPanelOpen && !computerPanelOpen && !showAudioPanel && !activeSearchActivity && !composerPreviewAttachment && !sidePreviewAttachment && isExcelConnectorActive && (
                 <React.Suspense fallback={<div className="h-full w-full animate-pulse bg-muted/30" aria-hidden="true" />}>

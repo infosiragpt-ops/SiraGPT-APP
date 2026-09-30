@@ -62,6 +62,7 @@ import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-san
 import { normalizeMathDelimiters } from '@/lib/markdown/normalize-math'
 import MemoMarkdownBlock from '@/components/markdown/memo-markdown-block'
 import { splitStableHead } from '@/lib/markdown-block-split'
+import { repairStreamingTail } from '@/lib/markdown/repair-streaming-tail'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';
@@ -486,26 +487,34 @@ function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => v
             </span>
         );
     }
+    // A real button so keyboard / screen-reader users can open the image
+    // workspace too (an <img onClick> is neither focusable nor activatable).
     return (
-        <img
-            src={imageUrl}
-            alt={file.name || file.originalName || "Image"}
-            className="chat-user-image max-h-[350px] rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-            style={naturalWidth ? { ["--img-natural-width" as string]: `${naturalWidth}px` } : undefined}
+        <button
+            type="button"
             onClick={() => onOpen(imageUrl)}
-            onLoad={(event) => {
-                const width = event.currentTarget.naturalWidth;
-                if (width > 0) setNaturalWidth(width);
-            }}
-            onError={(event) => {
-                if (attempt + 1 < candidates.length) {
-                    setAttempt(attempt + 1);
-                    return;
-                }
-                event.currentTarget.removeAttribute("src");
-                setFailed(true);
-            }}
-        />
+            aria-label={`Ampliar imagen ${file.name || file.originalName || ""}`.trim()}
+            className="block max-w-full p-0 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        >
+            <img
+                src={imageUrl}
+                alt={file.name || file.originalName || "Image"}
+                className="chat-user-image max-h-[350px] rounded-lg hover:opacity-90 transition-opacity"
+                style={naturalWidth ? { ["--img-natural-width" as string]: `${naturalWidth}px` } : undefined}
+                onLoad={(event) => {
+                    const width = event.currentTarget.naturalWidth;
+                    if (width > 0) setNaturalWidth(width);
+                }}
+                onError={(event) => {
+                    if (attempt + 1 < candidates.length) {
+                        setAttempt(attempt + 1);
+                        return;
+                    }
+                    event.currentTarget.removeAttribute("src");
+                    setFailed(true);
+                }}
+            />
+        </button>
     );
 }
 
@@ -636,7 +645,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
     // If there's an image, show only the chart with hover download/edit controls
     if (imageUrl) {
         return (
-            <div className="mt-3 relative inline-block w-full group">
+            <div className="mt-3 relative inline-block w-full group/chart">
                 <img
                     src={imageUrl}
                     alt="Generated chart"
@@ -645,7 +654,10 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
                 />
 
                 {/* Hover controls */}
-                <div className="absolute top-3 right-3 z-20 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 pointer-events-none">
+                {/* Named group so hovering the message text no longer reveals
+                    it; always visible on touch (no hover), revealed on hover
+                    or keyboard focus on pointer devices. */}
+                <div className="absolute top-3 right-3 z-20 flex flex-col gap-2 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/chart:opacity-100 focus-within:opacity-100 transition-all duration-300 [@media(hover:hover)]:translate-x-2 [@media(hover:hover)]:group-hover/chart:translate-x-0 focus-within:translate-x-0 pointer-events-none">
                     <Button
                         variant="secondary"
                         size="icon"
@@ -887,6 +899,9 @@ const GeneratedImageCard = ({
 
     const beginSelection = (event: React.PointerEvent<HTMLDivElement>) => {
         if (!editMode) return;
+        // Taps on the action buttons (Ampliar / pincel) must reach their
+        // onClick: capturing the pointer on the frame retargets the click.
+        if ((event.target as HTMLElement | null)?.closest?.("button")) return;
         event.preventDefault();
         event.stopPropagation();
         const point = pointFromEvent(event);
@@ -941,7 +956,7 @@ const GeneratedImageCard = ({
             ref={frameRef}
             className={cn(
                 "group/image relative inline-block overflow-hidden rounded-xl bg-muted/30 shadow-sm",
-                editMode && "cursor-crosshair ring-2 ring-pink-500/60"
+                editMode && "cursor-crosshair touch-none ring-2 ring-pink-500/60"
             )}
             onPointerDown={beginSelection}
             onPointerMove={moveSelection}
@@ -982,7 +997,7 @@ const GeneratedImageCard = ({
                 </div>
             )}
 
-            <div className="absolute right-3 top-3 z-20 flex gap-2 opacity-0 transition-all duration-200 group-hover/image:opacity-100">
+            <div className="absolute right-3 top-3 z-20 flex gap-2 opacity-100 transition-all duration-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/image:opacity-100 focus-within:opacity-100">
                 <button
                     type="button"
                     onClick={(event) => {
@@ -1016,6 +1031,424 @@ const GeneratedImageCard = ({
     );
 };
 
+// Plain text of a hast node (table titles / cells for the expand + export
+// controls).
+const getNodeText = (node: any): string => {
+    if (node.type === 'text') {
+        return node.value;
+    }
+    if (node.children) {
+        return node.children.map(getNodeText).join('');
+    }
+    return '';
+};
+
+type ExpandedTablePayload = { headers: string[]; rows: string[][]; title: string };
+
+type MessageMarkdownProps = {
+    content: string;
+    /** Full message content (TableControls export) — not the displayed slice. */
+    fullContent: string;
+    messageId: string;
+    role: string;
+    isStreaming: boolean;
+    hasAgentTrace: boolean;
+    onDocumentPreview?: (target: DocumentPreviewTarget) => void;
+    canPreview: boolean;
+    onPreview: () => void;
+    onExpandTable: (table: ExpandedTablePayload) => void;
+};
+
+// Optimized message content rendering with performance safeguards.
+// Lives at module scope (not inside MessageComponent) so its identity is
+// stable: an inner component got a new type on every parent render, which
+// remounted the whole markdown tree per streaming frame, per read-aloud
+// tick and per copy/feedback click — defeating MemoMarkdownBlock, dropping
+// Shiki highlighting back to plain <pre>, and clearing text selections.
+const MessageMarkdown = React.memo(function MessageMarkdown({
+    content: rawContent,
+    fullContent,
+    messageId,
+    role,
+    isStreaming,
+    hasAgentTrace,
+    onDocumentPreview,
+    canPreview,
+    onPreview,
+    onExpandTable,
+}: MessageMarkdownProps) {
+    // Normalize `\( \)` / `\[ \]` TeX bracket delimiters (commonly emitted
+    // by LLMs) to `$ $` / `$$ $$` once, up front, so every downstream
+    // branch — direct ReactMarkdown, the streaming head/tail split, and the
+    // memoized block — renders math via KaTeX. Code spans/blocks are left
+    // untouched and the helper is a no-op when no brackets are present.
+    const content = React.useMemo(() => normalizeMathDelimiters(rawContent), [rawContent]);
+
+    // Messages always render at full height — the old "Ver más / Ver
+    // menos" clamp was removed by user request (having to expand every
+    // long answer was friction, not comfort).
+    const contentRef = useRef<HTMLDivElement>(null);
+
+    // Optimized CodeBlock component with performance improvements.
+    // Meta-AI-style artifact routing: when the code is executable
+    // (html with DOCTYPE/html/canvas/svg, or svg/mermaid), mount
+    // the ArtifactCard (inline iframe preview + 4-button rail) in
+    // place of the plain syntax-highlighted block.
+    const CodeBlock = useCallback(({ node, inline, className, children, ...props }: any) => {
+        const match = /language-([\w-]+)/.exec(className || '');
+        // react-markdown v10 no longer sends a reliable `inline` flag (it is
+        // `undefined` for both inline spans and fenced blocks). A fenced
+        // block without language (```\nsiragpt.com\n``` — típico de la
+        // transcripción de imágenes) llegaba aquí sin `match` y caía al
+        // pill inline `bg-muted` dentro de un <pre> oscuro de prose:
+        // texto claro sobre pill claro = invisible en ambos temas.
+        // Heurística: es bloque si trae lenguaje, si react-markdown lo
+        // marcó explícito (inline === false), o si el contenido trae
+        // salto de línea (los fences siempre terminan en \n; el código
+        // inline nunca).
+        const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
+        const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
+        if (isBlock) {
+            const language = match ? match[1] : 'text';
+            const blockClassName = className || 'language-text';
+            const codeString = String(children).replace(/\n$/, '');
+            if (language === 'agent-task-state') {
+                try {
+                    const state = JSON.parse(codeString);
+                    // When the typed AgentTrace timeline is active for this
+                    // message, the sentinel contributes only its artifacts —
+                    // one timeline, not two. Never mount on the user bubble.
+                    if (role !== "ASSISTANT") return null;
+                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={role} messageId={messageId} />;
+                } catch {
+                    return null;
+                }
+            }
+            if (language === 'scientific-papers') {
+                try {
+                    return <PapersResultCard data={JSON.parse(codeString)} />;
+                } catch {
+                    return null;
+                }
+            }
+            if (isExecutableArtifact(language, codeString)) {
+                return <ArtifactCard code={codeString} language={language} />;
+            }
+            return (
+                <CustomCodeBlock className={blockClassName} {...props} canPreview={canPreview} onPreview={onPreview}>
+                    {children}
+                </CustomCodeBlock>
+            );
+        }
+        return (
+            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {children}
+            </code>
+        );
+    }, [role, messageId, hasAgentTrace, onDocumentPreview, canPreview, onPreview]);
+
+    // Tag-renderers that don't depend on streaming/final mode. Kept
+    // as a single useMemo so both maps reuse the same references and
+    // MemoMarkdownBlock can rely on components identity for memoing.
+    const baseComponents = useMemo(() => ({
+        pre: ({ children }: any) => {
+            const child = React.Children.toArray(children)[0]
+            const childProps = React.isValidElement(child) ? (child.props as any) : null
+            // A fenced block's <code> renders its own framed card
+            // (CustomCodeBlock / ArtifactCard / streaming card). Wrapping it
+            // in a prose <pre> painted a second dark padded frame around it
+            // (and nested a <div> inside <pre>). Keep the <pre> only for raw
+            // single-line <pre><code> that stays an inline code span.
+            const childText = Array.isArray(childProps?.children) ? childProps.children.join('') : String(childProps?.children ?? '')
+            const isFencedCode = childProps?.node?.tagName === 'code'
+                && (/(?:^|\s)language-/.test(String(childProps?.className || '')) || /\n/.test(childText))
+            if (isFencedCode || shouldUnwrapInteractiveFence(childProps?.className)) {
+                return <>{children}</>
+            }
+            return <pre>{children}</pre>
+        },
+        p: ({ children }: any) => <p className="text-[17px] leading-[1.65] mb-4">{children}</p>,
+        // Lists and cells pass markdown attributes through: `start` keeps an
+        // interrupted numbered list counting (1. … 2. … instead of 1. … 1.),
+        // GFM column alignment arrives as style.textAlign, and task lists
+        // carry `contains-task-list` / `task-list-item` classes.
+        ul: ({ node, children, className, ...rest }: any) => <ul {...rest} className={cn('mb-4 pl-6 text-[17px] leading-[1.65] [&.contains-task-list]:list-none [&.contains-task-list]:pl-0', className)}>{children}</ul>,
+        ol: ({ node, children, className, ...rest }: any) => <ol {...rest} className={cn('mb-4 pl-6 text-[17px] leading-[1.65]', className)}>{children}</ol>,
+        li: ({ node, children, className, ...rest }: any) => <li {...rest} className={cn('mb-1.5 text-[17px] leading-[1.65]', className)}>{children}</li>,
+        h1: ({ children }: any) => <h1 className="mb-4 font-serif text-2xl font-semibold leading-8">{children}</h1>,
+        h2: ({ children }: any) => <h2 className="mb-3 font-serif text-xl font-semibold leading-7">{children}</h2>,
+        h3: ({ children }: any) => <h3 className="mb-2 font-serif text-lg font-semibold leading-7">{children}</h3>,
+        h4: ({ children }: any) => <h4 className="mb-2 font-serif text-base font-semibold leading-7">{children}</h4>,
+        hr: () => <hr className="my-4 border-muted" />,
+        blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
+        th: ({ node, children, style, ...rest }: any) => <th {...rest} style={style} className="border border-muted px-3 py-2 bg-muted/50 text-left font-sans font-medium text-sm whitespace-nowrap">{children}</th>,
+        td: ({ node, children, style, ...rest }: any) => <td {...rest} className="border border-muted px-3 py-2 font-sans text-sm align-top" style={{ ...style, overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
+        strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
+        em: ({ children }: any) => <em className="italic">{children}</em>,
+        a: ({ href, children, ...props }: any) => {
+            // Only bare-URL link text goes through truncateUrl. Passing
+            // React children blindly broke two cases: nested markdown in
+            // the label ([**SiraGPT** docs](url) → children is an array →
+            // typeof guard returned '' → INVISIBLE link) and long prose
+            // labels with slashes got mangled by the domain/path logic.
+            const single = Array.isArray(children) && children.length === 1 ? children[0] : children;
+            const isBareUrl = typeof single === 'string' && /^(https?:\/\/|www\.)/i.test(single.trim());
+            return (
+                <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
+                    title={href}
+                    {...props}
+                >
+                    {isBareUrl ? truncateUrl(single) : children}
+                </a>
+            );
+        },
+    }), []);
+
+    // Streaming-only map: stable as long as the message id doesn't
+    // change. Crucially does NOT close over `message.content`, so it
+    // survives every token without invalidating MemoMarkdownBlock.
+    const streamingComponents = useMemo(() => ({
+        ...baseComponents,
+        table: ({ children }: any) => (
+            <div className="group relative mt-3">
+                <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
+                    <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                </div>
+                <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
+            </div>
+        ),
+        code: ({ node, inline, className, children, ...props }: any) => {
+            const match = /language-([\w-]+)/.exec(className || '');
+            // Misma heurística que CodeBlock (ver comentario ahí):
+            // en react-markdown v10 `inline` no es fiable y un fence
+            // sin lenguaje debe renderizar como bloque oscuro legible,
+            // nunca como pill inline dentro de un <pre>.
+            const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
+            const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
+            if (isBlock) {
+                const lang = ((match && match[1]) || 'text').toLowerCase();
+                const codeString = String(children).replace(/\n$/, '');
+                if (lang === 'agent-task-state') {
+                    try {
+                        const state = JSON.parse(codeString);
+                        if (role !== "ASSISTANT") return null;
+                        return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={role} messageId={messageId} />;
+                    } catch {
+                        return null;
+                    }
+                }
+                if (lang === 'scientific-papers') {
+                    try {
+                        return <PapersResultCard data={JSON.parse(codeString)} />;
+                    } catch {
+                        return null;
+                    }
+                }
+                const willBeArtifact = isExecutableArtifact(lang, codeString)
+                    || (lang === 'html' && /<!doctype|<html[\s>]/i.test(codeString.slice(0, 200)))
+                    || (lang === 'mermaid')
+                    || (lang === 'svg');
+                if (willBeArtifact) {
+                    return (
+                        <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/70">
+                            <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04]">
+                                <span className="text-[11px] font-sans tracking-wide text-zinc-500">{lang}</span>
+                                <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    Generando artefacto…
+                                </span>
+                            </div>
+                            <div className="relative">
+                                <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-200 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-zinc-950/90 to-transparent" />
+                            </div>
+                        </div>
+                    );
+                }
+                return (
+                    <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/60">
+                        <div className="px-3.5 py-1.5 border-b border-white/[0.04] text-[11px] font-sans tracking-wide text-zinc-500">{lang}</div>
+                        <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
+                    </div>
+                );
+            }
+            return (
+                <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
+            );
+        },
+    // onDocumentPreview is typically stable (callback from parent);
+    // baseComponents is stable. hasAgentTrace flips once when the first
+    // typed tool frame lands — the map must recompute then so the live
+    // sentinel hands the timeline over to AgentTrace.
+    }), [baseComponents, onDocumentPreview, hasAgentTrace, role, messageId]);
+
+    // Final (post-streaming) map: enriches the table with controls
+    // tied to the now-stable full message content. Recomputed only when
+    // streaming ends or the user edits a stored message.
+    const finalComponents = useMemo(() => ({
+        ...baseComponents,
+        table: ({ node, children, ...props }: any) => {
+            let title = '';
+            const parent = node.parent;
+            if (parent) {
+                const tableIndex = parent.children.indexOf(node);
+                for (let i = tableIndex - 1; i >= 0; i--) {
+                    const sibling = parent.children[i];
+                    if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
+                        title = getNodeText(sibling);
+                        break;
+                    }
+                    if (sibling.type !== 'text' || sibling.value.trim() !== '') {
+                        break;
+                    }
+                }
+            }
+
+            const handleExpand = () => {
+                const tHead = node.children.find((child: any) => child.tagName === 'thead');
+                const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+                const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
+                const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
+                onExpandTable({ headers, rows: data, title });
+            };
+            const tHead = node.children.find((child: any) => child.tagName === 'thead');
+            const tBody = node.children.find((child: any) => child.tagName === 'tbody');
+            const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? [];
+            const rows = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
+            const selectedTableData = headers.length > 0
+                ? { headers, rows }
+                : null;
+
+            return (
+                <div className="group relative mt-3">
+                    <TableControls
+                        content={fullContent}
+                        messageId={messageId}
+                        tableData={selectedTableData}
+                        onExpand={handleExpand}
+                        title={title}
+                    />
+                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
+                        <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                    </div>
+                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
+                </div>
+            );
+        },
+        code: CodeBlock,
+    }), [baseComponents, CodeBlock, messageId, fullContent, onExpandTable]);
+
+    const components = isStreaming ? streamingComponents : finalComponents;
+
+    if (role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
+        return null;
+    }
+    // Image-only / video messages skip markdown entirely: the caller
+    // does not mount this component for them.
+
+    const handleRenderedCopy = (event: React.ClipboardEvent<HTMLDivElement>) => {
+        const payload = createWordClipboardPayloadFromSelection(event.currentTarget, content);
+        if (!payload) return;
+
+        setClipboardDataForWord(event.clipboardData, payload);
+        event.preventDefault();
+        toast.success("Selección copiada con formato para Word");
+    };
+
+    return (
+        // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
+        // `prose-sm` adds to the final paragraph — that margin was
+        // pushing the action rail visually too far from the message.
+        // We keep all other prose typography intact. (The class name is a
+        // stable DOM hook; the expand/collapse it once hosted was removed.)
+        <div className="sgpt-message-collapsible">
+          <div className="relative">
+            <div
+                ref={contentRef}
+                className={cn(
+                    "prose prose-base dark:prose-invert max-w-none text-current font-serif text-[17px] leading-[1.65] tracking-[0.005em]",
+                    "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
+                    "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
+                )}
+                data-sgpt-rich-copy-root=""
+                onCopyCapture={handleRenderedCopy}
+            >
+            {(() => {
+                // While streaming, split the assistant content into a
+                // stable "head" (closed blocks) and a "live tail" so
+                // closed paragraphs/code/lists don't get re-parsed and
+                // re-rendered on every incoming token. The head is
+                // wrapped in a React.memo'd block that compares the
+                // content string and the components reference; both
+                // are stable across token deltas thanks to the
+                // streamingComponents useMemo above.
+                const isStreamingAssistant = isStreaming && role === 'ASSISTANT';
+                if (!isStreamingAssistant) {
+                    return (
+                        <ReactMarkdown
+                            remarkPlugins={markdownRemarkPlugins}
+                            rehypePlugins={markdownRehypePlugins}
+                            components={components}
+                        >
+                            {content}
+                        </ReactMarkdown>
+                    );
+                }
+                const { head, tail } = splitStableHead(content);
+                if (!head) {
+                    return (
+                        <ReactMarkdown
+                            remarkPlugins={markdownRemarkPlugins}
+                            rehypePlugins={markdownRehypePlugins}
+                            components={components}
+                        >
+                            {repairStreamingTail(content)}
+                        </ReactMarkdown>
+                    );
+                }
+                return (
+                    <>
+                        <MemoMarkdownBlock content={head} components={components} />
+                        {tail ? (
+                            <ReactMarkdown
+                                remarkPlugins={markdownRemarkPlugins}
+                                rehypePlugins={markdownRehypePlugins}
+                                components={components}
+                            >
+                                {repairStreamingTail(tail)}
+                            </ReactMarkdown>
+                        ) : null}
+                    </>
+                );
+            })()}
+            {isStreaming && role === 'ASSISTANT' ? (
+                <span
+                    aria-hidden="true"
+                    className="premium-caret ml-0.5 inline-block w-[0.5ch] h-[1em] -mb-[0.15em] bg-current align-baseline rounded-[1px]"
+                />
+            ) : null}
+            </div>
+          </div>
+        </div>
+    );
+});
+
+// The on-device NaturalSpeechEngine is a page-wide singleton. Track which
+// message started the current read-aloud so only that message stops it on
+// unmount (Virtuoso unmounts off-screen rows, streaming bubbles unmount at
+// the end of each stream) instead of every unmount cutting the speech off.
+let speechEngineOwner: symbol | null = null;
+
+// Explicit thesis-flow markers only. The old list (19 regexes compiled per
+// call, twice per render) also matched ordinary answers that merely
+// mentioned "Thesis_final.docx" or "Total Sources Found:", which then hid
+// their whole Markdown body behind the thesis card.
+const THESIS_MARKER_RE = /Initializing Thesis Generation|\*\*Searching Academic Sources\*\*|\*\*Generating Thesis Document\*\*|Thesis Generation Completed|\*\*Thesis Generation Error\*\*|Your comprehensive thesis has been generated/i;
+
 const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onImagePreview, onOpenSources, children }: {
     message: any;
     user: any;
@@ -1041,9 +1474,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const [isCopied, setIsCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
-    const [audioProgress, setAudioProgress] = useState(0);
-    const [audioDuration, setAudioDuration] = useState(0);
-    const [showAudioPlayer, setShowAudioPlayer] = useState(false);
+    const speechOwnerIdRef = useRef<symbol>(Symbol('msg-tts'));
+    const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+    useEffect(() => { currentAudioRef.current = currentAudio; }, [currentAudio]);
     const [isLoadingAudio, setIsLoadingAudio] = useState(false);
     const [feedbackSent, setFeedbackSent] = useState(message.feedback || null);
     const [isEditing, setIsEditing] = useState(false);
@@ -1051,7 +1484,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const [imageLoading, setImageLoading] = useState<{ [key: string]: boolean }>({});
     const [imageError, setImageError] = useState<{ [key: string]: boolean }>({});
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
-    const imageLoadedRef = React.useRef<Set<string>>(new Set());
     const [selectedFile, setSelectedFile] = useState<any>(null);
     const [fileContent, setFileContent] = useState<string>("");
     const [isContentLoading, setIsContentLoading] = useState(false);
@@ -1063,26 +1495,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     // Code preview states (now memoized for performance)
 
-    const getNodeText = (node: any): string => {
-        if (node.type === 'text') {
-            return node.value;
-        }
-        if (node.children) {
-            return node.children.map(getNodeText).join('');
-        }
-        return '';
-    };
 
 
-
-    // Video-specific states
-    const [videoLoading, setVideoLoading] = useState(false);
-    const [videoError, setVideoError] = useState(false);
-    const [isVideoPlaying, setIsVideoPlaying] = useState(false);
-    const [videoProgress, setVideoProgress] = useState(0);
-    const [videoDuration, setVideoDuration] = useState(0);
-
-    const videoRef = React.useRef<HTMLVideoElement>(null);
     const { handleTextToSpeech } = useVoiceControls();
 
     const handleViewFile = async (file: any) => {
@@ -1105,10 +1519,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             setIsContentLoading(false);
         }
     };
-
-    useEffect(() => {
-        setEditedContent(message.content);
-    }, [message.content]);
 
     // Handle ESC key to close image modal
     useEffect(() => {
@@ -1150,60 +1560,26 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         onToggleSplitView(content);
     };
 
-    // Cleanup audio when component unmounts. Cancels both the
-    // ElevenLabs <audio> element and any in-flight browser TTS
-    // utterance so navigating away mid-playback doesn't leave the
-    // tab silently talking from another route.
-    useEffect(() => {
-        return () => {
-            if (currentAudio) {
-                currentAudio.pause();
-                setCurrentAudio(null);
-            }
-            if (typeof window !== "undefined" && window.speechSynthesis) {
-                try { window.speechSynthesis.cancel() } catch { /* ignore */ }
-            }
-            // Also reset the NaturalSpeechEngine so its internal queue/state
-            // doesn't leak across route changes.
+    // Cleanup audio when component unmounts. Pauses this message's
+    // ElevenLabs <audio> element and, only when this message is the one
+    // that started the browser TTS, cancels the shared speech engine so
+    // navigating away mid-playback doesn't leave the tab talking. Other
+    // messages unmounting (scroll virtualisation, end of a stream) no
+    // longer cut off a read-aloud started elsewhere.
+    useEffect(() => () => {
+        currentAudioRef.current?.pause();
+        if (speechEngineOwner === speechOwnerIdRef.current) {
+            speechEngineOwner = null;
             if (isSpeechSupported()) {
                 try { getNaturalSpeechEngine().cancel() } catch { /* ignore */ }
             }
-        };
-    }, [currentAudio]);
-
-    // Video event handlers
-    const handleVideoPlay = () => {
-        if (videoRef.current) {
-            videoRef.current.play();
-            setIsVideoPlaying(true);
         }
-    };
-
-    const handleVideoPause = () => {
-        if (videoRef.current) {
-            videoRef.current.pause();
-            setIsVideoPlaying(false);
-        }
-    };
-
-    const handleVideoTimeUpdate = () => {
-        if (videoRef.current) {
-            const progress = (videoRef.current.currentTime / videoRef.current.duration) * 100;
-            setVideoProgress(progress);
-        }
-    };
-
-    const handleVideoLoadedMetadata = () => {
-        if (videoRef.current) {
-            setVideoDuration(videoRef.current.duration);
-        }
-    };
+    }, []);
 
     const downloadVideo = async (filenameOverride?: string) => {
         const targetFilename = filenameOverride || message.videoData?.filename;
         if (targetFilename) {
             try {
-                setVideoLoading(true);
                 // apiClient.downloadVideo returns a URL string, not a blob. We need to fetch the file as a blob.
                 // const downloadUrl = apiClient.downloadVideo(message.videoData.filename);
                 // const response = await fetch(downloadUrl);
@@ -1222,8 +1598,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             } catch (error) {
                 console.error('Download failed:', error);
                 toast.error('Failed to download video');
-            } finally {
-                setVideoLoading(false);
             }
         }
     };
@@ -1497,33 +1871,22 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
         try {
             setIsLoadingAudio(true);
-            setShowAudioPlayer(true);
             // Try ElevenLabs TTS first
             const audio = await handleTextToSpeech(textToSpeak);
             setIsLoadingAudio(false);
             if (audio) {
                 setCurrentAudio(audio);
 
-                // Set up audio event listeners
-                audio.onloadedmetadata = () => {
-                    setAudioDuration(audio.duration);
-                };
-
-                audio.ontimeupdate = () => {
-                    setAudioProgress((audio.currentTime / audio.duration) * 100);
-                };
-
+                // Set up audio event listeners. No progress/duration state:
+                // nothing renders it, and a `timeupdate` setter re-rendered
+                // the whole message ~4×/s while reading aloud.
                 audio.onended = () => {
                     setIsSpeaking(false);
-                    setAudioProgress(0);
-                    setShowAudioPlayer(false);
                     setCurrentAudio(null);
                 };
 
                 audio.onerror = () => {
                     setIsSpeaking(false);
-                    setAudioProgress(0);
-                    setShowAudioPlayer(false);
                     setCurrentAudio(null);
                     setIsLoadingAudio(false);
                     toast.error("Falló la reproducción del audio");
@@ -1549,7 +1912,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             // key, no country-locked cloud provider.
             void error;
             setIsLoadingAudio(false);
-            setShowAudioPlayer(false);
 
             if (!isSpeechSupported()) {
                 setIsSpeaking(false);
@@ -1570,12 +1932,17 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 offEnd();
                 offError();
             };
+            const releaseOwnership = () => {
+                if (speechEngineOwner === speechOwnerIdRef.current) speechEngineOwner = null;
+            };
             const offEnd = engine.on("end", () => {
+                releaseOwnership();
                 setIsSpeaking(false);
                 setCurrentAudio(null);
                 cleanup();
             });
             const offError = engine.on("error", () => {
+                releaseOwnership();
                 setIsSpeaking(false);
                 setCurrentAudio(null);
                 cleanup();
@@ -1585,20 +1952,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             // Optimistically flip the visual state — onstart can be slow on
             // Safari and the user expects immediate feedback on click.
             setIsSpeaking(true);
+            speechEngineOwner = speechOwnerIdRef.current;
             engine.speak(textToSpeak).catch(() => {
+                releaseOwnership();
                 setIsSpeaking(false);
                 cleanup();
             });
-        }
-    };
-
-    const toggleAudioPlayback = () => {
-        if (currentAudio) {
-            if (isSpeaking) {
-                currentAudio.pause();
-            } else {
-                currentAudio.play();
-            }
         }
     };
 
@@ -1611,19 +1970,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         // fallback is what's currently reading.
         if (isSpeechSupported()) {
             try { getNaturalSpeechEngine().cancel() } catch { /* ignore */ }
+            if (speechEngineOwner === speechOwnerIdRef.current) speechEngineOwner = null;
         }
         setIsSpeaking(false);
-        setAudioProgress(0);
-        setShowAudioPlayer(false);
         setCurrentAudio(null);
         setIsLoadingAudio(false);
-    };
-
-    const formatTime = (seconds: number) => {
-        if (isNaN(seconds)) return "0:00";
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
     const parsedFiles: any[] = useMemo(() => {
@@ -1649,374 +2000,18 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
     }, [parsedFiles])
 
-    // Optimized CodeBlock component with performance improvements.
-    // Meta-AI-style artifact routing: when the code is executable
-    // (html with DOCTYPE/html/canvas/svg, or svg/mermaid), mount
-    // the ArtifactCard (inline iframe preview + 4-button rail) in
-    // place of the plain syntax-highlighted block.
-    const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
-        const match = /language-([\w-]+)/.exec(className || '');
-        // react-markdown v10 no longer sends a reliable `inline` flag (it is
-        // `undefined` for both inline spans and fenced blocks). A fenced
-        // block without language (```\nsiragpt.com\n``` — típico de la
-        // transcripción de imágenes) llegaba aquí sin `match` y caía al
-        // pill inline `bg-muted` dentro de un <pre> oscuro de prose:
-        // texto claro sobre pill claro = invisible en ambos temas.
-        // Heurística: es bloque si trae lenguaje, si react-markdown lo
-        // marcó explícito (inline === false), o si el contenido trae
-        // salto de línea (los fences siempre terminan en \n; el código
-        // inline nunca).
-        const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
-        const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
-        if (isBlock) {
-            const language = match ? match[1] : 'text';
-            const blockClassName = className || 'language-text';
-            const codeString = String(children).replace(/\n$/, '');
-            if (language === 'agent-task-state') {
-                try {
-                    const state = JSON.parse(codeString);
-                    // When the typed AgentTrace timeline is active for this
-                    // message, the sentinel contributes only its artifacts —
-                    // one timeline, not two. Never mount on the user bubble.
-                    if (message.role !== "ASSISTANT") return null;
-                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={message.role} messageId={message.id} />;
-                } catch {
-                    return null;
-                }
-            }
-            if (language === 'scientific-papers') {
-                try {
-                    return <PapersResultCard data={JSON.parse(codeString)} />;
-                } catch {
-                    return null;
-                }
-            }
-            if (isExecutableArtifact(language, codeString)) {
-                return <ArtifactCard code={codeString} language={language} />;
-            }
-            return (
-                <CustomCodeBlock className={blockClassName} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
-                    {children}
-                </CustomCodeBlock>
-            );
-        }
-        return (
-            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {children}
-            </code>
-        );
-    };
-
-    // Optimized message content rendering with performance safeguards
-    const MessageContent = ({ content: rawContent }: { content: string }) => {
-        // Normalize `\( \)` / `\[ \]` TeX bracket delimiters (commonly emitted
-        // by LLMs) to `$ $` / `$$ $$` once, up front, so every downstream
-        // branch — direct ReactMarkdown, the streaming head/tail split, and the
-        // memoized block — renders math via KaTeX. Code spans/blocks are left
-        // untouched and the helper is a no-op when no brackets are present.
-        const content = React.useMemo(() => normalizeMathDelimiters(rawContent), [rawContent]);
-        // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
-        // if (isStreaming) {
-        //     return (
-        //         <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
-        //             <p className="mb-3 text-base whitespace-pre-wrap">{message.content}</p>
-        //         </div>
-        //     );
-        // }
-
-
-        // Messages always render at full height — the old "Ver más / Ver
-        // menos" clamp was removed by user request (having to expand every
-        // long answer was friction, not comfort).
-        const contentRef = useRef<HTMLDivElement>(null);
-
-        // Tag-renderers that don't depend on streaming/final mode. Kept
-        // as a single useMemo so both maps reuse the same references and
-        // MemoMarkdownBlock can rely on components identity for memoing.
-        const baseComponents = useMemo(() => ({
-            pre: ({ children }: any) => {
-                const child = React.Children.toArray(children)[0]
-                const childProps = React.isValidElement(child) ? (child.props as any) : null
-                if (shouldUnwrapInteractiveFence(childProps?.className)) {
-                    return <>{children}</>
-                }
-                return <pre>{children}</pre>
-            },
-            p: ({ children }: any) => <p className="text-[17px] leading-[1.65] mb-4">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-[17px] leading-[1.65]">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-[17px] leading-[1.65]">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1.5 text-[17px] leading-[1.65]">{children}</li>,
-            h1: ({ children }: any) => <h1 className="mb-4 font-serif text-2xl font-semibold leading-8">{children}</h1>,
-            h2: ({ children }: any) => <h2 className="mb-3 font-serif text-xl font-semibold leading-7">{children}</h2>,
-            h3: ({ children }: any) => <h3 className="mb-2 font-serif text-lg font-semibold leading-7">{children}</h3>,
-            h4: ({ children }: any) => <h4 className="mb-2 font-serif text-base font-semibold leading-7">{children}</h4>,
-            hr: () => <hr className="my-4 border-muted" />,
-            blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-sans font-medium text-sm whitespace-nowrap">{children}</th>,
-            td: ({ children }: any) => <td className="border border-muted px-3 py-2 font-sans text-sm align-top" style={{ overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
-            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-            em: ({ children }: any) => <em className="italic">{children}</em>,
-            a: ({ href, children, ...props }: any) => {
-                // Only bare-URL link text goes through truncateUrl. Passing
-                // React children blindly broke two cases: nested markdown in
-                // the label ([**SiraGPT** docs](url) → children is an array →
-                // typeof guard returned '' → INVISIBLE link) and long prose
-                // labels with slashes got mangled by the domain/path logic.
-                const single = Array.isArray(children) && children.length === 1 ? children[0] : children;
-                const isBareUrl = typeof single === 'string' && /^(https?:\/\/|www\.)/i.test(single.trim());
-                return (
-                    <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-                        title={href}
-                        {...props}
-                    >
-                        {isBareUrl ? truncateUrl(single) : children}
-                    </a>
-                );
-            },
-        }), []);
-
-        // Streaming-only map: stable as long as the message id doesn't
-        // change. Crucially does NOT close over `message.content`, so it
-        // survives every token without invalidating MemoMarkdownBlock.
-        const streamingComponents = useMemo(() => ({
-            ...baseComponents,
-            table: ({ children }: any) => (
-                <div className="group relative mt-3">
-                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                        <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                    </div>
-                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
-                </div>
-            ),
-            code: ({ node, inline, className, children, ...props }: any) => {
-                const match = /language-([\w-]+)/.exec(className || '');
-                // Misma heurística que CodeBlock (ver comentario ahí):
-                // en react-markdown v10 `inline` no es fiable y un fence
-                // sin lenguaje debe renderizar como bloque oscuro legible,
-                // nunca como pill inline dentro de un <pre>.
-                const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
-                const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
-                if (isBlock) {
-                    const lang = ((match && match[1]) || 'text').toLowerCase();
-                    const codeString = String(children).replace(/\n$/, '');
-                    if (lang === 'agent-task-state') {
-                        try {
-                            const state = JSON.parse(codeString);
-                            if (message.role !== "ASSISTANT") return null;
-                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={message.role} messageId={message.id} />;
-                        } catch {
-                            return null;
-                        }
-                    }
-                    if (lang === 'scientific-papers') {
-                        try {
-                            return <PapersResultCard data={JSON.parse(codeString)} />;
-                        } catch {
-                            return null;
-                        }
-                    }
-                    const willBeArtifact = isExecutableArtifact(lang, codeString)
-                        || (lang === 'html' && /<!doctype|<html[\s>]/i.test(codeString.slice(0, 200)))
-                        || (lang === 'mermaid')
-                        || (lang === 'svg');
-                    if (willBeArtifact) {
-                        return (
-                            <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/70">
-                                <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04]">
-                                    <span className="text-[11px] font-sans tracking-wide text-zinc-500">{lang}</span>
-                                    <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
-                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                        Generando artefacto…
-                                    </span>
-                                </div>
-                                <div className="relative">
-                                    <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-200 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-zinc-950/90 to-transparent" />
-                                </div>
-                            </div>
-                        );
-                    }
-                    return (
-                        <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/60">
-                            <div className="px-3.5 py-1.5 border-b border-white/[0.04] text-[11px] font-sans tracking-wide text-zinc-500">{lang}</div>
-                            <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                        </div>
-                    );
-                }
-                return (
-                    <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
-                );
-            },
-        // onDocumentPreview is typically stable (callback from parent);
-        // baseComponents is stable. hasAgentTrace flips once when the first
-        // typed tool frame lands — the map must recompute then so the live
-        // sentinel hands the timeline over to AgentTrace.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        }), [baseComponents, onDocumentPreview, hasAgentTrace]);
-
-        // Final (post-streaming) map: enriches the table with controls
-        // tied to the now-stable message.content. Recomputed only when
-        // streaming ends or the user edits a stored message.
-        const finalComponents = useMemo(() => ({
-            ...baseComponents,
-            table: ({ node, children, ...props }: any) => {
-                let title = '';
-                const parent = node.parent;
-                if (parent) {
-                    const tableIndex = parent.children.indexOf(node);
-                    for (let i = tableIndex - 1; i >= 0; i--) {
-                        const sibling = parent.children[i];
-                        if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
-                            title = getNodeText(sibling);
-                            break;
-                        }
-                        if (sibling.type !== 'text' || sibling.value.trim() !== '') {
-                            break;
-                        }
-                    }
-                }
-
-                const handleExpand = () => {
-                    const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                    const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                    const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
-                    const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-                    setTableHeaders(headers);
-                    setTableData(data);
-                    setTableTitle(title);
-                    setIsTableExpanded(true);
-                };
-                const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? [];
-                const rows = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-                const selectedTableData = headers.length > 0
-                    ? { headers, rows }
-                    : null;
-
-                return (
-                    <div className="group relative mt-3">
-                        <TableControls
-                            content={message.content}
-                            messageId={message.id}
-                            tableData={selectedTableData}
-                            onExpand={handleExpand}
-                            title={title}
-                        />
-                        <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                            <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                        </div>
-                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
-                    </div>
-                );
-            },
-            code: CodeBlock,
-        // CodeBlock is recreated per MessageComponent render but content
-        // and id only stabilize after streaming, where we actually use
-        // this map; keep deps explicit.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        }), [baseComponents, CodeBlock, message.id, message.content]);
-
-        const components = isStreaming ? streamingComponents : finalComponents;
-
-        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
-            return null;
-        }
-        // Don't render markdown for image-only messages to improve performance
-        if (isImageOnlyMessage() || isVideoMessage) {
-            return null;
-        }
-
-        const handleRenderedCopy = (event: React.ClipboardEvent<HTMLDivElement>) => {
-            const payload = createWordClipboardPayloadFromSelection(event.currentTarget, content);
-            if (!payload) return;
-
-            setClipboardDataForWord(event.clipboardData, payload);
-            event.preventDefault();
-            toast.success("Selección copiada con formato para Word");
-        };
-
-        return (
-            // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
-            // `prose-sm` adds to the final paragraph — that margin was
-            // pushing the action rail visually too far from the message.
-            // We keep all other prose typography intact. (The class name is a
-            // stable DOM hook; the expand/collapse it once hosted was removed.)
-            <div className="sgpt-message-collapsible">
-              <div className="relative">
-                <div
-                    ref={contentRef}
-                    className={cn(
-                        "prose prose-base dark:prose-invert max-w-none text-current font-serif text-[17px] leading-[1.65] tracking-[0.005em]",
-                        "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
-                        "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
-                    )}
-                    data-sgpt-rich-copy-root=""
-                    onCopyCapture={handleRenderedCopy}
-                >
-                {(() => {
-                    // While streaming, split the assistant content into a
-                    // stable "head" (closed blocks) and a "live tail" so
-                    // closed paragraphs/code/lists don't get re-parsed and
-                    // re-rendered on every incoming token. The head is
-                    // wrapped in a React.memo'd block that compares the
-                    // content string and the components reference; both
-                    // are stable across token deltas thanks to the
-                    // streamingComponents useMemo above.
-                    const isStreamingAssistant = isStreaming && message.role === 'ASSISTANT';
-                    if (!isStreamingAssistant) {
-                        return (
-                            <ReactMarkdown
-                                remarkPlugins={markdownRemarkPlugins}
-                                rehypePlugins={markdownRehypePlugins}
-                                components={components}
-                            >
-                                {content}
-                            </ReactMarkdown>
-                        );
-                    }
-                    const { head, tail } = splitStableHead(content);
-                    if (!head) {
-                        return (
-                            <ReactMarkdown
-                                remarkPlugins={markdownRemarkPlugins}
-                                rehypePlugins={markdownRehypePlugins}
-                                components={components}
-                            >
-                                {content}
-                            </ReactMarkdown>
-                        );
-                    }
-                    return (
-                        <>
-                            <MemoMarkdownBlock content={head} components={components} />
-                            {tail ? (
-                                <ReactMarkdown
-                                    remarkPlugins={markdownRemarkPlugins}
-                                    rehypePlugins={markdownRehypePlugins}
-                                    components={components}
-                                >
-                                    {tail}
-                                </ReactMarkdown>
-                            ) : null}
-                        </>
-                    );
-                })()}
-                {isStreaming && message.role === 'ASSISTANT' ? (
-                    <span
-                        aria-hidden="true"
-                        className="premium-caret ml-0.5 inline-block w-[0.5ch] h-[1em] -mb-[0.15em] bg-current align-baseline rounded-[1px]"
-                    />
-                ) : null}
-                </div>
-              </div>
-            </div>
-        );
-    };
+    // Stable callbacks for the hoisted MessageMarkdown so its memo holds.
+    const handleExpandTable = useCallback(({ headers, rows, title }: ExpandedTablePayload) => {
+        setTableHeaders(headers);
+        setTableData(rows);
+        setTableTitle(title);
+        setIsTableExpanded(true);
+    }, []);
+    // handlePreview closes over parsedCode/onToggleSplitView; route through a
+    // ref so the callback identity never changes.
+    const previewRef = useRef(handlePreview);
+    previewRef.current = handlePreview;
+    const stablePreview = useCallback(() => previewRef.current(), []);
 
     const videoEntry = useMemo(
         () => Array.isArray(parsedFiles) ? parsedFiles.find((f: any) => f?.type === 'video') : null,
@@ -2254,36 +2249,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             if (typeof message.content === 'string' && message.role === 'ASSISTANT') {
                 const content = message.content;
                 
-                // Check for thesis-specific content patterns
-                const thesisPatterns = [
-                    '🔍 Initializing Thesis Generation',
-                    '🔍 **Searching Academic Sources**',
-                    '📝 **Generating Thesis Document**',
-                    '✅ **Thesis Generation Completed**',
-                    '❌ **Thesis Generation Error**',
-                    'Google Scholar: scholar.google.com',
-                    'ResearchGate: www.researchgate.net',
-                    'PubMed: pubmed.ncbi.nlm.nih.gov',
-                    'ArXiv: arxiv.org/search',
-                    'IEEE Xplore: ieeexplore.ieee.org',
-                    'Thesis_.*\\.docx',
-                    'Topics Covered:.*Research Sources:',
-                    'Preparing to research and analyze',
-                    'Starting academic source search',
-                    'Found \\d+ sources for topic',
-                    'Research Materials Saved',
-                    'Total Sources Found:',
-                    'Your comprehensive thesis has been generated',
-                    'Word Document.*Download.*Preview in Chat'
-                ];
-                
-                const isThesisMessage = thesisPatterns.some(pattern => {
-                    try {
-                        return new RegExp(pattern, 'i').test(content);
-                    } catch {
-                        return content.toLowerCase().includes(pattern.toLowerCase());
-                    }
-                });
+                const isThesisMessage = THESIS_MARKER_RE.test(content);
                 
                 if (isThesisMessage) {
                     // Extract thesis data from content patterns
@@ -2416,6 +2382,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             return null;
         }
     };
+    // Computed once per render input: ThesisDisplay and the markdown gate
+    // below both read it (it used to run twice per render, per frame).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const thesisData = useMemo(() => getThesisData(), [message.metadata, (message as any).thesisData, message.content, message.role]);
     const getWatchUrl = (filename: string) => apiClient.getVideoFile(filename)
 
     const PPTDisplay = () => {
@@ -2636,7 +2606,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     }
 
     const ThesisDisplay = () => {
-        const thesisData = getThesisData();
         if (!thesisData) return null;
 
         return (
@@ -3176,7 +3145,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 };
 
                                 return (
-                                    <div key={index} className="relative inline-block group">
+                                    <div key={index} className="relative inline-block group/img">
                                         {imageLoading[`file-${index}`] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
                                                 <ThinkingStatusLoader state="generando-imagen" hideLabel compact density="glyph" announce={false} />
@@ -3193,13 +3162,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     src={src}
                                                     index={index}
                                                     onOpen={(url) => openImage(url, file)}
-                                                    onLoad={() => {
-                                                        const imgKey = `file-${index}`;
-                                                        if (!imageLoadedRef.current.has(imgKey)) {
-                                                            imageLoadedRef.current.add(imgKey);
-                                                            setImageLoading(prev => prev[imgKey] !== false ? { ...prev, [imgKey]: false } : prev);
-                                                        }
-                                                    }}
                                                     onError={() => {
                                                         const imgKey = `file-${index}`;
                                                         setImageLoading(prev => ({ ...prev, [imgKey]: false }));
@@ -3207,15 +3169,16 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     }}
                                                 />
 
-                                                {/* Hover download button */}
+                                                {/* Download button: hover/focus reveal on pointer devices, always visible on touch */}
                                                 <button
                                                     type="button"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         handleDownloadImage();
                                                     }}
-                                                    className="absolute bottom-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 shadow-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 translate-x-2 group-hover:translate-x-0 hover:bg-white dark:hover:bg-zinc-700 hover:scale-105"
-                                                    title="Download image"
+                                                    className="absolute bottom-3 right-3 z-20 h-9 w-9 rounded-full bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 shadow-lg flex items-center justify-center opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/img:opacity-100 focus-visible:opacity-100 transition-all duration-300 [@media(hover:hover)]:translate-x-2 [@media(hover:hover)]:group-hover/img:translate-x-0 focus-visible:translate-x-0 hover:bg-white dark:hover:bg-zinc-700 hover:scale-105"
+                                                    aria-label="Descargar imagen"
+                                                    title="Descargar imagen"
                                                 >
                                                     <Download className="h-4 w-4" />
                                                 </button>
@@ -3244,20 +3207,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                 className="max-w-full h-auto rounded-lg max-h-[250px] sm:max-h-[400px] object-contain cursor-pointer hover:opacity-90 transition-opacity"
                                                 loading="lazy"
                                                 onClick={() => setSelectedImage(visibleMessageContent)}
-                                                onLoad={(e) => {
-                                                    const imgKey = 'content-image';
-                                                    // Only update state if image wasn't already loaded
-                                                    if (!imageLoadedRef.current.has(imgKey)) {
-                                                        imageLoadedRef.current.add(imgKey);
-                                                        setImageLoading(prev => {
-                                                            // Only update if state actually changed
-                                                            if (prev[imgKey] !== false) {
-                                                                return { ...prev, [imgKey]: false };
-                                                            }
-                                                            return prev;
-                                                        });
-                                                    }
-                                                }}
                                                 onError={() => {
                                                     setImageLoading(prev => ({ ...prev, 'content-image': false }));
                                                     setImageError(prev => ({ ...prev, 'content-image': true }));
@@ -3316,7 +3265,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             <div className={`group flex w-full min-w-0 flex-col ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
                     <div className="msg-user-stack">
-                        {hasRenderableUserFiles && <FileDisplay />}
+                        {/* Called as plain render helpers, not <X />: these are
+                            defined inside MessageComponent, so as elements they
+                            got a new type every render and remounted (images,
+                            video player, connection cards re-fetching). They
+                            use no hooks, so a direct call is safe. */}
+                        {hasRenderableUserFiles && FileDisplay()}
                         {/* Document chips — clickable, open the same
                             UnifiedDocumentViewer as the composer. Filters
                             out images (FileDisplay renders them inline). */}
@@ -3338,9 +3292,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 "border border-transparent shadow-none",
                                 "text-[15px] leading-[1.45] tracking-[-0.005em]",
                                 "transition-colors duration-base ease-smooth",
+                                isEditing && "!w-full !max-w-full",
                             )}>
                                 {isEditing ? (
-                                    <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
+                                    <div className="space-y-2 w-full min-w-0 sm:min-w-[300px] md:min-w-[500px]">
                                         <Textarea
                                             value={editedContent}
                                             onChange={(e) => setEditedContent(e.target.value)}
@@ -3364,10 +3319,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             </Card>
                         )}
                         {hasContent && !isEditing && (
-                            // On touch (mobile) hover doesn't fire — make
-                            // the row always visible. On desktop keep the
-                            // hover reveal so the chat surface stays clean.
-                            <div className="mt-1 flex items-center gap-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                            // Devices without hover (phones, tablets) always
+                            // show the row; pointer devices keep the hover
+                            // reveal, and keyboard focus reveals it too.
+                            <div className="mt-1 flex items-center gap-1 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                                 <Button
                                     variant="ghost"
                                     size="icon"
@@ -3395,7 +3350,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     size="icon"
                                     className="h-6 w-6"
                                     aria-label={tCommon("edit")}
-                                    onClick={() => setIsEditing(true)}
+                                    onClick={() => {
+                                        // Seed the draft on entry instead of syncing it on
+                                        // every content change (that doubled each streaming frame).
+                                        setEditedContent(message.content);
+                                        setIsEditing(true);
+                                    }}
                                     title={tCommon("edit")}
                                 >
                                     <Pencil size={14} />
@@ -3459,29 +3419,45 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 ) : (
                                     // For diagram (figma) responses, only show the diagram block, no text
                                     // For thesis responses, only show the thesis display, no text
-                                    !hasFigmaDiagram && !getThesisData() && (() => {
+                                    !hasFigmaDiagram && !thesisData && (() => {
                                         // If the content carries an artifact block, render the
                                         // "before" prose, then the interactive viewer, then the
                                         // "after" prose. Otherwise fall back to plain text.
+                                        // Image-only / video messages don't render markdown.
+                                        if (isImageOnlyMessage() || isVideoMessage) return null;
+                                        const renderMarkdown = (content: string) => (
+                                            <MessageMarkdown
+                                                content={content}
+                                                fullContent={message.content}
+                                                messageId={message.id}
+                                                role={message.role}
+                                                isStreaming={Boolean(isStreaming)}
+                                                hasAgentTrace={hasAgentTrace}
+                                                onDocumentPreview={onDocumentPreview}
+                                                canPreview={canPreviewMessage}
+                                                onPreview={stablePreview}
+                                                onExpandTable={handleExpandTable}
+                                            />
+                                        );
                                         const parsed = extractArtifact(displayedContent || '');
-                                        if (!parsed) return <MessageContent content={displayedContent} />;
+                                        if (!parsed) return renderMarkdown(displayedContent);
                                         return (
                                             <>
-                                                {parsed.before && <MessageContent content={parsed.before} />}
+                                                {parsed.before && renderMarkdown(parsed.before)}
                                                 <InteractiveArtifact
                                                     html={parsed.artifact.html}
                                                     title={parsed.artifact.title}
                                                     description={parsed.artifact.description}
                                                 />
-                                                {parsed.after && <MessageContent content={parsed.after} />}
+                                                {parsed.after && renderMarkdown(parsed.after)}
                                             </>
                                         );
                                     })()
                                 )}
-                                <PPTDisplay />
-                                <VideoDisplay />
-                                <ThesisDisplay />
-                                <FileDisplay />
+                                {PPTDisplay()}
+                                {VideoDisplay()}
+                                {ThesisDisplay()}
+                                {FileDisplay()}
                                 <ChartDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} fullResponse={message.fullResponse} onImageClick={(url) => setSelectedImage(url)} />
                                 <FigmaDiagramDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
                                 <PlanArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
@@ -3491,9 +3467,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     onDocumentPreview={onDocumentPreview}
                                 />
                                 <InteractiveArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
-                                <GmailConnectionDisplay />
-                                <GoogleServicesConnectionDisplay />
-                                <SpotifyConnectionDisplay />
+                                {GmailConnectionDisplay()}
+                                {GoogleServicesConnectionDisplay()}
+                                {SpotifyConnectionDisplay()}
                                 {/* Computer Use Extracted Data Display */}
                                 {getComputerUseData() && (
                                     <ExtractedDataDownload
@@ -3501,8 +3477,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         finalUrl={getComputerUseData()?.url}
                                     />
                                 )}
-                                <SpotifyResultsDisplay />
-                                <ComputerUseReasoningDisplay />
+                                {SpotifyResultsDisplay()}
+                                {ComputerUseReasoningDisplay()}
                                 {children}
                             </>
                         )}
