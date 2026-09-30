@@ -238,6 +238,22 @@
       "account": {
         "label": "Cuenta",
         "desc": "Perfil de constructor"
+      },
+      "billing": {
+        "label": "Facturación",
+        "desc": "Plan, pagos y suscripción"
+      },
+      "usage": {
+        "label": "Uso",
+        "desc": "Créditos y consumo"
+      },
+      "capabilities": {
+        "label": "Capacidades",
+        "desc": "Memoria, búsqueda, voz y código"
+      },
+      "skills": {
+        "label": "Skills",
+        "desc": "Tus skills y el catálogo para descubrir"
       }
     },
     "general": {

@@ -101,9 +101,9 @@ describe("generate HTTP errors stop thinking", () => {
     assert.equal(
       friendlyGenerateHttpError(503, {
         error: "connection_unavailable",
-        message: "El modelo cortó el stream después de pensar. Reintenta; no es un fallo de GitHub.",
+        message: "El modelo cortó la respuesta después de pensar. Reintenta; si vuelve a pasar, elige otro modelo.",
       }),
-      "El modelo cortó el stream después de pensar. Reintenta; no es un fallo de GitHub.",
+      "El modelo cortó la respuesta después de pensar. Reintenta; si vuelve a pasar, elige otro modelo.",
     )
     assert.equal(
       friendlyGenerateHttpError(503, {

@@ -43,10 +43,10 @@ test('catalog lists the built-in document skills first, then the user Biblioteca
   assert.equal(catalog.filter((s) => s.name === 'informe-ucv').length, 1);
 });
 
-test('without a user only the built-ins are listed; a user skill never shadows a built-in', () => {
+test('without a user only the built-ins (and skill-creator) are listed; a user skill never shadows a built-in', () => {
   const root = tmpRoot();
   persist.persistUserSkill({ userId: 'u1', name: 'docx', description: 'fake', body: 'shadow', root });
-  assert.equal(chatSkills.listChatSkills({}).length, 5);
+  assert.deepEqual(chatSkills.listChatSkills({}).map((s) => s.name), ['docx', 'pptx', 'xlsx', 'pdf', 'csv', 'skill-creator']);
   const skill = chatSkills.loadChatSkill({ userId: 'u1', name: 'docx', persist: boundPersist(root) });
   assert.equal(skill.source, 'builtin');
   assert.match(skill.body, /Skill/);

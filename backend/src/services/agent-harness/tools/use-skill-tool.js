@@ -21,7 +21,7 @@ function buildUseSkillTool() {
     name: 'use_skill',
     description: [
       'Load an Agent Skill: a playbook with the exact procedure and quality bar for a kind of task.',
-      'Built-in skills: docx (Word), pptx (PowerPoint), xlsx (Excel), pdf, csv; the user may also have their own skills in their Biblioteca.',
+      'Built-in skills: docx (Word), pptx (PowerPoint), xlsx (Excel), pdf, csv; the user may also have their own skills and skills installed from the SiraGPT catalog (Ajustes → Skills).',
       'WHEN TO USE: before creating or editing a Word/PowerPoint/Excel/PDF/CSV file, or when the task matches a skill the user saved. Call without "name" to see the catalog, then load the one that fits and follow it.',
       'WHEN NOT TO USE: small talk or questions answerable directly; a skill already active in the system prompt this turn.',
     ].join(' '),
@@ -41,7 +41,7 @@ function buildUseSkillTool() {
           hint: 'Carga la skill que corresponda con use_skill({ name }) y sigue sus instrucciones.',
         };
       }
-      const skill = chatSkills.loadChatSkill({ userId, name: wanted });
+      const skill = chatSkills.loadChatSkill({ userId, name: wanted, respectDisabled: true });
       if (!skill) {
         const catalog = chatSkills.listChatSkills({ userId });
         return {

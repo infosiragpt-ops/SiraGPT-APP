@@ -16,7 +16,9 @@
  */
 
 import * as React from "react"
-import { Target, Search, FileText } from "lucide-react"
+import { Target, Search, FileText, ScrollText } from "lucide-react"
+
+import type { ChatSkillSummary } from "@/lib/api"
 
 export type SlashCommand = {
   id: string
@@ -58,18 +60,52 @@ interface SlashCommandMenuProps {
   filter: string
   onCommandPick: (command: SlashCommand) => void
   onClose: () => void
+  /** The user's enabled Agent Skills: «/» lists them first, claude.ai style. */
+  skills?: ChatSkillSummary[]
+  onSkillPick?: (skill: ChatSkillSummary) => void
 }
 
-export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: SlashCommandMenuProps) {
+type SlashItem =
+  | { kind: "skill"; id: string; skill: ChatSkillSummary }
+  | { kind: "command"; id: string; command: SlashCommand }
+
+const MAX_SLASH_SKILLS = 30
+
+export function SlashCommandMenu({ open, filter, onCommandPick, onClose, skills = [], onSkillPick }: SlashCommandMenuProps) {
   const [activeIdx, setActiveIdx] = React.useState(0)
 
-  const visible = React.useMemo(() => {
+  const visible = React.useMemo<SlashItem[]>(() => {
     const q = filter.toLowerCase().trim()
-    if (!q) return SLASH_COMMANDS
-    return SLASH_COMMANDS.filter(
-      (c) => c.id.startsWith(q) || c.label.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
-    )
-  }, [filter])
+    const skillItems: SlashItem[] = onSkillPick
+      ? [...skills]
+          .filter((s) => !q || s.name.startsWith(q) || s.name.includes(q) || (s.title || "").toLowerCase().includes(q))
+          .sort((a, b) => Number(!a.name.startsWith(q)) - Number(!b.name.startsWith(q)) || a.name.localeCompare(b.name, "es"))
+          .slice(0, MAX_SLASH_SKILLS)
+          .map((skill) => ({ kind: "skill" as const, id: `skill-${skill.name}`, skill }))
+      : []
+    const commands = !q
+      ? SLASH_COMMANDS
+      : SLASH_COMMANDS.filter(
+          (c) => c.id.startsWith(q) || c.label.toLowerCase().includes(q) || c.description.toLowerCase().includes(q),
+        )
+    return skillItems.concat(commands.map((command) => ({ kind: "command" as const, id: `cmd-${command.id}`, command })))
+  }, [filter, skills, onSkillPick])
+
+  // A new filter starts from the best match; keyboard moves keep the
+  // highlighted row in view (up to 30 skills + commands in a short list).
+  React.useEffect(() => { setActiveIdx(0) }, [filter])
+  React.useEffect(() => {
+    if (!open) return
+    const item = visible[activeIdx]
+    if (!item || typeof document === "undefined") return
+    const id = item.kind === "skill" ? `slash-skill-${item.skill.name}` : `slash-cmd-${item.command.id}`
+    document.getElementById(id)?.scrollIntoView?.({ block: "nearest" })
+  }, [open, activeIdx, visible])
+
+  const pick = React.useCallback((item: SlashItem) => {
+    if (item.kind === "skill") onSkillPick?.(item.skill)
+    else onCommandPick(item.command)
+  }, [onCommandPick, onSkillPick])
 
   React.useEffect(() => {
     if (activeIdx >= visible.length) setActiveIdx(0)
@@ -96,15 +132,20 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
       } else if (e.key === "Enter" || e.key === "Tab") {
         if (visible[activeIdx]) {
           e.preventDefault()
-          onCommandPick(visible[activeIdx])
+          pick(visible[activeIdx])
         }
       }
     }
     window.addEventListener("keydown", onKey, true)
     return () => window.removeEventListener("keydown", onKey, true)
-  }, [open, visible, activeIdx, onCommandPick, onClose])
+  }, [open, visible, activeIdx, pick, onClose])
 
   if (!open || visible.length === 0) return null
+
+  const active = visible[activeIdx]
+  const itemName = (item: SlashItem) => (item.kind === "skill" ? item.skill.name : item.command.id)
+  const itemLabel = (item: SlashItem) => (item.kind === "skill" ? "skill" : item.command.label)
+  const optionId = (item: SlashItem) => (item.kind === "skill" ? `slash-skill-${item.skill.name}` : `slash-cmd-${item.command.id}`)
 
   return (
     <>
@@ -113,48 +154,78 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose }: Slash
         command as ↑/↓ move through the list. It sits outside the listbox,
         whose children may only be options. */}
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-      {visible[activeIdx]
-        ? `/${visible[activeIdx].id}, ${visible[activeIdx].label}, ${activeIdx + 1} de ${visible.length}`
+      {active
+        ? `/${itemName(active)}, ${itemLabel(active)}, ${activeIdx + 1} de ${visible.length}`
         : ""}
     </span>
     <div
       role="listbox"
       aria-label="Comandos"
-      aria-activedescendant={visible[activeIdx] ? `slash-cmd-${visible[activeIdx].id}` : undefined}
+      aria-activedescendant={active ? optionId(active) : undefined}
       tabIndex={-1}
+      data-testid="slash-command-menu"
       className="absolute bottom-full mb-2 left-2 right-2 max-w-md rounded-xl border border-border/60 bg-popover/95 shadow-xl backdrop-blur z-50 overflow-hidden"
     >
-      <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/40">
-        Slash commands
-      </div>
-      <div className="max-h-64 overflow-y-auto">
-        {visible.map((cmd, idx) => (
-          <button
-            key={cmd.id}
-            id={`slash-cmd-${cmd.id}`}
-            type="button"
-            role="option"
-            aria-selected={idx === activeIdx}
-            onClick={() => onCommandPick(cmd)}
-            onMouseEnter={() => setActiveIdx(idx)}
-            className={`w-full flex items-start gap-3 px-3 py-2 text-left transition-colors ${
-              idx === activeIdx ? "bg-accent" : "hover:bg-accent/50"
-            }`}
-          >
-            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-              {cmd.icon}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-baseline gap-2">
-                <span className="font-medium text-sm text-foreground">/{cmd.id}</span>
-                <span className="text-xs text-muted-foreground">— {cmd.label}</span>
-              </span>
-              <span className="block text-xs text-muted-foreground leading-snug mt-0.5">
-                {cmd.description}
-              </span>
-            </span>
-          </button>
-        ))}
+      <div className="max-h-72 overflow-y-auto py-1">
+        {visible.map((item, idx) => {
+          const prev = visible[idx - 1]
+          const header = !prev || prev.kind !== item.kind
+            ? (item.kind === "skill" ? "Skills" : "Comandos")
+            : null
+          const highlighted = idx === activeIdx
+          return (
+            <React.Fragment key={item.id}>
+              {header ? (
+                <div role="presentation" className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {header}
+                </div>
+              ) : null}
+              {item.kind === "skill" ? (
+                <button
+                  id={optionId(item)}
+                  type="button"
+                  role="option"
+                  aria-selected={highlighted}
+                  data-testid={`slash-skill-${item.skill.name}`}
+                  onClick={() => pick(item)}
+                  onMouseEnter={() => setActiveIdx(idx)}
+                  className={`w-full flex items-center gap-3 px-3 py-1.5 text-left transition-colors ${
+                    highlighted ? "bg-accent" : "hover:bg-accent/50"
+                  }`}
+                >
+                  <ScrollText aria-hidden="true" className="h-4 w-4 shrink-0 text-foreground/80" />
+                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">{item.skill.name}</span>
+                  <span className="hidden max-w-[55%] truncate text-xs text-muted-foreground sm:block">{item.skill.description}</span>
+                </button>
+              ) : (
+                <button
+                  id={optionId(item)}
+                  type="button"
+                  role="option"
+                  aria-selected={highlighted}
+                  onClick={() => pick(item)}
+                  onMouseEnter={() => setActiveIdx(idx)}
+                  className={`w-full flex items-start gap-3 px-3 py-2 text-left transition-colors ${
+                    highlighted ? "bg-accent" : "hover:bg-accent/50"
+                  }`}
+                >
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                    {item.command.icon}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-2">
+                      <span className="font-medium text-sm text-foreground">/{item.command.id}</span>
+                      <span className="text-xs text-muted-foreground">— {item.command.label}</span>
+                    </span>
+                    <span className="block text-xs text-muted-foreground leading-snug mt-0.5">
+                      {item.command.description}
+                    </span>
+                  </span>
+                </button>
+              )}
+            </React.Fragment>
+          )
+        })}
       </div>
       <div className="px-3 py-1.5 text-[10px] text-muted-foreground border-t border-border/40 bg-muted/30">
         ↑↓ navegar · Enter seleccionar · Esc cerrar

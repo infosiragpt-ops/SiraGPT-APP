@@ -299,6 +299,11 @@ async function createRun(prisma, {
       break;
     } catch (error) {
       if (error?.code !== 'P2034' || attempt === 2) throw error;
+      // A Serializable conflict retried on the same tick collides again
+      // (prod 2026-09-27: «write conflict or a deadlock» three times in a
+      // row). A short jittered pause lets the winning transaction commit.
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 25 + Math.floor(Math.random() * 75) * (attempt + 1)));
     }
   }
   if (!run) {

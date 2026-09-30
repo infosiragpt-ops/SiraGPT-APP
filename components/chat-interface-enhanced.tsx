@@ -6212,6 +6212,9 @@ function ChatInterfaceContent() {
   const [isSending, setIsSending] = React.useState(false);
   // Agent Skills picked in «+ → Skills» — they ride the next message only.
   const composerSkills = useComposerSkills();
+  const { catalog: skillCatalog, select: selectSkill } = composerSkills;
+  const ensureSkillsLoadedRef = React.useRef(composerSkills.ensureLoaded);
+  ensureSkillsLoadedRef.current = composerSkills.ensureLoaded;
   const [sendingChatId, setSendingChatId] = React.useState<string | null>(null);
   // Synchronous gate for duplicate submit events. React state updates land
   // after the current event turn, so rapid Enter keydown/keypress pairs or
@@ -7754,6 +7757,20 @@ But first, you need to connect your Spotify account securely using the button be
     inputRef.current = input;
   }, [input]);
 
+  // Typing «/nombre-de-skill » (claude.ai) turns the skill into a composer
+  // chip and keeps the rest of the text. Slash commands (/goal…) keep
+  // priority; unknown names are left as typed.
+  React.useEffect(() => {
+    const match = /^\/([a-z0-9][a-z0-9_-]{0,63})\s([\s\S]*)$/.exec(input);
+    if (!match) return;
+    if (parseSlashPrefix(`/${match[1]}`)) return;
+    const skill = skillCatalog.find((s) => s.name === match[1]);
+    if (!skill) return;
+    selectSkill(skill);
+    setInput(match[2]);
+    chatDraft.save(match[2]);
+  }, [input, skillCatalog, selectSkill, chatDraft]);
+
   // Sync the slash menu's open state + filter with the live input value so
   // that pasting "/goal" or deleting the leading "/" toggles the menu
   // immediately (not only via handleTextareaChange, which can miss
@@ -7765,6 +7782,8 @@ But first, you need to connect your Spotify account securely using the button be
     } else {
       setSlashMenuOpen(true);
       setSlashMenuFilter(filter);
+      // «/» lists the user's skills (claude.ai): fetch them on first use.
+      ensureSkillsLoadedRef.current();
     }
     const caret = textareaRef.current?.selectionStart;
     const mention = detectAtMention(input, caret);
@@ -8761,6 +8780,14 @@ But first, you need to connect your Spotify account securely using the button be
             }, 0);
           }}
           onClose={() => setSlashMenuOpen(false)}
+          skills={composerSkills.catalog}
+          onSkillPick={(skill) => {
+            composerSkills.select(skill);
+            setInput("");
+            chatDraft.save("");
+            setSlashMenuOpen(false);
+            window.setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
         />
       }
       mentionMenu={

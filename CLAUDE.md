@@ -1401,6 +1401,36 @@ Pedido de Luis: «+ → Skills» justo bajo «Subir documento» y sin «Modo de 
 - **Tests**: `backend/tests/chat-skills.test.js`, `tests/lib/composer-skills.test.ts`,
   `tests/chat-skills-composer-source.test.ts`, `e2e/chat-skills-menu.spec.ts` (menú, chat, doc).
 
+### Ajustes → Skills, «Descubrir», «/» y memoria (added 2026-09-30)
+Paridad con claude.ai (pedido de Luis con capturas):
+- **Menú «+ → Skills»**: lista plana alfabética (ícono de pergamino + nombre) de las skills
+  ACTIVAS, y abajo «Gestionar habilidades» (Ajustes → Skills · Tuyos) y «Explorar habilidades»
+  (Descubrir). `openSettingsSection("skills", { skillsTab })` en `lib/chat/open-settings.ts`.
+- **«/» en el compositor**: `SlashCommandMenu` lista primero las skills («Skills») y luego los
+  comandos; elegir una la pone como chip. Escribir `/nombre ` también la convierte en chip.
+- **Ajustes → Skills** (`components/settings/skills-settings.tsx`, sección `skills` del panel):
+  pestañas **Tuyos** («Creado por ti» + «De SiraGPT»: integradas e instaladas; menú ⋮ con
+  Probar en un chat / Ver instrucciones / Editar / Desactivar / Eliminar o Quitar) y
+  **Descubrir** (destacada, «Para ti», «Nuevas habilidades», categorías con conteos reales).
+  «Añadir»: Crear con SiraGPT (chat nuevo con `skill-creator`), Escribir instrucciones,
+  Subir una skill (.md / .zip / .skill con SKILL.md, vía JSZip).
+- **Catálogo**: `backend/src/services/skills-catalog/*.md` (21 skills en español con
+  frontmatter name/title/description/category/added/featured) cargado por
+  `services/skills-catalog.js`. `skill-creator` viene instalada por defecto.
+- **Estado por usuario**: `.skills-state.json` junto a los SKILL.md del usuario
+  (`skills-persist` `readSkillState`/`writeSkillState`, escritura atómica): instaladas,
+  desactivadas y quitadas. Las desactivadas salen del menú, de «/» y de `use_skill`.
+- **API** (`routes/chat-skills.js`, CSRF): `GET /library`, `GET /discover`, `POST /`
+  (crear o subir), `GET|PUT|PATCH|DELETE /:name`, `POST /:name/install`, `GET /:name/download`.
+- **Memoria**: «Para ti» ordena el catálogo con lo que el usuario tiene en Ajustes → Memoria
+  (`memory/vault`); la herramienta `save_skill` (tier confirm) guarda skills creadas en el
+  chat (memoria procedimental) y la skill `importar-memoria` importa memorias de otro
+  asistente con `memory_search`/`memory_write`.
+- **Probar**: `startChatWithSkill` (`lib/chat/skills-events.ts`) cierra Ajustes, abre un chat
+  nuevo y deja la skill como chip (sessionStorage + evento en vivo).
+- **Tests**: `backend/tests/chat-skills-library.test.js`, `tests/components/skills-settings.test.tsx`,
+  `tests/components/slash-skills-menu.test.tsx`, casos nuevos en `e2e/chat-skills-menu.spec.ts`.
+
 ## Imágenes con el modelo elegido (added 2026-09-29)
 
 Pedido de Luis: un turno con imagen usa SOLO el modelo que el usuario eligió.
@@ -1502,6 +1532,28 @@ compositor, estados, móvil, lógica, superficies, carga) con verificación adve
   resiliencia del contexto, popovers a11y, sidebar/ajustes, pulido del shell, estabilidad
   del render), `tests/markdown-repair-streaming-tail.test.ts`, `tests/lib/markdown-block-split.test.ts`,
   `tests/components/message-markdown-render.test.tsx`.
+
+## Errores de Admin → Logs — cuarto volcado (added 2026-09-30)
+
+Del volcado del 27–30 sep, la mayoría ya tenía corrección en `production-main`
+posterior a la línea de log (#835 watchdog, #836 goal-events, #838 claves ilegibles,
+#842 slug DeepSeek, #875 abortos y P2034, #884 `[models-dbg]`, #915/#916/#924/#925
+saldo, transcripción, visión y atribución). Lo que seguía abierto:
+- **Sin saldo ≠ clave rechazada**: xAI responde 403 «used all available credits / monthly
+  spending limit», OpenAI 429 «no credits remaining», Anthropic 400 «credit balance is too
+  low», Meta 402. `litellm-gateway.classifyProviderError` mira ese texto ANTES del estado
+  (antes 403 ⇒ `auth`), y `task-error-classifier` lo clasifica `quota-exhausted` sin
+  reintentos antes de la regla de rate-limit (antes 429 ⇒ `rate-limited` reintentable).
+- **Telemetría vacía**: `POST /api/telemetry/error` sin mensaje/acción/stack/turno
+  (sondas, beacons sin cuerpo) responde 202 y no alerta, audita ni agrupa
+  (`isEmptyClientEvent`). Era el issue «client event · unknown» de Errores del sistema.
+- **Copia del timeout del chat**: «El modelo cortó la respuesta después de pensar…» —
+  sin la frase «no es un fallo de GitHub» heredada de codex.
+- **coworkRun.create**: pausa con jitter entre reintentos de P2034 (antes reintentaba en
+  el mismo tick y volvía a chocar).
+- Solo Luis: saldo/claves de OpenAI (incl. 401 en Files), xAI, Anthropic, Meta; volver a
+  guardar en Admin → Conexiones las claves marcadas «ilegible».
+- Test: `backend/tests/provider-credit-classification.test.js`.
 
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP

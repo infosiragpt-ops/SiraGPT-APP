@@ -118,7 +118,8 @@ test('SSE closer writes the classified Spanish text, not a generic connection', 
     code: 'E_TIMEOUT',
   });
   const body = res.chunks.join('');
-  assert.match(body, /El modelo cortó el stream/);
+  assert.match(body, /El modelo cortó la respuesta/);
+  assert.doesNotMatch(body, /GitHub/);
   assert.match(body, /"code":"E_TIMEOUT"/);
   assert.doesNotMatch(body, /Conexión no disponible/);
   assert.match(body, /data: \[DONE\]/);

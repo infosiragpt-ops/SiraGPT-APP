@@ -2555,7 +2555,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     let skillsPolicyLine = '';
     try {
       if (require('./agent-harness/run-agent-turn').harnessEnabled()) {
-        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill guardada en la Biblioteca del usuario, carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno.';
+        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill del usuario (las suyas o las que instaló en Ajustes → Skills), carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno. Si el usuario quiere convertir un procedimiento repetible en una skill, redáctala con él y, cuando la apruebe, guárdala con `save_skill`.';
       }
     } catch (_) { skillsPolicyLine = ''; }
     const extraSystem = codingWorkspace

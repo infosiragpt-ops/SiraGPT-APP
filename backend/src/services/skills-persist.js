@@ -72,7 +72,9 @@ function listPersistedSkills({ userId, root = DEFAULT_ROOT } = {}) {
   const out = [];
   for (const e of entries) {
     if (!e.isDirectory() || !SKILL_NAME_RE.test(e.name)) continue;
-    out.push({ name: e.name, userId: String(userId), persisted: true });
+    let updatedAt = null;
+    try { updatedAt = fs.statSync(path.join(dir, e.name, 'SKILL.md')).mtime.toISOString(); } catch { /* no SKILL.md yet */ }
+    out.push({ name: e.name, userId: String(userId), persisted: true, updatedAt });
   }
   return out;
 }
@@ -104,6 +106,61 @@ function deletePersistedSkill({ userId, name, root = DEFAULT_ROOT } = {}) {
 }
 
 
+// Per-user skills state (claude.ai «Ajustes → Skills»): which catalog skills
+// are installed, which skills are switched off, and which default-installed
+// skills the user removed. Lives next to the user's SKILL.md folders as a
+// dotfile, so listPersistedSkills (directories only) never sees it.
+const STATE_FILE = '.skills-state.json';
+const MAX_STATE_ENTRIES = 200;
+
+function cleanNameList(value) {
+  const out = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const clean = String(item || '').trim().toLowerCase();
+    if (SKILL_NAME_RE.test(clean) && !out.includes(clean)) out.push(clean);
+    if (out.length >= MAX_STATE_ENTRIES) break;
+  }
+  return out;
+}
+
+function normalizeSkillState(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const installed = {};
+  const rawInstalled = src.installed && typeof src.installed === 'object' ? src.installed : {};
+  for (const [name, at] of Object.entries(rawInstalled).slice(0, MAX_STATE_ENTRIES)) {
+    const clean = String(name || '').trim().toLowerCase();
+    if (!SKILL_NAME_RE.test(clean)) continue;
+    const iso = typeof at === 'string' && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : null;
+    installed[clean] = iso;
+  }
+  return { installed, disabled: cleanNameList(src.disabled), removed: cleanNameList(src.removed) };
+}
+
+function readSkillState({ userId, root = DEFAULT_ROOT } = {}) {
+  if (!String(userId || '').trim()) return normalizeSkillState(null);
+  const file = path.join(userRoot(userId, root), STATE_FILE);
+  assertInsideRoot(file, userRoot(userId, root));
+  try {
+    return normalizeSkillState(JSON.parse(fs.readFileSync(file, 'utf8')));
+  } catch {
+    return normalizeSkillState(null);
+  }
+}
+
+function writeSkillState({ userId, state, root = DEFAULT_ROOT } = {}) {
+  if (!String(userId || '').trim()) throw Object.assign(new Error('userId es obligatorio'), { code: 'user_required' });
+  const dir = userRoot(userId, root);
+  const file = path.join(dir, STATE_FILE);
+  assertInsideRoot(file, dir);
+  fs.mkdirSync(dir, { recursive: true });
+  const clean = normalizeSkillState(state);
+  // Atomic replace: a crash mid-write never leaves a truncated state file.
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(clean), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, file);
+  return clean;
+}
+
 function searchPersistedSkills({ userId, query, limit = 8, root = DEFAULT_ROOT } = {}) {
   const uid = String(userId || '').trim();
   if (!uid) return [];
@@ -129,6 +186,9 @@ function searchPersistedSkills({ userId, query, limit = 8, root = DEFAULT_ROOT }
 
 module.exports = {
   searchPersistedSkills,
+  readSkillState,
+  writeSkillState,
+  normalizeSkillState,
   SKILL_NAME_RE,
   persistUserSkill,
   listPersistedSkills,

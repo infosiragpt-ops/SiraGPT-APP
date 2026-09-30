@@ -118,6 +118,7 @@ import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import type { SectionKey } from "@/components/settings/settings-panel"
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from "@/lib/chat/open-settings"
+import { SKILL_NEW_CHAT_EVENT } from "@/lib/chat/skills-events"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
@@ -620,7 +621,7 @@ export function AppSidebar() {
   React.useEffect(() => {
     const onOpenSettings = (event: Event) => {
       const section = (event as CustomEvent<OpenSettingsDetail>).detail?.section
-      openSettings(section === "personalization" || section === "capabilities" ? section : "general")
+      openSettings(section === "personalization" || section === "capabilities" || section === "skills" ? section : "general")
     }
     window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings)
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings)
@@ -1121,6 +1122,19 @@ export function AppSidebar() {
       setOpenMobile(false);
     }
   }
+
+  // «Probar» / «Crear con SiraGPT» in Ajustes → Skills: close the dialog and
+  // start a fresh chat; the composer picks the skill up (skills-events).
+  const handleNewChatRef = React.useRef(handleNewChat)
+  handleNewChatRef.current = handleNewChat
+  React.useEffect(() => {
+    const onSkillChat = () => {
+      setSettingsOpen(false)
+      handleNewChatRef.current()
+    }
+    window.addEventListener(SKILL_NEW_CHAT_EVENT, onSkillChat)
+    return () => window.removeEventListener(SKILL_NEW_CHAT_EVENT, onSkillChat)
+  }, [])
 
   const handleTypeChange = (typeName: string) => {
     const type = generationTypes.find((t) => t.name === typeName)

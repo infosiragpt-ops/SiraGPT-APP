@@ -32,8 +32,11 @@ function githubConnectMessage() {
 
 const VENDOR_LEAK_RE = /deepseek|openrouter|sk-|Bearer\s|AKIA|BEGIN (RSA|OPENSSH|PRIVATE)/i;
 
+// Copy for a stream that died after the model started thinking. It used to
+// say «no es un fallo de GitHub» — a line borrowed from the codex path that
+// made no sense on a chat turn (prod 2026-09-28, a pptx design request).
 const STREAM_TIMEOUT_MESSAGE =
-  'El modelo cortó el stream después de pensar. Reintenta; no es un fallo de GitHub. Si el modelo no responde, elige otro.';
+  'El modelo cortó la respuesta después de pensar. Reintenta; si vuelve a pasar, elige otro modelo.';
 const PROVIDER_FAIL_MESSAGE =
   'El modelo no pudo completar la respuesta. Reintenta o elige otro modelo. No cambié de modelo.';
 const SANDBOX_FAIL_MESSAGE =
@@ -154,7 +157,7 @@ function classifyGenerateErrorCore(err) {
 
   if (
     /E_TIMEOUT|ETIMEDOUT|timed?\s*out|first-byte timeout|stream (ended|stalled|connect)|runtime_budget_exhausted|AbortError|\baborted\b/i.test(blob)
-    || /tard[oó] demasiado|cort[oó] el stream/i.test(raw)
+    || /tard[oó] demasiado|cort[oó] (?:el stream|la respuesta)/i.test(raw)
   ) {
     return { code: 'E_TIMEOUT', message: STREAM_TIMEOUT_MESSAGE };
   }
