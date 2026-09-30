@@ -1048,6 +1048,12 @@ jobs:
       - name: Install dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
 
+      - name: Install backend for the real preview proxy gate
+        if: matrix.shard == 1
+        run: |
+          npm --prefix backend ci --prefer-offline --no-audit --no-fund
+          npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
+
       # Cache the downloaded browser so the install is fast and reliable
       # (the binary CDN is the usual flake source for Playwright in CI).
       - name: Cache Playwright browsers

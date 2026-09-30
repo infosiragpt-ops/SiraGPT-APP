@@ -1,9 +1,23 @@
 import { expect, test } from '@playwright/test'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
-import { createRequire } from 'node:module'
+import { createRequire, Module } from 'node:module'
 import path from 'node:path'
 
 const backendRequire = createRequire(path.join(process.cwd(), 'backend/package.json'))
+
+function mockBackendModule(modulePath: string, exports: unknown): () => void {
+  const resolved = backendRequire.resolve(modulePath)
+  const original = backendRequire.cache[resolved]
+  const replacement = new Module(resolved)
+  replacement.filename = resolved
+  replacement.loaded = true
+  replacement.exports = exports
+  backendRequire.cache[resolved] = replacement
+  return () => {
+    if (original) backendRequire.cache[resolved] = original
+    else delete backendRequire.cache[resolved]
+  }
+}
 
 async function listen(server: Server): Promise<string> {
   await new Promise<void>((resolve, reject) => {
@@ -30,7 +44,13 @@ test('opaque sandbox renders real proxied ES modules and completes a JSON API pr
   process.env.CODEX_PREVIEW_TOKEN_SECRET = 'browser-preview-fixture-signing-secret-at-least-32-bytes'
   delete process.env.CODE_RUNNER_PREVIEW_TOKEN_SECRET
 
-  const { mockResolvedModule } = backendRequire('./tests/http-test-utils')
+  const databaseAccesses: string[] = []
+  const restoreDatabase = mockBackendModule('./src/config/database', new Proxy({}, {
+    get(_target, property) {
+      databaseAccesses.push(String(property))
+      throw new Error(`Preview fixture must not access the database: ${String(property)}`)
+    },
+  }))
   const express = backendRequire('express')
   const cors = backendRequire('cors')
   const { createCredentialedCorsOptions } = backendRequire('./src/middleware/cors-policy')
@@ -80,7 +100,7 @@ document.body.dataset.ready = 'true';`)
   })
   const upstreamOrigin = await listen(upstream)
   process.env.CODE_RUNNER_DEV_INTERNAL_URL = upstreamOrigin
-  const restoreRunner = mockResolvedModule(backendRequire.resolve('./src/services/codex/runner-client'), {
+  const restoreRunner = mockBackendModule('./src/services/codex/runner-client', {
     createRunnerClient: () => ({ devStatus: async () => ({ running: true, ready: true, project: 'browser-project', port: Number(new URL(upstreamOrigin).port) }) }),
     runnerDevUrl: () => upstreamOrigin,
     codexExportHostPath: () => '',
@@ -121,11 +141,13 @@ document.body.dataset.ready = 'true';`)
     expect(requests.some((entry) => entry.headers.cookie || entry.headers.authorization)).toBe(false)
     expect((await page.context().cookies()).some((cookie) => cookie.name === 'untrusted_preview')).toBe(false)
     expect(browserErrors).toEqual([])
+    expect(databaseAccesses).toEqual([])
     await page.screenshot({ path: testInfo.outputPath('opaque-preview-render-and-api.png') })
   } finally {
     await close(proxy)
     await close(upstream)
     restoreRunner()
+    restoreDatabase()
     if (previousRouter) backendRequire.cache[routerPath] = previousRouter
     else delete backendRequire.cache[routerPath]
     for (const key of envKeys) {
