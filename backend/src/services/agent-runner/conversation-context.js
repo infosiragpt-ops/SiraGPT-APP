@@ -80,15 +80,41 @@ function rechartsData(chart) {
   return JSON.stringify(result).length <= MAX_CHART_CHARS ? result : null;
 }
 
+function assistantSource(message) {
+  const content = typeof message.content === 'string' ? message.content : '';
+  const fallback = { content, hasStateArtifacts: false };
+  // Both agent-task entry points persist this envelope BEFORE invoking the
+  // runner. Only server-marked task messages may be interpreted as control;
+  // a quoted fence in ordinary assistant content remains source material.
+  if (message.metadata?.source !== 'agent-task' || content.length > MAX_FILES_JSON_CHARS) return fallback;
+  const open = '```agent-task-state\n';
+  if (!content.startsWith(open)) return fallback;
+  const end = content.indexOf('\n```', open.length);
+  if (end < 0) return fallback;
+  let state;
+  try { state = JSON.parse(content.slice(open.length, end)); }
+  catch { return fallback; }
+  // Fail closed on malformed/unknown envelopes instead of skipping a topic.
+  if (!state || Array.isArray(state) || !Array.isArray(state.steps) || !Array.isArray(state.artifacts)
+    || typeof state.finalText !== 'string' || typeof state.done !== 'boolean') return fallback;
+  return {
+    content: content.slice(end + '\n```'.length).trim() || state.finalText,
+    hasStateArtifacts: state.artifacts.length > 0
+      || Array.isArray(message.metadata.artifacts) && message.metadata.artifacts.length > 0,
+  };
+}
+
 function sourceFromMessages(messages, instruction) {
   for (const message of (Array.isArray(messages) ? messages : []).slice(0, MAX_SOURCE_MESSAGES)) {
     if (String(message?.role || '').toUpperCase() !== 'ASSISTANT' || message.deletedAt) continue;
-    const content = limitedString(message.content, MAX_CONTEXT_CHARS);
+    const assistant = assistantSource(message);
+    const content = limitedString(assistant.content, MAX_CONTEXT_CHARS);
     const { files, incomplete: filesIncomplete } = parseFiles(message.files);
     // A failed retry is not the source. Do not scan past a substantive answer
     // on a different topic to revive an older, unrelated graph.
-    if (/^\s*(?:No pude (?:generar|verificar|producir) (?:el documento|los archivos|un archivo)|E_PROVIDER:)/i.test(content)) continue;
-    if (!content.trim() && !files.length && !filesIncomplete) continue;
+    const hasSourceFiles = files.length > 0 || filesIncomplete || assistant.hasStateArtifacts;
+    if (!hasSourceFiles && /^\s*(?:No pude (?:generar|verificar|producir) (?:el documento|los archivos|un archivo)|E_PROVIDER:)/i.test(content)) continue;
+    if (!content.trim() && !hasSourceFiles) continue;
     const charts = [];
     let omittedVisualizations = 0;
     let visualTextTruncated = false;
@@ -109,7 +135,7 @@ function sourceFromMessages(messages, instruction) {
       sourceMessageId: limitedString(message.id, 120),
       content,
       visualizations: charts,
-      incomplete: (typeof message.content === 'string' && message.content.length > content.length)
+      incomplete: assistant.content.length > content.length
         || filesIncomplete || visualTextTruncated || omittedVisualizations > 0
         || (wantsPreviousChart(instruction) && charts.length === 0),
     };
@@ -136,7 +162,7 @@ async function loadConversationContext({ prisma, userId, chatId, instruction } =
     select: {
       messages: {
         where: { role: 'ASSISTANT', deletedAt: null },
-        select: { id: true, role: true, content: true, files: true },
+        select: { id: true, role: true, content: true, files: true, metadata: true },
         orderBy: { timestamp: 'desc' },
         take: MAX_SOURCE_MESSAGES,
       },
