@@ -1837,10 +1837,10 @@ async function runAgentRunnerForDocRoute({
   userId,
   chatId = null,
   prompt,
-  // The user's own words when `prompt` was enriched with previous-turn
-  // context (previous-turn-document-context): routing classifies these, the runner
-  // executes `prompt`.
+  // Compatibility for callers that specify routing text separately. Prior
+  // source material belongs in conversationContext, never in the prompt.
   routingPrompt = null,
+  conversationContext,
   fileIds = [],
   model,
   pickedModel = null,
@@ -1870,6 +1870,7 @@ async function runAgentRunnerForDocRoute({
     chatId,
     fileIds,
     instruction: text,
+    conversationContext,
     model,
     pickedModel,
     client,
