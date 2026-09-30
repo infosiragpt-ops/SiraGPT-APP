@@ -1343,6 +1343,7 @@ async function runAgentRunner({
     };
     // ── end F7 hook ──────────────────────────────────────────────────────
 
+    const turnUserMessages = messages.filter((message) => message.role === 'user');
     let result = await runAgentLoop({
       client: llm,
       model: resolvedModel,
@@ -1355,6 +1356,7 @@ async function runAgentRunner({
       signal: abortScope.signal,
       maxTokens: loopMaxTokens,
       turnWallMs: documentTurnWallMs(),
+      turnUserMessages,
     });
     throwIfAborted(abortScope.signal);
     if (result.stoppedReason === 'E_PROVIDER') {
@@ -1400,6 +1402,7 @@ async function runAgentRunner({
         signal: abortScope.signal,
         maxTokens: loopMaxTokens,
         turnWallMs: documentTurnWallMs(),
+        turnUserMessages,
       });
       throwIfAborted(abortScope.signal);
       if (result.stoppedReason === 'E_PROVIDER') {
