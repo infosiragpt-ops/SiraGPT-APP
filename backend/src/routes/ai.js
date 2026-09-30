@@ -7821,7 +7821,7 @@ router.post(
       // visualization instead. Falls through to the normal stream on
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
-      if (artifactGenerator.isArtifactRequest(prompt)) {
+      if (!verifiedCodingWorkspace && artifactGenerator.isArtifactRequest(prompt)) {
         turnProgress.settleAll();
         const __artifactHandle = turnProgress.begin('artifact', 'Diseñando la visualización interactiva', { tool: 'plan', kind: 'edit' });
         try {

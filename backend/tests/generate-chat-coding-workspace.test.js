@@ -14,6 +14,7 @@ const turnIdentity = require('../src/services/chat-turn-idempotency');
 const sseClose = require('../src/services/ai/generate-sse-close');
 const { createClientGoneWriter } = require('../src/services/ai/sse-client-gone');
 const turnProgress = require('../src/services/turn-progress');
+const artifacts = require('../src/services/artifacts/artifact-generator');
 
 const routeFile = path.resolve(__dirname, '../src/routes/ai.js');
 const routeSource = fs.readFileSync(routeFile, 'utf8');
@@ -36,6 +37,8 @@ async function fixture(testContext, options = {}) {
   const events = [];
   const projects = [];
   const workspaceResolutions = [];
+  const agenticRuns = [];
+  const artifactRuns = [];
   const streamControllers = new Map();
   const quotaEntered = deferred();
   const quotaReleased = deferred();
@@ -90,7 +93,16 @@ async function fixture(testContext, options = {}) {
       isEnabled: () => options.agenticEnabled !== false,
       modelSupportsFunctionCalling: () => options.modelHasTools !== false,
       resolveToolCallMode: () => options.modelHasTools === false ? 'none' : 'native',
+      runAgenticChat: async (input) => {
+        agenticRuns.push(input);
+        const finalAnswer = 'Fixture coding result';
+        input.res.write(`data: ${JSON.stringify({ content: finalAnswer })}\n\n`);
+        return { finalAnswer, stoppedReason: 'finalized' };
+      },
+      isHandledAgenticChatResult: (result) => result.stoppedReason === 'finalized',
     },
+    '../services/ai/picked-model-label': { resolvePickedModelLabel: async () => 'Modelo elegido' },
+    '../services/agents/generated-artifact-followup': { resolveChatGeneratedArtifactFollowup: async () => [] },
   };
   const context = {
     router, body, validationResult, Buffer, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -129,6 +141,7 @@ async function fixture(testContext, options = {}) {
     },
     unconfiguredModelMessage: async () => 'El modelo elegido no está configurado.',
     createProviderClientForRequest: () => ({ client: {} }),
+    createProviderClient: (provider) => ({ provider }),
     modelRouter: { getModel: () => null },
     messageAttachments: { looksLikeDocumentFollowupQuestion: () => false },
     operationalRag: { isPureGreetingPrompt: () => false, buildRuntimeContext: async () => null },
@@ -160,7 +173,23 @@ async function fixture(testContext, options = {}) {
           : { ok: true };
       },
     },
-    usageService: {},
+    usageService: { calculateTextTokens: () => 1 },
+    streamCache: { start: async () => null },
+    detectCodeTaskIntent: () => ({ isCodeTask: false, confidence: 0 }),
+    artifactGenerator: {
+      ...artifacts,
+      generate: async (input) => {
+        artifactRuns.push(input);
+        return { refused: false, title: 'Fixture artifact', description: '', html: '<html>Artifact</html>' };
+      },
+    },
+    OpenAI: class FixtureOpenAI {},
+    _hashUserIdForSpan: () => null,
+    withAIGenerateSpan: (_attributes, callback) => callback(null),
+    resolveUserSkillClearance: () => 'standard',
+    MESSAGE_IDEMPOTENCY_HASH_FIELD: turnIdentity.MESSAGE_IDEMPOTENCY_HASH_FIELD,
+    saveChatAndTrackUsage: async () => null,
+    postResponseBrainHook: { runShadowModeBrainPipeline: async () => {} },
     tryConsumePlanQuota: async () => {
       calls.push('quota-preflight');
       quotaEntered.resolve();
@@ -221,7 +250,7 @@ async function fixture(testContext, options = {}) {
     const text = await response.text();
     return { status: response.status, text, type: response.headers.get('content-type') };
   };
-  return { request, calls, events, projects, workspaceResolutions, streamControllers, quotaEntered, quotaReleased };
+  return { request, calls, events, projects, workspaceResolutions, agenticRuns, artifactRuns, streamControllers, quotaEntered, quotaReleased };
 }
 
 test('first chat coding prompt provisions only after provider and quota preflight, then emits the bound workspace', async (testContext) => {
@@ -341,5 +370,31 @@ test('unavailable agentic runtime or tool-less picked model cannot provision a p
     assert.equal(harness.calls.includes('prepare-workspace'), false);
     assert.equal(harness.events.some((event) => event.type === 'coding_workspace'), false);
     assert.equal(harness.events.find((event) => event.type === 'error')?.code, 'coding_tools_unavailable', response.text);
+  }
+});
+
+test('interactive software requests reach the bound coding agent with the picked model instead of generating isolated artifacts', async (testContext) => {
+  for (const prompt of [
+    'Build an interactive bicycle store web app',
+    'Crea una app web y genera una visualización de sus ventas',
+  ]) {
+    assert.equal(artifacts.isArtifactRequest(prompt), true);
+    const harness = await fixture(testContext, { stopAfterReady: false });
+    const response = await harness.request({ prompt, model: 'fixture-selected-model', provider: 'Gemini' });
+    assert.equal(response.status, 200);
+    assert.equal(harness.projects.length, 1);
+    assert.equal(harness.artifactRuns.length, 0);
+    assert.equal(harness.agenticRuns.length, 1, response.text);
+    const run = harness.agenticRuns[0];
+    assert.equal(run.model, 'fixture-selected-model');
+    assert.equal(run.provider, 'Gemini');
+    assert.equal(run.openai.provider, 'Gemini');
+    assert.equal(run.userQuery, prompt);
+    assert.equal(run.toolContext.codingWorkspace.projectId, harness.projects[0].id);
+    assert.equal(run.toolContext.chatId, 'chat-first');
+    assert.equal(run.toolContext.coworkDisabled, true);
+    assert.equal(harness.events.some((event) => event.type === 'error'), false, response.text);
+    assert.match(response.text, /Fixture coding result/);
+    assert.match(response.text, /data: \[DONE\]/);
   }
 });

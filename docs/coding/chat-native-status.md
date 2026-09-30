@@ -30,7 +30,7 @@ Las pruebas con infraestructura simulada verifican los controles de la ruta, per
 
 ## Validación realizada
 
-- Integración HTTP del handler real `/generate` y `/stop-stream`: 8/8 pruebas con DB/proveedor aislados, cubriendo primer evento, orden de preflights, cuota, permisos, proveedor definitivo, presupuesto, modelos sin herramientas y Stop. La prueba exitosa se detiene tras crear el proyecto; la ejecución con modelo real se verifica en producción.
+- Integración HTTP del handler real `/generate` y `/stop-stream`: 9/9 pruebas con DB/proveedor aislados, cubriendo primer evento, orden de preflights, cuota, permisos, proveedor definitivo, presupuesto, modelos sin herramientas y Stop. Los pedidos de apps interactivas llegan al agente con el mismo proyecto y modelo hasta el cierre SSE, sin desviarse al generador de HTML separado. La ejecución con modelo real se verifica en producción.
 - Detector compartido: 105/105 pruebas backend y 104/104 frontend/paridad. URLs dentro de bloques de código no importan repositorios; seguimientos naturales conservan el proyecto sin activar documentos o saludos.
 - Nueva comprobación Chromium: 13/13 casos de escritorio y móvil. Capturas fuera del repositorio; APIs simuladas y editor Monaco real.
 - Cancelación: 77/77 pruebas enfocadas de preparación, vínculo, importación y comandos posteriores a Stop. La cancelación conserva el estado terminal del proyecto cuando el runner ya empezó.
