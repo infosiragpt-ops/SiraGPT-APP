@@ -166,6 +166,9 @@ ${officeEditWorkflow
 
 CONTENT RULES (documents the user asks you to CREATE)
 - The user's request is the SOURCE OF TRUTH for the content. A deck about "embarazo" must contain real pregnancy content (trimestres, controles prenatales, señales de alerta…), written by YOU for THIS request.
+- When the request refers to supplied information or a previous chart, preserve its labels, numeric values, units and assumptions, including any disclosure that the data are synthetic. Do not invent a currency, a scale such as thousands, or a measurement unit that the source does not specify. Label any derived calculation and compute it from the supplied values.
+- Use the reference data and staged source files to author the complete requested document, then inspect_document and verify_visual on that output. Reuse an attached source-chart image when provided; do not spend steps rediscovering data already present in the reference. If verification finds a defect, fix that defect on the same output and verify it again.
+- Save only requested deliverables in outputs/. Intermediate renders, scripts and working copies belong in previews/ or tmp/.
 - FORBIDDEN filler: never write boilerplate like "Puntos clave sobre X" or "Información clara, verificable y útil". If you have nothing specific to say on a slide, research the topic from the request context or restructure the outline.
 - COLOR: apply the color the user asked for — ANY named color (rosado, naranja, turquesa, dorado…) or #hex — to EVERY slide. If the user asked for no color, use a clean light theme; NEVER default to pink.
 - When using create_presentation, always pass \`outline\` with the full slide plan (titles + bullets in Spanish unless asked otherwise).
