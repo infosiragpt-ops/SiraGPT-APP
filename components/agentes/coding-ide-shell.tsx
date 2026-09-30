@@ -25,17 +25,82 @@ import {
   type CodingRepoMapHint,
 } from "@/lib/agentes-coding/api"
 import { projectsCodexApi } from "@/lib/codex/api/projects"
-import type { CodexCloneResult, CodexProject } from "@/lib/codex/api/types"
+import type { CodexCloneResult, CodexEditorFile, CodexProject } from "@/lib/codex/api/types"
 import { buildFileTree, applyMapHints, languageFromPath, type FileTreeNode } from "@/lib/agentes-coding/file-tree"
 import { cn } from "@/lib/utils"
+import { isRuntimeEnvFile, redactSecretsForLogs } from "@/lib/code-secrets"
 
 const MonacoCodeArea = dynamic(() => import("@/components/code/monaco-code-area"), { ssr: false })
 const CodingMonacoDiff = dynamic(() => import("@/components/agentes/coding-monaco-diff"), { ssr: false })
 
 type Pane = "editor" | "diff" | "changes" | "terminal" | "preview"
 
-export function CodingIdeShell({ conversationId, embedded = false, onClose, onProjectReady }: {
+const EDITOR_MAX_BYTES = 500 * 1024
+const DRAFT_PREFIX = "siragpt:editor-draft:v1:"
+const DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const REVISION_RE = /^[a-f0-9]{64}$/
+type EditorDraft = { original: string; draft: string; revision: string; savedAt: number }
+
+function draftKey(userId: string | undefined, projectId: string | null, path: string): string | null {
+  if (!userId || !projectId || !path || isRuntimeEnvFile(path) || /(?:^|\/)(?:\.git|\.ssh)(?:\/|$)|(?:^|\/)(?:id_rsa|id_ed25519)|\.(?:pem|key)$/i.test(path)) return null
+  return DRAFT_PREFIX + [userId, projectId, path].map(encodeURIComponent).join(":")
+}
+
+function safeDraftText(text: string): boolean {
+  return new TextEncoder().encode(text).byteLength <= EDITOR_MAX_BYTES &&
+    redactSecretsForLogs(text) === text && !/AKIA[A-Z0-9]{16}|-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/.test(text)
+}
+
+function removeDraft(key: string | null) {
+  if (!key) return
+  try { window.sessionStorage.removeItem(key) } catch { /* storage can be unavailable */ }
+}
+
+function storeDraft(key: string | null, snapshot: EditorDraft) {
+  if (!key) return
+  if (!safeDraftText(snapshot.original) || !safeDraftText(snapshot.draft)) {
+    removeDraft(key)
+    return
+  }
+  try { window.sessionStorage.setItem(key, JSON.stringify(snapshot)) } catch { /* beforeunload still protects the live draft */ }
+}
+
+function readDraft(key: string | null): EditorDraft | null {
+  if (!key) return null
+  try {
+    const raw = window.sessionStorage.getItem(key)
+    if (!raw || raw.length > EDITOR_MAX_BYTES * 4) return null
+    const snapshot = JSON.parse(raw) as EditorDraft
+    if (typeof snapshot.original !== "string" || typeof snapshot.draft !== "string" ||
+      typeof snapshot.revision !== "string" || !REVISION_RE.test(snapshot.revision) ||
+      !Number.isFinite(snapshot.savedAt) || Date.now() - snapshot.savedAt > DRAFT_MAX_AGE_MS ||
+      !safeDraftText(snapshot.original) || !safeDraftText(snapshot.draft)) {
+      removeDraft(key)
+      return null
+    }
+    return snapshot
+  } catch { return null }
+}
+
+function editorReadOnly(body: CodexEditorFile): boolean {
+  return body.ok !== true || body.truncated !== false || body.readOnly !== false ||
+    typeof body.revision !== "string" || !REVISION_RE.test(body.revision) ||
+    !Number.isSafeInteger(body.sizeBytes) || body.sizeBytes < 0 || body.sizeBytes > EDITOR_MAX_BYTES
+}
+
+function editorError(err: unknown): string {
+  const code = (err as { body?: { error?: string } })?.body?.error
+  if (code === "file_conflict") return "El archivo cambió en el proyecto. Tu borrador sigue intacto; copia tus cambios y vuelve a abrir el archivo antes de guardar."
+  if (code === "run_in_progress" || code === "file_busy") return "El proyecto está trabajando en este archivo. Tu borrador sigue intacto; vuelve a guardar cuando termine."
+  if (code === "binary_file") return "Este archivo es binario y no se puede editar como texto."
+  if (code === "protected_path") return "Este archivo está protegido y no se puede abrir en el editor."
+  if ((err as { status?: number })?.status === 413) return "El archivo supera el límite del editor (500 KB). Tu borrador sigue intacto."
+  return err instanceof Error ? err.message : "Error del editor de código."
+}
+
+export function CodingIdeShell({ conversationId, userId, embedded = false, onClose, onProjectReady }: {
   conversationId?: string
+  userId?: string
   embedded?: boolean
   onClose?: () => void
   onProjectReady?: (ready: boolean) => void
@@ -52,6 +117,15 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   const [activePath, setActivePath] = React.useState("")
   const [original, setOriginal] = React.useState("")
   const [draft, setDraft] = React.useState("")
+  const [revision, setRevision] = React.useState<string | null>(null)
+  const [editorLocked, setEditorLocked] = React.useState(false)
+  const mountedRef = React.useRef(true)
+  const editorEpochRef = React.useRef(0)
+  const draftOwnerRef = React.useRef<{ userId?: string; projectId: string; path: string } | null>(null)
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false; editorEpochRef.current += 1 }
+  }, [])
   const [newPath, setNewPath] = React.useState("src/app.ts")
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState("")
@@ -68,13 +142,20 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   React.useEffect(() => { onProjectReady?.(Boolean(projectId)) }, [projectId, onProjectReady])
 
   const resetEditor = React.useCallback(() => {
+    editorEpochRef.current += 1
+    draftOwnerRef.current = null
+    setRevision(null)
+    setEditorLocked(false)
     setActivePath("")
     setOriginal("")
     setDraft("")
   }, [])
 
-  async function refreshProjectFiles(id: string) {
+  async function refreshProjectFiles(id: string, mutated = false) {
+    const epoch = editorEpochRef.current
+    if (mutated) setFileVersion((v) => v + 1)
     const paths = await projectsCodexApi.listFiles(id)
+    if (!mountedRef.current || editorEpochRef.current !== epoch || (projectIdRef.current && projectIdRef.current !== id)) return
     filesSigRef.current = paths.join("\0")
     setFiles(paths.map((path) => ({ path })))
   }
@@ -95,16 +176,42 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   const projectIdRef = React.useRef(projectId)
   projectIdRef.current = projectId
 
+  // Only unsaved drafts are kept in this browser tab, scoped to account,
+  // project and file. Server revisions remain attached to recovered drafts.
+  React.useEffect(() => {
+    const owner = draftOwnerRef.current
+    if (!owner || owner.userId !== userId || owner.projectId !== projectId || owner.path !== activePath) return
+    const key = draftKey(userId, projectId, activePath)
+    if (draft === original) { removeDraft(key); return }
+    if (editorLocked || !revision) return
+    storeDraft(key, { original, draft, revision, savedAt: Date.now() })
+  }, [userId, projectId, activePath, original, draft, revision, editorLocked])
+
+  React.useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (draftRef.current === originalRef.current) return
+      event.preventDefault()
+      event.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onBeforeUnload)
+    return () => window.removeEventListener("beforeunload", onBeforeUnload)
+  }, [])
+
+  function discardDraft() {
+    removeDraft(draftKey(userId, projectId, activePath))
+  }
+
   // Recarga silenciosa del árbol del proyecto vinculado. Si el archivo
   // abierto no tiene cambios sin guardar, también recarga su contenido
   // (el agente pudo modificarlo vía project_write). Con cambios locales
   // (dirty) nunca se pisa el borrador del usuario.
   const refreshProjectTree = React.useCallback(async ({ silent }: { silent?: boolean } = {}) => {
     const id = projectIdRef.current
+    const epoch = editorEpochRef.current
     if (!id || busyRef.current) return
     try {
       const paths = await projectsCodexApi.listFiles(id)
-      if (projectIdRef.current !== id) return
+      if (!mountedRef.current || editorEpochRef.current !== epoch || projectIdRef.current !== id) return
       const sig = paths.join("\0")
       if (sig !== filesSigRef.current) {
         filesSigRef.current = sig
@@ -114,16 +221,29 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
       const open = activePathRef.current
       if (open && draftRef.current === originalRef.current) {
         try {
-          const body = await projectsCodexApi.readFileContent(id, open)
+          const body = await projectsCodexApi.readEditorFile(id, open)
           const content = String(body?.content ?? "")
-          if (projectIdRef.current === id && activePathRef.current === open && draftRef.current === originalRef.current && content !== originalRef.current) {
+          if (mountedRef.current && editorEpochRef.current === epoch && projectIdRef.current === id && activePathRef.current === open && draftRef.current === originalRef.current) {
+            const locked = editorReadOnly(body)
+            setEditorLocked(locked)
+            setRevision(body.revision)
+            if (locked) {
+              setError("Este archivo no se puede cargar completo para editarlo (máximo 500 KB). Se mantiene en solo lectura.")
+              return
+            }
+            if (content === originalRef.current) return
             setOriginal(content)
             setDraft(content)
             // El agente cambió el contenido sin tocar el árbol: también
             // cuenta como cambio para el hot-restart del preview.
             setFileVersion((v) => v + 1)
           }
-        } catch {
+        } catch (err) {
+          if (mountedRef.current && editorEpochRef.current === epoch && projectIdRef.current === id && activePathRef.current === open &&
+            draftRef.current === originalRef.current && (err as { status?: number })?.status === 415) {
+            setEditorLocked(true)
+            setError(editorError(err))
+          }
           // El archivo pudo borrarse; el árbol ya lo refleja.
         }
       }
@@ -164,13 +284,17 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   }
 
   async function openProject(id: string) {
+    if (dirty && !window.confirm("Tienes cambios sin guardar. ¿Descartarlos y abrir otro proyecto?")) return
+    if (dirty) discardDraft()
     setBusy(true)
     setError("")
+    const epoch = editorEpochRef.current
     try {
       const [found, paths] = await Promise.all([
         projectsCodexApi.getProject(id),
         projectsCodexApi.listFiles(id),
       ])
+      if (!mountedRef.current || editorEpochRef.current !== epoch) return
       setProject(found)
       filesSigRef.current = paths.join("\0")
       setFiles(paths.map((path) => ({ path })))
@@ -184,10 +308,12 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   }
 
   async function refreshProjects() {
+    const epoch = editorEpochRef.current
     try {
-      setProjects(await projectsCodexApi.listProjects())
+      const all = await projectsCodexApi.listProjects()
+      if (mountedRef.current && editorEpochRef.current === epoch) setProjects(all)
     } catch {
-      setProjects([])
+      if (mountedRef.current && editorEpochRef.current === epoch) setProjects([])
     }
   }
 
@@ -230,19 +356,22 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
     return () => {
       cancelled = true
     }
-  }, [chatId, resetEditor])
+  }, [chatId, userId, resetEditor])
 
   async function handleEnsureProject() {
     if (!chatId || busy) return
     setBusy(true)
     setError("")
+    const epoch = editorEpochRef.current
     try {
       const binding = await projectsCodexApi.ensureProjectForChat(chatId, projectName.trim() || undefined)
+      if (!mountedRef.current || editorEpochRef.current !== epoch) return
       setProject(binding.project)
       setProjectName("")
       await refreshProjects()
+      if (!mountedRef.current || editorEpochRef.current !== epoch) return
       await refreshProjectFiles(binding.project.id)
-      resetEditor()
+      if (mountedRef.current && editorEpochRef.current === epoch) resetEditor()
     } catch (err) {
       fail(err)
     } finally {
@@ -253,6 +382,7 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   // Etapa 6: el chat abre un repo de GitHub clonado (ya vinculado por el
   // backend vía brief.chatId). Mismo camino que un proyecto recién creado.
   async function handleRepoBound(result: CodexCloneResult) {
+    const epoch = editorEpochRef.current
     setBusy(true)
     setError("")
     try {
@@ -260,8 +390,9 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
       setProjectName("")
       setMapHints([])
       await refreshProjects()
+      if (!mountedRef.current || editorEpochRef.current !== epoch) return
       await refreshProjectFiles(result.project.id)
-      resetEditor()
+      if (mountedRef.current && editorEpochRef.current === epoch) resetEditor()
     } catch (err) {
       fail(err)
     } finally {
@@ -275,13 +406,21 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   )
   const dirty = Boolean(activePath && draft !== original)
   const language = languageFromPath(activePath || newPath)
+  // Monaco retains previously opened models globally. Scope their URIs so
+  // a matching filename in another account/project never reuses its text.
+  const modelPath = "siragpt-editor://workspace/" + [
+    userId || "anonymous",
+    projectId ? "project" : "session",
+    projectId || session?.id || "unbound",
+    ...activePath.split("/"),
+  ].map(encodeURIComponent).join("/")
 
   function fail(err: unknown) {
     if (err instanceof AgentesCodingApiError) {
       setError(err.message)
       return
     }
-    setError(err instanceof Error ? err.message : "Error del editor de código.")
+    setError(editorError(err))
   }
 
   async function refreshFiles(sessionId: string) {
@@ -293,13 +432,25 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
     if (!projectId) return
     setBusy(true)
     setError("")
+    const id = projectId
+    const epoch = editorEpochRef.current
     try {
-      const body = await projectsCodexApi.readFileContent(projectId, path)
+      const body = await projectsCodexApi.readEditorFile(id, path)
+      if (!mountedRef.current || editorEpochRef.current !== epoch || projectIdRef.current !== id) return
       const content = String(body?.content ?? "")
+      const locked = editorReadOnly(body)
+      const recovered = !locked ? readDraft(draftKey(userId, id, path)) : null
+      draftOwnerRef.current = { userId, projectId: id, path }
       setActivePath(path)
-      setOriginal(content)
-      setDraft(content)
+      setEditorLocked(locked)
+      setRevision(recovered?.revision ?? body.revision)
+      setOriginal(recovered?.original ?? content)
+      setDraft(recovered?.draft ?? content)
       setPane("editor")
+      if (locked) setError("Este archivo no se puede cargar completo para editarlo (máximo 500 KB). Se mantiene en solo lectura.")
+      else if (recovered) setError(recovered.revision !== body.revision
+        ? "Recuperé tu borrador. El archivo cambió en el proyecto; revisa los cambios antes de guardar."
+        : "Recuperé el borrador que tenías sin guardar en esta pestaña.")
     } catch (err) {
       fail(err)
     } finally {
@@ -309,6 +460,7 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
 
   function handleOpenFile(path: string) {
     if (busy || (dirty && !window.confirm("Tienes cambios sin guardar. ¿Descartarlos y abrir otro archivo?"))) return
+    if (dirty) discardDraft()
     if (projectId) void openProjectFile(path)
     else void openFile(path)
   }
@@ -357,6 +509,9 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
     setError("")
     try {
       const content = await agentesCodingApi.readFile(session.id, path)
+      setEditorLocked(false)
+      setRevision(null)
+      draftOwnerRef.current = null
       setActivePath(path)
       setOriginal(content)
       setDraft(content)
@@ -369,18 +524,26 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
   }
 
   async function handleSave() {
-    if (!activePath) return
+    if (!activePath || busy || editorLocked || (projectId && !revision)) return
     setBusy(true)
     setError("")
     try {
       if (projectId) {
-        const current = await projectsCodexApi.readFileContent(projectId, activePath)
-        if (String(current.content ?? "") !== original) {
-          throw new Error("El archivo cambió en el proyecto. Copia tu borrador y vuelve a abrirlo para revisar los cambios antes de guardar.")
+        const id = projectId, path = activePath, savedDraft = draft
+        const epoch = editorEpochRef.current
+        await projectsCodexApi.saveWorkspaceFile(id, { path, content: savedDraft, expectedRevision: revision })
+        if (mountedRef.current && editorEpochRef.current === epoch && projectIdRef.current === id) {
+          setFileVersion((value) => value + 1)
         }
-        await projectsCodexApi.importFiles(projectId, [{ path: activePath, content: draft }])
-        setOriginal(draft)
-        await refreshProjectFiles(projectId)
+        const verified = await projectsCodexApi.readEditorFile(id, path)
+        if (editorReadOnly(verified) || verified.content !== savedDraft) {
+          throw new Error("No pude confirmar el contenido guardado. Tu borrador sigue intacto; vuelve a abrir el archivo para comprobarlo.")
+        }
+        removeDraft(draftKey(userId, id, path))
+        if (!mountedRef.current || editorEpochRef.current !== epoch || projectIdRef.current !== id) return
+        setRevision(verified.revision)
+        setOriginal(savedDraft)
+        await refreshProjectFiles(id)
       } else {
         if (!session) return
         await agentesCodingApi.writeFile(session.id, activePath, draft)
@@ -396,6 +559,7 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
 
   async function handleCreateFile() {
     if (dirty && !window.confirm("Tienes cambios sin guardar. ¿Descartarlos y crear otro archivo?")) return
+    if (dirty) discardDraft()
     const path = newPath.trim().replace(/^\/+/, "")
     if (!path) {
       setError("Indica una ruta de archivo.")
@@ -403,13 +567,16 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
     }
     setBusy(true)
     setError("")
+    const epoch = editorEpochRef.current
     try {
       if (projectId) {
         const existing = await projectsCodexApi.listFiles(projectId)
+        if (!mountedRef.current || editorEpochRef.current !== epoch) return
         if (existing.includes(path)) throw new Error("Ese archivo ya existe. Ábrelo para editarlo.")
-        await projectsCodexApi.importFiles(projectId, [{ path, content: "" }])
-        await refreshProjectFiles(projectId)
-        await openProjectFile(path)
+        await projectsCodexApi.saveWorkspaceFile(projectId, { path, content: "", expectedRevision: null })
+        if (!mountedRef.current || editorEpochRef.current !== epoch) return
+        await refreshProjectFiles(projectId, true)
+        if (mountedRef.current && editorEpochRef.current === epoch) await openProjectFile(path)
       } else {
         if (!session) return
         await agentesCodingApi.writeFile(session.id, path, draft && activePath === path ? draft : "")
@@ -450,7 +617,7 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
       setTerminalOut([`$ ${command}`, stdout, stderr,
         "timedOut" in result && result.timedOut ? "Tiempo de ejecución agotado." : `Código de salida: ${result.exitCode ?? "desconocido"}`,
       ].filter(Boolean).join("\n"))
-      if (projectId) await refreshProjectFiles(projectId)
+      if (projectId) await refreshProjectFiles(projectId, true)
     } catch (err) {
       fail(err)
     } finally {
@@ -543,7 +710,7 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
             type="button"
             className="h-8 rounded-md border border-border px-2 text-xs"
             onClick={handleSave}
-            disabled={busy || (!session && !projectId) || !activePath || !dirty}
+            disabled={busy || editorLocked || (Boolean(projectId) && !revision) || (!session && !projectId) || !activePath || !dirty}
             data-testid="agentes-coding-save"
           >
             Guardar
@@ -561,6 +728,7 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
             className="h-8 rounded-md px-2 text-xs text-muted-foreground"
             onClick={() => {
               if (dirty && !window.confirm("Tienes cambios sin guardar. ¿Cerrar el editor y descartarlos?")) return
+              if (dirty) discardDraft()
               if (onClose) onClose()
               else setOpen(false)
             }}
@@ -666,9 +834,9 @@ export function CodingIdeShell({ conversationId, embedded = false, onClose, onPr
                 <MonacoCodeArea
                   value={draft}
                   language={language}
-                  path={activePath}
+                  path={modelPath}
                   onChange={setDraft}
-                  readOnly={busy}
+                  readOnly={busy || editorLocked}
                 />
               ) : (
                 <p className="p-3 text-xs text-muted-foreground">

@@ -50,6 +50,7 @@ const publicationService = require('../services/codex/publication-service');
 const opencodeHarness = require('../services/codex/opencode-harness');
 const selfHosting = require('../services/codex/self-hosting');
 const workspaceChanges = require('../services/codex/workspace-changes');
+const { EDITOR_MAX_BYTES, editorPath, protectedEditorPath, editorErrorStatus } = require('../services/codex/editor-file-contract');
 const companyAssociationService = require('../services/codex/company-association-service');
 const {
   STRIP_REQUEST_HEADERS,
@@ -2495,7 +2496,7 @@ router.get('/projects/:id/files', authenticateToken, async (req, res) => {
     const files = String(out?.stdout || '')
       .split('\n')
       .map((s) => s.trim())
-      .filter(Boolean)
+      .filter((path) => editorPath(path) && !protectedEditorPath(path))
       .sort();
     return res.json({ files });
   } catch (err) {
@@ -2524,7 +2525,10 @@ const importFilesValidators = [
     .withMessage('path must be a string')
     .bail()
     .isLength({ min: 1, max: IMPORT_MAX_PATH_CHARS })
-    .withMessage(`path must be 1-${IMPORT_MAX_PATH_CHARS} chars`),
+    .withMessage(`path must be 1-${IMPORT_MAX_PATH_CHARS} chars`)
+    .bail()
+    .custom((path) => Boolean(editorPath(path)))
+    .withMessage('path must stay inside the workspace'),
   body('files.*.content')
     .isString()
     .withMessage('content must be a string')
@@ -2549,49 +2553,95 @@ const importFilesValidators = [
 ];
 
 router.post(
-  '/projects/:id/files',
-  authenticateToken,
-  requireCodexAgentAccess,
-  importFilesValidators,
+  '/projects/:id/files', authenticateToken, requireCodexAgentAccess, importFilesValidators,
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
-
+    const files = req.body.files.map((f) => ({ path: editorPath(f.path), content: String(f.content) }));
+    if (files.some((file) => protectedEditorPath(file.path))) return res.status(403).json({ error: 'protected_path', message: 'El lote contiene un archivo protegido.' });
     let project;
+    try { project = await loadOwnedProject(req, res); if (!project) return undefined; }
+    catch (err) { return res.status(500).json({ error: 'codex_import_failed', message: err.message }); }
     try {
-      project = await loadOwnedProject(req, res);
-      if (!project) return undefined;
-      if (await runService.hasActiveRun({ projectId: project.id })) {
-        return res.status(409).json({
-          error: 'run_in_progress',
-          message: 'Hay un run activo en este proyecto; espera a que termine antes de importar archivos.',
-        });
-      }
+      return await checkpointService.withProjectMutationLock(codexDb, project.id, async (lockedDb) => {
+        if (await runService.hasActiveRun({ projectId: project.id, db: lockedDb })) {
+          return res.status(409).json({ error: 'run_in_progress', message: 'Hay un run activo en este proyecto; espera antes de importar archivos.' });
+        }
+        const result = await createSandboxClient().writeFiles(project.id, files);
+        const written = Number.isInteger(result?.written) ? result.written : 0;
+        if (result?.ok !== true || written !== files.length) {
+          return res.status(409).json({ ok: false, error: 'incomplete_write', written, requested: files.length, message: 'No se guardaron todos los archivos. Revisa el proyecto antes de continuar.' });
+        }
+        return res.json({ ok: true, written });
+      });
     } catch (err) {
-      return res.status(500).json({ error: 'codex_import_failed', message: err.message });
-    }
-
-    try {
-      const files = req.body.files.map((f) => ({ path: String(f.path), content: String(f.content) }));
-      await createSandboxClient().writeFiles(project.id, files);
-      return res.json({ ok: true, written: files.length });
-    } catch (err) {
+      if (err?.body?.error === 'file_busy') return sendEditorFileError(res, err);
       return res.status(502).json({ error: 'runner_unreachable', message: err.message });
     }
   },
 );
 
+function sendEditorFileError(res, error) {
+  const code = error?.body?.error || error?.code || 'runner_unreachable';
+  const messages = {
+    file_conflict: 'El archivo cambió desde que lo abriste. Vuelve a leerlo antes de guardar.',
+    file_busy: 'Otro guardado está en curso. Conserva tu edición y vuelve a intentarlo.',
+    file_read_only: 'Este archivo supera el tamaño permitido para editar. Descárgalo para conservarlo completo.',
+    protected_path: 'Este archivo está protegido y no se abre en el editor.',
+    binary_file: 'Este archivo no es texto UTF-8 editable.',
+    file_too_large: 'El archivo supera el límite de 500 KB del editor.',
+    file_not_found: 'No se encontró el archivo.',
+    unsafe_path: 'La ruta no es un archivo seguro dentro del proyecto.',
+  };
+  return res.status(editorErrorStatus(error)).json({ ok: false, error: code, message: messages[code] || 'No se pudo acceder al archivo del proyecto.' });
+}
+
 router.get('/projects/:id/file', authenticateToken, async (req, res) => {
+  const editor = req.query.editor === 'true';
   try {
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
-    const path = String(req.query.path || '').trim();
+    const path = editorPath(req.query.path);
     if (!path) return res.status(400).json({ error: 'path_required' });
-    const out = await createSandboxClient().readFile(project.id, path);
+    if (protectedEditorPath(path)) return res.status(403).json({ error: 'protected_path', message: 'Este archivo está protegido.' });
+    const runner = createSandboxClient();
+    const out = editor ? await runner.readEditorFile(project.id, path) : await runner.readFile(project.id, path);
+    res.setHeader('Cache-Control', 'no-store');
     return res.json(out);
   } catch (err) {
+    if (editor) return sendEditorFileError(res, err);
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
+});
+
+// Browser editing is separate from legacy imports: every save names exactly
+// the revision opened by the user. The runner compares and atomically writes.
+router.put('/projects/:id/file', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  const path = editorPath(req.body?.path);
+  const content = req.body?.content;
+  const expectedRevision = req.body?.expectedRevision;
+  if (!path || typeof content !== 'string' || (expectedRevision !== null && (typeof expectedRevision !== 'string' || !/^[a-f0-9]{64}$/.test(expectedRevision)))) {
+    return res.status(400).json({ error: 'validation_failed', message: 'Se requieren path, content y la revisión leída del archivo.' });
+  }
+  if (protectedEditorPath(path)) return res.status(403).json({ error: 'protected_path', message: 'Este archivo está protegido.' });
+  if (Buffer.byteLength(content, 'utf8') > EDITOR_MAX_BYTES) return res.status(413).json({ error: 'file_too_large', message: 'El archivo supera el límite de 500 KB del editor.' });
+  try {
+    const project = await loadOwnedProject(req, res);
+    if (!project) return undefined;
+    // This is the SAME advisory lock used by createRun/checkpoint restore.
+    // Starting an agent cannot race the no-active-run check and this save.
+    return await checkpointService.withProjectMutationLock(codexDb, project.id, async (lockedDb) => {
+      if (await runService.hasActiveRun({ projectId: project.id, db: lockedDb })) {
+        return res.status(409).json({ error: 'run_in_progress', message: 'El agente está trabajando en este proyecto. Espera antes de guardar.' });
+      }
+      const out = await createSandboxClient().saveEditorFile(project.id, { path, content, expectedRevision });
+      if (out?.ok !== true || out.written !== 1 || out.revision !== crypto.createHash('sha256').update(content, 'utf8').digest('hex') || out.sizeBytes !== Buffer.byteLength(content, 'utf8')) {
+        return res.status(502).json({ error: 'incomplete_write', message: 'No se pudo confirmar el guardado. Conserva tu edición y vuelve a abrir el archivo.' });
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json(out);
+    });
+  } catch (err) { return sendEditorFileError(res, err); }
 });
 
 // ── Project terminal exec (Shell del panel sobre un proyecto Codex) ─────────
@@ -2645,13 +2695,18 @@ router.post(
       const timeoutMs = Number(req.body.timeoutMs) || undefined;
       const runner = createSandboxClient();
       const scoped = run && typeof runner.forRun === 'function' ? runner.forRun(run, project.id) : runner;
-      const out = await scoped.exec(project.id, cmd, { timeoutMs });
-      return res.json({
-        ok: Boolean(out?.ok),
-        exitCode: Number.isFinite(out?.exitCode) ? out.exitCode : null,
-        timedOut: Boolean(out?.timedOut),
-        stdout: String(out?.stdout || ''),
-        stderr: String(out?.stderr || ''),
+      return await checkpointService.withProjectMutationLock(codexDb, project.id, async (lockedDb) => {
+        if (await runService.hasActiveRun({ projectId: project.id, db: lockedDb })) {
+          return res.status(409).json({ error: 'run_in_progress', message: 'El agente está trabajando en este proyecto. Espera antes de ejecutar otro comando.' });
+        }
+        const out = await scoped.exec(project.id, cmd, { timeoutMs });
+        return res.json({
+          ok: Boolean(out?.ok),
+          exitCode: Number.isFinite(out?.exitCode) ? out.exitCode : null,
+          timedOut: Boolean(out?.timedOut),
+          stdout: String(out?.stdout || ''),
+          stderr: String(out?.stderr || ''),
+        });
       });
     } catch (err) {
       const status = Number(err?.status) || 0;

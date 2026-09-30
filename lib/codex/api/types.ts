@@ -22,6 +22,31 @@ export interface CodexProject {
   /** Chat de /agentes al que está vinculado el proyecto (brief.chatId). */
   chatId?: string | null
 }
+/** Lectura completa y acotada del editor; nunca guardar una lectura parcial. */
+export interface CodexEditorFile {
+  ok: boolean
+  path: string
+  content: string
+  revision: string | null
+  sizeBytes: number
+  truncated: boolean
+  readOnly: boolean
+}
+export interface CodexWorkspaceFileWrite {
+  path: string
+  content: string
+  /** null crea solo si el archivo no existe; SHA-256 compara su versión. */
+  expectedRevision: string | null
+}
+export interface CodexWorkspaceFileSaved {
+  ok: boolean
+  path: string
+  revision: string
+  sizeBytes: number
+  truncated: false
+  readOnly: false
+  written: number
+}
 /** Un archivo cambiado en el workspace frente a la rama base (GET /projects/:id/changes). */
 export interface CodexWorkspaceChangeFile {
   path: string

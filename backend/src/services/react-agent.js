@@ -1522,7 +1522,7 @@ async function run(openai, opts) {
           ...effortFields,
         }, { signal: stepCtl.signal });
       } else {
-        resp = await activeOpenai.chat.completions.create({
+        const nativePayload = {
           model: activeModel,
           messages,
           tools: toolsSchema,
@@ -1530,7 +1530,13 @@ async function run(openai, opts) {
           ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
           temperature: 0.3,
           ...effortFields,
-        }, { signal: stepCtl.signal });
+        };
+        // Direct V4 thinking supports native tools, but not forced choices.
+        // Preserve the shared transcript/schema; adapt only this request.
+        const payload = String(activeProvider || '').toLowerCase() === 'deepseek'
+          ? require('./ai/deepseek-billing-failover').prepareDeepSeekDirectToolRequest(nativePayload)
+          : nativePayload;
+        resp = await activeOpenai.chat.completions.create(payload, { signal: stepCtl.signal });
       }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);

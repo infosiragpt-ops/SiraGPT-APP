@@ -581,9 +581,9 @@ function applyThinkingControls(payload, runtime, thinkingLevel, thinkingLevelExp
 // The ReAct agent loop calls chat.completions directly (tools, tool_choice),
 // so it can't go through buildProviderChatPayload. This returns ONLY the
 // provider's native effort fields for a composer level, resolved with the
-// exact same mapping as the plain stream. DeepSeek is skipped: its thinking
-// mode needs reasoning_content replay in tool loops, which the loop doesn't
-// carry yet.
+// exact same mapping as the plain stream. The native ReAct loop preserves
+// DeepSeek reasoning_content on replay and adapts forced choices in thinking
+// mode, so an explicit V4 effort now uses this existing mapping as well.
 const EFFORT_FIELD_KEYS = ["thinking", "output_config", "reasoning_effort", "reasoning"];
 
 function resolveProviderEffortFields({
@@ -596,7 +596,11 @@ function resolveProviderEffortFields({
   const resolvedModel = String(model || "").trim();
   if (!resolvedModel || !thinkingLevel) return {};
   const runtime = getProviderRuntimeProfile({ provider, modelId: resolvedModel });
-  if (runtime.thinkingFormat === "deepseek") return {};
+  if (runtime.thinkingFormat === "deepseek") {
+    // The picker slug is normalized by the direct client after this point.
+    // Resolve effort against that same native ID without changing the pick.
+    runtime.model_id = require('../ai/deepseek-billing-failover').toDeepSeekDirectModel(runtime.model_id);
+  }
   const scratch = { model: resolvedModel, messages: [] };
   if (Number(maxTokens) > 0) scratch[runtime.maxTokensField || "max_tokens"] = Math.trunc(Number(maxTokens));
   applyThinkingControls(scratch, runtime, thinkingLevel, thinkingLevelExplicit);

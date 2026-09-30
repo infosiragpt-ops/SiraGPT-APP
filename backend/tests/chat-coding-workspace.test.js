@@ -53,7 +53,7 @@ test('chat ReAct edits and tests the SAME persistent project, preserving selecte
   const runnerCalls = [], requests = [];
   const runner = {
     async readFile(id, rel) { runnerCalls.push(id); return { content: await fs.readFile(path.join(root, rel), 'utf8') }; },
-    async writeFiles(id, files) { runnerCalls.push(id); for (const f of files) await fs.writeFile(path.join(root, f.path), f.content); return { ok: true }; },
+    async writeFiles(id, files) { runnerCalls.push(id); for (const f of files) await fs.writeFile(path.join(root, f.path), f.content); return { ok: true, written: files.length }; },
     async exec(id, cmd) {
       runnerCalls.push(id);
       if (cmd[0] === 'git') return { ok: true, stdout: 'app.js\n', exitCode: 0 };

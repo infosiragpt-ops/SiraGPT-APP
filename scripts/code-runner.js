@@ -60,6 +60,7 @@ const {
 const { dirname } = require("node:path");
 const {
   sanitizeProjectId,
+  createWorkspaceMutationGuard,
   sanitizeRunId,
   resolveProjectRelPath,
   migrateLegacyViteProxyConfig,
@@ -586,13 +587,23 @@ function removeRunWorktree(id, runId) {
   return { ok: true, removed: true };
 }
 
+const workspaceMutationGuard = createWorkspaceMutationGuard();
+
 function filesystemHelperError(code, message = code) {
   const error = new Error(message);
   error.code = code;
   return error;
 }
 
-async function callFilesystemHelper(
+function callFilesystemHelper(projectId, args, options = {}) {
+  const operation = () => callFilesystemHelperUnserialized(projectId, args, options);
+  if (["write", "save-editor", "read-editor"].includes(args[0])) {
+    return workspaceMutationGuard.run(options.cwd || projectDirOf(projectId), operation);
+  }
+  return operation();
+}
+
+async function callFilesystemHelperUnserialized(
   projectId,
   args,
   { input = null, outputCap = 1_000_000, cwd = projectDirOf(projectId) } = {},
@@ -1386,6 +1397,22 @@ Bun.serve({
         const status = ["worktree_not_found", "project_not_found"].includes(error.code) ? 404 : 409;
         return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
       }
+      if (body.editor === true) {
+        if (rawRunId != null || files.length !== 1) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+        try {
+          const result = await callFilesystemHelper(id, ["save-editor"], {
+            input: JSON.stringify(files[0]), outputCap: 20_000, cwd: workspace.dir,
+          });
+          return Response.json(result);
+        } catch (error) {
+          const code = error.code || "filesystem_operation_failed";
+          const status = ["file_conflict", "file_busy", "file_read_only"].includes(code) ? 409
+            : code === "protected_path" ? 403 : code === "binary_file" ? 415
+              : code === "file_too_large" ? 413 : code === "file_not_found" ? 404
+                : ["unsafe_path", "invalid_request"].includes(code) ? 400 : 500;
+          return Response.json({ ok: false, error: code }, { status });
+        }
+      }
       const accepted = [];
       let acceptedBytes = 0;
       for (const f of files.slice(0, 200)) {
@@ -1407,7 +1434,7 @@ Bun.serve({
         });
         return Response.json({ ok: true, written: result.written });
       } catch (error) {
-        return Response.json({ ok: false, error: error.code || "filesystem_operation_failed" }, { status: 500 });
+        return Response.json({ ok: false, error: error.code || "filesystem_operation_failed" }, { status: error.code === "file_busy" ? 409 : 500 });
       }
     }
 
@@ -1427,19 +1454,20 @@ Bun.serve({
         return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
       }
       try {
-        const result = await callFilesystemHelper(id, ["read", rel, "200000"], {
-          outputCap: 1_500_000,
+        const editor = url.searchParams.get("editor") === "true";
+        const result = await callFilesystemHelper(id, editor ? ["read-editor", rel] : ["read", rel, "200000"], {
+          outputCap: editor ? 3_500_000 : 1_500_000,
           cwd: workspace.dir,
         });
-        return Response.json({ ok: true, path: result.path, content: result.content });
+        return Response.json(editor ? result : { ok: true, path: result.path, content: result.content });
       } catch (error) {
         if (error.code === "file_not_found") {
           return Response.json({ ok: false, error: "file_not_found" }, { status: 404 });
         }
-        if (error.code === "unsafe_path" || error.code === "invalid_request") {
-          return Response.json({ ok: false, error: error.code }, { status: 400 });
-        }
-        return Response.json({ ok: false, error: "filesystem_operation_failed" }, { status: 500 });
+        const status = error.code === "protected_path" ? 403 : error.code === "binary_file" ? 415
+          : ["file_conflict", "file_busy", "file_read_only"].includes(error.code) ? 409
+            : ["unsafe_path", "invalid_request"].includes(error.code) ? 400 : 500;
+        return Response.json({ ok: false, error: error.code || "filesystem_operation_failed" }, { status });
       }
     }
 
@@ -1498,20 +1526,26 @@ Bun.serve({
         return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
       }
       const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || EXEC_DEFAULT_TIMEOUT_MS, 1_000), EXEC_MAX_TIMEOUT_MS);
-      const started = Date.now();
-      const proc = spawnSandboxed(id, cmd, { cwd: workspace.dir, stdout: "pipe", stderr: "pipe" });
-      const stdoutPromise = collectOutput(proc.stdout);
-      const stderrPromise = collectOutput(proc.stderr);
-      const { exitCode, timedOut } = await waitForExit(proc, timeoutMs);
-      const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
-      return Response.json({
-        ok: !timedOut && exitCode === 0,
-        exitCode,
-        timedOut,
-        stdout,
-        stderr,
-        durationMs: Date.now() - started,
-      });
+      try {
+        return await workspaceMutationGuard.run(workspace.dir, async () => {
+          const started = Date.now();
+          const proc = spawnSandboxed(id, cmd, { cwd: workspace.dir, stdout: "pipe", stderr: "pipe" });
+          const stdoutPromise = collectOutput(proc.stdout);
+          const stderrPromise = collectOutput(proc.stderr);
+          const { exitCode, timedOut } = await waitForExit(proc, timeoutMs);
+          const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+          return Response.json({
+            ok: !timedOut && exitCode === 0,
+            exitCode,
+            timedOut,
+            stdout,
+            stderr,
+            durationMs: Date.now() - started,
+          });
+        });
+      } catch (error) {
+        return Response.json({ ok: false, error: error.code || "filesystem_operation_failed" }, { status: error.code === "file_busy" ? 409 : 500 });
+      }
     }
 
     if (url.pathname === "/workspace/export" && req.method === "POST") {

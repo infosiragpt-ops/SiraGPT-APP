@@ -35,6 +35,8 @@ const EXPECTED_METHODS = [
   "execInProject",
   "importFiles",
   "readFileContent",
+  "readEditorFile",
+  "saveWorkspaceFile",
   "getProactive",
   "setProactive",
   "getCompanyOkrs",
@@ -227,4 +229,19 @@ describe("codexApi compatibility facade", () => {
     expect(publicationRequest.init.method).toBe("POST")
     expect(publicationRequest.body).toEqual({ checkpointId: "checkpoint-9" })
   })
+  it("lee completo y guarda por CAS sin usar la importación heredada", async () => {
+    const revision = "a".repeat(64)
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      ok: true, path: "src/a.ts", content: "v1", revision, sizeBytes: 2,
+      truncated: false, readOnly: false,
+    })).mockResolvedValueOnce(jsonResponse({ ok: true, revision: "b".repeat(64), written: 1 }))
+    await codexApi.readEditorFile("project-1", "src/a.ts")
+    await codexApi.saveWorkspaceFile("project-1", { path: "src/a.ts", content: "v2", expectedRevision: revision })
+    expect(requestAt(fetchMock, 0).url.searchParams.get("editor")).toBe("true")
+    expect(requestAt(fetchMock, 0).init.cache).toBe("no-store")
+    expect(requestAt(fetchMock, 1).init.method).toBe("PUT")
+    expect(requestAt(fetchMock, 1).url.pathname).toBe("/api/codex/projects/project-1/file")
+    expect(requestAt(fetchMock, 1).body).toEqual({ path: "src/a.ts", content: "v2", expectedRevision: revision })
+  })
+
 })

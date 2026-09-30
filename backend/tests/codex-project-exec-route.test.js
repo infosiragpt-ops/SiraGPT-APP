@@ -47,6 +47,10 @@ const restoreRunService = mockResolvedModule(require.resolve('../src/services/co
   hasActiveRun: async () => false,
 });
 
+const restoreCheckpoint = mockResolvedModule(require.resolve('../src/services/codex/checkpoint-service'), {
+  withProjectMutationLock: async (_db, projectId, work) => { serviceCalls.push(['mutationLock', projectId]); return work(null); },
+});
+
 class RunnerError extends Error {
   constructor(message, { status = 0, body = null } = {}) {
     super(message);
@@ -100,6 +104,7 @@ after(() => {
   restoreProjectService();
   restoreRunService();
   restoreRunner();
+  restoreCheckpoint();
   delete process.env.CODEX_AGENT_V2;
 });
 beforeEach(() => {

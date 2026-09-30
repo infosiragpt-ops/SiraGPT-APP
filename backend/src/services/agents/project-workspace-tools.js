@@ -195,7 +195,10 @@ async function projectWrite(args, ctx) {
   const { runner } = depsFromCtx(ctx);
   if (!runner) return runnerUnavailable();
   try {
-    await runner.writeFiles(bound.project.id, [{ path: rel, content }]);
+    const output = await runner.writeFiles(bound.project.id, [{ path: rel, content }]);
+    if (output?.ok !== true || output.written !== 1) {
+      return { ok: false, code: 'incomplete_write', message: 'El ejecutor no confirmó el archivo guardado. Vuelve a leerlo antes de continuar.' };
+    }
   } catch (err) {
     return { ok: false, code: 'runner_unreachable', message: String((err && err.message) || err) };
   }

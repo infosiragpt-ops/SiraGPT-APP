@@ -191,3 +191,12 @@ test('execute nunca lanza: binding roto → internal/no_project', async () => {
   // resolveBoundProject captura el fallo de binding como no_project
   assert.equal(r.code, 'no_project');
 });
+
+
+test('project_write never confirms a skipped or unconfirmed runner write', async () => {
+  for (const output of [{ ok: true, written: 0 }, { ok: true }, { ok: false, written: 1 }]) {
+    const ctx = ctxWith(BOUND, { writeFiles: async () => output });
+    const result = await tools.projectWriteTool.execute({ path: 'app.ts', content: 'changed' }, ctx);
+    assert.equal(result.ok, false); assert.equal(result.code, 'incomplete_write');
+  }
+});
