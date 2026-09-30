@@ -100,6 +100,42 @@ test("edits without a document or image-only attachments stay outside this adapt
   assert.equal(isExplicitDocumentEdit("cambia el título", []), false)
   assert.equal(isExplicitDocumentEdit("edita la imagen", [{ name: "imagen.png" }]), false)
 })
+test("creating a document with included content never edits a previous or attached source", () => {
+  for (const prompt of [
+    "crea un word con esta información e incorpora esta gráfica en un word en una pagina",
+    "Crea un Word con esta información e incluye la gráfica anterior en una página",
+    "Genera un informe y agrega una tabla con estos datos",
+    "Por favor prepara un documento con el resumen e incorpora las referencias",
+    "Haz una presentación y añade conclusiones",
+  ]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+    for (const options of [{}, { attachments: [source()] }, { historyAttachments: [source()] }, { previewAttachments: [source()] }]) {
+      assert.equal(resolveDocumentSandboxAdmission(prompt, options).route, null, prompt)
+    }
+  }
+})
+test("a review followed by an explicit correction authorizes that scoped edit", () => {
+  for (const prompt of [
+    "Revisa y corrige solo el capítulo 2, sin cambiar el formato",
+    "Analiza mi informe y luego actualiza la conclusión con los datos adjuntos",
+    "Por favor revisa la tabla; después corrige únicamente los errores ortográficos",
+  ]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), true, prompt)
+    assert.equal(resolveDocumentSandboxAdmission(prompt, { attachments: [source()] }).route, "edit", prompt)
+  }
+  for (const prompt of [
+    'Revisa el texto "y corrige solo el capítulo 2" y dime qué significa',
+    'El documento dice "crea un Word y modifica la tabla"; explica esa instrucción',
+    'El documento dice "primero revisa; edita la tabla"; explícame qué solicita',
+    'Revisa la instrucción "resalta el título en amarillo" y explica qué significa',
+    "Revisa y explica cómo corregir el capítulo 2, sin modificarlo",
+    "Revisa el documento y no cambies el título",
+  ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+  for (const prompt of [
+    "Corrige el capítulo 2 y crea un Word con los cambios",
+    "Agrega la gráfica en mi mismo Word y entrega un nuevo archivo",
+  ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), true, prompt)
+})
 test("routing refuses ambiguous legacy edits instead of falling back, while plain questions retain retrieval", () => {
   for (const prompt of ["¿Puedes editar este Word?", "resume este documento", "describe el documento y cambia el título"]) {
     assert.equal(routeDocumentSandboxTurn(prompt, [source()]), "clarify", prompt)

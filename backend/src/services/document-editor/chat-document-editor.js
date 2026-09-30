@@ -258,6 +258,52 @@ async function exactNamedEditedArtifact({ prisma, userId, chatId, instruction, d
   return named.size === 1 ? named.values().next().value : null;
 }
 
+/** Resolve a named follow-up across owned chat history before considering recency. */
+async function namedHistorySources({ messages, prisma, userId, chatId, instruction, deps }) {
+  const request = sourceSelectionText(instruction);
+  const filenameTokens = request.match(/[\p{L}\p{N}_-][^\s"'“”«»`<>]*\.(?:docx?|xlsx?|xlsm|pptx?|pdf|csv|txt|md)\b/giu) || [];
+  if (!filenameTokens.length) return null;
+  const uploadIds = messages.filter((message) => message.role !== 'ASSISTANT')
+    .flatMap((message) => deps.extractFileIds(message.files));
+  const uploads = await loadOwnedUploads(prisma, userId, uploadIds);
+  const byId = new Map(uploads.map((source) => [source.row.id, source]));
+  const selected = new Map();
+  const identitiesByName = new Map();
+  for (const message of messages) {
+    const candidates = message.role === 'ASSISTANT'
+      ? assistantFileRefs(message).map((ref) => {
+        const artifactId = artifactIdFromRef(ref);
+        const metadata = artifactId && readOwnedArtifactMetadata(artifactId, userId, deps);
+        return metadata ? { kind: 'artifact', name: metadata.filename, artifactId, metadata } : null;
+      }).filter(Boolean)
+      : deps.extractFileIds(message.files).map((id) => byId.get(id)).filter(Boolean);
+    for (const source of candidates) {
+      const names = sourceNames(source).filter((name) => namesExactVisibleArtifact(instruction, name));
+      if (!names.length) continue;
+      const identity = sourceLineage(source).sourceFileId || `artifact:${source.artifactId}`;
+      for (const name of names) {
+        const key = name.normalize('NFC').toLowerCase();
+        if (!identitiesByName.has(key)) identitiesByName.set(key, new Set());
+        identitiesByName.get(key).add(identity);
+      }
+      // History is newest-first: continuing an original filename retains its
+      // latest delivered version, including all previously applied edits.
+      if (!selected.has(identity)) selected.set(identity, source);
+    }
+  }
+  const matchedNames = [...identitiesByName.keys()];
+  const missingName = filenameTokens.some((token) => !matchedNames.some((name) => name.endsWith(token)));
+  if (!selected.size || missingName || [...identitiesByName.values()].some((ids) => ids.size > 1)) {
+    throw new DocumentEditError('DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
+      'No pude identificar un único documento con ese nombre. Adjunta el archivo que deseas editar; no modifiqué ninguno.');
+  }
+  const sources = [...selected.values()];
+  const namedUploads = sources.filter((source) => source.kind === 'upload');
+  const latest = await latestDerivedArtifacts({ prisma, userId, chatId, uploads: namedUploads, deps });
+  const byUploadId = new Map(namedUploads.map((source, index) => [source.row.id, latest[index]]));
+  return sources.map((source) => source.kind === 'upload' ? byUploadId.get(source.row.id) : source);
+}
+
 /**
  * Resolve which documents this turn edits. Explicit attachments win; a
  * follow-up scans the conversation newest-first and takes the latest document set,
@@ -312,6 +358,13 @@ async function resolveEditSources({ prisma, userId, chatId, fileIds = [], instru
     orderBy: { timestamp: 'desc' },
     take: HISTORY_SCAN_MESSAGES,
   });
+  // Explicit upload/artifact identities already returned above. A name in a
+  // quoted replacement is content, not a source (sourceSelectionText masks it).
+  // Batch follow-ups keep their existing related-document resolution.
+  if (!includeRelatedSources && !isExplicitBatch(instruction)) {
+    const named = await namedHistorySources({ messages, prisma, userId, chatId, instruction, deps });
+    if (named) return named;
+  }
   const recentSources = [];
   const sameSource = (a, b) => {
     const aId = sourceLineage(a).sourceFileId;
