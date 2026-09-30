@@ -3238,7 +3238,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 <UserChatImage
                                     key={`img-${index}`}
                                     file={file}
-                                    onOpen={setSelectedImage}
+                                    // Same path as generated images: the chat host opens
+                                    // a plain lightbox (or the editor when the image tool
+                                    // is active) instead of this component's fallback.
+                                    onOpen={(url) => openImage(url, file)}
                                 />
                             ))}
                     </div>
@@ -3620,6 +3623,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 <ImageWorkspace
                     assets={viewerImages.length ? viewerImages : [{ id: selectedImage, url: selectedImage, name: 'Imagen.png' }]}
                     initialAssetId={viewerImages.find(item => item.url === selectedImage)?.id || selectedImage}
+                    // Outside the chat host there is no image tool: a picture
+                    // opens as a plain lightbox, never with the edit toolbar.
+                    viewOnly
                     onClose={() => setSelectedImage(null)}
                 />
             )}

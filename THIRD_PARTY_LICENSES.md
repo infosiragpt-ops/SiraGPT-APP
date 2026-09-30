@@ -75,7 +75,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@drizzle-team/brocli` | 0.10.2 | Apache-2.0 | [link](https://github.com/drizzle-team/brocli) |
 | `@google/genai` | 1.28.0 | Apache-2.0 | [link](https://github.com/googleapis/js-genai) |
 | `@google/generative-ai` | 0.24.1 | Apache-2.0 | [link](https://github.com/google/generative-ai-js) |
-| `@grpc/grpc-js` | 1.14.4 | Apache-2.0 | [link](https://github.com/grpc/grpc-node.git#master) |
+| `@grpc/grpc-js` | 1.14.5 | Apache-2.0 | [link](https://github.com/grpc/grpc-node.git#master) |
 | `@grpc/proto-loader` | 0.8.1 | Apache-2.0 | [link](https://github.com/grpc/grpc-node) |
 | `@huggingface/tokenizers` | 0.1.3 | Apache-2.0 | [link](https://github.com/huggingface/tokenizers.js) |
 | `@huggingface/transformers` | 4.2.0 | Apache-2.0 | [link](https://github.com/huggingface/transformers.js) |
@@ -810,7 +810,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `asynckit` | 0.4.0 | MIT | [link](https://github.com/alexindigo/asynckit) |
 | `atomic-sleep` | 1.0.0 | MIT | [link](https://github.com/davidmarkclements/atomic-sleep) |
 | `autoprefixer` | 10.5.0 | MIT | [link](https://github.com/postcss/autoprefixer) |
-| `axios` | 1.18.0, 1.19.0 | MIT | [link](https://github.com/axios/axios) |
+| `axios` | 1.20.0 | MIT | [link](https://github.com/axios/axios) |
 | `bail` | 2.0.2 | MIT | [link](https://github.com/wooorm/bail) |
 | `balanced-match` | 1.0.2 | MIT | [link](https://github.com/juliangruber/balanced-match) |
 | `base64-js` | 0.0.8, 1.5.1 | MIT | [link](https://github.com/beatgammit/base64-js) |

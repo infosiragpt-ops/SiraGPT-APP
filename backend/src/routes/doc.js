@@ -40,6 +40,7 @@ const {
   findPreviousAssistantContent,
   isPreviousContentExportRequest,
 } = require('../services/document-followup-context');
+const { collectPreviousTurnContext } = require('../services/previous-turn-document-context');
 const {
   MAX_OUTLINE_ITEMS,
   MAX_RESEARCH_SOURCES,
@@ -364,8 +365,28 @@ router.post(
       });
       const shouldUsePreviousAssistantContent = isPreviousContentExportRequest(prompt);
       const requestedFileIds = normalizeRequestedFileIds(req.body);
+      // «Crea un word con esta información e incorpora esta gráfica»: the
+      // previous answer and its chart (rendered to PNG, owned File row) ride
+      // with the turn so the runner does not work blind.
+      const turnContext = await collectPreviousTurnContext({
+        prisma,
+        userId: req.user.id,
+        chatId,
+        instruction: prompt,
+        fileIds: requestedFileIds,
+      });
+      if (turnContext.applied) {
+        send({
+          type: 'stage',
+          label: turnContext.chart
+            ? 'Recuperando el contenido y la gráfica del mensaje anterior'
+            : 'Recuperando el contenido del mensaje anterior',
+          pct: 3,
+        });
+      }
+      const runnerFileIds = turnContext.fileIds;
       const [explicitReferenceFiles, projectContext, previousAssistantContent] = await Promise.all([
-        loadReferenceFiles(requestedFileIds, req.user.id),
+        loadReferenceFiles(runnerFileIds, req.user.id),
         loadProjectContextForChat(chatId, req.user.id),
         shouldUsePreviousAssistantContent
           ? loadPreviousAssistantContentForExport(chatId, req.user.id)
@@ -408,8 +429,10 @@ router.post(
           prisma,
           userId: req.user.id,
           chatId,
-          prompt,
-          fileIds: requestedFileIds,
+          prompt: turnContext.instruction,
+          // Claim / runner-only routing keeps reading the user's own words.
+          routingPrompt: prompt,
+          fileIds: runnerFileIds,
           model: req.body.model,
           skills: require('../services/chat-skills').normalizeSelectedSkillNames(req.body.skills),
           // Engines follow the model picked in the composer.
