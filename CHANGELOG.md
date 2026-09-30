@@ -16,6 +16,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Prepared chat-native coding projects: named cloud folders, an optional code button in the chat header, owner-scoped project preparation and repository import locking. Draft only: the `/generate` connection remains unapplied pending approval; see `docs/coding/chat-native-status.md`.
+
 - RLCD document analysis phase 3: retrieval-score + page-citation
   evidence, warmer Spanish defer (ask for section/page, candidate pages
   from RAG), expanded offline eval harness

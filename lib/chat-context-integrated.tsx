@@ -20,6 +20,7 @@ import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
+import { emitCodingWorkspaceReady } from "./chat/coding-workspace-event"
 import {
   COMPOSER_EFFORT_SCALE,
   COMPOSER_EFFORT_SCALE_KEY,
@@ -835,7 +836,7 @@ interface ChatContextType {
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
     content?: string,
     files?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated'; skills?: string[] }
+    options?: { codingWorkspace?: boolean; skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated'; skills?: string[] }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
@@ -1421,7 +1422,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         .map(resolveAttachmentId)
         .filter((id): id is string => Boolean(id));
       const conversationForRouting = activeChat?.messages || currentChat?.messages || [];
-      const historicalDocumentFileIds = normalizedFileIds.length === 0 && shouldUseExistingDocumentFileContext(content, conversationForRouting)
+      const historicalDocumentFileIds = !options?.codingWorkspace && normalizedFileIds.length === 0 && shouldUseExistingDocumentFileContext(content, conversationForRouting)
         ? collectRecentDocumentContextIds(conversationForRouting)
         : [];
       const requestFileIds = normalizedFileIds.length > 0 ? normalizedFileIds : historicalDocumentFileIds;
@@ -2426,6 +2427,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             controller.signal, // Pass the abort signal
             {
+              onCodingWorkspace: (payload) => {
+                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
+                emitCodingWorkspaceReady(payload, pendingOwnerId, activeChat.id);
+              },
               ...reasoningStreamHandlers,
               ...(() => {
                 const activityHandlers = createActivityHandlers({
@@ -2811,7 +2816,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated'; skills?: string[] }
+    options?: { codingWorkspace?: boolean; skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; webSearchMode?: 'dedicated'; skills?: string[] }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !isAuthenticated || !chatModel) return;
@@ -2949,7 +2954,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               }
               break;
             default:
-              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality, webSearchMode: options?.webSearchMode, skills: options?.skills });
+              await addMessage(initialContent, initialFiles, newChat, false, options?.initialIntent, { codingWorkspace: options?.codingWorkspace, idempotencyKey: options?.idempotencyKey, imageModel: options?.imageModel, imageProvider: options?.imageProvider, imageQuality: options?.imageQuality, webSearchMode: options?.webSearchMode, skills: options?.skills });
               break;
           }
         } catch (error) {

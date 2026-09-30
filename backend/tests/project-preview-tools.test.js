@@ -22,6 +22,7 @@ function makeDb({ user = { id: 'u1', isAdmin: true, isSuperAdmin: false, deleted
   return {
     rows,
     user: { findUnique: async ({ where }) => (where.id === user.id ? user : null) },
+    chat: { findFirst: async ({ where }) => where.userId === user.id && where.id === 'c1' ? { id: 'c1' } : null },
     codexProject: {
       create: async ({ data }) => { const row = { id: `p${rows.length + 1}`, ...data }; rows.push(row); return row; },
       update: async ({ where, data }) => { const row = rows.find((r) => r.id === where.id); Object.assign(row, data); return row; },
@@ -93,7 +94,7 @@ test('project_clone_repo: clones into a chat-bound project and points to preview
 test('project_clone_repo: an already bound chat is reused, nothing is cloned', async () => {
   const db = makeDb();
   const runner = makeRunner();
-  const binding = makeBinding({ 'u1:c1': { id: 'pX', name: 'Mi app', status: 'ready' } });
+  const binding = makeBinding({ 'u1:c1': { id: 'pX', name: 'Mi app', status: 'ready', sourceControl: { repository: 'https://github.com/infosiragpt-ops/runelectric.git' } } });
   const ctx = { userId: 'u1', chatId: 'c1', projectTools: { db, runner, binding, projectService: {}, githubApi: null, env: ENV } };
   const out = await tools.projectCloneRepoTool.execute({ repoUrl: 'https://github.com/infosiragpt-ops/runelectric' }, ctx);
   assert.equal(out.ok, true);
@@ -258,4 +259,61 @@ test('Next previews are shared without the trailing slash (skipTrailingSlashRedi
   const { absolutePreviewUrl } = svc._internal;
   assert.equal(absolutePreviewUrl('/x/app/', ENV, 'vite'), 'https://siragpt.com/x/app/');
   assert.equal(absolutePreviewUrl('/x/app/', ENV, 'next'), 'https://siragpt.com/x/app');
+});
+
+
+test('repository import refuses foreign chats and incompatible existing bindings', async () => {
+  const db = makeDb(), runner = makeRunner();
+  const deps = { db, runner, projectService: {}, githubApi: null, env: ENV, binding: makeBinding() };
+  const foreign = await svc.cloneRepoForChat({ userId: 'u1', chatId: 'foreign', repoUrl: 'https://github.com/a/b' }, deps);
+  assert.equal(foreign.code, 'coding_chat_not_found');
+  for (const project of [
+    { id: 'p1', name: 'App', status: 'ready' },
+    { id: 'p1', name: 'Other', status: 'ready', sourceControl: { repository: 'https://github.com/a/other' } },
+    { id: 'p1', name: 'Broken', status: 'error', sourceControl: { repository: 'https://github.com/a/b' } },
+  ]) {
+    const result = await svc.cloneRepoForChat({ userId: 'u1', chatId: 'c1', repoUrl: 'https://github.com/a/b' }, { ...deps, binding: makeBinding({ 'u1:c1': project }) });
+    assert.equal(result.ok, false);
+    assert.ok(['chat_already_bound', 'coding_project_not_ready'].includes(result.code));
+  }
+  assert.equal(db.rows.length, 0);
+  assert.equal(runner.calls.length, 0);
+});
+
+test('manual creation and repository import share one chat lock and never allocate duplicate projects', async () => {
+  const binding = require('../src/services/codex/project-chat-binding');
+  const { publicProject } = require('../src/services/codex/project-service');
+  const db = makeDb(), runner = makeRunner(), locks = [];
+  db.codexProject.findMany = async ({ where, take }) => db.rows.filter((row) => row.userId === where.userId && row.brief.chatId === where.brief.equals).slice(0, take);
+  db.$queryRawUnsafe = async (_sql, ...args) => { locks.push(args); return [{ locked: 1 }]; };
+  db.$transaction = async (work) => work(db);
+  let manualCreates = 0;
+  const projects = {
+    getProject: async ({ userId, id }) => {
+      const row = db.rows.find((item) => item.userId === userId && item.id === id);
+      return row ? publicProject(row) : null;
+    },
+    createProject: async ({ userId, name, brief }) => {
+      manualCreates++;
+      const row = await db.codexProject.create({ data: { userId, name, brief, status: 'ready' } });
+      return publicProject(row);
+    },
+  };
+  let release, started;
+  const hold = new Promise((resolve) => { release = resolve; });
+  const entered = new Promise((resolve) => { started = resolve; });
+  const init = runner.initWorkspace;
+  runner.initWorkspace = async (id) => { started(); await hold; return init(id); };
+  const importing = svc.cloneRepoForChat({ userId: 'u1', chatId: 'c1', repoUrl: 'https://github.com/a/b' }, { db, runner, binding, projectService: projects, githubApi: null, env: ENV });
+  await entered;
+  const manual = binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'c1', name: 'An app', db, projects });
+  release();
+  const [a, b] = await Promise.all([importing, manual]);
+  assert.equal(a.ok, true);
+  assert.equal(b.reused, true);
+  assert.equal(a.project.id, b.project.id);
+  assert.equal(db.rows.length, 1);
+  assert.equal(manualCreates, 0);
+  assert.equal(locks.length, 2);
+  assert.deepEqual(locks[0], locks[1], 'all workers serialize the same owner+chat key');
 });

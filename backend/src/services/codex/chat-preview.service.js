@@ -67,7 +67,7 @@ function defaultDeps() {
 }
 
 function resolveDeps(deps = {}) {
-  const base = deps && (deps.db || deps.runner || deps.projectService) ? {} : defaultDeps();
+  const base = deps?.db && deps?.runner && deps?.projectService ? {} : defaultDeps();
   return {
     db: deps.db || base.db,
     projectService: deps.projectService || base.projectService,
@@ -117,8 +117,23 @@ async function storedGithubToken(githubApi, userId) {
  * chat). If the chat already has a project, nothing is cloned and the bound
  * project is returned with `reused: true`.
  */
-async function cloneRepoForChat({ userId, chatId, repoUrl, branch = '', name = '' } = {}, deps = {}) {
+async function cloneRepoForChat(args = {}, deps = {}) {
   const d = resolveDeps(deps);
+  const { userId, chatId } = args;
+  const access = await assertCodexAccess({ userId, db: d.db, env: d.env });
+  if (!access.ok) return access;
+  if (!d.binding.cleanChatId(chatId)) return fail('no_chat_context', 'No hay chat de /agentes en este turno.');
+  try {
+    return await projectChatBinding.withChatProjectLock({ userId, chatId, db: d.db }, (lockedDb) => (
+      cloneRepoForChatLocked(args, { ...d, db: lockedDb })
+    ));
+  } catch (err) {
+    const code = err?.code === 'coding_chat_not_found' ? 'coding_chat_not_found' : 'coding_unavailable';
+    return fail(code, code === 'coding_chat_not_found' ? 'No se encontró el chat.' : 'No se pudo preparar el proyecto. Reintenta en unos segundos.');
+  }
+}
+
+async function cloneRepoForChatLocked({ userId, chatId, repoUrl, branch = '', name = '' }, d) {
   const cleanChat = d.binding.cleanChatId(chatId);
   if (!cleanChat) return fail('no_chat_context', 'No hay chat de /agentes en este turno.');
   const access = await assertCodexAccess({ userId, db: d.db, env: d.env });
@@ -138,12 +153,18 @@ async function cloneRepoForChat({ userId, chatId, repoUrl, branch = '', name = '
     return fail('runner_unreachable', String(err?.message || err));
   }
   if (bound && bound.id) {
+    if (bound.status !== 'ready') return fail('coding_project_not_ready', 'El proyecto de este chat no está listo. Revisa su error antes de continuar.');
+    let source = null;
+    try { source = d.harness.parsePublicGithubRepo(bound.sourceControl?.repository || bound.sourceControl?.webUrl); } catch { /* not a repository workspace */ }
+    if (!source || source.slug !== repository.slug) {
+      return fail('chat_already_bound', 'Este chat ya tiene otro proyecto. Abre un chat nuevo para trabajar con ese repositorio.');
+    }
     return {
       ok: true,
       reused: true,
-      project: { id: bound.id, name: bound.name || null, status: bound.status || null },
-      repository: { fullName: `${repository.owner}/${repository.repo}`, webUrl: repository.webUrl },
-      message: 'Este chat ya tiene un proyecto vinculado; no se clona de nuevo.',
+      project: { id: bound.id, name: bound.name || null, status: bound.status },
+      repository: { fullName: `${source.owner}/${source.repo}`, webUrl: source.webUrl },
+      message: 'Este chat ya tiene este repositorio vinculado; no se clona de nuevo.',
     };
   }
 

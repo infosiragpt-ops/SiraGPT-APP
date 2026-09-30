@@ -6,20 +6,23 @@ import { test } from "node:test"
 // Auxiliary source-boundary checks only; not SPEC §10.2 acceptance or UI E2E.
 const source = readFileSync(join(process.cwd(), "components/chat-interface-enhanced.tsx"), "utf8")
 test("document editor admission intercepts before Word/Excel connectors and never falls back", () => {
-  const early = source.indexOf("const sandboxDecision = isWordConnectorActive || isExcelConnectorActive")
+  const early = source.indexOf("const sandboxDecision = codingWorkspace || isWordConnectorActive || isExcelConnectorActive")
   const word = source.indexOf("if (isWordConnectorActive)", early)
   const excel = source.indexOf("if (isExcelConnectorActive)", early)
-  const later = source.indexOf("const documentSandboxRoute = resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route")
+  const later = source.indexOf("const documentSandboxRoute = codingWorkspace ? null : resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route")
   const legacy = source.indexOf("const shouldStartAgenticLoopImmediately =", later)
   assert.ok(early > 0 && word > early && excel > word)
   const admission = source.slice(early, word)
-  // An open connector keeps editing its own document; everything else is admitted by file id.
+  // A verified coding turn stays in its project. Open document connectors
+  // keep editing their own document; other document turns are admitted by id.
+  assert.match(admission, /const sandboxDecision = codingWorkspace \|\| isWordConnectorActive \|\| isExcelConnectorActive/)
   assert.match(admission, /\? \{ route: null, attachments: \[\] \}\s*: resolveDocumentSandboxAdmission\(msg, \{/)
   assert.doesNotMatch(admission, /need_original|wordHtml|connectorOpen/)
   assert.match(admission, /await startDocumentSandbox\(msg, sandboxDecision.attachments, idempotencyKey, documentPreflight.signal, \(chatId\) =>/)
   assert.match(admission, /return; \/\/ No silent fallback/)
   assert.ok(later > excel && legacy > later)
   const composer = source.slice(later, legacy)
+  assert.match(composer, /const documentSandboxRoute = codingWorkspace \? null : resolveDocumentSandboxAdmission\(msg, \{ attachments: filesToSend \}\)\.route/)
   assert.match(composer, /documentSandboxRoute === "clarify".*E_EDIT_AMBIGUOUS/)
   assert.match(composer, /await startDocumentSandbox\(msg, filesToSend, idempotencyKey, documentPreflight.signal, \(chatId\) =>/)
   assert.match(composer, /return; \/\/ No silent fallback/)

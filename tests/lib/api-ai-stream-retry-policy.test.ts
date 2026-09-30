@@ -105,6 +105,20 @@ describe('generateAIStream retry policy', () => {
     api.setToken(null)
   })
 
+  it('delivers only valid workspace metadata for the requested chat without treating it as a token', async () => {
+    const onCodingWorkspace = vi.fn()
+    mockFetch.mockResolvedValue(sseFrames([
+      { type: 'coding_workspace', chatId: 'another-chat', projectId: 'other', projectName: 'Other' },
+      { type: 'coding_workspace', chatId: 'code-chat', projectId: '', projectName: 'Invalid' },
+      { type: 'coding_workspace', chatId: 'code-chat', projectId: 'project-1', projectName: 'Bicicletas', brief: { internal: true }, workspacePath: '/private/path' },
+      { content: 'Proyecto preparado.' },
+    ]))
+    const result = await run({ onCodingWorkspace }, { chatId: 'code-chat' })
+    expect(onCodingWorkspace).toHaveBeenCalledExactlyOnceWith({ chatId: 'code-chat', projectId: 'project-1', projectName: 'Bicicletas' })
+    expect(result.chunks.join('')).toBe('Proyecto preparado.')
+    expect(result.onError).not.toHaveBeenCalled()
+  })
+
   it('stops a 429 rate limit after 4 retries with Spanish copy and no upgrade prompt', async () => {
     mockFetch.mockImplementation(async () => jsonError(429, {
       error: 'rate_limited',

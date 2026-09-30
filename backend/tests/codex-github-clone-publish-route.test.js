@@ -104,24 +104,35 @@ const originals = {
   update: codexDb.codexProject.update,
   findFirst: codexDb.codexProject.findFirst,
   findMany: codexDb.codexProject.findMany,
+  chatFindFirst: codexDb.chat.findFirst,
+  transaction: codexDb.$transaction,
+  queryRaw: codexDb.$queryRawUnsafe,
 };
 
 const dbCalls = [];
 // `bound` simula proyectos ya existentes del usuario (vínculo chat↔proyecto
 // vive en brief.chatId y se resuelve con findMany).
-function installDb({ row = null, bound = [] } = {}) {
-  codexDb.codexProject.findFirst = async () => (row ? { ...row } : null);
+function installDb({ row = null, bound = [], chatOwner = 'u-1' } = {}) {
+  const projects = [...bound];
+  codexDb.chat.findFirst = async ({ where }) => where.id === 'chat_42' && where.userId === chatOwner && where.deletedAt === null ? { id: 'chat_42' } : null;
+  codexDb.$transaction = async (work) => work(codexDb);
+  codexDb.$queryRawUnsafe = async (_sql, ...args) => { dbCalls.push(['lock', args]); return [{ locked: 1 }]; };
+  codexDb.codexProject.findFirst = async ({ where }) => row ? { ...row } : (projects.find((item) => item.id === where.id && item.userId === where.userId) || null);
   codexDb.codexProject.findMany = async ({ where }) => {
     dbCalls.push(['findMany', where]);
-    return bound.filter((r) => r.userId === where.userId).map((r) => ({ id: r.id, brief: r.brief }));
+    return projects.filter((r) => r.userId === where.userId && (!where.brief || r.brief?.chatId === where.brief.equals)).map((r) => ({ id: r.id, brief: r.brief }));
   };
   codexDb.codexProject.create = async ({ data }) => {
     dbCalls.push(['create', data]);
-    return { id: 'p-clone', ...data, createdAt: new Date(), updatedAt: new Date() };
+    const created = { id: 'p-clone', ...data, createdAt: new Date(), updatedAt: new Date() };
+    projects.push(created);
+    return created;
   };
   codexDb.codexProject.update = async ({ where, data }) => {
     dbCalls.push(['update', where, data]);
-    return { id: where.id, userId: 'u-1', name: 'X', status: 'ready', ...data };
+    const current = projects.find((item) => item.id === where.id);
+    if (current) Object.assign(current, data);
+    return { id: where.id, userId: 'u-1', name: 'X', status: 'ready', ...current, ...data };
   };
 }
 
@@ -134,6 +145,9 @@ after(() => {
   codexDb.codexProject.update = originals.update;
   codexDb.codexProject.findFirst = originals.findFirst;
   codexDb.codexProject.findMany = originals.findMany;
+  codexDb.chat.findFirst = originals.chatFindFirst;
+  codexDb.$transaction = originals.transaction;
+  codexDb.$queryRawUnsafe = originals.queryRaw;
   delete process.env.CODEX_AGENT_V2;
 });
 
@@ -428,4 +442,52 @@ test('POST /projects/clone sin chatId no toca el vínculo ni expone chatId', asy
   assert.equal(res.body.project.chatId, undefined);
   assert.equal(dbCalls.filter((c) => c[0] === 'findMany').length, 0);
   assert.equal(dbCalls.find((c) => c[0] === 'create')[1].brief.chatId, undefined);
+});
+
+
+test('POST /projects/clone cannot bind another user’s chat or a missing chat', async () => {
+  installDb({ chatOwner: 'u-2' });
+  const response = await request(buildApp()).post('/api/codex/projects/clone').send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'chat_42' });
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'coding_chat_not_found');
+  assert.equal(dbCalls.filter((call) => call[0] === 'create').length, 0);
+  assert.equal(activeRunner.calls.length, 0);
+  assert.equal(githubState.calls.length, 0);
+});
+
+test('concurrent HTTP clone and manual creation serialize the same chat and create only once', async () => {
+  installDb();
+  const binding = require('../src/services/codex/project-chat-binding');
+  let release, entered;
+  const hold = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  const init = activeRunner.initWorkspace;
+  activeRunner.initWorkspace = async (id) => { entered(); await hold; return init(id); };
+  const clone = request(buildApp()).post('/api/codex/projects/clone').send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'chat_42' }).then((out) => out);
+  await started;
+  let manualCreates = 0;
+  const projects = {
+    getProject: async ({ id, userId }) => codexDb.codexProject.findFirst({ where: { id, userId } }),
+    createProject: async () => { manualCreates++; throw new Error('must not create another project'); },
+  };
+  const manual = binding.findOrCreateProjectForChat({ userId: 'u-1', chatId: 'chat_42', name: 'New App', db: codexDb, projects });
+  release();
+  const [a, b] = await Promise.all([clone, manual]);
+  assert.equal(a.status, 201);
+  assert.equal(b.reused, true);
+  assert.equal(a.body.project.id, b.project.id);
+  assert.equal(dbCalls.filter((call) => call[0] === 'create').length, 1);
+  assert.equal(manualCreates, 0);
+  const locks = dbCalls.filter((call) => call[0] === 'lock');
+  assert.equal(locks.length, 2);
+  assert.deepEqual(locks[0][1], locks[1][1]);
+});
+
+test('a failed chat-clone transaction cannot send a successful 201 before commit', async () => {
+  installDb();
+  codexDb.$transaction = async (work) => { await work(codexDb); throw new Error('transaction commit failed'); };
+  const response = await request(buildApp()).post('/api/codex/projects/clone').send({ name: 'App', repoUrl: 'https://github.com/acme/app', chatId: 'chat_42' });
+  assert.equal(response.status, 500);
+  assert.equal(response.body.error, 'codex_clone_failed');
+  assert.equal(response.body.project, undefined);
 });
