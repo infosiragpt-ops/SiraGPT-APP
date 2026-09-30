@@ -158,7 +158,7 @@ test('falls back to body.url when page is missing', async () => {
   alerting.notifyFrontendError = async (p) => { received = p; };
   const handler = findRouteHandler(telemetryRoute, '/error');
   const { res } = makeRes();
-  await handler({ body: { url: 'https://app/x' }, headers: {} }, res);
+  await handler({ body: { url: 'https://app/x', message: 'boom' }, headers: {} }, res);
   await new Promise((r) => setImmediate(r));
   assert.equal(received.page, 'https://app/x');
 });
@@ -188,12 +188,12 @@ test('userId defaults to null when req.user is absent', async () => {
   alerting.notifyFrontendError = async (p) => { received = p; };
   const handler = findRouteHandler(telemetryRoute, '/error');
   const { res } = makeRes();
-  await handler({ body: {}, headers: {} }, res);
+  await handler({ body: { message: 'boom' }, headers: {} }, res);
   await new Promise((r) => setImmediate(r));
   assert.equal(received.userId, null);
 });
 
-test('tolerates non-object body without crashing', async () => {
+test('tolerates non-object body without crashing — and records nothing', async () => {
   let received = null;
   alerting.notifyFrontendError = async (p) => { received = p; };
   const handler = findRouteHandler(telemetryRoute, '/error');
@@ -201,7 +201,37 @@ test('tolerates non-object body without crashing', async () => {
   await handler({ body: null, headers: {} }, res);
   await new Promise((r) => setImmediate(r));
   assert.equal(state.statusCode, 202);
-  assert.equal(received.page, 'unknown');
+  assert.equal(received, null, 'an empty body carries no error to alert about');
+  assert.equal(auditCalls.length, 0);
+});
+
+test('an empty event (probe / beacon without body) is accepted but never alerted, audited or grouped', async () => {
+  let received = null;
+  alerting.notifyFrontendError = async (p) => { received = p; };
+  const handler = findRouteHandler(telemetryRoute, '/error');
+  for (const body of [{}, { page: '/agentes' }, { source: 'client', severity: 'error' }, { message: '   ' }]) {
+    const { res, state } = makeRes();
+    // eslint-disable-next-line no-await-in-loop
+    await handler({ body, headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0) Chrome/120.0.0.0' } }, res);
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((r) => setImmediate(r));
+    assert.equal(state.statusCode, 202, JSON.stringify(body));
+    assert.deepEqual(state.body, { accepted: true });
+  }
+  assert.equal(received, null);
+  assert.equal(auditCalls.length, 0);
+});
+
+test('a real error with only a stack is still recorded', async () => {
+  let received = null;
+  alerting.notifyFrontendError = async (p) => { received = p; };
+  const handler = findRouteHandler(telemetryRoute, '/error');
+  const { res, state } = makeRes();
+  await handler({ body: { stack: 'ReferenceError: Cannot access \'y\' before initialization\n    at a.js:1:1' }, headers: {} }, res);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(state.statusCode, 202);
+  assert.ok(received, 'stack-only reports are real crashes');
+  assert.match(received.stack, /ReferenceError/);
 });
 
 test('alerting errors are swallowed (never propagated to the client)', async () => {

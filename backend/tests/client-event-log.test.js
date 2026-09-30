@@ -4,6 +4,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  isEmptyClientEvent,
   sanitizeClientEvent,
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,
@@ -12,6 +13,19 @@ const {
 } = require('../src/services/client-event-log');
 
 describe('client-event-log', () => {
+  test('isEmptyClientEvent: nothing reported → true; any error, action, status or turn → false', () => {
+    for (const body of [null, undefined, 'x', [], {}, { page: '/agentes' }, { severity: 'error', source: 'client' }, { message: '' }, { message: '  ' }, { status: '' }]) {
+      assert.equal(isEmptyClientEvent(body), true, JSON.stringify(body));
+    }
+    for (const body of [
+      { message: 'boom' }, { error: 'boom' }, { reason: 'no_activity' }, { stack: 'at x' },
+      { action: 'turn_stream_error' }, { event: 'click' }, { endpoint: '/api/ai/generate' },
+      { status: 500 }, { status: '503' }, { turn: { reason: 'render_crash', chatId: 'c1' } },
+    ]) {
+      assert.equal(isEmptyClientEvent(body), false, JSON.stringify(body));
+    }
+  });
+
   test('redacts common secrets from strings', () => {
     const out = redactText('Bearer abc.def.ghi sk_live_secret user@example.com');
     assert.match(out, /Bearer \[REDACTED\]/);

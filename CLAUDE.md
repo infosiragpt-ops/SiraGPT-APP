@@ -1533,6 +1533,28 @@ compositor, estados, móvil, lógica, superficies, carga) con verificación adve
   del render), `tests/markdown-repair-streaming-tail.test.ts`, `tests/lib/markdown-block-split.test.ts`,
   `tests/components/message-markdown-render.test.tsx`.
 
+## Errores de Admin → Logs — cuarto volcado (added 2026-09-30)
+
+Del volcado del 27–30 sep, la mayoría ya tenía corrección en `production-main`
+posterior a la línea de log (#835 watchdog, #836 goal-events, #838 claves ilegibles,
+#842 slug DeepSeek, #875 abortos y P2034, #884 `[models-dbg]`, #915/#916/#924/#925
+saldo, transcripción, visión y atribución). Lo que seguía abierto:
+- **Sin saldo ≠ clave rechazada**: xAI responde 403 «used all available credits / monthly
+  spending limit», OpenAI 429 «no credits remaining», Anthropic 400 «credit balance is too
+  low», Meta 402. `litellm-gateway.classifyProviderError` mira ese texto ANTES del estado
+  (antes 403 ⇒ `auth`), y `task-error-classifier` lo clasifica `quota-exhausted` sin
+  reintentos antes de la regla de rate-limit (antes 429 ⇒ `rate-limited` reintentable).
+- **Telemetría vacía**: `POST /api/telemetry/error` sin mensaje/acción/stack/turno
+  (sondas, beacons sin cuerpo) responde 202 y no alerta, audita ni agrupa
+  (`isEmptyClientEvent`). Era el issue «client event · unknown» de Errores del sistema.
+- **Copia del timeout del chat**: «El modelo cortó la respuesta después de pensar…» —
+  sin la frase «no es un fallo de GitHub» heredada de codex.
+- **coworkRun.create**: pausa con jitter entre reintentos de P2034 (antes reintentaba en
+  el mismo tick y volvía a chocar).
+- Solo Luis: saldo/claves de OpenAI (incl. 401 en Files), xAI, Anthropic, Meta; volver a
+  guardar en Admin → Conexiones las claves marcadas «ilegible».
+- Test: `backend/tests/provider-credit-classification.test.js`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

@@ -237,11 +237,23 @@ function classifyRateLimited(err, rateRule) {
   };
 }
 
+// Explicit «the account has no money» wording. Providers wrap it in every
+// status: OpenAI 429 «You have no credits remaining», xAI 403 «used all
+// available credits or reached its monthly spending limit», Anthropic 400
+// «credit balance is too low», Meta 402 «Billing verification failed». The
+// status alone would file these as a retryable rate limit (429) or an auth
+// failure (403) — prod 2026-09-28/29 — so the wording is checked first.
+const HARD_CREDIT_RE = /no credits? (?:left|remaining)|used all (?:of )?(?:your |the )?(?:available )?credits|credit balance is too low|spending (?:limit|cap)|billing verification failed|insufficient[_ ](?:balance|credits?|funds)|exceeded your current quota|out of credits?|purchase (?:more )?credits/i;
+
 function classifyTaskError(err) {
   if (!err) return { retryable: false, reason: 'no-error' };
   const msg = String(err.message || err).toLowerCase();
   const code = String(err.code || err.statusCode || '').toLowerCase();
   const errName = String(err.name || '').toLowerCase();
+
+  if (HARD_CREDIT_RE.test(msg)) {
+    return { retryable: false, reason: 'quota-exhausted' };
+  }
 
   // Rate/concurrency pressure wins over generic quota words like "burst quota".
   const rateRule = RETRYABLE_RULES[0];

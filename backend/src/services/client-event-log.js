@@ -73,6 +73,20 @@ function normalizeEndpoint(raw) {
   return path.replace(/\/$/, '') || '/';
 }
 
+// A POST /api/telemetry/error with nothing in it — a probe, a scanner, a
+// beacon that lost its body — carries no error: nothing to alert, audit or
+// group (prod 2026-09-28..30: an «Errores del sistema» issue titled «client
+// event», page unknown, no stack, 0 users).
+function isEmptyClientEvent(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return true;
+  const hasText = (v) => typeof v === 'string' && v.trim().length > 0;
+  if (hasText(body.message) || hasText(body.error) || hasText(body.reason) || hasText(body.stack)) return false;
+  if (hasText(body.action) || hasText(body.event) || hasText(body.endpoint) || hasText(body.route)) return false;
+  if (Number.isFinite(Number(body.status)) && body.status !== null && body.status !== '') return false;
+  if (body.turn && typeof body.turn === 'object') return false;
+  return true;
+}
+
 function sanitizeClientEvent(body = {}, req = null) {
   const source = normalizeSource(body.source);
   const severity = normalizeSeverity(body.severity);
@@ -191,6 +205,7 @@ function isExpectedConfigClientEvent(event = {}) {
 }
 
 module.exports = {
+  isEmptyClientEvent,
   sanitizeClientEvent,
   buildClientEventAuditEntry,
   isExpectedAuthClientEvent,

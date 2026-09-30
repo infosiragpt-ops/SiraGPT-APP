@@ -25,10 +25,20 @@ const {
   isExpectedAuthClientEvent,
   isExpectedQuotaClientEvent,
   isExpectedConfigClientEvent,
+  isEmptyClientEvent,
 } = require('../services/client-event-log');
+
+function accepted(req, res) {
+  const responseBody = { accepted: true };
+  const requestId = req.requestId || req.headers?.['x-request-id'] || null;
+  if (requestId) responseBody.requestId = requestId;
+  return res.status(202).json(responseBody);
+}
 
 router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req, res) => {
   const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
+  // Nothing reported → nothing recorded. Still 202: the beacon never retries.
+  if (isEmptyClientEvent(body)) return accepted(req, res);
   const event = sanitizeClientEvent(body, req);
   const expectedClientNoise = isExpectedAuthClientEvent(event)
     || isExpectedQuotaClientEvent(event)
@@ -63,10 +73,7 @@ router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req,
       .catch(() => {});
   }
 
-  const responseBody = { accepted: true };
-  const requestId = req.requestId || req.headers?.['x-request-id'] || null;
-  if (requestId) responseBody.requestId = requestId;
-  res.status(202).json(responseBody);
+  return accepted(req, res);
 });
 
 module.exports = router;

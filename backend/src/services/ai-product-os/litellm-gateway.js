@@ -907,13 +907,17 @@ function classifyProviderError(error) {
     // «check quota» is a per-minute throttle and stays retryable.
     || message.match(/no credits? (?:left|remaining)|used all (?:of )?(?:your |the )?(?:available )?credits|credit balance is too low|spending (?:limit|cap)/i);
   let errorClass = "unknown";
-  if (status === 401 || status === 403 || code.includes("auth") || message.match(/api key|unauthori[sz]ed|forbidden/i)) {
-    errorClass = "auth";
-  } else if (quotaExhausted) {
+  if (quotaExhausted) {
     // Billing/quota exhaustion cannot recover within the same request. Keep it
     // distinct from a burst 429 so callers fail over immediately instead of
-    // sleeping and retrying the same unavailable account.
+    // sleeping and retrying the same unavailable account. Checked BEFORE the
+    // status-based auth rule: xAI answers an empty account with 403 «Your team
+    // … has either used all available credits or reached its monthly spending
+    // limit» (prod 2026-09-29, logged as «(auth)» and shown as «clave
+    // rechazada» instead of «sin saldo»).
     errorClass = "quota_exhausted";
+  } else if (status === 401 || status === 403 || code.includes("auth") || message.match(/api key|unauthori[sz]ed|forbidden/i)) {
+    errorClass = "auth";
   } else if (status === 429 || code.includes("rate") || message.match(/rate limit|too many requests/i)) {
     errorClass = "rate_limit";
   } else if (status === 408 || code.includes("timeout") || code === "etimedout" || message.match(/timeout|timed out|aborted/i)) {
