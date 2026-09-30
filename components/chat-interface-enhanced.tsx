@@ -7,6 +7,7 @@ import dynamic from "next/dynamic"
 import {
   Send,
   Paperclip,
+  Code2,
   Mic,
   Clapperboard,
   Square,
@@ -1267,6 +1268,8 @@ const ActionsDropdown = ({
   setShowAudioPanel,
   setAudioTab,
   composerSkills,
+  openCodePanel,
+  codeOpening,
   handleAndUploadFiles,
   isUploading,
   isWebSearching,
@@ -1705,6 +1708,24 @@ const ActionsDropdown = ({
           />
           {/* Agent Skills (claude.ai style): right under «Subir documento». */}
           {composerSkills ? <SkillsMenu skills={composerSkills} /> : null}
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            data-testid="composer-open-code"
+            onSelect={() => { setIsOpen(false); void openCodePanel(); }}
+            disabled={codeOpening}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-gray-100 dark:bg-gray-900/20 flex items-center justify-center">
+                <Code2 className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">Editar código</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {codeOpening ? 'Abriendo…' : 'Archivos, editor y pruebas en el navegador'}
+                </div>
+              </div>
+            </div>
+          </DropdownMenuItem>
           {/* Web Search */}
           <DropdownMenuItem
             className="liquid-menu-item"
@@ -13205,8 +13226,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }, [openComputerPanel]);
 
-  // The header no longer has a code button; the workspace stays reachable
-  // with `?code=1` (like `?computer=1`). With `?id=` wait for that chat so
+  // The workspace opens from the existing composer tools menu or `?code=1`.
+  // With `?id=` wait for that chat so
   // the panel binds to it instead of creating a new one.
   const codeParamHandledRef = React.useRef(false);
   React.useEffect(() => {
@@ -13352,6 +13373,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive, setIsExcelConnectorActive,
     setShowAudioPanel,
     composerSkills,
+    openCodePanel, codeOpening,
     handleComputerUseToggle, handleGmailToggle, handleGoogleCalendarToggle,
     handleGoogleDriveToggle, handleSpotifyToggle, handleWordConnectorToggle,
     handleExcelConnectorToggle,
@@ -15188,7 +15210,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
               {codePanelOpen && currentChat?.id && (
-                <ChatCodingPanel key={currentChat.id} chatId={currentChat.id}
+                <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id}
                   onClose={() => setCodePanelOpen(false)}
                   onProjectReady={setCodeProjectReady} />
               )}

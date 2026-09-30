@@ -15,4 +15,15 @@ describe("composer tools menu", () => {
     assert.ok(memory > music, "Memoria must follow Música")
     assert.match(chat, /openSettingsSection\("capabilities"\)/)
   })
+
+  it("opens the existing coding workspace from the tools menu after Skills", () => {
+    const skills = chat.indexOf("<SkillsMenu skills={composerSkills}")
+    const editor = chat.indexOf('data-testid="composer-open-code"', skills)
+    const search = chat.indexOf("{/* Web Search */}", editor)
+    assert.ok(skills > 0 && editor > skills && search > editor)
+    assert.match(chat.slice(editor, search), /void openCodePanel\(\)/)
+    assert.match(chat.slice(editor, search), /disabled=\{codeOpening\}/)
+    assert.match(chat, /chatId=\{currentChat.id\} userId=\{user\?\.id\}/)
+    assert.ok(chat.includes("key={`${user?.id || 'anon'}:${currentChat.id}`}"), "account changes must remount the access-gated editor")
+  })
 })

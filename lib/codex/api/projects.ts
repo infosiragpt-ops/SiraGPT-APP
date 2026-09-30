@@ -3,6 +3,9 @@
 
 import type {
   CodexChatBinding,
+  CodexEditorFile,
+  CodexWorkspaceFileWrite,
+  CodexWorkspaceFileSaved,
   CodexCloneResult,
   CodexProject,
   CodexPublishWorkspaceResult,
@@ -102,4 +105,10 @@ export const projectsCodexApi = {
   importFiles: (id: string, files: Array<{ path: string; content: string }>) =>
     req<{ ok: boolean; written: number }>(`/projects/${id}/files`, { method: "POST", body: JSON.stringify({ files }) }),
   readFileContent: (id: string, path: string) => req<{ ok: boolean; path: string; content: string }>(`/projects/${id}/file?path=${encodeURIComponent(path)}`),
+  readEditorFile: (id: string, path: string) => req<CodexEditorFile>(
+    `/projects/${id}/file?path=${encodeURIComponent(path)}&editor=true`, { cache: "no-store" },
+  ),
+  saveWorkspaceFile: (id: string, input: CodexWorkspaceFileWrite) => req<CodexWorkspaceFileSaved>(
+    `/projects/${id}/file`, { method: "PUT", body: JSON.stringify(input) },
+  ),
 } as const

@@ -251,7 +251,15 @@ test('effort fields per provider for the agent loop', () => {
     resolveProviderEffortFields({ provider: 'Anthropic', model: 'claude-opus-5-5', thinkingLevel: 'disabled' }),
     { output_config: { effort: 'low' } },
   );
-  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek-v4-pro', thinkingLevel: 'high', thinkingLevelExplicit: true }), {});
+  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek-v4-pro', thinkingLevel: 'high', thinkingLevelExplicit: true }), { thinking: { type: 'enabled' }, reasoning_effort: 'high' });
+  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek-v4-pro', thinkingLevel: 'low', thinkingLevelExplicit: true }), { thinking: { type: 'disabled' } });
+  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek-v4-pro', thinkingLevel: 'disabled', thinkingLevelExplicit: true }), { thinking: { type: 'disabled' } });
+  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek-v4-pro', thinkingLevel: null }), {});
+  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek-chat', thinkingLevel: 'high', thinkingLevelExplicit: true }), {});
+  for (const level of ['low', 'disabled']) {
+    assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek/deepseek-v4-pro', thinkingLevel: level, thinkingLevelExplicit: true }), { thinking: { type: 'disabled' } });
+  }
+  assert.deepEqual(resolveProviderEffortFields({ provider: 'DeepSeek', model: 'deepseek/deepseek-v4-pro', thinkingLevel: 'max', thinkingLevelExplicit: true }), { thinking: { type: 'enabled' }, reasoning_effort: 'max' });
   assert.deepEqual(resolveProviderEffortFields({ provider: 'Anthropic', model: 'claude-opus-4-7', thinkingLevel: null }), {});
 });
 
