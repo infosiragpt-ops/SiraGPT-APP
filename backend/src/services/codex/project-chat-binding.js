@@ -1,5 +1,7 @@
 'use strict';
 
+const { throwIfAborted } = require('../../utils/abort-signal');
+
 /**
  * project-chat-binding — vínculo 1:1 entre un chat de /agentes y un
  * CodexProject durable, sin migración: el chatId vive en `brief` (Json).
@@ -76,18 +78,23 @@ async function requireOwnedChat({ userId, chatId, db }) {
 // runner provisioning and ready/error transition commit together, so another
 // request cannot observe an absent binding and provision a second workspace.
 // Both the manual create route and repository import share this chat key.
-async function withChatProjectLock({ userId, chatId, db }, work) {
+async function withChatProjectLock({ userId, chatId, db, signal }, work) {
+  throwIfAborted(signal);
   const clean = await requireOwnedChat({ userId, chatId, db });
+  throwIfAborted(signal);
   const { withProjectMutationLock } = require('./checkpoint-service');
   return withProjectMutationLock(db, `chat:${String(userId)}:${clean}`, async (lockedDb) => {
+    throwIfAborted(signal);
     await requireOwnedChat({ userId, chatId: clean, db: lockedDb });
+    throwIfAborted(signal);
     return work(lockedDb, clean);
   });
 }
 
-async function findOrCreateProjectForChat({ userId, chatId, name = null, instructions = null, db = null, projects = null }) {
-  return withChatProjectLock({ userId, chatId, db }, async (lockedDb, clean) => {
+async function findOrCreateProjectForChat({ userId, chatId, name = null, instructions = null, db = null, projects = null, signal }) {
+  const result = await withChatProjectLock({ userId, chatId, db, signal }, async (lockedDb, clean) => {
     const found = await findProjectForChat({ userId, chatId: clean, db: lockedDb, projects });
+    throwIfAborted(signal);
     if (found) return { project: found, reused: true };
     const svc = projects || require('./project-service');
     const label = String(name || '').trim().slice(0, 80) || 'Mi app web';
@@ -98,9 +105,11 @@ async function findOrCreateProjectForChat({ userId, chatId, name = null, instruc
       const { hasFullStackIntent } = require('./project-service');
       brief.instructions = hasFullStackIntent(instructions) ? 'frontend y backend' : 'frontend';
     }
-    const project = await svc.createProject({ userId, name: label, brief, db: lockedDb });
+    const project = await svc.createProject({ userId, name: label, brief, db: lockedDb, signal });
     return { project, reused: false };
   });
+  throwIfAborted(signal);
+  return result;
 }
 
 module.exports = {

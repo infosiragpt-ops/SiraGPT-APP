@@ -46,6 +46,20 @@ function okRunner() {
   };
 }
 
+test('cancelled project preparation retains a terminal binding without writing more files', async () => {
+  const db = fakeDb();
+  const controller = new AbortController();
+  let writes = 0;
+  const runner = okRunner();
+  runner.initWorkspace = async () => { controller.abort(); return { ok: true }; };
+  runner.writeFiles = async () => { writes += 1; return { ok: true }; };
+  const project = await createProject({ userId: 'u1', name: 'Cancelled', runner, db, signal: controller.signal });
+  assert.equal(project.status, 'error');
+  assert.match(project.error, /cancelada/);
+  assert.equal(db.rows.get(project.id).status, 'error');
+  assert.equal(writes, 0);
+});
+
 test('hasFullStackIntent detects Spanish and English server/data product briefs', () => {
   const fullStackBriefs = [
     'Crea una app con base de datos para guardar clientes',

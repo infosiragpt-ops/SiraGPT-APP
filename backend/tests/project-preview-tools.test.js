@@ -52,6 +52,37 @@ function makeRunner({ statuses = [], startDev } = {}) {
 
 const noSleep = async () => {};
 
+test('repository cancellation after access lookup allocates no project or runner workspace', async () => {
+  const db = makeDb();
+  const runner = makeRunner();
+  const controller = new AbortController();
+  const readUser = db.user.findUnique;
+  db.user.findUnique = async (args) => { controller.abort(); return readUser(args); };
+  await assert.rejects(svc.cloneRepoForChat({ userId: 'u1', chatId: 'c1', repoUrl: 'https://github.com/example/shop', signal: controller.signal }, {
+    db, runner, binding: makeBinding(), projectService: {}, githubApi: null, env: ENV,
+  }), { name: 'AbortError' });
+  assert.equal(db.rows.length, 0);
+  assert.equal(runner.calls.length, 0);
+});
+
+test('cancelled repository clone commits its error binding before reporting cancellation', async () => {
+  const db = makeDb();
+  const runner = makeRunner();
+  const controller = new AbortController();
+  let committed = false;
+  db.$queryRawUnsafe = async () => [{ locked: 1 }];
+  db.$transaction = async (work) => { const result = await work(db); committed = true; return result; };
+  runner.initWorkspace = async () => { controller.abort(); return { ok: true }; };
+  await assert.rejects(svc.cloneRepoForChat({ userId: 'u1', chatId: 'c1', repoUrl: 'https://github.com/example/shop', signal: controller.signal }, {
+    db, runner, binding: makeBinding(), projectService: {}, githubApi: null, env: ENV,
+  }), { name: 'AbortError' });
+  assert.equal(committed, true);
+  assert.equal(db.rows.length, 1);
+  assert.equal(db.rows[0].status, 'error');
+  assert.match(db.rows[0].error, /cancelada/);
+  assert.equal(runner.calls.length, 0);
+});
+
 test('project_clone_repo: rejects non-github URLs and missing chat', async () => {
   const noChat = await tools.projectCloneRepoTool.execute({ repoUrl: 'https://github.com/a/b' }, { userId: 'u1' });
   assert.equal(noChat.code, 'no_chat_context');

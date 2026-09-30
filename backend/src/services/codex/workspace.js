@@ -8,11 +8,14 @@
  */
 
 const { starterFiles, fullStackStarterFiles } = require('./starter-files');
+const { throwIfAborted } = require('../../utils/abort-signal');
 
 const GIT_IDENT = ['-c', 'user.name=Codex Agent', '-c', 'user.email=codex@siragpt.local'];
 
-async function execOrThrow(runner, project, cmd, label) {
-  const out = await runner.exec(project, cmd);
+async function execOrThrow(runner, project, cmd, label, { signal } = {}) {
+  throwIfAborted(signal);
+  const out = await runner.exec(project, cmd, { signal });
+  throwIfAborted(signal);
   if (out.exitCode !== 0) {
     const detail = String(out.stderr || out.stdout || '').slice(0, 400);
     throw new Error(`${label} failed (exit ${out.exitCode}): ${detail}`);
@@ -24,29 +27,34 @@ function boundedCommitText(value, max = 4000) {
   return String(value || '').replace(/\u0000/g, '').trim().slice(0, max);
 }
 
-async function gitCommitAll(runner, project, message, { body = '' } = {}) {
+async function gitCommitAll(runner, project, message, { body = '', signal } = {}) {
+  throwIfAborted(signal);
   const title = boundedCommitText(message, 120) || 'chore(codex): checkpoint';
   const commitArgs = ['git', ...GIT_IDENT, 'commit', '--allow-empty', '-m', title];
   const commitBody = boundedCommitText(body);
   if (commitBody) commitArgs.push('-m', commitBody);
-  await execOrThrow(runner, project, ['git', 'add', '-A'], 'git add');
+  await execOrThrow(runner, project, ['git', 'add', '-A'], 'git add', { signal });
   await execOrThrow(
     runner,
     project,
     commitArgs,
     'git commit',
+    { signal },
   );
-  const head = await execOrThrow(runner, project, ['git', 'rev-parse', 'HEAD'], 'git rev-parse');
+  const head = await execOrThrow(runner, project, ['git', 'rev-parse', 'HEAD'], 'git rev-parse', { signal });
   return String(head.stdout || '').trim();
 }
 
-async function provisionWorkspace({ project, projectName, runner, fullStack = false } = {}) {
+async function provisionWorkspace({ project, projectName, runner, fullStack = false, signal } = {}) {
+  throwIfAborted(signal);
   await runner.initWorkspace(project);
+  throwIfAborted(signal);
   const files = fullStack
     ? fullStackStarterFiles({ projectName })
     : starterFiles({ projectName });
   await runner.writeFiles(project, files);
-  const commitSha = await gitCommitAll(runner, project, 'chore(codex): workspace inicial');
+  throwIfAborted(signal);
+  const commitSha = await gitCommitAll(runner, project, 'chore(codex): workspace inicial', { signal });
   return { workspacePath: `projects/${project}`, commitSha };
 }
 

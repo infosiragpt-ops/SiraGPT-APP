@@ -30,6 +30,42 @@ function fixture() {
   return { input, deps, rows, reads, creates };
 }
 
+test('cancelled coding preparation cannot read, provision or return a successful workspace', async () => {
+  const initial = fixture();
+  await assert.rejects(prepareChatCodingWorkspace({ ...initial.input, signal: AbortSignal.abort() }, initial.deps), { name: 'AbortError' });
+  assert.equal(initial.reads.length, 0);
+  assert.equal(initial.creates.length, 0);
+
+  const waiting = fixture();
+  const waitingController = new AbortController();
+  const readChat = waiting.input.db.chat.findFirst;
+  waiting.input.db.chat.findFirst = async (args) => { waitingController.abort(); return readChat(args); };
+  await assert.rejects(prepareChatCodingWorkspace({ ...waiting.input, signal: waitingController.signal }, waiting.deps), { name: 'AbortError' });
+  assert.equal(waiting.reads.filter(([kind]) => kind === 'binding').length, 0);
+  assert.equal(waiting.creates.length, 0);
+
+  const finishing = fixture();
+  const finishingController = new AbortController();
+  const create = finishing.deps.projects.createProject;
+  finishing.deps.projects.createProject = async (args) => {
+    assert.equal(args.signal, finishingController.signal);
+    const project = await create(args);
+    finishingController.abort();
+    return project;
+  };
+  await assert.rejects(prepareChatCodingWorkspace({ ...finishing.input, signal: finishingController.signal }, finishing.deps), { name: 'AbortError' });
+  assert.equal(finishing.rows.length, 1);
+});
+
+test('an errored binding explains the available recovery without claiming same-chat retry', async () => {
+  const context = fixture();
+  context.rows.push({ id: 'failed', status: 'error', userId: 'u1', brief: { chatId: 'chat1' } });
+  const result = await prepareChatCodingWorkspace(context.input, context.deps);
+  assert.equal(result.error, 'coding_project_not_ready');
+  assert.match(result.message, /chat nuevo/);
+  assert.equal(context.creates.length, 0);
+});
+
 test('a clear first coding request prepares a named durable project without a client mode flag', async () => {
   const f = fixture();
   const pending = await prepareChatCodingWorkspace({ ...f.input, provision: false }, f.deps);

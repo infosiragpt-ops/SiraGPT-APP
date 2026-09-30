@@ -1,5 +1,7 @@
 'use strict';
 
+const { throwIfAborted, isAbortError } = require('../../utils/abort-signal');
+
 // Resolve the workspace server-side. A client flag is intent, never authority.
 async function authorizeChatCoding({ user, chatId, db, env = process.env }, deps = {}) {
   const enabled = deps.enabled || require('./flags').isCodexV2Enabled;
@@ -30,8 +32,9 @@ function hasInlineSource(prompt, intent) {
  */
 async function prepareChatCodingWorkspace({
   user, chatId, db, prompt, hasAttachments = false, modality = null,
-  disableAgentic = false, provision = true, env = process.env,
+  disableAgentic = false, provision = true, env = process.env, signal,
 }, deps = {}) {
+  throwIfAborted(signal);
   const detect = deps.detect || require('../agents/software-build-intent').detectCodingIntent;
   const enabled = deps.enabled || require('./flags').isCodexV2Enabled;
   const canUse = deps.canUse || require('./access-control').canUseCodexAgent;
@@ -53,7 +56,9 @@ async function prepareChatCodingWorkspace({
   // owned binding is needed only to distinguish a short coding follow-up.
   try {
     await binding.requireOwnedChat({ userId: user.id, chatId, db });
+    throwIfAborted(signal);
     let project = await binding.findProjectForChat({ userId: user.id, chatId, db, projects: deps.projects });
+    throwIfAborted(signal);
     const intent = detect(prompt, { hasWorkspace: Boolean(project?.id), hasAttachments, modality });
     if (!intent.active) return idle;
     if (disableAgentic) return codingFailure(409, 'coding_tools_disabled', 'Activa las herramientas del chat para programar en el proyecto.');
@@ -63,7 +68,7 @@ async function prepareChatCodingWorkspace({
         : codingFailure(409, 'coding_source_required', 'Comparte la URL del repositorio o pega el código que quieres revisar en este chat.');
     }
     if (project?.id && project.status !== 'ready') {
-      return codingFailure(409, 'coding_project_not_ready', 'El proyecto de este chat no está listo. Revisa su error antes de continuar.');
+      return codingFailure(409, 'coding_project_not_ready', 'El proyecto de este chat no está listo. Abre un chat nuevo y repite la solicitud después de resolver el error de preparación.');
     }
     if (project?.id && intent.repositoryUrl) {
       const { parsePublicGithubRepo } = require('./opencode-harness');
@@ -76,30 +81,34 @@ async function prepareChatCodingWorkspace({
     if (provision && !project?.id) {
       if (intent.repositoryUrl) {
         const preview = deps.preview || require('./chat-preview.service');
-        const imported = await preview.cloneRepoForChat({ userId: user.id, chatId, repoUrl: intent.repositoryUrl, name: intent.projectName }, { ...deps.previewDeps, db });
+        const imported = await preview.cloneRepoForChat({ userId: user.id, chatId, repoUrl: intent.repositoryUrl, name: intent.projectName, signal }, { ...deps.previewDeps, db });
+        throwIfAborted(signal);
         if (!imported?.ok) {
           const known = {
-            github_auth_required: [409, 'Conecta tu cuenta de GitHub en Apps para acceder a ese repositorio y reintenta.'],
+            github_auth_required: [409, 'Conecta tu cuenta de GitHub en Apps y repite la solicitud en un chat nuevo para importar ese repositorio.'],
             repository_not_found: [404, 'El repositorio no existe o tu cuenta de GitHub no tiene acceso.'],
             chat_already_bound: [409, 'Este chat ya tiene otro proyecto. Abre un chat nuevo para trabajar con ese repositorio.'],
             coding_chat_not_found: [404, 'No se encontró el chat.'],
-            coding_project_not_ready: [409, 'El proyecto de este chat no está listo. Revisa su error antes de continuar.'],
+            coding_project_not_ready: [409, 'El proyecto de este chat no está listo. Abre un chat nuevo y repite la solicitud después de resolver el error de preparación.'],
           };
           const recognized = Object.hasOwn(known, imported?.code);
-          const [status, message] = recognized ? known[imported.code] : [503, 'No se pudo importar el repositorio. Revisa su acceso y reintenta.'];
+          const [status, message] = recognized ? known[imported.code] : [503, 'No se pudo importar el repositorio. Revisa su acceso y repite la solicitud en un chat nuevo.'];
           return codingFailure(status, recognized ? imported.code : 'coding_import_failed', message);
         }
         project = imported.project;
         reused = imported.reused === true;
       } else {
-        const created = await binding.findOrCreateProjectForChat({ userId: user.id, chatId, name: intent.projectName, instructions: prompt, db, projects: deps.projects });
+        const created = await binding.findOrCreateProjectForChat({ userId: user.id, chatId, name: intent.projectName, instructions: prompt, db, projects: deps.projects, signal });
+        throwIfAborted(signal);
         project = created.project;
         reused = created.reused === true;
       }
-      if (!project?.id || project.status !== 'ready') return codingFailure(503, 'coding_provision_failed', 'No se pudo preparar el proyecto. Revisa su estado y reintenta.');
+      if (!project?.id || project.status !== 'ready') return codingFailure(503, 'coding_provision_failed', 'No se pudo preparar el proyecto. Abre un chat nuevo y repite la solicitud después de resolver el error de preparación.');
     }
     return { ok: true, active: true, projectId: project?.id || null, projectName: project?.name || intent.projectName, reused };
   } catch (err) {
+    throwIfAborted(signal);
+    if (isAbortError(err)) throw err;
     if (err?.code === 'coding_chat_not_found') return codingFailure(404, err.code, 'No se encontró el chat.');
     return codingFailure(503, 'coding_unavailable', 'No se pudo comprobar el proyecto. Reintenta en unos segundos.');
   }

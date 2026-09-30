@@ -69,11 +69,18 @@ const CODE_CREATE_RE = /\b(?:crea(?:r|me|nos)?|crees|genera(?:r|me)?|haz(?:me)?|
 const SOURCE_FILE_RE = /\b[\w.-]+\.(?:[cm]?[jt]sx?|py|rb|rs|go|java|kt|swift|c|cpp|cs|h|html|css|scss|sql|sh)\b/;
 const NON_SOFTWARE_CODE_RE = /\b(?:codigo|code)\s+(?:qr|postal|de\s+(?:verificacion|seguridad|acceso|descuento|seguimiento|activacion|barras|whatsapp))\b/;
 const CODE_FOLLOWUP_RE = /\b(?:continua|continuar|sigue|prosigue|arregla|corrige|cambia|anade|agrega|quita|elimina|modifica|actualiza|hazlo|prueba|ejecuta|implementa|refactoriza|optimiza|revisa|verifica|instala|configura|publica|despliega|deploy|fix|update|continue|run|test|add|remove)\b/;
+const WORKSPACE_EDIT_ACTION_RE = /\b(?:pon(?:le|me)?|anade(?:le|lo|la|los|las)|agrega(?:le|lo|la|los|las)|conecta|integra|haz)\b/;
+const WORKSPACE_EDIT_TARGET_RE = /\b(?:fondo|colores?|diseno|interfaz|botones?|pantallas?|carrito|login|inicio de sesion|base de datos|autenticacion|registro|menu|navegacion|formularios?)\b/;
+const WORKSPACE_APPEARANCE_RE = /^(?:(?:por favor|ahora)\s+)*(?:(?:quiero|necesito)\s+)?que\s+(?:se\s+vea|luzca|sea)\s+(?:(?:un\s+poco\s+)?mas\s+)?(?:modern[oa]|limpi[oa]|minimalista|elegante|profesional|clar[oa]|oscur[oa]|azul|rojo|verde|blanco|negro)\b/;
 const EXPLANATION_ONLY_RE = /^(?:(?:por favor|quiero saber|necesito saber|dime)\s+)*(?:explica(?:me)?|ensena(?:me)?|que es|que significa|como (?:se |puedo |puede |funciona|crear|programar)|how (?:to|does)|what (?:is|does)|tutorial|pasos para)\b/;
-const NEGATED_CODE_RE = /\b(?:no\s+(?:(?:quiero|necesito)\s+que\s+)?(?:crees|hagas|edites|modifiques|cambies|programes|construyas)|(?:do not|don't)\s+(?:create|build|edit|modify|change))\b/;
+const NEGATED_CODE_RE = /\b(?:no\s+(?:(?:quiero|necesito)\s+que\s+)?(?:crees|hagas|edites|modifiques|cambies|programes|construyas|pongas|conectes|integres|anadas|agregues)|(?:do not|don't)\s+(?:create|build|edit|modify|change))\b/;
+
+function stripFencedCode(text: string): string {
+  return text.replace(/(`{3,}|~{3,})[^\r\n]*\r?\n[\s\S]*?(?:\1|$)/g, ' ');
+}
 
 export function chatGithubRepository(text: string): string | null {
-  const raw = String(text || '');
+  const raw = stripFencedCode(String(text || ''));
   const url = /(?:^|[\s(<"'])(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9._-]{0,38})\/([A-Za-z0-9._-]{1,100})/i.exec(raw);
   const named = url || /\b(?:repo(?:sitorio)?|github|pr\s+en|pull request\s+en)\s+(?:de\s+|en\s+)?([A-Za-z0-9][A-Za-z0-9_-]{0,38})\/([A-Za-z0-9._-]{1,100})/i.exec(raw);
   if (!named) return null;
@@ -105,7 +112,7 @@ export function detectCodingIntent(text: string, options: { hasWorkspace?: boole
   const raw = String(text || '');
   const hasInlineCode = /```(?:javascript|typescript|jsx|tsx|js|ts|python|py|ruby|rb|rust|rs|golang|go|java|kotlin|kt|swift|c|cpp|csharp|cs|php|html|css|scss|sql|bash|sh|shell|json|yaml|yml)\s*\r?\n[\s\S]*?```/i.test(raw);
   // Source-code comments and strings are task data, never routing instructions.
-  const n = normalize(raw.replace(/```[^\r\n]*\r?\n[\s\S]*?(?:```|$)/g, ' '));
+  const n = normalize(stripFencedCode(raw));
   if (!n || options.modality) return none;
   // Greetings, instructions about documents and explicit educational asks
   // never create a cloud project, including inside an existing coding chat.
@@ -125,7 +132,9 @@ export function detectCodingIntent(text: string, options: { hasWorkspace?: boole
   if (action && (repositoryUrl || repoAsk)) kind = 'repository';
   else if (isSoftwareBuildRequest(n) || (buildsDocumentSoftware && action) || (CODE_CREATE_RE.test(n) && codeAsk)) kind = 'create';
   else if (action && codeAsk) kind = /\b(?:revisa|revisar|verifica|verificar|analiza|analizar|review|inspect)\b/.test(n) ? 'review' : 'edit';
-  else if (options.hasWorkspace && !options.hasAttachments && CODE_FOLLOWUP_RE.test(n)) kind = 'followup';
+  else if (options.hasWorkspace && !options.hasAttachments && (CODE_FOLLOWUP_RE.test(n)
+    || (WORKSPACE_EDIT_ACTION_RE.test(n) && WORKSPACE_EDIT_TARGET_RE.test(n))
+    || WORKSPACE_APPEARANCE_RE.test(n))) kind = 'followup';
   if (!kind) return none;
   return { active: true, kind, projectName: codingProjectName(text, repositoryUrl), repositoryUrl };
 }

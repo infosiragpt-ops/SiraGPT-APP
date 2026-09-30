@@ -31,6 +31,36 @@ function makeProjects(store) {
   };
 }
 
+test('cancellation while waiting for the chat lock prevents project creation after release', async () => {
+  const store = [];
+  const db = makeDb();
+  const projects = makeProjects(store);
+  const controller = new AbortController();
+  let release;
+  let entered;
+  const held = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  const blocker = binding.withChatProjectLock({ userId: 'u1', chatId: 'chat-cancel', db }, async () => { entered(); await held; });
+  await started;
+  const pending = binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'chat-cancel', db, projects, signal: controller.signal });
+  const rejected = assert.rejects(pending, { name: 'AbortError' });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  release();
+  await Promise.all([blocker, rejected]);
+  assert.equal(store.length, 0);
+});
+
+test('cancellation during the locked project lookup prevents provisioning', async () => {
+  const store = [];
+  const db = makeDb();
+  const projects = makeProjects(store);
+  const controller = new AbortController();
+  db.codexProject.findMany = async () => { controller.abort(); return []; };
+  await assert.rejects(binding.findOrCreateProjectForChat({ userId: 'u1', chatId: 'chat-cancel-read', db, projects, signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(store.length, 0);
+});
+
 test('cleanChatId acepta cuid y rechaza basura', () => {
   assert.equal(binding.cleanChatId('cmabc123XYZ-_'), 'cmabc123XYZ-_');
   assert.equal(binding.cleanChatId(''), null);

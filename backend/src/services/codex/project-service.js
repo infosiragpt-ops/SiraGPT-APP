@@ -11,6 +11,7 @@ const defaultPrisma = (() => {
 })();
 const { createSandboxClient } = require('./sandbox-provider');
 const { provisionWorkspace } = require('./workspace');
+const { throwIfAborted, isAbortError } = require('../../utils/abort-signal');
 const { classifyText } = require('./error-patterns');
 const { publicProjectDatabase } = require('./project-database-serializer');
 const {
@@ -162,7 +163,9 @@ async function createProject({
   selfHosting = { prepareSelfHostedProject },
   selfHostAllowedRepositories,
   selfHostAllowedHosts,
+  signal,
 }) {
+  throwIfAborted(signal);
   const prisma = requireDb(db);
   const runnerClient = runner || createSandboxClient();
   const repoRequest = repositoryRequest({ brief, repository });
@@ -198,6 +201,7 @@ async function createProject({
     },
   });
   try {
+    throwIfAborted(signal);
     if (repositoryError) throw repositoryError;
     if (repositoryConfig) {
       const prepare = typeof selfHosting === 'function'
@@ -212,7 +216,9 @@ async function createProject({
         allowedRepositories: selfHostAllowedRepositories,
         allowedHosts: selfHostAllowedHosts,
         env,
+        signal,
       });
+      throwIfAborted(signal);
       if (!prepared || prepared.ok !== true || !prepared.workspacePath || !prepared.pullRequest) {
         const error = new Error('self-hosting preparation did not produce a PR-ready workspace');
         error.code = 'self_hosting_not_ready';
@@ -241,7 +247,9 @@ async function createProject({
       projectName: name,
       runner: runnerClient,
       fullStack: hasFullStackIntent(brief),
+      signal,
     });
+    throwIfAborted(signal);
     const ready = await prisma.codexProject.update({
       where: { id: row.id },
       // The browser must never receive the runner's private localhost URL in
@@ -253,7 +261,7 @@ async function createProject({
   } catch (err) {
     const failed = await prisma.codexProject.update({
       where: { id: row.id },
-      data: { status: 'error', error: describeProvisionError((err && err.message) || err) },
+      data: { status: 'error', error: signal?.aborted || isAbortError(err) ? 'La preparación del proyecto fue cancelada.' : describeProvisionError((err && err.message) || err) },
     });
     return publicProject(failed);
   }
