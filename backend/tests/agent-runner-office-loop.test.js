@@ -230,6 +230,116 @@ test('loop: identical office calls in one turn run again (no stale verification)
   assert.equal((loopSource.match(/!SAME_TURN_CACHE_EXCLUDE_RE\.test\(/g) || []).length, 2, 'both cache sites use the shared exclusion');
 });
 
+for (const toolName of ['execute_python', 'execute_bash']) {
+  const execArgs = (body) => toolName === 'execute_python' ? { code: body } : { command: body };
+  const outputPath = 'outputs/informe.docx';
+  const verifyArgs = { after: outputPath, checklist: ['Año actualizado a 2025'] };
+  const editArgs = {
+    src: 'uploads/informe.docx', dst: outputPath,
+    ops: [{ op: 'replace_text', find: '2024', replace: '2025' }],
+  };
+
+  test(`loop: repeated ${toolName} readback after an edit executes against the current output`, async () => {
+    const readArgs = execArgs('read_output_year()');
+    const client = scriptedClient([
+      { toolCalls: [{ name: toolName, args: readArgs }] },
+      { toolCalls: [{ name: 'office_edit', args: editArgs }] },
+      { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+      { toolCalls: [{ name: toolName, args: readArgs }] },
+      { content: 'Listo, el año del documento es 2025.' },
+    ]);
+    let year = 2024;
+    const reads = [];
+    const events = [];
+    const result = await runAgentLoop({
+      client, model: 'x', messages: [{ role: 'user', content: 'Cambia 2024 por 2025 y compruébalo' }],
+      tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+      executors: {
+        async [toolName]() { reads.push(year); return `${year}\n[exit 0]`; },
+        async office_edit() { year = 2025; return JSON.stringify({ ok: true, dst: outputPath }); },
+        async verify_visual() { return 'VEREDICTO: VERIFICADO'; },
+        [office.OUTPUTS_SNAPSHOT]: async () => ({ [outputPath]: `100 ${year}` }),
+      },
+      maxIterations: 5,
+      onEvent: (event) => events.push(event),
+    });
+    assert.deepEqual(reads, [2024, 2025], 'identical readback arguments must reopen the current file');
+    assert.equal(result.stoppedReason, 'final');
+    assert.deepEqual(result.steps.filter((step) => step.tool === toolName).map((step) => step.mutated), [false, false]);
+    assert.equal(result.verificationAttempts, 0, 'a read-only inspection must not re-arm verification');
+    assert.equal(events.some((event) => event.type === 'retry'), false);
+  });
+
+  test(`loop: repeated ${toolName} assertion recovers after a real repair`, async () => {
+    const assertArgs = execArgs('assert_output_year_is_2025()');
+    const client = scriptedClient([
+      { toolCalls: [{ name: toolName, args: assertArgs }] },
+      { toolCalls: [{ name: 'office_edit', args: editArgs }] },
+      { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+      { toolCalls: [{ name: toolName, args: assertArgs }] },
+      { content: 'Listo, la comprobación del año pasó.' },
+    ]);
+    let year = 2024;
+    let assertions = 0;
+    const result = await runAgentLoop({
+      client, model: 'x', messages: [{ role: 'user', content: 'Comprueba y corrige el año a 2025' }],
+      tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+      executors: {
+        async [toolName]() {
+          assertions += 1;
+          return year === 2025 ? 'Año comprobado\n[exit 0]' : 'ERROR: assertion failed: expected 2025, got 2024';
+        },
+        async office_edit() { year = 2025; return JSON.stringify({ ok: true, dst: outputPath }); },
+        async verify_visual() { return 'VEREDICTO: VERIFICADO'; },
+        [office.OUTPUTS_SNAPSHOT]: async () => ({ [outputPath]: `100 ${year}` }),
+      },
+      maxIterations: 5,
+    });
+    assert.equal(assertions, 2, 'a cached failure must not survive repair of the output');
+    assert.deepEqual(result.steps.filter((step) => step.tool === toolName).map((step) => step.ok), [false, true]);
+    assert.equal(result.stoppedReason, 'final');
+    assert.equal(result.verificationAttempts, 0);
+  });
+
+  test(`loop: repeated ${toolName} mutation invalidates the previous visual verification`, async () => {
+    const writeArgs = execArgs('append_requested_paragraph()');
+    const inspectArgs = { path: outputPath };
+    const client = scriptedClient([
+      { toolCalls: [{ name: toolName, args: writeArgs }] },
+      { toolCalls: [{ name: 'inspect_document', args: inspectArgs }] },
+      { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+      { toolCalls: [{ name: toolName, args: writeArgs }] },
+      { content: 'Listo.' },
+      { toolCalls: [{ name: 'inspect_document', args: inspectArgs }] },
+      { toolCalls: [{ name: 'verify_visual', args: verifyArgs }] },
+      { content: 'Listo, ambos párrafos están verificados.' },
+    ]);
+    let paragraphs = 0;
+    const verifiedVersions = [];
+    const inspectedVersions = [];
+    const events = [];
+    const result = await runAgentLoop({
+      client, model: 'x', messages: [{ role: 'user', content: 'Añade dos párrafos al documento y verifícalos' }],
+      tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }),
+      executors: {
+        async [toolName]() { paragraphs += 1; return `Párrafos añadidos: ${paragraphs}\n[exit 0]`; },
+        async inspect_document() { inspectedVersions.push(paragraphs); return JSON.stringify({ paragraphs }); },
+        async verify_visual() { verifiedVersions.push(paragraphs); return 'VEREDICTO: VERIFICADO'; },
+        [office.OUTPUTS_SNAPSHOT]: async () => ({ [outputPath]: `100 ${paragraphs}` }),
+      },
+      maxIterations: 8,
+      onEvent: (event) => events.push(event),
+    });
+    assert.equal(paragraphs, 2, 'a repeated mutation must execute instead of replaying an earlier result');
+    assert.deepEqual(result.steps.filter((step) => step.tool === toolName).map((step) => step.changedOutputs), [[outputPath], [outputPath]]);
+    assert.deepEqual(inspectedVersions, [1, 2]);
+    assert.deepEqual(verifiedVersions, [1, 2]);
+    assert.deepEqual(events.filter((event) => event.type === 'retry').map((event) => event.reason), ['missing_visual_verify']);
+    assert.equal(result.verificationAttempts, 1, 'the previous visual check cannot cover a later mutation');
+    assert.equal(result.stoppedReason, 'final');
+  });
+}
+
 test('loop: a successful visual repair allows the SAV/Excel readback to finish', async () => {
   const outputPath = 'outputs/encuesta_20x20.xlsx';
   const verifyArgs = { after: outputPath, checklist: ['Los encabezados se ven completos'] };

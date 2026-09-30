@@ -140,6 +140,7 @@ async function enqueueAgentRunnerJob(data, { QueueImpl, connection, queueName = 
     pickedModel: data.pickedModel || null,
     // Agent Skills picked in the composer («+ → Skills») — names only.
     skills: Array.isArray(data.skills) ? data.skills.slice(0, 3) : [],
+    conversationContext: data.conversationContext || null,
   }, {
     attempts: 1,
     removeOnComplete: { count: 200 },
