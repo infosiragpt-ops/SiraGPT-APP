@@ -169,11 +169,13 @@ const projectPreviewStartTool = {
 
 const projectPreviewStatusTool = {
   name: 'project_preview_status',
-  description: 'Current state of this chat\'s project dev server (installing / building / starting / ready / error) with the last log lines and previewUrl when running. Pass waitMs (up to 150000) to wait for it to become ready after a preview_pending.',
+  description: 'Current state of this chat\'s project dev server (installing / building / starting / ready / error) with the last log lines and previewUrl when running. Pass waitMs (up to 150000) to wait for it to become ready after a preview_pending. Pass verify:true to render this project in a real read-only browser and expectedText to check meaningful page content. This does not access external accounts or submit forms.',
   parameters: {
     type: 'object',
     properties: {
       waitMs: { type: 'integer', minimum: 5000, maximum: 150000, description: 'Esperar hasta este tiempo a que el servidor quede listo.' },
+      verify: { type: 'boolean', description: 'Abrir la aplicación en un navegador real y comprobar que renderiza sin errores.' },
+      expectedText: { type: 'string', maxLength: 300, description: 'Contenido visible significativo que debe estar presente al verificar.' },
     },
     additionalProperties: false,
   },
@@ -182,7 +184,20 @@ const projectPreviewStatusTool = {
       const scope = chatScope(ctx);
       if (scope.error) return scope.error;
       const svc = serviceFromCtx(ctx);
-      const out = withPreviewHint(await svc.previewStatusForChat({ userId: scope.userId, chatId: scope.chatId, waitMs: Number(args && args.waitMs) || undefined }, depsFromCtx(ctx)));
+      let out = withPreviewHint(await svc.previewStatusForChat({ userId: scope.userId, chatId: scope.chatId, waitMs: Number(args && args.waitMs) || undefined }, depsFromCtx(ctx)));
+      if (args?.verify === true && out?.ok && out.status?.ready) {
+        const verify = ctx?.projectTools?.browserVerifier || require('../codex/project-browser').verifyProjectPreviewForChat;
+        const checked = await verify({ userId: scope.userId, chatId: scope.chatId,
+          projectId: ctx?.codingWorkspace?.projectId || out.project?.id,
+          expectedText: args.expectedText, signal: ctx?.signal }, depsFromCtx(ctx));
+        // Screenshot bytes stay out of model prompts, traces and persisted chat.
+        // This result attests a browser check, not model visual inspection.
+        out = { ...out, ok: checked.ok === true, code: checked.code,
+          ...(checked.message ? { message: checked.message } : {}),
+          ...(checked.verification ? { verification: checked.verification } : {}),
+          screenshotCaptured: Boolean(checked.screenshot?.dataUrl),
+        };
+      }
       if (out && out.ok && out.status && out.status.ready) recordRlcdOutcome(ctx, out);
       announceReadyPreview(ctx, out);
       return out;

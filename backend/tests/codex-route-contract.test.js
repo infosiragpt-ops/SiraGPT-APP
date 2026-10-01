@@ -199,6 +199,105 @@ test('tokenized preview WebSocket reaches only its runner project', async (t) =>
   assert.equal(await echoed, 'vite:ping');
 });
 
+// Exercise actual HTTP servers and WS upgrades; only the runner's port lookup
+// and the authenticated project store use this file's existing doubles.
+async function opaquePreviewSocketFixture(t) {
+  process.env.CODEX_PREVIEW_TOKEN_SECRET = 'codex-opaque-ws-test-secret-at-least-32-bytes!!';
+  process.env.CORS_ORIGINS = 'http://localhost:3000';
+  const upstreamHits = [], sockets = new Set();
+  const upstream = http.createServer((req, res) => {
+    upstreamHits.push({ kind: 'http', url: req.url, headers: req.headers });
+    res.setHeader('Content-Type', 'text/javascript');
+    res.end('export const ready = true;');
+  });
+  const upstreamWss = new WebSocket.Server({ server: upstream });
+  upstreamWss.on('connection', (socket, req) => {
+    upstreamHits.push({ kind: 'ws', url: req.url, headers: req.headers });
+    socket.on('message', data => socket.send(`vite:${String(data)}`));
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  runnerMockPort = upstream.address().port;
+  const oldInternal = process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${runnerMockPort}`;
+  const app = buildApp({ globalCors: true });
+  const proxy = http.createServer(app);
+  const binding = codexRoutes.attachPreviewWebSocketProxy(proxy);
+  await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  t.after(async () => {
+    for (const socket of sockets) socket.terminate();
+    for (const socket of upstreamWss.clients) socket.terminate();
+    binding.close();
+    await new Promise(resolve => proxy.close(resolve));
+    await new Promise(resolve => upstream.close(resolve));
+    if (oldInternal === undefined) delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    else process.env.CODE_RUNNER_DEV_INTERNAL_URL = oldInternal;
+  });
+  function client(target, origin = 'null') {
+    const socket = new WebSocket(`ws://127.0.0.1:${proxy.address().port}${target}`, 'vite-hmr',
+      { origin, headers: { Cookie: 'session=private', Authorization: 'Bearer private' } });
+    sockets.add(socket);
+    return socket;
+  }
+  async function upgradeStatus(target, origin = 'null') {
+    const socket = client(target, origin);
+    return new Promise((resolve, reject) => {
+      socket.once('open', () => { socket.close(); resolve(101); });
+      socket.once('error', reject);
+      socket.once('unexpected-response', (_req, res) => {
+        res.resume(); socket.terminate(); resolve(res.statusCode);
+      });
+    });
+  }
+  function token(claims) {
+    const body = Buffer.from(JSON.stringify({ iat: Date.now(), exp: Date.now() + 60_000,
+      userId: 'u-1', projectId: 'p1', ...claims })).toString('base64url');
+    return `${body}.${crypto.createHmac('sha256', process.env.CODEX_PREVIEW_TOKEN_SECRET).update(body).digest('base64url')}`;
+  }
+  return { app, proxy, upstreamHits, client, upgradeStatus, token };
+}
+
+test('opaque tokenized Codex preview loads HTTP modules and upgrades Vite HMR without forwarding credentials', { timeout: 5_000 }, async t => {
+  const fixture = await opaquePreviewSocketFixture(t);
+  const start = await request(fixture.app).post('/api/codex/projects/p1/preview/start');
+  assert.equal(start.status, 200);
+  assert.ok(serviceCalls.some(([name, args]) => name === 'getProject' && args.id === 'p1' && args.userId === 'u-1'),
+    'the capability is minted through the authenticated ownership gate');
+  const response = await request(fixture.app).get(`${start.body.previewUrl}@vite/client`).set('Origin', 'null');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['access-control-allow-origin'], '*');
+  const socket = fixture.client(start.body.previewUrl);
+  await once(socket, 'open');
+  const echoed = once(socket, 'message');
+  socket.send('ping');
+  assert.equal(String((await echoed)[0]), 'vite:ping');
+  assert.equal(socket.protocol, 'vite-hmr');
+  const hit = fixture.upstreamHits.find(item => item.kind === 'ws');
+  assert.equal(hit.url, start.body.previewUrl);
+  assert.equal(hit.headers.cookie, undefined);
+  assert.equal(hit.headers.authorization, undefined);
+});
+
+test('opaque Codex upgrades reject invalid capabilities and never claim another WebSocket endpoint', { timeout: 5_000 }, async t => {
+  const fixture = await opaquePreviewSocketFixture(t);
+  const target = value => `/api/codex/projects/p1/preview/${value}/app/`;
+  for (const token of ['invalid.signature', fixture.token({ exp: Date.now() - 1 }),
+    fixture.token({ projectId: 'foreign-project' }), fixture.token({ userId: '' })]) {
+    assert.equal(await fixture.upgradeStatus(target(token)), 403);
+  }
+  assert.equal(await fixture.upgradeStatus(target(fixture.token()), 'https://evil.example.com'), 403);
+  assert.equal(fixture.upstreamHits.length, 0, 'rejections happen before opening an upstream connection');
+  const otherRoutes = new Set(['/ws/codex', '/api/code-runner/run-1/signed.token/app/',
+    '/api/codex/projects/p1/preview/start', `/api/codex/projects/p1/preview/${fixture.token()}/application/`]);
+  // A second endpoint handler demonstrates that Codex leaves these upgrades
+  // untouched instead of treating Origin:null as a global WS exemption.
+  fixture.proxy.on('upgrade', (req, socket) => {
+    if (otherRoutes.has(req.url)) socket.end('HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+  });
+  for (const route of otherRoutes) assert.equal(await fixture.upgradeStatus(route), 426);
+  const { previewOriginAllowed } = require('../src/services/code/preview-proxy');
+  assert.equal(previewOriginAllowed('null'), false, 'the general origin allowlist stays closed');
+});
+
 test('GET /health responds 200 with enabled=false when the flag is off', async () => {
   delete process.env.CODEX_AGENT_V2;
   const res = await request(buildApp()).get('/api/codex/health');

@@ -2,11 +2,11 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const test = require('node:test');
+const { setTimeout: realSetTimeout, clearTimeout: realClearTimeout } = require('node:timers');
 
 const {
   MIGRATION_COMMAND_ABORTED_CODE,
@@ -44,7 +44,7 @@ async function waitUntil(predicate, timeoutMs = 2_000) {
 
 function waitForMessage(child, predicate, timeoutMs = 3_000) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const timer = realSetTimeout(() => {
       cleanup();
       reject(new Error('timed out waiting for child IPC message'));
     }, timeoutMs);
@@ -58,7 +58,7 @@ function waitForMessage(child, predicate, timeoutMs = 3_000) {
       reject(new Error(`child exited before IPC result: code=${code} signal=${signal}`));
     };
     const cleanup = () => {
-      clearTimeout(timer);
+      realClearTimeout(timer);
       child.removeListener('message', onMessage);
       child.removeListener('exit', onExit);
     };
@@ -76,28 +76,32 @@ test('timed-out Prisma command kills a stubborn descendant process', {
   skip: process.platform === 'win32',
   timeout: 8_000,
 }, async (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-tree-timeout-'));
-  const pidFile = path.join(directory, 'descendant.pid');
-  let descendantPid;
+  let leader, descendantPid, ready;
   t.after(() => {
-    try {
-      if (descendantPid) process.kill(descendantPid, 'SIGKILL');
-    } catch {}
-    fs.rmSync(directory, { recursive: true, force: true });
+    t.mock.timers.reset();
+    try { if (leader?.pid) process.kill(-leader.pid, 'SIGKILL'); } catch {}
+    try { if (descendantPid) process.kill(descendantPid, 'SIGKILL'); } catch {}
   });
 
+  // Keep real processes/signals, but start advancing the command's clock only
+  // once the descendant has actually installed its stubborn SIGTERM handler.
+  // A busy CI worker can otherwise time out during spawn or the PID-file write.
+  const descendantSource = [
+    "process.on('SIGTERM', () => process.send({ type: 'descendant-term' }));",
+    "process.send({ type: 'descendant-ready', pid: process.pid });",
+    "setInterval(() => {}, 1000);",
+  ].join('\n');
   const leaderSource = [
     "const { spawn } = require('node:child_process');",
-    "const fs = require('node:fs');",
-    "const child = spawn(process.execPath, ['-e',",
-    "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\"",
-    "], { stdio: 'ignore' });",
-    "fs.writeFileSync(process.argv[1], String(child.pid));",
-    "process.on('SIGTERM', () => {});",
+    "process.on('SIGTERM', () => process.send({ type: 'leader-term' }));",
+    `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
+    "child.on('message', message => process.send(message));",
     "setInterval(() => {}, 1000);",
   ].join('\n');
 
-  const result = await runPrisma(['-e', leaderSource, pidFile], {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'] });
+  let settled = false;
+  const pending = runPrisma(['-e', leaderSource], {
     command: process.execPath,
     commandPrefix: [],
     cwd: __dirname,
@@ -107,15 +111,37 @@ test('timed-out Prisma command kills a stubborn descendant process', {
       DATABASE_URL: '',
       PRISMA_DATABASE_URL: '',
     },
+    spawnImpl(command, args, options) {
+      leader = spawn(command, args, { ...options, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+      ready = waitForMessage(leader, message => message?.type === 'descendant-ready');
+      return leader;
+    },
     timeoutMs: 150,
     killGraceMs: 50,
     pipe: false,
-  });
+  }).then(result => { settled = true; return result; });
+
+  descendantPid = (await ready).pid;
+  assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
+  assert.equal(isLiveNonZombie(leader.pid), true);
+  assert.equal(isLiveNonZombie(descendantPid), true);
+  t.mock.timers.tick(149);
+  assert.equal(settled, false, 'the command must not time out before its configured deadline');
+  const leaderTerm = waitForMessage(leader, message => message?.type === 'leader-term');
+  const descendantTerm = waitForMessage(leader, message => message?.type === 'descendant-term');
+  t.mock.timers.tick(1);
+  await Promise.all([leaderTerm, descendantTerm]);
+  assert.equal(isLiveNonZombie(leader.pid), true, 'the fixture really ignores SIGTERM');
+  assert.equal(isLiveNonZombie(descendantPid), true, 'the descendant really ignores SIGTERM');
+  assert.equal(settled, false);
+  t.mock.timers.tick(50);
+  // The grace deadline has expired. Resume real polling while the kernel
+  // delivers SIGKILL and reaps the group; do not simulate process termination.
+  t.mock.timers.reset();
+  const result = await pending;
 
   assert.equal(result.migrationCode, MIGRATION_COMMAND_TIMEOUT_CODE);
   assert.equal(prismaCommandExitStatus(result), 124);
-  descendantPid = Number(fs.readFileSync(pidFile, 'utf8'));
-  assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
   assert.equal(
     await waitUntil(() => !isLiveNonZombie(descendantPid)),
     true,

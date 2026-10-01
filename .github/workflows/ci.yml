@@ -1067,6 +1067,12 @@ jobs:
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Project agent browser verification (real Chromium hard gate)
+        if: matrix.shard == 1
+        run: |
+          node -e "const fs=require('node:fs'); const {chromium}=require('@playwright/test'); if(!fs.existsSync(chromium.executablePath())) throw new Error('Chromium is required for project browser verification');"
+          NODE_ENV=test node --test backend/tests/project-browser-real.test.js
+
       - name: Install real desktop input dependencies
         if: matrix.desktop_gate
         run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox

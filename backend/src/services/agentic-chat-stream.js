@@ -115,6 +115,8 @@
 
 const STAGE_LABELS = {
     update_plan: () => 'Actualizando el plan',
+    run_subagent: () => 'Coordinando agentes del proyecto',
+    project_preview_status: (args) => args?.verify ? 'Comprobando la aplicación en el navegador' : 'Comprobando la vista previa',
     search_tools: (args) => `Buscando herramientas: "${truncate(args?.query, 50)}"`,
     web_search: (args) => `Buscando "${truncate(args?.query, 60)}"`,
     read_url:   (args) => `Leyendo ${prettyDomain(args?.url) || 'fuente'}`,
@@ -2193,6 +2195,16 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
+    const codingTeam = codingWorkspace ? require('./codex/coding-agent-team').createCodingAgentTeam({
+      openai, model, provider, toolCallMode, thinkingLevel, thinkingLevelExplicit, maxSteps, maxRuntimeMs,
+    }) : null;
+    const recordCodingTeamUsage = require('./codex/chat-coding-workspace').createTeamUsageRecorder(codingTeam);
+    if (codingWorkspace) tools = require('./codex/chat-coding-workspace').codingTools({
+      team: codingTeam,
+      researchTools: applyCustomGptCapabilityGates(baseWebTools(), customGptCapabilities),
+    });
+    const codingToolNames = codingWorkspace ? new Set(tools.map(tool => tool.name)) : null;
+
     // ─── Agent harness (Phase 1) ──────────────────────────────────────────
     // Merge the harness-native tools (web_fetch / run_javascript /
     // create_artifact) plus the user's external MCP tools into the turn, and
@@ -2219,7 +2231,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           provider,
           // Weak prompted models already struggle with the core toolset —
           // don't hand them third-party MCP tools on top.
-          mcpEnabled: toolCallMode === 'native',
+          mcpEnabled: !codingWorkspace && toolCallMode === 'native',
           // Attachment IDs (ownership-verified upstream) — gates document_edit.
           fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds.filter(Boolean) : [],
           workspaceId: toolContext.workspaceId || null,
@@ -2233,8 +2245,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             || toolContext.composerPermission
             || 'default',
         });
-        if (__harness) tools = applyCustomGptCapabilityGates(__harness.tools, customGptCapabilities);
+        if (__harness) {
+          const wrapped = codingToolNames ? __harness.tools.filter(tool => codingToolNames.has(tool.name)) : __harness.tools;
+          tools = applyCustomGptCapabilityGates(wrapped, customGptCapabilities);
+        }
       } catch (harnessErr) {
+        // A coding write must never bypass its interactive permission wrapper.
+        // Read-only execution is not an alternative completion of this turn.
+        codingTeam?.dispose();
+        if (codingWorkspace && !__coworkRun) throw harnessErr;
         if (__coworkRun) {
           await require('./cowork/control-plane').finishRun(toolContext.prisma, {
             runId: __coworkRun.id,
@@ -2256,6 +2275,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       try {
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
         const pinned = [
+          ...(codingToolNames || []),
           ...mediaIntents.map((intent) => intent && intent.tool),
           ...(customGptAgentPolicy.requiresSkill ? ['run_skill', 'run_skill_pipeline'] : []),
           ...(artifactDeliveryContract.active && !softwareBuildTurn ? ['create_document', 'verify_artifact'] : []),
@@ -2283,9 +2303,6 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         console.warn('[agentic-chat] prompted tool cap failed (using full set):', capErr && capErr.message);
       }
     }
-    if (codingWorkspace) tools = require('./codex/chat-coding-workspace').codingTools({
-      researchTools: applyCustomGptCapabilityGates(baseWebTools(), customGptCapabilities),
-    });
     const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
@@ -2517,6 +2534,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (__coworkRun?.maxSteps) {
       maxStepsOverride = Math.min(maxStepsOverride, __coworkRun.maxSteps);
     }
+
+    codingTeam?.configureBudget({ maxSteps: maxStepsOverride, maxRuntimeMs: maxRuntimeOverride });
 
     // U3 observe/enforce: attach policy summary + non-fatal shadow diffs before
     // the first sentinel so telemetry is visible from the first UI frame.
@@ -2847,7 +2866,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         : null,
       codingWorkspace
         ? require('./codex/coding-finalize-guard').createCodingFinalizeGuard({
-          userQuery, projectId: toolContext.codingWorkspace.projectId,
+          userQuery, projectId: toolContext.codingWorkspace.projectId, requireBrowserVerification: true,
           userId: toolContext.userId, chatId: toolContext.chatId,
         })
         : planVerify.createAnswerVerifier({ openai, model, userQuery }),
@@ -2876,7 +2895,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         signal,
         onEvent,
       });
-      if (control?.stop || __coworkFallbackApplied) return control;
+      if (control?.stop || codingTeam || __coworkFallbackApplied) return control;
 
       const run = control?.run;
       const maxCost = Number(run?.maxCostUsd);
@@ -3111,7 +3130,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ctx: {
           ...toolContext,
           documentEditLlm: { client: openai, model, provider, toolCallMode },
-          signal,
+          signal: codingTeam?.signal || signal,
           provider,
           onEvent,
           toolGate,
@@ -3124,7 +3143,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           checkToolBudget: (name, usage) => checkWebToolBudget(name, usage, { searches: webLookupLimit, reads: webReadLimit }),
         },
         finalizeGuard: composedFinalizeGuard,
-        onBeforeStep: __coworkRun ? beforeCoworkStep : null,
+        onBeforeStep: codingTeam || __coworkRun ? async (context) => {
+          const control = __coworkRun ? await beforeCoworkStep(context) : null;
+          if (control?.stop) return control;
+          return codingTeam?.beforeStep({ ...context, ctx: { signal } }) || control;
+        } : null,
         onCheckpoint: __coworkRun
           ? (checkpoint) => require('./cowork/control-plane').saveCheckpoint(toolContext.prisma, {
             runId: __coworkRun.id,
@@ -3202,6 +3225,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         await writeSse(res, { replace: true, content: serializeSentinel(state) });
         },
         onStepDone: async (stepRec) => {
+        recordCodingTeamUsage(stepRec);
         // Harness first: settle tool calls that never reached execute()
         // (duplicate-cache hits, exhausted tools, invalid args) from their
         // observations so every tool_call_start gets its tool_result.
@@ -3271,6 +3295,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
       throw agentRunError;
     } finally {
+      codingTeam?.dispose();
       clearLiveTickers();
       if (signal && typeof signal.removeEventListener === 'function') {
         try { signal.removeEventListener('abort', onLiveAbort); } catch (_) { /* noop */ }

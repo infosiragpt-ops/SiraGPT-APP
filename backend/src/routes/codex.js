@@ -64,6 +64,7 @@ const {
   applyPreviewCorsHeaders,
   filterPreviewResponseHeaders,
   injectPreviewInteractionBridges,
+  isOpaqueCodexPreviewRequest,
   previewTokenFor: mintPreviewToken,
   previewNonceFromRequest,
   previewOriginAllowed,
@@ -187,7 +188,8 @@ async function previewWebSocketTarget(request, env = process.env) {
   const parts = previewUpgradeParts(request);
   if (!parts) throw previewUpgradeError(404);
   const payload = verifyPreviewToken(parts.token, env);
-  if (!payload || payload.projectId !== parts.projectId) throw previewUpgradeError(403);
+  if (!payload || payload.projectId !== parts.projectId
+    || typeof payload.userId !== 'string' || !payload.userId.trim()) throw previewUpgradeError(403);
 
   const projectPort = await resolvePreviewPort(parts.projectId, env);
   let upstreamBase;
@@ -209,7 +211,11 @@ async function previewWebSocketTarget(request, env = process.env) {
 function attachPreviewWebSocketProxy(server, env = process.env) {
   return attachWebSocketProxy(server, {
     shouldHandle: (request) => Boolean(previewUpgradeParts(request)),
-    isOriginAllowed: (request) => previewOriginAllowed(request.headers?.origin, env),
+    // The sandboxed iframe has an opaque origin, including its Vite HMR
+    // socket. This exception covers only the tokenized Codex app route;
+    // resolveTarget still verifies the owner/project capability before upgrade.
+    isOriginAllowed: (request) => previewOriginAllowed(request.headers?.origin, env)
+      || isOpaqueCodexPreviewRequest({ originalUrl: request.url, headers: request.headers }),
     resolveTarget: (request) => previewWebSocketTarget(request, env),
   });
 }
