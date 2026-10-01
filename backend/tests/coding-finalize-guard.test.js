@@ -158,7 +158,7 @@ test('preflight markers cannot erase actual failed checks or contradictory execu
   const rejected = patch => action('project_exec', { cmd: ['npx', 'vite', 'build'] }, { ok: false, code: 'command_rejected', executionStarted: false, ...patch });
   const finalProof = () => [read('package.json', pkg), exec(['npm', 'run', 'build'], { stdout: '✓ built in 120ms' }), read(), preview()];
   const query = 'Crea una web y compila el proyecto';
-  for (const patch of [{ exitCode: 0 }, { exitCode: 1 }, { stdout: 'executed' }, { stderr: 'failed' }, { timedOut: true }, { truncated: true }, { ok: true }, { executionStarted: true }, { executionStarted: undefined }, { code: 'runner_unreachable' }]) {
+  for (const patch of [{ exitCode: 0 }, { exitCode: 1 }, { stdout: 'executed' }, { stderr: 'failed' }, { timedOut: true }, { truncated: true }, { ok: true }, { executionStarted: true }, { executionStarted: undefined }, { code: 'runner_unreachable' }, { error: 'runner_timeout' }, { error: 'TOOL_REPORTED_FAILURE' }, { error: false }]) {
     blocked(check([write(), rejected(patch), ...finalProof()], query, 'Lista.'), 'E_CODING_CHECK_FAILED');
   }
   const failed = exec(['npx', 'vite', 'build'], { ok: false, exitCode: 1, stdout: 'Build failed' });

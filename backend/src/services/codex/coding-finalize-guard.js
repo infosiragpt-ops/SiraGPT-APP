@@ -207,7 +207,7 @@ function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId }) {
         // Only the tool's explicit pre-spawn rejection is recoverable across
         // commands. It never clears a prior actual failure of the same check.
         const rejectedBeforeExecution = obs.ok === false && obs.code === 'command_rejected'
-          && obs.executionStarted === false && !obs.error
+          && obs.executionStarted === false && (obs.error == null || obs.error === 'tool_reported_failure')
           && !['exitCode', 'stdout', 'stderr', 'timedOut', 'truncated', 'durationMs'].some(key => Object.hasOwn(obs, key));
         if (rejectedBeforeExecution) {
           exploratoryFailure = index;
