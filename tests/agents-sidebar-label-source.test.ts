@@ -15,7 +15,10 @@ describe("agentes sidebar chrome", () => {
     assert.match(sidebar, /data-testid="sidebar-brand"/)
     assert.doesNotMatch(sidebar, /aria-label="Atrás"/)
     assert.doesNotMatch(sidebar, /aria-label="Adelante"/)
-    assert.match(sidebar, /aria-label="Nuevo agente ⌘N"/)
+    // The header's «Nuevo agente» disc and the bell left on 2026-10-01 (second
+    // pass); the nav row below keeps the new-chat entry and ⌘N.
+    assert.doesNotMatch(sidebar, /aria-label="Nuevo agente ⌘N"/)
+    assert.match(sidebar, /onClick=\{handleNewChat\}/)
     assert.doesNotMatch(sidebar, /Nuevo chat ⌘N/)
     assert.doesNotMatch(sidebar, /aria-label="Chats"/)
     assert.doesNotMatch(sidebar, />Chats</)

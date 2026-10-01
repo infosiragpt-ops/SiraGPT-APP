@@ -1633,9 +1633,13 @@ archivos tocados.
   `CloverMark` sigue existiendo para el icono PWA, correos y documentos.
 - **Sidebar** (`app-sidebar.tsx`): la cabecera abre con el lockup `data-testid="sidebar-brand"`
   (nudo 22 px + wordmark «SiraGPT» `.sidebar-brand__wordmark`) y el botón de contraer al lado;
-  a la derecha notificaciones + «Nuevo agente». Los botones Atrás/Adelante salieron de la tira
-  (el rail de 16 rem no daba para el wordmark; el navegador ya los tiene). El rail colapsado
-  muestra el nudo.
+  y, en el extremo derecho, SOLO el botón de contraer (`HEADER_TOGGLE_BTN`: 32 px, glifo 20 px).
+  Segundo pedido de Luis el mismo día: la campanita (`NotificationCenter`) y el disco
+  «Nuevo agente» salieron de la cabecera; «Nuevo agente» sigue como primera fila del nav y ⌘N
+  funciona. La bandeja de notificaciones ya no tiene entrada en `/agentes` (queda solo en
+  `components/code/workspace-top-bar.tsx`). Los botones Atrás/Adelante salieron antes de la
+  tira (el rail de 16 rem no daba para el wordmark; el navegador ya los tiene). El rail
+  colapsado muestra el nudo.
 - Todos los renders in-app de la marca (BrandLogo, login/registro/recuperación, PWA prompt,
   BrandCycle) usan `KnotMark`.
 - Tests: `tests/brand-clover-source.test.ts` (actualizado), `tests/sidebar-brand-header-source.test.ts`,

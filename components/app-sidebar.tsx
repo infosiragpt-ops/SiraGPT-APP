@@ -20,7 +20,6 @@ import {
   MoreHorizontal,
   ChevronDown,
   ChevronRight,
-  MessageSquarePlus,
   Search,
   SlidersHorizontal,
   Library,
@@ -138,7 +137,6 @@ import {
   resolveChatWorkStatus,
 } from "@/lib/chat-work-status"
 import { CreditsBadge } from "@/components/CreditsBadge"
-import NotificationCenter from "./notification-center"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
   RECENT_CHAT_ACTIVITY_LABELS,
@@ -270,8 +268,10 @@ const NAV_ROW =
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
-const HEADER_ICON_BTN =
-  "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+// The header's collapse toggle: a real 32px hit target (Notion/Linear size)
+// with a 20px glyph, flush with the rail's right edge.
+const HEADER_TOGGLE_BTN =
+  "-mr-0.5 h-8 w-8 shrink-0 rounded-lg text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground active:bg-muted focus-visible:ring-1 focus-visible:ring-ring"
 const SIDEBAR_TIP =
   "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)] dark:bg-zinc-100 dark:text-zinc-950"
 const RECENT_TOOLBAR_ICON =
@@ -1449,49 +1449,32 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Brand lockup (knot mark + «SiraGPT») with the collapse toggle
-              beside it; notifications and the primary new-chat disc on the
-              right. */}
-          <div className="flex min-w-0 shrink items-center gap-1.5">
-            <div
-              className="sidebar-brand flex min-w-0 items-center gap-2 pl-0.5"
-              data-testid="sidebar-brand"
+          {/* Brand lockup (knot mark + «SiraGPT») on the left; the only
+              control on the right is the collapse toggle (Luis, 2026-10-01:
+              the bell and the new-chat disc left this strip — «Nuevo agente»
+              lives in the nav row below and ⌘N still works). */}
+          <div
+            className="sidebar-brand flex min-w-0 items-center gap-2 pl-0.5"
+            data-testid="sidebar-brand"
+          >
+            <KnotMark
+              size={22}
+              title="SiraGPT"
+              gap="hsl(var(--sidebar-background))"
+              className="h-[22px] w-[22px] shrink-0 text-[color:var(--brand)]"
+            />
+            <span className="sidebar-brand__wordmark truncate text-[15px] leading-none">
+              SiraGPT
+            </span>
+          </div>
+          <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
+            <SidebarTrigger
+              aria-label="Contraer barra lateral ⌘B"
+              className={HEADER_TOGGLE_BTN}
             >
-              <KnotMark
-                size={22}
-                title="SiraGPT"
-                gap="hsl(var(--sidebar-background))"
-                className="h-[22px] w-[22px] shrink-0 text-[color:var(--brand)]"
-              />
-              <span className="sidebar-brand__wordmark truncate text-[15px] leading-none">
-                SiraGPT
-              </span>
-            </div>
-            <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
-              <SidebarTrigger
-                aria-label="Contraer barra lateral ⌘B"
-                className={HEADER_ICON_BTN}
-              >
-                <SidebarOvalIcon className="h-4 w-4" />
-              </SidebarTrigger>
-            </SidebarChromeTooltip>
-          </div>
-          {/* The browser history buttons left this strip on 2026-10-01: the
-              wordmark needs the room (16rem rail) and the browser owns them. */}
-          <div className="flex shrink-0 items-center gap-1">
-            <NotificationCenter />
-            <SidebarChromeTooltip label="Nuevo agente ⌘N">
-              <button
-                type="button"
-                onPointerDown={markNewChatIntentFromPointer}
-                onClick={handleNewChat}
-                aria-label="Nuevo agente ⌘N"
-                className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
-              >
-                <MessageSquarePlus className="h-4 w-4" strokeWidth={1.9} />
-              </button>
-            </SidebarChromeTooltip>
-          </div>
+              <SidebarOvalIcon className="h-5 w-5" />
+            </SidebarTrigger>
+          </SidebarChromeTooltip>
         </div>
         {/* Collapsed state keeps a single, predictable affordance. */}
         <div className={cn("relative", state === "open" && "hidden")}>
