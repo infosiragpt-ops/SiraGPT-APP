@@ -49,6 +49,91 @@ function searchDocumentLexical(entries, query, k = 10) {
   }));
 }
 
+// Decompose only explicit question/list boundaries, never infer a new task.
+// Keep decimals, identifiers and URLs intact; this is a local ranker, not an
+// LLM router. Six facets bound the CPU work for long multi-part requests.
+function documentQueryFacets(query) {
+  if (typeof query !== 'string') return [];
+  const parts = query.slice(0, 16000)
+    .split(/(?:[?;](?:\s+|$)|\n+|\s+(?:y|and)\s+(?=¿?(?:cu[aá]l(?:es)?|qu[eé]|c[oó]mo|cu[aá]nt[oa]s?|d[oó]nde|por qu[eé]|what|which|how|where|why)\b))/iu)
+    .map(part => part.replace(/^\s*(?:(?:[-*•]|\d+[.)])\s+)?[¿¡]?/, '').trim())
+    .filter(part => documentTokens(part).length);
+  const seen = new Set();
+  return parts.filter(part => {
+    const key = documentTokens(part).join(' ');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 6);
+}
+
+// A leading "Según contrato.pdf" scopes every subquestion. Only narrow an
+// explicit single-source qualifier; comparisons and multiple named files keep
+// the caller's authenticated scope. This never adds an unavailable document.
+function qualifiedDocumentCandidates(pool, query) {
+  const normalize = value => String(value || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
+  const text = normalize(query).slice(0, 16000);
+  // Quantifiers qualify a document scope only next to a document noun:
+  // "todos los riesgos" still belongs to the explicitly named source.
+  const compares = /\b(compara\w*|contrasta\w*|compare\w*|versus)\b/u.test(text);
+  const otherDocuments = /\b(?:tod[oa]s?|otr[oa]s?|amb[oa]s|demas|resto|all|other|both|remaining)\s+(?:(?:de\s+)?(?:los|las|el|la|the)\s+|de\s+)?(?:archivos?|documentos?|fuentes?|adjuntos?|files?|documents?|sources?|attachments?)\b/u.test(text);
+  if (compares || otherDocuments) return pool;
+  const prefix = /^\s*(?:segun|en|del?|from|in|according\s+to)\s+(?:(?:el|la|the)\s+)?(?:(?:archivo|documento|file|document)\s+)?["'“«]?/u;
+  if (!prefix.test(text)) return pool;
+  const titles = [...new Set(pool.map(hit => normalize(hit.title)).filter(title => title.length >= 3 && title.length <= 240))];
+  const named = titles.filter(title => {
+    const position = text.indexOf(title);
+    if (position < 0) return false;
+    const adjacent = text[position - 1] || '';
+    const following = text[position + title.length] || '';
+    return !/[\p{L}\p{N}_./-]/u.test(adjacent) && !/[\p{L}\p{N}_./-]/u.test(following);
+  });
+  if (named.length !== 1 || !text.replace(prefix, '').startsWith(named[0])) return pool;
+  const sources = new Set(pool.filter(hit => normalize(hit.title) === named[0]).map(hit => hit.source).filter(Boolean));
+  return pool.filter(hit => normalize(hit.title) === named[0] || (hit.source && sources.has(hit.source)));
+}
+
+/** Preserve evidence for each explicit question before repeating its answer. */
+function selectDocumentEvidence(pool, query, k, { sourceDiversity = false } = {}) {
+  const limit = Math.max(0, Math.floor(Number(k) || 0));
+  let candidates = Array.isArray(pool) ? pool : [];
+  const facets = documentQueryFacets(query);
+  if (!limit || !candidates.length) return [];
+  if (facets.length < 2) return candidates.slice(0, limit);
+  candidates = qualifiedDocumentCandidates(candidates, query);
+
+  // Build once; six lexical searches reuse one bounded candidate index. All
+  // callers apply document ownership/source scope before providing this pool.
+  const index = createBm25Index({ tokenize: documentTokens, k1: 1.5 });
+  candidates.forEach((hit, position) => index.add(position, [
+    hit.title, hit.sectionTitle, hit.sourceLabel,
+    hit.sectionPath || hit.metadata?.sectionPath, hit.text,
+  ].filter(Boolean).join('\n')));
+  const selected = new Set();
+  const sources = new Set();
+  const topScore = sourceDiversity ? Math.max(0, ...candidates.map(hit => Number(hit.score) || 0)) : 0;
+  for (const facet of facets) {
+    if (selected.size >= limit) break;
+    const matches = index.search(facet, { topK: sourceDiversity ? candidates.length : 1 });
+    const diverse = sourceDiversity && matches.find(match => {
+      const hit = candidates[match.id];
+      return hit.source && !sources.has(hit.source) && hit.score >= topScore * 0.75
+        && (hit.textScore > 0 || hit.vectorScore > 0);
+    });
+    const best = diverse || matches[0];
+    // No match is an evidence gap, not a reason to add an arbitrary passage.
+    // The same passage may answer several facets; keep it once.
+    if (best && best.score > 0) {
+      selected.add(best.id);
+      if (candidates[best.id].source) sources.add(candidates[best.id].source);
+    }
+  }
+  for (let position = 0; position < candidates.length && selected.size < limit; position++) {
+    selected.add(position);
+  }
+  return [...selected].map(position => candidates[position]);
+}
+
 // Broad comparisons need evidence from several documents. Promote each
 // source's best competitive hit without guaranteeing a slot to a weak source.
 function diversifyDocumentSources(pool, k) {
@@ -106,4 +191,27 @@ function queryFocusedExcerpt(text, query, maxChars) {
   return text.slice(start, start + limit);
 }
 
-module.exports = { documentTokens, searchDocumentLexical, queryFocusedExcerpt, diversifyDocumentSources };
+/** Several distant answers in one chunk still share one excerpt budget. */
+function queryFocusedEvidence(text, query, maxChars) {
+  const source = typeof text === 'string' ? text : '';
+  const limit = Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : 1200;
+  const facets = documentQueryFacets(query);
+  if (facets.length < 2 || source.length <= limit || limit < facets.length * 160) {
+    return queryFocusedExcerpt(source, query, limit);
+  }
+  const tokens = new Set(documentTokens(source));
+  const supported = facets.filter(facet => documentTokens(facet).some(token => tokens.has(token)));
+  if (supported.length < 2) return queryFocusedExcerpt(source, query, limit);
+  const separator = '\n[…]\n';
+  const perFacet = Math.floor((limit - separator.length * (supported.length - 1)) / supported.length);
+  const excerpts = [];
+  for (const facet of supported) {
+    const excerpt = queryFocusedExcerpt(source, facet, perFacet).trim();
+    if (excerpt && !excerpts.some(existing => existing.includes(excerpt))) excerpts.push(excerpt);
+  }
+  // Every part remains verbatim. The marker explicitly identifies omissions,
+  // so combining distant spans never invents a contiguous document sentence.
+  return excerpts.join(separator);
+}
+
+module.exports = { documentTokens, documentQueryFacets, selectDocumentEvidence, searchDocumentLexical, queryFocusedExcerpt, queryFocusedEvidence, diversifyDocumentSources };

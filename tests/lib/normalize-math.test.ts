@@ -101,3 +101,26 @@ describe("normalizeMathDelimiters", () => {
     })
   })
 })
+
+
+describe("code integrity during math normalization", () => {
+  it("leaves an unfinished streamed fence byte-for-byte intact", () => {
+    const input = "Fórmula \\(x\\)\n\n```js\nconst price = '$10 y $20'; const formula = '\\(x\\)';"
+    expect(normalizeMathDelimiters(input)).toBe(input.replace("Fórmula \\(x\\)", "Fórmula $x$"))
+  })
+
+  it("matches the complete opening fence length", () => {
+    const input = "````md\n```js\nconst formula = '\\(x\\)';\n```\nPrecio $10 y $20\n````"
+    expect(normalizeMathDelimiters(input)).toBe(input)
+  })
+
+  it("preserves multi-backtick spans containing literal backticks", () => {
+    const input = "Código `` ` \\(x\\) $10 y $20 ` `` y fórmula \\(y\\)."
+    expect(normalizeMathDelimiters(input)).toBe(input.replace("fórmula \\(y\\)", "fórmula $y$"))
+  })
+
+  it("preserves multiline code spans", () => {
+    const input = "Código `\n\\(x\\) $10 y $20\n` y fórmula \\(y\\)."
+    expect(normalizeMathDelimiters(input)).toBe(input.replace("fórmula \\(y\\)", "fórmula $y$"))
+  })
+})

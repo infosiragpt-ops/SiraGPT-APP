@@ -1024,7 +1024,7 @@ jobs:
             specs: e2e/chat-github-connect.spec.ts e2e/chat-browser-live-progress.spec.ts e2e/chat-code-workspace.spec.ts e2e/codex-preview-cors.spec.ts e2e/chat-integrated-browser.spec.ts e2e/chat.spec.ts e2e/chat-upload.spec.ts
           - shard: 2
             desktop_gate: false
-            specs: e2e/document-task-error-recovery.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts
+            specs: e2e/document-task-error-recovery.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts e2e/chat-rich-rendering.spec.ts e2e/chat-compaction-notice.spec.ts
           - shard: 3
             desktop_gate: false
             specs: e2e/voice-reference-layout.spec.ts e2e/chat-media-preview-players.spec.ts e2e/chat-computer-login-handoff.spec.ts

@@ -47,3 +47,44 @@ describe("MessageComponent markdown rendering", () => {
     expect(after).toBe(first)
   })
 })
+
+
+describe("rich response navigation and streaming integrity", () => {
+  it("keeps heading destinations and follows anchors in the same document", () => {
+    const { container } = render(renderMessage({ content: "## Resumen\n\nVer [resumen](#resumen) y [guía](https://example.com)." }))
+    expect(container.querySelector("h2")?.id).toBe("resumen")
+    expect(container.querySelector('a[href="#resumen"]')?.getAttribute("target")).toBeNull()
+    expect(container.querySelector('a[href="https://example.com"]')?.getAttribute("target")).toBe("_blank")
+  })
+
+  it.each([true, false])("exposes a keyboard-scrollable table while streaming=%s", (streaming) => {
+    const { container } = render(renderMessage({ content: "| Producto | Precio |\n|:--|--:|\n| A | 10 |\n" }, streaming))
+    const scrollRegion = container.querySelector('[role="region"][aria-label="Tabla de la respuesta"]')
+    expect(scrollRegion).not.toBeNull()
+    expect(scrollRegion?.getAttribute("tabindex")).toBe("0")
+    expect(scrollRegion?.querySelector("table")).not.toBeNull()
+  })
+
+  it("resolves a reference link while the response still streams", () => {
+    const content = "Consulta esta documentación antes de empezar a configurar tu proyecto.\n\n[Documentación][manual]\n\n[manual]: https://example.com/docs"
+    const { container } = render(renderMessage({ content }, true))
+    expect(container.querySelector('a[href="https://example.com/docs"]')?.textContent).toBe("Documentación")
+  })
+
+  it("preserves both items in the same list while new tokens arrive", () => {
+    const content = "Estos son los pasos que debes seguir para configurar el proyecto:\n\n1. Primer elemento\n\n2. Segundo elemento"
+    const { container } = render(renderMessage({ content }, true))
+    expect(container.querySelectorAll("ol")).toHaveLength(1)
+    expect(container.querySelectorAll("ol li")).toHaveLength(2)
+  })
+})
+
+
+describe("streamed display equations", () => {
+  it("renders a blank-separated formula as one display equation", () => {
+    const content = "Esta es la ecuación que corresponde a los resultados obtenidos en el análisis.\n\n$$\nx = 1\n\ny = 2\n$$"
+    const { container } = render(renderMessage({ content }, true))
+    expect(container.querySelectorAll(".katex-display")).toHaveLength(1)
+    expect(container.querySelector(".katex-error")).toBeNull()
+  })
+})

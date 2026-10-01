@@ -1175,17 +1175,17 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
         ul: ({ node, children, className, ...rest }: any) => <ul {...rest} className={cn('mb-4 pl-6 text-[17px] leading-[1.65] [&.contains-task-list]:list-none [&.contains-task-list]:pl-0', className)}>{children}</ul>,
         ol: ({ node, children, className, ...rest }: any) => <ol {...rest} className={cn('mb-4 pl-6 text-[17px] leading-[1.65]', className)}>{children}</ol>,
         li: ({ node, children, className, ...rest }: any) => <li {...rest} className={cn('mb-1.5 text-[17px] leading-[1.65]', className)}>{children}</li>,
-        h1: ({ children }: any) => <h1 className="mb-4 font-serif text-2xl font-semibold leading-8">{children}</h1>,
-        h2: ({ children }: any) => <h2 className="mb-3 font-serif text-xl font-semibold leading-7">{children}</h2>,
-        h3: ({ children }: any) => <h3 className="mb-2 font-serif text-lg font-semibold leading-7">{children}</h3>,
-        h4: ({ children }: any) => <h4 className="mb-2 font-serif text-base font-semibold leading-7">{children}</h4>,
+        h1: ({ node, children, ...props }: any) => <h1 {...props} className="mb-4 font-serif text-2xl font-semibold leading-8">{children}</h1>,
+        h2: ({ node, children, ...props }: any) => <h2 {...props} className="mb-3 font-serif text-xl font-semibold leading-7">{children}</h2>,
+        h3: ({ node, children, ...props }: any) => <h3 {...props} className="mb-2 font-serif text-lg font-semibold leading-7">{children}</h3>,
+        h4: ({ node, children, ...props }: any) => <h4 {...props} className="mb-2 font-serif text-base font-semibold leading-7">{children}</h4>,
         hr: () => <hr className="my-4 border-muted" />,
         blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
         th: ({ node, children, style, ...rest }: any) => <th {...rest} style={style} className="border border-muted px-3 py-2 bg-muted/50 text-left font-sans font-medium text-sm whitespace-nowrap">{children}</th>,
-        td: ({ node, children, style, ...rest }: any) => <td {...rest} className="border border-muted px-3 py-2 font-sans text-sm align-top" style={{ ...style, overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
+        td: ({ node, children, style, ...rest }: any) => <td {...rest} className="border border-muted px-3 py-2 font-sans text-sm align-top" style={{ ...style, overflowWrap: 'anywhere', maxWidth: '28rem' }}>{children}</td>,
         strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
         em: ({ children }: any) => <em className="italic">{children}</em>,
-        a: ({ href, children, ...props }: any) => {
+        a: ({ node, href, children, ...props }: any) => {
             // Only bare-URL link text goes through truncateUrl. Passing
             // React children blindly broke two cases: nested markdown in
             // the label ([**SiraGPT** docs](url) → children is an array →
@@ -1196,7 +1196,7 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
             return (
                 <a
                     href={href}
-                    target="_blank"
+                    target={href?.startsWith("#") ? undefined : "_blank"}
                     rel="noopener noreferrer"
                     className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
                     title={href}
@@ -1214,9 +1214,9 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
     const streamingComponents = useMemo(() => ({
         ...baseComponents,
         table: ({ children }: any) => (
-            <div className="group relative mt-3">
-                <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                    <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+            <div className="group relative mt-3 min-w-0 max-w-full">
+                <div role="region" aria-label="Tabla de la respuesta" tabIndex={0} className="overflow-x-auto w-full max-w-full min-w-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}>
+                    <table className="font-sans border-collapse border border-muted mb-3 w-full">{children}</table>
                 </div>
                 <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
             </div>
@@ -1324,7 +1324,7 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
                 : null;
 
             return (
-                <div className="group relative mt-3">
+                <div className="group relative mt-3 min-w-0 max-w-full">
                     <TableControls
                         content={fullContent}
                         messageId={messageId}
@@ -1332,8 +1332,8 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
                         onExpand={handleExpand}
                         title={title}
                     />
-                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                        <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
+                    <div role="region" aria-label="Tabla de la respuesta" tabIndex={0} className="overflow-x-auto w-full max-w-full min-w-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100%' }}>
+                        <table className="font-sans border-collapse border border-muted mb-3 w-full">{children}</table>
                     </div>
                     <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
                 </div>
@@ -1365,12 +1365,12 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
         // pushing the action rail visually too far from the message.
         // We keep all other prose typography intact. (The class name is a
         // stable DOM hook; the expand/collapse it once hosted was removed.)
-        <div className="sgpt-message-collapsible">
+        <div className="sgpt-message-collapsible min-w-0 max-w-full">
           <div className="relative">
             <div
                 ref={contentRef}
                 className={cn(
-                    "prose prose-base dark:prose-invert max-w-none text-current font-serif text-[17px] leading-[1.65] tracking-[0.005em]",
+                    "prose prose-base dark:prose-invert min-w-0 max-w-none [overflow-wrap:anywhere] text-current font-serif text-[17px] leading-[1.65] tracking-[0.005em]",
                     "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
                     "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
                 )}

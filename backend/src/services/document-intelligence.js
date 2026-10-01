@@ -1,6 +1,6 @@
 const fs = require('fs');
 const hierarchicalChunker = require('./document/hierarchical-document-chunker');
-const { documentTokens, searchDocumentLexical } = require('./rag/document-retrieval');
+const { documentTokens, documentQueryFacets, selectDocumentEvidence, searchDocumentLexical } = require('./rag/document-retrieval');
 
 const OCR_PLACEHOLDER_RE = /^(no text found in image|no text detected(?: in image pdf)?|no content available|binary file|file content could not be extracted|file ".*?" uploaded successfully|error processing file:|unsupported file type)/i;
 
@@ -954,7 +954,16 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
 
   // Search uses a normalized copy only: short IDs, decimals and accents must
   // not disappear, and returned evidence keeps the document's exact values.
-  const terms = [...new Set(documentTokens(String(query || '')))].slice(0, MAX_TERMS_FOR_EVIDENCE);
+  // Allocate the existing term budget across explicit subquestions so a long
+  // first question cannot discard every keyword from the final question.
+  const facetTerms = documentQueryFacets(String(query || '')).map(facet => [...new Set(documentTokens(facet))]);
+  const terms = [];
+  for (let position = 0; position < MAX_TERMS_FOR_EVIDENCE && terms.length < MAX_TERMS_FOR_EVIDENCE; position++) {
+    for (const facet of facetTerms) {
+      if (facet[position] && !terms.includes(facet[position])) terms.push(facet[position]);
+      if (terms.length >= MAX_TERMS_FOR_EVIDENCE) break;
+    }
+  }
   if (!terms.length) {
     return {
       evidence: chunks.slice(0, limit).map((chunk, idx) => ({
@@ -1001,7 +1010,7 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
   // for this query. Returning an arbitrary first chunk here made a grounded
   // answer appear possible even when the requested fact was absent.
   if (!positiveMatches.length) return { evidence: [], totalChunks };
-  const topMatches = positiveMatches.slice(0, topK);
+  const topMatches = selectDocumentEvidence(positiveMatches, query, topK);
 
   // Strategy 4: Add neighbor chunks for context continuity
   const neighborSet = new Set(topMatches.map((c) => c.ordinal));

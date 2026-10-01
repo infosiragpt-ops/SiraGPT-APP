@@ -537,7 +537,7 @@ function createProviderClientForRequest(provider, req, opts = {}) {
 // configured so the compactor falls back to its extractive summary.
 function buildCompactionCompletion(runtime, req) {
   if (!runtime || !runtime.model) return null;
-  return async (messages, { maxTokens } = {}) => {
+  return async (messages, { maxTokens, signal } = {}) => {
     const { client } = createProviderClientForRequest(runtime.provider, req, { model: runtime.model });
     const response = await client.chat.completions.create({
       model: runtime.model,
@@ -547,7 +547,7 @@ function buildCompactionCompletion(runtime, req) {
       stream: false,
       // Meta reasoning tokens count against max_tokens — keep them minimal.
       ...(runtime.provider === 'Meta' ? { reasoning_effort: 'minimal' } : {}),
-    });
+    }, { signal });
     return response?.choices?.[0]?.message?.content || '';
   };
 }
@@ -2362,6 +2362,7 @@ router.post(
     // against it aborted a turn before the model was even called (prod
     // 2026-09-26: 77 s preparing an image → aborted at 45 s → empty turn).
     let __ttfbClockStartedAt = __generateStartedAt;
+    let __contextCompactionStartedAt = null;
     // While attachments are being prepared the watchdog allows a longer,
     // separate budget: the 45 s first-byte limit only applies to the model.
     // A prep step that overran 45 s used to abort the turn BEFORE the model
@@ -3340,6 +3341,9 @@ router.post(
             }
           });
           __firstByteWatchdog = setInterval(function () {
+            // Compaction has its own bounded, cancellable request. It is not
+            // the answer model's first-byte latency. Keep Stop active.
+            if (__contextCompactionStartedAt !== null) return;
             try {
               const hit = adTtfb.abortIfFirstByteOver45s({
                 startedAt: __ttfbClockStartedAt,
@@ -6995,7 +6999,7 @@ router.post(
       // older turns into the chat's rolling summary BEFORE the prompt is
       // assembled, keep the recent tail verbatim and inject the summary as a
       // cacheable system block. Fail-open: any error → no compaction.
-      if (canPersist && !req._miniShortChitchat && historyMessages.length > 0) {
+      if (!req._githubConnectionTurn && canPersist && !req._miniShortChitchat && historyMessages.length > 0) {
         let __compactHandle = null;
         try {
           const __attachmentTokens = (Array.isArray(processedFiles) ? processedFiles : [])
@@ -7003,6 +7007,7 @@ router.post(
           const __compactionPlan = conversationCompactor.planCompaction({
             model: actualModel,
             rows: historyMessages,
+            includePreemptive: true,
             systemTokens: contextWindow.estimateTokens(systemInstruction.content),
             promptTokens: contextWindow.estimateTokens(prompt) + __attachmentTokens,
             reservedCompletionTokens: Math.min(actualMaxOutputTokens || 16384, contextWindow.getCompletionLimit(actualModel)),
@@ -7010,7 +7015,12 @@ router.post(
           req._contextCompactionPlan = __compactionPlan;
           if (__compactionPlan.shouldCompact) {
             const __runtime = conversationCompactor.pickCompactionRuntime({ provider: actualProvider, model: actualModel });
-            __compactHandle = turnProgress.begin('history', `Comprimiendo el contexto (${__compactionPlan.rowsToCompact.length} mensajes)`, { tool: 'compact', meta: { tokens: __compactionPlan.historyTokens } });
+            __contextCompactionStartedAt = Date.now();
+            __compactHandle = turnProgress.begin('history', 'Compactando contexto…', {
+              tool: 'compact',
+              detail: 'Conservando instrucciones, archivos y mensajes recientes',
+              meta: { tokens: __compactionPlan.historyTokens },
+            });
             const __result = await conversationCompactor.compactChat({
               prisma,
               chatId,
@@ -7019,10 +7029,11 @@ router.post(
               previousSummary: __chatContextState?.contextSummary || '',
               previousMeta: __chatContextState?.contextSummaryMeta || null,
               complete: buildCompactionCompletion(__runtime, req),
+              signal,
               model: actualModel,
               runtime: __runtime,
             });
-            if (__result?.ok) {
+            if (__result?.ok && !signal.aborted) {
               historyMessages = __compactionPlan.rowsToKeep;
               __chatContextState = {
                 contextSummary: __result.summary,
@@ -7036,7 +7047,7 @@ router.post(
                 source: __result.source,
                 reason: __compactionPlan.reason,
               };
-              __compactHandle.done(`Contexto comprimido · ${__result.coveredMessages} mensajes resumidos`, {
+              __compactHandle.done(`Contexto compactado · ${__result.coveredMessages} mensajes resumidos`, {
                 detail: `historial ~${turnProgressLib.fmtInt(__compactionPlan.historyTokens)} tokens → resumen ~${turnProgressLib.fmtInt(__result.meta.summaryTokens)} tokens + ${historyMessages.length} ${historyMessages.length === 1 ? 'mensaje reciente' : 'mensajes recientes'}`,
               });
               generateLog.info('context.compacted', {
@@ -7047,12 +7058,19 @@ router.post(
               });
             } else {
               generateLog.warn('context.compaction_not_applied');
-              __compactHandle.done('El contexto se mantuvo sin comprimir', { detail: '' });
+              __compactHandle.fail(signal.aborted ? 'Compactación cancelada' : 'No se pudo compactar; se conserva el historial', { detail: '' });
             }
           }
         } catch (__compactErr) {
           generateLog.warnError('context.compaction_failed', __compactErr);
-          if (__compactHandle && __compactHandle.open) __compactHandle.fail('No pude comprimir el contexto', { detail: '' });
+          if (__compactHandle && __compactHandle.open) __compactHandle.fail('No se pudo compactar; se conserva el historial', { detail: '' });
+        } finally {
+          if (__contextCompactionStartedAt !== null) {
+            // Exclude only elapsed compaction time; do not forgive preparation
+            // time or disable the watchdog for the subsequent answer.
+            __ttfbClockStartedAt += Math.max(0, Date.now() - __contextCompactionStartedAt);
+            __contextCompactionStartedAt = null;
+          }
         }
       }
       if (__chatContextState?.contextSummary && !req._miniShortChitchat) {
@@ -9603,27 +9621,6 @@ router.post(
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
-        }
-        // Pre-emptive compaction: the thread is past half the context budget
-        // but still fits — fold the older turns now, off the request path, so
-        // the next turn does not pay the summarisation latency inline.
-        if (!req._githubConnectionTurn && canPersist && req._contextCompactionPlan?.preemptive && !req._contextCompaction) {
-          const __bgPlan = req._contextCompactionPlan;
-          const __bgRuntime = conversationCompactor.pickCompactionRuntime({ provider: actualProvider, model: actualModel });
-          setImmediate(() => {
-            conversationCompactor.maybeCompactInBackground({
-              prisma,
-              chatId,
-              model: actualModel,
-              systemTokens: Math.max(0, (__bgPlan.totalTokens || 0) - (__bgPlan.historyTokens || 0)),
-              complete: buildCompactionCompletion(__bgRuntime, req),
-              runtime: __bgRuntime,
-            }).then((r) => {
-              if (r?.ok) generateLog.info('context.background_compaction_completed', {
-                historyMessageCount: r.coveredMessages,
-              });
-            }).catch(() => {});
-          });
         }
         if (!req._githubConnectionTurn && savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({

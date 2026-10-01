@@ -37,3 +37,29 @@ describe("splitStableHead", () => {
     expect(tail.startsWith("```js")).toBe(true)
   })
 })
+
+
+describe("streaming markdown structural integrity", () => {
+  it("keeps a display equation with blank lines in one parser", () => {
+    const equation = "$$\nx = 1\n\ny = 2\n$$"
+    const { head, tail } = splitStableHead(`${intro}\n\n${equation}`)
+    expect(head).toBe(`${intro}\n`)
+    expect(tail).toBe(equation)
+  })
+
+  it("does not close a fence on a marker followed by code", () => {
+    const code = "```text\n```still code\n\nmore code\n```"
+    const { tail } = splitStableHead(`${intro}\n\n${code}`)
+    expect(tail).toBe(code)
+  })
+
+  it("keeps blank-separated items in one loose list", () => {
+    const list = "1. Primer elemento\n\n2. Segundo elemento"
+    expect(splitStableHead(`${intro}\n\n${list}`).tail).toBe(list)
+  })
+
+  it("keeps reference links and their definitions in the same parser", () => {
+    const content = `${intro}\n\nConsulta [documentación][manual].\n\n[manual]: https://example.com/docs`
+    expect(splitStableHead(content)).toEqual({ head: "", tail: content })
+  })
+})

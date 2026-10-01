@@ -186,3 +186,40 @@ describe("ThinkingTrace · answer streaming and done", () => {
     expect(loader?.className).toContain("tabular-nums")
   })
 })
+
+
+describe("ThinkingTrace · visible context compaction", () => {
+  const compactStep = (status: ThinkingActivityStep["status"], label = "Compactando contexto…"): ThinkingActivityStep => ({
+    id: "compact-1", stageId: "pipe:history:1", tool: "compact", phase: "history", status, label,
+    at: Date.now(), detail: "Conservando instrucciones, archivos y mensajes recientes",
+  })
+
+  it("prioritizes real compaction over a generic thinking row and announces it", () => {
+    const { container } = renderEs(<ThinkingTrace reasoning="" streaming activity={[compactStep("active")]} answer={{ streaming: true, text: "" }} />)
+    expect(container.querySelector("[data-step-current]")?.textContent).toContain("Compactando contexto…")
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Compactando contexto…")
+    expect(container.querySelector("[data-step-current] [data-thinking-loader]")).not.toBeNull()
+  })
+
+  it("keeps the compaction notice visible after a streamed acknowledgement", () => {
+    const { container } = renderEs(<ThinkingTrace reasoning="" streaming={false} activity={[compactStep("active")]} answer={{ streaming: true, text: "Reviso el historial." }} />)
+    expect(container.querySelector('[data-thinking-collapsed="live"]')?.textContent).toContain("Compactando contexto…")
+    expect(container.textContent).not.toContain("Redactando la respuesta")
+  })
+
+  it("settles the notice on completion and preserves a failed result in the trace", () => {
+    const { container, rerender } = renderEs(<ThinkingTrace reasoning="" streaming activity={[compactStep("active")]} answer={{ streaming: true, text: "" }} />)
+    rerender(<NextIntlClientProvider locale="es" messages={esMessages as any} timeZone="America/Lima"><ThinkingTrace reasoning="" streaming={false} activity={[compactStep("error", "No se pudo compactar; el historial se conserva")]} answer={{ streaming: true, text: "" }} /></NextIntlClientProvider>)
+    expect(container.querySelector('[data-step-status="error"]')?.textContent).toContain("No se pudo compactar")
+    expect(container.querySelector('[data-step-status="active"]')).toBeNull()
+    expect(container.textContent).not.toContain("Compactando contexto…")
+  })
+
+  it("a finished turn never claims compaction is still running", () => {
+    const { container } = renderEs(<ThinkingTrace reasoning="" streaming={false} activity={[compactStep("done", "Contexto compactado · 16 mensajes resumidos")]} answer={{ streaming: false, text: "Seguimos." }} />)
+    expect(container.querySelector('[data-thinking-collapsed="live"]')).toBeNull()
+    fireEvent.click(container.querySelector('button[aria-expanded="false"]')!)
+    expect(container.textContent).toContain("Contexto compactado · 16 mensajes resumidos")
+    expect(container.textContent).not.toContain("Compactando contexto…")
+  })
+})

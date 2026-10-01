@@ -8,6 +8,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Preserve rich chat responses during streaming: stable math, lists, links and code, with keyboard-scrollable tables that fit mobile screens. Retrieve evidence for multipart document questions without losing the named source. Show actual context compaction, preserve attributed constraints and file identities, and roll back summary writes when stopped. Keep progress and attachments when provisional messages become persisted responses.
+
 - Refresh the visible cloud app after verified same-URL edits, preserve execution outcomes throughout bounded answer verification, and retain the selected model and existing review limits.
 
 - Preserve the Linux file-lock conflict result when a rejected concurrent save also closes its input pipe; never overwrite the winning revision.

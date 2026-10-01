@@ -52,3 +52,14 @@ test("a list bullet is not treated as bold", () => {
 test("empty input stays empty", () => {
   assert.equal(repairStreamingTail(""), "")
 })
+
+
+test("does not repair code inside a longer still-open fence", () => {
+  const tail = "````md\n```js\n**literal"
+  assert.equal(repairStreamingTail(tail), tail)
+})
+
+test("does not mistake a different fence marker for a closing fence", () => {
+  const tail = "~~~md\n```js\n**literal"
+  assert.equal(repairStreamingTail(tail), tail)
+})

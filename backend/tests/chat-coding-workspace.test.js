@@ -74,7 +74,11 @@ test('chat ReAct recovers a preflight rejection and tests the SAME project after
   const persisted = [];
   const compacted = await compactor.compactChat({
     chatId: 'chat1', rows: visibleRows, env: {},
-    prisma: { chat: { update: async (update) => { persisted.push(update); } } },
+    prisma: { $transaction: async (operation) => {
+      const staged = [];
+      await operation({ chat: { update: async (update) => { staged.push(update); } } });
+      persisted.push(...staged);
+    } },
   });
   assert.equal(compacted.ok, true);
   assert.equal(compacted.source, 'extractive');
