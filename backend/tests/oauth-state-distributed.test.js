@@ -79,6 +79,12 @@ class FakeRedis {
       index.set(key, now + ttlMs);
       return 1;
     }
+    if (script.includes('oauth-state-peek-v1')) {
+      const now = Number(args[2]);
+      this._prune(indexKey, now);
+      const entry = this.shared.values.get(key);
+      return entry && entry.expiresAt > now ? entry.value : null;
+    }
     if (script.includes('oauth-state-consume-v1')) {
       const now = Number(args[2]);
       this._prune(indexKey, now);
@@ -597,4 +603,35 @@ test('closing an OAuth store never destroys an externally injected Redis client'
   assert.equal(redis.quitCalls, 0);
   assert.equal(redis.disconnectCalls, 0);
   assert.equal(redis.closed, false);
+});
+
+test('receipt peek is repeatable across replicas, never extends TTL and leaves consume one-use', async () => {
+  let now = Date.now();
+  const { storeA, storeB } = makeRedisPair({ clock: () => now });
+  await storeA.issue('receipt', 'completed', 1000);
+  assert.equal(await storeA.peek('receipt'), 'completed');
+  assert.equal(await storeB.peek('receipt'), 'completed');
+  now += 999;
+  assert.equal(await storeB.peek('receipt'), 'completed');
+  now += 1;
+  assert.equal(await storeA.peek('receipt'), null);
+  await storeA.issue('one-use', 'state', 1000);
+  assert.equal(await storeB.peek('one-use'), 'state');
+  assert.equal(await storeB.consume('one-use'), 'state');
+  assert.equal(await storeA.consume('one-use'), null);
+  assert.equal(await storeA.peek('one-use'), null);
+});
+
+test('memory receipt peek preserves expiry and capacity without changing OAuth consumption', async () => {
+  let now = Date.now();
+  const store = createOAuthStateStore({ env: env({ OAUTH_STATE_CACHE_MAX_ENTRIES: '1' }), clock: () => now });
+  await store.issue('receipt', 'completed', 1000);
+  assert.equal(await store.peek('receipt'), 'completed');
+  assert.equal(await store.peek('receipt'), 'completed');
+  await assert.rejects(store.issue('other', 'value', 1000), { code: OAUTH_STATE_STORE_CAPACITY });
+  now += 1000;
+  assert.equal(await store.peek('receipt'), null);
+  await store.issue('other', 'value', 1000);
+  assert.equal(await store.consume('other'), 'value');
+  assert.equal(await store.peek('other'), null);
 });

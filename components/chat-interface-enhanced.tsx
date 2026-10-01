@@ -1,6 +1,8 @@
 "use client"
 
 import { detectCodingIntent } from "@/lib/software-build-intent"
+import { useChatGithubConnect } from "@/hooks/use-chat-github-connect"
+import { GITHUB_CONNECTION_CANCEL_EVENT, GITHUB_RESUME_TEXT, isExplicitGithubConnectRequest } from "@/lib/chat/github-connect-handoff"
 import { useChatCodingWorkspace, useChatCodingPreview } from "@/hooks/use-chat-coding-workspace"
 import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
@@ -6805,6 +6807,22 @@ function ChatInterfaceContent() {
   const [isExcelConnectorActive, setIsExcelConnectorActive] = React.useState(false);
   const [isGeneratingExcel, setIsGeneratingExcel] = React.useState(false);
   const isCurrentChatLocalJobBusy = Boolean(currentChatId && activeLocalJobChatIds.includes(currentChatId));
+  const githubChatConnect = useChatGithubConnect({
+    userId: user?.id,
+    chatId: currentChatId,
+    busy: isCurrentChatStreaming || isCurrentChatLocalJobBusy || (isSending && sendingChatId === currentChatId),
+    onConnected: async (detail) => {
+      const targetChat = currentChatRef.current;
+      if (detail.userId !== user?.id || targetChat?.id !== detail.chatId) return;
+      // Continue through the existing stream without modifying the user's draft or attachments.
+      const resumed = await addMessage(GITHUB_RESUME_TEXT, [], targetChat, false, 'text', {
+        idempotencyKey: `github-handoff-${detail.handoffId}`,
+        preserveComposerAttachments: true,
+        codingWorkspace: Boolean(codeWorkspace && codeWorkspace.chatId === detail.chatId),
+      });
+      if (!resumed) throw new Error("github_resume_not_started");
+    },
+  });
   const excelConnectorRef = React.useRef<ExcelConnectorRef | null>(null);
 
   // Computer Use hook
@@ -6916,6 +6934,7 @@ function ChatInterfaceContent() {
   }, [setCurrentChat]);
 
   const stopActiveGeneration = React.useCallback(() => {
+    window.dispatchEvent(new CustomEvent(GITHUB_CONNECTION_CANCEL_EVENT, { detail: { userId: user?.id, chatId: currentChatId } }));
     const targetChatId = currentChatId;
     // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
     if (stopDocumentSandbox(targetChatId)) return;
@@ -7034,7 +7053,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, user?.id, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -10658,7 +10677,15 @@ But first, you need to connect your Spotify account securely using the button be
         : isVideoGenerationActive || chatType === 'video' ? 'video'
           : isVoiceGenerationActive ? 'voice' : isMusicGenerationActive ? 'music' : null,
     });
-    const codingWorkspace = codingIntent.active && !isWordConnectorActive && !isExcelConnectorActive
+    // Account authorization uses the canonical chat stream, including chats with no project.
+    // It never creates a software folder or opens the generic computer-use task lane.
+    const githubConnectionRequest = composerFiles.length === 0
+      && !isImageGenerationActive && chatType !== 'image' && !isVideoGenerationActive && chatType !== 'video'
+      && !isVoiceGenerationActive && !isMusicGenerationActive
+      && !isWordConnectorActive && !isExcelConnectorActive && !isGmailActive
+      && !isGoogleCalendarActive && !isGoogleDriveActive && !isSpotifyActive && !isComputerUseActive
+      && isExplicitGithubConnectRequest(msg);
+    const codingWorkspace = !githubConnectionRequest && codingIntent.active && !isWordConnectorActive && !isExcelConnectorActive
       && !isGmailActive && !isGoogleCalendarActive && !isGoogleDriveActive && !isSpotifyActive && !isComputerUseActive;
     // Capture the visible document before a busy chat queues this turn. New
     // attachments win; Word/Excel connectors keep their own open document.
@@ -10684,6 +10711,9 @@ But first, you need to connect your Spotify account securely using the button be
     }
     const idempotencyKey = queuedSend?.idempotencyKey || `chat-send-${safeUUID()}`;
     inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
+    if (!queuedSend && githubConnectionRequest) {
+      githubChatConnect.reserve(rawMsg);
+    }
 
     const activeFreePreviewTool = isFreePlan
       ? (isImageGenerationActive || chatType === 'image')
@@ -11332,7 +11362,7 @@ REWRITTEN TEXT:`;
         // straight into the agent-task pipeline and the chat froze on
         // "Analizando solicitud" whenever the worker/relay hiccupped.
         && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend));
-    const shouldStartAgenticLoopForCurrentMessage = !codingWorkspace && shouldStartAgenticLoopImmediately && !shouldUseAcademicSearch;
+    const shouldStartAgenticLoopForCurrentMessage = !githubConnectionRequest && !codingWorkspace && shouldStartAgenticLoopImmediately && !shouldUseAcademicSearch;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
@@ -11568,7 +11598,7 @@ REWRITTEN TEXT:`;
       const routingMessages = existingRoutingMessages.some((message: any) => message?.id === userMessage.id)
         ? existingRoutingMessages
         : [...existingRoutingMessages, userMessage];
-      const intent = codingWorkspace ? 'text' : await aiService.classifyIntent(
+      const intent = codingWorkspace || githubConnectionRequest ? 'text' : await aiService.classifyIntent(
         msg,
         routingMessages,
         intentController.signal

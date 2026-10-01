@@ -2583,7 +2583,7 @@ function allSentinelStates(frames) {
   }).filter(Boolean);
 }
 
-test('live progress: planning step, timed decide steps, agent_step stage frames and tickers that never leak', async () => {
+test('live progress: planning step, timed decide steps, agent_step stage frames and tickers that never leak', { timeout: 5000 }, async () => {
   const realSetTimeout = global.setTimeout;
   const realClearTimeout = global.clearTimeout;
   const tickers = new Map();
@@ -2613,6 +2613,8 @@ test('live progress: planning step, timed decide steps, agent_step stage frames 
   };
   try {
     let calls = 0;
+    let firstCallStarted;
+    const firstCall = new Promise(resolve => { firstCallStarted = resolve; });
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     const openai = {
@@ -2623,6 +2625,7 @@ test('live progress: planning step, timed decide steps, agent_step stage frames 
             if (!args || !args.tools) return { choices: [{ message: { role: 'assistant', content: '{"pass": true}' } }] };
             calls += 1;
             if (calls === 1) {
+              firstCallStarted();
               await gate;
               return toolCallMessage('web_search', { query: 'precio del cobre 2026' }, 'call_s1');
             }
@@ -2659,7 +2662,9 @@ test('live progress: planning step, timed decide steps, agent_step stage frames 
         }),
       }],
     });
-    for (let i = 0; i < 200 && calls === 0; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    // Wait for the observed model boundary, not an arbitrary count of event-loop turns.
+    // This retains all progress assertions and fails if the run ends first.
+    await Promise.race([firstCall, run.then(() => { throw new Error('Run ended before its first model call'); })]);
     assert.equal(calls, 1, 'the first model call is in flight');
 
     const first = allSentinelStates(frames())[0];

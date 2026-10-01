@@ -153,6 +153,27 @@ describe('ChatProvider: one retry path per failed turn', () => {
     vi.restoreAllMocks()
   })
 
+  it('keeps a newly attached draft file when GitHub resumes automatically', async () => {
+    await mount()
+    const draft = { id: 'draft-upload', name: 'borrador.xlsx', uploading: true }
+    await act(async () => { probe.ctx.setUploadedFiles([draft]) })
+    await act(async () => {
+      await probe.ctx.addMessage('GitHub conectado. Retoma la tarea pendiente.', [], { ...CHAT }, false, 'text', {
+        idempotencyKey: 'github-handoff-resume', preserveComposerAttachments: true,
+      })
+    })
+    expect(probe.ctx.uploadedFiles).toEqual([draft])
+    expect(streamCalls).toHaveLength(1)
+    expect(JSON.stringify(streamCalls[0].data)).not.toContain('draft-upload')
+  })
+
+  it('still clears submitted composer files for an ordinary user message', async () => {
+    await mount()
+    await act(async () => { probe.ctx.setUploadedFiles([{ id: 'draft-upload', name: 'borrador.xlsx' }]) })
+    await act(async () => { await probe.ctx.addMessage('Hola', [], { ...CHAT }, false, 'text') })
+    expect(probe.ctx.uploadedFiles).toEqual([])
+  })
+
   it('control: a retryable failure left alone is replayed once, with the same key', async () => {
     await mount()
     streamBehaviour.next = ['fail-retryable', 'succeed']

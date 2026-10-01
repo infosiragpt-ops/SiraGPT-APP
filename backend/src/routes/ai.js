@@ -7419,7 +7419,12 @@ router.post(
           const message = prepared.message || 'No se pudo preparar el proyecto. Reintenta en unos segundos.';
           preparingProject.fail(message);
           streamFailureMessage = message;
-          closeGenerateSseWithError(res, { message, code, recovered: false });
+          const handoffModule = require('../services/github/github-chat-handoff');
+          const handoff = handoffModule.createGithubChatHandoff({
+            userId, chatId, signal, emit: payload => res.write(`data: ${JSON.stringify(payload)}\n\n`),
+          });
+          await handoff.observe('project_clone_repo', { ok: false, code });
+          closeGenerateSseWithError(res, { message: handoff.pending ? handoffModule.GITHUB_HANDOFF_MESSAGE : message, code, recovered: false });
           return;
         }
         verifiedCodingWorkspace = { projectId: prepared.projectId };
@@ -7922,6 +7927,21 @@ router.post(
             planTier: __spanPlanTier,
           },
           async (span) => {
+            // Opening account consent does not require a tool-capable model.
+            // Return through this same callback so the existing persistence,
+            // active-turn ownership and stream completion remain canonical.
+            const connectionTurn = await require('../services/github/github-chat-turn').handleGithubConnectionTurn({
+              prompt, userId, chatId: canPersist ? chatId : null, db: prisma,
+              files: Array.isArray(req.body.files) ? req.body.files : [],
+              modality: req.body.chip || req.body.modality || req.body.generationLane || req.body.lane || null,
+              disableAgentic: req.body.disableAgentic === true,
+              publicWebReadonly: __publicWebReadonly, signal,
+              emit: payload => res.write(`data: ${JSON.stringify(payload)}\n\n`),
+            });
+            if (connectionTurn) {
+              req._githubConnectionTurn = true;
+              return connectionTurn.answer;
+            }
             // The model's picker display name for the honest failure copy
             // (owner policy: a picked model is never switched; the user is
             // told which model and which cause). Real catalog / admin-row
@@ -8591,6 +8611,9 @@ router.post(
           },
         );
 
+        // A connection instruction is fixed account UI copy; do not run
+        // document repair or LLM response audits over it.
+        if (!req._githubConnectionTurn) {
         // Attachment "recovery" answers a weak/empty reply with the extracted
         // document text. On an EDIT turn that is an echo of the user's own
         // file presented as the answer (prod, 2026-09-25: the editor was
@@ -8887,13 +8910,14 @@ router.post(
           generateLog.warnError('constraints.verification_failed', caVerifyErr);
         }
 
+        }
         if (cacheHandle) cacheHandle.complete();
         }
 
         // Fire-and-forget: extract durable facts from this turn and
         // add them to the user's long-term memory. Runs on the next
         // tick so the reply is already ack'd to the client.
-        if (userId && !__publicWebReadonly && typeof prompt === 'string' && fullResponseContent) {
+        if (!req._githubConnectionTurn && userId && !__publicWebReadonly && typeof prompt === 'string' && fullResponseContent) {
           try {
             // Memory extraction rides the provider ladder, never a single key.
             const memoryOpenAI = require('../services/memory-llm-client').createMemoryLlmClient();
@@ -8995,7 +9019,7 @@ router.post(
         // structured verdict (decision, blocking_flags, latency_ms,
         // reasons) so we can validate enforcement BEFORE flipping the
         // env flag SIRAGPT_BRAIN_ENFORCE=1. Never blocks delivery.
-        if (userId && fullResponseContent) {
+        if (!req._githubConnectionTurn && userId && fullResponseContent) {
           const documentClassification = documentEnrichment?.perFileProfile?.[0]
             ? { type: documentEnrichment.perFileProfile[0].type, confidence: documentEnrichment.perFileProfile[0].confidence }
             : null;
@@ -9146,7 +9170,7 @@ router.post(
         }
       }
 
-      const tokens = fullResponseContent.length + prompt.length;
+      const tokens = req._githubConnectionTurn ? 0 : fullResponseContent.length + prompt.length;
       // HARD INVARIANT: the user's visible reply is `fullResponseContent`
       // as it came back from the model. Every code path below may REFINE
       // finalContent (strip tags, append notes) but must NEVER leave it
@@ -9163,6 +9187,7 @@ router.post(
       // estimate of the complete provider input (history + current turn), so
       // costs are based on that instead of the current prompt alone.
       const buildGenerationUsage = (assistantContent) => {
+        if (req._githubConnectionTurn) return { tokensIn: 0, tokensOut: 0, total: 0, model: actualModel, contextTokens: 0, costTotalUsd: 0, costOriginalUsd: 0, costAppliedUsd: 0 };
         const fittedInputTokens = Number(fittedContext && fittedContext.totalTokens);
         const tokensIn = Number.isFinite(fittedInputTokens) && fittedInputTokens >= 0
           ? fittedInputTokens
@@ -9474,7 +9499,7 @@ router.post(
             stripDocumentConfidenceFooter,
           } = require('../services/document-analysis-rlhf');
           const __rlcdAgentFin = _rlcdAgentFin({ files: processedFiles, prompt });
-          if (rlcd.isDocumentEnabled() && __rlcdAgentFin === 'document') {
+          if (!req._githubConnectionTurn && rlcd.isDocumentEnabled() && __rlcdAgentFin === 'document') {
             const __rlcdOut = rlcd.finalizeAnswer({
               text: finalContent,
               prompt,
@@ -9574,7 +9599,7 @@ router.post(
           __reasoningSink,
           req._agentRun || null,
           0,
-          { observabilityLog: generateLog, rlhfFeedback, activityTrace: req._agentActivityTrace || req._turnProgress?.toMetadata({ durationMs: __firstByteAt ? __firstByteAt - __generateStartedAt : null }) || null },
+          { observabilityLog: generateLog, skipUsageMetering: req._githubConnectionTurn === true, rlhfFeedback, activityTrace: req._agentActivityTrace || req._turnProgress?.toMetadata({ durationMs: __firstByteAt ? __firstByteAt - __generateStartedAt : null }) || null },
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
@@ -9582,7 +9607,7 @@ router.post(
         // Pre-emptive compaction: the thread is past half the context budget
         // but still fits — fold the older turns now, off the request path, so
         // the next turn does not pay the summarisation latency inline.
-        if (canPersist && req._contextCompactionPlan?.preemptive && !req._contextCompaction) {
+        if (!req._githubConnectionTurn && canPersist && req._contextCompactionPlan?.preemptive && !req._contextCompaction) {
           const __bgPlan = req._contextCompactionPlan;
           const __bgRuntime = conversationCompactor.pickCompactionRuntime({ provider: actualProvider, model: actualModel });
           setImmediate(() => {
@@ -9600,7 +9625,7 @@ router.post(
             }).catch(() => {});
           });
         }
-        if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
+        if (!req._githubConnectionTurn && savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({
             prisma,
             rag,

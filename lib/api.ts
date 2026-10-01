@@ -35,6 +35,7 @@ import {
   shouldRecoverOnKeepalive,
 } from "./generate-stream-complete"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
+import { parseGithubConnectionPayload, type GithubConnectionPayload } from "./chat/github-connect-handoff"
 import { parseCodingWorkspacePayload, type CodingWorkspacePayload } from "./chat/coding-workspace-event"
 import { parseCodingPreviewPayload, type CodingPreviewPayload } from "./chat/coding-preview-event"
 import {
@@ -986,6 +987,7 @@ export function normalizeAIUsageFrame(frame: unknown): AIUsagePayload | null {
 }
 
 type AIStreamOptions = {
+  onGithubConnectionRequired?: (payload: GithubConnectionPayload) => void
   onCodingWorkspace?: (payload: CodingWorkspacePayload) => void
   onCodingPreviewReady?: (payload: CodingPreviewPayload) => void
   onReplace?: (content: string) => void
@@ -2942,6 +2944,10 @@ class ApiClient {
                     if (!streamFinished && !terminalErrorDelivered) flushBatch();
                   }, 40);
                 }
+              } else if (jsonData.type === 'github_connection_required') {
+                const handoff = parseGithubConnectionPayload(jsonData);
+                if (handoff && handoff.chatId === data.chatId) options.onGithubConnectionRequired?.(handoff);
+                lastProcessTime = Date.now();
               } else if (jsonData.type === 'coding_workspace') {
                 const workspace = parseCodingWorkspacePayload(jsonData);
                 if (workspace && workspace.chatId === data.chatId) options.onCodingWorkspace?.(workspace);

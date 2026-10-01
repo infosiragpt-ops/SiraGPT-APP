@@ -20,6 +20,7 @@ import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
+import { emitGithubConnectionRequired, GITHUB_CONNECTION_TURN_SETTLED_EVENT } from "./chat/github-connect-handoff"
 import { emitCodingWorkspaceReady } from "./chat/coding-workspace-event"
 import { emitCodingPreviewReady } from "./chat/coding-preview-event"
 import {
@@ -810,6 +811,8 @@ interface PaginationInfo {
   pages: number
 }
 interface AddMessageOptions {
+  /** Automatic account handoffs must not consume files from a new unsent draft. */
+  preserveComposerAttachments?: boolean
   codingWorkspace?: boolean
   imageModel?: string
   imageProvider?: string
@@ -1587,7 +1590,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           : c
       ));
 
-      setUploadedFiles([]); // Uploaded files clear kar dein
+      if (!options?.preserveComposerAttachments) setUploadedFiles([]);
       const controller = new AbortController();
       abortControllerRef.current = controller;
       markChatStreaming(activeChat.id, streamId, controller);
@@ -2428,6 +2431,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             },
             controller.signal, // Pass the abort signal
             {
+              onGithubConnectionRequired: (payload) => {
+                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
+                emitGithubConnectionRequired(payload, pendingOwnerId, activeChat.id);
+              },
               onCodingWorkspace: (payload) => {
                 if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
                 emitCodingWorkspaceReady(payload, pendingOwnerId, activeChat.id);
@@ -2680,6 +2687,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       } finally {
         if (turnLeaseTimer) clearInterval(turnLeaseTimer);
+        window.dispatchEvent(new CustomEvent(GITHUB_CONNECTION_TURN_SETTLED_EVENT, { detail: { userId: pendingOwnerId, chatId: activeChat.id } }));
         if (waitsForDefaultStreamTerminal) {
           releaseTurnLease(activeChat.id, turnIdempotencyKey, pendingOwnerId);
         }
