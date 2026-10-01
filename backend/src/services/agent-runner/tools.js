@@ -318,7 +318,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'create_presentation',
       description:
-        'Create a NEW PowerPoint from scratch. REQUIRED: pass `outline` with REAL titles, bullets and optional native editable `chart`. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme. Writes /workspace/outputs/<file>.pptx.',
+        'Create a NEW PowerPoint from scratch. Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover, with titles, bullets and optional native editable `chart`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme. Writes /workspace/outputs/<file>.pptx.',
       parameters: {
         type: 'object',
         properties: {
@@ -333,7 +333,7 @@ const BASE_TOOL_DEFINITIONS = [
           },
           outline: {
             type: 'array',
-            description: 'Slides with REAL content from the user\'s request: [{title, bullets: ["…"]}, …].',
+            description: 'Content slides with REAL content: [{title, bullets: ["…"]}, …]. Exclude the cover: the tool adds one title slide. For N total slides (N >= 2), use N-1 entries; for a single slide or coverless deck use execute_python.',
             items: {
               type: 'object',
               properties: {
@@ -416,7 +416,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
     async execute_python(args, ctx = {}) {
       const code = String(args?.code || '').trim();
       if (!code) return 'ERROR: empty code';
-      const wrapped = `python3 - <<'PY'\n${code}\nPY`;
+      // Helpers are staged in tmp/, while stdin scripts run from /workspace.
+      // Compile the user's source separately so future imports and line
+      // numbers retain normal stdin semantics instead of receiving a prefix.
+      const bootstrap = "import sys; sys.path.insert(0, '/workspace/tmp'); sys.argv[0] = '-'; globals()['__file__'] = '<stdin>'; exec(compile(sys.stdin.read(), '<stdin>', 'exec'))";
+      const wrapped = `python3 -c "${bootstrap}" <<'PY'\n${code}\nPY`;
       const r = await sandbox.exec(wrapped, { timeoutMs: CMD_TIMEOUT_MS, signal: ctx.signal });
       const parts = [];
       if (r.stdout) parts.push(r.stdout);
