@@ -157,7 +157,9 @@ const OFFICE_TOOL_DEFINITIONS = [
       name: 'inspect_document',
       description:
         'Lee la ESTRUCTURA de un docx/xlsx/pptx con direcciones exactas: párrafos numerados (i) con estilo y formato de sus runs; '
-        + 'celdas con valor, fórmula y formato; láminas con formas, placeholder, posición y tamaño en mm. Úsalo SIEMPRE antes de editar. '
+        + 'celdas con valor, fórmula y formato; láminas con formas, placeholder, posición y tamaño en mm. '
+        + 'XLSX/PPTX incluyen charts nativos: id estable, index por hoja/lámina (1-based), type, categories, series (values/refs/color/point_colors), title, legend, position y editable. '
+        + 'Colores automáticos/de tema no resueltos son null; complete:false/truncated nunca certifica datos. Úsalo SIEMPRE antes de editar. '
         + 'Con `query` devuelve solo lo que contiene ese texto (así ubicas "2024" o "Tabla 3").',
       parameters: {
         type: 'object',
@@ -243,6 +245,7 @@ const OFFICE_TOOL_DEFINITIONS = [
       description:
         'OBLIGATORIO después de editar. Compara ANTES vs DESPUÉS: partes XML cambiadas, cambios por párrafo/celda/forma, render de páginas, '
         + 'zonas cambiadas en mm, imagen antes/después con recuadros y zoom, checks de texto/celdas y revisión con modelo de visión contra tu checklist. '
+        + 'Para gráficas XLSX/PPTX usa expect.charts: comprueba tipo, datos, colores explícitos y editabilidad en OOXML incluso sin visión. '
         + 'Sin `before` revisa un documento NUEVO. Devuelve "VEREDICTO: VERIFICADO" o un ERROR con lo que falló.',
       parameters: {
         type: 'object',
@@ -264,6 +267,43 @@ const OFFICE_TOOL_DEFINITIONS = [
               only_pages: { type: 'array', items: { type: 'integer' }, description: 'Únicas páginas que pueden cambiar.' },
               same_page_count: { type: 'boolean' },
               cells: { type: 'object', description: 'xlsx: {"Hoja!C5": 155} verificado recalculando una copia.' },
+              charts: {
+                type: 'array', minItems: 1, maxItems: 20,
+                description: 'Gráficas nativas. Indica sheet (XLSX) o slide (PPTX), chart = id de inspect_document o index 1-based. Cada propiedad presente debe coincidir; series exige la cantidad y orden exactos. Ejemplo: [{sheet:"Datos",chart:1,type:"column",editable:true,categories:["T1","T2"],series:[{name:"Norte",values:[120,135],color:"1F4E78"}]}]. No admite fuentes externas ni datos truncados.',
+                items: {
+                  type: 'object', required: ['chart'], additionalProperties: false,
+                  properties: {
+                    sheet: { type: 'string', minLength: 1, maxLength: 512 },
+                    slide: { type: 'integer', minimum: 1 },
+                    chart: { anyOf: [{ type: 'integer', minimum: 1, maximum: 20 }, { type: 'string', minLength: 1, maxLength: 1024 }] },
+                    type: { type: 'string', enum: ['column', 'bar', 'line', 'area', 'pie', 'doughnut', 'scatter', 'bubble', 'radar', 'combo'] },
+                    grouping: { type: 'string', enum: ['clustered', 'stacked', 'percentStacked', 'standard'] },
+                    editable: { type: 'boolean' },
+                    categories: { type: 'array', maxItems: 200, items: { type: ['string', 'number', 'null'] } },
+                    title: { type: 'string', maxLength: 512 },
+                    legend: { type: 'boolean' },
+                    position: {
+                      type: 'object', additionalProperties: false, minProperties: 1,
+                      description: 'Solo coordenadas mm devueltas por inspect; tolerancia 0.05 mm. XLSX expone también sus marcadores de celda en inspect.',
+                      properties: { x_mm: { type: 'number' }, y_mm: { type: 'number' }, w_mm: { type: 'number' }, h_mm: { type: 'number' } },
+                    },
+                    series: {
+                      type: 'array', minItems: 1, maxItems: 16,
+                      items: {
+                        type: 'object', additionalProperties: false, minProperties: 1,
+                        properties: {
+                          name: { type: 'string', maxLength: 512 },
+                          values: { type: 'array', minItems: 1, maxItems: 200, items: { type: ['number', 'null'] } },
+                          x_values: { type: 'array', minItems: 1, maxItems: 200, items: { type: ['number', 'null'] } },
+                          bubble_sizes: { type: 'array', minItems: 1, maxItems: 200, items: { type: ['number', 'null'] } },
+                          color: { type: 'string', pattern: '^#?[0-9a-fA-F]{6}$', description: 'Color explícito de la serie; exige todos sus puntos iguales salvo que point_colors declare las excepciones.' },
+                          point_colors: { type: 'array', maxItems: 200, items: { type: 'string', pattern: '^#?[0-9a-fA-F]{6}$' } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
               allowed_parts: { type: 'array', items: { type: 'string' } },
             },
             additionalProperties: false,

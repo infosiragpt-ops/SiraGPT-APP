@@ -32,9 +32,11 @@ import copy
 import datetime as _dt
 import difflib
 import glob
+import io
 import json
 import math
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -60,6 +62,8 @@ NS = {
     "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
     "rel": "http://schemas.openxmlformats.org/package/2006/relationships",
     "ct": "http://schemas.openxmlformats.org/package/2006/content-types",
+    "c": "http://schemas.openxmlformats.org/drawingml/2006/chart",
+    "xdr": "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing",
 }
 XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 
@@ -1499,11 +1503,426 @@ def xlsx_cells(pkg: OfficePackage, part: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Gráficas nativas compartidas XLSX / PPTX. Solo partes internas del paquete.
+# ─────────────────────────────────────────────────────────────────────────────
+_CHART_MAX_POINTS = 200
+_CHART_MAX_SERIES = 16
+_CHART_MAX_COUNT = 20
+_CHART_MAX_TEXT = 512
+_CHART_MAX_OUTPUT = 18000
+_CHART_MAX_XML = 2 * 1024 * 1024
+_CHART_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
+
+
+def _chart_xml(pkg, part):
+    data = pkg.data.get(part, b"")
+    if not data or len(data) > _CHART_MAX_XML or b"<!DOCTYPE" in data.upper():
+        raise EditError("parte de gráfica ausente, demasiado grande o con DTD")
+    return etree.fromstring(data, _CHART_PARSER)
+
+
+def _chart_rel(pkg, part, rid, kind):
+    """Nunca abre URL, filesystem ni relaciones externas, incluso si parecen locales."""
+    relpart = OfficePackage.rels_name(part)
+    if not pkg.has(relpart):
+        raise EditError("relación interna ausente")
+    matches = [r for r in _chart_xml(pkg, relpart) if r.get("Id") == rid]
+    if len(matches) != 1:
+        raise EditError("relación interna ausente o ambigua")
+    rel = matches[0]
+    target = rel.get("Target", "")
+    if (rel.get("TargetMode", "Internal") != "Internal" or not rel.get("Type", "").endswith("/" + kind)
+            or not target or len(target) > 1024 or re.search(r"[\\\x00-\x20:%?#]", target)):
+        raise EditError("relación externa o destino no admitido")
+    resolved = posixpath.normpath(target.lstrip("/") if target.startswith("/")
+                                 else posixpath.join(posixpath.dirname(part), target))
+    if resolved in ("", ".", "..") or resolved.startswith("../") or not pkg.has(resolved):
+        raise EditError("relación fuera del paquete o parte ausente")
+    return resolved
+
+
+def _chart_text(value):
+    value = str(value or "")
+    if len(value) > _CHART_MAX_TEXT:
+        raise EditError("etiqueta o referencia de gráfica demasiado larga")
+    return value
+
+
+def _chart_sheets(pkg):
+    root = _chart_xml(pkg, "xl/workbook.xml")
+    out = []
+    for sh in root.findall("s:sheets/s:sheet", NS):
+        out.append({"name": _chart_text(sh.get("name")),
+                    "part": _chart_rel(pkg, "xl/workbook.xml", sh.get(q("r", "id")), "worksheet")})
+        if len(out) > 256:
+            raise EditError("demasiadas hojas para inspeccionar la gráfica")
+    return out
+
+
+def _chart_embedded_book(pkg, part, root):
+    external = root.find("c:externalData", NS)
+    if external is None:
+        raise EditError("gráfica sin libro de datos interno editable")
+    target = _chart_rel(pkg, part, external.get(q("r", "id")), "package")
+    payload = pkg.data[target]
+    if len(payload) > 8 * 1024 * 1024:
+        raise EditError("libro de gráfica demasiado grande")
+    with zipfile.ZipFile(io.BytesIO(payload)) as z:
+        infos = z.infolist()
+        if (len(infos) > 256 or sum(i.file_size for i in infos) > 32 * 1024 * 1024
+                or any(i.file_size > 8 * 1024 * 1024 for i in infos)):
+            raise EditError("libro de gráfica excede el límite de descompresión")
+    book = OfficePackage(io.BytesIO(payload))
+    _chart_sheets(book)
+    return book
+
+
+def _chart_range(book, formula):
+    """Resuelve únicamente un rango A1 finito en una hoja del mismo libro."""
+    formula = _chart_text(formula)
+    match = re.fullmatch(r"(?:'((?:[^']|'')+)'|([^'!\[\]]+))!(\$?[A-Za-z]{1,3}\$?[1-9][0-9]*)(?::(\$?[A-Za-z]{1,3}\$?[1-9][0-9]*))?", formula)
+    if not match or book is None:
+        raise EditError("referencia de datos externa o no resoluble")
+    name = (match.group(1).replace("''", "'") if match.group(1) is not None else match.group(2))
+    sheets = [s for s in _chart_sheets(book) if s["name"] == name]
+    if len(sheets) != 1:
+        raise EditError("hoja de datos ausente o ambigua")
+    start, c1, r1 = parse_ref(match.group(3))
+    end, c2, r2 = parse_ref(match.group(4) or match.group(3))
+    if (c1 > 16384 or c2 > 16384 or r1 > 1048576 or r2 > 1048576 or c2 < c1 or r2 < r1
+            or (c1 != c2 and r1 != r2) or (c2 - c1 + 1) * (r2 - r1 + 1) > _CHART_MAX_POINTS):
+        raise EditError("rango de gráfica no lineal o demasiado grande")
+    refs = expand_range(start + ":" + end) if start != end else [start]
+    wanted = set(refs)
+    sst = []
+    if book.has("xl/sharedStrings.xml"):
+        for si in _chart_xml(book, "xl/sharedStrings.xml").findall(S("si")):
+            sst.append("".join(t.text or "" for t in si.iter(S("t"))))
+    values = {}
+    for cell in _chart_xml(book, sheets[0]["part"]).iter(S("c")):
+        if cell.get("r") not in wanted:
+            continue
+        value, formula_cell, typ = _xl_cell_value(cell, sst)
+        if typ == "n" and value == "":
+            value = None
+        if typ == "e" or (formula_cell is not None and value is None):
+            raise EditError("dato de gráfica con error o fórmula sin recalcular")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise EditError("dato de gráfica no finito")
+        values[cell.get("r")] = _chart_text(value) if isinstance(value, str) else value
+    return [values.get(ref) for ref in refs]
+
+
+def _chart_equal(got, want):
+    if isinstance(got, list) and isinstance(want, list):
+        return len(got) == len(want) and all(_chart_equal(a, b) for a, b in zip(got, want))
+    if type(got) in (int, float) and type(want) in (int, float):
+        return math.isfinite(got) and math.isfinite(want) and math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-9)
+    return type(got) is type(want) and got == want
+
+
+def _chart_data(node, book):
+    if node is None:
+        return {"values": [], "ref": None}
+    multi = node.find("c:multiLvlStrRef/c:multiLvlStrCache", NS)
+    if node.find("c:multiLvlStrRef", NS) is not None and (multi is None or len(multi.findall("c:lvl", NS)) != 1):
+        raise EditError("categorías multinivel no admitidas por esta inspección")
+    formula = node.find(".//c:f", NS)
+    ref = _chart_text(formula.text) if formula is not None else None
+    cache = next((el for el in node if etree.QName(el).localname in ("numLit", "strLit")), None)
+    if cache is None:
+        cache = node.find(".//c:numCache", NS)
+    if cache is None:
+        cache = node.find(".//c:strCache", NS)
+    if multi is not None:
+        # PptxGenJS uses multiLvlStrRef even for a single ordinary label column.
+        cache = multi.find("c:lvl", NS)
+    values = None
+    if cache is not None:
+        count_el = (multi if multi is not None else cache).find("c:ptCount", NS)
+        points = cache.findall("c:pt", NS)
+        count = int(count_el.get("val")) if count_el is not None else max([int(p.get("idx")) + 1 for p in points] or [0])
+        if count < 0 or count > _CHART_MAX_POINTS or len(points) > count:
+            raise EditError("demasiados puntos de gráfica")
+        values = [None] * count
+        seen = set()
+        numeric = etree.QName(cache).localname in ("numCache", "numLit")
+        for p in points:
+            idx = int(p.get("idx"))
+            if idx < 0 or idx >= count or idx in seen:
+                raise EditError("índice de punto inválido o duplicado")
+            seen.add(idx)
+            raw = p.findtext("c:v", namespaces=NS)
+            if numeric and raw is not None and raw.strip():
+                value = float(raw)
+                if not math.isfinite(value):
+                    raise EditError("dato de gráfica no finito")
+                values[idx] = value
+            elif numeric:
+                values[idx] = None
+            else:
+                values[idx] = _chart_text(raw) if raw is not None else None
+    if ref:
+        resolved = _chart_range(book, ref)
+        if values is not None and not _chart_equal(resolved, values):
+            raise EditError("caché y datos de origen de la gráfica no coinciden")
+        values = resolved
+    if values is None:
+        literal = node.find("c:v", NS)
+        values = [_chart_text(literal.text)] if literal is not None else []
+    return {"values": values, "ref": ref}
+
+
+def _chart_color(node, line=False):
+    if node is None:
+        return None
+    properties = node.find("c:spPr/a:ln" if line else "c:spPr", NS)
+    if properties is not None:
+        fills = [el for el in properties if el.tag in {A(x) for x in ("noFill", "solidFill", "gradFill", "blipFill", "pattFill", "grpFill")}]
+        if len(fills) > 1:
+            raise EditError("relleno de gráfica ambiguo")
+        if fills and fills[0].tag == A("solidFill"):
+            if len(fills[0]) != 1:
+                raise EditError("color de gráfica ambiguo")
+            color = fills[0][0]
+            if color.tag == A("srgbClr") and not len(color):
+                return _norm_hex(color.get("val"))
+    # Theme/automatic/gradient colors remain unknown; never guess an RGB match.
+    return None
+
+
+def _chart_read(pkg, part, fmt):
+    root = _chart_xml(pkg, part)
+    if root.tag != q("c", "chartSpace"):
+        raise EditError("parte que no contiene una gráfica nativa")
+    chart = root.find("c:chart", NS)
+    if chart is None:
+        raise EditError("gráfica nativa vacía")
+    book = pkg if fmt == "xlsx" else _chart_embedded_book(pkg, part, root)
+    # An XLSX chart may also carry an externalData relationship: never certify it.
+    if fmt == "xlsx" and root.find("c:externalData", NS) is not None:
+        raise EditError("gráfica con fuente externa no verificable")
+    plot = chart.find("c:plotArea", NS)
+    kinds = {"barChart": "column", "bar3DChart": "column", "lineChart": "line", "line3DChart": "line",
+             "areaChart": "area", "area3DChart": "area", "pieChart": "pie", "pie3DChart": "pie",
+             "doughnutChart": "doughnut", "scatterChart": "scatter", "bubbleChart": "bubble", "radarChart": "radar"}
+    plots = [p for p in (plot if plot is not None else []) if etree.QName(p).localname.endswith("Chart")]
+    if not plots or len(plots) > 8:
+        raise EditError("tipo de gráfica no admitido")
+    series, types, groupings = [], [], []
+    for p in plots:
+        tag = etree.QName(p).localname
+        if tag not in kinds:
+            raise EditError("tipo de gráfica no admitido")
+        typ = kinds[tag]
+        if typ == "column" and p.find("c:barDir", NS) is not None and p.find("c:barDir", NS).get("val") == "bar":
+            typ = "bar"
+        types.append(typ)
+        grouping = p.find("c:grouping", NS)
+        groupings.append(grouping.get("val") if grouping is not None else None)
+        for s in p.findall("c:ser", NS):
+            if len(series) >= _CHART_MAX_SERIES:
+                raise EditError("demasiadas series de gráfica")
+            names = _chart_data(s.find("c:tx", NS), book)
+            cats = _chart_data(s.find("c:cat", NS), book)
+            vals = _chart_data(s.find("c:val", NS), book)
+            xs = _chart_data(s.find("c:xVal", NS), book)
+            ys = _chart_data(s.find("c:yVal", NS), book)
+            if typ in ("scatter", "bubble"):
+                vals = ys
+            if any(value is not None and (type(value) not in (int, float) or not math.isfinite(value)) for value in vals["values"]):
+                raise EditError("valores de gráfica no numéricos")
+            if typ in ("scatter", "bubble") and any(value is not None and (type(value) not in (int, float) or not math.isfinite(value)) for value in xs["values"]):
+                raise EditError("coordenadas de gráfica no numéricas")
+            color = _chart_color(s, line=typ in ("line", "scatter", "radar"))
+            point_colors = [color] * len(vals["values"])
+            seen = set()
+            for dp in s.findall("c:dPt", NS):
+                idx = dp.find("c:idx", NS)
+                n = int(idx.get("val")) if idx is not None else -1
+                if n < 0 or n >= len(point_colors) or n in seen:
+                    raise EditError("color de punto con índice inválido")
+                seen.add(n)
+                point_colors[n] = _chart_color(dp)
+            if not vals["values"] or (cats["values"] and len(cats["values"]) != len(vals["values"])):
+                raise EditError("datos o categorías de gráfica incompletos")
+            if typ in ("scatter", "bubble") and len(xs["values"]) != len(vals["values"]):
+                raise EditError("coordenadas de gráfica incompletas")
+            item = {"index": len(series) + 1, "name": names["values"][0] if names["values"] else None,
+                    "name_ref": names["ref"], "type": typ, "categories": cats["values"], "categories_ref": cats["ref"],
+                    "values": vals["values"], "values_ref": vals["ref"], "color": color, "point_colors": point_colors}
+            if typ in ("scatter", "bubble"):
+                item.update({"x_values": xs["values"], "x_values_ref": xs["ref"]})
+            if typ == "bubble":
+                sizes = _chart_data(s.find("c:bubbleSize", NS), book)
+                if len(sizes["values"]) != len(vals["values"]):
+                    raise EditError("tamaños de burbujas incompletos")
+                item.update({"bubble_sizes": sizes["values"], "bubble_sizes_ref": sizes["ref"]})
+            series.append(item)
+    if not series:
+        raise EditError("gráfica sin series")
+    title_node = chart.find("c:title", NS)
+    title = "".join(title_node.itertext()) if title_node is not None else ""
+    if title_node is not None:
+        rich = title_node.findall(".//a:t", NS)
+        title = "".join(t.text or "" for t in rich) if rich else "".join(str(v) for v in _chart_data(title_node.find("c:tx", NS), book)["values"])
+    legend = chart.find("c:legend", NS)
+    legend_pos = legend.find("c:legendPos", NS) if legend is not None else None
+    return {"part": part, "type": types[0] if len(plots) == 1 else "combo", "plot_types": types,
+            "grouping": groupings[0] if len(plots) == 1 else None, "series": series,
+            "categories": series[0]["categories"] if all(s["categories"] == series[0]["categories"] for s in series) else None,
+            "title": _chart_text(title), "legend": legend is not None,
+            "legend_position": legend_pos.get("val") if legend_pos is not None else None,
+            "editable": True, "complete": True}
+
+
+def _chart_anchor(anchor):
+    position = {"anchor": etree.QName(anchor).localname}
+    for name in ("from", "to"):
+        marker = anchor.find("xdr:" + name, NS)
+        if marker is not None:
+            position[name] = {etree.QName(x).localname: int(x.text) for x in marker if x.text is not None}
+    pos, ext = anchor.find("xdr:pos", NS), anchor.find("xdr:ext", NS)
+    if pos is not None:
+        position.update({"x_mm": emu_to_mm(int(pos.get("x"))), "y_mm": emu_to_mm(int(pos.get("y")))})
+    if ext is not None:
+        position.update({"w_mm": emu_to_mm(int(ext.get("cx"))), "h_mm": emu_to_mm(int(ext.get("cy")))})
+    return position
+
+
+def native_charts(pkg, fmt, *, sheet=None, slide=None):
+    """Inventario acotado. Una parte insegura/incompleta jamás se certifica editable."""
+    out = {"charts": [], "truncated": False}
+    budget = _CHART_MAX_OUTPUT
+
+    def add(owner, relation_part, chart_el, location):
+        nonlocal budget
+        if len(out["charts"]) >= _CHART_MAX_COUNT:
+            out["truncated"] = True
+            return
+        item = {**owner, **location, "id": relation_part + "#" + str(location.get("shape", location["index"]))}
+        try:
+            part = _chart_rel(pkg, relation_part, chart_el.get(q("r", "id")), "chart")
+            item.update(_chart_read(pkg, part, fmt))
+        except (EditError, ValueError, TypeError, KeyError, etree.XMLSyntaxError, zipfile.BadZipFile) as exc:
+            item.update({"editable": False, "complete": False, "error": str(exc)[:200]})
+        size = len(json.dumps(item, ensure_ascii=True))
+        if size > budget:
+            item = {k: v for k, v in item.items() if k in ("id", "index", "sheet", "slide", "shape", "part", "type")}
+            item.update({"editable": False, "complete": False, "error": "inventario de gráfica truncado por límite", "truncated": True})
+            out["truncated"] = True
+            size = len(json.dumps(item, ensure_ascii=True))
+        budget -= size
+        out["charts"].append(item)
+
+    if fmt == "xlsx":
+        for sh in _chart_sheets(pkg):
+            if sheet is not None and str(sheet) != sh["name"]:
+                continue
+            index = 0
+            for drawing in _chart_xml(pkg, sh["part"]).findall("s:drawing", NS):
+                try:
+                    part = _chart_rel(pkg, sh["part"], drawing.get(q("r", "id")), "drawing")
+                    root = _chart_xml(pkg, part)
+                    for anchor in root:
+                        for chart in anchor.findall(".//c:chart", NS):
+                            index += 1
+                            nv = anchor.find(".//xdr:cNvPr", NS)
+                            add({"sheet": sh["name"]}, part, chart,
+                                {"index": index, "shape": nv.get("id") if nv is not None else str(index), "position": _chart_anchor(anchor)})
+                except (EditError, ValueError, TypeError, etree.XMLSyntaxError):
+                    out["truncated"] = True
+    elif fmt == "pptx":
+        pres = _chart_xml(pkg, "ppt/presentation.xml")
+        for n, sl in enumerate(pres.findall("p:sldIdLst/p:sldId", NS), 1):
+            if slide is not None and str(slide) != str(n):
+                continue
+            part = _chart_rel(pkg, "ppt/presentation.xml", sl.get(q("r", "id")), "slide")
+            tree = _chart_xml(pkg, part).find("p:cSld/p:spTree", NS)
+            index = 0
+            for el, transform, _ in _pp_iter(tree if tree is not None else []):
+                if el.tag != P("graphicFrame"):
+                    continue
+                for chart in el.findall(".//c:chart", NS):
+                    index += 1
+                    nv = _pp_nv(el)
+                    name = nv.find(P("cNvPr")) if nv is not None else None
+                    geometry = _xf_geom(_pp_xfrm(el))
+                    position = dict(zip(("x_mm", "y_mm", "w_mm", "h_mm"), map(emu_to_mm, _pp_abs(transform, geometry)))) if geometry else {}
+                    add({"slide": n}, part, chart, {"index": index, "shape": name.get("id") if name is not None else str(index), "position": position})
+    return out
+
+
+def chart_checks(pkg, fmt, expectations):
+    if not isinstance(expectations, list) or not expectations or len(expectations) > _CHART_MAX_COUNT:
+        return [{"check": "expect.charts válido (1–20 gráficas)", "ok": False}]
+    checks = []
+    allowed = {"sheet", "slide", "chart", "type", "grouping", "editable", "categories", "series", "title", "legend", "position"}
+    series_allowed = {"name", "values", "x_values", "bubble_sizes", "color", "point_colors"}
+    for n, want in enumerate(expectations, 1):
+        result = {"check": f"gráfica nativa solicitada {n}", "ok": False}
+        try:
+            if not isinstance(want, dict) or set(want) - allowed or "chart" not in want:
+                raise EditError("expectativa de gráfica inválida: indica ubicación y chart (id o índice 1-based)")
+            if fmt not in ("xlsx", "pptx") or (fmt == "xlsx" and (not isinstance(want.get("sheet"), str) or "slide" in want)) or (fmt == "pptx" and (type(want.get("slide")) is not int or want["slide"] < 1 or "sheet" in want)):
+                raise EditError("ubicación de gráfica ausente o inválida")
+            inv = native_charts(pkg, fmt, sheet=want.get("sheet"), slide=want.get("slide"))
+            if inv["truncated"]:
+                raise EditError("inventario de gráficas incompleto o truncado")
+            selector = want["chart"]
+            charts = [c for c in inv["charts"] if (type(selector) is int and c["index"] == selector) or (isinstance(selector, str) and c["id"] == selector)]
+            if len(charts) != 1:
+                raise EditError("gráfica solicitada ausente o selector ambiguo")
+            got = charts[0]
+            if not got.get("complete"):
+                raise EditError(got.get("error", "datos de gráfica incompletos"))
+            failures = []
+            for key in ("type", "grouping", "editable", "categories", "title", "legend"):
+                if key in want and not _chart_equal(got.get(key), want[key]):
+                    failures.append(key)
+            if "series" in want:
+                if not isinstance(want["series"], list) or not want["series"] or len(want["series"]) != len(got["series"]):
+                    failures.append("series (cantidad)")
+                else:
+                    for i, (actual, expected) in enumerate(zip(got["series"], want["series"]), 1):
+                        if not isinstance(expected, dict) or not expected or set(expected) - series_allowed:
+                            raise EditError("expectativa de serie inválida")
+                        for key, value in expected.items():
+                            if key == "color":
+                                value = _norm_hex(value)
+                                if "point_colors" not in expected and any(color != value for color in actual.get("point_colors", [])):
+                                    failures.append(f"serie {i}: colores de puntos distintos del color solicitado")
+                            if key == "point_colors":
+                                if not isinstance(value, list):
+                                    raise EditError("point_colors debe ser una lista")
+                                value = [_norm_hex(v) for v in value]
+                            if not _chart_equal(actual.get(key), value):
+                                failures.append(f"serie {i}: {key}")
+            if "position" in want:
+                pos = want["position"]
+                if not isinstance(pos, dict) or not pos or set(pos) - {"x_mm", "y_mm", "w_mm", "h_mm"}:
+                    raise EditError("posición esperada inválida")
+                for key, value in pos.items():
+                    actual = got.get("position", {}).get(key)
+                    if type(value) not in (int, float) or type(actual) not in (int, float) or not math.isfinite(value) or abs(actual - value) > 0.05:
+                        failures.append("posición " + key)
+            result.update({"ok": not failures, "detail": "no coincide: " + ", ".join(failures) if failures else "tipo, datos y propiedades solicitadas comprobados en OOXML"})
+        except (EditError, ValueError, TypeError, KeyError, etree.XMLSyntaxError, zipfile.BadZipFile) as exc:
+            result["detail"] = str(exc)[:300]
+        checks.append(result)
+    return checks
+
+
 def xlsx_inspect(pkg: OfficePackage, *, query: Optional[str] = None, limit: int = 300, sheet: Any = None) -> Dict[str, Any]:
     styles = XlStyles(pkg)
     out = {"format": "xlsx", "sheets": []}
     q_low = query.lower() if query else None
     budget = limit
+    selected_sheet = next((sh["name"] for i, sh in enumerate(xl_sheets(pkg), 1)
+                           if sh["name"] == sheet or str(i) == str(sheet)), sheet) if sheet is not None else None
+    chart_inventory = native_charts(pkg, "xlsx", sheet=selected_sheet)
+    out["charts_truncated"] = chart_inventory["truncated"]
     for i, sh in enumerate(xl_sheets(pkg)):
         if sheet is not None and sh["name"] != sheet and str(i + 1) != str(sheet):
             continue
@@ -1529,6 +1948,7 @@ def xlsx_inspect(pkg: OfficePackage, *, query: Optional[str] = None, limit: int 
             "name": sh["name"], "index": i + 1, "state": sh["state"],
             "dimension": dim.get("ref") if dim is not None else None,
             "cells": items,
+            "charts": [c for c in chart_inventory["charts"] if c.get("sheet") == sh["name"]],
             "merged": [m.get("ref") for m in merged][:50] if merged is not None else [],
         })
     if budget <= 0:
@@ -1717,6 +2137,8 @@ def pptx_inspect(pkg: OfficePackage, *, query: Optional[str] = None, slide: Any 
     out = {"format": "pptx", "slide_size_mm": {"w": emu_to_mm(cx), "h": emu_to_mm(cy)}, "slides": []}
     q_low = query.lower() if query else None
     budget = limit
+    chart_inventory = native_charts(pkg, "pptx", slide=slide)
+    out["charts_truncated"] = chart_inventory["truncated"]
     for n, part in enumerate(pp_slide_parts(pkg), start=1):
         if slide is not None and str(slide) != str(n):
             continue
@@ -1767,7 +2189,8 @@ def pptx_inspect(pkg: OfficePackage, *, query: Optional[str] = None, slide: Any 
             if budget <= 0:
                 break
         if shapes or not q_low:
-            out["slides"].append({"n": n, "part": part, "layout": layout_name, "shapes": shapes})
+            out["slides"].append({"n": n, "part": part, "layout": layout_name, "shapes": shapes,
+                                  "charts": [c for c in chart_inventory["charts"] if c.get("slide") == n]})
         if budget <= 0:
             out["truncated"] = True
             break
@@ -2640,6 +3063,9 @@ def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expec
         bad = [n for n in report["parts"]["changed"] + report["parts"]["added"] + report["parts"]["removed"] if n not in allowed]
         checks.append({"check": "solo cambiaron las partes permitidas", "ok": not bad,
                        "detail": f"otras partes: {bad}" if bad else None})
+    if "charts" in expect:
+        checks.extend(chart_checks(OfficePackage(after), fmt, expect["charts"]) if fmt in ("xlsx", "pptx")
+                      else [{"check": "gráficas nativas requieren XLSX o PPTX", "ok": False}])
     report["checks"] = checks
     report["ok"] = all(c["ok"] for c in checks)
     report["summary"] = summarize(report)

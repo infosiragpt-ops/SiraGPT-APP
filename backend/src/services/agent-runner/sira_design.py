@@ -1384,8 +1384,8 @@ def restyle_xlsx(src, dst, theme):
     from openpyxl import load_workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.formatting.rule import DataBarRule
-    from openpyxl.chart import BarChart, Reference
     from openpyxl.utils import get_column_letter
+    from sira_charts import add_xlsx_chart, apply_xlsx_chart_colors
 
     wb = load_workbook(src)  # formulas stay formulas
     fonts = theme['fonts']
@@ -1398,7 +1398,7 @@ def restyle_xlsx(src, dst, theme):
     band_fill = PatternFill('solid', fgColor=colors['band'])
     header_fg = _on(colors['accent'])
     for ws in wb.worksheets:
-        info = {'sheet': ws.title, 'header_row': None, 'chart': False, 'data_bar': None, 'title_row': None}
+        info = {'sheet': ws.title, 'header_row': None, 'chart': False, 'charts_recolored': 0, 'data_bar': None, 'title_row': None}
         try:
             if ws.max_row <= 1 and ws.max_column <= 1 and ws['A1'].value is None:
                 sheets.append(info)
@@ -1423,6 +1423,15 @@ def restyle_xlsx(src, dst, theme):
                     ws.freeze_panes = ws.cell(row=header_row + 1, column=min_col).coordinate
                 info['title_row'] = _style_title_row(ws, header_row, min_col, max_col, fonts, colors)
             label_col = _label_column(ws, min_col, max_col, start, last_row)
+            temporal = re.compile(r'\b(mes|meses|month|months|a[nñ]o|year|fecha|date|trimestre|quarter|semana|week)\b', re.I)
+            if header_row:
+                time_cols = [c for c in range(min_col, max_col + 1)
+                             if temporal.search(str(ws.cell(header_row, c).value or ''))]
+                if time_cols:
+                    label_col = time_cols[0]
+            for existing_chart in getattr(ws, '_charts', []):
+                apply_xlsx_chart_colors(existing_chart, theme['chartColors'])
+                info['charts_recolored'] += 1
             total_rows = set()
             if label_col:
                 for r in range(start, last_row + 1):
@@ -1500,26 +1509,23 @@ def restyle_xlsx(src, dst, theme):
                         ws.conditional_formatting.add(rng, DataBarRule(start_type='min', end_type='max', color=colors['accent']))
                     info['data_bar'] = rng
                 contiguous = rows == list(range(rows[0], rows[-1] + 1))
-                if header_row and label_col and contiguous and 2 <= len(rows) <= 40 and not getattr(ws, '_charts', None):
-                    chart = BarChart()
-                    chart.type = 'col'
-                    chart.style = 10
-                    chart.title = str(ws.cell(row=header_row, column=col).value or ws.title)
-                    chart.y_axis.title = None
-                    chart.legend = None
-                    data = Reference(ws, min_col=col, min_row=rows[0], max_row=rows[-1])
-                    cats = Reference(ws, min_col=label_col, min_row=rows[0], max_row=rows[-1])
-                    chart.add_data(data, titles_from_data=False)
-                    chart.set_categories(cats)
-                    try:
-                        chart.series[0].graphicalProperties.solidFill = colors['accent']
-                        chart.series[0].graphicalProperties.line.solidFill = colors['accent']
-                    except Exception:
-                        pass
-                    chart.width, chart.height = 16, 8
+                if header_row and label_col and contiguous and rows[0] == header_row + 1 and 2 <= len(rows) <= 40 and not getattr(ws, '_charts', None):
+                    # Comparable measures share one native chart. Do not mix
+                    # quantity / unit-price columns into a monetary total.
+                    compatible = sorted(c for c in candidates if candidates[c] == rows)
+                    money = [c for c in compatible if MONEY_HEADER_RE.search(str(ws.cell(header_row, c).value or ''))
+                             and not re.search(r'unitari|unit price|precio|price', str(ws.cell(header_row, c).value or ''), re.I)]
+                    chart_cols = money or compatible
+                    chart_type = 'line' if temporal.search(str(ws.cell(header_row, label_col).value or '')) else 'column'
+                    ranges = ['%s%d:%s%d' % (get_column_letter(c), header_row, get_column_letter(c), rows[-1]) for c in chart_cols]
                     # Right of the table AND of every existing image / chart.
                     anchor_col = max(max_col + 2, _drawings_right_col(ws) + 2)
-                    ws.add_chart(chart, '%s%d' % (get_column_letter(anchor_col), header_row))
+                    add_xlsx_chart(ws, chart_type=chart_type, data_range=ranges,
+                                   category_range='%s%d:%s%d' % (get_column_letter(label_col), rows[0], get_column_letter(label_col), rows[-1]),
+                                   titles_from_data=True, colors=theme['chartColors'],
+                                   title=ws.title if len(chart_cols) > 1 else str(ws.cell(header_row, chart_cols[0]).value or ws.title),
+                                   legend='b' if len(chart_cols) > 1 else False,
+                                   anchor='%s%d' % (get_column_letter(anchor_col), header_row), width=16, height=8)
                     info['chart'] = True
             ws.sheet_view.showGridLines = False
             _fit_to_page(ws, max_col - min_col + 1, info['chart'])
