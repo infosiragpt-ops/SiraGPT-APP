@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CloverMark } from "@/components/brand"
+import { KnotMark } from "@/components/brand"
 import { useParams, useRouter } from "next/navigation"
 import { Eye, EyeOff } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -69,7 +69,7 @@ function ResetPasswordPageContent() {
         >
           <CardHeader className="px-6 pt-7 text-center sm:px-8 sm:pt-8">
             <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white">
-              <CloverMark size={40} className="text-[color:var(--brand)]" />
+              <KnotMark size={40} className="text-[color:var(--brand)]" />
             </div>
             <CardTitle className="text-2xl font-semibold tracking-tight text-neutral-900">
               Nueva contraseña

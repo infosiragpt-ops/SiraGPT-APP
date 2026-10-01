@@ -19,7 +19,6 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   MessageSquarePlus,
   Search,
@@ -59,7 +58,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
-import { CloverMark } from "@/components/brand"
+import { KnotMark } from "@/components/brand"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1450,9 +1449,24 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Claude-style chrome strip: collapse + browser history on the
-              left, notifications + the primary new-chat disc on the right. */}
-          <div className="flex shrink-0 items-center gap-0.5">
+          {/* Brand lockup (knot mark + «SiraGPT») with the collapse toggle
+              beside it; notifications and the primary new-chat disc on the
+              right. */}
+          <div className="flex min-w-0 shrink items-center gap-1.5">
+            <div
+              className="sidebar-brand flex min-w-0 items-center gap-2 pl-0.5"
+              data-testid="sidebar-brand"
+            >
+              <KnotMark
+                size={22}
+                title="SiraGPT"
+                gap="hsl(var(--sidebar-background))"
+                className="h-[22px] w-[22px] shrink-0 text-[color:var(--brand)]"
+              />
+              <span className="sidebar-brand__wordmark truncate text-[15px] leading-none">
+                SiraGPT
+              </span>
+            </div>
             <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
               <SidebarTrigger
                 aria-label="Contraer barra lateral ⌘B"
@@ -1461,27 +1475,9 @@ export function AppSidebar() {
                 <SidebarOvalIcon className="h-4 w-4" />
               </SidebarTrigger>
             </SidebarChromeTooltip>
-            <SidebarChromeTooltip label="Atrás">
-              <button
-                type="button"
-                aria-label="Atrás"
-                onClick={() => window.history.back()}
-                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
-              >
-                <ChevronLeft className="h-4 w-4" strokeWidth={1.9} />
-              </button>
-            </SidebarChromeTooltip>
-            <SidebarChromeTooltip label="Adelante">
-              <button
-                type="button"
-                aria-label="Adelante"
-                onClick={() => window.history.forward()}
-                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
-              >
-                <ChevronRight className="h-4 w-4" strokeWidth={1.9} />
-              </button>
-            </SidebarChromeTooltip>
           </div>
+          {/* The browser history buttons left this strip on 2026-10-01: the
+              wordmark needs the room (16rem rail) and the browser owns them. */}
           <div className="flex shrink-0 items-center gap-1">
             <NotificationCenter />
             <SidebarChromeTooltip label="Nuevo agente ⌘N">
@@ -1506,9 +1502,10 @@ export function AppSidebar() {
             onClick={toggleSidebar}
             aria-label="Expandir barra lateral ⌘B"
           >
-            <CloverMark
+            <KnotMark
               size={20}
               title="SiraGPT"
+              gap="hsl(var(--sidebar-background))"
               className="h-5 w-5 shrink-0 text-[color:var(--brand)] transition-opacity group-hover:opacity-0"
             />
             <SidebarOvalIcon className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />

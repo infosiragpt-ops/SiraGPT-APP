@@ -9524,10 +9524,20 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 :root {
   --celeste: 199 89% 48%;
   --success-green: 142 71% 40%;
+  /* Inside of the knot brand mark's tube (= the surface it sits on). */
+  --knot-gap: #ffffff;
 }
 .dark {
   --celeste: 199 92% 58%;
   --success-green: 142 66% 48%;
+  --knot-gap: #0d0d0d;
+}
+
+/* Sidebar brand lockup: knot mark + «SiraGPT» wordmark (2026-10-01). */
+.sidebar-brand__wordmark {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground));
 }
 
 /* Title rename field: thin professional light-blue border. */

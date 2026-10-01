@@ -1,7 +1,7 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { CloverMark } from "@/components/brand"
+import { KnotMark } from "@/components/brand"
 
 export function BrandLogo() {
   return (
@@ -25,7 +25,7 @@ export function BrandLogo() {
             filter: { duration: 0.3 },
           }}
         >
-          <CloverMark size={36} title="SiraGPT" />
+          <KnotMark size={36} title="SiraGPT" />
         </motion.span>
 
         {/* Wordmark with shimmer wave */}

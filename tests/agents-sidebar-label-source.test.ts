@@ -10,8 +10,11 @@ describe("agentes sidebar chrome", () => {
     const sidebar = source("components/app-sidebar.tsx")
     assert.doesNotMatch(sidebar, /Modo de la barra lateral/)
     assert.doesNotMatch(sidebar, /role="tablist"/)
-    assert.match(sidebar, /aria-label="Atrás"/)
-    assert.match(sidebar, /aria-label="Adelante"/)
+    // The header opens with the brand lockup (knot + «SiraGPT»); the browser
+    // history buttons left the strip on 2026-10-01 to make room for the wordmark.
+    assert.match(sidebar, /data-testid="sidebar-brand"/)
+    assert.doesNotMatch(sidebar, /aria-label="Atrás"/)
+    assert.doesNotMatch(sidebar, /aria-label="Adelante"/)
     assert.match(sidebar, /aria-label="Nuevo agente ⌘N"/)
     assert.doesNotMatch(sidebar, /Nuevo chat ⌘N/)
     assert.doesNotMatch(sidebar, /aria-label="Chats"/)
