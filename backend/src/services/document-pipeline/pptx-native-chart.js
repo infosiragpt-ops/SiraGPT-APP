@@ -23,7 +23,7 @@ const CHART_SCHEMA = {
     } },
     colors: { type: 'array', minItems: 1, maxItems: MAX_POINTS, items: colorSchema, description: 'Exact palette: one color per series, or per slice for pie/doughnut.' },
     pointColors: { type: 'array', minItems: 1, maxItems: MAX_POINTS, items: colorSchema, description: 'One color per point; pie/doughnut or single-series column/bar only.' },
-    position: { type: 'object', additionalProperties: false, required: ['x', 'y', 'w', 'h'], properties: Object.fromEntries(['x', 'y', 'w', 'h'].map((k) => [k, { type: 'number' }])) },
+    position: { type: 'object', description: 'Chart rectangle in inches on a 13.333 by 7.5 inch slide; keep clear of the title, notes and footer.', additionalProperties: false, required: ['x', 'y', 'w', 'h'], properties: Object.fromEntries(['x', 'y', 'w', 'h'].map((k) => [k, { type: 'number' }])) },
     showTitle: { type: 'boolean' }, showLegend: { type: 'boolean' }, legendPosition: { type: 'string', enum: ['bottom', 'left', 'right', 'top', 'top-right'] },
     showValue: { type: 'boolean' }, showLabel: { type: 'boolean', description: 'Show category names as slice labels (pie/doughnut only); axes already show categories on other chart types.' }, showPercent: { type: 'boolean' },
     grouping: { type: 'string', enum: ['clustered', 'stacked', 'percentStacked'] },

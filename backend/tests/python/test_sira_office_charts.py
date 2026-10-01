@@ -347,6 +347,39 @@ class TestNativeCharts(unittest.TestCase):
         self.assertTrue(inventory['truncated'])
         self.assertFalse(self.checks(dst, 'xlsx', self.expected('xlsx'))[0]['ok'])
 
+    def test_large_worksheet_keeps_cell_inspection_and_cannot_certify_chart(self):
+        dst = self.path('.xlsx')
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Datos'
+        ws.append(['Dato válido'])
+        for _ in range(160):
+            ws.append(['Contenido de celda ' * 800])
+        wb.save(dst)
+        with zipfile.ZipFile(dst) as z:
+            self.assertGreater(z.getinfo('xl/worksheets/sheet1.xml').file_size, 2 * 1024 * 1024)
+        inspected = so.inspect(dst, limit=1)
+        self.assertEqual(inspected['sheets'][0]['cells'], [{'ref': 'A1', 'value': 'Dato válido'}])
+        self.assertTrue(inspected['charts_truncated'])
+        self.assertEqual(inspected['sheets'][0]['charts'], [])
+        result = self.checks(dst, 'xlsx', {'sheet': 'Datos', 'chart': 1, 'type': 'column'})
+        self.assertFalse(result[0]['ok'])
+
+    def test_large_manifest_or_slide_only_limits_chart_inventory(self):
+        for fmt, src, part in [('xlsx', self.xlsx, 'xl/workbook.xml'), ('pptx', self.pptx, 'ppt/slides/slide1.xml')]:
+            with self.subTest(fmt=fmt):
+                dst = self.path('-' + fmt + '.' + fmt)
+                def change(parts):
+                    xml_change(parts, part, lambda root: root.append(etree.Comment('x' * (2 * 1024 * 1024))))
+                rewrite(src, dst, change)
+                inspected = so.inspect(dst, limit=1)
+                self.assertTrue(inspected['charts_truncated'])
+                if fmt == 'xlsx':
+                    self.assertEqual(inspected['sheets'][0]['cells'][0]['value'], 'Periodo')
+                else:
+                    self.assertEqual(inspected['slides'][0]['shapes'][0]['kind'], 'table/chart')
+                self.assertFalse(self.checks(dst, fmt, self.expected(fmt))[0]['ok'])
+
     @unittest.skipUnless(HAS_RENDER, 'LibreOffice y Poppler requeridos para recálculo real')
     def test_final_recalculated_file_can_verify_formula_chart(self):
         src = self.path('.xlsx')

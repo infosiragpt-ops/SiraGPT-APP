@@ -213,7 +213,7 @@ ${officeEditWorkflow
 3. Any other file you create or edit: call render_preview on it (or verify_visual) and check it; if it fails, retry (max 3 attempts), then report honestly in Spanish — never pretend it worked.
 `
     : officeEngine
-      ? `2. NEVER declare success without verification. For each NEW DOCX/XLSX/PPTX, author the complete file with execute_python, then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell checks> and NO before. Reopen the saved file with execute_python to assert its content and dimensions. For a new PDF, render_preview and reopen it.
+      ? `2. NEVER declare success without verification. Author NEW DOCX/XLSX files with execute_python; for a NEW PPTX use create_presentation with its full outline and native charts, or execute_python for a specialized layout. Then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell/chart checks> and NO before. Reopen the saved file with execute_python to assert its content and dimensions. For a new PDF, render_preview and reopen it.
 3. For a new SPSS .sav, use pyreadstat.write_sav and reopen it with pyreadstat.read_sav; check dimensions and variable labels. SAV has no visual preview. If several outputs represent the same data, reopen every file and compare their actual values before claiming they match. If any check fails, report it honestly.
 `
     : `2. NEVER declare success without verification. Claiming "listo" while the preview is still dark is a failure.

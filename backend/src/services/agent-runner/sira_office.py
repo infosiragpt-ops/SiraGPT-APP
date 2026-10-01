@@ -1793,6 +1793,15 @@ def _chart_anchor(anchor):
 
 def native_charts(pkg, fmt, *, sheet=None, slide=None):
     """Inventario acotado. Una parte insegura/incompleta jamás se certifica editable."""
+    try:
+        return _native_charts(pkg, fmt, sheet=sheet, slide=slide)
+    except (EditError, ValueError, TypeError, KeyError, etree.XMLSyntaxError, zipfile.BadZipFile):
+        # Limits of the optional chart inventory must not disable the existing
+        # cell/shape inspector. chart_checks rejects every incomplete inventory.
+        return {"charts": [], "truncated": True}
+
+
+def _native_charts(pkg, fmt, *, sheet=None, slide=None):
     out = {"charts": [], "truncated": False}
     budget = _CHART_MAX_OUTPUT
 
