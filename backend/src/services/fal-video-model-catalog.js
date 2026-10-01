@@ -695,6 +695,34 @@ const FAL_VIDEO_MODELS = Object.freeze([
     imageField: 'image_url',
     supportsNegativePrompt: true,
   },
+  {
+    id: 'google/gemini-omni-flash/v1.1/text-to-video',
+    displayName: 'Gemini Omni Flash 1.1 Text to Video',
+    brand: 'Google',
+    icon: 'GeminiLogo',
+    mode: 'text-to-video',
+    family: 'Gemini Omni Flash 1.1',
+    qualityTier: 'Live',
+    supportsAudio: true,
+    supportsResolution: true,
+    supportsNegativePrompt: false,
+    // Official schema checked 2026-10-01. Native audio has no API toggle.
+    // https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=google/gemini-omni-flash/v1.1/text-to-video
+    inputContract: {
+      durationMode: 'range',
+      durationMin: 3,
+      durationMax: 10,
+      durationStep: 1,
+      durationDefault: 8,
+      durationFormat: 'seconds-int',
+      resolutionEnum: ['360p', '720p', '1080p', '4k'],
+      resolutionDefault: '720p',
+      aspectRatioEnum: ['16:9', '9:16'],
+      aspectRatioDefault: '16:9',
+      supportsAudioToggle: false,
+      audioMode: 'always-on',
+    },
+  },
 ]);
 
 const FAL_VIDEO_BY_ID = new Map();
@@ -774,10 +802,11 @@ function toFalVideoModelRecord(definition, index = 0, overrides = {}) {
     supportsImageList: Boolean(definition.supportsImageList),
     imageField: definition.imageField || (supportsImageInput ? 'image_url' : null),
     endImageField: definition.endImageField || null,
-    audioField: definition.audioField || (definition.supportsAudio ? 'generate_audio' : null),
+    audioField: definition.inputContract?.supportsAudioToggle === false ? null : (definition.audioField || (definition.supportsAudio ? 'generate_audio' : null)),
     pairedTextEndpoint: definition.pairedTextEndpoint || null,
     pairedImageEndpoint: definition.pairedImageEndpoint || null,
     pairedReferenceEndpoint: definition.pairedReferenceEndpoint || null,
+    ...(definition.inputContract || {}),
   };
 
   return {
@@ -952,6 +981,31 @@ function inferFalEndImageField(endpoint) {
   return null;
 }
 
+function parseContractDuration(value) {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && /^\d+s?$/.test(value.trim())) return Number(value.trim().replace(/s$/, ''));
+  return NaN;
+}
+
+function validateFalVideoSettings({ endpoint, aspectRatio = '16:9', duration = '8s', resolution = '720p', audio = true } = {}) {
+  const contract = getFalVideoModelDefinition(endpoint)?.inputContract;
+  if (!contract) return { ok: true };
+  let message = null;
+  if (!contract.resolutionEnum.includes(resolution)) {
+    message = `La resolución ${String(resolution)} no está disponible para el modelo seleccionado. Elige ${contract.resolutionEnum.join(', ')}.`;
+  } else if (!contract.aspectRatioEnum.includes(aspectRatio)) {
+    message = `El formato ${String(aspectRatio)} no está disponible para el modelo seleccionado. Elige ${contract.aspectRatioEnum.join(' o ')}.`;
+  } else {
+    const seconds = parseContractDuration(duration);
+    if (!Number.isInteger(seconds) || seconds < contract.durationMin || seconds > contract.durationMax) {
+      message = `La duración debe ser un número entero entre ${contract.durationMin} y ${contract.durationMax} segundos para el modelo seleccionado.`;
+    } else if (contract.audioMode === 'always-on' && audio === false) {
+      message = 'El modelo seleccionado no permite desactivar el audio. Activa Audio o elige un modelo que permita vídeo sin audio.';
+    }
+  }
+  return message ? { ok: false, code: 'E_PARAMS', message } : { ok: true };
+}
+
 function buildFalVideoInputPayload({
   endpoint,
   prompt,
@@ -963,6 +1017,14 @@ function buildFalVideoInputPayload({
   resolution = '720p',
   audio = true,
 }) {
+  const validation = validateFalVideoSettings({ endpoint, aspectRatio, duration, resolution, audio });
+  if (!validation.ok) {
+    const error = new Error(validation.message);
+    error.status = 422;
+    error.code = 'VIDEO_MODEL_SETTINGS_UNSUPPORTED';
+    error.body = { code: error.code, message: validation.message };
+    throw error;
+  }
   const definition = getFalVideoModelDefinition(endpoint) || {
     id: endpoint,
     mode: inferFalVideoMode(endpoint),
@@ -987,7 +1049,7 @@ function buildFalVideoInputPayload({
     payload.resolution = normalizeFalResolution(resolution, id);
   }
 
-  if ((definition.supportsAudio || /veo|seedance|kling|pixverse|ltx/.test(id)) && !/sora|hailuo|cosmos|wan/.test(id)) {
+  if (definition.inputContract?.supportsAudioToggle !== false && (definition.supportsAudio || /veo|seedance|kling|pixverse|ltx/.test(id)) && !/sora|hailuo|cosmos|wan/.test(id)) {
     payload[definition.audioField || (/pixverse/.test(id) ? 'generate_audio_switch' : 'generate_audio')] = Boolean(audio);
   }
 
@@ -1020,6 +1082,7 @@ function buildFalVideoInputPayload({
 }
 
 function normalizeFalDuration(duration, endpoint = '') {
+  if (getFalVideoModelDefinition(endpoint)?.inputContract?.durationFormat === 'seconds-int') return parseContractDuration(duration);
   const raw = typeof duration === 'string' ? duration : `${duration || 8}`;
   const numeric = Math.min(Math.max(parseInt(raw, 10) || 8, 4), 15);
   const id = String(endpoint || '').toLowerCase();
@@ -1033,6 +1096,7 @@ function normalizeFalAspectRatio(aspectRatio) {
 }
 
 function normalizeFalResolution(resolution, endpoint = '') {
+  if (getFalVideoModelDefinition(endpoint)?.inputContract) return resolution;
   const raw = String(resolution || '720p').toLowerCase();
   if (/sora/.test(String(endpoint || '').toLowerCase())) {
     return raw === '480p' ? '720p' : raw;
@@ -1072,6 +1136,7 @@ function normalizeFalExploreModel(item, index = 0) {
     imageField: staticDefinition?.imageField,
     endImageField: staticDefinition?.endImageField,
     audioField: staticDefinition?.audioField,
+    inputContract: staticDefinition?.inputContract,
     pairedTextEndpoint: staticDefinition?.pairedTextEndpoint,
     pairedImageEndpoint: staticDefinition?.pairedImageEndpoint,
     pairedReferenceEndpoint: staticDefinition?.pairedReferenceEndpoint,
@@ -1100,4 +1165,5 @@ module.exports = {
   resolveFalVideoModelRequest,
   sortFalVideoModels,
   toFalVideoModelRecord,
+  validateFalVideoSettings,
 };

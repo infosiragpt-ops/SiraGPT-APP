@@ -8,7 +8,9 @@ const { listManifestModels } = require('../src/services/model-catalog-manifest')
 const { ModelSyncService } = require('../src/services/model-sync-service');
 const {
   buildFalVideoInputPayload,
+  normalizeFalExploreModel,
   resolveFalVideoModelRequest,
+  validateFalVideoSettings,
 } = require('../src/services/fal-video-model-catalog');
 
 const EXPECTED_CORE_FAL_VIDEO_MODELS = [
@@ -191,6 +193,88 @@ test('fal.ai video payload preserves automatic aspect ratio for Seedance', () =>
   assert.strictEqual(payload.duration, '8');
   assert.strictEqual(payload.resolution, '720p');
   assert.strictEqual(payload.generate_audio, true);
+});
+
+// Official input schema (2026-10-01): integer duration 3..10, 16:9/9:16,
+// 360p/720p/1080p/4k; native audio, with no audio or negative-prompt switch.
+// https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=google/gemini-omni-flash/v1.1/text-to-video
+const OMNI_ENDPOINT = 'google/gemini-omni-flash/v1.1/text-to-video';
+const OMNI_SETTINGS = Object.freeze({
+  endpoint: OMNI_ENDPOINT,
+  prompt: 'Una esfera azul gira lentamente sobre fondo blanco.',
+  duration: '4s',
+  aspectRatio: '9:16',
+  resolution: '720p',
+  audio: true,
+});
+
+test('Omni video payload uses the official integer duration and preserves valid settings', () => {
+  const routing = resolveFalVideoModelRequest(OMNI_ENDPOINT);
+  assert.strictEqual(routing.endpoint, OMNI_ENDPOINT);
+  assert.deepStrictEqual(buildFalVideoInputPayload({ ...OMNI_SETTINGS, negativePrompt: 'text overlay' }), {
+    prompt: OMNI_SETTINGS.prompt,
+    aspect_ratio: '9:16',
+    duration: 4,
+    resolution: '720p',
+  });
+  for (const resolution of ['360p', '720p', '1080p', '4k']) {
+    for (const duration of [3, '10s']) {
+      const payload = buildFalVideoInputPayload({ ...OMNI_SETTINGS, resolution, duration });
+      assert.strictEqual(payload.resolution, resolution);
+      assert.strictEqual(payload.duration, Number(String(duration).replace(/s$/, '')));
+      assert.strictEqual(typeof payload.duration, 'number');
+    }
+  }
+});
+
+test('Omni rejects incompatible controls instead of silently changing or omitting them', () => {
+  const invalidSettings = [
+    [{ resolution: '480p', audio: false }, /resoluci[oó]n.*480p/i],
+    [{ audio: false }, /no permite desactivar el audio/i],
+    [{ aspectRatio: '1:1' }, /formato.*1:1/i],
+    ...[2, 11, 3.5, '4seconds', '3.5s'].map(duration => [{ duration }, /duraci[oó]n.*3.*10/i]),
+  ];
+  for (const [settings, messagePattern] of invalidSettings) {
+    assert.throws(() => buildFalVideoInputPayload({ ...OMNI_SETTINGS, ...settings }), error => {
+      assert.strictEqual(error.status, 422);
+      assert.strictEqual(error.code, 'VIDEO_MODEL_SETTINGS_UNSUPPORTED');
+      assert.match(error.message, messagePattern);
+      assert.doesNotMatch(error.message, /fal|google|gemini|endpoint/i);
+      return true;
+    });
+  }
+});
+
+test('Omni preflight shares the builder contract without mutating caller settings', () => {
+  const input = Object.freeze({ ...OMNI_SETTINGS, audio: false });
+  const checked = validateFalVideoSettings(input);
+  assert.strictEqual(checked.ok, false);
+  assert.strictEqual(checked.code, 'E_PARAMS');
+  assert.match(checked.message, /no permite desactivar el audio/i);
+  assert.strictEqual(input.audio, false);
+  assert.deepStrictEqual(validateFalVideoSettings(OMNI_SETTINGS), { ok: true });
+});
+
+test('live-catalog Omni metadata exposes the same constraints as provider validation', () => {
+  const dynamic = normalizeFalExploreModel({
+    endpoint_id: OMNI_ENDPOINT,
+    metadata: { display_name: 'Synthetic video model', category: 'text-to-video' },
+  });
+  const caps = dynamic.apiData.fal;
+  assert.deepStrictEqual(caps.resolutionEnum, ['360p', '720p', '1080p', '4k']);
+  assert.strictEqual(caps.resolutionDefault, '720p');
+  assert.deepStrictEqual(caps.aspectRatioEnum, ['16:9', '9:16']);
+  assert.strictEqual(caps.aspectRatioDefault, '16:9');
+  assert.strictEqual(caps.durationMode, 'range');
+  assert.strictEqual(caps.durationMin, 3);
+  assert.strictEqual(caps.durationMax, 10);
+  assert.strictEqual(caps.durationStep, 1);
+  assert.strictEqual(caps.durationDefault, 8);
+  assert.strictEqual(caps.durationFormat, 'seconds-int');
+  assert.strictEqual(caps.supportsAudio, true);
+  assert.strictEqual(caps.supportsAudioToggle, false);
+  assert.strictEqual(caps.audioMode, 'always-on');
+  assert.strictEqual(caps.audioField, null);
 });
 
 test('admin fal.ai connection sync validates the key and imports video models', async () => {
