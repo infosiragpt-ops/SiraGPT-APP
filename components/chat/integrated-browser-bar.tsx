@@ -13,6 +13,8 @@ export type IntegratedBrowserBarProps = {
   autoNavigate?: boolean
   compact?: boolean
   onNavigated?: (url: string) => void
+  /** A project address is display-only; it must never navigate the remote computer. */
+  readOnlyLabel?: string
 }
 
 export function IntegratedBrowserBar({
@@ -21,7 +23,9 @@ export function IntegratedBrowserBar({
   compact = false,
   autoNavigate = true,
   onNavigated,
+  readOnlyLabel,
 }: IntegratedBrowserBarProps) {
+  const readOnly = readOnlyLabel !== undefined
   const [value, setValue] = React.useState(initialUrl)
   const [busy, setBusy] = React.useState(false)
   const lastAutoUrl = React.useRef("")
@@ -34,7 +38,7 @@ export function IntegratedBrowserBar({
 
   React.useEffect(() => {
     const chatId = String(conversationId || "").trim()
-    if (!autoNavigate || !initialUrl || !chatId) return
+    if (readOnly || !autoNavigate || !initialUrl || !chatId) return
     const stamp = `${chatId}::${initialUrl}`
     if (stamp === lastAutoUrl.current) return
     lastAutoUrl.current = stamp
@@ -58,10 +62,11 @@ export function IntegratedBrowserBar({
     return () => {
       cancelled = true
     }
-  }, [initialUrl, conversationId, autoNavigate])
+  }, [initialUrl, conversationId, autoNavigate, readOnly])
 
   const go = async (event?: React.FormEvent) => {
     event?.preventDefault()
+    if (readOnly) return
     const parsed = sanitizeNavigateUrl(value)
     if (!parsed.ok) {
       toast.error(parsed.error)
@@ -91,10 +96,11 @@ export function IntegratedBrowserBar({
     >
       <Globe className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden="true" />
       <input
-        value={value}
+        value={readOnly ? readOnlyLabel : value}
         onChange={(event) => setValue(event.target.value)}
         placeholder="Buscar o pegar una URL…"
-        aria-label="Dirección del navegador"
+        aria-label={readOnly ? "Dirección del proyecto" : "Dirección del navegador"}
+        readOnly={readOnly}
         data-testid="integrated-browser-url"
         disabled={busy}
         className={cn(
@@ -102,7 +108,7 @@ export function IntegratedBrowserBar({
           compact ? "text-[12px]" : "text-[11px]",
         )}
       />
-      <button
+      {readOnly ? null : <button
         type="submit"
         disabled={busy || !value.trim()}
         aria-label="Ir"
@@ -110,7 +116,7 @@ export function IntegratedBrowserBar({
         className="inline-grid h-6 w-6 shrink-0 place-items-center rounded-full text-zinc-500 hover:bg-black/5 hover:text-zinc-800 disabled:opacity-40 dark:hover:bg-white/10 dark:hover:text-zinc-100"
       >
         <ArrowRight className="h-3.5 w-3.5" />
-      </button>
+      </button>}
     </form>
   )
 }
