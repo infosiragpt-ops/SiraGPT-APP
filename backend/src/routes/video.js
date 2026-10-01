@@ -616,10 +616,12 @@ const {
   buildFalVideoInputPayload,
   extractFalVideoUrl,
   resolveFalVideoModelRequest,
+  validateFalVideoSettings,
 } = require('../services/fal-video-model-catalog');
 const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const videoPromptDirector = require('../services/video-prompt-director');
+const { checkPaidTokenCap } = require('../services/plan-quota');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
 const prisma = require('../config/database');
@@ -743,9 +745,9 @@ function resolveVeoFastDuration(requestedDuration, model) {
 router.post('/generate', [
   body('prompt').trim().notEmpty().withMessage('Video prompt is required'),
   body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
-  body('resolution').optional().isIn(['480p', '720p', '1080p']).withMessage('Invalid resolution'),
-  body('duration').optional().isInt({ min: 4, max: 15 }).withMessage('Invalid duration'),
-  body('audio').optional().isBoolean().withMessage('Audio must be a boolean'),
+  body('resolution').optional().isIn(['360p', '480p', '720p', '1080p', '4k']).withMessage('Invalid resolution'),
+  body('duration').optional().isInt({ min: 3, max: 15 }).withMessage('Invalid duration'),
+  body('audio').optional().isBoolean().withMessage('Audio must be a boolean').toBoolean(),
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
   body('image_urls').optional().isArray({ max: 12 }).withMessage('Image URLs must be an array'),
@@ -805,7 +807,22 @@ router.post('/generate', [
     }
 
     let resolvedModel = modelRouting.endpoint;
-    const numericDuration = resolveVeoFastDuration(requestedDuration, resolvedModel);
+    // Check the user's actual choices before normalization, quota writes or
+    // starting an operation. Unsupported settings must never become a paid
+    // provider rejection or a silently different video.
+    const requestedSettings = validateFalVideoSettings({
+      endpoint: resolvedModel, aspectRatio: aspect_ratio,
+      duration: requestedDuration, resolution, audio,
+    });
+    if (!requestedSettings.ok) {
+      return res.status(422).json({
+        code: requestedSettings.code, error: requestedSettings.message,
+        message: requestedSettings.message,
+      });
+    }
+    const numericDuration = modelRouting.model?.apiData?.fal?.durationFormat === 'seconds-int'
+      ? Number(requestedDuration)
+      : resolveVeoFastDuration(requestedDuration, resolvedModel);
     const duration = `${numericDuration}s`;
 
     // Professional direction + cross-clip continuity ("hilación").
@@ -855,6 +872,17 @@ router.post('/generate', [
       }
     }
 
+    const effectiveSettings = validateFalVideoSettings({
+      endpoint: resolvedModel, aspectRatio: effectiveAspectRatio,
+      duration: numericDuration, resolution: effectiveResolution, audio: effectiveAudio,
+    });
+    if (!effectiveSettings.ok) {
+      return res.status(422).json({
+        code: effectiveSettings.code, error: effectiveSettings.message,
+        message: effectiveSettings.message,
+      });
+    }
+
     const directedPrompt = direction ? direction.prompt : prompt;
     const effectiveNegativePrompt = negative_prompt || (direction ? direction.negativePrompt : null);
     const continuityMode = direction ? direction.continuityMode : 'none';
@@ -894,12 +922,11 @@ router.post('/generate', [
     });
 
     const usageThisMonth = currentUsage._sum.tokens || 0;
-    if (usageThisMonth >= req.user.monthlyLimit) {
-      return res.status(429).json({
-        error: 'Monthly video generation limit exceeded',
-        usage: { current: usageThisMonth, limit: req.user.monthlyLimit }
-      });
-    }
+    const quotaCap = checkPaidTokenCap(
+      { ...req.user, apiUsage: usageThisMonth },
+      { message: 'Monthly video generation limit exceeded' },
+    );
+    if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
     console.log('Calling Fal.ai Veo3 Video Generation API...');
 

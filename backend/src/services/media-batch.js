@@ -173,7 +173,11 @@ function transcriptMarkdown(rows) {
 }
 
 function wantsMediaAnalysis(goal) {
-  return /anal[ií]z|an[aá]lisis|resum|compar|sinteti|s[ií]ntesis|conclu|extrae|pregunta|qu[eé]\b|c[oó]mo\b|qui[eé]n\b|explica|tema|decisi|tarea|insight/i.test(String(goal));
+  // Negated deliverables are constraints, not analysis requests. Remove only
+  // that clause's action so a separate positive task ("sin resumen, pero
+  // analiza las decisiones") still runs after the literal transcription.
+  const requested = String(goal).replace(/\b(?:sin|no|ni)\s+(?:(?:me|nos)\s+)?(?:(?:hagas?|hacer|incluyas?|incluir|quiero|queremos|necesito)\s+)?(?:(?:un|una|el|la)\s+)?(?:resum[a-záéíóúñ]*|anal[ií]z[a-záéíóúñ]*|an[aá]lisis)\b/gi, '');
+  return /anal[ií]z|an[aá]lisis|resum|compar|sinteti|s[ií]ntesis|conclu|extrae|pregunta|qu[eé]\b|c[oó]mo\b|qui[eé]n\b|explica|tema|decisi|tarea|insight/i.test(requested);
 }
 
 function isMediaFollowup(goal) {

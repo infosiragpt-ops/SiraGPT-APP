@@ -21,6 +21,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
+const { publicGenerationError } = require('../services/ai/structured-generation');
 const { streamViz } = require('../services/viz-generator');
 
 const router = express.Router();
@@ -87,20 +88,21 @@ router.post(
 
     send({ type: 'stage', label: 'Preparando generador', pct: 1 });
 
-    let content = null, file = null, format = null, errorMsg = null;
+    let content = null, file = null, format = null, errorMsg = null, errorCode = 'E_CONTENT';
 
     try {
       for await (const ev of streamViz({ prompt, model: req.body.model, signal: controller.signal })) {
         if (clientGone) break;
         if (ev.type === 'final') { content = ev.content; file = ev.file; format = ev.format; continue; }
-        if (ev.type === 'error') { errorMsg = ev.error; continue; }
+        if (ev.type === 'error') { errorMsg = ev.error; errorCode = ev.code || 'E_CONTENT'; continue; }
         send(ev);
       }
     } catch (err) {
-      errorMsg = err?.message || 'viz failed';
+      ({ error: errorMsg, code: errorCode } = publicGenerationError(err, controller.signal));
     }
 
     clearInterval(heartbeat);
+    if (clientGone) return;
 
     if (content && file) {
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
@@ -111,14 +113,14 @@ router.post(
       }
       send({ type: 'final', content, file, format, assistantMessage });
     } else {
-      const reason = errorMsg || 'resultado vacío';
+      const reason = errorMsg || 'El modelo no devolvió un resultado válido. Inténtalo de nuevo.';
       console.error('[viz] generation failed:', reason);
       let assistantMessage = null;
       if (chatId) {
         try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
         catch (e) { console.error('[viz] persist failure error:', e?.message); }
       }
-      send({ type: 'error', error: reason, assistantMessage });
+      send({ type: 'error', error: reason, code: errorCode, assistantMessage });
     }
 
     try { res.end(); } catch {}

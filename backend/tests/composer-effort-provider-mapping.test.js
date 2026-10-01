@@ -151,3 +151,18 @@ test('Anthropic streaming client forwards the resolved controls and retries once
   assert.deepEqual(deltas[0], { reasoning_content: 'pensando' }, 'thinking goes to the reasoning trace');
   assert.deepEqual(deltas[1], { content: 'hola' });
 });
+
+
+test('Sonnet 5.5 suppresses up-front thinking with between_tools for trivial turns', () => {
+  for (const model of ['claude-sonnet-5-5', 'anthropic/claude-sonnet-5.5', 'claude-sonnet-5-5-20260930']) {
+    const payload = buildProviderChatPayload({ provider: 'Anthropic', model, messages, stream: true,
+      thinkingLevel: 'disabled', extra: { thinking: { type: 'disabled' } } }).payload;
+    assert.deepEqual(payload.thinking, { type: 'between_tools' }, model);
+    assert.equal(payload.output_config, undefined);
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      const selected = payloadFor('Anthropic', model, effort);
+      assert.deepEqual(selected.thinking, { type: 'adaptive', display: 'summarized' });
+      assert.deepEqual(selected.output_config, { effort });
+    }
+  }
+});

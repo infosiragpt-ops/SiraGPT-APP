@@ -48,6 +48,7 @@ function makeFakePrisma({ failType = null } = {}) {
       active.add(state);
       try {
         const tx = {
+          goalRun: this.goalRun,
           goalRunEvent: {
             async findFirst(args) {
               state.run = args.where.goalRunId;
@@ -159,6 +160,7 @@ test('cross-process conflicts are retried with backoff until the append lands', 
         throw Object.assign(new Error('write conflict'), { code: 'P2034' });
       }
       return fn({
+        goalRun: this.goalRun,
         goalRunEvent: {
           async findFirst() { return rows.length ? { seq: rows.length } : null; },
           async create({ data }) { rows.push(data); return { id: 'e1', ...data }; },
@@ -185,4 +187,73 @@ test('retry delays grow with jitter and are capped', () => {
     const d = retryDelayMs(attempt);
     assert.ok(d >= Math.floor(base * 0.5) && d <= Math.ceil(base * 1.5), `attempt ${attempt}: ${d}ms`);
   }
+});
+
+function makeAtomicRollupPrisma(errorCode) {
+  let committed = { rows: [], findingsCount: 0, phase: null };
+  let failNextUpdate = true;
+  function modelFor(state) {
+    return {
+      goalRunEvent: {
+        async findFirst() { return state.rows.at(-1) || null; },
+        async create({ data }) {
+          const row = { ...data, id: `e${data.seq}` };
+          state.rows.push(row);
+          return row;
+        },
+      },
+      goalRun: {
+        async updateMany({ data }) {
+          if (failNextUpdate) {
+            failNextUpdate = false;
+            throw Object.assign(new Error('rollup persistence failed'), { code: errorCode });
+          }
+          state.findingsCount += data.findingsCount?.increment || 0;
+          if (data.phase) state.phase = data.phase;
+          return { count: 1 };
+        },
+      },
+    };
+  }
+  return {
+    get state() { return committed; },
+    get goalRunEvent() { return modelFor(committed).goalRunEvent; },
+    get goalRun() { return modelFor(committed).goalRun; },
+    async $transaction(fn) {
+      const pending = { ...committed, rows: [...committed.rows] };
+      const result = await fn(modelFor(pending));
+      // A real transaction only exposes its event and rollup after both succeed.
+      committed = pending;
+      return result;
+    },
+  };
+}
+
+test('a retryable rollup conflict cannot commit the same event twice', async () => {
+  const fake = makeAtomicRollupPrisma('P2034');
+  const restore = withFakePrisma(fake);
+  try {
+    const result = await goalEvents.appendEvent({ goalRunId: 'run-atomic', type: 'finding', payload: { label: 'one finding' } });
+    assert.equal(result.ok, true);
+    assert.equal(fake.state.rows.length, 1, 'failed rollup rolls back the event before retry');
+    assert.equal(result.seq, 1);
+    assert.equal(fake.state.findingsCount, 1);
+  } finally { restore(); }
+});
+
+test('a permanent rollup failure leaves no half-committed event and the queue continues', async () => {
+  const fake = makeAtomicRollupPrisma('P1001');
+  const restore = withFakePrisma(fake);
+  try {
+    const failed = await goalEvents.appendEvent({ goalRunId: 'run-atomic', type: 'finding', payload: {} });
+    assert.equal(failed.ok, false);
+    assert.match(failed.error, /rollup persistence failed/);
+    assert.equal(fake.state.rows.length, 0, 'failed append must not leave an event without its counter');
+    assert.equal(fake.state.findingsCount, 0);
+    const next = await goalEvents.appendEvent({ goalRunId: 'run-atomic', type: 'phase', payload: { phase: 'search' } });
+    assert.equal(next.ok, true);
+    assert.equal(next.seq, 1);
+    assert.equal(fake.state.rows.length, 1);
+    assert.equal(fake.state.phase, 'search');
+  } finally { restore(); }
 });

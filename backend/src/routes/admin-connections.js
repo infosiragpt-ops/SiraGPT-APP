@@ -17,7 +17,7 @@ const { authenticateToken } = require('../middleware/auth');
 const requireAdminRoutePermission = require('../services/admin-route-policy');
 const prisma = require('../config/database');
 const { encrypt, decrypt } = require('../utils/encryption');
-const { applyAdminConnections, reconcileCatalog, noteUndecryptableKey } = require('../services/admin-connections-bridge');
+const { applyAdminConnections, reconcileCatalog, noteUndecryptableKey, UNREADABLE_KEY_REASON } = require('../services/admin-connections-bridge');
 const modelSyncService = require('../services/model-sync-service');
 const { invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const { describeConnectionProbeFailure, redactProbeDetail } = require('../services/connection-probe-reason');
@@ -111,8 +111,6 @@ function decryptKey(stored, row = null) {
     return null;
   }
 }
-
-const UNREADABLE_KEY_REASON = 'Clave ilegible — vuelve a guardarla. Se guardó con otra clave de cifrado del servidor y no se puede leer: pega la API key de nuevo y guarda.';
 
 // Known provider keys — used to normalise UI grouping. First-class
 // OpenAI-compatible local runtimes (Ollama, LM Studio, vLLM) keep their

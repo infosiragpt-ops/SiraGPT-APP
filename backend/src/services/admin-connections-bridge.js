@@ -130,6 +130,7 @@ const PROVIDER_PROBE = Object.freeze({
 });
 
 const KEY_PREFIX = 'enc:v1:';
+const UNREADABLE_KEY_REASON = 'Clave ilegible — vuelve a guardarla. Se guardó con otra clave de cifrado del servidor y no se puede leer: pega la API key de nuevo y guarda.';
 
 // A row encrypted with an older ENCRYPTION key can't be read back ("bad
 // decrypt"). That's a configuration state, not a per-boot error: warn ONCE per
@@ -356,16 +357,19 @@ async function reconcileCatalog() {
   }
 
   // Mirror to admin_connections rows so the panel sees the health.
-  const conns = await prisma.adminConnection.findMany({ select: { id: true, providerKey: true } });
+  const conns = await prisma.adminConnection.findMany({ select: { id: true, providerKey: true, apiKey: true } });
   for (const c of conns) {
     const r = results[c.providerKey];
     if (!r) continue;
+    // A healthy active credential cannot certify a different unreadable
+    // connection row. Preserve its actionable failure until it is re-saved.
+    const unreadable = Boolean(c.apiKey && unwrap(c.apiKey, c) === null);
     await prisma.adminConnection.update({
       where: { id: c.id },
       data: {
         lastSyncedAt: new Date(),
-        lastSyncOk: !!r.healthy,
-        lastSyncError: r.healthy ? null : (r.reason === 'no_key'
+        lastSyncOk: !unreadable && !!r.healthy,
+        lastSyncError: unreadable ? UNREADABLE_KEY_REASON.slice(0, 240) : r.healthy ? null : (r.reason === 'no_key'
           ? 'Sin API key configurada.'
           : describeConnectionProbeFailure({ providerKey: c.providerKey, status: r.status, error: r.error }).slice(0, 240)),
       },
@@ -376,6 +380,7 @@ async function reconcileCatalog() {
 }
 
 module.exports = {
+  UNREADABLE_KEY_REASON,
   noteUndecryptableKey,
   applyAdminConnections,
   applyCustomConnectionEnv,
