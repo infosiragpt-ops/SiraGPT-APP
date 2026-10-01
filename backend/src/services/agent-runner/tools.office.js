@@ -297,7 +297,7 @@ const OFFICE_TOOL_DEFINITIONS = [
                           x_values: { type: 'array', minItems: 1, maxItems: 200, items: { type: ['number', 'null'] } },
                           bubble_sizes: { type: 'array', minItems: 1, maxItems: 200, items: { type: ['number', 'null'] } },
                           color: { type: 'string', pattern: '^#?[0-9a-fA-F]{6}$', description: 'Color explícito de la serie; exige todos sus puntos iguales salvo que point_colors declare las excepciones.' },
-                          point_colors: { type: 'array', maxItems: 200, items: { type: 'string', pattern: '^#?[0-9a-fA-F]{6}$' } },
+                          point_colors: { type: 'array', maxItems: 200, description: 'Colores por punto en el orden de las categorías. Para pie/doughnut multicolor usa este campo y omite color, que exigiría un color uniforme de serie.', items: { type: 'string', pattern: '^#?[0-9a-fA-F]{6}$' } },
                         },
                       },
                     },

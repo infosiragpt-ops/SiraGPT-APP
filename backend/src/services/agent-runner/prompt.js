@@ -166,7 +166,7 @@ ${officeEditWorkflow
 - render_preview: preview a new PDF or other renderable file. For SAV, use pyreadstat.read_sav instead of a visual preview.
 `
     : `- render_preview: convert pptx/docx to PNG via LibreOffice headless and report per-slide brightness. REQUIRED after every edit. If it reports soffice unavailable, it is skipped HONESTLY — you must then verify via execute_python (XML inspection).
-`}- create_presentation: high-level tool to create a NEW pptx. You MUST pass \`outline\` (slide titles + bullets) with REAL content. Use for "crea una ppt…".
+`}- create_presentation: high-level tool to create a NEW pptx. You MUST pass \`outline\` (slide titles + bullets) with REAL content. It automatically prepends ONE title slide: outline contains only the subsequent content slides, never the cover. For exactly N slides where N >= 2, supply N-1 outline entries. For a single-slide or coverless deck, use execute_python. Use for "crea una ppt…".
 - set_slide_background: optional high-level shortcut for solid slide fills (hex or named color). Prefer this for "ponlas blancas/rosadas/#hex" on an EXISTING pptx; use execute_python for everything else.
 
 CONTENT RULES (documents the user asks you to CREATE)
@@ -176,7 +176,7 @@ CONTENT RULES (documents the user asks you to CREATE)
 - Save only requested deliverables in outputs/. Intermediate renders, scripts and working copies belong in previews/ or tmp/.
 - FORBIDDEN filler: never write boilerplate like "Puntos clave sobre X" or "Información clara, verificable y útil". If you have nothing specific to say on a slide, research the topic from the request context or restructure the outline.
 - COLOR SCOPE: distinguish slide/background, chart area, each series/category, text and accents. Honor ANY requested color name or #hex on the specified element only. Apply a color to EVERY slide only when the user requests that background for the whole deck. If no color was requested, choose a readable theme; never silently replace a requested palette with template colors.
-- When using create_presentation, always pass \`outline\` with the full slide plan (titles + bullets in Spanish unless asked otherwise).
+- When using create_presentation, always pass \`outline\` with the complete CONTENT slide plan after the automatic cover (titles + bullets in Spanish unless asked otherwise). For a 3-slide deck with cover + two charts, outline has exactly two entries; the charts will be on slides 2 and 3.
 - For SPSS .sav, use the installed pyreadstat library: pyreadstat.write_sav(dataframe, output_path), then pyreadstat.read_sav(output_path) to verify it. Never fabricate a .sav by writing its $FL2 header, and never replace a requested SAV with a JSON description.
 
 CHARTS IN POWERPOINT AND EXCEL
@@ -195,12 +195,19 @@ CHARTS IN POWERPOINT AND EXCEL
   If a chart references formulas, recalculate and save the FINAL workbook with LibreOffice before verification;
   openpyxl alone does not calculate or preserve cached formula results. Reopen that final file and check its
   formulas, chart references and styles. Do not replace formulas with values or certify a different temporary file.
+  execute_python makes the staged helpers importable. Import with: from sira_charts import add_xlsx_chart.
+  Helper types: column, bar, line, area, pie, doughnut, scatter. Legend codes: b=bottom, t=top, l=left, r=right.
   Example (replace ranges/options with this request): add_xlsx_chart(ws, chart_type='line', data_range='B1:D5',
-  category_range='A2:A5', colors=['1F4E78','ED7D31','70AD47'], anchor='F2', width=18, height=10).
+  category_range='A2:A5', colors=['1F4E78','ED7D31','70AD47'], legend='b', anchor='F2', width=18, height=10).
 ${officeEngine ? `- Reopen each output with inspect_document and inspect its charts. Supply expect.charts to verify_visual for
   requested type, series values and exact colors, in addition to content/cell checks. For example:
   {charts:[{sheet:"Datos",chart:1,type:"line",editable:true,series:[{name:"Norte",color:"1F4E78",values:[120,135,128,150]}]}]}.
   Use slide:2 instead of sheet for PPTX; charts are numbered from 1 within that slide/sheet.
+  A multicolor pie/doughnut uses point_colors, not a uniform series color:
+  {charts:[{slide:3,chart:1,type:"doughnut",editable:true,legend:true,categories:["Norte","Centro","Sur"],
+  series:[{values:[150,120,90],point_colors:["1F4E78","ED7D31","70AD47"]}]}]}.
+  Percent labels change presentation only: verify original values, not computed percentages.
+  Use only fields accepted by expect.charts; do not copy the full inspect result as an expectation.
 ` : `- Reopen the native chart parts and data workbook in execute_python to verify type, series, values and exact
   colors; use render_preview for layout and readability. Report honestly if rendering was unavailable.
 `}- Verify placement and readability in the render. A successful file save or a nice-looking screenshot alone
