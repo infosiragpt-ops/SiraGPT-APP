@@ -620,6 +620,7 @@ const {
 const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const videoPromptDirector = require('../services/video-prompt-director');
+const { checkPaidTokenCap } = require('../services/plan-quota');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
 const prisma = require('../config/database');
@@ -894,12 +895,11 @@ router.post('/generate', [
     });
 
     const usageThisMonth = currentUsage._sum.tokens || 0;
-    if (usageThisMonth >= req.user.monthlyLimit) {
-      return res.status(429).json({
-        error: 'Monthly video generation limit exceeded',
-        usage: { current: usageThisMonth, limit: req.user.monthlyLimit }
-      });
-    }
+    const quotaCap = checkPaidTokenCap(
+      { ...req.user, apiUsage: usageThisMonth },
+      { message: 'Monthly video generation limit exceeded' },
+    );
+    if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
     console.log('Calling Fal.ai Veo3 Video Generation API...');
 

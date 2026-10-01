@@ -222,6 +222,14 @@ describe("checkPaidTokenCap — paid token cap gate", () => {
     assert.deepEqual(res, { ok: true });
   });
 
+  test("paid media cap honors only the canonical superAdmin exemption", () => {
+    const overCap = { plan: "PRO", apiUsage: 750, monthlyLimit: 500 };
+    assert.deepEqual(checkPaidTokenCap({ ...overCap, isSuperAdmin: true }), { ok: true });
+    assert.equal(checkPaidTokenCap({ ...overCap, isAdmin: true }).status, 429);
+    assert.equal(checkPaidTokenCap({ ...overCap, isSuperAdmin: "true" }).status, 429);
+    assert.equal(checkPaidTokenCap(overCap).status, 429);
+  });
+
   test("at exactly the cap → 429 (>= comparison)", () => {
     const res = checkPaidTokenCap({ apiUsage: 500, monthlyLimit: 500 });
     assert.equal(res.ok, false);

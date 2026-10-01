@@ -17,6 +17,7 @@ const { resolveImageOperation } = require('../src/services/media/image-input-sel
 const { resolveImageSource } = require('../src/services/media/image-source');
 const { prepareEditCanvas, finishEditCanvas } = require('../src/services/media/image-edit-canvas');
 const { classifyImageGenError } = require('../src/services/image-error-classifier');
+const { checkPaidTokenCap } = require('../src/services/plan-quota');
 const routeFile = path.resolve(__dirname, '../src/routes/ai.js');
 const routeSource = fsSync.readFileSync(routeFile, 'utf8');
 const routeStart = routeSource.indexOf("router.post(\n  '/generate-image',");
@@ -25,7 +26,7 @@ const fixtureDir = fs.mkdtemp(path.join(os.tmpdir(), 'image-handler-'));
 after(async () => fs.rm(await fixtureDir, { recursive: true, force: true }));
 const image = (color, width = 8, height = 4) => sharp({ create: { width, height, channels: 4, background: color } }).png().toBuffer();
 
-async function harness({ source = true, chatOwned = true, editable = true } = {}) {
+async function harness({ source = true, chatOwned = true, editable = true, user = {} } = {}) {
   const sourceBytes = await image('#de2070'); const outputBytes = await image('#1040fa');
   const sourcePath = path.join(await fixtureDir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
   const calls = { generate: [], edit: [], saves: [], messages: [], reads: 0 };
@@ -53,7 +54,7 @@ async function harness({ source = true, chatOwned = true, editable = true } = {}
     honorPickerModel: (model, { provider }) => ({ model, provider }), isGrokImageModelName: () => false,
     normalizeImageAspectRatio: (ratio) => ratio || '1:1', normalizeImageQuality: (quality) => quality || '2K', normalizeImageCount: (count) => Number(count) || 1,
     promptWithImageAspectRatio: (prompt) => prompt, imageGenerationSizeFor: () => '1024x1024',
-    checkPaidTokenCap: () => ({ ok: true }), prisma, resolveImageOperation, resolveImageSource, prepareEditCanvas, finishEditCanvas,
+    checkPaidTokenCap, prisma, resolveImageOperation, resolveImageSource, prepareEditCanvas, finishEditCanvas,
     ADMIN_MANAGED_IMAGE_MODEL_NAMES: new Set(), isActiveGrokImageModel: () => false,
     isVerifiedChatImageModelName: () => true, normalizeCatalogModelType: () => ({ type: 'IMAGE' }),
     VERIFIED_CHAT_IMAGE_MODEL_NAMES: new Set(['gpt-image-2']), publicUploadUrl: (url) => url,
@@ -82,7 +83,7 @@ async function harness({ source = true, chatOwned = true, editable = true } = {}
     res.writeHead = (code) => { res.statusCode = code; res.headersSent = true; };
     res.flushHeaders = () => {}; res.write = () => {};
     res.end = (payload) => { res.body = payload ? JSON.parse(payload) : null; res.writableEnded = true; };
-    await handler({ body: { prompt: 'edit', chatId: 'chat', provider: 'OpenAI', model: 'gpt-image-2', ...body }, user: { id: 'owner' } }, res);
+    await handler({ body: { prompt: 'edit', chatId: 'chat', provider: 'OpenAI', model: 'gpt-image-2', ...body }, user: { id: 'owner', ...user } }, res);
     return res;
   }
   return { request, calls, sourceBytes };
@@ -107,6 +108,20 @@ test('canonical new generation does not inherit an image from history', async ()
   const res = await request({ prompt: 'crea otra imagen de una ciudad' });
   assert.ok(!res.body.error, res.body.error); assert.equal(calls.generate.length, 1); assert.equal(calls.edit.length, 0); assert.equal(calls.reads, 0);
   assert.equal(res.body.files[0].parentFileId, null); assert.equal(res.body.files[0].version, 1);
+});
+
+test('image route preserves paid quota and the canonical superAdmin exemption', async () => {
+  for (const isSuperAdmin of [false, true]) {
+    const { request, calls } = await harness({ user: { plan: 'PRO', apiUsage: 500, monthlyLimit: 500, isSuperAdmin } });
+    const res = await request({ prompt: 'crea otra imagen de una ciudad' });
+    assert.equal(res.statusCode, isSuperAdmin ? 200 : 429);
+    assert.equal(calls.generate.length, isSuperAdmin ? 1 : 0);
+    if (!isSuperAdmin) {
+      assert.equal(res.body.error, 'Monthly API limit exceeded');
+      assert.deepEqual(res.body.usage, { current: 500, limit: 500 });
+      assert.equal(calls.messages.length, 0);
+    }
+  }
 });
 
 test('explicit absent source and absent history fail without generating an unrelated image', async () => {

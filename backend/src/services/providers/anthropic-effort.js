@@ -10,6 +10,8 @@
  *                  depth is `output_config.effort` only.
  *   - opus5      — Opus 5: adaptive by default; `disabled` 400s at xhigh/max.
  *                  We never disable it and lower the effort instead.
+ *   - sonnet55   — Sonnet 5.5: `between_tools` suppresses up-front thinking;
+ *                  `disabled` is rejected. xhigh/max require adaptive.
  *   - adaptive   — Opus 4.6–4.8, Sonnet 4.6, Sonnet 5: `{type:"adaptive"}` +
  *                  effort; `disabled` accepted; `budget_tokens` 400s on 4.7+.
  *                  4.6 has no `xhigh`.
@@ -41,6 +43,7 @@ function anthropicThinkingFamily(model) {
   if (!/^claude-/.test(id)) return 'none';
   if (/^claude-(?:fable|mythos)-5(?:-|$)/.test(id) || /^claude-opus-5-5(?:-|$)/.test(id)) return 'always_on';
   if (/^claude-opus-5(?:-|$)/.test(id)) return 'opus5';
+  if (/^claude-sonnet-5-5(?:-|$)/.test(id)) return 'sonnet55';
   if (/^claude-(?:opus-4-[678]|sonnet-4-6|sonnet-5)(?:-|$)/.test(id)) return 'adaptive';
   if (/^claude-(?:haiku-4-5|sonnet-4-5|opus-4-5|opus-4-1|opus-4|sonnet-4|3-7-sonnet)(?:-|$)/.test(id)) return 'budget';
   return 'none';
@@ -54,6 +57,12 @@ function isFourSix(model) {
 function anthropicAcceptsDisabledThinking(model) {
   const family = anthropicThinkingFamily(model);
   return family === 'adaptive' || family === 'budget';
+}
+
+// Sonnet 5.5 migration: https://platform.claude.com/docs/en/build-with-claude/effort
+function anthropicThinkingOffType(model) {
+  if (anthropicThinkingFamily(model) === 'sonnet55') return 'between_tools';
+  return anthropicAcceptsDisabledThinking(model) ? 'disabled' : null;
 }
 
 function normalizeLevel(level) {
@@ -88,7 +97,7 @@ function resolveAnthropicEffortControls({ model, level, explicit = false, maxTok
   // Trivial turns ("hola") and explicit disables.
   if (normalized === 'disabled') {
     if (family === 'always_on' || family === 'opus5') return { output_config: { effort: 'low' } };
-    return { thinking: { type: 'disabled' } };
+    return { thinking: { type: anthropicThinkingOffType(model) } };
   }
 
   if (!explicit || !normalized) {
@@ -130,6 +139,7 @@ function isAnthropicEffortParamError(error) {
 module.exports = {
   anthropicThinkingFamily,
   anthropicAcceptsDisabledThinking,
+  anthropicThinkingOffType,
   resolveAnthropicEffortControls,
   isAnthropicEffortParamError,
   normalizeAnthropicModel,

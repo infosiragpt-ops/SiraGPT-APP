@@ -136,6 +136,7 @@ describe('authenticateToken · API key path', () => {
     assert.equal(called, true);
     assert.equal(res.statusCode, 200);
     assert.deepEqual(req.user, user);
+    assert.equal(req.token, minted.token, 'media loopback forwards the authenticated API key token');
     assert.equal(req.authMethod, 'api_key');
     assert.equal(req.apiKey.id, 'k-1');
     assert.deepEqual(req.apiKey.scopes, ['read']);

@@ -85,3 +85,58 @@ describe('POST /chats/:id/messages · content length validation', () => {
     assert.ok(res.body.error || res.body.errors);
   });
 });
+
+
+describe('PUT /chats/messages/:id · edit validation and ownership', () => {
+  function mockTransaction(t, prisma, implementation) {
+    const original = prisma.$transaction;
+    const mocked = t.mock.fn(implementation);
+    prisma.$transaction = mocked;
+    t.after(() => { prisma.$transaction = original; });
+    return mocked;
+  }
+  let auth;
+  beforeEach(() => { auth = installAuthSessionMock(); });
+  afterEach(() => { auth.restore(); });
+
+  test('non-string content returns 400 before opening a transaction', async (t) => {
+    const prisma = require('../src/config/database');
+    const transaction = mockTransaction(t, prisma, async () => { throw new Error('unexpected transaction'); });
+    const app = buildRouteTestApp('/chats', reloadModule('../src/routes/chats'));
+    for (const content of [42, {}, [], null, '  ']) {
+      const res = await request(app).put('/chats/messages/message-1')
+        .set('Authorization', auth.authHeader).send({ content });
+      assert.equal(res.status, 400);
+    }
+    assert.equal(transaction.mock.callCount(), 0);
+  });
+
+  test('missing or unowned message returns 404 without mutations or a server-failure log', async (t) => {
+    const prisma = require('../src/config/database');
+    let lookup;
+    mockTransaction(t, prisma, async (run) => run({ message: {
+      findFirst: async (args) => { lookup = args; return null; },
+      deleteMany: async () => assert.fail('must not delete messages'),
+      update: async () => assert.fail('must not edit messages'),
+    } }));
+    const errors = t.mock.method(console, 'error', () => {});
+    const app = buildRouteTestApp('/chats', reloadModule('../src/routes/chats'));
+    const res = await request(app).put('/chats/messages/message-1')
+      .set('Authorization', auth.authHeader).send({ content: 'Corrección' });
+    assert.equal(res.status, 404);
+    assert.deepEqual(lookup.where, { id: 'message-1', role: 'USER', chat: { userId: auth.user.id } });
+    assert.equal(errors.mock.callCount(), 0, 'an expected ownership/not-found response is not a server failure');
+  });
+
+  test('unexpected persistence failures remain visible as 500 and are logged', async (t) => {
+    const prisma = require('../src/config/database');
+    mockTransaction(t, prisma, async () => { throw new Error('database unavailable'); });
+    const errors = t.mock.method(console, 'error', () => {});
+    const app = buildRouteTestApp('/chats', reloadModule('../src/routes/chats'));
+    const res = await request(app).put('/chats/messages/message-1')
+      .set('Authorization', auth.authHeader).send({ content: 'Corrección' });
+    assert.equal(res.status, 500);
+    assert.equal(errors.mock.callCount(), 1);
+    assert.doesNotMatch(JSON.stringify(res.body), /database unavailable/);
+  });
+});

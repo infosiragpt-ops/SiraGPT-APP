@@ -399,12 +399,12 @@ function scheduleOpenAiFilesUpload(prismaClient, fileRecordId, file) {
     .then(() => uploadToOpenAiFiles(file))
     .then(async (openaiFileId) => {
       if (!openaiFileId) return;
-      await prismaClient.file.update({ where: { id: fileRecordId }, data: { openaiFileId } });
+      // A concurrent deletion is an ordinary zero-row update. update() would
+      // emit Prisma P2025 before catch runs, even though nothing is left to
+      // patch. Never recreate a file the user has deleted.
+      await prismaClient.file.updateMany({ where: { id: fileRecordId }, data: { openaiFileId } });
     })
     .catch((err) => {
-      // The row can be gone by the time the upload lands (the user deleted the
-      // file or the chat while it was in flight): nothing to patch.
-      if (err?.code === 'P2025') return;
       console.warn('[files] OpenAI Files background upload failed:', err?.message || err);
     });
 }

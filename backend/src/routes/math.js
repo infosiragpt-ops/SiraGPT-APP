@@ -18,6 +18,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
+const { publicGenerationError } = require('../services/ai/structured-generation');
 const { streamSolve } = require('../services/math-solver');
 
 const router = express.Router();
@@ -81,20 +82,21 @@ router.post(
 
     send({ type: 'stage', label: 'Preparando solver', pct: 1 });
 
-    let content = null, errorMsg = null, topic = 'other', usedPython = false;
+    let content = null, errorMsg = null, errorCode = 'E_CONTENT', topic = 'other', usedPython = false;
 
     try {
       for await (const ev of streamSolve({ prompt, model: req.body.model, signal: controller.signal })) {
         if (clientGone) break;
         if (ev.type === 'final') { content = ev.content; topic = ev.topic; usedPython = ev.usedPython; continue; }
-        if (ev.type === 'error') { errorMsg = ev.error; continue; }
+        if (ev.type === 'error') { errorMsg = ev.error; errorCode = ev.code || 'E_CONTENT'; continue; }
         send(ev);
       }
     } catch (err) {
-      errorMsg = err?.message || 'solver failed';
+      ({ error: errorMsg, code: errorCode } = publicGenerationError(err, controller.signal));
     }
 
     clearInterval(heartbeat);
+    if (clientGone) return;
 
     if (content) {
       send({ type: 'stage', label: 'Guardando en la conversación', pct: 98 });
@@ -105,14 +107,14 @@ router.post(
       }
       send({ type: 'final', content, topic, usedPython, assistantMessage });
     } else {
-      const reason = errorMsg || 'resultado vacío';
+      const reason = errorMsg || 'El modelo no devolvió un resultado válido. Inténtalo de nuevo.';
       console.error('[math] solver failed:', reason);
       let assistantMessage = null;
       if (chatId) {
         try { assistantMessage = await persistFailure(chatId, req.user.id, displayPrompt, reason); }
         catch (e) { console.error('[math] persist failure error:', e?.message); }
       }
-      send({ type: 'error', error: reason, assistantMessage });
+      send({ type: 'error', error: reason, code: errorCode, assistantMessage });
     }
 
     try { res.end(); } catch {}

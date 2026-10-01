@@ -126,7 +126,7 @@ async function appendEventNow({ goalRunId, type, safePayload }) {
           select: { seq: true },
         });
         const seq = (latest?.seq ?? 0) + 1;
-        return tx.goalRunEvent.create({
+        const event = await tx.goalRunEvent.create({
           data: {
             goalRunId: String(goalRunId),
             seq,
@@ -134,22 +134,22 @@ async function appendEventNow({ goalRunId, type, safePayload }) {
             payload: safePayload,
           },
         });
-      }, { isolationLevel: 'Serializable' });
 
-      // Roll up counters + phase + updatedAt on the parent row. Use
-      // updateMany (no throw on missing) so a deleted row doesn't
-      // crash the append path.
-      const counterDelta = counterDeltaForType(type);
-      const phase = phaseFromEvent({ type, ...safePayload });
-      const updateData = {
-        updatedAt: new Date(),
-        ...(counterDelta || {}),
-        ...(phase ? { phase } : {}),
-      };
-      await prisma.goalRun.updateMany({
-        where: { id: String(goalRunId) },
-        data: updateData,
-      });
+        // Commit event and rollup together. If the parent update conflicts
+        // after a separately committed insert, retrying the append duplicates
+        // that event and permanently miscounts the run's findings/pages.
+        const counterDelta = counterDeltaForType(type);
+        const phase = phaseFromEvent({ type, ...safePayload });
+        await tx.goalRun.updateMany({
+          where: { id: String(goalRunId) },
+          data: {
+            updatedAt: new Date(),
+            ...(counterDelta || {}),
+            ...(phase ? { phase } : {}),
+          },
+        });
+        return event;
+      }, { isolationLevel: 'Serializable' });
 
       return { ok: true, seq: created.seq, eventId: created.id };
     } catch (err) {

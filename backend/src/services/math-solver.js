@@ -37,43 +37,8 @@
  * teacher explaining the steps.
  */
 
-const OpenAI = require('openai');
 const { run } = require('./agents/code-sandbox');
-
-// Provider routing — same pattern as design-generator / plan-generator.
-function clientForModel(modelName) {
-  if (!modelName) return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
-  const m = String(modelName);
-  if (/^deepseek-(v\d|chat|reasoner)/i.test(m.trim())) {
-    return {
-      provider: 'DeepSeek',
-      client: new OpenAI({
-        apiKey: process.env.DEEPSEEK_API_KEY,
-        baseURL: 'https://api.deepseek.com',
-      }),
-    };
-  }
-  if (/^(anthropic|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|google|moonshotai)\//i.test(m)
-      || m.includes('/gpt-oss')) {
-    return {
-      provider: 'OpenRouter',
-      client: new OpenAI({
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseURL: 'https://openrouter.ai/api/v1',
-      }),
-    };
-  }
-  if (m.includes('gemini')) {
-    return {
-      provider: 'Gemini',
-      client: new OpenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-      }),
-    };
-  }
-  return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
-}
+const { clientForModel, completeStructured, publicGenerationError } = require('./ai/structured-generation');
 
 const SYSTEM_PROMPT = `You are a senior mathematics / science tutor for the siraGPT assistant.
 
@@ -112,55 +77,15 @@ Return exactly ONE JSON object.`;
 // imports of scipy.stats / pandas add 30+ seconds to cold startup.
 const PY_HEADER = `import math, statistics, itertools, fractions, decimal, json as _json\n`;
 
-function extractJson(raw) {
-  if (!raw) throw new Error('empty response');
-  const candidates = [raw];
-  const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  candidates.push(stripped);
-  const first = stripped.indexOf('{');
-  const last = stripped.lastIndexOf('}');
-  if (first >= 0 && last > first) candidates.push(stripped.slice(first, last + 1));
-  let lastErr;
-  for (const c of candidates) {
-    try { return JSON.parse(c); }
-    catch (e) { lastErr = e; }
-  }
-  throw new Error(`JSON parse failed: ${lastErr?.message}`);
+function validateMath(value) {
+  return ['algebra', 'calculus', 'statistics', 'linear_algebra', 'probability', 'physics', 'chemistry', 'other'].includes(value.topic)
+    && typeof value.explanation === 'string' && value.explanation.trim().length > 0
+    && typeof value.python === 'string' && typeof value.answer_latex === 'string';
 }
 
-async function solveMath({ prompt, model, signal }) {
-  const routed = clientForModel(model);
-  if (!routed.client) throw new Error(`math-solver: no API key for "${model}"`);
-
-  const callModel = async (useJsonMode) => {
-    const params = {
-      model: model || 'gpt-4o',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.1,
-      max_tokens: 3000,
-    };
-    if (useJsonMode && routed.provider !== 'Gemini') {
-      params.response_format = { type: 'json_object' };
-    }
-    return routed.client.chat.completions.create(params, { signal });
-  };
-
-  let resp;
-  try {
-    resp = await callModel(true);
-  } catch (err) {
-    if (/response_format|json_object|invalid.*param/i.test(err?.message || '')) {
-      resp = await callModel(false);
-    } else {
-      throw err;
-    }
-  }
-
-  const raw = resp.choices?.[0]?.message?.content || '';
-  const parsed = extractJson(raw);
+async function solveMath({ prompt, model, signal, clientOptions }) {
+  const parsed = await completeStructured({ prompt, model, signal, clientOptions,
+    systemPrompt: SYSTEM_PROMPT, temperature: 0.1, maxTokens: 3000, validate: validateMath });
 
   let usedPython = false;
   let runtimeMs = 0;
@@ -246,21 +171,15 @@ async function solveMath({ prompt, model, signal }) {
 
 // Streaming variant — yields progress events for the SSE route so the
 // chat can render live stages instead of a silent 15 s spinner.
-async function* streamSolve({ prompt, model, signal }) {
+async function* streamSolve({ prompt, model, signal, clientOptions }) {
   yield { type: 'stage', label: 'Analizando el problema', pct: 5 };
-  const routed = clientForModel(model);
-  if (!routed.client) {
-    yield { type: 'error', error: `Sin API key para "${model}"` };
-    return;
-  }
-  yield { type: 'stage', label: `Consultando modelo (${routed.provider})`, pct: 15 };
+  yield { type: 'stage', label: 'Consultando el modelo elegido', pct: 15 };
 
   let result;
   try {
-    result = await solveMath({ prompt, model, signal });
+    result = await solveMath({ prompt, model, signal, clientOptions });
   } catch (err) {
-    if (err?.name === 'AbortError') { yield { type: 'error', error: 'aborted' }; return; }
-    yield { type: 'error', error: err?.message || 'math-solver failed' };
+    yield { type: 'error', ...publicGenerationError(err, signal) };
     return;
   }
 

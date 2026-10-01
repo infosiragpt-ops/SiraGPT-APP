@@ -135,7 +135,7 @@ test('admin fal.ai connection applies FAL_KEY aliases and probes with Key auth',
 
 // ─── Auth-gated apply: a bad panel key can never shadow a working one ───────
 
-function withBridgeHarness({ rows, fetchImpl }, fn) {
+function withBridgeHarness({ rows, fetchImpl, connections = [], updates = [] }, fn) {
   const databasePath = require.resolve('../src/config/database');
   const bridgePath = require.resolve('../src/services/admin-connections-bridge');
   const previousDatabase = require.cache[databasePath];
@@ -146,8 +146,8 @@ function withBridgeHarness({ rows, fetchImpl }, fn) {
     loaded: true,
     exports: {
       adminConnection: {
-        findMany: async (args = {}) => (args.where ? rows : []),
-        update: async (p) => p,
+        findMany: async (args = {}) => (args.where ? rows : connections),
+        update: async (p) => { updates.push(p); return p; },
       },
     },
   };
@@ -222,5 +222,42 @@ test('SIRAGPT_CONN_BRIDGE_PROBE=0 disables the gate entirely', async () => {
     });
   } finally {
     delete process.env.SIRAGPT_CONN_BRIDGE_PROBE;
+  }
+});
+
+test('an unreadable connection cannot inherit a healthy provider credential verdict', async () => {
+  const crypto = require('node:crypto');
+  const key = Buffer.from('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', 'hex');
+  const iv = Buffer.alloc(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  cipher.setAutoPadding(false);
+  // Valid AES bytes whose decrypted padding is invalid: exercise real bad
+  // decrypt, without real credentials or a mocked encryption implementation.
+  const ciphertext = Buffer.concat([cipher.update(Buffer.alloc(16)), cipher.final()]);
+  const stored = `enc:v1:${iv.toString('hex')}:${ciphertext.toString('hex')}`;
+  const rows = [{ id: 'unreadable-fixture', providerKey: 'openai', apiKey: stored, updatedAt: new Date() }];
+  const updates = [];
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...parts) => warnings.push(parts.join(' '));
+  try {
+    await withBridgeHarness({
+      rows, connections: rows, updates,
+      fetchImpl: async (_url, options = {}) => {
+        assert.notEqual(options.headers?.Authorization, `Bearer ${stored}`);
+        return { ok: true, status: 200 };
+      },
+    }, async () => {
+      assert.equal(process.env.OPENAI_API_KEY, 'sk-from-dotenv');
+      const verdict = updates.find((entry) => entry.where.id === rows[0].id);
+      assert.equal(verdict.data.lastSyncOk, false);
+      assert.match(verdict.data.lastSyncError, /[Cc]lave ilegible/);
+      assert.match(verdict.data.lastSyncError, /guard/);
+      await require('../src/services/admin-connections-bridge').applyAdminConnections();
+      assert.equal(warnings.length, 1);
+      assert.ok(warnings.every((warning) => !warning.includes(stored) && !warning.includes('bad decrypt')));
+    });
+  } finally {
+    console.warn = originalWarn;
   }
 });

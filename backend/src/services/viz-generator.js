@@ -40,42 +40,8 @@
  * that the client renders with the libs already in the bundle.
  */
 
-const OpenAI = require('openai');
 const { run } = require('./agents/code-sandbox');
-
-function clientForModel(modelName) {
-  if (!modelName) return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
-  const m = String(modelName);
-  if (/^deepseek-(v\d|chat|reasoner)/i.test(m.trim())) {
-    return {
-      provider: 'DeepSeek',
-      client: new OpenAI({
-        apiKey: process.env.DEEPSEEK_API_KEY,
-        baseURL: 'https://api.deepseek.com',
-      }),
-    };
-  }
-  if (/^(anthropic|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|google|moonshotai)\//i.test(m)
-      || m.includes('/gpt-oss')) {
-    return {
-      provider: 'OpenRouter',
-      client: new OpenAI({
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseURL: 'https://openrouter.ai/api/v1',
-      }),
-    };
-  }
-  if (m.includes('gemini')) {
-    return {
-      provider: 'Gemini',
-      client: new OpenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-      }),
-    };
-  }
-  return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
-}
+const { clientForModel, completeStructured, publicGenerationError } = require('./ai/structured-generation');
 
 const SYSTEM_PROMPT = `You are a senior data visualisation engineer for the siraGPT assistant.
 
@@ -108,7 +74,7 @@ Payload shape per format:
   Pure Plotly.js JSON spec (same shape that Plotly.newPlot accepts). Include layout.title, margins, font, template: "simple_white".
 
 "chartjs" → { "config": { "type": ..., "data": {...}, "options": {...} } }
-  Valid Chart.js v4 config.
+  Valid Chart.js v4 config expressed as PURE JSON. Never include JavaScript functions, arrow functions, callbacks, formatters, undefined, NaN, comments or expressions. Omit tooltip/tick callbacks; use declarative labels, dataset labels and standard numeric formatting. Do not serialize function source as a string.
 
 "recharts" → {
     "type": "line"|"bar"|"area"|"pie"|"scatter",
@@ -137,46 +103,58 @@ Hard rules:
 - For Mermaid diagrams, keep labels short and valid; quote labels that contain punctuation, accents, parentheses, or slashes.
 `;
 
-function extractJson(raw) {
-  if (!raw) throw new Error('empty');
-  const tries = [raw, raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()];
-  const stripped = tries[1];
-  const i = stripped.indexOf('{');
-  const j = stripped.lastIndexOf('}');
-  if (i >= 0 && j > i) tries.push(stripped.slice(i, j + 1));
-  let lastErr;
-  for (const t of tries) {
-    try { return JSON.parse(t); } catch (e) { lastErr = e; }
+function validateViz(value) {
+  if (typeof value.title !== 'string' || !value.title.trim() || typeof value.explanation !== 'string') return false;
+  const payload = value.payload;
+  const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (!object(payload)) return false;
+  const nonempty = (v) => typeof v === 'string' && v.trim().length > 0;
+  const label = (v) => typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v));
+  const numberOrGap = (v) => v === null || (typeof v === 'number' && Number.isFinite(v));
+  const chartTypes = ['bar', 'line', 'pie', 'doughnut', 'radar', 'polarArea', 'scatter', 'bubble'];
+  switch (value.format) {
+    case 'matplotlib': return nonempty(payload.python);
+    case 'mermaid': return nonempty(payload.code);
+    case 'd3': return nonempty(payload.html);
+    case 'plotly': return Array.isArray(payload.data) && payload.data.length > 0 && payload.data.every(object)
+      && (payload.layout === undefined || object(payload.layout));
+    case 'chartjs': {
+      const config = payload.config;
+      if (!object(config) || !chartTypes.includes(config.type) || !object(config.data)
+        || !Array.isArray(config.data.datasets) || !config.data.datasets.length
+        || (config.options !== undefined && !object(config.options))) return false;
+      // Callback strings are not executable JSON configuration either. Reject
+      // unsupported formatting instead of delivering a chart that fails in UI.
+      const pending = config.options ? [config.options] : [];
+      while (pending.length) {
+        for (const [key, child] of Object.entries(pending.pop())) {
+          if (key === 'callback' || key === 'callbacks') return false;
+          if (child !== null && typeof child === 'object') pending.push(child);
+        }
+      }
+      return config.data.datasets.every((dataset) => object(dataset)
+        && (dataset.type === undefined || chartTypes.includes(dataset.type))
+        && (Array.isArray(dataset.data) || object(dataset.data)));
+    }
+    case 'recharts': return ['line', 'bar', 'area', 'pie', 'scatter'].includes(payload.type)
+      && Array.isArray(payload.data) && payload.data.length > 0 && payload.data.every(object)
+      && (payload.height === undefined || (Number.isFinite(payload.height) && payload.height > 0))
+      && (payload.colors === undefined || (Array.isArray(payload.colors) && payload.colors.length > 0 && payload.colors.every(nonempty)))
+      && (payload.type === 'pie'
+        ? payload.data.every((row) => label(row.name) && numberOrGap(row.value))
+        : nonempty(payload.xKey) && payload.data.every((row) => label(row[payload.xKey]))
+          && Array.isArray(payload.series) && payload.series.length > 0
+          && payload.series.every((series) => object(series) && nonempty(series.key)
+            && (series.name === undefined || typeof series.name === 'string')
+            && (series.color === undefined || nonempty(series.color))
+            && payload.data.every((row) => numberOrGap(row[series.key]))));
+    default: return false;
   }
-  throw new Error(`JSON parse failed: ${lastErr?.message}`);
 }
 
-async function callLlm({ prompt, model, signal }) {
-  const routed = clientForModel(model);
-  if (!routed.client) throw new Error(`viz-generator: no API key for "${model}"`);
-  const callModel = async (useJsonMode) => {
-    const params = {
-      model: model || 'gpt-4o',
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.25,
-      max_tokens: 4000,
-    };
-    if (useJsonMode && routed.provider !== 'Gemini') {
-      params.response_format = { type: 'json_object' };
-    }
-    return routed.client.chat.completions.create(params, { signal });
-  };
-  let resp;
-  try { resp = await callModel(true); }
-  catch (err) {
-    if (/response_format|json_object|invalid.*param/i.test(err?.message || '')) resp = await callModel(false);
-    else throw err;
-  }
-  const raw = resp.choices?.[0]?.message?.content || '';
-  return extractJson(raw);
+async function callLlm({ prompt, model, signal, clientOptions }) {
+  return completeStructured({ prompt, model, signal, clientOptions, systemPrompt: SYSTEM_PROMPT,
+    temperature: 0.25, maxTokens: 4000, validate: validateViz });
 }
 
 // Minimal Python prelude — imports are the snippet's responsibility.
@@ -287,8 +265,8 @@ function buildArtefact({ parsed, renderedPng, renderStderr }) {
   return { content: contentLines.filter(Boolean).join('\n'), file };
 }
 
-async function generateViz({ prompt, model, signal }) {
-  const parsed = await callLlm({ prompt, model, signal });
+async function generateViz({ prompt, model, signal, clientOptions }) {
+  const parsed = await callLlm({ prompt, model, signal, clientOptions });
   let renderedPng = null;
   let renderStderr = null;
   if (parsed.format === 'matplotlib') {
@@ -304,15 +282,14 @@ async function generateViz({ prompt, model, signal }) {
 }
 
 // Streaming variant for the SSE route.
-async function* streamViz({ prompt, model, signal }) {
+async function* streamViz({ prompt, model, signal, clientOptions }) {
   yield { type: 'stage', label: 'Analizando la solicitud', pct: 5 };
   let parsed;
   try {
     yield { type: 'stage', label: 'Eligiendo renderizador', pct: 15 };
-    parsed = await callLlm({ prompt, model, signal });
+    parsed = await callLlm({ prompt, model, signal, clientOptions });
   } catch (err) {
-    if (err?.name === 'AbortError') { yield { type: 'error', error: 'aborted' }; return; }
-    yield { type: 'error', error: err?.message || 'LLM failed' };
+    yield { type: 'error', ...publicGenerationError(err, signal) };
     return;
   }
   yield { type: 'stage', label: `Formato: ${parsed.format}`, pct: 40 };

@@ -2554,6 +2554,7 @@ router.get('/projects/:id/files', authenticateToken, async (req, res) => {
       .sort();
     return res.json({ files });
   } catch (err) {
+    if (err?.body?.error === 'file_busy' || err?.code === 'file_busy') return sendEditorFileError(res, err);
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
 });
