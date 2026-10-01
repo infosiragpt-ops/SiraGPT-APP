@@ -455,10 +455,11 @@ function isStructuralUnitEdit(t) {
 
 // Chart-local design is a surgical edit. It must never invoke the helper
 // that restyles every sheet/slide or fall through to a prose-only editor.
-const CHART_EDIT_TARGET_RE = /\b(?:grafic[ao]s?|charts?|series|leyendas?|ejes?)\b/;
+const CHART_EDIT_TARGET_RE = /\b(?:grafic[ao]s?|charts?|series?|leyendas?|ejes?)\b/;
 function isChartDocumentEdit(text) {
   const t = normalizeIntentText(text);
   if (!CHART_EDIT_TARGET_RE.test(t) || isQuestionOrAdviceRequest(text) || NON_DOC_OBJECT_RE.test(t)) return false;
+  if (/\b(?:explica\w*|explain\w*|ensena\w*)\b/.test(t)) return false;
   if (SOFTWARE_TARGET_RE.test(t) && !OFFICE_DOC_REF_RE.test(t)) return false;
   return WORK_RE.test(t) || FOLLOWUP_EDIT_VERB_RE.test(t) || DESIGN_IMPROVE_VERB_RE.test(t)
     || DESIGN_STANDALONE_RE.test(t) || DESIGN_CHANGE_VERB_RE.test(t);

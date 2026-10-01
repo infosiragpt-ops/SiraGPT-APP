@@ -60,6 +60,8 @@ test('precise chart follow-ups enter the file editor without restyling the whole
     'mejora el gráfico 1 del Excel',
     'rediseña únicamente la gráfica de la diapositiva 2',
     'mejora las gráficas y conserva las otras hojas',
+    'cambia la paleta de la serie Norte a azul',
+    'mejora la serie Norte del Excel',
   ]) {
     for (const format of ['xlsx', 'pptx']) {
       assert.equal(isDesignUpgradeRequest(request, { officeTarget: format }), false, request);
@@ -69,5 +71,9 @@ test('precise chart follow-ups enter the file editor without restyling the whole
   }
   assert.equal(shouldRunAgentRunner({ text: 'mejora el gráfico 1' }), false);
   assert.equal(shouldRunAgentRunner({ text: '¿Cómo puedo mejorar el gráfico 1?', hasPriorArtifacts: true, priorArtifactFormat: 'xlsx' }), false);
+  for (const text of ['¿Puedes explicarme cómo editar la gráfica?', '¿Puedes explicar por qué cambiar el gráfico a barras?']) {
+    assert.equal(shouldRunAgentRunner({ text, hasPriorArtifacts: true, priorArtifactFormat: 'xlsx' }), false);
+    assert.equal(isRunnerOnlyDocumentTurn(text, { priorArtifactFormat: 'xlsx' }), false);
+  }
   assert.equal(isDesignUpgradeRequest('rediseña todo el Excel', { officeTarget: 'xlsx' }), true);
 });
