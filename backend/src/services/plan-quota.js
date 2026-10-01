@@ -268,6 +268,8 @@ async function fetchUserPlanQuota(userId, prisma) {
  */
 function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}) {
   if (!user) return { ok: true };
+  // Direct paid-media routes share the exemption of the snapshot/chat gate.
+  if (isPlanQuotaExempt(user)) return { ok: true };
   // monthlyLimit === 0 means "no enforcement" (legacy / staff / unlimited
   // accounts), matching getPlanQuotaSnapshot's `limit > 0 && …` posture. Without
   // this guard, apiUsage >= 0 is always true and those accounts get bricked with

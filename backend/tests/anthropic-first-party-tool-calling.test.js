@@ -147,6 +147,22 @@ test('forced tool_choice becomes auto + a persistent instruction on Fable 5.1', 
   assert.deepEqual(requests[1].messages[0], requests[0].messages[0], 'earlier turns are rendered identically on later requests');
 });
 
+test('forced tool_choice becomes auto + a persistent instruction on Sonnet 5.5', async () => {
+  const { sdk, requests } = mockSdk([
+    { id: 'a', model: 'claude-sonnet-5-5', stop_reason: 'end_turn', usage: {}, content: [{ type: 'text', text: 'ok' }] },
+  ]);
+  const client = createAnthropicStreamingClient({ apiKey: 'k', sdkClient: sdk });
+  const messages = [{ role: 'user', content: 'Resume.' }];
+  const forced = { type: 'function', function: { name: 'finalize' } };
+  await client.chat.completions.create({ model: 'claude-sonnet-5-5', messages, tools: [SEARCH_TOOL], tool_choice: forced });
+  await client.chat.completions.create({ model: 'claude-sonnet-5-5', messages, tools: [SEARCH_TOOL], tool_choice: 'auto' });
+
+  assert.deepEqual(requests[0].tool_choice, { type: 'auto' });
+  const nudge0 = requests[0].messages[0].content.at(-1).text;
+  assert.match(nudge0, /finalize/);
+  assert.deepEqual(requests[1].messages[0], requests[0].messages[0], 'earlier turns are rendered identically on later requests');
+});
+
 test('forced tool_choice stays native on models without thinking', async () => {
   const { sdk, requests } = mockSdk([
     { id: 'a', model: 'claude-opus-4-7', stop_reason: 'tool_use', usage: {}, content: [{ type: 'tool_use', id: 't', name: 'web_search', input: {} }] },

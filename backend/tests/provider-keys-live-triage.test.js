@@ -166,11 +166,14 @@ test('an undecryptable admin-connection key warns once per row — never an ERRO
 test('Admin → Conexiones exposes keyReadable:false and «Probar» explains an unreadable key', () => {
   const route = read('routes/admin-connections.js');
   assert.match(route, /keyReadable: c\.apiKey \? plain != null : null,/);
-  assert.match(route, /Clave ilegible — vuelve a guardarla\./);
+  const { UNREADABLE_KEY_REASON } = require('../src/services/admin-connections-bridge');
+  assert.match(UNREADABLE_KEY_REASON, /^Clave ilegible — vuelve a guardarla\./);
+  assert.match(route, /reason: UNREADABLE_KEY_REASON/);
   const testIdx = route.indexOf("router.post('/:id/test'");
   const guardIdx = route.indexOf('if (conn.apiKey && decryptKey(conn.apiKey, conn) == null)', testIdx);
   const syncIdx = route.indexOf('modelSyncService.syncConnectionModels', testIdx);
   assert.ok(guardIdx > testIdx && guardIdx < syncIdx, 'unreadable key answered before probing the provider');
+  assert.match(route.slice(guardIdx, syncIdx), /return res\.json\(\{ ok: false, status: 0, keyReadable: false, reason: UNREADABLE_KEY_REASON \}\)/);
   assert.doesNotMatch(route, /console\.error\('\[admin-connections\] decryptKey failed/);
   const page = fs.readFileSync(path.join(__dirname, '../../app/admin/connections/page.tsx'), 'utf8');
   assert.match(page, /c\.apiKeySet && c\.keyReadable === false \?/);

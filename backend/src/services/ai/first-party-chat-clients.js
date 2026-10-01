@@ -9,6 +9,7 @@ const OpenAI = require('openai');
 const { PROVIDER_UNAVAILABLE_MESSAGE } = require('./provider-inference');
 const {
   anthropicAcceptsDisabledThinking,
+  anthropicThinkingOffType,
   anthropicThinkingFamily,
   isAnthropicEffortParamError,
 } = require('../providers/anthropic-effort');
@@ -68,16 +69,18 @@ function extractAnthropicThinking(event) {
 
 // `thinking` / `output_config` arrive already resolved per model family by
 // the gateway (providers/anthropic-effort.js). A bare `disabled` from other
-// callers is only forwarded to models that accept it — Fable 5.x and Opus
-// 5.5 answer 400 to it.
+// callers is translated to the model-specific off control. Sonnet 5.5
+// requires between_tools; Fable 5.x and Opus 5.5 cannot be disabled.
 function applyAnthropicThinkingControls(body, payload, model) {
   if (!body || typeof body !== 'object') return body;
   const thinking = payload && payload.thinking;
   const reasoningExcluded = payload && payload.reasoning && payload.reasoning.exclude === true;
   const target = model || body.model;
   if ((thinking && thinking.type === 'disabled') || reasoningExcluded) {
-    if (anthropicAcceptsDisabledThinking(target)) body.thinking = { type: 'disabled' };
-  } else if (thinking && (thinking.type === 'adaptive' || thinking.type === 'enabled')) {
+    const offType = anthropicThinkingOffType(target);
+    if (offType) body.thinking = { type: offType };
+  } else if (thinking && (thinking.type === 'adaptive' || thinking.type === 'enabled'
+    || (thinking.type === 'between_tools' && anthropicThinkingFamily(target) === 'sonnet55'))) {
     body.thinking = { ...thinking };
   }
   if (payload && payload.output_config && typeof payload.output_config === 'object') {
@@ -115,7 +118,7 @@ function hasToolTraffic(payload) {
 function forcedToolRejected(model, body) {
   const id = String(model || '').toLowerCase().replace(/(\d+)\.(\d+)/g, '$1-$2');
   if (/^claude-(?:fable|mythos)-5-1(?:-|$)|^claude-opus-5-5(?:-|$)/.test(id)) return true;
-  if (anthropicThinkingFamily(model) === 'always_on') return true;
+  if (['always_on', 'sonnet55'].includes(anthropicThinkingFamily(model))) return true;
   const thinking = body && body.thinking;
   return Boolean(thinking && thinking.type && thinking.type !== 'disabled');
 }
@@ -245,7 +248,10 @@ function createAnthropicStreamingClient({
     body.messages = transcript.messages;
     if (transcript.system) body.system = transcript.system;
     const hasEffortControls = Boolean(body.thinking || body.output_config);
-    const createOptions = { signal: requestOptions && requestOptions.signal };
+    const createOptions = {
+      signal: requestOptions && requestOptions.signal,
+      ...(requestOptions?.maxRetries !== undefined ? { maxRetries: requestOptions.maxRetries } : {}),
+    };
 
     if (!payload.stream) {
       let resp;
@@ -351,7 +357,10 @@ function createAnthropicStreamingClient({
           applyAnthropicThinkingControls(body, payload, model);
           const hasEffortControls = Boolean(body.thinking || body.output_config);
           if (!payload.stream) {
-            const createOptions = { signal: requestOptions && requestOptions.signal };
+            const createOptions = {
+              signal: requestOptions && requestOptions.signal,
+              ...(requestOptions?.maxRetries !== undefined ? { maxRetries: requestOptions.maxRetries } : {}),
+            };
             let resp;
             try {
               resp = await client.messages.create(body, createOptions);
@@ -369,7 +378,7 @@ function createAnthropicStreamingClient({
               id: resp && resp.id,
               object: 'chat.completion',
               model,
-              choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+              choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: mapStopReason(resp && resp.stop_reason, false) }],
             };
           }
           const openStream = async (requestBody) => {

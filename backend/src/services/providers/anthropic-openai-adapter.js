@@ -138,7 +138,7 @@ function toAnthropicTools(tools) {
 function toAnthropicToolChoice(choice) {
   if (!choice || choice === 'auto') return { type: 'auto' };
   if (choice === 'required') return { type: 'any' };
-  if (choice === 'none') return null;
+  if (choice === 'none') return { type: 'none' };
   if (typeof choice === 'object' && choice.type === 'function' && choice.function?.name) {
     return { type: 'tool', name: String(choice.function.name), disable_parallel_tool_use: true };
   }

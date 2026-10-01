@@ -12261,6 +12261,13 @@ router.post(
       const quotaCap = checkPaidTokenCap(req.user, { message: 'Monthly video generation limit exceeded' });
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
+      // Authorize the conversation before reading continuity or starting a
+      // paid operation. The same validated row is used when saving below.
+      const chat = chatId
+        ? await prisma.chat.findFirst({ where: { id: chatId, userId, deletedAt: null } })
+        : null;
+      if (chatId && !chat) return res.status(404).json({ error: 'Chat not found' });
+
       // ✅ Process attached files (for image-to-video/reference-to-video)
       const processedImageUrls = [];
       const addProcessedImageUrl = (rawUrl) => {
@@ -12323,8 +12330,8 @@ router.post(
         if (!videoHistory.length && chatId) {
           try {
             const recentMessages = await prisma.message.findMany({
-              where: { chatId },
-              orderBy: { createdAt: 'desc' },
+              where: { chatId, deletedAt: null },
+              orderBy: { timestamp: 'desc' },
               take: 20,
               select: { files: true }
             });
@@ -12373,7 +12380,9 @@ router.post(
 
         const videoResponse = await axios.post(url, videoPayload, {
           headers: {
-            'Authorization': req.headers.authorization,
+            // authenticateToken resolves both browser cookies and Bearer
+            // headers into req.token; cookies are absent on this loopback.
+            'Authorization': `Bearer ${req.token}`,
             'Content-Type': 'application/json',
             // Session fingerprint binding (session-fingerprint.js) ties the
             // token to `${req.ip}:hash(user-agent)`. Without forwarding the
@@ -12391,11 +12400,6 @@ router.post(
 
         // ✅ Save user message with complete file information if chatId provided
         if (chatId) {
-          const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
-          if (!chat) {
-            return res.status(404).json({ error: 'Chat not found' });
-          }
-
           // ✅ Prepare user message files - handle both files array and direct image_url
           let userMessageFiles = undefined;
 
@@ -12636,7 +12640,7 @@ router.post('/video-cancel/:operationId', authenticateToken, async (req, res) =>
 
     const cancelResponse = await axios.post(url, {}, {
       headers: {
-        'Authorization': req.headers.authorization,
+        'Authorization': `Bearer ${req.token}`,
         'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
         'X-Forwarded-For': req.ip,
       },
@@ -12720,7 +12724,7 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
     try {
       const statusResponse = await axios.get(url, {
         headers: {
-          'Authorization': req.headers.authorization,
+          'Authorization': `Bearer ${req.token}`,
           // Forward original UA + IP so the loopback call's session
           // fingerprint matches (see generate-video above) — otherwise
           // polling status would revoke the user's session.

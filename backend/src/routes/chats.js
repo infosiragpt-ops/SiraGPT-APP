@@ -1773,7 +1773,7 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
     const { content } = req.body;
-    if (!content || content.trim() === "") {
+    if (typeof content !== 'string' || content.trim() === "") {
       return res.status(400).json({ error: "Content cannot be empty." });
     }
 
@@ -1790,7 +1790,7 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
 
       if (!messageToEdit) {
         // Si el mensaje no existe, lanzar un error para forzar el rollback de la transacción
-        throw new Error("Message not found or you can't edit it.");
+        throw Object.assign(new Error("Message not found or you can't edit it."), { code: 'MESSAGE_NOT_FOUND' });
       }
 
       // Paso 2: Eliminar todos los mensajes posteriores a éste
@@ -1825,10 +1825,10 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
     res.json({ message: result });
 
   } catch (error) {
-    console.error('Edit message error:', error);
-    if (error.message.includes("Message not found")) {
+    if (error.code === 'MESSAGE_NOT_FOUND') {
       return res.status(404).json({ error: error.message });
     }
+    console.error('Edit message error:', error);
     res.status(500).json({ error: 'Failed to edit message' });
   }
 });

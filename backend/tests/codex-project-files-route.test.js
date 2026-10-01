@@ -53,6 +53,7 @@ const restoreRunService = mockResolvedModule(require.resolve('../src/services/co
 });
 
 const runnerCalls = [];
+let execImpl = async () => ({ ok: true, exitCode: 0, stdout: 'src/app.ts\n', stderr: '' });
 let readEditorImpl = async (_project, path) => ({ ok: true, path, content: 'full', revision: 'a'.repeat(64), sizeBytes: 4, truncated: false, readOnly: false });
 let saveEditorImpl = async (_project, file) => ({ ok: true, path: file.path, revision: require('node:crypto').createHash('sha256').update(file.content).digest('hex'), sizeBytes: Buffer.byteLength(file.content), truncated: false, readOnly: false, written: 1 });
 const restoreCheckpoint = mockResolvedModule(require.resolve('../src/services/codex/checkpoint-service'), {
@@ -64,6 +65,7 @@ let writeFilesImpl = async (project, files) => {
 };
 const restoreRunner = mockResolvedModule(require.resolve('../src/services/codex/runner-client'), {
   createRunnerClient: () => ({
+    exec: (project, command) => { runnerCalls.push(['exec', project, command]); return execImpl(project, command); },
     writeFiles: (project, files) => writeFilesImpl(project, files),
     readEditorFile: (project, path) => { runnerCalls.push(['readEditorFile', project, path]); return readEditorImpl(project, path); },
     readFile: async (project, path) => { runnerCalls.push(['readFile', project, path]); return { ok: true, path, content: 'legacy' }; },
@@ -93,6 +95,7 @@ beforeEach(() => {
   process.env.CODEX_AGENT_V2 = '1';
   serviceCalls.length = 0;
   runnerCalls.length = 0;
+  execImpl = async () => ({ ok: true, exitCode: 0, stdout: 'src/app.ts\n', stderr: '' });
   readEditorImpl = async (_project, path) => ({ ok: true, path, content: 'full', revision: 'a'.repeat(64), sizeBytes: 4, truncated: false, readOnly: false });
   saveEditorImpl = async (_project, file) => ({ ok: true, path: file.path, revision: require('node:crypto').createHash('sha256').update(file.content).digest('hex'), sizeBytes: Buffer.byteLength(file.content), truncated: false, readOnly: false, written: 1 });
   writeFilesImpl = async (project, files) => {
@@ -204,6 +207,29 @@ test('502 runner_unreachable when the sidecar write fails', async () => {
   const res = await request(app()).post('/api/codex/projects/p1/files').set(AUTH).send({ files: FILES });
   assert.equal(res.status, 502);
   assert.equal(res.body.error, 'runner_unreachable');
+});
+
+test('GET file listing preserves file_busy as 409 and does not retry or claim runner outage', async () => {
+  for (const error of [{ status: 409, body: { error: 'file_busy' } }, { code: 'file_busy' }]) {
+    execImpl = async () => { throw Object.assign(new Error('file_busy'), error); };
+    const before = runnerCalls.length;
+    const res = await request(app()).get('/api/codex/projects/p1/files').set(AUTH);
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error, 'file_busy');
+    assert.match(res.body.message, /guardado.*curso/);
+    assert.equal(runnerCalls.length - before, 1);
+  }
+});
+
+test('GET file listing keeps genuine transport failure as 502 and gates ownership first', async () => {
+  execImpl = async () => { throw new Error('connection refused'); };
+  const foreign = await request(app()).get('/api/codex/projects/p1/files').set(AUTH).set('x-test-user', 'u-2');
+  assert.equal(foreign.status, 404);
+  assert.equal(runnerCalls.length, 0);
+  const res = await request(app()).get('/api/codex/projects/p1/files').set(AUTH);
+  assert.equal(res.status, 502);
+  assert.equal(res.body.error, 'runner_unreachable');
+  assert.equal(runnerCalls.length, 1);
 });
 
 
