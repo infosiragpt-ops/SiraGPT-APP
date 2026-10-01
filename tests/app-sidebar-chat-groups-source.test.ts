@@ -118,10 +118,13 @@ describe("app sidebar recent-chats toolbar source contract", () => {
   it("keeps Spanish collapse tooltips and the Claude-style header strip", () => {
     assert.match(source, /Contraer barra lateral ⌘B/)
     assert.match(source, /Expandir barra lateral ⌘B/)
-    // The header keeps history + new chat after the Empresas mode row is removed.
+    // The header opens with the brand lockup (knot + «SiraGPT») and keeps the
+    // new-chat disc after the Empresas mode row is removed; the browser
+    // history buttons left the strip on 2026-10-01 to make room for the wordmark.
     assert.doesNotMatch(source, /Modo de la barra lateral/)
-    assert.match(source, /aria-label="Atrás"/)
-    assert.match(source, /aria-label="Adelante"/)
+    assert.match(source, /data-testid="sidebar-brand"/)
+    assert.doesNotMatch(source, /aria-label="Atrás"/)
+    assert.doesNotMatch(source, /aria-label="Adelante"/)
     assert.match(source, /aria-label="Nuevo agente ⌘N"/)
     assert.doesNotMatch(source, /aria-label="Empresas"/)
     assert.doesNotMatch(source, /data-testid="sidebar-apps-tab"/)

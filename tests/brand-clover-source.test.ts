@@ -34,13 +34,31 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     assert.match(source("public/sw.js"), /'\/brand\/clover\.svg'/)
   })
 
-  it("exposes CloverMark and uses it for every logo render (sidebar, header logo, auth pages)", () => {
+  it("keeps CloverMark for the PWA/document assets and uses the knot mark for every in-app logo render", () => {
     const mark = source("components/brand/clover-mark.tsx")
     assert.match(mark, /export function CloverMark/)
     assert.match(mark, /export function CloverBadge/)
     assert.match(mark, /fill="currentColor"/)
     assert.match(mark, /var\(--clover-vein, #fff\)/)
     assert.match(source("components/brand/index.ts"), /export \{ CloverMark, CloverBadge \} from "\.\/clover-mark"/)
+    assert.match(source("components/brand/index.ts"), /export \{ KnotMark \} from "\.\/knot-mark"/)
+    // Luis (2026-10-01): the in-app brand mark is the five-loop endless knot,
+    // generated as vector geometry (interlaced tube, currentColor borders,
+    // `--knot-gap` inside) — never a traced raster.
+    const knot = source("components/brand/knot-mark.tsx")
+    assert.match(knot, /export function KnotMark/)
+    assert.match(knot, /data-brand="knot"/)
+    assert.match(knot, /stroke="currentColor"/)
+    assert.match(knot, /var\(--knot-gap, #fff\)/)
+    assert.match(knot, /OVER_PATCHES/)
+    assert.doesNotMatch(knot, /<image|data:image/)
+    const asset = source("public/brand/knot.svg")
+    assert.match(asset, /viewBox="0 0 100 100"/)
+    assert.match(asset, /stroke="currentColor"/)
+    assert.match(asset, /var\(--knot-gap, #fff\)/)
+    const css = source("app/globals.css")
+    assert.match(css, /--knot-gap: #ffffff;/)
+    assert.match(css, /--knot-gap: #0d0d0d;/)
     for (const rel of [
       "components/BrandLogo.tsx",
       "components/app-sidebar.tsx",
@@ -48,8 +66,9 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
       "app/auth/register/page.tsx",
     ]) {
       const src = source(rel)
-      assert.match(src, /import \{ CloverMark \} from "@\/components\/brand"/, `${rel} imports CloverMark`)
-      assert.match(src, /<CloverMark/, `${rel} renders CloverMark`)
+      assert.match(src, /import \{ KnotMark \} from "@\/components\/brand"/, `${rel} imports KnotMark`)
+      assert.match(src, /<KnotMark/, `${rel} renders KnotMark`)
+      assert.doesNotMatch(src, /<CloverMark/, `${rel} no longer renders the clover`)
     }
   })
 

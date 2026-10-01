@@ -1620,6 +1620,27 @@ agente agotó sus pasos sin producir un archivo verificado».
   SIN el bloque «Premium chat finish» (borde celeste, memoria, liquid-pill) aunque el archivo lo
   tenía; `rm -rf .next/cache/webpack` lo arregla. Producción compila desde cero en Docker.
 
+## Marca: nudo de cinco bucles + «SiraGPT» en el sidebar (added 2026-10-01)
+
+Pedido de Luis con el logo (nudo celta de cinco bucles). UI lock re-baselineado para los
+archivos tocados.
+- **`components/brand/knot-mark.tsx` (`KnotMark`)**: la marca es geometría vectorial generada
+  (nudo tórico T(3,5): 5 bucles exteriores + pentagrama, 10 cruces entrelazados), NO un raster
+  calcado. Tubo con bordes en `currentColor` e interior/huecos en `--knot-gap` (blanco /
+  `#0d0d0d` por tema en `globals.css`; prop `gap` para paneles tintados, p. ej. el sidebar usa
+  `hsl(var(--sidebar-background))`). El entrelazado se dibuja con «parches» del tramo superior
+  sobre el trazo completo (mismos vértices → sin muescas). Mismo dibujo en `public/brand/knot.svg`.
+  `CloverMark` sigue existiendo para el icono PWA, correos y documentos.
+- **Sidebar** (`app-sidebar.tsx`): la cabecera abre con el lockup `data-testid="sidebar-brand"`
+  (nudo 22 px + wordmark «SiraGPT» `.sidebar-brand__wordmark`) y el botón de contraer al lado;
+  a la derecha notificaciones + «Nuevo agente». Los botones Atrás/Adelante salieron de la tira
+  (el rail de 16 rem no daba para el wordmark; el navegador ya los tiene). El rail colapsado
+  muestra el nudo.
+- Todos los renders in-app de la marca (BrandLogo, login/registro/recuperación, PWA prompt,
+  BrandCycle) usan `KnotMark`.
+- Tests: `tests/brand-clover-source.test.ts` (actualizado), `tests/sidebar-brand-header-source.test.ts`,
+  `tests/app-sidebar-chat-groups-source.test.ts` (actualizado).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
