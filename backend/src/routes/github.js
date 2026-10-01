@@ -24,6 +24,8 @@ const githubConfig = require('../config/github');
 const oauth = require('../services/github/github-oauth.service');
 const accounts = require('../repositories/GithubAccountRepository');
 const githubApi = require('../services/github/github-api.service');
+const chatOAuth = require('../services/github/github-chat-oauth');
+const prisma = require('../config/database');
 const connectedRepos = require('../repositories/ConnectedRepositoryRepository');
 const workspaces = require('../repositories/WorkspaceRepository');
 const workspaceManager = require('../services/github/workspace-manager');
@@ -88,13 +90,18 @@ async function touchWorkspace(repositoryId, userId, localPath, patch) {
 router.get('/status', authenticateToken, async (req, res) => {
   try {
     const providerStatus = getOptionalOAuthProviderStatus('github');
+    res.setHeader('Cache-Control', 'no-store');
     const account = await accounts.findByUserId(req.user.id);
+    const verification = req.query.verify === '1' ? await chatOAuth.verifyAccount(account, oauth) : null;
+    if (verification && !verification.connected) return res.json({ ...providerStatus, ...verification });
     if (!account) {
       return res.json({ ...providerStatus, connected: false });
     }
     return res.json({
       ...providerStatus,
       connected: true,
+      ...(verification || {}),
+      connectionVersion: account.updatedAt || account.connectedAt,
       login: account.login,
       name: account.name,
       avatarUrl: account.avatarUrl,
@@ -102,7 +109,8 @@ router.get('/status', authenticateToken, async (req, res) => {
       connectedAt: account.connectedAt,
     });
   } catch (err) {
-    console.error('[github] status error:', err.message);
+    if (err?.code === 'github_verification_unavailable') return res.status(503).json({ code: err.code, error: err.message });
+    console.error('[github] status unavailable');
     return res.status(500).json({ error: 'Failed to read GitHub connection status' });
   }
 });
@@ -113,15 +121,19 @@ router.get('/connect', requireGithubOAuth, authenticateToken, async (req, res) =
     if (!githubConfig.isConfigured()) {
       return res.status(503).json({ error: 'GitHub OAuth is not configured on the server' });
     }
-    const state = await oauth.signState(req.user.id);
+    const context = await chatOAuth.contextForRequest(req.query, req.user.id, prisma);
+    await chatOAuth.reserveHandoff(req.user.id, context);
+    const state = await oauth.signState(req.user.id, context);
     const url = oauth.buildAuthorizeUrl(state);
+    res.setHeader('Cache-Control', 'no-store');
     // Default: return JSON so the SPA controls navigation. ?redirect=1 → 302.
     if (String(req.query.redirect || '') === '1') {
       return res.redirect(url);
     }
-    return res.json({ url });
+    return res.json({ url, ...(context ? { chatId: context.chatId, handoffId: context.handoffId } : {}) });
   } catch (err) {
-    console.error('[github] connect error:', err.message);
+    console.error('[github] connect unavailable');
+    if (['github_handoff_invalid', 'github_handoff_reused', 'invalid_chat_id', 'coding_chat_not_found'].includes(err?.code)) return res.status(err.status).json({ code: err.code, error: err.message });
     if (isOAuthStateInfrastructureError(err)) {
       return sendOAuthStateUnavailable(res, { provider: 'github', error: err });
     }
@@ -129,31 +141,58 @@ router.get('/connect', requireGithubOAuth, authenticateToken, async (req, res) =
   }
 });
 
+// Correlated completion proof, readable until expiry after the provider callback.
+// A connection made in another tab cannot complete this pending handoff.
+router.get('/connect/status', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    const context = await chatOAuth.contextForRequest({ ...req.query, popup: '1' }, req.user.id, prisma);
+    return res.json(await chatOAuth.readHandoff(req.user.id, context));
+  } catch (err) {
+    if (['github_handoff_invalid', 'invalid_chat_id', 'coding_chat_not_found'].includes(err?.code)) return res.status(err.status).json({ code: err.code, error: err.message });
+    if (isOAuthStateInfrastructureError(err)) return sendOAuthStateUnavailable(res, { provider: 'github', error: err });
+    return res.status(503).json({ code: 'github_handoff_unavailable', error: 'No se pudo comprobar la conexión. Reintenta en unos segundos.' });
+  }
+});
+
 // GET /api/github/callback → finish OAuth, persist, redirect to frontend
 router.get('/callback', requireGithubOAuth, async (req, res) => {
   const { code, state, error: ghError } = req.query;
 
-  if (ghError) {
-    return res.redirect(githubConfig.postCallbackRedirect('denied'));
-  }
-  if (!code || !state) {
+  res.setHeader('Cache-Control', 'no-store');
+  if (typeof state !== 'string' || !state || state.length > 4096) {
     return res.redirect(githubConfig.postCallbackRedirect('invalid'));
   }
-
-  let userId;
+  let binding;
   try {
-    userId = await oauth.verifyState(state);
+    binding = await oauth.verifyStateContext(state);
   } catch (error) {
     if (isOAuthStateInfrastructureError(error)) {
       return sendOAuthStateUnavailable(res, { provider: 'github', error });
     }
     return res.redirect(githubConfig.postCallbackRedirect('expired'));
   }
-  if (!userId) {
-    return res.redirect(githubConfig.postCallbackRedirect('expired'));
-  }
+  if (!binding?.userId) return res.redirect(githubConfig.postCallbackRedirect('expired'));
+  const userId = binding.userId;
+  const context = binding.context;
+  const finish = async (status, connectionVersion) => {
+    try { await chatOAuth.recordHandoff(userId, context, status, connectionVersion); } catch (_err) {
+      // The authorization may have been saved, but no completion proof means
+      // the waiting chat must not resume on a different session's connection.
+      status = 'error';
+    }
+    if (chatOAuth.sendChatResult(res, context, status, githubConfig.frontendBase())) return res;
+    return res.redirect(githubConfig.postCallbackRedirect(status));
+  };
+  // State is consumed on denial as well, so cancellation cannot be replayed.
+  if (ghError) return finish('denied');
+  if (typeof code !== 'string' || !code || code.length > 2048) return finish('invalid');
 
   try {
+    if (chatOAuth.validContext(context)) {
+      const ownedChat = await prisma.chat.findFirst({ where: { id: context.chatId, userId, deletedAt: null }, select: { id: true } });
+      if (!ownedChat) return finish('chat_unavailable');
+    }
     const tokens = await oauth.exchangeCodeForToken(String(code));
     const ghUser = await oauth.fetchGithubUser(tokens.accessToken);
     const githubUserId = String(ghUser.id);
@@ -161,7 +200,7 @@ router.get('/callback', requireGithubOAuth, async (req, res) => {
     // A GitHub identity may only be linked to one siraGPT account.
     const existing = await accounts.findByGithubUserId(githubUserId);
     if (existing && existing.userId !== userId) {
-      return res.redirect(githubConfig.postCallbackRedirect('already_linked'));
+      return finish('already_linked');
     }
 
     const account = await accounts.upsertForUser(userId, {
@@ -194,10 +233,10 @@ router.get('/callback', requireGithubOAuth, async (req, res) => {
       console.warn('[github] app connection sync failed:', syncErr.message);
     }
 
-    return res.redirect(githubConfig.postCallbackRedirect('connected'));
-  } catch (err) {
-    console.error('[github] callback error:', err.message);
-    return res.redirect(githubConfig.postCallbackRedirect('error'));
+    return finish('connected', account.updatedAt || account.connectedAt);
+  } catch (_err) {
+    console.error('[github] callback unavailable');
+    return finish('error');
   }
 });
 

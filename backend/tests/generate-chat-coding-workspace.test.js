@@ -91,6 +91,8 @@ async function fixture(testContext, options = {}) {
         return result;
       },
     },
+    '../services/github/github-chat-turn': require('../src/services/github/github-chat-turn'),
+    '../services/github/github-chat-handoff': require('../src/services/github/github-chat-handoff'),
     '../services/turn-progress': turnProgress,
     '../services/agent-runner/activity-trace': { createActivityTraceCollector: () => ({}) },
     '../services/rlhf/reason-codes': { resolveFeedbackReasons: () => null },
@@ -485,4 +487,36 @@ test('same-project continuation constraints reuse the bound workspace without ge
     assert.equal(harness.artifactRuns.length, 0);
     assert.match(response.text, /data: \[DONE\]/);
   }
+});
+
+test('GitHub consent uses the canonical response persistence with Mini, tool-less and disabled agentic runtimes', async (testContext) => {
+  for (const entry of [
+    { options: { agenticEnabled: false } },
+    { options: { modelHasTools: false } },
+    { payload: { model: 'sira-mini' } },
+    { payload: { provider: 'TypeSafe' } },
+  ]) {
+    const harness = await fixture(testContext, entry.options);
+    const response = await harness.request({ prompt: 'pásame el link de GitHub para loguearme', ...entry.payload });
+    assert.equal(response.status, 200, response.text);
+    assert.equal(harness.events.filter(event => event.type === 'github_connection_required').length, 1, response.text);
+    assert.equal(harness.agenticRuns.length, 0); assert.equal(harness.plainRuns.length, 0); assert.equal(harness.artifactRuns.length, 0);
+    assert.equal(harness.projects.length, 0);
+    assert.equal(harness.persistedTurns.length, 1);
+    assert.match(harness.persistedTurns[0][3], /pendiente de tu autorización/);
+    assert.equal(harness.persistedTurns[0][4], 0);
+    assert.equal(harness.persistedTurns[0][14].skipUsageMetering, true);
+    assert.match(response.text, /data: \[DONE\]/);
+    assert.equal(harness.streamControllers.size, 0);
+  }
+});
+
+test('GitHub consent route respects foreign chat rejection and explicit disableAgentic', async (testContext) => {
+  const forbidden = await fixture(testContext, { foreignChat: true });
+  assert.equal((await forbidden.request({ prompt: 'conecta GitHub' })).status, 404);
+  assert.equal(forbidden.events.length, 0);
+  const disabled = await fixture(testContext, { modelHasTools: false });
+  const response = await disabled.request({ prompt: 'conecta GitHub', disableAgentic: true });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(disabled.events.some(event => event.type === 'github_connection_required'), false);
 });

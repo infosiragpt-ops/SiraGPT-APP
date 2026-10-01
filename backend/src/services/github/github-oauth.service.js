@@ -37,28 +37,34 @@ function getFetch() {
 }
 
 /** Sign and register a short-lived state token that binds this user + callback. */
-async function signState(userId) {
+async function signState(userId, context) {
   const cfg = githubConfig.require();
   return signOAuthState({
     userId,
     service: 'github',
     redirectUri: cfg.redirectUri,
+    ...(context ? { context } : {}),
   });
 }
 
 /** Atomically consume state. Returns the userId, or null if invalid/expired. */
-async function verifyState(state) {
+async function verifyStateContext(state) {
   try {
     const cfg = githubConfig.require();
     const decoded = await verifyOAuthState(state, {
       service: 'github',
       redirectUri: cfg.redirectUri,
     });
-    return decoded.userId;
+    return decoded;
   } catch (error) {
     if (error?.code === 'OAUTH_STATE_STORE_UNAVAILABLE') throw error;
     return null;
   }
+}
+
+/** Backwards-compatible user-only state consumer. */
+async function verifyState(state) {
+  return (await verifyStateContext(state))?.userId || null;
 }
 
 /** Build the GitHub consent URL for a given signed state. */
@@ -106,8 +112,9 @@ async function exchangeCodeForToken(code) {
 }
 
 /** Fetch the authenticated GitHub user's profile. */
-async function fetchGithubUser(accessToken) {
+async function fetchGithubUser(accessToken, { signal } = {}) {
   const res = await getFetch()(GITHUB_USER_URL, {
+    signal,
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/vnd.github+json',
@@ -116,7 +123,7 @@ async function fetchGithubUser(accessToken) {
     },
   });
   if (!res.ok) {
-    throw new Error(`GitHub user lookup failed (HTTP ${res.status})`);
+    throw Object.assign(new Error(`GitHub user lookup failed (HTTP ${res.status})`), { status: res.status });
   }
   return res.json();
 }
@@ -140,6 +147,7 @@ function openTokens(blob) {
 module.exports = {
   signState,
   verifyState,
+  verifyStateContext,
   buildAuthorizeUrl,
   exchangeCodeForToken,
   fetchGithubUser,
