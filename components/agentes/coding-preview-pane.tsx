@@ -14,7 +14,9 @@
  */
 
 import * as React from "react"
+import { RefreshCw, Square, X } from "lucide-react"
 
+import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { projectsCodexApi } from "@/lib/codex/api/projects"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
@@ -34,10 +36,11 @@ function unavailablePreviewNote(value: unknown): string {
   return "La vista previa todavía no está disponible. Vuelve a iniciarla para comprobar el proyecto."
 }
 
-export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision = 0 }: {
+export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision = 0, browser }: {
   projectId: string | null
   fileVersion?: number
   previewRevision?: number
+  browser?: { projectName: string; onClose: () => void }
 }) {
   const [phase, setPhase] = React.useState<Phase>("idle")
   const [url, setUrl] = React.useState<string | null>(null)
@@ -176,8 +179,32 @@ export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision 
     }
   }
 
+  const renderPane = (content: React.ReactNode) => browser ? (
+    <section className="flex h-full min-h-0 flex-col overflow-hidden border-l border-border/40 bg-background"
+      aria-label="Navegador del proyecto" data-testid="chat-project-browser" data-project-id={projectId || undefined}>
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-black/10 bg-gradient-to-b from-white to-zinc-100 px-3 dark:border-white/10 dark:from-[#2a2a2c] dark:to-[#1b1b1d]">
+        <IntegratedBrowserBar readOnlyLabel={`${browser.projectName || "Proyecto"} · Vista local`} autoNavigate={false} />
+        <button type="button" aria-label="Recargar aplicación" title="Recargar aplicación"
+          disabled={phase !== "ready" || !url} onClick={() => setFrameKey((key) => key + 1)}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+        <button type="button" aria-label="Detener aplicación" title="Detener aplicación" data-testid="agentes-preview-stop"
+          disabled={phase !== "ready" && phase !== "starting"} onClick={() => void stop()}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Square className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+        <button type="button" aria-label="Cerrar navegador" title="Cerrar navegador" onClick={browser.onClose}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1">{content}</div>
+    </section>
+  ) : content
+
   if (!projectId) {
-    return (
+    return renderPane(
       <p className="p-3 text-xs text-muted-foreground" data-testid="agentes-preview-pane">
         Abre un proyecto para ver su vista previa.
       </p>
@@ -185,9 +212,9 @@ export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision 
   }
 
   if (phase === "ready" && url) {
-    return (
+    return renderPane(
       <div className="flex h-full flex-col" data-testid="agentes-preview-pane">
-        <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
+        {browser ? null : <div className="flex items-center gap-2 border-b border-border px-2 py-1.5">
           <code className="flex-1 truncate text-xs text-muted-foreground">{url}</code>
           <button
             type="button"
@@ -204,7 +231,7 @@ export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision 
           >
             Detener
           </button>
-        </div>
+        </div>}
         <iframe
           key={frameKey}
           data-testid="agentes-preview-iframe"
@@ -218,7 +245,7 @@ export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision 
     )
   }
 
-  return (
+  return renderPane(
     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center" data-testid="agentes-preview-pane">
       {phase === "starting" ? (
         <>

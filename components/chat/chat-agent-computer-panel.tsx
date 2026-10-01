@@ -23,6 +23,7 @@ import { AgentComputerShell } from "@/components/code/agent-computer-shell"
 import { DepartmentComputerPane } from "@/components/code/department-computer-pane"
 import { postComputerNavigate } from "@/lib/computer-navigate-client"
 import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
+import { CodingPreviewPane } from "@/components/agentes/coding-preview-pane"
 import { ComputerLoginHandoffBanner } from "@/components/chat/computer-login-handoff-banner"
 import { coworkApi, type ScheduledCoworkTask } from "@/lib/cowork-api"
 import { formatScheduleEsPE } from "@/lib/format-schedule-es-pe"
@@ -47,6 +48,7 @@ export type ChatAgentComputerPanelProps = {
   initialDock?: "browser" | "desktop" | "files" | "terminal"
   navigateUrl?: string
   agentNavigating?: boolean
+  projectPreview?: { projectId: string; projectName: string; revision?: number }
 }
 
 type LiveStatus = "starting" | "live" | "error" | "idle"
@@ -84,7 +86,21 @@ function authHeaders(): Record<string, string> {
   }
 }
 
-export default function ChatAgentComputerPanel({
+// Keep project apps independent from computer/session/navigation effects. The
+// remote body mounts only for an actual computer or an active login handoff.
+export default function ChatAgentComputerPanel(props: ChatAgentComputerPanelProps) {
+  if (props.projectPreview && !props.loginHandoff) {
+    return <CodingPreviewPane
+      key={`${props.conversationId}:${props.projectPreview.projectId}`}
+      projectId={props.projectPreview.projectId}
+      previewRevision={props.projectPreview.revision}
+      browser={{ projectName: props.projectPreview.projectName, onClose: props.onClose }}
+    />
+  }
+  return <RemoteChatComputerPanel {...props} />
+}
+
+function RemoteChatComputerPanel({
   conversationId,
   onClose,
   loginHandoff = false,
