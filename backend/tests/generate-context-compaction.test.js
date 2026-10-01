@@ -47,9 +47,9 @@ test('the summariser is a non-streaming call on the request-scoped provider clie
   assert.match(ai, /stream: false,\s*\/\/ Meta reasoning tokens count against max_tokens/);
 });
 
-test('the compaction is persisted on the assistant message and a pre-emptive pass is scheduled', () => {
+test('compaction is persisted and pre-emptive work is scheduled outside account connection turns', () => {
   assert.match(ai, /\.\.\.\(req\._contextCompaction \? \{ contextCompaction: req\._contextCompaction \} : \{\}\),/);
-  assert.match(ai, /if \(canPersist && req\._contextCompactionPlan\?\.preemptive && !req\._contextCompaction\) \{[\s\S]{0,400}conversationCompactor\.maybeCompactInBackground\(\{/);
+  assert.match(ai, /if \(!req\._githubConnectionTurn && canPersist && req\._contextCompactionPlan\?\.preemptive && !req\._contextCompaction\) \{[\s\S]{0,400}conversationCompactor\.maybeCompactInBackground\(\{/);
 });
 
 test('editing, deleting or clearing messages invalidates a summary that covered them', () => {
