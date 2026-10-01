@@ -816,7 +816,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `base64-js` | 0.0.8, 1.5.1 | MIT | [link](https://github.com/beatgammit/base64-js) |
 | `base64url` | 3.0.1 | MIT | [link](https://github.com/brianloveswords/base64url) |
 | `basic-auth` | 2.0.1 | MIT | [link](https://github.com/jshttp/basic-auth) |
-| `basic-ftp` | 5.3.1 | MIT | [link](https://github.com/patrickjuchli/basic-ftp) |
+| `basic-ftp` | 6.2.1 | MIT | [link](https://github.com/patrickjuchli/basic-ftp) |
 | `bignumber.js` | 9.3.1 | MIT | [link](https://github.com/MikeMcl/bignumber.js) |
 | `binary` | 0.3.0 | MIT | [link](https://github.com/substack/node-binary) |
 | `binary-extensions` | 2.3.0 | MIT | [link](https://github.com/sindresorhus/binary-extensions) |
