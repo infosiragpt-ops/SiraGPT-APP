@@ -224,6 +224,7 @@ function normalizeExecCmd(raw) {
 }
 
 async function projectExec(args, ctx) {
+  if (ctx?.signal?.aborted) return { ok: false, code: 'E_CANCELLED', message: 'Ejecución cancelada.' };
   const cmd = normalizeExecCmd(args && args.cmd);
   if (!cmd) {
     return {
@@ -241,8 +242,11 @@ async function projectExec(args, ctx) {
   if (!runner) return runnerUnavailable();
   let out;
   try {
-    out = await runner.exec(bound.project.id, cmd, { timeoutMs });
+    if (ctx?.signal?.aborted) return { ok: false, code: 'E_CANCELLED', message: 'Ejecución cancelada.' };
+    out = await runner.exec(bound.project.id, cmd, { timeoutMs, signal: ctx?.signal });
+    if (ctx?.signal?.aborted) return { ok: false, code: 'E_CANCELLED', message: 'Ejecución cancelada.' };
   } catch (err) {
+    if (ctx?.signal?.aborted) return { ok: false, code: 'E_CANCELLED', message: 'Ejecución cancelada.' };
     // This exact runner response is emitted before workspace resolution/spawn.
     // Unknown HTTP/network errors can have executed work; never infer otherwise.
     if (err instanceof RunnerError && err.status === 400 && err.body?.ok === false

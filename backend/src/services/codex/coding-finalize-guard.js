@@ -49,6 +49,7 @@ function positiveObservation(obs) { return obs && typeof obs === 'object' && obs
 function fullRead(action) {
   const obs = action.observation;
   return positiveObservation(obs) && typeof obs.content === 'string'
+    && !obs.proposal && !action.args.proposalId
     && !obs.cached_result && obs.truncated === false && obs.offset === 0 && sanitizeRelPath(obs.path) === action.args.path;
 }
 
@@ -156,7 +157,7 @@ function checkedExecution(action, actions) {
 /** Pure completion contract for the server-authorized, project-scoped tool
  * lane. This verifies recorded work, not arbitrary functional correctness or
  * preservation of application data. It never sends another model request. */
-function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId }) {
+function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId, requireBrowserVerification = false }) {
   const contract = taskContract(userQuery);
   return ({ answer, steps, ctx, onCheckStart }) => {
     if (ctx?.signal?.aborted) return failure('E_CANCELLED', 'La comprobación del proyecto fue cancelada.');
@@ -191,11 +192,14 @@ function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId }) {
       const { tool, args, observation: obs, index } = action;
       if (tool === 'project_write') {
         lastWrite = index;
-        const path = sanitizeRelPath(args.path);
-        const valid = path && positiveObservation(obs) && obs.path === path && typeof args.content === 'string'
-          && obs.bytes === Buffer.byteLength(args.content, 'utf8');
+        const resolvedProposal = typeof args.proposalId === 'string' && args.proposalId === obs.proposalId;
+        const appliedProposal = resolvedProposal && obs.applied === true;
+        const path = sanitizeRelPath(args.path || (resolvedProposal ? obs.path : ''));
+        const writtenContent = appliedProposal ? obs.content : args.content;
+        const valid = (!args.proposalId || appliedProposal) && path && positiveObservation(obs) && obs.path === path
+          && typeof writtenContent === 'string' && obs.bytes === Buffer.byteLength(writtenContent, 'utf8');
         if (!valid) { failed.set(`write:${path || ''}`, 'Una escritura no está confirmada. Repite y verifica el archivo.'); continue; }
-        failed.delete(`write:${path}`); writes.set(path, action); lastWrite = index;
+        failed.delete(`write:${path}`); writes.set(path, { ...action, writtenContent }); lastWrite = index;
       }
       if (tool === 'project_read' && fullRead(action)) reads.push(action);
       if (tool === 'project_exec') {
@@ -229,7 +233,7 @@ function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId }) {
     if (contract.mutation || wroteClaim) {
       if (!writes.size) return failure('E_CODING_WRITE_REQUIRED', 'Guarda los cambios solicitados con project_write y comprueba el archivo real.', ['project_write']);
       const unverified = [...writes.entries()].filter(([path, written]) => !reads.some(read => read.index > Math.max(written.index, lastExec)
-        && read.observation.path === path && read.observation.content === written.args.content)).map(([path]) => path);
+        && read.observation.path === path && read.observation.content === written.writtenContent)).map(([path]) => path);
       if (unverified.length) return failure('E_CODING_READBACK_REQUIRED', `Después de los comandos, relee completos y comprueba estos archivos: ${unverified.slice(0, 10).join(', ')}. No basta un prefijo ni el diff contra la rama base.`, ['project_read']);
     } else if (contract.review && !reads.some(read => read.observation.content.trim())) {
       return failure('E_CODING_READ_REQUIRED', 'Lee el contenido completo de al menos un archivo relevante; listar nombres no comprueba el código.', ['project_read']);
@@ -256,6 +260,14 @@ function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId }) {
         || !positiveObservation(obs) || obs.project?.id !== projectId || obs.status?.ready !== true || obs.status?.running !== true
         || obs.status?.error || typeof obs.previewUrl !== 'string' || !obs.previewUrl.trim()) {
         return failure('E_CODING_PREVIEW_REQUIRED', 'Consulta la vista previa del mismo proyecto después de los cambios y comandos. Debe estar ejecutándose y lista.', ['project_preview_status']);
+      }
+    }
+    if ((contract.preview || previewClaim) && requireBrowserVerification) {
+      const proof = preview?.observation?.verification;
+      if (preview?.tool !== 'project_preview_status' || preview.args.verify !== true || proof?.kind !== 'browser'
+        || proof.mode !== 'read_only' || proof.rendered !== true || proof.expectedTextFound === false
+        || !Array.isArray(proof.errors) || proof.errors.length) {
+        return failure('E_CODING_BROWSER_REQUIRED', 'Abre y verifica la aplicación del proyecto en un navegador real con project_preview_status {verify:true,expectedText}. Comprueba contenido significativo después de los cambios; un servidor listo no confirma la página renderizada.', ['project_preview_status']);
       }
     }
     const prClaim = /\b(?:abri|creado|creada|cree|opened|created)\b.{0,70}\b(?:pr|pull request)\b/.test(text) || /https?:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/.test(answer);
