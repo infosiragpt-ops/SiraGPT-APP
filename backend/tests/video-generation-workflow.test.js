@@ -9,11 +9,16 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { checkPaidTokenCap } = require('../src/services/plan-quota');
+const { buildFalVideoInputPayload, validateFalVideoSettings, resolveFalVideoModelRequest } = require('../src/services/fal-video-model-catalog');
 
 const aiFile = path.resolve(__dirname, '../src/routes/ai.js');
 const aiSource = fs.readFileSync(aiFile, 'utf8');
 const videoFile = path.resolve(__dirname, '../src/routes/video.js');
 const videoSource = fs.readFileSync(videoFile, 'utf8');
+const resolveVeoFastDuration = vm.runInNewContext(`(${videoSource.slice(
+  videoSource.indexOf('function resolveVeoFastDuration('),
+  videoSource.indexOf('// Enhanced video generation with Fal.ai', videoSource.indexOf('function resolveVeoFastDuration(')),
+).trim()})`);
 const schema = fs.readFileSync(path.resolve(__dirname, '../prisma/schema.prisma'), 'utf8');
 const messageFields = new Set([...schema.match(/model Message \{([\s\S]*?)\n\}/)[1].matchAll(/^\s+(\w+)\s+\w/gm)].map((match) => match[1]));
 const chain = new Proxy(() => {}, { get: () => () => chain });
@@ -161,27 +166,32 @@ test('provider rejection remains a failure without saved processing message or u
 
 function serviceHarness({ user = {}, usage = 1000 } = {}) {
   let handler;
-  const calls = { generated: 0, usage: 0 };
+  let validators = [];
+  const inputValidation = require('express-validator');
+  const calls = { generated: 0, usage: 0, operations: new Map(), requests: [] };
   vm.runInNewContext(videoSource.slice(
     videoSource.indexOf("\nrouter.post('/generate', ["),
     videoSource.indexOf('\nfunction normalizeVideoImageUrls'),
   ), {
-    router: { post: (_url, ...args) => { handler = args.at(-1); } },
-    body: () => chain, authenticateToken() {}, requirePaidPlan: () => () => {},
-    validationResult: () => ({ isEmpty: () => true }), console: silentConsole,
+    router: { post: (_url, ...args) => { handler = args.at(-1); validators = args.flat().filter((item) => typeof item.run === 'function'); } },
+    body: inputValidation.body, authenticateToken() {}, requirePaidPlan: () => () => {},
+    validationResult: inputValidation.validationResult, console: silentConsole,
     resolveFalApiKey: async () => ({ apiKey: 'synthetic-provider-key', source: 'test' }), fal: { config() {} },
-    resolveFalVideoModelRequest: () => ({ ok: true, endpoint: 'selected-video' }),
-    resolveVeoFastDuration: () => 8, getRecentVideoHistoryForUser: () => [],
+    resolveFalVideoModelRequest: (model) => model === 'selected-video' ? ({ ok: true, endpoint: model }) : resolveFalVideoModelRequest(model),
+    buildFalVideoInputPayload, validateFalVideoSettings,
+    resolveVeoFastDuration, getRecentVideoHistoryForUser: () => [],
     videoPromptDirector: { directVideoPrompt: () => null }, checkPaidTokenCap,
     prisma: { apiUsage: { aggregate: async () => ({ _sum: { tokens: usage } }), create: async () => { calls.usage++; } } },
-    generateOperationId: () => 'op', randomUUID: () => 'fixture-uuid', activeOperations: new Map(),
-    generateVideoAsync: async () => { calls.generated++; },
+    generateOperationId: () => 'op', randomUUID: () => 'fixture-uuid', activeOperations: calls.operations,
+    generateVideoAsync: async (...args) => { calls.generated++; calls.requests.push(args); },
   }, { filename: videoFile });
   return {
     calls,
-    async request() {
+    async request(body = {}) {
       const res = response();
-      await handler({ body: { prompt: 'synthetic video', model: 'selected-video' }, user: { id: 'owner', plan: 'PRO', monthlyLimit: 500, ...user } }, res);
+      const req = { body: { prompt: 'synthetic video', model: 'selected-video', ...body }, user: { id: 'owner', plan: 'PRO', monthlyLimit: 500, ...user } };
+      for (const validator of validators) await validator.run(req);
+      await handler(req, res);
       return res;
     },
   };
@@ -200,4 +210,47 @@ test('inner video gate preserves paid cap and honors canonical unlimited exempti
     assert.equal(calls.generated, expected === 200 ? 1 : 0);
     assert.equal(calls.usage, expected === 200 ? 1 : 0);
   }
+});
+
+const omniModel = 'google/gemini-omni-flash/v1.1/text-to-video';
+
+test('unsupported selected video settings fail before operation, provider and usage', async () => {
+  for (const settings of [{ resolution: '480p' }, { audio: false }, { audio: 'false' }, { audio: '0' }, { aspect_ratio: '1:1' }, { duration: 11 }]) {
+    const { request, calls } = serviceHarness({ user: { isSuperAdmin: true } });
+    const res = await request({ model: omniModel, resolution: '720p', duration: 8, audio: true, ...settings });
+    assert.equal(res.statusCode, 422, JSON.stringify(settings));
+    assert.equal(res.body.code, 'E_PARAMS');
+    assert.ok(typeof res.body.message === 'string' && res.body.message.length > 20);
+    assert.doesNotMatch(res.body.message, /fal\.ai|google\/|gemini|Bearer|api.?key/i);
+    assert.equal(calls.generated, 0);
+    assert.equal(calls.usage, 0);
+    assert.equal(calls.operations.size, 0);
+  }
+});
+
+test('valid selected video settings reach generation without silent duration clamp', async () => {
+  const { request, calls } = serviceHarness({ user: { isSuperAdmin: true } });
+  const res = await request({ model: omniModel, resolution: '360p', duration: 3, audio: true, aspect_ratio: '9:16' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.generated, 1);
+  assert.equal(calls.usage, 1);
+  const args = calls.requests[0];
+  assert.equal(args[2], '9:16');
+  assert.equal(args[3], '3s');
+  assert.equal(args[8], omniModel);
+  assert.equal(args[9], '360p');
+  assert.equal(args[10], true);
+  const payload = buildFalVideoInputPayload({ endpoint: args[8], prompt: args[1], aspectRatio: args[2], duration: args[3], resolution: args[9], audio: args[10] });
+  assert.deepEqual(payload, { prompt: 'synthetic video', aspect_ratio: '9:16', duration: 3, resolution: '360p' });
+});
+
+test('outer video request preserves actionable parameter errors and makes no writes', async () => {
+  const message = 'El modelo seleccionado no admite 480p. Elige 360p, 720p, 1080p o 4k.';
+  const { request, calls } = aiHarness({ serviceError: { status: 422, data: { code: 'E_PARAMS', message, error: message } } });
+  const res = await request('POST /generate-video', { body: { model: omniModel, resolution: '480p' } });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.body.code, 'E_PARAMS');
+  assert.equal(res.body.message || res.body.error, message);
+  assert.equal(calls.saved.length, 0);
+  assert.equal(calls.usage.length, 0);
 });
