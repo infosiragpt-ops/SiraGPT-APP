@@ -6,7 +6,7 @@
  * message is always rendered from the untouched source.
  */
 
-const FENCE_LINE = /^\s*(`{3,}|~{3,})/
+import { hasOpenCodeFence } from "./code-regions"
 const TABLE_DELIMITER_ROW = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/
 
 export function repairStreamingTail(tail: string): string {
@@ -14,7 +14,7 @@ export function repairStreamingTail(tail: string): string {
   const lines = tail.split("\n")
 
   // Inside an open fenced block: the code renderer already copes; leave it.
-  if (lines.filter((line) => FENCE_LINE.test(line)).length % 2 === 1) return tail
+  if (hasOpenCodeFence(tail)) return tail
 
   // A trailing pipe-table block without its delimiter row is not a table yet.
   let end = lines.length

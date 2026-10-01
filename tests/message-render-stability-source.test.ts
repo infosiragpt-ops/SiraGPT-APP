@@ -62,7 +62,7 @@ describe("message render stability · source contracts", () => {
     assert.match(message, /ul: \(\{ node, children, className, \.\.\.rest \}: any\) => <ul \{\.\.\.rest\}/)
     assert.match(message, /li: \(\{ node, children, className, \.\.\.rest \}: any\) => <li \{\.\.\.rest\}/)
     assert.match(message, /th: \(\{ node, children, style, \.\.\.rest \}: any\) => <th \{\.\.\.rest\} style=\{style\}/)
-    assert.match(message, /style=\{\{ \.\.\.style, overflowWrap: 'break-word', maxWidth: '28rem' \}\}/)
+    assert.match(message, /style=\{\{ \.\.\.style, overflowWrap: 'anywhere', maxWidth: '28rem' \}\}/)
     assert.match(message, /childProps\?\.node\?\.tagName === 'code'/)
   })
 

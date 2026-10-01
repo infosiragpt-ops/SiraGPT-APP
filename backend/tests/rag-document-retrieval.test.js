@@ -6,18 +6,19 @@ const assert = require('node:assert/strict');
 // Hold the semantic ranking fixed to exercise lexical evidence independently
 // of a paid embedding model. These tests are not a semantic quality benchmark.
 let unavailable = false;
+let embeddingRequests = 0;
 require.cache[require.resolve('../src/services/embedding-provider')] = {
   exports: {
     isAvailable: () => !unavailable,
     expectedSpace: () => 'document-retrieval-regression',
-    embed: async texts => texts.map(() => new Float32Array([1, 0])),
+    embed: async texts => { embeddingRequests++; return texts.map(() => new Float32Array([1, 0])); },
   },
 };
 const rag = require('../src/services/rag-service');
 const store = require('../src/services/rag-store');
 const runtime = require('../src/services/rag/operational-runtime');
 const { ndcgAtK } = require('../src/services/rag/ndcg');
-const { documentTokens, queryFocusedExcerpt } = require('../src/services/rag/document-retrieval');
+const { documentTokens, documentQueryFacets, selectDocumentEvidence, queryFocusedExcerpt, queryFocusedEvidence } = require('../src/services/rag/document-retrieval');
 
 let sequence = 0;
 async function corpus(docs, userId = `doc-eval-${++sequence}`, collection = 'documents') {
@@ -147,4 +148,118 @@ test('multi-file comparison covers relevant sources instead of filling its budge
     useHybrid: true, useMMR: true, documentMode: true, sourceDiversity: true,
   });
   assert.deepEqual(new Set(hits.map(hit => hit.source)), new Set(['file:A', 'file:B']));
+});
+
+
+test('explicit query facets keep decimals and URLs intact, deduplicate and bound work', () => {
+  assert.deepEqual(documentQueryFacets('¿Cuál es la tasa 0,05 de RQ-007? ¿Qué indica https://example.org/?q=valor?'),
+    ['Cuál es la tasa 0,05 de RQ-007', 'Qué indica https://example.org/?q=valor']);
+  assert.equal(documentQueryFacets('Monto 2.75 en RQ-007 y tasa 0,05').length, 1);
+  assert.deepEqual(documentQueryFacets('2.75 en RQ-007; 0,05 en RQ-008'), ['2.75 en RQ-007', '0,05 en RQ-008']);
+  assert.equal(documentQueryFacets('¿Cuáles son los costos y cuántos materiales hay?').length, 2);
+  assert.equal(documentQueryFacets('¿Qué presupuesto? ¿Que presupuesto?').length, 1);
+  assert.equal(documentQueryFacets(Array.from({ length: 30 }, (_, i) => `Pregunta ${i}?`).join(' ')).length, 6);
+  assert.deepEqual(documentQueryFacets(null), []);
+  assert.equal(documentQueryFacets('¿Cuál es el presupuesto y cuál es el plazo?').length, 2);
+});
+
+test('facet coverage reuses one passage when it answers both questions without padding a missing answer', () => {
+  const both = { text: 'Presupuesto 800; plazo de entrega 20 días.' };
+  const other = { text: 'Introducción administrativa.' };
+  assert.deepEqual(selectDocumentEvidence([both, other], '¿Presupuesto? ¿Plazo?', 1), [both]);
+  assert.deepEqual(selectDocumentEvidence([both], '¿Presupuesto? ¿Riesgos?', 2), [both]);
+  assert.deepEqual(selectDocumentEvidence([both], '¿Presupuesto? ¿Riesgos?', 0), []);
+  assert.deepEqual(selectDocumentEvidence([other, both], 'presupuesto', 1), [other], 'single requests preserve caller ranking');
+});
+
+test('hybrid multi-question coverage survives bounded candidate pools and MMR without additional embeddings', async () => {
+  const docs = Array.from({ length: 50 }, () => ({ source: 'file:operation',
+    text: 'Presupuesto operativo mantenimiento capacitación transporte: S/ 84.000 aprobados.' }));
+  docs.push({ source: 'file:operation', text: 'Riesgos: inundación; mitigación: inventario de seguridad durante 14 días.', embedding: new Float32Array([0.7, 0.3]) });
+  docs.push({ source: 'file:excluded', text: 'Riesgos inundación plazo presupuesto operativo mantenimiento capacitación transporte privado.' });
+  const { userId, collection } = await corpus(docs);
+  const query = '¿Cuál es el presupuesto operativo de mantenimiento, capacitación y transporte? ¿Cuáles son los riesgos?';
+  for (const degraded of [false, true]) {
+    unavailable = degraded;
+    rag._embedCache.clear();
+    const before = embeddingRequests;
+    const hits = await rag.retrieve(userId, collection, query, 2, {
+      useHybrid: true, documentMode: true, useMMR: true, allowedSources: ['file:operation'], overfetchK: 8,
+    });
+    assert.equal(embeddingRequests - before, degraded ? 0 : 1, 'facets add no provider requests');
+    assert.equal(hits.length, 2);
+    assert.ok(hits.some(hit => hit.text.includes('84.000')), `budget missing (degraded=${degraded})`);
+    assert.ok(hits.some(hit => hit.text.includes('14 días')), `risks missing (degraded=${degraded})`);
+    assert.ok(hits.every(hit => hit.source === 'file:operation'));
+  }
+});
+
+
+test('two answers far apart inside one chunk survive citation clipping with explicit omission markers', () => {
+  const text = 'Presupuesto operativo: S/ 84.000 aprobados.\n'
+    + 'Acta administrativa sin datos pertinentes. '.repeat(130)
+    + '\nRiesgos: inundación; mitigación: inventario de seguridad durante 14 días.';
+  const context = runtime.buildEvidenceBlock({
+    query: '¿Cuál es el presupuesto? ¿Cuáles son los riesgos?', collection: 'chat:multi', docs: [],
+    hits: [{ source: 'file:operation', title: 'Operacion.xlsx', text }],
+  });
+  assert.match(context, /84\.000/);
+  assert.match(context, /14 días/);
+  assert.match(context, /\[…\]/, 'noncontiguous excerpts must never appear as one verbatim sentence');
+  const snippet = context.split('Excerpt: ')[1];
+  assert.ok(snippet.length <= 1200);
+  for (const part of snippet.split('\n[…]\n')) assert.ok(text.includes(part));
+  const [audited] = runtime.passagesForAudit([{ source: 'file:operation', text }], '¿Cuál es el presupuesto? ¿Cuáles son los riesgos?');
+  assert.equal(audited.text, snippet, 'auditor sees the same evidence as the answering model');
+  for (const budget of [-1, 0, 1, 80, 319, 320, 1200]) {
+    assert.ok(queryFocusedEvidence(text, '¿Presupuesto? ¿Riesgos?', budget).length <= Math.max(0, budget));
+  }
+});
+
+
+test('a leading named-source qualifier applies to every subquestion without borrowing another document', async () => {
+  const docs = [
+    { source: 'file:A', title: 'Contrato_A.pdf', text: 'Presupuesto: 850 soles.' },
+    { source: 'file:A', title: 'Contrato_A.pdf', text: 'Riesgos: retraso de entregas en la región andina por conflictos.' },
+    { source: 'file:B', title: 'Contrato_B.pdf', text: 'Riesgos: inundación.' },
+  ];
+  const { userId, collection } = await corpus(docs);
+  for (const qualifier of ['los ', 'TODOS los ', 'otros ', 'ambos ', 'los demás ']) {
+    const query = `Según Contrato_A.pdf, ¿cuál es el presupuesto? ¿Cuáles son ${qualifier}riesgos?`;
+    for (const degraded of [false, true]) {
+      unavailable = degraded;
+      rag._embedCache.clear();
+      const hits = await rag.retrieve(userId, collection, query, 2, {
+        useHybrid: true, documentMode: true, allowedSources: ['file:A', 'file:B'], useMMR: true,
+      });
+      assert.equal(hits.length, 2);
+      assert.ok(hits.every(hit => hit.source === 'file:A'), `unexpected source (${query}; degraded=${degraded})`);
+      assert.ok(hits.some(hit => hit.text.includes('región andina')));
+    }
+  }
+  for (const reference of ['otros archivos', 'todos los documentos', 'ambas fuentes', 'el resto de los adjuntos']) {
+    const hits = selectDocumentEvidence(docs,
+      `Según Contrato_A.pdf, ¿cuál es el presupuesto? ¿Cuáles son los riesgos en ${reference}?`, 3);
+    assert.ok(hits.some(hit => hit.source === 'file:B'), `explicit document reference stays multi-source: ${reference}`);
+  }
+  const both = selectDocumentEvidence(docs,
+    'Según Contrato_A.pdf y Contrato_B.pdf, ¿cuál es el presupuesto? ¿Cuáles son los riesgos?', 3);
+  assert.ok(both.some(hit => hit.source === 'file:B'), 'multiple named files remain available');
+});
+
+test('multi-part comparative retrieval preserves competitive source diversity as well as question coverage', async () => {
+  const docs = [
+    { source: 'file:A', title: 'A.pdf', text: 'Presupuesto: 100 soles.' },
+    { source: 'file:B', title: 'B.pdf', text: 'Presupuesto de la empresa: 110 soles. Plazo de ejecución: 30 días con entrega final de todos los equipos.' },
+    { source: 'file:A', title: 'A.pdf', text: 'Plazo: 15 días.' },
+  ];
+  const { userId, collection } = await corpus(docs);
+  for (const degraded of [false, true]) {
+    unavailable = degraded;
+    rag._embedCache.clear();
+    const hits = await rag.retrieve(userId, collection, 'Compara ambos archivos: ¿cuál es el presupuesto? ¿Cuál es el plazo?', 2, {
+      useHybrid: true, useMMR: true, documentMode: true, sourceDiversity: true,
+    });
+    assert.deepEqual(new Set(hits.map(hit => hit.source)), new Set(['file:A', 'file:B']), `source diversity (degraded=${degraded})`);
+  }
 });

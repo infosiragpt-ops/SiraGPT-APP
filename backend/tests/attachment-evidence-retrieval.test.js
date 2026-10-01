@@ -184,3 +184,40 @@ test('a transcription request keeps the document text even when no passage match
   }
   assert.equal(reads(), 0, 'transcription never runs the evidence retriever');
 });
+
+
+test('multi-part questions retain separately located evidence after the shared prompt budget is applied', async () => {
+  const chunks = Array.from({ length: 12 }, (_, index) => chunk(index + 1,
+    'Presupuesto operativo mantenimiento capacitación transporte: S/ 84.000 aprobados.',
+    { sourceLabel: `Costos!A${index + 2}:E${index + 2}` }));
+  for (let index = 0; index < 90; index++) chunks.push(chunk(index + 13,
+    'Acta de control: proveedores habilitados y procedimiento general de registro.'));
+  chunks.push(chunk(103,
+    'Riesgos: retraso de entregas por inundación; mitigación: inventario de seguridad durante 14 días.',
+    { sourceLabel: 'Riesgos!A104:C104' }));
+  const { prisma } = corpus([{ id: 'multi', name: 'Operacion.xlsx', chunks }]);
+  const result = await buildUploadedFileContext(prisma, {
+    userId: 'owner', fileIds: ['multi'], maxChars: 1800, evidenceLimit: 8,
+    query: '¿Cuál es el presupuesto operativo de mantenimiento, capacitación y transporte? ¿Cuáles son los riesgos?',
+  });
+  assert.match(result, /84\.000/);
+  assert.match(result, /inundación/);
+  assert.match(result, /14 días/);
+  assert.match(result, /Riesgos!A104:C104/);
+  assert.ok(result.length < 3300, 'coverage must share the existing prompt budget');
+});
+
+
+test('the final subquestion stays searchable when the first one exceeds the term budget', async () => {
+  const longQuestion = '¿Cuál es la evaluación detallada del presupuesto operativo anual mantenimiento capacitación transporte adquisición herramientas infraestructura materiales equipamiento consultoría administración logística compras suministros inversiones fiscalización planificación auditoría servicios instalaciones mobiliario computadoras maquinaria vehículos?';
+  const { prisma } = corpus([{ id: 'many-terms', name: 'Informe.txt', chunks: [
+    chunk(1, 'Presupuesto operativo anual: S/ 84.000; el expediente sigue aprobado.'),
+    chunk(2, 'Licencia ambiental ZX990: vigencia hasta el 30 de noviembre de 2027.'),
+  ] }]);
+  const result = await buildUploadedFileContext(prisma, {
+    userId: 'owner', fileIds: ['many-terms'], maxChars: 2000,
+    query: `${longQuestion} ¿Cuál es la vigencia de la licencia ambiental ZX990?`,
+  });
+  assert.match(result, /84\.000/);
+  assert.match(result, /30 de noviembre de 2027/);
+});

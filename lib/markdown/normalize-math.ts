@@ -17,12 +17,7 @@
 // It is a no-op when there is nothing to rewrite and is idempotent, so
 // applying it more than once on the same content is safe.
 
-// Capturing group so `String.prototype.split` keeps the code regions in the
-// result array (they land on odd indices and are passed through verbatim):
-//   1. ``` fenced ``` blocks
-//   2. ~~~ fenced ~~~ blocks
-//   3. `inline code` spans (single line)
-const CODE_REGION = /(`{3,}[\s\S]*?`{3,}|~{3,}[\s\S]*?~{3,}|`[^`\n]*`)/g
+import { transformOutsideCode } from "./code-regions"
 
 const BLOCK_LINE = (_m: string, ind: string, body: string) =>
   `${ind}$$\n${ind}${body.trim()}\n${ind}$$`
@@ -66,9 +61,5 @@ export function normalizeMathDelimiters(input: string): string {
   if (typeof input !== "string") return input
   if (!input.includes("\\(") && !input.includes("\\[") && !input.includes("$")) return input
 
-  const parts = input.split(CODE_REGION)
-  for (let i = 0; i < parts.length; i += 2) {
-    if (parts[i]) parts[i] = convertBracketMath(escapeCurrencyDollars(parts[i]))
-  }
-  return parts.join("")
+  return transformOutsideCode(input, (prose) => convertBracketMath(escapeCurrencyDollars(prose)))
 }

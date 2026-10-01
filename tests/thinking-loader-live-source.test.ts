@@ -51,8 +51,13 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     const agent = source("components/agent-trace.tsx")
     const placeholder = source("components/thinking-placeholder.tsx")
 
-    assert.match(trace, /kind: streaming && !\(toolCalls && toolCalls\.length\) \? "loader" : "dot"/)
-    assert.match(trace, /loaderState: streaming && !\(toolCalls && toolCalls\.length\) \? "pensando"/)
+    // The same live predicate drives glyph, status and loader state. A real
+    // compact phase owns the header instead of a competing generic thinker.
+    assert.match(trace, /const compacting = turnLive && activitySteps\.some\(\(step\) => step\.tool === "compact" && step\.status === "active"\)/)
+    assert.match(trace, /const thinkingLive = streaming && !\(toolCalls && toolCalls\.length\) && !compacting/)
+    assert.match(trace, /status: thinkingLive \? "active" : "done"/)
+    assert.match(trace, /kind: thinkingLive \? "loader" : "dot"/)
+    assert.match(trace, /loaderState: thinkingLive \? "pensando" : undefined/)
     assert.doesNotMatch(trace, /kind: streaming.*sunburst/)
 
     assert.match(agent, /kind: reasoningStreaming && steps\.length === 0 \? "loader" : "dot"/)

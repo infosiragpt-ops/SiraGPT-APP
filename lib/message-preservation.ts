@@ -357,7 +357,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   return preserveOrphanAssistantMessages(result, localMessages);
 }
 
-const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
+const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp|assistant-processing)-/;
 
 function parseTurnMetadata(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -385,6 +385,7 @@ export function turnIdentityKey(message?: { metadata?: unknown } | null): string
 type DedupeMessageLike = {
   metadata?: unknown;
   id?: string;
+  chatId?: string;
   role?: string;
   content?: unknown;
   timestamp?: unknown;
@@ -428,6 +429,39 @@ const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
     ...(graftedModel ? { model: graftedModel } : {}),
     ...(needsFiles ? { files: mergeMessageFileLists(winner.files, other.files) } : {}),
   } as T
+};
+
+// Same text is never enough to override an explicit identity from another
+// turn or chat. Legacy rows without identity retain their existing matching.
+const conflictingIdentity = (a: DedupeMessageLike, b: DedupeMessageLike) => {
+  if (a.chatId && b.chatId && a.chatId !== b.chatId) return true;
+  const keyA = turnIdentityKey(a), keyB = turnIdentityKey(b);
+  return Boolean(keyA && keyB && keyA !== keyB);
+};
+
+// The composer shell appears before addMessage creates the SSE receiver.
+// Preserve the receiver's id and current fields, grafting only data that it
+// lacks. Choosing by text length would let a long acknowledgement hide all
+// subsequent tool/reasoning frames, which patch the receiver by id.
+const handoffComposerShell = <T extends DedupeMessageLike>(shell: T, receiver: T): T => {
+  const shellData = shell as T & Record<string, unknown>;
+  const receiverData = receiver as T & Record<string, unknown>;
+  const inherited: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(shellData)) {
+    if (['id', 'content', 'metadata', 'files'].includes(key)) continue;
+    if (receiverData[key] === undefined || (
+      Array.isArray(receiverData[key]) && receiverData[key].length === 0 && Array.isArray(value) && value.length > 0
+    )) inherited[key] = value;
+  }
+  if (!hasText(receiver.content) && hasText(shell.content) && !isPlaceholderSentinel(shell.content)) inherited.content = shell.content;
+  if (parseMessageFiles(shell.files).length) inherited.files = mergeMessageFileLists(receiver.files, shell.files);
+  const receiverMeta = parseTurnMetadata(receiver.metadata);
+  const shellMeta = parseTurnMetadata(shell.metadata);
+  if (Object.keys(shellMeta).some(key => !(key in receiverMeta))) {
+    const metadata = { ...shellMeta, ...receiverMeta };
+    inherited.metadata = typeof receiver.metadata === 'string' ? JSON.stringify(metadata) : metadata;
+  }
+  return Object.keys(inherited).length ? { ...receiver, ...inherited } as T : receiver;
 };
 
 const isStableMessage = (message?: DedupeMessageLike) => {
@@ -519,7 +553,7 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   // Pass A — collapse exact-id duplicates, keeping the richer copy in the
   // earliest slot the id appeared.
   const slotById = new Map<string, number>();
-  const collapsed: TMessage[] = [];
+  let collapsed: TMessage[] = [];
   for (const message of messages) {
     const id = message?.id ? String(message.id) : '';
     if (id && slotById.has(id)) {
@@ -531,12 +565,31 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     collapsed.push(message);
   }
 
+  // Hand off the immediate composer shell to the actual stream owner. Both
+  // are optimistic; neither is a persisted server record. Explicit turn
+  // identity is required, and no USER message or unrelated send is removed.
+  const handedOff = new Set<number>();
+  collapsed.forEach((shell, index) => {
+    if (!/^msg-assistant-processing-/.test(String(shell.id || '')) || !isRole(shell, 'ASSISTANT')) return;
+    const key = turnIdentityKey(shell);
+    if (!key) return;
+    const receiverIndex = collapsed.findIndex(receiver => (
+      /^msg-ai-/.test(String(receiver.id || '')) && isRole(receiver, 'ASSISTANT') &&
+      turnIdentityKey(receiver) === key && !conflictingIdentity(shell, receiver)
+    ));
+    if (receiverIndex < 0) return;
+    collapsed[receiverIndex] = handoffComposerShell(shell, collapsed[receiverIndex]);
+    handedOff.add(index);
+  });
+  if (handedOff.size) collapsed = collapsed.filter((_, index) => !handedOff.has(index));
+
   // Pass B — drop optimistic twins whose stable-id sibling is already present.
   // Graft files from the optimistic copy onto the surviving server row first
   // so an audio attachment that only existed locally does not vanish.
   const isStableTwinOf = (candidate: TMessage, candidateIndex: number, other: TMessage, otherIndex: number) => {
     if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
     if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
+    if (conflictingIdentity(candidate, other)) return false;
     const candidateKey = turnIdentityKey(candidate);
     const otherKey = turnIdentityKey(other);
     // Live placeholder is `msg-ai-…` (empty). DB row is `cmti…` with the
@@ -564,7 +617,11 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   for (const [optimisticIndex, stableIndex] of optimisticTwinIndexes) {
     const optimistic = collapsed[optimisticIndex];
     const stable = collapsed[stableIndex];
-    if (parseMessageFiles(optimistic.files).length > 0 || parseMessageFiles(stable.files).length > 0) {
+    if (isRole(optimistic, 'ASSISTANT')) {
+      // A partial server row must not erase locally visible phase, reasoning,
+      // or artifact metadata while persistence catches up with the stream.
+      collapsed[stableIndex] = handoffComposerShell(optimistic, stable);
+    } else if (parseMessageFiles(optimistic.files).length > 0 || parseMessageFiles(stable.files).length > 0) {
       collapsed[stableIndex] = {
         ...stable,
         files: mergeMessageFileLists(stable.files, optimistic.files),
@@ -599,6 +656,7 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     if (
       bothStable &&
       String(prev.role || '').toUpperCase() === String(message.role || '').toUpperCase() &&
+      !conflictingIdentity(prev, message) &&
       sameContentNormalized(prev, message)
     ) {
       collapsedAdjacent[collapsedAdjacent.length - 1] = richerMessage(prev, message);
@@ -630,6 +688,8 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
       isRole(userB, 'USER') &&
       isRole(assistantA, 'ASSISTANT') &&
       isRole(assistantB, 'ASSISTANT') &&
+      !conflictingIdentity(userA, userB) &&
+      !conflictingIdentity(assistantA, assistantB) &&
       sameContentNormalized(userA, userB) &&
       Number.isFinite(userGapMs) &&
       userGapMs >= 0 &&

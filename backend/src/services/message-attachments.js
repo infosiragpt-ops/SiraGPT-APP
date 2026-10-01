@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
 const outputFormat = require('./output-format-contract');
-const { queryFocusedExcerpt } = require('./rag/document-retrieval');
+const { queryFocusedExcerpt, queryFocusedEvidence, selectDocumentEvidence } = require('./rag/document-retrieval');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
@@ -1009,10 +1009,11 @@ async function buildUploadedFileContext(prisma, {
     // The old 700-character minimum PER hit could more than triple the
     // per-file budget. Reserve space for labels, then keep the strongest
     // evidence before neighbors, with one bounded budget across all hits.
-    const selectedEvidence = [...effectiveEvidence]
+    const rankedEvidence = [...effectiveEvidence]
       .sort((a, b) => (Number(b.relevanceScore) || 0) - (Number(a.relevanceScore) || 0)
-        || (Number(a.ordinal) || 0) - (Number(b.ordinal) || 0))
-      .slice(0, Math.max(1, Math.floor(perFileBudget / (bulkBatch ? 180 : 480))));
+        || (Number(a.ordinal) || 0) - (Number(b.ordinal) || 0));
+    const selectedEvidence = selectDocumentEvidence(rankedEvidence, query,
+      Math.max(1, Math.floor(perFileBudget / (bulkBatch ? 180 : 480))));
     const spreadsheetBibliography = bibliographyRequest && isSpreadsheetMime(row.mimeType);
     const tableMarkdown = spreadsheetBibliography && tables.length
       ? tables
@@ -1030,7 +1031,7 @@ async function buildUploadedFileContext(prisma, {
           const sourceBudget = Math.max(0, Math.min(180, Math.floor(hitBudget / 3) - 16));
           const label = `Evidencia ${evidenceIndex + 1} [${sourceLabelForEvidence(item).slice(0, sourceBudget)}]:`;
           const textBudget = Math.max(0, hitBudget - label.length - 1);
-          const text = queryFocusedExcerpt(safeText(item.text, ''), query, textBudget);
+          const text = queryFocusedEvidence(safeText(item.text, ''), query, textBudget);
           // Preserve rows/columns and line breaks, including Excel addresses.
           return `${label}\n${text}`;
         }),

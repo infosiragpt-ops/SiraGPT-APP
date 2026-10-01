@@ -32,7 +32,7 @@ import {
   normalizeComposerEffort,
 } from "./chat/composer-effort"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
-import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
+import { dedupeMessages, hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 import {
@@ -1568,7 +1568,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ? prevChat.messages.map((message) => (
                 message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message
               ))
-            : [...prevChat.messages, aiMessagePlaceholder]
+            : dedupeMessages([...prevChat.messages, aiMessagePlaceholder])
         };
       });
       // Mirror the assistant placeholder into the `chats` cache too. When the
@@ -1585,7 +1585,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 ? (c.messages || []).map((message) => (
                     message.id === aiMessagePlaceholder.id ? aiMessagePlaceholder : message
                   ))
-                : [...(c.messages || []), aiMessagePlaceholder],
+                : dedupeMessages([...(c.messages || []), aiMessagePlaceholder]),
             }
           : c
       ));

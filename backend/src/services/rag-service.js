@@ -42,7 +42,7 @@ const { diverseTripleBeamSearch, flattenBeamsBFS } = require('./diverse-beam-sea
 const gistMemory = require('./gist-memory');
 const { runWithLock } = require('./agents/mutex');
 const ragStore = require('./rag-store');
-const { searchDocumentLexical, diversifyDocumentSources } = require('./rag/document-retrieval');
+const { searchDocumentLexical, diversifyDocumentSources, documentQueryFacets, selectDocumentEvidence } = require('./rag/document-retrieval');
 
 const EMBED_MODEL = 'text-embedding-3-small';   // 1536-dim, cheap, good
 const EMBED_DIM = 1536;
@@ -182,8 +182,11 @@ function _noteDegraded(reason) {
 }
 
 /** Shape a BM25-only pool like the semantic path's final hits (no rerank/MMR). */
-function finalizeDegradedHits(pool, k, opts = {}) {
-  const candidates = opts.documentMode && opts.sourceDiversity ? diversifyDocumentSources(pool, k) : pool;
+function finalizeDegradedHits(pool, k, opts = {}, query = '') {
+  const multiQuestion = opts.documentMode && documentQueryFacets(query).length > 1;
+  let candidates = opts.documentMode && opts.sourceDiversity
+    ? diversifyDocumentSources(pool, multiQuestion ? pool.length : k) : pool;
+  if (multiQuestion) candidates = selectDocumentEvidence(candidates, query, Math.max(1, k), opts);
   return candidates.slice(0, Math.max(1, k)).map(hit => ({
     ...formatRetrievalHit(hit, { includeDiagnostics: opts.includeDiagnostics }),
     retrievalMode: 'bm25_degraded',
@@ -470,7 +473,8 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   // Overfetch a pool to feed downstream MMR/reranker/RRF with real choice.
   // When all post-processing is off, we still cap the pool at k to match
   // the old behaviour byte-for-byte.
-  const needsPool = useMMR || rerank || useCohereRerank || useHybrid;
+  const multiQuestion = documentMode && documentQueryFacets(query).length > 1;
+  const needsPool = useMMR || rerank || useCohereRerank || useHybrid || multiQuestion;
   const poolSize = needsPool
     ? (overfetchK || Math.max(k * OVERFETCH_MULTIPLIER, OVERFETCH_FLOOR))
     : k;
@@ -502,10 +506,9 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     _noteDegraded(degradedReason);
   }
   if (!queryVecs) {
-    const bmHits = lexicalSearch(Math.max(1, cappedPool));
-    const degradedPool = bmHits
+    const bmHits = lexicalSearch(multiQuestion ? entries.length : Math.max(1, cappedPool));
+    let degradedPool = bmHits
       .filter((h) => h && h.doc && Number.isInteger(h.doc._idx) && h.score > 0)
-      .slice(0, Math.max(1, cappedPool))
       .map((h) => {
         const e = entries[h.doc._idx];
         return {
@@ -521,6 +524,9 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
           degradedReason: 'embeddings_unavailable',
         };
       });
+    degradedPool = multiQuestion
+      ? selectDocumentEvidence(degradedPool, query, Math.max(1, cappedPool), opts)
+      : degradedPool.slice(0, Math.max(1, cappedPool));
     if (__traceCollector && typeof __traceCollector === 'object') {
       const trace = buildRetrievalTrace({
         collection, query, requestedK: k, returnedK: Math.min(k, degradedPool.length),
@@ -534,7 +540,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       trace.scoring.text = true;
       Object.assign(__traceCollector, trace);
     }
-    return finalizeDegradedHits(degradedPool, k, opts);
+    return finalizeDegradedHits(degradedPool, k, opts, query);
   }
 
   const scored = entries.map((e, idx) => {
@@ -618,9 +624,10 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
       }
     });
 
-    pool = [...fused.values()]
-      .sort((a, b) => b.fusedScore - a.fusedScore)
-      .slice(0, Math.max(1, cappedPool))
+    const ranked = [...fused.values()].sort((a, b) => b.fusedScore - a.fusedScore);
+    pool = (multiQuestion
+      ? selectDocumentEvidence(ranked, query, Math.max(1, cappedPool), opts)
+      : ranked.slice(0, Math.max(1, cappedPool)))
       // Surface the fusion score as `score` so downstream MMR/reranker
       // see a unified metric.
       .map(e => ({ ...e, score: e.fusedScore, fusionScore: e.fusedScore }));
@@ -632,7 +639,9 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     scored.forEach((s, rank) => {
       s.semanticRank = rank + 1;
     });
-    pool = scored.slice(0, Math.max(1, cappedPool));
+    pool = multiQuestion
+      ? selectDocumentEvidence(scored, query, Math.max(1, cappedPool), opts)
+      : scored.slice(0, Math.max(1, cappedPool));
   }
 
   if (rerank) {
@@ -705,7 +714,7 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
   }
 
   if (useMMR) {
-    pool = mmrRerank(pool, { lambda: mmrLambda, k: documentMode && opts.sourceDiversity ? pool.length : Math.max(1, k) });
+    pool = mmrRerank(pool, { lambda: mmrLambda, k: (documentMode && opts.sourceDiversity) || multiQuestion ? pool.length : Math.max(1, k) });
   }
 
   // Attribution rerank — opt-in final pass that boosts hits whose text
@@ -726,7 +735,8 @@ async function retrieve(userId, collection, query, k = 5, opts = {}) {
     } catch (_attrErr) { /* swallow — degrades to existing order */ }
   }
 
-  if (documentMode && opts.sourceDiversity) pool = diversifyDocumentSources(pool, Math.max(1, k));
+  if (documentMode && opts.sourceDiversity) pool = diversifyDocumentSources(pool, multiQuestion ? pool.length : Math.max(1, k));
+  if (multiQuestion) pool = selectDocumentEvidence(pool, query, Math.max(1, k), opts);
 
   const hits = pool
     .slice(0, Math.max(1, k))

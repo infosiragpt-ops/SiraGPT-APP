@@ -157,6 +157,10 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
     () => (activity || []).filter((step) => step && (step.label || "").trim() && !OWNED_ELSEWHERE_PHASES.has(step.phase || "")),
     [activity],
   )
+  // Compaction is actual pipeline work, even if an earlier acknowledgement
+  // or reasoning chunk is already visible. Keep its live status above the
+  // generic thinking/answer line until the server sends its terminal event.
+  const compacting = turnLive && activitySteps.some((step) => step.tool === "compact" && step.status === "active")
   const hasReasoning = Boolean(reasoningText) || (toolCalls?.length ?? 0) > 0
   if (!hasReasoning && !streaming && activitySteps.length === 0) return null
 
@@ -168,7 +172,7 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
     // A legacy row (no stageId) has no result frame: it only runs while the
     // reasoning streams. A pipeline stage row runs until its own result —
     // unless AgenticSteps owns the live line.
-    const rowLive = streaming || (turnLive && !agentic && Boolean(step.stageId))
+    const rowLive = streaming || (turnLive && (!agentic || step.tool === "compact") && Boolean(step.stageId))
     const status = step.status === "error" ? "error" : step.status === "active" && rowLive ? "active" : "done"
     const note = (step.detail || "").trim()
     const duration = status === "active" ? undefined : stepDurationMs(step, activitySteps[i + 1])
@@ -187,7 +191,7 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
   // Folded (answer streaming / done) the summary line carries «Pensó durante»;
   // the reasoning row then only exists when there is reasoning to read.
   if (streaming || reasoningText || (!folded && activitySteps.length > 0)) {
-    const thinkingLive = streaming && !(toolCalls && toolCalls.length)
+    const thinkingLive = streaming && !(toolCalls && toolCalls.length) && !compacting
     rows.push({
       id: "think-header",
       label: streaming
@@ -195,9 +199,9 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
         : folded
           ? t("thought")
           : (durationMs && durationMs > 0 ? t("thoughtFor", { duration: formatThinkingDuration(durationMs) }) : t("thought")),
-      status: streaming && !(toolCalls && toolCalls.length) ? "active" : "done",
-      kind: streaming && !(toolCalls && toolCalls.length) ? "loader" : "dot",
-      loaderState: streaming && !(toolCalls && toolCalls.length) ? "pensando" : undefined,
+      status: thinkingLive ? "active" : "done",
+      kind: thinkingLive ? "loader" : "dot",
+      loaderState: thinkingLive ? "pensando" : undefined,
       ...(thinkingLive ? { startedAt: firstSeen("think-header") } : {}),
       ...(thinkingLive && headline ? { note: headline } : {}),
       expandable: Boolean(reasoningText),
@@ -238,7 +242,7 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
   if (folded && trivialVerdictRef.current) return null
   // An agentic turn without reasoning: once the loop hands over its answer,
   // AgenticSteps' own line is the turn's summary — no second «Pensó durante».
-  if (folded && agentic && !reasoningText) return null
+  if (folded && agentic && !reasoningText && !compacting) return null
 
   let collapsed: ClaudeTimelineCollapsed | null = null
   let timelineRows = rows
@@ -246,7 +250,7 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
     // The answer is streaming: one quiet line. A post-text phase (checking
     // the sources, generating the file…) takes it while it runs.
     const postRow = [...rows].reverse().find((row) => row.status === "active" && activitySteps.some(
-      (step) => "activity-" + step.id === row.id && step.phase === "post",
+      (step) => "activity-" + step.id === row.id && (step.phase === "post" || step.tool === "compact"),
     ))
     collapsed = postRow
       ? { live: true, label: postRow.label, startedAt: postRow.startedAt, announce: postRow.label }

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { findPendingTurnMatch } from '../lib/pending-messages';
 import {
   dedupeMessages,
   mergeChatPreservingUserMessages,
@@ -199,4 +200,119 @@ test('dedupeMessages drops the optimistic twin when the server row is id-only (f
   const out = dedupeMessages(msgs);
   assert.deepEqual(out.map((m) => m.id), ['clx_user_a3', 'clx_asst_a3']);
   assert.equal((out[0] as { files?: Array<{ id: string }> }).files?.[0]?.id, 'file-3');
+});
+
+
+// The composer paints a shell immediately, then addMessage creates the
+// chat-scoped stream owner. Only the latter receives SSE stage/reasoning.
+type StreamingMessageFixture = {
+  id: string;
+  role: string;
+  content: string;
+  chatId?: string;
+  metadata?: string | Record<string, unknown>;
+  files?: Array<{ id: string; name: string }>;
+  activityLog?: Array<{ id?: string; tool?: string; label: string; status: string }>;
+  reasoning?: string;
+  reasoningStreaming?: boolean;
+  progressStage?: string;
+};
+
+const contextTurn = JSON.stringify({ idempotencyKey: 'turn-context-1' });
+const composerShell: StreamingMessageFixture = { id: 'msg-assistant-processing-1', chatId: 'chat-context', role: 'ASSISTANT', content: '', metadata: contextTurn };
+const streamOwner: StreamingMessageFixture = { id: 'msg-ai-chat-context-uuid', chatId: 'chat-context', role: 'ASSISTANT', content: '', metadata: contextTurn };
+
+test('the stream owner replaces its composer shell before the first answer token', () => {
+  const user = { id: 'msg-user-1', chatId: 'chat-context', role: 'USER', content: 'Resume los acuerdos', metadata: contextTurn };
+  for (const owner of [streamOwner, {
+    ...streamOwner,
+    progressStage: 'Compactando contexto…',
+    activityLog: [{ id: 'compact-1', tool: 'compact', status: 'active', label: 'Compactando contexto…' }],
+    reasoning: 'Conservando el contexto',
+    reasoningStreaming: true,
+  }, { ...streamOwner, content: 'Los acuerdos son…' }]) {
+    const out = dedupeMessages<StreamingMessageFixture>([user, composerShell, owner]);
+    assert.deepEqual(out.map(m => m.id), [user.id, owner.id]);
+    assert.equal(out[1], owner, 'preserve the actual stream object, including all activity/reasoning');
+  }
+});
+
+test('a completed persisted turn replaces both temporary assistant placeholders', () => {
+  const persisted = { id: 'server-assistant-1', chatId: 'chat-context', role: 'ASSISTANT', content: 'Acuerdos conservados', metadata: contextTurn };
+  const out = dedupeMessages<StreamingMessageFixture>([composerShell, { ...streamOwner, content: persisted.content }, persisted]);
+  assert.deepEqual(out, [persisted]);
+  const merged = mergeChatPreservingUserMessages(
+    { id: 'chat-context', messages: [persisted] },
+    { id: 'chat-context', messages: [composerShell, streamOwner, persisted] },
+  );
+  assert.deepEqual(merged.messages, [persisted], 'reload must not resurrect a temporary shell');
+});
+
+test('composer shell matching requires the same turn and chat, never just blank content', () => {
+  for (const owner of [
+    { ...streamOwner, metadata: JSON.stringify({ idempotencyKey: 'different-turn' }) },
+    { ...streamOwner, chatId: 'other-chat' },
+    { ...streamOwner, role: 'USER' },
+    { ...streamOwner, metadata: undefined },
+  ]) {
+    const messages = [composerShell, owner];
+    assert.equal(dedupeMessages<StreamingMessageFixture>(messages), messages);
+  }
+});
+
+test('handoff preserves composer payload without replacing the receiver identity or newer stream fields', () => {
+  const file = { id: 'file-output', name: 'informe.pdf' };
+  const shell = { ...composerShell, content: 'Un acuse muy largo que no debe ganar al receptor SSE', files: [file], metadata: { idempotencyKey: 'turn-context-1', attachmentContext: 'source-1' }, activityLog: [{ label: 'Preparando', status: 'done' }], reasoning: 'Preparación' };
+  for (const messages of [[shell, streamOwner], [streamOwner, shell]]) {
+    const out = dedupeMessages<StreamingMessageFixture>(messages);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].id, streamOwner.id);
+    assert.equal(out[0].content, shell.content);
+    assert.deepEqual(out[0].files, [file]);
+    assert.deepEqual(out[0].activityLog, shell.activityLog);
+    assert.equal(out[0].reasoning, shell.reasoning);
+    assert.equal(JSON.parse(String(out[0].metadata)).attachmentContext, 'source-1');
+  }
+  const active = { ...streamOwner, content: 'OK', activityLog: [{ label: 'Compactando', status: 'active' }], reasoning: 'Contexto actual' };
+  const out = dedupeMessages<StreamingMessageFixture>([shell, active]);
+  assert.equal(out[0].id, active.id);
+  assert.equal(out[0].content, 'OK');
+  assert.deepEqual(out[0].activityLog, active.activityLog);
+  assert.equal(out[0].reasoning, active.reasoning);
+});
+
+test('explicit distinct turn identities are not collapsed even when text and timestamps match', () => {
+  const first = { id: 'msg-user-1', role: 'USER', content: 'continúa', metadata: { idempotencyKey: 'turn-1' }, timestamp: '2026-10-01T00:00:00Z' };
+  const second = { ...first, id: 'server-user-2', metadata: { idempotencyKey: 'turn-2' } };
+  for (const messages of [[first, second], [{ ...first, id: 'server-user-1' }, second]]) {
+    assert.equal(dedupeMessages<StreamingMessageFixture>(messages), messages);
+  }
+});
+
+
+test('partial persistence retains local assistant payload under the persisted identity', () => {
+  const shell = { ...composerShell, content: 'Acuerdos conservados', files: [{ id: 'file-output', name: 'informe.pdf' }], metadata: { idempotencyKey: 'turn-context-1', sources: ['fuente'] }, activityLog: [{ label: 'Compactando', status: 'active' }], reasoning: 'Preparación' };
+  const persisted = { ...streamOwner, id: 'server-assistant-1' };
+  for (const messages of [[shell, persisted], [shell, streamOwner, persisted]]) {
+    const out = dedupeMessages<StreamingMessageFixture>(messages);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].id, persisted.id);
+    assert.equal(out[0].content, shell.content);
+    assert.deepEqual(out[0].files, shell.files);
+    assert.deepEqual(out[0].activityLog, shell.activityLog);
+    assert.equal(out[0].reasoning, shell.reasoning);
+    assert.deepEqual(JSON.parse(String(out[0].metadata)).sources, ['fuente']);
+  }
+});
+
+test('after the state handoff, retry locates the receiver that subsequent SSE events patch', () => {
+  const user = { id: 'msg-user-1', role: 'USER', content: 'Resume', metadata: contextTurn };
+  const messages = dedupeMessages<StreamingMessageFixture>([user, composerShell, streamOwner]);
+  const match = findPendingTurnMatch(messages, { idempotencyKey: 'turn-context-1' });
+  assert.equal(messages[match.assistantIndex].id, streamOwner.id);
+  assert.equal(match.hasAssistantReply, false);
+  const resumed: StreamingMessageFixture[] = messages.map((message, index) => index === match.assistantIndex
+    ? { ...message, progressStage: 'Compactando contexto…' }
+    : message);
+  assert.equal(dedupeMessages<StreamingMessageFixture>(resumed)[match.assistantIndex].progressStage, 'Compactando contexto…');
 });
