@@ -503,3 +503,27 @@ test('stopping the integrated app does not restart it until the user asks', asyn
   expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
   expect(state.errors).toEqual([])
 })
+
+
+test('a coding edit mentioning the browser stays on the same project generation route', async ({ page }) => {
+  const state = await setup(page, { open: false, autoPreview: true })
+  await expect(page.getByTestId('chat-code-button')).toBeVisible()
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  const prompt = 'En esta misma app de prueba, cambia únicamente el subtítulo a: Vista previa funcionando en el navegador de SiraGPT. Conserva el título Bici Nube Lista, las tres bicicletas, el carrito, la API y todas las reservas existentes. No crees otro proyecto ni añadas o borres reservas. Ejecuta las pruebas aisladas y abre la vista previa actualizada al terminar.'
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill(prompt)
+  await composer.press('Enter')
+  await expect.poll(() => state.requests.filter(r => r === 'POST /ai/generate' || r === 'POST /agent/task').length).toBe(1)
+  expect(state.requests).not.toContain('POST /agent/task')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'code-chat', codingWorkspace: true, model: 'grok-4.6', prompt })
+  expect(state.generated[0].disableAgentic).not.toBe(true)
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  expect(state.requests.some(r => r.startsWith('POST /codex/projects'))).toBe(false)
+  expect(state.requests).not.toContain('POST /chats')
+  expect(state.requests.some(r => /^POST \/agent-computer(?:\/|$)/.test(r))).toBe(false)
+  expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
+  expect(state.errors).toEqual([])
+})
