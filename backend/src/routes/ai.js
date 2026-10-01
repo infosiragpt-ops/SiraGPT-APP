@@ -8344,6 +8344,7 @@ router.post(
                     userStopped: Boolean(signal && signal.aborted),
                     hasAttachments: (Array.isArray(processedFiles) && processedFiles.length > 0)
                       || __chatGeneratedRefs.length > 0,
+                    codingWorkspace: Boolean(verifiedCodingWorkspace),
                     modelLabel: await __turnModelLabel(),
                   });
                   if (__degrade.action === 'none') {

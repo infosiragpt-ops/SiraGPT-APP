@@ -6,7 +6,7 @@ test.use({ viewport: { width: 1440, height: 900 } })
 
 // UI flows use a stateful API double. The backend suite separately runs the
 // real ReAct loop, project tools and a real Node test against on-disk files.
-async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fresh?: boolean; menu?: boolean; twoProjects?: boolean; open?: boolean; otherUnbound?: boolean } = {}) {
+async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fresh?: boolean; menu?: boolean; twoProjects?: boolean; open?: boolean; otherUnbound?: boolean; autoPreview?: boolean; previewReady?: boolean } = {}) {
   const chat = { id: 'code-chat', title: 'Mi aplicación', model: 'grok-4.6', messages: [], createdAt: '2026-09-21T00:00:00Z', updatedAt: '2026-09-21T00:00:00Z' }
   const otherChat = { ...chat, id: 'other-chat', title: 'Otra aplicación' }
   const user = { id: 'code-user', name: 'Valeria', email: 'qa@example.com', plan: 'PRO', isAdmin: true }
@@ -17,8 +17,12 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   const otherFiles: Record<string, string> = { 'app.js': 'module.exports = 9;\n' }
   const generated: any[] = [], requests: string[] = [], errors: string[] = []
   let bound = opts.bound !== false, createdChat = !opts.fresh
+  let previewReady = Boolean(opts.previewReady)
+  const previewPath = "/api/codex/projects/code-project/preview/qa-token/app/"
+  const previewState = () => ({ project: project.id, ready: previewReady, running: previewReady, basePath: previewPath })
   page.on('pageerror', e => errors.push(e.stack || e.message))
   await page.addInitScript(() => {
+    if (window.self !== window.top) return
     localStorage.setItem('auth-token', 'coding-test')
     localStorage.setItem('selectedModel', 'grok-4.6')
   })
@@ -65,8 +69,10 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
       }
     }
     else if (p === '/codex/projects/code-project/exec') body = { ok: false, exitCode: 1, stdout: '', stderr: 'Prueba fallida: esperado 2' }
-    else if (p === '/codex/projects/code-project/preview/start') body = { devUrl: '/qa-code-preview', previewUrl: '/qa-code-preview' }
-    else if (p === '/codex/projects/code-project/preview/status') body = { running: true, previewUrl: '/qa-code-preview' }
+    else if (p === '/codex/projects/code-project/preview/start') { previewReady = true; body = { basePath: previewPath, devUrl: previewPath, previewUrl: previewPath, previewStatus: previewState() } }
+    else if (p === '/codex/projects/code-project/preview/status') body = previewState()
+    else if (p === '/codex/projects/code-project/preview/stop') { previewReady = false; body = { ok: true } }
+    else if (p === '/codex/projects/code-project/preview/qa-token/app/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>Mi aplicación</h1>' })
     else if (p === '/ai/generate') {
       const input = req.postDataJSON()
       generated.push(input)
@@ -76,6 +82,10 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
         if (opts.fresh) project.name = 'Café Aurora'
         files['app.js'] = 'module.exports = 2;\n'
         workspaceFrame = `data: ${JSON.stringify({ type: 'coding_workspace', chatId: input.chatId, projectId: project.id, projectName: project.name })}\n\n`
+        if (opts.autoPreview) {
+          previewReady = true
+          workspaceFrame += `data: ${JSON.stringify({ type: 'coding_preview_ready', chatId: input.chatId, projectId: project.id })}\n\n`
+        }
       }
       return route.fulfill({ contentType: 'text/event-stream', body: `${workspaceFrame}data: {"content":"Actualicé app.js y comprobé el resultado."}\n\ndata: [DONE]\n\n` })
     }
@@ -347,4 +357,45 @@ test('switching projects never reuses a discarded draft from a cached Monaco mod
   expect(state.files['app.js']).toBe('module.exports = 1;\n')
   expect(state.otherFiles['app.js']).toBe('module.exports = 9;\n')
   expect(state.errors).toEqual([])
+})
+
+
+test('a completed app opens automatically, stays closed when dismissed, and recovers after reload', async ({ page }, testInfo) => {
+  const state = await setup(page, { fresh: true, bound: false, autoPreview: true })
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('Créame una web para Café Aurora con catálogo y formulario de contacto')
+  await composer.press('Enter')
+  await expect(page.getByTestId('agentes-preview-iframe')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  await expect(page.getByTestId('agentes-coding-session-label')).toContainText('Café Aurora')
+  await page.screenshot({ path: testInfo.outputPath('chat-automatic-preview.png') })
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
+  await page.getByTestId('agentes-coding-ide-collapse').click()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  const oldReads = state.requests.filter(r => r.includes('/preview/status')).length
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('siragpt:coding-preview-ready', {
+    detail: { userId: 'code-user', chatId: 'code-chat', projectId: 'code-project' },
+  })))
+  await expect.poll(() => state.requests.filter(r => r.includes('/preview/status')).length).toBeGreaterThan(oldReads)
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  expect(state.requests.some(r => r.includes('/preview/stop'))).toBe(false)
+  await page.reload()
+  await expect(page.getByTestId('agentes-preview-iframe')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
+  expect(new URL(page.url()).pathname).toBe('/agentes')
+  expect(state.errors).toEqual([])
+})
+
+test('a ready app never replaces an editor draft already open', async ({ page }) => {
+  const state = await setup(page, { autoPreview: true })
+  await openFile(page)
+  await replaceEditor(page, 'module.exports = 77;\n')
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('Verifica el código de la app y abre su vista previa')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  await expect(page.locator('.monaco-editor').first()).toContainText('77')
+  await expect(page.getByTestId('agentes-preview-iframe')).toHaveCount(0)
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
 })

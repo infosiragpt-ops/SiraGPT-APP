@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -25,7 +25,10 @@ beforeEach(() => {
   window.localStorage.clear()
   window.sessionStorage.clear()
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 
 describe("chat title (claude.ai style)", () => {
   it("clicking the title opens the inline rename with the light-blue border and saves on Enter", async () => {
@@ -38,6 +41,34 @@ describe("chat title (claude.ai style)", () => {
     await userEvent.type(input, "binomio al cuadrado{Enter}")
     await waitFor(() => expect(chatList.renameChat).toHaveBeenCalledWith("chat_123", "binomio al cuadrado"))
     expect(screen.queryByTestId("chat-title-rename-input")).toBeNull()
+  })
+
+  it("selects the initial name when the input has not been edited", () => {
+    vi.useFakeTimers()
+    render(<ChatTitleMenu chat={chat} />)
+    fireEvent.click(screen.getByTestId("chat-title-rename-trigger"))
+    const input = screen.getByTestId("chat-title-rename-input") as HTMLInputElement
+    act(() => vi.advanceTimersByTime(30))
+    expect(document.activeElement).toBe(input)
+    expect(input.selectionStart).toBe(0)
+    expect(input.selectionEnd).toBe(chat.title.length)
+  })
+
+  it("does not select over a name entered before the initial autofocus completes", () => {
+    vi.useFakeTimers()
+    render(<ChatTitleMenu chat={chat} />)
+    fireEvent.click(screen.getByTestId("chat-title-rename-trigger"))
+    const input = screen.getByTestId("chat-title-rename-input") as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, { target: { value: "binomio" } })
+    input.setSelectionRange(input.value.length, input.value.length)
+
+    act(() => vi.advanceTimersByTime(30))
+    expect(input.selectionStart).toBe("binomio".length)
+    expect(input.selectionEnd).toBe("binomio".length)
+    fireEvent.change(input, { target: { value: "binomio al cuadrado" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(chatList.renameChat).toHaveBeenCalledWith("chat_123", "binomio al cuadrado")
   })
 
   it("the chevron opens the menu in claude.ai order and «Copiar ID de sesión» copies the chat id", async () => {

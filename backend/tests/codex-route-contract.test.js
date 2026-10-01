@@ -1010,3 +1010,41 @@ test('files/file routes 404 on foreign project ids (ownership gate)', async () =
   assert.equal((await request(buildApp()).get('/api/codex/projects/nope/files')).status, 404);
   assert.equal((await request(buildApp()).get('/api/codex/projects/nope/file?path=x')).status, 404);
 });
+
+
+test('preview status exposes a ready URL only with a current owner/project capability', async () => {
+  const { previewTokenFor } = require('../src/services/code/preview-proxy');
+  const token = previewTokenFor({ projectId: 'p1', userId: 'u-1' });
+  const basePath = `/api/codex/projects/p1/preview/${token}/app/`;
+  runnerStatusQueue = [{ running: true, ready: true, project: 'p1', basePath }];
+  const valid = await request(buildApp()).get('/api/codex/projects/p1/preview/status');
+  assert.equal(valid.body.ready, true);
+  assert.equal(valid.body.basePath, basePath);
+  for (const [owner, id, pathId] of [['other-user', 'p1', 'p1'], ['u-1', 'other-project', 'p1'], ['u-1', 'p1', 'other-project']]) {
+    const invalid = previewTokenFor({ projectId: id, userId: owner });
+    runnerStatusQueue = [{ running: true, ready: true, project: 'p1', basePath: `/api/codex/projects/${pathId}/preview/${invalid}/app/` }];
+    const res = await request(buildApp()).get('/api/codex/projects/p1/preview/status');
+    assert.equal(res.body.ready, false);
+    assert.equal(res.body.basePath, null);
+    assert.equal(res.body.devUrl, null);
+    assert.equal(res.body.previewExpired, true);
+  }
+  runnerStatusQueue = [{ running: true, ready: true, project: 'other-project', basePath, tail: ['foreign output'] }];
+  const foreign = await request(buildApp()).get('/api/codex/projects/p1/preview/status');
+  assert.equal(foreign.body.ready, false);
+  assert.equal(foreign.body.tail, undefined);
+});
+
+test('preview status never auto-opens an expired capability after a reload', async () => {
+  const { previewTokenFor } = require('../src/services/code/preview-proxy');
+  const realNow = Date.now, now = realNow();
+  Date.now = () => now - 60 * 60 * 1000;
+  let token;
+  try { token = previewTokenFor({ projectId: 'p1', userId: 'u-1' }); } finally { Date.now = realNow; }
+  runnerStatusQueue = [{ running: true, ready: true, project: 'p1', basePath: `/api/codex/projects/p1/preview/${token}/app/` }];
+  const res = await request(buildApp()).get('/api/codex/projects/p1/preview/status');
+  assert.equal(res.body.running, true);
+  assert.equal(res.body.ready, false);
+  assert.equal(res.body.previewExpired, true);
+  assert.equal(res.body.basePath, null);
+});

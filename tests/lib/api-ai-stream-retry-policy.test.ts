@@ -119,6 +119,19 @@ describe('generateAIStream retry policy', () => {
     expect(result.onError).not.toHaveBeenCalled()
   })
 
+  it('passes verified-preview identity only for the originating stream chat', async () => {
+    const onCodingPreviewReady = vi.fn()
+    mockFetch.mockResolvedValue(sseFrames([
+      { type: 'coding_preview_ready', chatId: 'another-chat', projectId: 'other' },
+      { type: 'coding_preview_ready', chatId: 'code-chat', projectId: '' },
+      { type: 'coding_preview_ready', chatId: 'code-chat', projectId: 'project-1', previewUrl: 'https://evil.test' },
+      { content: 'Aplicación preparada.' },
+    ]))
+    const result = await run({ onCodingPreviewReady }, { chatId: 'code-chat' })
+    expect(onCodingPreviewReady).toHaveBeenCalledExactlyOnceWith({ chatId: 'code-chat', projectId: 'project-1' })
+    expect(result.chunks.join('')).toBe('Aplicación preparada.')
+  })
+
   it('stops a 429 rate limit after 4 retries with Spanish copy and no upgrade prompt', async () => {
     mockFetch.mockImplementation(async () => jsonError(429, {
       error: 'rate_limited',

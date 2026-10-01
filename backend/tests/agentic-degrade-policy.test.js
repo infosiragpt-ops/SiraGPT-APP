@@ -254,3 +254,12 @@ test('source pin: routes/ai.js decides with decideAgenticDegrade and the loop re
   const loop = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agentic-chat-stream.js'), 'utf8');
   assert.match(loop, /modelError: result\?\.modelError \|\| null/);
 });
+
+
+test('coding timeout closes with its cause and never falls back to prose', () => {
+  const out = decideAgenticDegrade({ stoppedReason: 'model_error: step_timeout_60000ms', elapsedMs: 71536, codingWorkspace: true, modelLabel: 'Grok 4.7', env: ENV });
+  assert.equal(out.action, 'honest_close');
+  assert.equal(out.code, 'E_TIMEOUT');
+  assert.equal(out.reasonCode, 'step_timeout');
+  assert.match(out.message, /^Grok 4.7 tardó más de lo previsto/);
+});

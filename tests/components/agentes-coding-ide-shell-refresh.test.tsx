@@ -211,22 +211,23 @@ describe("CodingIdeShell auto-refresh", () => {
 
   it("el preview hace hot-restart cuando el poll detecta archivos nuevos (sin reiniciar el server)", async () => {
     vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({
-      devUrl: "/x/",
-      previewUrl: "/x/",
-      basePath: "/x/",
+      devUrl: "/api/codex/projects/p1/preview/tok/app/",
+      previewUrl: "/api/codex/projects/p1/preview/tok/app/",
+      basePath: "/api/codex/projects/p1/preview/tok/app/",
+      previewStatus: { project: "p1", ready: true, running: true },
     } as never)
     await renderWithProject()
     fireEvent.click(screen.getByTestId("agentes-coding-pane-preview"))
     fireEvent.click(screen.getByTestId("agentes-preview-start"))
     const first = await screen.findByTestId("agentes-preview-iframe")
-    expect(first).toHaveAttribute("src", "/x/")
+    expect(first).toHaveAttribute("src", "/api/codex/projects/p1/preview/tok/app/")
     vi.mocked(projectsCodexApi.listFiles).mockResolvedValue(["src/a.ts", "src/b.ts"])
     await nextPollTick(() => intervalCbs)
     await screen.findByText("b.ts")
     await waitFor(() => {
       expect(screen.getByTestId("agentes-preview-iframe")).not.toBe(first)
     })
-    expect(screen.getByTestId("agentes-preview-iframe")).toHaveAttribute("src", "/x/")
+    expect(screen.getByTestId("agentes-preview-iframe")).toHaveAttribute("src", "/api/codex/projects/p1/preview/tok/app/")
     expect(vi.mocked(projectsCodexApi.startPreview)).toHaveBeenCalledTimes(1)
   })
   it("edición iniciada durante una lectura de polling no pierde el borrador", async () => {
@@ -361,7 +362,7 @@ describe("CodingIdeShell auto-refresh", () => {
   })
 
   it("guardar refresca el preview aunque el árbol no cambie", async () => {
-    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({ previewUrl: "/x/", devUrl: "/x/" })
+    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({ previewUrl: "/api/codex/projects/p1/preview/tok/app/", devUrl: "/api/codex/projects/p1/preview/tok/app/", basePath: "/api/codex/projects/p1/preview/tok/app/", previewStatus: { project: "p1", ready: true, running: true } })
     await renderWithProject()
     fireEvent.click(screen.getByText("a.ts"))
     fireEvent.change(await screen.findByTestId("monaco-stub"), { target: { value: "mi cambio" } })
@@ -376,7 +377,7 @@ describe("CodingIdeShell auto-refresh", () => {
   })
 
   it("el guardado real refresca el preview aunque falle la relectura", async () => {
-    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({ previewUrl: "/x/", devUrl: "/x/" })
+    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({ previewUrl: "/api/codex/projects/p1/preview/tok/app/", devUrl: "/api/codex/projects/p1/preview/tok/app/", basePath: "/api/codex/projects/p1/preview/tok/app/", previewStatus: { project: "p1", ready: true, running: true } })
     await renderWithProject()
     fireEvent.click(screen.getByText("a.ts"))
     fireEvent.change(await screen.findByTestId("monaco-stub"), { target: { value: "mi cambio" } })
@@ -395,7 +396,7 @@ describe("CodingIdeShell auto-refresh", () => {
   })
 
   it("un poll sin cambios no recarga el preview", async () => {
-    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({ previewUrl: "/x/", devUrl: "/x/" })
+    vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({ previewUrl: "/api/codex/projects/p1/preview/tok/app/", devUrl: "/api/codex/projects/p1/preview/tok/app/", basePath: "/api/codex/projects/p1/preview/tok/app/", previewStatus: { project: "p1", ready: true, running: true } })
     await renderWithProject()
     fireEvent.click(screen.getByTestId("agentes-coding-pane-preview"))
     fireEvent.click(screen.getByTestId("agentes-preview-start"))

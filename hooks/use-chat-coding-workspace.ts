@@ -5,6 +5,7 @@ import { coreCodexApi } from "@/lib/codex/api/core"
 import { projectsCodexApi } from "@/lib/codex/api/projects"
 import type { CodexProject } from "@/lib/codex/api/types"
 import { CODING_WORKSPACE_READY_EVENT, type CodingWorkspaceReadyDetail } from "@/lib/chat/coding-workspace-event"
+import { CODING_PREVIEW_READY_EVENT, readyCodingPreviewPath, type CodingPreviewDetail } from "@/lib/chat/coding-preview-event"
 
 export function useChatCodingWorkspace(userId?: string, chatId?: string) {
   const [binding, setBinding] = React.useState<(CodingWorkspaceReadyDetail) | null>(null)
@@ -63,4 +64,32 @@ export function useCloudCodingProjects(userId?: string) {
     return () => window.removeEventListener(CODING_WORKSPACE_READY_EVENT, onReady)
   }, [userId])
   return snapshot && snapshot.userId === userId ? snapshot.projects : []
+}
+
+/** Recovery is read-only: opening a chat never starts a new dev server. */
+export function useChatCodingPreview(workspace: CodingWorkspaceReadyDetail | null) {
+  const [refresh, setRefresh] = React.useState(0)
+  const [snapshot, setSnapshot] = React.useState<(CodingPreviewDetail & { basePath: string }) | null>(null)
+  const userId = workspace?.userId, chatId = workspace?.chatId, projectId = workspace?.projectId
+  React.useEffect(() => {
+    if (!userId || !chatId || !projectId) return
+    const controller = new AbortController()
+    void projectsCodexApi.previewStatus(projectId, controller.signal).then((status) => {
+      if (controller.signal.aborted) return
+      const basePath = readyCodingPreviewPath(status, projectId)
+      setSnapshot(basePath ? { userId, chatId, projectId, basePath } : null)
+    }).catch(() => { if (!controller.signal.aborted) setSnapshot(null) })
+    return () => controller.abort()
+  }, [userId, chatId, projectId, refresh])
+  React.useEffect(() => {
+    const onReady = (event: Event) => {
+      const detail = (event as CustomEvent<CodingPreviewDetail>).detail
+      if (detail && userId && detail.userId === userId && detail.chatId === chatId && detail.projectId === projectId) {
+        setRefresh((version) => version + 1)
+      }
+    }
+    window.addEventListener(CODING_PREVIEW_READY_EVENT, onReady)
+    return () => window.removeEventListener(CODING_PREVIEW_READY_EVENT, onReady)
+  }, [userId, chatId, projectId])
+  return snapshot && snapshot.userId === userId && snapshot.chatId === chatId && snapshot.projectId === projectId ? snapshot : null
 }

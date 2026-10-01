@@ -122,6 +122,7 @@ function codingWorkspaceEvent(chatId, workspace) {
 const WORKSPACE_POLICY = [
   'Estás programando el proyecto persistente vinculado a ESTE chat. El usuario ve exactamente estos archivos en el panel Código.',
   'Trabaja con project_list, project_read y project_write. Antes de editar lee el archivo real; conserva los cambios existentes y no inventes archivos ni resultados.',
+  'Construye de forma incremental: una decisión pequeña por paso y un archivo o componente breve por escritura. Divide una app grande en componentes; no generes toda la aplicación en una sola respuesta. No repitas lecturas completas de archivos que ya inspeccionaste salvo que hayan cambiado.',
   'Usa project_exec para instalar, ejecutar, probar y verificar los cambios en ESTE proyecto. No uses otro filesystem, host, computadora, sandbox efímero ni generador de artefactos.',
   'Si piden una web/app, crea sus archivos reales en el proyecto. Inicia project_preview_start y verifica project_preview_status cuando corresponda. No inventes URLs de preview.',
   'Antes de finalizar verifica los archivos y los tests/build adecuados. Si fallan, corrige o informa el bloqueo exacto. Nunca afirmes cambios solo porque escribiste un bloque de código en el chat.',

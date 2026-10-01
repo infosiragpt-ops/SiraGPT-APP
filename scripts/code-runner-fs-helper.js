@@ -469,9 +469,11 @@ async function main() {
       cwd: root, input: ['write', 'save-editor'].includes(action) ? await readStdin() : undefined,
       encoding: 'utf8', maxBuffer: 4_000_000,
     });
+    // A rejected flock can close stdin while spawnSync is still writing the
+    // payload (EPIPE). Its explicit conflict exit code remains authoritative.
+    if (child.status === 75) throw publicError('file_busy');
     if (child.error) throw publicError('filesystem_lock_unavailable');
     if (child.status == null) throw publicError('filesystem_operation_failed');
-    if (child.status === 75) throw publicError('file_busy');
     process.stdout.write(child.stdout || '');
     process.stderr.write(child.stderr || '');
     process.exitCode = child.status || 0;
