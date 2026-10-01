@@ -94,15 +94,23 @@ slide.notes_slide.notes_text_frame.text = 'Guion del presentador…'
 - **Consistent grid:** margins ≥ 0.65", aligned left edges, equal gutters.
 - **Typography hierarchy:** display font for titles (28–40pt), body 13–17pt,
   captions 9–11pt. Never below 9pt.
-- **Restrained palette:** one background, one ink, ONE accent (+1 secondary).
-  Use the accent only for emphasis — numbers, key phrases, chart series.
-- **Charts carry the data, text carries the message:** chart on the left,
-  takeaway card on the right. Label the source under every chart.
+- **User-directed palette:** distinguish background, text, accents, and colors
+  assigned to each chart series/category. Preserve exact requested colors and
+  map them by series name. A series color is not a slide background request.
+  When unspecified, choose a restrained palette with distinguishable series.
+- **Charts carry the data, text carries the message:** follow the requested
+  layout (full width, side by side, chart plus takeaway, dashboard). Use readable
+  spacing and label the source; no mandatory single layout for every chart.
 - **Real data only.** Never invent statistics for decoration.
 - **Speaker notes on every slide** — what to SAY, not what is written.
 - **Section dividers** (dark background, big title) to chunk long decks.
-- Chart type: time series → line; parts of a whole (sums ≈100%) → doughnut;
-  category comparison → bar. Max ~6 categories per chart.
+- Chart type: honor the requested type, orientation and stacking. When omitted,
+  time series usually use lines and comparisons use bars/columns. Pie/doughnut
+  requires nonnegative parts of a whole. Do not truncate source categories to
+  fit a template; resize, divide charts, or clarify an impossible density.
+- Prefer native editable charts with their embedded workbook, not screenshots.
+  Reopen the result to check chart types, series, values, colors and placement;
+  then render for overlap, clipping, contrast, and readable labels.
 
 ## Common pitfalls
 - `shape.text = ...` nukes run formatting — edit runs instead.

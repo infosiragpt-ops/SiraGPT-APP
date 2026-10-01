@@ -335,7 +335,7 @@ jobs:
       - name: Install SPSS artifact test runtime
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir \
-            'narwhals==2.10.1' 'pyreadstat==1.3.6' 'pandas>=2.0,<3' 'openpyxl>=3.1,<4'
+            'narwhals==2.10.1' 'pyreadstat==1.3.6' 'pandas>=2.0,<3' 'openpyxl>=3.1,<4' 'python-pptx==1.0.2'
 
       - name: SPSS artifacts · create and reopen SAV plus Excel in chat
         if: matrix.shard == 1
@@ -363,7 +363,7 @@ jobs:
         if: matrix.shard == 1
         env:
           SIRA_FIXTURES_DIR: ${{ github.workspace }}/backend/tests/fixtures/office
-        run: python -m unittest tests/python/test_sira_office.py -v
+        run: python -m unittest tests/python/test_sira_office.py tests/python/test_sira_charts.py tests/python/test_sira_office_charts.py -v
 
       # Fase B: the runner's office tools against the REAL sandbox + engine.
       # Backend tests are sharded round-robin and only shard 1 has LibreOffice,
@@ -373,7 +373,7 @@ jobs:
         if: matrix.shard == 1
         env:
           NODE_ENV: test
-        run: node --test tests/agent-runner-office-tools.test.js tests/agent-runner-office-evals.test.js
+        run: node --test tests/agent-runner-office-tools.test.js tests/agent-runner-office-evals.test.js tests/agent-runner-office-charts.test.js
 
       # Shard 4 discovers this bank without LibreOffice and proves that the
       # fast path fails closed. Run the same bank on shard 1 as well so its

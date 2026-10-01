@@ -17,6 +17,7 @@
 
 const W = 13.333;
 const H = 7.5;
+const { addNativeChart } = require('../document-pipeline/pptx-native-chart');
 
 // A KPI is a real METRIC followed by its label with a plain space: «35%
 // reducción…», «$2,4 M en ahorro», «1.250 proveedores». Numbered outlines
@@ -118,7 +119,7 @@ async function buildThemedDeck({ PptxGenJS, title, topic, plan, theme, colorLock
     const number = idx + 2;
     const bullets = Array.isArray(item.bullets) ? item.bullets.filter(Boolean) : [];
     const closing = bullets.length === 0 && (CLOSING_RE.test(item.title) || idx === plan.length - 1);
-    const divider = bullets.length === 0;
+    const divider = !item.chart && bullets.length === 0;
     const slide = pptx.addSlide();
     if (divider) {
       // Section divider / closing: dark band slide (the requested color stays
@@ -148,6 +149,20 @@ async function buildThemedDeck({ PptxGenJS, title, topic, plan, theme, colorLock
     rect(slide, 0.72, ruleY, 1.1, 0.06, pal.accent);
     const top = ruleY + 0.4;
     const bottom = H - 0.8;
+    if (item.chart) {
+      addNativeChart(slide, pptx, item.chart, {
+        position: { x: 0.75, y: top, w: bullets.length ? 8 : 11.8, h: bottom - top },
+        colors: theme.chartColors || [pal.accent, pal.accent2], fontFace: fonts.body,
+      });
+      if (bullets.length) {
+        slide.addText(bullets.map((text, i) => ({ text, options: { bullet: true, breakLine: i < bullets.length - 1 } })), {
+          x: 9, y: top, w: 3.5, h: bottom - top, fontFace: fonts.body, fontSize: 16, color: pal.ink, fit: 'shrink', margin: 0,
+        });
+      }
+      if (item.chart.source) slide.addNotes(`Fuente: ${item.chart.source}`);
+      footer(slide, number, isDarkHex(pal.bg));
+      return;
+    }
     const kpis = bullets.map(kpiParts);
     let kpiMode = bullets.length >= 2 && bullets.length <= 6 && kpis.filter(Boolean).length >= Math.max(2, bullets.length - 1);
     const longest = bullets.reduce((m, b) => Math.max(m, b.length), 0);

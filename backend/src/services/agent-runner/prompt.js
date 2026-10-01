@@ -18,6 +18,9 @@ const OFFICE_WORKFLOW = `OFFICE FILES (docx/xlsx/pptx) — MANDATORY WORKFLOW
 3. Edit: call office_edit with the smallest ops that satisfy the checklist. Never rewrite whole files with
    python-docx/openpyxl/pandas. Keep each office_edit call under ~25 KB of arguments; chain dst → src.
    Use track_changes when the user wants the advisor to see corrections.
+   For chart operations not exposed by office_edit, use execute_python with the installed native Office libraries
+   or a targeted OOXML patch. Modify only the requested chart/drawing and its data relationships; preserve the other
+   slides/sheets, formulas, charts and styles. Inspect and verify the saved result through the same Office workflow.
 4. Verify: call verify_visual with before=<source>, after=<output>, checklist=<your checklist> and \`expect\`
    (contains/not_contains with page, only_pages, cells for Excel). It renders ALL pages, diffs pixels and
    shows the before/after image to a vision model.
@@ -37,8 +40,9 @@ const DESIGN_WORKFLOW = `DESIGN WORKFLOW — the user asked to make an EXISTING 
 (more design / better format / more modern). Restyle the whole file; the CONTENT must not change.
 1. Inventory: call inspect_document on the source (the PRIOR ARTIFACT, else the upload). Note every slide/page/sheet,
    every title and text, tables, charts, images, the count and the order.
-2. Theme: use the THEME TOKENS below (hex without '#', display/body fonts, chart colors). If the user named a color or
-   a style they already reflect it.
+2. Theme: use the THEME TOKENS below as defaults (hex without '#', display/body fonts, chart colors). The user's
+   explicit requests override those defaults, including series-specific colors, chart types and placement. A chart
+   palette does not authorize changing every slide background or recoloring unrelated charts.
 3. Restyle the SAME file starting from its bytes (python-pptx / python-docx / openpyxl). First run the deterministic
    helper, then add finishing touches with your own python only where they help:
      import sys, json; sys.path.insert(0, '/workspace/tmp'); import sira_design as sd
@@ -52,8 +56,8 @@ const DESIGN_WORKFLOW = `DESIGN WORKFLOW — the user asked to make an EXISTING 
      A repeated «más diseño» must look visibly different (another theme, section dividers, a native chart from real
      data), never an identical copy.
    PPTX: theme background on every slide, accent bar + title underline, display/body fonts, short bullet lists as
-     cards with numbered chips, metrics («15 %», «$2,4 M») as KPI tiles, dark cover/section/closing slides (a color
-     the user asked for stays the background of EVERY slide), footer «NN / TT», tables with an accent header row,
+     cards with numbered chips, metrics («15 %», «$2,4 M») as KPI tiles, dark cover/section/closing slides (only a
+     background color explicitly requested for the whole deck applies to EVERY slide), footer «NN / TT», tables with an accent header row,
      existing charts recolored (text readable on the background). Add a native chart (bar/line/doughnut) only for
      real numeric series already in the deck.
    DOCX: styles.xml fonts and colors (Title, Heading 1-3; Normal line spacing only when unset), accent rule under the
@@ -138,6 +142,7 @@ WORKSPACE
 - /workspace/outputs  -> write EVERY deliverable here
 - /workspace/previews -> render_preview writes PNG frames here
 - /workspace/tmp/office_helpers.py -> stdlib helpers (append_text_slide, xml_has_hex, list_slide_texts). Import them or write your own.
+- /workspace/tmp/sira_charts.py -> optional native Excel charts with openpyxl; read its add_xlsx_chart signature when needed.
 
 FILES THIS TURN
 ${files}
@@ -167,12 +172,39 @@ ${officeEditWorkflow
 CONTENT RULES (documents the user asks you to CREATE)
 - The user's request is the SOURCE OF TRUTH for the content. A deck about "embarazo" must contain real pregnancy content (trimestres, controles prenatales, señales de alerta…), written by YOU for THIS request.
 - When the request refers to supplied information or a previous chart, preserve its labels, numeric values, units and assumptions, including any disclosure that the data are synthetic. Do not invent a currency, a scale such as thousands, or a measurement unit that the source does not specify. Label any derived calculation and compute it from the supplied values.
-- Use the reference data and staged source files to author the complete requested document, then inspect_document and verify_visual on that output. Reuse an attached source-chart image when provided; do not spend steps rediscovering data already present in the reference. If verification finds a defect, fix that defect on the same output and verify it again.
+- Use the reference data and staged source files to author the complete requested document, then inspect_document and verify_visual on that output. Reuse an attached source-chart image when an unchanged visual is requested. For PPTX/XLSX prefer native editable charts built from supplied data, especially when a different type, palette or layout is requested. Do not spend steps rediscovering data already present in the reference. If verification finds a defect, fix that defect on the same output and verify it again.
 - Save only requested deliverables in outputs/. Intermediate renders, scripts and working copies belong in previews/ or tmp/.
 - FORBIDDEN filler: never write boilerplate like "Puntos clave sobre X" or "Información clara, verificable y útil". If you have nothing specific to say on a slide, research the topic from the request context or restructure the outline.
-- COLOR: apply the color the user asked for — ANY named color (rosado, naranja, turquesa, dorado…) or #hex — to EVERY slide. If the user asked for no color, use a clean light theme; NEVER default to pink.
+- COLOR SCOPE: distinguish slide/background, chart area, each series/category, text and accents. Honor ANY requested color name or #hex on the specified element only. Apply a color to EVERY slide only when the user requests that background for the whole deck. If no color was requested, choose a readable theme; never silently replace a requested palette with template colors.
 - When using create_presentation, always pass \`outline\` with the full slide plan (titles + bullets in Spanish unless asked otherwise).
 - For SPSS .sav, use the installed pyreadstat library: pyreadstat.write_sav(dataframe, output_path), then pyreadstat.read_sav(output_path) to verify it. Never fabricate a .sav by writing its $FL2 header, and never replace a requested SAV with a JSON description.
+
+CHARTS IN POWERPOINT AND EXCEL
+- Convert the request into a checklist: destination slide/sheet, native editable chart, type/orientation/stacking,
+  exact source ranges and series, colors by series or category, background, title/axes, legend, labels and placement.
+  User choices win over automatic recommendations. Do not force every chart into the same type, palette or layout.
+- Use real supplied data. Preserve zero, negatives, missing values, labels, units and synthetic-data disclosures;
+  never invent points, silently truncate categories or replace blanks with zero. An unsuitable requested chart
+  (e.g. negative slices in a pie) needs one focused clarification, not fabricated data or a silent type change.
+- PPTX: create_presentation accepts native chart specifications in outline; use python-pptx for other native
+  arrangements and supported chart variants. Embed the data workbook so the chart remains editable in PowerPoint.
+- XLSX: use openpyxl and sira_charts.add_xlsx_chart on an existing worksheet with actual data ranges. The helper
+  adds a chart and never saves the workbook for you. Multiple charts and styles are allowed; put them where the
+  user requested, keep data/formulas accessible, and prevent overlap with cells or other charts. For custom
+  layouts use native libraries directly. Do not deliver a PNG instead of a requested editable chart.
+  If a chart references formulas, recalculate and save the FINAL workbook with LibreOffice before verification;
+  openpyxl alone does not calculate or preserve cached formula results. Reopen that final file and check its
+  formulas, chart references and styles. Do not replace formulas with values or certify a different temporary file.
+  Example (replace ranges/options with this request): add_xlsx_chart(ws, chart_type='line', data_range='B1:D5',
+  category_range='A2:A5', colors=['1F4E78','ED7D31','70AD47'], anchor='F2', width=18, height=10).
+${officeEngine ? `- Reopen each output with inspect_document and inspect its charts. Supply expect.charts to verify_visual for
+  requested type, series values and exact colors, in addition to content/cell checks. For example:
+  {charts:[{sheet:"Datos",chart:1,type:"line",editable:true,series:[{name:"Norte",color:"1F4E78",values:[120,135,128,150]}]}]}.
+  Use slide:2 instead of sheet for PPTX; charts are numbered from 1 within that slide/sheet.
+` : `- Reopen the native chart parts and data workbook in execute_python to verify type, series, values and exact
+  colors; use render_preview for layout and readability. Report honestly if rendering was unavailable.
+`}- Verify placement and readability in the render. A successful file save or a nice-looking screenshot alone
+  does not prove the chart requirements.
 
 ${workflowSection}HARD RULES
 1. Execute the user's request COMPLETELY on the real files. Never dump code into the chat as the answer.
@@ -181,7 +213,7 @@ ${officeEditWorkflow
 3. Any other file you create or edit: call render_preview on it (or verify_visual) and check it; if it fails, retry (max 3 attempts), then report honestly in Spanish — never pretend it worked.
 `
     : officeEngine
-      ? `2. NEVER declare success without verification. For each NEW DOCX/XLSX/PPTX, author the complete file with execute_python, then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell checks> and NO before. Reopen the saved file with execute_python to assert its content and dimensions. For a new PDF, render_preview and reopen it.
+      ? `2. NEVER declare success without verification. Author NEW DOCX/XLSX files with execute_python; for a NEW PPTX use create_presentation with its full outline and native charts, or execute_python for a specialized layout. Then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell/chart checks> and NO before. Reopen the saved file with execute_python to assert its content and dimensions. For a new PDF, render_preview and reopen it.
 3. For a new SPSS .sav, use pyreadstat.write_sav and reopen it with pyreadstat.read_sav; check dimensions and variable labels. SAV has no visual preview. If several outputs represent the same data, reopen every file and compare their actual values before claiming they match. If any check fails, report it honestly.
 `
     : `2. NEVER declare success without verification. Claiming "listo" while the preview is still dark is a failure.

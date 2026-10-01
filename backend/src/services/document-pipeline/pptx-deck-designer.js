@@ -56,24 +56,27 @@ function cleanBullet(raw) {
   return { label: clean(match[1], 28), text: clean(match[2], 110) };
 }
 
-function sanitizeChart(raw, { evidenceText = '' } = {}) {
+function sanitizeChart(raw, { evidenceText = '', strict = false } = {}) {
   if (!raw || typeof raw !== 'object') return null;
-  const labels = (Array.isArray(raw.labels) ? raw.labels : []).map((l) => clean(l, 22)).filter(Boolean).slice(0, 6);
-  const values = (Array.isArray(raw.values) ? raw.values : [])
-    .map((v) => Number(v))
-    .filter((v) => Number.isFinite(v))
-    .slice(0, labels.length);
-  if (labels.length < 2 || values.length !== labels.length) return null;
   if (!clean(raw.source || '', 90)) return null;
-  if (!values.every((value) => valueIsGrounded(String(value), evidenceText))) return null;
-  return {
-    title: clean(raw.title || 'Datos clave', 60),
-    labels,
-    values,
-    unit: clean(raw.unit || '', 16),
-    source: clean(raw.source || '', 90),
-    asOf: clean(raw.asOf || raw.date || raw.period || '', 40),
-  };
+  const sourceValues = [...(Array.isArray(raw.xValues) ? raw.xValues : []),
+    ...(Array.isArray(raw.series) ? raw.series.flatMap((s) => Array.isArray(s?.values) ? s.values : []) : (Array.isArray(raw.values) ? raw.values : []))]
+    .filter((value) => value !== null);
+  if (!sourceValues.length || !sourceValues.every((value) => valueIsGrounded(String(value), evidenceText))) return null;
+  try {
+    const { normalizeNativeChart } = require('./pptx-native-chart');
+    const { pickChartType } = require('./pptx-design-system');
+    const guessed = pickChartType(raw);
+    const chart = normalizeNativeChart({ ...raw, title: raw.title || 'Datos clave', asOf: raw.asOf || raw.date || raw.period || '' }, {
+      defaultType: guessed === 'bar' ? 'column' : guessed,
+    });
+    const values = [...(chart.xValues || []), ...chart.series.flatMap((series) => series.values)].filter((value) => value !== null);
+    if (!values.every((value) => valueIsGrounded(String(value), evidenceText))) return null;
+    return chart;
+  } catch (error) {
+    if (strict && error.pptxChartRequirement) throw error;
+    return null;
+  }
 }
 
 function textIsGrounded(value, evidenceText) {
@@ -154,7 +157,7 @@ function sanitizeDeck(raw, {
       slide.quote = quote;
       slide.attribution = clean(rawSlide.attribution || '', 80);
     } else if (layout === 'chart') {
-      const chart = sanitizeChart(rawSlide.chart, { evidenceText });
+      const chart = sanitizeChart(rawSlide.chart, { evidenceText, strict: true });
       if (!chart) continue;
       slide.chart = chart;
       const insight = clean(rawSlide.insight || '', 160);
@@ -163,6 +166,7 @@ function sanitizeDeck(raw, {
     if (!slide.title && layout !== 'quote') continue;
     slides.push(legacyShape(slide));
   }
+  require('./pptx-native-chart').assertChartPresent(prompt, slides);
   if (slides.length < 1) return null;
   const deckTitle = clean(raw.deckTitle || title || 'Presentación', 80);
   return {
@@ -211,7 +215,8 @@ async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], refer
             '- Cada lámina lleva "notes": 2-3 frases de guion para el orador.',
             '- La última lámina es un cierre accionable (layout bullets, próximos pasos con dueño/criterio).',
             '- Todo texto visible debe dirigirse a la audiencia final. No menciones prompts, pipelines, agentes, validaciones ni el proceso de generación.',
-            'Esquema: {"deckTitle":string,"thesis":string,"slides":[{"layout":"section|bullets|two_column|stat|quote|chart","title":string,"kicker":string,"summary":string?,"bullets":[{"label":string?,"text":string}]?,"columns":[{"heading":string,"items":[string]}]?,"stat":{"value":string,"caption":string,"source":string}?,"support":[string]?,"quote":string?,"attribution":string?,"chart":{"title":string,"labels":[string],"values":[number],"unit":string?,"source":string,"asOf":string?}?,"insight":string?,"takeaway":string?,"notes":string}]}',
+            'Esquema: {"deckTitle":string,"thesis":string,"slides":[{"layout":"section|bullets|two_column|stat|quote|chart","title":string,"kicker":string,"summary":string?,"bullets":[{"label":string?,"text":string}]?,"columns":[{"heading":string,"items":[string]}]?,"stat":{"value":string,"caption":string,"source":string}?,"support":[string]?,"quote":string?,"attribution":string?,"chart":{"type":"column|bar|line|area|pie|doughnut|scatter","title":string,"labels":[string],"series":[{"name":string,"values":[number|null],"color":"#RRGGBB"?}],"xValues":[number]?,"colors":["#RRGGBB"]?,"pointColors":["#RRGGBB"]?,"position":{"x":number,"y":number,"w":number,"h":number}?,"showLegend":boolean?,"legendPosition":"bottom|left|right|top|top-right"?,"showValue":boolean?,"showLabel":boolean?,"showPercent":boolean?,"grouping":"clustered|stacked|percentStacked"?,"unit":string?,"source":string,"asOf":string?}?,"insight":string?,"takeaway":string?,"notes":string}]}',
+            '- Las gráficas son editables: conserva el tipo, series, datos y colores que pidió el usuario. No recortes categorías (máximo 200) ni series (máximo 12); null representa un dato ausente, nunca cero. Para scatter usa xValues numérico compartido y omite labels. Pie/doughnut admite una serie. position usa pulgadas en 13.333 × 7.5. colors define colores por serie o por sector circular; pointColors solo para sectores o una serie de barras/columnas.',
           ].join('\n'),
         },
         {
@@ -235,6 +240,7 @@ async function planPptxDeckWithLLM({ title = '', prompt = '', blocks = [], refer
     const parsed = JSON.parse(rawText);
     return sanitizeDeck(parsed, { title, prompt, referenceBriefs });
   } catch (err) {
+    if (err.pptxChartRequirement) throw err;
     console.warn('[pptx-deck-designer] fail-open al planner heurístico:', err?.message || err);
     return null;
   }

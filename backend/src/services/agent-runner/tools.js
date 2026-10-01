@@ -25,6 +25,7 @@
  */
 
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
+const { CHART_SCHEMA, normalizeNativeChart } = require('../document-pipeline/pptx-native-chart');
 const {
   DESCRIPTION_PARAM,
   OFFICE_TOOL_DEFINITIONS,
@@ -123,6 +124,7 @@ function normalizeHex(raw) {
 /** Accepts [{title,bullets}] or plain strings; drops empties, caps at 20. */
 function normalizeOutline(raw) {
   if (!Array.isArray(raw)) return [];
+  if (raw.length > 20 && raw.some((item) => item?.chart)) throw new Error('E_PARAMS: Más de 20 diapositivas con gráficas; usa execute_python sin recortar el contenido.');
   const out = [];
   for (const item of raw.slice(0, 20)) {
     if (typeof item === 'string') {
@@ -132,13 +134,14 @@ function normalizeOutline(raw) {
     }
     if (!item || typeof item !== 'object') continue;
     const t = String(item.title || '').trim();
+    if (!t && item.chart !== undefined) throw new Error('E_PARAMS: La diapositiva con gráfica necesita título; corrige outline o usa execute_python.');
     if (!t) continue;
     const bullets = (Array.isArray(item.bullets) ? item.bullets : [])
       .map((b) => String(b || '').trim())
       .filter(Boolean)
       .slice(0, 10)
       .map((b) => b.slice(0, 300));
-    out.push({ title: t.slice(0, 200), bullets });
+    out.push({ title: t.slice(0, 200), bullets, ...(item.chart !== undefined ? { chart: normalizeNativeChart(item.chart) } : {}) });
   }
   return out;
 }
@@ -315,7 +318,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'create_presentation',
       description:
-        'Create a NEW PowerPoint from scratch. REQUIRED: pass `outline` with the REAL slide content (titles + bullets) answering the user\'s request — never generic filler. Color: ANY #hex or color name the user asked for (rosado, naranja, turquesa, #1E3A8A…); omit `color` for a clean light theme — the default is NEVER pink. Writes /workspace/outputs/<file>.pptx.',
+        'Create a NEW PowerPoint from scratch. REQUIRED: pass `outline` with REAL titles, bullets and optional native editable `chart`. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme. Writes /workspace/outputs/<file>.pptx.',
       parameters: {
         type: 'object',
         properties: {
@@ -336,6 +339,7 @@ const BASE_TOOL_DEFINITIONS = [
               properties: {
                 title: { type: 'string' },
                 bullets: { type: 'array', items: { type: 'string' } },
+                chart: CHART_SCHEMA,
               },
               required: ['title'],
               additionalProperties: false,
@@ -517,7 +521,8 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
       // request has no color, fall back to a clean LIGHT theme — never pink.
       const requestedHex = normalizeHex(args?.color);
       let hex = requestedHex || DEFAULT_DECK_COLOR;
-      const outline = normalizeOutline(args?.outline);
+      let outline;
+      try { outline = normalizeOutline(args?.outline); } catch (err) { return `ERROR: ${err.message}`; }
       const filename = String(args?.filename || `${topic.replace(/[^\w\-]+/g, '-').slice(0, 40) || 'presentacion'}.pptx`).replace(/\.pptx$/i, '') + '.pptx';
       const plan = outline.length
         ? outline
@@ -547,7 +552,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
             filename,
           }));
         }
-      } catch (_) { /* flat deck below */ }
+      } catch (err) {
+        if (plan.some((item) => item.chart)) return `ERROR: E_PARAMS: No se pudo crear la gráfica editable. Usa execute_python conservando el diseño y todos los datos. ${err.message}`;
+        /* flat text deck below */
+      }
+      if (plan.some((item) => item.chart)) return 'ERROR: E_PARAMS: El diseño con gráfica requiere execute_python; no se creó una presentación incompleta.';
       hex = requestedHex || DEFAULT_DECK_COLOR;
       try {
         const PptxGenJS = require('pptxgenjs');

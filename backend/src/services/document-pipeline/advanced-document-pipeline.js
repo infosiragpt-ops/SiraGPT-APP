@@ -25,6 +25,7 @@ const { runRenderCritique } = require('./render-critique-loop');
 const { parseDocumentRequest } = require('./content/parse-document-request');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const { pickPptxTheme, pickChartType } = require('./pptx-design-system');
+const { addNativeChart, normalizeNativeChart, assertChartPresent } = require('./pptx-native-chart');
 const {
   attachSourceCitations,
   reconcilePptxPlan,
@@ -2382,6 +2383,7 @@ async function buildPptx(plan, outputPath) {
     fallbackSlides: fallbackPlan.slides,
     requiredItems: plan.presentationBrief?.mustInclude,
   }), { referenceBriefs: plan.referenceBriefs });
+  assertChartPresent(plan.userRequest, contentPlan.slides);
   plan.slidePlan = contentPlan;
   const theme = pickPptxTheme({
     template: plan.template,
@@ -2608,14 +2610,11 @@ async function buildPptx(plan, outputPath) {
     }
 
     if (layout === 'chart' && slideSpec.chart) {
-      const chartType = pickChartType(slideSpec.chart);
-      slide.addChart(pptx.ChartType[chartType], [
-        { name: slideSpec.chart.title, labels: slideSpec.chart.labels, values: slideSpec.chart.values },
-      ], {
-        x: 0.75, y: 2.05, w: 7.0, h: 4.4,
-        catAxisLabelFontFace: theme.fonts.body, valAxisLabelFontFace: theme.fonts.body,
-        showLegend: false, showValue: true, dataLabelFontSize: 12,
-        chartColors: theme.chartColors,
+      const guessed = pickChartType(slideSpec.chart);
+      addNativeChart(slide, pptx, slideSpec.chart, {
+        position: { x: 0.75, y: 2.05, w: 7.0, h: 4.4 },
+        fontFace: theme.fonts.body, colors: theme.chartColors,
+        defaultType: guessed === 'bar' ? 'column' : guessed,
       });
       if (slideSpec.chart.source) {
         const provenance = [
@@ -2771,17 +2770,18 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
         ${footer(pageNum, spec)}`);
     }
     if (layout === 'chart' && spec.chart) {
-      const max = Math.max(...spec.chart.values, 1);
+      const guessed = pickChartType(spec.chart);
+      const chart = normalizeNativeChart(spec.chart, { defaultType: guessed === 'bar' ? 'column' : guessed });
+      const labels = chart.labels || chart.xValues;
       return slideShell(`
         <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
         <div style="display:flex;gap:26px;padding:16px 40px 0;">
-          <div style="flex:1.4;display:flex;flex-direction:column;gap:9px;">
-            ${spec.chart.labels.map((label, i) => `
-              <div style="display:flex;align-items:center;gap:10px;">
-                <span style="width:110px;font-size:11.5px;color:${BODY};text-align:right;">${xmlEscape(label)}</span>
-                <div style="flex:1;background:${SURFACE_ALT};border-radius:6px;height:18px;overflow:hidden;"><div style="width:${Math.round((spec.chart.values[i] / max) * 100)}%;height:100%;background:${ACCENT};border-radius:6px;"></div></div>
-                <span style="width:40px;font-size:11px;color:${MUTED};">${xmlEscape(String(spec.chart.values[i]))}${xmlEscape(spec.chart.unit || '')}</span>
-              </div>`).join('')}
+          <div style="flex:1.4;min-width:0;max-height:270px;overflow:auto;">
+            <div style="font-size:11px;color:${MUTED};margin-bottom:8px;">Datos de la gráfica editable (${xmlEscape(chart.type)})</div>
+            <table style="border-collapse:collapse;font-size:11px;color:${BODY};width:100%;">
+              <thead><tr><th>${xmlEscape(chart.xAxisTitle || (chart.type === 'scatter' ? 'X' : 'Categoría'))}</th>${chart.series.map((series) => `<th>${xmlEscape(series.name)}</th>`).join('')}</tr></thead>
+              <tbody>${labels.map((label, i) => `<tr><td>${xmlEscape(String(label))}</td>${chart.series.map((series) => `<td style="text-align:right;">${series.values[i] === null ? '—' : xmlEscape(String(series.values[i]))}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table>
             ${spec.chart.source ? `<div style="margin-top:6px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.chart.source)}${spec.chart.unit ? ` · Unidad: ${xmlEscape(spec.chart.unit)}` : ''}${spec.chart.asOf ? ` · Corte: ${xmlEscape(spec.chart.asOf)}` : ''}</div>` : ''}
           </div>
           ${spec.insight ? `
@@ -3349,7 +3349,10 @@ async function runAdvancedDocumentPipeline({
         signal,
       });
       if (llmDeck) emit(events, 'deck_design', 'complete', `Guion de presentación diseñado (${llmDeck.slides.length} láminas, layouts variados)`, { slides: llmDeck.slides.length });
-    } catch { llmDeck = null; }
+    } catch (error) {
+      if (error.pptxChartRequirement) throw error;
+      llmDeck = null;
+    }
   }
   const fallbackPptxPlan = buildPptxContentPlan({
     title: plan.title,
