@@ -167,3 +167,20 @@ test('Linux kernel workspace lock releases after its holder is killed, with no p
   assert.equal(saved.ok, true); assert.equal(saved.revision, hash('after crash'));
   assert.deepEqual(fs.readdirSync(root), ['app.ts']);
 });
+
+
+test('Linux lock rejection stays file_busy when the save payload outlives flock stdin', { skip: process.platform !== 'linux' }, async (t) => {
+  const root = setup(t);
+  const lock = spawn('flock', ['--exclusive', root, process.execPath, '-e', "console.log('locked');setInterval(()=>{},1000)"], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  t.after(() => { try { process.kill(-lock.pid, 'SIGKILL'); } catch {} });
+  await new Promise((resolve, reject) => { lock.stdout.once('data', resolve); lock.once('error', reject); });
+  // A rejected flock exits before consuming this input. Node can report both
+  // EPIPE from stdin and the explicit lock-conflict exit status (75).
+  const blocked = await helper(root, { path: 'app.ts', content: 'x'.repeat(EDITOR_MAX_BYTES), expectedRevision: null });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.error, 'file_busy');
+  assert.equal(fs.existsSync(path.join(root, 'app.ts')), false);
+  process.kill(-lock.pid, 'SIGKILL');
+  await new Promise((resolve) => lock.once('close', resolve));
+  assert.deepEqual(fs.readdirSync(root), []);
+});
