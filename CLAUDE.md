@@ -1641,6 +1641,28 @@ archivos tocados.
 - Tests: `tests/brand-clover-source.test.ts` (actualizado), `tests/sidebar-brand-header-source.test.ts`,
   `tests/app-sidebar-chat-groups-source.test.ts` (actualizado).
 
+## Video que «desaparece» al enviarlo + guardia de gráficas (added 2026-10-01)
+
+Reporte de Luis: al subir un video, su mensaje desaparecía durante «pensando» y
+volvía a aparecer con la respuesta; el día anterior «no podía graficar».
+- **Causa del video**: un envío solo con archivo usa el texto automático del compositor
+  («Analiza los archivos adjuntos y responde según el contexto del hilo»). El paso B de
+  `dedupeMessages` (`lib/message-preservation.ts`) tomaba la burbuja optimista nueva
+  (`msg-user-…`) como gemela de CUALQUIER fila estable del mismo rol y texto, aunque fuera
+  del turno anterior con otro video, y la descartaba (injertando el video nuevo en el
+  mensaje viejo) hasta que el servidor persistía el turno (en la cola, al reclamar la tarea).
+  Ahora una gemela por contenido exige adjuntos compatibles (mismo id de subida, o un lado
+  sin archivos) y que no haya una respuesta ya terminada entre ambas (texto plano o
+  `agent-task-state` con `done`). Las gemelas por `idempotencyKey` no cambian.
+  Invariante **I16** en AGENTS.md; tests nuevos en `tests/message-dedupe.test.ts`
+  (fallan en pre-fix).
+- **Gráficas**: el fallo de ayer era `sira_charts.py` no importable desde `execute_python`
+  (helpers en `/workspace/tmp`, scripts en `/workspace`); Luis lo corrigió en #953
+  (bootstrap con `sys.path.insert(0, '/workspace/tmp')`). Guardia sin Python ni sandbox:
+  `backend/tests/agent-runner-python-helper-staging.test.js` (staging del helper en
+  `agent-runner/index.js`, bootstrap del wrapper, instrucción de import en el prompt).
+  Invariante **I17** en AGENTS.md.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

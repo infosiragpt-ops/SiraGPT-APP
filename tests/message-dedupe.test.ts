@@ -146,3 +146,57 @@ test('mergeChatPreservingUserMessages never emits duplicate ids or optimistic su
     'no optimistic temp ids survive the merge',
   );
 });
+
+// «Subí un video y desaparece… luego vuelve a aparecer»: a file-only send
+// reuses the composer's automatic prompt, so the new optimistic bubble read
+// as a twin of the previous turn's server row and vanished until the server
+// persisted the new turn. Attachments and answered turns now disambiguate.
+const RUNNING_TASK = '```agent-task-state\n{"done":false,"steps":[]}\n```';
+const DONE_TASK = '```agent-task-state\n{"done":true,"steps":[]}\n```\n\n**1 de 1 archivos transcritos.**';
+const AUTO_PROMPT = 'Analiza los archivos adjuntos y responde según el contexto del hilo.';
+
+test('dedupeMessages keeps a new file-only turn whose attachment differs from the older identical prompt', () => {
+  const msgs = [
+    { id: 'clx_user_v1', role: 'USER', content: AUTO_PROMPT, files: [{ id: 'file-1', name: 'lunes.mp4', mimeType: 'video/mp4' }] },
+    { id: 'clx_asst_v1', role: 'ASSISTANT', content: DONE_TASK },
+    { id: 'msg-user-1700000000001', role: 'USER', content: AUTO_PROMPT, files: [{ id: 'file-2', name: 'martes.mp4', mimeType: 'video/mp4' }] },
+    { id: 'msg-ai-1700000000002', role: 'ASSISTANT', content: RUNNING_TASK },
+  ];
+  const out = dedupeMessages(msgs);
+  assert.equal(out.length, 4);
+  assert.deepEqual(out.map((m) => m.id), ['clx_user_v1', 'clx_asst_v1', 'msg-user-1700000000001', 'msg-ai-1700000000002']);
+  // The older row must not swallow the new video either.
+  assert.deepEqual((out[0] as { files?: Array<{ id: string }> }).files?.map((f) => f.id), ['file-1']);
+});
+
+test('dedupeMessages still collapses the optimistic bubble onto its own server row (same upload, task running)', () => {
+  const msgs = [
+    { id: 'clx_user_v2', role: 'USER', content: AUTO_PROMPT, files: [{ id: 'file-2', name: 'martes.mp4' }] },
+    { id: 'clx_asst_v2', role: 'ASSISTANT', content: RUNNING_TASK },
+    { id: 'msg-user-1700000000003', role: 'USER', content: AUTO_PROMPT, files: [{ id: 'file-2', name: 'martes.mp4', mimeType: 'video/mp4' }] },
+  ];
+  const out = dedupeMessages(msgs);
+  assert.deepEqual(out.map((m) => m.id), ['clx_user_v2', 'clx_asst_v2']);
+  assert.equal((out[0] as { files?: Array<{ mimeType?: string }> }).files?.[0]?.mimeType, 'video/mp4');
+});
+
+test('dedupeMessages keeps a text-only prompt repeated after the previous reply was answered', () => {
+  const msgs = [
+    { id: 'clx_user_r1', role: 'USER', content: 'resume esto' },
+    { id: 'clx_asst_r1', role: 'ASSISTANT', content: 'Resumen: …' },
+    { id: 'msg-user-1700000000004', role: 'USER', content: 'resume esto' },
+    { id: 'msg-ai-1700000000005', role: 'ASSISTANT', content: '' },
+  ];
+  assert.equal(dedupeMessages(msgs).length, 4);
+});
+
+test('dedupeMessages drops the optimistic twin when the server row is id-only (files grafted) and unanswered', () => {
+  const msgs = [
+    { id: 'msg-user-1700000000006', role: 'USER', content: AUTO_PROMPT, files: [{ id: 'file-3', name: 'audio.m4a' }] },
+    { id: 'clx_user_a3', role: 'USER', content: AUTO_PROMPT, files: null },
+    { id: 'clx_asst_a3', role: 'ASSISTANT', content: RUNNING_TASK },
+  ];
+  const out = dedupeMessages(msgs);
+  assert.deepEqual(out.map((m) => m.id), ['clx_user_a3', 'clx_asst_a3']);
+  assert.equal((out[0] as { files?: Array<{ id: string }> }).files?.[0]?.id, 'file-3');
+});

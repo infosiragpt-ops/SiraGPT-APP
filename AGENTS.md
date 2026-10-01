@@ -556,6 +556,8 @@ NO DEBE: añadir los 200 golden en **este** PR. I1–I15 se documentan aquí; se
 | **I13** | F7.4 leak-gate; SiraComputer no se expone | F7 on sin Luis |
 | **I14** | Caddy `encode` **no** aplica a `text/event-stream` | SSE bufferizado |
 | **I15** | PR a `production-main`; nunca push `main`; nunca `--admin` si CI rojo | Push/merge ilegal |
+| **I16** | La burbuja del usuario (texto o archivo) **nunca** desaparece mientras el agente trabaja: un envío nuevo con el mismo texto automático y otro adjunto, o repetido tras una respuesta, es un turno nuevo (`tests/message-dedupe.test.ts`, `tests/lib/agent-task-turn.test.ts`) | El pedido «se auto elimina» hasta que el servidor lo persiste |
+| **I17** | `execute_python` importa los helpers de gráficas (`sira_charts.py`) en cada llamada: `/workspace/tmp` en `sys.path` y el helper se escribe al preparar el workspace (`backend/tests/agent-runner-python-helper-staging.test.js`) | «No podía graficar»: `ModuleNotFoundError: sira_charts` |
 
 DEBE: tests existentes de `hola` / brand-label / chips / UI-lock siguen verdes.
 PUEDE: un PR futuro añadir `router/golden.jsonl` ≥ 200 cubriendo I1, I7, I8, I9, H5, H6.
