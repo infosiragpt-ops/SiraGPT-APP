@@ -23,6 +23,9 @@ function failure(code, message, missingTools = []) {
 function taskContract(query) {
   const text = normalize(String(query || '').replace(/```[\s\S]*?```/g, ' '))
     .replace(/\bno (?:crees|hagas|construyas) (?:otro|un nuevo) proyecto\b/g, ' ');
+  // File names and paths (app.js, src/app/config) are not requests to deliver
+  // a web application. Keep actual surrounding words such as 'web' or 'app'.
+  const webText = text.replace(/(?:[\w@.-]*[\\/])+[\w@.-]+(?::\d+){0,2}|\b[\w@-]+\.[a-z\d]+(?::\d+){0,2}\b/gi, ' ');
   const intent = detectCodingIntent(query, { hasWorkspace: true });
   const pr = PR.test(text) && PR_ACTION.test(text);
   const previewOnly = PREVIEW.test(text) && !CHANGE.test(text);
@@ -31,7 +34,7 @@ function taskContract(query) {
   const mutation = CHANGE.test(changeText) || isSoftwareBuildRequest(query)
     || (!previewOnly && !checksOnly && !REVIEW.test(text) && !pr && ['create', 'edit', 'followup'].includes(intent.kind));
   return { mutation, review: !mutation && !previewOnly && !checksOnly && !pr,
-    preview: previewOnly || (mutation && WEB.test(text)),
+    preview: previewOnly || (mutation && WEB.test(webText)),
     tests: TESTS.test(text), build: BUILD.test(text) && !/^build (?:a|an|me)\b/.test(text),
     types: /\b(?:typecheck|tipos|tsc)\b/.test(text), pr };
 }
@@ -93,12 +96,18 @@ function checkScope(cmd) {
 }
 
 function testSummary(output) {
-  if (/(?:^|\n)\s*[#ℹ]?\s*(?:fail|failed|failures)\s*[:=]?\s*[1-9]\d*\b|\b[1-9]\d* (?:failed|errors?)\b|(?:^|\n)\s*not ok \d/i.test(output)) return false;
+  if (/(?:^|\n)\s*[#ℹ]?\s*(?:fail|failed|failures)\s*[:=]?\s*[1-9]\d*\b|\b[1-9]\d* (?:fail(?:ed)?|errors?)\b|(?:^|\n)\s*not ok \d/i.test(output)) return false;
   try {
     const json = JSON.parse(output.trim());
     if (json.success === true && Number(json.numPassedTests) > 0 && json.numFailedTests === 0
       && json.numFailedTestSuites === 0) return true;
   } catch (_) { /* human-readable runner reports below */ }
+  // Bun's native runner reports "4 pass / 0 fail" and a completed run.
+  // Require both counters and the run summary; a banner is not test proof.
+  const bunPass = /^\s*(\d+) pass\s*$/im.exec(output);
+  const bunFail = /^\s*(\d+) fail\s*$/im.exec(output);
+  if (bunPass || bunFail) return Boolean(bunPass && bunFail && Number(bunPass[1]) > 0
+    && Number(bunFail[1]) === 0 && /\bRan [1-9]\d* tests? across [1-9]\d* files?\./i.test(output));
   const fail = /(?:^|\n)\s*[#ℹ]?\s*(?:fail|failed|failures)\s*[:=]?\s*(\d+)\b/im.exec(output);
   const pass = /(?:^|\n)\s*[#ℹ]?\s*pass\s*[:=]?\s*(\d+)\b/im.exec(output);
   if (pass && fail) return Number(pass[1]) > 0 && Number(fail[1]) === 0;
@@ -108,7 +117,9 @@ function testSummary(output) {
 
 function checkedExecution(action, actions) {
   let cmd = action.args.cmd;
-  if (['npm', 'pnpm', 'yarn', 'bun'].includes(cmd?.[0])) {
+  // `bun test` invokes Bun's test runner directly; `bun run test` is a package script.
+  const nativeBunTest = cmd?.[0] === 'bun' && cmd[1] === 'test';
+  if (!nativeBunTest && ['npm', 'pnpm', 'yarn', 'bun'].includes(cmd?.[0])) {
     // A script name or echoed banner proves nothing. Resolve the exact script
     // from a fresh package.json observation/write before allowing its result.
     const previous = actions.filter(item => item.index < action.index);
@@ -192,12 +203,20 @@ function createCodingFinalizeGuard({ userQuery, projectId, userId, chatId }) {
         const cmd = args.cmd;
         const kind = commandKind(cmd);
         const key = `check:${Array.isArray(cmd) ? checkScope(cmd) : kind}`;
-        if (!Array.isArray(cmd) || !positiveObservation(obs) || obs.exitCode !== 0 || obs.timedOut === true || obs.truncated === true) {
-          if (kind) failed.set(key, `La comprobación ${kind} falló o quedó incompleta. Corrige y vuelve a comprobar ese mismo tipo de validación.`);
+        const executable = ['node', 'npm', 'bun', 'bunx', 'npx'].includes(cmd?.[0]) ? cmd[0] : 'el comprobador';
+        // Only the tool's explicit pre-spawn rejection is recoverable across
+        // commands. It never clears a prior actual failure of the same check.
+        const rejectedBeforeExecution = obs.ok === false && obs.code === 'command_rejected'
+          && obs.executionStarted === false && !obs.error
+          && !['exitCode', 'stdout', 'stderr', 'timedOut', 'truncated', 'durationMs'].some(key => Object.hasOwn(obs, key));
+        if (rejectedBeforeExecution) {
+          exploratoryFailure = index;
+        } else if (!Array.isArray(cmd) || !positiveObservation(obs) || obs.exitCode !== 0 || obs.timedOut === true || obs.truncated === true) {
+          if (kind) failed.set(key, `La comprobación ${kind} con ${executable} falló o quedó incompleta. Corrige y vuelve a comprobar ese mismo tipo de validación.`);
           else exploratoryFailure = index;
         } else if (kind) {
           if (checkedExecution(action, actions)) { failed.delete(key); checks.push(action); }
-          else failed.set(key, `El comando ${kind} no confirmó una comprobación válida. Usa un reporte real de pruebas con casos ejecutados o el compilador directo. Para un script npm/pnpm/yarn/bun, relee package.json completo inmediatamente antes del script; no basta su nombre ni un banner.`);
+          else failed.set(key, `El comando ${kind} con ${executable} no confirmó una comprobación válida. Usa un reporte real de pruebas con casos ejecutados o el compilador directo. Para un script npm/pnpm/yarn/bun, relee package.json completo inmediatamente antes del script; no basta su nombre ni un banner. Si el script encadena comandos, ejecuta cada comprobador directamente y revisa sus resultados.`);
         }
       }
       if (['project_preview_start', 'project_preview_status', 'project_preview_stop'].includes(tool)) preview = action;

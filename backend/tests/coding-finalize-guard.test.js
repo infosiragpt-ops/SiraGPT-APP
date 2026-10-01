@@ -87,7 +87,38 @@ test('package scripts must resolve from fresh package.json to a real checker', (
   assert.equal(check([read('package.json', pkg), exec(['npm', 'test'])], 'Ejecuta tests', 'Pruebas pasaron.').ok, true);
   for (const script of ['echo "4 passed"', 'node --test || true']) blocked(check([read('package.json', JSON.stringify({ scripts: { test: script } })), exec(['npm', 'test'], { stdout: '4 passed' })], 'Ejecuta tests', 'Pruebas pasaron.'));
 });
+test('native bun test reports complete successful suites without a package script', () => {
+  const report = 'bun test v1.2.0\n\n 4 pass\n 0 fail\n 4 expect() calls\nRan 4 tests across 1 file. [12.00ms]';
+  const result = check([exec(['bun', 'test'], { stdout: '', stderr: report })], 'Ejecuta tests', 'Pruebas pasaron.');
+  assert.equal(result.ok, true);
+  const pkg = JSON.stringify({ scripts: { test: 'bun test' } });
+  assert.equal(check([read('package.json', pkg), exec(['bun', 'run', 'test'], { stdout: '', stderr: report })], 'Ejecuta tests', 'Pruebas pasaron.').ok, true);
+});
+test('native bun failures, empty suites, banners, timeouts and partial reports do not pass', () => {
+  const report = 'bun test v1.2.0\n 4 pass\n 0 fail\nRan 4 tests across 1 file. [12.00ms]';
+  const invalid = [
+    { stderr: report.replace('0 fail', '1 fail') },
+    { stderr: report.replace('4 pass', '0 pass').replace('Ran 4 tests', 'Ran 0 tests') },
+    { stderr: 'bun test v1.2.0' },
+    { stderr: '4 pass\n0 fail' },
+    { stderr: report + '\n 1 fail\n' },
+    { stderr: report, timedOut: true },
+    { stderr: report, truncated: true },
+    { stderr: report, exitCode: 1 },
+  ];
+  for (const patch of invalid) blocked(check([exec(['bun', 'test'], { stdout: '', ...patch })], 'Ejecuta tests', 'Pruebas pasaron.'));
+  blocked(check([exec(['bun', 'run', 'test'], { stdout: '', stderr: report })], 'Ejecuta tests', 'Pruebas pasaron.'));
+  blocked(check([read('package.json', JSON.stringify({ scripts: { test: 'echo fake' } })), exec(['bun', 'run', 'test'], { stdout: '', stderr: report })], 'Ejecuta tests', 'Pruebas pasaron.'));
+});
 test('typecheck does not prove a requested build', () => { blocked(check([write(), exec(['npx', 'tsc', '--noEmit'], { stdout: '' }), read(), preview()], 'Crea la web y ejecuta el build', 'Lista.'), 'E_CODING_CHECK_REQUIRED'); });
+test('editing a code file or path does not require a web preview solely because its name contains app', () => {
+  for (const path of ['app.js', 'src/app.js', 'src/app/config', '/app/config', 'src/react/index.ts']) {
+    const result = check([write(), exec(), read()], `Cambia ${path} a 2, relee y comprueba con node.`, 'Archivo actualizado y comprobado.');
+    assert.equal(result.ok, true, path);
+  }
+  blocked(check([write(), exec(), read()], 'Cambia app.js de la web y comprueba con node.', 'Archivo actualizado y comprobado.'), 'E_CODING_PREVIEW_REQUIRED');
+  blocked(check([write(), exec(), read()], 'Crea una app usando app.js y comprueba con node.', 'Archivo actualizado y comprobado.'), 'E_CODING_PREVIEW_REQUIRED');
+});
 test('preview must belong to this project, be ready, and remain running after all writes and commands', () => {
   for (const patch of [{ project: undefined }, { status: { ready: false, running: true } }, { status: { ready: true, running: false } }, { previewUrl: null }]) blocked(check([write(), exec(), read(), preview(patch)]), 'E_CODING_PREVIEW_REQUIRED');
   blocked(check([...proof(), action('project_preview_stop', {}, { ok: true, project: { id: 'p' }, stopped: true })]), 'E_CODING_PREVIEW_REQUIRED');
@@ -108,4 +139,28 @@ test('Stop, missing proof and malformed records fail closed and cannot salvage p
   const guard = createCodingFinalizeGuard({ userQuery: 'Crea una web', ...identity });
   for (const steps of [null, [{ actions: null }], [{ actions: [null] }]]) blocked(guard({ answer: 'Listo.', steps, ctx }), 'E_CODING_EVIDENCE');
   const controller = new AbortController(); controller.abort(); blocked(check(proof(), undefined, undefined, { ...ctx, signal: controller.signal }), 'E_CANCELLED');
+});
+
+
+test('an explicit unexecuted command rejection recovers with a real build and fresh complete readback', () => {
+  const rejected = action('project_exec', { cmd: ['npx', 'vite', 'build'] }, { ok: false, code: 'command_rejected', executionStarted: false });
+  const pkg = JSON.stringify({ scripts: { build: 'vite build' } });
+  const build = () => exec(['npm', 'run', 'build'], { stdout: '✓ built in 120ms' });
+  const query = 'Crea una web y compila el proyecto';
+  assert.equal(check([write(), rejected, read('package.json', pkg), build(), read(), preview()], query, 'Web compilada y vista previa lista.').ok, true);
+  blocked(check([write(), rejected, read(), preview()], query, 'Lista.'), 'E_CODING_CHECK_REQUIRED');
+  blocked(check([write(), read('package.json', pkg), build(), rejected, read(), preview()], query, 'Lista.'), 'E_CODING_CHECK_REQUIRED');
+  blocked(check([write(), rejected, read('package.json', pkg), build(), preview()], query, 'Lista.'), 'E_CODING_READBACK_REQUIRED');
+});
+
+test('preflight markers cannot erase actual failed checks or contradictory execution evidence', () => {
+  const pkg = JSON.stringify({ scripts: { build: 'vite build' } });
+  const rejected = patch => action('project_exec', { cmd: ['npx', 'vite', 'build'] }, { ok: false, code: 'command_rejected', executionStarted: false, ...patch });
+  const finalProof = () => [read('package.json', pkg), exec(['npm', 'run', 'build'], { stdout: '✓ built in 120ms' }), read(), preview()];
+  const query = 'Crea una web y compila el proyecto';
+  for (const patch of [{ exitCode: 0 }, { exitCode: 1 }, { stdout: 'executed' }, { stderr: 'failed' }, { timedOut: true }, { truncated: true }, { ok: true }, { executionStarted: true }, { executionStarted: undefined }, { code: 'runner_unreachable' }]) {
+    blocked(check([write(), rejected(patch), ...finalProof()], query, 'Lista.'), 'E_CODING_CHECK_FAILED');
+  }
+  const failed = exec(['npx', 'vite', 'build'], { ok: false, exitCode: 1, stdout: 'Build failed' });
+  blocked(check([write(), failed, rejected(), ...finalProof()], query, 'Lista.'), 'E_CODING_CHECK_FAILED');
 });
