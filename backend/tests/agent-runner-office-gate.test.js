@@ -13,6 +13,17 @@ const { runAgentLoop, restorePinnedMessages, resolveContextBudgetTokens } = requ
 const { needsVerification, verificationNudge, isRendererUnavailable } = require('../src/services/agent-runner/verify');
 const { OUTPUTS_SNAPSHOT, changedOutputs } = require('../src/services/agent-runner/tools.office');
 const tools = require('../src/services/agent-runner/tools');
+
+test('data-file rendering exemption never exempts a mixed Office mutation', () => {
+  const data = { tool: 'write_file', ok: true, args: { path: 'outputs/datos.json' } };
+  assert.equal(needsVerification([data]).needed, false);
+  const office = { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/presupuesto.xlsx'] };
+  assert.equal(needsVerification([office, data]).reason, 'missing_visual_verify');
+  assert.equal(needsVerification([data, office]).reason, 'missing_visual_verify');
+  const mixed = { ...office, changedOutputs: ['outputs/presupuesto.xlsx', 'outputs/datos.json'] };
+  assert.equal(needsVerification([mixed]).reason, 'missing_visual_verify');
+  assert.equal(needsVerification([{ ...data, args: { path: 'outputs/falso.unknown' } }]).needed, true);
+});
 const ladder = require('../src/services/agent-runner/multimodal/vision-ladder');
 const { makeVisionVerifier } = require('../src/services/agent-runner/multimodal/visual-verifier');
 const runner = require('../src/services/agent-runner');
@@ -66,8 +77,8 @@ test('gate: read-only execute_python does not re-arm it; one that rewrote a docx
   assert.equal(needsVerification([...verified, { tool: 'execute_python', ok: true, mutated: false, changedOutputs: [] }], { strict: true }).needed, false);
   assert.equal(needsVerification([...verified, { tool: 'execute_python', ok: true, mutated: true, changedOutputs: ['outputs/tesis-editado-v2.docx'] }], { strict: true }).reason,
     'missing_visual_verify');
-  // a .md written by a sub-agent keeps the render rule
-  assert.equal(needsVerification([{ tool: 'write_file', ok: true, args: { path: 'outputs/informe.md' } }], { strict: true }).reason, 'missing_preview');
+  // Markdown has no visual canvas; actual format parsing is required later.
+  assert.equal(needsVerification([{ tool: 'write_file', ok: true, args: { path: 'outputs/informe.md' } }], { strict: true }).needed, false);
   assert.equal(needsVerification([{ tool: 'write_file', ok: true, args: { path: 'outputs/informe.md' } }, { tool: 'render_preview', ok: true }], { strict: true }).needed, false);
   // unknown snapshot → conservative: still an edit, render rule
   assert.equal(needsVerification([{ tool: 'execute_python', ok: true }], { strict: true }).reason, 'missing_preview');

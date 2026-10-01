@@ -21,7 +21,12 @@ const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
 
 function makeDocx(parts) {
   const zip = new PizZip();
-  zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>');
+  const overrides = Object.keys(parts).map((name) => {
+    const kind = name === 'word/document.xml' ? 'document.main' : name === 'word/styles.xml' ? 'styles'
+      : /^word\/header\d+\.xml$/.test(name) ? 'header' : /^word\/footer\d+\.xml$/.test(name) ? 'footer' : null;
+    return kind ? `<Override PartName="/${name}" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.${kind}+xml"/>` : '';
+  }).join('');
+  zip.file('[Content_Types].xml', `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>${overrides}</Types>`);
   zip.file('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
   for (const [name, xml] of Object.entries(parts)) zip.file(name, xml);
   return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });

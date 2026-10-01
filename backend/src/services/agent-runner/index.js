@@ -27,6 +27,7 @@ const { createOfficeFailureReporter, verificationFailureFromSteps } = require('.
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
+const { validateArtifactBytes } = require('../agents/artifact-delivery-validation');
 const { applySavXlsxDeliveryGate, createSavXlsxFinalEventGate } = require('./sav-xlsx-delivery');
 const { needsVerification } = require('./verify');
 
@@ -799,9 +800,10 @@ function isExplicitPdfConversion(instruction, files = []) {
 
 function requestsSavExcelDelivery(instruction) {
   const request = String(instruction || '');
+  if (/\bsps\b/i.test(request) && !/\bsav\b/i.test(request)) return false;
   if (require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(request)) return true;
   return (CREATE_DOC_RE.test(request) || DIRECT_SAV_FILE_REQUEST_RE.test(request))
-    && /(?:\bspss\b|\.sav\b)/i.test(request)
+    && /(?:\bspss\b|\bsav\b)/i.test(request)
     && /(?:\bexcel\b|\.xlsx\b)/i.test(request);
 }
 
@@ -856,13 +858,30 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
         : { ok: false, passed: false, engine: 'pyreadstat', reason: verdict.reason };
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: verdict.reason });
     } else {
-      out.valid = true;
+      const structure = await validateArtifactBytes(ext, out.buffer, { sandbox });
+      out.valid = structure.passed;
+      out.validation = structure;
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: structure.reason, code: structure.code });
+    }
+    if (out.valid && ['docx', 'xlsx', 'pptx'].includes(ext)) {
+      const structure = await validateArtifactBytes(ext, out.buffer, { sandbox });
+      out.valid = structure.passed;
+      out.validation = structure;
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: structure.reason, code: structure.code });
     }
   }
   for (const out of outputs) {
     const ext = String(out.name || '').split('.').pop().toLowerCase();
     const sources = (editContext.files || []).filter((file) => String(file.name || '').toLowerCase().endsWith(`.${ext}`));
     const source = resolveOutputEditSource(out.name, sources);
+    if (out.valid && editContext.isEdit && ['odt', 'ods', 'odp', 'rtf'].includes(ext)) {
+      // These readers prove the output format, not that an arbitrary edit
+      // fulfilled the instruction or preserved the original layout.
+      out.valid = false;
+      out.validation = { ok: false, passed: false, reason: 'semantic_edit_verifier_unavailable', engine: 'artifact_format_reader', scope: 'file_structure_only' };
+      onEvent({ type: 'output_invalid', name: out.name, reason: out.validation.reason, code: 'E_PARAMS' });
+      continue;
+    }
     if (out.valid && ext === 'pdf') {
       // The general agent also edits PDFs, outside the document-agent route.
       // Byte inequality proves neither a readable PDF nor a requested edit.
@@ -879,7 +898,7 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
         proof = { passed: verdict.ok, reason: verdict.reason };
       }
       out.valid = proof.passed;
-      out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_pdf_edit' };
+      out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_pdf_edit', structure: out.validation };
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
       continue;
     }
@@ -901,6 +920,7 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
       out.valid = proof.passed;
       out.validation = {
         ...proof, ok: proof.passed, engine: 'agent_runner_edit_delta',
+        ...(['docx', 'xlsx', 'pptx'].includes(ext) ? { structure: out.validation } : {}),
         ...(ext === 'sav' && out.validation?.spss ? { spss: out.validation.spss } : {}),
       };
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
@@ -1471,12 +1491,13 @@ async function runAgentRunner({
           reason: delivery.verificationNeeded ? 'verification_incomplete' : 'turn_incomplete' },
       })
       : outputs;
+    const readyOutputs = deliverableOutputs.filter((output) => output.valid !== false);
     onEvent({
       type: 'outputs',
-      count: delivery.blocked ? 0 : outputs.length,
-      names: delivery.blocked ? [] : outputs.map((o) => o.name),
+      count: readyOutputs.length,
+      names: readyOutputs.map((o) => o.name),
       label: delivery.verificationNeeded || (pairGate.active && !pairGate.ok)
-        ? 'Sin verificar' : delivery.blocked ? 'Incompleto' : 'Listo',
+        ? 'Sin verificar' : delivery.blocked ? 'Incompleto' : readyOutputs.length ? 'Listo' : 'Sin verificar',
     });
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.
@@ -1530,17 +1551,24 @@ async function runAgentRunnerForChat({
   skills = [],
 } = {}) {
   const requestedPair = requestsSavExcelDelivery(instruction);
-  const pendingPairCompletionEvents = [];
-  const runnerEvent = requestedPair ? (event) => {
-    // The runner verifies bytes before this entry point stores them. Delay a
-    // successful final/output announcement until both downloads exist.
-    if (event && ((event.type === 'final' && event.verified !== false && event.label !== 'Sin verificar')
-      || (event.type === 'outputs' && event.count > 0 && event.label === 'Listo'))) {
-      pendingPairCompletionEvents.push(event);
+  const deliveryContract = require('../agents/artifact-delivery-contract')
+    .buildArtifactDeliveryContract(instruction, { multipleArtifacts: true });
+  const pendingCompletionEvents = [];
+  const runnerEvent = (event) => {
+    // Never forward a final here. Its text can claim success even when the
+    // runner's verified flag is false. Retain it until persistence finishes;
+    // the delivery gate below rewrites failed finals before calling onEvent.
+    if (event && event.type === 'final') {
+      pendingCompletionEvents.push(event);
+      return;
+    }
+    // Successful output announcements also wait for downloadable artifacts.
+    if (event && event.type === 'outputs' && event.count > 0 && event.label === 'Listo') {
+      pendingCompletionEvents.push(event);
       return;
     }
     onEvent(event);
-  } : onEvent;
+  };
   let loaded = attachedFiles;
   const selectedPair = require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(instruction)
     && Array.isArray(fileIds) && fileIds.length > 0;
@@ -1598,24 +1626,42 @@ async function runAgentRunnerForChat({
   // files, preserve the loop's real failure (provider, quota, timeout, etc.).
   const missingFormats = artifacts.length ? missingRequestedSavExcel(instruction, artifacts) : [];
   const persistenceFailed = valid.length > 0 && !artifacts.length;
-  const rejectedEdit = !valid.length && (run.outputs || []).some((output) => output.validation?.passed === false);
-  const summary = delivery.verificationNeeded
+  const persistenceIncomplete = valid.length > artifacts.length;
+  const missingContract = require('../agents/artifact-delivery-contract')
+    .assessArtifactDeliveryCounts(deliveryContract, artifacts).missing;
+  const rejectedOutputs = (run.outputs || []).filter((output) => output.valid === false || output.validation?.passed === false);
+  const rejectedEdit = !valid.length && rejectedOutputs.length > 0;
+  const unsupportedFormat = !artifacts.length && (run.outputs || []).find((output) => output.validation?.reason === 'format_unsupported');
+  const unsupportedEdit = !artifacts.length && (run.outputs || []).some((output) => output.validation?.reason === 'semantic_edit_verifier_unavailable');
+  const summary = unsupportedFormat && !run.errorMessage
+    ? (unsupportedFormat.validation.error || 'No hay un verificador disponible para el formato solicitado. Usa un formato compatible.')
+    : unsupportedEdit && !run.errorMessage
+      ? 'Puedo abrir este formato, pero todavía no puedo comprobar que esa edición conserve el documento y cumpla los cambios solicitados. Usa Word, Excel o PowerPoint; no entregué una edición sin verificar.'
+    : delivery.verificationNeeded
     ? 'No pude verificar los archivos generados. No entregué un resultado sin comprobar; vuelve a intentarlo.'
     : delivery.blocked
       ? 'No pude completar los archivos solicitados. No entregué un resultado parcial; vuelve a intentarlo.'
     : missingFormats.length
     ? `No pude completar los dos archivos solicitados: falta ${missingFormats.join(' y ')}. ${artifacts.length ? `Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}.` : 'No entregué archivos.'} Inténtalo de nuevo; no asumiré que el archivo faltante existe.`
+    : rejectedOutputs.length && artifacts.length
+      ? `No pude verificar todos los archivos solicitados. Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}; ${rejectedOutputs.map((output) => output.name).join(', ')} no pasó la validación. El lote está incompleto.`
+    : missingContract.length && artifacts.length
+      ? `No pude completar todos los archivos solicitados: falta ${missingContract.map((request) => `${request.count} ${request.label}`).join(', ')}. Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}. El lote está incompleto.`
+    : persistenceIncomplete && artifacts.length
+      ? `No pude guardar todos los archivos como descargas. Solo entregué ${artifacts.map((artifact) => artifact.filename).join(', ')}. El lote está incompleto; vuelve a intentarlo.`
     : persistenceFailed ? 'La edición no pudo guardarse como archivo descargable. No entregué un resultado; vuelve a intentarlo.'
-    : rejectedEdit ? 'No pude verificar el cambio solicitado en el documento original. No entregué una copia sin cambios ni una edición incorrecta.'
+    : rejectedEdit ? 'No pude abrir o verificar correctamente el archivo solicitado. No entregué una copia inválida ni una edición sin comprobar.'
     : requestedPair && artifacts.length ? completedSavExcelSummary(artifacts, run.savXlsxVerification)
     : artifacts.length ? (String(run.finalText || '').trim() || `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`)
       : run.stoppedReason === 'edit_not_applied' ? String(run.finalText || 'No se aplicó la edición.')
         : 'No pude producir un archivo verificado. No entregué un resultado sin comprobar.';
-  if (requestedPair && pendingPairCompletionEvents.length) {
-    const completePair = !delivery.blocked && artifacts.length === 2 && missingFormats.length === 0;
-    for (const event of pendingPairCompletionEvents) {
+  if (pendingCompletionEvents.length) {
+    const complete = !delivery.blocked && artifacts.length > 0 && artifacts.length === valid.length
+      && rejectedOutputs.length === 0 && missingContract.length === 0 && missingFormats.length === 0 && (!requestedPair || artifacts.length === 2);
+    for (const event of pendingCompletionEvents) {
       try {
-        onEvent(completePair ? event : event.type === 'outputs'
+        onEvent(complete ? (event.type === 'outputs'
+          ? { ...event, count: artifacts.length, names: artifacts.map((artifact) => artifact.filename) } : event) : event.type === 'outputs'
           ? { ...event, count: 0, names: [], label: 'Sin verificar' }
           : { ...event, text: summary, label: 'Sin verificar', verified: false });
       } catch { /* UI must never fail the run */ }
@@ -1626,14 +1672,18 @@ async function runAgentRunnerForChat({
   let failReason = persistenceFailed ? 'artifact_persistence_failed' : run.stoppedReason || 'no_output';
   if (failReason === 'final' || failReason === 'fast_path') failReason = 'no_output';
   return {
-    ok: !delivery.blocked && artifacts.length > 0 && missingFormats.length === 0,
+    ok: !delivery.blocked && artifacts.length > 0 && missingFormats.length === 0 && missingContract.length === 0
+      && rejectedOutputs.length === 0 && !persistenceIncomplete,
     summary,
     artifacts,
     steps: run.steps || [],
     iterations: run.iterations,
     driver: run.driver,
     stoppedReason: delivery.blocked ? run.stoppedReason
-      : missingFormats.length ? 'requested_artifact_missing' : artifacts.length ? 'agent_runner' : failReason,
+      : missingFormats.length ? 'requested_artifact_missing'
+        : rejectedOutputs.length && artifacts.length ? 'artifact_validation_failed'
+          : missingContract.length && artifacts.length ? 'requested_artifact_missing'
+            : persistenceIncomplete ? 'artifact_persistence_failed' : artifacts.length ? 'agent_runner' : failReason,
     // The delivery gate can block a turn for being incomplete, but it must
     // not replace the provider's primary failure when no file was produced.
     errorMessage: !artifacts.length && run.errorMessage ? run.errorMessage

@@ -469,6 +469,7 @@ function makeOfficeToolExecutors(sandbox, {
       const outdir = `previews/verify-${slug(after)}`;
       const res = await runEngine(sandbox, 'verify', {
         before, after, outdir, dpi: Number(args.dpi) || DEFAULT_DPI, expect: args.expect || {},
+        persist_formula_cache: after.startsWith('outputs/') && /\.(?:xlsx|xlsm|xltx)$/i.test(after),
       }, ctx);
       if (!res || (res.ok === false && !res.summary)) {
         reportInfra('verify_visual', res);

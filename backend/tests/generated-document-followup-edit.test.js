@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const PizZip = require('pizzip');
 const { PDFDocument } = require('pdf-lib');
 const ExcelJS = require('exceljs');
@@ -15,6 +16,7 @@ const { verifyContentChanged, verifySlideTitleEdit } = require('../src/services/
 const { runAgentRunner, runAgentRunnerForChat, collectValidOutputs } = require('../src/services/agent-runner');
 const { trySurgicalPresentationFollowup } = require('../src/services/agent-runner/surgical-followup');
 const { getLatestConversationArtifact, resolveTurnFiles, loadArtifactBuffer, persistOutputs } = require('../src/services/agent-runner/artifacts');
+const { hasArtifactReadback } = require('../src/services/agents/artifact-delivery-validation');
 const editor = require('../src/services/source-preserving-document-edit');
 const PROMPT = 'en la primera Landin agrega en la Historia de los Dinosaurios de 1998.';
 const NEW_TITLE = 'Historia de los Dinosaurios de 1998';
@@ -355,11 +357,33 @@ test('artifact disk metadata is owner/chat scoped and rejects path traversal', a
   writeMeta({ storedRelPath: '../escape.pptx' }); assert.equal(await loadArtifactBuffer(row, { artifactDir: dir, objectStorage: {} }), null);
 });
 test('strict proof survives artifact persistence instead of being replaced with ZIP-only validation', async () => {
-  const proof = { ok: true, passed: true, engine: 'pptx_surgical_edit', scope: 'requested_slide_title_and_unchanged_other_parts' };
+  const original = await deck();
+  const edited = trySurgicalPresentationFollowup({ files: [{ name: 'historia.pptx', buffer: original, isPriorArtifact: true }], instruction: PROMPT });
+  const { buffer, validation: proof } = edited.outputs[0];
+  assert.equal(proof.passed, true);
+  assert.equal(proof.engine, 'pptx_surgical_edit');
+  assert.equal(proof.scope, 'requested_slide_title_and_unchanged_other_parts');
+  assert.equal(proof.slideNumber, 1);
+  assert.equal(proof.slideCount, 11);
   const saved = [];
-  const result = await persistOutputs({ outputs: [{ name: 'editado.pptx', buffer: await deck(), valid: true, validation: proof }], userId: 'u', chatId: 'c',
+  const result = await persistOutputs({ outputs: [{ name: 'editado.pptx', buffer, valid: true, validation: proof }], userId: 'u', chatId: 'c',
     saveArtifact: (item) => { saved.push(item); return { id: 'safe', filename: item.filename, mime: item.mime, downloadUrl: '/safe' }; } });
-  assert.deepEqual(saved[0].validation, proof); assert.deepEqual(result[0].validation, proof);
+  assert.equal(saved.length, 1); assert.equal(result.length, 1);
+  assert.deepEqual(Buffer.from(saved[0].base64, 'base64'), buffer);
+  for (const validation of [saved[0].validation, result[0].validation]) {
+    const { structure, ...semanticProof } = validation;
+    assert.deepEqual(semanticProof, proof, 'every semantic proof field must survive persistence');
+    assert.equal(structure.passed, true);
+    assert.equal(structure.scope, 'file_structure_only');
+    assert.equal(structure.summary.reader, 'python-pptx');
+    assert.equal(structure.summary.slideCount, 11);
+    assert.equal(structure.sizeBytes, buffer.length);
+    assert.equal(structure.sha256, createHash('sha256').update(buffer).digest('hex'));
+    assert.equal(hasArtifactReadback(validation, 'pptx', buffer), true);
+    assert.equal(hasArtifactReadback(validation, 'pptx', Buffer.concat([buffer, Buffer.from('changed')])), false);
+  }
+  assert.deepEqual(result[0].validation, saved[0].validation);
+  assert.equal(adapter.listPptxSlides(Buffer.from(saved[0].base64, 'base64'))[0].title, NEW_TITLE);
 });
 test('a storage failure cannot publish a file card or an optimistic chat success', async () => {
   const events = [];

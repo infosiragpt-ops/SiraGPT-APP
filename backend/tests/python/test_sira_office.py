@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pruebas de sira_office.py — correr con:  python3 -m unittest -v test_sira_office.py"""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -263,10 +264,89 @@ class TestXlsx(Base):
     def test_recalculated_values(self):
         dst = self.out("f.xlsx")
         so.edit(self.xlsx, dst, [{"op": "set_cell", "sheet": "Presupuesto", "ref": "B2", "value": 5}])
+        before = parts(dst)
         vals = so.recalc_values(dst, ["Presupuesto!D2", "Presupuesto!D6", "Resumen!B1"])
         self.assertEqual(vals["Presupuesto!D2"], 900)
         self.assertEqual(vals["Presupuesto!D6"], 900 + 380 + 720 + 231)
         self.assertEqual(vals["Resumen!B1"], 2231)
+        self.assertEqual(parts(dst), before, "consultar resultados no debe modificar el documento")
+
+    def test_formula_cache_types_and_shared_array_metadata(self):
+        dst, recalculated = self.out("cache.xlsx"), self.out("calculated.xlsx")
+        original = so.OfficePackage(self.xlsx)
+        sheet = so._xl_sheet_part(original, "Presupuesto")
+        for other in so.xl_sheets(original):
+            if other['part'] != sheet:
+                # This cache-type fixture has formulas only in Presupuesto.
+                original.data[other['part']] = re.sub(rb'<f(?:\s[^>]*)?(?:/>|>.*?</f>)', b'', original.data[other['part']])
+        header = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x="urn:fixture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x"><sheetData>'
+        body = '''<row r="1"><c r="A1" s="1"><f t="shared" ref="A1:A2" si="7"><![CDATA[B1*2]]></f><v>0</v></c><c x:hint="note r='A1' t='str' > text" r="B1"><v>4</v></c><c x:hint="note t='s' > text" r="C1" t="str"><f>"A&amp;B"</f><x:v>999</x:v><v>antiguo</v></c><c r="D1" t="b"><f>TRUE()</f><v>0</v></c><c r="E1" t="e"><f>1/0</f><v>#N/A</v></c><c r="F1"><f t="shared" ref="F1:F3" si="8">B1*5</f><v>0</v></c></row>
+<row r="2"><c r="A2"><f t="shared" si="7"/><v>0</v></c><c r="B2"><v>5</v></c><c r="C2" t="str"><f>""</f><v>antiguo</v></c><c r="F2" t="inlineStr"><is><t>Etiqueta intacta</t></is></c></row>
+<row r="3"><c r="A3"><f t="array" ref="A3:A4">B1:B2*3</f><v>0</v></c><c r="F3"><f t="shared" si="8"/><v>0</v></c></row><row r="4"><c r="A4"/></row>'''
+        pi = '<?note <c r="A1"><f>fake</f><v>777</v></c>?>'
+        foreign = '<extLst><ext uri="fixture"><x:c r="A1"><x:f>fake</x:f><x:v>666</x:v></x:c></ext></extLst>'
+        original.data[sheet] = (header + pi + body + '</sheetData>' + foreign + '</worksheet>').encode()
+        original.save(dst)
+        computed = so.OfficePackage(dst)
+        computed.data[sheet] = (header + '''<row r="1"><c r="A1"><v>8</v></c><c r="C1" t="s"><v>0</v></c><c r="D1" t="b"><v>1</v></c><c r="E1" t="e"><v>#DIV/0!</v></c><c r="F1"><v>20</v></c></row>
+<row r="2"><c r="A2"><v>10</v></c><c r="C2" t="str"><v/></c><c r="F2" t="str"><v>Otro texto</v></c></row><row r="3"><c r="A3"><v>12</v></c><c r="F3"><v>24</v></c></row><row r="4"><c r="A4"><v>15</v></c></row></sheetData></worksheet>''').encode()
+        computed.data['xl/sharedStrings.xml'] = b'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>A&amp;B</t></si></sst>'
+        if not any(i.filename == 'xl/sharedStrings.xml' for i in computed.infos):
+            computed.infos.append(zipfile.ZipInfo('xl/sharedStrings.xml'))
+        computed.save(recalculated)
+        before = parts(dst)
+        result = so._sync_formula_caches(dst, so.OfficePackage(recalculated))
+        after = parts(dst)
+        self.assertEqual(result['updated'], 10)
+        self.assertEqual(set(after), set(before), "no copiar partes de LibreOffice ni su tabla de strings")
+        for name in before:
+            if name != sheet:
+                self.assertEqual(after[name], before[name], name)
+        self.assertEqual(re.findall(rb'<f(?:\s[^>]*?)?(?:/>|>.*?</f>)', after[sheet]),
+                         re.findall(rb'<f(?:\s[^>]*?)?(?:/>|>.*?</f>)', before[sheet]))
+        root = etree.fromstring(after[sheet])
+        expected = {'A1': ('n', '8'), 'A2': ('n', '10'), 'A3': ('n', '12'), 'A4': ('n', '15'),
+                    'C1': ('str', 'A&B'), 'C2': ('str', ''), 'D1': ('b', '1'), 'E1': ('e', '#DIV/0!'),
+                    'F1': ('n', '20'), 'F3': ('n', '24')}
+        for ref, (kind, value) in expected.items():
+            cell = root.find(f'.//{so.S("c")}[@r="{ref}"]')
+            self.assertEqual(cell.get('t', 'n'), kind, ref)
+            self.assertEqual(cell.find(so.S('v')).text or '', value, ref)
+        self.assertEqual(root.find(f'.//{so.S("c")}[@r="A1"]').get('s'), '1')
+        self.assertIn(b'<c x:hint="note r=\'A1\' t=\'str\' > text" r="B1"><v>4</v></c>', after[sheet])
+        self.assertIn(b'x:hint="note t=\'s\' > text" r="C1" t="str"', after[sheet])
+        self.assertIn(pi.encode(), after[sheet], 'las instrucciones XML son datos intactos')
+        self.assertIn(foreign.encode(), after[sheet], 'los metadatos de otro namespace no son celdas')
+        self.assertIn(b'<x:v>999</x:v>', after[sheet], 'sólo el v directo del namespace Excel se recalcula')
+        self.assertIn(b'<![CDATA[B1*2]]>', after[sheet])
+        self.assertIn(b'<c r="B2"><v>5</v></c>', after[sheet])
+        self.assertIn(b'<c r="F2" t="inlineStr"><is><t>Etiqueta intacta</t></is></c>', after[sheet],
+                      "un rango shared no autoriza modificar celdas que el usuario convirtió a texto")
+
+    def test_invalid_formula_cache_does_not_write_partial_workbook(self):
+        dst = self.out('invalid-cache.xlsx')
+        shutil.copy(self.xlsx, dst)
+        before = parts(dst)
+        computed = so.OfficePackage(dst)  # fixture formula caches are empty
+        with self.assertRaises(so.EditError):
+            so._sync_formula_caches(dst, computed)
+        self.assertEqual(parts(dst), before)
+
+    def test_implicit_or_duplicate_formula_references_fail_without_writing(self):
+        for cell_xml in ('<c><f>2*2</f><v>0</v></c>',
+                         '<c r="A1"><f t="array" ref="A1:B1">{4,5}</f><v>0</v></c><c><v>0</v></c>',
+                         '<c r="A1"><f>2*2</f><v>0</v></c><c r="A1"><f>3*3</f><v>0</v></c>'):
+            with self.subTest(cells=cell_xml):
+                dst = self.out('unmapped-cache.xlsx')
+                pkg = so.OfficePackage(self.xlsx)
+                sheet = so._xl_sheet_part(pkg, 'Presupuesto')
+                pkg.data[sheet] = ('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                                   '<sheetData><row r="1">' + cell_xml + '</row></sheetData></worksheet>').encode()
+                pkg.save(dst)
+                before = parts(dst)
+                with self.assertRaisesRegex(so.EditError, 'implícitas|duplicada'):
+                    so._sync_formula_caches(dst, so.OfficePackage(self.xlsx))
+                self.assertEqual(parts(dst), before, 'un resultado no localizable nunca permite guardar el libro')
 
 
 # ─────────────────────────── POWERPOINT ───────────────────────────
@@ -388,8 +468,46 @@ class TestVerify(Base):
     def test_xlsx_verify_with_recalc(self):
         dst = self.out("pres.xlsx")
         so.edit(self.xlsx, dst, [{"op": "set_cell", "sheet": "Presupuesto", "ref": "B4", "value": 15}])
-        rep = so.verify(self.xlsx, dst, self.out("v3"), dpi=80, expect={"cells": {"Presupuesto!D6": 2231, "Resumen!B1": 2231}})
+        pkg = so.OfficePackage(dst)
+        sheet = so._xl_sheet_part(pkg, 'Presupuesto')
+        fake_cell = b'<!-- <c r="D4"><f>B4*C4</f><v>123456</v></c> -->'
+        fake_value = b'<!-- <v>876543</v> -->'
+        pkg.data[sheet] = re.sub(rb'(<c r="D4"[^>]*>)', lambda m: m.group(0) + fake_value, pkg.data[sheet])
+        pkg.data[sheet] = pkg.data[sheet].replace(b'<sheetData>', b'<sheetData>' + fake_cell)
+        pkg.save(dst)
+        edited = parts(dst)
+        rep = so.verify(self.xlsx, dst, self.out("v3"), dpi=80,
+                        expect={"cells": {"Presupuesto!D4": 900, "Presupuesto!D6": 2231, "Resumen!B1": 2231}},
+                        persist_formula_cache=True)
         self.assertTrue(rep["ok"], rep["summary"])
+        delivered = parts(dst)
+        self.assertIn(fake_cell, delivered[sheet])
+        self.assertIn(fake_value, delivered[sheet])
+        self.assertGreater(rep['formula_cache']['updated'], 0)
+        for name in edited:
+            if name not in rep['formula_cache']['parts']:
+                self.assertEqual(delivered[name], edited[name], name)
+            else:
+                # The original formulas (including attributes) and every
+                # other byte survive; only <v> results are inserted/replaced.
+                strip_values = lambda xml: re.sub(rb'<v(?:\s[^>]*)?(?:/>|>.*?</v>)', b'', xml)
+                self.assertEqual(strip_values(delivered[name]), strip_values(edited[name]), name)
+        for name, values in (('Presupuesto', {'D4': '900', 'D6': '2231'}), ('Resumen', {'B1': '2231'})):
+            pkg = so.OfficePackage(dst)
+            root = pkg.xml(so._xl_sheet_part(pkg, name))
+            for ref, expected in values.items():
+                cell = root.find(f'.//{so.S("c")}[@r="{ref}"]')
+                self.assertEqual(cell.find(so.S('v')).text, expected)
+
+    def test_failed_xlsx_verification_does_not_persist_caches(self):
+        dst = self.out('wrong-pres.xlsx')
+        so.edit(self.xlsx, dst, [{"op": "set_cell", "sheet": "Presupuesto", "ref": "B4", "value": 15}])
+        before = parts(dst)
+        rep = so.verify(self.xlsx, dst, self.out('v-wrong'), dpi=60,
+                        expect={"cells": {"Presupuesto!D6": 1}}, persist_formula_cache=True)
+        self.assertFalse(rep['ok'])
+        self.assertNotIn('formula_cache', rep)
+        self.assertEqual(parts(dst), before)
 
     def test_long_document_fast_scan(self):
         paras = so.docx_paragraphs(so.OfficePackage(self.long_docx))

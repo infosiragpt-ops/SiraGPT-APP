@@ -18,7 +18,7 @@ const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { renderPreview } = require('./doc-preview');
 const {
-  saveArtifact,
+  saveVerifiedArtifact: saveArtifact,
   EXTENSION_TO_MIME,
   ARTIFACT_DIR,
   INTERNAL: taskToolInternals,
@@ -4111,7 +4111,7 @@ async function persistEditedArtifact({
   validation,
 }) {
   const mime = EXTENSION_TO_MIME[format] || 'application/octet-stream';
-  const artifact = saveArtifact({
+  const artifact = await saveArtifact({
     filename,
     base64: buffer.toString('base64'),
     mime,

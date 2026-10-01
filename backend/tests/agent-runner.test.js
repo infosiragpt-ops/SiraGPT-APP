@@ -564,7 +564,7 @@ test('persistOutputs upserts GeneratedArtifact in PostgreSQL', async () => {
     },
   };
   await persistOutputs({
-    outputs: [{ name: 'deck.pptx', buffer: Buffer.from('pk'), valid: true }],
+    outputs: [{ name: 'deck.pptx', buffer: await fs.readFile(require('path').join(__dirname, 'fixtures/office/defensa_demo.pptx')), valid: true }],
     userId: 'u1',
     chatId: 'c1',
     prisma,
@@ -600,7 +600,7 @@ test('local sandbox persistKey keeps files across destroy()', async () => {
 test('persistOutputs saves via saveArtifact and emits file_artifact', async () => {
   const events = [];
   const saved = await persistOutputs({
-    outputs: [{ name: 'embarazo.pptx', buffer: Buffer.from('pk'), valid: true }],
+    outputs: [{ name: 'embarazo.pptx', buffer: await fs.readFile(require('path').join(__dirname, 'fixtures/office/defensa_demo.pptx')), valid: true }],
     userId: 'u1',
     chatId: 'c1',
     saveArtifact: ({ filename }) => ({
@@ -670,8 +670,71 @@ test('AgentRunner does not say Listo or deliver unverified metadata instead of t
   assert.equal(ran.ok, false);
   assert.equal(ran.stoppedReason, 'max_iterations');
   assert.equal(ran.artifacts.length, 0);
-  assert.match(ran.summary, /No pude verificar/);
+  assert.match(ran.summary, /No pude (?:verificar|completar)/);
   assert.doesNotMatch(ran.summary, /Listo|Generé el SAV/);
+});
+
+test('AgentRunner unknown-format completion never announces Listo or publishes a download', async () => {
+  const events = [];
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'write_file', args: { path: 'outputs/informe.unknown', content: 'Informe profesional completo.' } }] },
+    ...Array.from({ length: 12 }, () => ({ content: 'Listo. El documento está validado.' })),
+  ]);
+  const ran = await runAgentRunnerForChat({ instruction: 'Genera un documento en formato unknown.',
+    client, driver: 'local', maxIterations: 5, userId: 'unknown-format-user',
+    onEvent: (event) => events.push(event), saveArtifact: () => { throw new Error('invalid format must never persist'); } });
+  assert.equal(ran.ok, false);
+  assert.deepEqual(ran.artifacts, []);
+  assert.match(ran.summary, /verificador disponible.*unknown/);
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+  assert.equal(events.some((event) => event.type === 'outputs' && event.count > 0), false);
+  const finals = events.filter((event) => event.type === 'final');
+  assert.ok(finals.length > 0);
+  assert.ok(finals.every((event) => event.verified === false && event.text === ran.summary));
+  assert.equal(finals.some((event) => /Listo|(?:está|esta|quedó|quedo)\s+validado/i.test(event.text || '')), false);
+});
+
+test('AgentRunner legitimate JSON completion is announced after its actual file is saved', async () => {
+  const events = [];
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'write_file', args: { path: 'outputs/datos.json', content: '{"respuestas":[1,2,3]}' } }] },
+    { content: 'Listo. Entregué datos.json.' },
+  ]);
+  const ran = await runAgentRunnerForChat({ instruction: 'Genera un archivo JSON con tres respuestas.',
+    client, driver: 'local', maxIterations: 3, userId: 'json-format-user',
+    onEvent: (event) => events.push(event), saveArtifact: (input) => {
+      assert.equal(input.validation.structure.passed, true);
+      events.push({ type: 'actually_saved' });
+      return { id: 'json-real', filename: input.filename, format: 'json', mime: 'application/json', downloadUrl: '/artifact/json-real' };
+    } });
+  assert.equal(ran.ok, true);
+  assert.equal(ran.artifacts.length, 1);
+  const savedAt = events.findIndex((event) => event.type === 'actually_saved');
+  const finalAt = events.findIndex((event) => event.type === 'final');
+  assert.ok(savedAt >= 0 && finalAt > savedAt);
+  assert.equal(events.filter((event) => event.type === 'outputs' && event.count === 1).length, 1);
+});
+
+for (const mode of ['corrupt', 'missing', 'storage-failure']) test(`AgentRunner two-JSON contract cannot finish with a ${mode} second file`, async () => {
+  const events = [];
+  const code = "from pathlib import Path\nPath('outputs/valido.json').write_text('{\"ok\":true}')"
+    + (mode === 'missing' ? '' : `\nPath('outputs/segundo.json').write_text(${mode === 'corrupt' ? "'{'" : "'{\"ok\":true}'"})`);
+  const client = scriptedClient([
+    { toolCalls: [{ name: 'execute_python', args: { code } }] },
+    { content: 'Listo. Generé ambos archivos JSON y verifiqué los dos.' },
+  ]);
+  const ran = await runAgentRunnerForChat({ instruction: 'Genera exactamente dos archivos JSON descargables.',
+    client, driver: 'local', maxIterations: 3, userId: `partial-json-${mode}`,
+    onEvent: (event) => events.push(event), saveArtifact: (input) => {
+      if (mode === 'storage-failure' && input.filename === 'segundo.json') throw new Error('storage unavailable');
+      return { id: input.filename, filename: input.filename, format: 'json', mime: 'application/json', downloadUrl: `/artifact/${input.filename}` };
+    } });
+  assert.equal(ran.ok, false);
+  assert.equal(ran.artifacts.length, 1);
+  assert.match(ran.summary, /lote está incompleto/i);
+  assert.doesNotMatch(ran.summary, /Listo|Generé ambos|verifiqué los dos/);
+  assert.ok(events.filter((event) => event.type === 'final').every((event) => event.verified === false && event.text === ran.summary));
+  assert.equal(events.some((event) => event.type === 'outputs' && event.label === 'Listo'), false);
 });
 
 test('AgentRunner preserves provider failure when a requested SAV and Excel produced no files', async () => {

@@ -18,7 +18,7 @@ const { renderPreview } = require('../doc-preview');
 const {
   EXTENSION_TO_MIME,
   INTERNAL: { validateAgentArtifactBuffer },
-  saveArtifact,
+  saveVerifiedArtifact: saveArtifact,
 } = require('./task-tools');
 const persistence = require('./agent-task-persistence');
 
@@ -510,7 +510,7 @@ async function generateVancouverMatrixDocument({
   const filename = rows.length === 1
     ? `matriz_vancouver_${String(docs[0].file.originalName || 'documento').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 42)}.docx`
     : 'matriz_vancouver_documentos.docx';
-  const artifact = saveArtifact({
+  const artifact = await saveArtifact({
     filename,
     base64: buffer.toString('base64'),
     mime: EXTENSION_TO_MIME.docx,

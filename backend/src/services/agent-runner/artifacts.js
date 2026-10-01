@@ -3,6 +3,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { hasVerifiedSavBytes } = require('./sav-validation');
+const { EXTENSION_TO_MIME } = require('../agents/artifact-format-registry');
+const { validateArtifactBytes, bindArtifactReadback } = require('../agents/artifact-delivery-validation');
 
 /**
  * Conversation artifact registry.
@@ -294,7 +296,12 @@ async function persistOutputs({
       try { onEvent({ type: 'output_invalid', name: out.name, reason: 'sav_unverified' }); } catch { /* trace only */ }
       continue;
     }
-    eligible.push({ out, ext });
+    const structure = ext === 'sav' ? null : await validateArtifactBytes(ext, out.buffer, { validation: out.validation });
+    if (structure && !structure.passed) {
+      try { onEvent({ type: 'output_invalid', name: out.name, reason: structure.reason, code: structure.code }); } catch { /* trace only */ }
+      continue;
+    }
+    eligible.push({ out, ext, structure });
   }
   if (atomicSavXlsxPair && (eligible.length !== 2
     || new Set(eligible.map((item) => item.ext)).size !== 2
@@ -358,18 +365,17 @@ async function persistOutputs({
     }
   };
 
-  for (const { out, ext } of eligible) {
-    const mime = (
-      ext === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-      : ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      : ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      : ext === 'sav' ? 'application/x-spss-sav'
-      : ext === 'pdf' ? 'application/pdf'
-      : 'application/octet-stream'
-    );
+  for (const { out, ext, structure } of eligible) {
+    const mime = EXTENSION_TO_MIME[ext];
     let saved;
-    const validation = out.validation || { ok: true, passed: true, engine: 'agent_runner', scope: 'file_structure_only' };
+    const validation = out.validation
+      ? { ...out.validation, ...(structure ? { structure } : {}) }
+      : structure;
     try {
+      if (ext === 'sav') {
+        if (!hasVerifiedSavBytes(out)) throw new Error('sav_unverified');
+        bindArtifactReadback(validation, ext, out.buffer);
+      }
       saved = await save({
         filename: out.name,
         base64: out.buffer.toString('base64'),
@@ -380,6 +386,7 @@ async function persistOutputs({
         validation,
       });
       if (!saved?.id || !saved?.filename || !saved?.downloadUrl) throw new Error('artifact_persistence_incomplete');
+      if (saved.validation?.passed === false || saved.validation?.ok === false) throw new Error('artifact_persistence_validation_failed');
     } catch (err) {
       try { onEvent({ type: 'output_invalid', name: out.name, reason: 'artifact_persistence_failed' }); } catch { /* non-fatal UI event */ }
       if (atomicSavXlsxPair) {
@@ -397,7 +404,7 @@ async function persistOutputs({
       path: saved.path || null,
       downloadUrl: saved.downloadUrl,
       previewHtml: null,
-      validation,
+      validation: saved.validation || validation,
     };
     if (!atomicSavXlsxPair && prisma?.generatedArtifact && userId && saved.id) {
       try {

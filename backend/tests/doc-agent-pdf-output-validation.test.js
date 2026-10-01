@@ -102,6 +102,18 @@ test('the general agent rejects an unreadable PDF before it can be marked valid'
   const { output, events } = await runAgentOutputCheck(source, Buffer.from('definitely not a PDF'), instruction);
   assert.equal(output.valid, false);
   assert.equal(output.validation?.passed, false);
+  assert.equal(output.validation?.reason, 'pdf_header_invalid');
+  assert.equal(output.validation?.code, 'E_PARAMS');
+  assert.ok(events.some((event) => event.type === 'output_invalid' && event.reason === 'pdf_header_invalid'));
+});
+
+test('a matching PDF header cannot bypass the real unreadable-document rejection', async () => {
+  const source = await pdfWith('Proyecto revisado');
+  const { output, events } = await runAgentOutputCheck(source, Buffer.from('%PDF-1.7\ncorrupt objects\n%%EOF'), instruction);
+  assert.equal(output.valid, false);
+  assert.equal(output.validation?.passed, false);
+  assert.equal(output.validation?.reason, 'pdf_unreadable');
+  assert.equal(output.validation?.code, 'E_PARAMS');
   assert.ok(events.some((event) => event.type === 'output_invalid' && event.reason === 'pdf_unreadable'));
 });
 
@@ -168,7 +180,9 @@ test('explicit conversion from a non-PDF source accepts only a readable PDF resu
     { collectOutputs: async () => [{ name: 'convertido.pdf', buffer: Buffer.from('not a PDF') }] }, () => {}, context,
   );
   assert.equal(unreadable[0].valid, false);
-  assert.equal(unreadable[0].validation?.reason, 'pdf_unreadable');
+  assert.equal(unreadable[0].validation?.passed, false);
+  assert.equal(unreadable[0].validation?.reason, 'pdf_header_invalid');
+  assert.equal(unreadable[0].validation?.code, 'E_PARAMS');
 });
 
 test('the general agent accepts a verified PDF literal edit', async () => {

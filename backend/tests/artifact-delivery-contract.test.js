@@ -16,6 +16,48 @@ function verifiedStep(id) {
 }
 
 describe('multi-artifact delivery contract', () => {
+  test('real edit/delivery verbs, plural downloads and mixed format counts remain complete only with all files', () => {
+    const examples = [
+      ['Edita los tres archivos Word, Excel y PowerPoint adjuntos y devuelve exactamente tres archivos editados .docx, .xlsx y .pptx descargables.', ['docx', 'xlsx', 'pptx'], [1, 1, 1]],
+      ['Genera exactamente dos archivos descargables: vector.svg y vista.png.', ['svg', 'png'], [1, 1]],
+      ['Devuélveme dos archivos JSON y YAML descargables.', ['json', 'yaml'], [1, 1]],
+      ['Genera tres archivos descargables: dos documentos Word y un Excel.', ['docx', 'xlsx'], [2, 1]],
+    ];
+    for (const [prompt, formats, counts] of examples) {
+      const contract = contractService.buildArtifactDeliveryContract(prompt, { multipleArtifacts: true });
+      assert.equal(contract.active, true, prompt);
+      assert.deepEqual(contract.requested.map((item) => item.format), formats, prompt);
+      assert.deepEqual(contract.requested.map((item) => item.count), counts, prompt);
+      assert.equal(contract.expectedCount, counts.reduce((a, b) => a + b), prompt);
+      const artifacts = contract.requested.flatMap((request) => Array.from({ length: request.count }, (_, i) => ({
+        id: `${request.format}-${i}`, filename: `${request.format}-${i}.${request.format}`, format: request.format, downloadUrl: '/file',
+      })));
+      assert.deepEqual(contractService.assessArtifactDeliveryCounts(contract, artifacts).missing, []);
+      assert.ok(contractService.assessArtifactDeliveryCounts(contract, artifacts.slice(0, -1)).missing.length > 0);
+    }
+  });
+
+  test('an explicit total is preserved when some formats are unnamed or exceed a bounded turn', () => {
+    for (const count of [3, 10]) {
+      const contract = contractService.buildArtifactDeliveryContract(`Genera ${count} archivos descargables, incluyendo un Word y un Excel.`, { multipleArtifacts: true });
+      assert.equal(contract.expectedCount, count);
+      const files = [{ format: 'docx', filename: 'word.docx', downloadUrl: '/1' }, { format: 'xlsx', filename: 'excel.xlsx', downloadUrl: '/2' }];
+      assert.equal(contractService.assessArtifactDeliveryCounts(contract, files).missing.reduce((sum, item) => sum + item.count, 0), count - 2);
+    }
+  });
+
+  test('quoted replacement content is not a document count; aliases satisfy their canonical format', () => {
+    const quoted = contractService.buildArtifactDeliveryContract('Edita Word: cambia «texto» por «tres documentos» y devuelve un archivo Word.', { multipleArtifacts: true });
+    assert.equal(quoted.expectedCount, 1);
+    const aliases = contractService.buildArtifactDeliveryContract('Entrega tres archivos JPEG, HTML y YAML.', { multipleArtifacts: true });
+    const files = ['jpeg', 'htm', 'yml'].map((format) => ({ format, filename: `archivo.${format}`, downloadUrl: '/file' }));
+    assert.deepEqual(contractService.assessArtifactDeliveryCounts(aliases, files).missing, []);
+    const rows = contractService.buildArtifactDeliveryContract('Genera un Excel para 20 participantes con 20 preguntas.', { multipleArtifacts: true });
+    assert.equal(rows.expectedCount, 1);
+    const mixed = contractService.buildArtifactDeliveryContract('Genera dos Word y un Excel.', { multipleArtifacts: true });
+    assert.equal(mixed.expectedCount, 3);
+    assert.deepEqual(mixed.requested.map((item) => item.count), [2, 1]);
+  });
   test('SPSS plus Excel stays incomplete until both independently verified files exist', () => {
     const contract = contractService.buildArtifactDeliveryContract(
       'dame un documentos de spss con una muestra de 20 de 20 preguntas y un excel',

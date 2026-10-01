@@ -12,7 +12,8 @@ const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-artifact-foll
 process.env.AGENT_ARTIFACT_DIR = artifactDir;
 
 const objectStorage = require('../src/services/object-storage');
-const { saveArtifact, buildTaskTools, INTERNAL } = require('../src/services/agents/task-tools');
+const { saveArtifact, saveVerifiedArtifact, buildTaskTools, INTERNAL } = require('../src/services/agents/task-tools');
+const { saveReadableArtifact, readPairSource } = require('./helpers/readable-sav-xlsx-fixtures');
 const { validateFinalize } = require('../src/services/agents/agentic-execution-profile');
 const {
   isReadOnlyGeneratedArtifactFollowup,
@@ -26,10 +27,10 @@ const { buildRouteTestApp, installAuthSessionMock, reloadModule } = require('./h
 test('files:[] comparison recovers both validated SAV and XLSX from this owner and chat', async () => {
   const ownerUserId = 'owner-followup';
   const chatId = 'chat-followup';
-  const sav = saveArtifact({ filename: 'muestra.sav', base64: Buffer.from('SAV synthetic').toString('base64'), ownerUserId, chatId, validation: { passed: true } });
-  const xlsx = saveArtifact({ filename: 'muestra.xlsx', base64: Buffer.from('XLSX synthetic').toString('base64'), ownerUserId, chatId, validation: { passed: true } });
-  const foreign = saveArtifact({ filename: 'foreign.sav', base64: Buffer.from('foreign').toString('base64'), ownerUserId: 'other-owner', chatId, validation: { passed: true } });
-  const otherChat = saveArtifact({ filename: 'other-chat.sav', base64: Buffer.from('other chat').toString('base64'), ownerUserId, chatId: 'another-chat', validation: { passed: true } });
+  const sav = await saveReadableArtifact('muestra.sav', { userId: ownerUserId, chatId });
+  const xlsx = await saveReadableArtifact('muestra.xlsx', { userId: ownerUserId, chatId });
+  const foreign = await saveReadableArtifact('foreign.sav', { userId: 'other-owner', chatId });
+  const otherChat = await saveReadableArtifact('other-chat.sav', { userId: ownerUserId, chatId: 'another-chat' });
   const failed = saveArtifact({ filename: 'failed.xlsx', base64: Buffer.from('failed').toString('base64'), ownerUserId, chatId, validation: { passed: false } });
   const rows = [
     { id: xlsx.id, filename: xlsx.filename, format: 'xlsx', taskId: 'task-pair', createdAt: new Date('2026-09-26T11:02:00Z') },
@@ -82,7 +83,8 @@ test('files:[] comparison recovers both validated SAV and XLSX from this owner a
   const incompleteContext = buildGeneratedArtifactReadContext(latestOnly, 'Compara el SAV y Excel que acabas de entregar');
   assert.match(incompleteContext, /Faltan.*\.sav/);
   assert.match(incompleteContext, /No puedes concluir que los archivos coinciden/);
-  const latestPdf = saveArtifact({ filename: 'latest.pdf', base64: Buffer.from('latest').toString('base64'), ownerUserId, chatId, validation: { passed: true } });
+  const pdf = await require('pdf-lib').PDFDocument.create(); pdf.addPage();
+  const latestPdf = await saveVerifiedArtifact({ filename: 'latest.pdf', base64: Buffer.from(await pdf.save()).toString('base64'), ownerUserId, chatId, validation: { passed: true } });
   const otherDelivery = await resolveReadOnlyGeneratedArtifactFollowup({ generatedArtifact: { findMany: async () => [
     { id: latestPdf.id, filename: latestPdf.filename, format: 'pdf', taskId: 'newer-task', createdAt: new Date('2026-09-26T11:03:00Z') },
     ...rows,
@@ -90,7 +92,8 @@ test('files:[] comparison recovers both validated SAV and XLSX from this owner a
     userId: ownerUserId, chatId, providedFileIds: [], goal: 'Compara el SAV y Excel que acabas de entregar',
   });
   assert.deepEqual(otherDelivery, [], 'a newer PDF delivery must not resurrect the older SAV/XLSX pair');
-  const latestImage = saveArtifact({ filename: 'latest.png', base64: Buffer.from('image').toString('base64'), ownerUserId, chatId, validation: { passed: true } });
+  const png = await require('sharp')({ create: { width: 2, height: 2, channels: 3, background: 'white' } }).png().toBuffer();
+  const latestImage = await saveVerifiedArtifact({ filename: 'latest.png', base64: png.toString('base64'), ownerUserId, chatId, validation: { passed: true } });
   const imageDelivery = await resolveReadOnlyGeneratedArtifactFollowup({ generatedArtifact: { findMany: async () => [
     { id: latestImage.id, filename: latestImage.filename, format: 'png', taskId: 'image-task', createdAt: new Date('2026-09-26T11:04:00Z') },
     ...rows,
@@ -127,8 +130,8 @@ test('files:[] comparison recovers both validated SAV and XLSX from this owner a
 test('python_exec reads both owner-scoped artifacts after their local copies move to object storage', async (t) => {
   const ownerUserId = 'owner-r2';
   const chatId = 'chat-r2';
-  const sav = saveArtifact({ filename: 'values.sav', base64: Buffer.from('same 400 values').toString('base64'), ownerUserId, chatId, validation: { passed: true } });
-  const xlsx = saveArtifact({ filename: 'values.xlsx', base64: Buffer.from('same 400 values').toString('base64'), ownerUserId, chatId, validation: { passed: true } });
+  const sav = await saveReadableArtifact('values.sav', { userId: ownerUserId, chatId });
+  const xlsx = await saveReadableArtifact('values.xlsx', { userId: ownerUserId, chatId });
   const originals = new Map([[sav.id, fs.readFileSync(sav.path)], [xlsx.id, fs.readFileSync(xlsx.path)]]);
   const extensionById = new Map([[sav.id, '.sav'], [xlsx.id, '.xlsx']]);
   const previousToLocalTemp = objectStorage.toLocalTemp;
@@ -149,12 +152,7 @@ test('python_exec reads both owner-scoped artifacts after their local copies mov
     return { path: destination, cleanup: async () => { fs.rmSync(destination, { force: true }); } };
   };
   const refs = [sav, xlsx].map(({ id, filename }) => ({ id, filename }));
-  const output = await INTERNAL.pythonExec.execute({ source: [
-    'from pathlib import Path',
-    'assert len(ARTIFACT_FILES) == 2',
-    'values = [Path(item["path"]).read_text() for item in ARTIFACT_FILES.values()]',
-    'print("match=" + str(values[0] == values[1]).lower())',
-  ].join('\n') }, { userId: ownerUserId, chatId, generatedArtifactRefs: refs });
+  const output = await INTERNAL.pythonExec.execute({ source: readPairSource() }, { userId: ownerUserId, chatId, generatedArtifactRefs: refs });
   assert.equal(output.ok, true, output.stderr);
   assert.match(output.stdout, /match=true/);
   assert.equal(fs.existsSync(path.join(artifactDir, `hydrated-${sav.id}.sav`)), false);
@@ -217,8 +215,8 @@ test('HTTP files:[] follow-up reaches the selected model runner without an OpenA
     fs.rmSync(taskStoreDir, { recursive: true, force: true });
   });
   const chatId = 'http-generated-chat';
-  const sav = saveArtifact({ filename: 'http-values.sav', base64: Buffer.from('sav').toString('base64'), ownerUserId: auth.user.id, chatId, validation: { passed: true } });
-  const xlsx = saveArtifact({ filename: 'http-values.xlsx', base64: Buffer.from('xlsx').toString('base64'), ownerUserId: auth.user.id, chatId, validation: { passed: true } });
+  const sav = await saveReadableArtifact('http-values.sav', { userId: auth.user.id, chatId });
+  const xlsx = await saveReadableArtifact('http-values.xlsx', { userId: auth.user.id, chatId });
   prisma.chat.findFirst = async ({ where }) => where?.id === chatId && where?.userId === auth.user.id ? { id: chatId } : null;
   prisma.generatedArtifact.findMany = async () => [xlsx, sav].map((artifact) => ({
     id: artifact.id,
@@ -249,4 +247,19 @@ test('HTTP files:[] follow-up reaches the selected model runner without an OpenA
   assert.match(response.headers['content-type'], /text\/event-stream/);
   assert.equal(selectedModel, 'grok-4.7');
   assert.match(response.text, /done/);
+});
+
+test('a forged validation flag cannot authorize byte reading of plaintext statistical artifacts', async () => {
+  const files = ['sav', 'xlsx'].map((format) => saveArtifact({ filename: `forged.${format}`,
+    base64: Buffer.from('fake data').toString('base64'), ownerUserId: 'forged-owner', chatId: 'forged-chat', validation: { passed: true } }));
+  assert.ok(files.every((file) => file.validation.passed === false));
+  const refs = await resolveReadOnlyGeneratedArtifactFollowup({ generatedArtifact: { findMany: async () => files } }, {
+    userId: 'forged-owner', chatId: 'forged-chat', providedFileIds: [], goal: 'Compara el SAV y Excel que acabas de entregar',
+  });
+  assert.deepEqual(refs, []);
+  const output = await INTERNAL.pythonExec.execute({ source: 'print("ran")' }, {
+    userId: 'forged-owner', chatId: 'forged-chat', generatedArtifactRefs: files,
+  });
+  assert.equal(output.ok, false);
+  assert.doesNotMatch(output.stdout || '', /ran/);
 });

@@ -63,7 +63,14 @@ function buildValidation(transformed) {
   };
 }
 
-function persistOrWrap({ buffer, filename, userId, chatId, validation }) {
+async function persistOrWrap({ buffer, filename, userId, chatId, validation }) {
+  const structure = await require('../agents/artifact-delivery-validation').validateArtifactBytes('docx', buffer);
+  if (!structure.passed) {
+    const error = new Error(structure.error);
+    error.code = 'DOC_ENGINE_TRANSFORM_FAILED';
+    throw error;
+  }
+  validation.structure = structure;
   let artifact = null;
   if (userId) {
     try {
@@ -152,7 +159,7 @@ async function tryDocEngineAfterSelection({
     const contentName = pair.content.originalName || pair.content.filename || pair.content.name || 'documento.docx';
     const base = path.basename(contentName, path.extname(contentName)).replace(/[^\w.-]+/g, '_') || 'documento';
     const filename = `${base}_formato.docx`;
-    const artifact = persistOrWrap({
+    const artifact = await persistOrWrap({
       buffer: transformed.buffer,
       filename,
       userId,

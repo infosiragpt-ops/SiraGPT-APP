@@ -117,12 +117,12 @@ function buildTranscriptionDeliveryMarkdown({ fileCount = 1, format = '', artifa
 async function buildVerbatimTranscriptionDocument({ task, filename, markdown, format, emit }) {
   const fs = require('fs');
   const { createDocument } = require('../document-service');
-  const { saveArtifact, EXTENSION_TO_MIME } = require('./task-tools');
+  const { saveVerifiedArtifact: saveArtifact, EXTENSION_TO_MIME } = require('./task-tools');
   const persistence = require('./agent-task-persistence');
   const { filePath } = await createDocument(task.userId, filename, markdown);
   const buffer = await fs.promises.readFile(filePath);
   const mime = MIME_BY_FORMAT[format] || EXTENSION_TO_MIME[format] || 'application/octet-stream';
-  const artifact = saveArtifact({
+  const artifact = await saveArtifact({
     filename,
     base64: buffer.toString('base64'),
     mime,

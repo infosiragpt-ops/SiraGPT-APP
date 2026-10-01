@@ -113,7 +113,7 @@ test('the default builder writes a real Word whose text is the transcript (no mo
   const PizZip = require('pizzip');
   const saved = [];
   const taskTools = require('../src/services/agents/task-tools');
-  const originalSave = taskTools.saveArtifact;
+  const originalSave = taskTools.saveVerifiedArtifact;
   const persistence = require('../src/services/agents/agent-task-persistence');
   const originalPersist = persistence.persistGeneratedArtifact;
   const docService = require('../src/services/document-service');
@@ -124,7 +124,13 @@ test('the default builder writes a real Word whose text is the transcript (no mo
     await originalCreate.call(docService, `verbatim-test-${process.pid}`, filename, content).then(async (r) => { await fs.promises.copyFile(r.filePath, filePath); await fs.promises.rm(path.dirname(r.filePath), { recursive: true, force: true }); });
     return { filePath, safeFilename: filename };
   };
-  taskTools.saveArtifact = (input) => { saved.push(input); return { id: 'art1', filename: input.filename, mime: input.mime, sizeBytes: Buffer.from(input.base64, 'base64').length, downloadUrl: '/api/agent/artifact/art1' }; };
+  taskTools.saveVerifiedArtifact = async (input) => {
+    const artifact = await originalSave(input);
+    assert.equal(artifact.validation.passed, true);
+    assert.equal(artifact.validation.structure.summary.reader, 'python-docx');
+    saved.push(input);
+    return { ...artifact, id: 'art1' };
+  };
   persistence.persistGeneratedArtifact = async () => ({});
   try {
     const events = [];
@@ -138,7 +144,7 @@ test('the default builder writes a real Word whose text is the transcript (no mo
     assert.match(xml, /línea 29 de la transcripción/);
     assert.ok(events.some((ev) => ev.type === 'file_artifact' && ev.artifact.id === 'art1'));
   } finally {
-    taskTools.saveArtifact = originalSave;
+    taskTools.saveVerifiedArtifact = originalSave;
     persistence.persistGeneratedArtifact = originalPersist;
     docService.createDocument = originalCreate;
     fs.rmSync(tmp, { recursive: true, force: true });
