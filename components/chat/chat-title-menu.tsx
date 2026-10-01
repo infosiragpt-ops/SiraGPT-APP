@@ -98,6 +98,7 @@ export function ChatTitleMenu({
   const [deleting, setDeleting] = React.useState(false)
   const [folders, setFolders] = React.useState<{ folders: string[]; current: string | null }>({ folders: [], current: null })
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const renameFocusTimerRef = React.useRef<number | null>(null)
   const triggerRef = React.useRef<HTMLButtonElement>(null)
   // Blur after Enter/Escape must not save twice.
   const commitRef = React.useRef<"idle" | "done">("idle")
@@ -110,24 +111,34 @@ export function ChatTitleMenu({
       : Boolean(chat?.isPinned) || pinnedIds.includes(chatId)
     : false
 
+  const cancelRenameFocus = React.useCallback(() => {
+    if (renameFocusTimerRef.current === null) return
+    window.clearTimeout(renameFocusTimerRef.current)
+    renameFocusTimerRef.current = null
+  }, [])
+
   React.useEffect(() => {
     // A new chat resets any inline edit left open on the previous one.
     setEditing(false)
     setPinOverride(null)
-  }, [chatId])
+    return cancelRenameFocus
+  }, [chatId, cancelRenameFocus])
 
   const startRename = React.useCallback(() => {
     if (!chatId) return
+    cancelRenameFocus()
     setDraft(title)
     setEditing(true)
     commitRef.current = "idle"
-    window.setTimeout(() => {
+    renameFocusTimerRef.current = window.setTimeout(() => {
+      renameFocusTimerRef.current = null
       inputRef.current?.focus()
       inputRef.current?.select()
     }, 30)
-  }, [chatId, title])
+  }, [chatId, title, cancelRenameFocus])
 
   const finishRename = React.useCallback(async (save: boolean) => {
+    cancelRenameFocus()
     if (commitRef.current === "done") return
     commitRef.current = "done"
     setEditing(false)
@@ -136,7 +147,7 @@ export function ChatTitleMenu({
     const ok = await renameChat(chatId, next)
     if (ok) toast.success("Chat renombrado")
     else toast.error("No se pudo cambiar el nombre")
-  }, [chatId, draft, renameChat, title])
+  }, [chatId, draft, renameChat, title, cancelRenameFocus])
 
   const togglePin = React.useCallback(async () => {
     if (!chatId) return
@@ -224,8 +235,14 @@ export function ChatTitleMenu({
         value={draft}
         aria-label="Nombre del chat"
         maxLength={200}
-        onChange={(event) => setDraft(event.target.value)}
+        onPointerDown={cancelRenameFocus}
+        onChange={(event) => {
+          // Do not select over text entered before the deferred autofocus runs.
+          cancelRenameFocus()
+          setDraft(event.target.value)
+        }}
         onKeyDown={(event) => {
+          cancelRenameFocus()
           if (event.key === "Enter") {
             event.preventDefault()
             void finishRename(true)

@@ -1,13 +1,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { useChatCodingWorkspace, useCloudCodingProjects } from "@/hooks/use-chat-coding-workspace"
+import { useChatCodingWorkspace, useCloudCodingProjects, useChatCodingPreview } from "@/hooks/use-chat-coding-workspace"
 import { coreCodexApi } from "@/lib/codex/api/core"
 import { projectsCodexApi } from "@/lib/codex/api/projects"
 import { CODING_WORKSPACE_READY_EVENT, emitCodingWorkspaceReady } from "@/lib/chat/coding-workspace-event"
+import { CODING_PREVIEW_READY_EVENT, emitCodingPreviewReady, readyCodingPreviewPath } from "@/lib/chat/coding-preview-event"
 import type { CodexProject } from "@/lib/codex/api/types"
 
 vi.mock("@/lib/codex/api/core", () => ({ coreCodexApi: { access: vi.fn() } }))
-vi.mock("@/lib/codex/api/projects", () => ({ projectsCodexApi: { getProjectByChat: vi.fn(), listProjects: vi.fn() } }))
+vi.mock("@/lib/codex/api/projects", () => ({ projectsCodexApi: { getProjectByChat: vi.fn(), listProjects: vi.fn(), previewStatus: vi.fn() } }))
 
 const project = (id: string, chatId: string): CodexProject => ({ id, chatId, name: `Proyecto ${id}`, status: "ready", workspacePath: null, previewUrl: null, error: null })
 function deferred<T>() {
@@ -129,5 +130,84 @@ describe("durable project rows in Carpetas", () => {
     await waitFor(() => expect(coreCodexApi.access).toHaveBeenCalled())
     expect(result.current).toEqual([])
     expect(projectsCodexApi.listProjects).not.toHaveBeenCalled()
+  })
+})
+
+
+describe("ready cloud preview identity and recovery", () => {
+  const workspace = { userId: "u", chatId: "c", projectId: "p", projectName: "App" }
+  const status = { project: "p", ready: true, running: true, basePath: "/api/codex/projects/p/preview/tok/app/" }
+  beforeEach(() => { vi.resetAllMocks() })
+
+  it("requires actual readiness and the exact tokenized project path", () => {
+    expect(readyCodingPreviewPath(status, "p")).toBe(status.basePath)
+    expect(readyCodingPreviewPath({ ...status, framework: "next" }, "p")).toBe(status.basePath.slice(0, -1))
+    for (const bad of [
+      { ...status, ready: false }, { ...status, running: false }, { ...status, project: "other" },
+      { ...status, basePath: "http://localhost:5000" }, { ...status, basePath: "https://evil.test/app/" },
+      { ...status, basePath: "/api/codex/projects/other/preview/tok/app/" },
+      { ...status, basePath: "/api/codex/projects/p/preview/../app/" },
+      { ...status, basePath: status.basePath + "?redirect=https://evil.test" },
+    ]) expect(readyCodingPreviewPath(bad, "p")).toBeNull()
+  })
+
+  it("recovers only the bound project without starting and ignores foreign events", async () => {
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue(status)
+    const { result } = renderHook(() => useChatCodingPreview(workspace))
+    await waitFor(() => expect(result.current?.basePath).toBe(status.basePath))
+    await act(async () => {
+      emitCodingPreviewReady({ chatId: "other", projectId: "p" }, "u", "other")
+      emitCodingPreviewReady({ chatId: "c", projectId: "other" }, "u", "c")
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "other", "c")
+    })
+    expect(projectsCodexApi.previewStatus).toHaveBeenCalledTimes(1)
+    await act(async () => { emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c") })
+    await waitFor(() => expect(projectsCodexApi.previewStatus).toHaveBeenCalledTimes(2))
+  })
+
+  it("exposes a new revision for a verified ready event with the same URL and coalesces rapid events", async () => {
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue(status)
+    const { result } = renderHook(() => useChatCodingPreview(workspace))
+    await waitFor(() => expect(result.current).toMatchObject({ basePath: status.basePath, revision: 0 }))
+    await act(async () => {
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c")
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c")
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c")
+    })
+    await waitFor(() => expect(result.current).toMatchObject({ basePath: status.basePath, revision: 3 }))
+    expect(projectsCodexApi.previewStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not publish an unverified preview revision or a late ready result", async () => {
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue(status)
+    const { result } = renderHook(() => useChatCodingPreview(workspace))
+    await waitFor(() => expect(result.current?.revision).toBe(0))
+    const pending = deferred<unknown>()
+    vi.mocked(projectsCodexApi.previewStatus).mockReturnValueOnce(pending.promise)
+    await act(async () => { emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c") })
+    expect(result.current?.revision).toBe(0)
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue({ ...status, ready: false })
+    await act(async () => { emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c") })
+    expect(result.current).toBeNull()
+    await act(async () => { pending.resolve(status) })
+    expect(result.current).toBeNull()
+  })
+
+  it("drops stale status responses when switching accounts or chats", async () => {
+    const first = deferred<unknown>()
+    vi.mocked(projectsCodexApi.previewStatus).mockReturnValueOnce(first.promise).mockResolvedValue({ ready: false })
+    const { result, rerender } = renderHook(({ binding }) => useChatCodingPreview(binding), { initialProps: { binding: workspace } })
+    rerender({ binding: { ...workspace, userId: "other", chatId: "other" } })
+    await act(async () => { first.resolve(status) })
+    expect(result.current).toBeNull()
+  })
+
+  it("does not accept a URL or an event for a different stream chat", () => {
+    const listener = vi.fn()
+    window.addEventListener(CODING_PREVIEW_READY_EVENT, listener)
+    expect(emitCodingPreviewReady({ chatId: "other", projectId: "p" }, "u", "c")).toBe(false)
+    expect(emitCodingPreviewReady({ chatId: "c", projectId: "p", url: "https://evil.test" }, "u", "c")).toBe(true)
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ chatId: "c", projectId: "p", userId: "u" })
+    window.removeEventListener(CODING_PREVIEW_READY_EVENT, listener)
   })
 })

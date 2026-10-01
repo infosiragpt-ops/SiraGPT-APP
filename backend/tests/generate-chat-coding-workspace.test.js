@@ -15,6 +15,7 @@ const sseClose = require('../src/services/ai/generate-sse-close');
 const { createClientGoneWriter } = require('../src/services/ai/sse-client-gone');
 const turnProgress = require('../src/services/turn-progress');
 const artifacts = require('../src/services/artifacts/artifact-generator');
+const agenticDegradePolicy = require('../src/services/ai/agentic-degrade-policy');
 
 const routeFile = path.resolve(__dirname, '../src/routes/ai.js');
 const routeSource = fs.readFileSync(routeFile, 'utf8');
@@ -35,10 +36,13 @@ async function fixture(testContext, options = {}) {
   const calls = [];
   const errors = [];
   const events = [];
-  const projects = [];
+  const projects = options.existingProject ? [options.existingProject] : [];
   const workspaceResolutions = [];
   const agenticRuns = [];
   const artifactRuns = [];
+  const plainRuns = [];
+  const persistedTurns = [];
+  const warnings = [];
   const streamControllers = new Map();
   const quotaEntered = deferred();
   const quotaReleased = deferred();
@@ -73,7 +77,8 @@ async function fixture(testContext, options = {}) {
     },
   };
   const logger = {
-    info() {}, warn() {}, warnError() {},
+    info() {}, warnError() {},
+    warn(event, metadata) { warnings.push({ event, metadata }); },
     error(_event, error) { errors.push(error); },
   };
   const dynamicModules = {
@@ -95,13 +100,14 @@ async function fixture(testContext, options = {}) {
       resolveToolCallMode: () => options.modelHasTools === false ? 'none' : 'native',
       runAgenticChat: async (input) => {
         agenticRuns.push(input);
-        const finalAnswer = 'Fixture coding result';
-        input.res.write(`data: ${JSON.stringify({ content: finalAnswer })}\n\n`);
-        return { finalAnswer, stoppedReason: 'finalized' };
+        const result = options.agenticResult || { finalAnswer: 'Fixture coding result', stoppedReason: 'finalized' };
+        input.res.write(`data: ${JSON.stringify({ content: result.finalAnswer })}\n\n`);
+        return result;
       },
       isHandledAgenticChatResult: (result) => result.stoppedReason === 'finalized',
     },
     '../services/ai/picked-model-label': { resolvePickedModelLabel: async () => 'Modelo elegido' },
+    '../services/ai/agentic-degrade-policy': agenticDegradePolicy,
     '../services/agents/generated-artifact-followup': { resolveChatGeneratedArtifactFollowup: async () => [] },
   };
   const context = {
@@ -183,12 +189,19 @@ async function fixture(testContext, options = {}) {
         return { refused: false, title: 'Fixture artifact', description: '', html: '<html>Artifact</html>' };
       },
     },
+    aiService: {
+      generateStream: async (input) => {
+        plainRuns.push(input);
+        input.res.write(`data: ${JSON.stringify({ content: 'Fixture plain completion' })}\n\n`);
+        return 'Fixture plain completion';
+      },
+    },
     OpenAI: class FixtureOpenAI {},
     _hashUserIdForSpan: () => null,
     withAIGenerateSpan: (_attributes, callback) => callback(null),
     resolveUserSkillClearance: () => 'standard',
     MESSAGE_IDEMPOTENCY_HASH_FIELD: turnIdentity.MESSAGE_IDEMPOTENCY_HASH_FIELD,
-    saveChatAndTrackUsage: async () => null,
+    saveChatAndTrackUsage: async (...args) => { persistedTurns.push(args); return null; },
     postResponseBrainHook: { runShadowModeBrainPipeline: async () => {} },
     tryConsumePlanQuota: async () => {
       calls.push('quota-preflight');
@@ -250,7 +263,7 @@ async function fixture(testContext, options = {}) {
     const text = await response.text();
     return { status: response.status, text, type: response.headers.get('content-type') };
   };
-  return { request, calls, events, projects, workspaceResolutions, agenticRuns, artifactRuns, streamControllers, quotaEntered, quotaReleased };
+  return { request, calls, events, projects, workspaceResolutions, agenticRuns, artifactRuns, plainRuns, persistedTurns, warnings, streamControllers, quotaEntered, quotaReleased };
 }
 
 test('first chat coding prompt provisions only after provider and quota preflight, then emits the bound workspace', async (testContext) => {
@@ -395,6 +408,81 @@ test('interactive software requests reach the bound coding agent with the picked
     assert.equal(run.toolContext.coworkDisabled, true);
     assert.equal(harness.events.some((event) => event.type === 'error'), false, response.text);
     assert.match(response.text, /Fixture coding result/);
+    assert.match(response.text, /data: \[DONE\]/);
+  }
+});
+
+test('degraded coding runs preserve their full trace and report failure without plain regeneration', async (testContext) => {
+  for (const entry of [
+    { stoppedReason: 'no_message', reasonCode: 'no_message', status: null },
+    { stoppedReason: 'invalid_tool_calls', reasonCode: 'invalid_tool_calls', status: null },
+    { stoppedReason: 'model_error: 503 fixture provider unavailable', reasonCode: 'model_error', status: 503 },
+  ]) {
+    const agentRun = {
+      stoppedReason: entry.stoppedReason,
+      interrupted: false,
+      durationMs: 123456,
+      toolCallCount: 19,
+      steps: Array.from({ length: 19 }, (_, stepIndex) => ({
+        stepIndex, type: 'tool_call', toolName: 'codex_write_file', status: 'completed', durationMs: 1200,
+        args: { path: `src/fixture-${stepIndex}.js` }, result: { ok: true },
+      })),
+    };
+    const agentActivityTrace = {
+      kind: 'agent_runner_trace', version: 2, durationMs: 123456,
+      activityTrace: [{ type: 'tool_result', tool: 'codex_write_file', status: 'completed' }],
+    };
+    const harness = await fixture(testContext, {
+      stopAfterReady: false,
+      agenticResult: {
+        finalAnswer: 'Fixture incomplete coding response', stoppedReason: entry.stoppedReason,
+        agentRun, agentActivityTrace,
+      },
+    });
+    const response = await harness.request();
+    assert.equal(response.status, 200);
+    assert.equal(harness.agenticRuns.length, 1);
+    assert.equal(harness.plainRuns.length, 0);
+    assert.equal(harness.artifactRuns.length, 0);
+    assert.equal(harness.persistedTurns.length, 1, response.text);
+    const persisted = harness.persistedTurns[0];
+    assert.equal(persisted[12], agentRun, entry.stoppedReason);
+    assert.equal(persisted[14].activityTrace, agentActivityTrace, entry.stoppedReason);
+    assert.equal(persisted[12].steps.length, 19);
+    assert.equal(persisted[12].durationMs, 123456);
+    assert.match(persisted[3], /No pude completar la operación.*no doy los cambios por terminados/);
+    const replacement = harness.events.filter((event) => event.replace === true).at(-1);
+    assert.equal(replacement.content, persisted[3]);
+    assert.doesNotMatch(persisted[3], /Fixture incomplete coding response|Fixture plain completion/);
+    const degraded = harness.warnings.find((warning) => warning.event === 'agentic.degraded');
+    assert.equal(degraded?.metadata.reasonCode, entry.reasonCode);
+    assert.equal(degraded.metadata.status ?? null, entry.status);
+    assert.equal(degraded.metadata.durationMs, 123456);
+    assert.doesNotMatch(JSON.stringify(degraded.metadata), /fixture provider unavailable/);
+    assert.match(response.text, /data: \[DONE\]/);
+    assert.equal(harness.streamControllers.size, 0);
+  }
+});
+
+test('same-project continuation constraints reuse the bound workspace without generating a new project or isolated artifact', async (testContext) => {
+  for (const prompt of [
+    'Continúa en este mismo proyecto. Conserva lo ya creado, comprueba el backend y termina la validación. npm run build ya compiló correctamente. La vista previa está iniciada. No crees otro proyecto ni uses servicios de pago.',
+    'Continúa en este mismo proyecto. No crees otro proyecto.',
+    'Continúa en este mismo proyecto',
+  ]) {
+    const existingProject = { id: 'project-existing', name: 'Aplicación existente', status: 'ready' };
+    const harness = await fixture(testContext, { stopAfterReady: false, existingProject });
+    const response = await harness.request({ prompt, codingWorkspace: true });
+    assert.equal(response.status, 200);
+    assert.equal(harness.agenticRuns.length, 1, response.text);
+    assert.equal(harness.agenticRuns[0].toolContext.codingWorkspace.projectId, existingProject.id);
+    assert.equal(harness.agenticRuns[0].userQuery, prompt);
+    assert.equal(harness.projects.length, 1);
+    assert.equal(harness.calls.includes('create-project'), false);
+    assert.ok(harness.workspaceResolutions.length > 0);
+    assert.ok(harness.workspaceResolutions.every((result) => result.active && result.reused === true && result.projectId === existingProject.id));
+    assert.equal(harness.plainRuns.length, 0);
+    assert.equal(harness.artifactRuns.length, 0);
     assert.match(response.text, /data: \[DONE\]/);
   }
 });

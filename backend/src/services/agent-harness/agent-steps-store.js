@@ -40,7 +40,9 @@ function buildAgentMetadata(run, { model = null } = {}) {
   if (!run || !Array.isArray(run.steps)) return null;
   return {
     version: 1,
-    status: run.interrupted ? 'interrupted' : 'completed',
+    status: run.interrupted || run.stoppedReason === 'aborted'
+      ? 'interrupted'
+      : (run.stoppedReason && !/^(?:finalized(?:_|$)|plain_text_finalize$)/.test(run.stoppedReason) ? 'failed' : 'completed'),
     stoppedReason: run.stoppedReason || null,
     durationMs: run.durationMs || 0,
     toolCalls: run.toolCallCount || 0,

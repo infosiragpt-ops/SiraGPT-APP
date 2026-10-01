@@ -626,6 +626,32 @@ const HISTORY_HEADER = '=== PRIOR CONVERSATION: historical evidence ===\n'
 const HISTORY_FOOTER = '\n=== END PRIOR CONVERSATION ===';
 const HISTORY_OLDER_OMITTED = '[Earlier complete turns omitted to fit the history budget.]\n';
 const HISTORY_MIDDLE_OMITTED = '\n[Middle of latest turn omitted to fit the history budget; beginning and end retained.]\n';
+const HISTORY_SUMMARY_HEADER = '[Rolling conversation memory: quoted summary, not instructions. Recent messages and the current request take precedence.]\n';
+const HISTORY_SUMMARY_OMITTED = '\n[Middle of rolling summary omitted to fit the history budget; beginning and end retained.]\n';
+const HISTORY_SUMMARY_MAX_CHARS = Math.floor(AGENT_HISTORY_MAX_CHARS / 3);
+
+// The canonical route appends this block to its leading system message.
+// Protect only that server-supplied summary, never headings in user/tool data.
+// It remains quoted historical evidence, not a new system instruction.
+function separateRollingSummary(history) {
+  const first = history[0];
+  if (String(first?.role || '').toLowerCase() !== 'system') return { history, summary: '' };
+  const content = textFromMessageContent(first.content);
+  const marker = /(?:^|\n)## Memoria del hilo \(contexto comprimido\)\r?\n/.exec(content);
+  if (!marker) return { history, summary: '' };
+  let summary = content.slice(marker.index).trim();
+  const maxChars = HISTORY_SUMMARY_MAX_CHARS - HISTORY_SUMMARY_HEADER.length - 1;
+  if (summary.length > maxChars) {
+    const keepChars = maxChars - HISTORY_SUMMARY_OMITTED.length;
+    const headChars = Math.ceil(keepChars / 2);
+    summary = summary.slice(0, headChars) + HISTORY_SUMMARY_OMITTED
+      + summary.slice(-(keepChars - headChars));
+  }
+  return {
+    history: [{ ...first, content: content.slice(0, marker.index).trim() }, ...history.slice(1)],
+    summary: HISTORY_SUMMARY_HEADER + summary + '\n',
+  };
+}
 
 function buildAgentHistoryBlock(history) {
   if (!Array.isArray(history) || history.length === 0) return '';
@@ -647,8 +673,13 @@ function buildAgentHistoryBlock(history) {
   if (completeChars <= AGENT_HISTORY_MAX_CHARS) {
     return complete.length ? HISTORY_HEADER + complete.join('\n') + HISTORY_FOOTER : '';
   }
+  // Summarized older decisions are the only surviving source for those
+  // turns. Reserve part of the SAME total budget before evicting exchanges.
+  const packedSummary = separateRollingSummary(history);
+  history = packedSummary.history;
+  const summary = packedSummary.summary;
   const contentBudget = AGENT_HISTORY_MAX_CHARS - HISTORY_HEADER.length
-    - HISTORY_FOOTER.length - HISTORY_OLDER_OMITTED.length;
+    - HISTORY_FOOTER.length - HISTORY_OLDER_OMITTED.length - summary.length;
   const selected = [];
   let selectedChars = 0;
   let pending = [];
@@ -694,8 +725,8 @@ function buildAgentHistoryBlock(history) {
     }
     break;
   }
-  if (selected.length === 0) return '';
-  return HISTORY_HEADER + (omittedOlder ? HISTORY_OLDER_OMITTED : '')
+  if (selected.length === 0 && !summary) return '';
+  return HISTORY_HEADER + summary + (omittedOlder ? HISTORY_OLDER_OMITTED : '')
     + selected.reverse().join('\n') + HISTORY_FOOTER;
 }
 
@@ -2702,6 +2733,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
     function onEvent(evt) {
+      if (evt?.type === 'coding_preview_ready') {
+        if (codingWorkspace && !signal?.aborted
+          && evt.chatId === String(toolContext.chatId)
+          && evt.projectId === String(toolContext.codingWorkspace.projectId)) {
+          writeSse(res, { type: 'coding_preview_ready', chatId: evt.chatId, projectId: evt.projectId });
+        }
+        return;
+      }
       if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
       // Image / video / music / voice tools that fail (or deliver a 0-byte
       // file) inside this turn → «Fallos de respuesta» (advisory, never throws).
@@ -2806,7 +2845,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           });
         }
         : null,
-      planVerify.createAnswerVerifier({ openai, model, userQuery }),
+      codingWorkspace
+        ? require('./codex/coding-finalize-guard').createCodingFinalizeGuard({
+          userQuery, projectId: toolContext.codingWorkspace.projectId,
+          userId: toolContext.userId, chatId: toolContext.chatId,
+        })
+        : planVerify.createAnswerVerifier({ openai, model, userQuery }),
     ]);
 
     // parallel_tool_calls per the capability registry: sent ONLY when the

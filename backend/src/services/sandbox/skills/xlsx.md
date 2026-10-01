@@ -28,7 +28,8 @@ for row in ws.iter_rows(values_only=True):
 ```
 
 ## Read preserving formulas
-By default openpyxl reads cached values. To see formulas:
+By default openpyxl preserves formulas. Use data_only=True only for a separate
+read-only view of cached values; never save that view over the source:
 ```python
 wb = load_workbook('file.xlsx', keep_vba=False)  # formulas visible as strings
 ```
@@ -69,3 +70,23 @@ for sheet_name in wb.sheetnames:
 - Merged cells: check `ws.merged_cells` before iterating to avoid errors.
 - Date cells: openpyxl returns `datetime` objects; convert to string if needed.
 - Always save to a new file first, then verify before overwriting the original.
+
+## Native charts and user-directed design
+- Use native openpyxl charts linked to actual worksheet ranges, keeping data
+  and formulas accessible. Do not substitute an image for an editable chart.
+- Respect requested type (columns, horizontal bars, lines, area, pie, doughnut,
+  scatter), series/category colors, legend, labels, title and position. Default
+  styles are only for properties the user did not specify. Pie/doughnut needs
+  nonnegative parts of a whole; never fabricate or truncate data to fit it.
+- The agent sandbox provides /workspace/tmp/sira_charts.py with add_xlsx_chart;
+  read its signature. It adds a chart to an open worksheet without saving or
+  removing other charts. Use the native library for more specialized layouts.
+- Recolor existing charts without changing their data or formulas. Limit the
+  change to the selected chart, and preserve unrelated sheets and drawings.
+- Reopen the saved XLSX, check the chart relationships, type, values and colors,
+  and use inspect_document plus verify_visual(expect.charts=...) when available.
+  Render to check clipping, overlapping labels, contrast and print layout.
+- For charts backed by formulas, recalculate and save the final workbook with
+  LibreOffice before verification. openpyxl does not calculate cached results.
+  Recheck the saved formulas, chart references and styles; never replace formulas
+  with their values or certify a different temporary workbook as the deliverable.

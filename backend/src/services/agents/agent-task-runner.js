@@ -2870,10 +2870,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const agentRunnerText = String(displayGoal || goal || '');
     // «Crea un word con esta información e incorpora esta gráfica»: the
     // runner receives the previous answer (text + data) and the previous
-    // chart as a real PNG in the turn's files. Routing (claim / runner-only)
-    // keeps classifying the user's ORIGINAL words; only the runner sees the
-    // enriched instruction. Resolved lazily, once, on the first claim.
-    let agentRunnerInstruction = agentRunnerText;
+    // chart as a real PNG in the turn's files. Source data stays separate
+    // from the user's original instruction. Resolve once on the first claim.
+    let agentRunnerConversationContext;
     let agentRunnerFileIds = files;
     let agentRunnerContextResolved = false;
     const resolveAgentRunnerTurnContext = async () => {
@@ -2888,8 +2887,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           instruction: agentRunnerText,
           fileIds: files,
         });
+        agentRunnerConversationContext = turnContext?.conversationContext;
         if (turnContext?.applied) {
-          agentRunnerInstruction = turnContext.instruction;
           agentRunnerFileIds = turnContext.fileIds;
           stepIdCounter += 1;
           const contextStepId = `s${stepIdCounter}`;
@@ -2916,7 +2915,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const invokeAgentRunnerTurn = async () => {
       agentRunnerClaimedTurn = true;
       await resolveAgentRunnerTurnContext();
-      const runnerText = agentRunnerInstruction;
+      const runnerText = agentRunnerText;
       try {
         const agentRunner = require('../agent-runner');
         stepIdCounter += 1;
@@ -2929,6 +2928,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           chatId,
           fileIds: agentRunnerFileIds,
           instruction: runnerText,
+          conversationContext: agentRunnerConversationContext,
           // Engines follow the model picked in the composer (the ladder
           // only takes over on provider errors).
           pickedModel: agentRunner.runnerModelSpec(

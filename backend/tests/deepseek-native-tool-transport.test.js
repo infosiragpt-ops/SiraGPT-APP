@@ -155,6 +155,7 @@ test('DeepSeek default/high thinking edits, rereads and executes the same real p
     const before = 'module.exports = 1;\n';
     const after = 'module.exports = 2;\n';
     await fs.writeFile(path.join(root, 'app.js'), before);
+    await fs.writeFile(path.join(root, 'app.test.js'), "require('node:test')('export value', () => require('node:assert/strict').equal(require('./app'), 2));\n");
     const runnerCalls = [], requests = [], emitted = [], observed = [];
     const binding = { findProjectForChat: async () => ({ id: 'persistent-project' }) };
     const runner = {
@@ -163,14 +164,17 @@ test('DeepSeek default/high thinking edits, rereads and executes the same real p
       async exec(id, cmd) {
         runnerCalls.push(id);
         if (cmd[0] === 'git') return { ok: true, stdout: 'app.js\n', exitCode: 0 };
-        const result = await promisify(execFile)(cmd[0], cmd.slice(1), { cwd: root });
+        const childEnv = { ...process.env };
+        delete childEnv.NODE_TEST_CONTEXT; // The project suite runs independently of this test worker.
+        const result = await promisify(execFile)(cmd[0], cmd.slice(1), { cwd: root, env: childEnv });
         return { ok: true, ...result, exitCode: 0 };
       },
     };
     const plan = [
       ['project_list', {}], ['project_read', { path: 'app.js' }],
-      ['project_write', { path: 'app.js', content: after }], ['project_read', { path: 'app.js' }],
-      ['project_exec', { cmd: ['node', '-e', "require('node:assert/strict').equal(require('./app'),2);console.log('passed')"] }],
+      ['project_write', { path: 'app.js', content: after }],
+      ['project_exec', { cmd: ['node', '--test', 'app.test.js'] }],
+      ['project_read', { path: 'app.js' }],
       ['finalize', { answer: 'Actualicé app.js, releí el archivo guardado y pasó la prueba.' }],
     ];
     const direct = client(async (body) => {

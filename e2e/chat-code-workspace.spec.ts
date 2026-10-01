@@ -6,7 +6,7 @@ test.use({ viewport: { width: 1440, height: 900 } })
 
 // UI flows use a stateful API double. The backend suite separately runs the
 // real ReAct loop, project tools and a real Node test against on-disk files.
-async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fresh?: boolean; menu?: boolean; twoProjects?: boolean; open?: boolean; otherUnbound?: boolean } = {}) {
+async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fresh?: boolean; menu?: boolean; twoProjects?: boolean; open?: boolean; otherUnbound?: boolean; autoPreview?: boolean; previewReady?: boolean } = {}) {
   const chat = { id: 'code-chat', title: 'Mi aplicación', model: 'grok-4.6', messages: [], createdAt: '2026-09-21T00:00:00Z', updatedAt: '2026-09-21T00:00:00Z' }
   const otherChat = { ...chat, id: 'other-chat', title: 'Otra aplicación' }
   const user = { id: 'code-user', name: 'Valeria', email: 'qa@example.com', plan: 'PRO', isAdmin: true }
@@ -15,16 +15,22 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   const revisionOf = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
   const files: Record<string, string> = { 'app.js': 'module.exports = 1;\n' }
   const otherFiles: Record<string, string> = { 'app.js': 'module.exports = 9;\n' }
-  const generated: any[] = [], requests: string[] = [], errors: string[] = []
+  const generated: any[] = [], requests: string[] = [], errors: string[] = [], loginHandoffRequests: string[] = []
   let bound = opts.bound !== false, createdChat = !opts.fresh
+  let previewReady = Boolean(opts.previewReady)
+  const previewDocument = { title: "Mi aplicación" }
+  const previewPath = "/api/codex/projects/code-project/preview/qa-token/app/"
+  const previewState = () => ({ project: project.id, ready: previewReady, running: previewReady, basePath: previewPath })
   page.on('pageerror', e => errors.push(e.stack || e.message))
   await page.addInitScript(() => {
+    if (window.self !== window.top) return
     localStorage.setItem('auth-token', 'coding-test')
     localStorage.setItem('selectedModel', 'grok-4.6')
   })
   await page.route('**/api/**', async route => {
     const req = route.request(), url = new URL(req.url()), p = url.pathname.replace(/^\/api/, '')
     requests.push(`${req.method()} ${p}`)
+    if (p === '/agent-computer/login-handoff') loginHandoffRequests.push(`${req.method()} ${p}${url.search}`)
     const workspaceFiles = p.includes('/other-project/') ? otherFiles : files
     let body: unknown = {}, status = 200
     if (p === '/auth/me') body = { user }
@@ -65,8 +71,10 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
       }
     }
     else if (p === '/codex/projects/code-project/exec') body = { ok: false, exitCode: 1, stdout: '', stderr: 'Prueba fallida: esperado 2' }
-    else if (p === '/codex/projects/code-project/preview/start') body = { devUrl: '/qa-code-preview', previewUrl: '/qa-code-preview' }
-    else if (p === '/codex/projects/code-project/preview/status') body = { running: true, previewUrl: '/qa-code-preview' }
+    else if (p === '/codex/projects/code-project/preview/start') { previewReady = true; body = { basePath: previewPath, devUrl: previewPath, previewUrl: previewPath, previewStatus: previewState() } }
+    else if (p === '/codex/projects/code-project/preview/status') body = previewState()
+    else if (p === '/codex/projects/code-project/preview/stop') { previewReady = false; body = { ok: true } }
+    else if (p === '/codex/projects/code-project/preview/qa-token/app/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<h1>${previewDocument.title}</h1>` })
     else if (p === '/ai/generate') {
       const input = req.postDataJSON()
       generated.push(input)
@@ -76,6 +84,10 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
         if (opts.fresh) project.name = 'Café Aurora'
         files['app.js'] = 'module.exports = 2;\n'
         workspaceFrame = `data: ${JSON.stringify({ type: 'coding_workspace', chatId: input.chatId, projectId: project.id, projectName: project.name })}\n\n`
+        if (opts.autoPreview) {
+          previewReady = true
+          workspaceFrame += `data: ${JSON.stringify({ type: 'coding_preview_ready', chatId: input.chatId, projectId: project.id })}\n\n`
+        }
       }
       return route.fulfill({ contentType: 'text/event-stream', body: `${workspaceFrame}data: {"content":"Actualicé app.js y comprobé el resultado."}\n\ndata: [DONE]\n\n` })
     }
@@ -85,7 +97,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   const legacyLink = opts.menu === false
   await page.goto(opts.fresh ? '/agentes' : `/agentes?id=code-chat${legacyLink ? '&code=1' : ''}`, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
-  if (opts.open === false || opts.fresh) return { files, otherFiles, generated, requests, errors }
+  if (opts.open === false || opts.fresh) return { files, otherFiles, generated, requests, errors, previewDocument, loginHandoffRequests }
   if (!legacyLink) {
     await expect(page.getByTestId('chat-code-button')).toBeVisible({ timeout: 90_000 })
     await page.getByTestId('chat-code-button').click()
@@ -102,7 +114,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   } else {
     await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
   }
-  return { files, otherFiles, generated, requests, errors }
+  return { files, otherFiles, generated, requests, errors, previewDocument, loginHandoffRequests }
 }
 
 async function openFile(page: Page) {
@@ -161,6 +173,27 @@ test('short chat follow-up targets the same project and preserves selected model
   await page.getByTestId('agentes-coding-refresh-files').click()
   await expect(page.locator('.monaco-editor').first()).toContainText('2')
   expect(state.requests.some(r => r.includes('/generate-webdev') || r.includes('/agent-task'))).toBe(false)
+  expect(state.errors).toEqual([])
+})
+
+test('continuation forbidding a new project stays on the bound coding route without opening the editor', async ({ page }) => {
+  const state = await setup(page, { open: false })
+  await expect(page.getByTestId('chat-code-button')).toBeVisible()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  const prompt = 'Continúa en este mismo proyecto. Conserva lo ya creado, comprueba el backend y termina la validación. npm run build ya compiló correctamente. La vista previa está iniciada. No crees otro proyecto ni uses servicios de pago.'
+  await composer.fill(prompt)
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'code-chat', codingWorkspace: true, model: 'grok-4.6', prompt })
+  expect(state.generated[0].disableAgentic).not.toBe(true)
+  expect(state.requests.some(request => /\/(?:generate-webdev|generate-artifact|generate-viz|agent-task|classify-intent)/.test(request))).toBe(false)
+  expect(state.requests.some(request => request.startsWith('POST /codex/projects'))).toBe(false)
+  expect(state.requests).not.toContain('POST /chats')
+  await page.getByTestId('chat-code-button').click()
+  await openFile(page)
+  await expect(page.locator('.monaco-editor').first()).toContainText('2')
+  expect(state.requests).toContain('GET /codex/projects/code-project/file')
   expect(state.errors).toEqual([])
 })
 
@@ -325,5 +358,148 @@ test('switching projects never reuses a discarded draft from a cached Monaco mod
   await expect(page.locator('.monaco-editor').first()).not.toContainText('module.exports = 7;')
   expect(state.files['app.js']).toBe('module.exports = 1;\n')
   expect(state.otherFiles['app.js']).toBe('module.exports = 9;\n')
+  expect(state.errors).toEqual([])
+})
+
+
+test('a completed app opens in the integrated browser, stays closed when dismissed, and recovers after reload', async ({ page }, testInfo) => {
+  const state = await setup(page, { fresh: true, bound: false, autoPreview: true })
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('Créame una web para Café Aurora con catálogo y formulario de contacto')
+  await composer.press('Enter')
+  await expect(page.getByTestId('agentes-preview-iframe')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  await expect(page.getByRole('region', { name: 'Navegador del proyecto', exact: true })).toBeVisible()
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await expect(page.getByRole('textbox', { name: 'Dirección del proyecto', exact: true })).toHaveValue('Café Aurora · Vista local')
+  await page.screenshot({ path: testInfo.outputPath('chat-automatic-preview.png') })
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
+  await page.getByRole('button', { name: 'Cerrar navegador', exact: true }).click()
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-preview-iframe')).toHaveCount(0)
+  const oldReads = state.requests.filter(r => r.includes('/preview/status')).length
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('siragpt:coding-preview-ready', {
+    detail: { userId: 'code-user', chatId: 'code-chat', projectId: 'code-project' },
+  })))
+  await expect.poll(() => state.requests.filter(r => r.includes('/preview/status')).length).toBeGreaterThan(oldReads)
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  expect(state.requests.some(r => r.includes('/preview/stop'))).toBe(false)
+  await page.getByTestId('chat-browser-button').click()
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  await page.getByRole('button', { name: 'Cerrar navegador', exact: true }).click()
+  await page.reload()
+  await expect(page.getByTestId('agentes-preview-iframe')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await page.getByTestId('chat-code-button').click()
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  await openFile(page)
+  await expect(page.locator('.monaco-editor').first()).toContainText('module.exports = 2;')
+  await page.getByTestId('chat-browser-button').click()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  expect(state.requests.some(r => /^POST \/agent-computer(?:\/|$)/.test(r))).toBe(false)
+  expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
+  expect(new URL(page.url()).pathname).toBe('/agentes')
+  expect(state.errors).toEqual([])
+})
+
+test('an edit in the same chat refreshes the open app at the same preview URL', async ({ page }, testInfo) => {
+  const state = await setup(page, { autoPreview: true, previewReady: true, open: false })
+  const iframe = page.getByTestId('agentes-preview-iframe')
+  await expect(iframe).toBeVisible()
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  const previewUrl = await iframe.getAttribute('src')
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  // The agent changes content in an existing file: the file-tree paths and
+  // capability URL stay identical, so neither poll can serve as an edit signal.
+  state.previewDocument.title = 'Bici Nube Verificada'
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('En esta misma app, cambia el título a Bici Nube Verificada, ejecuta las pruebas y actualiza la vista previa. No crees otro proyecto.')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Bici Nube Verificada')
+  expect(await iframe.getAttribute('src')).toBe(previewUrl)
+  expect(Object.keys(state.files)).toEqual(['app.js'])
+  expect(state.requests.some(r => r.includes('/preview/start') || r.includes('/preview/stop'))).toBe(false)
+  await page.screenshot({ path: testInfo.outputPath('chat-followup-preview-refreshed.png') })
+  state.previewDocument.title = 'Recarga manual verificada'
+  await page.getByRole('button', { name: 'Recargar aplicación', exact: true }).click()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Recarga manual verificada')
+  expect(await iframe.getAttribute('src')).toBe(previewUrl)
+  expect(state.requests.some(r => r.includes('/preview/start') || r.includes('/preview/stop'))).toBe(false)
+  expect(state.requests.some(r => /^POST \/agent-computer(?:\/|$)/.test(r))).toBe(false)
+  expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
+  expect(state.errors).toEqual([])
+})
+
+test('a ready app never replaces an editor draft already open', async ({ page }) => {
+  const state = await setup(page, { autoPreview: true })
+  await openFile(page)
+  await replaceEditor(page, 'module.exports = 77;\n')
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('Verifica el código de la app y abre su vista previa')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  await expect(page.locator('.monaco-editor').first()).toContainText('77')
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-preview-iframe')).toHaveCount(0)
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
+  expect(state.requests.some(r => /^POST \/agent-computer(?:\/|$)/.test(r))).toBe(false)
+  expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
+  expect(state.errors).toEqual([])
+})
+
+
+test('switching chats closes the project browser and ignores another chat ready event', async ({ page }) => {
+  const state = await setup(page, { previewReady: true, open: false, twoProjects: true, otherUnbound: true })
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  await page.getByText('Otra aplicación', { exact: true }).click()
+  await expect(page.getByTestId('chat-code-button')).toHaveCount(0)
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-preview-iframe')).toHaveCount(0)
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('siragpt:coding-preview-ready', {
+    detail: { userId: 'code-user', chatId: 'code-chat', projectId: 'code-project' },
+  })))
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('hola')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  expect(state.generated[0]).toMatchObject({ chatId: 'other-chat', disableAgentic: true })
+  expect(state.generated[0].codingWorkspace).not.toBe(true)
+  await expect(page.getByTestId('chat-project-browser')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-coding-ide')).toHaveCount(0)
+  expect(state.requests.some(r => /^POST \/agent-computer(?:\/|$)/.test(r))).toBe(false)
+  expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
+  expect(state.errors).toEqual([])
+})
+
+test('stopping the integrated app does not restart it until the user asks', async ({ page }) => {
+  const state = await setup(page, { previewReady: true, open: false })
+  await expect(page.getByTestId('chat-project-browser')).toBeVisible()
+  await expect(page.getByTestId('agentes-preview-iframe')).toBeVisible()
+  await page.getByRole('button', { name: 'Detener aplicación', exact: true }).click()
+  await expect(page.getByTestId('agentes-preview-iframe')).toHaveCount(0)
+  await expect(page.getByTestId('agentes-preview-start')).toBeVisible()
+  expect(state.requests).toContain('POST /codex/projects/code-project/preview/stop')
+  const oldReads = state.requests.filter(r => r.includes('/preview/status')).length
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('siragpt:coding-preview-ready', {
+    detail: { userId: 'code-user', chatId: 'code-chat', projectId: 'code-project' },
+  })))
+  await expect.poll(() => state.requests.filter(r => r.includes('/preview/status')).length).toBeGreaterThan(oldReads)
+  await expect(page.getByTestId('agentes-preview-iframe')).toHaveCount(0)
+  expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
+  await page.getByTestId('agentes-preview-start').click()
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  expect(state.requests.filter(r => r === 'POST /codex/projects/code-project/preview/start')).toHaveLength(1)
+  expect(state.requests.some(r => /^POST \/agent-computer(?:\/|$)/.test(r))).toBe(false)
+  expect(state.loginHandoffRequests.some(r => /[?&]probe=1(?:&|$)/.test(r))).toBe(false)
   expect(state.errors).toEqual([])
 })

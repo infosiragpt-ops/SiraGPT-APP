@@ -56,7 +56,7 @@ export const projectsCodexApi = {
       timeoutMs: 180_000,
     }),
   startPreview: (id: string, signal?: AbortSignal) =>
-    req<{ devUrl: string; previewUrl?: string; basePath?: string }>(
+    req<{ devUrl: string; previewUrl?: string; basePath?: string; previewStatus?: { project?: string; ready?: boolean; running?: boolean; basePath?: string; framework?: string } }>(
       `/projects/${id}/preview/start`,
       { method: "POST", timeoutMs: 110_000, signal },
     ),

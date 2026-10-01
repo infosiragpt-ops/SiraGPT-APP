@@ -1,7 +1,7 @@
 "use client"
 
 import { detectCodingIntent } from "@/lib/software-build-intent"
-import { useChatCodingWorkspace } from "@/hooks/use-chat-coding-workspace"
+import { useChatCodingWorkspace, useChatCodingPreview } from "@/hooks/use-chat-coding-workspace"
 import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
 import dynamic from "next/dynamic"
@@ -6694,13 +6694,25 @@ function ChatInterfaceContent() {
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
   const [codePanelOpen, setCodePanelOpen] = React.useState(false);
+  const [codePanelInitialPane, setCodePanelInitialPane] = React.useState<"editor" | "preview">("editor");
   const [codeOpening, setCodeOpening] = React.useState(false);
   const { workspace: codeWorkspace, onProjectReady: onCodeProjectReady } = useChatCodingWorkspace(user?.id, currentChat?.id);
+  const readyCodePreview = useChatCodingPreview(codeWorkspace);
   React.useEffect(() => {
     setCodePanelOpen(false);
   }, [user?.id, currentChat?.id]);
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
   const [computerBrowserMode, setComputerBrowserMode] = React.useState(false);
+  const [computerProjectPreview, setComputerProjectPreview] = React.useState(false);
+  const computerPreviewChatRef = React.useRef({ userId: user?.id, chatId: currentChat?.id });
+  React.useEffect(() => {
+    const previous = computerPreviewChatRef.current;
+    computerPreviewChatRef.current = { userId: user?.id, chatId: currentChat?.id };
+    if (computerProjectPreview && (previous.userId !== user?.id || previous.chatId !== currentChat?.id)) {
+      setComputerPanelOpen(false);
+      setComputerProjectPreview(false);
+    }
+  }, [user?.id, currentChat?.id, computerProjectPreview]);
   const [computerNavigateUrl, setComputerNavigateUrl] = React.useState("");
   const [computerAgentNavigating, setComputerAgentNavigating] = React.useState(false);
   const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
@@ -13148,7 +13160,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }).catch(() => { postedHandoffKeysRef.current.delete(postKey); });
   }, [setCurrentChat]);
 
-  const openCodePanel = React.useCallback(async () => {
+  const openCodePanel = React.useCallback(async (initialPane: "editor" | "preview" = "editor") => {
     if (codeOpening || !codeWorkspace || codeWorkspace.chatId !== currentChatIdRef.current) return;
     setCodeOpening(true);
     try {
@@ -13164,13 +13176,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       closeArtifactPanel();
       setCoworkPanelOpen(false);
       setComputerPanelOpen(false);
+      setCodePanelInitialPane(initialPane);
       setCodePanelOpen(true);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el espacio de código");
     } finally { setCodeOpening(false); }
   }, [codeOpening, codeWorkspace, closeArtifactPanel]);
 
-  const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string; agentNavigating?: boolean }) => {
+  const openComputerPanel = React.useCallback((opts?: { browser?: boolean; url?: string; agentNavigating?: boolean; projectPreview?: boolean }) => {
     setShowAudioPanel(false);
     setActiveSearchActivityId(null);
     setDocumentPreviewUrl(null);
@@ -13184,6 +13197,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setCoworkPanelOpen(false);
     setCodePanelOpen(false);
     setComputerBrowserMode(Boolean(opts?.browser));
+    setComputerProjectPreview(Boolean(opts?.browser && opts?.projectPreview));
     setComputerAgentNavigating(Boolean(opts?.agentNavigating));
     if (opts?.url) setComputerNavigateUrl(opts.url);
     setComputerPanelOpen(true);
@@ -13191,6 +13205,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
     }
   }, [closeArtifactPanel, createNewChat]);
+  // Show each verified app in the existing browser panel once. The code
+  // button still opens files; readiness never starts a desktop session.
+  const presentedCodePreviewsRef = React.useRef(new Set<string>());
+  React.useEffect(() => {
+    if (!readyCodePreview || readyCodePreview.chatId !== currentChatIdRef.current) return;
+    const key = JSON.stringify([readyCodePreview.userId, readyCodePreview.chatId, readyCodePreview.projectId, readyCodePreview.basePath]);
+    if (presentedCodePreviewsRef.current.has(key)) return;
+    if (loginHandoffActive) return;
+    presentedCodePreviewsRef.current.add(key);
+    if (!codePanelOpen) openComputerPanel({ browser: true, projectPreview: true });
+  }, [readyCodePreview, codePanelOpen, loginHandoffActive, openComputerPanel]);
+
   // Header laptop (next to the chat title): toggles this chat's computer.
   const toggleComputerPanel = React.useCallback(() => {
     if (computerPanelOpen && !computerBrowserMode) setComputerPanelOpen(false);
@@ -13282,7 +13308,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       try {
         const api = getSameOriginApiBaseUrl().replace(/\/+$/, "");
         const res = await authenticatedFetch(
-          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen ? "&probe=1" : ""}`,
+          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen && !computerProjectPreview ? "&probe=1" : ""}`,
           { credentials: "include", signal: AbortSignal.timeout(12_000) },
         );
         const body = await res.json().catch(() => ({}));
@@ -13320,7 +13346,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     };
     // Poll fast only while a takeover can actually happen (computer panel
     // open, computer use on, a turn streaming or a takeover in progress).
-    const fast = computerPanelOpen || isComputerUseActive || isCurrentChatStreaming || loginHandoffActive;
+    const fast = (computerPanelOpen && !computerProjectPreview) || isComputerUseActive || isCurrentChatStreaming || loginHandoffActive;
     void pull();
     const timer = window.setInterval(() => void pull(), fast ? 2500 : 15000);
     const onWake = () => { if (document.visibilityState !== "hidden") void pull(); };
@@ -13332,7 +13358,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       document.removeEventListener("visibilitychange", onWake);
       window.removeEventListener("online", onWake);
     };
-  }, [currentChat?.id, openComputerPanel, computerPanelOpen, isComputerUseActive, isCurrentChatStreaming, loginHandoffActive, injectHandoffChat]);
+  }, [currentChat?.id, openComputerPanel, computerPanelOpen, computerProjectPreview, isComputerUseActive, isCurrentChatStreaming, loginHandoffActive, injectHandoffChat]);
 
   // Shared props bundle for <ActionsDropdown /> (the "+" tools button).
   // It renders in two spots: inline with the textarea while NO tool is
@@ -14716,7 +14742,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <Button
                   variant={computerPanelOpen && computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
-                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel({ browser: true, url: DEFAULT_BROWSER_HOME })}
+                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel(codeWorkspace ? { browser: true, projectPreview: true } : { browser: true, url: DEFAULT_BROWSER_HOME })}
                   title="Navegador"
                   aria-label="Navegador"
                   aria-pressed={computerPanelOpen && computerBrowserMode}
@@ -15211,7 +15237,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               className="h-full min-w-0 overflow-hidden shrink-0"
             >
               {codePanelOpen && codeWorkspace && currentChat?.id && (
-                <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id}
+                <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id} initialPane={codePanelInitialPane}
+                  previewRevision={readyCodePreview?.revision || 0}
                   onClose={() => setCodePanelOpen(false)}
                   onProjectReady={onCodeProjectReady} />
               )}
@@ -15221,9 +15248,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onClose={() => setCoworkPanelOpen(false)}
                 />
               )}
-              {computerPanelOpen && (
+              {computerPanelOpen && (!computerProjectPreview || codeWorkspace) && (
                 <ChatAgentComputerPanel
-                  key={`${currentChat?.id || "none"}-${computerBrowserMode ? "browser" : "desktop"}`}
+                  key={`${user?.id || "anon"}:${currentChat?.id || "none"}:${computerProjectPreview ? codeWorkspace?.projectId : computerBrowserMode ? "browser" : "desktop"}`}
                   conversationId={currentChat?.id || ""}
                   loginHandoff={loginHandoffActive}
                   loginHandoffSite={loginHandoffSite}
@@ -15232,9 +15259,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   initialDock={computerBrowserMode ? "browser" : "desktop"}
                   navigateUrl={computerNavigateUrl}
                   agentNavigating={computerAgentNavigating}
+                  projectPreview={computerProjectPreview && codeWorkspace ? {
+                    projectId: codeWorkspace.projectId,
+                    projectName: codeWorkspace.projectName,
+                    revision: readyCodePreview?.revision || 0,
+                  } : undefined}
                   onClose={() => {
                     setComputerPanelOpen(false)
                     setComputerBrowserMode(false)
+                    setComputerProjectPreview(false)
                     setComputerNavigateUrl("")
                     setLoginHandoffActive(false)
                   }}

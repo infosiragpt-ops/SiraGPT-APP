@@ -101,6 +101,7 @@ const WORKSPACE_EDIT_TARGET_RE = /\b(?:fondo|colores?|diseno|interfaz|botones?|p
 const WORKSPACE_APPEARANCE_RE = /^(?:(?:por favor|ahora)\s+)*(?:(?:quiero|necesito)\s+)?que\s+(?:se\s+vea|luzca|sea)\s+(?:(?:un\s+poco\s+)?mas\s+)?(?:modern[oa]|limpi[oa]|minimalista|elegante|profesional|clar[oa]|oscur[oa]|azul|rojo|verde|blanco|negro)\b/;
 const EXPLANATION_ONLY_RE = /^(?:(?:por favor|quiero saber|necesito saber|dime)\s+)*(?:explica(?:me)?|ensena(?:me)?|que es|que significa|como (?:se |puedo |puede |funciona|crear|programar)|how (?:to|does)|what (?:is|does)|tutorial|pasos para)\b/;
 const NEGATED_CODE_RE = /\b(?:no\s+(?:(?:quiero|necesito)\s+que\s+)?(?:crees|hagas|edites|modifiques|cambies|programes|construyas|pongas|conectes|integres|anadas|agregues)|(?:do not|don't)\s+(?:create|build|edit|modify|change))\b/;
+const WORKSPACE_REUSE_CONSTRAINT_RE = /\b(?:no\s+(?:(?:quiero|necesito)\s+que\s+)?(?:crees|hagas|construyas)\s+(?:otro|un\s+nuevo)\s+proyecto|(?:do not|don't)\s+(?:create|build)\s+(?:another|a\s+new)\s+project)\b/g;
 
 function stripFencedCode(text) {
   return text.replace(/(`{3,}|~{3,})[^\r\n]*\r?\n[\s\S]*?(?:\1|$)/g, ' ');
@@ -140,7 +141,8 @@ function detectCodingIntent(text, options = {}) {
   const raw = String(text || '');
   const hasInlineCode = /```(?:javascript|typescript|jsx|tsx|js|ts|python|py|ruby|rb|rust|rs|golang|go|java|kotlin|kt|swift|c|cpp|csharp|cs|php|html|css|scss|sql|bash|sh|shell|json|yaml|yml)\s*\r?\n[\s\S]*?```/i.test(raw);
   // Source-code comments and strings are task data, never routing instructions.
-  const n = normalize(stripFencedCode(raw));
+  const normalizedPrompt = normalize(stripFencedCode(raw));
+  const n = options.hasWorkspace ? normalizedPrompt.replace(WORKSPACE_REUSE_CONSTRAINT_RE, ' ').trim() : normalizedPrompt;
   if (!n || options.modality) return none;
   // Greetings, instructions about documents and explicit educational asks
   // never create a cloud project, including inside an existing coding chat.

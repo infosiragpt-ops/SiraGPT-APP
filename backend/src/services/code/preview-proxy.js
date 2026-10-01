@@ -183,6 +183,12 @@ function applyPreviewCorsHeaders(headers, origin, env = process.env) {
   return headers;
 }
 
+function isOpaqueCodexPreviewRequest(request) {
+  if (request?.headers?.origin !== 'null') return false;
+  const pathname = String(request.path || request.originalUrl || '').split('?')[0];
+  return /^\/api\/codex\/projects\/[A-Za-z0-9_-]{1,64}\/preview\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/app(?:\/|$)/.test(pathname);
+}
+
 function readPreviewBody(stream, maxBytes = MAX_PREVIEW_HTML_BYTES) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -545,6 +551,7 @@ module.exports = {
   filterPreviewResponseHeaders,
   injectPreviewConsoleBridge,
   injectPreviewInteractionBridges,
+  isOpaqueCodexPreviewRequest,
   previewFrameAncestors,
   previewOriginAllowed,
   previewParentOrigins,

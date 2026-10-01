@@ -59,14 +59,16 @@ test('tool set: office tools ON by default, SIRAGPT_OFFICE_ENGINE=0 restores the
   assert.equal(v1.function.parameters.properties.pages, undefined);
 });
 
-test('every base tool accepts an optional description; nested schemas untouched', () => {
+test('every base tool accepts an optional description without injecting it into nested chart or slide schemas', () => {
   for (const def of tools.BASE_TOOL_DEFINITIONS) {
     const params = def.function.parameters;
     assert.ok(params.properties.description, `${def.function.name} must accept description`);
     assert.ok(!(params.required || []).includes('description'), `${def.function.name}: description stays optional`);
   }
   const create = tools.BASE_TOOL_DEFINITIONS.find((d) => d.function.name === 'create_presentation');
-  assert.deepEqual(Object.keys(create.function.parameters.properties.outline.items.properties), ['title', 'bullets']);
+  const slide = create.function.parameters.properties.outline.items.properties;
+  assert.deepEqual(Object.keys(slide), ['title', 'bullets', 'chart']);
+  assert.equal(slide.chart.properties.description, undefined);
 });
 
 test('makeToolExecutors: office executors merged ON, absent OFF', () => {

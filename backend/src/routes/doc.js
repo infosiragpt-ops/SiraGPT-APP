@@ -429,9 +429,8 @@ router.post(
           prisma,
           userId: req.user.id,
           chatId,
-          prompt: turnContext.instruction,
-          // Claim / runner-only routing keeps reading the user's own words.
-          routingPrompt: prompt,
+          prompt,
+          conversationContext: turnContext.conversationContext,
           fileIds: runnerFileIds,
           model: req.body.model,
           skills: require('../services/chat-skills').normalizeSelectedSkillNames(req.body.skills),

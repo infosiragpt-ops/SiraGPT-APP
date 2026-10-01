@@ -215,7 +215,7 @@ const COLOR_ALIAS_RES = [
 ];
 
 function inferRequestedHex(prompt) {
-  const text = String(prompt || '');
+  const text = require('./background-color-request').backgroundColorRequest(prompt);
   const hex = text.match(/#([0-9a-fA-F]{6})/);
   if (hex) return hex[1].toUpperCase();
   for (const alias of COLOR_ALIAS_RES) {

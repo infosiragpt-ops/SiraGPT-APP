@@ -21,6 +21,7 @@ import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/c
 import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
 import { emitCodingWorkspaceReady } from "./chat/coding-workspace-event"
+import { emitCodingPreviewReady } from "./chat/coding-preview-event"
 import {
   COMPOSER_EFFORT_SCALE,
   COMPOSER_EFFORT_SCALE_KEY,
@@ -2430,6 +2431,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               onCodingWorkspace: (payload) => {
                 if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
                 emitCodingWorkspaceReady(payload, pendingOwnerId, activeChat.id);
+              },
+              onCodingPreviewReady: (payload) => {
+                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
+                emitCodingPreviewReady(payload, pendingOwnerId, activeChat.id);
               },
               ...reasoningStreamHandlers,
               ...(() => {

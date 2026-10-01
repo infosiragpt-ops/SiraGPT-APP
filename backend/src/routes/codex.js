@@ -61,6 +61,7 @@ const {
 } = require('../services/codex/preview-websocket-proxy');
 const {
   applyPreviewFrameHeaders: applyPreviewFramePolicy,
+  applyPreviewCorsHeaders,
   filterPreviewResponseHeaders,
   injectPreviewInteractionBridges,
   previewTokenFor: mintPreviewToken,
@@ -2389,7 +2390,21 @@ router.get('/projects/:id/preview/status', authenticateToken, requireCodexAgentA
     const project = await loadOwnedProject(req, res);
     if (!project) return undefined;
     const out = await createSandboxClient().devStatus(project.id);
-    return res.json({ ...out, devUrl: runnerDevUrl(process.env, Number.isInteger(out?.port) ? out.port : null) });
+    if (out?.project && out.project !== project.id) {
+      return res.json({ running: false, ready: false, project: project.id, basePath: null, devUrl: null, error: 'preview_project_mismatch' });
+    }
+    // A live process is not necessarily a usable preview: its base path can
+    // contain an expired capability. Do not auto-open that stale URL on reload.
+    let validBase = false;
+    try {
+      const parts = /^\/api\/codex\/projects\/([^/]+)\/preview\/([^/]+)\/app\/?$/.exec(String(out?.basePath || ''));
+      const claims = parts && verifyPreviewToken(decodeURIComponent(parts[2]));
+      validBase = Boolean(parts && decodeURIComponent(parts[1]) === project.id
+        && claims?.projectId === project.id && claims?.userId === req.user.id);
+    } catch (_) { /* malformed or expired capability stays unavailable */ }
+    return res.json({ ...out, project: project.id, ready: out?.ready === true && validBase,
+      basePath: validBase ? out.basePath : null, devUrl: validBase ? out.basePath : null,
+      previewExpired: Boolean(out?.running && !validBase) });
   } catch (err) {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
@@ -2426,6 +2441,18 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
   const payload = verifyPreviewToken(req.params.token);
   if (!payload || payload.projectId !== req.params.id) return res.status(403).json({ error: 'forbidden' });
 
+  if (req.method === 'OPTIONS' && req.headers.origin === 'null') {
+    const method = String(req.headers['access-control-request-method'] || '').toUpperCase();
+    const requestedHeaders = String(req.headers['access-control-request-headers'] || '').toLowerCase().split(',').map((header) => header.trim()).filter(Boolean);
+    if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+      || requestedHeaders.some((header) => header !== 'content-type')) {
+      return res.status(403).json({ error: 'preview_cors_forbidden' });
+    }
+    const headers = applyPreviewCorsHeaders({ 'cache-control': 'no-store', 'access-control-allow-methods': method }, req.headers.origin);
+    if (requestedHeaders.length) headers['access-control-allow-headers'] = 'content-type';
+    return res.set(headers).status(204).end();
+  }
+
   // Multi-project runner: target the port assigned to THIS project. Null
   // (unknown/not running) falls back to the configured base URL (legacy 5173).
   const projectPort = await resolvePreviewPort(req.params.id);
@@ -2445,6 +2472,16 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
     fwdHeaders[k] = v;
   }
   fwdHeaders.host = previewProxyHostHeader(upstreamBase);
+  const parsedJsonBody = req.method !== 'GET' && req.method !== 'HEAD'
+    && req.readableEnded && req.body !== undefined
+    && /^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type'] || ''))
+    ? Buffer.from(JSON.stringify(req.body), 'utf8')
+    : null;
+  if (parsedJsonBody) {
+    fwdHeaders['content-type'] = 'application/json; charset=utf-8';
+    fwdHeaders['content-length'] = String(parsedJsonBody.length);
+    delete fwdHeaders['content-encoding'];
+  }
 
   const transport = upstreamBase.protocol === 'https:' ? https : http;
   const upstream = transport.request(
@@ -2460,6 +2497,7 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
       const nonce = previewNonceFromRequest(req);
       const injectInteractions = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
       const headers = filterPreviewResponseHeaders(up.headers);
+      applyPreviewCorsHeaders(headers, req.headers.origin);
       if (injectInteractions) delete headers['content-length'];
       if (injectInteractions) {
         readPreviewBody(up).then((body) => {
@@ -2496,6 +2534,7 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
     }
   });
   if (req.method === 'GET' || req.method === 'HEAD') upstream.end();
+  else if (parsedJsonBody) upstream.end(parsedJsonBody);
   else req.pipe(upstream);
 });
 

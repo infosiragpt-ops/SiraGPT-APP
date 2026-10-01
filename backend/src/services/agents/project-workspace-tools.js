@@ -20,8 +20,10 @@
  * Contract: never throw for expected tool failures — return
  * `{ ok: false, code, message }` so the loop can self-correct.
  * Codes: no_chat_context | no_project | bad_path | blocked_secret |
- * content_too_large | invalid_command | runner_unreachable | internal.
+ * content_too_large | invalid_command | command_rejected | runner_unreachable | internal.
  */
+
+const { RunnerError } = require('../codex/runner-client');
 
 const MAX_PATH_CHARS = 500;
 const READ_DEFAULT_LINES = 200;
@@ -241,6 +243,13 @@ async function projectExec(args, ctx) {
   try {
     out = await runner.exec(bound.project.id, cmd, { timeoutMs });
   } catch (err) {
+    // This exact runner response is emitted before workspace resolution/spawn.
+    // Unknown HTTP/network errors can have executed work; never infer otherwise.
+    if (err instanceof RunnerError && err.status === 400 && err.body?.ok === false
+      && err.body.error === 'invalid_command' && Object.keys(err.body).every(key => ['ok', 'error'].includes(key))) {
+      return { ok: false, code: 'command_rejected', executionStarted: false,
+        message: 'El comando fue rechazado antes de ejecutarse. Usa node o un script npm del proyecto para ejecutar el comprobador.' };
+    }
     return { ok: false, code: 'runner_unreachable', message: String((err && err.message) || err) };
   }
   const stdout = truncateText(out && out.stdout);

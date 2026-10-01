@@ -8294,6 +8294,15 @@ router.post(
                     ),
                   },
                 });
+                // Carry the harness trace to the persistence layer so the
+                // assistant message gets agent_steps + agent_metadata.
+                req._agentRun = agenticResult?.agentRun || null;
+                // AgentRunner turns: the stage timeline persisted with the
+                // assistant row (messages.agent_metadata.activityTrace).
+                req._agentActivityTrace = agenticResult?.agentActivityTrace || null;
+                const __agenticDurationMs = Number.isFinite(req._agentRun?.durationMs) && req._agentRun.durationMs >= 0
+                  ? req._agentRun.durationMs
+                  : Date.now() - __generateStartedAt;
                 // The agentic loop reports success via isHandledAgenticChatResult:
                 // finalize, last-step rescue, AND the document-edit preloop
                 // (source_preserving_document_edit*). Anything else
@@ -8312,6 +8321,7 @@ router.post(
                 // them as success so the route delivers it instead of discarding
                 // it and re-generating via the plain stream.
                 const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult);
+                let __degrade = null;
                 if (!__agenticOk && agenticResult && agenticResult.stoppedReason) {
                   // One decision for every degraded run (agentic-degrade-policy):
                   // a dry / rejected / rate-limited provider closes honestly
@@ -8320,7 +8330,7 @@ router.post(
                   // step timeout regenerates only for plain turns within
                   // budget; a user Stop never regenerates. A socket merely
                   // detached keeps going (the turn is persisted for replay).
-                  const __degrade = require('../services/ai/agentic-degrade-policy').decideAgenticDegrade({
+                  __degrade = require('../services/ai/agentic-degrade-policy').decideAgenticDegrade({
                     stoppedReason: agenticResult.stoppedReason,
                     finalAnswer: agenticResult.finalAnswer,
                     error: agenticResult.error,
@@ -8334,12 +8344,16 @@ router.post(
                     userStopped: Boolean(signal && signal.aborted),
                     hasAttachments: (Array.isArray(processedFiles) && processedFiles.length > 0)
                       || __chatGeneratedRefs.length > 0,
+                    codingWorkspace: Boolean(verifiedCodingWorkspace),
                     modelLabel: await __turnModelLabel(),
                   });
                   if (__degrade.action === 'none') {
                     // Stop / abort: what WAS generated stays; no regeneration.
-                    if (agenticResult.agentRun) req._agentRun = agenticResult.agentRun;
-                    generateLog.warn('agentic.degraded', { outcome: 'aborted', reasonCode: __degrade.reasonCode });
+                    generateLog.warn('agentic.degraded', {
+                      outcome: 'aborted',
+                      reasonCode: __degrade.reasonCode,
+                      durationMs: __agenticDurationMs,
+                    });
                     if (__degrade.message) return __degrade.message;
                     return typeof agenticResult.finalAnswer === 'string' ? agenticResult.finalAnswer : '';
                   }
@@ -8347,6 +8361,7 @@ router.post(
                     generateLog.warn('agentic.degraded_honest', {
                       outcome: 'degraded',
                       reasonCode: __degrade.reasonCode,
+                      durationMs: __agenticDurationMs,
                       ...(__degrade.status ? { status: __degrade.status } : {}),
                     });
                     if (__turnTap && __degrade.failureReason) {
@@ -8368,12 +8383,6 @@ router.post(
                   }
                 }
                 if (__agenticOk) {
-                  // Carry the harness trace to the persistence layer so the
-                  // assistant message gets agent_steps + agent_metadata.
-                  req._agentRun = agenticResult.agentRun || null;
-                  // AgentRunner turns: the stage timeline persisted with the
-                  // assistant row (messages.agent_metadata.activityTrace).
-                  req._agentActivityTrace = agenticResult.agentActivityTrace || null;
                   // The live stream already contains artifact cards. Keep the
                   // compact persistence envelope separately from the model
                   // answer so post-processing and token accounting continue to
@@ -8385,11 +8394,6 @@ router.post(
                     : null;
                   return agenticResult.finalAnswer;
                 }
-                // Stop button / client abort: keep the partial trace and mark
-                // the run interrupted — what WAS generated stays visible.
-                if (agenticResult && agenticResult.stoppedReason === 'aborted' && agenticResult.agentRun) {
-                  req._agentRun = agenticResult.agentRun;
-                }
                 // Degraded/empty → do NOT return it. Fall through to the
                 // reliable plain stream below; aiService.generateStream emits a
                 // `replace` frame that overwrites any agent-task-state sentinel
@@ -8397,6 +8401,9 @@ router.post(
                 generateLog.warn('agentic.degraded', {
                   responseChars: __agenticAnswer.length,
                   outcome: 'degraded',
+                  reasonCode: __degrade?.reasonCode || 'unknown',
+                  durationMs: __agenticDurationMs,
+                  ...(__degrade?.status ? { status: __degrade.status } : {}),
                 });
               }
             } catch (agenticErr) {

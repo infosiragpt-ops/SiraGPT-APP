@@ -116,3 +116,8 @@ test('buildUnverifiedDraftAnswer: short drafts and missing-tool rejections retur
   const claimed = reactAgent.buildUnverifiedDraftAnswer({ draft: `${SOURCED_DRAFT} Busqué en la web y leí la página de Binance.`, guard: {}, steps: [{ actions: [{ tool: 'web_search', observation: { count: 3 } }] }] });
   assert.ok(claimed, 'a research claim backed by a real web_search observation is fine');
 });
+
+
+test('a coding proof failure cannot salvage a draft as a completed task', () => {
+  assert.equal(reactAgent.buildUnverifiedDraftAnswer({ draft: SOURCED_DRAFT, guard: { allowUnverifiedDraft: false }, steps: [] }), null);
+});

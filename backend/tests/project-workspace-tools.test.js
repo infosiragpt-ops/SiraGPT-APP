@@ -8,6 +8,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const tools = require('../src/services/agents/project-workspace-tools');
+const { RunnerError, createRunnerClient } = require('../src/services/codex/runner-client');
 
 const { sanitizeRelPath, isBlockedSecretPath, normalizeExecCmd, resolveBoundProject } = tools._internal;
 
@@ -198,5 +199,38 @@ test('project_write never confirms a skipped or unconfirmed runner write', async
     const ctx = ctxWith(BOUND, { writeFiles: async () => output });
     const result = await tools.projectWriteTool.execute({ path: 'app.ts', content: 'changed' }, ctx);
     assert.equal(result.ok, false); assert.equal(result.code, 'incomplete_write');
+  }
+});
+
+
+test('project_exec preserves an explicit HTTP400 preflight rejection without claiming execution', async () => {
+  const ctx = ctxWith(BOUND);
+  ctx.projectTools.runner = createRunnerClient({
+    baseUrl: 'http://runner.invalid', controlToken: '',
+    fetchImpl: async () => Response.json({ ok: false, error: 'invalid_command' }, { status: 400 }),
+  });
+  const result = await tools.projectExecTool.execute({ cmd: ['npx', 'vite', 'build'] }, ctx);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'command_rejected');
+  assert.equal(result.executionStarted, false);
+  assert.equal(result.exitCode, undefined);
+  assert.match(result.message, /antes de ejecutarse/);
+});
+
+test('project_exec never marks ambiguous or contradictory runner errors as preflight', async () => {
+  const body = { ok: false, error: 'invalid_command' };
+  const failures = [
+    new RunnerError('network', { status: 0, body }),
+    new RunnerError('server', { status: 500, body }),
+    new RunnerError('other', { status: 400, body: { ok: false, error: 'execution_failed' } }),
+    Object.assign(new Error('invalid_command'), { name: 'RunnerError', status: 400, body }),
+    ...[{ exitCode: 0 }, { exitCode: 1 }, { stdout: 'output' }, { timedOut: true }, { executionStarted: true }, { ok: true }]
+      .map(extra => new RunnerError('invalid_command', { status: 400, body: { ...body, ...extra } })),
+  ];
+  for (const error of failures) {
+    const ctx = ctxWith(BOUND, { exec: async () => { throw error; } });
+    const result = await tools.projectExecTool.execute({ cmd: ['npx', 'vite', 'build'] }, ctx);
+    assert.equal(result.code, 'runner_unreachable');
+    assert.equal(result.executionStarted, undefined);
   }
 });

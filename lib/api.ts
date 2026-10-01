@@ -36,6 +36,7 @@ import {
 } from "./generate-stream-complete"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 import { parseCodingWorkspacePayload, type CodingWorkspacePayload } from "./chat/coding-workspace-event"
+import { parseCodingPreviewPayload, type CodingPreviewPayload } from "./chat/coding-preview-event"
 import {
   attachGenerateHttpError,
   CONNECTION_UNAVAILABLE_MESSAGE,
@@ -986,6 +987,7 @@ export function normalizeAIUsageFrame(frame: unknown): AIUsagePayload | null {
 
 type AIStreamOptions = {
   onCodingWorkspace?: (payload: CodingWorkspacePayload) => void
+  onCodingPreviewReady?: (payload: CodingPreviewPayload) => void
   onReplace?: (content: string) => void
   onSources?: (payload: WebSourcesPayload) => void
   onMemory?: (payload: MemoryPayload) => void
@@ -2943,6 +2945,10 @@ class ApiClient {
               } else if (jsonData.type === 'coding_workspace') {
                 const workspace = parseCodingWorkspacePayload(jsonData);
                 if (workspace && workspace.chatId === data.chatId) options.onCodingWorkspace?.(workspace);
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'coding_preview_ready') {
+                const preview = parseCodingPreviewPayload(jsonData);
+                if (preview && preview.chatId === data.chatId) options.onCodingPreviewReady?.(preview);
                 lastProcessTime = Date.now();
               } else if (jsonData.type === 'computer_login_handoff') {
                 consumeLoginHandoffSse(jsonData)

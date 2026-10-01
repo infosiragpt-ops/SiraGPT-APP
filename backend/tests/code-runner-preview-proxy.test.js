@@ -18,6 +18,7 @@ const {
   buildPreviewSelectorBridge,
   injectPreviewConsoleBridge,
   injectPreviewInteractionBridges,
+  isOpaqueCodexPreviewRequest,
   MAX_PREVIEW_HTML_BYTES,
   previewFrameAncestors,
   previewOriginAllowed,
@@ -107,6 +108,20 @@ test('preview CORS never reflects an arbitrary Origin', () => {
   assert.equal(evil['access-control-allow-origin'], undefined);
   assert.equal(previewOriginAllowed('https://app.example.com', { CORS_ORIGINS: 'https://app.example.com' }), true);
   assert.equal(previewOriginAllowed('https://evil.example.com', { CORS_ORIGINS: 'https://app.example.com' }), false);
+});
+
+test('opaque Codex preview CORS exemption matches only the tokenized app route', () => {
+  const pathname = '/api/codex/projects/project-1/preview/signed.token/app/@vite/client';
+  assert.equal(isOpaqueCodexPreviewRequest({ path: pathname, headers: { origin: 'null' } }), true);
+  assert.equal(isOpaqueCodexPreviewRequest({ originalUrl: `${pathname}?direct=1`, headers: { origin: 'null' } }), true);
+  for (const origin of [undefined, 'https://evil.example.com', 'https://app.example.com', ' null']) {
+    assert.equal(isOpaqueCodexPreviewRequest({ path: pathname, headers: { origin } }), false);
+  }
+  for (const target of ['/api/codex/projects', '/api/codex/projects/project-1/preview/start', '/api/codex/projects/project-1/preview/signed.token/application/', '/api/codex/projects/project-1/preview/no-signature/app/', '/api/ai/generate']) {
+    assert.equal(isOpaqueCodexPreviewRequest({ path: target, headers: { origin: 'null' } }), false);
+  }
+  const backendEntry = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
+  assert.match(backendEntry, /CODE_RUNNER_TOKEN_APP_PATH_RE\.test\(path\) \|\| isOpaqueCodexPreviewRequest\(req\)/);
 });
 
 test('preview body reader hard-stops before buffering beyond the injection cap', async () => {

@@ -169,6 +169,7 @@ function decideAgenticDegrade({
   clientGone = false,
   userStopped = false,
   hasAttachments = false,
+  codingWorkspace = false,
   modelLabel = '',
   env = process.env,
 } = {}) {
@@ -232,7 +233,7 @@ function decideAgenticDegrade({
   }
 
   if (isStepTimeout(reason)) {
-    if (!hasAttachments && Number(elapsedMs) < plainFallbackMaxMs(env)) {
+    if (!hasAttachments && !codingWorkspace && Number(elapsedMs) < plainFallbackMaxMs(env)) {
       return out({ action: 'plain_fallback', reasonCode: 'step_timeout' });
     }
     return out({ action: 'honest_close', code: 'E_TIMEOUT', message: timeoutMessage(modelLabel), reasonCode: 'step_timeout' });

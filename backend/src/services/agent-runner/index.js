@@ -204,6 +204,15 @@ function loadSiraDesignPy({ dir } = {}) {
   return text;
 }
 
+let siraChartsPyCache;
+function loadSiraChartsPy({ dir } = {}) {
+  if (!dir && siraChartsPyCache !== undefined) return siraChartsPyCache;
+  let text = null;
+  try { text = fs.readFileSync(path.join(dir || __dirname, 'sira_charts.py'), 'utf8'); } catch (_) { /* optional helper */ }
+  if (!dir) siraChartsPyCache = text;
+  return text;
+}
+
 /**
  * Tokens of the redesign: a color the user named wins (any runner color
  * name or #hex), else the style keywords pick a professional theme.
@@ -238,7 +247,7 @@ const SOURCE_COPY_RE = /\b(?:copia|versi[oó]n)(?:\s+(?:nueva|corregida|editada|
 const { NAMED_COLORS } = require('./tools');
 
 function inferColorFromText(text) {
-  const t = String(text || '');
+  const t = require('../document-pipeline/background-color-request').backgroundColorRequest(text);
   const hex = t.match(/#([0-9a-fA-F]{6})/);
   if (hex) return hex[1].toUpperCase();
   const keys = Object.keys(NAMED_COLORS).sort((a, b) => b.length - a.length);
@@ -275,7 +284,7 @@ const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|ed
 // moved the note (eval pptx-nota-mover-verde). A named element or a movement
 // goes to the loop, which edits that shape.
 const SLIDE_BACKGROUND_RE = /\b(fondos?|background|ponlas|p[ií]ntalas|c[aá]mbialas|col[oó]realas|uniformi[sz]a\w*|todas)\b/i;
-const SHAPE_TARGET_RE = /\b(notas?|cuadros?|recuadros?|t[ií]tulos?|subt[ií]tulos?|textos?|formas?|flechas?|celdas?|tablas?|im[aá]gen(?:es)?|logos?|letras?|fuentes?|bordes?|l[ií]neas?|[ií]conos?|gr[aá]ficos?|botones|bot[oó]n|palabras?|frases?|mueve|mover|mu[eé]vela|desplaza\w*)\b|\d+(?:[.,]\d+)?\s*(?:mm|cm|pt|px)\b/i;
+const SHAPE_TARGET_RE = /\b(notas?|cuadros?|recuadros?|t[ií]tulos?|subt[ií]tulos?|textos?|formas?|flechas?|celdas?|tablas?|im[aá]gen(?:es)?|logos?|letras?|fuentes?|bordes?|l[ií]neas?|[ií]conos?|gr[aá]fic[ao]s?|charts?|series?|barras?|columnas?|leyendas?|ejes?|botones|bot[oó]n|palabras?|frases?|mueve|mover|mu[eé]vela|desplaza\w*)\b|\d+(?:[.,]\d+)?\s*(?:mm|cm|pt|px)\b/i;
 function isSlideBackgroundColorRequest(text) {
   const t = String(text || '');
   return SLIDE_BACKGROUND_RE.test(t) && !SHAPE_TARGET_RE.test(t);
@@ -444,6 +453,18 @@ function isStructuralUnitEdit(t) {
   return STRUCTURAL_DIRECT_RE.test(t) || STRUCTURAL_COUNTED_RE.test(t);
 }
 
+// Chart-local design is a surgical edit. It must never invoke the helper
+// that restyles every sheet/slide or fall through to a prose-only editor.
+const CHART_EDIT_TARGET_RE = /\b(?:grafic[ao]s?|charts?|series?|leyendas?|ejes?)\b/;
+function isChartDocumentEdit(text) {
+  const t = normalizeIntentText(text);
+  if (!CHART_EDIT_TARGET_RE.test(t) || isQuestionOrAdviceRequest(text) || NON_DOC_OBJECT_RE.test(t)) return false;
+  if (/\b(?:explica\w*|explain\w*|ensena\w*)\b/.test(t)) return false;
+  if (SOFTWARE_TARGET_RE.test(t) && !OFFICE_DOC_REF_RE.test(t)) return false;
+  return WORK_RE.test(t) || FOLLOWUP_EDIT_VERB_RE.test(t) || DESIGN_IMPROVE_VERB_RE.test(t)
+    || DESIGN_STANDALONE_RE.test(t) || DESIGN_CHANGE_VERB_RE.test(t);
+}
+
 /**
  * A request to make an EXISTING Office document LOOK better (design /
  * format / professional look) without changing what it says. Pure text
@@ -459,6 +480,7 @@ function isDesignUpgradeRequest(text, { officeTarget = null } = {}) {
   if (!t) return false;
   if (isQuestionOrAdviceRequest(text)) return false;
   if (NON_DOC_OBJECT_RE.test(t)) return false;
+  if (CHART_EDIT_TARGET_RE.test(t)) return false;
   if (SOFTWARE_TARGET_RE.test(t) && !OFFICE_DOC_REF_RE.test(t)) return false;
   if (TEMPLATE_STANDARD_RE.test(t) || ACADEMIC_DOC_RE.test(t)) return false;
   if (CONTENT_CHANGE_RE.test(t) || WRITING_TARGET_RE.test(t)) return false;
@@ -521,6 +543,7 @@ function shouldRunAgentRunner({
   const work = WORK_RE.test(t)
     || isHighlightEdit(t)
     || isFollowupDocumentEdit(t)
+    || (['pptx', 'xlsx'].includes(designTarget) && isChartDocumentEdit(t))
     || designClaim;
   if ((hasFiles || hasPrior) && work) return true;
   return false;
@@ -561,6 +584,7 @@ function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null } = {}) {
   if (isCreateOrStyleRunnerOnly(t)) return true;
   const named = officeFormatNamedIn(normalizeIntentText(t));
   const target = named || officeFamily(priorArtifactFormat);
+  if (['pptx', 'xlsx'].includes(target) && isChartDocumentEdit(t)) return true;
   return Boolean(target) && isDesignUpgradeRequest(t, { officeTarget: target });
 }
 
@@ -1113,6 +1137,10 @@ async function runAgentRunner({
           if (siraDesignPy) {
             try { await sandbox.writeFile('tmp/sira_design.py', siraDesignPy); } catch (_) { /* agent restyles with its own code */ }
           }
+          const siraChartsPy = loadSiraChartsPy();
+          if (siraChartsPy) {
+            try { await sandbox.writeFile('tmp/sira_charts.py', siraChartsPy); } catch (_) { /* native libraries remain available */ }
+          }
           try { await installSiraOfficeEngine(sandbox); } catch (err) {
             if (officeEngineEnabled()) {
               reportOfficeFailure({ tool: 'office_engine', code: 'install_failed', error: err && err.message });
@@ -1343,6 +1371,7 @@ async function runAgentRunner({
     };
     // ── end F7 hook ──────────────────────────────────────────────────────
 
+    const turnUserMessages = messages.filter((message) => message.role === 'user');
     let result = await runAgentLoop({
       client: llm,
       model: resolvedModel,
@@ -1355,6 +1384,7 @@ async function runAgentRunner({
       signal: abortScope.signal,
       maxTokens: loopMaxTokens,
       turnWallMs: documentTurnWallMs(),
+      turnUserMessages,
     });
     throwIfAborted(abortScope.signal);
     if (result.stoppedReason === 'E_PROVIDER') {
@@ -1400,6 +1430,7 @@ async function runAgentRunner({
         signal: abortScope.signal,
         maxTokens: loopMaxTokens,
         turnWallMs: documentTurnWallMs(),
+        turnUserMessages,
       });
       throwIfAborted(abortScope.signal);
       if (result.stoppedReason === 'E_PROVIDER') {
@@ -1837,10 +1868,10 @@ async function runAgentRunnerForDocRoute({
   userId,
   chatId = null,
   prompt,
-  // The user's own words when `prompt` was enriched with previous-turn
-  // context (previous-turn-document-context): routing classifies these, the runner
-  // executes `prompt`.
+  // Compatibility for callers that specify routing text separately. Prior
+  // source material belongs in conversationContext, never in the prompt.
   routingPrompt = null,
+  conversationContext,
   fileIds = [],
   model,
   pickedModel = null,
@@ -1870,6 +1901,7 @@ async function runAgentRunnerForDocRoute({
     chatId,
     fileIds,
     instruction: text,
+    conversationContext,
     model,
     pickedModel,
     client,
@@ -2004,6 +2036,7 @@ module.exports = {
   defaultModel,
   loadOfficeHelpersPy,
   loadSiraDesignPy,
+  loadSiraChartsPy,
   designThemeForTask,
   installSiraOfficeEngine,
   SIRA_OFFICE_ENGINE_REL,

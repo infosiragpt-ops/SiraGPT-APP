@@ -98,15 +98,17 @@ function editorError(err: unknown): string {
   return err instanceof Error ? err.message : "Error del editor de código."
 }
 
-export function CodingIdeShell({ conversationId, userId, embedded = false, onClose, onProjectReady }: {
+export function CodingIdeShell({ conversationId, userId, initialPane = "editor", previewRevision = 0, embedded = false, onClose, onProjectReady }: {
   conversationId?: string
   userId?: string
+  initialPane?: "editor" | "preview"
+  previewRevision?: number
   embedded?: boolean
   onClose?: () => void
   onProjectReady?: (ready: boolean) => void
 } = {}) {
   const [open, setOpen] = React.useState(true)
-  const [pane, setPane] = React.useState<Pane>("editor")
+  const [pane, setPane] = React.useState<Pane>(initialPane)
   const [sideBySide, setSideBySide] = React.useState(true)
   const [session, setSession] = React.useState<CodingSession | null>(null)
   const [files, setFiles] = React.useState<CodingFileEntry[]>([])
@@ -876,7 +878,7 @@ export function CodingIdeShell({ conversationId, userId, embedded = false, onClo
               />
             ) : null}
             {pane === "preview" ? (
-              <CodingPreviewPane key={projectId || "none"} projectId={projectId} fileVersion={fileVersion} />
+              <CodingPreviewPane key={projectId || "none"} projectId={projectId} fileVersion={fileVersion} previewRevision={previewRevision} />
             ) : null}
           </div>
         </div>
