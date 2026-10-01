@@ -1,6 +1,7 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
+import { getSameOriginApiBaseUrl } from "./api-base-url"
 
 /**
  * Frontend client for the /api/github backend (Replit-style workspace).
@@ -17,7 +18,7 @@ import { authenticatedFetch } from "./authenticated-fetch"
  * credentials:include, thin fetch wrappers.
  */
 
-const baseUrl = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"}/github`
+const baseUrl = () => `${getSameOriginApiBaseUrl()}/github`
 
 function authHeaders(): HeadersInit {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
@@ -47,14 +48,14 @@ async function handle<T>(res: Response): Promise<T> {
 }
 
 function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  return authenticatedFetch(`${baseUrl}${path}`, {
+  return authenticatedFetch(`${baseUrl()}${path}`, {
     credentials: "include",
     headers: authHeaders(),
     signal,
   }).then(handle<T>)
 }
 function send<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  return authenticatedFetch(`${baseUrl}${path}`, {
+  return authenticatedFetch(`${baseUrl()}${path}`, {
     method,
     credentials: "include",
     headers: authHeaders(),
@@ -72,6 +73,10 @@ export interface GithubStatus {
   name?: string | null
   avatarUrl?: string | null
   scopes?: string[]
+  reconnectRequired?: boolean
+  code?: string
+  verified?: boolean
+  connectionVersion?: string | null
   connectedAt?: string
 }
 
@@ -190,8 +195,18 @@ export interface GitCommit {
 
 export const githubService = {
   // OAuth
-  status: () => get<GithubStatus>("/status"),
-  connectUrl: () => get<{ url: string }>("/connect"),
+  status: (options: { verify?: boolean; signal?: AbortSignal } = {}) => get<GithubStatus>(options.verify ? "/status?verify=1" : "/status", options.signal),
+  connectUrl: (options: { chatId?: string; handoffId?: string; popup?: boolean; signal?: AbortSignal } = {}) => {
+    const params = new URLSearchParams()
+    if (options.chatId) params.set("chatId", options.chatId)
+    if (options.handoffId) params.set("handoffId", options.handoffId)
+    if (options.popup) params.set("popup", "1")
+    return get<{ url: string; chatId?: string; handoffId?: string }>(`/connect${params.size ? `?${params}` : ""}`, options.signal)
+  },
+  connectStatus: (options: { chatId: string; handoffId: string; signal?: AbortSignal }) => {
+    const params = new URLSearchParams({ chatId: options.chatId, handoffId: options.handoffId })
+    return get<{ status: "pending" | "success" | "error"; chatId: string; handoffId: string; error?: string; connectionVersion?: string | null }>(`/connect/status?${params}`, options.signal)
+  },
   disconnect: () => send<{ ok: boolean }>("POST", "/disconnect"),
 
   // Discovery
@@ -238,7 +253,7 @@ export const githubService = {
   // Download the whole workspace as a .zip to the user's machine. Uses a
   // fetch+blob flow (not a plain <a href>) so the Bearer auth header rides along.
   downloadZip: async (id: string, fileName = "workspace.zip") => {
-    const res = await authenticatedFetch(`${baseUrl}/connected/${id}/download`, {
+    const res = await authenticatedFetch(`${baseUrl()}/connected/${id}/download`, {
       credentials: "include",
       headers: authHeaders(),
     })

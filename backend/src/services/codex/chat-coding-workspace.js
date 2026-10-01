@@ -35,6 +35,10 @@ async function prepareChatCodingWorkspace({
   disableAgentic = false, provision = true, env = process.env, signal,
 }, deps = {}) {
   throwIfAborted(signal);
+  // Connecting an account is not an instruction to create or mutate a repo.
+  if (!hasAttachments && !modality && require('../github/github-chat-handoff').isGithubConnectRequest(prompt)) {
+    return { ok: true, active: false };
+  }
   const detect = deps.detect || require('../agents/software-build-intent').detectCodingIntent;
   const enabled = deps.enabled || require('./flags').isCodexV2Enabled;
   const canUse = deps.canUse || require('./access-control').canUseCodexAgent;

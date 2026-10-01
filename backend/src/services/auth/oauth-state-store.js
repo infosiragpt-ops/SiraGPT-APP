@@ -48,6 +48,14 @@ const CONSUME_LUA = [
   'return value',
 ].join('\n');
 
+// Completion receipts can be polled without consuming or extending them.
+// The OAuth codec itself continues to use CONSUME_LUA exclusively.
+const PEEK_LUA = [
+  '-- oauth-state-peek-v1',
+  "redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', tonumber(ARGV[1]))",
+  "return redis.call('GET', KEYS[1])",
+].join('\n');
+
 function clampInteger(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -161,6 +169,10 @@ function createMemoryBackend({ clock, maxEntries }) {
       entries.delete(key);
       return entry.value;
     },
+    async peek(key) {
+      prune();
+      return entries.get(key)?.value ?? null;
+    },
     size() {
       prune();
       return entries.size;
@@ -215,6 +227,9 @@ function createRedisBackend({
         indexKey,
         String(clock()),
       ));
+    },
+    async peek(jti) {
+      return run(() => redis.eval(PEEK_LUA, 2, fullKey(jti), indexKey, String(clock())));
     },
     size() {
       return 0;
@@ -412,6 +427,9 @@ function createOAuthStateStore({
     },
     consume(jti) {
       return run('consume', jti);
+    },
+    peek(jti) {
+      return run('peek', jti);
     },
     health,
     config,

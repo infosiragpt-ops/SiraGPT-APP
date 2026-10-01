@@ -150,8 +150,8 @@ test('public-web grounding returns through an isolated context-free stream', () 
   );
   assert.match(
     src,
-    /if\s*\(userId\s*&&\s*!__publicWebReadonly\s*&&\s*typeof prompt === 'string'\s*&&\s*fullResponseContent\)/,
-    'untrusted web output must not be extracted into durable memory/profile state',
+    /if\s*\(!req\._githubConnectionTurn\s*&&\s*userId\s*&&\s*!__publicWebReadonly\s*&&\s*typeof prompt === 'string'\s*&&\s*fullResponseContent\)/,
+    'untrusted web output and account connection copy must not be extracted into durable memory/profile state',
   );
   assert.match(
     src,
