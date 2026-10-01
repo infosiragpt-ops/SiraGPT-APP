@@ -7,7 +7,8 @@
  * provider-agnostic. The loop ALWAYS injects this in tests (scripted), so the
  * real provider path here is exercised only in live runs / the F15 smoke.
  *
- * Engine order: DeepSeek V4 NATIVE tool calling (deepseek-turn) whenever
+ * Explicit models use their own API without replacement on failure. For
+ * internal calls without a model, engine order: DeepSeek V4 NATIVE tool calling (deepseek-turn) whenever
  * DEEPSEEK_API_KEY is configured — the product ships DeepSeek V4 Flash / Pro
  * — then Claude native for eligible tiers,
  * then the PROMPTED ladder: the tools are described in the system prompt and
@@ -98,7 +99,9 @@ function extractUsage(resp, model) {
  *                   CODEX_ANTHROPIC_TIERS) with ANTHROPIC_API_KEY.
  *   - `cerebras`  — everything else: the free prompted path.
  */
-function resolveTurnEngine({ tier = null, env = process.env } = {}) {
+function resolveTurnEngine({ tier = null, env = process.env, model = null } = {}) {
+  const selected = llmProvider.selectedProviderForModel(model);
+  if (selected) return selected;
   const ds = getDeepSeekTurnConfig({ env, tier });
   if (ds.enabled && ds.tierEligible) return 'deepseek';
   const cfg = getAnthropicTurnConfig({ env, tier });
@@ -133,7 +136,8 @@ async function defaultLlmTurn({
   model = null,
   effort = null,
 } = {}) {
-  // Native engines first (DeepSeek V4 for every tier when configured, then
+  // Explicit selections pin their own engine below. Internal calls without a
+  // selection retain native engines first (DeepSeek V4 when configured, then
   // Claude for eligible tiers): best tool-calling fidelity. On failure they
   // degrade to the prompted ladder below instead of failing the run.
   //
@@ -147,9 +151,15 @@ async function defaultLlmTurn({
   //             to Cerebras DIRECT — NOT the ladder, which prioritizes paid
   //             providers ("first configured wins") and would silently bill
   //             them for the free tier.
+  const selectedProvider = llmProvider.selectedProviderForModel(model);
+  if (selectedProvider && !llmProvider.providerConfigured(selectedProvider, env)) {
+    throw llmProvider.selectedProviderError();
+  }
+  // Strip a catalog namespace only; never let the tier choose another model.
+  if (selectedProvider === 'anthropic' || selectedProvider === 'deepseek') model = llmProvider.modelFor(selectedProvider, env, model);
   let nativeDegraded = false;
   const excludeFromLadder = [];
-  const engine = resolveTurnEngine({ tier, env });
+  const engine = resolveTurnEngine({ tier, env, model });
   if (engine === 'deepseek') {
     try {
       const opts = {
@@ -167,7 +177,7 @@ async function defaultLlmTurn({
       return await deepseekTurn(opts);
     } catch (err) {
       // An aborted run must stay aborted — don't burn another call on it.
-      if (signal?.aborted) throw err;
+      if (selectedProvider || signal?.aborted) throw err;
       // Deltas already reached the user: another engine would splice two
       // different answers into one transcript. Fail closed.
       if (err?.partialResponse) throw err;
@@ -189,11 +199,14 @@ async function defaultLlmTurn({
         model,
         effort,
       };
+      if (selectedProvider === 'anthropic' && !env.ANTHROPIC_API_KEY && env.SIRA_ANTHROPIC_API_KEY) {
+        opts.env = { ...env, ANTHROPIC_API_KEY: env.SIRA_ANTHROPIC_API_KEY };
+      }
       if (createAnthropicClient) opts.createClient = createAnthropicClient;
       return await anthropicTurn(opts);
     } catch (err) {
       // An aborted run must stay aborted — don't burn another call on it.
-      if (signal?.aborted) throw err;
+      if (selectedProvider || signal?.aborted) throw err;
       nativeDegraded = true;
       if (env?.NODE_ENV !== 'test') console.warn('[codex llm-turn] claude nativo falló, degradando al ladder prompted:', err?.message || err);
     }
@@ -206,9 +219,9 @@ async function defaultLlmTurn({
   let usage = null;
 
   // Genuine eco (not a native degradation) goes to Cerebras DIRECT when
-  // configured, never the paid-first ladder. An injected `createClient` always
-  // wins (tests + explicit Cerebras callers) and behaves identically.
-  const ecoDirectCerebras = !nativeDegraded && getCerebrasConfig({ env }).enabled;
+  // configured, never the paid-first ladder. An injected `createClient` serves
+  // Cerebras only and cannot override a different explicit selection.
+  const ecoDirectCerebras = !nativeDegraded && (!selectedProvider || selectedProvider === 'cerebras') && getCerebrasConfig({ env }).enabled;
 
   // Provider ladder: DeepSeek → Anthropic (Claude) → OpenRouter → Cerebras,
   // with quarantine-based failover. Reached when (a) a native engine degraded,
@@ -217,7 +230,7 @@ async function defaultLlmTurn({
   // "something over nothing" wins, warned once so ops can see the eco tier is
   // not actually running free.
   const runLadder = async () => {
-    if (!nativeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
+    if (!selectedProvider && !nativeDegraded && !_warnedEcoLadderFallback && env?.NODE_ENV !== 'test') {
       _warnedEcoLadderFallback = true;
       console.warn('[codex llm-turn] tier eco sin Cerebras utilizable — usando el ladder (puede cobrar un proveedor de pago)');
     }
@@ -238,7 +251,7 @@ async function defaultLlmTurn({
     usage = out.usage;
   };
 
-  if (createClient || ecoDirectCerebras) {
+  if ((createClient && (!selectedProvider || selectedProvider === 'cerebras')) || ecoDirectCerebras) {
     // Direct Cerebras (free tier) path: OpenAI-style client, max_tokens 2048.
     const cfg = getCerebrasConfig({ env });
     if (!cfg.enabled) throw new Error('codex llm-turn: no LLM provider configured (CEREBRAS_API_KEY)');
@@ -262,7 +275,7 @@ async function defaultLlmTurn({
       usage = out.usage;
     } catch (err) {
       // An aborted run must stay aborted — don't burn another call on it.
-      if (signal?.aborted) throw err;
+      if (selectedProvider || signal?.aborted) throw err;
       // An injected createClient (tests / explicit Cerebras callers) is a hard
       // requirement — never silently replace the caller's chosen provider.
       if (createClient) throw err;

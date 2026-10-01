@@ -24,6 +24,11 @@ function modelSupportsVision(provider, model) {
   const normalizedModel = String(model || '').toLowerCase();
 
   if (normalizedProvider === 'deepseek') return false;
+  // Claude 3+ accepts images through native Messages blocks. Keep the
+  // selected API: the native adapter translates image_url parts below.
+  if (normalizedProvider === 'anthropic') {
+    return /^(?:anthropic\/)?claude-(?:[3-9](?:[.-]|$)|(?:sonnet|opus|haiku|fable|mythos)-[3-9](?:[.-]|$))/.test(normalizedModel);
+  }
   if (isSiraMiniAlias(model) || isSiraMiniAlias(normalizedModel)) return true;
   if (/(^|\/)(moondream|llava|bakllava|minicpm-v)/i.test(normalizedModel)) return true;
   if (normalizedProvider === 'gemini' || normalizedProvider === 'google') return /^gemini/.test(normalizedModel);
@@ -95,6 +100,9 @@ function shouldAttachVisionContent(provider, model, visionRuntime = selectVision
 /** Base URL + key for an OpenAI-SDK client of a vision runtime (non-streaming helpers). */
 function visionClientConfig(provider, env = process.env) {
   const p = normalizeProviderName(provider);
+  if (p === 'anthropic') {
+    return { apiKey: env.ANTHROPIC_API_KEY || env.SIRA_ANTHROPIC_API_KEY, protocol: 'anthropic', strictJsonSchema: false };
+  }
   if (p === 'gemini' || p === 'google') {
     return { apiKey: env.GEMINI_API_KEY, baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', strictJsonSchema: false };
   }

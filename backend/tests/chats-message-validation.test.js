@@ -140,3 +140,77 @@ describe('PUT /chats/messages/:id · edit validation and ownership', () => {
     assert.doesNotMatch(JSON.stringify(res.body), /database unavailable/);
   });
 });
+
+describe('PUT /chats/:id/pins · draft migration and concurrent revisions', () => {
+  let auth;
+  beforeEach(() => { auth = installAuthSessionMock(); });
+  afterEach(() => { auth.restore(); });
+
+  function pinStore(t, validatePins) {
+    const prisma = require('../src/config/database');
+    const appPins = require('../src/services/apps/pins');
+    let row = { id: 'new-chat', userId: auth.user.id, deletedAt: null, pinnedAppIds: [], pinRevision: 0 };
+    function replace(target, key, implementation) {
+      const original = target[key];
+      target[key] = implementation;
+      t.after(() => { target[key] = original; });
+    }
+    replace(prisma.chat, 'findFirst', async ({ where }) => {
+      assert.equal(where.userId, auth.user.id);
+      assert.equal(where.deletedAt, null);
+      return { ...row };
+    });
+    replace(prisma.chat, 'update', async ({ data }) => { row = { ...row, ...data }; return row; });
+    replace(prisma.chat, 'updateMany', async ({ where, data }) => {
+      assert.equal(where.userId, auth.user.id);
+      assert.equal(where.deletedAt, null);
+      if (where.id !== row.id || where.pinRevision !== row.pinRevision) return { count: 0 };
+      row = { ...row, ...data };
+      return { count: 1 };
+    });
+    replace(appPins, 'validatePins', validatePins || (async (_db, _user, pins) => ({ ok: true, pins, errors: [] })));
+    const app = buildRouteTestApp('/chats', reloadModule('../src/routes/chats'));
+    return {
+      row: () => row,
+      put(pins, revision) {
+        const call = request(app).put('/chats/new-chat/pins').set('Authorization', auth.authHeader);
+        if (revision != null) call.set('If-Match', `"pins-${revision}"`);
+        return call.send({ pinnedAppIds: pins });
+      },
+    };
+  }
+
+  test('migration requires revision zero and rejects a replay after another saved revision', async (t) => {
+    const store = pinStore(t);
+    const missing = await store.put(['github']);
+    assert.equal(missing.status, 428);
+    assert.equal(missing.body.code, 'PRECONDITION_REQUIRED');
+    const migrated = await store.put(['github'], 0);
+    assert.equal(migrated.status, 200);
+    assert.deepEqual(migrated.body, { pinnedAppIds: ['github'], revision: 1 });
+    const stale = await store.put(['x'], 0);
+    assert.equal(stale.status, 412);
+    assert.deepEqual(store.row().pinnedAppIds, ['github']);
+  });
+
+  test('two simultaneous migrations cannot both overwrite revision zero', async (t) => {
+    const release = [];
+    const store = pinStore(t, async (_db, _user, pins) => {
+      await new Promise((resolve) => {
+        release.push(resolve);
+        if (release.length === 2) release.forEach((finish) => finish());
+      });
+      return { ok: true, pins, errors: [] };
+    });
+    const responses = await Promise.all([store.put(['github'], 0), store.put(['x'], 0)]);
+    assert.deepEqual(responses.map((res) => res.status).sort(), [200, 412]);
+    const winner = responses.find((res) => res.status === 200);
+    const stale = responses.find((res) => res.status === 412);
+    assert.deepEqual(store.row().pinnedAppIds, winner.body.pinnedAppIds);
+    assert.equal(store.row().pinRevision, 1);
+    assert.deepEqual(stale.body.details, {
+      effectiveRevision: 1,
+      effectivePinnedAppIds: winner.body.pinnedAppIds,
+    });
+  });
+});

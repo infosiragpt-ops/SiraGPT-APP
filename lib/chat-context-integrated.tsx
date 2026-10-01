@@ -2847,7 +2847,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Migrate draft pins into the new conversation on the very first turn.
       const draftPins = Array.isArray(options?.pinnedAppIds) ? options.pinnedAppIds.slice(0, 4) : [];
       if (draftPins.length && newChat?.id) {
-        void apiClient.setChatPins(newChat.id, draftPins).catch(() => undefined)
+        try {
+          // A newly created chat starts at revision zero. Finish migration
+          // before selecting it so pin hydration cannot race an empty row.
+          // A 412 keeps any concurrently saved real-chat pins untouched.
+          await apiClient.setChatPins(newChat.id, draftPins, 0)
+        } catch {
+          toast.error("No se pudieron guardar las aplicaciones seleccionadas. Puedes volver a fijarlas en este chat.")
+        }
       }
       newChat.messages = [];
 

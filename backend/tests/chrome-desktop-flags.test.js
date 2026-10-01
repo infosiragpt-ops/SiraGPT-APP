@@ -36,7 +36,7 @@ describe('chrome desktop flags', () => {
 
   it('maximizes an existing Chrome window before launching another', () => {
     const cmd = chromeMaximizeOrLaunch({ xdotool: 'xdotool' });
-    assert.match(cmd, /windowsize 1920 1080/);
+    assert.match(cmd, /windowsize \"\$window\" 1920 1080/);
     assert.match(cmd, /--test-type/);
     assert.match(cmd, /--no-sandbox/);
     assert.doesNotMatch(cmd, /about:blank/);

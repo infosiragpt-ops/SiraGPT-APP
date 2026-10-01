@@ -200,7 +200,17 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     || /##\s*\S+\.(?:pptx?|docx?|xlsx?|pdf)\b/.test(text)
     || /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
-  const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|dise[nñ]a(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/.test(text)
+  // Adding charts/rows to a newly requested workbook describes its contents;
+  // it does not imply that a file with the requested output name already exists.
+  const spreadsheetCreation = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|elabora(?:r|me)?|prepara(?:r|me)?|disena(?:r|me)?)\s+(?:(?:un|una)\s+)?(?:nuev[oa]\s+)?(?:excel|xlsx|csv|ods|hoja\s+de\s+calculo)\b/.exec(text);
+  // Reuse the existing intent rules on the prefix: "traduce este archivo y
+  // crea un Excel" edits the original, while "crea un Excel y añade gráficas"
+  // describes a new file. The strictly shorter prefix cannot contain this
+  // first creation match, so this adds at most one detector pass. It also
+  // retains typo handling without comparing offsets in the doubled haystack.
+  const createsSpreadsheet = spreadsheetCreation
+    && !isSourcePreservingEditRequest(text.slice(0, spreadsheetCreation.index), files);
+  const explicitFreshDeliverable = createsSpreadsheet || /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|dise[nñ]a(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/.test(text)
     || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?)\b/.test(text)
     || wantsNewPresentationDeliverable(prompt);
   const explicitAttachedMutation = hasFiles && (

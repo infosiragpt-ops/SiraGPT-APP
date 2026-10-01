@@ -921,10 +921,25 @@ router.put('/:id/pins', authenticateToken, async (req, res) => {
       pinRevision: isNoOp ? current.revision : current.revision + 1,
       updatedAt: new Date(),
     };
-    await prisma.chat.update({
-      where: { id: req.params.id },
+    // Compare-and-set at the database boundary: a second writer can advance
+    // the revision while app availability/connection checks are in flight.
+    const updated = await prisma.chat.updateMany({
+      where: { id: req.params.id, userId: req.user.id, deletedAt: null, pinRevision: expectedRevision },
       data: next,
     });
+    if (updated.count !== 1) {
+      const fresh = await prisma.chat.findFirst({
+        where: { id: req.params.id, userId: req.user.id, deletedAt: null },
+        select: { pinnedAppIds: true, pinRevision: true },
+      });
+      if (!fresh) return res.status(404).json({ error: 'Chat not found', code: 'CHAT_NOT_FOUND' });
+      const effective = appPins.publicPins(fresh);
+      return res.status(412).json({
+        error: 'El conjunto de apps cambió en otro dispositivo.',
+        code: appPins.PIN_ERRORS.PIN_SET_STALE,
+        details: { effectiveRevision: effective.revision, effectivePinnedAppIds: effective.pinnedAppIds },
+      });
+    }
     const saved = appPins.publicPins(next);
     res.setHeader('ETag', `"pins-${saved.revision}"`);
     return res.json(saved);

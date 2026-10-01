@@ -216,6 +216,7 @@ function createAnthropicStreamingClient({
   apiKey = process.env.ANTHROPIC_API_KEY || process.env.SIRA_ANTHROPIC_API_KEY,
   fetchImpl,
   timeout,
+  maxRetries,
   sdkClient = null,
 } = {}) {
   const key = String(apiKey || '').trim();
@@ -225,7 +226,11 @@ function createAnthropicStreamingClient({
     if (sdkClient) return sdkClient;
     const mod = await import('@anthropic-ai/sdk');
     const Sdk = mod.default || mod.Anthropic;
-    return new Sdk({ apiKey: key });
+    return new Sdk({ apiKey: key,
+      ...(fetchImpl ? { fetch: fetchImpl } : {}),
+      ...(timeout !== undefined ? { timeout } : {}),
+      ...(maxRetries !== undefined ? { maxRetries } : {}),
+    });
   }
 
   async function createWithTools(client, payload, requestOptions, model) {
@@ -336,23 +341,12 @@ function createAnthropicStreamingClient({
           if (hasToolTraffic(payload)) {
             return createWithTools(client, payload, requestOptions, model);
           }
-          const messages = Array.isArray(payload.messages) ? payload.messages : [];
-          const system = messages
-            .filter((m) => m && m.role === 'system')
-            .map((m) => (typeof m.content === 'string' ? m.content : ''))
-            .filter(Boolean)
-            .join('\n\n');
-          const transcript = messages
-            .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
-            .map((m) => ({
-              role: m.role,
-              content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
-            }));
+          const transcript = toAnthropicTranscript(payload.messages);
           const body = {
             model: model || 'claude-sonnet-4-6',
             max_tokens: Number(payload.max_tokens) || 16384,
-            messages: transcript,
-            ...(system ? { system } : {}),
+            messages: transcript.messages,
+            ...(transcript.system ? { system: transcript.system } : {}),
           };
           applyAnthropicThinkingControls(body, payload, model);
           const hasEffortControls = Boolean(body.thinking || body.output_config);

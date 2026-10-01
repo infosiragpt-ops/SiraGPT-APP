@@ -62,6 +62,38 @@ function textBlocks(content) {
   return text ? [{ type: 'text', text }] : [];
 }
 
+// Preserve image bytes and their ordering in both chat and tool transcripts.
+// JSON-stringifying image_url blocks merely shows the model encoded text;
+// native Messages requires an image source block to actually inspect pixels.
+function visionBlocks(content) {
+  if (!Array.isArray(content)) return textBlocks(content);
+  return content.flatMap((part) => {
+    if (!part || typeof part !== 'object') return textBlocks(part);
+    if (part.type !== 'image_url' && part.type !== 'image') return textBlocks([part]);
+    const source = part.type === 'image' ? part.source : null;
+    const rawUrl = typeof part.image_url === 'string' ? part.image_url : part.image_url?.url;
+    const url = source?.type === 'url' ? source.url : rawUrl;
+    const dataUrl = typeof url === 'string' && url.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})$/);
+    const mediaType = dataUrl ? dataUrl[1] : source?.media_type;
+    const data = dataUrl ? dataUrl[2] : source?.type === 'base64' ? source.data : null;
+    if (/^image\/(?:png|jpeg|gif|webp)$/.test(mediaType || '') && typeof data === 'string'
+      && data.length > 0 && data.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+      return [{ type: 'image', source: { type: 'base64', media_type: mediaType, data } }];
+    }
+    if (typeof url === 'string') {
+      try {
+        const parsed = new URL(url);
+        if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password) {
+          return [{ type: 'image', source: { type: 'url', url } }];
+        }
+      } catch { /* invalid input is rejected below without exposing it */ }
+    }
+    const error = new Error('La imagen no tiene un formato compatible. Usa PNG, JPEG, GIF o WebP.');
+    error.code = 'E_PARAMS';
+    throw error;
+  });
+}
+
 /** Convert an OpenAI transcript into Anthropic's strict role/block format. */
 function toAnthropicTranscript(messages) {
   const systemParts = [];
@@ -94,11 +126,12 @@ function toAnthropicTranscript(messages) {
     if (message.role === 'tool') {
       const toolUseId = String(message.tool_call_id || '').trim();
       const text = contentAsText(message.content);
+      const content = Array.isArray(message.content) ? visionBlocks(message.content) : text;
       if (toolUseId) {
         appendTurn(turns, 'user', [{
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: text || 'Tool completed successfully with no textual output.',
+          content: content && content.length ? content : 'Tool completed successfully with no textual output.',
         }]);
       } else if (text) {
         appendTurn(turns, 'user', [{ type: 'text', text: `[Tool result]\n${text}` }]);
@@ -107,7 +140,7 @@ function toAnthropicTranscript(messages) {
     }
 
     if (message.role === 'user' || message.role === 'function') {
-      appendTurn(turns, 'user', textBlocks(message.content));
+      appendTurn(turns, 'user', visionBlocks(message.content));
     }
   }
 

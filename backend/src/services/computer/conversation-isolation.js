@@ -10,6 +10,7 @@ function looksLikeSecretOrStack(text) {
   const raw = String(text || '');
   if (!raw) return false;
   if (/sk-[A-Za-z0-9_-]{8,}/i.test(raw)) return true;
+  if (/Command failed:|(?:docker|podman)\s+exec\b|sira-ac-user-|xdotool|DISPLAY=|Bearer\s|BEGIN [A-Z ]*PRIVATE KEY|AKIA[A-Z0-9]{12,}/i.test(raw)) return true;
   if (/\bat\s+\S+\s+\(/i.test(raw)) return true;
   if (/node_modules|Error:\s+\S+/.test(raw) && raw.includes('\n')) return true;
   return false;

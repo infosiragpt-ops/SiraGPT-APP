@@ -6,6 +6,8 @@
  * "unsupported command-line flag" infobar without removing no-sandbox.
  */
 
+const { desktopAppFocusCommand } = require('./desktop-app-focus');
+
 const CHROME_DOCKER_FLAGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -28,14 +30,12 @@ function chromeOpenUrlCommand(url) {
 }
 
 function chromeMaximizeOrLaunch({ xdotool = 'xdotool' } = {}) {
-  const xd = String(xdotool || 'xdotool');
-  return (
-    `${xd} search --onlyvisible --class google-chrome windowactivate --sync windowmove 0 0 windowsize 1920 1080`
-    + ` || ${xd} search --onlyvisible --class Chromium windowactivate --sync windowmove 0 0 windowsize 1920 1080`
-    + ` || ${xd} search --onlyvisible --class chromium windowactivate --sync windowmove 0 0 windowsize 1920 1080`
-    + ` || google-chrome ${CHROME_VISIBLE_FLAGS}`
-    + ` || chromium ${CHROME_VISIBLE_FLAGS}`
-  );
+  return desktopAppFocusCommand({
+    xdotool,
+    windowClass: 'google-chrome|Chromium|chromium',
+    launchCommand: `if command -v google-chrome >/dev/null 2>&1; then exec google-chrome ${CHROME_VISIBLE_FLAGS}; else exec chromium ${CHROME_VISIBLE_FLAGS}; fi`,
+    maximize: true,
+  });
 }
 
 module.exports = {
