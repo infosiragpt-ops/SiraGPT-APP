@@ -126,6 +126,62 @@ test('transcribe + analyze is not reduced to literal transcription; short speech
   assert.equal(batch.usableTranscript({ extractedText: 'Media file "a.mp3": transcription unavailable.', processingStage: 'ready' }), false);
 });
 
+test('literal transcription does not treat negated summaries or analysis as requests', () => {
+  for (const goal of [
+    'Prueba de aceptación con audio sintético. Transcribe el audio adjunto de forma literal, sin resumen.',
+    'Transcribe el audio, no resumas.',
+    'Transcribir sin análisis.',
+    'Sólo transcribe.',
+    'Transcribe sin resumir ni analizar.',
+    'Transcribe. No me hagas un resumen ni un análisis.',
+  ]) assert.equal(batch.wantsMediaAnalysis(goal), false, goal);
+});
+
+test('negated analysis does not suppress a separate positive task', () => {
+  for (const goal of [
+    'Transcribe y resume.',
+    'Transcribe literalmente y después analiza.',
+    'Sólo transcribe primero y luego resume los acuerdos.',
+    'Transcribe sin resumen, pero analiza las decisiones.',
+    'Transcribe sin análisis y después haz un resumen.',
+    'No sólo transcribas: analiza el audio.',
+  ]) assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
+});
+
+test('real media delivery returns the exact synthetic transcript without map/reduce for sin resumen', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const { isPlainTranscriptionRequest } = require('../src/services/message-attachments');
+  const filename = path.resolve(__dirname, '../src/services/agents/agent-task-runner.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf('    if (mediaBatchRows) {');
+  const end = source.indexOf('    // ── Image-only analysis turn', start);
+  assert.ok(start >= 0 && end > start, 'execute the actual media delivery branch');
+  const goal = 'Prueba de aceptación con audio sintético. Transcribe el audio adjunto de forma literal, sin resumen.';
+  const transcript = 'Esta es una prueba. La reunión será el martes a las nueve. Revisaremos tres documentos y una hoja de cálculo.';
+  const rows = [{ id: 'synthetic', originalName: 'acceptance.wav', processingStage: 'ready', extractedText: transcript }];
+  let analysisCalls = 0;
+  let savedText;
+  const result = await vm.runInNewContext(`(async () => { ${source.slice(start, end)} })()`, {
+    mediaBatchRows: rows, mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0 }) },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: goal, goal,
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => { savedText = Buffer.from(artifact.base64, 'base64').toString('utf8'); return { id: 'txt', filename: artifact.filename }; },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: isPlainTranscriptionRequest(goal), openai: {}, task: {}, documentPolicy: {},
+    require: () => ({ createMediaAnalysisCompletion() { analysisCalls++; throw new Error('literal request must not call the model'); } }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  }, { filename });
+  assert.equal(analysisCalls, 0);
+  assert.equal(result.stoppedReason, 'transcription_finalize');
+  assert.equal(result.steps, 1);
+  assert.ok(result.finalMarkdown.includes(transcript));
+  assert.ok(savedText.includes(transcript));
+  assert.equal(result.metadata.mediaBatch.analyzed, 0);
+});
+
 test('follow-up uses only the newest batch in the owned chat, never global recent uploads', async () => {
   const { rows, prisma } = fixture();
   prisma.chat = { findFirst: async ({ where }) => where.userId === 'u' && where.id === 'chat-u' ? { id: 'chat-u' } : null };
