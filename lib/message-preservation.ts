@@ -1,4 +1,4 @@
-import { mergeMessageFileLists, parseMessageFiles } from './chat/composer-files';
+import { mergeMessageFileLists, parseMessageFiles, resolveUploadFileId } from './chat/composer-files';
 
 export type ChatMessageLike = {
   id?: string;
@@ -447,6 +447,52 @@ const messageTimeMs = (message?: DedupeMessageLike) => {
 const isRole = (message: DedupeMessageLike | undefined, role: string) =>
   String(message?.role || '').toUpperCase() === role;
 
+// One attachment → a stable identity: the upload id when the row carries one,
+// otherwise name + size + url. Used to tell «the same turn persisted by the
+// server» from «a new turn that happens to repeat the composer's automatic
+// prompt» («Analiza los archivos adjuntos…» with a different video).
+const attachmentIdentity = (file: unknown): string => {
+  const uploadId = resolveUploadFileId(file);
+  if (uploadId) return `id:${uploadId}`;
+  if (!file || typeof file !== 'object') return '';
+  const meta = file as { name?: unknown; originalName?: unknown; size?: unknown; url?: unknown };
+  const name = typeof meta.name === 'string' ? meta.name : typeof meta.originalName === 'string' ? meta.originalName : '';
+  const url = typeof meta.url === 'string' ? meta.url : '';
+  if (!name && !url) return '';
+  const size = typeof meta.size === 'number' ? String(meta.size) : '';
+  return `meta:${name}:${size}:${url}`;
+};
+
+// Attachments agree when either side has none (the server row may still be
+// id-only and the optimistic chip gets grafted onto it) or when they share at
+// least one file. Two different uploads are two different turns.
+const attachmentsCompatible = (a: DedupeMessageLike, b: DedupeMessageLike) => {
+  const idsA = parseMessageFiles(a?.files).map(attachmentIdentity).filter(Boolean);
+  const idsB = parseMessageFiles(b?.files).map(attachmentIdentity).filter(Boolean);
+  if (idsA.length === 0 || idsB.length === 0) return true;
+  return idsA.some((identity) => idsB.includes(identity));
+};
+
+// A stable assistant row that already holds an answer: plain text, or an
+// agent-task envelope that reached a terminal state. A running envelope or an
+// empty placeholder is not an answer yet.
+const isAnsweredAssistant = (message: DedupeMessageLike | undefined) => {
+  if (!message || !isStableMessage(message) || !isRole(message, 'ASSISTANT')) return false;
+  const text = asText(message.content);
+  if (!hasText(text) || isPlaceholderSentinel(text)) return false;
+  const task = parseAgentTaskContent(text);
+  return task.hasEnvelope ? task.done : true;
+};
+
+const answeredTurnBetween = (messages: DedupeMessageLike[], indexA: number, indexB: number) => {
+  const lo = Math.min(indexA, indexB);
+  const hi = Math.max(indexA, indexB);
+  for (let index = lo + 1; index < hi; index += 1) {
+    if (isAnsweredAssistant(messages[index])) return true;
+  }
+  return false;
+};
+
 /**
  * Final safety net against the optimistic-UI message-duplication bug — the
  * same turn surviving twice in the rendered list. Two failure modes collapse
@@ -488,7 +534,7 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   // Pass B — drop optimistic twins whose stable-id sibling is already present.
   // Graft files from the optimistic copy onto the surviving server row first
   // so an audio attachment that only existed locally does not vanish.
-  const isStableTwinOf = (candidate: TMessage, other: TMessage) => {
+  const isStableTwinOf = (candidate: TMessage, candidateIndex: number, other: TMessage, otherIndex: number) => {
     if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
     if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
     const candidateKey = turnIdentityKey(candidate);
@@ -497,14 +543,22 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     // same idempotencyKey. Match by turn identity even when content differs
     // so getChat replaces Pensando without a reload.
     if (candidateKey && otherKey && candidateKey === otherKey) return true;
-    return sameContentNormalized(other, candidate);
+    if (!sameContentNormalized(other, candidate)) return false;
+    // Same text is not the same turn when the attachments differ (a second
+    // video sent with the composer's automatic «Analiza los archivos
+    // adjuntos…» prompt) or when the stable row was already answered before
+    // this optimistic send («resume esto» asked again later). Dropping the
+    // new bubble there made the user's request vanish until the server
+    // persisted it («subí un video y desaparece… luego vuelve a aparecer»).
+    if (!attachmentsCompatible(candidate, other)) return false;
+    return !answeredTurnBetween(collapsed, candidateIndex, otherIndex);
   };
 
   const optimisticTwinIndexes = new Map<number, number>();
   collapsed.forEach((message, index) => {
     const id = message?.id ? String(message.id) : '';
     if (!id || !OPTIMISTIC_ID_RE.test(id)) return;
-    const twinIndex = collapsed.findIndex((other, j) => j !== index && isStableTwinOf(message, other));
+    const twinIndex = collapsed.findIndex((other, j) => j !== index && isStableTwinOf(message, index, other, j));
     if (twinIndex >= 0) optimisticTwinIndexes.set(index, twinIndex);
   });
   for (const [optimisticIndex, stableIndex] of optimisticTwinIndexes) {
