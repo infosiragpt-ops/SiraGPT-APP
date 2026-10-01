@@ -18,6 +18,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   const generated: any[] = [], requests: string[] = [], errors: string[] = []
   let bound = opts.bound !== false, createdChat = !opts.fresh
   let previewReady = Boolean(opts.previewReady)
+  const previewDocument = { title: "Mi aplicación" }
   const previewPath = "/api/codex/projects/code-project/preview/qa-token/app/"
   const previewState = () => ({ project: project.id, ready: previewReady, running: previewReady, basePath: previewPath })
   page.on('pageerror', e => errors.push(e.stack || e.message))
@@ -72,7 +73,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
     else if (p === '/codex/projects/code-project/preview/start') { previewReady = true; body = { basePath: previewPath, devUrl: previewPath, previewUrl: previewPath, previewStatus: previewState() } }
     else if (p === '/codex/projects/code-project/preview/status') body = previewState()
     else if (p === '/codex/projects/code-project/preview/stop') { previewReady = false; body = { ok: true } }
-    else if (p === '/codex/projects/code-project/preview/qa-token/app/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>Mi aplicación</h1>' })
+    else if (p === '/codex/projects/code-project/preview/qa-token/app/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<h1>${previewDocument.title}</h1>` })
     else if (p === '/ai/generate') {
       const input = req.postDataJSON()
       generated.push(input)
@@ -95,7 +96,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   const legacyLink = opts.menu === false
   await page.goto(opts.fresh ? '/agentes' : `/agentes?id=code-chat${legacyLink ? '&code=1' : ''}`, { waitUntil: 'domcontentloaded' })
   await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
-  if (opts.open === false || opts.fresh) return { files, otherFiles, generated, requests, errors }
+  if (opts.open === false || opts.fresh) return { files, otherFiles, generated, requests, errors, previewDocument }
   if (!legacyLink) {
     await expect(page.getByTestId('chat-code-button')).toBeVisible({ timeout: 90_000 })
     await page.getByTestId('chat-code-button').click()
@@ -112,7 +113,7 @@ async function setup(page: Page, opts: { bound?: boolean; access?: boolean; fres
   } else {
     await expect(page.locator('[data-testid=chat-composer-surface]:visible').last()).toBeVisible({ timeout: 90_000 })
   }
-  return { files, otherFiles, generated, requests, errors }
+  return { files, otherFiles, generated, requests, errors, previewDocument }
 }
 
 async function openFile(page: Page) {
@@ -384,6 +385,27 @@ test('a completed app opens automatically, stays closed when dismissed, and reco
   await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
   expect(state.requests.some(r => r.includes('/preview/start'))).toBe(false)
   expect(new URL(page.url()).pathname).toBe('/agentes')
+  expect(state.errors).toEqual([])
+})
+
+test('an edit in the same chat refreshes the open app at the same preview URL', async ({ page }, testInfo) => {
+  const state = await setup(page, { autoPreview: true, previewReady: true, open: false })
+  const iframe = page.getByTestId('agentes-preview-iframe')
+  await expect(iframe).toBeVisible()
+  const previewUrl = await iframe.getAttribute('src')
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Mi aplicación')
+  // The agent changes content in an existing file: the file-tree paths and
+  // capability URL stay identical, so neither poll can serve as an edit signal.
+  state.previewDocument.title = 'Bici Nube Verificada'
+  const composer = page.locator('[data-testid=chat-composer-surface]:visible').last().locator('textarea')
+  await composer.fill('En esta misma app, cambia el título a Bici Nube Verificada, ejecuta las pruebas y actualiza la vista previa. No crees otro proyecto.')
+  await composer.press('Enter')
+  await expect.poll(() => state.generated.length).toBe(1)
+  await expect(page.frameLocator('[data-testid=agentes-preview-iframe]').getByRole('heading')).toHaveText('Bici Nube Verificada')
+  expect(await iframe.getAttribute('src')).toBe(previewUrl)
+  expect(Object.keys(state.files)).toEqual(['app.js'])
+  expect(state.requests.some(r => r.includes('/preview/start') || r.includes('/preview/stop'))).toBe(false)
+  await page.screenshot({ path: testInfo.outputPath('chat-followup-preview-refreshed.png') })
   expect(state.errors).toEqual([])
 })
 

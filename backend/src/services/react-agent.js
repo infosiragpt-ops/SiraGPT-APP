@@ -860,6 +860,7 @@ function executedToolNames(steps) {
  * invented) or when the draft claims a side effect no tool performed.
  */
 function buildUnverifiedDraftAnswer({ draft, guard, steps }) {
+  if (guard?.allowUnverifiedDraft === false) return null;
   const text = String(draft || '').trim();
   if (text.length < MIN_UNVERIFIED_DRAFT_CHARS) return null;
   if (Array.isArray(guard && guard.missingTools) && guard.missingTools.length > 0) return null;
