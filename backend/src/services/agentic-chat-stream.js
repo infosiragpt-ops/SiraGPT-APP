@@ -2845,7 +2845,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           });
         }
         : null,
-      planVerify.createAnswerVerifier({ openai, model, userQuery }),
+      codingWorkspace
+        ? require('./codex/coding-finalize-guard').createCodingFinalizeGuard({
+          userQuery, projectId: toolContext.codingWorkspace.projectId,
+          userId: toolContext.userId, chatId: toolContext.chatId,
+        })
+        : planVerify.createAnswerVerifier({ openai, model, userQuery }),
     ]);
 
     // parallel_tool_calls per the capability registry: sent ONLY when the

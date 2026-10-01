@@ -1,6 +1,6 @@
 # Desarrollo desde el chat
 
-Base verificada: PR #941 publicada y servida dentro de `9bb17d90d41639a596a2fd70e9e12963e5db8014` (publicación `36788565094`). Esta corrección aborda el timeout observado con Grok, la apertura automática de la app y la conservación del resumen al compactar. Su publicación requiere CI y aceptación autenticada de la versión final.
+Base verificada: PR #945 publicada como `2e99b7b513b24363688771640a9a0f8e88c5f58e` (publicación `36794920755`), con versión y salud correctas. La aceptación autenticada creó la tienda y su API, pero detectó dos defectos adicionales de cierre y refresco corregidos en esta rama; requieren su propia publicación y aceptación final.
 
 La experiencia solicitada comienza escribiendo una tarea de desarrollo en `/agentes`. Un proyecto con nombre aparece en Carpetas y el botón Código de la cabecera permite abrir sus archivos. El editor es opcional y ya no está en el menú +. No se cambia de interfaz ni se activa un modo por inferencia.
 
@@ -28,6 +28,17 @@ Validación previa: 131/131 regresiones backend finales; 73/73 pruebas frontend 
 
 Aceptación previa con proveedor real: Grok 4.7 finalizó una web de bicicletas en 74,768 segundos usando el candidato cargado sólo en un proceso QA y el runner de Lenovo. Escribió frontend/backend; el primer comando falló por dependencias ausentes y el modelo lo corrigió. La compilación independiente terminó con código 0. Se reabrieron los archivos y verificaron sus hashes; HTML, módulo frontend, `/api/bikes` y `/api/health` respondieron HTTP 200, con tres bicicletas de IDs únicos y la llamada frontend→API confirmada. Se detuvo únicamente la vista previa QA. El vínculo/propietario de esta prueba son sintéticos; falta la aceptación autenticada del commit publicado.
 
+## Cierre y refresco después de una edición
+
+La aceptación autenticada de PR #945 creó una app con tres bicicletas, carrito y API SQLite. Se comprobaron dos unidades por 2.380 euros y una reserva sintética desde el iframe. El seguimiento escribió el título nuevo en el mismo proyecto y el módulo servido contenía el cambio, pero el iframe conservó el título anterior hasta recargar. Ambos turnos quedaron como `verification_failed` aunque sus pruebas de API habían pasado.
+
+- El extracto para el juez conserva todas las acciones dentro de los mismos 8.000 caracteres; los resultados y códigos de salida preceden a argumentos largos. Se mantiene la huella del contenido completo. Si no cabe evidencia suficiente, falla visiblemente.
+- El cierre de código usa comprobaciones deterministas del proyecto autorizado: escrituras y relecturas concordantes, resultados de pruebas/build pertinentes posteriores al último cambio y vista previa lista cuando corresponde. Se rechazan pruebas fallidas, evidencia ausente o antigua, proyectos ajenos y afirmaciones de publicación sin soporte. El verificador conversacional conserva su modelo, tiempo y presupuesto. No se aprueba por haber llamado una herramienta.
+- Un evento de vista previa verificado transmite una revisión local: el iframe activo se recarga aunque la URL y los nombres de archivo no cambien. Un heartbeat no recarga la app, ni un evento vuelve a abrir un panel cerrado o revierte Stop.
+- La prueba de seguimiento reveló además que el test generado limpiaba las reservas de su base de desarrollo. La política exige inspeccionar y aislar fixtures/bases antes de ejecutar pruebas; esto no sustituye la revisión del código generado ni acredita aislamiento automático de toda aplicación.
+
+Regresiones locales: el refresco de la misma URL fallaba antes y pasa en Chromium; 3/3 recorridos del panel, 1.246/1.246 componentes y TypeScript correctos. Las pruebas conservan fallos de ejecución, resultados negativos, cancelación y evidencia insuficiente. Una comparación real con fixtures sintéticas confirmó que el juez anterior y el experimento con streaming agotaban ambos los mismos 12 segundos; se retiró ese experimento y se sustituyó sólo el cierre de código por comprobaciones del proyecto. No se extrajeron conversaciones de producción para esa comparación.
+
 ## Integración del envío real del chat
 
 La ruta canónica `backend/src/routes/ai.js` detecta y autoriza la intención sin crear recursos durante el preflight. Tras comprobar cuotas, proveedor definitivo, presupuesto de contexto y capacidad de herramientas del modelo, prepara el proyecto y emite sólo `{type, chatId, projectId, projectName}`. El evento permite mostrar la carpeta y el botón Código, y se recupera al reconectar sin cambiar el cursor de texto. Stop propaga la cancelación y evita nuevas acciones tras las esperas; no garantiza terminar instantáneamente un proceso remoto ya iniciado. No se crea un esquema general de eventos de planos o jobs.
@@ -41,6 +52,7 @@ Las pruebas con infraestructura simulada verifican los controles de la ruta, per
 - Bóveda de variables: sólo propuesta, no implementada. Revisión automática exige aprobación específica y revisión de seguridad. El ejecutor compartido no acredita aislamiento para recibir secretos privados. No se amplían flags, attestation ni permisos.
 - Navegación: búsquedas y lecturas públicas habilitadas en el carril de código; acceso manual al navegador existente. No se agregan `computer_*`: su aislamiento/destinos y confirmación de pagos requieren correcciones antes de ampliar la automatización.
 - Adjuntos de código: el texto extraído puede perder espacios o etiquetas; no se presenta como importación fiel. Para esta entrega se usan GitHub o código pegado. Importar bytes originales y ZIP requiere una ruta owner-scoped con validación de archivos aparte.
+- La vista previa usa enlaces temporales. Si caducan, el control Iniciar vista previa los renueva en la nube; todavía no existe renovación continua sin reiniciar el servidor de la app. No se extiende la validez de enlaces ajenos o inválidos.
 - No existe checkpoint durable de ejecución conectado al agente de código: los archivos y el proyecto persisten, pero no se garantiza reanudar cualquier proceso interrumpido.
 - Proponer cambios no equivale a publicarlos. No se hace merge, publicación ni pago desde una inferencia.
 

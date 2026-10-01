@@ -107,6 +107,38 @@ describe("CodingPreviewPane", () => {
     expect(vi.mocked(projectsCodexApi.startPreview)).toHaveBeenCalledTimes(1)
   })
 
+  it("refreshes an already open app once for a verified preview revision even when the URL is unchanged", async () => {
+    const status = { project: "p1", ready: true, running: true, basePath: "/api/codex/projects/p1/preview/tok/app/" }
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue(status)
+    const { rerender } = render(<CodingPreviewPane projectId="p1" previewRevision={0} />)
+    const first = await screen.findByTestId("agentes-preview-iframe")
+    rerender(<CodingPreviewPane projectId="p1" previewRevision={1} />)
+    await waitFor(() => expect(screen.getByTestId("agentes-preview-iframe")).not.toBe(first))
+    const refreshed = screen.getByTestId("agentes-preview-iframe")
+    expect(refreshed).toHaveAttribute("src", status.basePath)
+    rerender(<CodingPreviewPane projectId="p1" previewRevision={1} />)
+    expect(screen.getByTestId("agentes-preview-iframe")).toBe(refreshed)
+    // A failed/non-ready status clears the parent snapshot. That is not a
+    // new ready event and must not reload the current app a second time.
+    rerender(<CodingPreviewPane projectId="p1" previewRevision={0} />)
+    expect(screen.getByTestId("agentes-preview-iframe")).toBe(refreshed)
+    expect(projectsCodexApi.startPreview).not.toHaveBeenCalled()
+    expect(projectsCodexApi.stopPreview).not.toHaveBeenCalled()
+  })
+
+  it("a preview revision after Stop does not revive the iframe or restart the server", async () => {
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue({
+      project: "p1", ready: true, running: true, basePath: "/api/codex/projects/p1/preview/tok/app/",
+    })
+    const { rerender } = render(<CodingPreviewPane projectId="p1" previewRevision={0} />)
+    await screen.findByTestId("agentes-preview-iframe")
+    fireEvent.click(screen.getByTestId("agentes-preview-stop"))
+    rerender(<CodingPreviewPane projectId="p1" previewRevision={1} />)
+    expect(screen.queryByTestId("agentes-preview-iframe")).toBeNull()
+    expect(projectsCodexApi.stopPreview).toHaveBeenCalledTimes(1)
+    expect(projectsCodexApi.startPreview).not.toHaveBeenCalled()
+  })
+
   it("hot-restart: subir fileVersion antes de ready no arranca solo; el arranque posterior es normal", async () => {
     vi.mocked(projectsCodexApi.startPreview).mockResolvedValue({
       devUrl: "/api/codex/projects/p1/preview/tok/app/",

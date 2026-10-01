@@ -69,7 +69,7 @@ export function useCloudCodingProjects(userId?: string) {
 /** Recovery is read-only: opening a chat never starts a new dev server. */
 export function useChatCodingPreview(workspace: CodingWorkspaceReadyDetail | null) {
   const [refresh, setRefresh] = React.useState(0)
-  const [snapshot, setSnapshot] = React.useState<(CodingPreviewDetail & { basePath: string }) | null>(null)
+  const [snapshot, setSnapshot] = React.useState<(CodingPreviewDetail & { basePath: string; revision: number }) | null>(null)
   const userId = workspace?.userId, chatId = workspace?.chatId, projectId = workspace?.projectId
   React.useEffect(() => {
     if (!userId || !chatId || !projectId) return
@@ -77,7 +77,9 @@ export function useChatCodingPreview(workspace: CodingWorkspaceReadyDetail | nul
     void projectsCodexApi.previewStatus(projectId, controller.signal).then((status) => {
       if (controller.signal.aborted) return
       const basePath = readyCodingPreviewPath(status, projectId)
-      setSnapshot(basePath ? { userId, chatId, projectId, basePath } : null)
+      // A stable capability URL can serve newly edited files. Publish the
+      // event revision only after the owned status confirms actual readiness.
+      setSnapshot(basePath ? { userId, chatId, projectId, basePath, revision: refresh } : null)
     }).catch(() => { if (!controller.signal.aborted) setSnapshot(null) })
     return () => controller.abort()
   }, [userId, chatId, projectId, refresh])

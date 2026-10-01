@@ -34,7 +34,11 @@ function unavailablePreviewNote(value: unknown): string {
   return "La vista previa todavía no está disponible. Vuelve a iniciarla para comprobar el proyecto."
 }
 
-export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: string | null; fileVersion?: number }) {
+export function CodingPreviewPane({ projectId, fileVersion = 0, previewRevision = 0 }: {
+  projectId: string | null
+  fileVersion?: number
+  previewRevision?: number
+}) {
   const [phase, setPhase] = React.useState<Phase>("idle")
   const [url, setUrl] = React.useState<string | null>(null)
   const [note, setNote] = React.useState("")
@@ -42,6 +46,7 @@ export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: s
   const operationRef = React.useRef(0)
   const abortRef = React.useRef<AbortController | null>(null)
   const seenFileVersionRef = React.useRef(fileVersion)
+  const seenPreviewRevisionRef = React.useRef(previewRevision)
 
   const stop = React.useCallback(async () => {
     operationRef.current += 1
@@ -129,6 +134,16 @@ export function CodingPreviewPane({ projectId, fileVersion = 0 }: { projectId: s
     seenFileVersionRef.current = fileVersion
     if (phase === "ready" && url) setFrameKey((k) => k + 1)
   }, [fileVersion, phase, url])
+
+  // A verified chat ready event can represent an edit to existing files;
+  // neither the URL nor the file-tree names need to change. Reload only the
+  // visible, running frame, never reopen a closed pane or revive Stop. Status
+  // polling alone does not produce a revision, and failed reads cannot undo it.
+  React.useEffect(() => {
+    if (previewRevision <= seenPreviewRevisionRef.current) return
+    seenPreviewRevisionRef.current = previewRevision
+    if (phase === "ready" && url) setFrameKey((key) => key + 1)
+  }, [previewRevision, phase, url])
 
   async function start() {
     if (!projectId || phase === "starting") return

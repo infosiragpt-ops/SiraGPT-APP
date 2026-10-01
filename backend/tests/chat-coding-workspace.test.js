@@ -61,6 +61,7 @@ test('project_list filters secrets and reports runner failure honestly', async (
 test('chat ReAct edits and tests the SAME persistent project after context compaction, preserving selected model', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-code-integration-'));
   await fs.writeFile(path.join(root, 'app.js'), 'module.exports = 1;\n');
+  await fs.writeFile(path.join(root, 'app.test.js'), "require('node:test')('export value', () => require('node:assert/strict').equal(require('./app'), 2));\n");
   // Execute the real compactor against an in-memory persistence boundary;
   // summary creation must not update/delete the visible message rows.
   const compactor = require('../src/services/conversation-compactor');
@@ -90,15 +91,18 @@ test('chat ReAct edits and tests the SAME persistent project after context compa
     async exec(id, cmd) {
       runnerCalls.push(id);
       if (cmd[0] === 'git') return { ok: true, stdout: 'app.js\n', exitCode: 0 };
-      const { stdout, stderr } = await promisify(execFile)(cmd[0], cmd.slice(1), { cwd: root });
+      const childEnv = { ...process.env };
+      delete childEnv.NODE_TEST_CONTEXT; // The project suite is an independent runner process.
+      const { stdout, stderr } = await promisify(execFile)(cmd[0], cmd.slice(1), { cwd: root, env: childEnv });
       return { ok: true, stdout, stderr, exitCode: 0 };
     },
   };
   const script = [
     ['project_list', {}], ['project_read', { path: 'app.js' }],
     ['project_write', { path: 'app.js', content: 'module.exports = 2;\n' }],
-    ['project_exec', { cmd: ['node', '-e', "require('node:assert/strict').equal(require('./app'),2); console.log('test passed')"] }],
-    ['finalize', { answer: 'Actualicé app.js a 2 y pasó la prueba.' }],
+    ['project_exec', { cmd: ['node', '--test', 'app.test.js'] }],
+    ['project_read', { path: 'app.js' }],
+    ['finalize', { answer: 'Actualicé app.js a 2 y pasó la prueba. ' + 'El archivo pertenece al mismo proyecto y se volvió a leer después de la comprobación. '.repeat(4) }],
   ];
   let index = 0;
   const openai = { chat: { completions: { create: async (req) => {
@@ -122,6 +126,8 @@ test('chat ReAct edits and tests the SAME persistent project after context compa
     assert.deepEqual(visibleRows, originalRows, 'compaction never deletes or rewrites the visible transcript');
     assert.deepEqual(history, originalHistory, 'the agent cannot mutate the caller-owned history');
     assert.match(result.finalAnswer, /pasó la prueba/);
+    assert.doesNotMatch(result.finalAnswer, /No pude verificar|contrasta las cifras/);
+    assert.ok(requests.every(request => Array.isArray(request.tools)), 'coding verification does not make an extra prose judge request');
     const names = requests[0].tools.map((t) => t.function.name);
     assert.ok(names.includes('project_write'));
     assert.ok(!names.includes('host_bash') && !names.includes('construir_scaffold'));

@@ -17,7 +17,9 @@
  *     claims are matched, so offers ("puedo crear…"), future ("voy a…")
  *     and conditional phrasings do not trip it. Bilingual ES/EN.
  *   - A claim is SUPPORTED when any of its evidence tools ran; otherwise
- *     it is UNSUPPORTED. Pure function, no I/O, fully testable.
+ *     it is UNSUPPORTED. This checks tool presence, not command exit codes
+ *     or output correctness; the answer reviewer evaluates those observations.
+ *     Pure function, no I/O, fully testable.
  */
 
 // Each claim kind: a matcher and the tool names that would substantiate it.
@@ -42,7 +44,7 @@ const CLAIM_KINDS = Object.freeze([
     // "creé/generé el archivo/documento/pdf", "I created the file/document"
     re: /(?<![\p{L}])(?:cre[ée]|gener[ée]|elabor[ée]|prepar[ée]|produj[ée]|arm[ée]|he\s+cre[aá]do|created|generated|produced|built|made|prepared)(?![\p{L}])[^.?!\n]{0,60}(?<![\p{L}])(?:archivo|documento|fichero|pdf|word|docx|excel|xlsx|pptx?|powerpoint|presentaci[oó]n|hoja\s+de\s+c[aá]lculo|informe|reporte|file|document|spreadsheet|deck|report|chart|gr[aá]fico|imagen|image|diagram)(?![\p{L}])/iu,
     tools: [
-      'create_document', 'verify_artifact', 'host_file', 'generate_image',
+      'create_document', 'verify_artifact', 'host_file', 'project_write', 'generate_image',
       'create_chart', 'create_mermaid_diagram', 'create_infographic_svg',
       'create_dashboard_html', 'generate_video',
     ],
@@ -51,13 +53,13 @@ const CLAIM_KINDS = Object.freeze([
     kind: 'doc_edited',
     // "actualicé/modifiqué/edité tu word", "I updated your document"
     re: /(?<![\p{L}])(?:actualic[ée]|modifiqu[ée]|edit[ée]|reescrib[ií]|cambi[ée]|ajust[ée]|updated|modified|edited|rewrote|changed|adjusted)(?![\p{L}])[^.?!\n]{0,50}(?<![\p{L}])(?:archivo|documento|word|docx|excel|xlsx|pptx?|pdf|file|document)(?![\p{L}])/iu,
-    tools: ['create_document', 'host_file', 'verify_artifact'],
+    tools: ['create_document', 'host_file', 'verify_artifact', 'project_write'],
   },
   {
     kind: 'code_executed',
     // "ejecuté/corrí el código/script/tests", "I ran the code/tests"
     re: /(?<![\p{L}])(?:ejecut[ée]|corr[ií]|prob[ée]|lanc[ée]|ran|run|executed|tested|compiled)(?![\p{L}])[^.?!\n]{0,40}(?<![\p{L}])(?:c[oó]digo|script|programa|tests?|pruebas?|comando|code|command|build|suite)(?![\p{L}])/iu,
-    tools: ['python_exec', 'bash_exec', 'run_tests', 'host_bash', 'code_sandbox'],
+    tools: ['python_exec', 'bash_exec', 'run_tests', 'host_bash', 'code_sandbox', 'project_exec'],
   },
   {
     kind: 'repo_modified',

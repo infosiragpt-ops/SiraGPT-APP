@@ -15227,6 +15227,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             >
               {codePanelOpen && codeWorkspace && currentChat?.id && (
                 <ChatCodingPanel key={`${user?.id || 'anon'}:${currentChat.id}`} chatId={currentChat.id} userId={user?.id} initialPane={codePanelInitialPane}
+                  previewRevision={readyCodePreview?.revision || 0}
                   onClose={() => setCodePanelOpen(false)}
                   onProjectReady={onCodeProjectReady} />
               )}

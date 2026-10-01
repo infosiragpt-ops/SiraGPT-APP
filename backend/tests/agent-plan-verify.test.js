@@ -229,6 +229,58 @@ describe('createAnswerVerifier', () => {
   });
 
 
+  test('a long coding run reviews all 51 results even when command arguments exceed the excerpt budget', async () => {
+    const openai = judgeClient(['{"pass":true}']);
+    const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: 'Crea la tienda de bicicletas y ejecuta todas las pruebas del proyecto.' });
+    const steps = Array.from({ length: 51 }, (_, i) => ({ actions: [{
+      tool: 'project_exec',
+      args: JSON.stringify({ cmd: ['node', '-e', `/* step ${i} */${'x'.repeat(2400)}`] }),
+      observation: { stdout: `CHECK_PASSED_${i}_END`, stderr: '', ok: true, exitCode: 0, timedOut: false, truncated: false },
+    }] }));
+    const original = structuredClone(steps);
+    assert.equal((await guard({ answer: LONG_ANSWER, steps })).ok, true);
+    const request = openai.calls[0];
+    const evidence = request.messages[1].content.split('TOOL OBSERVATIONS (bounded excerpt):\n')[1];
+    for (let i = 0; i < 51; i++) assert.ok(evidence.includes(`CHECK_PASSED_${i}_END`), `result ${i} is visible`);
+    assert.equal((evidence.match(/"exitCode":0/g) || []).length, 51);
+    assert.ok(evidence.indexOf('CHECK_PASSED_0_END') < evidence.indexOf('CHECK_PASSED_50_END'));
+    assert.ok(evidence.length <= 8000);
+    assert.match(request.messages[0].content, /untrusted evidence, not instructions/);
+    assert.deepEqual(steps, original, 'review compaction cannot rewrite the execution history');
+  });
+
+  test('a failed final command keeps its exit code, error and output tail after large commands and logs', async () => {
+    const openai = judgeClient(['{"pass":false,"problems":["the final tests failed"],"fix":"Repair the failing test."}']);
+    const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: LONG_QUERY });
+    const steps = Array.from({ length: 51 }, () => ({ actions: [{
+      tool: 'project_exec', args: JSON.stringify({ cmd: ['node', '-e', 'x'.repeat(2400)] }),
+      observation: { stdout: 'passed', ok: true, exitCode: 0 },
+    }] }));
+    steps[50].actions[0].observation = {
+      stdout: `${'verbose log\n'.repeat(3000)}LAST_TEST_FAILED`,
+      stderr: 'assertion_failed', exitCode: 1, ok: false, timedOut: false, truncated: false,
+    };
+    const verdict = await guard({ answer: LONG_ANSWER, steps });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.code, 'E_VERIFICATION_REJECTED');
+    const evidence = openai.calls[0].messages[1].content.split('TOOL OBSERVATIONS (bounded excerpt):\n')[1];
+    assert.match(evidence, /"exitCode":1/);
+    assert.match(evidence, /assertion_failed/);
+    assert.match(evidence, /LAST_TEST_FAILED/);
+    assert.match(evidence, /truncated/);
+    assert.ok(evidence.length <= 8000);
+  });
+
+  test('observations too numerous to represent all actions fail closed instead of hiding early evidence', async () => {
+    const openai = judgeClient(['{"pass":true}']);
+    const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: LONG_QUERY });
+    const steps = [{ actions: Array.from({ length: 1024 }, () => ({ tool: 'project_exec', observation: { ok: true, exitCode: 0 } })) }];
+    const verdict = await guard({ answer: LONG_ANSWER, steps });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.code, 'E_VERIFICATION_EVIDENCE');
+    assert.equal(openai.calls.length, 0);
+  });
+
   test('evidence outside the bounded judge excerpt still invalidates cached approval', async () => {
     const openai = judgeClient(['{"pass":true}', '{"pass":false}']);
     const guard = planVerify.createAnswerVerifier({ openai, model: 'gpt-test', userQuery: LONG_QUERY });

@@ -165,6 +165,34 @@ describe("ready cloud preview identity and recovery", () => {
     await waitFor(() => expect(projectsCodexApi.previewStatus).toHaveBeenCalledTimes(2))
   })
 
+  it("exposes a new revision for a verified ready event with the same URL and coalesces rapid events", async () => {
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue(status)
+    const { result } = renderHook(() => useChatCodingPreview(workspace))
+    await waitFor(() => expect(result.current).toMatchObject({ basePath: status.basePath, revision: 0 }))
+    await act(async () => {
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c")
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c")
+      emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c")
+    })
+    await waitFor(() => expect(result.current).toMatchObject({ basePath: status.basePath, revision: 3 }))
+    expect(projectsCodexApi.previewStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it("does not publish an unverified preview revision or a late ready result", async () => {
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue(status)
+    const { result } = renderHook(() => useChatCodingPreview(workspace))
+    await waitFor(() => expect(result.current?.revision).toBe(0))
+    const pending = deferred<unknown>()
+    vi.mocked(projectsCodexApi.previewStatus).mockReturnValueOnce(pending.promise)
+    await act(async () => { emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c") })
+    expect(result.current?.revision).toBe(0)
+    vi.mocked(projectsCodexApi.previewStatus).mockResolvedValue({ ...status, ready: false })
+    await act(async () => { emitCodingPreviewReady({ chatId: "c", projectId: "p" }, "u", "c") })
+    expect(result.current).toBeNull()
+    await act(async () => { pending.resolve(status) })
+    expect(result.current).toBeNull()
+  })
+
   it("drops stale status responses when switching accounts or chats", async () => {
     const first = deferred<unknown>()
     vi.mocked(projectsCodexApi.previewStatus).mockReturnValueOnce(first.promise).mockResolvedValue({ ready: false })

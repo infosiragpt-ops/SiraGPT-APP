@@ -106,3 +106,14 @@ test('English claims are detected too', () => {
   assert.ok(extractClaims('I created the report document for you.').some((c) => c.kind === 'file_created'));
   assert.ok(extractClaims('I ran the tests and they passed.').some((c) => c.kind === 'code_executed'));
 });
+
+
+test('project-scoped writes and execution satisfy the corresponding tool-presence claims', () => {
+  assert.equal(verifyClaims('Creé el archivo app.js.', ['project_write']).ok, true);
+  assert.equal(verifyClaims('Actualicé el archivo app.js.', ['project_write']).ok, true);
+  assert.equal(verifyClaims('Ejecuté las pruebas del código.', ['project_exec']).ok, true);
+  assert.equal(verifyClaims('I ran the tests.', ['project_exec']).ok, true);
+  assert.equal(verifyClaims('Ejecuté las pruebas del código.', ['project_read']).severity, 'high');
+  assert.equal(verifyClaims('Actualicé el archivo app.js.', ['project_exec']).severity, 'high');
+  assert.equal(verifyClaims('Desplegué la aplicación.', ['project_write', 'project_exec']).severity, 'high');
+});
