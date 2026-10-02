@@ -20,6 +20,11 @@ function harness() {
         if (method === 'Target.getTargetInfo') return { targetInfo: { targetId: page.id } };
         if (method === 'Emulation.setDeviceMetricsOverride') { page.viewport = { width: args.width, height: args.height }; return {}; }
         if (method === 'Emulation.clearDeviceMetricsOverride') { page.viewport = null; return {}; }
+        if (method === 'Runtime.evaluate') {
+          const value = vm.runInNewContext(args.expression, { document: { title: page.documentTitle, readyState: page.readyState }, location: { href: page.url() }, innerWidth: (page.viewport || { width: 1280 }).width, innerHeight: (page.viewport || { height: 800 }).height });
+          return { result: { value } };
+        }
+        if (method === 'Page.navigateToHistoryEntry') { page.index = args.entryId; return {}; }
         if (method === 'Page.getNavigationHistory') return { currentIndex: page.index, entries: page.history.map((url, id) => ({ id, url })) };
         if (method === 'Browser.getWindowForTarget') return { windowId: 1, bounds: { ...windows.get(1) } };
         if (method === 'Browser.setWindowBounds') { windows.set(args.windowId, { ...windows.get(args.windowId), ...args.bounds }); return {}; }
@@ -30,7 +35,7 @@ function harness() {
   };
   function makePage(url) {
     const page = {
-      id: 'target-' + ++counter, history: [url], index: 0, focus: pages.length === 0,
+      id: 'target-' + ++counter, history: [url], index: 0, focus: pages.length === 0, readyState: 'complete', documentTitle: url === 'about:blank' ? '' : 'Real page',
       context: () => context,
       title: async () => page.url() === 'about:blank' ? '' : 'Real page',
       url: () => page.history[page.index],
@@ -49,6 +54,7 @@ function harness() {
     module, exports: module.exports, process, AbortSignal, Map, Set,
     fetch: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://test.invalid/browser' }) }),
     require: name => {
+      if (name === 'node:timers/promises') return require(name);
       if (name === './orch-client') return { resolveOrchConfig: () => ({ url: 'http://test.invalid' }), orchFetch: async (path, options) => { clipCalls.push({ path, options }); if (failCommand === 'clip') throw new Error('clip failed'); return { ok: true }; } };
       if (name === './cdp-client') return { rewriteCdpWs: url => url };
       if (name === 'playwright') return { chromium: { connectOverCDP: async () => browser } };
@@ -271,4 +277,39 @@ test('a partially failed restore remains unconfirmed until an explicit restore s
   assert.equal(restored.presentation, 'desktop');
   assert.equal(restored.viewport.width, 1280);
   assert.equal((await h.browserState(session)).presentation, 'desktop');
+});
+
+
+test('cached history restores confirm the real document without relying on a new DOMContentLoaded or stale utility context', async () => {
+  const h = harness(); const page = h.makePage('https://example.com/one');
+  page.history.push('https://example.com/two'); page.index = 1;
+  page.goBack = async () => { page.index = 0; const error = new Error('cached document does not emit DOMContentLoaded'); error.name = 'TimeoutError'; throw error; };
+  page.title = async () => { throw new Error('stale utility context after BFCache'); };
+  const state = await h.browserAction(session, { type: 'browser_back', tabId: page.id });
+  assert.equal(state.tabs[0].url, 'https://example.com/one');
+  assert.equal(state.tabs[0].title, 'Real page');
+  assert.equal(state.canGoBack, false); assert.equal(state.canGoForward, true);
+  assert.equal(h.calls.filter(call => call?.method === 'Page.navigateToHistoryEntry').length, 1);
+  assert.equal(h.calls.find(call => call?.method === 'Page.navigateToHistoryEntry').args.entryId, 0);
+});
+
+test('same-URL history entries confirm entry identity in both directions and do not navigate beyond boundaries', async () => {
+  const h = harness(); const page = h.makePage('https://example.com/same');
+  page.history.push(page.url()); page.index = 1;
+  await h.browserAction(session, { type: 'browser_back', tabId: page.id });
+  assert.equal(page.index, 0);
+  await h.browserAction(session, { type: 'browser_back', tabId: page.id });
+  await h.browserAction(session, { type: 'browser_forward', tabId: page.id });
+  assert.equal(page.index, 1);
+  await h.browserAction(session, { type: 'browser_forward', tabId: page.id });
+  const navigations = h.calls.filter(call => call?.method === 'Page.navigateToHistoryEntry');
+  assert.deepEqual(navigations.map(call => call.args.entryId), [0, 1]);
+});
+
+test('a committed but still-loading history document cannot be acknowledged and abort does not repeat navigation', async () => {
+  const h = harness(); const page = h.makePage('https://example.com/one');
+  page.history.push('https://example.com/two'); page.index = 1; page.readyState = 'loading';
+  await assert.rejects(h.browserAction(session, { type: 'browser_back', tabId: page.id }, process.env, AbortSignal.timeout(60)), error => error.name === 'TimeoutError');
+  assert.equal(h.calls.filter(call => call?.method === 'Page.navigateToHistoryEntry').length, 1);
+  assert.equal(h.calls.at(-1), 'disconnect');
 });

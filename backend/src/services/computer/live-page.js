@@ -185,21 +185,77 @@ async function restorePresentation(session, browser, env, signal) {
   presentationBySession.delete(session.sessionId);
 }
 
+// A BFCache restore does not emit a new DOMContentLoaded and can leave the
+// temporary Playwright connection's utility context waiting for a new document.
+// Read only fixed, visible metadata directly from the actual document instead.
+async function readPageDocument(cdp) {
+  const data = await cdp.send('Runtime.evaluate', {
+    expression: '({ title: document.title, url: location.href, readyState: document.readyState, viewport: { width: innerWidth, height: innerHeight } })',
+    returnByValue: true,
+  });
+  const value = data?.result?.value;
+  if (data?.exceptionDetails || !value || typeof value.title !== 'string' || typeof value.url !== 'string'
+    || !['loading', 'interactive', 'complete'].includes(value.readyState)
+    || !Number.isFinite(value.viewport?.width) || !Number.isFinite(value.viewport?.height)) {
+    throw browserError('browser_document_unavailable', 502);
+  }
+  return value;
+}
+
+async function navigateHistory(page, delta, signal) {
+  const { setTimeout: delay } = require('node:timers/promises');
+  const cdp = await page.context().newCDPSession(page);
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(15000)]);
+  // Closing this CDP session also rejects a pending protocol command at the
+  // existing deadline; it never closes Chrome or repeats the navigation.
+  const abort = () => { void cdp.detach().catch(() => {}); };
+  deadline.addEventListener('abort', abort, { once: true });
+  try {
+    deadline.throwIfAborted();
+    const history = await cdp.send('Page.getNavigationHistory');
+    const entry = history.entries[history.currentIndex + delta];
+    if (!entry) return;
+    await cdp.send('Page.navigateToHistoryEntry', { entryId: entry.id });
+    for (;;) {
+      deadline.throwIfAborted();
+      const current = await cdp.send('Page.getNavigationHistory');
+      const active = current.entries[current.currentIndex];
+      if (active?.id === entry.id) {
+        const document = await readPageDocument(cdp);
+        if (document.readyState !== 'loading' && document.url === active.url) {
+          const confirmed = await cdp.send('Page.getNavigationHistory');
+          const final = confirmed.entries[confirmed.currentIndex];
+          if (final?.id === entry.id && final.url === document.url) { deadline.throwIfAborted(); return; }
+        }
+      }
+      // Confirmation polling only; navigateToHistoryEntry is sent exactly once.
+      await delay(25, undefined, { signal: deadline });
+    }
+  } catch (error) {
+    signal.throwIfAborted();
+    if (deadline.aborted) throw browserError('browser_history_timeout', 504);
+    throw error;
+  } finally {
+    deadline.removeEventListener('abort', abort);
+    await cdp.detach().catch(() => {});
+  }
+}
+
 async function readBrowserState(session, browser, selected) {
   requireConfirmedViewport(session);
   const pages = browser.contexts().flatMap(context => context.pages());
   const page = selected || await selectPage(browser);
   const tabs = [];
   let activeTabId = null;
-  for (const candidate of pages) {
-    const id = await targetId(candidate);
-    tabs.push({ id, title: (await candidate.title()).slice(0, 300) || 'Nueva pestaña', url: candidate.url() });
-    if (candidate === page) activeTabId = id;
-  }
   let canGoBack = false, canGoForward = false, viewport = null, presentation = 'desktop';
-  if (page) {
-    const cdp = await page.context().newCDPSession(page);
+  for (const candidate of pages) {
+    const cdp = await candidate.context().newCDPSession(candidate);
     try {
+      const id = (await cdp.send('Target.getTargetInfo')).targetInfo.targetId;
+      const document = await readPageDocument(cdp);
+      tabs.push({ id, title: document.title.slice(0, 300) || 'Nueva pestaña', url: document.url });
+      if (candidate !== page) continue;
+      activeTabId = id;
       const history = await cdp.send('Page.getNavigationHistory');
       if (presentationBySession.has(session.sessionId)) {
         const { bounds } = await cdp.send('Browser.getWindowForTarget');
@@ -207,7 +263,7 @@ async function readBrowserState(session, browser, selected) {
       }
       canGoBack = history.currentIndex > 0;
       canGoForward = history.currentIndex >= 0 && history.currentIndex < history.entries.length - 1;
-      viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      viewport = document.viewport;
     } finally { await cdp.detach().catch(() => {}); }
   }
   return { tabs, activeTabId, canGoBack, canGoForward, viewport, presentation };
@@ -248,12 +304,7 @@ async function browserAction(session, action, env = process.env, signal) {
       await page.bringToFront();
       const options = { waitUntil: 'domcontentloaded', timeout: 15000 };
       if (action.type === 'browser_back' || action.type === 'browser_forward') {
-        const cdp = await page.context().newCDPSession(page);
-        let history;
-        try { history = await cdp.send('Page.getNavigationHistory'); }
-        finally { await cdp.detach().catch(() => {}); }
-        if (action.type === 'browser_back' && history.currentIndex > 0) await page.goBack(options);
-        if (action.type === 'browser_forward' && history.currentIndex < history.entries.length - 1) await page.goForward(options);
+        await navigateHistory(page, action.type === 'browser_back' ? -1 : 1, signal);
       } else if (action.type === 'browser_reload') await page.reload(options);
     }
     if (action.type === 'browser_present' || action.type === 'browser_resize' || presentationBySession.has(session.sessionId)) await presentPage(session, page);

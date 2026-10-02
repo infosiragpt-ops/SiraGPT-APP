@@ -67,6 +67,62 @@ describe("browser session lifecycle", () => {
     expect(notify).toHaveBeenCalledWith("No se pudo restaurar el escritorio. Abre el navegador e inténtalo de nuevo.")
     expect(warning).toHaveBeenCalledWith("[AgentComputerShell] browser_restore_failed")
   })
+  it("repairs a failed cleanup only on explicit retry and keeps restore then present serialized", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    const restored = deferred<ComputerBrowserState>()
+    const presented = deferred<ComputerBrowserState>()
+    let pendingViewport = false
+    let restoreCount = 0
+    action.mockImplementation(async (_chat, _session, command) => {
+      if (command.type === "browser_restore") {
+        if (++restoreCount === 1) { pendingViewport = true; throw Error("Bearer SECRET") }
+        const state = await restored.promise
+        pendingViewport = false
+        return state
+      }
+      if (pendingViewport) throw Error("viewport pending")
+      return restoreCount > 1 ? presented.promise : browser
+    })
+    const first = render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    first.unmount()
+    await flush()
+    render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudo conectar")
+    const beforeRetry = action.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
+    expect(action).toHaveBeenCalledTimes(beforeRetry)
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }))
+    await flush()
+    expect(action.mock.calls.at(-1)?.[2]).toEqual({ type: "browser_restore" })
+    expect(screen.queryByRole("button", { name: "Reintentar" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Nueva pestaña" })).toBeDisabled()
+    await act(async () => restored.resolve({ ...browser, presentation: "desktop" }))
+    await flush()
+    expect(action.mock.calls.slice(beforeRetry).map((call) => call[2].type)).toEqual(["browser_restore", "browser_present"])
+    expect(screen.getByRole("button", { name: "Nueva pestaña" })).toBeDisabled()
+    await act(async () => presented.resolve(browser))
+    await flush()
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.getByRole("button", { name: "Nueva pestaña" })).toBeEnabled()
+    expect(navigate).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain("SECRET")
+  })
+  it("keeps a failed explicit presentation recovery visible without presenting or retrying again", async () => {
+    action.mockRejectedValue(Error("Bearer SECRET"))
+    render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }))
+    await flush()
+    expect(action.mock.calls.map((call) => call[2].type)).toEqual(["browser_present", "browser_restore"])
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudo completar")
+    expect(screen.getByRole("button", { name: "Reintentar" })).toBeEnabled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
+    expect(action).toHaveBeenCalledTimes(2)
+    expect(navigate).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain("SECRET")
+  })
   it("presents home without inventing a chat and navigates only its acquired session", async () => {
     render(<AgentComputerShell {...props} conversationId="" navigateUrl="https://example.com/final"><div /></AgentComputerShell>)
     await flush()
@@ -114,5 +170,38 @@ describe("browser session lifecycle", () => {
     width = 450; act(() => resize()); width = 500; act(() => resize())
     await act(async () => { await vi.advanceTimersByTimeAsync(250) })
     expect(action.mock.calls.filter((call) => call[2].type === "browser_resize").map((call) => call[2].width)).toEqual([390, 390, 500])
+  })
+
+  it.each(["reload", "navigate"])("retains pending resize repair after %s fails until explicit retry succeeds", async (attempt) => {
+    vi.stubGlobal("ResizeObserver", class { constructor(_callback: () => void) {} observe() {} disconnect() {} })
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ width: 390, height: 600, x: 0, y: 0, top: 0, left: 0, right: 390, bottom: 600, toJSON() {} })
+    let resizeCalls = 0
+    let pendingViewport = false
+    action.mockImplementation(async (_chat, _session, command) => {
+      if (command.type === "browser_resize") {
+        if (++resizeCalls === 1) { pendingViewport = true; throw Error("viewport pending") }
+        pendingViewport = false
+        return { ...browser, viewport: { width: command.width, height: command.height } }
+      }
+      if (pendingViewport && command.type !== "browser_restore") throw Error("viewport pending")
+      return browser
+    })
+    navigate.mockRejectedValue(Error("viewport pending"))
+    render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(screen.getByRole("alert")).toBeVisible()
+    if (attempt === "reload") fireEvent.click(screen.getByRole("button", { name: "Recargar página" }))
+    else {
+      fireEvent.change(screen.getByRole("textbox"), { target: { value: "https://example.com/next" } })
+      fireEvent.submit(screen.getByTestId("integrated-browser-bar"))
+    }
+    await flush()
+    expect(resizeCalls).toBe(1)
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }))
+    await flush()
+    expect(action.mock.calls.at(-1)?.[2]).toEqual({ type: "browser_resize", width: 390, height: 600 })
+    expect(resizeCalls).toBe(2)
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 })

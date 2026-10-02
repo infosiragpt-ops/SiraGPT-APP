@@ -41,6 +41,10 @@ function computerApiBase() {
 
 type DockApp = "desktop" | "browser" | "files" | "terminal"
 
+function isPresentationRepair(action: ComputerBrowserAction | null): boolean {
+  return action?.type === "browser_present" || action?.type === "browser_resize"
+}
+
 /** Phases that mean the agent computer is still coming up / working. */
 const IN_PROGRESS_PHASES = new Set(["starting", "loading", "building", "booting", "running"])
 
@@ -183,26 +187,43 @@ export function AgentComputerShell({
     return () => { stopped = true; clearTimeout(timer); browserReadAbort.current?.abort() }
   }, [browserVisible, hasBrowserState, conversationId, browserSessionId])
 
-  const browserAction = React.useCallback(async (action: ComputerBrowserAction) => {
+  const browserAction = React.useCallback(async (action: ComputerBrowserAction, recoverPresentation = false) => {
     const chatId = conversationId?.trim() || ""
     if (!browserSessionId || browserBusyRef.current) return null
     const epoch = browserEpoch.current
     browserMutation.current++
     browserReadAbort.current?.abort()
-    retryBrowserAction.current = null
+    // A pending presentation repair must survive later commands that the
+    // server refuses until the viewport is usable again.
+    const pendingRepair = isPresentationRepair(retryBrowserAction.current) ? retryBrowserAction.current : null
+    retryBrowserAction.current = pendingRepair
     browserBusyRef.current = true
     setBrowserBusy(true)
-    setBrowserError(null)
+    if (!pendingRepair) setBrowserError(null)
     try {
-      const state = await queueBrowser(() => actComputerBrowser(chatId, browserSessionId, action))
+      const state = await queueBrowser(async () => {
+        // An explicit retry can recover a partially restored framebuffer. Keep
+        // both steps in this operation so no navigation can run between them.
+        if (recoverPresentation && action.type === "browser_present") {
+          await actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" })
+        }
+        return actComputerBrowser(chatId, browserSessionId, action)
+      })
       if (action.type === "browser_resize" && (state.viewport?.width !== action.width || state.viewport?.height !== action.height)) {
         throw new Error("No se confirmó el tamaño del navegador")
       }
-      if (browserEpoch.current === epoch) { setBrowserState(state); return state }
+      if (browserEpoch.current === epoch) {
+        setBrowserState(state)
+        if (!pendingRepair || isPresentationRepair(action) || action.type === "browser_restore") {
+          retryBrowserAction.current = null
+          setBrowserError(null)
+        }
+        return state
+      }
       return null
     } catch {
       if (browserEpoch.current === epoch) {
-        retryBrowserAction.current = action
+        retryBrowserAction.current = isPresentationRepair(action) ? action : pendingRepair || action
         setBrowserError("No se pudo completar la acción del navegador. Inténtalo de nuevo.")
       }
       return null
@@ -215,10 +236,13 @@ export function AgentComputerShell({
     const epoch = browserEpoch.current
     browserMutation.current++
     browserReadAbort.current?.abort()
-    retryBrowserAction.current = null
+    // A pending presentation repair must survive later commands that the
+    // server refuses until the viewport is usable again.
+    const pendingRepair = isPresentationRepair(retryBrowserAction.current) ? retryBrowserAction.current : null
+    retryBrowserAction.current = pendingRepair
     browserBusyRef.current = true
     setBrowserBusy(true)
-    setBrowserError(null)
+    if (!pendingRepair) setBrowserError(null)
     try {
       const result = await queueBrowser(async () => {
         const actual = await postComputerNavigate(conversationId, url, browserState?.activeTabId || undefined, browserSessionId)
@@ -379,7 +403,7 @@ export function AgentComputerShell({
       {browserVisible ? <IntegratedBrowserBar browserControls={{
         state: browserState, busy: browserBusy || !browserSessionId, error: browserError || (liveStatus === "error" ? "La computadora no está disponible. Usa el botón Reintentar de la pantalla." : null),
         onAction: browserAction,
-        onRetry: retryBrowserAction.current ? () => browserAction(retryBrowserAction.current!) : undefined,
+        onRetry: retryBrowserAction.current ? () => browserAction(retryBrowserAction.current!, retryBrowserAction.current?.type === "browser_present") : undefined,
         onNavigate: browserNavigate, onClose, onToggleMaximize, maximized,
       }} /> : <div
         className="flex h-11 shrink-0 items-center gap-2 border-b border-black/10 bg-gradient-to-b from-white to-zinc-100 px-3 dark:border-white/10 dark:from-[#2a2a2c] dark:to-[#1b1b1d]"
