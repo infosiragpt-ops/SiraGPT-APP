@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from "framer-motion"
 import { useEffect, useState, useCallback, type CSSProperties } from "react"
-import { KnotMark } from "@/components/brand"
+import { AtomMark } from "@/components/brand"
 
 /**
  * Brand showcase cycling through AI providers + feature demos.
@@ -812,7 +812,7 @@ const GitHubMCPVisual = ({ color }: { color: string }) => (
         animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.06, 1] }}
         transition={{ duration: 2.8, repeat: Infinity, ease: "easeInOut" }}
       />
-      <KnotMark size={48} className="relative z-[1] text-white" gap="#0a0a0a" />
+      <AtomMark size={48} className="relative z-[1] text-white" />
     </motion.div>
   </div>
 )

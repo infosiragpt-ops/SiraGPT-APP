@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { KnotMark } from "@/components/brand"
+import { AtomMark } from "@/components/brand"
 import Link from "next/link"
 import { ArrowLeft, Mail, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -82,7 +82,7 @@ function ForgotPasswordPageContent() {
         />
         <div className="relative flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/15 backdrop-blur">
-            <KnotMark size={28} className="text-white" gap="#262626" />
+            <AtomMark size={28} className="text-white" />
           </div>
           <span className="text-lg font-semibold tracking-tight">SiraGPT</span>
         </div>
@@ -109,7 +109,7 @@ function ForgotPasswordPageContent() {
                 {t("back")}
               </Button>
               <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-neutral-200 bg-white">
-                <KnotMark size={40} className="text-[color:var(--brand)]" />
+                <AtomMark size={40} className="text-[color:var(--brand)]" />
               </div>
               <div aria-hidden="true" />
             </div>

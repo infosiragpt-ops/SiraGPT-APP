@@ -6,7 +6,7 @@ import path from "node:path"
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
 describe("Claude-style thinking surface", () => {
-  it("ships one animated ThinkingCore glyph in the monochrome think accent", () => {
+  it("ships one animated ThinkingCore glyph — the atom in motion — in the think accent", () => {
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /export function ClaudeAsterisk/)
     assert.match(asterisk, /data-claude-asterisk=\{active \? "active" : "idle"\}/)
@@ -16,6 +16,15 @@ describe("Claude-style thinking surface", () => {
     assert.doesNotMatch(asterisk, /LEAF_PATH|\[0, 90, 180, 270\]/, "the clover is the brand logo, not the thinking glyph")
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /claude-asterisk--active/)
+    // Luis (2026-10-02): three electrons travel the three orbits of the atom
+    // logo with a trail; idle is the static logo. SMIL moves them along the
+    // exact ellipse; the trail is a synced dash on a pathLength-100 copy.
+    assert.match(core, /data-brand-geometry="atom"/)
+    assert.match(core, /<animateMotion path=\{ORBIT_PATH\}/)
+    assert.match(core, /pathLength=\{100\}/)
+    assert.match(core, /attributeName="stroke-dashoffset"/)
+    assert.match(core, /thinking-core__electron-still/)
+    assert.doesNotMatch(core, /thinking-core__ripple/)
     const loaders = source("lib/thinking-loaders.ts")
     assert.match(loaders, /export const CLAUDE_THINK_ACCENT = "currentColor"/)
     const bars = source("components/pensando-bars.tsx")
@@ -30,10 +39,14 @@ describe("Claude-style thinking surface", () => {
     assert.match(css, /--step-running: var\(--think-text, #57534E\);/)
     assert.match(css, /--think-dim: #737373;/)
     assert.match(css, /--think-dim: #A3A3A3;/)
-    assert.match(css, /@keyframes thinking-core-orbit/)
     assert.match(css, /@keyframes thinking-core-pulse/)
-    assert.match(css, /@keyframes thinking-core-ripple/)
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__ripple,\s*\.thinking-live-label \{ animation: none; \}/)
+    assert.match(css, /@keyframes thinking-core-soft/)
+    assert.doesNotMatch(css, /@keyframes thinking-core-(orbit|ripple)/, "orbits are SMIL now; no ripple")
+    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: none; \}/)
+    // Reduced motion: the moving electrons and trails hide, the static logo shows, the nucleus only pulses softly.
+    assert.match(css, /\.claude-asterisk--active \.thinking-core__trail,\s*\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
+    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: inline; \}/)
+    assert.match(css, /\.thinking-live-label \{ animation: none; \}/)
     assert.doesNotMatch(css, /@keyframes claude-asterisk-(spin|breathe)/)
     assert.doesNotMatch(css, /--step-running: #2563eb;/)
     const loader = source("components/thinking-status-loader.tsx")

@@ -8606,52 +8606,32 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   --step-failed: #f87171;
 }
 
-/* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx).
-   The `.claude-asterisk*` class names are historical and shared by every
-   consumer. While active: two orbits counter-rotate at different speeds, the
-   core beats (heartbeat) and one ripple ring expands and fades. Idle is
-   static (no ripple element). Reduced motion keeps only a soft opacity pulse.
-   The outer <g> stays attribute-free; animations target inner classes. */
-@keyframes thinking-core-orbit {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-@keyframes thinking-core-orbit-reverse {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(-360deg); }
-}
+/* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx):
+   the SiraGPT atom in motion. The `.claude-asterisk*` class names are
+   historical and shared by every consumer. The electrons travel their orbits
+   with SMIL (animateMotion + a synced dash trail, inside the component); CSS
+   owns the nucleus beat, the colours and reduced motion. While active the
+   static electrons are hidden and the moving ones shown; idle (and reduced
+   motion) shows the static logo — electrons at the apex of each orbit, no
+   trail — with only a soft opacity pulse on the nucleus.
+   The outer <g> stays attribute-free; rules target inner classes. */
 @keyframes thinking-core-pulse {
   0%, 100% { transform: scale(0.85); opacity: 0.7; }
   50% { transform: scale(1.1); opacity: 1; }
-}
-@keyframes thinking-core-ripple {
-  0% { transform: scale(1); opacity: 0.55; }
-  100% { transform: scale(2.75); opacity: 0; }
 }
 @keyframes thinking-core-soft {
   0%, 100% { opacity: 0.65; }
   50% { opacity: 1; }
 }
 .claude-asterisk { transform-origin: 50% 50%; overflow: visible; }
-.claude-asterisk .thinking-core__orbit,
-.claude-asterisk .thinking-core__core,
-.claude-asterisk .thinking-core__ripple {
+.claude-asterisk .thinking-core__core {
   transform-box: view-box;
   transform-origin: 50% 50%;
 }
-.claude-asterisk--active .thinking-core__orbit--a {
-  animation: thinking-core-orbit 4s linear infinite;
-}
-.claude-asterisk--active .thinking-core__orbit--b {
-  animation: thinking-core-orbit-reverse 6.5s linear infinite;
-}
+.claude-asterisk--active .thinking-core__electron-still { display: none; }
 .claude-asterisk--active .thinking-core__core {
   animation: thinking-core-pulse 1.2s ease-in-out infinite;
 }
-.claude-asterisk--active .thinking-core__ripple {
-  animation: thinking-core-ripple 1.6s ease-out infinite;
-}
-.claude-asterisk--idle .thinking-core__ripple { display: none; }
 
 /* Live «Pensando…» label beats in sync with the core. */
 @keyframes thinking-live-label-pulse {
@@ -8661,11 +8641,10 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .thinking-live-label { animation: thinking-live-label-pulse 1.2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .claude-asterisk--active .thinking-core__orbit--a,
-  .claude-asterisk--active .thinking-core__orbit--b,
-  .claude-asterisk--active .thinking-core__ripple,
+  .claude-asterisk--active .thinking-core__trail,
+  .claude-asterisk--active .thinking-core__electron-live { display: none; }
+  .claude-asterisk--active .thinking-core__electron-still { display: inline; }
   .thinking-live-label { animation: none; }
-  .claude-asterisk--active .thinking-core__ripple { display: none; }
   .claude-asterisk--active .thinking-core__core { animation: thinking-core-soft 2s ease-in-out infinite; }
 }
 .run-trace-step--pending { color: var(--step-pending); }
@@ -9524,16 +9503,23 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 :root {
   --celeste: 199 89% 48%;
   --success-green: 142 71% 40%;
-  /* Inside of the knot brand mark's tube (= the surface it sits on). */
-  --knot-gap: #ffffff;
+  /* The three electrons of the «Pensando» atom (ThinkingCore) — the only
+     colour on a thinking surface; orbits and nucleus stay in the ink
+     (--think-accent). Luis (2026-10-02): «tres puntos de color giran con
+     estela alrededor del punto central». */
+  --think-electron-a: #38BDF8;
+  --think-electron-b: #A78BFA;
+  --think-electron-c: #FBBF24;
 }
 .dark {
   --celeste: 199 92% 58%;
   --success-green: 142 66% 48%;
-  --knot-gap: #0d0d0d;
+  --think-electron-a: #5BC8FA;
+  --think-electron-b: #B9A3FC;
+  --think-electron-c: #FCD34D;
 }
 
-/* Sidebar brand lockup: knot mark + «SiraGPT» wordmark (2026-10-01). */
+/* Sidebar brand lockup: atom mark + «SiraGPT» wordmark (2026-10-01; atom since 2026-10-02). */
 .sidebar-brand__wordmark {
   font-weight: 600;
   letter-spacing: -0.02em;
