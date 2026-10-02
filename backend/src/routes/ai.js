@@ -98,6 +98,7 @@ const langPolicy = require('../services/language-policy');
 const masterPrompt = require('../services/master-prompt');
 const streamCache = require('../services/stream-cache');
 const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/codex-run-orchestrator');
+const { canUseCodexAgent } = require('../services/codex/access-control');
 const autonomousGoalEscalation = require('../services/autonomous-goal-escalation');
 const { runParaphrasePipeline } = require('../services/paraphrase-engine');
 const {
@@ -6679,6 +6680,9 @@ router.post(
               userId,
               chatId,
               goal: prompt,
+              // "Clona y sírvelo" solo ejecuta código con la misma puerta que
+              // /api/codex/* (AGENTS.md §17: nunca RCE público por defecto).
+              allowRun: Boolean(req.user && canUseCodexAgent(req.user, process.env)),
             });
             codexRunId = codexRun.runId;
             if (cacheHandle && typeof cacheHandle.setAgentProgress === 'function') {

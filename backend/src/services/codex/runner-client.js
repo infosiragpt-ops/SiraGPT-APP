@@ -161,9 +161,12 @@ function createRunnerClient({
         }),
       // A scoped client assigns its own preview slot to project+run. Legacy
       // unscoped calls keep the historical per-project/no-arg behavior.
+      // `requestedPort` (chat: "en local 5000") pins the dev server port via
+      // the runner pool's pinnedPort semantics; omitted → pool assignment.
       startDev: (project, opts = {}) => call('POST', '/run', bodyFor({
         project: projectFor(project),
         basePath: opts.basePath || null,
+        ...(Number.isInteger(opts.requestedPort) ? { requestedPort: opts.requestedPort } : {}),
       })),
       devStatus: (project) => {
         const resolvedProject = projectFor(project);

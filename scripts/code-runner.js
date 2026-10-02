@@ -64,6 +64,7 @@ const {
   commandRejectionReason,
   shouldIgnoreExportPath,
   parseDevPortPool,
+  normalizeRequestedPort,
   createDevPool,
   buildRunnerEnv,
   buildPreflightEnabled,
@@ -882,13 +883,17 @@ function safeBasePath(value) {
  * background. Returns { port, project, reused } synchronously-ish (one probe
  * when reusing). Throws { code: "dev_pool_exhausted" } when the pool is full
  * and nothing is evictable.
+ * `requestedPort` (chat: "en local 5000") pins that exact port via the pool's
+ * pinnedPort semantics: the current holder is evicted regardless of pool.
+ * Reuse only honors a live server already on the requested port.
  */
-async function startDev(projectId = null, runId = null, basePath = null) {
+async function startDev(projectId = null, runId = null, basePath = null, requestedPort = null) {
   if (!projectId) {
     const error = new Error("legacy workspace-root execution is disabled; provide a project id");
     error.code = "legacy_root_run_disabled";
     throw error;
   }
+  const pinPort = normalizeRequestedPort(requestedPort); // throws invalid_requested_port
   const key = devKeyOf(projectId, runId);
   const normBase = safeBasePath(basePath);
   const expectedDir = runId ? worktreeDirOf(projectId, runId) : projectDirOf(projectId);
@@ -900,12 +905,14 @@ async function startDev(projectId = null, runId = null, basePath = null) {
   const { dir: workspaceDir } = ensureWorkspaceDirectory(projectId, runId);
 
   // Reuse: same project, already serving with the same base path → no restart
-  // (vite watches files, edits are picked up by HMR without a re-run).
+  // (vite watches files, edits are picked up by HMR without a re-run). A
+  // requested port only reuses a server already listening on it.
   const existing = devPool.get(key);
   if (
     existing
     && existing.state === "ready"
     && (existing.basePath || null) === normBase
+    && (pinPort == null || existing.port === pinPort)
     && (await probeReady(existing.port, existing.basePath))
   ) {
     devPool.touch(key);
@@ -913,7 +920,15 @@ async function startDev(projectId = null, runId = null, basePath = null) {
     return { port: existing.port, project: projectId, reused: true };
   }
 
-  const alloc = devPool.allocate(key, key === ROOT_KEY ? { pinnedPort: DEV_PORT } : {});
+  // allocate() returns the existing entry as-is (stable port across restarts);
+  // when the caller pinned a different port the old slot must be released
+  // first, or the pin would be silently ignored.
+  if (pinPort != null && existing && existing.port !== pinPort) {
+    killEntryProc(existing);
+    devPool.release(key);
+  }
+
+  const alloc = devPool.allocate(key, pinPort != null ? { pinnedPort: pinPort } : (key === ROOT_KEY ? { pinnedPort: DEV_PORT } : {}));
   if (!alloc) {
     const err = new Error("dev pool exhausted: all slots are busy starting");
     err.code = "dev_pool_exhausted";
@@ -1512,8 +1527,14 @@ Bun.serve({
       if ((body && body.project && !id) || (rawRunId && !runId)) {
         return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
       }
+      let requestedPort = null;
       try {
-        const out = await startDev(id, runId, body && body.basePath);
+        requestedPort = normalizeRequestedPort(body && body.requestedPort);
+      } catch (e) {
+        return Response.json({ ok: false, error: e.code || "invalid_requested_port" }, { status: 400 });
+      }
+      try {
+        const out = await startDev(id, runId, body && body.basePath, requestedPort);
         return Response.json({
           ok: true,
           port: out.port,
@@ -1522,6 +1543,9 @@ Bun.serve({
           reused: out.reused,
         });
       } catch (e) {
+        if (e && e.code === "invalid_requested_port") {
+          return Response.json({ ok: false, error: "invalid_requested_port" }, { status: 400 });
+        }
         if (e && e.code === "dev_pool_exhausted") {
           return Response.json({ ok: false, error: "dev_pool_exhausted" }, { status: 429 });
         }

@@ -26,6 +26,9 @@ const {
   commandRejectionReason,
   buildPreflightEnabled,
   previewDocumentReady,
+  normalizeRequestedPort,
+  MIN_REQUESTED_PORT,
+  MAX_REQUESTED_PORT,
   shouldIgnoreExportPath,
   buildRunnerEnv,
   isControlRequestAuthorized,
@@ -163,6 +166,20 @@ test('preview readiness rejects status errors, blank HTML, and framework overlay
   assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '<vite-error-overlay></vite-error-overlay>' }), false);
   assert.equal(previewDocumentReady({ status: 200, contentType: 'text/html', body: '<html><body><div id="root"></div><script></script></body></html>' }), true);
   assert.equal(previewDocumentReady({ status: 200, contentType: 'application/json', body: '' }), true);
+});
+
+test('normalizeRequestedPort accepts valid pins and rejects invalid values loudly', () => {
+  assert.equal(normalizeRequestedPort(undefined), null);
+  assert.equal(normalizeRequestedPort(''), null);
+  assert.equal(normalizeRequestedPort(' 5000 '), 5000);
+  assert.equal(normalizeRequestedPort(MIN_REQUESTED_PORT), MIN_REQUESTED_PORT);
+  assert.equal(normalizeRequestedPort(MAX_REQUESTED_PORT), MAX_REQUESTED_PORT);
+  for (const value of [1023, 65536, 5000.5, '5000.5', 'not-a-port', {}, []]) {
+    assert.throws(
+      () => normalizeRequestedPort(value),
+      (error) => error.code === 'invalid_requested_port',
+    );
+  }
 });
 
 test('shouldIgnoreExportPath keeps source but skips generated/heavy dirs', () => {

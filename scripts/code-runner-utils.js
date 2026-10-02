@@ -338,6 +338,30 @@ function parseDevPortPool(spec, basePort = 5173, size = DEFAULT_DEV_POOL_SIZE) {
   return list.length ? list : fallback;
 }
 
+// User-requested dev ports (chat: "dame la web en local 5000") must stay in
+// the unprivileged range. The pool pins the port exactly (createDevPool's
+// pinnedPort), evicting any current holder — same semantics as the legacy
+// root run pinning DEV_PORT.
+const MIN_REQUESTED_PORT = 1024;
+const MAX_REQUESTED_PORT = 65535;
+
+/**
+ * Normalize a user-requested dev port. Returns null when absent; throws
+ * { code: 'invalid_requested_port' } when present but not an integer in
+ * [1024, 65535]. Loud over silent (AGENTS.md §16): a mistyped port must not
+ * fall back to a random pool port and leave the user waiting on :5000.
+ */
+function normalizeRequestedPort(value) {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value.trim()) : value;
+  if (!Number.isInteger(n) || n < MIN_REQUESTED_PORT || n > MAX_REQUESTED_PORT) {
+    const err = new Error(`requestedPort must be an integer between ${MIN_REQUESTED_PORT} and ${MAX_REQUESTED_PORT}`);
+    err.code = 'invalid_requested_port';
+    throw err;
+  }
+  return n;
+}
+
 // States a server can be evicted in: it finished its lifecycle (serving or
 // crashed). Servers still installing/starting are never evicted — killing a
 // half-born server would surface as a phantom failure to its owner.
@@ -464,6 +488,9 @@ module.exports = {
   IGNORED_EXPORT_DIRS,
   shouldIgnoreExportPath,
   parseDevPortPool,
+  normalizeRequestedPort,
+  MIN_REQUESTED_PORT,
+  MAX_REQUESTED_PORT,
   createDevPool,
   EVICTABLE_STATES,
   DEFAULT_DEV_POOL_SIZE,

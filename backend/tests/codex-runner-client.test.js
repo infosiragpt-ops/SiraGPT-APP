@@ -115,6 +115,15 @@ test('startDev posts { project, basePath } to /run; runnerDevUrl honours env ove
   assert.equal(runnerDevUrl({}), 'http://localhost:5173');
 });
 
+test('startDev forwards a requested port only when it is an integer', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, port: 5000, project: 'p1' }));
+  const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  await client.startDev('p1', { requestedPort: 5000 });
+  await client.startDev('p1', { requestedPort: '5001' });
+  assert.deepEqual(calls[0].body, { project: 'p1', basePath: null, requestedPort: 5000 });
+  assert.deepEqual(calls[1].body, { project: 'p1', basePath: null });
+});
+
 test('devStatus/stopDev propagate the project (multi-project runner) and keep the legacy no-arg shape', async () => {
   const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, running: false }));
   const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
