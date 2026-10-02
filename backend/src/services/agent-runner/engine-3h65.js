@@ -272,6 +272,7 @@ function applyToolArgHygieneClosed({
     cacheHit: Boolean(fetchSkip && fetchSkip.cacheHit),
     cachedResult: fetchSkip && fetchSkip.result,
     bytes: capped && capped.bytes,
+    ...(enums && enums.ok === false && enums.validation ? { validation: enums.validation } : {}),
     code: (capped && capped.ok === false && capped.code)
       || (enums && enums.ok === false && enums.code)
       || (capped32 && capped32.truncated && capped32.code)

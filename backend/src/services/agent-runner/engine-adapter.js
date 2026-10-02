@@ -2864,27 +2864,35 @@ function validateEnumArgs(args, schema) {
     }
     return enums.includes(v);
   }
-  function walk(v, sch) {
+  function walk(v, sch, path = []) {
     if (!sch || typeof sch !== 'object') return;
     if (Array.isArray(sch.enum) && sch.enum.length) {
       if (!allowed(v, sch.enum)) {
         const err = new Error('enum_rejected');
         err.code = 'enum_rejected';
+        err.validation = { path, allowed: sch.enum.slice() };
         throw err;
       }
     }
     if (sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
-      for (const k of Object.keys(sch.properties)) walk(v[k], sch.properties[k]);
+      const required = Array.isArray(sch.required) ? sch.required : [];
+      for (const k of Object.keys(sch.properties)) {
+        // An absent optional field is not an invalid enum. A present value
+        // (including null/undefined), or a required field, is still validated.
+        if (Object.prototype.hasOwnProperty.call(v, k) || required.includes(k)) {
+          walk(v[k], sch.properties[k], path.concat(k));
+        }
+      }
     }
     if (sch.items && Array.isArray(v)) {
-      for (const item of v) walk(item, sch.items);
+      for (let i = 0; i < v.length; i += 1) walk(v[i], sch.items, path.concat(i));
     }
   }
   try {
     walk(args, schema);
     return { ok: true, args, code: null };
   } catch (e) {
-    return { ok: false, args, code: 'enum_rejected' };
+    return { ok: false, args, code: 'enum_rejected', ...(e && e.validation ? { validation: e.validation } : {}) };
   }
 }
 
@@ -5564,20 +5572,20 @@ function enforceTotalTurnWall120s({ startedAt, now, wallMs = TOTAL_TURN_WALL_MS 
 }
 
 function repairEnumCaseInsensitive(value, schema) {
-  function walk(v, sch) {
+  function walk(v, sch, path = []) {
     if (!sch || typeof sch !== 'object') return { ok: true, value: v };
     if (Array.isArray(sch.enum) && sch.enum.length) {
       if (sch.enum.includes(v)) return { ok: true, value: v, repaired: false, code: null };
       const want = String(v == null ? '' : v).toLowerCase();
       const hit = sch.enum.find((e) => String(e).toLowerCase() === want);
       if (hit !== undefined) return { ok: true, value: hit, repaired: true, code: 'enum_repair' };
-      return { ok: false, value: v, code: 'enum_invalid' };
+      return { ok: false, value: v, code: 'enum_invalid', validation: { path, allowed: sch.enum.slice() } };
     }
     if (sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
       const o = {};
       let repaired = false;
       for (const k of Object.keys(v)) {
-        const r = walk(v[k], sch.properties[k]);
+        const r = walk(v[k], sch.properties[k], path.concat(k));
         if (r.ok === false) return r;
         o[k] = r.value;
         if (r.repaired) repaired = true;
