@@ -1,24 +1,13 @@
 "use client"
 
 /**
- * AgentComputerShell — the founder's visual target for /code (capture
- * 2026-08-22 19:17): the right-hand panel IS the agent's live computer.
- *
- * It wraps the existing workspace main area in a Chrome-style OS window:
- * traffic lights + live title bar fed by CODE_PREVIEW_STATE_EVENT, a dock of
- * real machine apps (focus goes through /api/agent-computer/action → xdotool),
- * and a collapsible "Rutinas" strip for scheduled recurring jobs.
- *
- * In-progress states (preview.phase === "starting" and any other non-ready
- * work) render PensandoBars — Luis glyph, fill #38BDF8 — plus the
- * status.starting label ("Pensando…"). Boot/run verbs are never shown as
- * chrome copy; the in-progress glyph is always PensandoBars.
- *
- * The live browser viewport itself remains PreviewPane's sandboxed iframe —
- * this shell frames it, it does not duplicate any runner.
+ * Frames the existing /agentes computer panel. Browser controls operate on
+ * confirmed tabs in the conversation's live browser; desktop apps retain
+ * their existing dock. The viewport is the same interactive desktop session.
  */
 
 import * as React from "react"
+import { toast } from "sonner"
 import { useTranslations } from "next-intl"
 import {
   CalendarClock,
@@ -35,6 +24,7 @@ import {
 import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
+import { actComputerBrowser, readComputerBrowser, postComputerNavigate, type ComputerBrowserState, type ComputerBrowserAction } from "@/lib/computer-navigate-client"
 import { sanitizeNavigateUrl } from "@/lib/computer-navigate"
 import { PensandoBars } from "@/components/pensando-bars"
 import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
@@ -69,6 +59,12 @@ export type AgentComputerShellProps = {
   initialDock?: DockApp
   navigateUrl?: string
   autoNavigate?: boolean
+  onAutoNavigationAttempt?: () => void
+  cleanBrowser?: boolean
+  browserSessionId?: string | null
+  onBrowserModeChange?: (active: boolean) => void
+  maximized?: boolean
+  onToggleMaximize?: () => void
 }
 
 export function AgentComputerShell({
@@ -80,6 +76,12 @@ export function AgentComputerShell({
   initialDock = "browser",
   navigateUrl = "",
   autoNavigate = true,
+  onAutoNavigationAttempt,
+  cleanBrowser = false,
+  browserSessionId,
+  onBrowserModeChange,
+  maximized = false,
+  onToggleMaximize,
 }: AgentComputerShellProps) {
   const t = useTranslations("codex.panel.agentComputer")
   const [preview, setPreview] = React.useState<CodePreviewState | null>(null)
@@ -87,6 +89,206 @@ export function AgentComputerShell({
   const [activeApp, setActiveApp] = React.useState<DockApp>(initialDock)
   const [focusNote, setFocusNote] = React.useState<string | null>(null)
   const [deptName, setDeptName] = React.useState<string>("")
+  const browserVisible = cleanBrowser && activeApp === "browser"
+  const [browserState, setBrowserState] = React.useState<ComputerBrowserState | null>(null)
+  const [browserBusy, setBrowserBusy] = React.useState(false)
+  const [browserError, setBrowserError] = React.useState<string | null>(null)
+  const browserBusyRef = React.useRef(false)
+  const browserEpoch = React.useRef(0)
+  const browserMutation = React.useRef(0)
+  const browserReadAbort = React.useRef<AbortController | null>(null)
+  const retryBrowserAction = React.useRef<ComputerBrowserAction | null>(null)
+  const confirmedViewport = React.useRef(browserState?.viewport)
+  confirmedViewport.current = browserState?.viewport
+  const browserOperations = React.useRef<Promise<unknown>>(Promise.resolve())
+  const browserViewport = React.useRef<HTMLDivElement | null>(null)
+  const viewportCallback = React.useRef(onBrowserModeChange)
+  viewportCallback.current = onBrowserModeChange
+  React.useEffect(() => { viewportCallback.current?.(browserVisible) }, [browserVisible])
+  React.useEffect(() => { setActiveApp(initialDock) }, [conversationId, initialDock])
+
+  // Presentation and restoration share a queue with user actions. In particular,
+  // leaving during presentation restores only after the pending command settles.
+  const queueBrowser = React.useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
+    const pending = browserOperations.current.then(operation, operation)
+    browserOperations.current = pending.catch(() => undefined)
+    return pending
+  }, [])
+  React.useEffect(() => {
+    const epoch = ++browserEpoch.current
+    setBrowserState(null)
+    setBrowserError(null)
+    retryBrowserAction.current = null
+    setBrowserBusy(false)
+    browserBusyRef.current = false
+    const chatId = conversationId?.trim() || ""
+    if (!browserVisible || !browserSessionId) return
+    let stopped = false
+    browserBusyRef.current = true
+    setBrowserBusy(true)
+    void queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_present" }))
+      .then((state) => {
+        if (!stopped && browserEpoch.current === epoch) setBrowserState(state)
+      })
+      .catch(() => {
+        if (!stopped && browserEpoch.current === epoch) {
+          retryBrowserAction.current = { type: "browser_present" }
+          setBrowserError("No se pudo conectar con el navegador. Inténtalo de nuevo.")
+        }
+      })
+      .finally(() => {
+        if (!stopped && browserEpoch.current === epoch) { browserBusyRef.current = false; setBrowserBusy(false) }
+      })
+    return () => {
+      stopped = true
+      browserBusyRef.current = false
+      void queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" }))
+        .catch(() => {
+          // Static diagnostics only: never expose a URL, session, or server body.
+          console.warn("[AgentComputerShell] browser_restore_failed")
+          toast.error("No se pudo restaurar el escritorio. Abre el navegador e inténtalo de nuevo.")
+        })
+    }
+  }, [browserVisible, browserSessionId, conversationId, queueBrowser])
+
+  const hasBrowserState = browserState !== null
+  React.useEffect(() => {
+    const chatId = conversationId?.trim() || ""
+    if (!browserVisible || !hasBrowserState || !browserSessionId) return
+    const epoch = browserEpoch.current
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    const pull = async () => {
+      if (stopped) return
+      const mutation = browserMutation.current
+      try {
+        if (document.visibilityState !== "hidden" && !browserBusyRef.current) {
+          const controller = new AbortController()
+          browserReadAbort.current = controller
+          const state = await readComputerBrowser(chatId, browserSessionId, controller.signal)
+          if (!stopped && browserEpoch.current === epoch && browserMutation.current === mutation && !browserBusyRef.current) {
+            setBrowserState(state)
+            setBrowserError((previous) => previous === "No se pudo actualizar el navegador. Inténtalo de nuevo." ? null : previous)
+          }
+        }
+      } catch {
+        if (!stopped && browserEpoch.current === epoch && browserMutation.current === mutation) {
+          setBrowserError((previous) => previous || "No se pudo actualizar el navegador. Inténtalo de nuevo.")
+        }
+      } finally {
+        if (!stopped) timer = setTimeout(() => void pull(), 4000)
+      }
+    }
+    timer = setTimeout(() => void pull(), 4000)
+    return () => { stopped = true; clearTimeout(timer); browserReadAbort.current?.abort() }
+  }, [browserVisible, hasBrowserState, conversationId, browserSessionId])
+
+  const browserAction = React.useCallback(async (action: ComputerBrowserAction) => {
+    const chatId = conversationId?.trim() || ""
+    if (!browserSessionId || browserBusyRef.current) return null
+    const epoch = browserEpoch.current
+    browserMutation.current++
+    browserReadAbort.current?.abort()
+    retryBrowserAction.current = null
+    browserBusyRef.current = true
+    setBrowserBusy(true)
+    setBrowserError(null)
+    try {
+      const state = await queueBrowser(() => actComputerBrowser(chatId, browserSessionId, action))
+      if (action.type === "browser_resize" && (state.viewport?.width !== action.width || state.viewport?.height !== action.height)) {
+        throw new Error("No se confirmó el tamaño del navegador")
+      }
+      if (browserEpoch.current === epoch) { setBrowserState(state); return state }
+      return null
+    } catch {
+      if (browserEpoch.current === epoch) {
+        retryBrowserAction.current = action
+        setBrowserError("No se pudo completar la acción del navegador. Inténtalo de nuevo.")
+      }
+      return null
+    } finally {
+      if (browserEpoch.current === epoch) { browserBusyRef.current = false; setBrowserBusy(false) }
+    }
+  }, [conversationId, browserSessionId, queueBrowser])
+  const browserNavigate = async (url: string) => {
+    if (!browserSessionId || browserBusyRef.current) throw new Error("Navegador ocupado")
+    const epoch = browserEpoch.current
+    browserMutation.current++
+    browserReadAbort.current?.abort()
+    retryBrowserAction.current = null
+    browserBusyRef.current = true
+    setBrowserBusy(true)
+    setBrowserError(null)
+    try {
+      const result = await queueBrowser(async () => {
+        const actual = await postComputerNavigate(conversationId, url, browserState?.activeTabId || undefined, browserSessionId)
+        const state = await readComputerBrowser(conversationId?.trim() || "", browserSessionId)
+        return { actual, state }
+      })
+      if (browserEpoch.current !== epoch) throw new Error("La conversación cambió")
+      setBrowserState(result.state)
+      return result.actual
+    } catch {
+      if (browserEpoch.current === epoch) setBrowserError("No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.")
+      throw new Error("No se pudo abrir la página")
+    } finally {
+      if (browserEpoch.current === epoch) { browserBusyRef.current = false; setBrowserBusy(false) }
+    }
+  }
+  const navigateCallback = React.useRef(browserNavigate)
+  navigateCallback.current = browserNavigate
+  const lastAutoNavigation = React.useRef("")
+  const autoAttemptCallback = React.useRef(onAutoNavigationAttempt)
+  autoAttemptCallback.current = onAutoNavigationAttempt
+  React.useEffect(() => {
+    const parsed = sanitizeNavigateUrl(navigateUrl)
+    const stamp = `${conversationId}::${navigateUrl}`
+    if (!browserVisible || !hasBrowserState || browserBusy || !autoNavigate || !parsed.ok || lastAutoNavigation.current === stamp) return
+    lastAutoNavigation.current = stamp
+    autoAttemptCallback.current?.()
+    void navigateCallback.current(parsed.url).catch(() => undefined) // browserNavigate exposes the failure above.
+  }, [browserVisible, hasBrowserState, browserBusy, autoNavigate, navigateUrl, conversationId])
+
+  // Resize the actual remote viewport, not a CSS crop. One request runs at a
+  // time; resizing the panel replaces the pending size instead of building a queue.
+  React.useEffect(() => {
+    const host = browserViewport.current
+    if (!browserVisible || !hasBrowserState || !host || typeof ResizeObserver === "undefined") return
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    let pending: { width: number; height: number } | null = null
+    let applied = ""
+    let failed = ""
+    const flush = async () => {
+      if (stopped || !pending) return
+      if (browserBusyRef.current || document.visibilityState === "hidden") {
+        timer = setTimeout(() => void flush(), 250)
+        return
+      }
+      const size = pending
+      pending = null
+      const stamp = `${size.width}x${size.height}`
+      if (stamp === applied || stamp === failed || (confirmedViewport.current?.width === size.width && confirmedViewport.current?.height === size.height)) return
+      const state = await browserAction({ type: "browser_resize", ...size })
+      if (state?.viewport?.width === size.width && state.viewport.height === size.height) applied = stamp
+      else failed = stamp
+      if (!stopped && pending) timer = setTimeout(() => void flush(), 250)
+    }
+    const measure = () => {
+      const rect = host.getBoundingClientRect()
+      if (rect.width < 32 || rect.height < 32) return
+      const scale = Math.min(1, 1920 / rect.width, 1080 / rect.height)
+      pending = { width: Math.max(32, Math.floor(rect.width * scale)), height: Math.max(32, Math.floor(rect.height * scale)) }
+      clearTimeout(timer)
+      timer = setTimeout(() => void flush(), 250)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(host)
+    measure()
+    return () => { stopped = true; clearTimeout(timer); observer.disconnect() }
+  }, [browserVisible, hasBrowserState, browserAction])
+  const activeBrowserTab = browserState?.tabs.find((tab) => tab.id === browserState.activeTabId)
+  const emptyBrowser = browserVisible && browserState && (!activeBrowserTab || /^(?:about:blank|chrome:\/\/(?:newtab|new-tab-page)\/?|)$/.test(activeBrowserTab.url))
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -132,7 +334,7 @@ export function AgentComputerShell({
   const focusApp = React.useCallback(
     async (app: DockApp) => {
       setActiveApp(app)
-      if (app === "desktop") return
+      if (app === "desktop" || (cleanBrowser && app === "browser")) return
       setFocusNote(null)
       try {
         const response = await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
@@ -155,25 +357,31 @@ export function AgentComputerShell({
         setFocusNote(t("dock.unavailable"))
       }
     },
-    [conversationId, t],
+    [conversationId, t, cleanBrowser],
   )
 
   React.useEffect(() => {
+    if (cleanBrowser && initialDock === "browser") return
     const willNavigate = initialDock === "browser" && autoNavigate && Boolean(conversationId?.trim())
       && sanitizeNavigateUrl(navigateUrl).ok
     if (!willNavigate && initialDock && initialDock !== "desktop") void focusApp(initialDock)
-  }, [conversationId, initialDock, focusApp, autoNavigate, navigateUrl])
+  }, [conversationId, initialDock, focusApp, autoNavigate, navigateUrl, cleanBrowser])
 
   return (
     <section
-      className="flex h-full min-h-0 min-w-0 flex-col bg-[#e8e8ea] dark:bg-[#101012]"
+      className={cn("flex h-full min-h-0 min-w-0 flex-col", browserVisible ? "bg-white dark:bg-zinc-950" : "bg-[#e8e8ea] dark:bg-[#101012]")}
       data-testid="agent-computer-shell"
       data-agent-computer-shell="1"
       data-conversation-id={conversationId || undefined}
       aria-label={t("title")}
     >
-      {/* Browser-style window chrome */}
-      <div
+      {/* The browser uses real session controls; other desktop apps keep their existing chrome. */}
+      {browserVisible ? <IntegratedBrowserBar browserControls={{
+        state: browserState, busy: browserBusy || !browserSessionId, error: browserError || (liveStatus === "error" ? "La computadora no está disponible. Usa el botón Reintentar de la pantalla." : null),
+        onAction: browserAction,
+        onRetry: retryBrowserAction.current ? () => browserAction(retryBrowserAction.current!) : undefined,
+        onNavigate: browserNavigate, onClose, onToggleMaximize, maximized,
+      }} /> : <div
         className="flex h-11 shrink-0 items-center gap-2 border-b border-black/10 bg-gradient-to-b from-white to-zinc-100 px-3 dark:border-white/10 dark:from-[#2a2a2c] dark:to-[#1b1b1d]"
         data-testid="agent-computer-chrome"
       >
@@ -231,12 +439,18 @@ export function AgentComputerShell({
             <X className="h-4 w-4" />
           </button>
         ) : null}
-      </div>
+      </div>}
 
       {/* Live viewport — the existing preview canvas, framed */}
-      <div className="relative min-h-0 min-w-0 flex-1">
+      <div ref={browserViewport} data-testid="browser-viewport" className="relative min-h-0 min-w-0 flex-1">
         {children}
-        {isInProgress ? (
+        {emptyBrowser ? <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white px-6 text-center dark:bg-zinc-950" data-testid="browser-empty-state">
+          <Globe className="h-7 w-7 text-zinc-400" aria-hidden />
+          <h2 className="text-lg font-medium">Navega con SiraGPT</h2>
+          <p className="max-w-sm text-sm leading-6 text-muted-foreground">Escribe una URL o pídele a SiraGPT que abra un sitio. Puedes navegar desde aquí.</p>
+        </div> : null}
+        {browserVisible && !browserState && !browserError && liveStatus !== "error" ? <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-white text-sm text-muted-foreground dark:bg-zinc-950" role="status"><PensandoBars size={20} />Preparando navegador…</div> : null}
+        {isInProgress && !browserVisible ? (
           <div
             className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-white/50 dark:bg-black/40"
             data-testid="agent-computer-pensando"

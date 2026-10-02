@@ -19,6 +19,8 @@ export type DesktopScreenProps = {
   viewerToken?: string | null
   viewOnly?: boolean
   className?: string
+  /** Opt-in neutral margins for the navigator; desktop leases keep defaults. */
+  neutralBackground?: boolean
   /** RFB initialization completed; screen pixels are not inspected. */
   onConnected?: () => void
   /** Called when the RFB channel dies and local retries are exhausted (or a
@@ -34,6 +36,7 @@ export const DESKTOP_RFB_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000]
 
 type RfbHandle = {
   viewOnly: boolean
+  background?: string
   scaleViewport: boolean
   clipViewport: boolean
   resizeSession?: boolean
@@ -75,10 +78,18 @@ export function DesktopScreen({
   viewerToken,
   viewOnly = true,
   className,
+  neutralBackground = false,
   onConnected,
   onConnectionError,
 }: DesktopScreenProps) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
+  const rfbRef = React.useRef<RfbHandle | null>(null)
+  const neutralRef = React.useRef(neutralBackground)
+  neutralRef.current = neutralBackground
+  const defaultBackground = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => {
+    if (rfbRef.current) rfbRef.current.background = neutralBackground ? "#ffffff" : (defaultBackground.current || "#282828")
+  }, [neutralBackground])
   const [connected, setConnected] = React.useState(false)
   const [status, setStatus] = React.useState<"connecting" | "live" | "error">("connecting")
   const [retryNonce, setRetryNonce] = React.useState(0)
@@ -141,6 +152,9 @@ export function DesktopScreen({
         const RFB = (mod as { default?: unknown }).default || mod
         const Ctor = RFB as new (target: HTMLElement, url: string, opts?: Record<string, unknown>) => RfbHandle
         rfb = new Ctor(hostRef.current, viewerUrl, { shared: true })
+        rfbRef.current = rfb
+        defaultBackground.current = rfb.background
+        if (neutralRef.current) rfb.background = "#ffffff"
         rfb.viewOnly = Boolean(viewOnly)
         // Scale the full 1920x1080 desktop into the host. clipViewport=true
         // was leaving a black unused half when the overlay aspect ≠ 16:9.
@@ -186,13 +200,14 @@ export function DesktopScreen({
         retryTimerRef.current = null
       }
       try { resizeObserver?.disconnect() } catch { /* already gone */ }
+      if (rfbRef.current === rfb) rfbRef.current = null
       try { rfb?.disconnect() } catch { /* already gone */ }
     }
   }, [sessionId, viewerUrl, viewOnly, retryNonce])
 
   return (
     <div
-      className={cn("relative h-full w-full min-h-0 overflow-hidden bg-[#1b1b1d]", className)}
+      className={cn("relative h-full w-full min-h-0 overflow-hidden", neutralBackground ? "bg-white" : "bg-[#1b1b1d]", className)}
       data-testid="desktop-screen"
       data-desktop-session={sessionId}
       data-desktop-view-only={viewOnly ? "1" : "0"}
@@ -201,7 +216,7 @@ export function DesktopScreen({
     >
       {!connected ? (
         <div
-          className="absolute inset-0 z-10 flex items-center justify-center bg-[#1b1b1d]"
+          className={cn("absolute inset-0 z-10 flex items-center justify-center", neutralBackground ? "bg-white" : "bg-[#1b1b1d]")}
           data-testid="desktop-screen-black"
           aria-hidden={connected}
         >

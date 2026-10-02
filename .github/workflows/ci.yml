@@ -1069,7 +1069,7 @@ jobs:
 
       - name: Install real desktop input dependencies
         if: matrix.desktop_gate
-        run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox
+        run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox x11vnc
 
       # Real Chromium + X11 gate. The only retried failure is Chrome not
       # bringing up its CDP endpoint on a loaded runner (infrastructure, not

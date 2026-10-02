@@ -4,6 +4,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 type ControlledRfb = EventTarget & {
   disconnect: ReturnType<typeof vi.fn>
   viewOnly: boolean
+  background: string
+  resizeSession: boolean
 }
 const sessions = vi.hoisted(() => [] as ControlledRfb[])
 
@@ -12,6 +14,7 @@ const sessions = vi.hoisted(() => [] as ControlledRfb[])
 // public connection events, including a late disconnect during cleanup.
 vi.mock("@/components/desktop/desktop-rfb-client", () => ({
   default: class extends EventTarget {
+    background = "rgb(40, 40, 40)"
     viewOnly = false
     scaleViewport = false
     clipViewport = true
@@ -49,6 +52,20 @@ async function connectedTransport() {
 }
 
 describe("desktop viewer readiness", () => {
+  it("uses neutral margins only for the browser opt-in without changing F7 transport defaults", async () => {
+    const view = render(<DesktopScreen {...sessionProps} />)
+    const rfb = await connectedTransport()
+    expect(rfb.background).toBe("rgb(40, 40, 40)")
+    expect(rfb.resizeSession).toBe(false)
+    view.rerender(<DesktopScreen {...sessionProps} neutralBackground />)
+    expect(rfb.background).toBe("#ffffff")
+    expect(rfb.resizeSession).toBe(false)
+    expect(sessions).toHaveLength(1)
+    view.rerender(<DesktopScreen {...sessionProps} />)
+    expect(rfb.background).toBe("rgb(40, 40, 40)")
+    expect(rfb.disconnect).not.toHaveBeenCalled()
+  })
+
   it("reveals the canvas on noVNC connect without waiting for a nonexistent frame event", async () => {
     const onConnected = vi.fn()
     render(<DesktopScreen {...sessionProps} onConnected={onConnected} />)

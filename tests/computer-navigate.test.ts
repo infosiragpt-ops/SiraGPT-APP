@@ -67,7 +67,11 @@ describe("integrated browser chrome source contract", () => {
     assert.match(chat, /title="Navegador"/)
     assert.match(chat, /aria-label="Navegador"/)
     assert.match(chat, /openComputerPanel\(\{ browser: true/)
-    assert.match(chat, /DEFAULT_BROWSER_HOME/)
+    // Opening the clean browser preserves the current tab instead of forcing
+    // a search home page. Explicit prompts still use browserUrlFromPrompt.
+    assert.doesNotMatch(chat, /url: DEFAULT_BROWSER_HOME/)
+    assert.match(chat, /openComputerPanel\(\{ browser: true \}\)/)
+    assert.match(chat, /setComputerNavigateUrl\(opts\?\.url \|\| ""\)/)
     assert.match(chat, /browserUrlFromPrompt/)
     assert.match(chat, /params\.get\("browser"\)/)
     assert.match(chat, /COMPUTER_NAVIGATE_WINDOW_EVENT/)

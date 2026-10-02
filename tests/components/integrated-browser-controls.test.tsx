@@ -1,0 +1,63 @@
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { IntegratedBrowserBar, type IntegratedBrowserControls } from "@/components/chat/integrated-browser-bar"
+import type { ComputerBrowserState } from "@/lib/computer-navigate-client"
+const state: ComputerBrowserState = { tabs: [{ id: "a", title: "A", url: "https://example.com/a" }, { id: "b", title: "B", url: "https://example.com/b" }], activeTabId: "a", canGoBack: false, canGoForward: false, presentation: "embedded", viewport: { width: 800, height: 600 } }
+const props = (): IntegratedBrowserControls => ({ state, busy: false, error: null, onAction: vi.fn(async () => {}), onNavigate: vi.fn(async () => "https://example.com/final") })
+afterEach(cleanup)
+describe("confirmed browser chrome", () => {
+  it("keeps a draft during state polling and follows confirmed history after submitting", async () => {
+    const control = props()
+    const view = render(<IntegratedBrowserBar browserControls={control} />)
+    const input = screen.getByRole("textbox", { name: "Dirección del navegador" })
+    expect(screen.getAllByRole("textbox")).toHaveLength(1)
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: "https://example.com/draft" } })
+    view.rerender(<IntegratedBrowserBar browserControls={{ ...control, state: { ...state } }} />)
+    expect(input).toHaveValue("https://example.com/draft")
+    fireEvent.submit(screen.getByTestId("integrated-browser-bar"))
+    await waitFor(() => expect(input).toHaveValue("https://example.com/final"))
+    view.rerender(<IntegratedBrowserBar browserControls={{ ...control, state: { ...state, tabs: [{ ...state.tabs[0], url: "https://example.com/previous" }] } }} />)
+    expect(input).toHaveValue("https://example.com/previous")
+  })
+  it("moves keyboard focus only after the selected tab is confirmed", async () => {
+    const control = props()
+    const view = render(<IntegratedBrowserBar browserControls={control} />)
+    screen.getByRole("tab", { name: "A" }).focus()
+    fireEvent.keyDown(screen.getByRole("tab", { name: "A" }), { key: "ArrowRight" })
+    expect(control.onAction).toHaveBeenCalledWith({ type: "browser_tab_select", tabId: "b" })
+    expect(screen.getByRole("tab", { name: "B" })).not.toHaveFocus()
+    view.rerender(<IntegratedBrowserBar browserControls={{ ...control, state: { ...state, activeTabId: "b" }, busy: true }} />)
+    view.rerender(<IntegratedBrowserBar browserControls={{ ...control, state: { ...state, activeTabId: "b" }, busy: false }} />)
+    expect(screen.getByRole("tab", { name: "B" })).toHaveFocus()
+  })
+  it("uses real tab and history operations and focuses a confirmed blank tab", () => {
+    const control = props()
+    const view = render(<IntegratedBrowserBar browserControls={control} />)
+    expect(screen.getByRole("button", { name: "Atrás", exact: true })).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: "Nueva pestaña", exact: true }))
+    expect(control.onAction).toHaveBeenCalledWith({ type: "browser_tab_create" })
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar pestaña B" }))
+    expect(control.onAction).toHaveBeenCalledWith({ type: "browser_tab_close", tabId: "b" })
+    view.rerender(<IntegratedBrowserBar browserControls={{ ...control, state: { ...state, activeTabId: "blank", tabs: [{ id: "blank", title: "Nueva pestaña", url: "about:blank" }] } }} />)
+    expect(screen.getByRole("textbox")).toHaveValue("")
+    expect(screen.getByRole("textbox")).toHaveFocus()
+  })
+  it("reports a failed navigation without claiming the requested URL loaded", async () => {
+    const control = props()
+    control.onNavigate = vi.fn(async () => { throw Error("Bearer SECRET") })
+    render(<IntegratedBrowserBar browserControls={control} />)
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "https://example.com/fail" } })
+    fireEvent.submit(screen.getByTestId("integrated-browser-bar"))
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo abrir")
+    expect(screen.getByRole("tab", { name: "A" })).toHaveAttribute("aria-selected", "true")
+    expect(document.body.textContent).not.toContain("SECRET")
+  })
+  it("offers an explicit retry for presentation failures", async () => {
+    const control = { ...props(), state: null, error: "No se pudo conectar" }
+    render(<IntegratedBrowserBar browserControls={control} />)
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }))
+    expect(control.onAction).toHaveBeenCalledWith({ type: "browser_present" })
+    await act(async () => {})
+  })
+})

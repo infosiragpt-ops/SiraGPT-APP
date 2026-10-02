@@ -12,10 +12,11 @@ const { promisify } = require('node:util');
 const { chromium } = require('playwright');
 const { createOrchestrator } = require('../services/computer-orchestrator/server');
 const { buildChatComputerTools } = require('../backend/src/services/computer/chat-computer-tools');
-const { observePage } = require('../backend/src/services/computer/live-page');
+const { observePage, browserState, browserAction, navigatePage } = require('../backend/src/services/computer/live-page');
 const { ensureSession } = require('../backend/src/services/computer/persistent');
 const { CHROME_DOCKER_FLAGS } = require('../backend/src/services/computer/chrome-desktop-flags');
 const handoff = require('../backend/src/services/computer/login-handoff');
+const { verifyLiveViewport } = require('./browser-live-viewport.cjs');
 const exec = promisify(execFile);
 const listen = s => new Promise(r => s.listen(0, '127.0.0.1', r));
 const close = s => new Promise(r => { s.closeAllConnections(); s.close(r); });
@@ -108,6 +109,44 @@ async function main() {
     await run('computer_scroll', { direction: 'right', amount: 800 });
     await page.waitForFunction(() => scrollX > 100);
     console.log('PASS real browser: navigate -> observe -> click -> type -> Tab/Shift+Tab/Ctrl+A -> Enter -> visible saved result -> vertical/horizontal scroll');
+    const tabState = await browserState(session, env);
+    const originalTab = tabState.activeTabId;
+    assert.equal(tabState.tabs.length, 1);
+    const windowCdp = await context.newCDPSession(page);
+    const windowInfo = await windowCdp.send('Browser.getWindowForTarget');
+    await browserAction(session, { type: 'browser_present', tabId: originalTab }, env);
+    assert.equal((await windowCdp.send('Browser.getWindowForTarget')).bounds.windowState, 'fullscreen');
+    await browserAction(session, { type: 'browser_present', tabId: originalTab }, env);
+    let controlled = await browserAction(session, { type: 'browser_tab_create' }, env);
+    const newTab = controlled.activeTabId;
+    assert.notEqual(newTab, originalTab);
+    assert.equal(controlled.tabs.length, 2);
+    assert.equal(controlled.tabs.find(tab => tab.id === newTab).url, 'about:blank');
+    await navigatePage(session, url + '?second=1', env, undefined, { tabId: newTab });
+    await navigatePage(session, url + '?third=1', env, undefined, { tabId: newTab });
+    controlled = await browserAction(session, { type: 'browser_back', tabId: newTab }, env);
+    assert.equal(controlled.tabs.find(tab => tab.id === newTab).url, url + '?second=1');
+    assert.equal(controlled.canGoForward, true);
+    controlled = await browserAction(session, { type: 'browser_forward', tabId: newTab }, env);
+    assert.equal(controlled.tabs.find(tab => tab.id === newTab).url, url + '?third=1');
+    controlled = await browserAction(session, { type: 'browser_reload', tabId: newTab }, env);
+    assert.equal(controlled.tabs.find(tab => tab.id === newTab).url, url + '?third=1');
+    controlled = await browserAction(session, { type: 'browser_tab_select', tabId: originalTab }, env);
+    assert.equal(controlled.activeTabId, originalTab);
+    assert.equal(page.url(), url);
+    await assert.rejects(browserAction(session, { type: 'browser_tab_close', tabId: 'missing-target' }, env), error => error.code === 'browser_tab_missing');
+    controlled = await browserAction(session, { type: 'browser_tab_close', tabId: newTab }, env);
+    assert.equal(controlled.tabs.length, 1);
+    assert.equal(controlled.activeTabId, originalTab);
+    await browserAction(session, { type: 'browser_restore' }, env);
+    assert.equal((await windowCdp.send('Browser.getWindowForTarget')).bounds.windowState, windowInfo.bounds.windowState);
+    await windowCdp.detach();
+    console.log('PASS real browser: target tabs -> history -> reload -> select -> close -> fullscreen -> original window restored');
+    await verifyLiveViewport({
+      page,
+      resize: (width, height) => browserAction(session, { type: 'browser_resize', tabId: originalTab, width, height }, env),
+      restore: () => browserAction(session, { type: 'browser_restore' }, env),
+    });
     await page.locator('#secret').click();
     const blocked = await tools.find(t => t.name === 'computer_screenshot').execute();
     assert.ok(JSON.stringify(blocked).includes('loginHandoff'));

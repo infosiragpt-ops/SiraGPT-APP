@@ -1,0 +1,118 @@
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { ComputerBrowserState } from "@/lib/computer-navigate-client"
+const { action, read, navigate, notify } = vi.hoisted(() => ({ action: vi.fn(), read: vi.fn(), navigate: vi.fn(), notify: vi.fn() }))
+vi.mock("@/lib/computer-navigate-client", () => ({ actComputerBrowser: action, readComputerBrowser: read, postComputerNavigate: navigate }))
+vi.mock("sonner", () => ({ toast: { error: notify } }))
+vi.mock("next-intl", () => { const t = (key: string) => key; return { useTranslations: () => t } })
+vi.mock("@/lib/code-workspace-context", () => ({ CODE_PREVIEW_STATE_EVENT: "preview-test", CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT: "department-test", getActiveDepartmentSelection: () => null }))
+import { AgentComputerShell } from "@/components/code/agent-computer-shell"
+const browser: ComputerBrowserState = { tabs: [{ id: "a", title: "A", url: "https://example.com/a" }, { id: "b", title: "B", url: "https://example.com/b" }], activeTabId: "a", canGoBack: false, canGoForward: false, presentation: "embedded", viewport: { width: 800, height: 600 } }
+const props = { cleanBrowser: true, browserSessionId: "owned", conversationId: "qa", variant: "overlay" as const }
+const flush = async () => { await act(async () => { for (let n = 0; n < 8; n++) await Promise.resolve() }) }
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
+beforeEach(() => { vi.useFakeTimers(); action.mockReset().mockResolvedValue(browser); read.mockReset().mockResolvedValue(browser); navigate.mockReset().mockResolvedValue("https://example.com/final"); notify.mockReset() })
+afterEach(async () => { cleanup(); await flush(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+describe("browser session lifecycle", () => {
+  it("does not reconnect when parent callbacks change and does not poll a hidden document", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")
+    const view = render(<AgentComputerShell {...props} onClose={() => {}}><div /></AgentComputerShell>)
+    await flush()
+    view.rerender(<AgentComputerShell {...props} onClose={() => {}}><div /></AgentComputerShell>)
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
+    expect(action).toHaveBeenCalledTimes(1)
+    expect(action.mock.calls[0][2]).toEqual({ type: "browser_present" })
+    expect(read).not.toHaveBeenCalled()
+  })
+  it("ignores and aborts stale inventory when a confirmed tab action starts", async () => {
+    const pending = deferred<ComputerBrowserState>()
+    read.mockReturnValueOnce(pending.promise)
+    action.mockImplementation(async (_chat, _session, command) => command.type === "browser_tab_select" ? { ...browser, activeTabId: "b" } : browser)
+    render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    const signal = read.mock.calls[0][2] as AbortSignal
+    fireEvent.click(screen.getByRole("tab", { name: "B" }))
+    await flush()
+    expect(signal.aborted).toBe(true)
+    await act(async () => pending.resolve(browser))
+    expect(screen.getByRole("textbox")).toHaveValue("https://example.com/b")
+  })
+  it("clears only the recovered polling error", async () => {
+    read.mockRejectedValueOnce(Error("Bearer SECRET"))
+    render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudo actualizar")
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(screen.queryByRole("alert")).toBeNull()
+    action.mockRejectedValueOnce(Error("Bearer SECRET"))
+    fireEvent.click(screen.getByRole("button", { name: "Recargar página" }))
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudo completar")
+    expect(document.body.textContent).not.toContain("SECRET")
+  })
+  it("restores after a pending presentation and reports restoration failure safely", async () => {
+    const pending = deferred<ComputerBrowserState>()
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {})
+    action.mockReturnValueOnce(pending.promise).mockRejectedValueOnce(Error("Bearer SECRET"))
+    const view = render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    view.unmount()
+    expect(action).toHaveBeenCalledTimes(1)
+    await act(async () => pending.resolve(browser))
+    await flush()
+    expect(action.mock.calls[1][2]).toEqual({ type: "browser_restore" })
+    expect(notify).toHaveBeenCalledWith("No se pudo restaurar el escritorio. Abre el navegador e inténtalo de nuevo.")
+    expect(warning).toHaveBeenCalledWith("[AgentComputerShell] browser_restore_failed")
+  })
+  it("presents home without inventing a chat and navigates only its acquired session", async () => {
+    render(<AgentComputerShell {...props} conversationId="" navigateUrl="https://example.com/final"><div /></AgentComputerShell>)
+    await flush()
+    expect(action.mock.calls[0].slice(0, 3)).toEqual(["", "owned", { type: "browser_present" }])
+    expect(navigate).toHaveBeenCalledWith("", "https://example.com/final", "a", "owned")
+    expect(navigate).toHaveBeenCalledTimes(1)
+  })
+  it("waits for presentation before requested navigation and never replays an agent-owned URL", async () => {
+    const pending = deferred<ComputerBrowserState>()
+    action.mockReturnValueOnce(pending.promise)
+    const attempted = vi.fn()
+    const view = render(<AgentComputerShell {...props} navigateUrl="https://example.com/final" onAutoNavigationAttempt={attempted}><div /></AgentComputerShell>)
+    await flush()
+    expect(navigate).not.toHaveBeenCalled()
+    await act(async () => pending.resolve(browser))
+    await flush()
+    expect(attempted).toHaveBeenCalledTimes(1)
+    expect(navigate).toHaveBeenCalledTimes(1)
+    view.rerender(<AgentComputerShell {...props} navigateUrl="https://example.com/agent" autoNavigate={false}><div /></AgentComputerShell>)
+    await flush()
+    expect(navigate).toHaveBeenCalledTimes(1)
+  })
+  it("requires an explicit retry after resize failure and coalesces new dimensions", async () => {
+    let resize!: () => void
+    vi.stubGlobal("ResizeObserver", class { constructor(callback: () => void) { resize = callback } observe() {} disconnect() {} })
+    let width = 390
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => ({ width, height: 600, x: 0, y: 0, top: 0, left: 0, right: width, bottom: 600, toJSON() {} }))
+    let failed = false
+    action.mockImplementation(async (_chat, _session, command) => {
+      if (command.type === "browser_resize") {
+        if (!failed) { failed = true; throw Error("503 internal") }
+        return { ...browser, viewport: { width: command.width, height: command.height } }
+      }
+      return browser
+    })
+    render(<AgentComputerShell {...props}><div /></AgentComputerShell>)
+    await flush()
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(screen.getByRole("alert")).toBeVisible()
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
+    expect(action.mock.calls.filter((call) => call[2].type === "browser_resize")).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }))
+    await flush()
+    expect(screen.queryByRole("alert")).toBeNull()
+    width = 450; act(() => resize()); width = 500; act(() => resize())
+    await act(async () => { await vi.advanceTimersByTimeAsync(250) })
+    expect(action.mock.calls.filter((call) => call[2].type === "browser_resize").map((call) => call[2].width)).toEqual([390, 390, 500])
+  })
+})
