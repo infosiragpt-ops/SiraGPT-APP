@@ -121,6 +121,7 @@ function makeFakePrisma({
         const row = state.users.find((candidate) => (
           (where.id && candidate.id === where.id)
           || (where.stripeCustomerId && candidate.stripeCustomerId === where.stripeCustomerId)
+          || (where.stripeSubscriptionId && candidate.stripeSubscriptionId === where.stripeSubscriptionId)
         ));
         return row ? clone(row) : null;
       },
@@ -428,7 +429,7 @@ const CHECKOUT_EVENT = event('evt_checkout_1', 'checkout.session.completed', {
   customer: 'cus_1',
   subscription: 'sub_checkout',
   payment_status: 'paid',
-  metadata: { userId: 'u1', plan: 'PRO' },
+  metadata: { userId: 'u1', plan: 'PRO', application: 'siragpt' },
 });
 
 const INVOICE_SUCCEEDED_EVENT = event('evt_invoice_paid_1', 'invoice.payment_succeeded', {
@@ -474,6 +475,7 @@ const SUBSCRIPTION_CREATED_EVENT = event('evt_sub_created_1', 'customer.subscrip
   status: 'active',
   current_period_end: 1_700_000_000,
   items: { data: [{ price: { nickname: 'Pro' } }] },
+  metadata: { application: 'siragpt' },
 });
 
 const SUBSCRIPTION_UPDATED_EVENT = event('evt_sub_updated_1', 'customer.subscription.updated', {
@@ -1730,10 +1732,42 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     );
   });
 
+  test('Clover subscription webhooks keep item-level paid deadlines and replay cancellation accurately', async () => {
+    const deadline = 4_102_444_800;
+    const clover = event('evt_clover_canceling', 'customer.subscription.updated', {
+      id: 'sub_old', customer: 'cus_1', status: 'active', cancel_at_period_end: true,
+      items: { data: [{ id: 'si_fixture', current_period_start: 4_099_766_400, current_period_end: deadline }] },
+    }, 700);
+    const harness = setup({ stripeEvent: clover });
+    const compact = harness.internal.minimalStripeWebhookEvent(clover);
+    assert.equal(compact.data.object.current_period_end, deadline);
+    assert.equal(compact.data.object.cancel_at_period_end, true);
+    harness.setStripeEvent(compact);
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].subscriptionStatus, 'canceling');
+    assert.equal(harness.db._state.users[0].subscriptionEndDate.getTime(), deadline * 1000);
+    assert.equal(harness.db._state.subscriptionEvents[0].eventData.currentPeriodEnd, deadline);
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.subscriptionEvents.length, 1);
+  });
+
+  test('Clover subscription creation persists the item-level renewal deadline', async () => {
+    const deadline = 4_102_444_800;
+    const clover = event('evt_clover_created', 'customer.subscription.created', {
+      id: 'sub_new', customer: 'cus_1', status: 'active',
+      metadata: { application: 'siragpt' },
+      items: { data: [{ current_period_start: 4_099_766_400, current_period_end: deadline }] },
+    }, 700);
+    const harness = setup({ stripeEvent: clover });
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].subscriptionEndDate.getTime(), deadline * 1000);
+  });
+
   test('old-subscription update cannot overwrite a newer active subscription', async () => {
     const newSubscription = event('evt_sub_newer_created', 'customer.subscription.created', {
       id: 'sub_new',
       customer: 'cus_1',
+      metadata: { application: 'siragpt' },
       status: 'active',
       current_period_end: 1_800_000_000,
     }, 300);
@@ -1743,7 +1777,9 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
       status: 'past_due',
       current_period_end: 1_700_000_000,
     }, 200);
-    const harness = setup({ stripeEvent: newSubscription });
+    const harness = setup({ stripeEvent: newSubscription, payments: [{
+      id: 'pay_previous', userId: 'u1', provider: 'STRIPE', stripeCustomerId: 'cus_1', stripeSubscriptionId: 'sub_old', status: 'COMPLETED',
+    }] });
 
     assert.equal((await deliver(harness.app)).status, 200);
     harness.setStripeEvent(staleOldUpdate);
@@ -1980,10 +2016,11 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(harness.external.emailAttempts, 0);
   });
 
-  test('one-off invoice events mirror without subscription entitlement effects', async () => {
+  test('owned one-off invoice events mirror without subscription entitlement effects', async () => {
     const paid = event('evt_z_one_off_paid', 'invoice.payment_succeeded', {
       ...INVOICE_SUCCEEDED_EVENT.data.object,
       id: 'in_one_off_fenced',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -1991,6 +2028,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     const staleFailure = event('evt_a_one_off_failed', 'invoice.payment_failed', {
       ...INVOICE_FAILED_EVENT.data.object,
       id: 'in_one_off_fenced',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2015,10 +2053,11 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(failedRecord.eventData.processing.reason, 'invoice_not_subscription_cycle');
   });
 
-  test('one-off invoice mirrors remain independent across invoice IDs', async () => {
+  test('owned one-off invoice mirrors remain independent across invoice IDs', async () => {
     const newerInvoice = event('evt_one_off_newer_a', 'invoice.payment_succeeded', {
       ...INVOICE_SUCCEEDED_EVENT.data.object,
       id: 'in_one_off_a',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2026,6 +2065,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     const olderDifferentInvoice = event('evt_one_off_older_b', 'invoice.payment_failed', {
       ...INVOICE_FAILED_EVENT.data.object,
       id: 'in_one_off_b',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2045,7 +2085,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
   });
 
   for (const invoiceType of ['invoice.payment_succeeded', 'invoice.payment_failed']) {
-    test(`${invoiceType} for a mismatched subscription cannot mutate the active subscription`, async () => {
+    test(`${invoiceType} for an unrelated subscription cannot import invoices or mutate the active subscription`, async () => {
       const base = invoiceType === 'invoice.payment_succeeded'
         ? INVOICE_SUCCEEDED_EVENT
         : INVOICE_FAILED_EVENT;
@@ -2075,13 +2115,11 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
       assert.equal(harness.db._state.users[0].monthlyCallLimit, 4n);
       assert.equal(harness.db._state.usageAlerts.length, 1);
       assert.equal(harness.db._state.notifications.length, 0);
-      assert.equal(harness.db._state.invoices.length, 1, 'mismatched subscription invoice still mirrors');
-      assert.equal(harness.db._state.invoices[0].stripeSubscriptionId, 'sub_other');
-      const row = harness.db._state.subscriptionEvents[0];
-      assert.equal(row.eventData.subscriptionId, 'sub_other');
-      assert.equal(row.eventData.processing.disposition, 'no_op');
-      assert.equal(row.eventData.processing.reason, 'subscription_id_mismatch');
-      assert.deepEqual(row.eventData.outbox.effects, []);
+      assert.equal(harness.db._state.invoices.length, 0);
+      assert.equal(harness.db._state.subscriptionEvents.length, 0);
+      assert.equal(harness.db._state.systemSettings.length, 0);
+      assert.equal(harness.external.triggerAttempts, 0);
+      assert.equal(harness.external.emailAttempts, 0);
     });
   }
 
@@ -2090,6 +2128,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
       const replacement = event('evt_replacement_subscription', 'customer.subscription.created', {
         id: 'sub_current',
         customer: 'cus_1',
+        metadata: { application: 'siragpt' },
         status: 'active',
         current_period_end: 2_000_000_000,
       }, 900);
@@ -2113,6 +2152,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
       const harness = setup({
         stripeEvent: replacement,
         emailConfigured: true,
+        payments: [{ id: 'pay_previous', userId: 'u1', provider: 'STRIPE', stripeCustomerId: 'cus_1', stripeSubscriptionId: 'sub_old', status: 'COMPLETED' }],
         usageAlerts: [{ id: 'alert_previous_subscription', userId: 'u1' }],
       });
 
@@ -2380,7 +2420,100 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(harness.db._state.subscriptionEvents[0].eventData.subscriptionId, 'sub_expanded');
   });
 
-  test('unresolved user is durably pending, returns 500, and redelivery recovers after mapping exists', async () => {
+  for (const type of ['checkout.session.completed', 'customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted', 'invoice.payment_succeeded', 'invoice.payment_failed']) {
+    test(`shared-account ${type} for an unknown customer is acknowledged without writes or effects`, async () => {
+      const foreign = event(`evt_unowned_${type}`, type, {
+        id: 'resource_other_app', customer: 'cus_other_app', subscription: 'sub_other_app',
+        status: 'active', payment_status: 'paid', billing_reason: 'subscription_cycle',
+        metadata: { userId: 'u1', plan: 'PRO_MAX' },
+      });
+      const harness = setup({ stripeEvent: foreign });
+      const response = await deliver(harness.app);
+      assert.equal(response.status, 200);
+      assert.equal(harness.db._state.subscriptionEvents.length, 0, 'colliding metadata.userId is not local ownership');
+      assert.equal(harness.db._state.systemSettings.length, 0);
+      assert.equal(harness.db._state.invoices.length, 0);
+      assert.equal(harness.db._attempts.userUpdates, 0);
+      assert.equal(harness.external.subscriptionReads, 0);
+      assert.equal(harness.external.triggerAttempts, 0);
+      assert.equal(harness.external.emailAttempts, 0);
+      assert.equal(harness.external.posthog.length, 0);
+    });
+  }
+
+  test('an explicitly foreign application cannot replace a subscription for the same customer', async () => {
+    const foreign = event('evt_foreign_known_customer', 'customer.subscription.created', {
+      id: 'sub_other_app', customer: 'cus_1', status: 'active',
+      metadata: { application: 'other-app', userId: 'u1' },
+    });
+    const harness = setup({ stripeEvent: foreign });
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].stripeSubscriptionId, 'sub_old');
+    assert.equal(harness.db._state.subscriptionEvents.length, 0);
+    assert.equal(harness.db._state.systemSettings.length, 0);
+    assert.equal(harness.db._attempts.userUpdates, 0);
+  });
+
+  test('unmarked unrelated subscription creation cannot replace a known local subscription', async () => {
+    const unknown = event('evt_unmarked_other_subscription', 'customer.subscription.created', {
+      id: 'sub_other_app', customer: 'cus_1', status: 'active',
+    });
+    const harness = setup({ stripeEvent: unknown });
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].stripeSubscriptionId, 'sub_old');
+    assert.equal(harness.db._state.subscriptionEvents.length, 0);
+  });
+
+  for (const scenario of [
+    { name: 'no subscription', type: 'invoice.payment_succeeded', subscription: null, currentSubscription: 'sub_old' },
+    { name: 'an unknown subscription before first local association', type: 'invoice.payment_failed', subscription: 'sub_other_app', currentSubscription: null },
+  ]) {
+    test(`unmarked invoice with ${scenario.name} cannot use customer identity as ownership`, async () => {
+      const invoice = event(`evt_customer_only_${scenario.type}`, scenario.type, {
+        id: 'in_other_app', customer: 'cus_1', subscription: scenario.subscription,
+        status: scenario.type.endsWith('succeeded') ? 'paid' : 'open',
+        billing_reason: scenario.subscription ? 'subscription_cycle' : 'manual',
+        metadata: { userId: 'u1' },
+      });
+      const harness = setup({ stripeEvent: invoice, user: baseUser({ stripeSubscriptionId: scenario.currentSubscription }) });
+      assert.equal((await deliver(harness.app)).status, 200);
+      assert.equal(harness.db._state.invoices.length, 0);
+      assert.equal(harness.db._state.subscriptionEvents.length, 0);
+      assert.equal(harness.db._state.systemSettings.length, 0);
+      assert.equal(harness.db._attempts.userUpdates, 0);
+      assert.equal(harness.db._state.notifications.length, 0);
+      assert.equal(harness.external.triggerAttempts, 0);
+      assert.equal(harness.external.emailAttempts, 0);
+    });
+  }
+
+  test('a known legacy customer can establish its first unmarked subscription', async () => {
+    const legacy = event('evt_first_legacy_subscription', 'customer.subscription.created', {
+      id: 'sub_first', customer: 'cus_1', status: 'active',
+    });
+    const harness = setup({ stripeEvent: legacy, user: baseUser({ stripeSubscriptionId: null }) });
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].stripeSubscriptionId, 'sub_first');
+  });
+
+  for (const shape of ['parent', 'legacy']) {
+    test(`owned ${shape} invoice metadata preserves unresolved recovery ownership`, async () => {
+      const details = { subscription: 'sub_pending', metadata: { application: 'siragpt', secret: 'never-persist' } };
+      const owned = event(`evt_owned_invoice_${shape}`, 'invoice.payment_succeeded', {
+        id: 'in_pending', customer: 'cus_pending', status: 'paid',
+        ...(shape === 'parent' ? { parent: { subscription_details: details } } : { subscription: 'sub_pending', subscription_details: details }),
+      });
+      const harness = setup({ stripeEvent: owned, user: null });
+      assert.equal((await deliver(harness.app)).status, 500);
+      const pending = JSON.parse(harness.db._state.systemSettings[0].value);
+      assert.equal(pending.event.data.object.metadata.application, 'siragpt');
+      assert.doesNotMatch(harness.db._state.systemSettings[0].value, /never-persist/);
+      const replay = await harness.internal.processStripeWebhookEvent(pending.event, { persistUnresolved: false }).catch(error => error);
+      assert.equal(replay.code, 'STRIPE_WEBHOOK_USER_UNRESOLVED');
+    });
+  }
+
+  test('owned unresolved user is durably pending, returns 500, and redelivery recovers after mapping exists', async () => {
     const unresolvedEvent = event(
       'evt_unresolved_user_1',
       'customer.subscription.updated',
@@ -2390,7 +2523,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
         status: 'active',
         current_period_end: 1_800_000_000,
         email: 'victim@example.com',
-        metadata: { secret: 'do-not-persist-this' },
+        metadata: { application: 'siragpt', secret: 'do-not-persist-this' },
       },
       500,
     );
@@ -2409,6 +2542,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(pending.attempts, 1);
     assert.equal(pending.event.id, unresolvedEvent.id);
     assert.equal(pending.event.data.object.customer, 'cus_pending');
+    assert.equal(pending.event.data.object.metadata.application, 'siragpt');
     assert.doesNotMatch(harness.db._state.systemSettings[0].value, /victim@example\.com/);
     assert.doesNotMatch(harness.db._state.systemSettings[0].value, /do-not-persist-this/);
 

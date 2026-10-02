@@ -140,6 +140,17 @@ describe('POST /payments/subscription/cancel · paid-period persistence', () => 
     });
   });
 
+  test('Clover item-level deadline preserves paid access when cancellation is scheduled', async () => {
+    const expectedEnd = new Date(stripeSubscription.current_period_end * 1000);
+    stripeSubscription.items = { data: [{ current_period_start: 4_099_766_400, current_period_end: stripeSubscription.current_period_end }] };
+    delete stripeSubscription.current_period_end;
+    const response = await cancelSubscription();
+    assert.equal(response.status, 200);
+    assert.equal(response.body.subscription.currentPeriodEnd, expectedEnd.toISOString());
+    assert.deepEqual(updates[0].data, { subscriptionStatus: 'canceling', subscriptionEndDate: expectedEnd });
+    assert.equal(paidAccessFor(auth.user).nextCalled, true);
+  });
+
   test('invalid Stripe period end without a safe fallback preserves active paid access', async () => {
     stripeSubscription.current_period_end = -1;
 

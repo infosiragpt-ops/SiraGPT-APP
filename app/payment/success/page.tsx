@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useRef, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { CheckCircle, XCircle, Crown, Sparkles, ArrowRight, Settings, CreditCard, Calendar, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,23 +11,22 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
 import { planDisplayName } from '@/lib/plans-catalog'
+import { paymentIsConfirmed, subscriptionIsActive, subscriptionView, type PaymentSessionInfo, type SubscriptionInfo } from '@/lib/payment-status'
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 function PaymentSuccessContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { user, refreshUser } = useAuth()
-  const [loading, setLoading] = useState(true)
-  const [success, setSuccess] = useState(false)
-  const [sessionInfo, setSessionInfo] = useState<any>(null)
-  const [subscriptionInfo, setSubscriptionInfo] = useState<any>(null)
-  const [paymentDate, setPaymentDate] = useState<string>("")
-
-  // Set the date only on the client to avoid SSR/client locale mismatch
-  // (server renders with server locale, client with user locale → hydration error).
-  useEffect(() => { setPaymentDate(new Date().toLocaleDateString()) }, [])
+  const { user, refreshUser, isLoading: authLoading } = useAuth()
+  const [state, setState] = useState<'loading' | 'paid' | 'pending' | 'error' | 'auth' | 'missing'>('loading')
+  const [attempt, setAttempt] = useState(0)
+  const [sessionInfo, setSessionInfo] = useState<PaymentSessionInfo | null>(null)
+  const [subscriptionInfo, setSubscriptionInfo] = useState<SubscriptionInfo | null>(null)
+  const refreshRef = useRef(refreshUser)
+  refreshRef.current = refreshUser
 
   const sessionId = searchParams.get('session_id')
+  const loginHref = `/auth/login?next=${encodeURIComponent(`/payment/success${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`)}`
 
   // Plan features mapping
   const planFeatures: Record<string, {
@@ -67,55 +66,58 @@ function PaymentSuccessContent() {
   }
 
   useEffect(() => {
+    if (authLoading) { setState('loading'); return }
     if (!sessionId) {
-      setLoading(false)
+      setState('missing')
       return
     }
+    if (!user?.id) { setState('auth'); return }
+    let disposed = false
+    setState('loading')
+    setSessionInfo(null)
+    setSubscriptionInfo(null)
 
     // Verify payment success with backend
     const verifyPayment = async () => {
       try {
         const data = await apiClient.verifyPaymentSession(sessionId)
-        setSuccess(true)
-        setSessionInfo(data)
-
-        // Fetch updated user data and update context
-        try {
-          refreshUser();
-          // Fetch subscription details
-          try {
-            const subData = await apiClient.getSubscriptionInfo()
-            setSubscriptionInfo(subData)
-          } catch (subError) {
-            console.warn('Failed to fetch subscription details:', subError)
-          }
-        } catch (userError) {
-          console.warn('Failed to update user context:', userError)
+        if (disposed) return
+        if (!paymentIsConfirmed(data, sessionId)) {
+          setState(data?.sessionId === sessionId && data?.paymentStatus === 'PENDING' ? 'pending' : 'error')
+          return
         }
-
-        toast.success('¡Pago confirmado! Tu plan Pro ya está activo.')
+        setSessionInfo(data)
+        // Refresh entitlements before enabling the return to the chat. Payment
+        // confirmation alone does not prove an old subscription is active now.
+        try {
+          await refreshRef.current()
+          const subData = await apiClient.getSubscriptionInfo()
+          if (!disposed) setSubscriptionInfo(subData)
+        } catch {
+          // The verified payment remains confirmed; activation stays unknown.
+        }
+        if (!disposed) {
+          setState('paid')
+          toast.success('Pago confirmado.')
+        }
       } catch (error) {
-        console.error('Payment verification error:', error)
-        setSuccess(false)
-        toast.error('No pudimos verificar el pago. Escríbenos a soporte y lo revisamos.')
-      } finally {
-        setLoading(false)
+        if (disposed) return
+        const status = (error as { status?: number; statusCode?: number })?.status
+          ?? (error as { statusCode?: number })?.statusCode
+        setState(status === 401 ? 'auth' : 'error')
       }
     }
 
     verifyPayment()
-    // refreshUser comes from useAuth() and is intentionally NOT in deps —
-    // verifyPayment fires once per session and only needs the latest
-    // refresh closure, not a re-fire on identity change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, toast])
+    return () => { disposed = true }
+  }, [sessionId, user?.id, authLoading, attempt])
 
   const handleContinue = () => {
     // Redirect to chat or profile page
     router.push('/agentes')
   }
 
-  if (loading) {
+  if (state === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Card className="w-full max-w-md">
@@ -134,12 +136,14 @@ function PaymentSuccessContent() {
   }
 
   const currentPlanInfo = sessionInfo?.plan ? planFeatures[sessionInfo.plan] : null
+  const activeSubscription = Boolean(sessionInfo && subscriptionIsActive(subscriptionInfo, sessionInfo.plan))
+  const currentPeriodEnd = subscriptionView(subscriptionInfo).currentPeriodEnd
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-blue-50 to-purple-50 dark:from-emerald-950/20 dark:via-blue-950/20 dark:to-purple-950/20">
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto">
-          {success && sessionInfo ? (
+          {state === 'paid' && sessionInfo ? (
             <>
               {/* Success Header */}
               <div className="text-center mb-8">
@@ -147,10 +151,10 @@ function PaymentSuccessContent() {
                   <CheckCircle className="h-12 w-12 text-white" />
                 </div>
                 <h1 className="text-4xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent mb-2">
-                  ¡Te damos la bienvenida a {planDisplayName(sessionInfo.plan)}!
+                  Pago confirmado
                 </h1>
                 <p className="text-lg text-muted-foreground">
-                  Tu suscripción se activó correctamente
+                  {activeSubscription ? 'Tu suscripción se activó correctamente' : 'Consulta en facturación el estado actual de tu suscripción.'}
                 </p>
               </div>
 
@@ -164,11 +168,11 @@ function PaymentSuccessContent() {
                         {currentPlanInfo?.icon && <currentPlanInfo.icon className="h-8 w-8" />}
                         <div>
                           <CardTitle className="text-2xl">Plan {planDisplayName(sessionInfo.plan)}</CardTitle>
-                          <p className="text-muted-foreground">Suscripción activa</p>
+                          <p className="text-muted-foreground">{activeSubscription ? 'Suscripción activa' : 'Pago verificado'}</p>
                         </div>
                       </div>
                       <Badge className={`${currentPlanInfo?.badge} text-white`}>
-                        Activa
+                        {activeSubscription ? 'Activa' : 'Pago confirmado'}
                       </Badge>
                     </div>
                   </CardHeader>
@@ -201,11 +205,11 @@ function PaymentSuccessContent() {
                         <p className="font-semibold">${sessionInfo.amount}</p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">Próximo cobro</p>
+                        <p className="text-muted-foreground">{subscriptionView(subscriptionInfo).cancelAtPeriodEnd ? 'Acceso hasta' : 'Próximo cobro'}</p>
                         <p className="font-semibold">
-                          {subscriptionInfo?.nextBilling ?
-                            new Date(subscriptionInfo.nextBilling).toLocaleDateString() :
-                            'Mensual'
+                          {currentPeriodEnd ?
+                            new Date(currentPeriodEnd).toLocaleDateString() :
+                            'Consulta en facturación'
                           }
                         </p>
                       </div>
@@ -265,7 +269,7 @@ function PaymentSuccessContent() {
                           <span className="text-sm">Estado</span>
                         </div>
                         <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                          Activa
+                          {activeSubscription ? 'Activa' : 'Consultar en facturación'}
                         </Badge>
                       </div>
 
@@ -281,7 +285,7 @@ function PaymentSuccessContent() {
                         variant="outline"
                         size="sm"
                         className="w-full"
-                        onClick={() => router.push('/profile?tab=subscription')}
+                        onClick={() => router.push('/billing')}
                       >
                         Gestionar facturación y uso
                       </Button>
@@ -299,10 +303,6 @@ function PaymentSuccessContent() {
                         <span className="font-mono">{sessionInfo.sessionId.slice(-8)}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Fecha de pago:</span>
-                        <span suppressHydrationWarning>{paymentDate || "—"}</span>
-                      </div>
-                      <div className="flex justify-between">
                         <span>Método:</span>
                         <span>Stripe</span>
                       </div>
@@ -311,17 +311,23 @@ function PaymentSuccessContent() {
                 </div>
               </div>
             </>
-          ) : success === false ? (
+          ) : (
             /* Failure State */
             <div className="text-center max-w-md mx-auto">
               <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-gradient-to-br from-red-400 to-red-500 mb-6">
                 <XCircle className="h-12 w-12 text-white" />
               </div>
-              <h1 className="text-3xl font-bold text-red-600 mb-4">Pago fallido</h1>
+              <h1 className="text-3xl font-bold text-red-600 mb-4">
+                {state === 'pending' ? 'Pago pendiente de confirmación' : state === 'auth' ? 'Inicia sesión para verificar el pago' : 'No pudimos confirmar el pago'}
+              </h1>
               <Card>
                 <CardContent className="pt-6">
                   <p className="text-muted-foreground mb-6">
-                    Hubo un problema al procesar tu pago. Tranquilo, no se realizó ningún cargo.
+                    {state === 'pending'
+                      ? 'El pago todavía no figura como completado. Puedes volver a consultar su estado sin iniciar otro pago.'
+                      : state === 'auth'
+                        ? 'Usa la misma cuenta con la que iniciaste el pago. Conservaremos la referencia para verificarlo.'
+                        : 'No podemos confirmar el estado del cobro en este momento. Si ya pagaste, no vuelvas a pagar: verifica de nuevo o contacta a soporte.'}
                   </p>
                   {!sessionId && (
                     <p className="text-sm text-red-600 mb-6">
@@ -329,21 +335,25 @@ function PaymentSuccessContent() {
                     </p>
                   )}
                   <div className="space-y-3">
-                    <Button onClick={() => router.push('/agentes')} className="w-full">
-                      Reintentar
-                    </Button>
+                    {state === 'auth' ? (
+                      <Button onClick={() => router.push(loginHref)} className="w-full">Iniciar sesión</Button>
+                    ) : sessionId ? (
+                      <Button onClick={() => setAttempt(value => value + 1)} className="w-full">Volver a verificar</Button>
+                    ) : (
+                      <Button onClick={() => router.push('/billing')} className="w-full">Ver facturación</Button>
+                    )}
                     <Button
                       variant="outline"
-                      onClick={() => router.push('/profile')}
+                      onClick={() => router.push('/support')}
                       className="w-full"
                     >
-                      Ir al perfil
+                      Contactar a soporte
                     </Button>
                   </div>
                 </CardContent>
               </Card>
             </div>
-          ) : null}
+          )}
         </div>
       </div>
     </div>
@@ -358,9 +368,9 @@ export default function PaymentSuccessPage() {
           <CardContent className="pt-6">
             <div className="flex flex-col items-center space-y-4">
               <ThinkingIndicator size="lg" className="text-blue-600" />
-              <h2 className="text-xl font-semibold">Loading...</h2>
+              <h2 className="text-xl font-semibold">Cargando…</h2>
               <p className="text-sm text-muted-foreground text-center">
-                Please wait while we load your payment details.
+                Espera mientras consultamos los detalles de tu pago.
               </p>
             </div>
           </CardContent>

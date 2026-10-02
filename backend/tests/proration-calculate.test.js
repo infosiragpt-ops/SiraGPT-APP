@@ -17,8 +17,28 @@ function inject(reqPath, exportsValue) {
 
 let userRow = null;
 let subscription = null;
+const invoiceRequests = [];
 inject('../config/database', { user: { findUnique: async () => userRow } });
-inject('./stripe', { retrieveSubscription: async () => subscription });
+inject('./stripe', {
+  retrieveSubscription: async () => subscription,
+  plans: { PRO: { price: 500 }, PRO_MAX: { price: 1000 }, ENTERPRISE: { price: 20000 } },
+  retrieveUpcomingInvoice: async params => {
+    invoiceRequests.push(params);
+    // createPreview accepts subscription_details, not retrieveUpcoming's
+    // removed subscription_items/subscription_proration_behavior arguments.
+    if (params.subscription_items || params.subscription_proration_behavior) {
+      throw new Error('Received unknown parameter: subscription_items');
+    }
+    return { subtotal: 1267, total: 1267, amount_due: 1267, lines: { data: [{
+      description: 'Proration and renewal', amount: 1267,
+      period: { start: 1781481600, end: 1782864000 },
+    }] } };
+  },
+});
+inject('../utils/stripe-setup', { getPriceIdForPlan: async plan => {
+  assert.equal(plan, 'PRO_MAX');
+  return 'price_pro_monthly';
+} });
 
 const proration = require(path.join(SERVICES_DIR, 'proration.js'));
 
@@ -27,7 +47,7 @@ const SEC = (iso) => Math.floor(new Date(iso).getTime() / 1000);
 const FULL_CYCLE = { current_period_start: SEC('2026-06-01T00:00:00Z'), current_period_end: SEC('2026-07-01T00:00:00Z') };
 const CHANGE_DATE = new Date('2026-06-15T00:00:00Z');
 
-test('PRO→PRO_MAX mid-cycle → positive net charge ($8.00) + isUpgrade', async () => {
+test('PRO→PRO_MAX mid-cycle uses the $10 monthly checkout price', async () => {
   userRow = { id: 'u1', plan: 'PRO', stripeSubscriptionId: 'sub_1' };
   subscription = FULL_CYCLE;
   const r = await proration.calculateProration('u1', 'PRO_MAX', CHANGE_DATE);
@@ -35,10 +55,10 @@ test('PRO→PRO_MAX mid-cycle → positive net charge ($8.00) + isUpgrade', asyn
   assert.equal(r.remainingDays, 16);
   assert.equal(r.isUpgrade, true);
   assert.equal(r.isDowngrade, false);
-  // (2000-500) * 16/30 / 100 = 8.00 exactly
-  assert.ok(Math.abs(r.netAmount - 8) < 0.001, `expected ~+8.00, got ${r.netAmount}`);
+  // (1000-500) * 16/30 / 100 = 2.666...
+  assert.ok(Math.abs(r.netAmount - 8 / 3) < 0.001, `expected ~+2.67, got ${r.netAmount}`);
   assert.equal(r.currentPlanPrice, 5);
-  assert.equal(r.newPlanPrice, 20);
+  assert.equal(r.newPlanPrice, 10);
 });
 
 test('PRO_MAX→PRO mid-cycle → negative net (credit) + isDowngrade', async () => {
@@ -47,7 +67,46 @@ test('PRO_MAX→PRO mid-cycle → negative net (credit) + isDowngrade', async ()
   const r = await proration.calculateProration('u1', 'PRO', CHANGE_DATE);
   assert.equal(r.isDowngrade, true);
   assert.equal(r.isUpgrade, false);
-  assert.ok(Math.abs(r.netAmount + 8) < 0.001, `expected ~-8.00, got ${r.netAmount}`);
+  assert.ok(Math.abs(r.netAmount + 8 / 3) < 0.001, `expected ~-2.67, got ${r.netAmount}`);
+});
+
+test('Clover item-level periods produce finite proration and the actual renewal date', async () => {
+  userRow = { id: 'u1', plan: 'PRO', stripeSubscriptionId: 'sub_1' };
+  subscription = { items: { data: [{ id: 'si_fixture', ...FULL_CYCLE }] } };
+  const result = await proration.calculateProration('u1', 'PRO_MAX', CHANGE_DATE);
+  assert.equal(result.totalPeriodDays, 30);
+  assert.equal(result.remainingDays, 16);
+  assert.equal(result.currentPeriodEnd, '2026-07-01T00:00:00.000Z');
+  assert.ok(Math.abs(result.netAmount - 8 / 3) < 0.001);
+});
+
+test('plan-change preview sends Clover subscription_details and preserves the provider invoice', async () => {
+  userRow = { id: 'u1', plan: 'PRO', stripeCustomerId: 'cus_owner', stripeSubscriptionId: 'sub_1' };
+  subscription = { items: { data: [{ id: 'si_existing', ...FULL_CYCLE }] } };
+  invoiceRequests.length = 0;
+  const result = await proration.previewPlanChange('u1', 'PRO_MAX');
+  assert.deepEqual(invoiceRequests, [{
+    customer: 'cus_owner',
+    subscription: 'sub_1',
+    subscription_details: {
+      items: [{ id: 'si_existing', price: 'price_pro_monthly' }],
+      proration_behavior: 'create_prorations',
+    },
+  }]);
+  assert.equal(result.upcomingInvoice.amountDue, 12.67);
+  assert.equal(result.upcomingInvoice.total, 12.67);
+  assert.equal(result.upcomingInvoice.lines[0].description, 'Proration and renewal');
+});
+
+test('ambiguous or absent item periods fail before reporting invented proration amounts', async () => {
+  userRow = { id: 'u1', plan: 'PRO', stripeSubscriptionId: 'sub_1' };
+  for (const candidate of [
+    {},
+    { items: { data: [{ ...FULL_CYCLE }, { ...FULL_CYCLE, current_period_end: FULL_CYCLE.current_period_end + 86400 }] } },
+  ]) {
+    subscription = candidate;
+    await assert.rejects(() => proration.calculateProration('u1', 'PRO_MAX', CHANGE_DATE), /billing period is unavailable/);
+  }
 });
 
 test('same plan → net ~0 (no charge), neither up nor downgrade', async () => {

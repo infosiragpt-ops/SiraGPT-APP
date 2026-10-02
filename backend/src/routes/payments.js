@@ -6,6 +6,9 @@ const { makeBillingRateLimit } = require('../middleware/billing-rate-limit');
 const { parsePositiveInt } = require('../services/chat-scope');
 const prisma = require('../config/database');
 const stripeService = require('../services/stripe');
+const { inspectStripeConfiguration } = require('../services/stripe-readiness');
+const { createCustomerCheckout, createCustomerPortal } = require('../services/stripe-customer-billing');
+const { stripeSubscriptionPeriod } = require('../services/stripe-subscription-period');
 const { logger } = require('../middleware/logger');
 const { redactErrorMessage } = require('../utils/secret-redactor');
 const { getPriceIdForPlan } = require('../utils/stripe-setup');
@@ -406,6 +409,9 @@ router.post('/plan-change/execute', authenticateToken, planExecuteBillingRateLim
     
   } catch (error) {
     console.error('Error executing plan change:', error);
+    if (error?.code === 'PLAN_CHANGE_SCHEDULING_UNAVAILABLE') {
+      return res.status(409).json({ code: error.code, error: error.message });
+    }
     res.status(400).json({ error: error.message });
   }
 });
@@ -448,7 +454,7 @@ function buildPublicPaymentsConfig() {
   const whatsappNumber = salesWhatsAppNumber();
   return {
     stripeConfigured,
-    checkoutAvailable: stripeConfigured,
+    checkoutAvailable: stripeConfigured && (process.env.NODE_ENV !== 'production' || inspectStripeConfiguration(process.env).ready),
     demoAllowed: Boolean(stripeService.demoAllowed),
     whatsappNumber,
     paidPlan: PUBLIC_PAID_PLAN,
@@ -466,116 +472,49 @@ router.get('/config', (req, res) => {
 });
 
 const CHECKOUT_UNAVAILABLE_MESSAGE =
-  'El pago con tarjeta aún no está habilitado. Escríbenos por WhatsApp y activamos tu plan Pro en minutos.';
+  'El pago con tarjeta aún no está habilitado. Contacta con soporte o por WhatsApp para conocer las opciones disponibles.';
 
-// Create Stripe checkout session
+function requireCheckoutAvailable(req, res, next) {
+  if (buildPublicPaymentsConfig().checkoutAvailable) return next();
+  return res.status(503).json({
+    error: 'Payments unavailable', code: 'STRIPE_NOT_CONFIGURED',
+    message: CHECKOUT_UNAVAILABLE_MESSAGE, fallbackAvailable: true,
+    whatsappNumber: salesWhatsAppNumber(),
+  });
+}
+
+function sendBillingError(res, req, error, operation) {
+  if (error?.isBillingRequestError) return res.status(error.statusCode).json({
+    code: error.code, error: error.message, message: error.message,
+  });
+  if (!error?.isStripeOperationalError) logRouteError(req, 'payments.customer_billing_failed', error, { operation });
+  return sendStripeError(res, req, error, operation);
+}
+
+// New public subscriptions use the advertised Pro plan only. Legacy plans
+// remain supported by existing subscriptions and fulfillment.
 router.post('/stripe', authenticateToken, checkoutStripeBillingRateLimit, [
-  body('plan').isIn(['PRO', 'PRO_MAX', 'ENTERPRISE']).withMessage('Invalid plan')
-], async (req, res) => {
+  body('plan').isIn(['PRO_MAX']).withMessage('Invalid plan'),
+], async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  return requireCheckoutAvailable(req, res, next);
+}, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
-    // Check if Stripe is configured
-    if (!stripeService.isConfigured) {
-      return res.status(503).json({ 
-        error: 'Stripe not configured', 
-        code: 'STRIPE_NOT_CONFIGURED',
-        message: CHECKOUT_UNAVAILABLE_MESSAGE,
-        fallbackAvailable: true,
-        whatsappNumber: salesWhatsAppNumber(),
-      });
-    }
-
-    const { plan } = req.body;
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.id }
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Get or create Stripe customer
-    let stripeCustomerId = user.stripeCustomerId;
-    
-    if (!stripeCustomerId) {
-      const customer = await stripeService.createCustomer(
-        user.email,
-        user.name,
-        user.id
-      );
-      
-      stripeCustomerId = customer.id;
-      
-      // Update user with Stripe customer ID
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { stripeCustomerId }
-      });
-    }
-
-    // Get price ID for the plan
-    const priceId = await getPriceIdForPlan(plan);
-    
-    // Calculate amount for payment record
-    const planAmounts = {
-      PRO: 5.00,
-      PRO_MAX: 10.00,
-      ENTERPRISE: 200.00
-    };
-
-    // Create payment record
-    const payment = await prisma.payment.create({
-      data: {
-        userId: user.id,
-        amount: planAmounts[plan],
-        plan,
-        provider: 'STRIPE',
-        stripeCustomerId,
-        stripePriceId: priceId,
-        status: 'PENDING'
-      }
-    });
-
-    // Create Stripe checkout session
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    const session = await stripeService.createCheckoutSession(
-      priceId,
-      stripeCustomerId,
-      user.id,
-      plan,
-      `${frontendUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-      `${frontendUrl}/payment/cancel?plan=${encodeURIComponent(plan)}`
-    );
-
-    // Update payment record with session ID
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: {
-        stripeSessionId: session.id,
-        providerId: session.id
-      }
-    });
-
-    res.json({
-      sessionId: session.id,
-      url: session.url,
-      payment
-    });
-
+    res.set('Cache-Control', 'no-store');
+    res.json(await createCustomerCheckout({ prisma, stripeService, getPriceIdForPlan, userId: req.user.id }));
   } catch (error) {
-    if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) {
-      return sendStripeError(res, req, error, 'createStripeCheckout');
-    }
+    return sendBillingError(res, req, error, 'createStripeCheckout');
+  }
+});
 
-    logRouteError(req, 'payments.stripe.create_failed', error, { plan: req.body?.plan });
-    res.status(500).json({ 
-      error: 'Payment creation failed',
-      requestId: requestIdFor(req),
-    });
+const portalBillingRateLimit = billingLimiter('customer-portal', checkoutBillingLimit, checkoutBillingIpLimit, billingWindowMs);
+router.post('/portal', authenticateToken, portalBillingRateLimit, requireCheckoutAvailable, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await createCustomerPortal({ prisma, stripeService, userId: req.user.id }));
+  } catch (error) {
+    return sendBillingError(res, req, error, 'createCustomerPortal');
   }
 });
 
@@ -1362,6 +1301,49 @@ function stripePaidPlan(value) {
   return STRIPE_PAID_PLANS.has(plan) ? plan : null;
 }
 
+function stripeWebhookApplication(event) {
+  const object = event?.data?.object || {};
+  const markers = [
+    object.metadata?.application,
+    object.subscription_details?.metadata?.application,
+    object.parent?.subscription_details?.metadata?.application,
+    object.subscription?.metadata?.application,
+    object.parent?.subscription_details?.subscription?.metadata?.application,
+  ].filter(value => typeof value === 'string' && value.trim()).map(value => value.trim());
+  // An explicit foreign marker wins even when a customer is shared by apps.
+  if (markers.some(value => value !== 'siragpt')) return 'foreign';
+  return markers.includes('siragpt') ? 'siragpt' : null;
+}
+
+async function locallyOwnedStripeWebhook(context) {
+  const { customerId, subscriptionId, payment, user } = context;
+  if (payment && stripeResourceId(payment.stripeCustomerId) === customerId) return true;
+  if (user && subscriptionId && user.stripeSubscriptionId === subscriptionId) return true;
+  if (user && subscriptionId && !user.stripeSubscriptionId
+    && context.event.type === 'customer.subscription.created') return true;
+  if (!subscriptionId || !customerId) return false;
+  if (!user) {
+    const subscriptionUser = await prisma.user.findUnique({ where: { stripeSubscriptionId: subscriptionId } });
+    if (subscriptionUser?.stripeCustomerId === customerId) {
+      context.user = subscriptionUser;
+      context.userId = subscriptionUser.id;
+      return true;
+    }
+  }
+  // A previous local purchase may own an older subscription. Customer identity
+  // alone cannot authorize importing another app's invoice or replacing a plan.
+  const priorPayment = await prisma.payment.findFirst({ where: {
+    provider: 'STRIPE', stripeSubscriptionId: subscriptionId, stripeCustomerId: customerId,
+    ...(user ? { userId: user.id } : {}),
+  } });
+  if (!priorPayment) return false;
+  if (!user) {
+    context.user = await prisma.user.findUnique({ where: { id: priorPayment.userId } });
+    context.userId = priorPayment.userId;
+  }
+  return true;
+}
+
 function currentMonthStartUtcForStripeWebhook() {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -1452,7 +1434,9 @@ async function resolveStripeWebhookContext(event) {
     const payment = object.id && prisma.payment?.findFirst
       ? await prisma.payment.findFirst({ where: { stripeSessionId: object.id } })
       : null;
-    const userId = metadataUserId || payment?.userId || null;
+    // A shared account can contain another app's coincidentally identical
+    // metadata.userId. Only local billing resources establish ownership.
+    const userId = payment?.userId || null;
     let user = userId
       ? await prisma.user.findUnique({ where: { id: userId } })
       : null;
@@ -1517,7 +1501,7 @@ async function hydrateStripeWebhookContext(context, options = {}) {
     stripeSubscriptionStateRetrievalEnabled(options)
     && context.event.type === 'invoice.payment_succeeded'
     && context.subscriptionId
-    && (!context.subscription?.status || !context.subscription?.current_period_end)
+    && (!context.subscription?.status || !stripeSubscriptionPeriod(context.subscription).end)
   ) {
     return {
       ...context,
@@ -1568,7 +1552,7 @@ function canonicalStripeEventData(event, context) {
         ...common,
         subscriptionId: context.subscriptionId,
         status: projectedStripeSubscriptionStatus(object),
-        currentPeriodEnd: object.current_period_end || null,
+        currentPeriodEnd: stripeSubscriptionPeriod(object).end,
         endedAt: object.ended_at || null,
       };
   }
@@ -2220,7 +2204,7 @@ async function applyStripeWebhookTransaction(tx, event, context) {
         data: {
           stripeSubscriptionId: context.subscriptionId,
           subscriptionStatus: projectedStripeSubscriptionStatus(object),
-          subscriptionEndDate: toDateFromUnix(object.current_period_end),
+          subscriptionEndDate: toDateFromUnix(stripeSubscriptionPeriod(object).end),
         },
       });
       return {
@@ -2244,7 +2228,7 @@ async function applyStripeWebhookTransaction(tx, event, context) {
         where: { id: user.id },
         data: {
           subscriptionStatus: projectedStripeSubscriptionStatus(object),
-          subscriptionEndDate: toDateFromUnix(object.current_period_end),
+          subscriptionEndDate: toDateFromUnix(stripeSubscriptionPeriod(object).end),
         },
       });
       return {
@@ -2693,7 +2677,8 @@ function minimalStripeWebhookEvent(event) {
       id: stripeResourceId(object),
       customer: stripeResourceId(object.customer),
       status: object.status || null,
-      current_period_end: Number(object.current_period_end || 0) || null,
+      current_period_end: stripeSubscriptionPeriod(object).end,
+      cancel_at_period_end: object.cancel_at_period_end === true,
       ended_at: Number(object.ended_at || 0) || null,
     };
   }
@@ -2701,7 +2686,12 @@ function minimalStripeWebhookEvent(event) {
     id: event.id,
     type: event.type,
     created: stripeEventCreated(event),
-    data: { object: minimalObject },
+    data: { object: {
+      ...minimalObject,
+      ...(stripeWebhookApplication(event) === 'siragpt'
+        ? { metadata: { ...minimalObject.metadata, application: 'siragpt' } }
+        : {}),
+    } },
   };
 }
 
@@ -2775,14 +2765,20 @@ async function processStripeWebhookEvent(event, options = {}) {
     throw error;
   }
 
+  // A verified signature authenticates the shared Stripe account, not the app.
+  // Ignore foreign events without persisting payloads or scheduling retries.
+  const application = stripeWebhookApplication(event);
+  if (application === 'foreign') return { ignored: true, reason: 'foreign_application' };
   // All user resolution is read-only and happens before the transaction.
   let context = await resolveStripeWebhookContext(event);
+  const locallyOwned = await locallyOwnedStripeWebhook(context);
+  if (application !== 'siragpt' && !locallyOwned) {
+    return { ignored: true, reason: 'unowned_billing_resource' };
+  }
   if (!context.user) {
     console.error('User not found for Stripe webhook:', {
       eventId: event.id,
       eventType: event.type,
-      customerId: context.customerId,
-      userId: context.userId,
     });
     if (options.persistUnresolved !== false) {
       await persistUnresolvedStripeEvent(event, context);
@@ -2899,9 +2895,9 @@ router.get('/subscription', authenticateToken, async (req, res) => {
           stripeSubscription: {
             id: subscription.id,
             status: subscription.status,
-            currentPeriodEnd: toDateFromUnix(subscription.current_period_end),
+            currentPeriodEnd: toDateFromUnix(stripeSubscriptionPeriod(subscription).end),
             cancelAtPeriodEnd: subscription.cancel_at_period_end,
-            nextInvoiceDate: subscription.status === 'active' ? toDateFromUnix(subscription.current_period_end) : null
+            nextInvoiceDate: subscription.status === 'active' ? toDateFromUnix(stripeSubscriptionPeriod(subscription).end) : null
           }
         };
       } catch (error) {
@@ -2940,7 +2936,7 @@ router.post('/subscription/cancel', authenticateToken, subscriptionCancelBilling
     // otherwise preserve the current local status until the webhook reconciles.
     const nowMs = Date.now();
     const stripePeriodEnd = futureDateOrNull(
-      toDateFromUnix(subscription.current_period_end),
+      toDateFromUnix(stripeSubscriptionPeriod(subscription).end),
       nowMs,
     );
     const currentStatus = String(user.subscriptionStatus || '').trim().toLowerCase();

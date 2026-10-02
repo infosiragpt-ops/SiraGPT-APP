@@ -141,17 +141,29 @@ export function describeCheckoutError(err: unknown): CheckoutErrorInfo {
   const rawMessage = String(e.message || "")
   const whatsappNumber = normalizeWhatsAppNumber(data.whatsappNumber)
 
-  if (status === 503 || data.code === "STRIPE_NOT_CONFIGURED" || /not configured/i.test(rawMessage)) {
+  if (data.code === "STRIPE_NOT_CONFIGURED" || /not configured/i.test(rawMessage)) {
     return {
       kind: "unavailable",
       message:
         data.message ||
-        "El pago con tarjeta aún no está habilitado. Escríbenos por WhatsApp y activamos tu plan Pro en minutos.",
+        "El pago con tarjeta no está disponible en este momento. Contacta a soporte o escríbenos por WhatsApp para consultar la activación de Pro.",
       whatsappNumber,
     }
   }
   if (status === 401) {
     return { kind: "auth", message: "Tu sesión expiró. Inicia sesión de nuevo para continuar.", whatsappNumber }
+  }
+  const conflictMessages: Record<string, string> = {
+    SUBSCRIPTION_EXISTS: 'Ya tienes una suscripción. Revisa su estado en Facturación antes de iniciar otro pago.',
+    CHECKOUT_ALREADY_COMPLETED: 'El proceso de pago ya finalizó y se está verificando. Revisa tu suscripción en Facturación.',
+    CHECKOUT_EXPIRED: 'El enlace de pago venció. Vuelve a elegir Pro para preparar uno nuevo.',
+    CHECKOUT_REQUIRES_REVIEW: 'Este pago necesita revisión. Contacta a soporte antes de iniciar otro pago.',
+  }
+  if (data.code && conflictMessages[data.code]) {
+    return { kind: 'validation', message: conflictMessages[data.code], whatsappNumber }
+  }
+  if (status === 503) {
+    return { kind: 'generic', message: 'El servicio de pagos no está disponible temporalmente. Inténtalo más tarde.', whatsappNumber }
   }
   if (status === 400) {
     return { kind: "validation", message: data.message || "No pudimos preparar el pago. Inténtalo de nuevo.", whatsappNumber }

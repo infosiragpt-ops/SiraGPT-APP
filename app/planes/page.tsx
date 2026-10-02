@@ -215,7 +215,7 @@ export default function PlanesPage() {
                     </Link>
                   )}
                   <p className="text-center text-[12px] text-zinc-500">
-                    El pago con tarjeta se habilita muy pronto. Te activamos Pro en minutos.
+                    El pago con tarjeta no está disponible en este momento. Consulta con soporte cómo activar Pro.
                   </p>
                 </div>
               )

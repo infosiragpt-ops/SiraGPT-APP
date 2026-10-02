@@ -21,6 +21,19 @@ describe('api client core', () => {
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
+  it('requests the owned billing portal through a CSRF-aware POST without client customer or return URL', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('test-csrf')
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ url: 'https://billing.stripe.com/p/session_example' }), { status: 200 }))
+    expect(await api.createBillingPortal()).toEqual({ url: 'https://billing.stripe.com/p/session_example' })
+    expect(mockFetch).toHaveBeenCalledOnce()
+    const [url, opts] = mockFetch.mock.calls[0]
+    expect(url).toMatch(/\/payments\/portal$/)
+    expect(opts.method).toBe('POST')
+    expect(opts.credentials).toBe('include')
+    expect(new Headers(opts.headers).get('X-CSRF-Token')).toBe('test-csrf')
+    expect(opts.body).toBeUndefined()
+  })
+
   it('migrates new-chat pins using revision zero instead of a rejected headerless write', async () => {
     let serverRevision = 0
     let serverPins: string[] = []
