@@ -3,26 +3,27 @@
 import React from "react"
 import type { Workbook, Worksheet } from "exceljs"
 import { cn } from "@/lib/utils"
-import { readXlsxWorkbook, xlsxCellToText } from "@/lib/xlsx-client"
+import { readXlsxPreview, xlsxCellToText } from "@/lib/xlsx-client"
 import { SHEET_PAGE_ROWS, spreadsheetCellStyle, spreadsheetCellText, spreadsheetColumnLabel, spreadsheetDimensions, spreadsheetMergeSpans } from "@/lib/spreadsheet-preview-model"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
-export function SpreadsheetPreview({ buffer }: { buffer: ArrayBuffer }) {
+export function SpreadsheetPreview({ buffer, visualPreview }: { buffer: ArrayBuffer; visualPreview?: React.ReactNode }) {
+  const [hasVisualObjects, setHasVisualObjects] = React.useState(false)
   const [workbook, setWorkbook] = React.useState<Workbook | null>(null)
   const [error, setError] = React.useState("")
   React.useEffect(() => {
     let cancelled = false
-    setWorkbook(null); setError("")
+    setWorkbook(null); setError(""); setHasVisualObjects(false)
     if (buffer.byteLength > 25 * 1024 * 1024) { setError("Este libro supera 25 MB. Descárgalo para abrirlo completo."); return }
-    void readXlsxWorkbook(buffer).then((value) => { if (!cancelled) setWorkbook(value as unknown as Workbook) }).catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : "No se pudo leer el libro.") })
+    void readXlsxPreview(buffer).then(({ workbook, hasVisualObjects }) => { if (!cancelled) { setWorkbook(workbook as unknown as Workbook); setHasVisualObjects(hasVisualObjects) } }).catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : "No se pudo leer el libro.") })
     return () => { cancelled = true }
   }, [buffer])
   if (error) return <p role="alert" className="p-6 text-sm text-destructive">{error}</p>
   if (!workbook) return <div role="status" className="flex h-full items-center justify-center gap-2 text-sm"><ThinkingIndicator size="sm" />Leyendo hoja de cálculo…</div>
-  return <WorkbookGrid workbook={workbook} />
+  return <WorkbookGrid workbook={workbook} visualPreview={hasVisualObjects ? visualPreview || <p role="status" className="p-4 text-sm">La cuadrícula muestra las celdas. Descarga el archivo para ver sus gráficas y objetos completos.</p> : undefined} />
 }
 
-export function WorkbookGrid({ workbook }: { workbook: Workbook }) {
+export function WorkbookGrid({ workbook, visualPreview }: { workbook: Workbook; visualPreview?: React.ReactNode }) {
   const sheets = workbook.worksheets.filter((sheet) => sheet.state === "visible" || !sheet.state)
   const [active, setActive] = React.useState(sheets[0]?.id)
   const [page, setPage] = React.useState(0)
@@ -57,6 +58,7 @@ export function WorkbookGrid({ workbook }: { workbook: Workbook }) {
             })}
           </tr>)}</tbody>
         </table>
+        {visualPreview && <section aria-label="Gráficas y objetos del libro" className="border-t border-zinc-200 dark:border-zinc-700">{visualPreview}</section>}
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-950">
         <div role="tablist" aria-label="Hojas del libro" className="flex max-w-full gap-1 overflow-x-auto">{sheets.map((value) => <button key={value.id} role="tab" aria-selected={value.id === sheet.id} onClick={() => { setActive(value.id); setPage(0); setSelected("A1") }} className={cn("whitespace-nowrap border-b-2 px-3 py-2 font-medium", value.id === sheet.id ? "border-emerald-600 bg-white text-emerald-700 dark:bg-zinc-800 dark:text-emerald-400" : "border-transparent text-zinc-500")}>{value.name}</button>)}</div>

@@ -264,8 +264,10 @@ async function stripWorkbookDrawings(zip: Awaited<ReturnType<typeof boundedWorkb
   return zip.generateAsync({ type: "arraybuffer", compression: "STORE" })
 }
 
-export async function readXlsxWorkbook(buffer: ArrayBuffer) {
+export async function readXlsxPreview(buffer: ArrayBuffer) {
   const bounded = await boundedWorkbookZip(buffer)
+  // Inspect the validated original package before the cell-reader copy drops drawings.
+  const hasVisualObjects = Object.keys(bounded.files).some(name => /^xl\/(?:charts|drawings)\/[^/]+\.xml$/i.test(name))
   const safeBytes = await bounded.generateAsync({ type: "arraybuffer", compression: "STORE" })
   const ExcelJS = await loadExcelJS()
   const workbook = new ExcelJS.Workbook()
@@ -282,7 +284,11 @@ export async function readXlsxWorkbook(buffer: ArrayBuffer) {
     // Sanitised bytes failed for another reason — try the original once.
     await workbook.xlsx.load(safeBytes)
   }
-  return workbook
+  return { workbook, hasVisualObjects }
+}
+
+export async function readXlsxWorkbook(buffer: ArrayBuffer) {
+  return (await readXlsxPreview(buffer)).workbook
 }
 
 export async function createXlsxBlob(rows: unknown[][], sheetName = "Data") {

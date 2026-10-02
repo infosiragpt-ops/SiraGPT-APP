@@ -37,6 +37,11 @@ const PdfRenderer = dynamic(
   { ssr: false, loading: () => null },
 )
 
+const ServerConvertedPdfRenderer = dynamic(
+  () => import("@/components/viewers/UnifiedDocumentViewer").then(module => module.ServerConvertedPdfRenderer),
+  { ssr: false, loading: () => null },
+)
+
 const SpreadsheetPreview = dynamic(
   () => import("@/components/viewers/spreadsheet-preview").then(module => module.SpreadsheetPreview),
   { ssr: false, loading: () => null },
@@ -634,6 +639,14 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     }
   }, [downloadUrl, filename, isDownloading])
 
+  const spreadsheetVisualAttachment = React.useMemo<AttachmentLike>(() => ({
+    name: filename, url: downloadUrl,
+    mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    id: typeof url === "string" ? undefined : url.fileId,
+    artifactId: typeof url === "string" ? undefined : url.artifactId,
+  }), [filename, downloadUrl, url])
+  const spreadsheetPdfUrl = explicitPdfUrl || derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(previewUrl) || undefined
+
   const [textCopied, setTextCopied] = React.useState(false)
   const copyText = React.useCallback(async () => {
     if (state.kind !== "text") return
@@ -1222,7 +1235,13 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         )}
 
-        {state.kind === "spreadsheet" && <SpreadsheetPreview buffer={state.buffer} />}
+        {state.kind === "spreadsheet" && <SpreadsheetPreview buffer={state.buffer} visualPreview={
+          <div className="h-[70vh] min-h-96">
+            <ServerConvertedPdfRenderer a={spreadsheetVisualAttachment} previewUrl={spreadsheetPdfUrl}
+              toolbarContainer={toolbarContainer} compactToolbar={inlineToolbar}
+              fallback={<p role="status" className="p-4 text-sm">No se pudo mostrar la vista con gráficas y objetos. Las celdas siguen disponibles; descarga el archivo para verlo completo.</p>} />
+          </div>
+        } />}
         {state.kind === "statistical" && <StatisticalDataPreview loadPage={loadStatisticalPage} />}
 
         {state.kind === "svg" && (

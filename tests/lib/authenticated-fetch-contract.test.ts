@@ -213,8 +213,8 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
   },
   {
     file: "components/viewers/UnifiedDocumentViewer.tsx",
-    reason: "Data/blob or external viewer asset branch after trusted Sira assets use authenticatedFetch.",
-    accepts: (text) => text === "fetch(normalized)",
+    reason: "Data/blob or external viewer asset branch with cancellation after trusted Sira assets use authenticatedFetch.",
+    accepts: (text) => text === "fetch(normalized, { signal })",
   },
   {
     file: "lib/attachments/link-preview.ts",
