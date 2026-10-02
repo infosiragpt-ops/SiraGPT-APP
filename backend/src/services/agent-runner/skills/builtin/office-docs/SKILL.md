@@ -133,6 +133,13 @@ print(json.dumps(r, ensure_ascii=False))     # ok, output, theme, titles, warnin
    fuentes, el interlineado y el ajuste de página mueven los saltos de página:
    no exijas el mismo número de páginas. Si no es VERIFICADO, corrige solo lo
    fallido (máx. 3).
+   `inspect_document` ya reabre los bytes guardados. En XLSX/PPTX devuelve
+   el inventario nativo de gráficas (tipo, título, series y referencias): usa
+   esos valores con `expect.charts` para verificar. Python queda para requisitos
+   adicionales que el inspector no cubra; no reconstruyas el inventario mediante
+   atributos internos supuestos. Si una API falla por tipo o atributo, consulta
+   su firma/documentación instalada antes de otro cambio. El fallo no valida el
+   documento ni autoriza entregarlo.
 5. **Respuesta** — en español: qué cambió visualmente, nombre del archivo,
    que el contenido se conservó y si hubo revisión visual.
 
