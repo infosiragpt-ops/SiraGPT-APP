@@ -1722,6 +1722,15 @@ central»). Sustituye al nudo de cinco bucles del día anterior. UI lock re-base
 - Tests actualizados: `tests/brand-clover-source.test.ts` (átomo, sin nudo, tokens),
   `tests/sidebar-brand-header-source.test.ts`, `tests/claude-thinking-surface-source.test.ts`
   (SMIL + reduced motion), `tests/claude-trace-rail-source.test.ts`.
+- **Segunda pasada (mismo día)**: «solo quiero los puntitos sin las líneas» → ThinkingCore no
+  dibuja los anillos de órbita (solo electrones + estela + núcleo; idle = tres puntos + núcleo).
+  **Favicon y PWA en átomo**: `public/icon.svg`, `favicon.ico` (16/32/48 PNG-in-ICO con trazo
+  grueso), `sira-gpt-{180,192,512}.png`, `sira-gpt.png`, `apple-touch-icon.png` y
+  `brand/atom-maskable-512.png` se generan con sharp desde el átomo en tinta sobre tile blanco
+  (script de sesión, no está en el repo); los `brand/clover-*.png` y `clover-mono.svg` se
+  eliminaron (`clover.svg` + `CloverMark` siguen para correos y documentos). Manifest
+  `theme_color` #ffffff y maskable al átomo; `layout.tsx` añade `?v=atom` a los iconos para
+  que el navegador suelte el favicon trébol cacheado; `sw.js` precachea `/brand/atom.svg`.
 
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP

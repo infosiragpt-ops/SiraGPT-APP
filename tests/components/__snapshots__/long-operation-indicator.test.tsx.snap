@@ -45,14 +45,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
               class="thinking-core__orbit thinking-core__orbit--a"
               transform="rotate(-90 12 12)"
             >
-              <path
-                class="thinking-core__ring"
-                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                fill="none"
-                opacity="0.45"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
               <g
                 class="thinking-core__electron thinking-core__electron--a"
                 style="color: var(--think-electron-a, currentColor);"
@@ -124,14 +116,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
               class="thinking-core__orbit thinking-core__orbit--b"
               transform="rotate(30 12 12)"
             >
-              <path
-                class="thinking-core__ring"
-                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                fill="none"
-                opacity="0.45"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
               <g
                 class="thinking-core__electron thinking-core__electron--b"
                 style="color: var(--think-electron-b, currentColor);"
@@ -203,14 +187,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
               class="thinking-core__orbit thinking-core__orbit--c"
               transform="rotate(150 12 12)"
             >
-              <path
-                class="thinking-core__ring"
-                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                fill="none"
-                opacity="0.45"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
               <g
                 class="thinking-core__electron thinking-core__electron--c"
                 style="color: var(--think-electron-c, currentColor);"
@@ -353,14 +329,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
               class="thinking-core__orbit thinking-core__orbit--a"
               transform="rotate(-90 12 12)"
             >
-              <path
-                class="thinking-core__ring"
-                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                fill="none"
-                opacity="0.45"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
               <g
                 class="thinking-core__electron thinking-core__electron--a"
                 style="color: var(--think-electron-a, currentColor);"
@@ -432,14 +400,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
               class="thinking-core__orbit thinking-core__orbit--b"
               transform="rotate(30 12 12)"
             >
-              <path
-                class="thinking-core__ring"
-                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                fill="none"
-                opacity="0.45"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
               <g
                 class="thinking-core__electron thinking-core__electron--b"
                 style="color: var(--think-electron-b, currentColor);"
@@ -511,14 +471,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
               class="thinking-core__orbit thinking-core__orbit--c"
               transform="rotate(150 12 12)"
             >
-              <path
-                class="thinking-core__ring"
-                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                fill="none"
-                opacity="0.45"
-                stroke="currentColor"
-                stroke-width="1.2"
-              />
               <g
                 class="thinking-core__electron thinking-core__electron--c"
                 style="color: var(--think-electron-c, currentColor);"

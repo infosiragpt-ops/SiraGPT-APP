@@ -138,12 +138,12 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     icons: {
       icon: [
-        { url: "/favicon.ico", sizes: "any" },
-        { url: "/sira-gpt-192.png", sizes: "192x192", type: "image/png" },
-        { url: "/sira-gpt-512.png", sizes: "512x512", type: "image/png" },
+        { url: "/favicon.ico?v=atom", sizes: "any" },
+        { url: "/sira-gpt-192.png?v=atom", sizes: "192x192", type: "image/png" },
+        { url: "/sira-gpt-512.png?v=atom", sizes: "512x512", type: "image/png" },
       ],
       apple: [
-        { url: "/sira-gpt-180.png", sizes: "180x180", type: "image/png" },
+        { url: "/sira-gpt-180.png?v=atom", sizes: "180x180", type: "image/png" },
       ],
     },
   }

@@ -13,19 +13,20 @@ export type ThinkingCoreProps = React.SVGAttributes<SVGSVGElement> & {
 }
 
 /**
- * ThinkingCore — the «Pensando» glyph: the SiraGPT atom in motion. The same
- * geometry as the brand mark (`components/brand/atom-mark.tsx`): a solid
- * nucleus, three elliptical orbits rotated −90° / 30° / 150°, one electron on
- * each. While active, the three electrons travel their orbits — each in its
- * own colour (`--think-electron-a|b|c`) and with a fading trail («estela»)
- * behind it — around the nucleus, which beats. Idle renders the static logo
+ * ThinkingCore — the «Pensando» glyph: the SiraGPT atom in motion, dots only.
+ * The same geometry as the brand mark (`components/brand/atom-mark.tsx`): a
+ * solid nucleus and three elliptical orbits rotated −90° / 30° / 150° with one
+ * electron each — but the orbit rings are NOT drawn (Luis, 2026-10-02: «solo
+ * quiero los puntitos sin las líneas»). While active, the three electrons
+ * travel their invisible orbits — each in its own colour
+ * (`--think-electron-a|b|c`) and with a fading trail («estela») behind it —
+ * around the nucleus, which beats. Idle renders the static logo
  * (electron at the apex of its orbit, no trail), so a finished turn ends on
  * the brand itself. Luis supplied the animation (canvas «ia-estelas»: «tres
  * puntos de color giran con estela alrededor del punto central») and the
  * atom logo on 2026-10-02.
  *
- * Orbit rings and nucleus take `currentColor` (`--think-accent`, the
- * foreground ink). Electrons move with SMIL `animateMotion` along the exact
+ * The nucleus takes `currentColor` (`--think-accent`, the foreground ink). Electrons move with SMIL `animateMotion` along the exact
  * orbit path (paced → constant speed); the trail is a dash on a duplicate of
  * the orbit (`pathLength="100"`) whose `stroke-dashoffset` animates in sync,
  * so the tail bends with the ellipse at every size (12 px rail → 48 px).
@@ -96,7 +97,6 @@ export function ThinkingCore({ size = 20, active = true, color, className, title
       <g>
         {ELECTRONS.map(({ key, angle, dur, begin }) => (
           <g key={key} className={`thinking-core__orbit thinking-core__orbit--${key}`} transform={`rotate(${angle} ${CX} ${CY})`}>
-            <path className="thinking-core__ring" d={ORBIT_PATH} fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.45" />
             <g
               className={`thinking-core__electron thinking-core__electron--${key}`}
               style={active ? { color: `var(--think-electron-${key}, currentColor)` } : undefined}

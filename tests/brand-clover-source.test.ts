@@ -19,19 +19,31 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe("Clover brand (four-leaf clover mark + green accent)", () => {
-  it("ships the clover SVG asset drawn with currentColor and the web manifest in clover green", () => {
+  it("ships the clover SVG for documents, and the atom as favicon, PWA icons and manifest (Luis, 2026-10-02)", () => {
     const svg = source("public/brand/clover.svg")
     assert.match(svg, /fill="currentColor"/)
     assert.match(svg, /viewBox="0 0 512 512"/)
-    assert.ok(fs.existsSync(path.join(root, "public/brand/clover-maskable-512.png")))
-    const manifest = JSON.parse(source("public/manifest.webmanifest"))
-    assert.equal(manifest.theme_color, "#2E7D32")
-    assert.equal(manifest.background_color, "#ffffff")
-    assert.ok(manifest.icons.some((i: { src: string; purpose?: string }) => i.src === "/brand/clover-maskable-512.png" && i.purpose === "maskable"))
+    // Browser tab + PWA icons are the atom on a white tile; the clover PNGs are gone.
     const icon = source("public/icon.svg")
-    assert.doesNotMatch(icon, /<image/)
-    assert.match(icon, /#2E7D32/)
-    assert.match(source("public/sw.js"), /'\/brand\/clover\.svg'/)
+    assert.doesNotMatch(icon, /<image|#2E7D32/i)
+    assert.match(icon, /M370 200A170 62 0 1 1 30 200A170 62 0 1 1 370 200/)
+    assert.equal((icon.match(/rotate\((-90|30|150) 200 200\)/g) || []).length, 3)
+    for (const rel of ["public/favicon.ico", "public/sira-gpt-192.png", "public/sira-gpt-512.png", "public/sira-gpt-180.png", "public/apple-touch-icon.png", "public/brand/atom-maskable-512.png"]) {
+      assert.ok(fs.existsSync(path.join(root, rel)), `${rel} exists`)
+    }
+    assert.ok(!fs.existsSync(path.join(root, "public/brand/clover-maskable-512.png")))
+    assert.ok(!fs.existsSync(path.join(root, "public/brand/clover-512.png")))
+    const manifest = JSON.parse(source("public/manifest.webmanifest"))
+    assert.equal(manifest.theme_color, "#ffffff")
+    assert.equal(manifest.background_color, "#ffffff")
+    assert.ok(manifest.icons.some((i: { src: string; purpose?: string }) => i.src === "/brand/atom-maskable-512.png" && i.purpose === "maskable"))
+    assert.ok(!manifest.icons.some((i: { src: string }) => i.src.includes("clover")))
+    // Cache-busted icon URLs so browsers drop the cached clover favicon.
+    const layout = source("app/layout.tsx")
+    assert.match(layout, /\{ url: "\/favicon\.ico\?v=atom", sizes: "any" \}/)
+    assert.match(layout, /\/sira-gpt-180\.png\?v=atom/)
+    assert.match(source("public/sw.js"), /'\/brand\/atom\.svg'/)
+    assert.doesNotMatch(source("public/sw.js"), /clover/)
   })
 
   it("keeps CloverMark for the PWA/document assets and uses the atom mark for every in-app logo render", () => {
