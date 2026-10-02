@@ -32,6 +32,9 @@ esac
     const state = process.env.FOCUS_STATE;
     fs.writeFileSync(path.join(state, 'pid'), String(process.pid));
     fs.appendFileSync(path.join(state, 'launches'), 'launch\\n');
+    const args = process.argv.slice(2);
+    fs.writeFileSync(path.join(state, 'args'), JSON.stringify(args));
+    if (process.env.FOCUS_REQUIRE_CDP === 'yes' && !['--remote-debugging-port=9222', '--remote-debugging-address=0.0.0.0', '--user-data-dir=/workspace/.chrome'].every(flag => args.includes(flag))) process.exit(9);
     if (process.env.FOCUS_LAUNCH === 'no') process.exit(9);
     setTimeout(() => fs.writeFileSync(path.join(state, 'visible'), 'ready'), 80);
     setInterval(() => process.stdout.write('GUI still running\\n'), 100);
@@ -58,6 +61,18 @@ test('Chrome launch returns after a confirmed window while the GUI remains alive
   const calls = fs.readFileSync(path.join(f.state, 'calls'), 'utf8');
   assert.match(calls, /windowmove 12345 0 0/);
   assert.match(calls, /windowsize 12345 1920 1080/);
+});
+
+test('reopening Chrome after its parent exits preserves the control listener and profile arguments', async (t) => {
+  const f = fixture(t);
+  f.env.FOCUS_REQUIRE_CDP = 'yes';
+  const out = await pexec('bash', ['-c', chromeMaximizeOrLaunch()], { env: f.env, timeout: 6000 });
+  assert.match(out.stdout, /desktop_app_ready/);
+  const args = JSON.parse(fs.readFileSync(path.join(f.state, 'args'), 'utf8'));
+  assert.ok(args.includes('--remote-debugging-port=9222'));
+  assert.ok(args.includes('--remote-debugging-address=0.0.0.0'));
+  assert.ok(args.includes('--user-data-dir=/workspace/.chrome'));
+  assert.equal(fs.readFileSync(path.join(f.state, 'launches'), 'utf8'), 'launch\n');
 });
 
 for (const [windowClass, launchCommand] of [

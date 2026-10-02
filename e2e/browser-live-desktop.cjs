@@ -14,11 +14,24 @@ const { createOrchestrator } = require('../services/computer-orchestrator/server
 const { buildChatComputerTools } = require('../backend/src/services/computer/chat-computer-tools');
 const { observePage } = require('../backend/src/services/computer/live-page');
 const { ensureSession } = require('../backend/src/services/computer/persistent');
-const { CHROME_DOCKER_FLAGS } = require('../backend/src/services/computer/chrome-desktop-flags');
+const { CHROME_DOCKER_FLAGS, chromeMaximizeOrLaunch } = require('../backend/src/services/computer/chrome-desktop-flags');
 const handoff = require('../backend/src/services/computer/login-handoff');
 const exec = promisify(execFile);
 const listen = s => new Promise(r => s.listen(0, '127.0.0.1', r));
 const close = s => new Promise(r => { s.closeAllConnections(); s.close(r); });
+const shellQuote = value => "'" + String(value).replace(/'/g, "'\\''") + "'";
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function waitForExit(pid, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  do {
+    try { process.kill(pid, 0); } catch (error) {
+      if (error.code === 'ESRCH') return;
+      throw error;
+    }
+    await delay(25);
+  } while (Date.now() < deadline);
+  throw new Error('Owned Chrome process did not exit');
+}
 
 async function main() {
   assert.ok(process.env.DISPLAY, 'Real desktop gate requires Xvfb; never skip silently');
@@ -47,6 +60,8 @@ async function main() {
     execIn: async (_container, command) => exec('bash', ['-c', command], { timeout: 20000, maxBuffer: 12 * 1024 * 1024 }),
   }});
   let context, browser, chromeProcess;
+  const launcherBin = path.join(profile, 'fixture-bin');
+  const launcherPidFile = path.join(profile, 'relaunched-chrome.pid');
   try {
     await docker(['info', '--format', '{{.ServerVersion}}']);
     await docker(['pull', 'node:22-bookworm-slim'], 120000);
@@ -80,8 +95,33 @@ async function main() {
     const url = `http://127.0.0.1:${fixture.address().port}/form`;
     await run('computer_navigate', { url });
     assert.equal(context.pages().length, 1, 'first navigation creates a tab in the existing Chrome');
-    const page = context.pages()[0];
+    let page = context.pages()[0];
     await page.waitForSelector('input[name=city]');
+    // Exercise the production visible launcher after its hidden parent exits.
+    // The wrapper only selects the installed test binary; it adds NO CDP flags.
+    // Only the profile path is replaced, keeping this CI profile isolated.
+    await context.addCookies([{ name: 'relaunch_fixture', value: 'preserved', url, expires: Math.floor(Date.now() / 1000) + 3600 }]);
+    const initialConnection = await browser.newBrowserCDPSession();
+    await initialConnection.send('Browser.close');
+    await waitForExit(chromeProcess.pid);
+    browser = undefined;
+    context = undefined;
+    await assert.rejects(fetch('http://127.0.0.1:9222/json/version', { signal: AbortSignal.timeout(500) }), 'the original CDP listener must be closed');
+    fs.mkdirSync(launcherBin);
+    fs.writeFileSync(path.join(launcherBin, 'google-chrome'), `#!/bin/bash\nprintf '%s\\n' "$$" > ${shellQuote(launcherPidFile)}\nexec ${shellQuote(chromium.executablePath())} "$@"\n`, { mode: 0o700 });
+    const relaunch = chromeMaximizeOrLaunch().replaceAll('--user-data-dir=/workspace/.chrome', `--user-data-dir=${shellQuote(profile)}`);
+    const opened = await exec('bash', ['-c', relaunch], { env: { ...process.env, PATH: `${launcherBin}:${process.env.PATH}` }, timeout: 10000 });
+    assert.match(opened.stdout, /desktop_app_ready/);
+    const restored = await fetch('http://127.0.0.1:9222/json/version', { signal: AbortSignal.timeout(5000) });
+    assert.equal(restored.status, 200, 'the production launcher restores CDP without fixture-injected debugging flags');
+    browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+    context = browser.contexts()[0];
+    assert.ok((await context.cookies(url)).some(cookie => cookie.name === 'relaunch_fixture' && cookie.value === 'preserved'), 'visible relaunch preserves the persistent browser profile');
+    await run('computer_navigate', { url });
+    page = context.pages().find(candidate => candidate.url() === url);
+    assert.ok(page, 'navigation after relaunch reaches the actual visible browser');
+    await page.waitForSelector('input[name=city]');
+    console.log('PASS real browser: close original parent -> production visible relaunch -> restored private CDP -> persistent profile -> navigation');
     const session = await ensureSession(owner);
     const snap = await observePage(session, env);
     const city = snap.controls.find(c => c.label === 'Ciudad');
@@ -150,7 +190,17 @@ async function main() {
     throw error;
   } finally {
     const removed = await Promise.allSettled([...createdContainers.values()].map(id => docker(['rm', '--force', id])));
-    await browser?.close();
+    if (browser?.isConnected()) {
+      const shutdown = await browser.newBrowserCDPSession().catch(() => null);
+      await shutdown?.send('Browser.close').catch(() => {});
+      await browser.close();
+    }
+    if (fs.existsSync(launcherPidFile)) {
+      const ownedPid = Number(fs.readFileSync(launcherPidFile, 'utf8').trim());
+      assert.ok(Number.isSafeInteger(ownedPid) && ownedPid > 1, 'only the PID created by this fixture may be cleaned up');
+      try { process.kill(ownedPid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      await waitForExit(ownedPid);
+    }
     if (chromeProcess && chromeProcess.exitCode === null) {
       const exited = new Promise(resolve => chromeProcess.once('exit', resolve));
       chromeProcess.kill();

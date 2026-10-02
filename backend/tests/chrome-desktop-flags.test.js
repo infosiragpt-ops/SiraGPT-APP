@@ -25,6 +25,21 @@ describe('chrome desktop flags', () => {
     assert.doesNotMatch(CHROME_VISIBLE_FLAGS, /DeepSeek|OpenRouter|model_id/);
   });
 
+  it('restores the existing private CDP listener in every visible relaunch entrypoint', () => {
+    const startup = read('services/computer-orchestrator/start-desktop.sh');
+    const contract = ['--remote-debugging-port=9222', '--remote-debugging-address=0.0.0.0'];
+    for (const flag of contract) assert.ok(startup.includes(flag), 'contract comes from the existing desktop startup');
+    for (const [entry, command] of [
+      ['focus or relaunch', chromeMaximizeOrLaunch()],
+      ['open URL', chromeOpenUrlCommand('https://example.com/')],
+      ['desktop application', read('services/computer-orchestrator/desktop-look/applications/google-chrome.desktop')],
+      ['orchestrator navigation', read('services/computer-orchestrator/server.js')],
+    ]) {
+      for (const flag of contract) assert.ok(command.includes(flag), `${entry} restores ${flag}`);
+      assert.ok(command.includes('--user-data-dir=/workspace/.chrome'), `${entry} preserves the persistent profile`);
+    }
+  });
+
   it('opens a URL maximized without about:blank', () => {
     const cmd = chromeOpenUrlCommand('https://siragpt.com');
     assert.match(cmd, /--no-sandbox/);
