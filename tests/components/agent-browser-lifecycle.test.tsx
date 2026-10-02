@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { ComputerBrowserState } from "@/lib/computer-navigate-client"
-const { action, read, navigate, notify } = vi.hoisted(() => ({ action: vi.fn(), read: vi.fn(), navigate: vi.fn(), notify: vi.fn() }))
+const { action, read, navigate, notify, focus } = vi.hoisted(() => ({ action: vi.fn(), read: vi.fn(), navigate: vi.fn(), notify: vi.fn(), focus: vi.fn() }))
 vi.mock("@/lib/computer-navigate-client", () => ({ actComputerBrowser: action, readComputerBrowser: read, postComputerNavigate: navigate }))
 vi.mock("sonner", () => ({ toast: { error: notify } }))
+vi.mock("@/lib/authenticated-fetch", () => ({ authenticatedFetch: focus }))
 vi.mock("next-intl", () => { const t = (key: string) => key; return { useTranslations: () => t } })
 vi.mock("@/lib/code-workspace-context", () => ({ CODE_PREVIEW_STATE_EVENT: "preview-test", CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT: "department-test", getActiveDepartmentSelection: () => null }))
 import { AgentComputerShell } from "@/components/code/agent-computer-shell"
@@ -11,7 +12,7 @@ const browser: ComputerBrowserState = { tabs: [{ id: "a", title: "A", url: "http
 const props = { cleanBrowser: true, browserSessionId: "owned", conversationId: "qa", variant: "overlay" as const }
 const flush = async () => { await act(async () => { for (let n = 0; n < 8; n++) await Promise.resolve() }) }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done }); return { promise, resolve } }
-beforeEach(() => { vi.useFakeTimers(); action.mockReset().mockResolvedValue(browser); read.mockReset().mockResolvedValue(browser); navigate.mockReset().mockResolvedValue("https://example.com/final"); notify.mockReset() })
+beforeEach(() => { vi.useFakeTimers(); action.mockReset().mockResolvedValue(browser); read.mockReset().mockResolvedValue(browser); navigate.mockReset().mockResolvedValue("https://example.com/final"); notify.mockReset(); focus.mockReset().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) }) })
 afterEach(async () => { cleanup(); await flush(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe("browser session lifecycle", () => {
   it("does not reconnect when parent callbacks change and does not poll a hidden document", async () => {
@@ -122,6 +123,33 @@ describe("browser session lifecycle", () => {
     expect(action).toHaveBeenCalledTimes(2)
     expect(navigate).not.toHaveBeenCalled()
     expect(document.body.textContent).not.toContain("SECRET")
+  })
+  it.each(["close", "files"])("does not present after %s cancels an explicit recovery while restore is pending", async (leave) => {
+    const restored = deferred<ComputerBrowserState>()
+    let restoreCount = 0
+    action.mockImplementation(async (_chat, _session, command) => {
+      if (command.type === "browser_restore" && ++restoreCount === 1) return restored.promise
+      return { ...browser, presentation: "desktop" }
+    }).mockRejectedValueOnce(Error("viewport pending"))
+    const view = render(<AgentComputerShell {...props} onClose={() => view.unmount()}><div /></AgentComputerShell>)
+    await flush()
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }))
+    await flush()
+    expect(action.mock.calls.map((call) => call[2].type)).toEqual(["browser_present", "browser_restore"])
+    if (leave === "close") fireEvent.click(screen.getByRole("button", { name: "Cerrar navegador" }))
+    else {
+      fireEvent.click(screen.getByRole("button", { name: "dock.files" }))
+      await flush()
+      expect(focus).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(focus.mock.calls[0][1].body)).toMatchObject({ focus: "files", conversationId: "qa" })
+      expect(screen.getByRole("button", { name: "dock.files" })).toHaveAttribute("aria-pressed", "true")
+    }
+    await act(async () => restored.resolve({ ...browser, presentation: "desktop" }))
+    await flush()
+    expect(action.mock.calls.map((call) => call[2].type)).toEqual(["browser_present", "browser_restore", "browser_restore"])
+    expect(navigate).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+    expect(screen.queryByRole("alert")).toBeNull()
   })
   it("presents home without inventing a chat and navigates only its acquired session", async () => {
     render(<AgentComputerShell {...props} conversationId="" navigateUrl="https://example.com/final"><div /></AgentComputerShell>)

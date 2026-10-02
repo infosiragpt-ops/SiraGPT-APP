@@ -145,6 +145,7 @@ export function AgentComputerShell({
       })
     return () => {
       stopped = true
+      if (browserEpoch.current === epoch) browserEpoch.current++
       browserBusyRef.current = false
       void queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" }))
         .catch(() => {
@@ -206,6 +207,7 @@ export function AgentComputerShell({
         // both steps in this operation so no navigation can run between them.
         if (recoverPresentation && action.type === "browser_present") {
           await actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" })
+          if (browserEpoch.current !== epoch) throw new Error("La vista del navegador cambió")
         }
         return actComputerBrowser(chatId, browserSessionId, action)
       })

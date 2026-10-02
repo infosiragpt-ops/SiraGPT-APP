@@ -17,7 +17,7 @@ async function withLiveBrowser(session, env, signal, run) {
   if (!response.ok) throw new Error('browser_observation_unavailable');
   const version = await response.json();
   const { chromium } = require('playwright');
-  const browser = await chromium.connectOverCDP(rewriteCdpWs(version.webSocketDebuggerUrl, base), { headers, timeout: 8000 });
+  const browser = await chromium.connectOverCDP(rewriteCdpWs(version.webSocketDebuggerUrl, base), { headers, timeout: 8000, noDefaults: true });
   const disconnect = () => { void browser.close().catch(() => {}); };
   signal?.addEventListener('abort', disconnect, { once: true });
   try {
@@ -59,9 +59,26 @@ async function selectPage(browser, tabId, createPage = false) {
     // Never redirect a stale/foreign target to another tab in this session.
     throw browserError('browser_tab_missing', 404);
   }
+  // CDP attachment must preserve native focus. A background Chrome window can
+  // have a visible tab without document focus; the focused window takes priority.
+  // Read the current document directly, avoiding BFCache utility-context state.
+  let visiblePage;
   for (const page of pages) {
-    if (await page.evaluate(() => document.hasFocus()).catch(() => false)) return page;
+    const cdp = await page.context().newCDPSession(page);
+    try {
+      const data = await cdp.send('Runtime.evaluate', {
+        expression: '({ focused: document.hasFocus(), visible: document.visibilityState === "visible" })',
+        returnByValue: true,
+      });
+      const state = data?.result?.value;
+      if (data?.exceptionDetails || typeof state?.focused !== 'boolean' || typeof state?.visible !== 'boolean') {
+        throw browserError('browser_document_unavailable', 502);
+      }
+      if (state.focused) return page;
+      if (state.visible && !visiblePage) visiblePage = page;
+    } finally { await cdp.detach().catch(() => {}); }
   }
+  if (visiblePage) return visiblePage;
   if (pages[0]) return pages[0];
   if (createPage && browser.contexts()[0]) return browser.contexts()[0].newPage();
   return null;

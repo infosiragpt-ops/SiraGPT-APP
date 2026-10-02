@@ -21,7 +21,7 @@ function harness() {
         if (method === 'Emulation.setDeviceMetricsOverride') { page.viewport = { width: args.width, height: args.height }; return {}; }
         if (method === 'Emulation.clearDeviceMetricsOverride') { page.viewport = null; return {}; }
         if (method === 'Runtime.evaluate') {
-          const value = vm.runInNewContext(args.expression, { document: { title: page.documentTitle, readyState: page.readyState }, location: { href: page.url() }, innerWidth: (page.viewport || { width: 1280 }).width, innerHeight: (page.viewport || { height: 800 }).height });
+          const value = vm.runInNewContext(args.expression, { document: { title: page.documentTitle, readyState: page.readyState, hasFocus: () => page.focus, visibilityState: page.visible ? 'visible' : 'hidden' }, location: { href: page.url() }, innerWidth: (page.viewport || { width: 1280 }).width, innerHeight: (page.viewport || { height: 800 }).height });
           return { result: { value } };
         }
         if (method === 'Page.navigateToHistoryEntry') { page.index = args.entryId; return {}; }
@@ -35,12 +35,12 @@ function harness() {
   };
   function makePage(url) {
     const page = {
-      id: 'target-' + ++counter, history: [url], index: 0, focus: pages.length === 0, readyState: 'complete', documentTitle: url === 'about:blank' ? '' : 'Real page',
+      id: 'target-' + ++counter, history: [url], index: 0, focus: pages.length === 0, visible: pages.length === 0, readyState: 'complete', documentTitle: url === 'about:blank' ? '' : 'Real page',
       context: () => context,
       title: async () => page.url() === 'about:blank' ? '' : 'Real page',
       url: () => page.history[page.index],
       evaluate: async fn => String(fn).includes('hasFocus') ? page.focus : (page.viewport || { width: 1280, height: 800 }),
-      bringToFront: async () => { pages.forEach(p => { p.focus = p === page; }); calls.push('front:' + page.id); },
+      bringToFront: async () => { pages.forEach(p => { p.focus = p === page; p.visible = p === page; }); calls.push('front:' + page.id); },
       close: async () => { calls.push('close:' + page.id); pages.splice(pages.indexOf(page), 1); },
       goBack: async () => { page.index--; }, goForward: async () => { page.index++; },
       reload: async options => { calls.push({ reload: page.id, options }); },
@@ -57,7 +57,7 @@ function harness() {
       if (name === 'node:timers/promises') return require(name);
       if (name === './orch-client') return { resolveOrchConfig: () => ({ url: 'http://test.invalid' }), orchFetch: async (path, options) => { clipCalls.push({ path, options }); if (failCommand === 'clip') throw new Error('clip failed'); return { ok: true }; } };
       if (name === './cdp-client') return { rewriteCdpWs: url => url };
-      if (name === 'playwright') return { chromium: { connectOverCDP: async () => browser } };
+      if (name === 'playwright') return { chromium: { connectOverCDP: async (_url, options) => { calls.push({ connect: options }); return browser; } } };
       throw Error('Unexpected dependency: ' + name);
     },
   });
@@ -312,4 +312,41 @@ test('a committed but still-loading history document cannot be acknowledged and 
   await assert.rejects(h.browserAction(session, { type: 'browser_back', tabId: page.id }, process.env, AbortSignal.timeout(60)), error => error.name === 'TimeoutError');
   assert.equal(h.calls.filter(call => call?.method === 'Page.navigateToHistoryEntry').length, 1);
   assert.equal(h.calls.at(-1), 'disconnect');
+});
+
+
+test('reconnection preserves native focus and chooses the visible tab when Chrome is not focused', async () => {
+  const h = harness();
+  const first = h.makePage('https://example.com/background');
+  const second = h.makePage('https://example.com/current');
+  first.focus = false; first.visible = false;
+  second.focus = false; second.visible = true;
+  // The stale Playwright utility context must not decide which native tab wins.
+  first.evaluate = async () => true;
+  const state = await h.browserState(session);
+  assert.equal(state.activeTabId, second.id);
+  assert.equal(h.calls.find(call => call.connect).connect.noDefaults, true);
+});
+
+test('native focused window wins over a visible tab in a background window', async () => {
+  const h = harness();
+  const first = h.makePage('https://example.com/background-window');
+  const second = h.makePage('https://example.com/focused-window');
+  first.focus = false; first.visible = true;
+  // Native activation can precede its visibility-change event.
+  second.focus = true; second.visible = false;
+  first.evaluate = async () => true;
+  assert.equal((await h.browserState(session)).activeTabId, second.id);
+});
+
+test('a native tab switch after a tool selection is observed without remembering a stale target', async () => {
+  const h = harness();
+  const first = h.makePage('https://example.com/first');
+  const second = h.makePage('https://example.com/second');
+  await h.browserAction(session, { type: 'browser_tab_select', tabId: second.id });
+  first.focus = false; second.focus = false;
+  first.visible = true; second.visible = false;
+  assert.equal((await h.browserState(session)).activeTabId, first.id);
+  first.visible = false; second.visible = true;
+  assert.equal((await h.browserState(session)).activeTabId, second.id);
 });

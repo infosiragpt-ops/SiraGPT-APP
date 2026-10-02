@@ -121,7 +121,7 @@ async function main() {
     chromeStartupNotReady = !ready;
     assert.ok(ready, 'desktop Chrome must start its CDP endpoint');
     phase = 'cdp';
-    browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+    browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { noDefaults: true });
     context = browser.contexts()[0];
     assert.equal(context.pages().length, 0, 'fresh production desktop starts with no tab');
     const owner = { userId: 'desktop-e2e', conversationId: 'form-e2e', env };
@@ -185,6 +185,7 @@ async function main() {
     assert.equal(controlled.canGoForward, true);
     assert.equal(controlled.tabs.find(tab => tab.id === newTab).title, 'Formulario local de prueba');
     let refreshedHistory = await browserState(session, env);
+    assert.equal(refreshedHistory.activeTabId, newTab);
     assert.equal(refreshedHistory.tabs.find(tab => tab.id === newTab).url, url + '?second=1');
     assert.equal(refreshedHistory.tabs.find(tab => tab.id === newTab).title, 'Formulario local de prueba');
     const observedBack = await observePage(session, env);
@@ -194,11 +195,24 @@ async function main() {
     assert.equal(controlled.tabs.find(tab => tab.id === newTab).url, url + '?third=1');
     assert.equal(controlled.tabs.find(tab => tab.id === newTab).title, 'Formulario local de prueba');
     refreshedHistory = await browserState(session, env);
+    assert.equal(refreshedHistory.activeTabId, newTab);
     assert.equal(refreshedHistory.tabs.find(tab => tab.id === newTab).url, url + '?third=1');
     assert.equal(refreshedHistory.tabs.find(tab => tab.id === newTab).title, 'Formulario local de prueba');
     const observedForward = await observePage(session, env);
     assert.equal(observedForward.url, url + '?third=1');
     assert.equal(observedForward.title, 'Formulario local de prueba');
+    // Native selection is not a remembered agent target: follow the user's tab
+    // change even after the previous action explicitly selected the other tab.
+    await page.bringToFront();
+    await page.waitForFunction(() => document.visibilityState === 'visible', null, { timeout: 15000 });
+    assert.equal((await browserState(session, env)).activeTabId, originalTab);
+    assert.equal((await observePage(session, env)).url, url);
+    const secondPage = context.pages().find(candidate => candidate !== page);
+    assert.ok(secondPage, 'the native second tab remains open');
+    await secondPage.bringToFront();
+    await secondPage.waitForFunction(() => document.visibilityState === 'visible', null, { timeout: 15000 });
+    assert.equal((await browserState(session, env)).activeTabId, newTab);
+    assert.equal((await observePage(session, env)).url, url + '?third=1');
     controlled = await browserAction(session, { type: 'browser_reload', tabId: newTab }, env);
     assert.equal(controlled.tabs.find(tab => tab.id === newTab).url, url + '?third=1');
     controlled = await browserAction(session, { type: 'browser_tab_select', tabId: originalTab }, env);

@@ -407,8 +407,8 @@ test("mobile 390x844 keeps one usable omnibox and browser controls inside the sc
   await screenshot(page, "empty-mobile")
   const mobileViewport = fixture.state().viewport
   await page.setViewportSize({ width: 430, height: 900 })
+  await expect.poll(() => fixture.state().viewport).not.toEqual(mobileViewport)
   await assertViewportMatchesHost(page, fixture)
-  expect(fixture.state().viewport).not.toEqual(mobileViewport)
   const restored = fixture.actions.filter((action) => action.type === "browser_restore").length
   await button(page, "Cerrar navegador").click()
   await expect(page.getByTestId("chat-agent-computer-panel")).toHaveCount(0)
