@@ -215,8 +215,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `openai` | 5.23.2, 6.34.0 | Apache-2.0 | [link](https://github.com/openai/openai-node) |
 | `opossum` | 9.0.0 | Apache-2.0 | [link](https://github.com/nodeshift/opossum) |
 | `pdfjs-dist` | 4.8.69, 5.4.296, 6.2.108 | Apache-2.0 | [link](https://github.com/mozilla/pdf.js) |
-| `playwright` | 1.56.1, 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
-| `playwright-core` | 1.56.1, 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
+| `playwright` | 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
+| `playwright-core` | 1.60.0 | Apache-2.0 | [link](https://github.com/microsoft/playwright) |
 | `prisma` | 6.19.3 | Apache-2.0 | [link](https://github.com/prisma/prisma) |
 | `puppeteer` | 25.10.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `puppeteer-core` | 25.10.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
