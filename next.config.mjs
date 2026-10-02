@@ -15,7 +15,9 @@ function resolveBackendInternalUrl() {
   if (isReplitDeployment && (!configured || /(?:localhost|127\.0\.0\.1):5000\b/.test(configured))) {
     return replitBackendBase
   }
-  return configured || replitBackendBase
+  // Rewrites are baked into the build: Docker must address the backend
+  // service, not a Replit loopback port inside the frontend container.
+  return configured || (process.env.DOCKER_BUILD === 'true' ? 'http://backend:5000' : replitBackendBase)
 }
 
 /** @type {import('next').NextConfig} */
