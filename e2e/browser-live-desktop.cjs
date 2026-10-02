@@ -121,8 +121,13 @@ async function main() {
       const deadline = Date.now() + 3000;
       let commands;
       do {
-        const top = await docker(['top', id, '-eo', 'comm']);
-        commands = top.stdout.trim().split('\n').slice(1).map(line => line.trim()).filter(Boolean);
+        // Docker needs PID in ps output to map host processes to this container.
+        const top = await docker(['top', id, '-eo', 'pid,comm']);
+        commands = top.stdout.trim().split('\n').slice(1).filter(line => line.trim()).map(line => {
+          const match = /^\s*\d+\s+(\S+)\s*$/.exec(line);
+          assert.ok(match, 'Docker process rows must contain a PID and command');
+          return match[1];
+        });
         if (commands.length === 1 && commands[0] === 'sleep') break;
         await new Promise(resolve => setTimeout(resolve, 25));
       } while (Date.now() < deadline);
