@@ -1112,6 +1112,7 @@ jobs:
         # lifecycle hooks, so run it explicitly (the code workspace specs need it).
         run: |
           set -euo pipefail
+          node --test tests/critical-ui-safe-reporter.test.cjs
           node scripts/prepare-code-editor.cjs
           npx next build --no-lint
 
@@ -1137,7 +1138,9 @@ jobs:
           # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
           # and runs against this production instance.
           STATUS=0
-          npx playwright test --reporter=list ${{ matrix.specs }} || STATUS=$?
+          # Closed diagnostics emit only allowlisted spec IDs and bounded
+          # numeric locations/status, never test errors, titles or artifacts.
+          npx playwright test --reporter=list,./e2e/critical-ui-safe-reporter.cjs ${{ matrix.specs }} || STATUS=$?
           kill "$SERVER_PID" 2>/dev/null || true
           if [ "$STATUS" -ne 0 ]; then tail -n 80 /tmp/next-e2e.log || true; fi
           exit $STATUS
