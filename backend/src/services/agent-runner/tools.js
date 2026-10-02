@@ -106,11 +106,27 @@ for (const [names, hex] of COLOR_SPECS) {
   }
 }
 
-function cap(s) {
+function cap(s, maxChars = MAX_TOOL_RESULT_CHARS) {
   const str = String(s == null ? '' : s);
-  return str.length > MAX_TOOL_RESULT_CHARS
-    ? `${str.slice(0, MAX_TOOL_RESULT_CHARS)}\n…[result truncated]`
+  return str.length > maxChars
+    ? `${str.slice(0, maxChars)}\n…[result truncated]`
     : str;
+}
+
+// Advice is fixed harness text, never source code, file paths or exception
+// values. The failed execution stays ERROR and still counts toward loop cuts.
+function officeApiReadbackGuidance(code, stderr, enabled) {
+  if (!enabled) return '';
+  const error = String(stderr || '');
+  const tail = error.slice(-8192).trim();
+  if (!error.includes('Traceback (most recent call last):')
+    || !/(?:^|\n)(?:AttributeError|TypeError):[^\n]*$/.test(tail)) return '';
+  const usesOpenpyxl = /(?:^|\n)\s*(?:from\s+openpyxl(?:\.\w+)*\s+import\b|import\s+openpyxl\b)/.test(code)
+    || /[\\/]openpyxl[\\/]/.test(tail);
+  if (!usesOpenpyxl) return '';
+  return '[Office readback guidance]\n'
+    + 'No adivines otra propiedad de la biblioteca. Si el XLSX ya fue guardado, usa inspect_document sobre ese archivo para releer celdas y gráficas (type, title, series y referencias); no reconstruyas esos metadatos con atributos internos. '
+    + 'Si falta una comprobación, consulta la firma o documentación de la API instalada antes de otro cambio. Corrige solo lo necesario y ejecuta verify_visual sobre el resultado final. Este error no valida el archivo ni permite entregarlo.';
 }
 
 function normalizeHex(raw) {
@@ -429,7 +445,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
       const output = cap(parts.join('\n'));
       if (r.aborted) return `ERROR: sandbox command aborted\n${output}`;
       if (r.timedOut) return `ERROR: sandbox command timed out after ${CMD_TIMEOUT_MS}ms\n${output}`;
-      if (Number(r.exitCode) !== 0) return `ERROR: python failed\n${output}`;
+      if (Number(r.exitCode) !== 0) {
+        const guidance = officeApiReadbackGuidance(code, r.stderr, typeof executors.inspect_document === 'function');
+        const detail = guidance ? cap(output, MAX_TOOL_RESULT_CHARS - guidance.length - 100) : output;
+        return `ERROR: python failed\n${detail}${guidance ? `\n${guidance}` : ''}`;
+      }
       return output;
     },
 

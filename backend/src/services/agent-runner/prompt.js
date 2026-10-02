@@ -196,6 +196,8 @@ CHARTS IN POWERPOINT AND EXCEL
   openpyxl alone does not calculate or preserve cached formula results. Reopen that final file and check its
   formulas, chart references and styles. Do not replace formulas with values or certify a different temporary file.
   execute_python makes the staged helpers importable. Import with: from sira_charts import add_xlsx_chart.
+  Simple titles are text: pass title='Requested title' to the helper or assign chart.title to that text.
+  For custom library objects, read the installed API signature/documentation instead of assuming attributes.
   Helper types: column, bar, line, area, pie, doughnut, scatter. Legend codes: b=bottom, t=top, l=left, r=right.
   Example (replace ranges/options with this request): add_xlsx_chart(ws, chart_type='line', data_range='B1:D5',
   category_range='A2:A5', colors=['1F4E78','ED7D31','70AD47'], legend='b', anchor='F2', width=18, height=10).
@@ -207,6 +209,8 @@ ${officeEngine ? `- Reopen each output with inspect_document and inspect its cha
   {charts:[{slide:3,chart:1,type:"doughnut",editable:true,legend:true,categories:["Norte","Centro","Sur"],
   series:[{values:[150,120,90],point_colors:["1F4E78","ED7D31","70AD47"]}]}]}.
   Percent labels change presentation only: verify original values, not computed percentages.
+  The inspector reopens the saved OOXML and returns chart type/title/data as ordinary values. Use this
+  inventory instead of inferring native chart metadata from internal openpyxl object attributes.
   Use only fields accepted by expect.charts; do not copy the full inspect result as an expectation.
 ` : `- Reopen the native chart parts and data workbook in execute_python to verify type, series, values and exact
   colors; use render_preview for layout and readability. Report honestly if rendering was unavailable.
@@ -220,7 +224,7 @@ ${officeEditWorkflow
 3. Any other file you create or edit: call render_preview on it (or verify_visual) and check it; if it fails, retry (max 3 attempts), then report honestly in Spanish — never pretend it worked.
 `
     : officeEngine
-      ? `2. NEVER declare success without verification. Author NEW DOCX/XLSX files with execute_python; for a NEW PPTX use create_presentation with its full outline and native charts, or execute_python for a specialized layout. Then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell/chart checks> and NO before. Reopen the saved file with execute_python to assert its content and dimensions. For a new PDF, render_preview and reopen it.
+      ? `2. NEVER declare success without verification. Author NEW DOCX/XLSX files with execute_python; for a NEW PPTX use create_presentation with its full outline and native charts, or execute_python for a specialized layout. Then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell/chart checks> and NO before. inspect_document already reopens the saved binary; use its content, dimensions and native-chart inventory for readback. Use execute_python only for additional required checks the inspector does not cover, consulting the installed API before using unfamiliar properties. For a new PDF, render_preview and reopen it.
 3. For a new SPSS .sav, use pyreadstat.write_sav and reopen it with pyreadstat.read_sav; check dimensions and variable labels. SAV has no visual preview. If several outputs represent the same data, reopen every file and compare their actual values before claiming they match. If any check fails, report it honestly.
 `
     : `2. NEVER declare success without verification. Claiming "listo" while the preview is still dark is a failure.
