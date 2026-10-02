@@ -445,6 +445,16 @@ test("home browser uses the owned member session without fabricating a conversat
   await expect(page.getByTestId("browser-empty-state")).toBeVisible()
   await button(page, "Nueva pestaña").click()
   await expect(page.getByTestId("browser-empty-state")).toBeVisible()
+  await expect(address(page)).toBeFocused()
+  await expect.poll(async () => address(page).evaluate((element) => {
+    const style = getComputedStyle(element)
+    const channels = style.borderTopColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+    return {
+      blueBorder: !!channels && Number(channels[1]) < 60 && Number(channels[2]) > 100
+        && Number(channels[3]) > 150 && parseFloat(style.borderTopWidth) > 0,
+      outline: style.outlineStyle,
+    }
+  }), { message: "The focused omnibox must render a blue border without the browser's second outline" }).toEqual({ blueBorder: true, outline: "none" })
   await navigate(page, siteA)
   await assertViewportMatchesHost(page, fixture)
   expect(fixture.getChatPosts()).toBe(0)

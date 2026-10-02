@@ -42,6 +42,8 @@ async function verifyLiveViewport({ page, resize, restore }) {
   let viewerBrowser, viewer, vnc;
   let vncLog = "";
   let setupError;
+  let phase = "vnc_start";
+  let expected = null;
   const reserve = net.createServer();
   await listen(reserve);
   const vncPort = reserve.address().port;
@@ -102,21 +104,27 @@ window.rfb=rfb;
       if (!ready) await new Promise(resolve => setTimeout(resolve, 50));
     }
     assert.ok(ready, `x11vnc fixture must start: ${setupError?.message || vncLog}`);
+    phase = "fixture_open";
     await page.goto(`http://127.0.0.1:${server.address().port}/fixture`);
     viewerBrowser = await chromium.launch({ headless: true });
     viewer = await viewerBrowser.newPage({ viewport: { width: 1000, height: 800 } });
     await viewer.goto(`http://127.0.0.1:${server.address().port}/viewer`);
+    phase = "rfb_connect";
     await viewer.waitForFunction(() => window.rfbConnected === true);
     for (const dimensions of [{ width: 810, height: 640 }, { width: 430, height: 900 }]) {
       const { width, height } = dimensions;
+      expected = dimensions;
+      phase = "resize";
       const result = await resize(width, height);
       assert.equal(result.presentation, "embedded");
       assert.deepEqual(result.viewport, dimensions, "confirmed Chrome viewport must equal the visible frame");
+      phase = "chrome_dimensions";
       await page.waitForFunction(({ width, height }) => innerWidth === width && innerHeight === height, dimensions);
       await viewer.setViewportSize(dimensions);
       // The canvas buffer is the server framebuffer, independent of local CSS
       // scaling. Four native corner colors catch headers, cropping/letterboxes,
       // and missing NewFBSize support in the real RFB transport.
+      phase = "framebuffer_corners";
       await viewer.waitForFunction(({ width, height }) => {
         const c = document.querySelector("canvas");
         if (!c || c.width !== width || c.height !== height) return false;
@@ -125,13 +133,16 @@ window.rfb=rfb;
         return corners.every(([x,y,rgb]) => Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3).every((v,i) => Math.abs(v-rgb[i]) < 5));
       }, dimensions, { timeout: 8000 });
       const canvas = viewer.locator("canvas");
+      phase = "pointer_center";
       await canvas.click({ position: { x: width / 2, y: height / 2 } });
       await page.waitForFunction(expected => document.querySelector("output").textContent === expected, `save:${width}x${height}`, { timeout: 5000 });
+      phase = "pointer_edge";
       await canvas.click({ position: { x: width - 10, y: height - 10 } });
       await page.waitForFunction(expected => document.querySelector("output").textContent === expected, `br:${width}x${height}`, { timeout: 5000 });
       await viewer.screenshot({ path: `/tmp/browser-gate-rfb-${width}x${height}.png` });
       console.log(`PASS real RFB viewport ${width}x${height}: exact framebuffer, four visible corners, center and edge input hit the actual Chrome page`);
     }
+    phase = "restore";
     const restored = await restore();
     assert.equal(restored.presentation, "desktop");
     await viewer.waitForFunction(() => {
@@ -145,6 +156,19 @@ window.rfb=rfb;
     } finally { await cdp.detach(); }
     console.log("PASS real RFB restore: original 1920x1080 desktop framebuffer and normal browser window restored");
   } catch (error) {
+    // Closed numeric diagnostics from THIS inert fixture only. No exception
+    // message, URL, headers, request body, input values or raw stack is emitted
+    // into GitHub annotations. These can be reviewed without CI log access.
+    const chrome = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, focused: document.hasFocus() })).catch(() => null);
+    const framebuffer = viewer ? await viewer.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      if (!canvas) return null;
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width, height = canvas.height;
+      const corners = width > 12 && height > 12 && ctx ? [[6,6],[width-6,6],[6,height-6],[width-6,height-6]].map(([x,y]) => Array.from(ctx.getImageData(x,y,1,1).data).slice(0,3)) : [];
+      return { width, height, corners, connected: window.rfbConnected === true, disconnected: window.rfbDisconnected === true };
+    }).catch(() => null) : null;
+    console.error("::error title=Isolated RFB proof failed::" + JSON.stringify({ phase, expected, chrome, framebuffer }));
     await viewer?.screenshot({ path: "/tmp/browser-gate-rfb-failed.png" }).catch(() => {});
     throw error;
   } finally {
