@@ -16,7 +16,8 @@ name: Publish production (Lenovo)
 # It never touches .env secrets, DNS, volumes or the database.
 #
 # Manual use: "Run workflow" with an optional target SHA (defaults to the
-# branch head). The job is a no-op when the target is already live.
+# branch head). App publication is skipped when already live; the existing
+# computer-orchestrator is still independently verified and updated if stale.
 on:
   push:
     branches: [production-main]
@@ -139,11 +140,10 @@ jobs:
         if: steps.live.outputs.sha == steps.target.outputs.sha
         shell: bash
         run: |
-          echo "::notice::${{ steps.target.outputs.sha }} is already the live release — nothing to publish"
+          echo "::notice::${{ steps.target.outputs.sha }} is already the live app release — verifying the computer orchestrator"
           printf 'Already live: `%s`\n' "${{ steps.target.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fast-forward the Lenovo checkout to the target
-        if: steps.live.outputs.sha != steps.target.outputs.sha
         shell: bash
         env:
           TARGET: ${{ steps.target.outputs.sha }}
@@ -204,8 +204,15 @@ jobs:
           "$PUBLISH" "$TARGET" "$LIVE"
           runner_tagged=0
 
+      - name: Publish and verify the existing computer orchestrator
+        shell: bash
+        env:
+          TARGET: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          bash "$REPO/deploy/iliagpt/publish-computer-orchestrator.sh" "$TARGET"
+
       - name: Verify public release
-        if: steps.live.outputs.sha != steps.target.outputs.sha
         shell: bash
         env:
           TARGET: ${{ steps.target.outputs.sha }}
