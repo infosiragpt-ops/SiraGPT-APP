@@ -242,6 +242,10 @@ function editDistanceAtMostOne(a, b) {
 // ordinary words look like verbs ("comercial" ~ "comen").
 function fuzzyEditVerb(word) {
   if (word.length < 3) return false;
+  // The noun «colores» is one edit from the stem «coloc». It is not an
+  // instruction to modify an attachment (e.g. «identifica sus colores»).
+  // Actual color/place verbs still match their exact stems below.
+  if (word === 'colores') return false;
   return FUZZY_EDIT_STEMS.some((stem) => word.startsWith(stem)
     || (word.length >= 6 && stem.length >= 5 && editDistanceAtMostOne(word.slice(0, stem.length), stem)));
 }

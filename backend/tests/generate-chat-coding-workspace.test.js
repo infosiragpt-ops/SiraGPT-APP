@@ -5,6 +5,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const os = require('node:os');
+const imageVision = require('../src/services/image-attachment-vision');
+const visionRuntime = require('../src/services/ai/vision-runtime');
+const nativeClients = require('../src/services/ai/first-party-chat-clients');
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const workspace = require('../src/services/codex/chat-coding-workspace');
@@ -41,6 +45,17 @@ async function fixture(testContext, options = {}) {
   const agenticRuns = [];
   const artifactRuns = [];
   const plainRuns = [];
+  const nativeVisionRequests = [];
+  const nativeVisionClient = options.imageFile ? nativeClients.createAnthropicStreamingClient({
+    apiKey: 'test-only',
+    sdkClient: { messages: { stream(body) {
+      nativeVisionRequests.push(body);
+      return { async *[Symbol.asyncIterator]() {
+        yield { type: 'content_block_delta', delta: { type: 'text_delta', text: 'El texto de la imagen es QA-731. A la izquierda hay un círculo de color naranja; a la derecha hay un cuadrado de color azul. Ambas figuras aparecen separadas sobre el fondo.' } };
+        yield { type: 'message_delta', delta: { stop_reason: 'end_turn' } };
+      } };
+    } } },
+  }) : null;
   const persistedTurns = [];
   const warnings = [];
   const streamControllers = new Map();
@@ -96,7 +111,10 @@ async function fixture(testContext, options = {}) {
     '../services/turn-progress': turnProgress,
     '../services/agent-runner/activity-trace': { createActivityTraceCollector: () => ({}) },
     '../services/rlhf/reason-codes': { resolveFeedbackReasons: () => null },
+    '../services/agents/agentic-trigger': require('../src/services/agents/agentic-trigger'),
+    '../services/agent-runner': require('../src/services/agent-runner'),
     '../services/agentic-chat-stream': {
+      shouldUseAgenticChat: require('../src/services/agentic-chat-stream').shouldUseAgenticChat,
       isEnabled: () => options.agenticEnabled !== false,
       modelSupportsFunctionCalling: () => options.modelHasTools !== false,
       resolveToolCallMode: () => options.modelHasTools === false ? 'none' : 'native',
@@ -148,11 +166,25 @@ async function fixture(testContext, options = {}) {
         && !(options.finalProviderReady === false && calls.filter((call) => call === 'provider-preflight').length > 1);
     },
     unconfiguredModelMessage: async () => 'El modelo elegido no está configurado.',
-    createProviderClientForRequest: () => ({ client: {} }),
+    createProviderClientForRequest: () => ({ client: nativeVisionClient || {} }),
     createProviderClient: (provider) => ({ provider }),
     modelRouter: { getModel: () => null },
-    messageAttachments: { looksLikeDocumentFollowupQuestion: () => false },
-    operationalRag: { isPureGreetingPrompt: () => false, buildRuntimeContext: async () => null },
+    messageAttachments: require('../src/services/message-attachments'),
+    loadUserFile: async (fileId, userId) => {
+      assert.equal(userId, 'owner');
+      assert.equal(fileId, options.imageFile?.id);
+      return options.imageFile;
+    },
+    chatAttachmentRecovery: {
+      ...require('../src/services/chat-attachment-recovery'),
+      refreshProcessedFileExtracts: async (_prisma, files) => files,
+      buildChatUploadedFileContext: async () => '',
+      wantsBibliographyAnswer: () => false,
+    },
+    isImageFileRecord: imageVision.isImageAttachment,
+    isImageMime: (mime) => typeof mime === 'string' && mime.startsWith('image/'),
+    documentAnalysisQuality: { buildPromptBlock: () => '' },
+    operationalRag: { isPureGreetingPrompt: () => false, buildRuntimeContext: async () => null, shouldCompactFilePrompt: () => false },
     recoverRecentChatDocumentFiles: async () => [],
     isSiraMiniAlias: (model) => model === 'sira-mini',
     SIRA_MINI_PUBLIC_NAME: 'sira-mini',
@@ -167,10 +199,11 @@ async function fixture(testContext, options = {}) {
     rag: { getOpenAI: () => null },
     getMemoryAdapter: () => null,
     webSearchPlanned: () => false,
-    routeSupportsVision: () => false,
+    routeSupportsVision: visionRuntime.modelSupportsVision,
     conversationCompactor: { loadChatSummaryState: async () => null, historyWhere: (chatId) => ({ chatId }) },
     contextWindow: {
       getCompletionLimit: () => 16384,
+      getContextLimit: () => 1000000,
       fitMessagesToContext: (messages) => ({ messages, droppedCount: 0, totalTokens: 0 }),
     },
     tokenBudget: {
@@ -194,6 +227,7 @@ async function fixture(testContext, options = {}) {
     aiService: {
       generateStream: async (input) => {
         plainRuns.push(input);
+        if (options.imageFile) return require('../src/services/ai-service').generateStream(input);
         input.res.write(`data: ${JSON.stringify({ content: 'Fixture plain completion' })}\n\n`);
         return 'Fixture plain completion';
       },
@@ -265,7 +299,7 @@ async function fixture(testContext, options = {}) {
     const text = await response.text();
     return { status: response.status, text, type: response.headers.get('content-type') };
   };
-  return { request, calls, events, projects, workspaceResolutions, agenticRuns, artifactRuns, plainRuns, persistedTurns, warnings, streamControllers, quotaEntered, quotaReleased };
+  return { request, calls, events, projects, workspaceResolutions, agenticRuns, artifactRuns, plainRuns, nativeVisionRequests, persistedTurns, warnings, streamControllers, quotaEntered, quotaReleased };
 }
 
 test('first chat coding prompt provisions only after provider and quota preflight, then emits the bound workspace', async (testContext) => {
@@ -519,4 +553,38 @@ test('GitHub consent route respects foreign chat rejection and explicit disableA
   const response = await disabled.request({ prompt: 'conecta GitHub', disableAgentic: true });
   assert.equal(response.status, 200, response.text);
   assert.equal(disabled.events.some(event => event.type === 'github_connection_required'), false);
+});
+
+
+const IMAGE_READ_REQUEST = 'Prueba de reconocimiento visual: identifica el texto exacto de la imagen y describe las dos figuras, sus colores y su posición. Responde solo con lo que observas en el archivo adjunto.';
+
+test('uploaded image descriptions reach the selected native vision API with original pixels, not document editing', async (testContext) => {
+  // Verify transport, not model perception: real PNG bytes and the actual
+  // route/service/native adapter, with a deterministic SDK response.
+  const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'generate-vision-'));
+  testContext.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  const imagePath = path.join(tempDir, 'qa.png');
+  fs.writeFileSync(imagePath, imageBytes);
+  const imageFile = { id: 'qa-image', name: 'qa.png', mimeType: 'image/png', path: imagePath, extractedText: 'QA-731' };
+  const harness = await fixture(testContext, { imageFile, stopAfterReady: false });
+  const response = await harness.request({
+    prompt: IMAGE_READ_REQUEST, model: 'claude-sonnet-5-5', provider: 'Anthropic', files: [imageFile.id],
+  });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(harness.events.some((event) => event.type === 'error'), false, response.text);
+  assert.equal(harness.agenticRuns.length, 0, 'read-only images must not enter the text-only editing loop');
+  assert.equal(harness.plainRuns.length, 1);
+  assert.equal(harness.nativeVisionRequests.length, 1);
+  const native = harness.nativeVisionRequests[0];
+  assert.equal(native.model, 'claude-sonnet-5-5');
+  const imageParts = native.messages.flatMap((message) => message.content).filter((part) => part.type === 'image');
+  assert.equal(imageParts.length, 1);
+  assert.equal(imageParts[0].source.media_type, 'image/png');
+  assert.equal(imageParts[0].source.type, 'base64');
+  assert.deepEqual(Buffer.from(imageParts[0].source.data, 'base64'), imageBytes);
+  const promptText = native.messages.flatMap((message) => message.content).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+  assert.ok(promptText.includes(IMAGE_READ_REQUEST));
+  assert.match(response.text, /QA-731/);
+  assert.match(response.text, /data: \[DONE\]/);
 });

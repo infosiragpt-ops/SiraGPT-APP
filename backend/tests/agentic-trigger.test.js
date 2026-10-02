@@ -156,3 +156,27 @@ test('the SPEC eval prompts route as edits; bare highlight/paraphrase questions 
     'sube el archivo a drive', 'hazme una portada para mi libro',
   ]) assert.equal(isDocumentEditRequest(prompt), false, prompt);
 });
+
+
+test('descriptive colors are not fuzzy document edits, including prefaced visual requests', () => {
+  const { isDocumentEditRequest, isFuzzyDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
+  const prompts = [
+    'Prueba de reconocimiento visual: identifica el texto exacto de la imagen y describe las dos figuras, sus colores y su posición. Responde solo con lo que observas en el archivo adjunto.',
+    'Por favor, dime los colores de las figuras en el archivo adjunto.',
+    'Necesito identificar los colores y el texto del archivo.',
+    'Me interesa saber qué colores hay en este documento.',
+  ];
+  for (const prompt of prompts) {
+    assert.equal(isFuzzyDocumentEditRequest(prompt), false, prompt);
+    assert.equal(isDocumentEditRequest(prompt), false, prompt);
+  }
+  for (const prompt of [
+    'Colorea el título del documento de naranja.',
+    'Coloca el título del archivo al inicio.',
+    'Quiero que coloques el título en la primera página.',
+    'QIERO QUE AGREGES COMENTARIOS EN OBSERVACIONES DEL DOCUMENTO',
+    'Cambia los colores de la tabla del archivo.',
+  ]) {
+    assert.equal(isDocumentEditRequest(prompt), true, prompt);
+  }
+});
