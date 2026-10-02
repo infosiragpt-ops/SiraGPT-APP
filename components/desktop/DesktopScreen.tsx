@@ -4,7 +4,8 @@
  * Same-origin SiraComputer viewer (F7.2).
  *
  * RFB canvas via the scoped /ws/desktop/:sessionId proxy.
- * First framebuffer update ends the black panel.
+ * The public RFB connect event reveals the desktop canvas.
+ * This signals an established session, not verified screen pixels.
  * viewOnly=true while the agent owns input.
  * Screen pixels are DATA, never credentials or model ids.
  */
@@ -18,7 +19,8 @@ export type DesktopScreenProps = {
   viewerToken?: string | null
   viewOnly?: boolean
   className?: string
-  onFirstFrame?: () => void
+  /** RFB initialization completed; screen pixels are not inspected. */
+  onConnected?: () => void
   /** Called when the RFB channel dies and local retries are exhausted (or a
       live channel drops). The owner should rebuild the session (re-POST) or
       surface an honest error — never leave "Preparando…" spinning. */
@@ -73,17 +75,22 @@ export function DesktopScreen({
   viewerToken,
   viewOnly = true,
   className,
-  onFirstFrame,
+  onConnected,
   onConnectionError,
 }: DesktopScreenProps) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
-  const [firstFrame, setFirstFrame] = React.useState(false)
+  const [connected, setConnected] = React.useState(false)
   const [status, setStatus] = React.useState<"connecting" | "live" | "error">("connecting")
   const [retryNonce, setRetryNonce] = React.useState(0)
-  const firstFrameRef = React.useRef(false)
+  const connectedRef = React.useRef(false)
   const attemptsRef = React.useRef(0)
   const retryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewerUrl = sameOriginDesktopWsUrl(wsUrl, viewerToken)
+  const callbacksRef = React.useRef({ onConnected, onConnectionError })
+
+  React.useEffect(() => {
+    callbacksRef.current = { onConnected, onConnectionError }
+  }, [onConnected, onConnectionError])
 
   // A new session (or new URL) gets a fresh retry budget.
   React.useEffect(() => {
@@ -91,8 +98,8 @@ export function DesktopScreen({
   }, [sessionId, viewerUrl])
 
   React.useEffect(() => {
-    setFirstFrame(false)
-    firstFrameRef.current = false
+    setConnected(false)
+    connectedRef.current = false
     setStatus("connecting")
     const host = hostRef.current
     if (!host || !viewerUrl || !sessionId) return
@@ -100,17 +107,17 @@ export function DesktopScreen({
     let cancelled = false
     let rfb: RfbHandle | null = null
     let resizeObserver: ResizeObserver | null = null
-    const markFrame = () => {
-      if (cancelled) return
-      firstFrameRef.current = true
-      setFirstFrame(true)
+    const markConnected = () => {
+      if (cancelled || connectedRef.current) return
+      connectedRef.current = true
+      setConnected(true)
       setStatus("live")
-      onFirstFrame?.()
+      callbacksRef.current.onConnected?.()
     }
     const failChannel = () => {
       if (cancelled) return
       setStatus("error")
-      onConnectionError?.()
+      callbacksRef.current.onConnectionError?.()
     }
     const scheduleRetry = () => {
       if (cancelled) return
@@ -141,17 +148,16 @@ export function DesktopScreen({
         rfb.clipViewport = false
         rfb.resizeSession = false
         rfb.showDotCursor = false
-        rfb.addEventListener("connect", () => {
-          if (!cancelled) setStatus("live")
-        })
-        rfb.addEventListener("framebufferupdate", markFrame as (ev: Event) => void)
+        // noVNC exposes connect after protocol initialization. It does not
+        // emit a framebufferupdate event; waiting for one hides a live canvas.
+        rfb.addEventListener("connect", markConnected)
         rfb.addEventListener("disconnect", () => {
           if (cancelled) return
-          // A drop after the first frame also rebuilds through the owner:
+          // A drop after connection also rebuilds through the owner:
           // a frozen canvas with no error is worse than a visible retry.
-          if (firstFrameRef.current) {
+          if (connectedRef.current) {
             setStatus("error")
-            onConnectionError?.()
+            callbacksRef.current.onConnectionError?.()
             return
           }
           scheduleRetry()
@@ -165,7 +171,7 @@ export function DesktopScreen({
       } catch {
         if (cancelled) return
         // Import/constructor failure behaves like a dead channel.
-        if (firstFrameRef.current || attemptsRef.current >= DESKTOP_RFB_MAX_RETRIES) {
+        if (connectedRef.current || attemptsRef.current >= DESKTOP_RFB_MAX_RETRIES) {
           failChannel()
         } else {
           scheduleRetry()
@@ -182,7 +188,7 @@ export function DesktopScreen({
       try { resizeObserver?.disconnect() } catch { /* already gone */ }
       try { rfb?.disconnect() } catch { /* already gone */ }
     }
-  }, [sessionId, viewerUrl, viewOnly, onFirstFrame, onConnectionError, retryNonce])
+  }, [sessionId, viewerUrl, viewOnly, retryNonce])
 
   return (
     <div
@@ -190,14 +196,14 @@ export function DesktopScreen({
       data-testid="desktop-screen"
       data-desktop-session={sessionId}
       data-desktop-view-only={viewOnly ? "1" : "0"}
-      data-desktop-first-frame={firstFrame ? "1" : "0"}
+      data-desktop-connected={connected ? "1" : "0"}
       data-desktop-viewer-status={status}
     >
-      {!firstFrame ? (
+      {!connected ? (
         <div
           className="absolute inset-0 z-10 flex items-center justify-center bg-[#1b1b1d]"
           data-testid="desktop-screen-black"
-          aria-hidden={firstFrame}
+          aria-hidden={connected}
         >
           <p className="text-sm text-zinc-400">Preparando escritorio…</p>
         </div>

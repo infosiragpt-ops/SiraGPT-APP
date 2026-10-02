@@ -134,7 +134,7 @@ export function AgentComputerShell({
       if (app === "desktop") return
       setFocusNote(null)
       try {
-        await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
+        const response = await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -144,6 +144,11 @@ export function AgentComputerShell({
           }),
           signal: AbortSignal.timeout(20_000),
         })
+        const result = await response.json().catch(() => null) as { ok?: unknown } | null
+        if (!response.ok || result?.ok !== true) {
+          setFocusNote(t("dock.unavailable"))
+          return
+        }
         setFocusNote(app === "browser" ? t("dock.focusedBrowser") : t("dock.focusedOther", { app }))
       } catch {
         setFocusNote(t("dock.unavailable"))
