@@ -72,6 +72,9 @@ describe('StripeService error handling', () => {
     assert.deepEqual(calls[0].options, { idempotencyKey: 'sira-customer-user_fixture' });
     assert.deepEqual(calls[1].options, { idempotencyKey: 'sira-checkout-payment_fixture' });
     assert.equal(calls[1].params.mode, 'subscription');
+    assert.equal(calls[0].params.metadata.application, 'siragpt');
+    assert.equal(calls[1].params.metadata.application, 'siragpt');
+    assert.equal(calls[1].params.subscription_data.metadata.application, 'siragpt');
   });
 
   it('only reuses an active monthly USD price with interval_count one', async () => {

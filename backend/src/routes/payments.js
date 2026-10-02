@@ -1301,6 +1301,47 @@ function stripePaidPlan(value) {
   return STRIPE_PAID_PLANS.has(plan) ? plan : null;
 }
 
+function stripeWebhookApplication(event) {
+  const object = event?.data?.object || {};
+  const markers = [
+    object.metadata?.application,
+    object.subscription_details?.metadata?.application,
+    object.parent?.subscription_details?.metadata?.application,
+    object.subscription?.metadata?.application,
+    object.parent?.subscription_details?.subscription?.metadata?.application,
+  ].filter(value => typeof value === 'string' && value.trim()).map(value => value.trim());
+  // An explicit foreign marker wins even when a customer is shared by apps.
+  if (markers.some(value => value !== 'siragpt')) return 'foreign';
+  return markers.includes('siragpt') ? 'siragpt' : null;
+}
+
+async function locallyOwnedStripeWebhook(context) {
+  const { customerId, subscriptionId, payment, user } = context;
+  if (payment && stripeResourceId(payment.stripeCustomerId) === customerId) return true;
+  if (user && (!subscriptionId || !user.stripeSubscriptionId || user.stripeSubscriptionId === subscriptionId)) return true;
+  if (!subscriptionId || !customerId) return false;
+  if (!user) {
+    const subscriptionUser = await prisma.user.findUnique({ where: { stripeSubscriptionId: subscriptionId } });
+    if (subscriptionUser?.stripeCustomerId === customerId) {
+      context.user = subscriptionUser;
+      context.userId = subscriptionUser.id;
+      return true;
+    }
+  }
+  // A previous local purchase may own an older subscription. Customer identity
+  // alone cannot authorize importing another app's invoice or replacing a plan.
+  const priorPayment = await prisma.payment.findFirst({ where: {
+    provider: 'STRIPE', stripeSubscriptionId: subscriptionId, stripeCustomerId: customerId,
+    ...(user ? { userId: user.id } : {}),
+  } });
+  if (!priorPayment) return false;
+  if (!user) {
+    context.user = await prisma.user.findUnique({ where: { id: priorPayment.userId } });
+    context.userId = priorPayment.userId;
+  }
+  return true;
+}
+
 function currentMonthStartUtcForStripeWebhook() {
   const now = new Date();
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -1391,7 +1432,9 @@ async function resolveStripeWebhookContext(event) {
     const payment = object.id && prisma.payment?.findFirst
       ? await prisma.payment.findFirst({ where: { stripeSessionId: object.id } })
       : null;
-    const userId = metadataUserId || payment?.userId || null;
+    // A shared account can contain another app's coincidentally identical
+    // metadata.userId. Only local billing resources establish ownership.
+    const userId = payment?.userId || null;
     let user = userId
       ? await prisma.user.findUnique({ where: { id: userId } })
       : null;
@@ -2641,7 +2684,12 @@ function minimalStripeWebhookEvent(event) {
     id: event.id,
     type: event.type,
     created: stripeEventCreated(event),
-    data: { object: minimalObject },
+    data: { object: {
+      ...minimalObject,
+      ...(stripeWebhookApplication(event) === 'siragpt'
+        ? { metadata: { ...minimalObject.metadata, application: 'siragpt' } }
+        : {}),
+    } },
   };
 }
 
@@ -2715,14 +2763,20 @@ async function processStripeWebhookEvent(event, options = {}) {
     throw error;
   }
 
+  // A verified signature authenticates the shared Stripe account, not the app.
+  // Ignore foreign events without persisting payloads or scheduling retries.
+  const application = stripeWebhookApplication(event);
+  if (application === 'foreign') return { ignored: true, reason: 'foreign_application' };
   // All user resolution is read-only and happens before the transaction.
   let context = await resolveStripeWebhookContext(event);
+  const locallyOwned = await locallyOwnedStripeWebhook(context);
+  if (application !== 'siragpt' && !locallyOwned) {
+    return { ignored: true, reason: 'unowned_billing_resource' };
+  }
   if (!context.user) {
     console.error('User not found for Stripe webhook:', {
       eventId: event.id,
       eventType: event.type,
-      customerId: context.customerId,
-      userId: context.userId,
     });
     if (options.persistUnresolved !== false) {
       await persistUnresolvedStripeEvent(event, context);

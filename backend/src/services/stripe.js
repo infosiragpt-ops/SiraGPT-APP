@@ -503,7 +503,8 @@ class StripeService {
         email,
         name,
         metadata: {
-          userId
+          userId,
+          application: 'siragpt',
         }
       }, { idempotencyKey: `sira-customer-${userId}` }),
       { userId, email }
@@ -525,12 +526,14 @@ class StripeService {
         cancel_url: cancelUrl,
         metadata: {
           userId,
-          plan
+          plan,
+          application: 'siragpt',
         },
         subscription_data: {
           metadata: {
             userId,
-            plan
+            plan,
+            application: 'siragpt',
           }
         }
       }, options),
