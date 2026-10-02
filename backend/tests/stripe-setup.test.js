@@ -28,6 +28,7 @@ const stripeMock = {
   plans: { PRO: {}, PRO_MAX: {}, ENTERPRISE: {} },
   createOrUpdateProducts: async () => ({}),
   ensurePriceForPlan: async () => null,
+  validatePriceForPlan: async () => ({}),
 };
 
 const dbMock = {
@@ -289,8 +290,10 @@ describe('getPriceIdForPlan', () => {
     );
   });
 
-  it('prefers the cached/env id and never touches Stripe when one exists', async () => {
+  it('validates the cached id against Stripe before returning it without reprovisioning', async () => {
     let called = false;
+    const validations = [];
+    stripeMock.validatePriceForPlan = async (...args) => { validations.push(args); return {}; };
     stripeMock.ensurePriceForPlan = async () => {
       called = true;
       return { price: { id: 'price_unexpected' } };
@@ -299,6 +302,22 @@ describe('getPriceIdForPlan', () => {
     const out = await setup.getPriceIdForPlan('PRO_MAX');
     assert.equal(out, 'price_cached');
     assert.equal(called, false);
+    assert.deepEqual(validations, [['price_cached', 'PRO_MAX']]);
+    stripeMock.validatePriceForPlan = async () => ({});
+  });
+
+  it('does not charge or provision another price when a cached price fails validation', async () => {
+    dbMock.systemSettings.findUnique = async () => ({ value: 'price_wrong_cached' });
+    const originalValidation = stripeMock.validatePriceForPlan;
+    stripeMock.validatePriceForPlan = async () => { throw Object.assign(new Error('Wrong monthly USD price'), { code: 'STRIPE_PRICE_MISMATCH' }); };
+    let provisioned = false;
+    stripeMock.ensurePriceForPlan = async () => { provisioned = true; };
+    try {
+      await assert.rejects(() => setup.getPriceIdForPlan('PRO_MAX'), { code: 'STRIPE_PRICE_MISMATCH' });
+      assert.equal(provisioned, false);
+    } finally {
+      stripeMock.validatePriceForPlan = originalValidation;
+    }
   });
 });
 

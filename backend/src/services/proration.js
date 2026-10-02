@@ -3,6 +3,8 @@ const prisma = require('../config/database');
 const { logger } = require('../middleware/logger');
 const { redactErrorMessage } = require('../utils/secret-redactor');
 const { monthlyLimitForStripePlan } = require('./plan-credits-catalog');
+const { stripeSubscriptionPeriod } = require('./stripe-subscription-period');
+const { getPriceIdForPlan } = require('../utils/stripe-setup');
 
 function logProrationError(operation, error, context = {}) {
   if (error?.isStripeOperationalError || stripeService.isStripeLikeError?.(error)) return;
@@ -50,8 +52,12 @@ class ProrationService {
       // Get current subscription from Stripe
       const subscription = await stripeService.retrieveSubscription(user.stripeSubscriptionId);
       
-      const currentPeriodStart = new Date(subscription.current_period_start * 1000);
-      const currentPeriodEnd = new Date(subscription.current_period_end * 1000);
+      const period = stripeSubscriptionPeriod(subscription);
+      if (period.start === null || period.end === null || period.end < period.start) {
+        throw new Error('Subscription billing period is unavailable');
+      }
+      const currentPeriodStart = new Date(period.start * 1000);
+      const currentPeriodEnd = new Date(period.end * 1000);
       const DAY_MS = 1000 * 60 * 60 * 24;
       // Guard against a degenerate billing period (start === end, or malformed
       // Stripe timestamps): totalPeriodDays must be ≥ 1 or the proration ratios
@@ -65,14 +71,11 @@ class ProrationService {
       );
 
       // Plan pricing (in cents)
-      const planPricing = {
-        'PRO': 500,        // $5.00
-        'PRO_MAX': 2000,   // $20.00
-        'ENTERPRISE': 20000 // $200.00
-      };
-
-      const currentPlanPrice = planPricing[user.plan];
-      const newPlanPrice = planPricing[newPlan];
+      const currentPlanPrice = stripeService.plans?.[user.plan]?.price;
+      const newPlanPrice = stripeService.plans?.[newPlan]?.price;
+      if (!Number.isInteger(currentPlanPrice) || !Number.isInteger(newPlanPrice)) {
+        throw new Error('Subscription plan pricing is unavailable');
+      }
 
       // Calculate unused portion of current plan
       const unusedAmount = (currentPlanPrice * remainingDays) / totalPeriodDays;
@@ -110,6 +113,9 @@ class ProrationService {
    */
   async changePlan(userId, newPlan, immediate = true) {
     try {
+      if (immediate !== true) {
+        return await this.scheduleNextCyclePlanChange();
+      }
       const user = await prisma.user.findUnique({
         where: { id: userId }
       });
@@ -242,29 +248,14 @@ class ProrationService {
   /**
    * Schedule plan change for next billing cycle
    */
-  async scheduleNextCyclePlanChange(user, newPlan, newPriceId) {
-    try {
-      const subscription = await stripeService.retrieveSubscription(user.stripeSubscriptionId);
-
-      // Schedule the change for the next billing cycle
-      const scheduledChange = await stripeService.updateSubscription(
-        user.stripeSubscriptionId,
-        {
-          items: [{
-            id: subscription.items.data[0].id,
-            price: newPriceId,
-          }],
-          proration_behavior: 'none', // No prorations for next-cycle changes
-        },
-        'scheduleNextCyclePlanChange'
-      );
-
-      return scheduledChange;
-
-    } catch (error) {
-      logProrationError('scheduleNextCyclePlanChange', error, { userId: user.id, newPlan });
-      throw error;
-    }
+  async scheduleNextCyclePlanChange() {
+    // Updating items with proration_behavior:'none' changes the price NOW.
+    // Until a real Subscription Schedule is supported, fail before any Stripe
+    // call or entitlement write rather than claiming a future change.
+    const error = new Error('La programación de cambios de plan aún no está disponible. No se ha modificado tu suscripción.');
+    error.code = 'PLAN_CHANGE_SCHEDULING_UNAVAILABLE';
+    error.statusCode = 409;
+    throw error;
   }
 
   /**
@@ -272,11 +263,7 @@ class ProrationService {
    */
   async getPriceIdForPlan(plan) {
     try {
-      const setting = await prisma.systemSettings.findUnique({
-        where: { key: `STRIPE_PRICE_${plan}` }
-      });
-
-      return setting?.value;
+      return await getPriceIdForPlan(plan);
     } catch (error) {
       logProrationError('getPriceIdForPlan', error, { plan });
       return null;
@@ -304,11 +291,13 @@ class ProrationService {
           upcomingInvoice = await stripeService.retrieveUpcomingInvoice({
             customer: user.stripeCustomerId,
             subscription: user.stripeSubscriptionId,
-            subscription_items: [{
-              id: subscription.items.data[0].id,
-              price: newPriceId,
-            }],
-            subscription_proration_behavior: 'create_prorations'
+            subscription_details: {
+              items: [{
+                id: subscription.items.data[0].id,
+                price: newPriceId,
+              }],
+              proration_behavior: 'create_prorations',
+            },
           });
         } catch (error) {
           logProrationWarning('previewUpcomingInvoice', error, { userId, newPlan });

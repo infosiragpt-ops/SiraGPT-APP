@@ -7,6 +7,7 @@ import { ArrowRight, Check, Loader2, ShieldCheck, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { apiClient } from '@/lib/api'
+import { PAID_PLAN, describeCheckoutError } from '@/lib/plans-catalog'
 import styles from './payment-cancel.module.css'
 
 const PLAN_LABELS: Record<string, string> = {
@@ -15,9 +16,9 @@ const PLAN_LABELS: Record<string, string> = {
 }
 
 const REASSURANCE = [
-  'Tu cuenta sigue en el plan gratuito.',
-  'Conservas todas las funciones gratis.',
-  'Puedes mejorar de plan en segundos, sin permanencia.',
+  'Esta página no cambia tu suscripción actual.',
+  'Puedes consultar el estado de tu cuenta en facturación.',
+  'Si ya pagaste, verifica el cobro antes de iniciar otro pago.',
 ]
 
 function PaymentCancelContent() {
@@ -37,16 +38,16 @@ function PaymentCancelContent() {
     }
     try {
       setRetrying(true)
-      const response = await apiClient.createStripePayment({ plan })
+      const response = await apiClient.createStripePayment({ plan: PAID_PLAN.code })
       if (!response?.url) throw new Error('No checkout URL received')
       window.location.href = response.url
     } catch (err: any) {
       const status = err?.status ?? err?.statusCode
       if (status === 401) {
         toast.error('Tu sesión expiró — inicia sesión de nuevo.')
-        router.push('/auth/login')
+        router.push('/auth/login?next=%2Fplanes')
       } else {
-        toast.error('No pudimos reabrir el pago. Vuelve a intentarlo desde los planes.')
+        toast.error(describeCheckoutError(err).message)
         router.push('/planes')
       }
     } finally {
@@ -77,9 +78,7 @@ function PaymentCancelContent() {
           No completaste el pago
         </h1>
         <p className={`mt-3 text-sm leading-6 ${styles.copy}`}>
-          Cancelaste el proceso y{' '}
-          <span className={`font-medium ${styles.copyStrong}`}>no se realizó ningún cargo</span>.{' '}
-          Tu cuenta sigue en el plan gratuito — puedes mejorar cuando quieras.
+          Volviste del proceso de pago. Consulta facturación si necesitas comprobar el estado de un cobro o de tu suscripción.
         </p>
 
         <div className={`mt-6 rounded-lg p-4 ${styles.panel}`}>
@@ -119,7 +118,7 @@ function PaymentCancelContent() {
             onClick={() => router.push('/agentes')}
             className={`h-11 w-full rounded-md ${styles.secondaryButton}`}
           >
-            Seguir en el plan gratis
+            Volver al chat
           </Button>
           <button
             type="button"

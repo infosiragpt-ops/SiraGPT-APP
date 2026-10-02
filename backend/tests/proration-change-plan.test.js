@@ -73,3 +73,13 @@ test('changePlan tolerates a legacy Number monthlyLimit without throwing', async
   assert.equal(res.success, true);
   assert.equal(updateArgs.data.monthlyLimit, 1000n + monthlyLimitForStripePlan('PRO_MAX'));
 });
+
+test('next-cycle requests fail explicitly before any charge or entitlement mutation', async () => {
+  userRow = { id: 'u1', plan: 'PRO', stripeSubscriptionId: 'sub_1', monthlyLimit: 1000n };
+  updateArgs = null;
+  stripeCharged = false;
+  await assert.rejects(() => proration.changePlan('u1', 'PRO_MAX', false), { code: 'PLAN_CHANGE_SCHEDULING_UNAVAILABLE' });
+  assert.equal(stripeCharged, false);
+  assert.equal(updateArgs, null);
+  assert.equal(userRow.plan, 'PRO');
+});

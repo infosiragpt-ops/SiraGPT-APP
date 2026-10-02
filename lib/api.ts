@@ -3540,6 +3540,10 @@ class ApiClient {
     return this.request('/payments/subscription');
   }
 
+  async createBillingPortal(): Promise<{ url: string }> {
+    return this.request('/payments/portal', { method: 'POST' });
+  }
+
   async cancelSubscription() {
     return this.request('/payments/subscription/cancel', {
       method: 'POST',

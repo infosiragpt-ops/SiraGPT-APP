@@ -57,6 +57,99 @@ function makeStripeAuthError() {
 }
 
 describe('StripeService error handling', () => {
+  it('sends stable customer and caller-owned checkout idempotency keys to Stripe', async () => {
+    const calls = [];
+    const service = new StripeService({
+      env: { NODE_ENV: 'test', STRIPE_SECRET_KEY: 'sk_test_synthetic_fixture' },
+      logger: captureLogger(),
+      stripeFactory: () => ({
+        customers: { create: async (params, options) => { calls.push({ type: 'customer', params, options }); return { id: 'cus_fixture' }; } },
+        checkout: { sessions: { create: async (params, options) => { calls.push({ type: 'checkout', params, options }); return { id: 'cs_fixture' }; } } },
+      }),
+    });
+    await service.createCustomer('synthetic@example.test', 'Synthetic', 'user_fixture');
+    await service.createCheckoutSession('price_fixture', 'cus_fixture', 'user_fixture', 'PRO_MAX', 'https://example.test/success', 'https://example.test/cancel', { idempotencyKey: 'sira-checkout-payment_fixture' });
+    assert.deepEqual(calls[0].options, { idempotencyKey: 'sira-customer-user_fixture' });
+    assert.deepEqual(calls[1].options, { idempotencyKey: 'sira-checkout-payment_fixture' });
+    assert.equal(calls[1].params.mode, 'subscription');
+  });
+
+  it('only reuses an active monthly USD price with interval_count one', async () => {
+    const valid = { id: 'price_valid', active: true, livemode: false, type: 'recurring', currency: 'usd', unit_amount: 1000, recurring: { interval: 'month', interval_count: 1 } };
+    const invalid = [
+      { ...valid, id: 'price_eur', currency: 'eur' },
+      { ...valid, id: 'price_quarter', recurring: { interval: 'month', interval_count: 3 } },
+      { ...valid, id: 'price_archived', active: false },
+      { ...valid, id: 'price_other_mode', livemode: true },
+    ];
+    const service = new StripeService({
+      env: { NODE_ENV: 'test', STRIPE_SECRET_KEY: 'sk_test_synthetic_fixture' },
+      logger: captureLogger(),
+      stripeFactory: () => ({ products: { list: async () => ({ data: [{ id: 'prod_fixture', metadata: { plan: 'PRO_MAX' } }] }) }, prices: { list: async () => ({ data: [...invalid, valid] }) } }),
+    });
+    assert.equal((await service.ensurePriceForPlan('PRO_MAX')).price.id, 'price_valid');
+  });
+
+  it('concurrent cold catalog setup shares one product and monthly USD price', async () => {
+    const products = new Map();
+    const prices = new Map();
+    const requests = [];
+    const create = (resources, prefix) => async (params, options) => {
+      requests.push({ prefix, params, options });
+      const key = options?.idempotencyKey || `unkeyed-${resources.size}`;
+      if (!resources.has(key)) resources.set(key, { id: `${prefix}_${resources.size + 1}`, ...params });
+      return resources.get(key);
+    };
+    const service = new StripeService({
+      env: { NODE_ENV: 'test', STRIPE_SECRET_KEY: 'sk_test_synthetic_fixture' },
+      logger: captureLogger(),
+      stripeFactory: () => ({
+        products: { list: async () => ({ data: [] }), create: create(products, 'prod') },
+        prices: { list: async () => ({ data: [] }), create: create(prices, 'price') },
+      }),
+    });
+    const results = await Promise.all([1, 2, 3].map(() => service.ensurePriceForPlan('PRO_MAX')));
+    assert.equal(products.size, 1, 'cold concurrent requests must share a product idempotency key');
+    assert.equal(prices.size, 1, 'cold concurrent requests must share a price idempotency key');
+    assert.equal(new Set(results.map(result => result.price.id)).size, 1);
+    for (const request of requests) {
+      assert.deepEqual(request.options, { idempotencyKey: request.prefix === 'prod'
+        ? 'sira-product-PRO_MAX-v1' : 'sira-price-prod_1-PRO_MAX-1000-usd-month-v1' });
+      if (request.prefix === 'price') {
+        assert.equal(request.params.unit_amount, 1000);
+        assert.equal(request.params.currency, 'usd');
+        assert.equal(request.params.recurring.interval, 'month');
+      }
+    }
+  });
+
+  it('validates cached prices against the current account and catalogue before checkout', async () => {
+    let returnedPrice = { id: 'price_cached', active: true, livemode: false, type: 'recurring', currency: 'usd', unit_amount: 1000, recurring: { interval: 'month', interval_count: 1 } };
+    const service = new StripeService({
+      env: { NODE_ENV: 'test', STRIPE_SECRET_KEY: 'sk_test_synthetic_fixture' },
+      logger: captureLogger(),
+      stripeFactory: () => ({ prices: { retrieve: async id => { assert.equal(id, 'price_cached'); return returnedPrice; } } }),
+    });
+    assert.equal((await service.validatePriceForPlan('price_cached', 'PRO_MAX')).id, 'price_cached');
+    for (const wrong of [{ currency: 'eur' }, { unit_amount: 2000 }, { active: false }, { livemode: true }, { recurring: { interval: 'year', interval_count: 1 } }]) {
+      const original = returnedPrice;
+      returnedPrice = { ...original, ...wrong };
+      await assert.rejects(() => service.validatePriceForPlan('price_cached', 'PRO_MAX'), { code: 'STRIPE_PRICE_MISMATCH' });
+      returnedPrice = original;
+    }
+  });
+
+  it('uses the supported invoice preview API without an obsolete SDK method', async () => {
+    let seen;
+    const service = new StripeService({
+      env: { NODE_ENV: 'test', STRIPE_SECRET_KEY: 'sk_test_synthetic_fixture' },
+      logger: captureLogger(),
+      stripeFactory: () => ({ invoices: { createPreview: async params => { seen = params; return { id: 'upcoming_in_fixture' }; } } }),
+    });
+    assert.equal((await service.getUpcomingInvoice('cus_fixture')).id, 'upcoming_in_fixture');
+    assert.deepEqual(seen, { customer: 'cus_fixture' });
+  });
+
   it('uses the current Stripe API version when creating the SDK client', () => {
     let configSeen = null;
     const service = new StripeService({

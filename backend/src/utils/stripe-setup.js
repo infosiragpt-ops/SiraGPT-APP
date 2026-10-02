@@ -62,10 +62,12 @@ async function getPriceIdForPlan(plan) {
   });
   
   if (setting?.value) {
+    if (stripeService.isConfigured) await stripeService.validatePriceForPlan(setting.value, plan);
     return setting.value;
   }
 
   if (process.env[settingKey]) {
+    if (stripeService.isConfigured) await stripeService.validatePriceForPlan(process.env[settingKey], plan);
     return process.env[settingKey];
   }
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -27,7 +27,8 @@ import { toast } from 'sonner'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context-integrated'
 import { apiClient } from '@/lib/api'
-import { authenticatedFetch } from '@/lib/authenticated-fetch'
+import { subscriptionView, subscriptionStatusLabel, type SubscriptionInfo } from '@/lib/payment-status'
+import { getPaymentsConfig } from '@/lib/plans-service'
 import {
   CONTACT_PLAN,
   PAID_PLAN,
@@ -42,18 +43,12 @@ import {
 import PlanChangeManager from './plan-change-manager'
 import AnalyticsDashboard from './analytics-dashboard'
 
-interface SubscriptionData {
-  status: string
-  plan: string
-  currentPeriodEnd?: string
-  cancelAtPeriodEnd?: boolean
-  nextBillingAmount?: number
-  paymentMethod?: string
-}
-
 export default function SubscriptionManager() {
   const { user, refreshUser } = useAuth()
-  const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null)
+  const [subscriptionData, setSubscriptionData] = useState<SubscriptionInfo | null>(null)
+  const [subscriptionError, setSubscriptionError] = useState(false)
+  const [runtimeNumber, setRuntimeNumber] = useState<string | null>(null)
+  const subscriptionRequest = useRef(0)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [showPlanChange, setShowPlanChange] = useState(false)
@@ -64,7 +59,7 @@ export default function SubscriptionManager() {
   // /planes: createStripePayment → redirect to session.url). "Hablemos"
   // opens WhatsApp. Only the two plans from lib/plans-catalog are offered.
   const openWhatsAppOrSupport = (message: string) => {
-    const href = buildWhatsAppHref(resolveWhatsAppNumber(), message)
+    const href = buildWhatsAppHref(resolveWhatsAppNumber(runtimeNumber), message)
     if (href) {
       window.open(href, '_blank', 'noopener,noreferrer')
     } else {
@@ -89,7 +84,7 @@ export default function SubscriptionManager() {
     } catch (err: any) {
       const info = describeCheckoutError(err)
       if (info.kind === 'unavailable') {
-        const href = buildWhatsAppHref(info.whatsappNumber || resolveWhatsAppNumber(), PRO_WHATSAPP_MESSAGE)
+        const href = buildWhatsAppHref(info.whatsappNumber || resolveWhatsAppNumber(runtimeNumber), PRO_WHATSAPP_MESSAGE)
         toast.error(info.message, {
           duration: 8000,
           action: href
@@ -158,49 +153,45 @@ export default function SubscriptionManager() {
     { code: 'ENTERPRISE', name: CONTACT_PLAN.name, cta: CONTACT_PLAN.cta },
   ]
 
-  useEffect(() => {
-    fetchSubscriptionData()
-    
-    // No need for expiration checking with normal Stripe billing
-  }, [refreshUser])
-
-  const fetchSubscriptionData = async () => {
+  const fetchSubscriptionData = useCallback(async () => {
+    const request = ++subscriptionRequest.current
+    setLoading(true)
+    setSubscriptionError(false)
+    setSubscriptionData(null)
     try {
-      const response = await authenticatedFetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription`,
-      )
-      
-      if (response.ok) {
-        const data = await response.json()
-        setSubscriptionData(data)
-      }
-    } catch (error) {
-      console.error('Failed to fetch subscription data:', error)
+      const data = await apiClient.getSubscriptionInfo()
+      if (request === subscriptionRequest.current) setSubscriptionData(data)
+    } catch {
+      if (request === subscriptionRequest.current) setSubscriptionError(true)
     } finally {
-      setLoading(false)
+      if (request === subscriptionRequest.current) setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (user?.id) void fetchSubscriptionData()
+    return () => { subscriptionRequest.current += 1 }
+  }, [user?.id, fetchSubscriptionData])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    getPaymentsConfig(controller.signal).then(config => setRuntimeNumber(config.whatsappNumber)).catch(() => {})
+    return () => controller.abort()
+  }, [])
 
   const handleCancelSubscription = async () => {
-    if (!confirm('Are you sure you want to cancel your subscription? You will still have access until the end of your current billing period.')) {
+    if (!confirm('¿Quieres cancelar tu suscripción? Mantendrás el acceso hasta que termine el periodo actual.')) {
       return
     }
 
     setActionLoading('cancel')
     try {
-      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription/cancel`, {
-        method: 'POST',
-      })
-
-      if (response.ok) {
-        toast.success('Subscription canceled successfully')
-        await fetchSubscriptionData()
-       refreshUser()
-      } else {
-        toast.error('Failed to cancel subscription')
-      }
-    } catch (error) {
-      toast.error('Error canceling subscription')
+      await apiClient.cancelSubscription()
+      toast.success('Cancelación programada para el final del periodo.')
+      await fetchSubscriptionData()
+      await refreshUser()
+    } catch {
+      toast.error('No pudimos cancelar la suscripción. Inténtalo de nuevo o contacta a soporte.')
     } finally {
       setActionLoading(null)
     }
@@ -209,19 +200,28 @@ export default function SubscriptionManager() {
   const handleReactivateSubscription = async () => {
     setActionLoading('reactivate')
     try {
-      const response = await authenticatedFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/payments/subscription/reactivate`, {
-        method: 'POST',
-      })
+      await apiClient.reactivateSubscription()
+      toast.success('Suscripción reactivada.')
+      await fetchSubscriptionData()
+      await refreshUser()
+    } catch {
+      toast.error('No pudimos reactivar la suscripción. Inténtalo de nuevo o contacta a soporte.')
+    } finally {
+      setActionLoading(null)
+    }
+  }
 
-      if (response.ok) {
-        toast.success('Subscription reactivated successfully')
-        await fetchSubscriptionData()
-        refreshUser()
-      } else {
-        toast.error('Failed to reactivate subscription')
+  const handleBillingPortal = async () => {
+    setActionLoading('portal')
+    try {
+      const response = await apiClient.createBillingPortal()
+      const url = new URL(response.url)
+      if (url.protocol !== 'https:' || url.hostname !== 'billing.stripe.com' || url.username || url.password) {
+        throw new Error('Invalid billing portal URL')
       }
-    } catch (error) {
-      toast.error('Error reactivating subscription')
+      window.location.assign(url.href)
+    } catch {
+      toast.error('No pudimos abrir la gestión de facturación. Inténtalo de nuevo o contacta a soporte.')
     } finally {
       setActionLoading(null)
     }
@@ -231,6 +231,8 @@ export default function SubscriptionManager() {
 
   const currentPlan = user.plan || 'FREE'
   const currentPlanInfo = planInfo[currentPlan]
+  const billing = subscriptionView(subscriptionData)
+  const billingLabel = subscriptionStatusLabel(billing.status, billing.cancelAtPeriodEnd)
   
   // Calculate usage correctly based on plan type
   let usedAmount, totalLimit, remainingAmount, usagePercentage
@@ -262,7 +264,7 @@ export default function SubscriptionManager() {
                 : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >
-            Overview
+            Resumen
           </button>
           {/* {user?.isAdmin && (
             <button
@@ -293,18 +295,16 @@ export default function SubscriptionManager() {
               <div>
                 <CardTitle className="text-2xl">Plan {planDisplayName(currentPlan)}</CardTitle>
                 <CardDescription>
-                  {subscriptionData?.status === 'active' ? 'Active subscription' : 
-                   subscriptionData?.cancelAtPeriodEnd ? 'Canceling at period end' :
-                   'Current plan'}
+                  {loading ? 'Consultando suscripción…' : billingLabel}
                 </CardDescription>
               </div>
             </div>
             <div className="text-right">
               <Badge 
-                variant={subscriptionData?.status === 'active' ? 'default' : 'secondary'}
-                className={subscriptionData?.status === 'active' ? 'bg-green-500' : ''}
+                variant={billing.status === 'active' ? 'default' : 'secondary'}
+                className={billing.status === 'active' ? 'bg-green-500' : ''}
               >
-                {subscriptionData?.status || 'Active'}
+                {loading ? 'Consultando…' : billingLabel}
               </Badge>
               {currentPlan !== 'FREE' && (
                 <p className="text-sm text-muted-foreground mt-1">
@@ -315,6 +315,11 @@ export default function SubscriptionManager() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
+          {subscriptionError && (
+            <p role="alert" className="text-sm text-muted-foreground">
+              No pudimos consultar tu suscripción. <button type="button" className="underline" onClick={fetchSubscriptionData}>Volver a consultar</button>
+            </p>
+          )}
           {/* Usage Progress */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -354,13 +359,13 @@ export default function SubscriptionManager() {
             <>
               <Separator />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {subscriptionData.currentPeriodEnd && (
+                {billing.currentPeriodEnd && (
                   <div className="flex items-center space-x-3 p-3 bg-muted/50 rounded-lg">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
                     <div>
-                      <p className="text-sm font-medium">Próximo cobro</p>
+                      <p className="text-sm font-medium">{billing.cancelAtPeriodEnd ? 'Acceso hasta' : 'Próximo cobro'}</p>
                       <p className="text-xs text-muted-foreground">
-                        {new Date(subscriptionData.currentPeriodEnd).toLocaleDateString()}
+                        {new Date(billing.currentPeriodEnd).toLocaleDateString()}
                       </p>
                     </div>
                   </div>
@@ -382,7 +387,7 @@ export default function SubscriptionManager() {
       </Card>
 
       {/* Subscription Actions */}
-      {currentPlan !== 'FREE' && (
+      {(currentPlan !== 'FREE' || billing.hasCustomer) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center">
@@ -391,7 +396,7 @@ export default function SubscriptionManager() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {subscriptionData?.cancelAtPeriodEnd ? (
+            {billing.cancelAtPeriodEnd ? (
               <div className="flex items-start space-x-3 p-4 bg-amber-50 dark:bg-amber-950/20 rounded-lg border border-amber-200 dark:border-amber-800">
                 <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5" />
                 <div className="flex-1">
@@ -399,7 +404,7 @@ export default function SubscriptionManager() {
                     Suscripción por terminar
                   </p>
                   <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-                    Tu suscripción terminará el {subscriptionData.currentPeriodEnd ? new Date(subscriptionData.currentPeriodEnd).toLocaleDateString() : 'próximo cobro'}.
+                    Tu suscripción terminará el {billing.currentPeriodEnd ? new Date(billing.currentPeriodEnd).toLocaleDateString() : 'final del periodo actual'}.
                     Puedes reactivarla en cualquier momento antes de esa fecha.
                   </p>
                   <Button
@@ -407,14 +412,14 @@ export default function SubscriptionManager() {
                     variant="outline"
                     className="mt-3"
                     onClick={handleReactivateSubscription}
-                    disabled={actionLoading === 'reactivate'}
+                    disabled={actionLoading !== null || loading || subscriptionError}
                   >
                     {actionLoading === 'reactivate' && <ThinkingIndicator size="xs" className="mr-2" />}
                     Reactivar suscripción
                   </Button>
                 </div>
               </div>
-            ) : (
+            ) : billing.status === 'active' || billing.status === 'trialing' ? (
               <div className="flex items-center justify-between p-4 border rounded-lg">
                 <div>
                   <p className="font-medium">Cancelar suscripción</p>
@@ -426,13 +431,13 @@ export default function SubscriptionManager() {
                   variant="outline"
                   size="sm"
                   onClick={handleCancelSubscription}
-                  disabled={actionLoading === 'cancel'}
+                  disabled={actionLoading !== null || loading || subscriptionError}
                 >
                   {actionLoading === 'cancel' && <ThinkingIndicator size="xs" className="mr-2" />}
                   Cancelar
                 </Button>
               </div>
-            )}
+            ) : null}
 
             {/* <div className="flex items-center justify-between p-4 border rounded-lg">
               <div>
@@ -453,18 +458,18 @@ export default function SubscriptionManager() {
 
             <Separator />
 
-            {/* <div className="flex items-center justify-between p-4 border rounded-lg">
+            {billing.hasCustomer && <div className="flex items-center justify-between p-4 border rounded-lg">
               <div>
-                <p className="font-medium">Billing Portal</p>
+                <p className="font-medium">Facturación</p>
                 <p className="text-sm text-muted-foreground">
-                  View invoices, update payment method, and download receipts
+                  Actualiza tu tarjeta y consulta tus facturas en el portal seguro.
                 </p>
               </div>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={handleBillingPortal} disabled={actionLoading !== null || loading}>
                 <ExternalLink className="h-3 w-3 mr-2" />
-                Open Portal
+                {actionLoading === 'portal' ? 'Abriendo…' : 'Gestionar facturación'}
               </Button>
-            </div> */}
+            </div>}
           </CardContent>
         </Card>
       )}

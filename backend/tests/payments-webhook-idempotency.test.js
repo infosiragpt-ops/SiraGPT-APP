@@ -1730,6 +1730,36 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     );
   });
 
+  test('Clover subscription webhooks keep item-level paid deadlines and replay cancellation accurately', async () => {
+    const deadline = 4_102_444_800;
+    const clover = event('evt_clover_canceling', 'customer.subscription.updated', {
+      id: 'sub_old', customer: 'cus_1', status: 'active', cancel_at_period_end: true,
+      items: { data: [{ id: 'si_fixture', current_period_start: 4_099_766_400, current_period_end: deadline }] },
+    }, 700);
+    const harness = setup({ stripeEvent: clover });
+    const compact = harness.internal.minimalStripeWebhookEvent(clover);
+    assert.equal(compact.data.object.current_period_end, deadline);
+    assert.equal(compact.data.object.cancel_at_period_end, true);
+    harness.setStripeEvent(compact);
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].subscriptionStatus, 'canceling');
+    assert.equal(harness.db._state.users[0].subscriptionEndDate.getTime(), deadline * 1000);
+    assert.equal(harness.db._state.subscriptionEvents[0].eventData.currentPeriodEnd, deadline);
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.subscriptionEvents.length, 1);
+  });
+
+  test('Clover subscription creation persists the item-level renewal deadline', async () => {
+    const deadline = 4_102_444_800;
+    const clover = event('evt_clover_created', 'customer.subscription.created', {
+      id: 'sub_new', customer: 'cus_1', status: 'active',
+      items: { data: [{ current_period_start: 4_099_766_400, current_period_end: deadline }] },
+    }, 700);
+    const harness = setup({ stripeEvent: clover });
+    assert.equal((await deliver(harness.app)).status, 200);
+    assert.equal(harness.db._state.users[0].subscriptionEndDate.getTime(), deadline * 1000);
+  });
+
   test('old-subscription update cannot overwrite a newer active subscription', async () => {
     const newSubscription = event('evt_sub_newer_created', 'customer.subscription.created', {
       id: 'sub_new',

@@ -390,6 +390,36 @@ class StripeService {
     return this.callStripe('ping', () => this.stripe.products.list({ limit: 1 }));
   }
 
+  priceMatchesPlan(price, planKey) {
+    const plan = this.plans[planKey];
+    const liveMode = /^(?:sk|rk)_live_/.test(String(this.env.STRIPE_SECRET_KEY || '').trim());
+    return Boolean(plan && price
+      && price.active === true
+      && price.livemode === liveMode
+      && price.type === 'recurring'
+      && price.currency === 'usd'
+      && price.unit_amount === plan.price
+      && price.recurring?.interval === 'month'
+      && price.recurring?.interval_count === 1
+      && (!price.metadata?.plan || price.metadata.plan === planKey));
+  }
+
+  async validatePriceForPlan(priceId, planKey) {
+    return this.callStripe('validatePriceForPlan', async () => {
+      const price = await this.stripe.prices.retrieve(priceId);
+      if (!this.priceMatchesPlan(price, planKey)) {
+        throw new StripeOperationalError({
+          code: 'STRIPE_PRICE_MISMATCH',
+          message: 'Configured price does not match the active monthly USD plan in this Stripe mode.',
+          publicMessage: 'El precio configurado para este plan no está disponible. Contacta con soporte.',
+          statusCode: 503,
+          operation: 'validatePriceForPlan',
+        });
+      }
+      return price;
+    }, { plan: planKey, priceId });
+  }
+
   /**
    * Idempotently make sure the Stripe product + monthly USD price for ONE
    * plan exist, and return them. Products are matched by `metadata.plan`
@@ -422,7 +452,7 @@ class StripeService {
               plan: planKey,
               credits: planData.credits.toString()
             }
-          });
+          }, { idempotencyKey: `sira-product-${planKey}-v1` });
         }
 
         const prices = await this.stripe.prices.list({
@@ -430,10 +460,7 @@ class StripeService {
           active: true
         });
 
-        let price = prices.data.find(p =>
-          p.unit_amount === planData.price &&
-          p.recurring?.interval === 'month'
-        );
+        let price = prices.data.find(p => this.priceMatchesPlan(p, planKey));
 
         if (!price) {
           price = await this.stripe.prices.create({
@@ -446,7 +473,7 @@ class StripeService {
             metadata: {
               plan: planKey
             }
-          });
+          }, { idempotencyKey: `sira-price-${product.id}-${planKey}-${planData.price}-usd-month-v1` });
         }
 
         return {
@@ -478,12 +505,12 @@ class StripeService {
         metadata: {
           userId
         }
-      }),
+      }, { idempotencyKey: `sira-customer-${userId}` }),
       { userId, email }
     );
   }
 
-  async createCheckoutSession(priceId, customerId, userId, plan, successUrl, cancelUrl) {
+  async createCheckoutSession(priceId, customerId, userId, plan, successUrl, cancelUrl, options = {}) {
     return this.callStripe(
       'createCheckoutSession',
       () => this.stripe.checkout.sessions.create({
@@ -506,7 +533,7 @@ class StripeService {
             plan
           }
         }
-      }),
+      }, options),
       { userId, customerId, priceId, plan }
     );
   }
@@ -584,7 +611,7 @@ class StripeService {
       : paramsOrCustomerId;
     return this.callStripe(
       'retrieveUpcomingInvoice',
-      () => this.stripe.invoices.retrieveUpcoming(params),
+      () => this.stripe.invoices.createPreview(params),
       { customerId: params?.customer, subscriptionId: params?.subscription }
     );
   }
