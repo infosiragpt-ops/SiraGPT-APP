@@ -3318,6 +3318,16 @@ async function runAgentLoopInner({
       observationHistory.push(result);
       if (String(result).startsWith('ERROR:')) {
         deadLetterHistory.push({ tool: mapped, name: mapped, code: 'tool_error' });
+      } else {
+        // Recovery applies only to this tool. Preserve a limit already hit
+        // inside the current batch: later success must not reopen that tool.
+        const failures = deadLetterHistory.filter((entry) => entry.tool === mapped);
+        const exhausted = loadEngineAdapter()?.deadLetterSameToolAfterN?.(failures)?.halt === true;
+        if (!exhausted) {
+          for (let i = deadLetterHistory.length - 1; i >= 0; i -= 1) {
+            if (deadLetterHistory[i].tool === mapped) deadLetterHistory.splice(i, 1);
+          }
+        }
       }
       parallelFinished.push({ id: call && call.id, call, result });
       const ok = !String(result).startsWith('ERROR:');
