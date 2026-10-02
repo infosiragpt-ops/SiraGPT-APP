@@ -153,6 +153,15 @@ function buildVisionReaderFailureMessage(reason) {
         + 'Elige un modelo que vea imágenes o escribe aquí el contenido de la imagen y lo resuelvo.';
 }
 
+// The abort the caller's signal carries (an AbortError DOMException by
+// default), or an equivalent one, so the catch below treats a stream cut by
+// the user exactly like any other client cancel.
+function clientAbortError(signal) {
+    const reason = signal && signal.reason;
+    if (reason && typeof reason === 'object' && reason.name === 'AbortError') return reason;
+    return Object.assign(new Error('Request was aborted by the client.'), { name: 'AbortError', code: 'ABORT_ERR' });
+}
+
 function isPinnedUserGenerate(provider, model) {
     if (isPinnedLocalGenerate(provider, model)) return true;
     // Any explicit picker model is user-pinned — never silent-swap vendors.
@@ -1397,6 +1406,12 @@ class AIService {
                         await emitReasoningDone();
 
                         if (!hasStreamedAnyContent) {
+                            // The user pressed Stop (or the tab closed) before the
+                            // first token: WE cut the provider stream, the model
+                            // did not answer empty. Surface the client abort it
+                            // is — never a provider failure (no «❌ Error from
+                            // xAI API: Empty completion», no error frame, no memo).
+                            if (signal && signal.aborted) throw clientAbortError(signal);
                             throw Object.assign(new Error('Empty completion — model returned no content'), { code: 'EMPTY_COMPLETION' });
                         }
                         // Whitespace/punctuation-only deltas count as empty:
@@ -1409,6 +1424,7 @@ class AIService {
                             fullResponseContent = '';
                             hasStreamedAnyContent = false;
                             if (billingFailover && billingFailover.to.model === currentModel) billingFailover.noticePending = true;
+                            if (signal && signal.aborted) throw clientAbortError(signal);
                             throw Object.assign(new Error('Empty completion — model streamed only whitespace'), { code: 'EMPTY_COMPLETION' });
                         }
 

@@ -191,6 +191,58 @@ router.post('/sessions', requireFlag, authenticateToken, async (req, res) => {
   }
 });
 
+const DESKTOP_ACTION_TIMEOUT_MS = Number(process.env.COMPUTER_ACTION_TIMEOUT_MS) > 0
+  ? Number(process.env.COMPUTER_ACTION_TIMEOUT_MS)
+  : 45_000;
+
+function actionSignal(signal, ms) {
+  const timer = AbortSignal.timeout(ms);
+  if (!signal || typeof AbortSignal.any !== 'function') return timer;
+  try { return AbortSignal.any([signal, timer]); } catch (_) { return timer; }
+}
+
+// Forward one action to the desktop orchestrator. The call is bounded (a
+// desktop that hangs must not hold the route forever) and a transport
+// failure is a 502 with a Spanish message, never a raw `fetch failed`.
+async function forwardDesktopAction(target, action, { signal, fetchImpl = fetch, timeoutMs = DESKTOP_ACTION_TIMEOUT_MS } = {}) {
+  try {
+    return await fetchImpl(target, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action),
+      signal: actionSignal(signal, timeoutMs),
+    });
+  } catch (cause) {
+    if (signal && signal.aborted) throw cause;
+    const timedOut = cause && (cause.name === 'TimeoutError' || cause.name === 'AbortError');
+    const err = new Error(timedOut
+      ? 'El escritorio no respondió a tiempo. Inténtalo de nuevo.'
+      : 'No se pudo contactar el escritorio de este chat. Vuelve a abrir la computadora e inténtalo de nuevo.');
+    err.code = timedOut ? 'desktop_action_timeout' : 'desktop_unreachable';
+    err.status = timedOut ? 504 : 502;
+    err.publicMessage = err.message;
+    err.cause = cause;
+    throw err;
+  }
+}
+
+// The orchestrator's own 5xx (its CDP call timed out, the desktop died) is
+// an upstream failure: report it as such (504 / 502) with a message the
+// panel can show, instead of relaying it as a 500 of this API.
+function throwIfDesktopActionFailed(status, data) {
+  if (Number(status) < 500) return;
+  const detail = String((data && (data.error || data.message)) || '');
+  const timedOut = /timeout|timed?\s*out/i.test(detail);
+  const err = new Error(timedOut
+    ? 'El escritorio no respondió a tiempo. Inténtalo de nuevo.'
+    : 'El escritorio no pudo completar la acción. Vuelve a abrir la computadora e inténtalo de nuevo.');
+  err.code = timedOut ? 'desktop_action_timeout' : 'desktop_action_failed';
+  err.status = timedOut ? 504 : 502;
+  err.publicMessage = err.message;
+  err.upstream = { status: Number(status), error: detail.slice(0, 200) };
+  throw err;
+}
+
 function failComputer(res, err, fallbackCode) {
   return res.status(err.status || 500).json({
     error: err.code || fallbackCode,
@@ -382,8 +434,9 @@ async function handleAction(req, res, session) {
   const action = (mapped.actions && mapped.actions[0]) || rawAction;
   const orch = resolveOrchConfig();
   const target = orch.url + '/sessions/' + session.sessionId + '/agent/action';
-  const forwarded = await fetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
+  const forwarded = await forwardDesktopAction(target, action, { signal });
   const data = await forwarded.json().catch(() => ({}));
+  throwIfDesktopActionFailed(forwarded.status, data);
   return res.status(forwarded.status).json(withConversation({
     ...data,
     charge: charge.charge,
@@ -484,3 +537,5 @@ router.post('/login-handoff', requireFlag, authenticateToken, (req, res) => {
 module.exports = router;
 module.exports.identityFor = identityFor;
 module.exports.ensureMemberDesktop = ensureMemberDesktop;
+module.exports.forwardDesktopAction = forwardDesktopAction;
+module.exports.throwIfDesktopActionFailed = throwIfDesktopActionFailed;
