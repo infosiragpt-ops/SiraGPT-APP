@@ -14,6 +14,7 @@ describe("/agentes composer · «+ → Skills» (claude.ai style)", () => {
     const web = chat.indexOf("{isWebSearchActive ? 'Búsqueda web activa' : 'Búsqueda web'}")
     assert.ok(upload > 0 && skills > upload && web > skills, "Skills sits between upload and web search")
     assert.doesNotMatch(chat, /<div className="liquid-label font-medium text-sm">Modo de voz<\/div>/)
+    assert.match(source("components/chat/skills-menu.tsx"), />Habilidades \(skills\)<\/div>/)
   })
 
   it("sends the picked skills with the turn and clears the chips", () => {

@@ -1300,6 +1300,10 @@ const ActionsDropdown = ({
   const [tooltipOpen, setTooltipOpen] = React.useState(false);
   const [justClosed, setJustClosed] = React.useState(false);
   const closeTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const screenRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const screenStreamRef = React.useRef<MediaStream | null>(null);
+  const screenRecordingTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+  const [isScreenRecording, setIsScreenRecording] = React.useState(false);
   const isFreePlan = isFreePlanName(currentPlan);
 
   const handleFileUpload = (event?: Event | React.SyntheticEvent) => {
@@ -1325,6 +1329,114 @@ const ActionsDropdown = ({
       setIsOpen(false);
     }
   };
+
+  const clearScreenRecordingTimer = React.useCallback(() => {
+    if (screenRecordingTimerRef.current) {
+      clearTimeout(screenRecordingTimerRef.current);
+      screenRecordingTimerRef.current = null;
+    }
+  }, []);
+
+  const stopScreenRecording = React.useCallback(() => {
+    clearScreenRecordingTimer();
+    const recorder = screenRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        recorder.stop();
+      } catch {
+        screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+        screenRecorderRef.current = null;
+        screenStreamRef.current = null;
+        setIsScreenRecording(false);
+        toast.error('No se pudo detener la grabación de pantalla.');
+      }
+      return;
+    }
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenStreamRef.current = null;
+    setIsScreenRecording(false);
+  }, [clearScreenRecordingTimer]);
+
+  const startScreenRecording = React.useCallback(async () => {
+    if (isScreenRecording) {
+      stopScreenRecording();
+      return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Este navegador no permite grabar la pantalla.');
+      return;
+    }
+
+    let stream: MediaStream | null = null;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const mimeType = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4',
+      ].find((candidate) => (
+        typeof MediaRecorder.isTypeSupported !== 'function' || MediaRecorder.isTypeSupported(candidate)
+      )) || '';
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+
+      screenStreamRef.current = stream;
+      screenRecorderRef.current = recorder;
+      setIsScreenRecording(true);
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
+      recorder.onstop = () => {
+        clearScreenRecordingTimer();
+        stream?.getTracks().forEach((track) => track.stop());
+        screenStreamRef.current = null;
+        screenRecorderRef.current = null;
+        setIsScreenRecording(false);
+
+        const blob = new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/webm' });
+        if (blob.size === 0) {
+          toast.error('La grabación no produjo un video.');
+          return;
+        }
+        const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        const file = new File(
+          [blob],
+          `grabacion-pantalla-${new Date().toISOString().replace(/[:.]/g, '-')}.${extension}`,
+          { type: blob.type },
+        );
+        void handleAndUploadFiles(filesToFileList([file]), 'screen-recording');
+        setIsOpen(false);
+      };
+      recorder.start();
+      stream.getVideoTracks()[0]?.addEventListener('ended', stopScreenRecording, { once: true });
+      screenRecordingTimerRef.current = setTimeout(stopScreenRecording, 5 * 60 * 1000);
+    } catch (error: any) {
+      stream?.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+      screenRecorderRef.current = null;
+      setIsScreenRecording(false);
+      if (error?.name === 'NotAllowedError' || error?.name === 'AbortError') {
+        toast.info('Grabación de pantalla cancelada.');
+      } else {
+        toast.error(error?.message || 'No se pudo iniciar la grabación de pantalla.');
+      }
+    }
+  }, [clearScreenRecordingTimer, handleAndUploadFiles, isScreenRecording, stopScreenRecording]);
+
+  React.useEffect(() => () => {
+    clearScreenRecordingTimer();
+    const recorder = screenRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      try { recorder.stop(); } catch { /* already stopped by the browser */ }
+    }
+    screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+    screenRecorderRef.current = null;
+    screenStreamRef.current = null;
+  }, [clearScreenRecordingTimer]);
 
   // Function to handle single selection - deactivate others when one is selected
   const handleWebSearchToggle = () => {
@@ -1708,6 +1820,33 @@ const ActionsDropdown = ({
             data-accepts-any-format="true"
             onChange={handleFilesSelected}
           />
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            data-testid="chat-screen-record-trigger"
+            disabled={!isScreenRecording && isMenuDisabled}
+            onSelect={(event) => {
+              event.preventDefault();
+              void startScreenRecording();
+            }}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
+                {isScreenRecording ? (
+                  <Square className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                ) : (
+                  <Monitor className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">
+                  {isScreenRecording ? 'Detener grabación' : 'Grabar pantalla'}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {isScreenRecording ? 'Se adjuntará el video al detener' : 'Graba pantalla o ventana y adjúntala al mensaje'}
+                </div>
+              </div>
+            </div>
+          </DropdownMenuItem>
           {/* Agent Skills (claude.ai style): right under «Subir documento». */}
           {composerSkills ? <SkillsMenu skills={composerSkills} /> : null}
           {/* Web Search */}
