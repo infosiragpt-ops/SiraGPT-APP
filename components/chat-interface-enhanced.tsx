@@ -1341,7 +1341,15 @@ const ActionsDropdown = ({
     clearScreenRecordingTimer();
     const recorder = screenRecorderRef.current;
     if (recorder && recorder.state !== 'inactive') {
-      recorder.stop();
+      try {
+        recorder.stop();
+      } catch {
+        screenStreamRef.current?.getTracks().forEach((track) => track.stop());
+        screenRecorderRef.current = null;
+        screenStreamRef.current = null;
+        setIsScreenRecording(false);
+        toast.error('No se pudo detener la grabación de pantalla.');
+      }
       return;
     }
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -1367,7 +1375,9 @@ const ActionsDropdown = ({
         'video/webm;codecs=vp8,opus',
         'video/webm',
         'video/mp4',
-      ].find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
+      ].find((candidate) => (
+        typeof MediaRecorder.isTypeSupported !== 'function' || MediaRecorder.isTypeSupported(candidate)
+      )) || '';
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       const chunks: Blob[] = [];
 
