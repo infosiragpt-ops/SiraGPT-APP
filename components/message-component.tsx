@@ -3643,9 +3643,23 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         </article>
     );
 };
+// agentMetadata is re-created by every post-turn chat merge (the merge
+// spreads each row), so a reference check alone re-rendered every settled
+// agent bubble (trace hydration, artifact extraction) after each turn. Compare
+// by value when the references differ; the blob is small and this runs once
+// per bubble per merge, not per frame.
+const agentMetadataKey = (value: unknown): string => {
+    if (value == null) return ""
+    if (typeof value === "string") return value
+    try { return JSON.stringify(value) } catch { return String(value) }
+}
+
 export const areMessagePropsEqual = (prev: any, next: any) => {
     const a = prev.message
     const b = next.message
+    // Same row object and same live flag: nothing below can differ. This is
+    // the common case for every settled bubble on every stream flush.
+    if (a === b && Boolean(prev.isStreaming) === Boolean(next.isStreaming)) return true
     if (a.id !== b.id) return false
     if (a.content !== b.content) return false
     // The live timeline changes while content is still empty: new stages,
@@ -3653,7 +3667,7 @@ export const areMessagePropsEqual = (prev: any, next: any) => {
     if (Boolean(prev.isStreaming) !== Boolean(next.isStreaming)) return false
     if (a.progressStage !== b.progressStage) return false
     if (activitySignature(a.activityLog) !== activitySignature(b.activityLog)) return false
-    if (a.agentMetadata !== b.agentMetadata) return false
+    if (a.agentMetadata !== b.agentMetadata && agentMetadataKey(a.agentMetadata) !== agentMetadataKey(b.agentMetadata)) return false
     // Live reasoning and the agent harness also stream while content is empty.
     if ((a.reasoning || "").length !== (b.reasoning || "").length) return false
     if (Boolean(a.reasoningStreaming) !== Boolean(b.reasoningStreaming)) return false
