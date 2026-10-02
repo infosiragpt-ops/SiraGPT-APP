@@ -28,7 +28,10 @@ describe("/agentes premium finish", () => {
     assert.match(rail, /"mt-3 -ml-1 inline-flex items-center gap-1"/)
     const message = source("components/message-component.tsx")
     assert.match(message, /className="msg-actions-row flex flex-wrap items-center gap-2"/)
-    assert.match(message, /className="mt-2 flex items-center gap-1 opacity-100 \[@media\(hover:hover\)\]:opacity-0/)
+    // 2026-10-02 (claude.ai density): the user row sits 6px under the bubble
+    // with 28px tiles and a quiet «hace N min» label; phones tighten it further
+    // via `.msg--user .msg-user-actions`.
+    assert.match(message, /className="msg-user-actions mt-1\.5 flex items-center gap-0\.5 opacity-100 \[@media\(hover:hover\)\]:opacity-0/)
   })
 
   it("a picture clicked in the chat opens a plain lightbox; the edit toolbar belongs to the image tool", () => {

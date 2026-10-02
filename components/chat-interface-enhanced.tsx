@@ -1660,7 +1660,7 @@ const ActionsDropdown = ({
                 variant="ghost"
                 size="sm"
                 aria-label="Adjuntar archivos y herramientas"
-                className="composer-plus-liquid-button flex h-10 w-10 items-center justify-center rounded-full p-0"
+                className="composer-plus-liquid-button flex h-9 w-9 items-center justify-center rounded-full p-0"
                 disabled={isMenuDisabled}
               >
                 <Plus className="relative z-10 h-5 w-5" strokeWidth={2.2} />
@@ -14730,7 +14730,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     aria-label="Abrir el menú lateral"
                     title="Abrir el menú"
                     data-testid="chat-mobile-sidebar-open"
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
                   >
                     <SidebarOvalIcon className="h-[18px] w-[18px]" />
                   </button>

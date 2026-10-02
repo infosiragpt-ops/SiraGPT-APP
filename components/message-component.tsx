@@ -95,7 +95,7 @@ import { OWNED_ELSEWHERE_PHASES } from "@/lib/chat/live-progress";
 import ActivityRail from "./activity-rail"
 import ThinkingTrace from "./thinking-trace"
 import AgentTrace from "./agent-trace"
-import MessageActionRail from "./MessageActionRail"
+import MessageActionRail, { formatRelativeTimeEs } from "./MessageActionRail"
 import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
@@ -3252,6 +3252,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     };
 
 
+    // «hace 1 min» under the user bubble, like claude.ai; null hides the label.
+    const userRelativeTime = message.role === 'USER'
+        ? formatRelativeTimeEs((message as any).timestamp || (message as any).createdAt || null)
+        : null;
+
     return (
         <article
             className={cn("flex", message.role === "USER" ? "msg--user" : "msg--assistant")}
@@ -3325,11 +3330,17 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             // Devices without hover (phones, tablets) always
                             // show the row; pointer devices keep the hover
                             // reveal, and keyboard focus reveals it too.
-                            <div className="mt-2 flex items-center gap-1 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <div className="msg-user-actions mt-1.5 flex items-center gap-0.5 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                                {/* claude.ai: a quiet relative time leads the row. */}
+                                {userRelativeTime ? (
+                                    <span className="mr-1 select-none text-[11px] tabular-nums text-muted-foreground/60">
+                                        {userRelativeTime}
+                                    </span>
+                                ) : null}
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-6 w-6"
+                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
                                     aria-label={isCopied ? tMessageActions("copied") : tMessageActions("copy")}
                                     onClick={() => {
                                         copyMarkdownToWordClipboard(formatAgentTaskUserContent(message.content))
@@ -3351,7 +3362,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-6 w-6"
+                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
                                     aria-label={tCommon("edit")}
                                     onClick={() => {
                                         // Seed the draft on entry instead of syncing it on
