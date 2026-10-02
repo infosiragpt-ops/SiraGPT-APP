@@ -1732,6 +1732,33 @@ central»). Sustituye al nudo de cinco bucles del día anterior. UI lock re-base
   `theme_color` #ffffff y maskable al átomo; `layout.tsx` añade `?v=atom` a los iconos para
   que el navegador suelte el favicon trébol cacheado; `sw.js` precachea `/brand/atom.svg`.
 
+## Chats largos: por qué se volvía lento y qué se hizo (added 2026-10-02)
+
+Reporte de Luis: «cuando ya llevo un buen rato hablando se empieza a hacer lento».
+Diagnóstico en dos frentes, con las mitigaciones ya existentes respetadas (buffer rAF,
+memo de `ChatMessageList`/`MessageComponent`, Virtuoso >40, compactación de contexto).
+- **Navegador (por frame mientras llega la respuesta)**: `dedupeMessages` corría dos veces
+  por flush (~60 Hz) sobre TODO el chat y el paso B hacía `JSON.parse` de la metadata y una
+  regex de normalización sobre cada respuesta histórica por comparación; `shouldRenderChatMessage`
+  parseaba `files` de cada mensaje por frame; el efecto de recuperación de tareas del agente
+  (`findRecoverableAgentTaskMessage`) recorría todo el historial por frame; y el comparador
+  `areMessagePropsEqual` reconstruía firmas/`JSON.stringify(files)` sin atajo cuando el objeto
+  era el mismo, y re-renderizaba cada burbuja de agente tras cada turno porque el merge
+  recrea `agentMetadata`. Fix: memos por objeto (`WeakMap`, invalidadas por referencia de
+  `metadata`/`content`/`files`) en `lib/message-preservation.ts` y
+  `lib/chat/message-rendering.ts`; atajo `a === b` y `agentMetadata` por valor en el
+  comparador; el efecto de recuperación espera a que termine el stream.
+- **Backend (por turno)**: ver «Chats largos — topes del historial por turno» en
+  `docs/ENV_VARIABLES.md` (imágenes históricas solo de las 3 filas más recientes, texto de
+  adjuntos históricos a 8k, filas de la pila de entendimiento a 6k/1.5k) y
+  `GET /api/chats/:id` ya no envía `reasoningDetails` (cadena de razonamiento firmada que el
+  cliente nunca lee y que la UI descargaba tras cada turno).
+- **Pendiente (decisión de Luis)**: bajar `SIRAGPT_COMPACT_MAX_HISTORY_TOKENS` (80k) /
+  ratio de compactación anticipada; mover los bloques volátiles del system prompt detrás del
+  historial para que el prefix-caching de OpenAI/DeepSeek/Gemini reutilice el historial;
+  umbral de Virtuoso 40 → ~16; `?after=` incremental en `GET /api/chats/:id`.
+- Tests: `tests/long-chat-perf.test.ts`, `backend/tests/long-chat-history-caps.test.js`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

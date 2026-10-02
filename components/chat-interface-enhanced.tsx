@@ -6681,6 +6681,11 @@ function ChatInterfaceContent() {
   // above keep normal poll updates from creating a second connection.
   React.useEffect(() => {
     if (!currentChatId) return;
+    // The messages array is replaced on every stream flush; scanning the
+    // whole history (JSON.parse of every agent envelope) per frame made long
+    // chats sluggish. A recoverable bubble cannot arrive mid-stream, so wait
+    // for the stream to settle; the effect re-runs on that final change.
+    if (isCurrentChatStreaming) return;
     if (localJobControllersRef.current.has(currentChatId)) return;
     if (agentTaskRecoveryControllersRef.current.has(currentChatId)) return;
     const candidate = findRecoverableAgentTaskMessage(currentChat?.messages || []);
@@ -6689,7 +6694,7 @@ function ChatInterfaceContent() {
     if (agentTaskRecoveryWakeKeysRef.current.get(currentChatId) === wakeKey) return;
     agentTaskRecoveryWakeKeysRef.current.set(currentChatId, wakeKey);
     setAgentTaskRecoveryHydrationNonce(value => value + 1);
-  }, [currentChat?.messages, currentChatId]);
+  }, [currentChat?.messages, currentChatId, isCurrentChatStreaming]);
 
   // Voice Studio panel state
   const [showAudioPanel, setShowAudioPanel] = React.useState(false);

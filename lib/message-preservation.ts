@@ -373,10 +373,40 @@ function parseTurnMetadata(value: unknown): Record<string, unknown> {
   }
 }
 
-export function turnIdentityKey(message?: { metadata?: unknown } | null): string {
-  const metadata = parseTurnMetadata(message?.metadata);
-  const key = metadata.idempotencyKey || metadata.streamId || metadata.turnKey;
+// Per-message memo for the identity key and the whitespace-normalised text.
+// dedupeMessages runs on EVERY stream flush (~60 Hz) over the whole chat, and
+// Pass B compares each optimistic bubble against every stable row: without
+// the memo that was a JSON.parse of the metadata plus a regex pass over every
+// historical answer per frame — the chat got slower the longer it ran.
+// Historical rows are reference-stable, so the memo hits; the live bubble is
+// a new object each frame and is normalised once per frame (its own length).
+type IdentityMemo = { metadata: unknown; key: string };
+type NormalizedMemo = { content: unknown; text: string };
+const identityMemo = new WeakMap<object, IdentityMemo>();
+const normalizedMemo = new WeakMap<object, NormalizedMemo>();
+
+function computeTurnIdentityKey(metadata: unknown): string {
+  const parsed = parseTurnMetadata(metadata);
+  const key = parsed.idempotencyKey || parsed.streamId || parsed.turnKey;
   return typeof key === 'string' ? key.trim() : '';
+}
+
+export function turnIdentityKey(message?: { metadata?: unknown } | null): string {
+  if (!message || typeof message !== 'object') return '';
+  const hit = identityMemo.get(message);
+  if (hit && hit.metadata === message.metadata) return hit.key;
+  const key = computeTurnIdentityKey(message.metadata);
+  identityMemo.set(message, { metadata: message.metadata, key });
+  return key;
+}
+
+function normalizedText(message: { content?: unknown } | null | undefined): string {
+  if (!message || typeof message !== 'object') return '';
+  const hit = normalizedMemo.get(message);
+  if (hit && hit.content === message.content) return hit.text;
+  const text = asText(message.content).trim().replace(/\s+/g, ' ');
+  normalizedMemo.set(message, { content: message.content, text });
+  return text;
 }
 
 // Minimal structural shape for dedupe — deliberately WITHOUT ChatMessageLike's
@@ -393,11 +423,12 @@ type DedupeMessageLike = {
 };
 
 const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
-  const ta = asText(a?.content).trim();
-  const tb = asText(b?.content).trim();
-  if (!ta || !tb) return false;
   // Tolerate trivial whitespace differences (server may collapse newlines).
-  return ta.replace(/\s+/g, ' ') === tb.replace(/\s+/g, ' ');
+  const ta = normalizedText(a);
+  if (!ta) return false;
+  const tb = normalizedText(b);
+  if (!tb) return false;
+  return ta === tb;
 };
 
 const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
@@ -534,10 +565,9 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   // Pass B — drop optimistic twins whose stable-id sibling is already present.
   // Graft files from the optimistic copy onto the surviving server row first
   // so an audio attachment that only existed locally does not vanish.
-  const isStableTwinOf = (candidate: TMessage, candidateIndex: number, other: TMessage, otherIndex: number) => {
+  const isStableTwinOf = (candidate: TMessage, candidateIndex: number, other: TMessage, otherIndex: number, candidateKey: string) => {
     if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
     if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
-    const candidateKey = turnIdentityKey(candidate);
     const otherKey = turnIdentityKey(other);
     // Live placeholder is `msg-ai-…` (empty). DB row is `cmti…` with the
     // same idempotencyKey. Match by turn identity even when content differs
@@ -558,7 +588,8 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   collapsed.forEach((message, index) => {
     const id = message?.id ? String(message.id) : '';
     if (!id || !OPTIMISTIC_ID_RE.test(id)) return;
-    const twinIndex = collapsed.findIndex((other, j) => j !== index && isStableTwinOf(message, index, other, j));
+    const candidateKey = turnIdentityKey(message);
+    const twinIndex = collapsed.findIndex((other, j) => j !== index && isStableTwinOf(message, index, other, j, candidateKey));
     if (twinIndex >= 0) optimisticTwinIndexes.set(index, twinIndex);
   });
   for (const [optimisticIndex, stableIndex] of optimisticTwinIndexes) {

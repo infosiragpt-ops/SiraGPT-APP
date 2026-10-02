@@ -740,6 +740,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
     // Serialize BigInt fields before sending response
     const serializedChat = serializeChat(chat);
     if (serializedChat?.messages?.length) {
+      // `reasoningDetails` is the raw signed thinking chain replayed to the
+      // provider server-side; the client never reads it, and on long chats
+      // it was the bulk of a payload the UI downloads after every turn.
+      for (const message of serializedChat.messages) {
+        if (message && typeof message === 'object' && 'reasoningDetails' in message) delete message.reasoningDetails;
+      }
       serializedChat.messages = await hydrateChatMessageAttachments(prisma, {
         userId: req.user.id,
         messages: serializedChat.messages,

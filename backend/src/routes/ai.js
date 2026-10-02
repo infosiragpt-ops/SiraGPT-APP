@@ -2056,6 +2056,54 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 
 const streamControllers = new Map();
 
+// Per-row caps for the history handed to the understanding stack (see the
+// in-thread block below). Env-tunable; 0 disables the cap.
+const UNDERSTANDING_RECENT_ROWS = 6;
+const UNDERSTANDING_RECENT_MAX_CHARS = Number(process.env.SIRAGPT_UNDERSTANDING_RECENT_MAX_CHARS) >= 0
+  ? Number(process.env.SIRAGPT_UNDERSTANDING_RECENT_MAX_CHARS)
+  : 6000;
+const UNDERSTANDING_OLD_MAX_CHARS = Number(process.env.SIRAGPT_UNDERSTANDING_OLD_MAX_CHARS) >= 0
+  ? Number(process.env.SIRAGPT_UNDERSTANDING_OLD_MAX_CHARS)
+  : 1500;
+function capUnderstandingHistoryContent(content, recent) {
+  const text = String(content || '');
+  const max = recent ? UNDERSTANDING_RECENT_MAX_CHARS : UNDERSTANDING_OLD_MAX_CHARS;
+  if (!max || text.length <= max) return text;
+  return `${text.slice(0, max)}…`;
+}
+
+// History replay caps (the prompt sent to the model). Every historical image
+// used to be re-read from disk and inlined as base64 (detail: high) on every
+// turn, and every historical attachment re-appended its full extracted text:
+// the prompt grew with the chat and the wait before the first token with it.
+// Only the newest HISTORY_INLINE_IMAGE_ROWS image-bearing rows keep their
+// pixels (older ones become a named stub the model can still refer to), and
+// an attachment's text is capped per row — the current turn re-attaches the
+// recent documents in full through the file context / RAG path anyway.
+const HISTORY_INLINE_IMAGE_ROWS = Number(process.env.SIRAGPT_HISTORY_INLINE_IMAGE_ROWS) >= 0
+  ? Number(process.env.SIRAGPT_HISTORY_INLINE_IMAGE_ROWS)
+  : 3;
+const HISTORY_ATTACHMENT_TEXT_MAX_CHARS = Number(process.env.SIRAGPT_HISTORY_ATTACHMENT_TEXT_MAX_CHARS) >= 0
+  ? Number(process.env.SIRAGPT_HISTORY_ATTACHMENT_TEXT_MAX_CHARS)
+  : 8000;
+function capHistoryAttachmentText(text) {
+  const value = String(text || '');
+  if (!HISTORY_ATTACHMENT_TEXT_MAX_CHARS || value.length <= HISTORY_ATTACHMENT_TEXT_MAX_CHARS) return value;
+  return `${value.slice(0, HISTORY_ATTACHMENT_TEXT_MAX_CHARS)}\n[… texto recortado en el historial: ${value.length - HISTORY_ATTACHMENT_TEXT_MAX_CHARS} caracteres más. El documento completo sigue disponible como adjunto.]`;
+}
+// Indexes of the history rows whose images stay inline this turn.
+function historyRowsWithInlineImages(rows, isImageAttachment) {
+  const keep = new Set();
+  if (!HISTORY_INLINE_IMAGE_ROWS) return keep;
+  for (let i = rows.length - 1; i >= 0 && keep.size < HISTORY_INLINE_IMAGE_ROWS; i -= 1) {
+    const m = rows[i];
+    let files = [];
+    try { files = typeof m.files === 'string' ? JSON.parse(m.files) : (m.files || []); } catch { files = []; }
+    if (Array.isArray(files) && files.some(isImageAttachment)) keep.add(i);
+  }
+  return keep;
+}
+
 function stopGenerateSseHeartbeat(handle) {
   try {
     const { sseCancelClearsHeartbeat } = require('../services/agent-runner/engine-adapter');
@@ -3901,10 +3949,15 @@ router.post(
               select: { role: true, content: true },
             });
           }
-          // Map oldest → newest, normalized shape for the resolver.
-          __conversationHistoryForUnderstanding = __historyMsgs.slice().reverse().map((m) => ({
+          // Map oldest → newest, normalized shape for the resolver. Each row
+          // is capped: the understanding stack (attribution, saliency, RLCD,
+          // CIRA…) runs synchronously on the event loop over up to 80 rows
+          // every turn, so a chat full of long answers made each turn slower
+          // than the last. The last turns keep more text than the old ones.
+          const __historyRows = __historyMsgs.slice().reverse();
+          __conversationHistoryForUnderstanding = __historyRows.map((m, index) => ({
             role: m.role === 'ASSISTANT' ? 'assistant' : 'user',
-            content: m.content || '',
+            content: capUnderstandingHistoryContent(m.content || '', __historyRows.length - index <= UNDERSTANDING_RECENT_ROWS),
           })).filter((m) => m.content);
           __pr3RecentTurns = __conversationHistoryForUnderstanding.slice(-6).map((m) => ({
             role: m.role,
@@ -7083,7 +7136,9 @@ router.post(
           || (!currentTurnHasNonImageFiles && routeCanReachVision(actualProvider, actualModel)));
       let messages = [systemInstruction];
       if (historyMessages.length) {
-        for (const m of historyMessages) {
+        const isHistoryImageAttachment = (f) => Boolean(f) && (isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image');
+        const inlineImageRows = historyRowsWithInlineImages(historyMessages, isHistoryImageAttachment);
+        for (const [historyIndex, m] of historyMessages.entries()) {
           const messageRole = m.role === 'USER' ? 'user' : 'assistant';
 
           // Parse files if present
@@ -7104,10 +7159,10 @@ router.post(
           // carries a document/spreadsheet/PDF, historical images are
           // intentionally omitted so a "dame un resumen" request cannot
           // drift into a previous weather/image-generation context.
-          const historicalImageFiles = parsedFiles.filter(f =>
-            isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image'
-          );
-          const imageFiles = currentTurnHasNonImageFiles ? [] : historicalImageFiles;
+          const historicalImageFiles = parsedFiles.filter(isHistoryImageAttachment);
+          // Older image rows keep a named stub instead of their pixels.
+          const imagesInlineForRow = inlineImageRows.has(historyIndex);
+          const imageFiles = currentTurnHasNonImageFiles || !imagesInlineForRow ? [] : historicalImageFiles;
 
           const nonImageFiles = parsedFiles.filter(f =>
             !(isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image')
@@ -7160,7 +7215,7 @@ router.post(
                 const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
                   ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
                   : '';
-                const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
+                const content = capHistoryAttachmentText(preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f));
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
 
@@ -7179,6 +7234,9 @@ router.post(
               messageContent += `\n\n[${imageFiles.length} imagen(es) adjunta(s): ${imageNames}. Este modelo no soporta entrada de imagen; las imágenes no se pudieron procesar visualmente.]`;
             } else if (currentTurnHasNonImageFiles && historicalImageFiles.length > 0) {
               messageContent += `\n\n[${historicalImageFiles.length} previous image attachment(s) omitted because the current user turn has document attachments. Do not use those previous visuals unless explicitly requested.]`;
+            } else if (!imagesInlineForRow && historicalImageFiles.length > 0) {
+              const imageNames = historicalImageFiles.map(f => f.name || f.originalName || 'imagen').join(', ');
+              messageContent += `\n\n[${historicalImageFiles.length} imagen(es) adjunta(s) anteriormente: ${imageNames}. Solo las imágenes más recientes viajan en cada turno; si el usuario pide volver a esta, pídele que la reenvíe.]`;
             }
 
             if (nonImageFiles.length > 0) {
@@ -7186,7 +7244,7 @@ router.post(
                 const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
                   ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
                   : '';
-                const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
+                const content = capHistoryAttachmentText(preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f));
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
               messageContent += fileContext;

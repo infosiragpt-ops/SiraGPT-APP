@@ -81,12 +81,57 @@ export function hasMessageTextForRender(content: unknown): boolean {
   return String(content).trim().length > 0
 }
 
+// The transcript filters EVERY message through this on each stream flush
+// (~60 Hz). The verdict only depends on these fields, and historical rows are
+// reference-stable, so memoise per message object and recompute only when one
+// of the inputs changes (the live bubble is a new object each frame anyway).
+type RenderVerdictMemo = {
+  content: unknown
+  files: unknown
+  error: unknown
+  progressStage: unknown
+  activityRail: unknown
+  activityLog: unknown
+  allowEmpty: boolean
+  verdict: boolean
+}
+const renderVerdictMemo = new WeakMap<object, RenderVerdictMemo>()
+
 export function shouldRenderChatMessage(
   message: unknown,
   allowEmptyStreamingAssistant = false,
 ): boolean {
   const candidate = asRenderableMessage(message)
   if (!candidate) return false
+  const hit = renderVerdictMemo.get(candidate)
+  if (
+    hit
+    && hit.allowEmpty === allowEmptyStreamingAssistant
+    && hit.content === candidate.content
+    && hit.files === candidate.files
+    && hit.error === candidate.error
+    && hit.progressStage === candidate.progressStage
+    && hit.activityRail === candidate.activityRail
+    && hit.activityLog === candidate.activityLog
+  ) return hit.verdict
+  const verdict = computeRenderVerdict(candidate, allowEmptyStreamingAssistant)
+  renderVerdictMemo.set(candidate, {
+    content: candidate.content,
+    files: candidate.files,
+    error: candidate.error,
+    progressStage: candidate.progressStage,
+    activityRail: candidate.activityRail,
+    activityLog: candidate.activityLog,
+    allowEmpty: allowEmptyStreamingAssistant,
+    verdict,
+  })
+  return verdict
+}
+
+function computeRenderVerdict(
+  candidate: RenderableChatMessage,
+  allowEmptyStreamingAssistant: boolean,
+): boolean {
 
   const role = String(candidate.role || "").toUpperCase()
   if (role === "USER") return true

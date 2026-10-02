@@ -116,6 +116,22 @@ plus the steering flag it already defines:
 | `SIRAGPT_LLM_GATEWAY_BREAKER_RESET_MS` | `60000` | Circuit breaker reset timeout (opossum) |
 | `SIRAGPT_LLM_MAX_TOKENS` | `4096` | Max tokens per LLM call |
 
+### Chats largos — topes del historial por turno (added 2026-10-02)
+
+Cada turno de `/api/ai/generate` repetía el historial completo: cada imagen
+histórica se releía del disco y viajaba en base64 (`detail: high`), cada adjunto
+histórico re-adjuntaba su texto extraído entero y la pila de entendimiento
+(atribución, saliencia, RLCD, CIRA) corría síncrona sobre 80 filas sin recortar.
+El turno N era más lento que el N-1. Topes (0 = sin tope):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_HISTORY_INLINE_IMAGE_ROWS` | `3` | Filas con imagen más recientes cuyas imágenes viajan al modelo; las anteriores quedan como stub con el nombre |
+| `SIRAGPT_HISTORY_ATTACHMENT_TEXT_MAX_CHARS` | `8000` | Tope por adjunto histórico del texto extraído repetido en el prompt (el turno actual re-adjunta los documentos recientes completos por file-context/RAG) |
+| `SIRAGPT_UNDERSTANDING_RECENT_MAX_CHARS` | `6000` | Tope por fila para las últimas 6 filas que ve la pila de entendimiento |
+| `SIRAGPT_UNDERSTANDING_OLD_MAX_CHARS` | `1500` | Tope por fila para las filas anteriores de esa pila |
+| `COMPUTER_ACTION_TIMEOUT_MS` | `45000` | Tope del reenvío de una acción al orquestador del escritorio (`POST /api/agent-computer/action`); 504 `desktop_action_timeout` al agotarse |
+
 ---
 
 ## Embeddings ladder (RAG + memory)
