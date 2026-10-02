@@ -356,7 +356,7 @@ function createOrchestrator(opts = {}) {
           err.status = 400;
           throw err;
         }
-        const chromeFlags = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-infobars --test-type --start-maximized --window-size=1920,1080 --window-position=0,0 --user-data-dir=/workspace/.chrome';
+        const chromeFlags = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-infobars --test-type --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --start-maximized --window-size=1920,1080 --window-position=0,0 --user-data-dir=/workspace/.chrome';
         const quoted = JSON.stringify(urlToOpen);
         const focus = [
           'xdotool search --onlyvisible --class google-chrome windowactivate --sync windowmove 0 0 windowsize 1920 1080',

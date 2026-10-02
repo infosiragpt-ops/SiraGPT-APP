@@ -18,6 +18,8 @@ const CHROME_DOCKER_FLAGS = [
   '--hide-crash-restore-bubble',
   '--disable-infobars',
   '--test-type',
+  '--remote-debugging-port=9222',
+  '--remote-debugging-address=0.0.0.0',
   '--user-data-dir=/workspace/.chrome',
 ].join(' ');
 
