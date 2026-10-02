@@ -9666,3 +9666,78 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   box-shadow: 0 30px 80px -30px hsl(0 0% 0% / 0.9), 0 0 0 1px hsl(0 0% 100% / 0.08);
   overflow: hidden;
 }
+
+/* ───────────────────────────────────────────────────────────────
+ * Compact chat density on phones — claude.ai parity (Luis, 2026-10-02)
+ *
+ * The #78 touch-target rule above inflates EVERY button to 44 × 44 on
+ * coarse pointers. In the chat that doubled the header, spread the
+ * copy / edit row under the user bubble and the action rail under the
+ * answer, and made the composer a 44px-button bar — nothing like the
+ * compact claude.ai layout Luis compared it with. The chat surfaces now
+ * keep their own 28–36px geometry; the `::after` hit-area expansion
+ * (≤767px, aria-labelled h-7 / h-8 / h-9 buttons) still gives each
+ * control an invisible 44px tap zone, so nothing gets harder to tap.
+ * ─────────────────────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  :is(.chat-mobile-header, .composer-input-row, .msg--user, .chat-assistant-message)
+    button:not([data-no-tap-target]):not(.no-tap-target),
+  :is(.chat-mobile-header, .composer-input-row, .msg--user, .chat-assistant-message)
+    [role="button"]:not([data-no-tap-target]):not(.no-tap-target) {
+    min-height: 0;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  /* Header: a quieter strip — less top air, 36px controls, 18px glyphs. */
+  .chat-mobile-header {
+    padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
+  }
+  .chat-header-row {
+    min-height: 2.5rem;
+  }
+
+  /* Composer: 36px round controls (+, mic, send) on a 48px row, 32px pill. */
+  .composer-input-row {
+    min-height: 3rem;
+    padding: 0.3rem 0.35rem 0.3rem 0.3rem !important;
+  }
+  .composer-input-row .composer-toolbar-actions {
+    min-height: 2.25rem;
+  }
+  .composer-plus-liquid-button,
+  .composer-input-row .composer-toolbar-actions > button.composer-dictation-button,
+  .composer-input-row .composer-toolbar-actions > button.composer-send-button,
+  .composer-input-row .composer-toolbar-actions > button.composer-stop-button {
+    width: 2.25rem !important;
+    min-width: 2.25rem;
+    height: 2.25rem !important;
+    min-height: 2.25rem;
+  }
+  /* Every footer control shares the 36px line: pill, shield, ring and ⚡. */
+  .chat-model-trigger,
+  .chat-context-trigger,
+  .composer-input-row .composer-model-inline .chat-model-trigger,
+  .composer-permission-chip,
+  .composer-effort-chip,
+  .composer-context-trigger {
+    height: 2.25rem !important;
+    min-height: 2.25rem;
+  }
+  /* Smaller discs free ~1.2rem for the model name (budget was 16.1rem). */
+  .composer-model-inline {
+    max-width: min(46vw, max(3.5rem, calc(100vw - 2 * var(--chat-mobile-gutter, 0.75rem) - 14.9rem))) !important;
+  }
+  .chat-composer-disclaimer {
+    font-size: 11px;
+    line-height: 1rem;
+  }
+
+  /* Message actions: 28px tiles with 14px glyphs sit tight under the
+     bubble / answer, like claude.ai («hace 1 min · ↺ ✎ ⧉»). */
+  .msg--user .msg-user-actions {
+    gap: 0.125rem;
+    margin-top: 0.25rem;
+  }
+}

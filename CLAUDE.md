@@ -1667,6 +1667,30 @@ volvía a aparecer con la respuesta; el día anterior «no podía graficar».
   `agent-runner/index.js`, bootstrap del wrapper, instrucción de import en el prompt).
   Invariante **I17** en AGENTS.md.
 
+## Densidad compacta del chat en móvil — paridad claude.ai (added 2026-10-02)
+
+Pedido de Luis con capturas de siragpt.com y claude.ai en iPhone («todo se ve más compacto,
+más profesional»). UI lock re-baselineado para los archivos tocados.
+- **Causa**: la regla global #78 de `globals.css` (`@media (pointer: coarse)` → `min-height/
+  min-width: 2.75rem` en todo botón) inflaba a 44 px cada control del chat en teléfonos:
+  cabecera, fila copiar/editar bajo la burbuja, barra de acciones de la respuesta y los
+  botones del compositor (su lista de excepciones `pre button, .composer-toolbar button…`
+  nunca ganaba por especificidad). Eso separaba y agrandaba todo frente a claude.ai.
+- **Fix** (bloque «Compact chat density on phones» al FINAL de `globals.css`): `:is(.chat-
+  mobile-header, .composer-input-row, .msg--user, .chat-assistant-message) button:not(…)`
+  recupera su geometría propia; el pseudo `::after` de 44 px (≤767px, botones con aria-label
+  h-7/h-8/h-9) conserva el área táctil. En ≤767px: cabecera con menos aire arriba, `+`/mic/
+  enviar/parar a 36 px, pill del modelo y chips (escudo, anillo, ⚡) a 36 px, fila del
+  compositor 3rem, presupuesto del pill 14.9rem (antes 16.1), disclaimer 11px.
+- **Mensajes**: la fila bajo la burbuja del usuario es `msg-user-actions` (`mt-1.5`, tiles
+  `h-7 w-7` con glifo 14 px) y abre con «hace N min» (`formatRelativeTimeEs` de
+  `MessageActionRail`), como claude.ai. El rail de la respuesta no cambia (ya era 28 px).
+- Escritorio intacto salvo esa fila (28 px en vez de 24). Verificado en navegador (390×844
+  claro/oscuro, 1280 escritorio) y con `e2e/chat-composer-stable-size.spec.ts` (8/8).
+- Tests: `tests/chat-mobile-compact-density-source.test.ts` (nuevo),
+  `tests/agentes-premium-finish-source.test.ts` (clase de la fila actualizada).
+- Gotcha repetido: `next dev` sirvió `globals.css` viejo hasta `rm -rf .next/cache/webpack`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
