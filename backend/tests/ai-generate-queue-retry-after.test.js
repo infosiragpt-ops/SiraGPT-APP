@@ -98,9 +98,12 @@ test('webdev: a picked model that fails is reported (the buffered error frame), 
   assert.ok(start > 0);
   const block = route.slice(start, route.indexOf("'/generate-google-services'"));
   assert.match(block, /frame\.type === 'error' && frame\.recovered !== true\) webdevErrorFrame = frame;/);
-  const failAt = block.indexOf('if (webdevErrorFrame && !signal.aborted) {');
+  // A Stop during the first pass returns first; then the picked model's
+  // failure is handled before any repair / template fallback.
+  const stopAt = block.indexOf('if (signal.aborted) return;');
+  const failAt = block.indexOf('if (webdevErrorFrame) {');
   const repairAt = block.indexOf('if (!webdevProviderFailed) {');
-  assert.ok(failAt > 0 && repairAt > failAt, 'the failure is handled before any repair / template fallback');
+  assert.ok(stopAt > 0 && failAt > stopAt && repairAt > failAt, 'the failure is handled before any repair / template fallback');
   assert.match(block.slice(failAt, repairAt), /closeGenerateSseWithError\(res, \{/);
   // A failed webdev turn is persisted as the honest reply but never metered
   // (the quota counts ApiUsage rows, which saveChatAndTrackUsage now skips).

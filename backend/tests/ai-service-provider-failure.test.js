@@ -300,6 +300,28 @@ test('the user Stop is neutral for the breaker: it neither counts nor drains ear
   assert.equal(breaker.state, STATES.CLOSED);
 });
 
+test('Stop before the first token (empty provider stream): a client abort, not «Empty completion» — no error frame, no failure report, no memo', async () => {
+  process.env.XAI_API_KEY = 'xai-test-key';
+  const ctrl = new AbortController();
+  // The SDK stream, cut by our abort listener, ends without a single delta.
+  const cutStream = {
+    async *[Symbol.asyncIterator]() {
+      ctrl.abort();
+    },
+  };
+  const { out, frames, failures } = await runGenerate({
+    provider: 'xAI',
+    model: 'grok-4.7',
+    signal: ctrl.signal,
+    primaryCreate: async () => cutStream,
+  });
+  assert.equal(out, '');
+  assert.equal(errorFrame(frames), null, 'no «no pudo responder» frame for a stream the user stopped');
+  assert.equal(failures.length, 0, 'a user Stop is not a provider failure');
+  assert.equal(billing.failoverReasonFor(Object.assign(new Error('x'), { siraProvider: 'xAI' })), null);
+  assert.equal(getBreaker('xAI:grok-4.7').failureCount, 0);
+});
+
 test('SiraGPT Mini / Custom never fail over and never feed the memo', async () => {
   const r = await runGenerate({
     provider: 'Custom',

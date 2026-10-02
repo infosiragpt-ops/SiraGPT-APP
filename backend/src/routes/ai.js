@@ -14073,10 +14073,16 @@ Every element should feel intentionally designed, polished, and premium. The use
           modelLabel: () => require('../services/ai/picked-model-label').resolvePickedModelLabel({ model, provider, prisma }),
         });
 
+        // The user stopped (or closed the tab) during the first pass: there
+        // is nothing to repair and nobody to answer. The design fallback
+        // would only die with an abort of its own, logged as a generation
+        // error («APIUserAbortError: Request was aborted»).
+        if (signal.aborted) return;
+
         // The picked model could not answer: tell the user exactly which
         // model and why (the buffered frame never reached them), and never
         // build a site without it (no repair pass, no template fallback).
-        if (webdevErrorFrame && !signal.aborted) {
+        if (webdevErrorFrame) {
           webdevProviderFailed = true;
           fullResponseContent = String(webdevErrorFrame.message || webdevErrorFrame.error || '').trim();
           closeGenerateSseWithError(res, {
@@ -14149,7 +14155,12 @@ Every element should feel intentionally designed, polished, and premium. The use
           res.write(`data: [DONE]\n\n`);
         }
       } catch (apiError) {
-        if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
+        // A client abort surfaces as the SDK's APIUserAbortError (OpenAI /
+        // xAI / DeepSeek) or a plain AbortError; either way the request is
+        // over, not failed.
+        const abortLike = signal.aborted
+          || (apiError && typeof apiError === 'object' && /^(AbortError|APIUserAbortError)$/.test(String(apiError.name || '')));
+        if (abortLike) {
           console.warn('Web Dev AI Service stream aborted by client in route.');
           return;
         }
