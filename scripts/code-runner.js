@@ -68,6 +68,7 @@ const {
   commandRejectionReason,
   shouldIgnoreExportPath,
   parseDevPortPool,
+  normalizeRequestedPort,
   createDevPool,
   buildRunnerEnv,
   buildPreflightEnabled,
@@ -922,8 +923,10 @@ function safeBasePath(value) {
  * background. Returns { port, project, reused } synchronously-ish (one probe
  * when reusing). Throws { code: "dev_pool_exhausted" } when the pool is full
  * and nothing is evictable.
+ * `requestedPort` (chat: "en local 5000") pins that exact port via the pool's
+ * pinnedPort semantics: the current holder is evicted regardless of pool.
+ * Reuse only honors a live server already on the requested port.
  */
-
 // Next preview under the tokenized base: write the config wrapper (see
 // code-runner-utils buildNextPreviewWrapper). Idempotent per start; files are
 // owned by the project's sandbox identity and excluded from git so they never
@@ -964,7 +967,10 @@ function prepareNextPreviewConfig(projectId, cwd, basePath, entry) {
 }
 
 async function startDev(projectId = null, runId = null, basePath = null, opts = {}) {
-  const pinnedPort = sanitizePinnedPort(opts && opts.port, { reserved: [CTRL_PORT] });
+  const requestedPort = opts && Object.prototype.hasOwnProperty.call(opts, "requestedPort")
+    ? normalizeRequestedPort(opts.requestedPort)
+    : null;
+  const pinnedPort = requestedPort ?? sanitizePinnedPort(opts && opts.port, { reserved: [CTRL_PORT] });
   const extraEnv = sanitizeDevEnv(opts && opts.env);
   if (!projectId) {
     const error = new Error("legacy workspace-root execution is disabled; provide a project id");
@@ -982,7 +988,8 @@ async function startDev(projectId = null, runId = null, basePath = null, opts = 
   const { dir: workspaceDir } = ensureWorkspaceDirectory(projectId, runId);
 
   // Reuse: same project, already serving with the same base path → no restart
-  // (vite watches files, edits are picked up by HMR without a re-run).
+  // (vite watches files, edits are picked up by HMR without a re-run). A
+  // requested port only reuses a server already listening on it.
   const existing = devPool.get(key);
   if (
     existing
@@ -1655,7 +1662,11 @@ Bun.serve({
         return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
       }
       try {
-        const out = await startDev(id, runId, body && body.basePath, { port: body && (body.port ?? body.preferredPort), env: body && body.env });
+        const out = await startDev(id, runId, body && body.basePath, {
+          port: body && (body.port ?? body.preferredPort),
+          requestedPort: body && body.requestedPort,
+          env: body && body.env,
+        });
         return Response.json({
           ok: true,
           port: out.port,
@@ -1664,6 +1675,12 @@ Bun.serve({
           reused: out.reused,
         });
       } catch (e) {
+        if (e && e.code === "invalid_requested_port") {
+          return Response.json({ ok: false, error: "invalid_requested_port" }, { status: 400 });
+        }
+        if (e && e.code === "invalid_requested_port") {
+          return Response.json({ ok: false, error: "invalid_requested_port" }, { status: 400 });
+        }
         if (e && e.code === "dev_pool_exhausted") {
           return Response.json({ ok: false, error: "dev_pool_exhausted" }, { status: 429 });
         }
