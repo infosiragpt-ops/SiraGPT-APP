@@ -18,6 +18,7 @@ const { createSessionStore, slugUserId, sessionIdFor, containerNameFor } = requi
 const { createDockerRuntime } = require('./docker-runtime');
 const { buildActionCommand, screenshotCommand, actionType } = require('./agent-actions');
 const { proxyHttp, proxyUpgrade, joinPath } = require('./http-proxy');
+const { createCdpConnector } = require('./cdp-exec-transport');
 
 const ORCH_DOWN_ES = 'No se pudo abrir la computadora. El escritorio no está disponible.';
 const DEFAULT_PORT = 8090;
@@ -82,6 +83,7 @@ function publicUrls(session, env = process.env) {
 function createOrchestrator(opts = {}) {
   const env = opts.env || process.env;
   const store = opts.store || createSessionStore();
+  const openCdpSocket = createCdpConnector(env);
   const driver = String(opts.driver || env.AGENT_COMPUTER_ORCH_DRIVER || 'docker').trim().toLowerCase();
   const maxDesktops = Number(env.AGENT_COMPUTER_MAX_DESKTOPS) > 0
     ? Number(env.AGENT_COMPUTER_MAX_DESKTOPS)
@@ -313,9 +315,10 @@ function createOrchestrator(opts = {}) {
         return json(res, 200, { Browser: 'fake', webSocketDebuggerUrl: '' });
       }
       return proxyHttp(req, res, {
-        hostname: session.host,
+        hostname: '127.0.0.1',
         port: 9222,
         path: sub || '/',
+        openStream: signal => openCdpSocket(session.container, signal),
       });
     }
 
@@ -404,9 +407,10 @@ function createOrchestrator(opts = {}) {
       });
     }
     return proxyUpgrade(req, socket, head, {
-      hostname: session.host,
+      hostname: '127.0.0.1',
       port: 9222,
       path: rest || '/',
+      openStream: signal => openCdpSocket(session.container, signal),
     });
   }
 

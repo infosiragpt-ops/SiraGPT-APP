@@ -1,6 +1,7 @@
 'use strict';
-// Real Chromium + X11 input. The only substitution is local desktop process
-// hosting instead of Docker: HTTP/session/action/CDP contracts stay production.
+// Real Chromium + X11 input AND real Docker Engine CDP transport. The browser
+// stays on the CI X11 host; the compuser bridge runs in a disposable container
+// sharing that test network. Docker Engine and CDP responses are not mocked.
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -21,19 +22,34 @@ const close = s => new Promise(r => { s.closeAllConnections(); s.close(r); });
 
 async function main() {
   assert.ok(process.env.DISPLAY, 'Real desktop gate requires Xvfb; never skip silently');
+  assert.ok(process.env.CI && process.platform === 'linux', 'Docker host networking is restricted to this Linux CI gate');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-browser-gate-'));
   const wm = spawn('openbox', [], { stdio: 'ignore' });
+  const createdContainers = new Map();
+  const docker = (args, timeout = 20000) => exec('docker', ['--host', 'unix:///var/run/docker.sock', ...args], { timeout, maxBuffer: 1024 * 1024 });
   const env = { NODE_ENV: 'test', SIRAGPT_AGENT_COMPUTER: '1', AGENT_COMPUTER_API_KEY: require('node:crypto').randomUUID() };
   const fixture = http.createServer((_req, res) => {
     res.setHeader('Content-Type', 'text/html');
     res.end(`<!doctype html><html><title>Formulario local de prueba</title><style>body{margin:40px;font:18px sans-serif}input,button{display:block;padding:12px;margin:12px 0}#long{margin-top:1100px}#wide{width:2400px;height:60px}</style><form onsubmit="event.preventDefault();document.querySelector('output').textContent='Guardado: '+this.city.value+' / '+this.subject.value"><label>Ciudad<input name="city"></label><label>Asunto<input name="subject"></label><button>Guardar</button></form><output></output><div id="long">Final del formulario</div><div id="wide">Desplazamiento horizontal</div><button id="secret" onclick="document.querySelector('#wall').hidden=false;document.querySelector('#pw').focus()">Entrar</button><div id="wall" hidden><h2>Inicia sesión</h2><label>Contraseña<input id="pw" type="password" value="fixture-private-do-not-echo"></label></div></html>`);
   });
   const orch = createOrchestrator({ env, driver: 'local-real-desktop', runtime: {
-    ensureContainer: async () => ({ info: {}, reused: true }), containerIp: () => '127.0.0.1',
+    ensureContainer: async name => {
+      if (!createdContainers.has(name)) {
+        const created = await docker(['create', '--network', 'host', '--name', name, 'node:22-bookworm-slim', 'sleep', 'infinity']);
+        const id = created.stdout.trim();
+        assert.match(id, /^[a-f0-9]{64}$/);
+        createdContainers.set(name, id);
+        await docker(['start', id]);
+        await docker(['exec', '--user', 'root', id, 'useradd', '--create-home', '--shell', '/bin/bash', 'compuser']);
+      }
+      return { info: {}, reused: true };
+    }, containerIp: () => '127.0.0.1',
     execIn: async (_container, command) => exec('bash', ['-c', command], { timeout: 20000, maxBuffer: 12 * 1024 * 1024 }),
   }});
   let context, browser, chromeProcess;
   try {
+    await docker(['info', '--format', '{{.ServerVersion}}']);
+    await docker(['pull', 'node:22-bookworm-slim'], 120000);
     await listen(fixture); await listen(orch.server);
     env.AGENT_COMPUTER_ORCHESTRATOR_URL = `http://127.0.0.1:${orch.server.address().port}`;
     const chromeLog = fs.openSync('/tmp/browser-gate-chrome.log', 'w');
@@ -101,6 +117,18 @@ async function main() {
     assert.equal(await page.locator('#pw').inputValue(), 'fixture-private-do-not-echo');
     console.log('PASS real browser: password gate -> private user takeover -> writes refused');
     handoff.resetTakeoverForTests();
+    for (const id of createdContainers.values()) {
+      const deadline = Date.now() + 3000;
+      let commands;
+      do {
+        const top = await docker(['top', id, '-eo', 'comm']);
+        commands = top.stdout.trim().split('\n').slice(1).map(line => line.trim()).filter(Boolean);
+        if (commands.length === 1 && commands[0] === 'sleep') break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      } while (Date.now() < deadline);
+      assert.deepEqual(commands, ['sleep'], 'all real Docker CDP helpers must exit after browser operations');
+    }
+    console.log('PASS real Docker: authenticated CDP bridge and no residual helper processes');
   } catch (error) {
     // Fixture-only diagnostics; no input values or real credentials are logged.
     const page = context?.pages()[0];
@@ -116,6 +144,7 @@ async function main() {
     }
     throw error;
   } finally {
+    const removed = await Promise.allSettled([...createdContainers.values()].map(id => docker(['rm', '--force', id])));
     await browser?.close();
     if (chromeProcess && chromeProcess.exitCode === null) {
       const exited = new Promise(resolve => chromeProcess.once('exit', resolve));
@@ -125,6 +154,7 @@ async function main() {
     await close(orch.server); await close(fixture);
     wm.kill();
     fs.rmSync(profile, { recursive: true, force: true });
+    assert.ok(removed.every(result => result.status === 'fulfilled'), 'every container created by this test must be removed');
   }
 }
 main().catch(e => { console.error(e.message); process.exitCode = 1; });
