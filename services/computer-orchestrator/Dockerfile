@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /workspace /opt/sira-orch \
     && chown compuser:compuser /workspace
 
-COPY session-store.js docker-runtime.js agent-actions.js http-proxy.js server.js /opt/sira-orch/
+COPY session-store.js docker-runtime.js agent-actions.js http-proxy.js cdp-exec-transport.js server.js /opt/sira-orch/
 COPY start-desktop.sh /usr/local/bin/start-desktop.sh
 COPY desktop-look/ /opt/sira-orch/desktop-look/
 RUN chmod 755 /usr/local/bin/start-desktop.sh \
