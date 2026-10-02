@@ -1200,12 +1200,15 @@ class FileProcessor {
     // 2 retries with backoff) kept a 43 KB PNG "extracting" for ~75 s when
     // the vision runtime answered 429 (prod 2026-09-26).
     const visionTimeoutMs = Number(process.env.SIRAGPT_VISION_DOC_TIMEOUT_MS);
-    return new OpenAI({
+    const options = {
       apiKey: config.apiKey,
-      ...(config.baseURL ? { baseURL: config.baseURL } : {}),
       timeout: Number.isFinite(visionTimeoutMs) && visionTimeoutMs >= 1000 ? visionTimeoutMs : 25_000,
       maxRetries: 1,
-    });
+    };
+    if (config.protocol === 'anthropic') {
+      return require('./ai/first-party-chat-clients').createAnthropicStreamingClient(options);
+    }
+    return new OpenAI({ ...options, ...(config.baseURL ? { baseURL: config.baseURL } : {}) });
   }
 
   /**

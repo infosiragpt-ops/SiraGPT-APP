@@ -32,6 +32,7 @@ const loginHandoff = require('../services/computer/login-handoff');
 const {
   chromeMaximizeOrLaunch,
 } = require('../services/computer/chrome-desktop-flags');
+const { desktopAppFocusCommand } = require('../services/computer/desktop-app-focus');
 const { sanitizeNavigateUrl } = require('../services/computer/navigate-url');
 
 const pexec = promisify(execFile);
@@ -263,9 +264,9 @@ router.get('/sessions/:id', requireFlag, authenticateToken, async (req, res) => 
 const FOCUS_CMDS = {
   chrome: chromeMaximizeOrLaunch({ xdotool: XD }),
   browser: chromeMaximizeOrLaunch({ xdotool: XD }),
-  thunar: XD + ' search --onlyvisible --class Thunar windowactivate || thunar /workspace',
-  files: XD + ' search --onlyvisible --class Thunar windowactivate || thunar /workspace',
-  terminal: XD + ' search --onlyvisible --class xfce4-terminal windowactivate || xfce4-terminal --working-directory=/workspace',
+  thunar: desktopAppFocusCommand({ xdotool: XD, windowClass: 'Thunar', launchCommand: 'exec thunar /workspace' }),
+  files: desktopAppFocusCommand({ xdotool: XD, windowClass: 'Thunar', launchCommand: 'exec thunar /workspace' }),
+  terminal: desktopAppFocusCommand({ xdotool: XD, windowClass: 'xfce4-terminal', launchCommand: 'exec xfce4-terminal --working-directory=/workspace' }),
   desktop: XD + ' search --onlyvisible --class xfdesktop windowactivate || true',
 };
 
@@ -325,7 +326,17 @@ async function handleAction(req, res, session) {
   });
   const focus = String((req.body && (req.body.focus || req.body.app)) || '').trim().toLowerCase();
   if (focus && FOCUS_CMDS[focus]) {
-    const out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus], { signal });
+    let out;
+    try {
+      out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus], { signal });
+    } catch (err) {
+      if (String(err.stderr || '').includes('desktop_app_not_ready')) {
+        err.code = 'desktop_app_not_ready';
+        err.status = 503;
+        err.publicMessage = 'La aplicación no pudo abrirse en el escritorio. Vuelve a abrir la computadora e inténtalo de nuevo.';
+      }
+      throw err;
+    }
     return res.json({
       ok: true,
       focus,

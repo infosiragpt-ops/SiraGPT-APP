@@ -14,7 +14,6 @@
 
 import * as React from "react"
 import { useAuth } from "@/lib/auth-context-integrated"
-import { apiClient } from "@/lib/api"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
 import {
@@ -26,6 +25,11 @@ import {
 } from "@/lib/apps-pins"
 
 const PIN_FEATURE_FLAG_KEY = "apps.pins.enabled"
+
+/** Optimistic chat IDs have no server row until the first turn creates it. */
+function isDraftConversation(id: string | null | undefined): boolean {
+  return !id || id === "__new__" || id.startsWith("temp-chat-")
+}
 
 export function appsPinsEnabled(): boolean {
   if (typeof window === "undefined") return false
@@ -113,7 +117,7 @@ export function useAppPins(conversationId: string | null | undefined): UseAppPin
       return
     }
     const draft = readDraftPins(conversationId)
-    if (!isAuthenticated) {
+    if (!isAuthenticated || isDraftConversation(conversationId)) {
       setPinnedAppIds(draft)
       setRevision(0)
       return
@@ -146,7 +150,7 @@ export function useAppPins(conversationId: string | null | undefined): UseAppPin
   const persist = React.useCallback(async (next: string[]) => {
     const id = conversationRef.current
     writeDraftPins(id || "pending", next)
-    if (!id) return
+    if (!id || !isAuthenticated || isDraftConversation(id)) return
     setSyncing(true)
     // Single rebase on 412 PIN_SET_STALE (spec v2 §5): reapply the local
     // intent on top of the canonical state once, then give up.
@@ -222,7 +226,7 @@ export function useAppPins(conversationId: string | null | undefined): UseAppPin
     } finally {
       setSyncing(false)
     }
-  }, [])
+  }, [isAuthenticated])
 
   const pinApp = React.useCallback(async (appId: string): Promise<boolean> => {
     if (!enabled) return false
@@ -237,7 +241,7 @@ export function useAppPins(conversationId: string | null | undefined): UseAppPin
     writeDraftPins(conversationRef.current || "pending", next)
     await persist(next)
     return true
-  }, [persist])
+  }, [enabled, persist])
 
   const unpinApp = React.useCallback(async (appId: string) => {
     const current = pinsRef.current

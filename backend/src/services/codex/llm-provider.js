@@ -4,7 +4,8 @@
  * codex/llm-provider — resolves the best available LLM for the codex agent
  * loop and exposes a single provider-agnostic `chatComplete()`.
  *
- * Ladder (first configured wins, override with CODEX_LLM_PROVIDER):
+ * Explicit models stay on their own connection. Internal calls without a
+ * model retain the default ladder (override with CODEX_LLM_PROVIDER):
  *   1. deepseek   — DEEPSEEK_API_KEY   (DeepSeek V4 Flash/Pro — the product's
  *      only sanctioned models; native tool use lives in deepseek-turn, this
  *      rung is the prompted-protocol fallback)
@@ -13,11 +14,15 @@
  *   3. openrouter — OPENROUTER_API_KEY (OpenAI-compatible)
  *   4. cerebras   — CEREBRAS_API_KEY   (FlashGPT free tier; previous default)
  *
- * A provider that throws is quarantined for FAILOVER_TTL_MS and the call is
+ * For an unselected internal call, a failed provider is quarantined for
+ * FAILOVER_TTL_MS and the call is
  * retried on the next rung, so a bad key / quota blip degrades quality instead
  * of failing the run. All clients are lazy-required and injectable for tests.
  */
 
+const { inferProviderFromModelId, providerConnectionReady, PROVIDER_UNAVAILABLE_MESSAGE } = require('../ai/provider-inference');
+const { stripVendorPrefix } = require('../ai/first-party-chat-clients');
+const { stripUnsupportedSampling } = require('../ai/openai-sampling-params');
 const { getCerebrasConfig, createCerebrasClient } = require('../ai/cerebras-client');
 const { toAnthropicMessages, cacheStableTranscriptPrefix, cacheEnabled } = require('./anthropic-turn');
 const {
@@ -45,21 +50,42 @@ function clean(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+function selectedProviderForModel(model) {
+  const requested = clean(model);
+  if (!requested) return null;
+  if (normalizeDeepSeekModel(requested)) return 'deepseek';
+  return inferProviderFromModelId(requested).toLowerCase();
+}
+
+function selectedProviderError() {
+  const error = new Error(PROVIDER_UNAVAILABLE_MESSAGE);
+  error.code = 'E_PROVIDER';
+  return error;
+}
+
 function providerConfigured(name, env) {
   if (name === 'deepseek') return getDeepSeekTurnConfig({ env }).enabled;
   if (name === 'anthropic') return Boolean(clean(env.ANTHROPIC_API_KEY) || clean(env.SIRA_ANTHROPIC_API_KEY));
   if (name === 'openrouter') return Boolean(clean(env.OPENROUTER_API_KEY));
   if (name === 'cerebras') return getCerebrasConfig({ env }).enabled;
-  return false;
+  return providerConnectionReady(name, env);
 }
 
 function modelFor(name, env, override = null) {
   const requested = clean(override);
+  if (requested && selectedProviderForModel(requested) !== name) throw selectedProviderError();
   if (name === 'deepseek') {
-    return normalizeDeepSeekModel(requested) || clean(env.CODEX_DEEPSEEK_MODEL) || DEFAULT_DEEPSEEK_MODEL;
+    const normalized = normalizeDeepSeekModel(requested);
+    if (requested && !/^sira[\s_-]*(?:pro|r[aá]pido)$/i.test(requested)
+      && normalized !== requested.replace(/^deepseek\//i, '').toLowerCase()) throw selectedProviderError();
+    return normalized || clean(env.CODEX_DEEPSEEK_MODEL) || DEFAULT_DEEPSEEK_MODEL;
   }
   if (requested) {
-    if (name === 'anthropic' && /^claude-[a-z0-9._-]+$/i.test(requested)) return requested;
+    if (name === 'anthropic') {
+      const native = stripVendorPrefix(requested, ['anthropic/']);
+      if (!/^claude-[a-z0-9._-]+$/i.test(native)) throw selectedProviderError();
+      return native;
+    }
     if (name === 'openrouter' && requested.includes('/')) return requested;
     if (name === 'cerebras' && !requested.includes('/') && !/^claude-/i.test(requested) && !normalizeDeepSeekModel(requested)) return requested;
   }
@@ -82,8 +108,12 @@ function defaultMaxTokensFor(name) {
  * `exclude` drops rungs the caller already tried natively this step (a
  * failed deepseek-turn must not be re-hit in prompted mode a second later).
  */
-function resolveCandidates({ env = process.env, now = Date.now, exclude = [] } = {}) {
+function resolveCandidates({ env = process.env, now = Date.now, exclude = [], model = null } = {}) {
   const skip = new Set((Array.isArray(exclude) ? exclude : []).map((n) => String(n || '').toLowerCase()));
+  // A caller's explicit choice outranks tier/env defaults and quarantine.
+  // Exclusion or missing credentials cannot authorize another provider.
+  const selected = selectedProviderForModel(model);
+  if (selected) return providerConfigured(selected, env) && !skip.has(selected) ? [selected] : [];
   const forced = clean(env.CODEX_LLM_PROVIDER).toLowerCase();
   if (forced) {
     return LADDER.includes(forced) && providerConfigured(forced, env) && !skip.has(forced) ? [forced] : [];
@@ -226,20 +256,23 @@ async function callOpenAICompatible({
     const reasoning = ['low', 'medium', 'high'].includes(String(effort || '').toLowerCase()) && providerLabel === 'OpenRouter'
       ? { effort: String(effort).toLowerCase() }
       : null;
-    resp = await client.chat.completions.create(
-      {
-        model,
-        messages: toOpenAICompatibleMessages(messages),
-        temperature,
-        max_tokens: maxTokens,
-        ...(reasoning ? { reasoning } : {}),
-        ...(shouldStream ? { stream: true } : {}),
-        ...(shouldStream && (providerLabel === 'OpenRouter' || providerLabel === 'DeepSeek')
-          ? { stream_options: { include_usage: true } }
-          : {}),
-      },
-      signal ? { signal } : undefined,
-    );
+    const request = {
+      model,
+      messages: toOpenAICompatibleMessages(messages),
+      temperature,
+      max_tokens: maxTokens,
+      ...(reasoning ? { reasoning } : {}),
+      ...(shouldStream ? { stream: true } : {}),
+      ...(shouldStream && (providerLabel === 'OpenRouter' || providerLabel === 'DeepSeek')
+        ? { stream_options: { include_usage: true } }
+        : {}),
+    };
+    if (providerLabel === 'OpenAI') {
+      stripUnsupportedSampling(model, request);
+      request.max_completion_tokens = request.max_tokens;
+      delete request.max_tokens;
+    }
+    resp = await client.chat.completions.create(request, signal ? { signal } : undefined);
   } catch (error) {
     throw error;
   }
@@ -313,7 +346,8 @@ function createOpenRouterClient(env, OpenAICtor) {
 }
 
 /**
- * One provider-agnostic completion. Tries each candidate in order; a throwing
+ * One provider-agnostic completion. An explicit model has one candidate and
+ * returns its original failure. Without a selection, a throwing
  * provider is quarantined and the next rung is tried. Throws only when every
  * candidate failed (with the first error, the most meaningful one).
  */
@@ -331,8 +365,10 @@ async function chatComplete({
   effort = null,
   exclude = [],
 } = {}) {
-  const candidates = resolveCandidates({ env, now, exclude });
+  const selected = selectedProviderForModel(model);
+  const candidates = resolveCandidates({ env, now, exclude, model });
   if (candidates.length === 0) {
+    if (selected) throw selectedProviderError();
     throw new Error('codex llm-provider: no LLM provider configured (DEEPSEEK_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY / CEREBRAS_API_KEY)');
   }
 
@@ -382,7 +418,7 @@ async function chatComplete({
           onReasoningDelta,
           effort,
         });
-      } else {
+      } else if (name === 'cerebras') {
         const client = clients.cerebras || createCerebrasClient({ env });
         if (!client?.chat?.completions) throw new Error('cerebras client unavailable');
         out = await callOpenAICompatible({
@@ -397,11 +433,19 @@ async function chatComplete({
           onReasoningDelta,
           effort,
         });
+      } else {
+        // Reuse the chat/structured first-party connection registry for
+        // explicit GPT, Grok, Gemini, etc.; never send those IDs to the ladder.
+        const { clientForModel } = require('../ai/structured-generation');
+        const routed = clientForModel(model, { env, ...(clients.openAICtor ? { OpenAIImpl: clients.openAICtor } : {}) });
+        out = await callOpenAICompatible({ messages, temperature, maxTokens: effectiveMax,
+          signal, model: routed.model, client: routed.client, providerLabel: routed.provider,
+          onTextDelta, onReasoningDelta, effort });
       }
       quarantine.delete(name);
       return out;
     } catch (err) {
-      if (signal?.aborted) throw err; // cancellation is not a provider failure
+      if (selected || signal?.aborted) throw err; // an explicit model cannot fail over
       // Once a provider emitted visible deltas, fail closed instead of retrying
       // another rung and splicing two different answers into one transcript.
       if (err?.partialResponse) throw err;
@@ -435,6 +479,8 @@ module.exports = {
   defaultMaxTokensFor,
   modelFor,
   providerConfigured,
+  selectedProviderForModel,
+  selectedProviderError,
   callAnthropic,
   callOpenAICompatible,
   toOpenAICompatibleMessages,

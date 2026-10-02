@@ -18,7 +18,7 @@ describe("always-on computer — bounded reconnect in the viewer", () => {
 
   it("a live drop also rebuilds instead of freezing on the last frame", () => {
     const screen = source("components/desktop/DesktopScreen.tsx")
-    assert.match(screen, /if \(firstFrameRef\.current\) \{\s*setStatus\("error"\)\s*onConnectionError\?\.\(\)/)
+    assert.match(screen, /if \(connectedRef\.current\) \{\s*setStatus\("error"\)\s*callbacksRef\.current\.onConnectionError\?\.\(\)/)
   })
 })
 

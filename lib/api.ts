@@ -1895,9 +1895,10 @@ class ApiClient {
   }
 
   /** Replace the conversation's pinned apps. Throws with { code, appId } on rejection. */
-  async setChatPins(chatId: string, pinnedAppIds: string[]): Promise<string[]> {
+  async setChatPins(chatId: string, pinnedAppIds: string[], expectedRevision: number): Promise<string[]> {
     const res = await this.request(`/chats/${chatId}/pins`, {
       method: 'PUT',
+      headers: { 'If-Match': `"pins-${expectedRevision}"` },
       body: JSON.stringify({ pinnedAppIds }),
     });
     return Array.isArray(res?.pinnedAppIds) ? res.pinnedAppIds.map(String) : [];

@@ -444,8 +444,8 @@ test('modelFor(deepseek): alias/override normalizados, default flash, env overri
   assert.equal(provider.modelFor('deepseek', env), DEFAULT_MODEL_FLASH);
   assert.equal(provider.modelFor('deepseek', env, 'Sira Pro'), DEFAULT_MODEL_PRO);
   assert.equal(provider.modelFor('deepseek', { ...env, CODEX_DEEPSEEK_MODEL: 'deepseek-chat' }), 'deepseek-chat');
-  assert.equal(provider.modelFor('deepseek', env, 'gpt-4o'), DEFAULT_MODEL_FLASH);
-  assert.equal(provider.modelFor('cerebras', env, 'deepseek-v4-flash'), 'llama-x', 'un id DeepSeek no se manda a Cerebras');
+  assert.throws(() => provider.modelFor('deepseek', env, 'gpt-4o'), { code: 'E_PROVIDER' });
+  assert.throws(() => provider.modelFor('cerebras', env, 'deepseek-v4-flash'), { code: 'E_PROVIDER' }, 'una elección explícita nunca se sustituye por el modelo de Cerebras');
   assert.equal(provider.defaultMaxTokensFor('deepseek'), 8192);
 });
 

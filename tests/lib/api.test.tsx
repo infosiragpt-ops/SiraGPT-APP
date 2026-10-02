@@ -21,6 +21,31 @@ describe('api client core', () => {
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
+  it('migrates new-chat pins using revision zero instead of a rejected headerless write', async () => {
+    let serverRevision = 0
+    let serverPins: string[] = []
+    mockFetch.mockImplementation(async (_url: string, opts: RequestInit) => {
+      const ifMatch = new Headers(opts.headers).get('If-Match')
+      const status = !ifMatch ? 428 : ifMatch !== `"pins-${serverRevision}"` ? 412 : 200
+      if (status === 200) {
+        serverPins = JSON.parse(String(opts.body)).pinnedAppIds
+        serverRevision += 1
+      }
+      return new Response(JSON.stringify(status === 200
+        ? { pinnedAppIds: serverPins, revision: serverRevision }
+        : { error: 'pin revision required', code: status === 428 ? 'PRECONDITION_REQUIRED' : 'PIN_SET_STALE' }), { status })
+    })
+
+    expect(await api.setChatPins('new-chat', ['github'], 0)).toEqual(['github'])
+    expect(serverRevision).toBe(1)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    // A concurrently updated real chat must not be overwritten by replaying
+    // the initial draft migration with its original revision.
+    await expect(api.setChatPins('new-chat', ['x'], 0)).rejects.toMatchObject({ status: 412 })
+    expect(serverPins).toEqual(['github'])
+    expect(serverRevision).toBe(1)
+  })
+
   it('includes Authorization header when token is set', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,

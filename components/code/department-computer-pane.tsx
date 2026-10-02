@@ -507,6 +507,17 @@ export function DepartmentComputerPane({
           setLoading(true)
           return
         }
+        if (preferAgentComputer) {
+          // The preferred session has exhausted its acquisition attempts.
+          // Availability of the separate desktop pool cannot keep it pending.
+          // Do not expose raw server diagnostics in the existing error card.
+          setPoolWarm(0)
+          setError(GENERIC_DESKTOP_UNAVAILABLE)
+          setStatusLine(GENERIC_DESKTOP_UNAVAILABLE)
+          setLoading(false)
+          setExhausted(true)
+          return
+        }
         const nextHint: DesktopPoolHint = {
           poolWarm: warm,
           enabled: Boolean(desk?.enabled),
@@ -676,7 +687,7 @@ export function DepartmentComputerPane({
               viewerToken={desktopLease.viewerToken}
               viewOnly={desktopLease.inputMode !== "human"}
               className="absolute inset-0 h-full w-full min-h-0"
-              onFirstFrame={() => setStatusLine("En vivo")}
+              onConnected={() => setStatusLine("En vivo")}
               onConnectionError={handleViewerConnectionError}
             />
           ) : orchRfbWs && session?.sessionId ? (
@@ -686,7 +697,7 @@ export function DepartmentComputerPane({
               wsUrl={orchRfbWs}
               viewOnly={false}
               className="absolute inset-0 h-full w-full min-h-0"
-              onFirstFrame={() => setStatusLine("En vivo")}
+              onConnected={() => setStatusLine("En vivo")}
               onConnectionError={handleViewerConnectionError}
             />
           ) : attachUrl ? (
