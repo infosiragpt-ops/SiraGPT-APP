@@ -138,7 +138,7 @@ export function SkillsMenu({ skills }: { skills: ComposerSkills }) {
         <ScrollText className="h-4 w-4 text-foreground/80" />
       </div>
       <div className="min-w-0 flex-1">
-        <div className="liquid-label text-sm font-medium">Skills</div>
+        <div className="liquid-label text-sm font-medium">Habilidades (skills)</div>
         <div className="truncate text-xs text-muted-foreground">{subtitleFor(skills)}</div>
       </div>
     </div>
