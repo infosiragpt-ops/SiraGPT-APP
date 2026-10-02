@@ -130,7 +130,7 @@ describe('computer login handoff backend', () => {
     assert.match(route, /ensureTakeoverFromLivePage/);
     assert.match(route, /router\.post\('\/navigate'/);
     assert.match(route, /sanitizeNavigateUrl/);
-    assert.match(route, /agentPost\(session, '\/navigate'/);
+    assert.match(route, /navigatePage\(session, url/);
     assert.match(stream, /POLICY_ES/);
     assert.match(stream, /chatMessage/);
     assert.match(persist, /applyObserveHandoff/);

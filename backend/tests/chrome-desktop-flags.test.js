@@ -62,7 +62,7 @@ describe('chrome desktop flags', () => {
     assert.match(desk, /--window-size=1920,1080/);
     assert.match(orch, /--start-maximized/);
     assert.match(orch, /--window-size=1920,1080/);
-    assert.match(route, /chromeOpenUrlCommand|openUrlInChrome|agent\/navigate/);
+    assert.match(route, /navigatePage\(session, url/);
     assert.match(route, /chromeMaximizeOrLaunch|openUrlInChrome/);
     // Agent navigation no longer launches Chrome: it reuses the visible
     // desktop's authenticated CDP session (behavior covered by the real gate).

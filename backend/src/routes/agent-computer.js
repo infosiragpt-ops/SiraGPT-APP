@@ -198,40 +198,28 @@ function failComputer(res, err, fallbackCode) {
   });
 }
 
-async function navigateMemberDesktop(session, url) {
-  const persistent = require('../services/computer/persistent');
-  // Prefer the orchestrator exec (it owns session.container). Direct dockerExec
-  // is the same-host fallback. Do not call agentPost(session, '/navigate') —
-  // that path used to hang on the orch http-proxy for ~120s.
-  const orch = resolveOrchConfig();
-  if (session && session.sessionId && orch.url) {
-    try {
-      const headers = { 'Content-Type': 'application/json' };
-      if (orch.secret) headers.Authorization = `Bearer ${orch.secret}`;
-      const res = await fetch(
-        `${orch.url}/sessions/${encodeURIComponent(session.sessionId)}/agent/navigate`,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ url }),
-          signal: AbortSignal.timeout(8_000),
-        },
-      );
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data && data.ok !== false) {
-        return { ok: true, url, result: data, sessionId: session.sessionId, via: 'orch' };
-      }
-    } catch (_) { /* same-host docker exec below */ }
+async function navigateMemberDesktop(session, url, signal) {
+  try {
+    // Navigate the attached browser itself. A background process launch is not
+    // evidence that this desktop loaded the page (or even opened a browser).
+    const { navigatePage } = require('../services/computer/live-page');
+    const result = await navigatePage(session, url, process.env, signal);
+    return { ok: true, url: result.url, sessionId: session.sessionId };
+  } catch (cause) {
+    const err = new Error('No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.', { cause });
+    err.code = 'navigate_failed';
+    err.status = 502;
+    err.publicMessage = err.message;
+    throw err;
   }
-  const opened = await persistent.openUrlInChrome(session, url, { timeoutMs: 12_000 });
-  return { ok: true, url, result: opened, sessionId: session.sessionId, fallback: 'chrome' };
 }
 
 router.post('/navigate', requireFlag, authenticateToken, async (req, res) => {
+  const signal = requestAbortSignal(req);
   try {
     const url = sanitizeNavigateUrl(req.body && (req.body.url || req.body.href));
     const desktop = await ensureMemberDesktop(req);
-    const out = await navigateMemberDesktop(desktop, url);
+    const out = await navigateMemberDesktop(desktop, url, signal);
     return res.json(withConversation(out, identityFor(req)));
   } catch (err) {
     return failComputer(res, err, 'navigate_failed');
