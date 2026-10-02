@@ -56,6 +56,30 @@ Each desktop container is `sira-ac-user-{slug}` with user `compuser`,
 `DISPLAY=:1`, and memory/CPU caps (`AGENT_COMPUTER_DESKTOP_MEMORY_MB`,
 `AGENT_COMPUTER_DESKTOP_CPUS`).
 
+## CPU quota and desktop thread pools
+
+A CPU time quota alone leaves every host CPU visible to Mesa and Chromium.
+On a 32-CPU host, a desktop capped at one CPU could still create 68 compositor
+threads and exhaust its unchanged 256-task limit. The Docker runtime now also
+sets CPU affinity to `ceil(quota)` allowed CPUs, bounded by the kernel's
+`Cpus_allowed_list`. A stable offset from the desktop name spreads placement
+across the allowed CPUs; it is not an exclusive CPU reservation.
+
+When a session is acquired, an existing container with a finite CPU quota and
+no explicit `CpusetCpus` receives only that affinity field through Docker's
+in-place update API. An explicit affinity or an unlimited/unknown legacy quota
+is preserved. There is no container restart, profile deletion, change to
+memory/task/security limits, or new environment setting. Failure to read a valid
+allowed CPU mask or apply the update surfaces as session unavailability.
+
+Existing thread pools do not shrink just because their affinity changes.
+Recover an already exhausted desktop separately under operator supervision;
+do not restart every user's browser or desktop automatically. In the affected
+QA session, replacing only `xfwm4` under the permitted one-CPU affinity reduced
+its threads from 68 to 4 and total tasks from 219 to 156, preserving the open
+windows and browser profile. Direct browser navigation then worked, with no
+increase in `pids.events`. This recovery does not repair unrelated CDP routing.
+
 ## Always-on behavior
 
 Desktops are never reaped by the orchestrator: containers run with

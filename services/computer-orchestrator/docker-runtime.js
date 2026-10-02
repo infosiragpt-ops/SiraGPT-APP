@@ -2,6 +2,8 @@
 
 const http = require('http');
 const net = require('net');
+const fs = require('fs');
+const { createHash } = require('crypto');
 const { spawn } = require('child_process');
 
 const DEFAULT_SOCKET = '/var/run/docker.sock';
@@ -71,6 +73,37 @@ function nanoCpus(cpus) {
   return Math.round((Number.isFinite(n) && n > 0 ? n : 1) * 1e9);
 }
 
+// CPU quota limits time, not the CPU count seen by Mesa/Chromium. Bound the
+// affinity too, so thread pools are not sized for every CPU on the host.
+function readCpuAffinity() {
+  const status = fs.readFileSync('/proc/self/status', 'utf8');
+  return (status.match(/^Cpus_allowed_list:\s*(.+)$/m) || [])[1] || '';
+}
+
+function parseCpuAffinity(raw) {
+  const ids = new Set();
+  for (const part of String(raw).trim().split(',')) {
+    const match = part.match(/^(\d+)(?:-(\d+))?$/);
+    if (!match) throw new Error('invalid CPU affinity');
+    const first = Number(match[1]);
+    const last = Number(match[2] || match[1]);
+    if (!Number.isSafeInteger(last) || last > 1048575 || last < first || last - first >= 16384) {
+      throw new Error('invalid CPU affinity range');
+    }
+    for (let id = first; id <= last; id += 1) ids.add(id);
+    if (ids.size > 16384) throw new Error('CPU affinity is too large');
+  }
+  return [...ids].sort((a, b) => a - b);
+}
+
+function quotaCpuCount(hostConfig = {}) {
+  if (Number(hostConfig.NanoCpus) > 0) return Number(hostConfig.NanoCpus) / 1e9;
+  if (Number(hostConfig.CpuQuota) > 0 && Number(hostConfig.CpuPeriod) > 0) {
+    return Number(hostConfig.CpuQuota) / Number(hostConfig.CpuPeriod);
+  }
+  return 0;
+}
+
 function createDockerRuntime(opts = {}) {
   const socketPath = opts.socketPath || process.env.DOCKER_HOST_SOCKET || DEFAULT_SOCKET;
   const rawApi = opts.apiVersion || process.env.DOCKER_API_VERSION || DEFAULT_API;
@@ -79,6 +112,37 @@ function createDockerRuntime(opts = {}) {
   const memoryMb = opts.memoryMb || process.env.AGENT_COMPUTER_DESKTOP_MEMORY_MB || 1024;
   const cpus = opts.cpus || process.env.AGENT_COMPUTER_DESKTOP_CPUS || '1';
   const requestImpl = opts.requestImpl || dockerRequest;
+  const readCpuAffinityImpl = opts.readCpuAffinityImpl || readCpuAffinity;
+
+  function desktopCpuAffinity(containerName, quota) {
+    try {
+      const allowed = parseCpuAffinity(readCpuAffinityImpl());
+      const count = Math.min(allowed.length, Math.max(1, Math.ceil(quota)));
+      // A stable offset avoids assigning every member to CPU zero. CPU IDs
+      // come from the kernel's allowed mask, not a guessed contiguous range.
+      const offset = createHash('sha256').update(containerName).digest().readUInt32BE(0) % allowed.length;
+      return Array.from({ length: count }, (_, i) => allowed[(offset + i) % allowed.length])
+        .sort((a, b) => a - b).join(',');
+    } catch (cause) {
+      const err = new Error('desktop CPU affinity unavailable');
+      err.code = 'DESKTOP_CPU_AFFINITY_UNAVAILABLE';
+      err.status = 503;
+      err.cause = cause;
+      throw err;
+    }
+  }
+
+  async function alignExistingCpuAffinity(containerName, info) {
+    const config = (info && info.HostConfig) || {};
+    const quota = quotaCpuCount(config);
+    // An explicit placement belongs to the operator. Unknown/unlimited legacy
+    // quotas also stay untouched rather than adopting today's defaults.
+    if (String(config.CpusetCpus || '').trim() || !Number.isFinite(quota) || quota <= 0) return;
+    const CpusetCpus = desktopCpuAffinity(containerName, quota);
+    await requestImpl('POST', `/containers/${encodeURIComponent(containerName)}/update`, { CpusetCpus });
+    // Docker applies affinity in place. Never restart the desktop or its apps:
+    // existing pools can be recovered separately without losing the profile.
+  }
   const novncPort = Number(opts.novncPort) > 0 ? Number(opts.novncPort) : NOVNC_PORT;
   const novncWaitIntervalMs = Number(opts.novncWaitIntervalMs || process.env.AGENT_COMPUTER_NOVNC_WAIT_INTERVAL_MS) > 0
     ? Number(opts.novncWaitIntervalMs || process.env.AGENT_COMPUTER_NOVNC_WAIT_INTERVAL_MS)
@@ -163,6 +227,7 @@ function createDockerRuntime(opts = {}) {
       HostConfig: {
         Memory: memoryBytes(memoryMb),
         NanoCpus: nanoCpus(cpus),
+        CpusetCpus: desktopCpuAffinity(containerName, nanoCpus(cpus) / 1e9),
         MemorySwap: memoryBytes(memoryMb),
         PidsLimit: 256,
         ShmSize: 256 * 1024 * 1024,
@@ -194,6 +259,7 @@ function createDockerRuntime(opts = {}) {
 
   async function ensureContainer(containerName) {
     const existing = await inspectContainer(containerName);
+    if (existing) await alignExistingCpuAffinity(containerName, existing);
     if (existing && isRunning(existing)) {
       const info = await afterStart(containerName);
       return { info, reused: true, created: false };

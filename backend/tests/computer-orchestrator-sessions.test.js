@@ -212,6 +212,7 @@ describe('siragpt-computer-orchestrator session contract', () => {
     }, 280);
 
     const runtime = createDockerRuntime({
+      readCpuAffinityImpl: () => '0-31',
       requestImpl: mockDockerMissingThenCreate(container),
       network: 'bridge',
       novncPort: port,
@@ -254,6 +255,7 @@ describe('siragpt-computer-orchestrator session contract', () => {
     }, 280);
 
     const runtime = createDockerRuntime({
+      readCpuAffinityImpl: () => '0-31',
       requestImpl: mockDockerAlreadyRunning(container),
       network: 'bridge',
       novncPort: port,
@@ -286,6 +288,7 @@ describe('siragpt-computer-orchestrator session contract', () => {
     const userId = 'deadnovnc';
     const container = containerNameFor(userId);
     const runtime = createDockerRuntime({
+      readCpuAffinityImpl: () => '0-31',
       requestImpl: mockDockerMissingThenCreate(container),
       network: 'bridge',
       novncPort: 1,
@@ -438,6 +441,7 @@ describe('always-on computer: desktop listing', () => {
   test('listComputers returns only sira-ac-user-* names with running flags', async () => {
     const { createDockerRuntime } = require('../../services/computer-orchestrator/docker-runtime');
     const runtime = createDockerRuntime({
+      readCpuAffinityImpl: () => '0-31',
       requestImpl: async (method, path) => {
         assert.match(path, /label/);
         return {
@@ -459,8 +463,178 @@ describe('always-on computer: desktop listing', () => {
   test('listComputers never throws when the socket is gone', async () => {
     const { createDockerRuntime } = require('../../services/computer-orchestrator/docker-runtime');
     const runtime = createDockerRuntime({
+      readCpuAffinityImpl: () => '0-31',
       requestImpl: async () => { throw new Error('no socket'); },
     });
     assert.deepEqual(await runtime.listComputers(), []);
+  });
+});
+
+// Exercise the actual Docker request builder: the external Engine transport is
+// controlled, while create/reuse, quota resolution and affinity selection run.
+function desktopCpuHarness({ existing, cpus = 1, allowed = '0-31', updateError, readAffinityError } = {}) {
+  const requests = [];
+  let info = existing ? structuredClone(existing) : null;
+  let affinityReads = 0;
+  const runtime = createDockerRuntime({
+    cpus,
+    network: 'bridge',
+    readCpuAffinityImpl: () => {
+      affinityReads += 1;
+      if (readAffinityError) throw readAffinityError;
+      return allowed;
+    },
+    connectImpl: (_port, _host, done) => done(),
+    requestImpl: async (method, route, body) => {
+      requests.push({ method, route, body: structuredClone(body) });
+      if (method === 'GET' && route.endsWith('/json')) {
+        if (!info) throw Object.assign(new Error('no such container'), { status: 404 });
+        return { status: 200, data: structuredClone(info) };
+      }
+      if (method === 'POST' && route.startsWith('/containers/create?')) {
+        const name = new URLSearchParams(route.split('?')[1]).get('name');
+        info = { ...inspectRunning(name), State: { Running: false }, HostConfig: structuredClone(body.HostConfig) };
+        return { status: 201, data: { Id: 'test-desktop' } };
+      }
+      if (method === 'POST' && route.endsWith('/update')) {
+        if (updateError) throw updateError;
+        Object.assign(info.HostConfig, body);
+        return { status: 200, data: { Warnings: [] } };
+      }
+      if (method === 'POST' && route.endsWith('/start')) {
+        info.State.Running = true;
+        return { status: 204, data: {} };
+      }
+      throw new Error(`unexpected Docker request: ${method} ${route}`);
+    },
+  });
+  return { runtime, requests, getInfo: () => structuredClone(info), affinityReads: () => affinityReads };
+}
+
+function cpuIds(value) {
+  assert.equal(typeof value, 'string', 'Docker CPU affinity must be present');
+  return value.split(',').map(Number);
+}
+
+function quotaDesktop(extra = {}) {
+  return {
+    ...inspectRunning('sira-ac-user-cpu-qa'),
+    HostConfig: {
+      NanoCpus: 1e9, CpusetCpus: '', PidsLimit: 256,
+      Memory: 1024 ** 3, MemorySwap: 1024 ** 3,
+      SecurityOpt: ['seccomp=unconfined'], CapAdd: ['SYS_ADMIN'],
+      ...extra,
+    },
+  };
+}
+
+describe('desktop CPU quota is reflected in visible CPU affinity', () => {
+  test('one-CPU desktop on 32 CPUs does not expose all host CPUs to thread pools', async () => {
+    const h = desktopCpuHarness();
+    const out = await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+    const create = h.requests.find((r) => r.route.startsWith('/containers/create?')).body;
+    const ids = cpuIds(create.HostConfig.CpusetCpus);
+    assert.equal(ids.length, 1);
+    assert.ok(ids[0] >= 0 && ids[0] < 32);
+    assert.equal(create.HostConfig.NanoCpus, 1e9);
+    assert.equal(create.HostConfig.PidsLimit, 256);
+    assert.equal(create.HostConfig.Memory, 1024 ** 3);
+    assert.equal(create.HostConfig.MemorySwap, 1024 ** 3);
+    assert.deepEqual(create.HostConfig.SecurityOpt, ['seccomp=unconfined']);
+    assert.deepEqual(create.HostConfig.CapAdd, ['SYS_ADMIN']);
+    assert.deepEqual(create.Env, ['DISPLAY=:1', 'HOME=/home/compuser']);
+    assert.equal(out.created, true);
+  });
+
+  test('fractional quotas round up within a sparse allowed affinity, never to CPU zero', async () => {
+    for (const [cpus, count] of [[0.5, 1], [1.5, 2], [8, 4]]) {
+      const h = desktopCpuHarness({ cpus, allowed: '2,4-5,9' });
+      await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+      const config = h.getInfo().HostConfig;
+      const ids = cpuIds(config.CpusetCpus);
+      assert.equal(ids.length, count);
+      assert.equal(new Set(ids).size, count);
+      assert.ok(ids.every((id) => [2, 4, 5, 9].includes(id)));
+      assert.equal(config.NanoCpus, cpus * 1e9);
+    }
+  });
+
+  test('allocation is stable across restarts and spreads desktops across allowed CPUs', async () => {
+    const placements = new Set();
+    for (let i = 0; i < 32; i += 1) {
+      const name = `sira-ac-user-allocation-${i}`;
+      const a = desktopCpuHarness();
+      const b = desktopCpuHarness();
+      await a.runtime.ensureContainer(name);
+      await b.runtime.ensureContainer(name);
+      assert.equal(a.getInfo().HostConfig.CpusetCpus, b.getInfo().HostConfig.CpusetCpus);
+      placements.add(a.getInfo().HostConfig.CpusetCpus);
+    }
+    assert.ok(placements.size >= 8, `desktops must not all be pinned together: ${placements.size}`);
+  });
+
+  test('reuse narrows unassigned affinity in place without restarting or changing other limits', async () => {
+    const existing = quotaDesktop();
+    const h = desktopCpuHarness({ existing, cpus: 8 });
+    const first = await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+    const update = h.requests.find((r) => r.route.endsWith('/update'));
+    assert.ok(update, 'old running desktop needs the same quota-aware affinity');
+    assert.deepEqual(Object.keys(update.body), ['CpusetCpus']);
+    assert.equal(cpuIds(update.body.CpusetCpus).length, 1, 'use its persisted quota, not changed defaults');
+    assert.deepEqual(h.getInfo().HostConfig, { ...existing.HostConfig, ...update.body });
+    assert.equal(first.reused, true);
+    assert.equal(first.created, false);
+    assert.equal(first.info.HostConfig.CpusetCpus, update.body.CpusetCpus);
+    assert.equal(h.requests.filter((r) => r.method === 'POST' && !r.route.endsWith('/update')).length, 0);
+    await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+    assert.equal(h.requests.filter((r) => r.route.endsWith('/update')).length, 1, 'migration is idempotent');
+  });
+
+  test('explicit existing CPU affinity stays untouched even if wider than the default quota', async () => {
+    const existing = quotaDesktop({ CpusetCpus: '4-7' });
+    const h = desktopCpuHarness({ existing, readAffinityError: new Error('must not inspect host') });
+    await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+    assert.deepEqual(h.getInfo(), existing);
+    assert.equal(h.affinityReads(), 0);
+    assert.equal(h.requests.filter((r) => r.method === 'POST').length, 0);
+  });
+
+  test('a stopped desktop receives affinity before start and keeps its existing identity', async () => {
+    const existing = quotaDesktop({ NanoCpus: 0, CpuQuota: 150000, CpuPeriod: 100000 });
+    existing.State.Running = false;
+    const h = desktopCpuHarness({ existing, allowed: '3,7,9' });
+    const out = await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+    const writes = h.requests.filter((r) => r.method === 'POST');
+    assert.deepEqual(writes.map((r) => r.route.split('/').pop()), ['update', 'start']);
+    assert.equal(cpuIds(writes[0].body.CpusetCpus).length, 2);
+    assert.equal(out.created, false);
+    assert.equal(out.info.Name, existing.Name);
+  });
+
+  test('legacy unlimited or unknown quotas are not replaced by current defaults', async () => {
+    for (const extra of [{ NanoCpus: 0 }, { NanoCpus: 0, CpuQuota: -1, CpuPeriod: 100000 }]) {
+      const h = desktopCpuHarness({ existing: quotaDesktop(extra) });
+      await h.runtime.ensureContainer('sira-ac-user-cpu-qa');
+      assert.equal(h.requests.filter((r) => r.method === 'POST').length, 0);
+      assert.equal(h.affinityReads(), 0);
+    }
+  });
+
+  test('affinity read/parse failures fail before creating an incorrectly sized desktop', async () => {
+    for (const settings of [{ readAffinityError: new Error('EACCES') }, { allowed: '7-2' }, { allowed: '0,wat' }, { allowed: '' }]) {
+      const h = desktopCpuHarness(settings);
+      await assert.rejects(h.runtime.ensureContainer('sira-ac-user-cpu-qa'), { code: 'DESKTOP_CPU_AFFINITY_UNAVAILABLE' });
+      assert.equal(h.requests.filter((r) => r.method === 'POST').length, 0);
+    }
+  });
+
+  test('Docker update failures are surfaced without starting or recreating the desktop', async () => {
+    const failure = Object.assign(new Error('Engine rejected update'), { status: 500 });
+    const existing = quotaDesktop();
+    existing.State.Running = false;
+    const h = desktopCpuHarness({ existing, updateError: failure });
+    await assert.rejects(h.runtime.ensureContainer('sira-ac-user-cpu-qa'), (err) => err === failure);
+    assert.deepEqual(h.requests.filter((r) => r.method === 'POST').map((r) => r.route.split('/').pop()), ['update']);
+    assert.deepEqual(h.getInfo(), existing);
   });
 });
