@@ -1,7 +1,9 @@
 import * as React from "react"
+import { readFileSync } from "node:fs"
+import { SpreadsheetPreview } from "@/components/viewers/spreadsheet-preview"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { PdfRenderer, type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
+import { PdfRenderer, ServerConvertedPdfRenderer, type AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 
 // Auxiliary React state/portal tests. PDF parsing and observers are controlled
 // here; these do not validate actual PDF rendering, conversion, or production.
@@ -45,7 +47,7 @@ beforeEach(() => {
   })
   vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} })
 })
-afterEach(() => { cleanup(); host.remove(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); host.remove(); window.localStorage.removeItem("auth-token"); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe("PdfRenderer async state and toolbar host", () => {
   it("mounts observers after bytes arrive and portals real controls only to the supplied header", async () => {
@@ -104,4 +106,89 @@ describe("PdfRenderer async state and toolbar host", () => {
     expect(host).toBeEmptyDOMElement()
     expect(view.container).toContainElement(screen.getByTestId("pdf-preview-controls"))
   })
+})
+
+
+describe("spreadsheet native-object visual readback", () => {
+  const workbook = () => Uint8Array.from(readFileSync("tests/fixtures/spreadsheet-two-native-charts.xlsx")).buffer
+  it("passes the existing server's real converted PDF bytes to the PDF renderer and retains cells", async () => {
+    const bytes = Uint8Array.from(readFileSync("tests/fixtures/spreadsheet-two-native-charts.pdf"))
+    const fetcher = vi.fn().mockResolvedValue(new Response(bytes, { headers: { "content-type": "application/pdf" } }))
+    vi.stubGlobal("fetch", fetcher)
+    window.localStorage.setItem("auth-token", "fixture-token")
+    const a = { id: "native-source-cache", name: "Resumen.xlsx", url: "/api/agent/artifact/abcdef123456", artifactId: "abcdef123456" }
+    const visual = <ServerConvertedPdfRenderer a={a} previewUrl="/api/agent/artifact/abcdef123456/preview.pdf" toolbarContainer={host} fallback={<p>Visual no disponible</p>} />
+    const view = render(<SpreadsheetPreview buffer={workbook()} visualPreview={visual} />)
+    expect(await screen.findByRole("table", { name: "Hoja Resumen" })).toBeInTheDocument()
+    await waitFor(() => expect(pdf.documents.has(37)).toBe(true))
+    expect(Array.from(pdf.documents.get(37).file.data)).toEqual(Array.from(bytes))
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(String(fetcher.mock.calls[0][0])).toContain("/api/agent/artifact/abcdef123456/preview.pdf")
+    expect(new Headers(fetcher.mock.calls[0][1].headers).get("Authorization")).toBe("Bearer fixture-token")
+    expect(fetcher.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+    expect(within(host).getByTestId("pdf-preview-controls")).toBeInTheDocument()
+    view.rerender(<SpreadsheetPreview buffer={workbook()} visualPreview={visual} />)
+    await screen.findByRole("table", { name: "Hoja Resumen" })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    view.unmount()
+    // Exercise the viewer's shared byte cache on a new consumer of the same
+    // source ID: the derived PDF must never replace the original XLSX bytes.
+    render(<PdfRenderer a={{ ...a, file: { arrayBuffer: async () => workbook() } as File }} />)
+    await waitFor(() => expect(pdf.documents.has(80)).toBe(true))
+    expect(Array.from(pdf.documents.get(80).file.data)).toEqual(Array.from(new Uint8Array(workbook())))
+  })
+
+  it("leaves the grid available and shows an honest fallback when conversion is unavailable", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response("unavailable", { status: 415 }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<SpreadsheetPreview buffer={workbook()} visualPreview={
+      <ServerConvertedPdfRenderer a={{ id: "xlsx-unavailable", name: "Resumen.xlsx" }} fallback={<p role="status">Descarga el archivo para ver las gráficas.</p>} />
+    } />)
+    expect(await screen.findByRole("table", { name: "Hoja Resumen" })).toBeInTheDocument()
+    expect(await screen.findByText("Descarga el archivo para ver las gráficas.")).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(pdf.documents.size).toBe(0)
+  })
+
+  it.each([
+    ["non-pdf", () => new Response("<html>not a document</html>")],
+    ["declared-size", () => new Response("%PDF-", { headers: { "content-length": String(33 * 1024 * 1024) } })],
+    ["stream-size", () => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(new Uint8Array(33 * 1024 * 1024)); controller.close()
+    } }))],
+  ])("does not pass an invalid or oversized %s visual response to the PDF renderer", async (id, response) => {
+    const fetcher = vi.fn().mockImplementation(async () => response())
+    vi.stubGlobal("fetch", fetcher)
+    render(<ServerConvertedPdfRenderer a={{ id: `bounded-${id}`, name: "Resumen.xlsx" }} fallback={<p>Vista no disponible</p>} />)
+    expect(await screen.findByText("Vista no disponible")).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(pdf.documents.size).toBe(0)
+  })
+
+  it("stops a stalled visual conversion without a retry loop", async () => {
+    vi.useFakeTimers()
+    const fetcher = vi.fn().mockImplementation(() => new Promise(() => {}))
+    vi.stubGlobal("fetch", fetcher)
+    render(<ServerConvertedPdfRenderer a={{ id: "bounded-stall", name: "Resumen.xlsx" }} fallback={<p>Vista no disponible</p>} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_001) })
+    expect(screen.getByText("Vista no disponible")).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls[0][1].signal.aborted).toBe(true)
+    expect(pdf.documents.size).toBe(0)
+  })
+
+
+  it("does not attach Sira credentials to an external visual response", async () => {
+    const bytes = Uint8Array.from(readFileSync("tests/fixtures/spreadsheet-two-native-charts.pdf"))
+    window.localStorage.setItem("auth-token", "fixture-token")
+    const fetcher = vi.fn().mockResolvedValue(new Response(bytes))
+    vi.stubGlobal("fetch", fetcher)
+    render(<ServerConvertedPdfRenderer a={{ name: "Resumen.xlsx" }} previewUrl="https://example.invalid/visual.pdf" fallback={<p>Vista no disponible</p>} />)
+    await waitFor(() => expect(pdf.documents.has(37)).toBe(true))
+    const options = fetcher.mock.calls[0][1]
+    expect(new Headers(options.headers).has("Authorization")).toBe(false)
+    expect(options.credentials).not.toBe("include")
+    expect(options.signal).toBeInstanceOf(AbortSignal)
+  })
+
 })

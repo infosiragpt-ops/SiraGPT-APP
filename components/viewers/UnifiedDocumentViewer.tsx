@@ -704,12 +704,45 @@ function RendererDispatch({
 
 const convertedPdfCache = new Map<string, AttachmentLike>()
 const convertedPdfPromiseCache = new Map<string, Promise<AttachmentLike>>()
+const SPREADSHEET_PDF_MAX_BYTES = 32 * 1024 * 1024
+// The existing server conversion can take up to 90 seconds. Bound the optional
+// visual layer separately so it never keeps an already-readable grid waiting.
+const SPREADSHEET_PDF_TIMEOUT_MS = 120_000
+
+async function readSpreadsheetPdf(response: Response): Promise<ArrayBuffer> {
+  if (Number(response.headers.get("content-length")) > SPREADSHEET_PDF_MAX_BYTES) {
+    await response.body?.cancel()
+    throw new Error("spreadsheet-pdf-size")
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error("spreadsheet-pdf-empty")
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > SPREADSHEET_PDF_MAX_BYTES) {
+        await reader.cancel()
+        throw new Error("spreadsheet-pdf-size")
+      }
+      chunks.push(value)
+    }
+  } finally { reader.releaseLock() }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  if (String.fromCharCode(...bytes.subarray(0, 5)) !== "%PDF-") throw new Error("spreadsheet-pdf-invalid")
+  return bytes.buffer
+}
 
 function hasClientPreviewSource(a: AttachmentLike): boolean {
   return !!a.file || !!a.url || !!a.extractedText
 }
 
-function canUseServerPdfConversion(a: AttachmentLike): boolean {
+function canUseServerPdfConversion(a: AttachmentLike, previewUrl?: string): boolean {
+  if (previewUrl) return true
   const id = String(a.id || "")
   return !!id && !id.startsWith("temp")
 }
@@ -718,12 +751,12 @@ function renderedPdfName(name: string): string {
   return `${name.replace(/\.[^.]+$/, "") || name}.pdf`
 }
 
-async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<AttachmentLike> {
-  if (!canUseServerPdfConversion(a)) {
+async function fetchServerConvertedPdfAttachment(a: AttachmentLike, previewUrl?: string): Promise<AttachmentLike> {
+  if (!canUseServerPdfConversion(a, previewUrl)) {
     throw new Error("no-stable-id")
   }
 
-  const key = String(a.id)
+  const key = previewUrl || String(a.id)
   const cached = convertedPdfCache.get(key)
   if (cached) return cached
 
@@ -732,19 +765,37 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
 
   const promise = (async () => {
     const base = process.env.NEXT_PUBLIC_IMAGE_URL || ""
-    const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
-    const res = await fetchAssetBytes(url)
-    if (!res.ok) {
-      const err = new Error(`http-${res.status}`) as Error & { retryable?: boolean }
-      if (isRetryablePreviewHttpStatus(res.status)) err.retryable = true
-      throw err
+    const url = previewUrl || `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
+    const spreadsheet = detectKind(a) === "xlsx"
+    const controller = spreadsheet ? new AbortController() : undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = async () => {
+      const res = await fetchAssetBytes(url, controller?.signal)
+      if (!res.ok) {
+        const err = new Error(`http-${res.status}`) as Error & { retryable?: boolean }
+        if (isRetryablePreviewHttpStatus(res.status)) err.retryable = true
+        throw err
+      }
+      return spreadsheet ? readSpreadsheetPdf(res) : res.arrayBuffer()
     }
-
-    const buf = await res.arrayBuffer()
+    let buf: ArrayBuffer
+    try {
+      buf = spreadsheet ? await Promise.race([
+        load(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller!.abort()
+            reject(new Error("spreadsheet-pdf-timeout"))
+          }, SPREADSHEET_PDF_TIMEOUT_MS)
+        }),
+      ]) : await load()
+    } finally { if (timer) clearTimeout(timer) }
     const cached = cloneArrayBuffer(buf)
     const pdfBlob = new File([cloneArrayBuffer(cached)], renderedPdfName(a.name), { type: "application/pdf" })
     const pdfAtt: AttachmentLike = {
-      id: a.id,
+      // The render is a different representation. Never overwrite the source
+      // XLSX bytes cached for reopening its cell grid.
+      id: `rendered-pdf:${key}`,
       name: renderedPdfName(a.name),
       mimeType: "application/pdf",
       size: buf.byteLength,
@@ -760,9 +811,9 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
   return promise
 }
 
-function ServerConvertedPdfRenderer({
-  a, fallback,
-}: { a: AttachmentLike; fallback: React.ReactNode }) {
+export function ServerConvertedPdfRenderer({
+  a, fallback, previewUrl, toolbarContainer, compactToolbar,
+}: { a: AttachmentLike; fallback: React.ReactNode; previewUrl?: string; toolbarContainer?: HTMLElement | null; compactToolbar?: boolean }) {
   const [state, setState] = React.useState<"probing" | "ok" | "unavailable">("probing")
   const [pdfAttachment, setPdfAttachment] = React.useState<AttachmentLike | null>(null)
   const [unavailableReason, setUnavailableReason] = React.useState<string>("")
@@ -771,7 +822,7 @@ function ServerConvertedPdfRenderer({
     setState("probing")
     setPdfAttachment(null)
     setUnavailableReason("")
-    if (!canUseServerPdfConversion(a)) {
+    if (!canUseServerPdfConversion(a, previewUrl)) {
       setState("unavailable")
       setUnavailableReason(a.id ? "temporary-id" : "no-id")
       return
@@ -779,10 +830,10 @@ function ServerConvertedPdfRenderer({
 
     let cancelled = false
     ;(async () => {
-      const maxAttempts = 8
+      const maxAttempts = detectKind(a) === "xlsx" ? 1 : 8
       for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
         try {
-          const pdfAtt = await fetchServerConvertedPdfAttachment(a)
+          const pdfAtt = await fetchServerConvertedPdfAttachment(a, previewUrl)
           if (cancelled) return
           setPdfAttachment(pdfAtt)
           setState("ok")
@@ -803,14 +854,14 @@ function ServerConvertedPdfRenderer({
       }
     })()
     return () => { cancelled = true }
-  }, [a])
+  }, [a, previewUrl])
 
   // Never paint client-side office pages while the server object is
   // still uploading or LibreOffice is converting. A local File exists
   // the moment the user picks the document — that is what used to show
   // a finished 1/N thesis page at 80% upload.
   if (state === "probing") {
-    const canWaitForServer = canUseServerPdfConversion(a) || !hasClientPreviewSource(a)
+    const canWaitForServer = canUseServerPdfConversion(a, previewUrl) || !hasClientPreviewSource(a)
     if (canWaitForServer) {
       return <LoadingState label={CONVERSION_LOADING_LABEL} />
     }
@@ -823,7 +874,7 @@ function ServerConvertedPdfRenderer({
     }
     return <>{fallback}</>
   }
-  return <PdfRenderer a={pdfAttachment} />
+  return <PdfRenderer a={pdfAttachment} toolbarContainer={toolbarContainer} compactToolbar={compactToolbar} />
 }
 
 // ─── Reusable CopyButton (code/json/text copy) ───────────────────────
@@ -910,15 +961,15 @@ function cacheSet(key: string, partial: { text?: string; buffer?: ArrayBuffer })
   })
 }
 
-async function fetchAssetBytes(url: string): Promise<Response> {
+async function fetchAssetBytes(url: string, signal?: AbortSignal): Promise<Response> {
   const normalized = absUrl(url)
-  if (/^(data:|blob:)/i.test(normalized)) return fetch(normalized)
+  if (/^(data:|blob:)/i.test(normalized)) return fetch(normalized, { signal })
   // A publish restarts the backend for a few seconds; retry gateway 5xx
   // quietly instead of surfacing «HTTP 502».
   return fetchWithTransientRetry(() => (
     isTrustedSiraApiUrl(normalized, ASSET_BASE_URL)
-      ? authenticatedAssetFetch(normalized)
-      : fetch(normalized)
+      ? authenticatedAssetFetch(normalized, { signal })
+      : fetch(normalized, { signal })
   ))
 }
 
@@ -2065,7 +2116,13 @@ function XlsxRenderer({ a }: { a: AttachmentLike }) {
   }, [a])
   if (err) return <ErrorState error={err} />
   if (!buffer) return <LoadingState label="Leyendo hoja de cálculo…" />
-  return <SpreadsheetPreview buffer={buffer} />
+  return <SpreadsheetPreview buffer={buffer} visualPreview={
+    <div className="h-[70vh] min-h-96">
+      <ServerConvertedPdfRenderer a={a}
+        previewUrl={a.artifactId ? `/api/agent/artifact/${encodeURIComponent(a.artifactId)}/preview.pdf` : undefined}
+        fallback={<p role="status" className="p-4 text-sm">No se pudo mostrar la vista con gráficas y objetos. Las celdas siguen disponibles; descarga el archivo para verlo completo.</p>} />
+    </div>
+  } />
 }
 
 // ─── PPTX (client-side text + image extraction via JSZip) ────────────

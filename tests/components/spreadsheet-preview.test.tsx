@@ -1,5 +1,7 @@
 import React from "react"
+import { readFileSync } from "node:fs"
 import ExcelJS from "exceljs"
+import JSZip from "jszip"
 import { fireEvent, render, screen, within } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 import { SpreadsheetPreview, WorkbookGrid } from "@/components/viewers/spreadsheet-preview"
@@ -29,6 +31,25 @@ async function realWorkbookBytes() {
 }
 
 describe("native spreadsheet preview", () => {
+  it("keeps the grid and mounts the faithful visual renderer for real native charts", async () => {
+    const bytes = Uint8Array.from(readFileSync("tests/fixtures/spreadsheet-two-native-charts.xlsx")).buffer
+    const original = new Uint8Array(bytes).slice()
+    render(<SpreadsheetPreview buffer={bytes} visualPreview={<div data-testid="faithful-workbook-render">Rendered native chart pages</div>} />)
+    expect(await screen.findByRole("table", { name: "Hoja Resumen" })).toBeInTheDocument()
+    expect(screen.getByLabelText("A1: Mes", { selector: "td" })).toBeInTheDocument()
+    expect(await screen.findByTestId("faithful-workbook-render")).toBeInTheDocument()
+    expect(screen.getByText("8 filas · 4 columnas")).toBeInTheDocument()
+    expect(new Uint8Array(bytes)).toEqual(original)
+    const source = await JSZip.loadAsync(bytes)
+    expect(Object.keys(source.files).filter(name => /^xl\/charts\/chart\d+\.xml$/.test(name))).toHaveLength(2)
+  })
+
+  it("does not mount a visual renderer or request conversion for a cells-only workbook", async () => {
+    render(<SpreadsheetPreview buffer={await realWorkbookBytes()} visualPreview={<div data-testid="faithful-workbook-render" />} />)
+    await screen.findByRole("table", { name: "Hoja Respuestas" })
+    expect(screen.queryByTestId("faithful-workbook-render")).toBeNull()
+  })
+
   it("reads actual XLSX bytes, shows all 23 columns, cached formulas and original cell formatting", async () => {
     render(<SpreadsheetPreview buffer={await realWorkbookBytes()} />)
     const table = await screen.findByRole("table", { name: "Hoja Respuestas" })
