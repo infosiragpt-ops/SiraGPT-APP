@@ -1318,7 +1318,9 @@ function stripeWebhookApplication(event) {
 async function locallyOwnedStripeWebhook(context) {
   const { customerId, subscriptionId, payment, user } = context;
   if (payment && stripeResourceId(payment.stripeCustomerId) === customerId) return true;
-  if (user && (!subscriptionId || !user.stripeSubscriptionId || user.stripeSubscriptionId === subscriptionId)) return true;
+  if (user && subscriptionId && user.stripeSubscriptionId === subscriptionId) return true;
+  if (user && subscriptionId && !user.stripeSubscriptionId
+    && context.event.type === 'customer.subscription.created') return true;
   if (!subscriptionId || !customerId) return false;
   if (!user) {
     const subscriptionUser = await prisma.user.findUnique({ where: { stripeSubscriptionId: subscriptionId } });

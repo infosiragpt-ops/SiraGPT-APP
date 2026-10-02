@@ -2016,10 +2016,11 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(harness.external.emailAttempts, 0);
   });
 
-  test('one-off invoice events mirror without subscription entitlement effects', async () => {
+  test('owned one-off invoice events mirror without subscription entitlement effects', async () => {
     const paid = event('evt_z_one_off_paid', 'invoice.payment_succeeded', {
       ...INVOICE_SUCCEEDED_EVENT.data.object,
       id: 'in_one_off_fenced',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2027,6 +2028,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     const staleFailure = event('evt_a_one_off_failed', 'invoice.payment_failed', {
       ...INVOICE_FAILED_EVENT.data.object,
       id: 'in_one_off_fenced',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2051,10 +2053,11 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(failedRecord.eventData.processing.reason, 'invoice_not_subscription_cycle');
   });
 
-  test('one-off invoice mirrors remain independent across invoice IDs', async () => {
+  test('owned one-off invoice mirrors remain independent across invoice IDs', async () => {
     const newerInvoice = event('evt_one_off_newer_a', 'invoice.payment_succeeded', {
       ...INVOICE_SUCCEEDED_EVENT.data.object,
       id: 'in_one_off_a',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2062,6 +2065,7 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     const olderDifferentInvoice = event('evt_one_off_older_b', 'invoice.payment_failed', {
       ...INVOICE_FAILED_EVENT.data.object,
       id: 'in_one_off_b',
+      metadata: { application: 'siragpt' },
       billing_reason: 'manual',
       parent: null,
       subscription: null,
@@ -2459,6 +2463,29 @@ describe('POST /payments/stripe/webhook · durable Stripe event claims', () => {
     assert.equal(harness.db._state.users[0].stripeSubscriptionId, 'sub_old');
     assert.equal(harness.db._state.subscriptionEvents.length, 0);
   });
+
+  for (const scenario of [
+    { name: 'no subscription', type: 'invoice.payment_succeeded', subscription: null, currentSubscription: 'sub_old' },
+    { name: 'an unknown subscription before first local association', type: 'invoice.payment_failed', subscription: 'sub_other_app', currentSubscription: null },
+  ]) {
+    test(`unmarked invoice with ${scenario.name} cannot use customer identity as ownership`, async () => {
+      const invoice = event(`evt_customer_only_${scenario.type}`, scenario.type, {
+        id: 'in_other_app', customer: 'cus_1', subscription: scenario.subscription,
+        status: scenario.type.endsWith('succeeded') ? 'paid' : 'open',
+        billing_reason: scenario.subscription ? 'subscription_cycle' : 'manual',
+        metadata: { userId: 'u1' },
+      });
+      const harness = setup({ stripeEvent: invoice, user: baseUser({ stripeSubscriptionId: scenario.currentSubscription }) });
+      assert.equal((await deliver(harness.app)).status, 200);
+      assert.equal(harness.db._state.invoices.length, 0);
+      assert.equal(harness.db._state.subscriptionEvents.length, 0);
+      assert.equal(harness.db._state.systemSettings.length, 0);
+      assert.equal(harness.db._attempts.userUpdates, 0);
+      assert.equal(harness.db._state.notifications.length, 0);
+      assert.equal(harness.external.triggerAttempts, 0);
+      assert.equal(harness.external.emailAttempts, 0);
+    });
+  }
 
   test('a known legacy customer can establish its first unmarked subscription', async () => {
     const legacy = event('evt_first_legacy_subscription', 'customer.subscription.created', {
