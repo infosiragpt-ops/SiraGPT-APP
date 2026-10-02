@@ -1,7 +1,7 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { KnotMark } from "@/components/brand"
+import { AtomMark } from "@/components/brand"
 
 export function BrandLogo() {
   return (
@@ -25,7 +25,7 @@ export function BrandLogo() {
             filter: { duration: 0.3 },
           }}
         >
-          <KnotMark size={36} title="SiraGPT" />
+          <AtomMark size={36} title="SiraGPT" />
         </motion.span>
 
         {/* Wordmark with shimmer wave */}

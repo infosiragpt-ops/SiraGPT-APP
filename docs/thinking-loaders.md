@@ -76,8 +76,12 @@ Step identity prefers `step_id`.
   same glyph. The live Pensando glyph is the **ThinkingCore**
   (`components/brand/thinking-core.tsx` via `components/claude-asterisk.tsx`),
   drawn in the monochrome think accent: `--think-accent` is the foreground
-  (black on light, white on dark; the clover green stays the brand logo only),
-  frozen to a soft pulse under reduced motion; the celeste 3×3 dot matrix
+  (black on light, white on dark; the clover green stays the brand logo only).
+  Since 2026-10-02 the ThinkingCore is the **SiraGPT atom in motion** (same
+  geometry as the `AtomMark` logo): three electrons travel their orbits with a
+  trail («estela»), each in its own colour (`--think-electron-a|b|c`, the only
+  colour on a thinking surface), the nucleus beats; idle is the static logo in
+  ink. Reduced motion hides the moving electrons and keeps a soft pulse; the celeste 3×3 dot matrix
   and the old sunburst are **retired** for live Pensando. Labels are muted
   neutral greys (`--think-text`, `--think-dim`). Collapsed rows read
   «Pensó durante N s · N pasos» on every flow (chat, agent loop, agentic steps).

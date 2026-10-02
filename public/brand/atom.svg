@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" fill="none" role="img" aria-label="SiraGPT — átomo de tres órbitas con un electrón en cada una">
+  <title>SiraGPT</title>
+  <g transform="rotate(-90 200 200)">
+    <path d="M370 200A170 62 0 1 1 30 200A170 62 0 1 1 370 200" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-dasharray="716.9 52" stroke-dashoffset="742.9"/>
+    <circle cx="370" cy="200" r="13" fill="currentColor"/>
+  </g>
+  <g transform="rotate(30 200 200)">
+    <path d="M370 200A170 62 0 1 1 30 200A170 62 0 1 1 370 200" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-dasharray="716.9 52" stroke-dashoffset="742.9"/>
+    <circle cx="370" cy="200" r="13" fill="currentColor"/>
+  </g>
+  <g transform="rotate(150 200 200)">
+    <path d="M370 200A170 62 0 1 1 30 200A170 62 0 1 1 370 200" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-dasharray="716.9 52" stroke-dashoffset="742.9"/>
+    <circle cx="370" cy="200" r="13" fill="currentColor"/>
+  </g>
+  <circle cx="200" cy="200" r="24" fill="currentColor"/>
+</svg>

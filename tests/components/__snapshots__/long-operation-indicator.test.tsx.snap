@@ -31,6 +31,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
           aria-hidden="true"
           class="claude-asterisk thinking-core claude-asterisk--active"
           data-brand="thinking-core"
+          data-brand-geometry="atom"
           data-claude-asterisk="active"
           data-claude-asterisk-weight="fine"
           data-thinking-core="active"
@@ -42,41 +43,241 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
           <g>
             <g
               class="thinking-core__orbit thinking-core__orbit--a"
+              transform="rotate(-90 12 12)"
             >
-              <ellipse
-                cx="12"
-                cy="12"
+              <path
+                class="thinking-core__ring"
+                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
                 fill="none"
-                rx="10"
-                ry="4.2"
+                opacity="0.45"
                 stroke="currentColor"
-                stroke-width="1.5"
-                transform="rotate(-60 12 12)"
+                stroke-width="1.2"
               />
+              <g
+                class="thinking-core__electron thinking-core__electron--a"
+                style="color: var(--think-electron-a, currentColor);"
+              >
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.28"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="16 84"
+                  stroke-dashoffset="16"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="0s"
+                    dur="2.6s"
+                    from="16"
+                    repeatCount="indefinite"
+                    to="-84"
+                  />
+                </path>
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.6"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="7 93"
+                  stroke-dashoffset="7"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="0s"
+                    dur="2.6s"
+                    from="7"
+                    repeatCount="indefinite"
+                    to="-93"
+                  />
+                </path>
+                <circle
+                  class="thinking-core__electron-live"
+                  fill="currentColor"
+                  r="1.7"
+                >
+                  <animatemotion
+                    begin="0s"
+                    dur="2.6s"
+                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle
+                  class="thinking-core__electron-still"
+                  cx="22"
+                  cy="12"
+                  fill="currentColor"
+                  r="1.7"
+                />
+              </g>
             </g>
             <g
               class="thinking-core__orbit thinking-core__orbit--b"
+              transform="rotate(30 12 12)"
             >
-              <ellipse
-                cx="12"
-                cy="12"
+              <path
+                class="thinking-core__ring"
+                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
                 fill="none"
-                rx="10"
-                ry="4.2"
+                opacity="0.45"
                 stroke="currentColor"
-                stroke-width="1.5"
-                transform="rotate(60 12 12)"
+                stroke-width="1.2"
               />
+              <g
+                class="thinking-core__electron thinking-core__electron--b"
+                style="color: var(--think-electron-b, currentColor);"
+              >
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.28"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="16 84"
+                  stroke-dashoffset="16"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-1.1s"
+                    dur="3.1s"
+                    from="16"
+                    repeatCount="indefinite"
+                    to="-84"
+                  />
+                </path>
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.6"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="7 93"
+                  stroke-dashoffset="7"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-1.1s"
+                    dur="3.1s"
+                    from="7"
+                    repeatCount="indefinite"
+                    to="-93"
+                  />
+                </path>
+                <circle
+                  class="thinking-core__electron-live"
+                  fill="currentColor"
+                  r="1.7"
+                >
+                  <animatemotion
+                    begin="-1.1s"
+                    dur="3.1s"
+                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle
+                  class="thinking-core__electron-still"
+                  cx="22"
+                  cy="12"
+                  fill="currentColor"
+                  r="1.7"
+                />
+              </g>
             </g>
-            <circle
-              class="thinking-core__ripple"
-              cx="12"
-              cy="12"
-              fill="none"
-              r="4"
-              stroke="currentColor"
-              stroke-width="1"
-            />
+            <g
+              class="thinking-core__orbit thinking-core__orbit--c"
+              transform="rotate(150 12 12)"
+            >
+              <path
+                class="thinking-core__ring"
+                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                fill="none"
+                opacity="0.45"
+                stroke="currentColor"
+                stroke-width="1.2"
+              />
+              <g
+                class="thinking-core__electron thinking-core__electron--c"
+                style="color: var(--think-electron-c, currentColor);"
+              >
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.28"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="16 84"
+                  stroke-dashoffset="16"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-2.3s"
+                    dur="3.6s"
+                    from="16"
+                    repeatCount="indefinite"
+                    to="-84"
+                  />
+                </path>
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.6"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="7 93"
+                  stroke-dashoffset="7"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-2.3s"
+                    dur="3.6s"
+                    from="7"
+                    repeatCount="indefinite"
+                    to="-93"
+                  />
+                </path>
+                <circle
+                  class="thinking-core__electron-live"
+                  fill="currentColor"
+                  r="1.7"
+                >
+                  <animatemotion
+                    begin="-2.3s"
+                    dur="3.6s"
+                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle
+                  class="thinking-core__electron-still"
+                  cx="22"
+                  cy="12"
+                  fill="currentColor"
+                  r="1.7"
+                />
+              </g>
+            </g>
             <circle
               class="thinking-core__core"
               cx="12"
@@ -138,6 +339,7 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
           aria-hidden="true"
           class="claude-asterisk thinking-core claude-asterisk--active"
           data-brand="thinking-core"
+          data-brand-geometry="atom"
           data-claude-asterisk="active"
           data-claude-asterisk-weight="fine"
           data-thinking-core="active"
@@ -149,41 +351,241 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
           <g>
             <g
               class="thinking-core__orbit thinking-core__orbit--a"
+              transform="rotate(-90 12 12)"
             >
-              <ellipse
-                cx="12"
-                cy="12"
+              <path
+                class="thinking-core__ring"
+                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
                 fill="none"
-                rx="10"
-                ry="4.2"
+                opacity="0.45"
                 stroke="currentColor"
-                stroke-width="1.5"
-                transform="rotate(-60 12 12)"
+                stroke-width="1.2"
               />
+              <g
+                class="thinking-core__electron thinking-core__electron--a"
+                style="color: var(--think-electron-a, currentColor);"
+              >
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.28"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="16 84"
+                  stroke-dashoffset="16"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="0s"
+                    dur="2.6s"
+                    from="16"
+                    repeatCount="indefinite"
+                    to="-84"
+                  />
+                </path>
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.6"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="7 93"
+                  stroke-dashoffset="7"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="0s"
+                    dur="2.6s"
+                    from="7"
+                    repeatCount="indefinite"
+                    to="-93"
+                  />
+                </path>
+                <circle
+                  class="thinking-core__electron-live"
+                  fill="currentColor"
+                  r="1.7"
+                >
+                  <animatemotion
+                    begin="0s"
+                    dur="2.6s"
+                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle
+                  class="thinking-core__electron-still"
+                  cx="22"
+                  cy="12"
+                  fill="currentColor"
+                  r="1.7"
+                />
+              </g>
             </g>
             <g
               class="thinking-core__orbit thinking-core__orbit--b"
+              transform="rotate(30 12 12)"
             >
-              <ellipse
-                cx="12"
-                cy="12"
+              <path
+                class="thinking-core__ring"
+                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
                 fill="none"
-                rx="10"
-                ry="4.2"
+                opacity="0.45"
                 stroke="currentColor"
-                stroke-width="1.5"
-                transform="rotate(60 12 12)"
+                stroke-width="1.2"
               />
+              <g
+                class="thinking-core__electron thinking-core__electron--b"
+                style="color: var(--think-electron-b, currentColor);"
+              >
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.28"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="16 84"
+                  stroke-dashoffset="16"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-1.1s"
+                    dur="3.1s"
+                    from="16"
+                    repeatCount="indefinite"
+                    to="-84"
+                  />
+                </path>
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.6"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="7 93"
+                  stroke-dashoffset="7"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-1.1s"
+                    dur="3.1s"
+                    from="7"
+                    repeatCount="indefinite"
+                    to="-93"
+                  />
+                </path>
+                <circle
+                  class="thinking-core__electron-live"
+                  fill="currentColor"
+                  r="1.7"
+                >
+                  <animatemotion
+                    begin="-1.1s"
+                    dur="3.1s"
+                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle
+                  class="thinking-core__electron-still"
+                  cx="22"
+                  cy="12"
+                  fill="currentColor"
+                  r="1.7"
+                />
+              </g>
             </g>
-            <circle
-              class="thinking-core__ripple"
-              cx="12"
-              cy="12"
-              fill="none"
-              r="4"
-              stroke="currentColor"
-              stroke-width="1"
-            />
+            <g
+              class="thinking-core__orbit thinking-core__orbit--c"
+              transform="rotate(150 12 12)"
+            >
+              <path
+                class="thinking-core__ring"
+                d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                fill="none"
+                opacity="0.45"
+                stroke="currentColor"
+                stroke-width="1.2"
+              />
+              <g
+                class="thinking-core__electron thinking-core__electron--c"
+                style="color: var(--think-electron-c, currentColor);"
+              >
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.28"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="16 84"
+                  stroke-dashoffset="16"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-2.3s"
+                    dur="3.6s"
+                    from="16"
+                    repeatCount="indefinite"
+                    to="-84"
+                  />
+                </path>
+                <path
+                  class="thinking-core__trail"
+                  d="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                  fill="none"
+                  opacity="0.6"
+                  pathLength="100"
+                  stroke="currentColor"
+                  stroke-dasharray="7 93"
+                  stroke-dashoffset="7"
+                  stroke-linecap="round"
+                  stroke-width="1.6"
+                >
+                  <animate
+                    attributeName="stroke-dashoffset"
+                    begin="-2.3s"
+                    dur="3.6s"
+                    from="7"
+                    repeatCount="indefinite"
+                    to="-93"
+                  />
+                </path>
+                <circle
+                  class="thinking-core__electron-live"
+                  fill="currentColor"
+                  r="1.7"
+                >
+                  <animatemotion
+                    begin="-2.3s"
+                    dur="3.6s"
+                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+                <circle
+                  class="thinking-core__electron-still"
+                  cx="22"
+                  cy="12"
+                  fill="currentColor"
+                  r="1.7"
+                />
+              </g>
+            </g>
             <circle
               class="thinking-core__core"
               cx="12"

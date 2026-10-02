@@ -7,17 +7,17 @@ const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "
 
 /**
  * Luis (2026-10-01): the sidebar header opens with the brand lockup — the
- * five-loop knot mark and the «SiraGPT» wordmark — and ends with the collapse
- * toggle on the right; the collapsed rail keeps the knot as its single affordance.
+ * brand mark (the atom since 2026-10-02) and the «SiraGPT» wordmark — and ends with the collapse
+ * toggle on the right; the collapsed rail keeps the mark as its single affordance.
  */
-describe("sidebar brand header (knot mark + SiraGPT wordmark)", () => {
+describe("sidebar brand header (atom mark + SiraGPT wordmark)", () => {
   const sidebar = source("components/app-sidebar.tsx")
 
   it("renders the lockup first in the open header, with the toggle beside it", () => {
     const lockup = sidebar.indexOf('data-testid="sidebar-brand"')
     assert.ok(lockup > 0, "lockup present")
     const header = sidebar.slice(lockup, lockup + 1400)
-    assert.match(header, /<KnotMark\s+size=\{22\}\s+title="SiraGPT"\s+gap="hsl\(var\(--sidebar-background\)\)"/)
+    assert.match(header, /<AtomMark\s+size=\{22\}\s+title="SiraGPT"\s+className=/)
     assert.match(header, /className="sidebar-brand__wordmark truncate text-\[15px\] leading-none">\s*SiraGPT\s*<\/span>/)
     const wordmark = header.indexOf("sidebar-brand__wordmark")
     const toggle = header.indexOf('aria-label="Contraer barra lateral ⌘B"')
@@ -37,9 +37,9 @@ describe("sidebar brand header (knot mark + SiraGPT wordmark)", () => {
     assert.doesNotMatch(sidebar, /aria-label="Adelante"/)
   })
 
-  it("the collapsed rail shows the knot and the mark never falls back to the clover", () => {
-    assert.match(sidebar, /<KnotMark\s+size=\{20\}\s+title="SiraGPT"\s+gap="hsl\(var\(--sidebar-background\)\)"/)
-    assert.doesNotMatch(sidebar, /CloverMark/)
+  it("the collapsed rail shows the atom and the mark never falls back to the clover or the knot", () => {
+    assert.match(sidebar, /<AtomMark\s+size=\{20\}\s+title="SiraGPT"\s+className=/)
+    assert.doesNotMatch(sidebar, /CloverMark|KnotMark/)
     const css = source("app/globals.css")
     assert.match(css, /\.sidebar-brand__wordmark \{[\s\S]{0,160}letter-spacing: -0\.02em;/)
   })

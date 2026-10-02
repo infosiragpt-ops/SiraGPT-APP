@@ -34,65 +34,83 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     assert.match(source("public/sw.js"), /'\/brand\/clover\.svg'/)
   })
 
-  it("keeps CloverMark for the PWA/document assets and uses the knot mark for every in-app logo render", () => {
+  it("keeps CloverMark for the PWA/document assets and uses the atom mark for every in-app logo render", () => {
     const mark = source("components/brand/clover-mark.tsx")
     assert.match(mark, /export function CloverMark/)
     assert.match(mark, /export function CloverBadge/)
     assert.match(mark, /fill="currentColor"/)
     assert.match(mark, /var\(--clover-vein, #fff\)/)
     assert.match(source("components/brand/index.ts"), /export \{ CloverMark, CloverBadge \} from "\.\/clover-mark"/)
-    assert.match(source("components/brand/index.ts"), /export \{ KnotMark \} from "\.\/knot-mark"/)
-    // Luis (2026-10-01): the in-app brand mark is the five-loop endless knot,
-    // generated as vector geometry (interlaced tube, currentColor borders,
-    // `--knot-gap` inside) — never a traced raster.
-    const knot = source("components/brand/knot-mark.tsx")
-    assert.match(knot, /export function KnotMark/)
-    assert.match(knot, /data-brand="knot"/)
-    assert.match(knot, /stroke="currentColor"/)
-    assert.match(knot, /var\(--knot-gap, #fff\)/)
-    assert.match(knot, /OVER_PATCHES/)
-    assert.doesNotMatch(knot, /<image|data:image/)
-    const asset = source("public/brand/knot.svg")
-    assert.match(asset, /viewBox="0 0 100 100"/)
+    assert.match(source("components/brand/index.ts"), /export \{ AtomMark \} from "\.\/atom-mark"/)
+    assert.doesNotMatch(source("components/brand/index.ts"), /knot-mark/)
+    // Luis (2026-10-02): the in-app brand mark is the atom — three elliptical
+    // orbits (−90° / 30° / 150°) with one electron each around a solid
+    // nucleus, pure vector geometry in currentColor («tinta»), each ring with
+    // a dash gap centred on its electron — never a traced raster.
+    const atom = source("components/brand/atom-mark.tsx")
+    assert.match(atom, /export function AtomMark/)
+    assert.match(atom, /data-brand="atom"/)
+    assert.match(atom, /stroke="currentColor"/)
+    assert.match(atom, /const ORBIT_ANGLES = \[-90, 30, 150\] as const/)
+    assert.match(atom, /strokeDasharray=\{dashArray\}/)
+    assert.match(atom, /r=\{w\.nucleus\} fill="currentColor"/)
+    assert.doesNotMatch(atom, /<image|data:image/)
+    const asset = source("public/brand/atom.svg")
+    assert.match(asset, /viewBox="0 0 400 400"/)
     assert.match(asset, /stroke="currentColor"/)
-    assert.match(asset, /var\(--knot-gap, #fff\)/)
+    assert.match(asset, /stroke-dasharray="716\.9 52" stroke-dashoffset="742\.9"/)
+    assert.equal((asset.match(/<circle cx="370" cy="200" r="13"/g) || []).length, 3)
+    // The five-loop knot (2026-10-01) is gone: one in-app brand mark only.
+    assert.ok(!fs.existsSync(path.join(root, "components/brand/knot-mark.tsx")))
+    assert.ok(!fs.existsSync(path.join(root, "public/brand/knot.svg")))
     const css = source("app/globals.css")
-    assert.match(css, /--knot-gap: #ffffff;/)
-    assert.match(css, /--knot-gap: #0d0d0d;/)
+    assert.doesNotMatch(css, /--knot-gap/)
     for (const rel of [
       "components/BrandLogo.tsx",
       "components/app-sidebar.tsx",
+      "components/PWAInstallPrompt.tsx",
+      "components/BrandCycle.tsx",
       "app/auth/login/page.tsx",
       "app/auth/register/page.tsx",
+      "app/auth/forgot-password/page.tsx",
+      "app/auth/reset-password/page.tsx",
+      "app/auth/reset/[token]/page.tsx",
     ]) {
       const src = source(rel)
-      assert.match(src, /import \{ KnotMark \} from "@\/components\/brand"/, `${rel} imports KnotMark`)
-      assert.match(src, /<KnotMark/, `${rel} renders KnotMark`)
-      assert.doesNotMatch(src, /<CloverMark/, `${rel} no longer renders the clover`)
+      assert.match(src, /import \{ AtomMark \} from "@\/components\/brand"/, `${rel} imports AtomMark`)
+      assert.match(src, /<AtomMark/, `${rel} renders AtomMark`)
+      assert.doesNotMatch(src, /<CloverMark|KnotMark/, `${rel} renders neither the clover nor the knot`)
     }
   })
 
   // Luis (2026-09-29): the interface is black & white — the in-app brand ink
   // is near-black on light and near-white on dark (the PWA icon, emails and
   // generated documents keep the clover green asset).
-  it("uses a monochrome ink as the in-app brand accent in both themes; the thinking glyph is monochrome", () => {
+  it("uses a monochrome ink as the in-app brand accent in both themes; the thinking atom is ink + three electron colours", () => {
     const css = source("app/globals.css")
     assert.match(css, /--brand: #0A0A0A;/)
     assert.match(css, /--brand: #FAFAFA;/)
-    // The thinking glyph is the foreground (black on light, white on dark), in both themes.
+    // The thinking glyph's orbits and nucleus are the foreground (black on light, white on dark), in both themes;
+    // only its three electrons carry colour (Luis, 2026-10-02), via dedicated tokens.
     assert.equal((css.match(/--think-accent: hsl\(var\(--foreground\)\);/g) || []).length, 2)
     assert.doesNotMatch(css, /--think-accent: #(2E7D32|66BB6A);/i)
+    assert.match(css, /--think-electron-a: #38BDF8;/)
+    assert.match(css, /--think-electron-b: #A78BFA;/)
+    assert.match(css, /--think-electron-c: #FBBF24;/)
     assert.match(css, /--clover-vein: #ffffff;/)
     assert.match(css, /--accent-violet: 0 0% 4%;/)
     assert.match(css, /--accent-violet: 0 0% 96%;/)
     assert.doesNotMatch(css, /--brand: #(7c5cff|5b4dff);/i)
     assert.match(source("lib/thinking-loaders.ts"), /export const CLAUDE_THINK_ACCENT = "currentColor"/)
-    // The thinking glyph is the ThinkingCore (not the clover), drawn in the monochrome think accent.
+    // The thinking glyph is the ThinkingCore (the atom in motion, not the clover), drawn in the think accent.
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /data-brand="thinking-core"/)
     assert.doesNotMatch(asterisk, /data-brand="clover"/)
     assert.match(asterisk, /export function ClaudeAsterisk/)
-    assert.match(source("components/brand/thinking-core.tsx"), /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
+    const core = source("components/brand/thinking-core.tsx")
+    assert.match(core, /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
+    assert.match(core, /data-brand-geometry="atom"/)
+    assert.match(core, /var\(--think-electron-\$\{key\}, currentColor\)/)
   })
 
   it("leaves no raster sira-gpt.png logo render under app/ and components/", () => {

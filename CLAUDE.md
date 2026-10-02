@@ -1691,6 +1691,38 @@ más profesional»). UI lock re-baselineado para los archivos tocados.
   `tests/agentes-premium-finish-source.test.ts` (clase de la fila actualizada).
 - Gotcha repetido: `next dev` sirvió `globals.css` viejo hasta `rm -rf .next/cache/webpack`.
 
+## Marca: átomo de tres órbitas + «Pensando» como átomo en movimiento (added 2026-10-02)
+
+Pedido de Luis con el SVG del logo («logo de Sira de átomo») y el símbolo de pensar de la
+plataforma (canvas «ia-estelas»: «tres puntos de color giran con estela alrededor del punto
+central»). Sustituye al nudo de cinco bucles del día anterior. UI lock re-baselineado.
+- **`components/brand/atom-mark.tsx` (`AtomMark`)**: la marca es el SVG de Luis tal cual
+  (viewBox 400, tres órbitas elípticas 170×62 rotadas −90°/30°/150°, un electrón r=13 en el
+  ápice de cada una, núcleo r=24, trazo 9), todo en `currentColor` («tinta»); cada anillo
+  lleva el hueco centrado en su electrón (`stroke-dasharray`/`dashoffset`). A ≤32 px aplica
+  un tamaño óptico (trazo 16, electrón 19, núcleo 32; prop `weight`) para que el sidebar
+  (20–22 px) y las tarjetas de auth (28 px) no queden en hilos de 0,5 px. Mismo dibujo en
+  `public/brand/atom.svg`. **`KnotMark`, `public/brand/knot.svg` y `--knot-gap` se eliminaron**
+  (sin prop `gap`). `CloverMark` sigue para el icono PWA, correos y documentos.
+- **Todos los renders in-app** (sidebar abierto y rail colapsado, BrandLogo, login/registro/
+  recuperación/reset, PWA prompt, BrandCycle) usan `AtomMark`.
+- **`components/brand/thinking-core.tsx` (`ThinkingCore`, el único glifo «Pensando»)**: ahora es
+  el mismo átomo en movimiento. Órbitas y núcleo en la tinta (`--think-accent`); los tres
+  electrones recorren su elipse exacta con SMIL `animateMotion` (velocidad constante, fases con
+  `begin` negativo, 2.6/3.1/3.6 s) y dejan estela: dos dashes (16 % y 7 % de la órbita) sobre una
+  copia del anillo con `pathLength="100"` cuyo `stroke-dashoffset` se anima en sincronía, así la
+  cola se curva con la elipse a cualquier tamaño (12 px rail → 48 px). Idle = el logo estático
+  (electrón en el ápice, sin estela). CSS (`.claude-asterisk*`, históricos): latido del núcleo
+  (`thinking-core-pulse`), y con `prefers-reduced-motion` se ocultan electrones móviles y
+  estelas, se muestran los estáticos y el núcleo solo pulsa en opacidad. Sin ripple.
+- **Excepción al monocromo (decisión de Luis)**: los electrones son los únicos puntos de color
+  de una superficie de pensamiento: tokens `--think-electron-a|b|c` en `globals.css` (celeste
+  #38BDF8 / violeta #A78BFA / ámbar #FBBF24; variantes más claras en `.dark`). Los valores son
+  una propuesta ajustable en un solo sitio; el canvas original no viajó con sus colores.
+- Tests actualizados: `tests/brand-clover-source.test.ts` (átomo, sin nudo, tokens),
+  `tests/sidebar-brand-header-source.test.ts`, `tests/claude-thinking-surface-source.test.ts`
+  (SMIL + reduced motion), `tests/claude-trace-rail-source.test.ts`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
