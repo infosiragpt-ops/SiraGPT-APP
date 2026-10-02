@@ -35,6 +35,7 @@ import {
 import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
+import { sanitizeNavigateUrl } from "@/lib/computer-navigate"
 import { PensandoBars } from "@/components/pensando-bars"
 import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import {
@@ -158,8 +159,10 @@ export function AgentComputerShell({
   )
 
   React.useEffect(() => {
-    if (initialDock && initialDock !== "desktop") void focusApp(initialDock)
-  }, [conversationId, initialDock, focusApp])
+    const willNavigate = initialDock === "browser" && autoNavigate && Boolean(conversationId?.trim())
+      && sanitizeNavigateUrl(navigateUrl).ok
+    if (!willNavigate && initialDock && initialDock !== "desktop") void focusApp(initialDock)
+  }, [conversationId, initialDock, focusApp, autoNavigate, navigateUrl])
 
   return (
     <section
@@ -188,7 +191,10 @@ export function AgentComputerShell({
             conversationId={conversationId}
             initialUrl={navigateUrl}
             autoNavigate={autoNavigate}
-            onNavigated={() => void focusApp("browser")}
+            onNavigated={() => {
+              setActiveApp("browser")
+              setFocusNote(t("dock.focusedBrowser"))
+            }}
           />
           <span
             className={cn(

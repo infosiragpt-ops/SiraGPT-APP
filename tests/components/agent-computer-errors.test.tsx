@@ -9,7 +9,11 @@ vi.mock("next-intl", () => {
 })
 vi.mock("next/dynamic", () => ({ default: () => () => <div data-testid="live-desktop-viewer" /> }))
 vi.mock("@/components/code/ComputerViewer", () => ({ ComputerViewer: () => <div data-testid="iframe-viewer" /> }))
-vi.mock("@/components/chat/integrated-browser-bar", () => ({ IntegratedBrowserBar: () => null }))
+vi.mock("@/components/chat/integrated-browser-bar", () => ({
+  IntegratedBrowserBar: ({ onNavigated }: { onNavigated?: (url: string) => void }) => (
+    <button onClick={() => onNavigated?.("https://example.com/redirected")}>Confirm navigation</button>
+  ),
+}))
 vi.mock("@/lib/code-workspace-context", () => ({
   CODE_PREVIEW_STATE_EVENT: "preview-test",
   CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT: "department-test",
@@ -28,6 +32,29 @@ beforeEach(() => { transport.mockReset() })
 afterEach(() => { cleanup() })
 
 describe("computer dock reports confirmed actions", () => {
+  it("keeps the page brought forward by confirmed navigation instead of focusing the first browser window", async () => {
+    transport.mockResolvedValue(json({ ok: true }))
+    render(<AgentComputerShell initialDock="desktop" variant="overlay" conversationId="qa-chat"><div /></AgentComputerShell>)
+    fireEvent.click(screen.getByRole("button", { name: "Confirm navigation" }))
+    await waitFor(() => expect(screen.getByTestId("agent-computer-focus-note")).toHaveTextContent("dock.focusedBrowser"))
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it("does not race automatic navigation with initial window focus", () => {
+    transport.mockResolvedValue(json({ ok: true }))
+    render(<AgentComputerShell initialDock="browser" variant="overlay" conversationId="qa-chat"
+      navigateUrl="https://example.com/" autoNavigate><div /></AgentComputerShell>)
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it("still focuses the browser when automatic navigation is disabled", async () => {
+    transport.mockResolvedValue(json({ ok: true }))
+    render(<AgentComputerShell initialDock="browser" variant="overlay" conversationId="qa-chat"
+      navigateUrl="https://example.com/" autoNavigate={false}><div /></AgentComputerShell>)
+    await waitFor(() => expect(transport).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(transport.mock.calls[0][1].body)).toEqual({ focus: "browser", conversationId: "qa-chat" })
+  })
+
   it.each([
     [503, { ok: false, message: serverDetail }],
     [200, { ok: false, message: serverDetail }],

@@ -51,19 +51,15 @@ export async function postComputerNavigate(
     }),
     signal: AbortSignal.timeout(30_000),
   })
-  const body = await res.json().catch(() => ({})) as { message?: string; error?: string; ok?: boolean }
-  if (!res.ok || body.ok === false) {
-    throw new Error(body.message || body.error || "No se pudo abrir la página")
+  const body = await res.json().catch(() => ({})) as { message?: string; error?: string; ok?: boolean; url?: unknown } | null
+  if (!res.ok || body?.ok !== true) {
+    throw new Error(body?.message || body?.error || "No se pudo abrir la página")
   }
-  await authenticatedFetch(`${apiRoot()}/agent-computer/action`, {
-    method: "POST",
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify({
-      focus: "browser",
-      ...(chatId ? { conversationId: chatId } : {}),
-    }),
-    signal: AbortSignal.timeout(20_000),
-  }).catch(() => undefined)
-  return parsed.url
+  const actual = sanitizeNavigateUrl(body.url)
+  if (!actual.ok || typeof body.url !== "string" || !/^https?:\/\//i.test(body.url)) {
+    throw new Error("No se pudo confirmar la página abierta. Inténtalo de nuevo.")
+  }
+  // The navigation service already brought the selected page to the front.
+  // Focusing the first browser window here can hide that page with an old tab.
+  return actual.url
 }
