@@ -9,7 +9,7 @@
   "display": "standalone",
   "orientation": "any",
   "background_color": "#ffffff",
-  "theme_color": "#2E7D32",
+  "theme_color": "#ffffff",
   "categories": ["productivity", "utilities", "education"],
   "icons": [
     {
@@ -25,7 +25,7 @@
       "purpose": "any"
     },
     {
-      "src": "/brand/clover-maskable-512.png",
+      "src": "/brand/atom-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

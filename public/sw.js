@@ -37,7 +37,7 @@ const PRECACHE_URLS = [
   '/offline',
   '/sira-gpt-192.png',
   '/sira-gpt-512.png',
-  '/brand/clover.svg',
+  '/brand/atom.svg',
   '/manifest.webmanifest',
 ]
 

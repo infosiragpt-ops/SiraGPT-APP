@@ -31,7 +31,7 @@ describe("Claude-style activity rail", () => {
     assert.match(asterisk, /data-claude-asterisk-weight="fine"/)
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /viewBox="0 0 24 24"/)
-    assert.match(core, /strokeWidth="1\.2" opacity="0\.45"/, "orbit rings stay hairline and quiet at 24px")
+    assert.doesNotMatch(core, /thinking-core__ring/, "dots only: no orbit rings (Luis, 2026-10-02)")
     assert.match(core, /r="1\.7" fill="currentColor"/, "electrons are small dots")
     assert.match(core, /<circle className="thinking-core__core" cx="12" cy="12" r="2\.6" fill="currentColor" \/>/)
     const loader = source("components/thinking-status-loader.tsx")

@@ -28,7 +28,10 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(core, /\{ key: "c", angle: 150, dur: "3\.6s", begin: "-2\.3s" \}/)
     assert.match(core, /const ORBIT_RY = 3\.65/)
     assert.match(core, /transform=\{`rotate\(\$\{angle\} \$\{CX\} \$\{CY\}\)`\}/)
-    assert.equal((core.match(/stroke="currentColor"/g) || []).length, 2, "the orbit ring + the trail dash")
+    // Luis (2026-10-02, second pass): dots only — no orbit ring is drawn; the
+    // only stroke is the trail dash behind each electron.
+    assert.equal((core.match(/stroke="currentColor"/g) || []).length, 1, "only the trail dash")
+    assert.doesNotMatch(core, /thinking-core__ring/)
     assert.match(core, /fill="currentColor"/)
     assert.doesNotMatch(core, /Gradient|<filter|url\(#|#2E7D32"|LEAF_PATH|rotate\(\$\{deg\}\)/)
     // Electrons move along the exact orbit path with SMIL; the trail is a
