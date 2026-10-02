@@ -178,7 +178,9 @@ function applyToolJsonCoerceClosed({
     ? repairEnumCaseInsensitive(next, sch)
     : { ok: true, value: next };
   if (enums && enums.ok === false) {
-    return { ok: false, refuse: true, args: next, code: enums.code || 'enum_invalid' };
+    return { ok: false, refuse: true, args: next, code: enums.code || 'enum_invalid',
+      ...(enums.validation ? { validation: enums.validation } : {}),
+    };
   }
   const filled = repairMissingRequiredFromPriorTurn
     ? repairMissingRequiredFromPriorTurn((enums && enums.value != null) ? enums.value : next, sch, { prior })

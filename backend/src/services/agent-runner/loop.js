@@ -67,6 +67,24 @@ function loadEngine3h67() {
   try { return require('./engine-3h67'); } catch (_) { return null; }
 }
 
+// Diagnostics contain only schema field names and allowed enum values. Never
+// echo the rejected argument: it may contain document content or credentials.
+function enumValidationHint(validation) {
+  if (!validation || !Array.isArray(validation.path) || !Array.isArray(validation.allowed)) return '';
+  let field = '';
+  for (const part of validation.path.slice(0, 16)) {
+    if (Number.isSafeInteger(part) && part >= 0) field += `[${part}]`;
+    else if (typeof part === 'string' && /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/.test(part)) field += `${field ? '.' : ''}${part}`;
+    else return '';
+  }
+  const allowed = validation.allowed.slice(0, 20)
+    .filter((value) => value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+      || (typeof value === 'string' && value.length <= 64))
+    .map((value) => JSON.stringify(value));
+  if (!allowed.length) return '';
+  return ` Campo: ${field || '(raíz)'}. Valores permitidos: ${allowed.join(', ')}.`;
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -2698,7 +2716,7 @@ async function runAgentLoopInner({
               });
               if (coerced && coerced.ok === false && !(args && args.__parse_error)) {
                 const classified = classifyLoopError({ code: coerced.code || 'json_parse' });
-                result = 'ERROR: ' + classified.message;
+                result = 'ERROR: ' + classified.message + enumValidationHint(coerced.validation);
                 cacheHit = true;
               } else if (coerced && coerced.args && !coerced.args.__parse_error) {
                 args = coerced.args;
@@ -2877,7 +2895,7 @@ async function runAgentLoopInner({
               cacheHit = true;
             } else if (hyg && hyg.refuse) {
               const classified = classifyLoopError({ code: hyg.code || 'tool_args_invalid' });
-              result = 'ERROR: ' + classified.message;
+              result = 'ERROR: ' + classified.message + enumValidationHint(hyg.validation);
               cacheHit = true;
             }
           }
