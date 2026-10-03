@@ -97,7 +97,7 @@ test('ensureAvailable: probes /api/tags once, memoises the verdict, and re-probe
 });
 
 test('ensureAvailable: a model that was never pulled, or an unreachable Ollama, is memoised as unavailable with a reason', async () => {
-  const missing = makeClient({ responder: () => jsonResponse({ models: [{ name: 'gemma4:26b' }] }) });
+  const missing = makeClient({ env: { OLLAMA_OCR_AUTO_PULL: '0' }, responder: () => jsonResponse({ models: [{ name: 'gemma4:26b' }] }) });
   const verdict = await missing.client.ensureAvailable();
   assert.equal(verdict.available, false);
   assert.equal(verdict.reason, 'model_not_found');
@@ -113,6 +113,76 @@ test('ensureAvailable: a model that was never pulled, or an unreachable Ollama, 
   assert.equal(disabled.client.isEnabled(), false);
   assert.deepEqual(await disabled.client.ensureAvailable(), { available: false, reason: 'ollama_ocr_disabled' });
   assert.equal(disabled.calls.length, 0);
+});
+
+test('auto-pull: a missing model triggers ONE background POST /api/pull, probes read model_pulling meanwhile, and the next probe after the pull finds it', async () => {
+  let listed = false;
+  let resolvePull;
+  const calls = { tags: 0, pull: 0 };
+  const { client } = makeClient({
+    responder: (url, init) => {
+      if (url.endsWith('/api/tags')) {
+        calls.tags += 1;
+        return jsonResponse(listed ? TAGS_WITH_MODEL : { models: [{ name: 'gemma4:26b' }] });
+      }
+      if (url.endsWith('/api/pull')) {
+        calls.pull += 1;
+        const body = JSON.parse(init.body);
+        assert.equal(body.model, 'glm-ocr');
+        assert.equal(body.stream, false);
+        return new Promise((resolve) => { resolvePull = () => { listed = true; resolve(jsonResponse({ status: 'success' })); }; });
+      }
+      throw new Error(`unexpected ${url}`);
+    },
+  });
+  const first = await client.ensureAvailable();
+  assert.deepEqual([first.available, first.reason], [false, 'model_pulling']);
+  assert.equal(client.describe().pulling, true);
+  // Concurrent/next probes do not start a second pull.
+  await client.resetCache();
+  const again = await client.ensureAvailable();
+  assert.equal(again.reason, 'model_pulling');
+  assert.equal(calls.pull, 1);
+  resolvePull();
+  await client.waitForPull();
+  assert.equal(client.describe().pulling, false);
+  const after = await client.ensureAvailable();
+  assert.equal(after.available, true, 'memo dropped after the pull so the probe re-ran immediately');
+  assert.equal(after.cached, undefined);
+  assert.equal(calls.pull, 1);
+});
+
+test('auto-pull: a failed pull parks retries for OLLAMA_OCR_PULL_RETRY_MS and OLLAMA_OCR_AUTO_PULL=0 never pulls', async () => {
+  const calls = { pull: 0 };
+  const failing = makeClient({
+    env: { OLLAMA_OCR_PULL_RETRY_MS: '60000', OLLAMA_OCR_PROBE_TTL_MS: '30000' },
+    responder: (url) => {
+      if (url.endsWith('/api/tags')) return jsonResponse({ models: [] });
+      calls.pull += 1;
+      return jsonResponse({ error: 'pull model manifest: file does not exist' }, { status: 500 });
+    },
+  });
+  assert.equal((await failing.client.ensureAvailable()).reason, 'model_pulling');
+  await failing.client.waitForPull();
+  assert.equal(calls.pull, 1);
+  assert.match(failing.client.describe().lastPullFailure.reason, /pull answered 500/);
+  const parked = await failing.client.ensureAvailable();
+  assert.equal(parked.reason, 'model_not_found', 'no second pull inside the retry window');
+  assert.equal(calls.pull, 1);
+  failing.tick(61_000);
+  assert.equal((await failing.client.ensureAvailable()).reason, 'model_pulling', 'retried after the window');
+  assert.equal(calls.pull, 2);
+  await failing.client.waitForPull();
+
+  const off = makeClient({
+    env: { OLLAMA_OCR_AUTO_PULL: '0' },
+    responder: (url) => {
+      assert.ok(url.endsWith('/api/tags'), 'never calls /api/pull');
+      return jsonResponse({ models: [] });
+    },
+  });
+  assert.equal((await off.client.ensureAvailable()).reason, 'model_not_found');
+  assert.equal(off.client.describe().autoPull, false);
 });
 
 test('recognize: posts the GLM-OCR task prompt + base64 image to /api/chat and returns the cleaned transcription', async () => {

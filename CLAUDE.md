@@ -1891,11 +1891,14 @@ Pedido de Luis: incorporar GLM-OCR (Z.ai, 0,9B, nº 1 OmniDocBench v1.5) a la pl
   Cubre imágenes adjuntas, PDFs escaneados, imágenes dentro de Office y `OCR_MODE=vision`.
 - **Producción**: `docker-compose.prod.yml` pasa `SIRAGPT_OLLAMA_OCR` / `OLLAMA_OCR_BASE_URL`
   (`http://siragpt-ollama:11434`, la misma Ollama de SiraGPT Mini en la red `iliagpt-app`) /
-  `OLLAMA_OCR_MODEL` (`glm-ocr`) al backend. **Lo único que falta en la Lenovo es descargar el
-  modelo**: `docker exec siragpt-ollama ollama pull glm-ocr` (~1,9 GB); el siguiente sondeo lo
-  enciende sin reiniciar nada. Envs en `docs/ENV_VARIABLES.md` y `docs/operations/ENVIRONMENT.md`.
-- Tests: `backend/tests/ollama-ocr.test.js` (10: config/alias `/v1`, listado de tags, sondeo y
-  memo, request/respuesta, fallos HTTP/timeout/caída, integración con el motor y PDF).
+  `OLLAMA_OCR_MODEL` (`glm-ocr`) al backend. **El modelo se instala solo**: si el sondeo ve la
+  Ollama viva sin `glm-ocr`, el cliente lanza `POST /api/pull` una vez en segundo plano (~1,9 GB,
+  `model_pulling` mientras tanto, reintento tras `OLLAMA_OCR_PULL_RETRY_MS` si falla) y re-sondea
+  al terminar — Luis no necesita shell en la Lenovo. `OLLAMA_OCR_AUTO_PULL=0` lo apaga. Envs en
+  `docs/ENV_VARIABLES.md` y `docs/operations/ENVIRONMENT.md`.
+- Tests: `backend/tests/ollama-ocr.test.js` (12: config/alias `/v1`, listado de tags, sondeo y
+  memo, auto-pull único + reintento parqueado, request/respuesta, fallos HTTP/timeout/caída,
+  integración con el motor y PDF).
 
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP

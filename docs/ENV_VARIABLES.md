@@ -179,9 +179,13 @@ con `GET /api/tags` y se memoiza `OLLAMA_OCR_PROBE_TTL_MS`: sin Ollama o sin el 
 descargado el motor sigue al peldaño de pago en < 3 s, sin error para el usuario. Proveedor
 reportado: `ollama:glm-ocr`. En `NODE_ENV=test` queda apagado salvo `SIRAGPT_OLLAMA_OCR=1`.
 
-**Activación en la Lenovo (una sola vez, dentro del contenedor de Ollama):**
-`docker exec siragpt-ollama ollama pull glm-ocr` (~1,9 GB). No hace falta reiniciar el backend:
-el siguiente sondeo lo detecta. Con `OCR_MODE=vision` GLM-OCR lee directo sin pasar por Tesseract.
+**Instalación del modelo: automática.** Si el sondeo ve la Ollama viva pero sin `glm-ocr`, el
+backend le pide descargarlo (`POST /api/pull`, una sola vez, en segundo plano, ~1,9 GB) y vuelve a
+sondear al terminar — no hace falta shell en la Lenovo ni reiniciar nada; el primer arranque tras
+publicar lo deja instalado. Mientras descarga el motor sigue con el modelo de nube
+(`reason: model_pulling`). Un pull fallido se reintenta cada `OLLAMA_OCR_PULL_RETRY_MS`.
+Alternativa manual: `docker exec siragpt-ollama ollama pull glm-ocr`. Con `OCR_MODE=vision`
+GLM-OCR lee directo sin pasar por Tesseract.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -195,6 +199,9 @@ el siguiente sondeo lo detecta. Con `OCR_MODE=vision` GLM-OCR lee directo sin pa
 | `OLLAMA_OCR_MAX_SIDE` | `2048` | Lado máximo (px) de la imagen enviada |
 | `OLLAMA_OCR_NUM_PREDICT` | `8192` | Tokens máximos de salida |
 | `OLLAMA_OCR_KEEP_ALIVE` | `30m` | Cuánto queda el modelo cargado en Ollama tras una lectura |
+| `OLLAMA_OCR_AUTO_PULL` | `1` (`0` apaga) | Descargar el modelo automáticamente cuando falta |
+| `OLLAMA_OCR_PULL_TIMEOUT_MS` | `2700000` | Tope de la descarga (45 min) |
+| `OLLAMA_OCR_PULL_RETRY_MS` | `1800000` | Espera antes de reintentar un pull fallido (30 min) |
 
 ---
 

@@ -25,6 +25,12 @@
  *   — no env change, no restart.
  * - Never throws. Every failure is `{ ok:false, reason }` so `ocr-engine`
  *   can keep its own fail-open ladder.
+ * - Self-installing: when the probe finds Ollama up but the model missing,
+ *   the client asks Ollama to download it (`POST /api/pull`, once, in the
+ *   background) and re-probes when the pull finishes. Nobody needs a shell on
+ *   the production host; the next publish brings the model along. Off with
+ *   `OLLAMA_OCR_AUTO_PULL=0`; a failed pull is retried after
+ *   `OLLAMA_OCR_PULL_RETRY_MS`.
  * - Default ON everywhere except `NODE_ENV=test` (unit tests never touch
  *   the network; they inject `fetchImpl`). Kill switch `SIRAGPT_OLLAMA_OCR=0`.
  */
@@ -39,6 +45,8 @@ const DEFAULT_PROBE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_SIDE = 2048;
 const DEFAULT_NUM_PREDICT = 8192;
 const DEFAULT_KEEP_ALIVE = '30m';
+const DEFAULT_PULL_TIMEOUT_MS = 45 * 60 * 1000;
+const DEFAULT_PULL_RETRY_MS = 30 * 60 * 1000;
 
 const TASK_PROMPTS = Object.freeze({
   text: 'Text Recognition:',
@@ -89,6 +97,9 @@ function getOllamaOcrConfig(env = process.env) {
     maxSide: intFromEnv(env, 'OLLAMA_OCR_MAX_SIDE', DEFAULT_MAX_SIDE, { min: 512, max: 8192 }),
     numPredict: intFromEnv(env, 'OLLAMA_OCR_NUM_PREDICT', DEFAULT_NUM_PREDICT, { min: 256, max: 65536 }),
     keepAlive: String(env.OLLAMA_OCR_KEEP_ALIVE || DEFAULT_KEEP_ALIVE),
+    autoPull: !FALSY.has(String(env.OLLAMA_OCR_AUTO_PULL ?? '').trim().toLowerCase()),
+    pullTimeoutMs: intFromEnv(env, 'OLLAMA_OCR_PULL_TIMEOUT_MS', DEFAULT_PULL_TIMEOUT_MS, { min: 10_000 }),
+    pullRetryMs: intFromEnv(env, 'OLLAMA_OCR_PULL_RETRY_MS', DEFAULT_PULL_RETRY_MS, { min: 1000 }),
   };
 }
 
@@ -172,6 +183,10 @@ async function prepareImage(buffer, { maxSide, sharpImpl } = {}) {
 
 function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.now(), sharpImpl, logger = console } = {}) {
   const availability = new Map();
+  // key → { promise, startedAt } while a pull is in flight; key → { failedAt }
+  // after a failed pull so a permanently missing model is retried on a slow cadence.
+  const pulls = new Map();
+  const pullFailures = new Map();
   const getFetch = () => fetchImpl || globalThis.fetch;
 
   function config() {
@@ -190,6 +205,57 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
   function remember(cfg, state) {
     availability.set(cacheKey(cfg), { ...state, checkedAt: now() });
     return state;
+  }
+
+  /**
+   * Ask Ollama to download the model (`POST /api/pull`). Fire-and-forget: the
+   * returned promise never rejects; while it runs the memo reads
+   * `model_pulling`, and when it ends the memo is dropped so the next
+   * `ensureAvailable` re-probes right away. One pull per base+model at a time;
+   * a failure parks retries for `pullRetryMs`.
+   */
+  function startPull(cfg) {
+    const key = cacheKey(cfg);
+    const inflight = pulls.get(key);
+    if (inflight) return inflight.promise;
+    const failed = pullFailures.get(key);
+    if (failed && now() - failed.failedAt < cfg.pullRetryMs) return null;
+    const fetchFn = getFetch();
+    if (typeof fetchFn !== 'function') return null;
+
+    logger.log(`[ollama-ocr] model «${cfg.model}» missing on ${cfg.baseUrl} — asking Ollama to pull it (this runs once, in the background)`);
+    const t = timeoutSignal(cfg.pullTimeoutMs);
+    const promise = (async () => {
+      try {
+        const response = await fetchFn(`${cfg.baseUrl}/api/pull`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          // `model` is the current field; `name` keeps older Ollama builds happy.
+          body: JSON.stringify({ model: cfg.model, name: cfg.model, stream: false }),
+          signal: t.signal,
+        });
+        const bodyText = response ? await readBodyText(response) : '';
+        let status = null;
+        try { status = JSON.parse(bodyText || '{}').status || null; } catch { status = null; }
+        if (!response || !response.ok || (status && !/success/i.test(String(status)))) {
+          throw new Error(`pull answered ${response ? response.status : 0}${status ? ` (${status})` : ''}: ${bodyText.slice(0, 160)}`);
+        }
+        pullFailures.delete(key);
+        logger.log(`[ollama-ocr] pull of «${cfg.model}» finished — local OCR becomes the first vision rung on the next read`);
+        return { ok: true };
+      } catch (error) {
+        pullFailures.set(key, { failedAt: now(), reason: String((error && error.message) || error).slice(0, 200) });
+        logger.warn(`[ollama-ocr] pull of «${cfg.model}» failed (${String((error && error.message) || error).slice(0, 160)}) — retrying in ${Math.round(cfg.pullRetryMs / 60000)} min; cloud vision OCR stays in charge`);
+        return { ok: false };
+      } finally {
+        t.clear();
+        pulls.delete(key);
+        // Drop the memo so the next probe sees the real state immediately.
+        availability.delete(key);
+      }
+    })();
+    pulls.set(key, { promise, startedAt: now() });
+    return promise;
   }
 
   /**
@@ -216,6 +282,9 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
       }
       const json = await response.json().catch(() => ({}));
       if (!isModelListed(json && json.models, cfg.model)) {
+        if (cfg.autoPull && (pulls.has(cacheKey(cfg)) || startPull(cfg))) {
+          return remember(cfg, { available: false, reason: 'model_pulling' });
+        }
         const state = remember(cfg, { available: false, reason: 'model_not_found' });
         logger.warn(`[ollama-ocr] model «${cfg.model}» is not pulled on ${cfg.baseUrl} (run: ollama pull ${cfg.model}) — cloud vision OCR stays in charge for ${Math.round(cfg.probeTtlMs / 1000)} s`);
         return state;
@@ -305,6 +374,14 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
 
   function resetCache() {
     availability.clear();
+    pullFailures.clear();
+  }
+
+  /** Resolves when the in-flight pull (if any) settles. Tests + graceful shutdown. */
+  async function waitForPull() {
+    const cfg = config();
+    const inflight = pulls.get(cacheKey(cfg));
+    return inflight ? inflight.promise : null;
   }
 
   function describe() {
@@ -318,10 +395,13 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
       available: cached ? cached.available : null,
       reason: cached ? cached.reason : null,
       checkedAt: cached ? cached.checkedAt : null,
+      autoPull: cfg.autoPull,
+      pulling: pulls.has(cacheKey(cfg)),
+      lastPullFailure: pullFailures.get(cacheKey(cfg)) || null,
     };
   }
 
-  return { config, isEnabled, ensureAvailable, recognize, resetCache, describe };
+  return { config, isEnabled, ensureAvailable, recognize, resetCache, describe, startPull, waitForPull };
 }
 
 const defaultClient = createOllamaOcrClient();
