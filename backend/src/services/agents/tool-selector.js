@@ -173,6 +173,9 @@ function selectTools(rawInput, deps = {}) {
     // specific-intent turn even though the user attached a file to edit it.
     if (signals.hasFiles && /(rag_retrieve|docintel|deep_analyze|document_edit)/.test(n)) coreSet.add(toName(t));
     if ((signals.hasMedia || /media|image|chart/.test(it)) && /(create_document|generate_image|create_chart)/.test(n)) coreSet.add(toName(t));
+    // A link + «transcribe / subtítulos / qué dicen en el minuto…»: the
+    // transcription tool must survive the cap whatever the intent label.
+    if (n === 'transcribe_url' && (signals.transcribeUrl || /transcri|subtit|minuto|timestamp/.test(String(input.userQuery || '').toLowerCase()))) coreSet.add(toName(t));
     const mentionedTools = new Set(
       (Array.isArray(signals.mentionedAppTools) ? signals.mentionedAppTools : [])
         .map((name) => String(name || '').toLowerCase())

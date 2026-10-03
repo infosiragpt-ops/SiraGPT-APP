@@ -10042,3 +10042,57 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
     background-image: none;
   }
 }
+
+/* ───────────────────────────────────────────────────────────────
+ * Rich user text — what the user pasted, rendered as what it is
+ * (Luis, 2026-10-03): «los links deberían marcarse de color celeste».
+ * Links (user bubble AND assistant answer) use the --celeste exception;
+ * file names, timecodes and `code` inside the user bubble get mono chips.
+ * ─────────────────────────────────────────────────────────────── */
+.chat-user-link,
+.chat-assistant-message .prose a:not(.anchor-link) {
+  color: hsl(var(--celeste));
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: hsl(var(--celeste) / 0.45);
+  text-underline-offset: 0.16em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  transition: text-decoration-color var(--duration-fast, 150ms) ease-out, color var(--duration-fast, 150ms) ease-out;
+}
+.chat-user-link:hover,
+.chat-assistant-message .prose a:not(.anchor-link):hover {
+  text-decoration-color: hsl(var(--celeste));
+}
+.chat-user-link:focus-visible,
+.chat-assistant-message .prose a:not(.anchor-link):focus-visible {
+  outline: 2px solid hsl(var(--celeste) / 0.6);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.chat-user-file,
+.chat-user-code,
+.chat-user-timecode {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86em;
+  line-height: 1.2;
+  padding: 0.1em 0.4em;
+  border-radius: 0.375rem;
+  background: hsl(var(--foreground) / 0.06);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.08);
+  white-space: nowrap;
+}
+.chat-user-file {
+  font-weight: 500;
+}
+.chat-user-timecode {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.dark .chat-user-file,
+.dark .chat-user-code,
+.dark .chat-user-timecode {
+  background: hsl(var(--foreground) / 0.1);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12);
+}

@@ -147,6 +147,23 @@ ruteo (editor de documentos / AgentRunner).
 | `SIRAGPT_REQUEST_BRIEF_LLM` | `1` | `0` desactiva el refinado con el tier gratuito (Cerebras) de los briefs de baja confianza con historial; sin `CEREBRAS_API_KEY` nunca corre |
 | `SIRAGPT_REQUEST_BRIEF_LLM_TIMEOUT_MS` | `900` | Tope de la llamada de refinado; al agotarse se conserva el brief heurístico |
 
+### Transcripción de enlaces — herramienta `transcribe_url` (added 2026-10-03)
+
+`backend/src/services/agent-harness/tools/transcribe-url-tool.js`: el agente transcribe el
+audio de un enlace (YouTube, Vimeo, Drive público, .mp4/.mp3 directos…) entero o de un
+minuto a otro. Descarga solo la sección con `yt-dlp --download-sections`, recorta y codifica
+con ffmpeg (mono 16 kHz AAC) y transcribe con la escalera de `audio-transcriber` (OpenAI →
+Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado) devuelve
+`media_login_required` con dos caminos para el usuario. La imagen del backend instala
+`yt-dlp` (apk) junto a `ffmpeg`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TRANSCRIBE_URL_YTDLP` | `yt-dlp` | Binario del descargador |
+| `FFMPEG_PATH` | `ffmpeg` | Binario de ffmpeg (compartido con whisper local) |
+| `TRANSCRIBE_URL_MAX_SECONDS` | `10800` | Máximo de audio por llamada (3 h); por encima pide un rango (`media_too_long`) |
+| `TRANSCRIBE_URL_TIMEOUT_MS` | `1200000` | Tope por proceso (descarga / ffmpeg) y para la transcripción (20 min) |
+
 ---
 
 ## Embeddings ladder (RAG + memory)

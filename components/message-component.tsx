@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { RequestBriefLine, extractRequestBrief } from "@/components/chat/request-brief-line";
+import { RichUserText } from "@/components/chat/rich-user-text";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
@@ -3325,7 +3326,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         </div>
                                     </div>
                                 ) : (
-                                    <p className="chat-user-bubble-inner">{formatAgentTaskUserContent(message.content)}</p>
+                                    <p className="chat-user-bubble-inner"><RichUserText text={formatAgentTaskUserContent(message.content)} /></p>
                                 )}
                             </Card>
                         )}

@@ -71,6 +71,8 @@ WORKDIR /app
 # (universal-document-extractor; members are piped to stdout, never unpacked).
 # bash: SiraCode workspace exec spawns /bin/bash -lc (Planificar permission
 # resume). Alpine's node image does not ship it; do not fall back to sh.
+# yt-dlp: the chat tool transcribe_url downloads the audio of a public video /
+# audio / recording link (whole or a timecode range) before whisper.
 RUN apk add --no-cache \
     bash \
     chromium \
@@ -97,6 +99,7 @@ RUN apk add --no-cache \
     tesseract-ocr-data-spa \
     ttf-dejavu \
     ttf-freefont \
+    yt-dlp \
     libgomp \
     libstdc++ \
     wget

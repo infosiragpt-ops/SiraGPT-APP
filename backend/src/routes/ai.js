@@ -8461,6 +8461,9 @@ router.post(
                     signals: {
                       hasFiles: Array.isArray(agenticFileIds) && agenticFileIds.length > 0,
                       hasCode: !!(req._cognitiveDecision && req._cognitiveDecision.difficulty && req._cognitiveDecision.difficulty.hasCode),
+                      // A pasted link + «transcribe…»: keep transcribe_url in the
+                      // per-turn tool subset (tool-selector core rule).
+                      transcribeUrl: Boolean(__requestBrief && __requestBrief.deliverable && __requestBrief.deliverable.kind === 'transcription' && __requestBrief.target && __requestBrief.target.kind === 'url'),
                     },
                   },
                   toolContext: {
