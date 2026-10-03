@@ -1804,6 +1804,36 @@ el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recib
   `tests/request-brief-frontend-source.test.ts` (4), `tests/components/request-brief-line.test.tsx` (3).
   Envs en `docs/ENV_VARIABLES.md` (`SIRAGPT_REQUEST_BRIEF*`).
 
+## Acabado profesional v3 — CSS de sistema (added 2026-10-03)
+
+Pedido de Luis: «aplica CSS de forma masiva, más profesional, para que la interfaz se vea más
+bonita de manera muy avanzada». UN bloque aditivo al FINAL de `app/globals.css` («Professional
+finish v3»), sin color nuevo ni código de componentes, todo con tokens (`--shadow-*`, `--ease-*`,
+alfa de `--foreground`) para que claro / oscuro / medianoche compartan un lenguaje.
+1. **Tipografía** (`@layer base`, las utilidades siguen ganando): `optimizeLegibility` +
+   antialiasing, `text-wrap: balance` en títulos y `pretty` en párrafos, tracking óptico por
+   tamaño, `kbd` como tecla, placeholders en `--text-tertiary`, una sola curva de movimiento
+   para botones/enlaces/ítems que no traen la suya.
+2. **Lectura de la respuesta** (`.chat-assistant-message .prose`): títulos en sans 600 con
+   escala y h2 subrayado, enlaces con subrayado fino que se intensifica al hover, código inline
+   como pastilla sin backticks, marcadores de lista atenuados, cita con barra de tinta sin
+   cursiva, tablas como tarjeta (borde, cabecera, zebra suave, cifras tabulares), hr/img.
+3. **Profundidad**: burbuja del usuario con brillo superior de 1px + contorno hairline; menús,
+   listbox, popovers y diálogos con `--shadow-lg/xl` + brillo superior (tooltips excluidos por
+   `data-state`).
+4. **Interacción**: filas del sidebar con hover calmado y activa contorneada
+   (`[data-sidebar="menu-button"][data-active="true"]`), etiquetas de grupo en terciario,
+   tabs activas con `--shadow-sm`, campos de texto con contorno oscuro + lavado de 3px en vez
+   del outline (excluye el compositor, el campo celeste de renombrado, `.no-default-focus-ring`
+   y `[data-sidebar="input"]`).
+5. **Carga**: el `Skeleton` («animate-pulse rounded-md bg-muted») barre con luz en vez de
+   pulsar; `prefers-reduced-motion` lo apaga.
+- Intactos: superficie del compositor (contrato + e2e), marcas, toasts, paleta del bloque de
+  código, botones liquid. Verificado: los 18 tests fuente que fijan `globals.css`, compilación
+  Tailwind completa, UI lock re-baselineado solo para `globals.css`.
+- Test: `tests/ui-professional-finish-source.test.ts` (único bloque, monocromo sin literales
+  cromáticos, exclusiones del compositor, reduced motion).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

@@ -9727,3 +9727,318 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
     margin-top: 0.25rem;
   }
 }
+
+/* ───────────────────────────────────────────────────────────────
+ * Professional finish v3 — system-wide polish (Luis, 2026-10-03)
+ *
+ * «Aplica CSS de forma masiva, más profesional, para que la interfaz
+ * se vea más bonita de manera muy avanzada.» One additive layer over
+ * the monochrome system: no new colour, no new component code. Every
+ * rule is token-driven (--shadow-*, --ease-*, --foreground alpha) so the
+ * three themes (light / dark / midnight) keep one language.
+ *
+ *   1. Type rendering + rhythm (base layer — utilities still win)
+ *   2. Reading typography of the assistant answer (.prose in the chat)
+ *   3. Depth: user bubble, overlays (menus, popovers, dialogs)
+ *   4. Interaction: sidebar rows, menu items, tabs, form focus contour
+ *   5. Loading: skeleton sweep instead of a flat pulse
+ *
+ * Deliberately untouched: the composer surface (its own contract and
+ * e2e), the brand marks, toasts, the code block palette, the liquid
+ * buttons. Reduced motion is honoured at the end.
+ * ─────────────────────────────────────────────────────────────── */
+
+/* 1 · Type rendering + rhythm ------------------------------------ */
+@layer base {
+  html {
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    font-optical-sizing: auto;
+  }
+  :where(h1, h2, h3, h4, h5, h6) {
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+  :where(h1, h2) {
+    letter-spacing: -0.022em;
+  }
+  :where(h3, h4) {
+    letter-spacing: -0.014em;
+  }
+  :where(p, li, dd, figcaption, blockquote) {
+    text-wrap: pretty;
+  }
+  :where(kbd) {
+    font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78em;
+    line-height: 1;
+    padding: 0.18em 0.42em 0.14em;
+    border-radius: 0.375rem;
+    color: hsl(var(--foreground));
+    background: hsl(var(--foreground) / 0.05);
+    border: 1px solid hsl(var(--foreground) / 0.14);
+    box-shadow: inset 0 -1px 0 hsl(var(--foreground) / 0.14);
+    white-space: nowrap;
+  }
+  :where(input, textarea, select)::placeholder {
+    color: hsl(var(--text-tertiary));
+    opacity: 1;
+  }
+  /* One motion language for every interactive element that brings none
+     of its own; Tailwind transition utilities and component rules win. */
+  :where(button, [role="button"], [role="menuitem"], [role="option"], [role="tab"], a[href]) {
+    transition-property: background-color, border-color, color, box-shadow, opacity, transform;
+    transition-duration: var(--duration-fast, 150ms);
+    transition-timing-function: var(--ease-out-smooth, cubic-bezier(0.22, 1, 0.36, 1));
+  }
+}
+
+/* 2 · Reading typography of the assistant answer ------------------ */
+.chat-assistant-message .prose :where(h1, h2, h3, h4):not(:where(.not-prose *)) {
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.chat-assistant-message .prose :where(h1):not(:where(.not-prose *)) {
+  font-size: 1.42em;
+  margin: 1.5em 0 0.6em;
+}
+.chat-assistant-message .prose :where(h2):not(:where(.not-prose *)) {
+  font-size: 1.24em;
+  margin: 1.45em 0 0.55em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.chat-assistant-message .prose :where(h3):not(:where(.not-prose *)) {
+  font-size: 1.1em;
+  margin: 1.3em 0 0.45em;
+}
+.chat-assistant-message .prose :where(h4):not(:where(.not-prose *)) {
+  font-size: 1em;
+  margin: 1.2em 0 0.4em;
+  color: hsl(var(--foreground) / 0.86);
+}
+.chat-assistant-message .prose :where(h1, h2, h3, h4):first-child {
+  margin-top: 0.2em;
+}
+.chat-assistant-message .prose :where(p):not(:where(.not-prose *)) {
+  margin-top: 0.85em;
+  margin-bottom: 0.85em;
+}
+.chat-assistant-message .prose :where(strong):not(:where(.not-prose *)) {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+.chat-assistant-message .prose :where(a):not(:where(.not-prose *)) {
+  color: hsl(var(--foreground));
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: hsl(var(--foreground) / 0.35);
+  text-underline-offset: 0.18em;
+  transition: text-decoration-color var(--duration-fast, 150ms) ease-out;
+}
+.chat-assistant-message .prose :where(a):not(:where(.not-prose *)):hover {
+  text-decoration-color: hsl(var(--foreground));
+}
+/* Inline code: a quiet pill, no typographic backticks. */
+.chat-assistant-message .prose :where(:not(pre) > code):not(:where(.not-prose *)) {
+  font-size: 0.86em;
+  font-weight: 500;
+  padding: 0.12em 0.42em;
+  border-radius: 0.375rem;
+  color: hsl(var(--foreground));
+  background: hsl(var(--foreground) / 0.06);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.08);
+}
+.chat-assistant-message .prose :where(:not(pre) > code):not(:where(.not-prose *))::before,
+.chat-assistant-message .prose :where(:not(pre) > code):not(:where(.not-prose *))::after {
+  content: none;
+}
+/* Lists: calmer markers, room between items. */
+.chat-assistant-message .prose :where(ul, ol):not(:where(.not-prose *)) {
+  padding-left: 1.45em;
+  margin-top: 0.7em;
+  margin-bottom: 0.7em;
+}
+.chat-assistant-message .prose :where(li):not(:where(.not-prose *)) {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+  padding-left: 0.15em;
+}
+.chat-assistant-message .prose :where(li)::marker {
+  color: hsl(var(--foreground) / 0.5);
+  font-weight: 500;
+}
+/* Quotes: an ink bar, upright text. */
+.chat-assistant-message .prose :where(blockquote):not(:where(.not-prose *)) {
+  font-style: normal;
+  font-weight: 400;
+  color: hsl(var(--foreground) / 0.82);
+  border-left: 2px solid hsl(var(--foreground) / 0.35);
+  padding: 0.15em 0 0.15em 1.05em;
+  margin: 1.1em 0;
+}
+.chat-assistant-message .prose :where(blockquote p):not(:where(.not-prose *))::before,
+.chat-assistant-message .prose :where(blockquote p):not(:where(.not-prose *))::after {
+  content: none;
+}
+/* Tables: a card, aligned figures, soft zebra. */
+.chat-assistant-message .prose :where(table):not(:where(.not-prose *)) {
+  width: 100%;
+  margin: 1.1em 0;
+  font-size: 0.92em;
+  line-height: 1.45;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.625rem;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.chat-assistant-message .prose :where(thead th):not(:where(.not-prose *)) {
+  background: hsl(var(--foreground) / 0.035);
+  color: hsl(var(--foreground));
+  font-weight: 600;
+  text-align: left;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+.chat-assistant-message .prose :where(tbody td):not(:where(.not-prose *)) {
+  padding: 0.5rem 0.8rem;
+  border-bottom: 1px solid hsl(var(--border));
+  vertical-align: top;
+}
+.chat-assistant-message .prose :where(tbody tr:last-child td):not(:where(.not-prose *)) {
+  border-bottom: 0;
+}
+.chat-assistant-message .prose :where(tbody tr:nth-child(even) td):not(:where(.not-prose *)) {
+  background: hsl(var(--foreground) / 0.018);
+}
+.chat-assistant-message .prose :where(hr):not(:where(.not-prose *)) {
+  border: 0;
+  height: 1px;
+  background: hsl(var(--border));
+  margin: 1.6em 0;
+}
+.chat-assistant-message .prose :where(img):not(:where(.not-prose *)) {
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow-hairline);
+}
+.chat-assistant-message .prose :where(figcaption):not(:where(.not-prose *)) {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.85em;
+}
+
+/* 3 · Depth ------------------------------------------------------- */
+/* User bubble: a 1px light catch on top and a hairline contour, so it
+   sits on the canvas instead of being a flat grey patch. */
+.chat-user-bubble {
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.55),
+    0 0 0 1px hsl(0 0% 0% / 0.035);
+}
+.dark .chat-user-bubble {
+  box-shadow:
+    inset 0 1px 0 hsl(0 0% 100% / 0.05),
+    0 0 0 1px hsl(0 0% 100% / 0.06);
+}
+/* Floating layers (menus, listboxes, popovers, dialogs): one elevation,
+   a light catch along the top edge. Tooltips keep their own shadow. */
+[data-radix-popper-content-wrapper]
+  > :is([role="menu"], [role="listbox"], [role="dialog"], [data-side]):not([data-state="delayed-open"]):not([data-state="instant-open"]) {
+  box-shadow:
+    var(--shadow-lg),
+    inset 0 1px 0 hsl(0 0% 100% / 0.6);
+}
+.dark [data-radix-popper-content-wrapper]
+  > :is([role="menu"], [role="listbox"], [role="dialog"], [data-side]):not([data-state="delayed-open"]):not([data-state="instant-open"]) {
+  box-shadow:
+    var(--shadow-lg),
+    inset 0 1px 0 hsl(0 0% 100% / 0.05);
+}
+[role="dialog"][data-state="open"]:not([data-sidebar]):not([data-radix-popper-content-wrapper] *) {
+  box-shadow:
+    var(--shadow-xl),
+    inset 0 1px 0 hsl(0 0% 100% / 0.65);
+}
+.dark [role="dialog"][data-state="open"]:not([data-sidebar]):not([data-radix-popper-content-wrapper] *) {
+  box-shadow:
+    var(--shadow-xl),
+    inset 0 1px 0 hsl(0 0% 100% / 0.06);
+}
+
+/* 4 · Interaction --------------------------------------------------- */
+/* Sidebar rows: a calm hover, a contoured active row, legible labels. */
+[data-sidebar="menu-button"],
+[data-sidebar="menu-sub-button"] {
+  transition:
+    background-color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    box-shadow var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out);
+}
+[data-sidebar="menu-button"][data-active="true"],
+[data-sidebar="menu-sub-button"][data-active="true"] {
+  background: hsl(var(--sidebar-accent));
+  color: hsl(var(--sidebar-accent-foreground));
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px hsl(var(--sidebar-border));
+}
+[data-sidebar="group-label"] {
+  letter-spacing: 0.02em;
+  color: hsl(var(--text-tertiary));
+}
+/* Menu rows and tabs: the hover/active states read as one family. */
+[role="menuitem"],
+[role="menuitemcheckbox"],
+[role="menuitemradio"],
+[role="option"] {
+  transition:
+    background-color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out);
+}
+[role="tab"][data-state="active"] {
+  box-shadow: var(--shadow-sm);
+}
+/* Text fields: the contour darkens and a soft 3px wash replaces the
+   2px outline. Excludes the composer (own contract), the celeste rename
+   field and anything that opts out. */
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([role="switch"]), textarea, select):not(.composer-surface *):not(.composer-input-row *):not(.chat-title-input--celeste):not(.no-default-focus-ring):not([data-sidebar="input"]):focus-visible {
+  outline: none;
+  border-color: hsl(var(--foreground) / 0.55);
+  box-shadow: 0 0 0 3px hsl(var(--foreground) / 0.08);
+}
+.dark :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([role="switch"]), textarea, select):not(.composer-surface *):not(.composer-input-row *):not(.chat-title-input--celeste):not(.no-default-focus-ring):not([data-sidebar="input"]):focus-visible {
+  border-color: hsl(var(--foreground) / 0.6);
+  box-shadow: 0 0 0 3px hsl(var(--foreground) / 0.12);
+}
+
+/* 5 · Loading ------------------------------------------------------- */
+/* Skeleton (components/ui/skeleton: "animate-pulse rounded-md bg-muted"):
+   a light sweep reads as "loading" better than a flat opacity pulse. */
+.animate-pulse.rounded-md.bg-muted {
+  animation: sira-skeleton-sweep 1.6s linear infinite;
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 0%,
+    hsl(var(--foreground) / 0.06) 50%,
+    hsl(var(--muted)) 100%
+  );
+  background-size: 200% 100%;
+  background-position: 180% 0;
+}
+@keyframes sira-skeleton-sweep {
+  from { background-position: 180% 0; }
+  to { background-position: -80% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse.rounded-md.bg-muted {
+    animation: none;
+    background-image: none;
+  }
+}
