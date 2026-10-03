@@ -33,6 +33,7 @@ const GATE_FRAMES = new Map([
   ['backend/src/services/computer/persistent.js', 'persistent.js'],
   ['services/computer-orchestrator/server.js', 'server.js'],
   ['services/computer-orchestrator/agent-actions.js', 'agent-actions.js'],
+  ['services/computer-orchestrator/docker-runtime.js', 'docker-runtime.js'],
   ['services/computer-orchestrator/cdp-exec.js', 'cdp-exec.js'],
 ]);
 function safeGateFailure(error, phase) {
@@ -78,6 +79,70 @@ async function main() {
   const wm = spawn('openbox', [], { stdio: 'ignore' });
   const createdContainers = new Map();
   const docker = (args, timeout = 20000) => exec('docker', ['--host', 'unix:///var/run/docker.sock', ...args], { timeout, maxBuffer: 1024 * 1024 });
+  const dockerInput = (args, input) => new Promise((resolve, reject) => {
+    const child = execFile('docker', ['--host', 'unix:///var/run/docker.sock', ...args],
+      { timeout: 20000, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr }));
+    // An early CLI exit is reported by execFile; do not create an unhandled EPIPE.
+    child.stdin.on('error', () => {});
+    child.stdin.end(input);
+  });
+  async function assertNoExecHelpers(id) {
+    const deadline = Date.now() + 3000;
+    let commands;
+    do {
+      // Docker needs PID in ps output to map host processes to this container.
+      const top = await docker(['top', id, '-eo', 'pid,comm']);
+      commands = top.stdout.trim().split('\n').slice(1).filter(line => line.trim()).map(line => {
+        const match = /^\s*\d+\s+(\S+)\s*$/.exec(line);
+        assert.ok(match, 'Docker process rows must contain a PID and command');
+        return match[1];
+      });
+      if (commands.length === 1 && commands[0] === 'sleep') break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    } while (Date.now() < deadline);
+    assert.deepEqual(commands, ['sleep'], 'all real Docker exec/CDP helpers must exit after browser operations');
+  }
+  async function verifyRuntimeExecWithoutCli() {
+    // CI-only disposable fixture. The production publisher never mounts this
+    // socket into its offline candidate checks or changes a user's desktop.
+    const name = 'sira-ac-user-ci-exec-' + require('node:crypto').randomBytes(8).toString('hex');
+    const created = await docker(['create', '--name', name, '--network', 'none', '--read-only',
+      '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock',
+      'node:22-bookworm-slim', 'sleep', 'infinity']);
+    const id = created.stdout.trim();
+    assert.match(id, /^[a-f0-9]{64}$/);
+    createdContainers.set(name, id);
+    await docker(['start', id]);
+    // Run the exact production module in the same Node major as its image,
+    // delivered over stdin rather than installing a CLI or another dependency.
+    const source = fs.readFileSync(path.join(__dirname, '../services/computer-orchestrator/docker-runtime.js'), 'utf8');
+    const check = `
+      'use strict';
+      const assert = require('node:assert/strict');
+      const { spawnSync } = require('node:child_process');
+      assert.equal(spawnSync('docker', ['--version']).error?.code, 'ENOENT');
+      const runtimeModule = { exports: {} };
+      new Function('require', 'module', 'exports', ${JSON.stringify(source)})(require, runtimeModule, runtimeModule.exports);
+      const runtime = runtimeModule.exports.createDockerRuntime();
+      (async () => {
+        const result = await runtime.execIn(${JSON.stringify(name)}, "printf 'exec-output'; printf 'exec-error' >&2", { user: 'nobody', timeoutMs: 5000 });
+        assert.deepEqual(result, { ok: true, stdout: 'exec-output', stderr: 'exec-error' });
+        await assert.rejects(runtime.execIn(${JSON.stringify(name)}, 'exit 7', { user: 'nobody', timeoutMs: 5000 }),
+          error => error.code === 'DOCKER_EXEC_FAILED' && error.exitCode === 7);
+        await assert.rejects(runtime.execIn(${JSON.stringify(name)}, 'sleep 30', { user: 'nobody', timeoutMs: 500 }),
+          error => error.code === 'DOCKER_EXEC_TIMEOUT');
+        await assert.rejects(runtime.execIn(${JSON.stringify(name)}, 'sleep 30', { user: 'nobody', timeoutMs: 5000, signal: AbortSignal.timeout(500) }),
+          error => error.code === 'DOCKER_EXEC_CANCELLED');
+      })().catch(() => { process.exitCode = 1; });
+    `;
+    await dockerInput(['exec', '-i', id, 'node', '-'], check);
+    // Check now: waiting until the full browser flow finishes could hide a
+    // leaked 30-second command that exits naturally before final cleanup.
+    await assertNoExecHelpers(id);
+    console.log('PASS real Docker: Node without CLI -> Engine exec -> separated output -> exit status -> timeout/abort -> no residual helpers');
+  }
   const env = { NODE_ENV: 'test', SIRAGPT_AGENT_COMPUTER: '1', AGENT_COMPUTER_API_KEY: require('node:crypto').randomUUID() };
   const fixture = http.createServer((_req, res) => {
     res.setHeader('Content-Type', 'text/html');
@@ -102,6 +167,7 @@ async function main() {
     phase = 'docker';
     await docker(['info', '--format', '{{.ServerVersion}}']);
     await docker(['pull', 'node:22-bookworm-slim'], 120000);
+    await verifyRuntimeExecWithoutCli();
     await listen(fixture); await listen(orch.server);
     env.AGENT_COMPUTER_ORCHESTRATOR_URL = `http://127.0.0.1:${orch.server.address().port}`;
     phase = 'start';
@@ -243,22 +309,7 @@ async function main() {
     console.log('PASS real browser: password gate -> private user takeover -> writes refused');
     handoff.resetTakeoverForTests();
     phase = 'cleanup';
-    for (const id of createdContainers.values()) {
-      const deadline = Date.now() + 3000;
-      let commands;
-      do {
-        // Docker needs PID in ps output to map host processes to this container.
-        const top = await docker(['top', id, '-eo', 'pid,comm']);
-        commands = top.stdout.trim().split('\n').slice(1).filter(line => line.trim()).map(line => {
-          const match = /^\s*\d+\s+(\S+)\s*$/.exec(line);
-          assert.ok(match, 'Docker process rows must contain a PID and command');
-          return match[1];
-        });
-        if (commands.length === 1 && commands[0] === 'sleep') break;
-        await new Promise(resolve => setTimeout(resolve, 25));
-      } while (Date.now() < deadline);
-      assert.deepEqual(commands, ['sleep'], 'all real Docker CDP helpers must exit after browser operations');
-    }
+    for (const id of createdContainers.values()) await assertNoExecHelpers(id);
     console.log('PASS real Docker: authenticated CDP bridge and no residual helper processes');
   } catch (error) {
     reportGateFailure(error, phase);
