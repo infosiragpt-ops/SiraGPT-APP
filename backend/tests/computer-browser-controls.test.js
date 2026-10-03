@@ -15,6 +15,9 @@ function harness({ abortSignal = AbortSignal } = {}) {
   const connections = [];
   const timers = new Set();
   const pending = new Set();
+  let cdpDown = 0;
+  let relaunchError = null;
+  const relaunches = [];
   const context = {
     pages: () => pages,
     newPage: async () => makePage('about:blank'),
@@ -99,16 +102,23 @@ function harness({ abortSignal = AbortSignal } = {}) {
     module: vmModule, exports: vmModule.exports, process, AbortSignal: abortSignal, Map, Set,
     setTimeout: (run, ms) => { const timer = { run, ms, unref() {} }; timers.add(timer); return timer; },
     clearTimeout: timer => timers.delete(timer),
-    fetch: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://test.invalid/browser' }) }),
+    fetch: async () => {
+      if (cdpDown > 0) { cdpDown -= 1; return { ok: false, status: 502, json: async () => ({}) }; }
+      return { ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://test.invalid/browser' }) };
+    },
+    Date,
     require: name => {
       if (name === 'node:timers/promises') return require(name);
+      if (name === './persistent') return { dockerExec: async (sessionArg, command, options) => { relaunches.push({ session: sessionArg, command, options }); if (relaunchError) throw relaunchError; cdpDown = 0; return { ok: true }; } };
+      if (name === './chrome-desktop-flags') return { chromeMaximizeOrLaunch: () => 'launch-chrome-with-cdp' };
       if (name === './orch-client') return { resolveOrchConfig: () => ({ url: 'http://test.invalid' }), orchFetch: async (path, options) => { clipCalls.push({ path, options }); if (failCommand === 'clip') throw new Error('clip failed'); return { ok: true }; } };
       if (name === './cdp-client') return { rewriteCdpWs: url => url };
       if (name === 'playwright') return { chromium: { connectOverCDP: async (_url, options) => { calls.push({ connect: options }); return connectBrowser(); } } };
       throw Error('Unexpected dependency: ' + name);
     },
   });
-  return { ...vmModule.exports, makePage, pages, calls, windows, clipCalls, connections, timers,
+  return { ...vmModule.exports, makePage, pages, calls, windows, clipCalls, connections, timers, relaunches,
+    cdp: { down: (count = Infinity) => { cdpDown = count; }, relaunchFails: error => { relaunchError = error; } },
     expireIdle: async () => { for (const timer of [...timers]) { timers.delete(timer); timer.run(); } await new Promise(resolve => setImmediate(resolve)); },
     fail: method => { failCommand = method; if (method.startsWith('hang-owner:')) hangOwner = connections.find(browser => !browser.closed); } };
 }
@@ -693,4 +703,37 @@ test('a native tab switch after a tool selection is observed without remembering
   assert.equal((await h.browserState(session)).activeTabId, first.id);
   first.visible = false; second.visible = true;
   assert.equal((await h.browserState(session)).activeTabId, second.id);
+});
+
+// Prod 2026-10-03: with Chrome closed inside the desktop, every 4-second
+// browser poll answered 502 for hours. CDP unreachable now relaunches Chrome
+// (with its DevTools port) once per cooldown and continues; a desktop whose
+// container is gone is reported as desktop_unavailable, never retried blindly.
+test('an unreachable DevTools port relaunches Chrome in the same desktop and the inventory continues', async () => {
+  const h = harness();
+  h.makePage('https://example.com/');
+  h.cdp.down(1);
+  const state = await h.browserState(session);
+  assert.equal(state.tabs.length, 1);
+  assert.equal(h.relaunches.length, 1);
+  assert.equal(h.relaunches[0].session, session);
+  assert.equal(h.relaunches[0].command, 'launch-chrome-with-cdp');
+  assert.ok(h.relaunches[0].options.timeoutMs <= 12_000);
+});
+
+test('a relaunch cooldown stops a dead desktop from becoming a relaunch storm', async () => {
+  const h = harness();
+  h.makePage('https://example.com/');
+  h.cdp.down();
+  h.cdp.relaunchFails(new Error('xdotool: desktop_app_not_ready'));
+  await assert.rejects(h.browserState(session), error => error.code === 'browser_observation_unavailable' && error.status === 502);
+  await assert.rejects(h.browserState(session), error => error.code === 'browser_observation_unavailable');
+  assert.equal(h.relaunches.length, 1, 'second poll inside the cooldown must not relaunch again');
+});
+
+test('a missing desktop container is reported as desktop_unavailable with a user-facing message', async () => {
+  const h = harness();
+  h.cdp.down();
+  h.cdp.relaunchFails(Object.assign(new Error('Command failed: docker exec'), { stderr: 'Error: No such container: sira-ac-user-luis' }));
+  await assert.rejects(h.browserState(session), error => error.code === 'desktop_unavailable' && error.status === 503 && /Vuelve a abrir la computadora/.test(error.publicMessage));
 });

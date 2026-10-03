@@ -8,6 +8,14 @@
 
 const { desktopAppFocusCommand } = require('./desktop-app-focus');
 
+// The desktop boots Chrome with its DevTools port (start-desktop.sh); the
+// integrated browser, navigation and tab controls all reach Chrome through
+// that port. A relaunch WITHOUT it (user closed Chrome, crash under load)
+// used to leave CDP dead until the container restarted: every 4-second
+// browser poll answered 502 (prod 2026-10-03, 346 lines in one afternoon).
+// Chrome ignores the flag when it hands the launch to a running instance.
+const CHROME_CDP_FLAGS = '--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0';
+
 const CHROME_DOCKER_FLAGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -18,6 +26,7 @@ const CHROME_DOCKER_FLAGS = [
   '--hide-crash-restore-bubble',
   '--disable-infobars',
   '--test-type',
+  CHROME_CDP_FLAGS,
   '--user-data-dir=/workspace/.chrome',
 ].join(' ');
 
@@ -39,6 +48,7 @@ function chromeMaximizeOrLaunch({ xdotool = 'xdotool' } = {}) {
 }
 
 module.exports = {
+  CHROME_CDP_FLAGS,
   CHROME_DOCKER_FLAGS,
   CHROME_WINDOW_FLAGS,
   CHROME_VISIBLE_FLAGS,

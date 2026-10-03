@@ -1991,12 +1991,26 @@ pase correctivo); #992 se fusionó con la base de #990 conservando la versión d
   (`closeIdleConnections`), espera la gracia (`SIRAGPT_HTTP_CLOSE_GRACE_MS`, 3.5 s) y corta el
   resto (`closeAllConnections`); nunca rechaza. El orden de pasos no cambia.
 - **Computadora: 502 en `GET /api/agent-computer/activity?sessionId=ac_luis&browser=1`** (346
-  líneas en una tarde): es el sondeo de estado del navegador integrado (#981/#988/#989) —
-  `browser=1` consulta `browserState` del escritorio del miembro y responde
-  `browser_state_failed` (502) cuando el contenedor no contesta (durante el OCR de 371 s que
-  saturaba la CPU y en el minuto posterior a cada reinicio). Es un fallo upstream real; sin
-  cambio de código en #992 (se descartó un atajo para sondeos sin conversación que no cubría
-  este caso).
+  líneas en una tarde, más `/action` y `/navigate`): es el sondeo del navegador integrado
+  (#981/#988/#989) fallando en `connectLiveBrowser` → `/sessions/<id>/cdp/json/version`.
+  **Causa de código (PR posterior a #992)**: el escritorio arranca Chrome con
+  `--remote-debugging-port=9222` (`start-desktop.sh`), pero toda relanzada desde el backend
+  (`chromeMaximizeOrLaunch`, `chromeOpenUrlCommand`) arrancaba Chrome SIN el puerto: en cuanto
+  el usuario cerraba Chrome en el escritorio, CDP quedaba muerto hasta reiniciar el contenedor y
+  cada sondeo de 4 s respondía 502. Arreglo: `CHROME_CDP_FLAGS` dentro de `CHROME_DOCKER_FLAGS`
+  (`chrome-desktop-flags.js`); `live-page.connectLiveBrowser` con CDP inalcanzable relanza Chrome
+  en el MISMO escritorio (`persistent.dockerExec` + `chromeMaximizeOrLaunch`, una vez por
+  `CHROME_RECOVERY_COOLDOWN_MS` = 20 s por sesión) y espera hasta 8 s el puerto; contenedor
+  ausente ⇒ `desktop_unavailable` (503, «Vuelve a abrir la computadora»), lo demás ⇒
+  `browser_observation_unavailable` (502). `agent-computer.js`: `failComputer` registra UNA línea
+  WARN por código cada 30 s (`[agent-computer] <code> status= route= session= cause=`, causa
+  saneada con `looksLikeSecretOrStack`, repeticiones contadas en `suppressed=`); el sondeo
+  `browser=1` responde `200 {ok:false, browser:null, error, message}` cuando el escritorio o su
+  Chrome no están (nunca `ok:true`; el panel muestra el error y «Reintentar» igual), en vez de un
+  5xx por tick; `browser_viewport_failed` y los demás conservan su estado. Acciones y navegación
+  siguen en 5xx con el código real. Tests: `chrome-desktop-flags` (+2),
+  `computer-browser-controls` (+3: relanzada, cooldown, contenedor ausente),
+  `computer-browser-poll-unavailable` (4).
 - **Importación de artefactos a cowork** (#990): leía primero R2 (objeto aún no subido) y luego
   el local (ya borrado por el espejo) → «Artifact content is not available». Ahora local
   primero (handle acotado, realpath dentro de `ARTIFACT_DIR`) y solo con ENOENT una lectura
