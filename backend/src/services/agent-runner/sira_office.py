@@ -20,6 +20,8 @@ CLI (stdout = JSON):
   python3 sira_office.py render  '{"path": "outputs/tesis-editado.docx", "outdir": "previews/after", "dpi": 110}'
   python3 sira_office.py diff    '{"before": "...", "after": "...", "outdir": "previews/diff"}'
   python3 sira_office.py verify  '{"before": "...", "after": "...", "outdir": "previews/verify", "expect": {...}}'
+  python3 sira_office.py build_from_template '{"template": "uploads/plantilla.potx", "dst": "outputs/deck.pptx", "title": "...", "outline": [...]}'
+  python3 sira_office.py layouts '{"path": "uploads/plantilla.pptx"}'
   (también: --args-file ruta.json en lugar del JSON en línea)
 
 Dependencias: Python 3.9+, lxml, Pillow. Binarios: soffice (LibreOffice),
@@ -2225,6 +2227,548 @@ def _a_apply_rpr(rpr: etree._Element, fmt: Dict[str, Any]) -> None:
             set_child_ordered(rpr, A(tag), A_RPR_ORDER).set("typeface", str(fmt["font"]))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PPTX — operaciones de LÁMINA (añadir / duplicar / borrar / mover / fondo)
+# y construcción de un deck SOBRE una plantilla del usuario (.pptx / .potx).
+#
+# Todo a nivel de paquete OOXML: los masters, layouts y tema de la plantilla
+# quedan byte-idénticos; una lámina nueva nace del layout del propio deck
+# (sus placeholders heredan posición, fuente y color), nunca de un diseño
+# propio. Es lo que hace que «usa este formato» se cumpla de verdad.
+# ─────────────────────────────────────────────────────────────────────────────
+_REL_SLIDE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+_REL_LAYOUT = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout"
+_REL_NOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide"
+_CT_SLIDE = "application/vnd.openxmlformats-officedocument.presentationml.slide+xml"
+_CT_PRESENTATION = "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"
+_CT_TEMPLATE = "application/vnd.openxmlformats-officedocument.presentationml.template.main+xml"
+_CT_SLIDESHOW = "application/vnd.openxmlformats-officedocument.presentationml.slideshow.main+xml"
+# Partes que una lámina duplicada NO comparte con la original (se clonan).
+_CLONE_REL_TYPES = ("/chart", "/oleObject", "/package", "/diagramData", "/diagramLayout",
+                    "/diagramQuickStyle", "/diagramColors", "/chartUserShapes")
+_PLACEHOLDER_TEXT_RE = re.compile(r"(haga clic|haz clic|click to|lorem ipsum|texto de ejemplo|t[ií]tulo de ejemplo|sample text)", re.I)
+
+
+def _pkg_add_part(pkg: OfficePackage, name: str, payload: bytes) -> None:
+    """Añade una parte nueva (o reemplaza una eliminada) al paquete."""
+    if name in pkg.removed:
+        pkg.removed.discard(name)
+    if name not in pkg.data:
+        zi = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        pkg.infos.append(zi)
+    pkg.data[name] = payload
+    pkg._xml.pop(name, None)
+    pkg.modified.discard(name)
+
+
+def _ct_override(pkg: OfficePackage, part: str, content_type: str) -> None:
+    ct = pkg.xml("[Content_Types].xml")
+    for ov in ct:
+        if ov.get("PartName") == "/" + part:
+            ov.set("ContentType", content_type)
+            pkg.touch("[Content_Types].xml")
+            return
+    etree.SubElement(ct, f"{{{NS['ct']}}}Override", PartName="/" + part, ContentType=content_type)
+    pkg.touch("[Content_Types].xml")
+
+
+def _ct_content_type(pkg: OfficePackage, part: str) -> Optional[str]:
+    ct = pkg.xml("[Content_Types].xml")
+    for ov in ct:
+        if ov.get("PartName") == "/" + part:
+            return ov.get("ContentType")
+    return None
+
+
+def _rels_root(pkg: OfficePackage, part: str) -> etree._Element:
+    rn = pkg.rels_name(part)
+    if not pkg.has(rn):
+        _pkg_add_part(pkg, rn, b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+                      b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>')
+    return pkg.xml(rn)
+
+
+def _next_rid(root: etree._Element) -> str:
+    used = {r.get("Id") for r in root}
+    n = 1
+    while f"rId{n}" in used:
+        n += 1
+    return f"rId{n}"
+
+
+def _add_rel(pkg: OfficePackage, part: str, rel_type: str, target: str, external: bool = False) -> str:
+    root = _rels_root(pkg, part)
+    rid = _next_rid(root)
+    el = etree.SubElement(root, f"{{{NS['rel']}}}Relationship", Id=rid, Type=rel_type, Target=target)
+    if external:
+        el.set("TargetMode", "External")
+    pkg.touch(pkg.rels_name(part))
+    return rid
+
+
+def _rel_target(part: str, target_part: str) -> str:
+    base = posixpath.dirname(part)
+    return posixpath.relpath(target_part, base) if base else target_part
+
+
+def _next_part_name(pkg: OfficePackage, prefix: str, suffix: str) -> str:
+    n = 1
+    while pkg.has(f"{prefix}{n}{suffix}") or f"{prefix}{n}{suffix}" in pkg.data:
+        n += 1
+    return f"{prefix}{n}{suffix}"
+
+
+def pp_layouts(pkg: OfficePackage) -> List[Dict[str, Any]]:
+    """Layouts del deck con nombre y placeholders (type#idx)."""
+    out = []
+    names = sorted((n for n in pkg.names if re.match(r"^ppt/slideLayouts/slideLayout\d+\.xml$", n)),
+                   key=lambda s: int(re.search(r"(\d+)\.xml$", s).group(1)))
+    for i, part in enumerate(names):
+        root = pkg.xml(part)
+        csld = root.find(P("cSld"))
+        phs = []
+        tree = csld.find(P("spTree")) if csld is not None else None
+        for el, _, _ in _pp_iter(tree if tree is not None else []):
+            ph = _pp_ph(el)
+            if ph is not None:
+                phs.append(ph.get("type", "obj") + (f"#{ph.get('idx')}" if ph.get("idx") else ""))
+        out.append({"index": i, "part": part, "name": csld.get("name") if csld is not None else f"Layout {i + 1}",
+                    "placeholders": phs})
+    return out
+
+
+def _layout_role(layout: Dict[str, Any]) -> str:
+    name = (layout.get("name") or "").lower()
+    phs = layout.get("placeholders", [])
+    types = {p.split("#")[0] for p in phs}
+    if "ctrTitle" in types or re.search(r"portada|title slide|t[ií]tulo\b|cover|inicio", name):
+        return "cover"
+    if re.search(r"section|secci[oó]n|divisor|separador", name):
+        return "section"
+    if re.search(r"cierre|closing|gracias|thank|fin\b|final", name):
+        return "closing"
+    has_body = any(t in types for t in ("body", "obj")) or any(p.endswith("#1") for p in phs)
+    if "title" in types and has_body:
+        if re.search(r"two|dos|comparison|comparaci[oó]n", name):
+            return "two_content"
+        return "content"
+    if "title" in types and not has_body:
+        return "title_only"
+    if not types:
+        return "blank"
+    return "other"
+
+
+def _pick_layout(layouts: List[Dict[str, Any]], role: str, wanted: Any = None) -> Dict[str, Any]:
+    if wanted is not None:
+        for l in layouts:
+            if str(wanted) == str(l["index"]) or str(wanted).lower() == str(l["name"]).lower():
+                return l
+        raise EditError(f"no existe el layout «{wanted}». Layouts: " + ", ".join(f"{l['index']}:{l['name']}" for l in layouts))
+    roles = [(_layout_role(l), l) for l in layouts]
+    order = {
+        "cover": ["cover", "title_only", "section", "content", "other"],
+        "content": ["content", "two_content", "title_only", "other", "blank"],
+        "section": ["section", "cover", "title_only", "content"],
+        "closing": ["closing", "cover", "section", "title_only", "content"],
+    }.get(role, ["content", "other"])
+    for want in order:
+        for r, l in roles:
+            if r == want:
+                return l
+    if not layouts:
+        raise EditError("la plantilla no tiene layouts")
+    return layouts[0]
+
+
+
+def _new_txbody(lines: List[str], levels: Optional[List[int]] = None) -> etree._Element:
+    tx = etree.Element(P("txBody"))
+    etree.SubElement(tx, A("bodyPr"))
+    etree.SubElement(tx, A("lstStyle"))
+    if not lines:
+        lines = [""]
+    for i, line in enumerate(lines):
+        p = etree.SubElement(tx, A("p"))
+        lvl = levels[i] if levels and i < len(levels) else 0
+        if lvl:
+            etree.SubElement(p, A("pPr"), lvl=str(lvl))
+        r = etree.SubElement(p, A("r"))
+        etree.SubElement(r, A("rPr"), lang="es-ES", dirty="0")
+        t = etree.SubElement(r, A("t"))
+        t.text = str(line)
+        _preserve_space(t, str(line), False)
+    return tx
+
+
+def _new_slide_from_layout(pkg: OfficePackage, layout_part: str, *, position: Optional[int] = None,
+                           keep_placeholders: Tuple[str, ...] = ("title", "ctrTitle", "subTitle", "body", "obj",
+                                                                  "dt", "ftr", "sldNum")) -> Tuple[str, int]:
+    """Crea una lámina vacía a partir de un layout del deck. Devuelve (parte, número)."""
+    if not pkg.has(layout_part):
+        raise EditError(f"el layout «{layout_part}» no existe")
+    lroot = pkg.xml(layout_part)
+    ltree = lroot.find(f"{P('cSld')}/{P('spTree')}")
+    sld = etree.Element(P("sld"), nsmap={"a": NS["a"], "r": NS["r"], "p": NS["p"]})
+    csld = etree.SubElement(sld, P("cSld"))
+    tree = etree.SubElement(csld, P("spTree"))
+    nv = etree.SubElement(tree, P("nvGrpSpPr"))
+    etree.SubElement(nv, P("cNvPr"), id="1", name="")
+    etree.SubElement(nv, P("cNvGrpSpPr"))
+    etree.SubElement(nv, P("nvPr"))
+    gpr = etree.SubElement(tree, P("grpSpPr"))
+    xf = etree.SubElement(gpr, A("xfrm"))
+    etree.SubElement(xf, A("off"), x="0", y="0")
+    etree.SubElement(xf, A("ext"), cx="0", cy="0")
+    etree.SubElement(xf, A("chOff"), x="0", y="0")
+    etree.SubElement(xf, A("chExt"), cx="0", cy="0")
+    next_id = 2
+    for el in (ltree if ltree is not None else []):
+        if el.tag != P("sp"):
+            continue
+        ph = _pp_ph(el)
+        if ph is None or ph.get("type", "obj") not in keep_placeholders:
+            continue
+        sp = etree.SubElement(tree, P("sp"))
+        nvsp = etree.SubElement(sp, P("nvSpPr"))
+        lname = (_pp_nv(el).find(P("cNvPr")).get("name") if _pp_nv(el) is not None else None) or f"Placeholder {next_id}"
+        etree.SubElement(nvsp, P("cNvPr"), id=str(next_id), name=lname)
+        etree.SubElement(nvsp, P("cNvSpPr")).append(etree.Element(A("spLocks"), noGrp="1"))
+        nvpr = etree.SubElement(nvsp, P("nvPr"))
+        nph = etree.SubElement(nvpr, P("ph"))
+        for k in ("type", "idx", "sz", "orient"):
+            if ph.get(k) is not None:
+                nph.set(k, ph.get(k))
+        etree.SubElement(sp, P("spPr"))
+        sp.append(_new_txbody([""]))
+        next_id += 1
+    etree.SubElement(sld, P("clrMapOvr")).append(etree.Element(A("masterClrMapping")))
+    part = _next_part_name(pkg, "ppt/slides/slide", ".xml")
+    payload = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + etree.tostring(sld, encoding="UTF-8")
+    _pkg_add_part(pkg, part, payload)
+    _ct_override(pkg, part, _CT_SLIDE)
+    _add_rel(pkg, part, _REL_LAYOUT, _rel_target(part, layout_part))
+    number = _register_slide(pkg, part, position)
+    return part, number
+
+
+def _register_slide(pkg: OfficePackage, part: str, position: Optional[int]) -> int:
+    pres = pkg.xml("ppt/presentation.xml")
+    lst = pres.find(P("sldIdLst"))
+    if lst is None:
+        lst = etree.Element(P("sldIdLst"))
+        anchor = pres.find(P("sldMasterIdLst"))
+        if anchor is not None:
+            anchor.addnext(lst)
+        else:
+            pres.insert(0, lst)
+    rid = _add_rel(pkg, "ppt/presentation.xml", _REL_SLIDE, _rel_target("ppt/presentation.xml", part))
+    ids = [int(s.get("id")) for s in lst if (s.get("id") or "").isdigit()]
+    sid = etree.Element(P("sldId"), id=str(max(ids + [255]) + 1))
+    sid.set(q("r", "id"), rid)
+    count = len(lst)
+    if position is None or int(position) > count:
+        lst.append(sid)
+        number = count + 1
+    else:
+        pos = max(1, int(position))
+        lst.insert(pos - 1, sid)
+        number = pos
+    pkg.touch("ppt/presentation.xml")
+    return number
+
+
+def _clone_part_tree(pkg: OfficePackage, part: str, depth: int = 0) -> str:
+    """Clona una parte y, recursivamente, las partes propias (gráficos, incrustados)."""
+    m = re.match(r"^(.*?)(\d+)(\.[a-z0-9]+)$", part)
+    prefix, suffix = (m.group(1), m.group(3)) if m else (part + "-copy", "")
+    new_part = _next_part_name(pkg, prefix, suffix) if m else part.replace(suffix, "") + "-copy" + suffix
+    _pkg_add_part(pkg, new_part, pkg.data[part])
+    ct = _ct_content_type(pkg, part)
+    if ct:
+        _ct_override(pkg, new_part, ct)
+    rn = pkg.rels_name(part)
+    if pkg.has(rn) and depth < 3:
+        root = copy.deepcopy(pkg.xml(rn))
+        for r in list(root):
+            typ = r.get("Type", "")
+            if r.get("TargetMode") == "External":
+                continue
+            if typ.endswith(_REL_NOTES):
+                root.remove(r)
+                continue
+            if any(typ.endswith(t) for t in _CLONE_REL_TYPES):
+                target = r.get("Target", "")
+                resolved = target.lstrip("/") if target.startswith("/") else \
+                    posixpath.normpath(posixpath.join(posixpath.dirname(part), target))
+                if pkg.has(resolved):
+                    cloned = _clone_part_tree(pkg, resolved, depth + 1)
+                    r.set("Target", _rel_target(new_part, cloned))
+        payload = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n' + etree.tostring(root, encoding="UTF-8")
+        _pkg_add_part(pkg, pkg.rels_name(new_part), payload)
+    return new_part
+
+
+def pp_duplicate_slide(pkg: OfficePackage, slide: Any, position: Optional[int] = None) -> Tuple[str, int]:
+    src = _pp_slide_part(pkg, slide)
+    new_part = _clone_part_tree(pkg, src)
+    number = _register_slide(pkg, new_part, position)
+    return new_part, number
+
+
+def pp_delete_slide(pkg: OfficePackage, slide: Any) -> Dict[str, Any]:
+    part = _pp_slide_part(pkg, slide)
+    pres = pkg.xml("ppt/presentation.xml")
+    lst = pres.find(P("sldIdLst"))
+    rels = pkg.rels("ppt/presentation.xml")
+    rid = next((k for k, (typ, tgt) in rels.items() if tgt == part), None)
+    for s in list(lst):
+        if s.get(q("r", "id")) == rid:
+            lst.remove(s)
+    pkg.touch("ppt/presentation.xml")
+    # Notas propias de la lámina (ninguna otra lámina las referencia).
+    for typ, tgt in list(pkg.rels(part).values()):
+        if typ.endswith(_REL_NOTES) and pkg.has(tgt):
+            pkg.remove_part_everywhere(tgt)
+            pkg.remove(pkg.rels_name(tgt))
+    pkg.remove_part_everywhere(part)
+    pkg.remove(pkg.rels_name(part))
+    return {"removed": part}
+
+
+def pp_move_slide(pkg: OfficePackage, slide: Any, position: int) -> int:
+    parts = pp_slide_parts(pkg)
+    n = int(slide)
+    if not 1 <= n <= len(parts):
+        raise EditError(f"la lámina {n} no existe (hay {len(parts)})")
+    pos = max(1, min(int(position), len(parts)))
+    lst = pkg.xml("ppt/presentation.xml").find(P("sldIdLst"))
+    items = list(lst)
+    el = items[n - 1]
+    lst.remove(el)
+    lst.insert(pos - 1, el)
+    pkg.touch("ppt/presentation.xml")
+    return pos
+
+
+def pp_set_slide_background(pkg: OfficePackage, slide: Any, color: str) -> Dict[str, Any]:
+    part = _pp_slide_part(pkg, slide)
+    root = pkg.xml(part)
+    csld = root.find(P("cSld"))
+    if csld is None:
+        raise EditError("la lámina no tiene cSld")
+    old = csld.find(P("bg"))
+    if old is not None:
+        csld.remove(old)
+    bg = etree.Element(P("bg"))
+    bgpr = etree.SubElement(bg, P("bgPr"))
+    sf = etree.SubElement(bgpr, A("solidFill"))
+    etree.SubElement(sf, A("srgbClr"), val=_norm_hex(color))
+    etree.SubElement(bgpr, A("effectLst"))
+    csld.insert(0, bg)
+    pkg.touch(part)
+    return {"slide": int(slide), "fill": _norm_hex(color)}
+
+
+def _fill_placeholder(sp: etree._Element, lines: List[str], levels: Optional[List[int]] = None) -> None:
+    old = sp.find(P("txBody"))
+    tx = _new_txbody(lines, levels)
+    if old is not None:
+        # Conservar bodyPr/lstStyle propios del layout clonado si existen.
+        bp, ls = old.find(A("bodyPr")), old.find(A("lstStyle"))
+        if bp is not None:
+            tx.replace(tx.find(A("bodyPr")), copy.deepcopy(bp))
+        if ls is not None:
+            tx.replace(tx.find(A("lstStyle")), copy.deepcopy(ls))
+        sp.replace(old, tx)
+    else:
+        sp.append(tx)
+
+
+def pp_fill_slide(pkg: OfficePackage, part: str, *, title: Optional[str] = None, subtitle: Optional[str] = None,
+                  bullets: Optional[List[Any]] = None, body: Optional[str] = None) -> Dict[str, Any]:
+    """Rellena los placeholders de una lámina (título / subtítulo / cuerpo) y
+    elimina los de contenido que queden vacíos (los de pie/fecha/número se conservan)."""
+    root = pkg.xml(part)
+    tree = root.find(f"{P('cSld')}/{P('spTree')}")
+    filled = {"title": False, "subtitle": False, "body": False}
+    lines: List[str] = []
+    levels: List[int] = []
+    for b in (bullets or []):
+        if isinstance(b, dict):
+            lines.append(str(b.get("text", "")))
+            levels.append(int(b.get("level", 0) or 0))
+        else:
+            lines.append(str(b))
+            levels.append(0)
+    if body and not lines:
+        lines = [ln for ln in str(body).split("\n")]
+        levels = [0] * len(lines)
+    body_slots = []
+    for el in list(tree):
+        if el.tag != P("sp"):
+            continue
+        ph = _pp_ph(el)
+        if ph is None:
+            continue
+        t = ph.get("type", "obj")
+        if t in ("title", "ctrTitle") and title is not None and not filled["title"]:
+            _fill_placeholder(el, [title])
+            filled["title"] = True
+        elif t == "subTitle" and subtitle is not None and not filled["subtitle"]:
+            _fill_placeholder(el, [subtitle])
+            filled["subtitle"] = True
+        elif t in ("body", "obj"):
+            body_slots.append(el)
+    if body_slots and lines:
+        _fill_placeholder(body_slots[0], lines, levels)
+        filled["body"] = True
+        for extra in body_slots[1:]:
+            tree.remove(extra)
+    elif body_slots:
+        for extra in body_slots:
+            tree.remove(extra)
+    # Placeholders de título/subtítulo sin texto: fuera (no «Haga clic para…»).
+    for el in list(tree):
+        if el.tag != P("sp"):
+            continue
+        ph = _pp_ph(el)
+        if ph is None:
+            continue
+        t = ph.get("type", "obj")
+        if t in ("title", "ctrTitle", "subTitle") and not _pp_text(el).strip():
+            tree.remove(el)
+    pkg.touch(part)
+    return filled
+
+
+def build_from_template(template: str, dst: str, *, title: Optional[str] = None, subtitle: Optional[str] = None,
+                        outline: Optional[List[Dict[str, Any]]] = None, keep_sample_slides: bool = False,
+                        cover: bool = True, closing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Construye un deck NUEVO sobre la plantilla del usuario: mismos masters,
+    layouts y tema; las láminas de muestra se eliminan; cada entrada del
+    outline se vuelca en el layout más apropiado (o el que indique `layout`)."""
+    fmt = detect_format(template)
+    if fmt != "pptx":
+        raise EditError("build_from_template necesita una plantilla .pptx o .potx")
+    if os.path.abspath(template) == os.path.abspath(dst):
+        raise EditError("dst debe ser un archivo nuevo en outputs/; nunca se sobrescribe la plantilla")
+    pkg = OfficePackage(template)
+    warnings: List[str] = []
+    # .potx / .ppsx → documento normal.
+    ct_pres = _ct_content_type(pkg, "ppt/presentation.xml")
+    if ct_pres in (_CT_TEMPLATE, _CT_SLIDESHOW):
+        _ct_override(pkg, "ppt/presentation.xml", _CT_PRESENTATION)
+    layouts = pp_layouts(pkg)
+    if not layouts:
+        raise EditError("la plantilla no tiene layouts; no puedo construir sobre ella")
+    sample = pp_slide_parts(pkg)
+    removed = 0
+    if not keep_sample_slides:
+        for _ in range(len(sample)):
+            pp_delete_slide(pkg, 1)
+            removed += 1
+    created = []
+    if cover and (title or subtitle):
+        lay = _pick_layout(layouts, "cover")
+        part, n = _new_slide_from_layout(pkg, lay["part"])
+        pp_fill_slide(pkg, part, title=title or "", subtitle=subtitle)
+        created.append({"slide": n, "layout": lay["name"], "role": "cover"})
+    for item in (outline or []):
+        if not isinstance(item, dict):
+            item = {"title": str(item)}
+        role = str(item.get("role") or ("section" if item.get("section") else "content"))
+        lay = _pick_layout(layouts, role, item.get("layout"))
+        part, n = _new_slide_from_layout(pkg, lay["part"])
+        pp_fill_slide(pkg, part, title=item.get("title"), subtitle=item.get("subtitle"),
+                      bullets=item.get("bullets"), body=item.get("body"))
+        if item.get("chart"):
+            warnings.append(f"lámina {n}: la gráfica nativa no se insertó; añádela con python-pptx sobre {dst}")
+        if item.get("notes"):
+            warnings.append(f"lámina {n}: las notas del orador no se insertaron")
+        created.append({"slide": n, "layout": lay["name"], "role": role})
+    if closing:
+        lay = _pick_layout(layouts, "closing")
+        part, n = _new_slide_from_layout(pkg, lay["part"])
+        pp_fill_slide(pkg, part, title=closing.get("title", "Gracias"), subtitle=closing.get("subtitle"),
+                      bullets=closing.get("bullets"))
+        created.append({"slide": n, "layout": lay["name"], "role": "closing"})
+    if not created and not keep_sample_slides:
+        raise EditError("sin título ni outline no hay nada que construir; pasa `outline` con las láminas reales")
+    changed = pkg.save(dst)
+    check = OfficePackage(dst)
+    leftovers = []
+    if not keep_sample_slides:
+        for n, part in enumerate(pp_slide_parts(check), start=1):
+            txt = " ".join(_pp_text(el) for el, _, _ in _pp_iter(check.xml(part).find(f"{P('cSld')}/{P('spTree')}")) if el.tag != P("grpSp"))
+            if _PLACEHOLDER_TEXT_RE.search(txt):
+                leftovers.append(n)
+    return {"ok": True, "dst": dst, "template": template, "slides": len(pp_slide_parts(check)),
+            "removed_sample_slides": removed, "created": created, "layouts": [{"index": l["index"], "name": l["name"]} for l in layouts],
+            "leftover_placeholder_text_on": leftovers, "warnings": warnings, "parts_changed": len(changed)}
+
+
+def pptx_apply_slide_op(pkg: OfficePackage, op: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Operaciones de lámina (no de forma). Devuelve None si `op` no es una de ellas."""
+    kind = op.get("op")
+    if kind == "list_layouts":
+        return {"op": kind, "layouts": pp_layouts(pkg)}
+    if kind == "add_slide":
+        layouts = pp_layouts(pkg)
+        lay = _pick_layout(layouts, str(op.get("role") or "content"), op.get("layout"))
+        part, n = _new_slide_from_layout(pkg, lay["part"], position=op.get("position"))
+        filled = pp_fill_slide(pkg, part, title=op.get("title"), subtitle=op.get("subtitle"),
+                               bullets=op.get("bullets"), body=op.get("body"))
+        return {"op": kind, "slide": n, "layout": lay["name"], "filled": filled}
+    if kind == "duplicate_slide":
+        if op.get("slide") is None:
+            raise EditError("duplicate_slide necesita «slide» (la lámina a copiar)")
+        part, n = pp_duplicate_slide(pkg, op["slide"], op.get("position"))
+        if any(k in op for k in ("title", "subtitle", "bullets", "body")):
+            # Reemplazo de texto SOLO en los placeholders indicados; el resto se copia tal cual.
+            root = pkg.xml(part)
+            tree = root.find(f"{P('cSld')}/{P('spTree')}")
+            for el in list(tree):
+                ph = _pp_ph(el) if el.tag == P("sp") else None
+                if ph is None:
+                    continue
+                t = ph.get("type", "obj")
+                if t in ("title", "ctrTitle") and op.get("title") is not None:
+                    _fill_placeholder(el, [str(op["title"])])
+                elif t == "subTitle" and op.get("subtitle") is not None:
+                    _fill_placeholder(el, [str(op["subtitle"])])
+                elif t in ("body", "obj") and (op.get("bullets") or op.get("body")):
+                    lines = [str(b.get("text", "")) if isinstance(b, dict) else str(b) for b in (op.get("bullets") or [])] \
+                        or str(op.get("body", "")).split("\n")
+                    _fill_placeholder(el, lines)
+            pkg.touch(part)
+        return {"op": kind, "source": int(op["slide"]), "slide": n}
+    if kind == "delete_slide":
+        if op.get("slide") is None:
+            raise EditError("delete_slide necesita «slide»")
+        res = pp_delete_slide(pkg, op["slide"])
+        return {"op": kind, "slide": int(op["slide"]), **res}
+    if kind == "move_slide":
+        if op.get("slide") is None or op.get("position") is None:
+            raise EditError("move_slide necesita «slide» y «position»")
+        pos = pp_move_slide(pkg, op["slide"], int(op["position"]))
+        return {"op": kind, "slide": int(op["slide"]), "position": pos}
+    if kind == "set_slide_background":
+        if not op.get("color"):
+            raise EditError("set_slide_background necesita «color» (hex RRGGBB)")
+        targets = op.get("slides")
+        if targets is None:
+            if op.get("slide") is None:
+                raise EditError("set_slide_background necesita «slide» o «slides»; para TODAS pasa slides: \"all\"")
+            targets = [op["slide"]]
+        elif targets == "all":
+            targets = list(range(1, len(pp_slide_parts(pkg)) + 1))
+        done = [pp_set_slide_background(pkg, s, op["color"]) for s in targets]
+        return {"op": kind, "slides": [d["slide"] for d in done], "fill": _norm_hex(op["color"])}
+    return None
+
+
 def pptx_apply(pkg: OfficePackage, op: Dict[str, Any]) -> Dict[str, Any]:
     kind = op.get("op")
     if kind == "replace_text":
@@ -2264,6 +2808,10 @@ def pptx_apply(pkg: OfficePackage, op: Dict[str, Any]) -> Dict[str, Any]:
             c = _pp_nv(el).find(P("cNvPr"))
             where.append({"slide": n, "shape": c.get("name"), "text": "".join(s.text for s in pptx_segments(ap))[:200]})
         return {"op": kind, "matches": len(cands), "where": where}
+
+    slide_res = pptx_apply_slide_op(pkg, op)
+    if slide_res is not None:
+        return slide_res
 
     part = _pp_slide_part(pkg, op.get("slide"))
     el, T, grp = _pp_find_shape(pkg, part, op.get("shape"))
@@ -2375,7 +2923,8 @@ def pptx_apply(pkg: OfficePackage, op: Dict[str, Any]) -> Dict[str, Any]:
         return {"op": kind, **label, "runs_formatted": touched, "format": fmt}
 
     raise EditError(f"operación desconocida para pptx: «{kind}». Usa replace_text, set_shape_text, set_geometry, "
-                    "set_fill o set_text_format")
+                    "set_fill, set_text_format, add_slide, duplicate_slide, delete_slide, move_slide, "
+                    "set_slide_background o list_layouts")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3170,7 +3719,13 @@ def _dispatch(cmd: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return verify(args.get("before"), args["after"], args["outdir"], int(args.get("dpi", 110)), args.get("expect"))
     if cmd == "recalc":
         return {"ok": True, "values": recalc_values(args["path"], args.get("cells", []))}
-    raise EditError(f"comando desconocido «{cmd}» (inspect, edit, render, diff, verify, recalc)")
+    if cmd == "build_from_template":
+        return build_from_template(args["template"], args["dst"], title=args.get("title"), subtitle=args.get("subtitle"),
+                                   outline=args.get("outline") or [], keep_sample_slides=bool(args.get("keep_sample_slides")),
+                                   cover=args.get("cover", True) is not False, closing=args.get("closing"))
+    if cmd == "layouts":
+        return {"ok": True, "layouts": pp_layouts(OfficePackage(args["path"]))}
+    raise EditError(f"comando desconocido «{cmd}» (inspect, edit, render, diff, verify, recalc, build_from_template, layouts)")
 
 
 def main(argv: List[str]) -> int:

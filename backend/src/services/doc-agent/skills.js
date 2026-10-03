@@ -193,9 +193,9 @@ and line endings; write the result to /workspace/outputs.`,
 };
 
 const EXT_TO_SKILL = {
-  docx: 'docx', doc: 'docx',
-  xlsx: 'xlsx', xls: 'xlsx', csv: 'csv',
-  pptx: 'pptx', ppt: 'pptx',
+  docx: 'docx', doc: 'docx', docm: 'docx', dotx: 'docx', odt: 'docx',
+  xlsx: 'xlsx', xls: 'xlsx', xlsm: 'xlsx', xltx: 'xlsx', ods: 'xlsx', csv: 'csv',
+  pptx: 'pptx', ppt: 'pptx', pptm: 'pptx', potx: 'pptx', odp: 'pptx',
   pdf: 'pdf',
   txt: 'txt', md: 'txt', text: 'txt',
 };
@@ -219,7 +219,7 @@ function buildDocAgentSystemPrompt(fileNames = [], opts = {}) {
   const formats = ordered.filter((k) => ['docx', 'xlsx', 'pptx', 'pdf'].includes(k));
   const blocks = [
     CORE_RULES,
-    buildSurgicalPromptAddition({ instruction: opts.instruction || '', formats }),
+    buildSurgicalPromptAddition({ instruction: opts.instruction || '', formats, fileNames }),
   ];
   for (const key of ordered) blocks.push(SKILLS[key]);
   const list = fileNames.length

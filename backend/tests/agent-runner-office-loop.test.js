@@ -67,7 +67,8 @@ test('every base tool accepts an optional description without injecting it into 
   }
   const create = tools.BASE_TOOL_DEFINITIONS.find((d) => d.function.name === 'create_presentation');
   const slide = create.function.parameters.properties.outline.items.properties;
-  assert.deepEqual(Object.keys(slide), ['title', 'bullets', 'chart']);
+  assert.deepEqual(Object.keys(slide), ['title', 'bullets', 'chart', 'layout', 'role', 'subtitle']);
+  for (const key of ['layout', 'role', 'subtitle']) assert.equal(slide[key].properties, undefined, `${key} is a scalar, no nested description`);
   assert.equal(slide.chart.properties.description, undefined);
 });
 

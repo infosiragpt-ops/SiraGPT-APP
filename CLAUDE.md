@@ -2024,6 +2024,69 @@ pase correctivo); #992 se fusionó con la base de #990 conservando la versión d
 - Tests (#992): `auto-file-bridge-prisma-fields` (3), `ocr-engine-local-budget` (7),
   `http-server-close` (5, servidor real con SSE + keep-alive), `ai-service-corrective-abort-source` (1).
 
+## Plantilla PPT obligatoria + edición quirúrgica de láminas (added 2026-10-03)
+
+Pedido de Luis: «si le doy un formato de ppt quiero que el software lo siga obligatorio y hacer
+cambios quirúrgicos en documentos». Auditoría con agentes (12 lectores + recorrido de escenarios +
+verificación adversarial) sobre el pipeline de documentos: todo turno «crea una ppt con este
+formato» + Plantilla.pptx terminaba en un deck aurora de pptxgenjs y la plantilla se reducía a un
+excerpt de «material de referencia»; no existía ninguna operación para añadir/duplicar/borrar/mover
+láminas ni para pintar el fondo de UNA sola. Solo backend; UI lock intacto.
+- **`backend/src/services/document-template-intent.js`** (puro): `detectTemplateIntent({prompt,
+  fileNames, priorArtifactNames})` → `{isTemplateFill, templateFile, contentFiles, outputFormat}`.
+  `.potx/.dotx/.xltx` son plantilla siempre; `.pptx/.docx/.xlsx` solo con cue («con este formato»,
+  «usa/usando esta plantilla», «siguiendo el diseño», «como esta», «pasa mi informe al formato de la
+  plantilla», par contenido+plantilla) y una intención de crear/convertir/usar-para. Una edición
+  acotada («cambia el título de la lámina 3 manteniendo el formato») NUNCA es relleno de plantilla.
+- **`backend/src/services/document-template-lineage.js`** (puro, pizzip): `summarizeTemplate`
+  (layouts con placeholders, masters, láminas de muestra, fuentes/paleta del tema →
+  `describeTemplateForPrompt`) y `verifyTemplateLineage({templateBuffer, outputBuffer})`: el
+  entregable debe compartir esquema de color+fuentes del tema, masters (spTree), layouts (por
+  nombre), cada lámina referencia un layout y no quedan láminas de muestra ni texto «Haga clic…».
+  Para docx: estilos, tema, encabezados/pies, geometría de página, sin XXXX/lorem.
+- **Runner** (`agent-runner/index.js`): el turno con plantilla fuerza `creatingNewFile`, no es
+  `isEdit` (la barrera de delta no aplica), emite el paso «Leyendo la plantilla adjunta» con el
+  inventario, y `buildAgentRunnerPrompt({templateFill})` sustituye el OFFICE_WORKFLOW quirúrgico y
+  la regla «NEW PPTX ⇒ create_presentation» por **TEMPLATE WORKFLOW** (`prompt.js
+  templateWorkflow`): construir SOBRE `uploads/<plantilla>`; nunca pptxgenjs/sira_design/tema.
+  `collectValidOutputs` corre `verifyTemplateLineage` sobre cada salida del formato de la plantilla:
+  fallo ⇒ `output_invalid template_not_followed`, el archivo no se entrega y el reintento le dice
+  al modelo por qué. Kill switch `SIRAGPT_TEMPLATE_LINEAGE=0`. `shouldRunAgentRunner` reclama
+  «haz una presentación como esta» / «usa esta plantilla para una ppt» (cue + sustantivo + adjunto).
+- **`create_presentation` con `template`** (`tools.js`): llama a `sira_office.py build_from_template`
+  (abre la plantilla, convierte .potx a presentación, elimina las láminas de muestra, crea cada
+  lámina desde un layout PROPIO elegido por `layout`/`role` o por placeholders —cover/content/
+  section/closing— y rellena título/subtítulo/viñetas; masters/layouts/tema byte-idénticos).
+  Entradas del outline aceptan `layout`, `role`, `subtitle`. Reporta `leftover_placeholder_text_on`
+  y `warnings` (gráficas: python-pptx sobre la MISMA salida).
+- **Ops de lámina en `office_edit`** (`sira_office.py pptx_apply_slide_op`): `add_slide{layout?,
+  role?, title?, subtitle?, bullets?, body?, position?}`, `duplicate_slide{slide, position?, title?,
+  bullets?}` (clona la lámina y sus partes propias —gráficos, incrustados—, descarta sus notas),
+  `delete_slide{slide}`, `move_slide{slide, position}`, `set_slide_background{slide|slides|"all",
+  color}` (SOLO esas láminas; `<p:bg>` en la lámina, nunca el master) y `list_layouts{}`.
+  Comandos CLI `build_from_template` y `layouts`.
+- **Fast path del fondo** (`extractSlideScope`): «solo en la 2» / «la segunda lámina» ⇒ `slide_number`
+  escalado a esa lámina; «2, 3 y 5», «de la 2 a la 4», «la última» ⇒ sin fast path (el loop usa
+  `set_slide_background{slides}`); «todas» ⇒ todo el deck como antes. Nunca en un turno con plantilla.
+- **Brief del pedido** (`request-brief.js`): restricción `template` (primera, con `file`/`format`),
+  acción `create`, entregable por formato de la plantilla, resumen «Crear una presentación con el
+  formato de «X.pptx» · 8 láminas», línea PLANTILLA OBLIGATORIA en el bloque tier 0 (sin la línea
+  «Objeto: … trabaja sobre SU contenido»), `routingHints().templateFile/templateFormat`. El refinado
+  LLM no puede inventar una plantilla.
+- **doc-agent**: `EXT_TO_SKILL` mapea `.potx/.pptm/.odp→pptx`, `.dotx/.docm/.odt→docx`,
+  `.xltx/.xlsm/.ods→xlsx`; `surgical-rules.buildSurgicalPromptAddition({fileNames})` añade
+  `TEMPLATE_FILL_RULES` cuando el turno es relleno de plantilla; `validate.validateEditedFile({
+  templateFill:true})` tolera la eliminación de láminas/notas de muestra y los cambios de
+  `presentation.xml`/rels/`[Content_Types].xml`, nunca de masters/layouts/tema.
+- Tests: `document-template-intent` (7), `document-template-lineage` (5), `agent-runner-template-fill`
+  (6: reclamo, prompt, create_presentation template=, ops expuestas, barrera de linaje + kill switch,
+  scope de láminas), `pptx-slide-ops-engine` (2, motor real con lxml sobre `defensa_demo.pptx`;
+  skip honesto sin lxml). Verificado a mano: `build_from_template` y las 5 ops sobre el fixture
+  producen paquetes coherentes (content types, rels, sldIdLst) que pasan el linaje. En este sandbox
+  `soffice` no carga ni el fixture original (fallo de entorno), así que el render queda para CI.
+- Pre-existentes en este entorno (idénticos en el árbol limpio): `agent-runner-scenario-bank`
+  («scripted client exhausted», 37) y `agent-runner.test.js` «runAgentRunnerForDocRoute … file shape».
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

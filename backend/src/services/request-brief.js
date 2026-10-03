@@ -433,6 +433,24 @@ function detectConstraints(text) {
   return out.slice(0, 6);
 }
 
+/**
+ * «con este formato / usa esta plantilla» + an attached .pptx/.potx/.docx/
+ * .dotx: the attachment is the FORMAT of a new deliverable, not its content.
+ * The brief carries it as a `template` constraint (first, it changes what the
+ * runner must do) and routingHints exposes it as `templateFile`.
+ */
+function detectTemplateIntentSafe(raw, attachments, priorArtifact) {
+  try {
+    const { detectTemplateIntent } = require('./document-template-intent');
+    const names = (Array.isArray(attachments) ? attachments : []).map(attachmentName).filter(Boolean);
+    const prior = priorArtifact && priorArtifact.filename ? [priorArtifact.filename] : [];
+    const intent = detectTemplateIntent({ prompt: raw, fileNames: names, priorArtifactNames: prior });
+    return intent && intent.isTemplateFill ? intent : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 /** Inline material the user pasted (quotes, colons + long text, code fences). */
 function hasInlineSource(raw, words) {
   const s = String(raw || '');
@@ -536,6 +554,12 @@ function targetLabel(target) {
 
 function buildSummary(brief) {
   const { action, deliverable, target, constraints } = brief;
+  const template = constraints.find((c) => c.kind === 'template' && c.file);
+  if (template) {
+    const extras = constraints.filter((c) => c !== template).map((c) => c.value).filter(Boolean);
+    const what = DELIVERABLE_LABEL[deliverable.kind] || 'el entregable';
+    return clip([`Crear ${what} con el formato de «${clip(template.file, 32)}»`, ...extras].join(' · '), MAX_SUMMARY_CHARS);
+  }
   let head;
   const tl = targetLabel(target);
   switch (action) {
@@ -632,9 +656,20 @@ function buildRequestBrief(input = {}) {
   const signals = { hasAttachments: attachments.length > 0, hasPrevAssistant, question: isQuestion, words };
 
   const constraints = detectConstraints(text);
-  const action = text ? pickAction(text, { deliverables, hasAttachments: attachments.length > 0, hasPrevAssistant, isQuestion, words, constraints, priorArtifact }) : 'converse';
+  const templateIntent = detectTemplateIntentSafe(raw, attachments, priorArtifact);
+  if (templateIntent) constraints.unshift({ kind: 'template', value: `siguiendo el formato de «${clip(templateIntent.templateFile, 40)}»`, file: templateIntent.templateFile, format: templateIntent.outputFormat });
+  let action = text ? pickAction(text, { deliverables, hasAttachments: attachments.length > 0, hasPrevAssistant, isQuestion, words, constraints, priorArtifact }) : 'converse';
+  if (templateIntent && ['edit', 'transform', 'answer', 'analyze'].includes(action)) action = 'create';
   const target = resolveTarget(text, { attachments, priorArtifact, hasPrevAssistant, action, coreference: input.coreference || null, deliverables, raw });
   const deliverable = pickDeliverable(text, action, deliverables, formats, target);
+  if (templateIntent) {
+    const kindByFormat = { pptx: 'presentation', docx: 'document', xlsx: 'spreadsheet' };
+    if (!deliverable.kind || deliverable.kind === 'text' || !deliverable.format) {
+      deliverable.kind = kindByFormat[templateIntent.outputFormat] || deliverable.kind;
+      deliverable.format = templateIntent.outputFormat || deliverable.format;
+      deliverable.ofTarget = false;
+    }
+  }
   const ambiguity = detectAmbiguity(text, raw, { action, target, attachments, hasPrevAssistant, deliverables, words, priorArtifact });
   const references = Array.isArray(input.coreference && input.coreference.references)
     ? input.coreference.references
@@ -719,8 +754,10 @@ function buildRequestBriefPromptBlock(brief) {
   } else if (brief.action === 'answer' || brief.action === 'analyze') {
     lines.push('- Entregable: respuesta en texto en el chat (no generes archivos salvo que lo pida)');
   }
+  const templateConstraint = brief.constraints.find((c) => c.kind === 'template' && c.file);
   switch (brief.target.kind) {
     case 'attachment':
+      if (templateConstraint && (!brief.target.name || brief.target.name === templateConstraint.file)) break; // the PLANTILLA line below says it
       lines.push(`- Objeto: ${brief.target.name ? `el archivo adjunto «${brief.target.name}»` : `los ${brief.target.count || ''} archivos adjuntos`.replace(/\s+/g, ' ')}. Trabaja sobre SU contenido real.`);
       break;
     case 'generated_artifact':
@@ -738,6 +775,10 @@ function buildRequestBriefPromptBlock(brief) {
       break;
     default:
       break;
+  }
+  const template = brief.constraints.find((c) => c.kind === 'template' && c.file);
+  if (template) {
+    lines.push(`- PLANTILLA OBLIGATORIA: el adjunto «${template.file}» es el FORMATO del entregable, no su contenido. Construye el archivo SOBRE esa plantilla (sus layouts, tema, fuentes, logos, encabezados); nunca un diseño propio ni una plantilla de SiraGPT. Las láminas/párrafos de muestra se reemplazan por contenido real.`);
   }
   if (brief.constraints.length) {
     lines.push(`- Restricciones explícitas: ${brief.constraints.map((c) => c.value).join(' · ')}`);
@@ -802,6 +843,7 @@ function mergeLlmBrief(brief, parsed) {
   if (Array.isArray(parsed.constraints)) {
     for (const c of parsed.constraints.slice(0, 6)) {
       if (!c || typeof c.value !== 'string' || !c.value.trim()) continue;
+      if (String(c.kind) === 'template') continue; // only the deterministic detector may claim a template
       const kind = /^(?:language|count|length|tone|audience|color|other)$/.test(String(c.kind)) ? c.kind : 'other';
       if (!next.constraints.some((x) => fold(x.value) === fold(c.value))) { next.constraints.push({ kind, value: clip(c.value, 40) }); changed = true; }
     }
@@ -856,13 +898,17 @@ async function refineRequestBriefWithLlm(brief, ctx = {}, deps = {}) {
 
 /** Routing hints the gates consume (one place, so the regexes stop disagreeing). */
 function routingHints(brief) {
-  if (!brief) return { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null };
+  if (!brief) return { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null, templateFile: null, templateFormat: null };
   const officeFormat = brief.target.kind === 'generated_artifact' && OFFICE_FORMATS.has(String(brief.target.format || '')) && brief.target.format !== 'csv'
     ? brief.target.format : null;
+  const template = (brief.constraints || []).find((c) => c && c.kind === 'template' && c.file) || null;
   return {
     editsPreviousAnswer: brief.target.kind === 'previous_answer' && ['edit', 'transform', 'continue', 'analyze'].includes(brief.action),
     editsGeneratedOfficeFile: Boolean(officeFormat) && ['edit', 'transform'].includes(brief.action),
     officeTargetFormat: officeFormat,
+    // «con este formato» + attached template: the AgentRunner builds ON it.
+    templateFile: template ? template.file : null,
+    templateFormat: template ? (template.format || null) : null,
   };
 }
 

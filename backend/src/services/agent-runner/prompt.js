@@ -30,6 +30,46 @@ const OFFICE_WORKFLOW = `OFFICE FILES (docx/xlsx/pptx) — MANDATORY WORKFLOW
 7. Final reply in Spanish: what changed (page/cell/slide), the output file name, and whether visual review ran.
    If it could not be verified, say so plainly.`;
 
+// «Crea una presentación … con este formato» + Plantilla.pptx/.potx (or a
+// .docx/.dotx template). The attached file is the FORMAT, never the content
+// source and never a surgical-edit target: the deliverable is built ON it.
+// Replaces both the surgical OFFICE_WORKFLOW and the from-scratch
+// create_presentation rule for these turns (incident 2026-10-03: every
+// template turn produced an aurora-themed pptxgenjs deck).
+function templateWorkflow({ templateFile, templateFormat, templateSummary = '' } = {}) {
+  const file = String(templateFile || '').trim();
+  const fmt = String(templateFormat || '').toLowerCase();
+  const summary = String(templateSummary || '').trim();
+  const pptx = fmt === 'pptx';
+  const build = pptx
+    ? `3. Build: call create_presentation with template="uploads/${file}", the title and the FULL outline (one entry per content
+   slide: title + bullets, optional layout name/index from the inventory, role cover|content|section|closing). It opens the
+   template, removes its sample slides, creates each slide from one of ITS layouts and fills the placeholders, keeping
+   masters, layouts, theme, fonts, logos and footers byte-identical. Never pass theme or color with template.
+   For charts, tables or images that create_presentation does not place, continue on the SAME output file with
+   execute_python + python-pptx (Presentation('outputs/<file>'), prs.slide_layouts by name, placeholders), or
+   office_edit ops add_slide/duplicate_slide/set_shape_text. NEVER build the deck with pptxgenjs, NEVER
+   create_presentation without template, NEVER restyle with sira_design: that would discard the user's format.`
+    : `3. Build: open the template with python-docx — Document('uploads/${file}') — and write the content INTO it:
+   use its own paragraph/heading/list/table styles by name (doc.styles), keep headers, footers, sectPr, theme and
+   numbering untouched, replace placeholder/sample paragraphs (XXXX, lorem, «Haga clic…») with real content and delete
+   leftover sample content. Save as outputs/<name>.docx. NEVER create Document() from scratch, NEVER rebuild with
+   pandoc/docx-js: that would discard the user's format.`;
+  return `TEMPLATE WORKFLOW — the user attached a FORMAT to follow (mandatory)
+The file uploads/${file} is the user's template: the deliverable MUST be built ON it so it inherits its design
+(masters, layouts, theme colours, fonts, logos, headers/footers, placeholders). The content comes from the request
+${pptx ? 'and any other attached source' : 'and any other attached source'}; the template contributes ONLY its look and structure.
+1. Understand: checklist of the requested content (topic, slide/section count, language, anything the user listed).
+2. Inspect: ${pptx ? 'read the layout inventory below (or office_edit op list_layouts) and plan which layout each slide uses.' : 'call inspect_document on the template to read its styles, headings and placeholders.'}
+${build}
+4. Verify: inspect_document on the output and verify_visual with after=<output>, no before, checklist including
+   «usa los layouts/estilos de la plantilla», «sin texto de muestra de la plantilla», «contenido real en cada lámina/sección».
+   The runner also checks that the output descends from the template (theme, masters, layouts); a deck that ignored
+   the template is NOT delivered.
+5. Final reply in Spanish: say the file follows the attached template (which layouts/styles were used).
+${summary ? `\n${summary}` : ''}`;
+}
+
 // Follow-up «agrégale más diseño / hazla más profesional» on an EXISTING
 // Office file (incident 2026-09-28). The surgical rules above («never
 // improve», «smallest ops», «never rewrite») are right for precise edits and
@@ -108,6 +148,8 @@ function officeEngineOn(env = process.env) {
 function buildAgentRunnerPrompt({
   fileNames = [], priorArtifactNames = [], memoryBlock = '', officeEngine = officeEngineOn(),
   creatingNewFile = false, designUpgrade = false, designTheme = null,
+  // { file, format, summary }: the attached format to build on (template fill).
+  templateFill = null,
 } = {}) {
   const files = fileNames.length
     ? fileNames.map((n) => `- ${n}`).join('\n')
@@ -123,17 +165,22 @@ function buildAgentRunnerPrompt({
   // New files need authoring libraries and verification by reopening them.
   const hasOfficeSource = [...fileNames, ...priorArtifactNames]
     .some((name) => /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i.test(String(name)));
-  const officeEditWorkflow = officeEngine && hasOfficeSource && !creatingNewFile;
+  const template = templateFill && templateFill.file ? templateFill : null;
+  // A template fill is a creation ON the attached file: neither the surgical
+  // workflow (it would forbid rewriting) nor the from-scratch rule applies.
+  const officeEditWorkflow = officeEngine && hasOfficeSource && !creatingNewFile && !template;
   // Redesign of an existing Office file: DESIGN_WORKFLOW replaces the
   // surgical OFFICE_WORKFLOW (and its «never improve» rule) for this turn.
   const designWorkflow = officeEditWorkflow && Boolean(designUpgrade);
   const designLite = !officeEngine && hasOfficeSource && !creatingNewFile && Boolean(designUpgrade);
   const themeBlock = designWorkflow || designLite ? designThemeBlock(designTheme) : '';
-  const workflowSection = designWorkflow
-    ? `${DESIGN_WORKFLOW}${themeBlock ? `\n\n${themeBlock}` : ''}\n\n`
-    : designLite
-      ? `${DESIGN_WORKFLOW_LITE}${themeBlock ? `\n\n${themeBlock}` : ''}\n\n`
-      : officeEditWorkflow ? `${OFFICE_WORKFLOW}\n\n` : '';
+  const workflowSection = template
+    ? `${templateWorkflow({ templateFile: template.file, templateFormat: template.format, templateSummary: template.summary })}\n\n`
+    : designWorkflow
+      ? `${DESIGN_WORKFLOW}${themeBlock ? `\n\n${themeBlock}` : ''}\n\n`
+      : designLite
+        ? `${DESIGN_WORKFLOW_LITE}${themeBlock ? `\n\n${themeBlock}` : ''}\n\n`
+        : officeEditWorkflow ? `${OFFICE_WORKFLOW}\n\n` : '';
 
   return `You are SiraGPT's generic agent (Claude-style). You solve ANY request by writing and running your own code with tools. There is no hardcoded list of supported requests: white, pink, a hex, add a thanks slide, fix a comma, rewrite a paragraph — all of them are just code you write.
 
@@ -223,6 +270,10 @@ ${officeEditWorkflow
     ? `2. NEVER declare success without verification: office files follow the ${designWorkflow ? 'DESIGN' : 'OFFICE FILES'} workflow above (verify_visual).
 3. Any other file you create or edit: call render_preview on it (or verify_visual) and check it; if it fails, retry (max 3 attempts), then report honestly in Spanish — never pretend it worked.
 `
+    : officeEngine && template
+      ? `2. NEVER declare success without verification. Follow the TEMPLATE WORKFLOW above: the deliverable is built ON uploads/${template.file} (${template.format === 'pptx' ? 'create_presentation with template=, then python-pptx on the same output if needed' : 'python-docx on the template itself'}); a from-scratch file is a failure even if it looks similar. Then inspect_document on the output and verify_visual with after=<output>, checklist=<requirements>, expect=<content checks> and NO before.
+3. If the lineage check or verification fails, fix the SAME output (never start a second deck from scratch) and verify again; report honestly in Spanish if it still fails.
+`
     : officeEngine
       ? `2. NEVER declare success without verification. Author NEW DOCX/XLSX files with execute_python; for a NEW PPTX use create_presentation with its full outline and native charts, or execute_python for a specialized layout. Then call inspect_document with path=<that exact output> and verify_visual with after=<output>, checklist=<requirements>, expect=<content/cell/chart checks> and NO before. inspect_document already reopens the saved binary; use its content, dimensions and native-chart inventory for readback. Use execute_python only for additional required checks the inspector does not cover, consulting the installed API before using unfamiliar properties. For a new PDF, render_preview and reopen it.
 3. For a new SPSS .sav, use pyreadstat.write_sav and reopen it with pyreadstat.read_sav; check dimensions and variable labels. SAV has no visual preview. If several outputs represent the same data, reopen every file and compare their actual values before claiming they match. If any check fails, report it honestly.
@@ -243,4 +294,4 @@ COMPLETION CHECKLIST (mandatory)
 - Only then finish.`;
 }
 
-module.exports = { buildAgentRunnerPrompt, OFFICE_WORKFLOW, DESIGN_WORKFLOW, DESIGN_WORKFLOW_LITE };
+module.exports = { buildAgentRunnerPrompt, templateWorkflow, OFFICE_WORKFLOW, DESIGN_WORKFLOW, DESIGN_WORKFLOW_LITE };

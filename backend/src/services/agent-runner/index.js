@@ -119,6 +119,10 @@ const {
 const MAX_OUTPUT_RETRIES = 3;
 const { trySurgicalPresentationFollowup } = require('./surgical-followup');
 const { isScopedSlideMutation, parsePresentationTitleEdit } = require('../document-editing/presentation-title-intent');
+// «Crea una ppt con este formato» + Plantilla.pptx: the attachment is the FORMAT
+// of the deliverable (built ON it, lineage verified), never a from-scratch deck.
+const { detectTemplateIntent, hasTemplateCue } = require('../document-template-intent');
+const { summarizeTemplate, describeTemplateForPrompt, verifyTemplateLineage } = require('../document-template-lineage');
 const { verifyContentChanged, verifySlideTitleEdit, assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
 const { validateEditedPdf } = require('../doc-agent/pdf-output-validation');
 
@@ -546,7 +550,36 @@ function shouldRunAgentRunner({
     || (['pptx', 'xlsx'].includes(designTarget) && isChartDocumentEdit(t))
     || designClaim;
   if ((hasFiles || hasPrior) && work) return true;
+  // «haz una presentación como esta» / «usa esta plantilla para una ppt de…»:
+  // a format to follow + a deliverable noun is runner work even without a
+  // WORK_RE verb (the surgical editor would refuse it as an edit).
+  if (hasFiles && DOC_NOUN_RE.test(t) && hasTemplateCue(t)) return true;
   return false;
+}
+
+// «solo en la 2», «la lámina 3», «diapositivas 2 y 4», «la segunda»: the
+// slides a background request names. null = no scope (whole deck).
+const ORDINAL_SLIDE = { primera: 1, segunda: 2, tercera: 3, cuarta: 4, quinta: 5, sexta: 6, septima: 7, séptima: 7, octava: 8, novena: 9, decima: 10, décima: 10 };
+function extractSlideScope(text) {
+  const t = String(text || '').toLowerCase();
+  if (/(?<!\p{L})(todas|todos|cada|toda la|todo el|entera|completa)(?!\p{L})/u.test(t)) return null;
+  const nums = new Set();
+  // «láminas 2 y 4», «diapositiva 3», «slides 2, 3 y 5», «solo en la 2», «en la 4».
+  const listRe = /(?<!\p{L})(?:l[aá]minas?|diapositivas?|slides?|p[aá]ginas?|solo (?:en )?la|s[oó]lo (?:en )?la|en la|de la|a la|la)\s+(?:n(?:ro|[uú]m)?\.?\s*)?(\d{1,3}(?:\s*(?:,|y|e|-)\s*(?:la\s+)?\d{1,3})*)(?!\d)/gu;
+  let m;
+  while ((m = listRe.exec(t))) {
+    for (const n of m[1].match(/\d{1,3}/g) || []) nums.add(Number(n));
+  }
+  const range = /(?<!\p{L})(?:de la|desde la|de las|entre la)\s+(\d{1,3})\s+(?:a|hasta|y)\s+la\s+(\d{1,3})(?!\d)/u.exec(t);
+  if (range) { for (let i = Number(range[1]); i <= Math.min(Number(range[2]), Number(range[1]) + 60); i += 1) nums.add(i); }
+  const ord = /(?<!\p{L})(primera|segunda|tercera|cuarta|quinta|sexta|s[eé]ptima|octava|novena|d[eé]cima)\s+(?:l[aá]mina|diapositiva|slide|p[aá]gina)(?!\p{L})/u.exec(t)
+    || /(?<!\p{L})(?:l[aá]mina|diapositiva|slide)\s+(primera|segunda|tercera|cuarta|quinta)(?!\p{L})/u.exec(t);
+  if (ord && ORDINAL_SLIDE[ord[1]]) nums.add(ORDINAL_SLIDE[ord[1]]);
+  const last = /(?<!\p{L})(?:[uú]ltima|final|pen[uú]ltima)\s+(?:l[aá]mina|diapositiva|slide)(?!\p{L})/u.test(t)
+    || /(?<!\p{L})(?:l[aá]mina|diapositiva|slide)\s+(?:final|[uú]ltima)(?!\p{L})/u.test(t);
+  if (last) return { numbers: [...nums].sort((a, b) => a - b), unresolved: true };
+  if (!nums.size) return null;
+  return { numbers: [...nums].sort((a, b) => a - b), unresolved: false };
 }
 
 /**
@@ -830,6 +863,11 @@ function completedSavExcelSummary(artifacts = [], verification = null) {
   return `Entregué ${names}. El SAV se pudo abrir; todavía no he comparado sus valores con los del Excel, así que no puedo afirmar que coincidan.`;
 }
 
+// Kill switch for the template-lineage gate (SIRAGPT_TEMPLATE_LINEAGE=0).
+function templateLineageEnabled(env = process.env) {
+  return String((env && env.SIRAGPT_TEMPLATE_LINEAGE) ?? '').trim() !== '0';
+}
+
 async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}) {
   const outputs = await sandbox.collectOutputs();
   for (const out of outputs) {
@@ -857,6 +895,24 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: verdict.reason });
     } else {
       out.valid = true;
+    }
+  }
+  // Template fill: a deliverable of the template's format must descend from
+  // the template (theme, masters, layouts, no sample leftovers). A deck the
+  // model rebuilt from scratch is not delivered, however good it looks.
+  const templateFill = editContext.templateFill;
+  if (templateFill && Buffer.isBuffer(templateFill.buffer) && templateLineageEnabled()) {
+    for (const out of outputs) {
+      const ext = String(out.name || '').split('.').pop().toLowerCase();
+      if (out.valid === false || ext !== String(templateFill.format || '').toLowerCase()) continue;
+      let verdict;
+      try { verdict = verifyTemplateLineage({ templateBuffer: templateFill.buffer, outputBuffer: out.buffer }); } catch (err) { verdict = { ok: false, reasons: [`lineage_error: ${err && err.message}`], checks: [] }; }
+      out.validation = { ...(out.validation || {}), templateLineage: { ok: verdict.ok, checks: verdict.checks, reasons: verdict.reasons } };
+      if (!verdict.ok) {
+        out.valid = false;
+        out.validation = { ...out.validation, ok: false, passed: false, engine: 'template_lineage', reason: 'template_not_followed', details: verdict.reasons.slice(0, 4) };
+        onEvent({ type: 'output_invalid', name: out.name, reason: 'template_not_followed', details: verdict.reasons.slice(0, 4) });
+      }
     }
   }
   for (const out of outputs) {
@@ -1057,8 +1113,14 @@ async function runAgentRunner({
     // same-format artifacts returned from an existing-file turn must contain
     // a real change unless the user explicitly asked to generate a new file.
     // Keep the generic document pipeline out of AgentRunner's dependency path.
+    const earlyTemplate = detectTemplateIntent({
+      prompt: task,
+      fileNames: files.filter((f) => f && Buffer.isBuffer(f.buffer) && !f.isPriorArtifact).map((f) => f.name),
+      priorArtifactNames: files.filter((f) => f && f.isPriorArtifact).map((f) => f.name),
+    });
     const editContext = { files, instruction: task,
-      isEdit: files.some((file) => Buffer.isBuffer(file?.buffer))
+      isEdit: !earlyTemplate.isTemplateFill
+        && files.some((file) => Buffer.isBuffer(file?.buffer))
         && (!CREATE_DOC_RE.test(task) || SOURCE_COPY_RE.test(task)) };
     // Capacity queue progress (remote driver): one visible checkpoint when
     // the wait starts and another every ~10 s, so the user sees the turn is
@@ -1172,7 +1234,38 @@ async function runAgentRunner({
     const pairEdit = require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(task);
     const isCreateRequest = !pairEdit && ((CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
       || requestsSavExcelDelivery(task));
-    const creatingNewFile = isCreateRequest && !SOURCE_COPY_RE.test(task);
+    let creatingNewFile = isCreateRequest && !SOURCE_COPY_RE.test(task);
+    // ── Template fill: the attached .pptx/.potx/.docx/.dotx is the FORMAT ──
+    // The deliverable is built ON it (prompt TEMPLATE WORKFLOW +
+    // create_presentation template=); the output must descend from it
+    // (collectValidOutputs → verifyTemplateLineage) or it is not delivered.
+    const templateIntent = detectTemplateIntent({ prompt: task, fileNames: names, priorArtifactNames: priorNames });
+    let templateFill = null;
+    if (templateIntent.isTemplateFill) {
+      creatingNewFile = true;
+      const staged = files.find((f) => f && Buffer.isBuffer(f.buffer) && sanitizeUploadName(f.name, files.indexOf(f)) === templateIntent.templateFile)
+        || files.find((f) => f && Buffer.isBuffer(f.buffer) && String(f.name || '').split(/[\\/]/).pop() === templateIntent.templateFile);
+      let summary = null;
+      try { summary = staged ? summarizeTemplate(staged.buffer) : null; } catch (_) { summary = null; }
+      templateFill = {
+        file: templateIntent.templateFile,
+        format: templateIntent.outputFormat,
+        summary: describeTemplateForPrompt(summary, templateIntent.templateFile),
+        buffer: staged ? staged.buffer : null,
+        contentFiles: templateIntent.contentFiles,
+      };
+      editContext.templateFill = templateFill;
+      onEvent({ type: 'tool_call', tool: 'inspect_document', label: 'Leyendo la plantilla adjunta', preview: templateIntent.templateFile });
+      onEvent({
+        type: 'tool_result',
+        tool: 'inspect_document',
+        ok: Boolean(summary),
+        label: 'Plantilla reconocida',
+        preview: summary
+          ? JSON.stringify({ template: templateIntent.templateFile, format: templateIntent.outputFormat, layouts: (summary.layouts || []).map((l) => l.name).slice(0, 20), sampleSlides: (summary.slides || []).length, masters: summary.masters })
+          : JSON.stringify({ template: templateIntent.templateFile, format: templateIntent.outputFormat, note: 'inventario no disponible; el loop la inspecciona' }),
+      });
+    }
     // «agrégale más diseño / hazla más profesional» on an existing Office
     // file: the prompt switches to the DESIGN WORKFLOW (restyle the same
     // file, keep all content, <stem>-v2.<ext>) and the theme tokens are
@@ -1181,7 +1274,7 @@ async function runAgentRunner({
     // agent task) gets it.
     // The file it restyles: the last edited version first, else the upload.
     const designSource = [...priorNames, ...names].find((n) => OFFICE_FILE_RE.test(String(n))) || null;
-    const designUpgrade = !creatingNewFile
+    const designUpgrade = !creatingNewFile && !templateFill
       && Boolean(designSource)
       && isDesignUpgradeRequest(task, { officeTarget: resolveDesignTarget(task, { priorArtifactFormat: designSource }) });
     const designTheme = designUpgrade ? designThemeForTask(task) : null;
@@ -1201,6 +1294,7 @@ async function runAgentRunner({
       creatingNewFile,
       designUpgrade,
       designTheme,
+      templateFill: templateFill ? { file: templateFill.file, format: templateFill.format, summary: templateFill.summary } : null,
     });
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
@@ -1243,9 +1337,15 @@ async function runAgentRunner({
     let fastPathUsed = false;
     // A redesign that mentions a color («rediséñala con fondo azul») is not a
     // plain repaint: the loop restyles the whole deck with that color.
-    if (color && pptxUpload && !isCreateRequest && !designUpgrade && isSlideBackgroundColorRequest(task)) {
-      onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
-      const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
+    // «pon el fondo azul SOLO en la 2»: one named slide takes the fast path
+    // scoped to it; several slides or «la última» go to the loop (office_edit
+    // set_slide_background{slides}) — never a whole-deck repaint.
+    const slideScope = extractSlideScope(task);
+    const scopedOne = slideScope && !slideScope.unresolved && slideScope.numbers.length === 1 ? slideScope.numbers[0] : null;
+    const scopeBlocksFastPath = Boolean(slideScope) && scopedOne === null;
+    if (color && pptxUpload && !isCreateRequest && !designUpgrade && !templateFill && !scopeBlocksFastPath && isSlideBackgroundColorRequest(task)) {
+      onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: scopedOne ? `${color} · lámina ${scopedOne}` : color });
+      const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}`, ...(scopedOne ? { slide_number: scopedOne } : {}) });
       onEvent({
         type: 'tool_result',
         tool: 'set_slide_background',
@@ -1257,6 +1357,7 @@ async function runAgentRunner({
     } else if (
       pptxUpload
       && !designUpgrade
+      && !templateFill
       && /\b(gracias|thanks)\b/i.test(task)
       && /\b(l[aá]mina|diapositiva|slide|ppt|agrega|a[nñ]ade|pon)\b/i.test(task)
     ) {
@@ -1410,10 +1511,14 @@ async function runAgentRunner({
         attempt: outputAttempt,
         label: 'Reintentando',
       });
+      const lineageRejects = outputs.filter((o) => o.valid === false && o.validation && o.validation.reason === 'template_not_followed');
       messages.push({
         role: 'user',
-        content:
-          `You have NOT produced a valid deliverable in /workspace/outputs (attempt ${outputAttempt}/${MAX_OUTPUT_RETRIES}). `
+        content: lineageRejects.length
+          ? `Your output ${lineageRejects.map((o) => o.name).join(', ')} was REJECTED (attempt ${outputAttempt}/${MAX_OUTPUT_RETRIES}): it does not descend from the user's template uploads/${editContext.templateFill.file} — ${lineageRejects.flatMap((o) => (o.validation.details || [])).slice(0, 4).join('; ')}. `
+            + `Build it ON the template: ${String(editContext.templateFill.format) === 'pptx' ? 'create_presentation with template="uploads/' + editContext.templateFill.file + '" and the full outline (or python-pptx Presentation(\'uploads/' + editContext.templateFill.file + '\') using ITS slide_layouts, removing its sample slides)' : 'python-docx Document(\'uploads/' + editContext.templateFill.file + '\') writing the content with ITS styles'}, `
+            + 'save under /workspace/outputs/ and verify. Never start from scratch or restyle with a SiraGPT theme. If this is the last attempt and it still fails, report the error honestly.'
+          : `You have NOT produced a valid deliverable in /workspace/outputs (attempt ${outputAttempt}/${MAX_OUTPUT_RETRIES}). `
           + 'Use execute_python (python-pptx / python-docx / openpyxl / zipfile / tmp/office_helpers.py) to CREATE or EDIT the file, '
           + 'save it under /workspace/outputs/, then call render_preview and inspect the result. Do this now. '
           + 'If this is the last attempt and it still fails, report the error honestly.',
@@ -1661,6 +1766,7 @@ const AGENT_RUNNER_FAILURE_COPY = {
   // F4 — orchestrator-specific honest failures
   budget_exceeded: 'el agente superó el presupuesto de iteraciones/tokens asignado a la tarea y se detuvo para no seguir consumiendo recursos',
   plan_failed: 'el director del agente no pudo construir un plan válido para la tarea multi-paso',
+  template_not_followed: 'el archivo generado no seguía la plantilla adjunta (tema, masters o layouts distintos) y no se entregó',
 };
 
 /** Transient sandbox failures get their own reason instead of `exception`. */
@@ -1996,6 +2102,8 @@ function orchestratorEnabled(env) {
 }
 
 module.exports = {
+  extractSlideScope,
+  templateLineageEnabled,
   sandboxFailureReason,
   dropIntermediateOutputs,
   archivePreviousOutputs,

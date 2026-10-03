@@ -810,6 +810,12 @@ una vez por minuto (con el recuento del minuto anterior) y el resto a `info`.
 | `SIRAGPT_OCR_LOCAL_IMAGE_BUDGET_MS` | `20000` | Presupuesto de reloj (ms) de TODO el intento local de Tesseract sobre UNA imagen (ambas pasadas). Pasado el plazo no arranca otra variante, un `recognize()` colgado se abandona terminando el worker y la imagen pasa a los peldaños de visión (GLM-OCR local → nube). Una foto de WhatsApp retuvo la subida 371 s en producción. El pase por mosaicos conserva su propio `SIRAGPT_OCR_IMAGE_BUDGET_MS` (12 s). |
 | `SIRAGPT_HTTP_CLOSE_GRACE_MS` | `3500` | Gracia (ms) que `http_server_close` da a las peticiones en vuelo antes de cortar los sockets que sigan abiertos (SSE, long-poll). Debe quedar por debajo del presupuesto de 5 s del paso; con `keepAliveTimeout` de 2 min un `server.close()` a secas nunca terminaba. Los sockets ociosos keep-alive se sueltan de inmediato. |
 
+## Plantilla obligatoria y edición quirúrgica de láminas (added 2026-10-03)
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `SIRAGPT_TEMPLATE_LINEAGE` | on | `0` desactiva la barrera de linaje: con ella activa, un turno «crea una ppt/word con este formato» + plantilla adjunta (.pptx/.potx/.docx/.dotx) solo entrega archivos que DESCIENDEN de la plantilla (mismo esquema de color y fuentes del tema, mismos masters, mismos layouts, sin láminas de muestra). Un deck reconstruido con un tema de SiraGPT se marca `template_not_followed`, no se entrega y el modelo recibe la causa para rehacerlo sobre la plantilla. |
+
 ## Billing failover and provider keys (optional)
 
 When the provider of a user-selected model has no credit/quota left

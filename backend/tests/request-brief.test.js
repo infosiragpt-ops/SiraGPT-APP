@@ -277,7 +277,7 @@ test('an empty prompt yields a trivial brief and nothing throws on odd input', (
   assert.doesNotThrow(() => brief('x'.repeat(20000), { attachments: [null, {}], recentTurns: [null, { role: 'assistant' }] }));
   assert.equal(rb.publicRequestBrief(null), null);
   assert.equal(rb.buildRequestBriefPromptBlock(null), '');
-  assert.deepEqual(rb.routingHints(null), { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null });
+  assert.deepEqual(rb.routingHints(null), { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null, templateFile: null, templateFormat: null });
 });
 
 test('a pasted link is the object: «transcribe este video del minuto 1.5 al 10» → transcription of the URL with a time range', () => {

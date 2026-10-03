@@ -108,7 +108,11 @@ function diffOoxml(originalBuffer, editedBuffer) {
  * @param {string[]} [opts.expectedParts] entry names the plan said would change
  * @param {boolean} [opts.strictForbidden] hard-fail on forbidden touches
  */
-function validateEditedFile({ originalBuffer, editedBuffer, instruction = '', expectedParts = [], strictForbidden = false } = {}) {
+// Parts a template fill legitimately drops: the template's sample slides
+// (and their rels / notes). Masters, layouts, theme and styles never appear here.
+const TEMPLATE_DISPOSABLE_RE = /^ppt\/(?:slides\/(?:_rels\/)?slide\d+\.xml(?:\.rels)?|notesSlides\/(?:_rels\/)?notesSlide\d+\.xml(?:\.rels)?)$/;
+
+function validateEditedFile({ originalBuffer, editedBuffer, instruction = '', expectedParts = [], strictForbidden = false, templateFill = false } = {}) {
   if (!Buffer.isBuffer(editedBuffer) || editedBuffer.length === 0) {
     return { ok: false, reason: 'empty_file', diff: null };
   }
@@ -121,10 +125,16 @@ function validateEditedFile({ originalBuffer, editedBuffer, instruction = '', ex
   const diff = diffOoxml(originalBuffer, editedBuffer);
   if (!diff) return { ok: false, reason: 'baseline_unreadable', diff: null };
   if (diff.removed.length > 0) {
-    return { ok: false, reason: 'parts_removed', diff, details: diff.removed.slice(0, 10) };
+    // A template fill removes the template's sample slides by design; any
+    // other removed part (a layout, a master, the theme) is still a failure.
+    const illegal = templateFill ? diff.removed.filter((n) => !TEMPLATE_DISPOSABLE_RE.test(n)) : diff.removed;
+    if (illegal.length > 0) return { ok: false, reason: 'parts_removed', diff, details: illegal.slice(0, 10) };
   }
   const reformat = isReformateoRequest(instruction);
-  const touchedForbidden = reformat ? [] : diff.changed.filter(isForbiddenEntry);
+  // Adding/removing slides rewrites presentation.xml and [Content_Types].xml:
+  // expected in a template fill; design parts stay forbidden.
+  const SLIDE_STRUCTURE = new Set(['ppt/presentation.xml', 'ppt/_rels/presentation.xml.rels', '[Content_Types].xml']);
+  const touchedForbidden = reformat ? [] : diff.changed.filter((n) => isForbiddenEntry(n) && !(templateFill && SLIDE_STRUCTURE.has(n)));
   if (strictForbidden && touchedForbidden.length > 0) {
     return { ok: false, reason: 'forbidden_parts_touched', diff, details: touchedForbidden };
   }
