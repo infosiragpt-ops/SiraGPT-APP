@@ -221,3 +221,20 @@ test('target path traversal is rejected before binary reads and before persisten
   assert.ok(!f.calls.includes('local') && !f.calls.includes('remote'));
   assert.equal(f.created.length, 0);
 });
+
+test('Stop during remote reading prevents content persistence after the read resolves', async t => {
+  let entered, release;
+  const reading = new Promise(resolve => { entered = resolve; });
+  const waiting = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, { absent: true, metadata: { storageRef: 'r2:fixture' }, async remoteRead() {
+    entered(); await waiting; return { stream: Readable.from([bytes]) };
+  } });
+  const controller = new AbortController();
+  const pending = f.run({ signal: controller.signal });
+  await reading;
+  controller.abort();
+  release();
+  await assert.rejects(pending, error => error.name === 'AbortError');
+  assert.equal(f.created.length, 0);
+  assert.equal(fs.existsSync(path.join(f.dir, 'content')), false);
+});

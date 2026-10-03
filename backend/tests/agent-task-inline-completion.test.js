@@ -115,3 +115,48 @@ test('inline completion survives a rejected progress DB update without reopening
   assert.deepEqual(committed, ['cancelled']);
   assert.deepEqual(flow.writes, ['running', 'cancelled']);
 });
+
+async function inlineDeliveryConsumer(deliver, events) {
+  const filename = path.join(__dirname, '../src/routes/agent-task.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf("      const delivery = await require('../services/agents/agent-task-workspace-delivery')");
+  const end = source.indexOf('      // Persist the final assistant message', start);
+  assert.ok(start >= 0 && end > start, 'inline finalization must include the awaited workspace delivery');
+  const signal = new AbortController().signal;
+  const context = {
+    require: name => { assert.match(name, /agent-task-workspace-delivery$/); return { finalizeWorkspaceDelivery: deliver }; },
+    prisma: {}, req: { user: { id: 'owner' } }, chatId: 'chat', artifacts: [{ id: 'artifact' }],
+    controller: { signal }, result: { steps: [] },
+    emit: event => events.push(event), applyEvent: event => { events.push(event); return event; },
+    finishProgressPersistence: async status => events.push({ type: 'persist', status }),
+    ...require('../src/services/agents/react-run-outcome'),
+  };
+  return vm.runInNewContext(`(async () => { let finalMarkdown = 'Archivo listo'; let stoppedReason = 'final_answer'; ${source.slice(start, end)} })()`, context, { filename });
+}
+
+test('inline delivery awaits workspace import before publishing final text or done', async () => {
+  const events = [];
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const pending = inlineDeliveryConsumer(async input => {
+    assert.equal(input.chatId, 'chat');
+    assert.equal(input.userId, 'owner');
+    await waiting;
+    return { finalMarkdown: 'Guardado', stoppedReason: 'final_answer' };
+  }, events);
+  await Promise.resolve();
+  assert.equal(events.length, 0);
+  release();
+  await pending;
+  assert.deepEqual(events.map(event => event.type), ['persist', 'final_text', 'done']);
+  assert.equal(events[1].markdown, 'Guardado');
+});
+
+test('inline delivery records workspace failure instead of a completed task', async () => {
+  const events = [];
+  await inlineDeliveryConsumer(async () => ({
+    finalMarkdown: 'Descarga disponible; no se pudo guardar.', stoppedReason: 'control_plane_error:workspace_delivery_failed',
+  }), events);
+  assert.equal(events[0].status, 'failed');
+  assert.equal(events[2].stoppedReason, 'control_plane_error:workspace_delivery_failed');
+});
