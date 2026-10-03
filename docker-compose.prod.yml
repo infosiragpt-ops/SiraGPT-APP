@@ -356,6 +356,12 @@ services:
       CHANNEL_PAIRING_PEPPER: ${CHANNEL_PAIRING_PEPPER:-}
       CORS_ORIGINS: "${CORS_ORIGINS:-https://siragpt.com,https://www.siragpt.com,https://office.siragpt.com}"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # GLM-OCR local (`ollama run glm-ocr` en la Ollama de la Lenovo) como
+      # primer peldaño del OCR por visión; el modelo de pago queda de respaldo.
+      # Se activa solo cuando el modelo está descargado (sondeo cacheado).
+      SIRAGPT_OLLAMA_OCR: ${SIRAGPT_OLLAMA_OCR:-1}
+      OLLAMA_OCR_BASE_URL: ${OLLAMA_OCR_BASE_URL:-http://siragpt-ollama:11434}
+      OLLAMA_OCR_MODEL: ${OLLAMA_OCR_MODEL:-glm-ocr}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}

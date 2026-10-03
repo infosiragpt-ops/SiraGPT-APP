@@ -3,6 +3,7 @@ const sharp = require('sharp');
 const fs = require('fs').promises;
 const OpenAI = require('openai');
 const imageAnalyzer = require('./image-analyzer');
+const ollamaOcr = require('./ollama-ocr');
 
 const OCR_PLACEHOLDER_RE = /^(no text found in image|no text detected(?: in image pdf)?|no content available|binary file|file content could not be extracted|file ".*?" uploaded successfully|error processing file:|unsupported file type)/i;
 
@@ -41,6 +42,9 @@ class OcrEngine {
   constructor() {
     // Configurable default language via env. Falls back to spa+eng.
     this.defaultLanguage = process.env.OCR_DEFAULT_LANGUAGE || 'spa+eng';
+    // GLM-OCR on the Lenovo's Ollama: first vision rung, before the paid
+    // cloud model. Injectable so tests never touch the network.
+    this.ollamaOcr = ollamaOcr;
   }
 
   get config() {
@@ -882,6 +886,7 @@ class OcrEngine {
     const texts = [];
     let totalConfidence = 0;
     let usedPages = 0;
+    const providers = new Set();
 
     for (let idx = 0; idx < pageIndices.length; idx += 1) {
       const pageIdx = pageIndices[idx];
@@ -897,6 +902,7 @@ class OcrEngine {
         texts.push(result.text);
         totalConfidence += Number(result.ocr.confidence || 0);
         usedPages += 1;
+        if (result.ocr.provider) providers.add(result.ocr.provider);
       }
     }
 
@@ -912,7 +918,8 @@ class OcrEngine {
         ocr: {
           status: 'vision_fallback',
           confidence: Math.round(quality.confidence || 92),
-          provider: `openai:${config.visionModel}`,
+          // Pages may have been read by GLM-OCR (local) and/or the cloud model.
+          provider: providers.size ? [...providers].join('+') : `openai:${config.visionModel}`,
           usefulChars: quality.usefulChars,
           lineCount: quality.lineCount,
           pages: pageBuffers.length,
@@ -925,7 +932,74 @@ class OcrEngine {
     return this.asFailedResult(quality, 'vision_fallback_empty', { pages: pageBuffers.length });
   }
 
+  /**
+   * GLM-OCR through the Lenovo's Ollama (`ollama run glm-ocr`). Runs BEFORE
+   * the cloud vision model: free, local, and #1 on OmniDocBench for scanned
+   * documents, tables and formulas. Returns `null` when the rung is off or
+   * not configured, a `vision_fallback` result when it read the image, and a
+   * `failed` result (with the reason) when Ollama/the model were unavailable
+   * or produced nothing — the caller then continues down the ladder.
+   */
+  async runOllamaOcrFallback({ filePath, buffer, mimeType = 'image/png', config = this.config, localQuality = null } = {}) {
+    const client = this.ollamaOcr;
+    if (!client || typeof client.isEnabled !== 'function' || !client.isEnabled()) return null;
+    const modelName = (() => {
+      try { return client.config().model; } catch { return 'glm-ocr'; }
+    })();
+    const provider = `ollama:${modelName}`;
+    const failed = (reason, extra = {}) => ({
+      text: '',
+      ocr: {
+        status: 'failed',
+        confidence: 0,
+        provider,
+        reason,
+        localConfidence: localQuality?.confidence ?? null,
+        ...extra,
+      },
+    });
+
+    try {
+      const availability = await client.ensureAvailable();
+      if (!availability || !availability.available) return failed(availability?.reason || 'ollama_ocr_unavailable');
+
+      const result = await client.recognize({ buffer, filePath, mimeType });
+      if (!result || !result.ok) return failed(result?.reason || 'ollama_ocr_failed');
+
+      const raw = normalizeOcrText(result.text);
+      const text = /^OCR_EMPTY$/i.test(raw) ? '' : raw;
+      // Same trust level as the cloud vision read: a VLM transcription has no
+      // per-glyph confidence, so the quality gate is on the text itself.
+      const quality = this.evaluateQuality({ text, confidence: 95 }, config);
+      if (!quality.enoughText && !quality.legibleShort) {
+        return this.asFailedResult(quality, 'ollama_ocr_empty', { provider });
+      }
+      console.log(`[ocr-engine] ${provider} read ${quality.usefulChars} chars in ${result.durationMs ?? '?'} ms`);
+      return {
+        text: quality.text,
+        ocr: {
+          status: 'vision_fallback',
+          confidence: Math.round(quality.confidence),
+          provider: result.provider || provider,
+          usefulChars: quality.usefulChars,
+          lineCount: quality.lineCount,
+          localConfidence: localQuality?.confidence ?? null,
+          elapsedMs: result.durationMs ?? null,
+        },
+      };
+    } catch (error) {
+      return failed(error?.message || 'ollama_ocr_failed');
+    }
+  }
+
   async runVisionFallback({ filePath, buffer, mimeType = 'image/png', config = this.config, localQuality = null, promptPrefix = '' }) {
+    // Rung 1: local GLM-OCR. A successful read ends here; anything else
+    // (rung off, Ollama down, model not pulled, empty output) falls through
+    // to the cloud model exactly as before.
+    const localVision = await this.runOllamaOcrFallback({ filePath, buffer, mimeType, config, localQuality });
+    if (localVision && localVision.ocr.status === 'vision_fallback') return localVision;
+    const localVisionReason = localVision?.ocr?.reason || null;
+
     if (!process.env.OPENAI_API_KEY) {
       return {
         text: '',
@@ -935,6 +1009,7 @@ class OcrEngine {
           provider: null,
           reason: 'vision_api_unavailable',
           localConfidence: localQuality?.confidence ?? null,
+          ...(localVisionReason ? { ollamaOcr: localVisionReason } : {}),
         },
       };
     }

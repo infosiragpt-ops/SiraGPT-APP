@@ -1873,6 +1873,30 @@ sin intentar nada. Tres frentes, todos obligatorios:
   +2 en `request-brief.test.js`, `tests/lib/user-text-tokens.test.ts` (6),
   `tests/components/rich-user-text.test.tsx` (3). Envs en `docs/ENV_VARIABLES.md`.
 
+## OCR local con GLM-OCR — `ollama run glm-ocr` en la Lenovo (added 2026-10-03)
+
+Pedido de Luis: incorporar GLM-OCR (Z.ai, 0,9B, nº 1 OmniDocBench v1.5) a la plataforma.
+- **`backend/src/services/ollama-ocr.js`**: cliente de la API nativa de Ollama
+  (`POST /api/chat` con `images` base64 y el prompt de tarea del modelo `Text Recognition:` /
+  `Table Recognition:` / `Figure Recognition:`; salida Markdown). Sondeo de disponibilidad con
+  `GET /api/tags` memoizado (`OLLAMA_OCR_PROBE_TTL_MS`, 5 min): sin Ollama o sin el modelo
+  descargado responde `{available:false, reason}` en < 3 s y NUNCA lanza. `createOllamaOcrClient`
+  inyectable (`env`, `fetchImpl`, `now`, `sharpImpl`) para tests sin red. Default ON salvo
+  `NODE_ENV=test`; kill switch `SIRAGPT_OLLAMA_OCR=0`.
+- **Escalera** (`ocr-engine.js`): Tesseract → **`runOllamaOcrFallback`** → OpenAI
+  (`runVisionFallback`). Una lectura local válida termina ahí (status `vision_fallback`,
+  provider `ollama:glm-ocr`, confianza 95 como la del modelo de nube); cualquier otro resultado
+  sigue al peldaño de pago y, sin `OPENAI_API_KEY`, el fallo expone `ocr.ollamaOcr` con la razón
+  local. `runVisionPdfFallback` etiqueta el proveedor con los que realmente leyeron páginas.
+  Cubre imágenes adjuntas, PDFs escaneados, imágenes dentro de Office y `OCR_MODE=vision`.
+- **Producción**: `docker-compose.prod.yml` pasa `SIRAGPT_OLLAMA_OCR` / `OLLAMA_OCR_BASE_URL`
+  (`http://siragpt-ollama:11434`, la misma Ollama de SiraGPT Mini en la red `iliagpt-app`) /
+  `OLLAMA_OCR_MODEL` (`glm-ocr`) al backend. **Lo único que falta en la Lenovo es descargar el
+  modelo**: `docker exec siragpt-ollama ollama pull glm-ocr` (~1,9 GB); el siguiente sondeo lo
+  enciende sin reiniciar nada. Envs en `docs/ENV_VARIABLES.md` y `docs/operations/ENVIRONMENT.md`.
+- Tests: `backend/tests/ollama-ocr.test.js` (10: config/alias `/v1`, listado de tags, sondeo y
+  memo, request/respuesta, fallos HTTP/timeout/caída, integración con el motor y PDF).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
