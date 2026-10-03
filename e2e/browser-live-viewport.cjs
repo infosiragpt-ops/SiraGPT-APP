@@ -31,15 +31,67 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:white}
 #save{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:180px;height:70px;background:#a020f0;color:white;border:0;font:18px sans-serif}
 </style><button class="corner" id="tl" aria-label="Esquina izquierda superior"></button><button class="corner" id="tr" aria-label="Esquina derecha superior"></button><button class="corner" id="bl" aria-label="Esquina izquierda inferior"></button><button class="corner" id="br" aria-label="Esquina derecha inferior"></button><button id="save">Guardar prueba</button><output></output><script>
 document.addEventListener('click',e=>{if(e.target.tagName==='BUTTON')document.querySelector('output').textContent=e.target.id+':'+innerWidth+'x'+innerHeight});
+// Observe the rendered fixture without a CDP client retaining emulation.
+const fixtureControl=new WebSocket('ws://'+location.host+'/fixture-control');
+fixtureControl.addEventListener('message',event=>{
+  const request=JSON.parse(event.data);
+  if(request.type!=='snapshot'||!Number.isSafeInteger(request.id))return;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>fixtureControl.send(JSON.stringify({
+    id:request.id,viewport:{width:innerWidth,height:innerHeight},
+    output:document.querySelector('output').textContent,focused:document.hasFocus()
+  }))));
+});
 </script></html>`;
 
-async function verifyLiveViewport({ page, resize, restore }) {
+async function verifyLiveViewport({ previousUrl, withPage, navigate, state, resize, restore }) {
   assert.ok(process.env.CI && process.platform === "linux" && process.env.DISPLAY, "RFB proof requires the isolated Linux X11 gate");
-  const previousUrl = page.url();
   const novncRoot = path.dirname(path.dirname(require.resolve("@novnc/novnc")));
   const connections = new Set();
   const sockets = new Set();
-  let viewerBrowser, viewer, vnc;
+  let viewerBrowser, viewer, vnc, fixtureControl;
+  let nextSnapshot = 0;
+  const fixtureReady = Promise.withResolvers();
+  async function fixtureSnapshot(timeoutMs = 5000) {
+    let timer;
+    try {
+      await Promise.race([fixtureReady.promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("fixture_control_not_ready")), timeoutMs);
+      })]);
+    } finally { clearTimeout(timer); }
+    assert.equal(fixtureControl.readyState, WebSocket.OPEN, "the real page must keep its fixture control channel open");
+    const id = ++nextSnapshot;
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timeout); fixtureControl.off("message", message); fixtureControl.off("close", closed);
+      };
+      const closed = () => { cleanup(); reject(new Error("fixture_control_closed")); };
+      const timeout = setTimeout(() => { cleanup(); reject(new Error("fixture_snapshot_timeout")); }, timeoutMs);
+      const message = raw => {
+        let value;
+        try { value = JSON.parse(raw); } catch { cleanup(); reject(new Error("fixture_snapshot_invalid")); return; }
+        // Every read is acknowledged after its request and two actual page
+        // animation frames. A cached resize notification cannot satisfy it.
+        if (value.id !== id) return;
+        cleanup();
+        if (!Number.isInteger(value.viewport?.width) || !Number.isInteger(value.viewport?.height)
+          || typeof value.output !== "string" || typeof value.focused !== "boolean") {
+          reject(new Error("fixture_snapshot_invalid")); return;
+        }
+        resolve(value);
+      };
+      fixtureControl.on("message", message); fixtureControl.once("close", closed);
+      fixtureControl.send(JSON.stringify({ type: "snapshot", id }));
+    });
+  }
+  async function expectFixtureOutput(output) {
+    const deadline = Date.now() + 5000;
+    let snapshot;
+    do {
+      snapshot = await fixtureSnapshot(Math.max(1, deadline - Date.now()));
+      if (snapshot.output === output) return;
+    } while (Date.now() < deadline);
+    assert.equal(snapshot.output, output, "RFB input must reach the actual fixture target");
+  }
   let vncLog = "";
   let setupError;
   let phase = "vnc_start";
@@ -74,6 +126,16 @@ window.rfb=rfb;
   });
   const wsServer = new WebSocketServer({ noServer: true });
   server.on("upgrade", (req, socket, head) => {
+    if (req.url === "/fixture-control") {
+      wsServer.handleUpgrade(req, socket, head, ws => {
+        assert.ok(!fixtureControl, "only the isolated native fixture owns this control channel");
+        fixtureControl = ws; connections.add(ws);
+        ws.on("error", () => ws.close());
+        ws.on("close", () => connections.delete(ws));
+        fixtureReady.resolve();
+      });
+      return;
+    }
     if (req.url !== "/rfb") { socket.destroy(); return; }
     wsServer.handleUpgrade(req, socket, head, ws => {
       connections.add(ws);
@@ -105,7 +167,7 @@ window.rfb=rfb;
     }
     assert.ok(ready, `x11vnc fixture must start: ${setupError?.message || vncLog}`);
     phase = "fixture_open";
-    await page.goto(`http://127.0.0.1:${server.address().port}/fixture`);
+    await navigate(`http://127.0.0.1:${server.address().port}/fixture`);
     viewerBrowser = await chromium.launch({ headless: true });
     viewer = await viewerBrowser.newPage({ viewport: { width: 1000, height: 800 } });
     await viewer.goto(`http://127.0.0.1:${server.address().port}/viewer`);
@@ -118,8 +180,18 @@ window.rfb=rfb;
       const result = await resize(width, height);
       assert.equal(result.presentation, "embedded");
       assert.deepEqual(result.viewport, dimensions, "confirmed Chrome viewport must equal the visible frame");
+      // The action has returned and every test observer is disconnected. A
+      // second backend request must report the real persisted dimensions, not
+      // the temporary metrics visible only inside the resize request.
+      phase = "independent_state";
+      const persisted = await state();
+      assert.equal(persisted.presentation, "embedded");
+      assert.deepEqual(persisted.viewport, dimensions, "viewport must survive the completed resize and a separate state request");
       phase = "chrome_dimensions";
-      await page.waitForFunction(({ width, height }) => innerWidth === width && innerHeight === height, dimensions);
+      const actual = await fixtureSnapshot();
+      assert.deepEqual(actual.viewport, dimensions, "the rendered page must retain viewport after every request disconnects");
+      // This report came from the page after painting, with no CDP observer.
+      // Pixel and pointer proof also runs without a test CDP client.
       await viewer.setViewportSize(dimensions);
       // The canvas buffer is the server framebuffer, independent of local CSS
       // scaling. Four native corner colors catch headers, cropping/letterboxes,
@@ -135,12 +207,12 @@ window.rfb=rfb;
       const canvas = viewer.locator("canvas");
       phase = "pointer_center";
       await canvas.click({ position: { x: width / 2, y: height / 2 } });
-      await page.waitForFunction(expected => document.querySelector("output").textContent === expected, `save:${width}x${height}`, { timeout: 5000 });
+      await expectFixtureOutput(`save:${width}x${height}`);
       phase = "pointer_edge";
       await canvas.click({ position: { x: width - 10, y: height - 10 } });
-      await page.waitForFunction(expected => document.querySelector("output").textContent === expected, `br:${width}x${height}`, { timeout: 5000 });
+      await expectFixtureOutput(`br:${width}x${height}`);
       await viewer.screenshot({ path: `/tmp/browser-gate-rfb-${width}x${height}.png` });
-      console.log(`PASS real RFB viewport ${width}x${height}: exact framebuffer, four visible corners, center and edge input hit the actual Chrome page`);
+      console.log(`PASS real RFB viewport ${width}x${height}: independent requests, disconnected observers, exact framebuffer, four corners, center and edge input`);
     }
     phase = "restore";
     const restored = await restore();
@@ -149,17 +221,21 @@ window.rfb=rfb;
       const canvas = document.querySelector("canvas");
       return canvas?.width === 1920 && canvas?.height === 1080;
     }, null, { timeout: 8000 });
-    const cdp = await page.context().newCDPSession(page);
-    try {
-      const { bounds } = await cdp.send("Browser.getWindowForTarget");
-      assert.notEqual(bounds.windowState, "fullscreen", "leaving the panel restores actual Chrome window chrome");
-    } finally { await cdp.detach(); }
+    const restoredState = await state();
+    assert.equal(restoredState.presentation, "desktop", "restore survives a separate request too");
+    await withPage(async page => {
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const { bounds } = await cdp.send("Browser.getWindowForTarget");
+        assert.notEqual(bounds.windowState, "fullscreen", "leaving the panel restores actual Chrome window chrome");
+      } finally { await cdp.detach(); }
+    });
     console.log("PASS real RFB restore: original 1920x1080 desktop framebuffer and normal browser window restored");
   } catch (error) {
     // Closed numeric diagnostics from THIS inert fixture only. No exception
     // message, URL, headers, request body, input values or raw stack is emitted
     // into GitHub annotations. These can be reviewed without CI log access.
-    const chrome = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, focused: document.hasFocus() })).catch(() => null);
+    const chrome = fixtureControl?.readyState === WebSocket.OPEN ? await fixtureSnapshot().then(snapshot => ({ ...snapshot.viewport, focused: snapshot.focused })).catch(() => null) : null;
     const framebuffer = viewer ? await viewer.evaluate(() => {
       const canvas = document.querySelector("canvas");
       if (!canvas) return null;
@@ -180,7 +256,7 @@ window.rfb=rfb;
     await new Promise(resolve => wsServer.close(resolve));
     await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
     await stop(vnc);
-    await page.goto(previousUrl).catch(() => {});
+    await navigate(previousUrl).catch(() => {});
   }
 }
 module.exports = { verifyLiveViewport };

@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { EventEmitter } = require('node:events');
 
 function harness() {
   const calls = [];
@@ -9,16 +10,27 @@ function harness() {
   const windows = new Map([[1, { windowState: 'maximized', left: 0, top: 0, width: 1280, height: 900 }]]);
   let counter = 0;
   let failCommand = '';
+  let hangOwner;
   const clipCalls = [];
+  const connections = [];
+  const timers = new Set();
+  const pending = new Set();
   const context = {
     pages: () => pages,
     newPage: async () => makePage('about:blank'),
-    newCDPSession: async page => ({
+    newCDPSession: async (page, owner) => {
+      let detached = false;
+      const cdp = {
       send: async (method, args) => {
+        if (detached || owner?.closed) throw new Error('CDP session closed');
         calls.push({ method, args, page: page.id });
         if (failCommand === method) throw new Error('private diagnostic must not become success');
+        if (failCommand === 'hang:' + method || (failCommand === 'hang-owner:' + method && owner === hangOwner)) return new Promise((resolve, reject) => pending.add({ owner, reject }));
         if (method === 'Target.getTargetInfo') return { targetInfo: { targetId: page.id } };
-        if (method === 'Emulation.setDeviceMetricsOverride') { page.viewport = { width: args.width, height: args.height }; return {}; }
+        if (method === 'Emulation.setDeviceMetricsOverride') {
+          if (failCommand !== 'metrics-noop') { page.viewport = { width: args.width, height: args.height }; page.viewportOwner = cdp; }
+          return {};
+        }
         if (method === 'Emulation.clearDeviceMetricsOverride') { page.viewport = null; return {}; }
         if (method === 'Runtime.evaluate') {
           const value = vm.runInNewContext(args.expression, { document: { title: page.documentTitle, readyState: page.readyState, hasFocus: () => page.focus, visibilityState: page.visible ? 'visible' : 'hidden' }, location: { href: page.url() }, innerWidth: (page.viewport || { width: 1280 }).width, innerHeight: (page.viewport || { height: 800 }).height });
@@ -30,38 +42,75 @@ function harness() {
         if (method === 'Browser.setWindowBounds') { windows.set(args.windowId, { ...windows.get(args.windowId), ...args.bounds }); return {}; }
         throw Error('Unexpected CDP: ' + method);
       },
-      detach: async () => calls.push('detach'),
-    }),
+      detach: async () => {
+        if (detached) return;
+        detached = true;
+        // Chromium immediately drops an override when its owning CDP session
+        // detaches. This behavior is essential to the lifetime regression.
+        if (page.viewportOwner === cdp) { page.viewport = null; page.viewportOwner = null; }
+        owner?.sessions.delete(cdp);
+        calls.push('detach');
+      },
+      };
+      owner?.sessions.add(cdp);
+      return cdp;
+    },
   };
   function makePage(url) {
-    const page = {
+    const page = Object.assign(new EventEmitter(), {
       id: 'target-' + ++counter, history: [url], index: 0, focus: pages.length === 0, visible: pages.length === 0, readyState: 'complete', documentTitle: url === 'about:blank' ? '' : 'Real page',
       context: () => context,
       title: async () => page.url() === 'about:blank' ? '' : 'Real page',
       url: () => page.history[page.index],
       evaluate: async fn => String(fn).includes('hasFocus') ? page.focus : (page.viewport || { width: 1280, height: 800 }),
       bringToFront: async () => { pages.forEach(p => { p.focus = p === page; p.visible = p === page; }); calls.push('front:' + page.id); },
-      close: async () => { calls.push('close:' + page.id); pages.splice(pages.indexOf(page), 1); },
+      close: async () => { calls.push('close:' + page.id); pages.splice(pages.indexOf(page), 1); page.emit('close'); },
       goBack: async () => { page.index--; }, goForward: async () => { page.index++; },
       reload: async options => { calls.push({ reload: page.id, options }); },
       goto: async (url, options) => { page.history.splice(page.index + 1); page.history.push(url); page.index++; calls.push({ goto: page.id, url, options }); },
-    };
+    });
     pages.push(page); return page;
   }
-  const browser = { contexts: () => [context], close: async () => calls.push('disconnect') };
-  const module = { exports: {} };
+  function connectBrowser() {
+    const browser = Object.assign(new EventEmitter(), { closed: false, sessions: new Set() });
+    const wrappers = new Map();
+    const wrap = page => {
+      if (!wrappers.has(page)) wrappers.set(page, new Proxy(page, { get(target, key) {
+        if (key === 'context') return () => connectedContext;
+        const value = target[key]; return typeof value === 'function' ? value.bind(target) : value;
+      } }));
+      return wrappers.get(page);
+    };
+    const connectedContext = { pages: () => pages.map(wrap), newPage: async () => wrap(makePage('about:blank')),
+      newCDPSession: page => context.newCDPSession(page, browser) };
+    browser.contexts = () => [connectedContext];
+    browser.close = async () => {
+      if (browser.closed) return;
+      browser.closed = true;
+      for (const cdp of [...browser.sessions]) await cdp.detach();
+      for (const item of [...pending]) if (item.owner === browser) { pending.delete(item); item.reject(new Error('CDP session closed')); }
+      browser.emit('disconnected'); calls.push('disconnect');
+    };
+    connections.push(browser);
+    return browser;
+  }
+  const vmModule = { exports: {} };
   vm.runInNewContext(fs.readFileSync(require.resolve('../src/services/computer/live-page'), 'utf8'), {
-    module, exports: module.exports, process, AbortSignal, Map, Set,
+    module: vmModule, exports: vmModule.exports, process, AbortSignal, Map, Set,
+    setTimeout: (run, ms) => { const timer = { run, ms, unref() {} }; timers.add(timer); return timer; },
+    clearTimeout: timer => timers.delete(timer),
     fetch: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://test.invalid/browser' }) }),
     require: name => {
       if (name === 'node:timers/promises') return require(name);
       if (name === './orch-client') return { resolveOrchConfig: () => ({ url: 'http://test.invalid' }), orchFetch: async (path, options) => { clipCalls.push({ path, options }); if (failCommand === 'clip') throw new Error('clip failed'); return { ok: true }; } };
       if (name === './cdp-client') return { rewriteCdpWs: url => url };
-      if (name === 'playwright') return { chromium: { connectOverCDP: async (_url, options) => { calls.push({ connect: options }); return browser; } } };
+      if (name === 'playwright') return { chromium: { connectOverCDP: async (_url, options) => { calls.push({ connect: options }); return connectBrowser(); } } };
       throw Error('Unexpected dependency: ' + name);
     },
   });
-  return { ...module.exports, makePage, pages, calls, windows, clipCalls, fail: method => { failCommand = method; } };
+  return { ...vmModule.exports, makePage, pages, calls, windows, clipCalls, connections, timers,
+    expireIdle: async () => { for (const timer of [...timers]) { timers.delete(timer); timer.run(); } await new Promise(resolve => setImmediate(resolve)); },
+    fail: method => { failCommand = method; if (method.startsWith('hang-owner:')) hangOwner = connections.find(browser => !browser.closed); } };
 }
 const session = { sessionId: 'owned-desktop' };
 
@@ -194,6 +243,148 @@ test('viewport reflows the real page and sends only bounded dimensions to its ow
   assert.equal(page.viewport, null, 'restoration clears metrics from every tab, not just the active one');
   assert.equal(h.clipCalls.at(-1).options.body.type, 'browser_restore_viewport');
   assert.equal(h.windows.get(1).windowState, 'maximized');
+});
+
+test('viewport survives request disconnection and releases every owner session on restore', async () => {
+  const h = harness(); h.makePage('chrome://newtab/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  const observed = await h.browserState(session);
+  assert.equal(observed.viewport.width, 813, 'an independent request sees the actual retained width');
+  assert.equal(observed.viewport.height, 917);
+  const owner = h.connections.find(browser => !browser.closed);
+  assert.ok(owner, 'the viewport has one owner after the request connection closes');
+  assert.equal(h.connections.filter(browser => !browser.closed).length, 1);
+  assert.equal(owner.sessions.size, 1);
+  for (let index = 0; index < 3; index++) {
+    const state = await h.browserState(session);
+    assert.equal(state.viewport.width, 813); assert.equal(state.viewport.height, 917);
+    assert.equal(h.connections.filter(browser => !browser.closed).length, 1);
+  }
+  assert.equal(h.pages[0].url(), 'chrome://newtab/', 'retaining presentation never replaces an internal/user tab');
+  await h.browserAction(session, { type: 'browser_restore' });
+  assert.equal(h.connections.every(browser => browser.closed), true);
+  assert.equal(owner.sessions.size, 0);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.pages[0].viewport, null);
+});
+
+test('aborting an observation leaves the independent viewport owner connected', async () => {
+  const h = harness(); h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  const owner = h.connections.find(browser => !browser.closed);
+  h.fail('hang:Runtime.evaluate');
+  const controller = new AbortController();
+  const reading = h.browserState(session, process.env, controller.signal);
+  const rejected = assert.rejects(reading);
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort(); await rejected;
+  h.fail('');
+  assert.equal(owner.closed, false);
+  assert.equal((await h.browserState(session)).viewport.width, 813);
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+
+for (const method of ['Emulation.setDeviceMetricsOverride', 'Target.getTargetInfo']) {
+  test(`aborting a retained ${method} command releases the queue for explicit recovery`, async () => {
+    const h = harness(); h.makePage('https://example.com/');
+    await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+    const owner = h.connections.find(browser => !browser.closed);
+    const page = method === 'Target.getTargetInfo' ? h.makePage('https://example.com/new') : h.pages[0];
+    h.fail('hang-owner:' + method);
+    const controller = new AbortController();
+    const resizing = h.browserAction(session, { type: 'browser_resize', tabId: page.id, width: 430, height: 900 }, process.env, controller.signal);
+    const rejected = assert.rejects(resizing);
+    await new Promise(resolve => setImmediate(resolve));
+    controller.abort(); await rejected;
+    assert.equal(owner.closed, true, 'abort closes the retained connection, not only the request observer');
+    h.fail('');
+    await h.browserAction(session, { type: 'browser_restore' });
+    assert.equal(h.connections.every(browser => browser.closed), true);
+    assert.equal(h.windows.get(1).windowState, 'maximized');
+  });
+}
+
+test('aborting an unresponsive clear command releases its owner and allows a later explicit restore', async () => {
+  const h = harness(); h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  h.fail('hang-owner:Emulation.clearDeviceMetricsOverride');
+  const controller = new AbortController();
+  const restoring = h.browserAction(session, { type: 'browser_restore' }, process.env, controller.signal);
+  const rejected = assert.rejects(restoring, error => error.code === 'browser_viewport_failed');
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort(); await rejected; h.fail('');
+  assert.equal(h.connections.every(browser => browser.closed), true);
+  assert.equal(h.timers.size, 0);
+  await assert.rejects(h.browserState(session), error => error.code === 'browser_viewport_failed');
+  await h.browserAction(session, { type: 'browser_restore' });
+  assert.equal(h.windows.get(1).windowState, 'maximized');
+});
+
+test('lost viewport owner fails closed and an explicit resize can acquire a fresh owner', async () => {
+  const h = harness(); h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  await h.connections.find(browser => !browser.closed).close();
+  assert.equal(h.timers.size, 0);
+  await assert.rejects(h.browserState(session), error => error.code === 'browser_viewport_failed');
+  await assert.rejects(h.browserAction(session, { type: 'browser_tab_create' }), error => error.code === 'browser_viewport_failed');
+  const repaired = await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  assert.equal(repaired.viewport.width, 813);
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+
+test('a successful CDP acknowledgement without actual reflow never confirms the viewport', async () => {
+  const h = harness(); h.makePage('https://example.com/'); h.fail('metrics-noop');
+  await assert.rejects(h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 }), error => error.code === 'browser_viewport_failed');
+  h.fail('');
+  await assert.rejects(h.browserState(session), error => error.code === 'browser_viewport_failed');
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+
+test('idle viewport restores original desktop geometry and releases the persistent connection', async () => {
+  const h = harness(); h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  assert.equal([...h.timers][0].ms, 5 * 60_000);
+  await h.expireIdle();
+  assert.equal(h.windows.get(1).windowState, 'maximized');
+  assert.equal(h.pages[0].viewport, null);
+  assert.equal(h.clipCalls.at(-1).options.body.type, 'browser_restore_viewport');
+  assert.equal(h.connections.every(browser => browser.closed), true);
+  assert.equal(h.timers.size, 0);
+  assert.equal((await h.browserState(session)).presentation, 'desktop');
+});
+
+test('an idle callback queued before recent activity cannot retire the active viewport', async () => {
+  const h = harness(); h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  const staleTimer = [...h.timers][0];
+  await h.browserState(session);
+  staleTimer.run(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.connections.filter(browser => !browser.closed).length, 1);
+  assert.equal((await h.browserState(session)).viewport.width, 813);
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+
+test('failed idle restoration releases resources but preserves the repair gate and original bounds', async () => {
+  const h = harness(); h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  h.fail('clip'); await h.expireIdle(); h.fail('');
+  assert.equal(h.connections.every(browser => browser.closed), true);
+  assert.equal(h.timers.size, 0);
+  await assert.rejects(h.browserState(session), error => error.code === 'browser_viewport_failed');
+  await h.browserAction(session, { type: 'browser_restore' });
+  assert.equal(h.windows.get(1).windowState, 'maximized');
+});
+
+test('closing an emulated tab releases its target session without disconnecting the surviving viewport', async () => {
+  const h = harness(); const first = h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  await h.browserAction(session, { type: 'browser_tab_create' });
+  const owner = h.connections.find(browser => !browser.closed);
+  assert.equal(owner.sessions.size, 2);
+  await h.browserAction(session, { type: 'browser_tab_close', tabId: first.id });
+  assert.equal(owner.sessions.size, 1);
+  assert.equal((await h.browserState(session)).viewport.width, 813);
+  await h.browserAction(session, { type: 'browser_restore' });
 });
 
 test('invalid dimensions never reach CDP or the compositor and a clip failure remains restorable', async () => {

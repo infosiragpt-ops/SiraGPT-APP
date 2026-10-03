@@ -5,9 +5,7 @@
 const { resolveOrchConfig, orchFetch } = require('./orch-client');
 const { rewriteCdpWs } = require('./cdp-client');
 
-async function withLiveBrowser(session, env, signal, run) {
-  signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000);
-  signal.throwIfAborted();
+async function connectLiveBrowser(session, env, signal) {
   const cfg = resolveOrchConfig(env);
   const base = `${cfg.url}/sessions/${encodeURIComponent(session.sessionId)}/cdp`;
   const headers = cfg.secret ? { Authorization: `Bearer ${cfg.secret}` } : {};
@@ -18,6 +16,15 @@ async function withLiveBrowser(session, env, signal, run) {
   const version = await response.json();
   const { chromium } = require('playwright');
   const browser = await chromium.connectOverCDP(rewriteCdpWs(version.webSocketDebuggerUrl, base), { headers, timeout: 8000, noDefaults: true });
+  if (signal?.aborted) { await browser.close().catch(() => {}); signal.throwIfAborted(); }
+  return browser;
+}
+
+async function withLiveBrowser(session, env, signal, run) {
+  signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000);
+  signal.throwIfAborted();
+  touchViewportLease(session);
+  const browser = await connectLiveBrowser(session, env, signal);
   const disconnect = () => { void browser.close().catch(() => {}); };
   signal?.addEventListener('abort', disconnect, { once: true });
   try {
@@ -27,6 +34,7 @@ async function withLiveBrowser(session, env, signal, run) {
     signal?.removeEventListener('abort', disconnect);
     // Disconnect CDP; never destroy the user's persistent browser.
     await browser.close().catch(() => {});
+    touchViewportLease(session);
   }
 }
 
@@ -99,6 +107,98 @@ async function withLivePage(session, env, signal, run, { createPage = false, tab
 const presentationBySession = new Map();
 const viewportBySession = new Map();
 const pendingBySession = new Map();
+// Emulation belongs to its CDP session: detaching it immediately restores the
+// native desktop size. A dedicated connection owns only these overrides, so
+// cancelling a short-lived observation cannot tear down the visible viewport.
+const viewportLeases = new Map();
+const VIEWPORT_IDLE_MS = 5 * 60_000;
+const MAX_VIEWPORT_TARGETS = 128;
+
+function invalidateViewport(session) {
+  const viewport = viewportBySession.get(session.sessionId);
+  if (viewport) viewport.confirmed = false;
+}
+
+function touchViewportLease(session) {
+  const lease = viewportLeases.get(session.sessionId);
+  if (!lease || lease.closed) return;
+  clearTimeout(lease.timer);
+  const timer = setTimeout(() => {
+    void inBrowserOrder(session, undefined, async () => {
+      if (viewportLeases.get(session.sessionId) !== lease || lease.timer !== timer) return;
+      const signal = AbortSignal.timeout(25000);
+      try {
+        await withLiveBrowser(session, lease.env, signal, browser => restorePresentation(session, browser, lease.env, signal));
+      } catch (_) {
+        // A partial restore must remain explicitly repairable. Release sockets,
+        // but retain the original bounds and unconfirmed framebuffer state.
+        invalidateViewport(session);
+        await releaseViewportLease(session, false);
+      }
+    }).catch(() => {});
+  }, VIEWPORT_IDLE_MS);
+  lease.timer = timer;
+  timer.unref?.();
+}
+
+function viewportOperation(session, lease, signal, run) {
+  signal = signal || AbortSignal.timeout(25000);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener('abort', abort);
+      invalidateViewport(session);
+      // Only a cancelled mutation closes this dedicated connection. Closing it
+      // also interrupts an unresponsive renderer's pending CDP commands.
+      void lease.browser.close().catch(() => {});
+      reject(browserError('browser_viewport_failed', 502));
+    };
+    if (signal.aborted) { abort(); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    Promise.resolve().then(run).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
+
+async function releaseViewportLease(session, clear = true, signal = AbortSignal.timeout(25000)) {
+  const lease = viewportLeases.get(session.sessionId);
+  if (!lease) return;
+  lease.closed = true;
+  clearTimeout(lease.timer);
+  viewportLeases.delete(session.sessionId);
+  lease.browser.off('disconnected', lease.onDisconnect);
+  let failed = false;
+  for (const entry of lease.targets.values()) {
+    entry.page.off('close', entry.onClose);
+    if (clear) await viewportOperation(session, lease, signal, () => entry.cdp.send('Emulation.clearDeviceMetricsOverride')).catch(() => { failed = true; });
+  }
+  lease.targets.clear();
+  // Closing the owner connection detaches all target sessions, even when a
+  // renderer no longer acknowledges individual detach/clear commands.
+  await lease.browser.close().catch(() => { failed = true; });
+  if (failed && clear) throw browserError('browser_viewport_failed', 502);
+}
+
+async function viewportLease(session, env, signal) {
+  let lease = viewportLeases.get(session.sessionId);
+  if (lease) return lease;
+  if (viewportLeases.size >= 1000) throw browserError('browser_presentation_capacity', 503);
+  const browser = await connectLiveBrowser(session, env, signal);
+  lease = { browser, targets: new Map(), env, closed: false, timer: null };
+  lease.onDisconnect = () => {
+    if (lease.closed) return;
+    lease.closed = true;
+    clearTimeout(lease.timer);
+    for (const entry of lease.targets.values()) entry.page.off('close', entry.onClose);
+    lease.targets.clear();
+    if (viewportLeases.get(session.sessionId) === lease) {
+      viewportLeases.delete(session.sessionId);
+      invalidateViewport(session);
+    }
+  };
+  browser.on('disconnected', lease.onDisconnect);
+  viewportLeases.set(session.sessionId, lease);
+  touchViewportLease(session);
+  return lease;
+}
 const BROWSER_ACTIONS = new Set([
   'browser_tab_create', 'browser_tab_select', 'browser_tab_close',
   'browser_back', 'browser_forward', 'browser_reload', 'browser_present', 'browser_restore', 'browser_resize',
@@ -140,12 +240,34 @@ async function presentPage(session, page) {
   } finally { await cdp.detach().catch(() => {}); }
 }
 
-async function setPageViewport(page, viewport) {
-  const cdp = await page.context().newCDPSession(page);
+async function setPageViewport(session, page, viewport, env, signal) {
+  const lease = await viewportLease(session, env, signal);
   try {
-    if (viewport) await cdp.send('Emulation.setDeviceMetricsOverride', { ...viewport, deviceScaleFactor: 1, mobile: false });
-    else await cdp.send('Emulation.clearDeviceMetricsOverride');
-  } finally { await cdp.detach().catch(() => {}); }
+    await viewportOperation(session, lease, signal, async () => {
+      const id = await targetId(page);
+      let entry = lease.targets.get(id);
+      if (!entry) {
+        if (lease.targets.size >= MAX_VIEWPORT_TARGETS) throw browserError('browser_presentation_capacity', 503);
+        const ownedPage = await selectPage(lease.browser, id);
+        const cdp = await ownedPage.context().newCDPSession(ownedPage);
+        entry = { cdp, page: ownedPage, onClose: null };
+        entry.onClose = () => {
+          lease.targets.delete(id);
+          void cdp.detach().catch(() => {});
+        };
+        ownedPage.once('close', entry.onClose);
+        lease.targets.set(id, entry);
+      }
+      await entry.cdp.send('Emulation.setDeviceMetricsOverride', { ...viewport, deviceScaleFactor: 1, mobile: false });
+      signal?.throwIfAborted();
+      if (lease.closed) throw browserError('browser_viewport_failed', 502);
+    });
+  } catch (cause) {
+    invalidateViewport(session);
+    const error = browserError('browser_viewport_failed', 502);
+    error.cause = cause;
+    throw error;
+  }
 }
 
 async function clipViewport(session, viewport, env, signal) {
@@ -173,7 +295,7 @@ async function restorePresentation(session, browser, env, signal) {
     // Clearing Chrome metrics and resetting RFB are one presentation change.
     // A partial restore remains failed, even if Chrome alone now has its old size.
     viewportBySession.get(session.sessionId).confirmed = false;
-    for (const page of browser.contexts().flatMap(context => context.pages())) await setPageViewport(page, null);
+    await releaseViewportLease(session, true, signal);
     await clipViewport(session, null, env, signal);
     viewportBySession.delete(session.sessionId);
   }
@@ -258,8 +380,8 @@ async function navigateHistory(page, delta, signal) {
   }
 }
 
-async function readBrowserState(session, browser, selected) {
-  requireConfirmedViewport(session);
+async function readBrowserState(session, browser, selected, confirmingViewport = false) {
+  if (!confirmingViewport) requireConfirmedViewport(session);
   const pages = browser.contexts().flatMap(context => context.pages());
   const page = selected || await selectPage(browser);
   const tabs = [];
@@ -282,6 +404,12 @@ async function readBrowserState(session, browser, selected) {
       canGoForward = history.currentIndex >= 0 && history.currentIndex < history.entries.length - 1;
       viewport = document.viewport;
     } finally { await cdp.detach().catch(() => {}); }
+  }
+  const expected = viewportBySession.get(session.sessionId);
+  if (expected && (!viewport || viewport.width !== expected.size.width || viewport.height !== expected.size.height
+    || !viewportLeases.has(session.sessionId))) {
+    expected.confirmed = false;
+    throw browserError('browser_viewport_failed', 502);
   }
   return { tabs, activeTabId, canGoBack, canGoForward, viewport, presentation };
 }
@@ -336,10 +464,13 @@ async function browserAction(session, action, env = process.env, signal) {
       // Retain cleanup information before either mutation, but do not expose the
       // requested size as applied until both Chrome and the RFB server accept it.
       viewportBySession.set(session.sessionId, viewport);
-      await setPageViewport(page, viewport.size);
+      await setPageViewport(session, page, viewport.size, env, signal);
       await clipViewport(session, viewport.size, env, signal);
+      const state = await readBrowserState(session, browser, page, true);
+      signal.throwIfAborted();
       viewport.confirmed = true;
-    } else if (previousViewport) await setPageViewport(page, previousViewport.size);
+      return state;
+    } else if (previousViewport) await setPageViewport(session, page, previousViewport.size, env, signal);
     return readBrowserState(session, browser, page);
   }));
 }

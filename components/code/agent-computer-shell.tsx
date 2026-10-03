@@ -114,6 +114,7 @@ export function AgentComputerShell({
   }, [clearAnnotations])
   const [browserState, setBrowserState] = React.useState<ComputerBrowserState | null>(null)
   const [browserBusy, setBrowserBusy] = React.useState(false)
+  const [viewportGeneration, setViewportGeneration] = React.useState(0)
   const [browserError, setBrowserError] = React.useState<string | null>(null)
   const browserBusyRef = React.useRef(false)
   const browserBackgroundResize = React.useRef(false)
@@ -207,11 +208,17 @@ export function AgentComputerShell({
           const state = await readComputerBrowser(chatId, browserSessionId, controller.signal)
           if (!stopped && browserEpoch.current === epoch && browserMutation.current === mutation && !browserBusyRef.current) {
             setBrowserState(state)
-            setBrowserError((previous) => previous === "No se pudo actualizar el navegador. Inténtalo de nuevo." ? null : previous)
+            if (state.presentation === "desktop") {
+              retryBrowserAction.current = { type: "browser_present" }
+              setBrowserError("La vista del navegador necesita reconectarse. Pulsa Reintentar.")
+            } else {
+              setBrowserError((previous) => previous === "No se pudo actualizar el navegador. Inténtalo de nuevo." ? null : previous)
+            }
           }
         }
       } catch {
         if (!stopped && browserEpoch.current === epoch && browserMutation.current === mutation) {
+          retryBrowserAction.current ||= { type: "browser_present" }
           setBrowserError((previous) => previous || "No se pudo actualizar el navegador. Inténtalo de nuevo.")
         }
       } finally {
@@ -256,6 +263,9 @@ export function AgentComputerShell({
       }
       if (browserEpoch.current === epoch) {
         setBrowserState(state)
+        // Restore removes the old remote size. Measure again even if the local
+        // panel has not moved since the last successful resize.
+        if (recoverPresentation && action.type === "browser_present") setViewportGeneration((current) => current + 1)
         if (!pendingRepair || isPresentationRepair(action) || action.type === "browser_restore") {
           retryBrowserAction.current = null
           setBrowserError(null)
@@ -363,7 +373,7 @@ export function AgentComputerShell({
     observer.observe(host)
     measure()
     return () => { stopped = true; clearTimeout(timer); observer.disconnect() }
-  }, [browserVisible, hasBrowserState, browserAction])
+  }, [browserVisible, hasBrowserState, browserAction, viewportGeneration])
   const activeBrowserTab = browserState?.tabs.find((tab) => tab.id === browserState.activeTabId)
   const emptyBrowser = browserVisible && browserState && (!activeBrowserTab || /^(?:about:blank|chrome:\/\/(?:newtab|new-tab-page)\/?|)$/.test(activeBrowserTab.url))
 

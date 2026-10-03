@@ -293,19 +293,46 @@ async function main() {
     await windowCdp.detach();
     console.log('PASS real browser: target tabs -> history -> reload -> select -> close -> fullscreen -> original window restored');
     phase = 'rfb';
+    // Production requests disconnect their CDP clients. Keeping this test's
+    // original observer alive concealed viewport loss after the last detach.
+    // The actual desktop Chrome was spawned above and remains running.
+    await browser.close();
+    browser = null; context = null;
+    const withViewportPage = async operation => {
+      const observer = await chromium.connectOverCDP('http://127.0.0.1:9222', { noDefaults: true });
+      try {
+        let target;
+        for (const candidate of observer.contexts().flatMap(candidateContext => candidateContext.pages())) {
+          const cdp = await candidate.context().newCDPSession(candidate);
+          try {
+            if ((await cdp.send('Target.getTargetInfo')).targetInfo.targetId === originalTab) target = candidate;
+          } finally { await cdp.detach(); }
+          if (target) break;
+        }
+        assert.ok(target, 'the original native tab must survive independent backend requests');
+        return await operation(target);
+      } finally { await observer.close(); }
+    };
     await verifyLiveViewport({
-      page,
+      previousUrl: url,
+      withPage: withViewportPage,
+      navigate: destination => navigatePage(session, destination, env, undefined, { tabId: originalTab }),
+      state: () => browserState(session, env),
       resize: (width, height) => browserAction(session, { type: 'browser_resize', tabId: originalTab, width, height }, env),
       restore: () => browserAction(session, { type: 'browser_restore' }, env),
     });
     phase = 'password';
-    await page.locator('#secret').click();
+    browser = await chromium.connectOverCDP('http://127.0.0.1:9222', { noDefaults: true });
+    context = browser.contexts()[0];
+    const passwordPage = context.pages().find(candidate => candidate.url() === url);
+    assert.ok(passwordPage, 'viewport cleanup returns the original native tab to its fixture');
+    await passwordPage.locator('#secret').click();
     const blocked = await tools.find(t => t.name === 'computer_screenshot').execute();
     assert.ok(JSON.stringify(blocked).includes('loginHandoff'));
     assert.ok(!JSON.stringify(blocked).includes('fixture-private-do-not-echo'));
     const paused = await tools.find(t => t.name === 'computer_type').execute({ text: 'must-not-type' });
     assert.ok(JSON.stringify(paused).includes('loginHandoff'));
-    assert.equal(await page.locator('#pw').inputValue(), 'fixture-private-do-not-echo');
+    assert.equal(await passwordPage.locator('#pw').inputValue(), 'fixture-private-do-not-echo');
     console.log('PASS real browser: password gate -> private user takeover -> writes refused');
     handoff.resetTakeoverForTests();
     phase = 'cleanup';
