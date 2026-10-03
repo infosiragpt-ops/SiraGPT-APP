@@ -21,11 +21,30 @@
  *      .txt (and .srt on request) through the artifact store, announced as a
  *      `file_artifact` card like create_artifact does.
  *
+ * Ladder (2026-10-03, Luis: «tiene que entrar al video y sacar el audio sí o
+ * sí»): yt-dlp first. When yt-dlp does not know the page («Unsupported URL»,
+ * a login-looking 401/403, a generic failure), the headless Chromium of the
+ * image opens the page WITH the user's cookies (media-discovery), presses
+ * play and records the HLS/DASH/MP4 the player really fetches; that URL goes
+ * back to yt-dlp with the page as Referer and the browser's cookies, and if
+ * yt-dlp still refuses, ffmpeg reads the stream directly (HLS/MP4 + headers).
+ * A page that still shows a login form with no media is reported as
+ * `media_login_required` with the two user paths: attach the file, or attach
+ * a `cookies.txt` once (kept encrypted per user by cookie-jar-store and
+ * reused for every later link of that site).
+ *
+ * YouTube needs a JS runtime for its signature challenge: every yt-dlp call
+ * gets `--js-runtimes node:<this process's node>` (TRANSCRIBE_URL_JS_RUNTIME:
+ * node | deno | none) and, when set, TRANSCRIBE_URL_REMOTE_COMPONENTS.
+ *
  * Limits: TRANSCRIBE_URL_MAX_SECONDS (default 3 h of audio per call — ask for
  * a range beyond that), TRANSCRIBE_URL_TIMEOUT_MS (default 20 min),
- * TRANSCRIBE_URL_YTDLP (binary, default `yt-dlp`), FFMPEG_PATH.
+ * TRANSCRIBE_URL_YTDLP (binary, default `yt-dlp`), FFMPEG_PATH,
+ * TRANSCRIBE_URL_BROWSER_DISCOVERY (`0` disables the browser rung),
+ * TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS (default 30 s).
  * Fully injectable (`deps.runCommand`, `deps.transcribe`, `deps.saveArtifact`,
- * `deps.dnsCheck`, `deps.fs`) so the tests run without network or binaries.
+ * `deps.dnsCheck`, `deps.fs`, `deps.discoverMedia`, `deps.cookieJar`,
+ * `deps.loadAttachedCookies`) so the tests run without network or binaries.
  */
 
 const path = require('node:path');
@@ -35,12 +54,17 @@ const { spawn } = require('node:child_process');
 const { z } = require('zod');
 const { assertSafeUrl } = require('./web-fetch-tool');
 const { buildUntrustedChildEnv } = require('../../../utils/untrusted-child-env');
+const mediaDiscovery = require('./media-discovery');
+const cookieJar = require('./cookie-jar-store');
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_SECONDS = 3 * 60 * 60;
 const MAX_TEXT_CHARS = 60_000;
 const MAX_COMMAND_OUTPUT = 2 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 60_000;
+const DISCOVERY_TIMEOUT_MS = 30_000;
+/** yt-dlp verdicts that mean «the page is not a platform yt-dlp knows» — worth a look with the browser. */
+const DISCOVERY_ELIGIBLE = new Set(['media_unsupported_url', 'media_download_failed', 'media_login_required', 'media_not_found']);
 
 class TranscribeUrlError extends Error {
   constructor(code, message, extra = {}) {
@@ -132,8 +156,8 @@ function classifyDownloadFailure(stderr, err) {
 }
 
 const USER_MESSAGES = Object.freeze({
-  media_login_required: 'El enlace pide iniciar sesión (cuenta institucional, video privado o contenido con acceso restringido), así que no puedo descargar el audio desde aquí. Opciones: descarga el audio o la grabación desde la plataforma y adjúntalo en el chat, o abre la grabación en la computadora de este chat con tu sesión iniciada y avísame.',
-  media_unsupported_url: 'Ese enlace no apunta a un video o audio que pueda descargar (no es una página de medios ni un archivo de audio/video). Pásame el enlace directo del video o adjunta el archivo.',
+  media_login_required: 'El enlace pide iniciar sesión (cuenta institucional, video privado o acceso restringido), así que sin tu sesión no puedo sacar el audio desde aquí. Dos caminos: (1) descarga el video o audio desde la plataforma y adjúntalo en el chat; (2) adjunta UNA sola vez tu archivo cookies.txt de ese sitio (expórtalo con la extensión «Get cookies.txt LOCALLY» en Chrome/Edge con la sesión abierta) y lo guardaré cifrado para que los próximos enlaces de esa plataforma se transcriban solos.',
+  media_unsupported_url: 'Abrí el enlace con el navegador y no encontré ningún video o audio reproducible en esa página. Pásame el enlace directo del video, o adjunta el archivo; si la página pide iniciar sesión, adjunta tu cookies.txt de ese sitio una vez.',
   media_not_found: 'El enlace no existe o el contenido fue retirado (404). Revisa el enlace.',
   media_rate_limited: 'La plataforma del enlace limitó las descargas por ahora. Intenta en unos minutos o adjunta el archivo.',
   media_too_long: 'El contenido supera el máximo por llamada. Dime el rango que necesitas (de tal minuto a tal minuto) y lo transcribo por partes.',
@@ -145,6 +169,12 @@ const USER_MESSAGES = Object.freeze({
   invalid_range: 'El rango no es válido: el inicio debe ser menor que el fin y estar dentro de la duración del contenido.',
   invalid_url: 'El enlace no es una URL http(s) pública válida.',
 });
+
+/** Last non-empty line of a process' stderr — the actionable one. */
+function lastLine(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.length ? lines[lines.length - 1] : '';
+}
 
 function errorResult(code, detail, extra = {}) {
   return {
@@ -187,17 +217,51 @@ function buildSrt(segments, { offset = 0 } = {}) {
   return segments.map((seg, i) => `${i + 1}\n${fmtSrtTime(Number(seg.start) + offset)} --> ${fmtSrtTime(Number(seg.end) + offset)}\n${String(seg.text || '').trim()}\n`).join('\n');
 }
 
+/** Netscape cookie jar of THIS turn's attachments (ownership re-checked), or null. */
+async function loadAttachedCookies(ctx = {}, deps = {}) {
+  const prisma = ctx.prisma || null;
+  const ids = (Array.isArray(ctx.fileIds) ? ctx.fileIds : []).map(String).filter(Boolean);
+  if (!prisma || !ctx.userId || !ids.length) return null;
+  let rows = [];
+  try { rows = await prisma.file.findMany({ where: { id: { in: ids }, userId: ctx.userId } }); } catch (_) { return null; }
+  const fsImpl = deps.fs || fs;
+  for (const row of rows) {
+    const name = String(row.originalName || row.filename || '').toLowerCase();
+    const mime = String(row.mimeType || '').toLowerCase();
+    const size = Number(row.size) || 0;
+    const plausible = /\.txt$/.test(name) || /cookie/.test(name) || mime.startsWith('text/');
+    if (!plausible || size > cookieJar.MAX_JAR_BYTES || !row.path) continue;
+    let text = null;
+    try {
+      const objectStorage = deps.objectStorage || require('../../object-storage');
+      if (objectStorage.isRemote(row.path)) {
+        const local = await objectStorage.toLocalTemp(row.path);
+        try { text = await fsImpl.promises.readFile(local.path, 'utf8'); } finally { await local.cleanup(); }
+      } else {
+        text = await fsImpl.promises.readFile(row.path, 'utf8');
+      }
+    } catch (_) { text = null; }
+    if (text && cookieJar.isNetscapeCookieText(text)) return { text, filename: row.originalName || row.filename || 'cookies.txt', fileId: row.id };
+  }
+  return null;
+}
+
 async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const env = deps.env || process.env;
   const run = deps.runCommand || runCommand;
   const transcribeImpl = deps.transcribe || ((...a) => require('../../audio-transcriber').transcribe(...a));
   const saveArtifactImpl = deps.saveArtifact || ((...a) => require('../../agents/task-tools').saveArtifact(...a));
   const dnsCheck = deps.dnsCheck || (async (hostname) => require('../../connectors/web-fetch').resolveAndAssertSafe(hostname));
+  const discoverImpl = deps.discoverMedia || mediaDiscovery.discoverMedia;
+  const jar = deps.cookieJar || { save: (userId, text) => cookieJar.saveUserCookies(userId, text, { env }), load: (userId) => cookieJar.loadUserCookies(userId, { env }) };
+  const loadAttached = deps.loadAttachedCookies || loadAttachedCookies;
   const fsImpl = deps.fs || fs;
   const ytdlp = env.TRANSCRIBE_URL_YTDLP || 'yt-dlp';
   const ffmpeg = env.FFMPEG_PATH || 'ffmpeg';
   const timeoutMs = Number(env.TRANSCRIBE_URL_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
   const maxSeconds = Number(env.TRANSCRIBE_URL_MAX_SECONDS) > 0 ? Number(env.TRANSCRIBE_URL_MAX_SECONDS) : DEFAULT_MAX_SECONDS;
+  const discoveryEnabled = String(env.TRANSCRIBE_URL_BROWSER_DISCOVERY || '1') !== '0';
+  const discoveryTimeoutMs = Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) : DISCOVERY_TIMEOUT_MS;
   const signal = ctx.signal || null;
   const startedAt = Date.now();
 
@@ -222,18 +286,107 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const workDir = await fsImpl.promises.mkdtemp(path.join(deps.tmpDir || os.tmpdir(), 'sira-transcribe-'));
   const cleanup = async () => { try { await fsImpl.promises.rm(workDir, { recursive: true, force: true }); } catch (_) { /* best-effort */ } };
   try {
-    // 2. Probe
-    let info = null;
+    // Session: a cookies.txt attached in this turn (saved for next time) or the
+    // user's saved jar. Only hosts/counts are ever reported, never values.
+    let cookiesText = null;
+    let cookiesInfo = null;
+    let cookiesPath = null;
     try {
-      const probe = await run(ytdlp, ['--dump-single-json', '--no-playlist', '--no-warnings', '--skip-download', '--', url.href], { signal, timeoutMs: Math.min(timeoutMs, PROBE_TIMEOUT_MS), cwd: workDir });
-      if (probe.code !== 0) return errorResult(classifyDownloadFailure(probe.stderr), probe.stderr.trim().split('\n').pop());
-      try { info = JSON.parse(probe.stdout); } catch (_) { info = null; }
-    } catch (err) {
-      if (err && err.name === 'AbortError') throw err;
-      return errorResult(classifyDownloadFailure('', err), err && err.message);
+      const attached = await loadAttached(ctx, deps);
+      if (attached && attached.text) {
+        cookiesText = attached.text;
+        cookiesInfo = { source: 'attachment', hosts: cookieJar.cookieHosts(attached.text) };
+        if (ctx.userId) {
+          try { const saved = await jar.save(ctx.userId, attached.text); cookiesInfo.saved = true; cookiesInfo.hosts = saved.hosts; } catch (err) { cookiesInfo.saved = false; cookiesInfo.saveError = String((err && err.message) || err).slice(0, 120); }
+        }
+      } else if (ctx.userId) {
+        const stored = await jar.load(ctx.userId);
+        if (stored) { cookiesText = stored; cookiesInfo = { source: 'saved', hosts: cookieJar.cookieHosts(stored) }; }
+      }
+    } catch (_) { cookiesText = null; }
+    const writeCookies = async () => {
+      if (!cookiesText) return;
+      cookiesPath = path.join(workDir, 'cookies.txt');
+      await fsImpl.promises.writeFile(cookiesPath, cookiesText, { mode: 0o600 });
+    };
+    await writeCookies();
+
+    const ytBase = () => {
+      const base = ['--no-playlist', '--no-warnings'];
+      const jsRuntime = String(env.TRANSCRIBE_URL_JS_RUNTIME || 'node').toLowerCase();
+      if (jsRuntime === 'node') base.push('--no-js-runtimes', '--js-runtimes', `node:${process.execPath}`);
+      else if (jsRuntime !== 'none' && jsRuntime !== 'deno') base.push('--js-runtimes', jsRuntime);
+      if (env.TRANSCRIBE_URL_REMOTE_COMPONENTS) base.push('--remote-components', String(env.TRANSCRIBE_URL_REMOTE_COMPONENTS));
+      // yt-dlp needs ffmpeg for --download-sections and HLS; point it at the
+      // same binary we use (it only honours a binary actually named ffmpeg).
+      if (path.isAbsolute(ffmpeg) && /^ffmpeg(\.exe)?$/i.test(path.basename(ffmpeg))) base.push('--ffmpeg-location', path.dirname(ffmpeg));
+      if (cookiesPath) base.push('--cookies', cookiesPath);
+      return base;
+    };
+    const headerArgs = (t) => (t.referer ? ['--referer', t.referer, '--add-headers', `User-Agent:${t.userAgent || mediaDiscovery.DESKTOP_UA}`] : []);
+
+    const probeWith = async (t) => {
+      try {
+        const probe = await run(ytdlp, [...ytBase(), ...headerArgs(t), '--dump-single-json', '--skip-download', '--', t.href], { signal, timeoutMs: Math.min(timeoutMs, PROBE_TIMEOUT_MS), cwd: workDir });
+        if (probe.code !== 0) return { ok: false, code: classifyDownloadFailure(probe.stderr), detail: lastLine(probe.stderr) };
+        let info = null;
+        try { info = JSON.parse(probe.stdout); } catch (_) { info = null; }
+        return { ok: true, info };
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        return { ok: false, code: classifyDownloadFailure('', err), detail: err && err.message };
+      }
+    };
+
+    // 2. Probe — yt-dlp first; the browser when yt-dlp does not know the page.
+    let target = { href: url.href, referer: null, userAgent: null, via: 'yt-dlp', direct: false, titleHint: null };
+    let probe = await probeWith(target);
+    let discovery = null;
+    if (!probe.ok && discoveryEnabled && DISCOVERY_ELIGIBLE.has(probe.code)) {
+      const browserCookies = cookiesText ? mediaDiscovery.parseNetscapeCookies(cookiesText) : [];
+      let disc;
+      try {
+        disc = await discoverImpl(url.href, { cookies: browserCookies, timeoutMs: Math.min(discoveryTimeoutMs, timeoutMs), dnsCheck, env, signal });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        disc = { ok: false, reason: 'discovery_failed', detail: String((err && err.message) || err).slice(0, 200) };
+      }
+      discovery = {
+        reason: disc.reason || null,
+        candidates: Array.isArray(disc.candidates) ? disc.candidates.length : 0,
+        loginWall: Boolean(disc.loginWall),
+        elapsedMs: disc.elapsedMs || null,
+        ...(disc.detail ? { detail: disc.detail } : {}),
+      };
+      let candidate = null;
+      for (const c of Array.isArray(disc.candidates) ? disc.candidates : []) {
+        try { assertSafeUrl(c.url); await dnsCheck(new URL(c.url).hostname); candidate = c; break; } catch (_) { /* skip unsafe */ }
+      }
+      if (candidate) {
+        if (disc.cookiesNetscape) { cookiesText = cookieJar.mergeNetscapeCookies(cookiesText, disc.cookiesNetscape); await writeCookies(); }
+        target = { href: candidate.url, referer: url.href, userAgent: disc.userAgent || mediaDiscovery.DESKTOP_UA, via: 'browser+yt-dlp', direct: false, titleHint: disc.title || null, kind: candidate.kind };
+        discovery.picked = { kind: candidate.kind, host: (() => { try { return new URL(candidate.url).hostname; } catch (_) { return null; } })() };
+        probe = await probeWith(target);
+        if (!probe.ok) {
+          // yt-dlp refused the stream itself — ffmpeg reads HLS/DASH/MP4 directly.
+          discovery.ytdlpOnCandidate = probe.code;
+          target.via = 'browser+ffmpeg';
+          target.direct = true;
+          probe = { ok: true, info: { title: disc.title || null, duration: null } };
+        }
+      } else if (disc.loginWall) {
+        return errorResult('media_login_required', disc.detail || 'login wall after browser discovery', { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) });
+      } else {
+        return errorResult(probe.code === 'media_download_failed' && disc.reason === 'no_media_found' ? 'media_unsupported_url' : probe.code, probe.detail, { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) });
+      }
+    } else if (!probe.ok) {
+      return errorResult(probe.code, probe.detail, cookiesInfo ? { cookies: cookiesInfo } : {});
     }
-    const duration = info && Number.isFinite(Number(info.duration)) ? Number(info.duration) : null;
-    const title = (info && (info.title || info.fulltitle)) || url.hostname;
+
+    const info = probe.info;
+    // null/undefined duration = unknown (a discovered live stream); 0 is unknown too.
+    const duration = info && info.duration != null && Number.isFinite(Number(info.duration)) && Number(info.duration) > 0 ? Number(info.duration) : null;
+    const title = (info && (info.title || info.fulltitle)) || target.titleHint || url.hostname;
     const rangeStart = start != null ? start : 0;
     let rangeEnd = end != null ? end : duration;
     if (duration != null && rangeStart >= duration) return errorResult('invalid_range', `start ${fmtClock(rangeStart)} beyond duration ${fmtClock(duration)}`, { durationSeconds: duration });
@@ -248,38 +401,78 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     }
 
     // 3. Download the section as audio, then trim precisely.
-    const rawTemplate = path.join(workDir, 'source.%(ext)s');
-    const dlArgs = ['--no-playlist', '--no-warnings', '--no-progress', '--quiet', '-f', 'bestaudio/best', '-o', rawTemplate];
-    const sectioned = start != null || end != null;
-    if (sectioned && rangeEnd != null) dlArgs.push('--download-sections', `*${rangeStart}-${rangeEnd}`, '--force-keyframes-at-cuts');
-    dlArgs.push('--', url.href);
-    try {
-      const dl = await run(ytdlp, dlArgs, { signal, timeoutMs, cwd: workDir });
-      if (dl.code !== 0) return errorResult(classifyDownloadFailure(dl.stderr), dl.stderr.trim().split('\n').pop(), { title });
-    } catch (err) {
-      if (err && err.name === 'AbortError') throw err;
-      return errorResult(classifyDownloadFailure('', err), err && err.message, { title });
-    }
-    const files = (await fsImpl.promises.readdir(workDir)).filter((f) => f.startsWith('source.'));
-    if (!files.length) return errorResult('media_download_failed', 'yt-dlp produced no file', { title });
-    const sourcePath = path.join(workDir, files[0]);
     const clipPath = path.join(workDir, 'clip.m4a');
-    // With --download-sections the file already starts at rangeStart: trim
-    // relative to the clip; without it, trim absolute times.
-    const ffArgs = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', sourcePath];
-    if (!sectioned && (start != null || end != null)) {
-      if (start != null) ffArgs.push('-ss', String(rangeStart));
-      if (rangeEnd != null) ffArgs.push('-to', String(rangeEnd));
-    } else if (sectioned && span != null) {
-      ffArgs.push('-t', String(span));
-    }
-    ffArgs.push('-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', clipPath);
-    try {
-      const ff = await run(ffmpeg, ffArgs, { signal, timeoutMs, cwd: workDir });
-      if (ff.code !== 0) return errorResult('ffmpeg_failed', ff.stderr.trim().split('\n').pop(), { title });
-    } catch (err) {
-      if (err && err.name === 'AbortError') throw err;
-      return errorResult(err && err.code === 'ENOENT' ? 'ffmpeg_failed' : 'ffmpeg_failed', err && err.message, { title });
+    const sectioned = start != null || end != null;
+    if (target.direct) {
+      // ffmpeg straight from the discovered stream, with the page's headers and
+      // the session cookies that apply to that host. One pass: seek + encode.
+      const headers = [`Referer: ${target.referer}`, `User-Agent: ${target.userAgent}`];
+      const hostCookies = mediaDiscovery.cookiesForHost(cookiesText ? mediaDiscovery.parseNetscapeCookies(cookiesText) : [], new URL(target.href).hostname);
+      if (hostCookies.length) headers.push(`Cookie: ${hostCookies.map((c) => `${c.name}=${c.value}`).join('; ')}`);
+      const ffArgs = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-headers', `${headers.join('\r\n')}\r\n`];
+      if (rangeStart > 0) ffArgs.push('-ss', String(rangeStart));
+      ffArgs.push('-i', target.href);
+      const limit = rangeEnd != null ? rangeEnd - rangeStart : maxSeconds;
+      ffArgs.push('-t', String(limit), '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', clipPath);
+      try {
+        const ff = await run(ffmpeg, ffArgs, { signal, timeoutMs, cwd: workDir });
+        if (ff.code !== 0) return errorResult('media_download_failed', lastLine(ff.stderr), { title, discovery });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        return errorResult(err && err.code === 'ENOENT' ? 'ffmpeg_failed' : 'media_download_failed', err && err.message, { title, discovery });
+      }
+    } else {
+      const rawTemplate = path.join(workDir, 'source.%(ext)s');
+      // `--fixup never`: we re-encode right after, so yt-dlp's own ffmpeg
+      // remux pass (FixupM3u8 etc.) is wasted work and one more way to fail.
+      const dlArgs = [...ytBase(), ...headerArgs(target), '--no-progress', '--quiet', '--fixup', 'never', '-f', 'bestaudio/best', '-o', rawTemplate];
+      if (sectioned && rangeEnd != null) dlArgs.push('--download-sections', `*${rangeStart}-${rangeEnd}`, '--force-keyframes-at-cuts');
+      dlArgs.push('--', target.href);
+      const sourceFiles = async () => (await fsImpl.promises.readdir(workDir)).filter((f) => f.startsWith('source.') && !/\.(part|ytdl)$/i.test(f));
+      // Did yt-dlp cut the section itself (ffmpeg reading the stream) or did we
+      // get the whole recording and must trim locally?
+      let cutBySections = sectioned && rangeEnd != null;
+      try {
+        let dl = await run(ytdlp, dlArgs, { signal, timeoutMs, cwd: workDir });
+        if (dl.code !== 0 && !(await sourceFiles()).length && cutBySections) {
+          // The sectioned download needs ffmpeg to read the stream over the
+          // network (HLS + -ss); when that path fails (headers the demuxer
+          // drops, a CDN that refuses byte ranges…) fetch the whole recording
+          // with yt-dlp's own downloader and trim locally. Bounded by the
+          // per-call cap on the DURATION, so a 2 h class still fits.
+          const sectionedError = lastLine(dl.stderr) || 'sectioned download failed';
+          const whole = dlArgs.filter((a, i, all) => !(a === '--download-sections' || a === '--force-keyframes-at-cuts' || all[i - 1] === '--download-sections'));
+          const retry = await run(ytdlp, whole, { signal, timeoutMs, cwd: workDir });
+          dl = retry;
+          if (retry.code === 0 || (await sourceFiles()).length) { cutBySections = false; discovery = { ...(discovery || {}), fullDownloadFallback: sectionedError }; }
+        }
+        // A non-zero exit AFTER the media landed (a post-processing hiccup) is
+        // not a download failure: the file is what we need.
+        if (dl.code !== 0 && !(await sourceFiles()).length) return errorResult(classifyDownloadFailure(dl.stderr), lastLine(dl.stderr), { title, ...(discovery ? { discovery } : {}) });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        return errorResult(classifyDownloadFailure('', err), err && err.message, { title, ...(discovery ? { discovery } : {}) });
+      }
+      const files = await sourceFiles();
+      if (!files.length) return errorResult('media_download_failed', 'yt-dlp produced no file', { title });
+      const sourcePath = path.join(workDir, files[0]);
+      // With --download-sections the file already starts at rangeStart: trim
+      // relative to the clip; otherwise trim absolute times.
+      const ffArgs = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', sourcePath];
+      if (!cutBySections && (start != null || end != null)) {
+        if (start != null) ffArgs.push('-ss', String(rangeStart));
+        if (rangeEnd != null) ffArgs.push('-to', String(rangeEnd));
+      } else if (cutBySections && span != null) {
+        ffArgs.push('-t', String(span));
+      }
+      ffArgs.push('-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', clipPath);
+      try {
+        const ff = await run(ffmpeg, ffArgs, { signal, timeoutMs, cwd: workDir });
+        if (ff.code !== 0) return errorResult('ffmpeg_failed', lastLine(ff.stderr), { title });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        return errorResult('ffmpeg_failed', err && err.message, { title });
+      }
     }
 
     // 4. Transcribe
@@ -354,6 +547,9 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       truncated,
       artifact,
       ...(srtArtifact ? { srtArtifact } : {}),
+      via: target.via,
+      ...(discovery ? { discovery } : {}),
+      ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
       elapsedMs: Date.now() - startedAt,
     };
   } finally {
@@ -376,7 +572,8 @@ function buildTranscribeUrlTool(deps = {}) {
       'Transcribe the audio of a video / audio / class recording given its LINK, whole or only from one timecode to another ("del minuto 1:30 al 10:00").',
       'WHEN TO USE: the user pastes a URL of a video, podcast, lecture, meeting or audio and asks for a transcription, subtitles, a summary of what is said, or what is said at a given minute. Pass start/end exactly as the user asked (convert "minuto 1.5" to "1:30").',
       'WHEN NOT TO USE: the user attached the audio file itself (the attachment is already transcribed); a web page with text (use web_fetch).',
-      'Results are structured: ok:false with code "media_login_required" means the link needs the user\'s own session (offer: attach the audio, or open it on the chat computer logged in); "media_too_long" means ask for a range. Never retry the same URL more than once per failure.',
+      'It handles platform links (yt-dlp) AND player pages (a headless browser opens the page with the user\'s saved cookies, presses play and grabs the real stream). If the user attached a cookies.txt in this turn it is used and saved for later links of that site.',
+      'Results are structured: ok:false with code "media_login_required" means the link needs the user\'s own session — relay userMessage: attach the video/audio file, or attach a cookies.txt of that site once; "media_too_long" means ask for a range. `cookies.saved:true` means the session was stored: say so. Never retry the same URL more than once per failure.',
     ].join(' '),
     inputSchema,
     permissionTier: 'auto',
@@ -394,6 +591,8 @@ function buildTranscribeUrlTool(deps = {}) {
 module.exports = {
   buildTranscribeUrlTool,
   executeTranscribeUrl,
+  loadAttachedCookies,
+  DISCOVERY_ELIGIBLE,
   parseTimecode,
   fmtClock,
   fmtSrtTime,
