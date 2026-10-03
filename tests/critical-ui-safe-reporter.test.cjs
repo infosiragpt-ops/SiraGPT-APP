@@ -124,9 +124,13 @@ test('getters, inherited metadata and throwing proxies fail closed without evalu
   assert.equal(failureAnnotation(Object.create(caseInput()), Object.create(resultInput())), '::error title=Critical UI case failed::spec=unknown; status=unknown\n');
 });
 
-test('phase diagnostics emit only the sixteen fixed phase constants', () => {
+test('phase diagnostics emit only the fixed phase constants', () => {
   const phases = ['home_open', 'home_empty', 'home_create_tab', 'home_focus', 'home_focus_style',
     'home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline',
+    'home_focus_inactive', 'home_focus_token_missing', 'home_focus_rule_missing', 'home_focus_rule_unreadable',
+    'home_focus_color_unparsed', 'home_focus_neutral', 'home_focus_color_notblue', 'home_focus_border_zero',
+    'keyboard_tab_focus', 'keyboard_tab_focus_lost', 'keyboard_tab_indicator_missing',
+    'keyboard_close_focus', 'keyboard_close_focus_lost', 'keyboard_close_indicator_missing', 'keyboard_focus_style',
     'home_navigate', 'home_viewport', 'home_no_chat', 'home_same_session', 'home_url_owner',
     'home_storage_owner', 'fixture_requests', 'frontend_exceptions'];
   for (const phase of phases) {
@@ -146,7 +150,7 @@ test('phase diagnostics emit only the sixteen fixed phase constants', () => {
 
 test('arbitrary phase values, annotation types and object coercions never reach output', () => {
   const expected = failureAnnotation(caseInput(), resultInput());
-  for (const payload of [...sensitive, 'HOME_OPEN', 'home_open\n', 'home_open,phase=home_empty', 'home_focus_dark_border=rgb(39, 39, 42)', 'home_focus_outline:solid', 'x'.repeat(100_000),
+  for (const payload of [...sensitive, 'HOME_OPEN', 'home_open\n', 'home_open,phase=home_empty', 'home_focus_dark_border=rgb(39, 39, 42)', 'home_focus_outline:solid', 'home_focus_neutral=rgb(39,39,42)', 'keyboard_tab_indicator_missing:none', 'home_focus_rule_missing\n', 'x'.repeat(100_000),
     null, undefined, 1, { toString() { throw new Error(secretMarker); } }]) {
     const annotations = [{ type: 'sira_safe_ui_phase', description: payload }, { type: payload, description: 'home_open' }];
     const output = failureAnnotation({ ...caseInput(), annotations }, resultInput());
@@ -259,8 +263,13 @@ test('real Playwright omits arbitrary phase content instead of echoing or coerci
   assertClosed(result.stdout);
 });
 
-test('real Playwright focus-style diagnostics are limited to the closed border and outline phases', () => {
-  const phases = ['home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline'];
+test('real Playwright focus-style diagnostics are limited to closed causes', () => {
+  const phases = ['home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline',
+  'home_focus_inactive', 'home_focus_token_missing', 'home_focus_rule_missing', 'home_focus_rule_unreadable',
+  'home_focus_color_unparsed', 'home_focus_neutral', 'home_focus_color_notblue', 'home_focus_border_zero',
+  'keyboard_tab_focus', 'keyboard_tab_focus_lost', 'keyboard_tab_indicator_missing',
+  'keyboard_close_focus', 'keyboard_close_focus_lost', 'keyboard_close_indicator_missing', 'keyboard_focus_style',
+  ];
   const source = 'const {test}=require(' + JSON.stringify(require.resolve('@playwright/test')) + ');\n'
     + phases.map((phase) => 'test(' + JSON.stringify(secretMarker + phase) + ',()=>{test.info().annotations.push({type:"sira_safe_ui_phase",description:' + JSON.stringify(phase) + '});throw new Error(' + JSON.stringify(sensitive.join(' | ')) + ')});').join('\n') + '\n';
   const result = runPlaywright(source);

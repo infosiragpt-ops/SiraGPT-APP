@@ -268,6 +268,10 @@ async function assertViewportMatchesHost(page: Page, fixture: BrowserFixture) {
 type SafeUiPhase =
   | "home_open" | "home_empty" | "home_create_tab" | "home_focus" | "home_focus_style"
   | "home_focus_dark_border" | "home_focus_light_border" | "home_focus_outline"
+  | "home_focus_inactive" | "home_focus_token_missing" | "home_focus_rule_missing" | "home_focus_rule_unreadable"
+  | "home_focus_color_unparsed" | "home_focus_neutral" | "home_focus_color_notblue" | "home_focus_border_zero"
+  | "keyboard_tab_focus" | "keyboard_tab_focus_lost" | "keyboard_tab_indicator_missing"
+  | "keyboard_close_focus" | "keyboard_close_focus_lost" | "keyboard_close_indicator_missing" | "keyboard_focus_style"
   | "home_navigate" | "home_viewport" | "home_no_chat" | "home_same_session"
   | "home_url_owner" | "home_storage_owner" | "fixture_requests" | "frontend_exceptions"
 
@@ -285,18 +289,59 @@ async function assertFocusedAddressStyle(page: Page) {
     const state = await address(page).evaluate((element) => {
       const style = getComputedStyle(element)
       const channels = style.borderTopColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+      let focusRule = false
+      let rulesReadable = true
+      // Inspect only whether the owned focus declaration exists. CSS text and
+      // custom-property values never leave this browser evaluation.
+      const inspectRules = (rules: CSSRuleList) => {
+        for (const rule of Array.from(rules)) {
+          if (rule instanceof CSSStyleRule
+            && rule.selectorText.split(",").some((selector) => selector.trim() === "input.sira-browser-address:focus")
+            && rule.style.getPropertyValue("border-color")) focusRule = true
+          if ("cssRules" in rule) inspectRules((rule as CSSGroupingRule).cssRules)
+        }
+      }
+      for (const sheet of Array.from(document.styleSheets)) {
+        try { inspectRules(sheet.cssRules) } catch { rulesReadable = false }
+      }
       return {
         blueBorder: !!channels && Number(channels[1]) < 60 && Number(channels[2]) > 100
           && Number(channels[3]) > 150 && parseFloat(style.borderTopWidth) > 0,
         noOutline: style.outlineStyle === "none",
-        dark: document.documentElement.classList.contains("dark"),
+        active: document.activeElement === element,
+        tokenPresent: style.getPropertyValue("--celeste").trim().length > 0,
+        focusRule,
+        rulesReadable,
+        colorParsed: !!channels,
+        neutralColor: !!channels && channels[1] === channels[2] && channels[2] === channels[3],
+        positiveBorder: parseFloat(style.borderTopWidth) > 0,
       }
     })
     safeUiPhase(!state.blueBorder
-      ? (state.dark ? "home_focus_dark_border" : "home_focus_light_border")
+      ? (!state.active ? "home_focus_inactive"
+        : !state.tokenPresent ? "home_focus_token_missing"
+        : !state.focusRule ? (state.rulesReadable ? "home_focus_rule_missing" : "home_focus_rule_unreadable")
+        : !state.colorParsed ? "home_focus_color_unparsed"
+        : !state.positiveBorder ? "home_focus_border_zero"
+        : state.neutralColor ? "home_focus_neutral" : "home_focus_color_notblue")
       : (!state.noOutline ? "home_focus_outline" : "home_focus_style"))
     return { blueBorder: state.blueBorder, outline: state.noOutline ? "none" : "present" }
   }, { message: "The focused omnibox must render a blue border without the browser's second outline" }).toEqual({ blueBorder: true, outline: "none" })
+}
+
+async function assertKeyboardFocusIndicator(control: Locator, kind: "tab" | "close") {
+  await expect.poll(async () => {
+    const state = await control.evaluate((element) => ({
+      active: document.activeElement === element,
+      hasIndicator: getComputedStyle(element).boxShadow !== "none",
+    }))
+    safeUiPhase(!state.active
+      ? (kind === "tab" ? "keyboard_tab_focus_lost" : "keyboard_close_focus_lost")
+      : !state.hasIndicator
+        ? (kind === "tab" ? "keyboard_tab_indicator_missing" : "keyboard_close_indicator_missing")
+        : "keyboard_focus_style")
+    return state.hasIndicator
+  }).toBe(true)
 }
 
 test.beforeEach(() => {
@@ -467,15 +512,17 @@ test("keyboard tab navigation moves selection and focus together", async ({ page
   await first.focus()
   await first.press("ArrowRight")
   await expect(second).toHaveAttribute("aria-selected", "true")
+  safeUiPhase("keyboard_tab_focus")
   await expect(second).toBeFocused()
-  await expect.poll(() => second.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none")
+  await assertKeyboardFocusIndicator(second, "tab")
   await second.press("Home")
   await expect(first).toHaveAttribute("aria-selected", "true")
   await expect(first).toBeFocused()
   await first.press("Tab")
   const close = button(page, "Cerrar pestaña Página A")
+  safeUiPhase("keyboard_close_focus")
   await expect(close).toBeFocused()
-  await expect.poll(() => close.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none")
+  await assertKeyboardFocusIndicator(close, "close")
   await expect(address(page)).toHaveValue(siteA)
 })
 

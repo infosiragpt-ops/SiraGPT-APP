@@ -21,6 +21,10 @@ const RESULT_STATES = Object.freeze(['passed', 'failed', 'timedOut', 'skipped', 
 const SAFE_PHASES = Object.freeze([
   'home_open', 'home_empty', 'home_create_tab', 'home_focus', 'home_focus_style',
   'home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline',
+  'home_focus_inactive', 'home_focus_token_missing', 'home_focus_rule_missing', 'home_focus_rule_unreadable',
+  'home_focus_color_unparsed', 'home_focus_neutral', 'home_focus_color_notblue', 'home_focus_border_zero',
+  'keyboard_tab_focus', 'keyboard_tab_focus_lost', 'keyboard_tab_indicator_missing',
+  'keyboard_close_focus', 'keyboard_close_focus_lost', 'keyboard_close_indicator_missing', 'keyboard_focus_style',
   'home_navigate', 'home_viewport', 'home_no_chat', 'home_same_session',
   'home_url_owner', 'home_storage_owner', 'fixture_requests', 'frontend_exceptions',
 ]);
