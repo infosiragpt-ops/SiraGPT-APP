@@ -7,8 +7,9 @@
 // because the File model has neither `source` nor `metadata` columns. Right
 // behind it, documentIntelligence.analyzeFile was called as (fileRecord,
 // content) instead of (prisma, { userId, fileId, fileRecord }) and would have
-// thrown next. This test drives ingestPastedContent against a Prisma double
-// that only accepts the columns declared in schema.prisma.
+// thrown next. #990 moved the provenance to DocumentAnalysis.metadata; this
+// test pins the contract by driving ingestPastedContent against a Prisma
+// double that only accepts the columns declared in schema.prisma.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -53,6 +54,13 @@ function loadBridgeWithDoubles() {
         return [];
       },
     },
+    documentAnalysis: {
+      async update({ data }) {
+        calls.analysisUpdate = calls.analysisUpdate || [];
+        calls.analysisUpdate.push(data);
+        return { fileId: 'file_1', ...data };
+      },
+    },
   };
   const analyzeCalls = [];
   const doubles = {
@@ -64,7 +72,7 @@ function loadBridgeWithDoubles() {
         assert.equal(opts.fileId, 'file_1');
         assert.equal(opts.userId, 'user_1');
         assert.ok(opts.fileRecord && opts.fileRecord.extractedText, 'fileRecord carries the pasted text');
-        return { status: 'ready', language: 'es', chunkCount: 3, tableCount: 0 };
+        return { status: 'ready', language: 'es', chunkCount: 3, tableCount: 0, metadata: { originalName: 'x' } };
       },
     },
     './document-intent-analyzer': { async analyzeSingleDocument() { return { intent: 'reference' }; } },
@@ -98,12 +106,15 @@ test('ingestPastedContent only writes File columns that exist in schema.prisma',
   const result = await bridge.ingestPastedContent('user_1', PASTE);
   assert.equal(result.autoFiled, true, `expected autoFiled, got ${JSON.stringify(result)}`);
   assert.equal(calls.create.length, 1);
-  assert.equal(calls.create[0].path.startsWith(bridge.AUTO_FILE_PATH_PREFIX), true);
+  assert.equal(calls.create[0].path.startsWith('auto/'), true);
   assert.equal('source' in calls.create[0], false);
   assert.equal('metadata' in calls.create[0], false);
-  assert.ok(calls.update.length >= 1, 'extracted text persisted');
   assert.equal(analyzeCalls.length, 1);
-  assert.deepEqual(result.analysis, { language: 'es', chunkCount: 3, tableCount: 0, status: 'ready' });
+  // Provenance lives on DocumentAnalysis.metadata (it has a Json column), not on File.
+  assert.equal(calls.analysisUpdate.length, 1);
+  assert.equal(calls.analysisUpdate[0].metadata.source, 'paste');
+  assert.equal(calls.analysisUpdate[0].metadata.lineCount, PASTE.split('\n').length);
+  assert.deepEqual(result.analysis, { language: 'es', chunkCount: 3, tableCount: 0 });
   assert.equal(result.lineCount, PASTE.split('\n').length);
 });
 
@@ -115,9 +126,8 @@ test('getAutoFilesForChat filters by the auto/ path namespace, not a source colu
   assert.equal(calls.findMany[0].where.deletedAt, null);
 });
 
-test('auto-file-bridge source never passes source/metadata to prisma.file', () => {
+test('auto-file-bridge calls analyzeFile with the prisma-first signature', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'auto-file-bridge.js'), 'utf8');
-  assert.doesNotMatch(src, /^\s*source:\s*'paste'/m);
-  assert.doesNotMatch(src, /^\s*metadata:\s*\{/m);
   assert.match(src, /documentIntelligence\.analyzeFile\(prisma,\s*\{/);
+  assert.doesNotMatch(src, /analyzeFile\(fileRecord/);
 });

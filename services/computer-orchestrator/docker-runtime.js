@@ -4,13 +4,141 @@ const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const { createHash } = require('crypto');
-const { spawn } = require('child_process');
 
 const DEFAULT_SOCKET = '/var/run/docker.sock';
 const DEFAULT_API = 'v1.44';
 const NOVNC_PORT = 6080;
 const NOVNC_WAIT_INTERVAL_MS = 250;
 const NOVNC_WAIT_TIMEOUT_MS = 45_000;
+
+
+// The orchestrator image has Node and the Docker socket, not a Docker CLI.
+// Execute through Engine HTTP, like the CDP bridge. The helper lives in the
+// already-owned desktop and terminates its process group on timeout/disconnect.
+const EXEC_HELPER = String.raw`
+const { spawn } = require('node:child_process');
+const timeoutMs = Number(process.argv[1]);
+const command = process.argv[2];
+if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || typeof command !== 'string') process.exit(125);
+let timedOut = false, cancelled = false, killTimer, finished = false;
+const child = spawn('bash', ['-lc', command], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+const killGroup = signal => { if (child.pid) { try { process.kill(-child.pid, signal); } catch {} } };
+const terminate = timeout => {
+  if (finished) return;
+  if (timeout) timedOut = true; else cancelled = true;
+  killGroup('SIGTERM');
+  if (!killTimer) killTimer = setTimeout(() => killGroup('SIGKILL'), 250);
+};
+const timer = setTimeout(() => terminate(true), timeoutMs);
+process.stdin.resume();
+process.stdin.once('end', () => terminate(false));
+process.stdin.once('error', () => terminate(false));
+process.stdout.on('error', () => terminate(false));
+process.stderr.on('error', () => terminate(false));
+child.stdout.pipe(process.stdout, { end: false });
+child.stderr.pipe(process.stderr, { end: false });
+child.once('error', () => { finished = true; clearTimeout(timer); clearTimeout(killTimer); process.exit(125); });
+child.once('close', code => {
+  finished = true; clearTimeout(timer); clearTimeout(killTimer);
+  // Cancelled commands lose their descendants; a successful launch may
+  // intentionally leave a detached app alive with its output redirected.
+  if (timedOut || cancelled) killGroup('SIGKILL');
+  process.stdin.destroy();
+  const exitCode = timedOut ? 124 : cancelled ? 125 : Number.isInteger(code) ? code : 125;
+  process.stdout.end(() => process.stderr.end(() => process.exit(exitCode)));
+});
+`;
+const EXEC_OUTPUT_LIMIT = 16 * 1024 * 1024;
+
+function execError(code = 'DOCKER_EXEC_UNAVAILABLE', status = 502, exitCode) {
+  const error = new Error(code === 'DOCKER_EXEC_TIMEOUT' ? 'Desktop command timed out'
+    : code === 'DOCKER_EXEC_CANCELLED' ? 'Desktop command cancelled' : 'Desktop command failed');
+  error.code = code;
+  error.status = status;
+  if (Number.isInteger(exitCode)) error.exitCode = exitCode;
+  // Never include the command, daemon response, stdout or stderr in an error.
+  return error;
+}
+
+function execJson(socketPath, apiVersion, method, route, body, signal) {
+  return new Promise((resolve, reject) => {
+    const payload = body == null ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request({ socketPath, path: `/${apiVersion}${route}`, method, signal,
+      headers: { 'Content-Type': 'application/json', ...(payload ? { 'Content-Length': payload.length } : {}) },
+    }, res => {
+      const chunks = []; let size = 0;
+      res.on('data', chunk => {
+        size += chunk.length;
+        if (size > 65536) res.destroy(execError()); else chunks.push(chunk);
+      });
+      res.once('error', () => reject(execError()));
+      res.once('end', () => {
+        try {
+          if (res.statusCode < 200 || res.statusCode >= 300) throw execError();
+          resolve(JSON.parse(Buffer.concat(chunks)));
+        } catch { reject(execError()); }
+      });
+    });
+    req.once('error', () => reject(execError()));
+    req.end(payload);
+  });
+}
+
+// Non-TTY Engine output uses eight-byte stdout/stderr frame headers. Consume
+// incrementally, with one shared output cap and no daemon diagnostics in errors.
+function execOutput(socketPath, apiVersion, id, signal) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(JSON.stringify({ Detach: false, Tty: false }));
+    let socket, settled = false, header = Buffer.alloc(0), remaining = 0, channel = 0, size = 0;
+    const stdout = [], stderr = [];
+    const req = http.request({ socketPath, path: `/${apiVersion}/exec/${id}/start`, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': payload.length, Connection: 'Upgrade', Upgrade: 'tcp' },
+    });
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', abort);
+      req.destroy(); socket?.destroy();
+      if (error) reject(error);
+      else resolve({ stdout: Buffer.concat(stdout).toString('utf8'), stderr: Buffer.concat(stderr).toString('utf8') });
+    };
+    const abort = () => finish(execError());
+    const consume = bytes => {
+      let offset = 0;
+      while (offset < bytes.length && !settled) {
+        if (remaining === 0) {
+          const take = Math.min(8 - header.length, bytes.length - offset);
+          header = Buffer.concat([header, bytes.subarray(offset, offset + take)]); offset += take;
+          if (header.length < 8) return;
+          channel = header[0]; remaining = header.readUInt32BE(4);
+          if (![1, 2].includes(channel) || header[1] || header[2] || header[3] || remaining > EXEC_OUTPUT_LIMIT) {
+            finish(execError('DOCKER_EXEC_OUTPUT_INVALID')); return;
+          }
+          header = Buffer.alloc(0);
+          if (!remaining) continue;
+        }
+        const take = Math.min(remaining, bytes.length - offset);
+        size += take;
+        if (size > EXEC_OUTPUT_LIMIT) { finish(execError('DOCKER_EXEC_OUTPUT_LIMIT')); return; }
+        (channel === 1 ? stdout : stderr).push(bytes.subarray(offset, offset + take));
+        remaining -= take; offset += take;
+      }
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    req.once('upgrade', (res, stream, head) => {
+      socket = stream;
+      if (settled || signal.aborted || res.statusCode !== 101) { stream.destroy(); finish(execError()); return; }
+      stream.on('data', consume);
+      stream.once('end', () => finish(remaining || header.length ? execError('DOCKER_EXEC_OUTPUT_INVALID') : null));
+      stream.once('error', () => finish(execError()));
+      stream.once('close', () => { if (!settled) finish(execError()); });
+      if (head.length) consume(head);
+    });
+    req.once('response', res => { res.destroy(); finish(execError()); });
+    req.once('error', () => finish(execError()));
+    if (signal.aborted) abort(); else req.end(payload);
+  });
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -313,33 +441,36 @@ function createDockerRuntime(opts = {}) {
     return String(name || '').replace(/^\//, '');
   }
 
-  async function execIn(containerName, command, { timeoutMs = 20_000, user = 'compuser' } = {}) {
-    if (typeof opts.execImpl === 'function') {
-      return opts.execImpl(containerName, command, { timeoutMs, user });
+  async function execIn(containerName, command, { timeoutMs = 20_000, user = 'compuser', signal } = {}) {
+    if (typeof opts.execImpl === 'function') return opts.execImpl(containerName, command, { timeoutMs, user, signal });
+    if (!/^sira-ac-user-[a-z0-9_-]+$/i.test(String(containerName || ''))
+      || !/^[a-z0-9_-]{1,64}$/i.test(String(user || ''))
+      || typeof command !== 'string' || command.length > 65536
+      || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120_000) {
+      throw execError('DOCKER_EXEC_INVALID', 400);
     }
-    return new Promise((resolve, reject) => {
-      const child = spawn(
-        'docker',
-        ['exec', '-u', user, '-e', 'DISPLAY=:1', containerName, 'bash', '-lc', String(command || '')],
-        { timeout: timeoutMs },
-      );
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d) => { stdout += d; });
-      child.stderr.on('data', (d) => { stderr += d; });
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code !== 0) {
-          const err = new Error(stderr || stdout || `docker_exec_${code}`);
-          err.status = 500;
-          err.stdout = stdout;
-          err.stderr = stderr;
-          reject(err);
-          return;
-        }
-        resolve({ stdout, stderr, ok: true });
-      });
-    });
+    const deadline = AbortSignal.timeout(timeoutMs);
+    const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
+    try {
+      bounded.throwIfAborted();
+      const created = await execJson(socketPath, apiVersion, 'POST', `/containers/${encodeURIComponent(containerName)}/exec`, {
+        AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: false,
+        User: user, Env: ['DISPLAY=:1'], Cmd: ['node', '-e', EXEC_HELPER, String(timeoutMs), command],
+      }, bounded);
+      if (!/^[a-f0-9]{64}$/i.test(created?.Id || '')) throw execError();
+      const output = await execOutput(socketPath, apiVersion, created.Id, bounded);
+      const state = await execJson(socketPath, apiVersion, 'GET', `/exec/${created.Id}/json`, null, bounded);
+      if (state?.Running !== false || !Number.isInteger(state.ExitCode) || state.ExitCode < 0 || state.ExitCode > 255) {
+        throw execError('DOCKER_EXEC_INCOMPLETE');
+      }
+      if (state.ExitCode !== 0) {
+        throw execError(state.ExitCode === 124 ? 'DOCKER_EXEC_TIMEOUT' : 'DOCKER_EXEC_FAILED', state.ExitCode === 124 ? 504 : 502, state.ExitCode);
+      }
+      return { ok: true, ...output };
+    } catch (error) {
+      if (bounded.aborted) throw execError(signal?.aborted ? 'DOCKER_EXEC_CANCELLED' : 'DOCKER_EXEC_TIMEOUT', signal?.aborted ? 499 : 504);
+      throw error?.code?.startsWith('DOCKER_EXEC_') ? error : execError();
+    }
   }
 
   return {

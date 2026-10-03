@@ -1,13 +1,15 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 
 /**
- * Live browser progress (Claude-style side panel). APIs are stubbed.
+ * Live browser progress in the existing computer panel. APIs are stubbed.
  * Covers the activity chip (hidden / url-only / full / updates / host-only)
  * and auto-expand on agent navigate (once per chat, manual collapse wins).
+ * Browser state and remote form data are explicit fixtures, not remote-pixel evidence.
  * Never captures credentials.
  */
 
 test.describe.configure({ timeout: 240_000 })
+test.use({ locale: "es-PE" })
 
 const user = {
   id: "live-progress-user",
@@ -48,10 +50,38 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 async function mockApi(page: Page, activity: () => ActivityState) {
   const activityHits: string[] = []
   const navigated: string[] = []
+  const websiteRequests: string[] = []
+  const unexpected: string[] = []
+  const pageErrors: string[] = []
+  const sessionId = "sess-live"
+  const tabId = "live-tab-1"
+  let remotePage = { url: "about:blank", title: "Nueva pestaña", formDraft: "" }
+  let presentation: "embedded" | "desktop" = "desktop"
+  let viewport = { width: 1920, height: 1080 }
+  const browser = () => ({
+    tabs: [{ id: tabId, title: remotePage.title, url: remotePage.url }],
+    activeTabId: tabId, canGoBack: false, canGoForward: false,
+    presentation, viewport: { ...viewport },
+  })
+  const envelope = () => ({
+    ok: true, browser: browser(), sessionId, userId: "user_c_liveprogresschat",
+    conversationId: chat.id, conversationBound: true, sessionKey: "user_c_liveprogresschat",
+  })
+  const reject = (route: Route, description: string) => {
+    unexpected.push(description)
+    return fulfillJson(route, { ok: false, error: "unexpected_live_progress_fixture_request" }, 501)
+  }
+  const loadWebsite = (url: string, formDraft = "") => {
+    websiteRequests.push(url)
+    remotePage = { url, title: "Formulario QA", formDraft }
+  }
+  page.on("pageerror", (error) => pageErrors.push(error.name + ": " + error.message))
 
   await page.addInitScript(() => {
     localStorage.setItem("auth-token", "live-progress-token")
     localStorage.setItem("currentChatId", "live-progress-chat")
+    localStorage.setItem("siragpt.locale", "es")
+    document.cookie = "NEXT_LOCALE=es; path=/; samesite=lax"
   })
 
   const handleApiRoute = async (route: Route) => {
@@ -64,7 +94,7 @@ async function mockApi(page: Page, activity: () => ActivityState) {
     if (path === "/health") return fulfillJson(route, { status: "healthy" })
     if (path === "/ai/models") {
       return fulfillJson(route, {
-        models: [{ id: "m1", name: "deepseek-v4-flash", displayName: "DeepSeek V4 Flash", provider: "DeepSeek", type: "TEXT", isActive: true }],
+        models: [{ id: "m1", name: "Sira Rápido", displayName: "Sira Rápido", provider: "DeepSeek", type: "TEXT", isActive: true }],
       })
     }
     if (path === "/payments/subscription") {
@@ -82,47 +112,112 @@ async function mockApi(page: Page, activity: () => ActivityState) {
       return fulfillJson(route, { error: "prefer_agent_computer" }, 503)
     }
     if (path === "/agent-computer/sessions" && request.method() === "POST") {
+      const body = request.postDataJSON() as { conversationId?: string } | null
+      if ((body?.conversationId || url.searchParams.get("conversationId")) !== chat.id) return reject(route, "session conversation mismatch")
       return fulfillJson(route, {
-        sessionId: "sess-live",
-        userId: "user_c_liveprogresschat",
-        conversationId: chat.id,
-        conversationBound: true,
-        sessionKey: "user_c_liveprogresschat",
+        ...envelope(),
         embedUrl: "/agent-computer/sessions/sess-live/novnc/vnc.html?autoconnect=1",
       }, 201)
     }
+    if (path === `/agent-computer/sessions/${sessionId}` && request.method() === "GET") return fulfillJson(route, envelope())
     if (path === "/agent-computer/navigate" && request.method() === "POST") {
-      const body = (request.postDataJSON() || {}) as { url?: string }
-      navigated.push(String(body.url || ""))
-      return fulfillJson(route, { ok: true, url: body.url, conversationId: chat.id })
+      const body = request.postDataJSON() as { url?: string; conversationId?: string; sessionId?: string; tabId?: string }
+      if (body.conversationId !== chat.id || (body.sessionId !== undefined && body.sessionId !== sessionId)) return reject(route, "navigation owner mismatch")
+      if ((body.tabId !== undefined && body.tabId !== tabId) || !body.url || !/^https?:\/\//.test(body.url)) return reject(route, "navigation target mismatch")
+      navigated.push(body.url)
+      loadWebsite(body.url)
+      return fulfillJson(route, { ...envelope(), url: remotePage.url })
     }
     if (path === "/agent-computer/action" && request.method() === "POST") {
-      return fulfillJson(route, { ok: true })
+      const body = request.postDataJSON() as {
+        conversationId?: string; sessionId?: string; focus?: string;
+        action?: { type?: string; tabId?: string; width?: number; height?: number }
+      }
+      if (body.conversationId !== chat.id || (body.sessionId !== undefined && body.sessionId !== sessionId)) return reject(route, "action owner mismatch")
+      if (!body.action && ["browser", "chrome", "desktop", "files", "terminal"].includes(body.focus || "")) return fulfillJson(route, { ...envelope(), focus: body.focus })
+      if (body.sessionId !== sessionId || !body.action || (body.action.tabId !== undefined && body.action.tabId !== tabId)) return reject(route, "browser action session or tab mismatch")
+      switch (body.action.type) {
+        case "browser_present": presentation = "embedded"; break
+        case "browser_restore": presentation = "desktop"; break
+        case "browser_resize":
+          if (!Number.isInteger(body.action.width) || !Number.isInteger(body.action.height)
+            || body.action.width! < 32 || body.action.width! > 1920 || body.action.height! < 32 || body.action.height! > 1080) return reject(route, "invalid browser viewport")
+          viewport = { width: body.action.width!, height: body.action.height! }
+          break
+        default: return reject(route, `unsupported browser action: ${body.action.type}`)
+      }
+      return fulfillJson(route, envelope())
     }
     if (path === "/agent-computer/activity" && request.method() === "GET") {
-      activityHits.push(url.searchParams.get("conversationId") || "")
+      const conversationId = url.searchParams.get("conversationId")
+      if (conversationId !== chat.id) return reject(route, "activity conversation mismatch")
+      activityHits.push(conversationId)
+      if (url.searchParams.get("browser") === "1") {
+        if (url.searchParams.get("sessionId") !== sessionId) return reject(route, "browser activity session mismatch")
+        return fulfillJson(route, envelope())
+      }
       return fulfillJson(route, activity())
     }
     if (path === "/agent-computer/login-handoff") {
+      if (url.searchParams.get("conversationId") !== chat.id) return reject(route, "handoff conversation mismatch")
       return fulfillJson(route, { active: false, conversationId: chat.id })
     }
+    if (path.startsWith("/agent-computer/")) return reject(route, `unsupported computer endpoint: ${request.method()} ${path}`)
 
     return fulfillJson(route, {})
   }
 
   await page.route("**/api/**", handleApiRoute)
   await page.route("http://localhost:5000/**", handleApiRoute)
-  return { activityHits, navigated }
+  const fixture = { activityHits, navigated, websiteRequests, unexpected, pageErrors,
+    agentNavigate: loadWebsite, remotePage: () => ({ ...remotePage }), browser,
+  }
+  fixtures.set(page, fixture)
+  return fixture
 }
 
-async function openPanel(page: Page) {
+type ProgressFixture = Awaited<ReturnType<typeof mockApi>>
+const fixtures = new WeakMap<Page, ProgressFixture>()
+const address = (page: Page) => page.getByRole("textbox", { name: "Dirección del navegador", exact: true })
+async function showDesktop(page: Page) {
+  const desktop = page.getByTestId("agent-computer-dock-os").getByRole("button", { name: "Escritorio", exact: true })
+  const menu = page.getByRole("button", { name: "Más opciones del navegador", exact: true })
+  if (await menu.isVisible()) {
+    await menu.click()
+    await page.getByRole("menuitem", { name: "Escritorio", exact: true }).click()
+  } else {
+    await desktop.click()
+  }
+  await expect(desktop).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByTestId("chat-computer-collapse")).toBeVisible()
+}
+async function agentNavigate(page: Page, fixture: ProgressFixture, url: string, formDraft = "") {
+  // The agent has already navigated remotely before its event reaches the UI.
+  fixture.agentNavigate(url, formDraft)
+  await page.evaluate((href) => window.dispatchEvent(new CustomEvent("siragpt:computer-navigate", {
+    detail: { url: href, conversationId: "live-progress-chat", tool: "computer_navigate" },
+  })), url)
+}
+async function openPanel(page: Page, mode: "computer" | "browser" = "computer") {
   await page.setViewportSize({ width: 1280, height: 800 })
-  await page.goto("/agentes?id=live-progress-chat&browser=1", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto(`/agentes?id=live-progress-chat&${mode}=1`, { waitUntil: "domcontentloaded", timeout: 120_000 })
   const panel = page.getByTestId("chat-agent-computer-panel")
   await expect(panel).toBeVisible({ timeout: 60_000 })
+  if (mode === "computer") {
+    await page.getByTestId("chat-computer-expand").click()
+    await showDesktop(page)
+  } else {
+    await expect(page.getByRole("tab", { selected: true })).toHaveCount(1)
+  }
   await expect(panel).toHaveAttribute("data-chat-computer-view", "expanded")
   return panel
 }
+
+test.afterEach(async ({ page }) => {
+  const fixture = fixtures.get(page)
+  expect(fixture?.unexpected || []).toEqual([])
+  expect(fixture?.pageErrors || []).toEqual([])
+})
 
 test("chip stays hidden without progress", async ({ page }) => {
   await mockApi(page, () => ({ activity: null, url: null, title: "" }))
@@ -190,55 +285,52 @@ test("panel polls the activity endpoint per chat", async ({ page }) => {
 })
 
 test("agent navigate auto-expands the panel once", async ({ page }) => {
-  await mockApi(page, () => ({ activity: null, url: null, title: "" }))
-  const panel = await openPanel(page)
-  await page.getByTestId("chat-browser-button").click()
+  const fixture = await mockApi(page, () => ({ activity: null, url: null, title: "" }))
+  const panel = await openPanel(page, "browser")
+  await page.getByRole("button", { name: "Cerrar navegador", exact: true }).click()
   await expect(panel).toHaveCount(0)
-  await page.evaluate(() => {
-    window.dispatchEvent(
-      new CustomEvent("siragpt:computer-navigate", {
-        detail: { url: "https://www.ejemplo.com/form", conversationId: "live-progress-chat" },
-      })
-    )
-  })
+  await agentNavigate(page, fixture, "https://www.ejemplo.com/form")
   await expect(panel).toHaveAttribute("data-chat-computer-view", "expanded", { timeout: 30_000 })
   await expect(page.getByTestId("chat-computer-live-desktop")).toBeVisible({ timeout: 30_000 })
+  await expect(address(page)).toHaveValue("https://www.ejemplo.com/form")
+  expect(fixture.navigated).toEqual([])
 })
 
 test("manual collapse wins over later navigates", async ({ page }) => {
-  await mockApi(page, () => ({ activity: null, url: null, title: "" }))
-  const panel = await openPanel(page)
-  const navigate = (url: string) =>
-    page.evaluate((href) => {
-      window.dispatchEvent(
-        new CustomEvent("siragpt:computer-navigate", {
-          detail: { url: href, conversationId: "live-progress-chat" },
-        })
-      )
-    }, url)
-  await navigate("https://www.ejemplo.com/a")
+  const fixture = await mockApi(page, () => ({ activity: null, url: null, title: "" }))
+  const panel = await openPanel(page, "browser")
+  await agentNavigate(page, fixture, "https://www.ejemplo.com/a")
+  await expect(address(page)).toHaveValue("https://www.ejemplo.com/a")
   await expect(panel).toHaveAttribute("data-chat-computer-view", "expanded", { timeout: 30_000 })
+  // Collapse belongs to the existing desktop mode, not the clean browser bar.
+  await showDesktop(page)
   await page.getByTestId("chat-computer-collapse").click()
   await expect(panel).toHaveAttribute("data-chat-computer-view", "compact", { timeout: 30_000 })
-  await navigate("https://www.ejemplo.com/b")
+  await agentNavigate(page, fixture, "https://www.ejemplo.com/b")
+  await expect(address(page)).toHaveValue("https://www.ejemplo.com/b")
   await page.waitForTimeout(2_000)
   await expect(panel).toHaveAttribute("data-chat-computer-view", "compact")
+  expect(fixture.navigated).toEqual([])
 })
 
-
 test("agent navigation and collapsing never replay a website request", async ({ page }) => {
-  const { navigated } = await mockApi(page, () => ({ activity: null, url: null, title: "" }))
-  await openPanel(page)
-  await expect.poll(() => navigated.length).toBeGreaterThan(0)
-  const before = navigated.length
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent("siragpt:computer-navigate", {
-    detail: { url: "https://example.com/filled-form", conversationId: "live-progress-chat", tool: "computer_navigate" },
-  })))
-  await expect(page.getByTestId("integrated-browser-url").first()).toHaveValue("https://example.com/filled-form")
+  const fixture = await mockApi(page, () => ({ activity: null, url: null, title: "" }))
+  await openPanel(page, "browser")
+  await expect(page.getByTestId("browser-empty-state")).toBeVisible()
+  await expect(address(page)).toHaveValue("")
+  expect(fixture.navigated).toEqual([])
+  expect(fixture.websiteRequests).toEqual([])
+  await agentNavigate(page, fixture, "https://example.com/filled-form", "Respuesta sin enviar")
+  await expect(address(page)).toHaveValue("https://example.com/filled-form")
+  const before = fixture.websiteRequests.length
+  await showDesktop(page)
   await page.getByTestId("chat-computer-collapse").click()
   await page.getByTestId("chat-computer-expand").click()
   await expect(page.getByTestId("chat-computer-live-desktop")).toBeVisible()
-  expect(navigated.length).toBe(before)
+  await expect(address(page)).toHaveValue("https://example.com/filled-form")
+  expect(fixture.remotePage().formDraft).toBe("Respuesta sin enviar")
+  expect(fixture.websiteRequests.length).toBe(before)
+  expect(fixture.navigated).toEqual([])
 })
 
 test("finished activity clears stale site and step", async ({ page }) => {
