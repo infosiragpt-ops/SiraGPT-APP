@@ -132,6 +132,21 @@ El turno N era más lento que el N-1. Topes (0 = sin tope):
 | `SIRAGPT_UNDERSTANDING_OLD_MAX_CHARS` | `1500` | Tope por fila para las filas anteriores de esa pila |
 | `COMPUTER_ACTION_TIMEOUT_MS` | `45000` | Tope del reenvío de una acción al orquestador del escritorio (`POST /api/agent-computer/action`); 504 `desktop_action_timeout` al agotarse |
 
+### Brief del pedido — entendimiento por turno (added 2026-10-03)
+
+`backend/src/services/request-brief.js` calcula UNA lectura estructurada de lo
+que pide el usuario (acción, entregable, objetivo —adjunto / archivo generado /
+respuesta anterior—, restricciones, ambigüedad) por turno de `/api/ai/generate`.
+Cierra la fila «Analizando tu mensaje» con «Entendí: …», viaja como frame SSE
+`request_brief`, entra como bloque de sistema tier 0 y dirige las puertas de
+ruteo (editor de documentos / AgentRunner).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_REQUEST_BRIEF` | `1` | `0`/`off` desactiva el brief (fila, frame, bloque, ruteo y preguntas de aclaración del brief) |
+| `SIRAGPT_REQUEST_BRIEF_LLM` | `1` | `0` desactiva el refinado con el tier gratuito (Cerebras) de los briefs de baja confianza con historial; sin `CEREBRAS_API_KEY` nunca corre |
+| `SIRAGPT_REQUEST_BRIEF_LLM_TIMEOUT_MS` | `900` | Tope de la llamada de refinado; al agotarse se conserva el brief heurístico |
+
 ---
 
 ## Embeddings ladder (RAG + memory)

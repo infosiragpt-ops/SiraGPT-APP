@@ -38,6 +38,8 @@ const DISABLED = String(process.env.SIRAGPT_PROMPT_BUDGET_DISABLED || '').toLowe
 
 const TIER_BY_KIND = Object.freeze({
   'master-prompt': 0,
+  // The turn's request brief (what the user asked): never trimmed.
+  'request-brief': 0,
   'header': 0,
   'rules': 0,
   'custom-gpt': 0,

@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { RequestBriefLine, extractRequestBrief } from "@/components/chat/request-brief-line";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
@@ -1652,6 +1653,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // carry it on the message; a reloaded AgentRunner turn replays the
     // stage events persisted in agent_metadata.activityTrace.
     const liveActivity: any[] = Array.isArray((message as any).activityLog) ? (message as any).activityLog : [];
+    // «Entendí: …» (request-brief): live on the message, persisted in metadata.
+    const requestBriefView = isAssistant ? extractRequestBrief(message) : null;
     const persistedTrace = isAssistant && !liveActivity.length ? (message as any).agentMetadata : null;
     const hydratedActivity = useMemo(() => hydrateActivityTrace(persistedTrace), [persistedTrace]);
     const activityLog: any[] = liveActivity.length ? liveActivity : hydratedActivity;
@@ -3408,6 +3411,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 answer={{ streaming: Boolean(isStreaming), text: message.content || "" }}
                             />
                         ) : null}
+                        {requestBriefView && !isThinking && !message.error ? (
+                            <RequestBriefLine brief={requestBriefView} live={Boolean(isStreaming)} />
+                        ) : null}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking && !hasAgentTrace && hasRunnerTrace ? (
@@ -3666,6 +3672,7 @@ export const areMessagePropsEqual = (prev: any, next: any) => {
     // a tool result settling its row, a thumbnail, the stream closing.
     if (Boolean(prev.isStreaming) !== Boolean(next.isStreaming)) return false
     if (a.progressStage !== b.progressStage) return false
+    if (a.requestBrief !== b.requestBrief) return false
     if (activitySignature(a.activityLog) !== activitySignature(b.activityLog)) return false
     if (a.agentMetadata !== b.agentMetadata && agentMetadataKey(a.agentMetadata) !== agentMetadataKey(b.agentMetadata)) return false
     // Live reasoning and the agent harness also stream while content is empty.

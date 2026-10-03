@@ -3922,6 +3922,17 @@ router.post(
       // del usuario y resolver coreferencias del mensaje actual. Ambos son
       // best-effort: cualquier fallo cae al comportamiento actual.
       const __pr3ExtraBlocks = [];
+      // Request brief (services/request-brief): ONE structured reading of
+      // what this turn asks — action, deliverable, target (attachment /
+      // generated file / previous answer), constraints, ambiguity — computed
+      // once the understanding phase has history, attachments, coreference
+      // and repair detection. It closes the «Analizando tu mensaje» row
+      // («Entendí: …»), travels as a `request_brief` SSE frame, becomes a
+      // tier-0 system block and steers the routing gates below.
+      let __requestBrief = null;
+      let __requestBriefPublic = null;
+      let __requestBriefBlock = '';
+      let __requestBriefHints = { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null };
       let __pr3RecentTurns = [];
       let __conversationHistoryForUnderstanding = [];
       const __promptCount = turnProgressLib.countWordsBounded(prompt);
@@ -4030,7 +4041,74 @@ router.post(
           }
         }
       } catch (_pr3CorefErr) { /* swallow */ }
-      __understandingHandle.done();
+      // ─── Request brief ─────────────────────────────────────────────
+      try {
+        const requestBrief = require('../services/request-brief');
+        if (requestBrief.isEnabled()) {
+          const __briefStartedAt = Date.now();
+          let __priorArtifact = null;
+          if (userId && canPersist && chatId && !__publicWebReadonly && requestBrief.needsPriorArtifactLookup(prompt)) {
+            try {
+              const __latest = await require('../services/agent-runner/artifacts')
+                .getLatestConversationArtifact(prisma, { userId, chatId, instruction: prompt });
+              if (__latest) {
+                __priorArtifact = {
+                  id: __latest.id || null,
+                  filename: __latest.filename || null,
+                  mime: __latest.mime || null,
+                };
+              }
+            } catch (_briefArtErr) { __priorArtifact = null; }
+          }
+          __requestBrief = requestBrief.buildRequestBrief({
+            prompt,
+            recentTurns: __pr3RecentTurns || [],
+            attachments: processedFiles,
+            priorArtifact: __priorArtifact,
+            coreference: __pr3CorefResult,
+            repairDetection: __pr6RepairDetection,
+          });
+          if (requestBrief.shouldRefineWithLlm(__requestBrief, { hasHistory: (__pr3RecentTurns || []).length > 0 })) {
+            __requestBrief = await requestBrief.refineRequestBriefWithLlm(__requestBrief, {
+              prompt,
+              recentTurns: __pr3RecentTurns || [],
+              attachments: processedFiles,
+              priorArtifact: __priorArtifact,
+            });
+          }
+          __requestBriefPublic = requestBrief.publicRequestBrief(__requestBrief);
+          __requestBriefBlock = requestBrief.buildRequestBriefPromptBlock(__requestBrief);
+          if (__requestBriefBlock) __requestBriefBlock = `\n\n${__requestBriefBlock}`;
+          __requestBriefHints = requestBrief.routingHints(__requestBrief);
+          req._requestBrief = __requestBriefPublic;
+          const __briefRow = requestBrief.describeRequestBrief(__requestBrief);
+          __understandingHandle.done(__briefRow.label, { detail: __briefRow.detail });
+          try {
+            res.write(`data: ${JSON.stringify({ type: 'request_brief', brief: __requestBriefPublic })}\n\n`);
+          } catch { /* socket gone */ }
+          generateLog.info('understanding.request_brief', {
+            action: __requestBrief.action,
+            deliverable: __requestBrief.deliverable.kind,
+            target: __requestBrief.target.kind,
+            targetSource: __requestBrief.target.source,
+            constraints: __requestBrief.constraints.length,
+            ambiguity: __requestBrief.ambiguity.score,
+            ask: __requestBrief.ambiguity.ask,
+            confidence: __requestBrief.confidence,
+            source: __requestBrief.source,
+            priorArtifact: Boolean(__priorArtifact),
+            durationMs: Date.now() - __briefStartedAt,
+          });
+        } else {
+          __understandingHandle.done();
+        }
+      } catch (_briefErr) {
+        __requestBrief = null;
+        __requestBriefPublic = null;
+        __requestBriefBlock = '';
+        __requestBriefHints = { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null };
+        try { __understandingHandle.done(); } catch (_) { /* row may already be settled */ }
+      }
 
       // Resolve the language policy promise started before quota check.
       // By the time we reach here, it has been running concurrently with
@@ -5968,6 +6046,27 @@ router.post(
           generateLog.warnError('routing.intent_triage_failed', triageErr);
           intentTriageDecision = null;
         }
+        // The request brief found no source at all («tradúcelo» with nothing
+        // attached and no history) or a format conflict («en word o pdf»):
+        // ask ONE question with options before spending a model call. Never
+        // overrides a question the triage already decided to ask.
+        try {
+          if (__requestBrief && __requestBrief.ambiguity && __requestBrief.ambiguity.ask && __requestBrief.ambiguity.question
+            && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
+            const __briefOptions = (__requestBrief.ambiguity.options || [])
+              .filter((o) => o && o.label)
+              .map((o) => ({ label: String(o.label), intentHint: 'text', contractPatch: {} }));
+            intentTriageDecision = {
+              action: 'ask',
+              question: __requestBrief.ambiguity.question,
+              reason: `request_brief:${(__requestBrief.ambiguity.reasons || []).join(',') || 'ambiguous'}`,
+              source: 'request_brief',
+              score: __requestBrief.ambiguity.score,
+              ...(__briefOptions.length >= 2 ? { options: __briefOptions, optionsSource: 'request_brief' } : {}),
+            };
+            generateLog.info('routing.request_brief_ask', { reason: intentTriageDecision.reason, options: __briefOptions.length });
+          }
+        } catch (_briefAskErr) { /* advisory */ }
 
         // ─── Cognitive core: reasoning orchestrator ───────────────────────
         // One pure, deterministic decision that assesses difficulty + risk,
@@ -6134,7 +6233,7 @@ router.post(
                 if (__a.ask && __judged.question && (!intentTriageDecision || intentTriageDecision.action !== 'ask')) {
                   intentTriageDecision = { action: 'ask', question: __judged.question, reason: 'jev_needs_context', source: 'rlcd_jev', score: __a.calibrated.ask };
                   generateLog.info('rlcd.jev_ask', { calibrated: __a.calibrated.ask, needsContext: __judged.judgement.needsContext });
-                } else if (__a.vetoAsk && intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.source !== 'rlcd_media') {
+                } else if (__a.vetoAsk && intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.source !== 'rlcd_media' && intentTriageDecision.source !== 'request_brief') {
                   generateLog.info('rlcd.jev_ask', { vetoed: true, previousReason: intentTriageDecision.reason, needsContext: __judged.judgement.needsContext });
                   intentTriageDecision = { ...intentTriageDecision, action: 'execute', vetoedBy: 'rlcd_jev' };
                 }
@@ -6511,7 +6610,9 @@ router.post(
       const _explicitWebGrounding = __publicWebReadonly;
       const _webSearchAllowed =
         req.body.disableWebSearch !== true
-        && (_explicitWebGrounding || req.body.disableAgentic !== true);
+        && (_explicitWebGrounding || req.body.disableAgentic !== true)
+        // A turn that ends in a clarifying question never searches the web.
+        && !(intentTriageDecision && intentTriageDecision.action === 'ask' && intentTriageDecision.question);
       if (typeof prompt === 'string' && prompt.length > 0) {
         const _webGroundingPrompt = _explicitWebGrounding
           ? __publicWebQuery
@@ -6899,7 +7000,7 @@ router.post(
         }
       } catch (_skillsErr) { selectedSkillsBlock = ''; }
 
-      const systemInstruction = { role: 'system', content: promptBundle.system + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + selectedSkillsBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock + rlcdPromptBlock };
+      const systemInstruction = { role: 'system', content: promptBundle.system + __requestBriefBlock + openclawRuntimeBlock + llmUnderstandingBlock + conversationUnderstandingBlock + universalContractBlock + enterpriseExecutionBlock + memoryBlock + orchMemoryBlock + activeMemoryBlock + crossChatBlock + attributionBlock + circuitAttributionBlock + intentAttributionGraphBlock + saliencyBlock + adversarialBlock + feedbackBlock + evidenceBlock + documentAnalysisQualityBlock + documentEnrichmentBlock + coworkBlock + webSearchBlock + __pr5GroundingBlock + selectedSkillsBlock + reasoningEffortBlock + constraintBlock + postureDirectiveBlock + rlcdPromptBlock };
       // Structured view of the system prompt — same content as
       // `systemInstruction.content`, but split into typed blocks with a
       // `cacheable` hint. When the downstream provider is Anthropic (or
@@ -6911,6 +7012,9 @@ router.post(
         ...(Array.isArray(promptBundle.systemBlocks) ? promptBundle.systemBlocks : [
           { kind: 'master-prompt', text: promptBundle.system, cacheable: true },
         ]),
+        // Tier 0 (prompt-budget-allocator) and never pruned (prompt-kernel):
+        // this is the one block that says what the user asked.
+        { kind: 'request-brief', text: __requestBriefBlock, cacheable: false },
         { kind: 'openclaw-runtime', text: openclawRuntimeBlock, cacheable: false },
         { kind: 'llm-understanding-packet', text: llmUnderstandingBlock, cacheable: false },
         { kind: 'conversation-understanding', text: conversationUnderstandingBlock, cacheable: false },
@@ -7784,16 +7888,17 @@ router.post(
         // Emit structured clarify options as a side-channel SSE event so
         // future clients can render chips while current clients still see
         // the numbered text in the content stream.
-        if (triageOptions.length >= 2) {
-          try {
-            res.write(`data: ${JSON.stringify({
-              type: 'intent.clarify_options',
-              question: baseQuestion,
-              options: triageOptions,
-              source: intentTriageDecision.optionsSource || 'unknown',
-            })}\n\n`);
-          } catch { /* socket gone */ }
-        }
+        // Always emitted (options may be empty): the client turns it into the
+        // decision panel above the composer (option chips + free reply), the
+        // same panel a reload rebuilds from the persisted metadata below.
+        try {
+          res.write(`data: ${JSON.stringify({
+            type: 'intent.clarify_options',
+            question: baseQuestion,
+            options: triageOptions.map((o) => ({ label: o.label })),
+            source: intentTriageDecision.optionsSource || intentTriageDecision.source || 'unknown',
+          })}\n\n`);
+        } catch { /* socket gone */ }
         try { res.write(`data: ${JSON.stringify({ content: triageQuestion })}\n\n`); } catch { /* socket gone */ }
         fullResponseContent = triageQuestion;
         try {
@@ -7811,6 +7916,12 @@ router.post(
                 streamId: streamId || null,
                 turnFingerprint: triageTurnFingerprint,
                 origin: 'intent_triage',
+                // lib/chat-work-status reads these to rebuild the decision
+                // panel (option chips) after a reload.
+                kind: 'clarification',
+                question: baseQuestion,
+                options: triageOptions.map((o) => ({ label: o.label })),
+                ...(__requestBriefPublic ? { requestBrief: __requestBriefPublic } : {}),
                 ...(generateIdempotencyRequestHash
                   ? { [MESSAGE_IDEMPOTENCY_HASH_FIELD]: generateIdempotencyRequestHash }
                   : {}),
@@ -8048,6 +8159,13 @@ router.post(
                 documentEditRequested = require('../services/agents/agentic-trigger')
                   .isDocumentEditRequest(prompt);
               } catch (_) { documentEditRequested = false; }
+              // «agrega 2 ejemplos más a tu explicación»: the brief resolved
+              // the target to the previous ANSWER — the edit verb must not
+              // send the turn to the document editor.
+              if (documentEditRequested && __requestBriefHints.editsPreviousAnswer) {
+                documentEditRequested = false;
+                generateLog.info('routing.request_brief_veto', { gate: 'document_edit', target: 'previous_answer' });
+              }
               __chatGeneratedRefs = await require('../services/agents/generated-artifact-followup')
                 .resolveChatGeneratedArtifactFollowup(prisma, {
                   userId,
@@ -8079,7 +8197,10 @@ router.post(
                 let priorArtifactFormat = null;
                 if (
                   canPersist && chatId
-                  && (__agentRunner.isDesignUpgradeRequest(prompt, { officeTarget: 'pptx' }) || __agentRunner.isFollowupDocumentEdit(prompt))
+                  && (__agentRunner.isDesignUpgradeRequest(prompt, { officeTarget: 'pptx' }) || __agentRunner.isFollowupDocumentEdit(prompt)
+                    // «ahora en azul», «ponlas todas rosadas»: the brief already
+                    // resolved the target to the chat's generated Office file.
+                    || __requestBriefHints.editsGeneratedOfficeFile)
                 ) {
                   try {
                     hasPriorArtifacts = await __agentRunner.hasConversationArtifacts(prisma, { userId, chatId });
@@ -8094,6 +8215,17 @@ router.post(
                   priorArtifactFormat,
                   text: prompt,
                 });
+                // The brief decides the two cases the regex gate gets wrong:
+                // a style/edit follow-up aimed at the generated Office file
+                // is runner work even without a document noun; an edit of
+                // the previous ANSWER never is.
+                if (!createDocRequested && __requestBriefHints.editsGeneratedOfficeFile && hasPriorArtifacts) {
+                  createDocRequested = true;
+                  generateLog.info('routing.request_brief_claim', { gate: 'agent_runner', format: __requestBriefHints.officeTargetFormat });
+                } else if (createDocRequested && __requestBriefHints.editsPreviousAnswer && !(processedFiles || []).some((f) => f && !isImageMime(f.mimeType || f.type))) {
+                  createDocRequested = false;
+                  generateLog.info('routing.request_brief_veto', { gate: 'agent_runner', target: 'previous_answer' });
+                }
               } catch (_) { createDocRequested = false; }
               // Tool-calling fallback ladder: 'native' (OpenAI-style
               // tool_calls), 'prompted' (tools described in the system prompt,
@@ -8283,6 +8415,10 @@ router.post(
                   progress: turnProgress,
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
+                  // The per-turn request brief: steers the inner edit /
+                  // runner claims and rides the loop's system prompt.
+                  requestBrief: __requestBriefPublic,
+                  requestBriefBlock: __requestBriefBlock ? __requestBriefBlock.trim() : '',
                   preferenceBlock: feedbackBlock || '',
                   selectedSkillsBlock,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
@@ -9648,6 +9784,9 @@ router.post(
           ...(pickerDisplayName ? { pickerDisplayName } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
+          // What the turn understood (request-brief): the «Entendí: …» line
+          // of a reloaded message and the material for the thumbs feedback.
+          ...(__requestBriefPublic ? { requestBrief: __requestBriefPublic } : {}),
         };
         const savedChat = await saveChatAndTrackUsage(
           userId,

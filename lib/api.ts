@@ -986,7 +986,79 @@ export function normalizeAIUsageFrame(frame: unknown): AIUsagePayload | null {
   }
 }
 
+/**
+ * What the backend understood from the user's message this turn
+ * (services/request-brief `publicRequestBrief`): shown as «Entendí: …» with a
+ * one-click correction, and persisted in the assistant metadata.
+ */
+export type RequestBriefPayload = {
+  version: number
+  source: string
+  action: string
+  summary: string
+  confidence: number
+  trivial: boolean
+  deliverable: { kind: string | null; format: string | null }
+  target: { kind: string; name: string | null; format: string | null }
+  constraints: Array<{ kind: string; value: string }>
+  ambiguity: { score: number; ask: boolean; question?: string; note?: string; options: Array<{ label: string }> }
+}
+
+/** A clarifying question the turn ended with, plus its option chips. */
+export type ClarifyOptionsPayload = {
+  question: string
+  options: Array<{ label: string }>
+  source?: string
+}
+
+export function parseRequestBriefPayload(raw: unknown): RequestBriefPayload | null {
+  if (!raw || typeof raw !== 'object') return null
+  const record = raw as Record<string, unknown>
+  if (typeof record.summary !== 'string' || typeof record.action !== 'string') return null
+  const deliverable = (record.deliverable && typeof record.deliverable === 'object' ? record.deliverable : {}) as Record<string, unknown>
+  const target = (record.target && typeof record.target === 'object' ? record.target : {}) as Record<string, unknown>
+  const ambiguity = (record.ambiguity && typeof record.ambiguity === 'object' ? record.ambiguity : {}) as Record<string, unknown>
+  const asOptions = (list: unknown) => (Array.isArray(list)
+    ? list.map((o) => (o && typeof o === 'object' && typeof (o as { label?: unknown }).label === 'string' ? { label: (o as { label: string }).label } : null)).filter((o): o is { label: string } => Boolean(o))
+    : [])
+  return {
+    version: typeof record.version === 'number' ? record.version : 1,
+    source: typeof record.source === 'string' ? record.source : 'heuristic',
+    action: record.action,
+    summary: record.summary,
+    confidence: typeof record.confidence === 'number' ? record.confidence : 0,
+    trivial: record.trivial === true,
+    deliverable: {
+      kind: typeof deliverable.kind === 'string' ? deliverable.kind : null,
+      format: typeof deliverable.format === 'string' ? deliverable.format : null,
+    },
+    target: {
+      kind: typeof target.kind === 'string' ? target.kind : 'none',
+      name: typeof target.name === 'string' ? target.name : null,
+      format: typeof target.format === 'string' ? target.format : null,
+    },
+    constraints: Array.isArray(record.constraints)
+      ? record.constraints
+        .map((c) => (c && typeof c === 'object' && typeof (c as { value?: unknown }).value === 'string'
+          ? { kind: String((c as { kind?: unknown }).kind || 'other'), value: (c as { value: string }).value }
+          : null))
+        .filter((c): c is { kind: string; value: string } => Boolean(c))
+      : [],
+    ambiguity: {
+      score: typeof ambiguity.score === 'number' ? ambiguity.score : 0,
+      ask: ambiguity.ask === true,
+      ...(typeof ambiguity.question === 'string' ? { question: ambiguity.question } : {}),
+      ...(typeof ambiguity.note === 'string' ? { note: ambiguity.note } : {}),
+      options: asOptions(ambiguity.options),
+    },
+  }
+}
+
 type AIStreamOptions = {
+  // What the backend understood from this message (request-brief frame).
+  onRequestBrief?: (brief: RequestBriefPayload) => void
+  // The turn ended with a clarifying question: its option chips.
+  onClarifyOptions?: (payload: ClarifyOptionsPayload) => void
   onGithubConnectionRequired?: (payload: GithubConnectionPayload) => void
   onCodingWorkspace?: (payload: CodingWorkspacePayload) => void
   onCodingPreviewReady?: (payload: CodingPreviewPayload) => void
@@ -2956,6 +3028,24 @@ class ApiClient {
               } else if (jsonData.type === 'coding_preview_ready') {
                 const preview = parseCodingPreviewPayload(jsonData);
                 if (preview && preview.chatId === data.chatId) options.onCodingPreviewReady?.(preview);
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'request_brief') {
+                const brief = parseRequestBriefPayload(jsonData.brief)
+                if (brief && options.onRequestBrief) options.onRequestBrief(brief)
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'intent.clarify_options' && typeof jsonData.question === 'string') {
+                if (options.onClarifyOptions) {
+                  const clarifyOptions = Array.isArray(jsonData.options)
+                    ? jsonData.options
+                      .map((o: unknown) => (o && typeof o === 'object' && typeof (o as { label?: unknown }).label === 'string' ? { label: (o as { label: string }).label } : null))
+                      .filter((o: { label: string } | null): o is { label: string } => Boolean(o))
+                    : []
+                  options.onClarifyOptions({
+                    question: jsonData.question,
+                    options: clarifyOptions,
+                    ...(typeof jsonData.source === 'string' ? { source: jsonData.source } : {}),
+                  })
+                }
                 lastProcessTime = Date.now();
               } else if (jsonData.type === 'computer_login_handoff') {
                 consumeLoginHandoffSse(jsonData)

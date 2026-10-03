@@ -1759,6 +1759,51 @@ memo de `ChatMessageList`/`MessageComponent`, Virtuoso >40, compactación de con
   umbral de Virtuoso 40 → ~16; `?after=` incremental en `GET /api/chats/:id`.
 - Tests: `tests/long-chat-perf.test.ts`, `backend/tests/long-chat-history-caps.test.js`.
 
+## Brief del pedido — entendimiento de lo que pide el usuario (added 2026-10-03)
+
+Pedido de Luis: «mejoras de gran impacto en el entendimiento de lo que pide el usuario» en
+`/agentes`. Antes, el ruteo del chat decidía «¿editar archivo o responder?», «¿crear o
+modificar?», «¿sobre qué?» con 30+ regex independientes que solo miraban el prompt crudo; los
+bloques de entendimiento (conversation-understanding, circuit, IAG, saliency) solo alimentaban
+el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recibir la respuesta.
+- **`backend/src/services/request-brief.js`** (puro, ~1 ms): UNA lectura estructurada por turno
+  `{ action, deliverable:{kind,format}, target:{kind: attachment|generated_artifact|previous_answer|none,
+  name, format}, constraints, references, repair, ambiguity:{score, ask, question, options, note},
+  confidence, summary }` a partir del prompt + últimos turnos + adjuntos del turno + ÚLTIMO
+  artefacto generado del chat (`agent-runner/artifacts.getLatestConversationArtifact`, una
+  query indexada solo si `needsPriorArtifactLookup`) + correferencias + repair. Bilingüe
+  ES/EN sin acentos. Refinado opcional fail-open con el tier gratuito (`builder/llm.complete`,
+  900 ms) solo para briefs de baja confianza con historial.
+- **Cableado en `routes/ai.js`** (tras la fase de entendimiento, antes del triage): cierra la fila
+  «Analizando tu mensaje» con «Entendí: Editar el archivo generado «informe.pptx» · azul»
+  (detalle = supuesto o «Te pregunto antes de seguir»); emite el frame SSE `request_brief`;
+  bloque de sistema `request-brief` tier 0 (`prompt-budget-allocator`) y nunca podado
+  (`prompt-kernel` ALWAYS_KEEP), primero tras el master prompt; viaja al loop agéntico
+  (`requestBrief`, `requestBriefBlock` en `runAgenticChat`); se persiste en
+  `metadata.requestBrief` del mensaje del asistente.
+- **Ruteo**: `routingHints(brief)` corrige los dos fallos documentados: «ahora en azul» /
+  «ponlas todas rosadas» con un Office generado ⇒ reclamo del AgentRunner aunque no haya
+  sustantivo de documento (`editsGeneratedOfficeFile`); «agrega 2 ejemplos más a tu
+  explicación» ⇒ NUNCA editor de documentos ni runner (`editsPreviousAnswer`), ni en la ruta ni
+  en los reclamos internos de `agentic-chat-stream`. «Crea un word con esta información» sigue
+  siendo trabajo del runner (la respuesta anterior es la FUENTE, no el objeto).
+- **Aclaración temprana con opciones**: sin fuente («tradúcelo» sin adjunto ni historial, «resume»
+  a secas) o conflicto de formato («en word o pdf») ⇒ `intentTriageDecision` `ask` con
+  `source:'request_brief'` (inmune al veto de Jev) antes de gastar modelo; la web search se
+  salta en cualquier turno que termina en pregunta. El short-circuit ahora SIEMPRE emite
+  `intent.clarify_options` y persiste `{ kind:'clarification', question, options }`, que
+  `lib/chat-work-status` convierte en el panel de decisión sobre el compositor (chips + respuesta
+  libre), en vivo y tras recargar.
+- **Frontend**: `lib/api.ts` parsea `request_brief` / `intent.clarify_options`
+  (`RequestBriefPayload`, `ClarifyOptionsPayload`); `chat-context-integrated` guarda
+  `message.requestBrief` y convierte el frame de aclaración en `metadata.kind='clarification'`;
+  `components/chat/request-brief-line.tsx` muestra «Entendí: … · supuesto» bajo la respuesta con
+  «Corregir» (prefill del compositor «No era eso. Lo que quiero es: »); se oculta en small talk.
+  UI lock re-baselineado para los 4 archivos tocados.
+- Tests: `backend/tests/request-brief.test.js` (24), `request-brief-routing-source.test.js` (7),
+  `tests/request-brief-frontend-source.test.ts` (4), `tests/components/request-brief-line.test.tsx` (3).
+  Envs en `docs/ENV_VARIABLES.md` (`SIRAGPT_REQUEST_BRIEF*`).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
