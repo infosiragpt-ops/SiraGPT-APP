@@ -163,6 +163,21 @@ Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado
 | `FFMPEG_PATH` | `ffmpeg` | Binario de ffmpeg (compartido con whisper local) |
 | `TRANSCRIBE_URL_MAX_SECONDS` | `10800` | Máximo de audio por llamada (3 h); por encima pide un rango (`media_too_long`) |
 | `TRANSCRIBE_URL_TIMEOUT_MS` | `1200000` | Tope por proceso (descarga / ffmpeg) y para la transcripción (20 min) |
+| `TRANSCRIBE_URL_JS_RUNTIME` | `node` | Runtime JS para el desafío de YouTube: `node` (el Node del propio backend, `--js-runtimes node:<execPath>`), `deno` o `none` |
+| `TRANSCRIBE_URL_REMOTE_COMPONENTS` | (vacío) | Pasa `--remote-components` a yt-dlp (p. ej. `ejs:github`) si la imagen no trae `yt-dlp-ejs` |
+| `TRANSCRIBE_URL_BROWSER_DISCOVERY` | `1` | Peldaño del navegador headless (Chromium de la imagen) para páginas de reproductor que yt-dlp no conoce; `0` lo apaga |
+| `TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS` | `30000` | Tope del descubrimiento con navegador por enlace |
+| `SIRAGPT_COOKIE_JAR_DIR` | `<UPLOAD_DIR>/cookie-jars` | Carpeta de los `cookies.txt` cifrados por usuario (AES-256 con `ENCRYPTION_KEY`) |
+
+**Escalera (added 2026-10-03, segundo paso):** yt-dlp → si no conoce la página («Unsupported URL», 401/403,
+fallo genérico) el **Chromium de la imagen abre la página con las cookies del usuario**, pulsa play y registra
+el HLS/DASH/MP4 real que pide el reproductor (`media-discovery.js`); esa URL vuelve a yt-dlp con `Referer` y
+las cookies del navegador, y si yt-dlp aún la rechaza, **ffmpeg lee el stream directo** con las cabeceras.
+Un reproductor que sigue mostrando login sin medios ⇒ `media_login_required` con dos caminos: adjuntar el
+archivo o adjuntar UNA vez `cookies.txt` del sitio (`cookie-jar-store.js` lo guarda cifrado por usuario y
+lo reutiliza en los próximos enlaces de esa plataforma; solo viajan las cookies del host del enlace).
+La imagen instala `yt-dlp[default]` desde PyPI (trae `yt-dlp-ejs`, el solucionador del desafío de YouTube)
+y cada llamada usa el Node 22 del backend como runtime JS.
 
 ---
 

@@ -1923,6 +1923,46 @@ re-baselineado para los archivos tocados.
   `thinking-core-source`, `claude-thinking-surface-source`, `brand-clover-source` y el snapshot
   de `long-operation-indicator`.
 
+## Transcribir CUALQUIER enlace: navegador headless + cookies del usuario (added 2026-10-03)
+
+Reporte de Luis: «el sistema todavía no puede transcribir el video que le di en el link… tiene
+que entrar al video y sacar el audio sí o sí» (grabaciones de clase en upn.class.com, YouTube,
+cualquier enlace). Diagnóstico: (1) YouTube exige desde 2025-11 un runtime JS + el solucionador
+`yt-dlp-ejs`, y el `yt-dlp` de apk no lo trae; (2) los reproductores institucionales son SPAs sin
+medios en el HTML (yt-dlp: «Unsupported URL»); (3) una grabación privada solo baja con la sesión
+del usuario. Tres piezas, todas en `backend/src/services/agent-harness/tools/`:
+- **`media-discovery.js`**: abre la página en el Chromium de la imagen (Playwright,
+  `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`) con las cookies del usuario, pulsa play y registra las
+  peticiones de medios (HLS/DASH/MP4/M4A, no segmentos) + `<video>/<source>`/og:video/JSON-LD;
+  ranking (master m3u8 > mpd > mp4 > audio), detección de muro de login (redirección a /login,
+  `input[type=password]` sin medios), exporta las cookies del contexto en formato Netscape.
+  Postura SSRF de web_fetch en CADA petición de la página (route interception: sin IP literales ni
+  localhost/.internal, DNS verificado por host). `discoverMedia(url, {cookies, timeoutMs, dnsCheck,
+  launch})`; degrada a `browser_unavailable` sin Chromium.
+- **`cookie-jar-store.js`**: `cookies.txt` (Netscape) por usuario, cifrado con `utils/encryption`
+  (AES-256, `ENCRYPTION_KEY`) en `SIRAGPT_COOKIE_JAR_DIR` (`<UPLOAD_DIR>/cookie-jars`). Nunca se
+  loguean ni devuelven valores: solo hosts. `isNetscapeCookieText`, `saveUserCookies`,
+  `loadUserCookies`, `mergeNetscapeCookies`.
+- **`transcribe-url-tool.js`** (escalera): yt-dlp (con `--no-js-runtimes --js-runtimes
+  node:<process.execPath>`, `--cookies` del jar) → si no conoce la página (`DISCOVERY_ELIGIBLE`)
+  → `media-discovery` → candidato seguro a yt-dlp con `--referer` + UA + cookies del navegador →
+  si yt-dlp lo rechaza, **ffmpeg directo** (`-headers Referer/User-Agent/Cookie` solo del host, `-ss`,
+  `-t`). Un `cookies.txt` adjunto en el turno (`loadAttachedCookies`: `ctx.fileIds` + ownership) se
+  usa y se guarda para los próximos enlaces; sin adjunto se carga el jar guardado. Muro de login
+  sin medios ⇒ `media_login_required` con los dos caminos (adjuntar archivo / adjuntar cookies.txt
+  una vez). Resultado: `via` (`yt-dlp` | `browser+yt-dlp` | `browser+ffmpeg`), `discovery`,
+  `cookies {source, hosts, saved}`.
+- **`backend/Dockerfile`**: `pip3 install "yt-dlp[default]>=2026.8"` (trae `yt-dlp-ejs`) en vez
+  del apk; el runtime JS es el Node 22 de la imagen.
+- **Verificación real (sin red externa en este sandbox)**: `backend/tests/media-discovery.test.js`
+  (9, incluye un caso con Chromium real: SPA que carga el HLS por JS → descubierto; redirección a
+  /login → muro) + e2e manual con yt-dlp 2026.08 y ffmpeg reales contra un servidor local
+  (archivo directo, reproductor SPA con HLS, reproductor privado sin/con cookies). YouTube y
+  upn.class.com NO se pudieron probar desde el sandbox (el proxy de egreso los bloquea): la
+  prueba final es en producción con un enlace real.
+- Envs en `docs/ENV_VARIABLES.md` (`TRANSCRIBE_URL_JS_RUNTIME`, `_REMOTE_COMPONENTS`,
+  `_BROWSER_DISCOVERY`, `_DISCOVERY_TIMEOUT_MS`, `SIRAGPT_COOKIE_JAR_DIR`).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

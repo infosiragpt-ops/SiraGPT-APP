@@ -47,6 +47,10 @@ function deps(over = {}) {
       dnsCheck: async () => true,
       tmpDir: fs.mkdtempSync(path.join(os.tmpdir(), 'tut-')),
       env: { TRANSCRIBE_URL_MAX_SECONDS: '3600', ...(over.env || {}) },
+      // Browser discovery is injected: unit tests never launch Chromium.
+      discoverMedia: over.discoverMedia || (async () => ({ ok: false, reason: 'no_media_found', candidates: [], loginWall: false })),
+      cookieJar: over.cookieJar || { save: async () => ({ hosts: [] }), load: async () => null },
+      loadAttachedCookies: over.loadAttachedCookies || (async () => null),
       transcribe: over.transcribe || (async (filePath, mime, name, opts) => {
         transcribed.push({ filePath, mime, name, opts });
         return {
@@ -142,7 +146,8 @@ test('a login wall / private recording returns media_login_required with the two
   assert.equal(res.code, 'media_login_required');
   assert.match(res.userMessage, /iniciar sesión/);
   assert.match(res.userMessage, /adjúntalo en el chat/);
-  assert.match(res.userMessage, /computadora de este chat/);
+  assert.match(res.userMessage, /cookies\.txt/);
+  assert.equal(res.discovery.reason, 'no_media_found', 'the browser rung ran before giving up');
   assert.equal(d.transcribed.length, 0);
   assert.equal(d.saved.length, 0);
 });
@@ -232,5 +237,6 @@ test('the harness registers transcribe_url, the loop labels it and the selector 
   const bySignal = selectTools({ tools, userQuery: 'hazlo', intent: 'code_generation', maxTools: 8, signals: { transcribeUrl: true } }, { skillAdapter: null });
   assert.ok(bySignal.selectedNames.includes('transcribe_url'));
   const dockerfile = fs.readFileSync(path.join(__dirname, '../Dockerfile'), 'utf8');
-  assert.match(dockerfile, /^\s+yt-dlp \\$/m);
+  assert.match(dockerfile, /pip3 install --no-cache-dir --break-system-packages "yt-dlp\[default\]>=2026\.8"/, 'yt-dlp with the EJS extra from PyPI');
+  assert.doesNotMatch(dockerfile, /^\s+yt-dlp \\$/m, 'no stale apk yt-dlp');
 });
