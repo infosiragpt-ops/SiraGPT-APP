@@ -166,6 +166,45 @@ Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado
 
 ---
 
+### OCR local con GLM-OCR (Ollama de la Lenovo) — `ollama run glm-ocr` (added 2026-10-03)
+
+`backend/src/services/ollama-ocr.js` + `ocr-engine.runOllamaOcrFallback`: GLM-OCR (Z.ai, 0,9B,
+nº 1 en OmniDocBench v1.5) servido por la Ollama que ya corre SiraGPT Mini
+(`siragpt-ollama:11434`) es el **primer peldaño del OCR por visión**: Tesseract → **GLM-OCR
+local** → modelo de visión de pago (OpenAI). Cubre imágenes adjuntas, PDFs escaneados, imágenes
+dentro de Office y el camino `vision`. Llamada nativa `POST /api/chat` con el prompt de tarea
+del modelo (`Text Recognition:` / `Table Recognition:` / `Figure Recognition:`), imagen reducida
+a `OLLAMA_OCR_MAX_SIDE` y salida Markdown (tablas, fórmulas LaTeX). La disponibilidad se sondea
+con `GET /api/tags` y se memoiza `OLLAMA_OCR_PROBE_TTL_MS`: sin Ollama o sin el modelo
+descargado el motor sigue al peldaño de pago en < 3 s, sin error para el usuario. Proveedor
+reportado: `ollama:glm-ocr`. En `NODE_ENV=test` queda apagado salvo `SIRAGPT_OLLAMA_OCR=1`.
+
+**Instalación del modelo: automática.** Si el sondeo ve la Ollama viva pero sin `glm-ocr`, el
+backend le pide descargarlo (`POST /api/pull`, una sola vez, en segundo plano, ~1,9 GB) y vuelve a
+sondear al terminar — no hace falta shell en la Lenovo ni reiniciar nada; el primer arranque tras
+publicar lo deja instalado. Mientras descarga el motor sigue con el modelo de nube
+(`reason: model_pulling`). Un pull fallido se reintenta cada `OLLAMA_OCR_PULL_RETRY_MS`.
+Alternativa manual: `docker exec siragpt-ollama ollama pull glm-ocr`. Con `OCR_MODE=vision`
+GLM-OCR lee directo sin pasar por Tesseract.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_OLLAMA_OCR` | `1` (`0` apaga) | Interruptor del peldaño local |
+| `OLLAMA_OCR_BASE_URL` | `http://siragpt-ollama:11434` | Ollama a usar (acepta `…/v1`, se normaliza). Alias: `OLLAMA_BASE_URL` |
+| `OLLAMA_OCR_MODEL` | `glm-ocr` | Modelo (p. ej. `glm-ocr:q8_0`, `glm-ocr:bf16`) |
+| `OLLAMA_OCR_TASK` | `text` | Prompt de tarea por defecto: `text` / `table` / `figure` |
+| `OLLAMA_OCR_TIMEOUT_MS` | `90000` | Tope por imagen/página |
+| `OLLAMA_OCR_PROBE_TIMEOUT_MS` | `2500` | Tope del sondeo `/api/tags` |
+| `OLLAMA_OCR_PROBE_TTL_MS` | `300000` | Memo del veredicto disponible/no disponible (5 min) |
+| `OLLAMA_OCR_MAX_SIDE` | `2048` | Lado máximo (px) de la imagen enviada |
+| `OLLAMA_OCR_NUM_PREDICT` | `8192` | Tokens máximos de salida |
+| `OLLAMA_OCR_KEEP_ALIVE` | `30m` | Cuánto queda el modelo cargado en Ollama tras una lectura |
+| `OLLAMA_OCR_AUTO_PULL` | `1` (`0` apaga) | Descargar el modelo automáticamente cuando falta |
+| `OLLAMA_OCR_PULL_TIMEOUT_MS` | `2700000` | Tope de la descarga (45 min) |
+| `OLLAMA_OCR_PULL_RETRY_MS` | `1800000` | Espera antes de reintentar un pull fallido (30 min) |
+
+---
+
 ## Embeddings ladder (RAG + memory)
 
 `backend/src/services/embedding-provider.js` is the single embedding entry point

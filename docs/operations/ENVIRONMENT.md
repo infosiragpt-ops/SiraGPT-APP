@@ -412,6 +412,11 @@ payload in the recovery record.
 | `OCR_MODE` | OCR processing mode | `hybrid` |
 | `OCR_MIN_CONFIDENCE` | Minimum OCR confidence | `70` |
 | `OCR_VISION_MODEL` | Vision model for OCR fallback | (auto) |
+| `SIRAGPT_OLLAMA_OCR` | Local GLM-OCR via Ollama as the first vision-OCR rung (before `OCR_VISION_MODEL`); `0` disables | `1` |
+| `OLLAMA_OCR_BASE_URL` | Ollama serving `glm-ocr` (the Lenovo's `siragpt-ollama`); the backend pulls the model itself when missing | `http://siragpt-ollama:11434` |
+| `OLLAMA_OCR_AUTO_PULL` | Ask Ollama to download the model when the probe finds it missing (`0` disables) | `1` |
+| `OLLAMA_OCR_MODEL` | GLM-OCR tag to call | `glm-ocr` |
+| `OLLAMA_OCR_TIMEOUT_MS` | Per-image timeout for the local OCR read | `90000` |
 | `OCR_PDF_MAX_VARIANTS` | Local OCR variants per PDF page: normalize, contrast, threshold, adaptive, inverted | `4` |
 | `OCR_PDF_DEEP_VARIANT_PAGES` | PDF pages that receive multi-variant OCR before falling back to the fastest pass | `60` |
 | `OCR_PDF_PAGE_META_LIMIT` | Page-level OCR quality rows retained in analysis metadata | `200` |
