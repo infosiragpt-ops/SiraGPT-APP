@@ -124,6 +124,79 @@ test('getters, inherited metadata and throwing proxies fail closed without evalu
   assert.equal(failureAnnotation(Object.create(caseInput()), Object.create(resultInput())), '::error title=Critical UI case failed::spec=unknown; status=unknown\n');
 });
 
+test('phase diagnostics emit only the thirteen fixed phase constants', () => {
+  const phases = ['home_open', 'home_empty', 'home_create_tab', 'home_focus', 'home_focus_style',
+    'home_navigate', 'home_viewport', 'home_no_chat', 'home_same_session', 'home_url_owner',
+    'home_storage_owner', 'fixture_requests', 'frontend_exceptions'];
+  for (const phase of phases) {
+    const output = failureAnnotation({ ...caseInput(), annotations: [{ type: 'sira_safe_ui_phase', description: phase }] }, resultInput());
+    assert.equal(output, '::error title=Critical UI case failed,file=' + knownFile + ',line=27::spec=' + knownFile + '; status=failed; line=27; retry=0; phase=' + phase + '\n');
+    assertClosed(output);
+  }
+  const annotations = [
+    { type: 'sira_safe_ui_phase', description: 'home_open' },
+    { type: 'evidence', description: sensitive.join(' | ') },
+    { type: 'sira_safe_ui_phase', description: 'home_focus_style' },
+  ];
+  const output = failureAnnotation({ ...caseInput(), annotations }, resultInput());
+  assert.match(output, /; phase=home_focus_style\n$/);
+  assertClosed(output);
+});
+
+test('arbitrary phase values, annotation types and object coercions never reach output', () => {
+  const expected = failureAnnotation(caseInput(), resultInput());
+  for (const payload of [...sensitive, 'HOME_OPEN', 'home_open\n', 'home_open,phase=home_empty', 'x'.repeat(100_000),
+    null, undefined, 1, { toString() { throw new Error(secretMarker); } }]) {
+    const annotations = [{ type: 'sira_safe_ui_phase', description: payload }, { type: payload, description: 'home_open' }];
+    const output = failureAnnotation({ ...caseInput(), annotations }, resultInput());
+    assert.equal(output, expected);
+    assertClosed(output);
+  }
+});
+
+test('phase arrays and entries use only own data descriptors without invoking getters', () => {
+  let reads = 0;
+  const poison = { get() { reads += 1; throw new Error(secretMarker); } };
+  const inputGetter = Object.defineProperty(caseInput(), 'annotations', poison);
+  const arrayGetter = [];
+  Object.defineProperty(arrayGetter, '0', poison);
+  const typeGetter = Object.defineProperty({ description: 'home_open' }, 'type', poison);
+  const descriptionGetter = Object.defineProperty({ type: 'sira_safe_ui_phase' }, 'description', poison);
+  const inheritedIndex = Array(1);
+  Object.setPrototypeOf(inheritedIndex, { 0: { type: 'sira_safe_ui_phase', description: 'home_open' } });
+  const inheritedEntries = [
+    Object.create({ type: 'sira_safe_ui_phase', description: 'home_open' }),
+    Object.assign(Object.create({ description: 'home_open' }), { type: 'sira_safe_ui_phase' }),
+    Object.assign(Object.create({ type: 'sira_safe_ui_phase' }), { description: 'home_open' }),
+  ];
+  const inheritedInput = Object.assign(Object.create({ annotations: [{ type: 'sira_safe_ui_phase', description: 'home_open' }] }), caseInput());
+  for (const input of [inputGetter, inheritedInput, ...[arrayGetter, [typeGetter], [descriptionGetter], inheritedIndex, inheritedEntries].map((annotations) => ({ ...caseInput(), annotations }))]) {
+    assert.equal(failureAnnotation(input, resultInput()), failureAnnotation(caseInput(), resultInput()));
+  }
+  assert.equal(reads, 0);
+});
+
+test('phase arrays are bounded and reject oversized, array-like and revoked proxy values', () => {
+  let indexReads = 0;
+  const oversized = Array(65);
+  Object.defineProperty(oversized, '0', { get() { indexReads += 1; throw new Error(secretMarker); } });
+  const large = Array(10_000_000);
+  const revocable = Proxy.revocable([], {});
+  revocable.revoke();
+  const brokenDescriptors = new Proxy([], { getOwnPropertyDescriptor() { throw new Error(secretMarker); } });
+  const brokenItem = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error(secretMarker); } });
+  for (const annotations of [oversized, large, { 0: { type: 'sira_safe_ui_phase', description: 'home_open' }, length: 1 },
+    'home_open', null, undefined, revocable.proxy, brokenDescriptors, [brokenItem]]) {
+    const output = failureAnnotation({ ...caseInput(), annotations }, resultInput());
+    assert.equal(output, failureAnnotation(caseInput(), resultInput()));
+    assertClosed(output);
+  }
+  assert.equal(indexReads, 0);
+  const bounded = Array(64);
+  bounded[63] = { type: 'sira_safe_ui_phase', description: 'home_viewport' };
+  assert.match(failureAnnotation({ ...caseInput(), annotations: bounded }, resultInput()), /; phase=home_viewport\n$/);
+});
+
 test('runner errors emit one fixed command and do not inspect the error', () => {
   const script = `const Reporter=require(${JSON.stringify(reporterPath)});const error=new Proxy({}, {get(){throw Error(${JSON.stringify(secretMarker)})}});new Reporter().onError(error);`;
   const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
@@ -164,5 +237,23 @@ test('real Playwright runner errors never publish thrown messages or source cont
   const lines = result.stdout.trimEnd().split('\n');
   assert.ok(lines.length >= 1);
   assert.ok(lines.every((line) => line === '::error title=Critical UI runner failed::Critical UI runner failed; details omitted.'));
+  assertClosed(result.stdout);
+});
+
+test('real Playwright reports the last explicit closed phase without leaking other annotations', () => {
+  const result = runPlaywright(`const {test}=require(${JSON.stringify(require.resolve('@playwright/test'))});\ntest(${JSON.stringify(secretMarker)},()=>{test.info().annotations.push({type:'sira_safe_ui_phase',description:'home_open'});test.info().annotations.push({type:'evidence',description:${JSON.stringify(sensitive.join(' | '))}});test.info().annotations.splice(0,1);test.info().annotations.push({type:'sira_safe_ui_phase',description:'home_focus_style'});throw new Error(${JSON.stringify(secretMarker)})});\n`);
+  assert.equal(result.status, 1);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stderr.includes(secretMarker), false);
+  assert.equal(result.stdout, '::error title=Critical UI case failed,file=e2e/chat.spec.ts,line=2::spec=e2e/chat.spec.ts; status=failed; line=2; retry=0; phase=home_focus_style\n');
+  assertClosed(result.stdout);
+});
+
+test('real Playwright omits arbitrary phase content instead of echoing or coercing it', () => {
+  const result = runPlaywright(`const {test}=require(${JSON.stringify(require.resolve('@playwright/test'))});\ntest(${JSON.stringify(secretMarker)},()=>{test.info().annotations.push({type:'sira_safe_ui_phase',description:${JSON.stringify(sensitive.join(' | '))}});throw new Error(${JSON.stringify(secretMarker)})});\n`);
+  assert.equal(result.status, 1);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stderr.includes(secretMarker), false);
+  assert.equal(result.stdout, '::error title=Critical UI case failed,file=e2e/chat.spec.ts,line=2::spec=e2e/chat.spec.ts; status=failed; line=2; retry=0\n');
   assertClosed(result.stdout);
 });

@@ -263,13 +263,28 @@ async function assertViewportMatchesHost(page: Page, fixture: BrowserFixture) {
   expect(fixture.actions.filter((action) => action.type === "browser_resize").at(-1)).toMatchObject(expected)
 }
 
+type SafeUiPhase =
+  | "home_open" | "home_empty" | "home_create_tab" | "home_focus" | "home_focus_style"
+  | "home_navigate" | "home_viewport" | "home_no_chat" | "home_same_session"
+  | "home_url_owner" | "home_storage_owner" | "fixture_requests" | "frontend_exceptions"
+
+function safeUiPhase(phase: SafeUiPhase) {
+  const annotations = test.info().annotations
+  for (let index = annotations.length - 1; index >= 0; index -= 1) {
+    if (annotations[index].type === "sira_safe_ui_phase") annotations.splice(index, 1)
+  }
+  annotations.push({ type: "sira_safe_ui_phase", description: phase })
+}
+
 test.beforeEach(() => {
   test.info().annotations.push({ type: "evidence", description: "LOCAL rendered frontend, API fixture; remote Chrome/X11 is a separate real gate" })
 })
 test.afterEach(async ({ page }) => {
   const fixture = fixtures.get(page)
   fixture?.releaseNavigation()
+  if (fixture?.unexpected.length) safeUiPhase("fixture_requests")
   expect(fixture?.unexpected || [], "Unsupported browser requests must fail the fixture").toEqual([])
+  if (fixture?.pageErrors.length) safeUiPhase("frontend_exceptions")
   expect(fixture?.pageErrors || [], "No frontend runtime exception").toEqual([])
 })
 
@@ -438,14 +453,19 @@ test("keyboard tab navigation moves selection and focus together", async ({ page
 
 
 test("home browser uses the owned member session without fabricating a conversation", async ({ page }) => {
+  safeUiPhase("home_open")
   const fixture = await mockApi(page, { home: true })
   await openPanel(page, { width: 1280, height: 800 }, { home: true })
   const sessionCount = fixture.getSessionPosts()
+  safeUiPhase("home_empty")
   expect(fixture.navigated, "A blank home browser must not navigate to a default website").toEqual([])
   await expect(page.getByTestId("browser-empty-state")).toBeVisible()
+  safeUiPhase("home_create_tab")
   await button(page, "Nueva pestaña").click()
   await expect(page.getByTestId("browser-empty-state")).toBeVisible()
+  safeUiPhase("home_focus")
   await expect(address(page)).toBeFocused()
+  safeUiPhase("home_focus_style")
   await expect.poll(async () => address(page).evaluate((element) => {
     const style = getComputedStyle(element)
     const channels = style.borderTopColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/)
@@ -455,11 +475,17 @@ test("home browser uses the owned member session without fabricating a conversat
       outline: style.outlineStyle,
     }
   }), { message: "The focused omnibox must render a blue border without the browser's second outline" }).toEqual({ blueBorder: true, outline: "none" })
+  safeUiPhase("home_navigate")
   await navigate(page, siteA)
+  safeUiPhase("home_viewport")
   await assertViewportMatchesHost(page, fixture)
+  safeUiPhase("home_no_chat")
   expect(fixture.getChatPosts()).toBe(0)
+  safeUiPhase("home_same_session")
   expect(fixture.getSessionPosts()).toBe(sessionCount)
+  safeUiPhase("home_url_owner")
   expect(new URL(page.url()).searchParams.get("id")).toBeNull()
+  safeUiPhase("home_storage_owner")
   expect(await page.evaluate(() => localStorage.getItem("currentChatId"))).toBeNull()
   await screenshot(page, "home-local")
 })

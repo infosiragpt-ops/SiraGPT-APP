@@ -18,6 +18,11 @@ const SPEC_FILES = Object.freeze([
   'e2e/chat-computer-login-handoff.spec.ts',
 ]);
 const RESULT_STATES = Object.freeze(['passed', 'failed', 'timedOut', 'skipped', 'interrupted']);
+const SAFE_PHASES = Object.freeze([
+  'home_open', 'home_empty', 'home_create_tab', 'home_focus', 'home_focus_style',
+  'home_navigate', 'home_viewport', 'home_no_chat', 'home_same_session',
+  'home_url_owner', 'home_storage_owner', 'fixture_requests', 'frontend_exceptions',
+]);
 
 function ownValue(object, key) {
   if (object === null || typeof object !== 'object') return undefined;
@@ -42,6 +47,27 @@ function boundedInteger(value, minimum, maximum) {
   return typeof value === 'number' && Number.isInteger(value) && value >= minimum && value <= maximum ? value : null;
 }
 
+function knownPhase(test) {
+  const annotations = ownValue(test, 'annotations');
+  try {
+    if (!Array.isArray(annotations)) return null;
+  } catch {
+    return null;
+  }
+  const length = boundedInteger(ownValue(annotations, 'length'), 0, 64);
+  if (length === null) return null;
+  let phase = null;
+  for (let index = 0; index < length; index += 1) {
+    const annotation = ownValue(annotations, String(index));
+    if (ownValue(annotation, 'type') !== 'sira_safe_ui_phase') continue;
+    const description = ownValue(annotation, 'description');
+    // Return only a constant from the closed catalog, never annotation content.
+    const known = SAFE_PHASES.find((value) => value === description);
+    if (known) phase = known;
+  }
+  return phase;
+}
+
 function failureAnnotation(test, result) {
   const rawStatus = ownValue(result, 'status');
   const status = RESULT_STATES.find((known) => known === rawStatus) || 'unknown';
@@ -58,6 +84,8 @@ function failureAnnotation(test, result) {
   const fields = ['spec=' + (file || 'unknown'), 'status=' + status];
   if (line !== null && file) fields.push('line=' + line);
   if (retry !== null) fields.push('retry=' + retry);
+  const phase = knownPhase(test);
+  if (phase) fields.push('phase=' + phase);
   return '::error ' + properties.join(',') + '::' + fields.join('; ') + '\n';
 }
 
