@@ -98,17 +98,15 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
   // Luis (2026-09-29): the interface is black & white — the in-app brand ink
   // is near-black on light and near-white on dark (the PWA icon, emails and
   // generated documents keep the clover green asset).
-  it("uses a monochrome ink as the in-app brand accent in both themes; the thinking atom is ink + three electron colours", () => {
+  it("uses a monochrome ink as the in-app brand accent in both themes; the thinking atom is ink only (red on error)", () => {
     const css = source("app/globals.css")
     assert.match(css, /--brand: #0A0A0A;/)
     assert.match(css, /--brand: #FAFAFA;/)
-    // The thinking glyph's orbits and nucleus are the foreground (black on light, white on dark), in both themes;
-    // only its three electrons carry colour (Luis, 2026-10-02), via dedicated tokens.
+    // The thinking glyph — nucleus AND electrons — is the foreground (black on light, white on dark), in both
+    // themes (Luis, 2026-10-03: monochrome; the electron colour tokens of 2026-10-02 are gone). Red only on error.
     assert.equal((css.match(/--think-accent: hsl\(var\(--foreground\)\);/g) || []).length, 2)
     assert.doesNotMatch(css, /--think-accent: #(2E7D32|66BB6A);/i)
-    assert.match(css, /--think-electron-a: #38BDF8;/)
-    assert.match(css, /--think-electron-b: #A78BFA;/)
-    assert.match(css, /--think-electron-c: #FBBF24;/)
+    assert.doesNotMatch(css, /--think-electron-[abc]:/)
     assert.match(css, /--clover-vein: #ffffff;/)
     assert.match(css, /--accent-violet: 0 0% 4%;/)
     assert.match(css, /--accent-violet: 0 0% 96%;/)
@@ -122,7 +120,8 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
     assert.match(core, /data-brand-geometry="atom"/)
-    assert.match(core, /var\(--think-electron-\$\{key\}, currentColor\)/)
+    assert.doesNotMatch(core, /--think-electron-/)
+    assert.match(core, /tone = "default"/)
   })
 
   it("leaves no raster sira-gpt.png logo render under app/ and components/", () => {

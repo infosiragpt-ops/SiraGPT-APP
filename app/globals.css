@@ -8607,13 +8607,14 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 }
 
 /* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx):
-   the SiraGPT atom in motion. The `.claude-asterisk*` class names are
-   historical and shared by every consumer. The electrons travel their orbits
-   with SMIL (animateMotion + a synced dash trail, inside the component); CSS
-   owns the nucleus beat, the colours and reduced motion. While active the
-   static electrons are hidden and the moving ones shown; idle (and reduced
-   motion) shows the static logo — electrons at the apex of each orbit, no
-   trail — with only a soft opacity pulse on the nucleus.
+   the SiraGPT atom in motion, monochrome dots only (no trail, no colour; red
+   via `.claude-asterisk--error` only when the system fails). The
+   `.claude-asterisk*` class names are historical and shared by every
+   consumer. The electrons travel their orbits with SMIL (animateMotion,
+   inside the component); CSS owns the nucleus beat and reduced motion. While
+   active the static electrons are hidden and the moving ones shown; idle
+   (and reduced motion) shows the static logo — electrons at the apex of each
+   orbit — with only a soft opacity pulse on the nucleus.
    The outer <g> stays attribute-free; rules target inner classes. */
 @keyframes thinking-core-pulse {
   0%, 100% { transform: scale(0.85); opacity: 0.7; }
@@ -8641,7 +8642,6 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .thinking-live-label { animation: thinking-live-label-pulse 1.2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .claude-asterisk--active .thinking-core__trail,
   .claude-asterisk--active .thinking-core__electron-live { display: none; }
   .claude-asterisk--active .thinking-core__electron-still { display: inline; }
   .thinking-live-label { animation: none; }
@@ -9503,20 +9503,13 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 :root {
   --celeste: 199 89% 48%;
   --success-green: 142 71% 40%;
-  /* The three electrons of the «Pensando» atom (ThinkingCore) — the only
-     colour on a thinking surface; orbits and nucleus stay in the ink
-     (--think-accent). Luis (2026-10-02): «tres puntos de color giran con
-     estela alrededor del punto central». */
-  --think-electron-a: #38BDF8;
-  --think-electron-b: #A78BFA;
-  --think-electron-c: #FBBF24;
+  /* The «Pensando» atom (ThinkingCore) is monochrome — nucleus and electrons
+     in the ink (--think-accent); it only turns red (--destructive) on error
+     (Luis, 2026-10-03). The former --think-electron-a|b|c colour tokens are gone. */
 }
 .dark {
   --celeste: 199 92% 58%;
   --success-green: 142 66% 48%;
-  --think-electron-a: #5BC8FA;
-  --think-electron-b: #B9A3FC;
-  --think-electron-c: #FCD34D;
 }
 
 /* Sidebar brand lockup: atom mark + «SiraGPT» wordmark (2026-10-01; atom since 2026-10-02). */
@@ -10095,4 +10088,18 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 .dark .chat-user-timecode {
   background: hsl(var(--foreground) / 0.1);
   box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12);
+}
+
+/* ── Touch devices: no hover tooltips ─────────────────────────────────────
+   Luis (2026-10-03, iPhone): tapping the sidebar toggle showed the black
+   «Contraer barra lateral ⌘B» tooltip (Radix opens tooltips on focus, and a
+   tap focuses the button). A tooltip is a hover affordance; on a device with
+   no hover it only adds a stray black bubble — and «⌘B» means nothing there.
+   Every TooltipContent carries `.ui-tooltip`; the aria-labels stay for
+   assistive tech. */
+@media (hover: none) {
+  .ui-tooltip,
+  [data-radix-popper-content-wrapper]:has(> .ui-tooltip) {
+    display: none !important;
+  }
 }

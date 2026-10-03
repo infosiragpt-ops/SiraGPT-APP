@@ -17,12 +17,16 @@ describe("Claude-style thinking surface", () => {
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /claude-asterisk--active/)
     // Luis (2026-10-02): three electrons travel the three orbits of the atom
-    // logo with a trail; idle is the static logo. SMIL moves them along the
-    // exact ellipse; the trail is a synced dash on a pathLength-100 copy.
+    // logo; idle is the static logo. SMIL moves them along the exact ellipse.
+    // Luis (2026-10-03): monochrome dots only — no trail, no electron colour;
+    // red (tone="error") is the only colour, and only when the system fails.
     assert.match(core, /data-brand-geometry="atom"/)
     assert.match(core, /<animateMotion path=\{ORBIT_PATH\}/)
-    assert.match(core, /pathLength=\{100\}/)
-    assert.match(core, /attributeName="stroke-dashoffset"/)
+    assert.doesNotMatch(core, /pathLength=\{100\}|attributeName="stroke-dashoffset"|thinking-core__trail|function Trail/, "no trail")
+    assert.doesNotMatch(core, /--think-electron-/, "no per-electron colour")
+    assert.match(core, /const ERROR_TINT = "hsl\(var\(--destructive\)\)"/)
+    assert.match(core, /failed \? "claude-asterisk--error" : null/)
+    assert.match(core, /data-thinking-tone=\{tone\}/)
     assert.match(core, /thinking-core__electron-still/)
     assert.doesNotMatch(core, /thinking-core__ripple/)
     const loaders = source("lib/thinking-loaders.ts")
@@ -43,8 +47,9 @@ describe("Claude-style thinking surface", () => {
     assert.match(css, /@keyframes thinking-core-soft/)
     assert.doesNotMatch(css, /@keyframes thinking-core-(orbit|ripple)/, "orbits are SMIL now; no ripple")
     assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: none; \}/)
-    // Reduced motion: the moving electrons and trails hide, the static logo shows, the nucleus only pulses softly.
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__trail,\s*\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
+    // Reduced motion: the moving electrons hide, the static logo shows, the nucleus only pulses softly.
+    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
+    assert.doesNotMatch(css, /thinking-core__trail/)
     assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: inline; \}/)
     assert.match(css, /\.thinking-live-label \{ animation: none; \}/)
     assert.doesNotMatch(css, /@keyframes claude-asterisk-(spin|breathe)/)
@@ -71,9 +76,10 @@ describe("Claude-style thinking surface", () => {
     assert.match(css, /var\(--think-text\) 35%,\s*var\(--think-text-hi\) 50%,\s*var\(--think-text\) 65%/)
     // The in-app brand ink is monochrome (black & white interface).
     assert.match(css, /--brand: #0A0A0A;/)
-    // Terminal check / X are inline currentColor glyphs, not the celeste/red SVG files.
+    // Terminal check is an inline currentColor glyph; the error state is the atom itself in the destructive red.
     const loader = source("components/thinking-status-loader.tsx")
     assert.match(loader, /function TerminalGlyph/)
+    assert.match(loader, /<ClaudeAsterisk size=\{px\} active=\{false\} tone="error" \/>/)
     assert.doesNotMatch(loader, /<img/)
   })
 
