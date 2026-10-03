@@ -1824,11 +1824,16 @@ class AIService {
             );
             return resp.choices?.[0]?.message?.content || '';
         } catch (err) {
-            const wasTimeout = timeoutCtrl.signal.aborted && err?.name === 'AbortError'
-                && !signal?.aborted;
+            // Classify by the signals, not by err.name: the OpenAI SDK
+            // surfaces our own abort as APIUserAbortError("Request was
+            // aborted."), which used to be logged as a real failure (prod
+            // 2026-10-03). Our 8 s ceiling → "abandoned"; the user's Stop /
+            // a closed stream → quiet; anything else → the provider failed.
+            const parentAborted = Boolean(signal?.aborted);
+            const wasTimeout = timeoutCtrl.signal.aborted && !parentAborted;
             if (wasTimeout) {
                 console.warn(`corrective pass abandoned after ${TIMEOUT_MS}ms — returning original response`);
-            } else {
+            } else if (!parentAborted) {
                 console.warn('corrective pass failed:', err.message || err);
             }
             return '';

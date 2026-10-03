@@ -10,6 +10,8 @@ const rag = require('./rag-service');
 
 const MAX_PASTE_LENGTH = Number.parseInt(process.env.SIRAGPT_AUTO_FILE_MAX_PASTE || '2000000', 10);
 const MIN_PASTE_LENGTH = Number.parseInt(process.env.SIRAGPT_AUTO_FILE_MIN_PASTE || '200', 10);
+// Synthetic path namespace of pasted (virtual) documents — no file on disk.
+const AUTO_FILE_PATH_PREFIX = 'auto/';
 const AUTO_FILE_TTL_MS = Number.parseInt(process.env.SIRAGPT_AUTO_FILE_TTL_MS || `${7 * 24 * 60 * 60 * 1000}`, 10);
 
 const CONTENT_TYPE_MAP = {
@@ -98,25 +100,32 @@ async function ingestPastedContent(userId, content, opts = {}) {
         filename: fileName,
         // Virtual (pasted) document — no file on disk. The File model requires
         // a non-null `path`; use a synthetic, namespaced one.
-        path: `auto/${fileName}`,
+        path: `${AUTO_FILE_PATH_PREFIX}${fileName}`,
         mimeType: detected.mime,
         size: sizeBytes,
         extractedText: content,
         processingStage: 'uploaded',
-        source: 'paste',
-        metadata: {
-          autoFiled: true,
-          detectedFormat: detected.format,
-          charCount: content.length,
-          lineCount,
-          createdAt: new Date().toISOString(),
-        },
+        // The File model has NO `source` / `metadata` columns (prod
+        // 2026-10-03: every paste ≥200 chars died with "Unknown argument
+        // `source`" before the row existed). The paste origin is encoded in
+        // the synthetic `auto/` path prefix; format/line stats travel in the
+        // response and the DocumentAnalysis row that analyzeFile writes.
       },
     });
 
     await fileProcessingStatus.setStage(prisma, fileRecord.id, 'extracting', { userId });
 
-    const analysis = await documentIntelligence.analyzeFile(fileRecord, content);
+    // analyzeFile(prisma, { userId, fileId, fileRecord, force }) — it was
+    // being called as (fileRecord, content), which threw on `prisma.file`
+    // and sank every paste (masked until now by the Prisma `source` crash).
+    // The row carries the pasted text, so the analyzer reads it straight
+    // from `fileRecord` and never touches the synthetic `auto/` path.
+    const analysis = (await documentIntelligence.analyzeFile(prisma, {
+      userId,
+      fileId: fileRecord.id,
+      fileRecord,
+      force: true,
+    })) || {};
 
     await prisma.file.update({
       where: { id: fileRecord.id },
@@ -130,15 +139,6 @@ async function ingestPastedContent(userId, content, opts = {}) {
         // (set above) until scheduleAutoFileRagIndex + setStage('ready') advance
         // it through the real machine.
         extractedText: content,
-        metadata: {
-          ...fileRecord.metadata,
-          analysis: {
-            language: analysis.language,
-            chunkCount: analysis.chunks?.length || 0,
-            tableCount: analysis.tables?.length || 0,
-            hasUsefulText: analysis.hasUsefulText,
-          },
-        },
       },
     });
 
@@ -178,9 +178,10 @@ async function ingestPastedContent(userId, content, opts = {}) {
       charCount: content.length,
       lineCount,
       analysis: {
-        language: analysis.language,
-        chunkCount: analysis.chunks?.length || 0,
-        tableCount: analysis.tables?.length || 0,
+        language: analysis.language || null,
+        chunkCount: Number(analysis.chunkCount ?? analysis.chunks?.length) || 0,
+        tableCount: Number(analysis.tableCount ?? analysis.tables?.length) || 0,
+        status: analysis.status || null,
       },
       intent: intentAnalysis,
     };
@@ -251,7 +252,11 @@ async function getAutoFilesForChat(userId, chatId, opts = {}) {
   const files = await prisma.file.findMany({
     where: {
       userId,
-      source: 'paste',
+      // Pasted documents are the rows whose synthetic path lives under the
+      // `auto/` namespace (see ingestPastedContent) — there is no `source`
+      // column to filter on.
+      path: { startsWith: AUTO_FILE_PATH_PREFIX },
+      deletedAt: null,
       createdAt: { gte: new Date(Date.now() - AUTO_FILE_TTL_MS) },
     },
     orderBy: { createdAt: 'desc' },
@@ -263,13 +268,13 @@ async function getAutoFilesForChat(userId, chatId, opts = {}) {
       size: true,
       processingStage: true,
       createdAt: true,
-      metadata: true,
     },
   });
   return files;
 }
 
 module.exports = {
+  AUTO_FILE_PATH_PREFIX,
   ingestPastedContent,
   ingestDroppedFiles,
   getAutoFilesForChat,

@@ -154,6 +154,11 @@ async function streamToBuffer(stream, limit = MAX_FILE_BYTES) {
   return Buffer.concat(chunks);
 }
 
+// Second chance for an artifact whose R2 mirror is still uploading.
+const ARTIFACT_IMPORT_RETRY_MS = Number(process.env.SIRAGPT_ARTIFACT_IMPORT_RETRY_MS) > 0
+  ? Number(process.env.SIRAGPT_ARTIFACT_IMPORT_RETRY_MS)
+  : 1500;
+
 async function readStorageBuffer(storageRef) {
   if (objectStorage.isRemote(storageRef)) {
     const stored = await objectStorage.readStream(storageRef);
@@ -706,16 +711,36 @@ async function importAgentArtifact(prisma, {
   if (String(metadata.ownerUserId || '') !== String(userId)) {
     throw new CoworkWorkspaceError('artifact_not_found', 'Artifact not found.', 404);
   }
-  let buffer = null;
-  if (metadata.storageRef) {
-    try { buffer = await readStorageBuffer(metadata.storageRef); } catch (_) { /* try local */ }
-  }
-  if (!buffer && metadata.storedRelPath) {
-    const root = path.resolve(ARTIFACT_DIR);
+  // The import runs the instant the tool emits file_artifact, while the R2
+  // mirror (task-tools.startArtifactMirror) may be mid-flight: the object is
+  // not in the bucket yet and, once it is, the local copy gets unlinked.
+  // Read the local file FIRST (it exists until the mirror confirms), then
+  // the bucket, and give the mirror one short second chance before giving
+  // up (prod 2026-10-03: «Artifact content is not available.»).
+  const root = path.resolve(ARTIFACT_DIR);
+  const localCandidates = [];
+  if (metadata.storedRelPath) {
     const local = path.resolve(root, metadata.storedRelPath);
-    if (local.startsWith(`${root}${path.sep}`)) {
-      try { buffer = await fsp.readFile(local); } catch (_) { /* missing after R2 mirror */ }
+    if (local.startsWith(`${root}${path.sep}`)) localCandidates.push(local);
+  }
+  if (metadata.filename) {
+    // Legacy artifacts (pre folderCode) live flat as `<id>-<filename>`.
+    const legacy = path.resolve(root, `${id}-${metadata.filename}`);
+    if (legacy.startsWith(`${root}${path.sep}`) && !localCandidates.includes(legacy)) localCandidates.push(legacy);
+  }
+  const readOnce = async () => {
+    for (const local of localCandidates) {
+      try { return await fsp.readFile(local); } catch (_) { /* missing after R2 mirror */ }
     }
+    if (metadata.storageRef) {
+      try { return await readStorageBuffer(metadata.storageRef); } catch (_) { /* not mirrored yet */ }
+    }
+    return null;
+  };
+  let buffer = await readOnce();
+  if (!buffer) {
+    await new Promise((r) => setTimeout(r, ARTIFACT_IMPORT_RETRY_MS));
+    buffer = await readOnce();
   }
   if (!buffer) throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
   const resolvedPath = normalizeWorkspacePath(targetPath || `deliverables/${metadata.filename || `${id}.bin`}`);

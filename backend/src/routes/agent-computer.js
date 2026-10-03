@@ -491,6 +491,14 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
 // reports the last recorded agent action plus a best-effort page peek.
 router.get('/activity', requireFlag, authenticateToken, async (req, res) => {
   try {
+    // Polls that carry no conversation key (the orchestrator's own viewer
+    // page polls `?sessionId=ac_<member>&browser=1`; prod 2026-10-03 logged
+    // 346 of them as 5xx «request errored» in one afternoon) get an empty,
+    // cacheable answer: there is nothing to isolate and nothing to leak —
+    // activity is keyed by conversation, and without one there is none.
+    if (!readConversationId(req)) {
+      return res.json({ activity: null, url: null, title: '', conversationBound: false });
+    }
     const identity = identityFor(req);
     requireProvenIsolation(identity);
     const { getActivity } = require('../services/computer/live-actions');

@@ -803,6 +803,14 @@ uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error
 El aviso «run bootstrap failed (legacy chat continues)» se registra como WARN
 una vez por minuto (con el recuento del minuto anterior) y el resto a `info`.
 
+## Volcado de producción 2026-10-03 — OCR local acotado, cierre HTTP, importación de artefactos
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `SIRAGPT_OCR_LOCAL_IMAGE_BUDGET_MS` | `20000` | Presupuesto de reloj (ms) de TODO el intento local de Tesseract sobre UNA imagen (ambas pasadas). Pasado el plazo no arranca otra variante, un `recognize()` colgado se abandona terminando el worker y la imagen pasa a los peldaños de visión (GLM-OCR local → nube). Una foto de WhatsApp retuvo la subida 371 s en producción. El pase por mosaicos conserva su propio `SIRAGPT_OCR_IMAGE_BUDGET_MS` (12 s). |
+| `SIRAGPT_HTTP_CLOSE_GRACE_MS` | `3500` | Gracia (ms) que `http_server_close` da a las peticiones en vuelo antes de cortar los sockets que sigan abiertos (SSE, long-poll). Debe quedar por debajo del presupuesto de 5 s del paso; con `keepAliveTimeout` de 2 min un `server.close()` a secas nunca terminaba. Los sockets ociosos keep-alive se sueltan de inmediato. |
+| `SIRAGPT_ARTIFACT_IMPORT_RETRY_MS` | `1500` | Segunda oportunidad (ms) al importar un artefacto recién generado al workspace de cowork cuando ni la copia local ni el objeto en R2 están todavía disponibles (el espejo a R2 va en vuelo). Se lee primero la copia local, luego el bucket. |
+
 ## Billing failover and provider keys (optional)
 
 When the provider of a user-selected model has no credit/quota left
