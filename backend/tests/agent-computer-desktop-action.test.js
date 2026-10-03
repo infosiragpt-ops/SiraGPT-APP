@@ -11,7 +11,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { forwardDesktopAction, throwIfDesktopActionFailed } = require('../src/routes/agent-computer');
+const { forwardDesktopAction, throwIfDesktopActionFailed, desktopFocusError } = require('../src/routes/agent-computer');
 
 function jsonResponse(status, body) {
   return { status, ok: status < 400, json: async () => body };
@@ -80,4 +80,36 @@ test('forwardDesktopAction: the client abort is rethrown as is', async () => {
     forwardDesktopAction('http://orch/x', { type: 'screenshot' }, { fetchImpl, signal: ctrl.signal, timeoutMs: 1000 }),
     (err) => err.name === 'AbortError' && !err.status,
   );
+});
+
+// Focus commands (xdotool inside the desktop container): the user never
+// reads the raw `docker exec … xdotool search --class google-chrome …` line.
+test('desktopFocusError: a failed xdotool focus is a 502 in Spanish without the docker command', () => {
+  const raw = Object.assign(new Error('Command failed: docker exec -u compuser -e DISPLAY=:1 sira-ac-user-abc_c_def bash -lc xdotool search --onlyvisible --class google-chrome windowactivate'), { stderr: '' });
+  const err = desktopFocusError(raw, 'chrome');
+  assert.equal(err.status, 502);
+  assert.equal(err.code, 'desktop_focus_failed');
+  assert.doesNotMatch(err.publicMessage, /docker|xdotool|sira-ac-user/);
+  assert.match(err.publicMessage, /«chrome»/);
+  assert.equal(err.cause, raw);
+});
+
+test('desktopFocusError: the desktop_app_not_ready marker keeps its 503 copy', () => {
+  const err = desktopFocusError(Object.assign(new Error('Command failed'), { stderr: 'desktop_app_not_ready\n' }), 'terminal');
+  assert.equal(err.status, 503);
+  assert.equal(err.code, 'desktop_app_not_ready');
+  assert.match(err.publicMessage, /no pudo abrirse/);
+});
+
+test('desktopFocusError: a missing / stopped container is a 503 desktop_unavailable', () => {
+  const err = desktopFocusError(Object.assign(new Error('Command failed'), { stderr: 'Error response from daemon: No such container: sira-ac-user-x' }), 'files');
+  assert.equal(err.status, 503);
+  assert.equal(err.code, 'desktop_unavailable');
+  assert.doesNotMatch(err.publicMessage, /sira-ac-user/);
+});
+
+test('desktopFocusError: a client abort is not a desktop failure', () => {
+  const err = desktopFocusError(Object.assign(new Error('aborted'), { name: 'AbortError' }), 'chrome');
+  assert.equal(err.status, 499);
+  assert.equal(err.code, 'desktop_focus_aborted');
 });

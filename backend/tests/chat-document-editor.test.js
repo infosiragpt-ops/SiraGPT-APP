@@ -274,10 +274,15 @@ test('a missing or ambiguous named historical source never falls back to the new
     ],
   });
   const { deps } = baseDeps({ artifactDir });
-  for (const name of ['ausente.docx', 'ajeno.docx', 'tesis.docx']) {
+  // A name that matches no owned file in this chat (absent, or another
+  // user's artifact — never revealed) says so; two same-name uploads are
+  // ambiguous. Neither ever falls back to the newest document.
+  for (const name of ['ausente.docx', 'ajeno.docx']) {
     await assert.rejects(resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: `Mejora la redacción de ${name}`, deps }),
-      (err) => err.code === 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
+      (err) => err.code === 'DOCUMENT_EDIT_SOURCE_NOT_FOUND' && err.message.includes(name) && /pídeme crearlo/.test(err.message));
   }
+  await assert.rejects(resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction: 'Mejora la redacción de tesis.docx', deps }),
+    (err) => err.code === 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
 });
 
 test('semantic Word edits cannot use legacy annex fallback when the selected model is absent or fails', async () => {

@@ -243,6 +243,37 @@ function throwIfDesktopActionFailed(status, data) {
   throw err;
 }
 
+// A focus command (xdotool / app launcher inside the desktop container) that
+// fails used to surface as a 500 whose message was the raw `docker exec …`
+// command line (container name included). The user reads what happened to
+// the app, never the command; the detail stays in the server log.
+function desktopFocusError(err, focus) {
+  const stderr = String((err && err.stderr) || '');
+  const mapped = new Error('');
+  mapped.cause = err;
+  mapped.focus = focus;
+  if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')) {
+    mapped.code = 'desktop_focus_aborted';
+    mapped.status = 499;
+    mapped.message = 'La acción se canceló antes de completarse.';
+  } else if (stderr.includes('desktop_app_not_ready')) {
+    mapped.code = 'desktop_app_not_ready';
+    mapped.status = 503;
+    mapped.message = 'La aplicación no pudo abrirse en el escritorio. Vuelve a abrir la computadora e inténtalo de nuevo.';
+  } else if (/No such container|is not running|Cannot connect to the Docker daemon|not found/i.test(stderr + ' ' + String((err && err.message) || ''))) {
+    mapped.code = 'desktop_unavailable';
+    mapped.status = 503;
+    mapped.message = 'El escritorio de esta conversación no está disponible. Vuelve a abrir la computadora e inténtalo de nuevo.';
+  } else {
+    mapped.code = 'desktop_focus_failed';
+    mapped.status = 502;
+    mapped.message = `No pude traer ${focus ? `la aplicación «${focus}»` : 'la aplicación'} al frente en el escritorio. Inténtalo de nuevo o vuelve a abrir la computadora.`;
+  }
+  mapped.publicMessage = mapped.message;
+  console.warn('[agent-computer] focus failed', { focus, code: mapped.code, detail: String((err && err.message) || '').slice(0, 200) });
+  return mapped;
+}
+
 function failComputer(res, err, fallbackCode) {
   return res.status(err.status || 500).json({
     error: err.code || fallbackCode,
@@ -370,12 +401,7 @@ async function handleAction(req, res, session) {
     try {
       out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus], { signal });
     } catch (err) {
-      if (String(err.stderr || '').includes('desktop_app_not_ready')) {
-        err.code = 'desktop_app_not_ready';
-        err.status = 503;
-        err.publicMessage = 'La aplicación no pudo abrirse en el escritorio. Vuelve a abrir la computadora e inténtalo de nuevo.';
-      }
-      throw err;
+      throw desktopFocusError(err, focus);
     }
     return res.json({
       ok: true,
@@ -539,3 +565,4 @@ module.exports.identityFor = identityFor;
 module.exports.ensureMemberDesktop = ensureMemberDesktop;
 module.exports.forwardDesktopAction = forwardDesktopAction;
 module.exports.throwIfDesktopActionFailed = throwIfDesktopActionFailed;
+module.exports.desktopFocusError = desktopFocusError;
