@@ -5,15 +5,73 @@
 const { resolveOrchConfig, orchFetch } = require('./orch-client');
 const { rewriteCdpWs } = require('./cdp-client');
 
+// One Chrome relaunch per desktop per cooldown: the browser poll runs every
+// 4 s and must not turn a dead desktop into a relaunch storm.
+const chromeRecoveryBySession = new Map();
+const CHROME_RECOVERY_COOLDOWN_MS = 20_000;
+const CHROME_RECOVERY_WAIT_MS = 8000;
+
+function unavailableError(code, message, cause) {
+  const error = new Error(code);
+  error.code = code;
+  error.status = code === 'desktop_unavailable' ? 503 : 502;
+  error.publicMessage = message;
+  if (cause) error.cause = cause;
+  return error;
+}
+
+async function cdpVersion(base, headers, signal) {
+  const response = await fetch(`${base}/json/version`, {
+    headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`cdp_http_${response.status}`);
+  return response.json();
+}
+
+// CDP is unreachable (Chrome closed by the user, crashed under load). Relaunch
+// Chrome inside the SAME desktop with the DevTools port and wait for the port
+// to answer. A desktop whose container is gone cannot be repaired from here:
+// that is `desktop_unavailable`, and the panel asks the user to reopen it.
+async function recoverLiveChrome(session, env, base, headers, signal, cause) {
+  const last = chromeRecoveryBySession.get(session.sessionId) || 0;
+  if (Date.now() - last < CHROME_RECOVERY_COOLDOWN_MS) {
+    throw unavailableError('browser_observation_unavailable', 'El navegador de la computadora no responde. Inténtalo de nuevo en unos segundos.', cause);
+  }
+  chromeRecoveryBySession.set(session.sessionId, Date.now());
+  try {
+    const { dockerExec } = require('./persistent');
+    const { chromeMaximizeOrLaunch } = require('./chrome-desktop-flags');
+    await dockerExec(session, chromeMaximizeOrLaunch({ xdotool: 'xdotool' }), { signal, timeoutMs: 12_000 });
+  } catch (error) {
+    const detail = `${error && error.message} ${error && error.stderr}`;
+    if (/No such container|is not running|Cannot connect to the Docker daemon|not found|container_missing/i.test(detail)) {
+      throw unavailableError('desktop_unavailable', 'El escritorio de esta conversación no está disponible. Vuelve a abrir la computadora e inténtalo de nuevo.', error);
+    }
+    throw unavailableError('browser_observation_unavailable', 'No se pudo reabrir el navegador de la computadora. Vuelve a abrir la computadora e inténtalo de nuevo.', error);
+  }
+  const { setTimeout: sleep } = require('node:timers/promises');
+  const deadline = Date.now() + CHROME_RECOVERY_WAIT_MS;
+  let lastError = cause;
+  for (;;) {
+    signal?.throwIfAborted();
+    try { return await cdpVersion(base, headers, signal); } catch (error) { lastError = error; }
+    if (Date.now() >= deadline) break;
+    await sleep(500, undefined, signal ? { signal } : undefined);
+  }
+  throw unavailableError('browser_observation_unavailable', 'El navegador de la computadora no responde. Vuelve a abrir la computadora e inténtalo de nuevo.', lastError);
+}
+
 async function connectLiveBrowser(session, env, signal) {
   const cfg = resolveOrchConfig(env);
   const base = `${cfg.url}/sessions/${encodeURIComponent(session.sessionId)}/cdp`;
   const headers = cfg.secret ? { Authorization: `Bearer ${cfg.secret}` } : {};
-  const response = await fetch(`${base}/json/version`, {
-    headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
-  });
-  if (!response.ok) throw new Error('browser_observation_unavailable');
-  const version = await response.json();
+  let version;
+  try {
+    version = await cdpVersion(base, headers, signal);
+  } catch (cause) {
+    if (signal?.aborted) throw cause;
+    version = await recoverLiveChrome(session, env, base, headers, signal, cause);
+  }
   const { chromium } = require('playwright');
   const browser = await chromium.connectOverCDP(rewriteCdpWs(version.webSocketDebuggerUrl, base), { headers, timeout: 8000, noDefaults: true });
   if (signal?.aborted) { await browser.close().catch(() => {}); signal.throwIfAborted(); }

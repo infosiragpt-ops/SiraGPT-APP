@@ -20,6 +20,11 @@ describe('chrome desktop flags', () => {
     assert.match(CHROME_DOCKER_FLAGS, /--no-sandbox/);
     assert.match(CHROME_DOCKER_FLAGS, /--test-type/);
     assert.match(CHROME_DOCKER_FLAGS, /--disable-infobars/);
+    // Every relaunch from the backend must serve the DevTools port the
+    // integrated browser connects to (prod 2026-10-03: a Chrome relaunched
+    // without it left every browser poll on 502 until the container restarted).
+    assert.match(CHROME_DOCKER_FLAGS, /--remote-debugging-port=9222/);
+    assert.match(CHROME_DOCKER_FLAGS, /--remote-debugging-address=0\.0\.0\.0/);
     assert.match(CHROME_VISIBLE_FLAGS, /--start-maximized/);
     assert.match(CHROME_VISIBLE_FLAGS, /--window-size=1920,1080/);
     assert.doesNotMatch(CHROME_VISIBLE_FLAGS, /DeepSeek|OpenRouter|model_id/);
