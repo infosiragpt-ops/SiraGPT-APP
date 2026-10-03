@@ -104,21 +104,52 @@ const FORMAT_NOTES = Object.freeze({
   pdf: 'PDF: not a document but a page description. Prefer structural ops; micro-edits only same-font/similar-length.',
 });
 
-function buildSurgicalPromptAddition({ instruction = '', formats = [] } = {}) {
+// «Usa esta plantilla / con este formato» + an attached template: the file
+// is the FORMAT of a new deliverable. Its masters, layouts, theme and styles
+// stay byte-identical (the guard still holds) but its sample slides /
+// placeholder paragraphs are REPLACED by real content — the opposite of the
+// «keep every text» rule of a surgical edit.
+const TEMPLATE_FILL_RULES = `TEMPLATE FILL MODE — the attached file is a FORMAT to follow, not content to keep
+Build the deliverable ON the template package: open it, keep [Content_Types].xml (fix the
+content type when the file is a .potx/.dotx), theme, masters, layouts, styles, headers and
+footers byte-identical, then REMOVE its sample slides / placeholder paragraphs (lorem, XXXX,
+«Haga clic para…») and create the real content from the template's OWN layouts and styles
+(python-pptx: prs.slide_layouts by name, placeholders; python-docx: doc.styles by name).
+Removing sample slides and adding new ones changes ppt/presentation.xml, its rels and
+[Content_Types].xml: that is expected here. Deliver the SAME package family (.pptx/.docx),
+never a deck or document started from scratch.`;
+
+function detectTemplateFill(instruction = '', fileNames = []) {
+  try {
+    const { detectTemplateIntent } = require('../document-template-intent');
+    const intent = detectTemplateIntent({ prompt: instruction, fileNames });
+    return intent && intent.isTemplateFill ? intent : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function buildSurgicalPromptAddition({ instruction = '', formats = [], fileNames = [] } = {}) {
   const reformat = isReformateoRequest(instruction);
+  const templateFill = detectTemplateFill(instruction, fileNames);
   const notes = (Array.isArray(formats) ? formats : [])
     .map((f) => FORMAT_NOTES[String(f || '').toLowerCase()])
     .filter(Boolean);
   const guard = reformat
     ? 'REFORMAT MODE explicitly requested by the user: style/theme/layout changes are allowed for this run.'
     : 'FORMAT GUARD active: styles.xml, numbering.xml, theme, layouts, masters, margins/sectPr and [Content_Types].xml are OFF-LIMITS unless the user says "modo reformateo".';
-  return [SURGICAL_RULES, guard, ...notes].join('\n\n');
+  const template = templateFill
+    ? `${TEMPLATE_FILL_RULES}\nTEMPLATE: uploads/${templateFill.templateFile}${templateFill.contentFiles.length ? ` · CONTENT SOURCES: ${templateFill.contentFiles.map((n) => `uploads/${n}`).join(', ')}` : ''}`
+    : '';
+  return [SURGICAL_RULES, guard, ...(template ? [template] : []), ...notes].join('\n\n');
 }
 
 module.exports = {
   FORBIDDEN_PARTS,
   SKILL_ORDER,
   SURGICAL_RULES,
+  TEMPLATE_FILL_RULES,
+  detectTemplateFill,
   FORMAT_NOTES,
   REFORMATEO_RE,
   isReformateoRequest,

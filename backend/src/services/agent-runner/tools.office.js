@@ -148,6 +148,8 @@ const OFFICE_OPS = [
   'set_cell', 'set_cell_style',
   // pptx
   'set_shape_text', 'set_geometry', 'set_fill', 'set_text_format',
+  // pptx — operaciones de lámina (nacen del layout del PROPIO deck; masters/tema intactos)
+  'add_slide', 'duplicate_slide', 'delete_slide', 'move_slide', 'set_slide_background', 'list_layouts',
 ];
 
 const OFFICE_TOOL_DEFINITIONS = [
@@ -191,7 +193,10 @@ const OFFICE_TOOL_DEFINITIONS = [
         + 'set_paragraph_format{paragraph,align?,space_before_pt?,space_after_pt?,line_spacing?,indent_left_mm?,first_line_mm?,hanging_mm?} · set_cell_text{table,row,col,text}. '
         + 'XLSX: set_cell{sheet,ref,value|formula} · set_cell_style{sheet,ref|range,bold?,italic?,color?,fill?,number_format?,h_align?,font_size?}. '
         + 'PPTX: replace_text{find,replace,slide?,shape?,occurrence?,all?} · set_shape_text{slide,shape,text} · '
-        + 'set_geometry{slide,shape,x_mm?,y_mm?,w_mm?,h_mm?,dx_mm?,dy_mm?} · set_fill{slide,shape,color} · set_text_format{slide,shape,find?,size_pt?,bold?,italic?,underline?,color?,font?}. '
+        + 'set_geometry{slide,shape,x_mm?,y_mm?,w_mm?,h_mm?,dx_mm?,dy_mm?} · set_fill{slide,shape,color} · set_text_format{slide,shape,find?,size_pt?,bold?,italic?,underline?,color?,font?} · '
+        + 'LÁMINAS: add_slide{layout?(nombre o índice de list_layouts),role?(cover|content|section|closing),title?,subtitle?,bullets?,body?,position?} (nace del layout del propio deck: mismo diseño) · '
+        + 'duplicate_slide{slide,position?,title?,bullets?} («una lámina igual a la 4») · delete_slide{slide} · move_slide{slide,position} · '
+        + 'set_slide_background{slide|slides:[n…]|slides:"all",color} (SOLO esas láminas; nunca pintes todas si pidió una) · list_layouts{}. '
         + 'Colores en hex RRGGBB. Índices y nombres salen de inspect_document. '
         + 'Máx. ~25 KB de argumentos por llamada: para lotes grandes (p. ej. parafrasear un capítulo) haz varias llamadas '
         + 'de 6–10 párrafos, usando el dst de una como src de la siguiente.',
