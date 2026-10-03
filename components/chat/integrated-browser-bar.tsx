@@ -178,7 +178,9 @@ function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, on
     const parsed = sanitizeNavigateUrl(draft)
     if (!parsed.ok) { setLocalError(parsed.error); return }
     setLocalError(null)
-    dirty.current = false
+    // Keep the entered address through queued work and failures; only a
+    // confirmed navigation may replace it with the actual destination.
+    dirty.current = true
     try {
       const actual = await onNavigate(parsed.url)
       setDraft(actual)
@@ -225,7 +227,7 @@ function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, on
         className="no-default-focus-ring sira-browser-address ml-1 h-9 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-base outline-none transition-shadow disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 sm:text-[13px]" />
       <button type="submit" className={button} disabled={busy || !state || !draft.trim()} aria-label="Ir" data-testid="integrated-browser-go"><ArrowRight className="h-4 w-4" aria-hidden /></button>
     </form>
-    {error || localError ? <p className="absolute inset-x-0 top-full z-30 border-b border-red-100 bg-white px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300" role="alert" data-testid="browser-error">{error || localError}{(onRetry || !state) && !busy ? <button type="button" className="ml-2 underline underline-offset-2" onClick={() => { if (onRetry) void onRetry().catch(() => setLocalError("No se pudo completar la acción. Inténtalo de nuevo.")); else action({ type: "browser_present" }) }}>Reintentar</button> : null}</p> : null}
+    {error || localError ? <p className="absolute inset-x-0 top-full z-30 border-b border-red-100 bg-white px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300" role="alert" data-testid="browser-error">{error || localError}{(onRetry || !state) && !busy ? <button type="button" className="ml-2 underline underline-offset-2" onClick={() => { setLocalError(null); if (onRetry) void onRetry().catch(() => setLocalError("No se pudo completar la acción. Inténtalo de nuevo.")); else action({ type: "browser_present" }) }}>Reintentar</button> : null}</p> : null}
     {busy ? <span className="sr-only" role="status">Abriendo página…</span> : null}
   </div>
 }

@@ -98,6 +98,7 @@ export function AgentComputerShell({
   const [browserBusy, setBrowserBusy] = React.useState(false)
   const [browserError, setBrowserError] = React.useState<string | null>(null)
   const browserBusyRef = React.useRef(false)
+  const browserBackgroundResize = React.useRef(false)
   const browserEpoch = React.useRef(0)
   const browserMutation = React.useRef(0)
   const browserReadAbort = React.useRef<AbortController | null>(null)
@@ -125,6 +126,7 @@ export function AgentComputerShell({
     retryBrowserAction.current = null
     setBrowserBusy(false)
     browserBusyRef.current = false
+    browserBackgroundResize.current = false
     const chatId = conversationId?.trim() || ""
     if (!browserVisible || !browserSessionId) return
     let stopped = false
@@ -147,6 +149,7 @@ export function AgentComputerShell({
       stopped = true
       if (browserEpoch.current === epoch) browserEpoch.current++
       browserBusyRef.current = false
+      browserBackgroundResize.current = false
       void queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" }))
         .catch(() => {
           // Static diagnostics only: never expose a URL, session, or server body.
@@ -188,21 +191,26 @@ export function AgentComputerShell({
     return () => { stopped = true; clearTimeout(timer); browserReadAbort.current?.abort() }
   }, [browserVisible, hasBrowserState, conversationId, browserSessionId])
 
-  const browserAction = React.useCallback(async (action: ComputerBrowserAction, recoverPresentation = false) => {
+  const browserAction = React.useCallback(async (action: ComputerBrowserAction, recoverPresentation = false, backgroundResize = false) => {
     const chatId = conversationId?.trim() || ""
-    if (!browserSessionId || browserBusyRef.current) return null
+    if (!browserSessionId || (browserBusyRef.current && !browserBackgroundResize.current)) return null
     const epoch = browserEpoch.current
-    browserMutation.current++
+    const mutation = ++browserMutation.current
     browserReadAbort.current?.abort()
     // A pending presentation repair must survive later commands that the
     // server refuses until the viewport is usable again.
-    const pendingRepair = isPresentationRepair(retryBrowserAction.current) ? retryBrowserAction.current : null
+    let pendingRepair = isPresentationRepair(retryBrowserAction.current) ? retryBrowserAction.current : null
     retryBrowserAction.current = pendingRepair
     browserBusyRef.current = true
-    setBrowserBusy(true)
+    // Automatic sizing must not discard a URL entered between its start and end.
+    // The first foreground command joins this queue and owns the busy state.
+    browserBackgroundResize.current = backgroundResize && action.type === "browser_resize"
+    setBrowserBusy(!browserBackgroundResize.current)
     if (!pendingRepair) setBrowserError(null)
     try {
       const state = await queueBrowser(async () => {
+        if (browserEpoch.current !== epoch) throw new Error("La vista del navegador cambió")
+        if (isPresentationRepair(retryBrowserAction.current)) pendingRepair = retryBrowserAction.current
         // An explicit retry can recover a partially restored framebuffer. Keep
         // both steps in this operation so no navigation can run between them.
         if (recoverPresentation && action.type === "browser_present") {
@@ -230,23 +238,29 @@ export function AgentComputerShell({
       }
       return null
     } finally {
-      if (browserEpoch.current === epoch) { browserBusyRef.current = false; setBrowserBusy(false) }
+      if (browserEpoch.current === epoch && browserMutation.current === mutation) {
+        browserBusyRef.current = false
+        browserBackgroundResize.current = false
+        setBrowserBusy(false)
+      }
     }
   }, [conversationId, browserSessionId, queueBrowser])
   const browserNavigate = async (url: string) => {
-    if (!browserSessionId || browserBusyRef.current) throw new Error("Navegador ocupado")
+    if (!browserSessionId || (browserBusyRef.current && !browserBackgroundResize.current)) throw new Error("Navegador ocupado")
     const epoch = browserEpoch.current
-    browserMutation.current++
+    const mutation = ++browserMutation.current
     browserReadAbort.current?.abort()
     // A pending presentation repair must survive later commands that the
     // server refuses until the viewport is usable again.
     const pendingRepair = isPresentationRepair(retryBrowserAction.current) ? retryBrowserAction.current : null
     retryBrowserAction.current = pendingRepair
     browserBusyRef.current = true
+    browserBackgroundResize.current = false
     setBrowserBusy(true)
     if (!pendingRepair) setBrowserError(null)
     try {
       const result = await queueBrowser(async () => {
+        if (browserEpoch.current !== epoch) throw new Error("La vista del navegador cambió")
         const actual = await postComputerNavigate(conversationId, url, browserState?.activeTabId || undefined, browserSessionId)
         const state = await readComputerBrowser(conversationId?.trim() || "", browserSessionId)
         return { actual, state }
@@ -258,7 +272,11 @@ export function AgentComputerShell({
       if (browserEpoch.current === epoch) setBrowserError("No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.")
       throw new Error("No se pudo abrir la página")
     } finally {
-      if (browserEpoch.current === epoch) { browserBusyRef.current = false; setBrowserBusy(false) }
+      if (browserEpoch.current === epoch && browserMutation.current === mutation) {
+        browserBusyRef.current = false
+        browserBackgroundResize.current = false
+        setBrowserBusy(false)
+      }
     }
   }
   const navigateCallback = React.useRef(browserNavigate)
@@ -295,7 +313,7 @@ export function AgentComputerShell({
       pending = null
       const stamp = `${size.width}x${size.height}`
       if (stamp === applied || stamp === failed || (confirmedViewport.current?.width === size.width && confirmedViewport.current?.height === size.height)) return
-      const state = await browserAction({ type: "browser_resize", ...size })
+      const state = await browserAction({ type: "browser_resize", ...size }, false, true)
       if (state?.viewport?.width === size.width && state.viewport.height === size.height) applied = stamp
       else failed = stamp
       if (!stopped && pending) timer = setTimeout(() => void flush(), 250)

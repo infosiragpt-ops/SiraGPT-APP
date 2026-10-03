@@ -107,7 +107,7 @@ jobs:
           path: .next/cache
           # Exact source match only: partial restores can retain compiled CSS
           # from an earlier source tree, including stale Tailwind extraction.
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx,css}', 'components/**/*.{ts,tsx,js,jsx,css}', 'lib/**/*.{ts,tsx,js,jsx,css}', 'hooks/**/*.{ts,tsx,js,jsx,css}', 'styles/**/*.css', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx,css}', 'components/**/*.{ts,tsx,js,jsx,css}', 'lib/**/*.{ts,tsx,js,jsx,css}', 'hooks/**/*.{ts,tsx,js,jsx,css}', 'styles/**/*.css', 'src/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}', '*.{js,ts,jsx,tsx,mdx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
       - name: Next.js build
         run: npm run build
 
@@ -1092,7 +1092,7 @@ jobs:
           path: .next/cache
           # Exact source match only: partial restores can retain compiled CSS
           # from an earlier source tree, including stale Tailwind extraction.
-          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx,css}', 'components/**/*.{ts,tsx,js,jsx,css}', 'lib/**/*.{ts,tsx,js,jsx,css}', 'hooks/**/*.{ts,tsx,js,jsx,css}', 'styles/**/*.css', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
+          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx,css}', 'components/**/*.{ts,tsx,js,jsx,css}', 'lib/**/*.{ts,tsx,js,jsx,css}', 'hooks/**/*.{ts,tsx,js,jsx,css}', 'styles/**/*.css', 'src/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}', '*.{js,ts,jsx,tsx,mdx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
 
       # Production bundle for the gate (not the standalone deploy build —
       # that one is validated by `Frontend · build`). Lint and the backend
