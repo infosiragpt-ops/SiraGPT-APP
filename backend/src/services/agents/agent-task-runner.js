@@ -39,6 +39,8 @@ const {
   enrichAgentTaskEvent,
 } = require('./agent-task-honest-progress');
 const persistence = require('./agent-task-persistence');
+const { finalizeWorkspaceDelivery } = require('./agent-task-workspace-delivery');
+const { loadTaskConversationHistory } = require('./task-conversation-history');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const transcriptionFastPath = require('./transcription-document-fast-path');
 const {
@@ -2140,6 +2142,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
   const task = internals.createTaskRecord({
     taskId,
+    createdAt: payload.createdAt || existing?.createdAt,
     userId: user.id,
     chatId,
     displayGoal,
@@ -2539,6 +2542,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     artifactsList = artifacts,
     metadata = {},
   }) => {
+    const delivery = await finalizeWorkspaceDelivery({
+      prisma, userId: user.id, chatId, artifacts: artifactsList, finalMarkdown, stoppedReason,
+      signal: controller.signal, emit,
+    });
+    ({ finalMarkdown, stoppedReason } = delivery);
+    metadata = { ...metadata, workspaceDelivery: delivery.workspaceDelivery };
     const status = statusForAgentStopReason(stoppedReason);
     task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
@@ -3157,7 +3166,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           // al generador de documentos nuevos.
           emit({ type: 'step_done', id: currentStepId, ok: true });
           currentStepId = null;
-          return finishDeterministicTask({
+          return await finishDeterministicTask({
             finalMarkdown: preserved.content,
             stoppedReason: 'image_edit_clarification_needed',
             steps: stepIdCounter,
@@ -3237,7 +3246,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         emit({ type: 'step_done', id: currentStepId, ok: deliverableResults.length > 0 });
         currentStepId = null;
         logDocRouting('source_preserving_edit', agentRunnerFailure ? `rescued_after_${agentRunnerFailure.reason}` : undefined);
-        return finishDeterministicTask({
+        return await finishDeterministicTask({
           finalMarkdown: preserved.content,
           stoppedReason: 'source_preserving_document_edit',
           steps: stepIdCounter,
@@ -3267,7 +3276,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             passed: false,
             summary: err?.message || 'No se ubicó el fragmento exacto dentro del archivo original.',
           });
-          return finishDeterministicTask({
+          return await finishDeterministicTask({
             finalMarkdown: buildSourcePreservingFailureMarkdown(err),
             stoppedReason: 'source_preserving_document_target_not_found',
             steps: stepIdCounter,
@@ -3289,7 +3298,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             passed: false,
             summary: err?.message || 'No se pudo editar el archivo original.',
           });
-          return finishDeterministicTask({
+          return await finishDeterministicTask({
             finalMarkdown: buildSourcePreservingFailureMarkdown(err),
             stoppedReason: 'source_preserving_document_edit_failed',
             steps: stepIdCounter,
@@ -3523,7 +3532,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         stepIdCounter = 1;
         emit({ type: 'step_start', id: 's1', label: 'Formateando referencias', icon: 'file-text' });
         emit({ type: 'step_done', id: 's1', ok: true });
-        return finishDeterministicTask({
+        return await finishDeterministicTask({
           finalMarkdown: thinBibliographyFallback,
           stoppedReason: 'attachment_bibliography_fallback',
           steps: 1,
@@ -3687,7 +3696,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           ? 'Se respondió sin depender del bucle de herramientas ni de la cola.'
           : 'Se explicó cómo aportar contenido legible en lugar de dejar el stream abierto.',
       });
-      return finishDeterministicTask({
+      return await finishDeterministicTask({
         finalMarkdown: finalFallbackMarkdown,
         stoppedReason: recoveredMarkdown ? 'attachment_chat_fast_path' : 'attachment_unreadable_fast_path',
         steps: 1,
@@ -3741,7 +3750,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           ? 'Se generó la respuesta usando el texto extraído del archivo.'
           : 'Se indicó al usuario cómo aportar contenido legible.',
       });
-      return finishDeterministicTask({
+      return await finishDeterministicTask({
         finalMarkdown: finalFallbackMarkdown,
         stoppedReason: recoveredMarkdown ? 'attachment_local_fallback' : 'attachment_unreadable_fallback',
         steps: 1,
@@ -3800,7 +3809,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       emit({ type: 'step_start', id: 's3', label: 'Preparando entrega final', icon: 'check' });
       emit({ type: 'step_done', id: 's3', ok: true });
 
-      return finishDeterministicTask({
+      return await finishDeterministicTask({
         finalMarkdown: generated.finalMarkdown,
         stoppedReason: 'vancouver_matrix_docx',
         steps: 3,
@@ -3928,6 +3937,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       console.log(`[agent-task-runner] resuming task ${taskId} from step ${resumeCheckpoint.stepsCompleted}`);
     }
 
+    const conversationHistory = await loadTaskConversationHistory(prisma, { userId: user.id, chatId, taskId, before: task.createdAt });
     const reactRunArgs = {
       query: goal,
       tools,
@@ -3957,7 +3967,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         openclawRuntimeProfile
       ) + (generatedArtifactRefs.length
         ? `\n\n${buildGeneratedArtifactReadContext(generatedArtifactRefs, displayGoal || goal)}`
-        : '') + require('../chat-skills').selectedSkillsSuffix({ userId: user && user.id, names: skills }),
+        : '') + (conversationHistory ? `\n\n${conversationHistory}` : '')
+        + require('../chat-skills').selectedSkillsSuffix({ userId: user && user.id, names: skills }),
       ctx: toolCtx,
       finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
         finalizeProfile,
@@ -4366,6 +4377,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
     }
 
+    const delivery = await finalizeWorkspaceDelivery({
+      prisma, userId: user.id, chatId, artifacts, finalMarkdown, stoppedReason,
+      signal: controller.signal, emit,
+    });
+    ({ finalMarkdown, stoppedReason } = delivery);
     const status = statusForAgentStopReason(stoppedReason);
     task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
@@ -4401,6 +4417,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         frameworks: frameworkStatus,
         durableExecution: enterpriseRuntimeProfile.durableExecution,
         stoppedReason,
+        workspaceDelivery: delivery.workspaceDelivery,
         maxSteps,
         maxRuntimeMs,
       },
@@ -4472,7 +4489,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     });
     return { taskId, status, artifacts: artifacts.length };
   } catch (err) {
-    if (!controller.signal.aborted && hasAttachedFiles) {
+    if (!controller.signal.aborted && hasAttachedFiles && err?.code !== 'E_HISTORY_UNAVAILABLE') {
       const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
@@ -4526,7 +4543,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           ? 'La respuesta se completó con el texto del adjunto.'
           : 'Se dieron instrucciones claras en lugar de un error opaco.',
       });
-      return finishDeterministicTask({
+      return await finishDeterministicTask({
         finalMarkdown: finalFallbackMarkdown,
         stoppedReason: recoveredMarkdown ? 'attachment_runtime_recovery' : 'attachment_unreadable_recovery',
         steps: Math.max(1, stepIdCounter),
@@ -4540,7 +4557,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     }
     const errorEvent = controller.signal.aborted
       ? { type: 'error', message: 'Tarea detenida por el usuario.' }
-      : toAgentTaskErrorEvent(err || 'agent task failed');
+      : err?.code === 'E_HISTORY_UNAVAILABLE'
+        ? { type: 'error', code: 'E_HISTORY_UNAVAILABLE', message: 'No pude recuperar el contexto de esta conversación. Reintenta antes de generar el archivo.' }
+        : toAgentTaskErrorEvent(err || 'agent task failed');
     const message = errorEvent.message;
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
     emit(errorEvent);

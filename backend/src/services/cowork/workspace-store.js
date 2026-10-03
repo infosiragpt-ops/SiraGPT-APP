@@ -6,6 +6,7 @@ const { constants: fsConstants } = require('node:fs');
 const path = require('node:path');
 const archiver = require('archiver');
 const objectStorage = require('../object-storage');
+const { throwIfAborted } = require('../../utils/abort-signals');
 
 const MAX_FILE_BYTES = Math.max(
   1024,
@@ -751,7 +752,9 @@ async function importAgentArtifact(prisma, {
   artifactId,
   targetPath = null,
   authorRunId = null,
+  signal = null,
 }) {
+  throwIfAborted(signal);
   const { ARTIFACT_DIR } = require('../agents/task-tools');
   const id = String(artifactId || '').trim();
   if (!/^[a-f0-9]{8,64}$/i.test(id)) {
@@ -768,11 +771,14 @@ async function importAgentArtifact(prisma, {
   }
   await getWorkspace(prisma, { workspaceId, userId });
   const resolvedPath = normalizeWorkspacePath(targetPath || `deliverables/${metadata.filename || `${id}.bin`}`);
+  throwIfAborted(signal);
   const buffer = await readArtifactImportBuffer(metadata, ARTIFACT_DIR, id);
+  throwIfAborted(signal);
   const existing = await prisma.coworkFile.findUnique({
     where: { workspaceId_path: { workspaceId: String(workspaceId), path: resolvedPath } },
     select: { currentVersion: true },
   });
+  throwIfAborted(signal);
   return writeFile(prisma, {
     workspaceId,
     userId,
