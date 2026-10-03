@@ -109,6 +109,44 @@ test('history and reload are backed by the selected page, not optimistic fronten
   await assert.rejects(h.browserState(session), /private diagnostic/);
 });
 
+for (const focused of [true, false]) {
+  test(`closing a background tab preserves the native ${focused ? 'focused' : 'visible'} tab among three tabs`, async () => {
+    const h = harness();
+    const first = h.makePage('https://example.com/first');
+    const background = h.makePage('https://example.com/background');
+    const active = h.makePage('https://example.com/active');
+    await active.bringToFront();
+    active.focus = focused;
+    h.calls.length = 0;
+
+    const state = await h.browserAction(session, { type: 'browser_tab_close', tabId: background.id });
+
+    assert.equal(state.activeTabId, active.id);
+    assert.deepEqual(h.pages.map(page => page.id), [first.id, active.id]);
+    assert.equal(active.visible, true);
+    assert.equal(active.focus, focused, 'closing a background tab does not steal desktop focus');
+    assert.equal(first.focus, false);
+    assert.deepEqual(h.calls.filter(call => typeof call === 'string' && /^(front|close):/.test(call)), ['close:' + background.id]);
+  });
+}
+
+test('closing the active tab among three tabs confirms the focused surviving replacement', async () => {
+  const h = harness();
+  const first = h.makePage('https://example.com/first');
+  const middle = h.makePage('https://example.com/middle');
+  const active = h.makePage('https://example.com/active');
+  await active.bringToFront();
+  h.calls.length = 0;
+
+  const state = await h.browserAction(session, { type: 'browser_tab_close', tabId: active.id });
+
+  assert.equal(state.activeTabId, first.id);
+  assert.deepEqual(h.pages.map(page => page.id), [first.id, middle.id]);
+  assert.equal(first.focus, true);
+  assert.equal(first.visible, true);
+  assert.deepEqual(h.calls.filter(call => typeof call === 'string' && /^(front|close):/.test(call)), ['front:' + first.id, 'close:' + active.id]);
+});
+
 test('closing the last real tab creates its blank replacement before closing and preserves Chrome', async () => {
   const h = harness();
   const page = h.makePage('https://example.com/');

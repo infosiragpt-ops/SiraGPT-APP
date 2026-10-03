@@ -311,12 +311,17 @@ async function browserAction(session, action, env = process.env, signal) {
     }
     if (!page) throw browserError('browser_tab_missing', 404);
     if (action.type === 'browser_tab_close') {
-      const pages = browser.contexts().flatMap(context => context.pages());
-      const next = pages.find(candidate => candidate !== page) || await page.context().newPage();
-      // Opening the replacement first keeps the last Chrome window/profile alive.
-      await next.bringToFront();
+      const active = await selectPage(browser);
+      if (!active || active === page) {
+        const pages = browser.contexts().flatMap(context => context.pages());
+        const next = pages.find(candidate => candidate !== page) || await page.context().newPage();
+        // Opening the replacement first keeps the last Chrome window/profile alive.
+        await next.bringToFront();
+      }
       await page.close();
-      page = next;
+      // Closing a background tab must preserve the browser's native selection.
+      page = await selectPage(browser);
+      if (!page) throw browserError('browser_tab_missing', 404);
     } else {
       await page.bringToFront();
       const options = { waitUntil: 'domcontentloaded', timeout: 15000 };
