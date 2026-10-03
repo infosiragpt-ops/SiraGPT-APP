@@ -6,7 +6,7 @@ const { resolveSessionIdentity } = require('../src/services/computer/member-key'
 
 test('browser controls preserve existing authenticated desktop ownership and report confirmed state', async t => {
   const auth = installAuthSessionMock();
-  let enabled = true, failure = false;
+  let enabled = true, failure = false, navigationFailure;
   const requests = [], controls = [], reads = [];
   const validateBrowserAction = require('../src/services/computer/live-page').validateBrowserAction;
   const browser = { tabs: [{ id: 'target-1', title: 'Página', url: 'https://example.com/' }], activeTabId: 'target-1', canGoBack: true, canGoForward: false, presentation: 'embedded', viewport: { width: 1000, height: 700 } };
@@ -32,6 +32,7 @@ test('browser controls preserve existing authenticated desktop ownership and rep
         }
       },
       browserState: async (session, _env, signal) => { reads.push({ session, signal }); return browser; },
+      navigatePage: async () => { if (navigationFailure) throw navigationFailure; return { ok: true, url: 'https://example.com/' }; },
       browserAction: async (session, action, _env, signal) => {
         validateBrowserAction(action);
         controls.push({ session, action, signal });
@@ -68,6 +69,21 @@ test('browser controls preserve existing authenticated desktop ownership and rep
     assert.equal(controls.at(-1).session.sessionId, 'owned-desktop');
     assert.equal(controls.at(-1).action.tabId, 'target-1');
     assert.ok(controls.at(-1).signal instanceof AbortSignal);
+  });
+  await t.test('navigation preserves a repairable viewport failure without exposing its private cause', async () => {
+    navigationFailure = Object.assign(new Error('browser_viewport_failed'), {
+      code: 'browser_viewport_failed', status: 502,
+      publicMessage: 'No se pudo completar la acción del navegador. Vuelve a intentarlo.',
+      cause: new Error('private-session-or-secret-diagnostic'),
+    });
+    const res = await request(identityApp).post('/api/agent-computer/navigate').set('Authorization', auth.authHeader)
+      .send({ sessionId: 'owned-desktop', conversationId: 'chat-a', tabId: 'target-1', url: 'https://example.com/' });
+    assert.equal(res.status, 502);
+    assert.equal(res.body.error, 'browser_viewport_failed');
+    assert.equal(res.body.message, navigationFailure.publicMessage);
+    assert.notEqual(res.body.ok, true);
+    assert.doesNotMatch(JSON.stringify(res.body), /private-session|secret-diagnostic/);
+    navigationFailure = undefined;
   });
   await t.test('ownership, authentication, flag and missing session deny before CDP', async () => {
     const count = reads.length + controls.length;
