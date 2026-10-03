@@ -327,6 +327,7 @@ function RemoteChatComputerPanel({
         className={cn(
           "flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/40 bg-[#e8e8ea] dark:bg-[#101012]",
           (mobileFullScreen || maximized) && "fixed inset-0 z-50 border-l-0",
+          browserMode && "border-l-0 bg-[#fafafa] px-[7px] pb-[7px] pt-px dark:bg-zinc-950",
         )}
         data-testid="chat-agent-computer-panel"
         data-chat-computer-conversation={chatId || undefined}

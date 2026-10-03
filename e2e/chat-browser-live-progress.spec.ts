@@ -181,7 +181,13 @@ const fixtures = new WeakMap<Page, ProgressFixture>()
 const address = (page: Page) => page.getByRole("textbox", { name: "Dirección del navegador", exact: true })
 async function showDesktop(page: Page) {
   const desktop = page.getByTestId("agent-computer-dock-os").getByRole("button", { name: "Escritorio", exact: true })
-  await desktop.click()
+  const menu = page.getByRole("button", { name: "Más opciones del navegador", exact: true })
+  if (await menu.isVisible()) {
+    await menu.click()
+    await page.getByRole("menuitem", { name: "Escritorio", exact: true }).click()
+  } else {
+    await desktop.click()
+  }
   await expect(desktop).toHaveAttribute("aria-pressed", "true")
   await expect(page.getByTestId("chat-computer-collapse")).toBeVisible()
 }

@@ -48,16 +48,18 @@ type TabFixture = { id: string; history: string[]; index: number }
 type BrowserAction = { type: string; tabId?: string; width?: number; height?: number }
 function titleFor(url: string): string {
   if (url === "about:blank") return "Nueva pestaña"
+  if (url === "https://www.google.com/") return "Google"
+  if (url === "https://www.google.com/search?q=google") return "google - Buscar con Google"
   if (url === siteA) return "Página A"
   if (url === siteB) return "Página B"
   if (url === siteC) return "Página C"
   return "Inicio QA"
 }
 
-async function mockApi(page: Page, { home = false }: { home?: boolean } = {}) {
+async function mockApi(page: Page, { home = false, initialUrl = "https://www.google.com/" }: { home?: boolean; initialUrl?: string } = {}) {
   const conversationId = home ? null : chat.id
   const ownsConversation = (value: unknown) => home ? value == null || value === "" : value === chat.id
-  const tabs: TabFixture[] = [{ id: "fixture-tab-1", history: [home ? "about:blank" : "https://www.google.com/"], index: 0 }]
+  const tabs: TabFixture[] = [{ id: "fixture-tab-1", history: [home ? "about:blank" : initialUrl], index: 0 }]
   let nextId = 2
   let activeTabId = tabs[0].id
   let presentation: "embedded" | "desktop" = "desktop"
@@ -466,9 +468,14 @@ test("keyboard tab navigation moves selection and focus together", async ({ page
   await first.press("ArrowRight")
   await expect(second).toHaveAttribute("aria-selected", "true")
   await expect(second).toBeFocused()
+  await expect.poll(() => second.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none")
   await second.press("Home")
   await expect(first).toHaveAttribute("aria-selected", "true")
   await expect(first).toBeFocused()
+  await first.press("Tab")
+  const close = button(page, "Cerrar pestaña Página A")
+  await expect(close).toBeFocused()
+  await expect.poll(() => close.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe("none")
   await expect(address(page)).toHaveValue(siteA)
 })
 
@@ -510,4 +517,34 @@ test("home browser uses the owned member session without fabricating a conversat
 test("home browser preserves the focused omnibox and owned member session in the saved dark theme", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("theme", "dark"))
   await assertHomeBrowserOwnership(page, { dark: true })
+})
+
+
+test.describe("reference browser frame", () => {
+  test.use({ deviceScaleFactor: 2 })
+  test("matches the compact reference and keeps desktop tools reachable without a bottom dock", async ({ page }) => {
+    const fixture = await mockApi(page, { initialUrl: "https://www.google.com/search?q=google" })
+    await openPanel(page, { width: 724, height: 1078 })
+    await expect(page.getByTestId("agent-computer-dock-os")).toHaveCount(0)
+    await expect(page.getByRole("link", { name: "Abrir en otra pestaña" })).toHaveAttribute("href", "https://www.google.com/search?q=google")
+    await expect.poll(() => page.getByRole("tab", { selected: true }).locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0)
+    const tab = await page.getByRole("tab", { selected: true }).boundingBox()
+    const add = await button(page, "Nueva pestaña").boundingBox()
+    expect(add!.x - tab!.x - tab!.width).toBeLessThan(40)
+    for (const name of ["Más opciones del navegador", "Anotar página", "Interactuar con la página", "Cerrar navegador"]) {
+      await assertInsideViewport(page, button(page, name))
+    }
+    const frame = await page.getByTestId("agent-computer-shell").boundingBox()
+    expect(frame!.x).toBe(7)
+    expect(frame!.y).toBe(1)
+    await screenshot(page, "reference-frame")
+    await button(page, "Más opciones del navegador").click()
+    await page.getByRole("menuitem", { name: "Escritorio", exact: true }).click()
+    await expect(page.getByTestId("agent-computer-dock-os")).toBeVisible()
+    await expect.poll(() => fixture.actions.filter((action) => action.type === "browser_restore").length).toBeGreaterThan(0)
+    await page.getByTestId("agent-computer-dock-os").getByRole("button", { name: "Navegador", exact: true }).click()
+    await expect(page.getByTestId("agent-computer-dock-os")).toHaveCount(0)
+    await expect(address(page)).toHaveValue("https://www.google.com/search?q=google")
+    expect(fixture.navigated).toEqual([])
+  })
 })

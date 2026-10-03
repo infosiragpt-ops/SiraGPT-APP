@@ -27,6 +27,7 @@ import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { actComputerBrowser, readComputerBrowser, postComputerNavigate, type ComputerBrowserState, type ComputerBrowserAction } from "@/lib/computer-navigate-client"
 import { sanitizeNavigateUrl } from "@/lib/computer-navigate"
 import { PensandoBars } from "@/components/pensando-bars"
+import { imagePoint, type ImageViewerStroke } from "@/lib/image-viewer"
 import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import {
   CODE_PREVIEW_STATE_EVENT,
@@ -94,6 +95,23 @@ export function AgentComputerShell({
   const [focusNote, setFocusNote] = React.useState<string | null>(null)
   const [deptName, setDeptName] = React.useState<string>("")
   const browserVisible = cleanBrowser && activeApp === "browser"
+  const [annotationMode, setAnnotationMode] = React.useState<"interact" | "draw">("interact")
+  const [annotationStrokes, setAnnotationStrokes] = React.useState<ImageViewerStroke[]>([])
+  const annotationSurface = React.useRef<SVGSVGElement | null>(null)
+  const annotationPointer = React.useRef<{ id: number; index: number; count: number } | null>(null)
+  const stopAnnotationStroke = React.useCallback(() => {
+    const pointer = annotationPointer.current
+    annotationPointer.current = null
+    if (pointer && annotationSurface.current?.hasPointerCapture?.(pointer.id)) annotationSurface.current.releasePointerCapture(pointer.id)
+  }, [])
+  const clearAnnotations = React.useCallback(() => {
+    stopAnnotationStroke()
+    setAnnotationStrokes([])
+  }, [stopAnnotationStroke])
+  const resetAnnotations = React.useCallback(() => {
+    clearAnnotations()
+    setAnnotationMode("interact")
+  }, [clearAnnotations])
   const [browserState, setBrowserState] = React.useState<ComputerBrowserState | null>(null)
   const [browserBusy, setBrowserBusy] = React.useState(false)
   const [browserError, setBrowserError] = React.useState<string | null>(null)
@@ -106,6 +124,9 @@ export function AgentComputerShell({
   const confirmedViewport = React.useRef(browserState?.viewport)
   confirmedViewport.current = browserState?.viewport
   const browserOperations = React.useRef<Promise<unknown>>(Promise.resolve())
+  const restoreBrowser = React.useRef<(() => Promise<boolean>) | null>(null)
+  const desktopFocusRequest = React.useRef(0)
+  React.useEffect(() => () => { desktopFocusRequest.current++ }, [conversationId, browserSessionId])
   const browserViewport = React.useRef<HTMLDivElement | null>(null)
   const viewportCallback = React.useRef(onBrowserModeChange)
   viewportCallback.current = onBrowserModeChange
@@ -130,6 +151,20 @@ export function AgentComputerShell({
     const chatId = conversationId?.trim() || ""
     if (!browserVisible || !browserSessionId) return
     let stopped = false
+    let restoration: Promise<boolean> | null = null
+    const restore = () => {
+      if (!restoration) restoration = queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" }))
+        .then(() => true)
+        .catch(() => {
+          // Static diagnostics only: never expose a URL, session, or server body.
+          console.warn("[AgentComputerShell] browser_restore_failed")
+          toast.error("No se pudo restaurar el escritorio. Abre el navegador e inténtalo de nuevo.")
+          return false
+        })
+        .finally(() => { if (restoreBrowser.current === restore) restoreBrowser.current = null })
+      return restoration
+    }
+    restoreBrowser.current = restore
     browserBusyRef.current = true
     setBrowserBusy(true)
     void queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_present" }))
@@ -150,12 +185,8 @@ export function AgentComputerShell({
       if (browserEpoch.current === epoch) browserEpoch.current++
       browserBusyRef.current = false
       browserBackgroundResize.current = false
-      void queueBrowser(() => actComputerBrowser(chatId, browserSessionId, { type: "browser_restore" }))
-        .catch(() => {
-          // Static diagnostics only: never expose a URL, session, or server body.
-          console.warn("[AgentComputerShell] browser_restore_failed")
-          toast.error("No se pudo restaurar el escritorio. Abre el navegador e inténtalo de nuevo.")
-        })
+      // Keep the shared wait reachable by rapid dock changes until it settles.
+      void restore()
     }
   }, [browserVisible, browserSessionId, conversationId, queueBrowser])
 
@@ -194,6 +225,7 @@ export function AgentComputerShell({
   const browserAction = React.useCallback(async (action: ComputerBrowserAction, recoverPresentation = false, backgroundResize = false) => {
     const chatId = conversationId?.trim() || ""
     if (!browserSessionId || (browserBusyRef.current && !browserBackgroundResize.current)) return null
+    if (["browser_tab_create", "browser_tab_select", "browser_tab_close", "browser_back", "browser_forward", "browser_reload", "browser_restore"].includes(action.type)) resetAnnotations()
     const epoch = browserEpoch.current
     const mutation = ++browserMutation.current
     browserReadAbort.current?.abort()
@@ -244,9 +276,10 @@ export function AgentComputerShell({
         setBrowserBusy(false)
       }
     }
-  }, [conversationId, browserSessionId, queueBrowser])
+  }, [conversationId, browserSessionId, queueBrowser, resetAnnotations])
   const browserNavigate = async (url: string) => {
     if (!browserSessionId || (browserBusyRef.current && !browserBackgroundResize.current)) throw new Error("Navegador ocupado")
+    resetAnnotations()
     const epoch = browserEpoch.current
     const mutation = ++browserMutation.current
     browserReadAbort.current?.abort()
@@ -360,6 +393,43 @@ export function AgentComputerShell({
   const isError = useSessionStatus ? liveStatus === "error" : preview?.phase === "error"
   const statusPhase = useSessionStatus ? liveStatus : (preview?.phase ?? "idle")
 
+  const annotationAvailable = Boolean(browserVisible && browserState && !emptyBrowser && isLive && !browserBusy && !browserError)
+  React.useEffect(() => {
+    resetAnnotations()
+  }, [browserVisible, browserSessionId, conversationId, activeBrowserTab?.id, activeBrowserTab?.url, resetAnnotations])
+  React.useEffect(() => {
+    if (!annotationAvailable) { stopAnnotationStroke(); setAnnotationMode("interact"); return }
+    if (annotationMode !== "draw") return
+    annotationSurface.current?.focus()
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      stopAnnotationStroke()
+      setAnnotationMode("interact")
+    }
+    window.addEventListener("keydown", escape, true)
+    return () => { window.removeEventListener("keydown", escape, true); stopAnnotationStroke() }
+  }, [annotationAvailable, annotationMode, stopAnnotationStroke])
+  const beginAnnotation = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (!annotationAvailable || annotationMode !== "draw" || event.button !== 0 || annotationPointer.current || annotationStrokes.length >= 64) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0 || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return
+    event.preventDefault()
+    const point = imagePoint(event.clientX, event.clientY, rect)
+    annotationPointer.current = { id: event.pointerId, index: annotationStrokes.length, count: 1 }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    setAnnotationStrokes((strokes) => [...strokes, { points: [point], color: "hsl(var(--celeste))", width: 2.5 }])
+  }
+  const continueAnnotation = (event: React.PointerEvent<SVGSVGElement>) => {
+    const pointer = annotationPointer.current
+    if (!pointer || pointer.id !== event.pointerId || pointer.count >= 256 || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return
+    event.preventDefault()
+    const point = imagePoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect())
+    pointer.count++
+    setAnnotationStrokes((strokes) => strokes.map((stroke, index) => index === pointer.index ? { ...stroke, points: [...stroke.points, point] } : stroke))
+  }
+
   const statusLabel = isLive
     ? t("status.live")
     : isInProgress
@@ -377,10 +447,15 @@ export function AgentComputerShell({
 
   const focusApp = React.useCallback(
     async (app: DockApp) => {
+      const request = ++desktopFocusRequest.current
+      const restore = restoreBrowser.current
       setActiveApp(app)
-      if (app === "desktop" || (cleanBrowser && app === "browser")) return
+      if (cleanBrowser && app === "browser") return
       setFocusNote(null)
       try {
+        const restored = !restore || await restore()
+        if (request !== desktopFocusRequest.current) return
+        if (!restored) { setFocusNote(t("dock.unavailable")); return }
         const response = await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
           method: "POST",
           credentials: "include",
@@ -392,13 +467,14 @@ export function AgentComputerShell({
           signal: AbortSignal.timeout(20_000),
         })
         const result = await response.json().catch(() => null) as { ok?: unknown } | null
+        if (request !== desktopFocusRequest.current) return
         if (!response.ok || result?.ok !== true) {
           setFocusNote(t("dock.unavailable"))
           return
         }
         setFocusNote(app === "browser" ? t("dock.focusedBrowser") : t("dock.focusedOther", { app }))
       } catch {
-        setFocusNote(t("dock.unavailable"))
+        if (request === desktopFocusRequest.current) setFocusNote(t("dock.unavailable"))
       }
     },
     [conversationId, t, cleanBrowser],
@@ -413,7 +489,7 @@ export function AgentComputerShell({
 
   return (
     <section
-      className={cn("flex h-full min-h-0 min-w-0 flex-col", browserVisible ? "bg-white dark:bg-zinc-950" : "bg-[#e8e8ea] dark:bg-[#101012]")}
+      className={cn("flex h-full min-h-0 min-w-0 flex-col", browserVisible ? "sira-browser-window bg-white dark:bg-zinc-950" : "bg-[#e8e8ea] dark:bg-[#101012]")}
       data-testid="agent-computer-shell"
       data-agent-computer-shell="1"
       data-conversation-id={conversationId || undefined}
@@ -425,6 +501,10 @@ export function AgentComputerShell({
         onAction: browserAction,
         onRetry: retryBrowserAction.current ? () => browserAction(retryBrowserAction.current!, retryBrowserAction.current?.type === "browser_present") : undefined,
         onNavigate: browserNavigate, onClose, onToggleMaximize, maximized,
+        annotationMode, annotationAvailable, hasAnnotations: annotationStrokes.length > 0,
+        onAnnotationModeChange: (mode) => { stopAnnotationStroke(); setAnnotationMode(mode === "draw" && annotationAvailable ? "draw" : "interact") },
+        onClearAnnotations: clearAnnotations,
+        onOpenDesktopApp: (app) => { resetAnnotations(); void focusApp(app) },
       }} /> : <div
         className="flex h-11 shrink-0 items-center gap-2 border-b border-black/10 bg-gradient-to-b from-white to-zinc-100 px-3 dark:border-white/10 dark:from-[#2a2a2c] dark:to-[#1b1b1d]"
         data-testid="agent-computer-chrome"
@@ -488,6 +568,17 @@ export function AgentComputerShell({
       {/* Live viewport — the existing preview canvas, framed */}
       <div ref={browserViewport} data-testid="browser-viewport" className="relative min-h-0 min-w-0 flex-1">
         {children}
+        {annotationAvailable || (browserVisible && annotationStrokes.length > 0) ? <svg
+          ref={annotationSurface} viewBox="0 0 100 100" preserveAspectRatio="none" tabIndex={-1}
+          aria-label="Anotaciones temporales de la página" data-testid="browser-annotations"
+          className={cn("absolute inset-0 z-20 h-full w-full outline-none", annotationAvailable && annotationMode === "draw" ? "cursor-crosshair touch-none" : "pointer-events-none")}
+          onPointerDown={beginAnnotation} onPointerMove={continueAnnotation}
+          onPointerUp={(event) => { if (annotationPointer.current?.id === event.pointerId) stopAnnotationStroke() }}
+          onPointerCancel={stopAnnotationStroke} onLostPointerCapture={() => { annotationPointer.current = null }}
+        >{annotationStrokes.map((stroke, index) => <polyline key={index}
+          points={stroke.points.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" stroke={stroke.color}
+          strokeWidth={stroke.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pointerEvents="none"
+        />)}</svg> : null}
         {emptyBrowser ? <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white px-6 text-center dark:bg-zinc-950" data-testid="browser-empty-state">
           <Globe className="h-7 w-7 text-zinc-400" aria-hidden />
           <h2 className="text-lg font-medium">Navega con SiraGPT</h2>
@@ -575,7 +666,7 @@ export function AgentComputerShell({
       )}
 
       {/* OS-style dock */}
-      <nav
+      {!browserVisible ? <nav
         className="flex h-14 shrink-0 items-end justify-center gap-2 border-t border-black/10 bg-zinc-100/95 px-3 pb-1.5 backdrop-blur dark:border-white/10 dark:bg-[#0c0c0d]/95"
         aria-label={t("title")}
         data-testid="agent-computer-dock-os"
@@ -588,7 +679,7 @@ export function AgentComputerShell({
         <span className="mb-1 ml-1 hidden max-w-40 truncate text-[9px] text-zinc-400 md:block" data-testid="agent-computer-focus-note">
           {focusNote ?? ""}
         </span>
-      </nav>
+      </nav> : null}
     </section>
   )
 }

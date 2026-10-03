@@ -3974,6 +3974,114 @@ summary:focus-visible,
   outline: none !important;
 }
 
+/* Embedded browser chrome: the live page owns every pixel below this header. */
+.sira-browser-window {
+  overflow: hidden;
+  border: 1px solid #dedede;
+  border-radius: 12px;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 0.08);
+}
+.sira-browser-toolbar { font-family: Arial, Helvetica, sans-serif; }
+.sira-browser-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  min-width: 0;
+  padding: 3px 4px 1px;
+}
+.sira-browser-tab-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.sira-browser-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.sira-browser-tabs::-webkit-scrollbar { display: none; }
+.sira-browser-tab {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 190px;
+  height: 26px;
+  border-radius: 7px;
+}
+.sira-browser-tab-active { background: #e9e9e9; }
+.sira-browser-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 3px 0 7px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  text-align: left;
+}
+.sira-browser-site-icon { width: 14px; height: 14px; flex-shrink: 0; object-fit: contain; }
+.sira-browser-window-controls { display: flex; align-items: center; gap: 0; margin-left: auto; flex-shrink: 0; }
+.sira-browser-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: #262626;
+  transition: background-color 120ms ease;
+}
+.sira-browser-button > svg { width: 15px; height: 15px; stroke-width: 1.7; }
+.sira-browser-button:hover { background-color: rgb(0 0 0 / 0.055); }
+.sira-browser-button:disabled { pointer-events: none; opacity: 0.4; }
+.sira-browser-button:focus-visible, .sira-browser-tab-label:focus-visible { box-shadow: inset 0 0 0 2px hsl(var(--celeste)); }
+.sira-browser-button[aria-label="Anotar página"][aria-pressed="true"] { color: #0284c7; background-color: #e0f2fe; }
+.sira-browser-button.sira-browser-tab-close { width: 24px; height: 24px; margin-right: 1px; }
+.sira-browser-tab-close > svg { width: 12px; height: 12px; }
+.sira-browser-navigation { display: flex; align-items: center; gap: 0; height: 34px; padding: 1px 4px 5px; min-width: 0; }
+.sira-browser-navigation > .sira-browser-button { width: 26px; }
+.sira-browser-address-wrap { position: relative; min-width: 0; flex: 1; margin: 0 7px; }
+input.sira-browser-address {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  border: 1px solid #e4e4e4;
+  border-radius: 6px;
+  background: white;
+  padding: 0 27px 0 9px;
+  outline: none;
+  font: 14px/1 Arial, Helvetica, sans-serif;
+  text-align: center;
+  box-shadow: 0 0 1px rgb(0 0 0 / 0.03);
+}
+input.sira-browser-address::placeholder { color: #919191; text-align: left; }
+input.sira-browser-address:focus { text-align: left; }
+input.sira-browser-address:disabled { opacity: 0.6; }
+input.sira-browser-address-display { color: transparent; }
+.sira-browser-address-label {
+  position: absolute;
+  inset: 0 27px 0 9px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+  line-height: 25px;
+  font-size: 14px;
+  pointer-events: none;
+}
+.sira-browser-button.sira-browser-address-action { position: absolute; right: 2px; top: 1px; width: 23px; height: 23px; }
+.dark .sira-browser-window { border-color: #404040; }
+.dark .sira-browser-tab-active { background: #303030; }
+.dark .sira-browser-button { color: #e5e5e5; }
+.dark .sira-browser-button:hover { background-color: rgb(255 255 255 / 0.08); }
+.dark input.sira-browser-address { background: #18181b; border-color: #404040; }
+@media (pointer: coarse) {
+  .sira-browser-tab-row, .sira-browser-navigation { height: 44px; }
+  .sira-browser-button, .sira-browser-navigation > .sira-browser-button { width: 36px; height: 36px; }
+  .sira-browser-tab, .sira-browser-tab-label { height: 34px; }
+  input.sira-browser-address { height: 34px; font-size: 16px; }
+  .sira-browser-address-label { line-height: 34px; font-size: 16px; }
+  .sira-browser-button.sira-browser-address-action { height: 32px; }
+  .sira-browser-address-wrap { margin: 0 2px; }
+}
+@media (prefers-reduced-motion: reduce) { .sira-browser-button { transition: none; } }
+
 /* The address input keeps visible focus in both themes, including when
    the dark default-border utility is emitted after this stylesheet. */
 input.sira-browser-address:focus {

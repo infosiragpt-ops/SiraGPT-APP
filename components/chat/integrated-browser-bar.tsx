@@ -1,7 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { Globe, ArrowRight, ArrowLeft, RefreshCw, Plus, X, Maximize2, Minimize2 } from "lucide-react"
+import Image from "next/image"
+import { Globe, ArrowRight, ArrowLeft, RotateCw, Plus, X, Maximize2, Minimize2, MoreVertical, ExternalLink, Pencil, MousePointer2, Copy, Eraser, Folder, TerminalSquare, Monitor } from "lucide-react"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { PensandoBars } from "@/components/pensando-bars"
 import type { ComputerBrowserAction, ComputerBrowserState } from "@/lib/computer-navigate-client"
 import { toast } from "sonner"
@@ -137,15 +139,34 @@ export type IntegratedBrowserControls = {
   onClose?: () => void
   onToggleMaximize?: () => void
   maximized?: boolean
+  annotationMode?: "interact" | "draw"
+  annotationAvailable?: boolean
+  onAnnotationModeChange?: (mode: "interact" | "draw") => void
+  hasAnnotations?: boolean
+  onClearAnnotations?: () => void
+  onOpenDesktopApp?: (app: "desktop" | "files" | "terminal") => void
 }
 
 function visibleAddress(url: string | undefined): string {
   return url && /^https?:\/\//i.test(url) ? url : ""
 }
 
-function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, onToggleMaximize, maximized, onRetry }: IntegratedBrowserControls) {
+// Only bundled icons for exact known hosts: no third-party requests revealing
+// which sites are open in the user's remote session.
+function siteIcon(url: string): string | null {
+  try {
+    const target = new URL(url)
+    if (target.protocol === "https:" && ["google.com", "www.google.com"].includes(target.hostname)) return "/conexiones-logos/google.svg"
+  } catch { /* A blank or internal page has no site icon. */ }
+  return null
+}
+
+function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, onToggleMaximize, maximized, onRetry,
+  annotationMode = "interact", annotationAvailable = false, onAnnotationModeChange, hasAnnotations, onClearAnnotations, onOpenDesktopApp,
+}: IntegratedBrowserControls) {
   const active = state?.tabs.find((tab) => tab.id === state.activeTabId)
   const [draft, setDraft] = React.useState(visibleAddress(active?.url))
+  const [addressFocused, setAddressFocused] = React.useState(false)
   const [localError, setLocalError] = React.useState<string | null>(null)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const dirty = React.useRef(false)
@@ -194,38 +215,86 @@ function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, on
     setLocalError(null)
     void onAction(value).catch(() => { setLocalError("No se pudo completar la acción. Inténtalo de nuevo.") })
   }
-  const button = "no-default-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:pointer-events-none disabled:opacity-35 dark:text-zinc-300 dark:hover:bg-zinc-800 dark:hover:text-white"
-  return <div className="relative shrink-0 border-b border-border bg-white text-foreground dark:bg-zinc-950" data-testid="integrated-browser-controls" aria-busy={busy}>
-    <div className="flex min-w-0 items-center gap-1 px-2 pt-2 pb-1">
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="Pestañas del navegador">
-        {state?.tabs.map((tab, index) => <div key={tab.id} className={cn("flex min-w-0 shrink-0 items-center rounded-lg border", tab.id === state.activeTabId ? "border-zinc-200 bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800" : "border-transparent")}>
-          <button ref={(element) => { if (element) tabButtons.current.set(tab.id, element); else tabButtons.current.delete(tab.id) }} type="button" role="tab" aria-selected={tab.id === state.activeTabId}
-            tabIndex={tab.id === state.activeTabId ? 0 : -1} disabled={busy}
-            className="no-default-focus-ring h-9 min-w-0 max-w-40 truncate rounded-md px-3 text-left text-[13px] outline-none focus-visible:ring-2 focus-visible:ring-sky-500 sm:max-w-52"
-            title={tab.title || "Nueva pestaña"} onClick={() => action({ type: "browser_tab_select", tabId: tab.id })}
-            onKeyDown={(event) => {
-              if (!state || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
-              event.preventDefault()
-              const next = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + state.tabs.length) % state.tabs.length
-              keyboardTarget.current = state.tabs[next].id
-              action({ type: "browser_tab_select", tabId: state.tabs[next].id })
-            }}>{tab.title || "Nueva pestaña"}</button>
-          <button type="button" disabled={busy} className={cn(button, "mr-0.5 h-7 w-7")} aria-label={`Cerrar pestaña ${tab.title || "Nueva pestaña"}`} onClick={() => action({ type: "browser_tab_close", tabId: tab.id })}><X className="h-3.5 w-3.5" aria-hidden /></button>
-        </div>)}
+  const button = "no-default-focus-ring sira-browser-button"
+  const currentAddress = visibleAddress(active?.url)
+  const currentParsed = sanitizeNavigateUrl(currentAddress)
+  const externalUrl = currentParsed.ok ? currentParsed.url : null
+  const addressParts = (() => {
+    if (!currentAddress || dirty.current || addressFocused) return null
+    try { const url = new URL(currentAddress); return { host: url.host, tail: `${url.pathname === "/" ? "" : url.pathname}${url.search}${url.hash}` } }
+    catch { return null }
+  })()
+  const copyAddress = async () => {
+    if (!externalUrl) return
+    try {
+      await navigator.clipboard.writeText(externalUrl)
+      toast.success("Dirección copiada")
+    } catch {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+      toast.error("Selecciona la dirección y cópiala desde la barra.")
+    }
+  }
+  return <div className="sira-browser-toolbar relative shrink-0 border-b border-zinc-200 bg-white text-zinc-900 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-100" data-testid="integrated-browser-controls" aria-busy={busy}>
+    <div className="sira-browser-tab-row">
+      <div className="sira-browser-tab-group">
+        <div className="sira-browser-tabs" role="tablist" aria-label="Pestañas del navegador">
+          {state?.tabs.map((tab, index) => <div key={tab.id} className={cn("sira-browser-tab", tab.id === state.activeTabId && "sira-browser-tab-active")}>
+            <button ref={(element) => { if (element) tabButtons.current.set(tab.id, element); else tabButtons.current.delete(tab.id) }} type="button" role="tab" aria-selected={tab.id === state.activeTabId}
+              tabIndex={tab.id === state.activeTabId ? 0 : -1} disabled={busy}
+              className="no-default-focus-ring sira-browser-tab-label"
+              title={tab.title || "Nueva pestaña"} onClick={() => action({ type: "browser_tab_select", tabId: tab.id })}
+              onKeyDown={(event) => {
+                if (!state || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
+                event.preventDefault()
+                const next = event.key === "Home" ? 0 : event.key === "End" ? state.tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + state.tabs.length) % state.tabs.length
+                keyboardTarget.current = state.tabs[next].id
+                action({ type: "browser_tab_select", tabId: state.tabs[next].id })
+              }}>
+                {visibleAddress(tab.url) ? (siteIcon(tab.url)
+                  ? <Image src={siteIcon(tab.url)!} alt="" width={14} height={14} className="sira-browser-site-icon" draggable={false} />
+                  : <Globe className="sira-browser-site-icon" aria-hidden />) : null}
+                <span className="truncate">{tab.title || "Nueva pestaña"}</span>
+            </button>
+            <button type="button" disabled={busy} className={cn(button, "sira-browser-tab-close")} aria-label={`Cerrar pestaña ${tab.title || "Nueva pestaña"}`} onClick={() => action({ type: "browser_tab_close", tabId: tab.id })}><X aria-hidden /></button>
+          </div>)}
+        </div>
+        <button type="button" className={button} disabled={busy || !state} aria-label="Nueva pestaña" title="Nueva pestaña" onClick={() => action({ type: "browser_tab_create" })}><Plus aria-hidden /></button>
       </div>
-      <button type="button" className={button} disabled={busy || !state} aria-label="Nueva pestaña" title="Nueva pestaña" onClick={() => action({ type: "browser_tab_create" })}><Plus className="h-4 w-4" aria-hidden /></button>
-      {onToggleMaximize ? <button type="button" className={button} aria-label={maximized ? "Restaurar navegador" : "Maximizar navegador"} title={maximized ? "Restaurar navegador" : "Maximizar navegador"} onClick={onToggleMaximize}>{maximized ? <Minimize2 className="h-4 w-4" aria-hidden /> : <Maximize2 className="h-4 w-4" aria-hidden />}</button> : null}
-      {onClose ? <button type="button" className={button} aria-label="Cerrar navegador" title="Cerrar navegador" data-testid="chat-agent-computer-close" onClick={onClose}><X className="h-4 w-4" aria-hidden /></button> : null}
+      <div className="sira-browser-window-controls">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild><button type="button" className={button} aria-label="Más opciones del navegador" title="Más opciones"><MoreVertical aria-hidden /></button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="z-[80] min-w-48">
+            <DropdownMenuItem disabled={!externalUrl} onSelect={copyAddress}><Copy className="mr-2 h-4 w-4" />Copiar dirección</DropdownMenuItem>
+            <DropdownMenuItem disabled={!hasAnnotations} onSelect={onClearAnnotations}><Eraser className="mr-2 h-4 w-4" />Borrar anotaciones</DropdownMenuItem>
+            {onOpenDesktopApp ? <><DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => onOpenDesktopApp("files")}><Folder className="mr-2 h-4 w-4" />Archivos</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onOpenDesktopApp("terminal")}><TerminalSquare className="mr-2 h-4 w-4" />Terminal</DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onOpenDesktopApp("desktop")}><Monitor className="mr-2 h-4 w-4" />Escritorio</DropdownMenuItem>
+            </> : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {onToggleMaximize ? <button type="button" className={button} aria-label={maximized ? "Restaurar navegador" : "Maximizar navegador"} title={maximized ? "Restaurar navegador" : "Maximizar navegador"} onClick={onToggleMaximize}>{maximized ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />}</button> : null}
+        {onClose ? <button type="button" className={button} aria-label="Cerrar navegador" title="Cerrar navegador" data-testid="chat-agent-computer-close" onClick={onClose}><X aria-hidden /></button> : null}
+      </div>
     </div>
-    <form className="flex min-w-0 items-center gap-0.5 px-2 pb-2" data-testid="integrated-browser-bar" onSubmit={(event) => void submit(event)}>
-      <button type="button" className={button} disabled={busy || !state?.canGoBack} aria-label="Atrás" title="Atrás" onClick={() => action({ type: "browser_back", tabId: state?.activeTabId || undefined })}><ArrowLeft className="h-4 w-4" aria-hidden /></button>
-      <button type="button" className={button} disabled={busy || !state?.canGoForward} aria-label="Adelante" title="Adelante" onClick={() => action({ type: "browser_forward", tabId: state?.activeTabId || undefined })}><ArrowRight className="h-4 w-4" aria-hidden /></button>
-      <button type="button" className={button} disabled={busy || !state?.activeTabId} aria-label="Recargar página" title="Recargar página" onClick={() => action({ type: "browser_reload", tabId: state?.activeTabId || undefined })}>{busy ? <PensandoBars size={16} /> : <RefreshCw className="h-4 w-4" aria-hidden />}</button>
-      <input ref={inputRef} aria-label="Dirección del navegador" data-testid="integrated-browser-url" placeholder="Escribe una URL" value={draft}
-        disabled={!state} readOnly={busy} inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-        onChange={(event) => { dirty.current = true; setDraft(event.target.value) }}
-        className="no-default-focus-ring sira-browser-address ml-1 h-9 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-base outline-none transition-shadow disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 sm:text-[13px]" />
-      <button type="submit" className={button} disabled={busy || !state || !draft.trim()} aria-label="Ir" data-testid="integrated-browser-go"><ArrowRight className="h-4 w-4" aria-hidden /></button>
+    <form className="sira-browser-navigation" data-testid="integrated-browser-bar" onSubmit={(event) => void submit(event)}>
+      <button type="button" className={button} disabled={busy || !state?.canGoBack} aria-label="Atrás" title="Atrás" onClick={() => action({ type: "browser_back", tabId: state?.activeTabId || undefined })}><ArrowLeft aria-hidden /></button>
+      <button type="button" className={button} disabled={busy || !state?.canGoForward} aria-label="Adelante" title="Adelante" onClick={() => action({ type: "browser_forward", tabId: state?.activeTabId || undefined })}><ArrowRight aria-hidden /></button>
+      <button type="button" className={button} disabled={busy || !state?.activeTabId} aria-label="Recargar página" title="Recargar página" onClick={() => action({ type: "browser_reload", tabId: state?.activeTabId || undefined })}>{busy ? <PensandoBars size={16} /> : <RotateCw aria-hidden />}</button>
+      <div className="sira-browser-address-wrap">
+        <input ref={inputRef} aria-label="Dirección del navegador" data-testid="integrated-browser-url" placeholder="Escribe una URL" value={draft}
+          disabled={!state} readOnly={busy} inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
+          onFocus={() => setAddressFocused(true)} onBlur={() => setAddressFocused(false)}
+          onChange={(event) => { dirty.current = true; setDraft(event.target.value) }}
+          className={cn("no-default-focus-ring sira-browser-address", addressParts && "sira-browser-address-display")} />
+        {addressParts ? <span aria-hidden className="sira-browser-address-label"><span>{addressParts.host}</span><span className="text-zinc-400">{addressParts.tail}</span></span> : null}
+        {addressFocused || dirty.current ? <button type="submit" className={cn(button, "sira-browser-address-action")} disabled={busy || !state || !draft.trim()} aria-label="Ir" data-testid="integrated-browser-go"><ArrowRight aria-hidden /></button>
+          : externalUrl ? <a href={externalUrl} target="_blank" rel="noopener noreferrer" className={cn(button, "sira-browser-address-action")} aria-label="Abrir en otra pestaña" title="Abrir en otra pestaña"><ExternalLink aria-hidden /></a>
+          : <button type="button" disabled className={cn(button, "sira-browser-address-action")} aria-label="Abrir en otra pestaña"><ExternalLink aria-hidden /></button>}
+      </div>
+      <button type="button" className={button} disabled={!annotationAvailable || !onAnnotationModeChange} aria-pressed={annotationMode === "draw"} aria-label="Anotar página" title="Anotar página" onClick={() => onAnnotationModeChange?.(annotationMode === "draw" ? "interact" : "draw")}><Pencil aria-hidden /></button>
+      <button type="button" className={button} disabled={!onAnnotationModeChange} aria-pressed={annotationMode === "interact"} aria-label="Interactuar con la página" title="Interactuar con la página" onClick={() => onAnnotationModeChange?.("interact")}><MousePointer2 aria-hidden /></button>
     </form>
     {error || localError ? <p className="absolute inset-x-0 top-full z-30 border-b border-red-100 bg-white px-3 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-zinc-950 dark:text-red-300" role="alert" data-testid="browser-error">{error || localError}{(onRetry || !state) && !busy ? <button type="button" className="ml-2 underline underline-offset-2" onClick={() => { setLocalError(null); if (onRetry) void onRetry().catch(() => setLocalError("No se pudo completar la acción. Inténtalo de nuevo.")); else action({ type: "browser_present" }) }}>Reintentar</button> : null}</p> : null}
     {busy ? <span className="sr-only" role="status">Abriendo página…</span> : null}
