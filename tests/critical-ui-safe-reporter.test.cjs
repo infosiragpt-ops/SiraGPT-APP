@@ -124,8 +124,9 @@ test('getters, inherited metadata and throwing proxies fail closed without evalu
   assert.equal(failureAnnotation(Object.create(caseInput()), Object.create(resultInput())), '::error title=Critical UI case failed::spec=unknown; status=unknown\n');
 });
 
-test('phase diagnostics emit only the thirteen fixed phase constants', () => {
+test('phase diagnostics emit only the sixteen fixed phase constants', () => {
   const phases = ['home_open', 'home_empty', 'home_create_tab', 'home_focus', 'home_focus_style',
+    'home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline',
     'home_navigate', 'home_viewport', 'home_no_chat', 'home_same_session', 'home_url_owner',
     'home_storage_owner', 'fixture_requests', 'frontend_exceptions'];
   for (const phase of phases) {
@@ -145,7 +146,7 @@ test('phase diagnostics emit only the thirteen fixed phase constants', () => {
 
 test('arbitrary phase values, annotation types and object coercions never reach output', () => {
   const expected = failureAnnotation(caseInput(), resultInput());
-  for (const payload of [...sensitive, 'HOME_OPEN', 'home_open\n', 'home_open,phase=home_empty', 'x'.repeat(100_000),
+  for (const payload of [...sensitive, 'HOME_OPEN', 'home_open\n', 'home_open,phase=home_empty', 'home_focus_dark_border=rgb(39, 39, 42)', 'home_focus_outline:solid', 'x'.repeat(100_000),
     null, undefined, 1, { toString() { throw new Error(secretMarker); } }]) {
     const annotations = [{ type: 'sira_safe_ui_phase', description: payload }, { type: payload, description: 'home_open' }];
     const output = failureAnnotation({ ...caseInput(), annotations }, resultInput());
@@ -255,5 +256,19 @@ test('real Playwright omits arbitrary phase content instead of echoing or coerci
   assert.equal(result.error, undefined);
   assert.equal(result.stderr.includes(secretMarker), false);
   assert.equal(result.stdout, '::error title=Critical UI case failed,file=e2e/chat.spec.ts,line=2::spec=e2e/chat.spec.ts; status=failed; line=2; retry=0\n');
+  assertClosed(result.stdout);
+});
+
+test('real Playwright focus-style diagnostics are limited to the closed border and outline phases', () => {
+  const phases = ['home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline'];
+  const source = 'const {test}=require(' + JSON.stringify(require.resolve('@playwright/test')) + ');\n'
+    + phases.map((phase) => 'test(' + JSON.stringify(secretMarker + phase) + ',()=>{test.info().annotations.push({type:"sira_safe_ui_phase",description:' + JSON.stringify(phase) + '});throw new Error(' + JSON.stringify(sensitive.join(' | ')) + ')});').join('\n') + '\n';
+  const result = runPlaywright(source);
+  assert.equal(result.status, 1);
+  assert.equal(result.error, undefined);
+  assert.equal(result.stderr.includes(secretMarker), false);
+  const expected = phases.map((phase, index) => '::error title=Critical UI case failed,file=e2e/chat.spec.ts,line=' + (index + 2)
+    + '::spec=e2e/chat.spec.ts; status=failed; line=' + (index + 2) + '; retry=0; phase=' + phase + '\n').join('');
+  assert.equal(result.stdout, expected);
   assertClosed(result.stdout);
 });

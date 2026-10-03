@@ -20,6 +20,7 @@ const SPEC_FILES = Object.freeze([
 const RESULT_STATES = Object.freeze(['passed', 'failed', 'timedOut', 'skipped', 'interrupted']);
 const SAFE_PHASES = Object.freeze([
   'home_open', 'home_empty', 'home_create_tab', 'home_focus', 'home_focus_style',
+  'home_focus_dark_border', 'home_focus_light_border', 'home_focus_outline',
   'home_navigate', 'home_viewport', 'home_no_chat', 'home_same_session',
   'home_url_owner', 'home_storage_owner', 'fixture_requests', 'frontend_exceptions',
 ]);

@@ -265,6 +265,7 @@ async function assertViewportMatchesHost(page: Page, fixture: BrowserFixture) {
 
 type SafeUiPhase =
   | "home_open" | "home_empty" | "home_create_tab" | "home_focus" | "home_focus_style"
+  | "home_focus_dark_border" | "home_focus_light_border" | "home_focus_outline"
   | "home_navigate" | "home_viewport" | "home_no_chat" | "home_same_session"
   | "home_url_owner" | "home_storage_owner" | "fixture_requests" | "frontend_exceptions"
 
@@ -274,6 +275,26 @@ function safeUiPhase(phase: SafeUiPhase) {
     if (annotations[index].type === "sira_safe_ui_phase") annotations.splice(index, 1)
   }
   annotations.push({ type: "sira_safe_ui_phase", description: phase })
+}
+
+async function assertFocusedAddressStyle(page: Page) {
+  safeUiPhase("home_focus_style")
+  await expect.poll(async () => {
+    const state = await address(page).evaluate((element) => {
+      const style = getComputedStyle(element)
+      const channels = style.borderTopColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/)
+      return {
+        blueBorder: !!channels && Number(channels[1]) < 60 && Number(channels[2]) > 100
+          && Number(channels[3]) > 150 && parseFloat(style.borderTopWidth) > 0,
+        noOutline: style.outlineStyle === "none",
+        dark: document.documentElement.classList.contains("dark"),
+      }
+    })
+    safeUiPhase(!state.blueBorder
+      ? (state.dark ? "home_focus_dark_border" : "home_focus_light_border")
+      : (!state.noOutline ? "home_focus_outline" : "home_focus_style"))
+    return { blueBorder: state.blueBorder, outline: state.noOutline ? "none" : "present" }
+  }, { message: "The focused omnibox must render a blue border without the browser's second outline" }).toEqual({ blueBorder: true, outline: "none" })
 }
 
 test.beforeEach(() => {
@@ -452,10 +473,11 @@ test("keyboard tab navigation moves selection and focus together", async ({ page
 })
 
 
-test("home browser uses the owned member session without fabricating a conversation", async ({ page }) => {
+async function assertHomeBrowserOwnership(page: Page, { dark = false }: { dark?: boolean } = {}) {
   safeUiPhase("home_open")
   const fixture = await mockApi(page, { home: true })
   await openPanel(page, { width: 1280, height: 800 }, { home: true })
+  if (dark) await expect(page.locator("html")).toHaveClass(/(?:^|\s)dark(?:\s|$)/)
   const sessionCount = fixture.getSessionPosts()
   safeUiPhase("home_empty")
   expect(fixture.navigated, "A blank home browser must not navigate to a default website").toEqual([])
@@ -465,16 +487,7 @@ test("home browser uses the owned member session without fabricating a conversat
   await expect(page.getByTestId("browser-empty-state")).toBeVisible()
   safeUiPhase("home_focus")
   await expect(address(page)).toBeFocused()
-  safeUiPhase("home_focus_style")
-  await expect.poll(async () => address(page).evaluate((element) => {
-    const style = getComputedStyle(element)
-    const channels = style.borderTopColor.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/)
-    return {
-      blueBorder: !!channels && Number(channels[1]) < 60 && Number(channels[2]) > 100
-        && Number(channels[3]) > 150 && parseFloat(style.borderTopWidth) > 0,
-      outline: style.outlineStyle,
-    }
-  }), { message: "The focused omnibox must render a blue border without the browser's second outline" }).toEqual({ blueBorder: true, outline: "none" })
+  await assertFocusedAddressStyle(page)
   safeUiPhase("home_navigate")
   await navigate(page, siteA)
   safeUiPhase("home_viewport")
@@ -487,5 +500,14 @@ test("home browser uses the owned member session without fabricating a conversat
   expect(new URL(page.url()).searchParams.get("id")).toBeNull()
   safeUiPhase("home_storage_owner")
   expect(await page.evaluate(() => localStorage.getItem("currentChatId"))).toBeNull()
-  await screenshot(page, "home-local")
+  await screenshot(page, dark ? "home-dark-local" : "home-local")
+}
+
+test("home browser uses the owned member session without fabricating a conversation", async ({ page }) => {
+  await assertHomeBrowserOwnership(page)
+})
+
+test("home browser preserves the focused omnibox and owned member session in the saved dark theme", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("theme", "dark"))
+  await assertHomeBrowserOwnership(page, { dark: true })
 })

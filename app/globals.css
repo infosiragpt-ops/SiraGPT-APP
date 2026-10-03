@@ -3974,6 +3974,13 @@ summary:focus-visible,
   outline: none !important;
 }
 
+/* The address input keeps visible focus in both themes, including when
+   the dark default-border utility is emitted after this stylesheet. */
+input.sira-browser-address:focus {
+  border-color: hsl(var(--celeste));
+  box-shadow: 0 0 0 2px hsl(var(--celeste) / 0.2);
+}
+
 /* Brand text selection — a calm violet wash (the --ring accent) instead
    of the browser-default blue, so highlighted text matches the premium
    palette in both themes. Additive only; keeps the text color readable
