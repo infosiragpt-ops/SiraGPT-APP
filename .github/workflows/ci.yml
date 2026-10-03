@@ -105,15 +105,15 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .next/cache
-          # Source-aware key: invalidate the cache when either deps or
-          # frontend source change, so `next build` reuses module-graph
-          # hits as often as safely possible.
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
-          restore-keys: |
-            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
-            nextjs-${{ runner.os }}-
+          # Exact source match only: partial restores can retain compiled CSS
+          # from an earlier source tree, including stale Tailwind extraction.
+          # hashFiles uses @actions/glob with nobrace:true: list extensions explicitly.
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.ts', 'app/**/*.tsx', 'app/**/*.js', 'app/**/*.jsx', 'app/**/*.css', 'components/**/*.ts', 'components/**/*.tsx', 'components/**/*.js', 'components/**/*.jsx', 'components/**/*.css', 'lib/**/*.ts', 'lib/**/*.tsx', 'lib/**/*.js', 'lib/**/*.jsx', 'lib/**/*.css', 'hooks/**/*.ts', 'hooks/**/*.tsx', 'hooks/**/*.js', 'hooks/**/*.jsx', 'hooks/**/*.css', 'styles/**/*.css', 'src/**/*.ts', 'src/**/*.tsx', 'pages/**/*.ts', 'pages/**/*.tsx', '*.js', '*.ts', '*.jsx', '*.tsx', '*.mdx', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
       - name: Next.js build
-        run: npm run build
+        run: |
+          set -euo pipefail
+          node --test tests/ci-build-cache.test.cjs
+          npm run build
 
       # Hard gate — gzipped bundle size must stay under the budget defined
       # in scripts/bundle-size-budget.json. Re-seed with
@@ -1069,7 +1069,7 @@ jobs:
 
       - name: Install real desktop input dependencies
         if: matrix.desktop_gate
-        run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox
+        run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox x11vnc
 
       # Real Chromium + X11 gate. The only retried failure is Chrome not
       # bringing up its CDP endpoint on a loaded runner (infrastructure, not
@@ -1094,11 +1094,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .next/cache
-          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx}', 'components/**/*.{ts,tsx,js,jsx}', 'lib/**/*.{ts,tsx,js,jsx}', 'hooks/**/*.{ts,tsx,js,jsx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.mjs') }}
-          restore-keys: |
-            nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
-            nextjs-e2e-${{ runner.os }}-
-            nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-
+          # Exact source match only: partial restores can retain compiled CSS
+          # from an earlier source tree, including stale Tailwind extraction.
+          # hashFiles uses @actions/glob with nobrace:true: list extensions explicitly.
+          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.ts', 'app/**/*.tsx', 'app/**/*.js', 'app/**/*.jsx', 'app/**/*.css', 'components/**/*.ts', 'components/**/*.tsx', 'components/**/*.js', 'components/**/*.jsx', 'components/**/*.css', 'lib/**/*.ts', 'lib/**/*.tsx', 'lib/**/*.js', 'lib/**/*.jsx', 'lib/**/*.css', 'hooks/**/*.ts', 'hooks/**/*.tsx', 'hooks/**/*.js', 'hooks/**/*.jsx', 'hooks/**/*.css', 'styles/**/*.css', 'src/**/*.ts', 'src/**/*.tsx', 'pages/**/*.ts', 'pages/**/*.tsx', '*.js', '*.ts', '*.jsx', '*.tsx', '*.mdx', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
 
       # Production bundle for the gate (not the standalone deploy build —
       # that one is validated by `Frontend · build`). Lint and the backend
@@ -1112,6 +1111,7 @@ jobs:
         # lifecycle hooks, so run it explicitly (the code workspace specs need it).
         run: |
           set -euo pipefail
+          node --test tests/critical-ui-safe-reporter.test.cjs tests/ci-build-cache.test.cjs
           node scripts/prepare-code-editor.cjs
           npx next build --no-lint
 
@@ -1137,7 +1137,9 @@ jobs:
           # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
           # and runs against this production instance.
           STATUS=0
-          npx playwright test --reporter=list ${{ matrix.specs }} || STATUS=$?
+          # Closed diagnostics emit only allowlisted spec IDs and bounded
+          # numeric locations/status, never test errors, titles or artifacts.
+          npx playwright test --reporter=list,./e2e/critical-ui-safe-reporter.cjs ${{ matrix.specs }} || STATUS=$?
           kill "$SERVER_PID" 2>/dev/null || true
           if [ "$STATUS" -ne 0 ]; then tail -n 80 /tmp/next-e2e.log || true; fi
           exit $STATUS

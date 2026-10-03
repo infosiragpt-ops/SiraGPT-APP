@@ -57,6 +57,9 @@ export type DepartmentComputerPaneProps = {
   onStatusChange?: (status: "starting" | "live" | "error" | "idle") => void
   /** Skip the F7 desktop pool and use the agent-computer Chrome (navigator). */
   preferAgentComputer?: boolean
+  /** Opt-in clean navigator; never affects the separate desktop lease. */
+  browserMode?: boolean
+  onSessionReady?: (sessionId: string, conversationId: string | null) => void
 }
 
 function computerApiBase() {
@@ -365,6 +368,8 @@ export function DepartmentComputerPane({
   embedded = false,
   onStatusChange,
   preferAgentComputer = false,
+  browserMode = false,
+  onSessionReady,
 }: DepartmentComputerPaneProps) {
   const chatId = String(conversationId || "").trim()
   const initial = sessionCache.get(cacheKey(chatId || null)) ?? null
@@ -386,6 +391,15 @@ export function DepartmentComputerPane({
   const resolvedName = departmentName || (dept === "ceo-office" ? "CEO Office" : dept)
   const embedUrl = session ? embedFrom(session) : ""
   const bound = Boolean(session?.conversationBound && chatId)
+  const cleanBrowserViewport = browserMode && preferAgentComputer && !desktopLease
+  React.useEffect(() => {
+    const matches = chatId
+      ? session?.conversationId === chatId && session.conversationBound === true
+      : session?.conversationId === null && session.conversationBound === false
+    if (preferAgentComputer && session?.sessionId && matches) {
+      onSessionReady?.(session.sessionId, chatId || null)
+    }
+  }, [preferAgentComputer, session?.sessionId, session?.conversationId, session?.conversationBound, chatId, onSessionReady])
 
   const bumpBuild = React.useCallback(() => {
     buildIdRef.current += 1
@@ -663,7 +677,8 @@ export function DepartmentComputerPane({
 
       <div
         className={cn(
-          "relative min-h-0 flex-1 bg-[#1b1b1d] text-zinc-50",
+          "relative min-h-0 flex-1",
+          cleanBrowserViewport ? "bg-white text-zinc-600 dark:bg-zinc-950" : "bg-[#1b1b1d] text-zinc-50",
           expanded ? "overflow-visible" : "overflow-hidden",
         )}
         data-novnc-fit="cover"
@@ -695,6 +710,7 @@ export function DepartmentComputerPane({
               key={`${session.sessionId}:${buildId}`}
               sessionId={session.sessionId}
               wsUrl={orchRfbWs}
+              neutralBackground={cleanBrowserViewport}
               viewOnly={false}
               className="absolute inset-0 h-full w-full min-h-0"
               onConnected={() => setStatusLine("En vivo")}
@@ -757,7 +773,7 @@ export function DepartmentComputerPane({
             </button>
           ) : null}
 
-          {!expanded && hasLiveDesktop ? (
+          {!expanded && hasLiveDesktop && !cleanBrowserViewport ? (
             <div className="group/abrir absolute inset-0 z-20 flex items-center justify-center">
               <div className="absolute inset-0 bg-black/0 transition-colors group-hover/abrir:bg-black/25" />
               <button

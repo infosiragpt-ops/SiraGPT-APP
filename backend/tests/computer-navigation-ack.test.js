@@ -114,8 +114,22 @@ function livePageHarness({ focused = true, failure } = {}) {
     goto: async (url, options) => { calls.push({ url, options }); if (failure) throw failure; },
     url: () => 'https://example.com/redirected',
   };
+  const context = {
+    pages: () => [oldPage, selected],
+    newCDPSession: async page => ({
+      send: async (method, args) => {
+        assert.equal(method, 'Runtime.evaluate');
+        const value = vm.runInNewContext(args.expression, {
+          document: { hasFocus: () => page === selected && focused, visibilityState: page === selected ? 'visible' : 'hidden' },
+        });
+        return { result: { value } };
+      },
+      detach: async () => {},
+    }),
+  };
+  oldPage.context = selected.context = () => context;
   const browser = {
-    contexts: () => [{ pages: () => [oldPage, selected] }],
+    contexts: () => [context],
     close: async () => { calls.push('disconnect'); },
   };
   const module = { exports: {} };

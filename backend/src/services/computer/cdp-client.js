@@ -203,22 +203,28 @@ async function snapshotAccessibility(cdpUrl, {
   } catch (rawErr) {
     const pw = playwrightImpl || loadPlaywright();
     if (!pw || !pw.chromium) throw rawErr;
-    const browser = await pw.chromium.connectOverCDP(cdpUrl, { timeout: timeoutMs });
+    const browser = await pw.chromium.connectOverCDP(cdpUrl, { timeout: timeoutMs, noDefaults: true });
     try {
       const contexts = browser.contexts();
       const pages = contexts.flatMap((ctx) => ctx.pages());
       const page = pages[0] || await (contexts[0] && contexts[0].newPage && contexts[0].newPage());
       if (!page) return { text: '(no page)', url: null, title: '' };
-      let snapshot = null;
-      try { snapshot = await page.accessibility.snapshot({ interestingOnly: false }); }
-      catch (_) { snapshot = await page.accessibility.snapshot(); }
-      const title = await page.title().catch(() => '');
-      const url = page.url();
-      return {
-        url,
-        title,
-        text: [`url: ${url}`, `title: ${title}`, ...flattenA11y(snapshot)].join('\n').slice(0, 24000),
-      };
+      const cdp = await page.context().newCDPSession(page);
+      try {
+        const snapshot = await cdp.send('Accessibility.getFullAXTree');
+        if (!Array.isArray(snapshot?.nodes) || snapshot.nodes.length === 0) {
+          throw new Error('cdp_accessibility_unavailable');
+        }
+        const title = await page.title().catch(() => '');
+        const url = page.url();
+        return {
+          url,
+          title,
+          text: [`url: ${url}`, `title: ${title}`, ...flattenAxNodes(snapshot.nodes)].join('\n').slice(0, 24000),
+        };
+      } finally {
+        try { await cdp.detach(); } catch (_) { /* ignore */ }
+      }
     } finally {
       try { await browser.close(); } catch (_) { /* ignore */ }
     }

@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Chat computer panel — compact Grok-Bot-style surface.
+ * Existing /agentes computer panel with a conversation-bound browser.
  *
  * Default view: a light panel with the live screen as a thumbnail card
  * («Pantalla de SiraGPT»), gear + collapse controls on top, and the
@@ -21,7 +21,6 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { AgentComputerShell } from "@/components/code/agent-computer-shell"
 import { DepartmentComputerPane } from "@/components/code/department-computer-pane"
-import { postComputerNavigate } from "@/lib/computer-navigate-client"
 import { IntegratedBrowserBar } from "@/components/chat/integrated-browser-bar"
 import { CodingPreviewPane } from "@/components/agentes/coding-preview-pane"
 import { ComputerLoginHandoffBanner } from "@/components/chat/computer-login-handoff-banner"
@@ -113,7 +112,17 @@ function RemoteChatComputerPanel({
 }: ChatAgentComputerPanelProps) {
   const chatId = String(conversationId || "").trim()
   const [liveStatus, setLiveStatus] = React.useState<LiveStatus>("starting")
-  const [expanded, setExpanded] = React.useState(Boolean(startExpanded || loginHandoff))
+  const [expanded, setExpanded] = React.useState(Boolean(startExpanded || loginHandoff || initialDock === "browser"))
+  const [maximized, setMaximized] = React.useState(false)
+  const [browserMode, setBrowserMode] = React.useState(initialDock === "browser")
+  const [browserSession, setBrowserSession] = React.useState<{ sessionId: string; conversationId: string | null } | null>(null)
+  const onSessionReady = React.useCallback((sessionId: string, conversationId: string | null) => setBrowserSession({ sessionId, conversationId }), [])
+  React.useEffect(() => {
+    if (!maximized) return
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setMaximized(false) }
+    window.addEventListener("keydown", escape)
+    return () => window.removeEventListener("keydown", escape)
+  }, [maximized])
   const [activity, setActivity] = React.useState<{ step?: number; lastAction?: string | null; lastUrl?: string | null } | null>(null)
   const [activityUrl, setActivityUrl] = React.useState<string>("")
   const [handoffActive, setHandoffActive] = React.useState(Boolean(loginHandoff))
@@ -143,22 +152,13 @@ function RemoteChatComputerPanel({
     setHandoffActive(Boolean(loginHandoff))
     if (loginHandoffSite) setHandoffSite(String(loginHandoffSite))
     if (loginHandoffKind) setHandoffKind(String(loginHandoffKind))
-    if (loginHandoff || startExpanded) setExpanded(true)
-  }, [loginHandoff, loginHandoffSite, loginHandoffKind, startExpanded])
+    if (loginHandoff || startExpanded || initialDock === "browser") setExpanded(true)
+  }, [loginHandoff, loginHandoffSite, loginHandoffKind, startExpanded, initialDock])
 
   // A tool owns its navigation. Replaying it from UI after mount/collapse
   // could wipe a partially completed form. Only manual URL requests run here.
   const lastManualNavigation = React.useRef("")
-  React.useEffect(() => {
-    if (!chatId || !navigateUrl || agentNavigating) return
-    const stamp = `${chatId}:${navigateUrl}`
-    if (lastManualNavigation.current === stamp) return
-    lastManualNavigation.current = stamp
-    void postComputerNavigate(chatId, navigateUrl).catch(() => {
-      lastManualNavigation.current = ""
-      toast.error("No se pudo abrir la página")
-    })
-  }, [chatId, navigateUrl, agentNavigating])
+
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -295,6 +295,9 @@ function RemoteChatComputerPanel({
 
   const pane = (
     <DepartmentComputerPane
+      key={chatId}
+      browserMode={browserMode}
+      onSessionReady={onSessionReady}
       departmentName="Computadora"
       departmentId={chatId ? `chat:${chatId}` : "chat"}
       computerRunId={chatId ? `chat-${chatId}` : "chat"}
@@ -323,13 +326,14 @@ function RemoteChatComputerPanel({
       <section
         className={cn(
           "flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/40 bg-[#e8e8ea] dark:bg-[#101012]",
-          mobileFullScreen && "fixed inset-0 z-50 border-l-0",
+          (mobileFullScreen || maximized) && "fixed inset-0 z-50 border-l-0",
+          browserMode && "border-l-0 bg-[#fafafa] px-[7px] pb-[7px] pt-px dark:bg-zinc-950",
         )}
         data-testid="chat-agent-computer-panel"
         data-chat-computer-conversation={chatId || undefined}
         data-chat-computer-view="expanded"
         data-login-handoff={handoffActive ? "1" : "0"}
-        data-full-screen={mobileFullScreen ? "1" : "0"}
+        data-full-screen={mobileFullScreen || maximized ? "1" : "0"}
         data-user-typeable={handoffActive ? "1" : "0"}
         aria-label="Computadora"
       >
@@ -340,7 +344,7 @@ function RemoteChatComputerPanel({
           onReady={() => void handBack()}
           viewportWidth={viewportWidth}
         />
-        {handoffActive ? null : (
+        {handoffActive || browserMode ? null : (
           <button
             type="button"
             onClick={() => {
@@ -354,16 +358,22 @@ function RemoteChatComputerPanel({
             Panel
           </button>
         )}
-        {activityChip}
+        {browserMode ? null : activityChip}
         <div className="relative min-h-0 min-w-0 flex-1" style={{ pointerEvents: "auto" }} data-testid="chat-computer-live-desktop">
           <AgentComputerShell
             conversationId={chatId}
             variant="overlay"
+            cleanBrowser
+            browserSessionId={browserSession?.conversationId === (chatId || null) ? browserSession.sessionId : null}
+            onBrowserModeChange={setBrowserMode}
+            maximized={maximized}
+            onToggleMaximize={() => setMaximized((value) => !value)}
             onClose={onClose}
             liveStatus={liveStatus}
             initialDock={initialDock}
             navigateUrl={navigateUrl}
-            autoNavigate={false}
+            autoNavigate={!agentNavigating && lastManualNavigation.current !== `${chatId}:${navigateUrl}`}
+            onAutoNavigationAttempt={() => { lastManualNavigation.current = `${chatId}:${navigateUrl}` }}
           >
             {pane}
           </AgentComputerShell>
