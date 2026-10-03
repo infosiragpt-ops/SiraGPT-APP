@@ -638,3 +638,207 @@ describe('desktop CPU quota is reflected in visible CPU affinity', () => {
     assert.deepEqual(h.getInfo(), existing);
   });
 });
+
+// Exercise execIn itself over a Unix-domain Docker Engine HTTP transport.
+// The fixture executes the exact container helper with Node; no Docker CLI or
+// injected execImpl participates in the runtime path under test.
+async function dockerExecFixture(t, { createStatus = 201, startStatus = 101, inspectStatus = 200, holdCreate = false, holdStart = false, outputFrames, inspectBody } = {}) {
+  const http = require('node:http');
+  const os = require('node:os');
+  const { spawn } = require('node:child_process');
+  const { once } = require('node:events');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-exec-'));
+  const socketPath = path.join(dir, 'engine.sock');
+  const sockets = new Set(), children = new Set(), requests = [], execs = new Map();
+  const originalPath = process.env.PATH;
+  const frame = (socket, channel, bytes) => {
+    const header = Buffer.alloc(8); header[0] = channel; header.writeUInt32BE(bytes.length, 4);
+    if (!socket.destroyed) { socket.write(header.subarray(0, 3)); socket.write(header.subarray(3)); socket.write(bytes); }
+  };
+  const server = http.createServer(async (req, res) => {
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : null;
+    requests.push({ method: req.method, path: req.url, body });
+    if (req.method === 'GET') {
+      const exec = execs.get(req.url.split('/').at(-2));
+      res.writeHead(inspectStatus, { 'Content-Type': 'application/json' });
+      res.end(inspectStatus === 200 ? JSON.stringify(inspectBody || { Running: exec?.running, ExitCode: exec?.exitCode }) : 'private daemon credential');
+      return;
+    }
+    if (holdCreate) return;
+    if (createStatus !== 201) { res.writeHead(createStatus); res.end('private daemon credential'); return; }
+    const id = String(execs.size + 1).padStart(64, 'a');
+    execs.set(id, { body, running: true, exitCode: null });
+    res.writeHead(201, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ Id: id }));
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.on('error', () => {}); socket.once('close', () => sockets.delete(socket)); });
+  server.on('upgrade', async (req, socket, head) => {
+    socket.on('error', () => {});
+    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    let incoming = Buffer.concat([...chunks, head]);
+    const length = Number(req.headers['content-length']);
+    while (incoming.length < length) incoming = Buffer.concat([incoming, (await once(socket, 'data'))[0]]);
+    assert.deepEqual(JSON.parse(incoming.subarray(0, length)), { Detach: false, Tty: false });
+    if (holdStart) return;
+    if (startStatus !== 101) { socket.end('HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n'); return; }
+    const exec = execs.get(req.url.split('/').at(-2));
+    assert.ok(exec, 'start must use the created exec ID');
+    socket.write('HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n');
+    if (outputFrames) {
+      exec.running = false; exec.exitCode = 0;
+      for (const bytes of outputFrames) socket.write(bytes);
+      socket.end();
+      return;
+    }
+    assert.equal(exec.body.Cmd[0], 'node');
+    const child = spawn(process.execPath, exec.body.Cmd.slice(1), {
+      env: { ...process.env, PATH: originalPath, DISPLAY: ':1' }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    exec.pid = child.pid; children.add(child);
+    child.stdin.on('error', () => {});
+    socket.on('data', data => child.stdin.write(data));
+    const closeInput = () => child.stdin.end();
+    socket.on('end', closeInput); socket.on('close', closeInput);
+    child.stdout.on('data', data => frame(socket, 1, data));
+    child.stderr.on('data', data => frame(socket, 2, data));
+    child.on('close', code => { children.delete(child); exec.running = false; exec.exitCode = code; socket.end(); });
+  });
+  await new Promise(resolve => server.listen(socketPath, resolve));
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    for (const child of children) child.kill();
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return { runtime: createDockerRuntime({ socketPath }), requests, children, execs, sockets };
+}
+
+test('desktop exec uses Docker Engine without a local CLI and preserves separated output and exit status', async t => {
+  const f = await dockerExecFixture(t);
+  const priorPath = process.env.PATH;
+  let result;
+  try {
+    process.env.PATH = '/fixture-without-docker-cli';
+    result = await f.runtime.execIn('sira-ac-user-owned', "printf 'visible output'; printf 'private diagnostic' >&2", { timeoutMs: 3000 });
+  } finally { process.env.PATH = priorPath; }
+  assert.deepEqual(result, { ok: true, stdout: 'visible output', stderr: 'private diagnostic' });
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests[0].path, '/v1.44/containers/sira-ac-user-owned/exec');
+  assert.equal(f.requests[0].body.User, 'compuser');
+  assert.deepEqual(f.requests[0].body.Env, ['DISPLAY=:1']);
+  assert.equal(f.requests[0].body.Tty, false);
+  assert.equal(f.requests[1].method, 'GET');
+  assert.match(f.requests[1].path, /^\/v1\.44\/exec\/[a-f0-9]{64}\/json$/);
+});
+
+async function execHelpersGone(f) {
+  const deadline = Date.now() + 2000;
+  while (f.children.size > 0 && Date.now() < deadline) await delay(10);
+  assert.equal(f.children.size, 0, 'Engine disconnect must not leave the command helper running');
+}
+
+function dockerOutputFrame(channel, text) {
+  const bytes = Buffer.isBuffer(text) ? text : Buffer.from(text);
+  const header = Buffer.alloc(8); header[0] = channel; header.writeUInt32BE(bytes.length, 4);
+  return Buffer.concat([header, bytes]);
+}
+
+test('desktop exec nonzero status is rejected without command output in its error', async t => {
+  const f = await dockerExecFixture(t);
+  await assert.rejects(f.runtime.execIn('sira-ac-user-owned', "printf 'private stdout'; printf 'private stderr' >&2; exit 7"), error => {
+    assert.equal(error.code, 'DOCKER_EXEC_FAILED'); assert.equal(error.exitCode, 7);
+    assert.equal(error.status, 502); assert.equal(error.stdout, undefined); assert.equal(error.stderr, undefined);
+    assert.doesNotMatch(String(error) + JSON.stringify(error), /private|printf|credential/);
+    return true;
+  });
+  await execHelpersGone(f);
+});
+
+test('desktop exec deadline stops the actual command group and closes the Engine stream', async t => {
+  const f = await dockerExecFixture(t);
+  const started = Date.now();
+  await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'sleep 30', { timeoutMs: 250 }), { code: 'DOCKER_EXEC_TIMEOUT', status: 504 });
+  assert.ok(Date.now() - started < 2000, 'one deadline bounds create/start/output/inspect');
+  await execHelpersGone(f);
+  for (const exec of f.execs.values()) if (exec.pid) assert.throws(() => process.kill(exec.pid, 0), { code: 'ESRCH' });
+});
+
+test('desktop exec cancellation terminates its command without waiting for the deadline', async t => {
+  const f = await dockerExecFixture(t);
+  const controller = new AbortController();
+  const result = f.runtime.execIn('sira-ac-user-owned', 'sleep 30', { timeoutMs: 5000, signal: controller.signal });
+  const rejected = assert.rejects(result, { code: 'DOCKER_EXEC_CANCELLED', status: 499 });
+  const readyDeadline = Date.now() + 2000;
+  while (!f.children.size && Date.now() < readyDeadline) await delay(10);
+  assert.equal(f.children.size, 1);
+  controller.abort(); await rejected; await execHelpersGone(f);
+});
+
+for (const stage of ['create', 'start']) {
+  test(`desktop exec deadline also aborts a pending Engine ${stage}`, async t => {
+    const f = await dockerExecFixture(t, stage === 'create' ? { holdCreate: true } : { holdStart: true });
+    await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true', { timeoutMs: 100 }), { code: 'DOCKER_EXEC_TIMEOUT' });
+    assert.equal(f.children.size, 0);
+  });
+}
+
+for (const stage of ['create', 'start', 'inspect']) {
+  test(`desktop exec fails closed on Engine ${stage} HTTP errors`, async t => {
+    const f = await dockerExecFixture(t, { [`${stage}Status`]: 500 });
+    await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true'), error => {
+      assert.equal(error.code, 'DOCKER_EXEC_UNAVAILABLE');
+      assert.doesNotMatch(String(error) + JSON.stringify(error), /private|credential/);
+      return true;
+    });
+  });
+}
+
+test('desktop exec demultiplexes fragmented UTF-8 output across stdout and stderr frames', async t => {
+  const word = Buffer.from('Navegación ✓');
+  const stream = Buffer.concat([dockerOutputFrame(1, word.subarray(0, 10)), dockerOutputFrame(2, 'diagnóstico'), dockerOutputFrame(1, word.subarray(10))]);
+  const f = await dockerExecFixture(t, { outputFrames: [stream.subarray(0, 2), stream.subarray(2, 9), stream.subarray(9)] });
+  const out = await f.runtime.execIn('sira-ac-user-owned', 'true');
+  assert.deepEqual(out, { ok: true, stdout: 'Navegación ✓', stderr: 'diagnóstico' });
+});
+
+for (const kind of ['truncated-header', 'truncated-body', 'unknown-channel', 'oversized-frame', 'total-cap']) {
+  test(`desktop exec rejects ${kind} without reporting successful output`, async t => {
+    let frames;
+    if (kind === 'truncated-header') frames = [Buffer.of(1, 0, 0)];
+    if (kind === 'truncated-body') frames = [dockerOutputFrame(1, 'visible').subarray(0, 10)];
+    if (kind === 'unknown-channel') frames = [dockerOutputFrame(9, 'visible')];
+    if (kind === 'oversized-frame') { const h = Buffer.alloc(8); h[0] = 1; h.writeUInt32BE(16 * 1024 * 1024 + 1, 4); frames = [h]; }
+    if (kind === 'total-cap') frames = [dockerOutputFrame(1, Buffer.alloc(8 * 1024 * 1024)), dockerOutputFrame(2, Buffer.alloc(8 * 1024 * 1024)), dockerOutputFrame(1, 'x')];
+    const f = await dockerExecFixture(t, { outputFrames: frames });
+    await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true'), { code: kind === 'total-cap' ? 'DOCKER_EXEC_OUTPUT_LIMIT' : 'DOCKER_EXEC_OUTPUT_INVALID' });
+    assert.equal(f.requests.filter(row => row.method === 'GET').length, 0, 'invalid output cannot be acknowledged');
+  });
+}
+
+test('desktop exec does not claim success without a completed, known ExitCode', async t => {
+  for (const inspectBody of [{ Running: true, ExitCode: 0 }, { Running: false }, { Running: false, ExitCode: -1 }]) {
+    const f = await dockerExecFixture(t, { inspectBody });
+    await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true'), { code: 'DOCKER_EXEC_INCOMPLETE' });
+  }
+});
+
+test('desktop exec validates owned container and deadline before reaching the Engine', async t => {
+  const f = await dockerExecFixture(t);
+  await assert.rejects(f.runtime.execIn('other-container', 'true'), { code: 'DOCKER_EXEC_INVALID' });
+  await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true', { timeoutMs: 0 }), { code: 'DOCKER_EXEC_INVALID' });
+  await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true', { timeoutMs: 120001 }), { code: 'DOCKER_EXEC_INVALID' });
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(f.runtime.execIn('sira-ac-user-owned', 'true', { signal: controller.signal }), { code: 'DOCKER_EXEC_CANCELLED' });
+  assert.equal(f.requests.length, 0);
+});
+
+test('desktop exec preserves an intentionally detached app after a successful launch', async t => {
+  const f = await dockerExecFixture(t);
+  const result = await f.runtime.execIn('sira-ac-user-owned', 'sleep 30 >/dev/null 2>&1 & printf "%s" "$!"');
+  const pid = Number(result.stdout);
+  assert.ok(Number.isSafeInteger(pid) && pid > 1);
+  try {
+    assert.doesNotThrow(() => process.kill(pid, 0), 'a successful launch must leave the app alive');
+    await execHelpersGone(f);
+  } finally { try { process.kill(pid, 'SIGKILL'); } catch {} }
+});
