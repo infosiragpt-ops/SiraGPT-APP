@@ -35,9 +35,11 @@ const ACTIONS = Object.freeze([
 ]);
 const DELIVERABLE_KINDS = Object.freeze([
   'presentation', 'document', 'spreadsheet', 'pdf', 'image', 'chart', 'diagram', 'table', 'code', 'media',
-  'translation', 'summary', 'text',
+  'translation', 'summary', 'text', 'transcription',
 ]);
-const TARGET_KINDS = Object.freeze(['attachment', 'generated_artifact', 'previous_answer', 'none']);
+const TARGET_KINDS = Object.freeze(['attachment', 'generated_artifact', 'previous_answer', 'url', 'none']);
+const URL_RE = /\bhttps?:\/\/[^\s<>()\]«»"']+/i;
+const TIME_RANGE_RE = /\b(?:del?\s+)?(?:minuto|min|segundo|hora)?\s*(\d{1,2}(?:[:.,]\d{1,2}){0,2})\s*(?:al?|hasta|a el|-|–|—|to)\s+(?:el\s+)?(?:minuto|min|segundo|hora)?\s*(\d{1,2}(?:[:.,]\d{1,2}){0,2})\b/;
 const OFFICE_FORMATS = new Set(['docx', 'pptx', 'xlsx', 'pdf', 'csv']);
 const ASK_THRESHOLD = 0.75;
 const MAX_SUMMARY_CHARS = 80;
@@ -76,6 +78,8 @@ const DELIVERABLE_RES = [
   ['media', /\b(?:videos?|audios?|cancion(?:es)?|musica|voz|locucion|podcast|animacion)\b/],
   ['code', /\b(?:codigo|script|funcion|programa|api|endpoint|componente|aplicacion|app|pagina web|landing|sitio web|web app|html|css|javascript|typescript|python|sql|regex|consulta sql|algoritmo|clase|modulo|test unitario|tests?)\b/],
   ['translation', /\b(?:traduc\w*|translat\w*)\b/],
+  // Typo-tolerant: «transcirbir», «trascribir», «trasncribir», «transcipcion».
+  ['transcription', /\b(?:transcri\w*|transcirb\w*|trascri\w*|trasncri\w*|transcip\w*|transcrip\w*|subtitul\w*|subtitle\w*|pasa(?:lo|la)? a texto|audio a texto|voz a texto)\b/],
   ['summary', /\b(?:resum\w*|sintesis|sintetiza\w*|summar\w*|tl;?dr|abstract|resumen ejecutivo)\b/],
 ];
 
@@ -99,6 +103,7 @@ const DELIVERABLE_LABEL = Object.freeze({
   presentation: 'una presentación', document: 'un documento Word', spreadsheet: 'una hoja de Excel', pdf: 'un PDF',
   image: 'una imagen', chart: 'una gráfica', diagram: 'un diagrama', table: 'una tabla', code: 'código',
   media: 'un archivo multimedia', translation: 'una traducción', summary: 'un resumen', text: 'una respuesta en texto',
+  transcription: 'una transcripción',
 });
 
 const DEFAULT_FORMAT = Object.freeze({
@@ -238,6 +243,7 @@ function pickAction(text, { deliverables, hasAttachments, hasPrevAssistant, isQu
   const hasCode = CODE_RE.test(text) || (deliverables.includes('code') && (hasCreate || hasEdit));
   const artifactNoun = deliverables.some((k) => !['translation', 'summary', 'text'].includes(k));
 
+  if (deliverables.includes('transcription')) return 'transform';
   if (hasTransform && !hasCreate) return 'transform';
   if (hasVisualize && !hasEdit && !/\b(?:grafic[ao]s?|chart) (?:anterior|generad\w*)\b/.test(text)) return 'visualize';
   if (hasCode && !artifactNounExcludingCode(deliverables)) return 'code';
@@ -274,7 +280,8 @@ function pickDeliverable(text, action, deliverables, formats, target) {
     return { kind, format: target.format || explicitFormat || DEFAULT_FORMAT[kind] || null, ofTarget: true };
   }
   if (action === 'transform') {
-    if (/\btraduc|translat/.test(text)) kind = 'translation';
+    if (deliverables.includes('transcription')) kind = 'transcription';
+    else if (/\btraduc|translat/.test(text)) kind = 'translation';
     else if (explicitFormat) kind = formatToKind(explicitFormat);
   }
   // A question or an analysis answers in the chat: a document noun there
@@ -305,6 +312,14 @@ function formatToKind(fmt) {
 
 function resolveTarget(text, ctx) {
   const { attachments, priorArtifact, hasPrevAssistant, action, coreference, deliverables } = ctx;
+  // A pasted link is the object of the request («transcribe este enlace del
+  // minuto 1 al 10», «resume este video», «qué dice esta página»).
+  const urlMatch = URL_RE.exec(ctx.raw || '');
+  if (urlMatch && !attachments.length && ['transform', 'analyze', 'answer', 'search', 'create', 'visualize'].includes(action)) {
+    let host = null;
+    try { host = new URL(urlMatch[0]).hostname.replace(/^www\./, ''); } catch (_) { host = null; }
+    if (host) return { kind: 'url', name: host, format: null, url: urlMatch[0], source: 'explicit' };
+  }
   const named = namedAttachments(text, attachments);
   if (named.length) {
     return {
@@ -375,6 +390,19 @@ const ACCENTS = Object.freeze({
   ninos: 'niños', nino: 'niño', maximo: 'máximo', publico: 'público', sintesis: 'síntesis', version: 'versión',
   marron: 'marrón', cafe: 'café', pestana: 'pestaña', tamano: 'tamaño', diseno: 'diseño', ingles: 'inglés',
 });
+/** «1.5» after «minuto» → 01:30; «10» → 10:00; «1:30» stays; «01:02:03» stays. */
+function normalizeTimecode(raw, text) {
+  const v = String(raw || '').replace(',', '.');
+  if (/^\d{1,2}:\d{1,2}(?::\d{1,2})?$/.test(v)) return v.split(':').map((p) => p.padStart(2, '0')).join(':');
+  const n = Number(v);
+  if (!Number.isFinite(n)) return v;
+  const inSeconds = /\bsegundos?\b/.test(text) && !/\bminutos?\b/.test(text);
+  const total = Math.round(inSeconds ? n : n * 60);
+  const h = Math.floor(total / 3600); const m = Math.floor((total % 3600) / 60); const s = total % 60;
+  const two = (x) => String(x).padStart(2, '0');
+  return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${two(m)}:${two(s)}`;
+}
+
 function prettify(value) {
   return String(value || '').split(' ').map((w) => ACCENTS[w] || w).join(' ');
 }
@@ -398,6 +426,10 @@ function detectConstraints(text) {
   if (audience) out.push({ kind: 'audience', value: prettify(`para ${audience[1]}`) });
   const color = COLOR_RE.exec(text);
   if (color) out.push({ kind: 'color', value: prettify(color[1] || color[2]) });
+  const range = TIME_RANGE_RE.exec(text);
+  if (range && /\b(?:minuto|min|segundo|hora|transcri|audio|video|grabaci)/.test(text)) {
+    out.push({ kind: 'time_range', value: `${normalizeTimecode(range[1], text)} → ${normalizeTimecode(range[2], text)}` });
+  }
   return out.slice(0, 6);
 }
 
@@ -429,7 +461,7 @@ function detectAmbiguity(text, raw, ctx) {
     }
   }
   const needsSource = ['transform', 'analyze', 'edit'].includes(action) || (action === 'visualize' && !/\b(?:datos?|cifras?|valores?|\d)/.test(text));
-  if (needsSource && target.kind === 'none' && !attachments.length && !hasPrevAssistant && !hasInlineSource(raw, words)) {
+  if (needsSource && target.kind === 'none' && !attachments.length && !hasPrevAssistant && !hasInlineSource(raw, words) && !URL_RE.test(raw)) {
     reasons.push('missing_source');
     score = Math.max(score, 0.85);
     const what = action === 'transform' ? (deliverables.includes('translation') ? 'traducir' : 'convertir')
@@ -498,6 +530,7 @@ function targetLabel(target) {
   }
   if (target.kind === 'generated_artifact') return target.name ? `el archivo generado «${clip(target.name, 32)}»` : 'el archivo generado';
   if (target.kind === 'previous_answer') return 'mi respuesta anterior';
+  if (target.kind === 'url') return `el enlace de ${clip(target.name || 'la web', 32)}`;
   return '';
 }
 
@@ -510,7 +543,9 @@ function buildSummary(brief) {
       head = tl ? `Editar ${tl}` : 'Editar';
       break;
     case 'transform':
-      head = deliverable.kind === 'translation'
+      head = deliverable.kind === 'transcription'
+        ? `Transcribir ${tl || 'el audio'}`
+        : deliverable.kind === 'translation'
         ? `Traducir ${tl || 'el texto'}`
         : `Convertir ${tl || 'el contenido'}${deliverable.format ? ` a ${FORMAT_LABEL[deliverable.format] || deliverable.format}` : ''}`;
       break;
@@ -598,7 +633,7 @@ function buildRequestBrief(input = {}) {
 
   const constraints = detectConstraints(text);
   const action = text ? pickAction(text, { deliverables, hasAttachments: attachments.length > 0, hasPrevAssistant, isQuestion, words, constraints, priorArtifact }) : 'converse';
-  const target = resolveTarget(text, { attachments, priorArtifact, hasPrevAssistant, action, coreference: input.coreference || null, deliverables });
+  const target = resolveTarget(text, { attachments, priorArtifact, hasPrevAssistant, action, coreference: input.coreference || null, deliverables, raw });
   const deliverable = pickDeliverable(text, action, deliverables, formats, target);
   const ambiguity = detectAmbiguity(text, raw, { action, target, attachments, hasPrevAssistant, deliverables, words, priorArtifact });
   const references = Array.isArray(input.coreference && input.coreference.references)
@@ -674,7 +709,10 @@ function publicRequestBrief(brief) {
 function buildRequestBriefPromptBlock(brief) {
   if (!brief || brief.trivial) return '';
   const lines = ['## Lo que pide el usuario en este turno (brief verificado)'];
-  lines.push(`- Acción: ${ACTION_LABEL[brief.action] || brief.action}`);
+  const actionLabel = brief.action === 'transform' && brief.deliverable.kind === 'transcription'
+    ? 'Transcribir'
+    : brief.action === 'transform' && brief.deliverable.kind === 'translation' ? 'Traducir' : (ACTION_LABEL[brief.action] || brief.action);
+  lines.push(`- Acción: ${actionLabel}`);
   if (brief.deliverable.kind && brief.deliverable.kind !== 'text') {
     const fmt = brief.deliverable.format ? ` (${FORMAT_LABEL[brief.deliverable.format] || brief.deliverable.format})` : '';
     lines.push(`- Entregable: ${DELIVERABLE_LABEL[brief.deliverable.kind] || brief.deliverable.kind}${fmt}${brief.deliverable.ofTarget ? ' — es el archivo a editar, no uno nuevo' : ''}`);
@@ -687,6 +725,9 @@ function buildRequestBriefPromptBlock(brief) {
       break;
     case 'generated_artifact':
       lines.push(`- Objeto: el archivo que YA generaste en este chat${brief.target.name ? ` («${brief.target.name}»)` : ''}. Modifícalo; no crees uno nuevo ni respondas solo con texto.`);
+      break;
+    case 'url':
+      lines.push(`- Objeto: el enlace que pegó el usuario (${brief.target.name || 'web'}). ${brief.deliverable.kind === 'transcription' ? 'Transcríbelo con la herramienta `transcribe_url` (start/end según el rango pedido); no digas que no puedes sin haberla llamado.' : 'Léelo con la herramienta adecuada antes de responder.'}`);
       break;
     case 'previous_answer':
       if (['create', 'visualize', 'code'].includes(brief.action) || (brief.action === 'transform' && brief.deliverable.kind !== 'translation')) {

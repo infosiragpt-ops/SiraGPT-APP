@@ -317,6 +317,7 @@ const LIVE_DECISION_VERBS = {
   scientific_search: ['buscar artículos científicos', (n) => `hacer ${n} búsquedas científicas`],
   read_url: ['leer una página', (n) => `leer ${n} páginas`],
   web_fetch: ['leer una página', (n) => `leer ${n} páginas`],
+  transcribe_url: ['transcribir el audio de un enlace', (n) => `transcribir ${n} enlaces`],
   web_extract: ['extraer una página', (n) => `extraer ${n} páginas`],
   rag_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
   docintel_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
@@ -2670,6 +2671,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       '  4. Ejecuta `npm test` o la suite de pruebas respectiva para verificar.',
       '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
+      'Cuando el usuario pega el enlace de un video, audio, clase o grabación y pide transcribirlo, subtitularlo, resumir lo que se dice o saber qué dicen en cierto minuto: usa `transcribe_url` con `start`/`end` exactamente como lo pidió («del minuto 1.5 al 10» → start "1:30", end "10:00"; sin rango = todo). Si devuelve `media_login_required`, dilo claro y ofrece dos caminos: adjuntar el audio aquí, o abrir la grabación en la computadora de este chat con su sesión iniciada. Nunca digas que no puedes transcribir enlaces sin haber llamado a la herramienta.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Memoria persistente: el índice del usuario ya está en el system prompt. Abre un tema con `memory_read_topic`, busca con `memory_search` (grep primero), recupera lo hablado en otros chats con `chat_history_search`, busca en Drive/Gmail del usuario con `connector_search`, y guarda hechos nuevos y duraderos con `memory_write` en esta misma conversación (nunca secretos ni detalles efímeros). Si el usuario pide olvidar algo, usa `memory_forget`.',
       preGroundedSources > 0

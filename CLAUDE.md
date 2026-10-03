@@ -1834,6 +1834,45 @@ alfa de `--foreground`) para que claro / oscuro / medianoche compartan un lengua
 - Test: `tests/ui-professional-finish-source.test.ts` (único bloque, monocromo sin literales
   cromáticos, exclusiones del compositor, reduced motion).
 
+## Reconocer lo que pega el usuario + transcribir enlaces por minuto (added 2026-10-03)
+
+Pedido de Luis con captura de un chat: un enlace de grabación (upn.class.com) pegado por el
+usuario se veía como texto plano, y «transcribir del minuto 1.5 al 10» terminó en «no pude»
+sin intentar nada. Tres frentes, todos obligatorios:
+- **Burbuja del usuario rica** (`lib/chat/user-text-tokens.ts` puro + `components/chat/
+  rich-user-text.tsx`): links (http/https y `www.`) como anclas celestes con la URL completa en
+  el title y vista acotada (`host/ruta…`), puntuación final fuera del enlace (paréntesis
+  balanceado se conserva), correos `mailto:`, nombres de archivo con extensión como chip mono
+  (sin espacios: «informe final.docx» chipea «final.docx»), timecodes `1:30` / `01:02:03` en
+  cifras tabulares y `` `código` ``. Texto plano se renderiza idéntico. Montado dentro de
+  `<p className="chat-user-bubble-inner">` (invariante del test de wrap). CSS al final de
+  `globals.css` («Rich user text»): los links del usuario Y de la respuesta
+  (`.chat-assistant-message .prose a`) usan la excepción `--celeste`.
+- **`transcribe_url`** (`backend/src/services/agent-harness/tools/transcribe-url-tool.js`):
+  herramienta del harness, tier `auto`. URL con la misma postura SSRF que `web_fetch` →
+  sondeo `yt-dlp --dump-single-json` (título, duración; login/privado ⇒ `media_login_required`)
+  → descarga solo la sección (`--download-sections *start-end`) como mejor audio → ffmpeg
+  recorta y codifica mono 16 kHz AAC → `audio-transcriber.transcribe` (escalera + whisper.cpp
+  local) → segmentos desplazados al reloj de la grabación, texto `[mm:ss] …` acotado a 60k
+  para el modelo y `.txt` completo (y `.srt` si `subtitles`) como tarjeta de descarga
+  (`file_artifact`). Errores estructurados con `userMessage` en español
+  (`media_login_required` ofrece adjuntar el audio o abrir la grabación en la computadora del
+  chat; `media_too_long` pide un rango; `ytdlp_missing`). `start`/`end` aceptan segundos,
+  `mm:ss`, `hh:mm:ss`, «1.5 min». Inyectable (`runCommand`, `transcribe`, `saveArtifact`,
+  `dnsCheck`) — tests sin red ni binarios. Registrada en `run-agent-turn.buildHarnessTools`,
+  etiqueta en `LIVE_DECISION_VERBS`, línea de política en el prompt del loop, y el
+  `tool-selector` la conserva en turnos con «transcri/subtít/minuto» o la señal
+  `transcribeUrl` (que la ruta deriva del brief). **`backend/Dockerfile` instala `yt-dlp`**.
+- **Brief del pedido**: detecta la transcripción (tolerante a «transcirbir», «trascribir»),
+  el enlace como objeto (`target.kind='url'`, solo el host en el payload público) y el rango
+  `del minuto 1.5 al 10` → restricción `time_range` «01:30 → 10:00»; el bloque de sistema
+  ordena usar `transcribe_url` y no decir «no puedo» sin haberla llamado; un enlace nunca
+  dispara la pregunta de «¿qué quieres que transcriba?».
+- Tests: `backend/tests/transcribe-url-tool.test.js` (10: rango/sección/offset/artefactos,
+  login, clasificación de fallos, validación de rangos, URLs inseguras, cap, registro),
+  +2 en `request-brief.test.js`, `tests/lib/user-text-tokens.test.ts` (6),
+  `tests/components/rich-user-text.test.tsx` (3). Envs en `docs/ENV_VARIABLES.md`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

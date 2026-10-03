@@ -279,3 +279,35 @@ test('an empty prompt yields a trivial brief and nothing throws on odd input', (
   assert.equal(rb.buildRequestBriefPromptBlock(null), '');
   assert.deepEqual(rb.routingHints(null), { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null });
 });
+
+test('a pasted link is the object: «transcribe este video del minuto 1.5 al 10» → transcription of the URL with a time range', () => {
+  const b = brief('https://upn.class.com/player/recording/1d178f25-49ba ) transcirbir del minuto 1.5 al minuto 10 del inicio');
+  assert.equal(b.action, 'transform');
+  assert.equal(b.deliverable.kind, 'transcription');
+  assert.equal(b.target.kind, 'url');
+  assert.equal(b.target.name, 'upn.class.com');
+  assert.deepEqual(b.constraints, [{ kind: 'time_range', value: '01:30 → 10:00' }]);
+  assert.equal(b.ambiguity.ask, false);
+  assert.match(b.summary, /^Transcribir el enlace de upn\.class\.com · 01:30 → 10:00$/);
+  const block = rb.buildRequestBriefPromptBlock(b);
+  assert.match(block, /- Acción: Transcribir/);
+  assert.match(block, /transcribe_url/);
+  const pub = rb.publicRequestBrief(b);
+  assert.equal(pub.target.kind, 'url');
+  assert.equal(JSON.stringify(pub).includes('"url":'), false, 'the public payload carries the host, never the raw link');
+});
+
+test('links with other verbs keep their action; mm:ss ranges and seconds are normalised; an attached audio wins over no link', () => {
+  const sum = brief('resume https://example.com/articulo');
+  assert.equal(sum.action, 'analyze');
+  assert.equal(sum.target.kind, 'url');
+  const yt = brief('transcribe https://youtu.be/abc del 2:30 al 12:00');
+  assert.deepEqual(yt.constraints, [{ kind: 'time_range', value: '02:30 → 12:00' }]);
+  const secs = brief('transcribe https://youtu.be/abc del segundo 30 al 90');
+  assert.deepEqual(secs.constraints, [{ kind: 'time_range', value: '00:30 → 01:30' }]);
+  const attached = brief('transcribe el audio adjunto', { attachments: [{ originalName: 'clase.mp3' }] });
+  assert.equal(attached.deliverable.kind, 'transcription');
+  assert.equal(attached.target.kind, 'attachment');
+  // A link means the source exists: no «¿qué quieres que transcriba?».
+  assert.equal(brief('transcribe https://youtu.be/abc').ambiguity.ask, false);
+});
