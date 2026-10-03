@@ -8446,6 +8446,13 @@ router.post(
                       try { __turnTap.set({ failureReason: __degrade.failureReason }); } catch (_) { /* advisory */ }
                     }
                     if (!res.writableEnded && !res._siraGenerateSseClosed) {
+                      // The loop already streamed its generic apology («Hubo un
+                      // problema temporal con el modelo…») as the answer; the
+                      // honest close appends its own copy, so the user read
+                      // both glued together. Clear the buffer first.
+                      if (__agenticDidStream) {
+                        try { res.write(`data: ${JSON.stringify({ replace: true, content: '' })}\n\n`); } catch (_) { /* socket gone */ }
+                      }
                       closeGenerateSseWithError(res, {
                         message: __degrade.message,
                         code: __degrade.code,

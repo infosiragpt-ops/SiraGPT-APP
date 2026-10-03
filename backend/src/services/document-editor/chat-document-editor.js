@@ -293,7 +293,15 @@ async function namedHistorySources({ messages, prisma, userId, chatId, instructi
   }
   const matchedNames = [...identitiesByName.keys()];
   const missingName = filenameTokens.some((token) => !matchedNames.some((name) => name.endsWith(token)));
-  if (!selected.size || missingName || [...identitiesByName.values()].some((ids) => ids.size > 1)) {
+  if (!selected.size) {
+    // «Continúa desde el Excel que acabas de crear … entrega X.xlsx»: the
+    // named file is in no message of this chat (the earlier creation failed,
+    // or it lives in another chat). Say that, instead of «ambiguous».
+    const named = [...new Set(filenameTokens.map((token) => token.normalize('NFC')))].join(', ');
+    throw new DocumentEditError('DOCUMENT_EDIT_SOURCE_NOT_FOUND',
+      `No encuentro en este chat ningún archivo llamado ${named}. Adjúntalo si ya existe, o pídeme crearlo como un archivo nuevo; no modifiqué ninguno.`);
+  }
+  if (missingName || [...identitiesByName.values()].some((ids) => ids.size > 1)) {
     throw new DocumentEditError('DOCUMENT_EDIT_SOURCE_AMBIGUOUS',
       'No pude identificar un único documento con ese nombre. Adjunta el archivo que deseas editar; no modifiqué ninguno.');
   }

@@ -111,6 +111,16 @@ test('webdev: a picked model that fails is reported (the buffered error frame), 
   assert.doesNotMatch(block, /const tokens = webdevProviderFailed \? 0/);
 });
 
+test('an honest close after a streamed degraded apology clears the buffer first (no glued double message)', () => {
+  const start = route.indexOf("if (__degrade.action === 'honest_close') {");
+  assert.ok(start > 0);
+  const block = route.slice(start, route.indexOf('return __degrade.message;', start));
+  const replaceAt = block.indexOf("if (__agenticDidStream) {");
+  const closeAt = block.indexOf('closeGenerateSseWithError(res, {');
+  assert.ok(replaceAt > 0 && closeAt > replaceAt, 'the replace frame is written before the honest close');
+  assert.match(block.slice(replaceAt, closeAt), /replace: true, content: ''/);
+});
+
 test('onProviderFailure records the transparent cause (reason, provider, wait)', () => {
   const start = route.indexOf("generateLog.warn('provider.failure_cause'");
   assert.ok(start > 0);
