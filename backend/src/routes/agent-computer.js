@@ -309,7 +309,7 @@ async function navigateMemberDesktop(session, url, signal, tabId) {
     const result = await navigatePage(session, url, process.env, signal, { tabId });
     return { ok: true, url: result.url, sessionId: session.sessionId };
   } catch (cause) {
-    if (['browser_tab_missing', 'browser_action_invalid'].includes(cause?.code)) throw cause;
+    if (['browser_tab_missing', 'browser_action_invalid', 'browser_viewport_failed'].includes(cause?.code)) throw cause;
     const err = new Error('No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.', { cause });
     err.code = 'navigate_failed';
     err.status = 502;

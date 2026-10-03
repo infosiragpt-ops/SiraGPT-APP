@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
-function harness() {
+function harness({ abortSignal = AbortSignal } = {}) {
   const calls = [];
   const pages = [];
   const windows = new Map([[1, { windowState: 'maximized', left: 0, top: 0, width: 1280, height: 900 }]]);
@@ -96,7 +96,7 @@ function harness() {
   }
   const vmModule = { exports: {} };
   vm.runInNewContext(fs.readFileSync(require.resolve('../src/services/computer/live-page'), 'utf8'), {
-    module: vmModule, exports: vmModule.exports, process, AbortSignal, Map, Set,
+    module: vmModule, exports: vmModule.exports, process, AbortSignal: abortSignal, Map, Set,
     setTimeout: (run, ms) => { const timer = { run, ms, unref() {} }; timers.add(timer); return timer; },
     clearTimeout: timer => timers.delete(timer),
     fetch: async () => ({ ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://test.invalid/browser' }) }),
@@ -113,6 +113,121 @@ function harness() {
     fail: method => { failCommand = method; if (method.startsWith('hang-owner:')) hangOwner = connections.find(browser => !browser.closed); } };
 }
 const session = { sessionId: 'owned-desktop' };
+
+function holdNextProtocolResponse(page, methodToHold) {
+  const context = page.context();
+  const createSession = context.newCDPSession.bind(context);
+  let entered, resume;
+  const reached = new Promise(resolve => { entered = resolve; });
+  const released = new Promise(resolve => { resume = resolve; });
+  let held = false;
+  context.newCDPSession = async (...args) => {
+    const cdp = await createSession(...args);
+    const send = cdp.send.bind(cdp);
+    cdp.send = async (method, params) => {
+      const response = await send(method, params);
+      if (!held && method === methodToHold) {
+        held = true;
+        entered();
+        await released;
+      }
+      return response;
+    };
+    return cdp;
+  };
+  return { reached, resume };
+}
+
+test('a delayed inventory cannot invalidate a newer confirmed viewport', async () => {
+  const h = harness();
+  const page = h.makePage('https://example.com/');
+  await h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  // Runtime.evaluate has captured the old dimensions before history replies.
+  // Only the transport timing changes; every protocol response remains real
+  // fixture state and the production observation code is unmodified.
+  const hold = holdNextProtocolResponse(page, 'Page.getNavigationHistory');
+  const inventory = h.browserState(session);
+  await hold.reached;
+  const resize = h.browserAction(session, { type: 'browser_resize', width: 901, height: 777 });
+  await new Promise(resolve => setImmediate(resolve));
+  hold.resume();
+  const [before, resized] = await Promise.all([inventory, resize]);
+  assert.equal(before.viewport.width, 813);
+  assert.equal(resized.viewport.width, 901);
+  assert.equal(resized.viewport.height, 777);
+  const after = await h.browserState(session);
+  assert.equal(after.viewport.width, 901);
+  assert.equal(after.viewport.height, 777);
+  await h.navigatePage(session, 'https://example.com/next');
+  assert.equal(h.calls.filter(call => call?.goto).length, 1);
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+
+test('a queued inventory waits for resize confirmation instead of observing a partial viewport', async () => {
+  const h = harness();
+  const page = h.makePage('https://example.com/');
+  const hold = holdNextProtocolResponse(page, 'Emulation.setDeviceMetricsOverride');
+  const resize = h.browserAction(session, { type: 'browser_resize', width: 813, height: 917 });
+  await hold.reached;
+  const inventory = h.browserState(session);
+  // Install a handler before yielding: the pre-fix inventory rejects here.
+  const result = inventory.then(value => ({ value }), error => ({ error }));
+  await new Promise(resolve => setImmediate(resolve));
+  hold.resume();
+  await resize;
+  const observed = await result;
+  assert.equal(observed.error, undefined);
+  assert.equal(observed.value.viewport.width, 813);
+  assert.equal(observed.value.viewport.height, 917);
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+
+test('cancelling an inventory in the session queue returns without opening another connection', async () => {
+  const h = harness();
+  const page = h.makePage('https://example.com/');
+  const hold = holdNextProtocolResponse(page, 'Page.getNavigationHistory');
+  const inventory = h.browserState(session);
+  await hold.reached;
+  const connections = h.connections.length;
+  const controller = new AbortController();
+  const queued = h.browserState(session, process.env, controller.signal);
+  const rejected = assert.rejects(queued, error => error.name === 'AbortError');
+  controller.abort();
+  await rejected;
+  assert.equal(h.connections.length, connections);
+  hold.resume();
+  await inventory;
+  assert.equal((await h.browserState(session)).tabs.length, 1);
+});
+
+test('the inventory deadline includes time waiting in the session queue', async () => {
+  const deadlines = [];
+  const h = harness({ abortSignal: {
+    any: signals => AbortSignal.any(signals),
+    timeout: ms => {
+      const controller = new AbortController();
+      deadlines.push({ ms, controller });
+      return controller.signal;
+    },
+  } });
+  const page = h.makePage('https://example.com/');
+  const hold = holdNextProtocolResponse(page, 'Page.getNavigationHistory');
+  const inventory = h.browserState(session);
+  await hold.reached;
+  const connections = h.connections.length;
+  const count = deadlines.length;
+  const queued = h.browserState(session);
+  const rejected = assert.rejects(queued, error => error.name === 'TimeoutError');
+  assert.equal(deadlines.length, count + 1, 'the queue wait starts its deadline before any new CDP request');
+  const deadline = deadlines.at(-1);
+  assert.equal(deadline.ms, 25000);
+  deadline.controller.abort(new DOMException('Deadline exceeded', 'TimeoutError'));
+  await rejected;
+  assert.equal(h.connections.length, connections);
+  hold.resume();
+  await inventory;
+  assert.equal((await h.browserState(session)).tabs.length, 1);
+});
 
 test('browser inventory is read-only even when the persistent browser has no tabs', async () => {
   const h = harness();

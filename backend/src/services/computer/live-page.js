@@ -415,7 +415,19 @@ async function readBrowserState(session, browser, selected, confirmingViewport =
 }
 
 async function browserState(session, env = process.env, signal) {
-  return withLiveBrowser(session, env, signal, browser => readBrowserState(session, browser));
+  signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(25000)]) : AbortSignal.timeout(25000);
+  signal.throwIfAborted();
+  // Capture and validate dimensions in the same session order as resize. A
+  // delayed inventory must never compare an old document with a newer viewport.
+  const observation = inBrowserOrder(session, signal, () => withLiveBrowser(session, env, signal, browser => readBrowserState(session, browser)));
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    signal.addEventListener('abort', abort, { once: true });
+    // Cancellation returns immediately, but leaves the queue barrier intact.
+    // A cancelled queued read cannot open CDP when its predecessor finishes.
+    observation.then(value => signal.aborted ? reject(signal.reason) : resolve(value), reject)
+      .finally(() => signal.removeEventListener('abort', abort));
+  });
 }
 
 async function browserAction(session, action, env = process.env, signal) {
