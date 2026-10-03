@@ -8,7 +8,7 @@ import "katex/dist/katex.min.css"
 import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
-import { apiClient, type AIUsagePayload } from "./api"
+import { apiClient, type AIUsagePayload, type ClarifyOptionsPayload, type RequestBriefPayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
 import { appendActivity, finalizeActivity, type ActivityEvent, type ActivityStep } from "./chat/activity-log"
@@ -285,6 +285,9 @@ interface Message {
   // buscando en la web, analizando la imagen, pensando…). Live only — the
   // persisted row keeps reasoningDurationMs in metadata instead.
   activityLog?: ActivityStep[]
+  // What the backend understood from the user's message (request-brief
+  // frame). Live only — a reloaded row carries it in metadata.requestBrief.
+  requestBrief?: RequestBriefPayload | null
   thinkingStartedAt?: number
   thinkingEndedAt?: number | null
   // Agent harness (AgentTrace). Live streams accumulate `agentSteps` from the
@@ -462,7 +465,36 @@ function createActivityHandlers(opts: {
   isCancelled: () => boolean
 }) {
   const { setChat, messageId, isCancelled } = opts
+  const patchPlaceholder = (patch: (msg: any) => any) => {
+    setChat((prevChat: any) => {
+      if (!prevChat) return prevChat
+      const newMessages = prevChat.messages.map((msg: any) => (msg.id === messageId ? patch(msg) : msg))
+      return { ...prevChat, messages: newMessages }
+    })
+  }
   return {
+    // «Entendí: …» — the brief rides the placeholder; the row of the thinking
+    // timeline is closed by the backend with the same label.
+    onRequestBrief: (brief: RequestBriefPayload) => {
+      if (isCancelled()) return
+      patchPlaceholder((msg: any) => ({ ...msg, requestBrief: brief }))
+    },
+    // The turn ended with a clarifying question: the decision panel above
+    // the composer reads `metadata.kind === "clarification"` (lib/chat-work-
+    // status), the same shape the backend persists for a reload.
+    onClarifyOptions: (payload: ClarifyOptionsPayload) => {
+      if (isCancelled()) return
+      patchPlaceholder((msg: any) => {
+        let metadata: Record<string, unknown> = {}
+        try {
+          metadata = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : (msg.metadata && typeof msg.metadata === 'object' ? msg.metadata : {})
+        } catch { metadata = {} }
+        return {
+          ...msg,
+          metadata: { ...metadata, kind: 'clarification', question: payload.question, options: payload.options },
+        }
+      })
+    },
     onActivity: (text: string, event?: ActivityEvent) => {
       if (isCancelled()) return
       setChat((prevChat: any) => {

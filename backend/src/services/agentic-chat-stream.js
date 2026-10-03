@@ -1292,7 +1292,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // Live progress of the turn (services/turn-progress, owned by the
       // route): the loop's model calls become `agent_model` rows. Optional.
       progress = null,
+      // Request brief of the turn (services/request-brief publicRequestBrief)
+      // and its rendered system block. The brief settles the two follow-up
+      // cases the regex claims get wrong: an edit aimed at the previous
+      // ANSWER never goes to the document editor / runner; a style edit
+      // aimed at the generated Office file always does.
+      requestBrief = null,
+      requestBriefBlock = '',
     } = opts || {};
+    const briefTargetsPreviousAnswer = Boolean(requestBrief && requestBrief.target && requestBrief.target.kind === 'previous_answer'
+      && ['edit', 'transform', 'continue', 'analyze'].includes(requestBrief.action));
+    const briefTargetsGeneratedOffice = Boolean(requestBrief && requestBrief.target && requestBrief.target.kind === 'generated_artifact'
+      && /^(?:docx|pptx|xlsx|pdf)$/.test(String(requestBrief.target.format || ''))
+      && ['edit', 'transform'].includes(requestBrief.action));
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
     if (!model)  throw new Error('runAgenticChat: model is required');
@@ -1675,13 +1687,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           } catch (_) { priorArtifactFormat = null; }
         }
       }
-      if (!codingWorkspace && shouldRunAgentRunner({
+      const runnerClaim = !codingWorkspace && !briefTargetsPreviousAnswer && (shouldRunAgentRunner({
         files: uploadedFileRefs,
         fileIds: preloopFileIds,
         hasPriorArtifacts: prior,
         priorArtifactFormat,
         text: userQuery,
-      })) {
+      }) || (briefTargetsGeneratedOffice && prior && uploadedFileRefs.length === 0));
+      if (runnerClaim) {
         const finished = await invokeAgentRunner();
         if (finished) return finished;
       }
@@ -1721,6 +1734,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       && toolContext.userId
       && customGptCapabilities?.documents !== false
       && isDocumentEditRequest(userQuery)
+      // «agrega 2 ejemplos más a tu explicación»: an edit of the answer, not
+      // of a file — the surgical editor must not claim it.
+      && !briefTargetsPreviousAnswer
       // Never short-circuit "realiza una ppt de 30 slides de la tesis.pdf" into
       // source-preserving PDF annex editing — that must create a fresh .pptx.
       && !wantsNewDeckDeliverable
@@ -2612,6 +2628,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
+      requestBriefBlock || '',
       pluginPromptBlock,
       buildSkillExecutionPrompt(customGptAgentPolicy),
       buildArtifactDeliveryPrompt(artifactDeliveryContract),

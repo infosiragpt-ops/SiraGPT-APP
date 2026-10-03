@@ -32,6 +32,8 @@
 // Blocks that carry the answer's substance / grounding / persona — never dropped.
 const ALWAYS_KEEP = new Set([
   'master-prompt',
+  // What the user asked this turn (request-brief): never pruned.
+  'request-brief',
   'universal-contract',
   'conversation-understanding',
   'evidence',
