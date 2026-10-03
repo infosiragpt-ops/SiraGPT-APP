@@ -107,9 +107,13 @@ jobs:
           path: .next/cache
           # Exact source match only: partial restores can retain compiled CSS
           # from an earlier source tree, including stale Tailwind extraction.
-          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx,css}', 'components/**/*.{ts,tsx,js,jsx,css}', 'lib/**/*.{ts,tsx,js,jsx,css}', 'hooks/**/*.{ts,tsx,js,jsx,css}', 'styles/**/*.css', 'src/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}', '*.{js,ts,jsx,tsx,mdx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
+          # hashFiles uses @actions/glob with nobrace:true: list extensions explicitly.
+          key: nextjs-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.ts', 'app/**/*.tsx', 'app/**/*.js', 'app/**/*.jsx', 'app/**/*.css', 'components/**/*.ts', 'components/**/*.tsx', 'components/**/*.js', 'components/**/*.jsx', 'components/**/*.css', 'lib/**/*.ts', 'lib/**/*.tsx', 'lib/**/*.js', 'lib/**/*.jsx', 'lib/**/*.css', 'hooks/**/*.ts', 'hooks/**/*.tsx', 'hooks/**/*.js', 'hooks/**/*.jsx', 'hooks/**/*.css', 'styles/**/*.css', 'src/**/*.ts', 'src/**/*.tsx', 'pages/**/*.ts', 'pages/**/*.tsx', '*.js', '*.ts', '*.jsx', '*.tsx', '*.mdx', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
       - name: Next.js build
-        run: npm run build
+        run: |
+          set -euo pipefail
+          node --test tests/ci-build-cache.test.cjs
+          npm run build
 
       # Hard gate — gzipped bundle size must stay under the budget defined
       # in scripts/bundle-size-budget.json. Re-seed with
@@ -1092,7 +1096,8 @@ jobs:
           path: .next/cache
           # Exact source match only: partial restores can retain compiled CSS
           # from an earlier source tree, including stale Tailwind extraction.
-          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.{ts,tsx,js,jsx,css}', 'components/**/*.{ts,tsx,js,jsx,css}', 'lib/**/*.{ts,tsx,js,jsx,css}', 'hooks/**/*.{ts,tsx,js,jsx,css}', 'styles/**/*.css', 'src/**/*.{ts,tsx}', 'pages/**/*.{ts,tsx}', '*.{js,ts,jsx,tsx,mdx}', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
+          # hashFiles uses @actions/glob with nobrace:true: list extensions explicitly.
+          key: nextjs-e2e-${{ runner.os }}-${{ hashFiles('package-lock.json') }}-${{ hashFiles('app/**/*.ts', 'app/**/*.tsx', 'app/**/*.js', 'app/**/*.jsx', 'app/**/*.css', 'components/**/*.ts', 'components/**/*.tsx', 'components/**/*.js', 'components/**/*.jsx', 'components/**/*.css', 'lib/**/*.ts', 'lib/**/*.tsx', 'lib/**/*.js', 'lib/**/*.jsx', 'lib/**/*.css', 'hooks/**/*.ts', 'hooks/**/*.tsx', 'hooks/**/*.js', 'hooks/**/*.jsx', 'hooks/**/*.css', 'styles/**/*.css', 'src/**/*.ts', 'src/**/*.tsx', 'pages/**/*.ts', 'pages/**/*.tsx', '*.js', '*.ts', '*.jsx', '*.tsx', '*.mdx', 'next.config.mjs', 'tailwind.config.js', 'postcss.config.js', 'postcss.config.mjs') }}
 
       # Production bundle for the gate (not the standalone deploy build —
       # that one is validated by `Frontend · build`). Lint and the backend
@@ -1106,7 +1111,7 @@ jobs:
         # lifecycle hooks, so run it explicitly (the code workspace specs need it).
         run: |
           set -euo pipefail
-          node --test tests/critical-ui-safe-reporter.test.cjs
+          node --test tests/critical-ui-safe-reporter.test.cjs tests/ci-build-cache.test.cjs
           node scripts/prepare-code-editor.cjs
           npx next build --no-lint
 

@@ -74,14 +74,11 @@ describe("fast CI layout", () => {
       assert.ok(key, "cache must have a source-aware key")
       for (const input of [
         "package-lock.json",
-        "app/**/*.{ts,tsx,js,jsx,css}",
-        "components/**/*.{ts,tsx,js,jsx,css}",
-        "lib/**/*.{ts,tsx,js,jsx,css}",
-        "hooks/**/*.{ts,tsx,js,jsx,css}",
+        ...["app", "components", "lib", "hooks"].flatMap((directory) =>
+          ["ts", "tsx", "js", "jsx", "css"].map((extension) => `${directory}/**/*.${extension}`)),
         "styles/**/*.css",
-        "src/**/*.{ts,tsx}",
-        "pages/**/*.{ts,tsx}",
-        "*.{js,ts,jsx,tsx,mdx}",
+        ...["src", "pages"].flatMap((directory) => ["ts", "tsx"].map((extension) => `${directory}/**/*.${extension}`)),
+        ...["js", "ts", "jsx", "tsx", "mdx"].map((extension) => `*.${extension}`),
         "next.config.mjs",
         "tailwind.config.js",
         "postcss.config.js",
