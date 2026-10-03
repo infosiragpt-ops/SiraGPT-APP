@@ -1900,6 +1900,29 @@ Pedido de Luis: incorporar GLM-OCR (Z.ai, 0,9B, nº 1 OmniDocBench v1.5) a la pl
   memo, auto-pull único + reintento parqueado, request/respuesta, fallos HTTP/timeout/caída,
   integración con el motor y PDF).
 
+## Pulido móvil: sin tooltips táctiles + átomo «Pensando» monocromo (added 2026-10-03)
+
+Pedido de Luis con captura de iPhone: al tocar el botón de contraer el sidebar aparecía la
+burbuja negra «Contraer barra lateral ⌘B»; y el indicador de pensar debe ser «simplemente
+puntitos dando vueltas, en blanco y negro», rojo solo si el sistema falla. UI lock
+re-baselineado para los archivos tocados.
+- **Tooltips en táctil**: `components/ui/tooltip.tsx` añade la clase `ui-tooltip` a todo
+  `TooltipContent`; bloque «Touch devices: no hover tooltips» al final de `globals.css`:
+  `@media (hover: none)` oculta `.ui-tooltip` y su wrapper Radix (`:has`). Radix abre el
+  tooltip al enfocar y un toque enfoca el botón; en un dispositivo sin hover solo sobra. Los
+  `aria-label` siguen (lector de pantalla).
+- **ThinkingCore monocromo** (`components/brand/thinking-core.tsx`): sin estela (`Trail` y el
+  dash `stroke-dashoffset` eliminados) y sin color por electrón (tokens `--think-electron-a|b|c`
+  eliminados de `globals.css`): núcleo y los tres electrones en `currentColor` (`--think-accent`,
+  la tinta), SMIL `animateMotion` por la elipse exacta con fases distintas (0 / −1.1 / −2.3 s).
+  Prop `tone: "default" | "error"` (también en `ClaudeAsterisk`): `error` pinta el átomo entero
+  en `hsl(var(--destructive))` y añade `claude-asterisk--error` + `data-thinking-tone`.
+  `thinking-status-loader` usa el átomo estático en rojo como glifo terminal de error (el check
+  de «completado» no cambia).
+- Tests: `tests/mobile-thinking-polish-source.test.ts` (nuevo); actualizados
+  `thinking-core-source`, `claude-thinking-surface-source`, `brand-clover-source` y el snapshot
+  de `long-operation-indicator`.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
