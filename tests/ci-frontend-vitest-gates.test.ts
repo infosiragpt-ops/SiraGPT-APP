@@ -58,7 +58,12 @@ describe("frontend CI test gates", () => {
 
     // Both frontend jobs are required by the aggregate check.
     const build = jobSource("frontend")
-    assert.match(stepSource(build, "Next.js build"), /^\s*run:\s*npm run build\s*$/m)
+    const buildStep = stepSource(build, "Next.js build")
+    assert.match(buildStep, /^\s*run:\s*\|\s*$/m)
+    assert.match(buildStep, /^\s*set -euo pipefail\s*$/m, "the multi-command build must fail on the first error")
+    assert.match(buildStep, /^\s*npm run build\s*$/m, "the production build command remains mandatory")
+    assert.doesNotMatch(buildStep, /continue-on-error\s*:|\|\||(?:^|\n)\s*set\s+\+e\b/,
+      "the production build cannot ignore an error")
     const gate = jobSource("ci")
     assert.match(gate, /needs:\s*\[[^\]]*\bfrontend\b[^\]]*\bfrontend-tests\b[^\]]*\]/)
     assert.match(gate, /needs\.frontend-tests\.result/)
