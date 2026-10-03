@@ -592,6 +592,7 @@ const { validate: validateAttributionConfig } = require('./src/services/attribut
 const alerting = require('./src/services/alerting');
 const sloTracker = require('./src/services/slo-tracker');
 const shutdownRegistry = require('./src/utils/shutdown');
+const { closeHttpServer } = require('./src/utils/http-server-close');
 const telemetryRoutes = require('./src/routes/telemetry');
 
 const app = express();
@@ -1933,8 +1934,12 @@ async function startServer() {
     }, 5000);
 
     // Stop accepting new HTTP connections before draining in-flight work.
-    shutdownRegistry.register('http_server_close', () => new Promise((resolve) => {
-        try { server.close(() => resolve()); } catch { resolve(); }
+    // keepAliveTimeout is 2 min and SSE turns stay open, so a bare
+    // server.close() never settled inside the 5 s budget (every SIGTERM in
+    // prod logged shutdown_step_fail here). closeHttpServer drops idle
+    // sockets at once and cuts the rest after a short grace.
+    shutdownRegistry.register('http_server_close', () => closeHttpServer(server, {
+        onCut: (count) => logger.info({ step: 'http_server_close', cut: count }, 'http_server_close_cut_open_sockets'),
     }), 5000);
 
     // Drain in-flight requests (best-effort, 5s budget per step;

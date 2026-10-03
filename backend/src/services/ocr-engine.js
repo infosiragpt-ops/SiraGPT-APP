@@ -38,6 +38,65 @@ function usefulCharCount(text) {
   return matches ? matches.length : 0;
 }
 
+// Local (Tesseract) wall-clock budget for ONE image, both passes included.
+// Default 20 s: comfortably above a clean screenshot (1-3 s) and far below
+// the six-minute photo reads seen in production. Tunable per deployment.
+function localImageBudgetMs(options = {}) {
+  const fromOpts = Number(options.localBudgetMs);
+  if (Number.isFinite(fromOpts) && fromOpts > 0) return fromOpts;
+  const fromEnv = Number(process.env.SIRAGPT_OCR_LOCAL_IMAGE_BUDGET_MS);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return 20_000;
+}
+
+// Tesseract core narrates every rejected blob ("Image too small to scale!!",
+// "Line cannot be recognized!!") through the worker's error channel; without
+// a handler tesseract.js throws them on the message bus and the process log
+// fills with hundreds of WARN lines per photo. Count them, never print them.
+const TESSERACT_NOISE_RE = /Image too small to scale|Line cannot be recognized|Empty page|Estimating resolution/i;
+function tesseractWorkerOptions() {
+  return {
+    errorHandler: (err) => {
+      const msg = String((err && err.message) || err || '');
+      if (TESSERACT_NOISE_RE.test(msg)) return;
+      console.warn('[ocr-engine] tesseract worker:', msg.slice(0, 200));
+    },
+  };
+}
+
+async function terminateWorker(worker) {
+  if (!worker || typeof worker.terminate !== 'function') return;
+  try { await worker.terminate(); } catch { /* already gone */ }
+}
+
+// Race one recognize() against the absolute deadline. On timeout the worker
+// is terminated (the only way to stop the WASM job) and the caller must not
+// reuse it; the pending promise is left to settle on its own.
+async function recognizeWithin(worker, image, deadlineAt) {
+  if (!deadlineAt) return { result: await worker.recognize(image), timedOut: false };
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) return { result: null, timedOut: true };
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    // Not unref'd on purpose: the deadline must fire even if the hung WASM
+    // job is the only thing left on the loop.
+    timer = setTimeout(() => resolve({ result: null, timedOut: true }), remaining);
+  });
+  const job = Promise.resolve()
+    .then(() => worker.recognize(image))
+    .then((result) => ({ result, timedOut: false }));
+  try {
+    const outcome = await Promise.race([job, timeout]);
+    if (outcome.timedOut) {
+      job.catch(() => {});
+      await terminateWorker(worker);
+    }
+    return outcome;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 class OcrEngine {
   constructor() {
     // Configurable default language via env. Falls back to spa+eng.
@@ -158,7 +217,7 @@ class OcrEngine {
     // rendered text walls): the single pass downscales to ~3000px and tiny
     // glyphs dissolve. Tiles keep native resolution; the better read wins.
     let tiledUsed = 0;
-    if (imageAnalyzer.shouldTileOcr(stats, localResult.quality)) {
+    if (!localResult.timedOut && imageAnalyzer.shouldTileOcr(stats, localResult.quality)) {
       try {
         const tiled = await this.runTiledImageOcr(input, stats, options);
         if (tiled && this.scoreQuality(tiled.quality) > this.scoreQuality(localResult.quality)) {
@@ -193,7 +252,8 @@ class OcrEngine {
       return this._withImageMeta(result, stats, { tiled: tiledUsed });
     }
 
-    return this._withImageMeta(this.asFailedResult(localResult.quality, localResult.error), stats, { tiled: tiledUsed });
+    const failure = localResult.error || (localResult.timedOut ? 'local_ocr_timeout' : undefined);
+    return this._withImageMeta(this.asFailedResult(localResult.quality, failure), stats, { tiled: tiledUsed });
   }
 
   /**
@@ -234,7 +294,7 @@ class OcrEngine {
     const tiles = imageAnalyzer.planTiles(stats.width, stats.height, cfg);
     if (tiles.length <= 1) return null;
 
-    const worker = await createWorker(options.language || this.defaultLanguage);
+    const worker = await createWorker(options.language || this.defaultLanguage, undefined, tesseractWorkerOptions());
     const texts = [];
     let confSum = 0;
     let confSamples = 0;
@@ -482,14 +542,26 @@ class OcrEngine {
       variantFactories.length,
     ));
     let lastError = null;
+    // Wall-clock deadline (absolute ms) shared by every variant of this
+    // image. A phone photo with no text makes Tesseract chew on thousands
+    // of spurious blobs ("Image too small to scale!!" spam) for MINUTES per
+    // variant — prod 2026-10-03: one WhatsApp picture held the upload for
+    // 371 s before the vision rungs got a look. Past the deadline the loop
+    // stops, and a recognize() still running is abandoned by terminating
+    // the worker (the WASM job cannot be interrupted any other way).
+    const deadlineAt = Number(options.deadlineAt) || 0;
+    let timedOut = false;
 
     for (let idx = 0; idx < maxVariants; idx += 1) {
+      if (deadlineAt && Date.now() >= deadlineAt) { timedOut = true; break; }
       const entry = variantFactories[idx];
       const makeVariant = typeof entry === 'function' ? entry : entry.make;
       const variantName = typeof entry === 'function' ? `variant_${idx + 1}` : entry.name;
       try {
         const variant = await makeVariant();
-        const { data: { text, confidence } } = await worker.recognize(variant);
+        const recognized = await recognizeWithin(worker, variant, deadlineAt);
+        if (recognized.timedOut) { timedOut = true; break; }
+        const { data: { text, confidence } } = recognized.result;
         variantsProcessed += 1;
         const quality = this.evaluateQuality({ text, confidence }, config);
         if (this.scoreQuality(quality) > this.scoreQuality(best)) {
@@ -506,35 +578,46 @@ class OcrEngine {
       if (best.accepted) break;
     }
 
-    if (variantsProcessed === 0 && lastError) throw lastError;
-    return { quality: best, variants: variantsProcessed, variant: bestVariant };
+    if (variantsProcessed === 0 && lastError && !timedOut) throw lastError;
+    return { quality: best, variants: variantsProcessed, variant: bestVariant, timedOut };
   }
 
   async runLocalImageOcr(filePath, options = {}) {
     const variantFactories = await this.createImageVariantsForInput(filePath);
-    const worker = await createWorker(options.language || this.defaultLanguage);
+    const worker = await createWorker(options.language || this.defaultLanguage, undefined, tesseractWorkerOptions());
+    // One budget for the whole local attempt (both passes). Past it the
+    // picture goes straight to the vision rungs (GLM-OCR local → cloud),
+    // which read photos far better than Tesseract anyway.
+    const deadlineAt = Date.now() + localImageBudgetMs(options);
 
     try {
       const first = await this.recognizeBestVariant(worker, variantFactories, this.config, {
         maxVariants: variantFactories.length,
+        deadlineAt,
       });
       if (first?.quality?.accepted) return first;
+      if (first?.timedOut) {
+        console.warn(`[ocr-engine] local OCR budget (${localImageBudgetMs(options)} ms) exhausted after ${first.variants} variant(s) — handing the image to the vision rungs`);
+        return { ...first, timedOut: true };
+      }
 
       const enlargedFactories = await this.createImageVariantsForInput(filePath, { maxSide: 4000 });
       const second = await this.recognizeBestVariant(worker, enlargedFactories, this.config, {
         maxVariants: enlargedFactories.length,
+        deadlineAt,
       });
+      const timedOut = Boolean(second.timedOut);
       if (this.scoreQuality(second.quality) > this.scoreQuality(first.quality)) {
-        return { ...second, retriedEnlarged: true };
+        return { ...second, retriedEnlarged: true, timedOut };
       }
-      return { ...first, retriedEnlarged: true };
+      return { ...first, retriedEnlarged: true, timedOut };
     } finally {
-      await worker.terminate();
+      await terminateWorker(worker);
     }
   }
 
   async recognizePageBuffers(pageBuffers, options = {}) {
-    const worker = await createWorker(options.language || this.defaultLanguage);
+    const worker = await createWorker(options.language || this.defaultLanguage, undefined, tesseractWorkerOptions());
     const pageResults = [];
     try {
       for (const pageBuffer of pageBuffers) {
@@ -599,7 +682,7 @@ class OcrEngine {
     const maxChars = positiveIntFromEnv('OCR_PDF_MAX_CHARS', config.pdfMaxChars || 6_000_000);
     const language = options.language || this.defaultLanguage;
     const onPage = typeof options.onPage === 'function' ? options.onPage : null;
-    const worker = await createWorker(language);
+    const worker = await createWorker(language, undefined, tesseractWorkerOptions());
     const pageResults = [];
     const textParts = [];
     const startedAt = Date.now();
@@ -786,7 +869,7 @@ class OcrEngine {
     }
 
     const language = options.language || this.defaultLanguage;
-    const worker = await createWorker(language);
+    const worker = await createWorker(language, undefined, tesseractWorkerOptions());
     const pages = [];
     const startedAt = Date.now();
     try {
@@ -1137,3 +1220,5 @@ class OcrEngine {
 }
 
 module.exports = new OcrEngine();
+// Test seams only (not part of the engine API).
+module.exports._internals = { recognizeWithin, tesseractWorkerOptions, localImageBudgetMs, TESSERACT_NOISE_RE };

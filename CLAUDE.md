@@ -1963,6 +1963,53 @@ del usuario. Tres piezas, todas en `backend/src/services/agent-harness/tools/`:
 - Envs en `docs/ENV_VARIABLES.md` (`TRANSCRIBE_URL_JS_RUNTIME`, `_REMOTE_COMPONENTS`,
   `_BROWSER_DISCOVERY`, `_DISCOVERY_TIMEOUT_MS`, `SIRAGPT_COOKIE_JAR_DIR`).
 
+## Volcado de producción 2026-10-03 — pegado, OCR, cierre HTTP, computadora (added 2026-10-03)
+
+Del log del 3-oct (09:20Z → 16:51Z) que pegó Luis, «corregir y dejarlo en producción». Dos
+PR en paralelo: **#990** (pegado + importación de artefactos) y **#992** (OCR, cierre HTTP,
+pase correctivo); #992 se fusionó con la base de #990 conservando la versión de #990.
+- **Pegado de texto roto desde siempre** (#990): `auto-file-bridge.ingestPastedContent` pasaba
+  `source:'paste'` y `metadata:{…}` a `prisma.file.create` — el modelo `File` no tiene esas
+  columnas («Unknown argument `source`», cada pegado ≥200 chars) — y llamaba
+  `documentIntelligence.analyzeFile(fileRecord, content)` con la firma equivocada. La
+  procedencia vive ahora en `DocumentAnalysis.metadata` (columna Json), `getAutoFilesForChat`
+  filtra por el prefijo `auto/` del `path`, y los fallos se registran como `E_FILE_INGESTION` /
+  `E_FILE_INDEXING` (el mensaje de Prisma podía contener el documento entero). Test de #992
+  `auto-file-bridge-prisma-fields` valida cada `data`/`where`/`select` contra las columnas
+  reales de `schema.prisma`.
+- **OCR local acotado** (#992, `ocr-engine.js`): una foto de WhatsApp tuvo a Tesseract 371 s
+  (cientos de «Image too small to scale!!») antes de que GLM-OCR/visión vieran la imagen.
+  `recognizeBestVariant` acepta `deadlineAt`; `runLocalImageOcr` fija UN presupuesto para
+  ambas pasadas (`SIRAGPT_OCR_LOCAL_IMAGE_BUDGET_MS`, 20 s), `recognizeWithin` carrera el
+  `recognize()` contra el plazo y **termina el worker** si se pasa (único modo de parar el job
+  WASM); con `timedOut` no hay pase por mosaicos y el fallo se etiqueta `local_ocr_timeout`.
+  Todo `createWorker` recibe `tesseractWorkerOptions()` (errorHandler que silencia el ruido del
+  core; los errores reales del worker siguen en WARN). Seams en `ocrEngine._internals`.
+- **`http_server_close` siempre vencía** (#992, 5 s): `keepAliveTimeout` es 120 s y los SSE
+  siguen abiertos, así que `server.close()` nunca terminaba. `utils/http-server-close.js`
+  `closeHttpServer(server, {graceMs, onCut})`: cierra el listener, suelta los sockets ociosos
+  (`closeIdleConnections`), espera la gracia (`SIRAGPT_HTTP_CLOSE_GRACE_MS`, 3.5 s) y corta el
+  resto (`closeAllConnections`); nunca rechaza. El orden de pasos no cambia.
+- **Computadora: 502 en `GET /api/agent-computer/activity?sessionId=ac_luis&browser=1`** (346
+  líneas en una tarde): es el sondeo de estado del navegador integrado (#981/#988/#989) —
+  `browser=1` consulta `browserState` del escritorio del miembro y responde
+  `browser_state_failed` (502) cuando el contenedor no contesta (durante el OCR de 371 s que
+  saturaba la CPU y en el minuto posterior a cada reinicio). Es un fallo upstream real; sin
+  cambio de código en #992 (se descartó un atajo para sondeos sin conversación que no cubría
+  este caso).
+- **Importación de artefactos a cowork** (#990): leía primero R2 (objeto aún no subido) y luego
+  el local (ya borrado por el espejo) → «Artifact content is not available». Ahora local
+  primero (handle acotado, realpath dentro de `ARTIFACT_DIR`) y solo con ENOENT una lectura
+  remota.
+- **Pase correctivo** (#992): «corrective pass failed: Request was aborted.» era nuestro propio
+  tope de 8 s (el SDK de OpenAI lanza `APIUserAbortError`, no `AbortError`). Se clasifica por
+  señales: tope → «abandoned», Stop del usuario → silencio, otro → fallo real.
+- Sin arreglo en código (upstream): turnos degradados `step_timeout` a 60 s con xAI grok-4.7
+  + 16 tools (CONVERSAR), `feedback-exemplars > 900ms` (consulta lenta), sondas CVE a
+  `/metabase`, y el 502 de `/action` tras un reinicio (escritorio reiniciando).
+- Tests (#992): `auto-file-bridge-prisma-fields` (3), `ocr-engine-local-budget` (7),
+  `http-server-close` (5, servidor real con SSE + keep-alive), `ai-service-corrective-abort-source` (1).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
