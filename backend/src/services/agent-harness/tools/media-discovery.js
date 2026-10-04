@@ -166,6 +166,11 @@ function isBlockedHost(hostname) {
  *   timeoutMs: total budget (default 30 s)
  *   dnsCheck(hostname): throws when the host resolves to a private address
  *   launch(): Promise<Browser> (tests)
+ *   attach(): Promise<{ browser, context }> — work inside an EXISTING, already
+ *     signed-in browser (the chat computer's Chrome) instead of a fresh
+ *     headless one: one new tab, routed through the same SSRF guard, closed
+ *     at the end; the user's browser and its other tabs are never touched and
+ *     only the cookies of the page / media hosts are exported.
  *   env, logger
  */
 async function discoverMedia(pageUrl, opts = {}) {
@@ -181,8 +186,9 @@ async function discoverMedia(pageUrl, opts = {}) {
   try { page = new URL(String(pageUrl)); } catch (_) { return { ...result, reason: 'invalid_url' }; }
   if (!/^https?:$/.test(page.protocol) || isBlockedHost(page.hostname)) return { ...result, reason: 'invalid_url' };
 
-  const pw = opts.launch ? null : getPlaywright();
-  if (!opts.launch && (!pw || !pw.chromium || typeof pw.chromium.launch !== 'function')) {
+  const attached = typeof opts.attach === 'function';
+  const pw = opts.launch || attached ? null : getPlaywright();
+  if (!opts.launch && !attached && (!pw || !pw.chromium || typeof pw.chromium.launch !== 'function')) {
     return { ...result, reason: 'browser_unavailable' };
   }
 
@@ -199,27 +205,47 @@ async function discoverMedia(pageUrl, opts = {}) {
 
   const seen = [];
   let browser = null;
+  let existingContext = null;
   try {
-    browser = opts.launch ? await opts.launch() : await pw.chromium.launch(chromiumLaunchOptions(env));
+    if (attached) {
+      const handle = await opts.attach();
+      browser = handle && handle.browser;
+      existingContext = (handle && handle.context) || (browser && typeof browser.contexts === 'function' ? browser.contexts()[0] : null);
+      if (!browser || !existingContext) throw new Error('attached browser has no context');
+    } else {
+      browser = opts.launch ? await opts.launch() : await pw.chromium.launch(chromiumLaunchOptions(env));
+    }
   } catch (err) {
     logger.warn('[media-discovery] chromium launch failed:', err && err.message ? err.message : err);
+    if (browser) { try { await browser.close(); } catch (_) { /* ignore */ } }
     return { ...result, reason: 'browser_unavailable', detail: String((err && err.message) || err).slice(0, 200) };
   }
 
+  let tab = null;
   try {
-    const context = await browser.newContext({ userAgent: DESKTOP_UA, viewport: { width: 1280, height: 800 }, locale: 'es-PE' });
-    const cookies = cookiesForHost(opts.cookies, page.hostname);
-    if (cookies.length) {
-      try { await context.addCookies(cookies.map((c) => ({ ...c, domain: c.domain, path: c.path || '/' }))); } catch (err) { logger.warn('[media-discovery] cookies rejected:', err && err.message); }
+    let context = existingContext;
+    if (!attached) {
+      context = await browser.newContext({ userAgent: DESKTOP_UA, viewport: { width: 1280, height: 800 }, locale: 'es-PE' });
+      const cookies = cookiesForHost(opts.cookies, page.hostname);
+      if (cookies.length) {
+        try { await context.addCookies(cookies.map((c) => ({ ...c, domain: c.domain, path: c.path || '/' }))); } catch (err) { logger.warn('[media-discovery] cookies rejected:', err && err.message); }
+      }
     }
-    await context.route('**/*', async (route) => {
+    tab = await context.newPage();
+    if (attached) {
+      // The user's real browser: report ITS user agent so the backend download
+      // looks like the same browser the session belongs to.
+      try { result.userAgent = (await tab.evaluate(() => navigator.userAgent)) || DESKTOP_UA; } catch (_) { /* keep default */ }
+    }
+    // Route only this tab: in an attached browser the user's other tabs keep
+    // browsing normally.
+    await (attached ? tab : context).route('**/*', async (route) => {
       let url;
       try { url = new URL(route.request().url()); } catch (_) { return route.abort(); }
       if (!/^https?:$/.test(url.protocol)) return route.abort();
       if (!(await hostAllowed(url.hostname))) return route.abort();
       return route.continue();
     });
-    const tab = await context.newPage();
     tab.on('request', (req) => {
       const url = req.url();
       if (isMediaCandidate(url)) seen.push({ url, kind: classifyMediaUrl(url), source: 'request' });
@@ -304,7 +330,10 @@ async function discoverMedia(pageUrl, opts = {}) {
     const loginText = /iniciar sesi[oó]n|inicia sesi[oó]n|log ?in|sign ?in|acceder|autenticar|contraseña|password/i.test(dom.text || '');
     result.loginWall = !result.best && (LOGIN_PATH_RE.test(finalPath) || dom.hasPassword || (loginText && !navError));
     try {
-      const jar = await context.cookies();
+      // Attached: only the page's and the media hosts' cookies leave the user's
+      // browser (Playwright filters by URL), never the whole profile.
+      const scope = attached ? [page.href, ...result.candidates.slice(0, 3).map((c) => c.url)] : undefined;
+      const jar = scope ? await context.cookies(scope) : await context.cookies();
       if (jar && jar.length) result.cookiesNetscape = toNetscapeCookies(jar);
     } catch (_) { /* optional */ }
     result.ok = Boolean(result.best);
@@ -314,6 +343,8 @@ async function discoverMedia(pageUrl, opts = {}) {
     result.reason = 'discovery_failed';
     result.detail = String((err && err.message) || err).slice(0, 200);
   } finally {
+    if (attached && tab) { try { await tab.close(); } catch (_) { /* ignore */ } }
+    // Headless: closes the throwaway browser. Attached (CDP): only disconnects.
     try { await browser.close(); } catch (_) { /* ignore */ }
     result.elapsedMs = Date.now() - startedAt;
   }

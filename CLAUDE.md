@@ -1963,6 +1963,25 @@ del usuario. Tres piezas, todas en `backend/src/services/agent-harness/tools/`:
 - Envs en `docs/ENV_VARIABLES.md` (`TRANSCRIBE_URL_JS_RUNTIME`, `_REMOTE_COMPONENTS`,
   `_BROWSER_DISCOVERY`, `_DISCOVERY_TIMEOUT_MS`, `SIRAGPT_COOKIE_JAR_DIR`).
 
+## Transcribir grabaciones con login desde la computadora del chat (added 2026-10-04)
+
+Reporte: «del minuto 60 al minuto 1:20» de una grabación de upn.class.com terminó en «el reproductor
+de Class no respondió a tiempo». Dos causas: el rango se leía 1:00:00 → 01:20 y la grabación exige la
+sesión UPN del usuario, que el Chromium headless del backend no tiene.
+- **Rango**: pasada la hora, un fin «a:bb» anterior al inicio es horas:minutos («1:20» → 1:20:00):
+  `transcribe-url-tool.resolveRangeEnd` y `request-brief.resolveRangeEndLabel`. Antes de la hora no cambia.
+- **Peldaño «computadora»** (`transcribe_url`, tras yt-dlp y el headless): `media-discovery.discoverMedia`
+  acepta `attach()` y trabaja en una pestaña NUEVA del Chrome de la computadora del chat
+  (`live-page.connectLiveBrowser`, perfil persistente por usuario, ahí ya está logueado): mismo guard SSRF
+  por pestaña, cierra solo su pestaña, desconecta CDP y exporta solo las cookies de la página y de los
+  hosts de medios (nunca se guardan en el jar). Encontrado ⇒ `via: computer+yt-dlp|ffmpeg`. Sin medios
+  (login) ⇒ abre la página en la pestaña visible (`navigatePage`), emite `computer_navigate` (SSE → el
+  panel de la computadora se abre solo, `lib/api.ts`) y devuelve `media_login_in_computer`: «inicia sesión
+  ahí y escribe «listo»»; el modelo reintenta la misma URL y rango. Sin computadora para el usuario ⇒
+  `media_login_required` de siempre. Kill switch `TRANSCRIBE_URL_COMPUTER=0`; tope 60 s.
+- Tests: `backend/tests/media-discovery.test.js` (+4: peldaño computadora, handoff de login, rangos,
+  Chromium real en modo adjunto con cookies de otro sitio y pestaña del usuario intactas).
+
 ## Volcado de producción 2026-10-03 — pegado, OCR, cierre HTTP, computadora (added 2026-10-03)
 
 Del log del 3-oct (09:20Z → 16:51Z) que pegó Luis, «corregir y dejarlo en producción». Dos

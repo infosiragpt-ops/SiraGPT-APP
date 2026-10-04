@@ -403,6 +403,25 @@ function normalizeTimecode(raw, text) {
   return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${two(m)}:${two(s)}`;
 }
 
+function clockSeconds(label) {
+  const parts = String(label || '').split(':').map(Number);
+  if (!parts.length || parts.some((n) => !Number.isFinite(n))) return null;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
+/**
+ * «del minuto 60 al minuto 1:20»: past the hour, an «a:bb» end that would fall
+ * before the start reads as hours:minutes («1:20» → «1:20:00»).
+ */
+function resolveRangeEndLabel(fromLabel, toLabel) {
+  const from = clockSeconds(fromLabel);
+  const to = clockSeconds(toLabel);
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(toLabel || ''));
+  if (from == null || to == null || to > from || from < 3600 || !m) return toLabel;
+  const hours = Number(m[1]); const minutes = Number(m[2]);
+  return hours * 3600 + minutes * 60 > from ? `${hours}:${String(minutes).padStart(2, '0')}:00` : toLabel;
+}
+
 function prettify(value) {
   return String(value || '').split(' ').map((w) => ACCENTS[w] || w).join(' ');
 }
@@ -428,7 +447,8 @@ function detectConstraints(text) {
   if (color) out.push({ kind: 'color', value: prettify(color[1] || color[2]) });
   const range = TIME_RANGE_RE.exec(text);
   if (range && /\b(?:minuto|min|segundo|hora|transcri|audio|video|grabaci)/.test(text)) {
-    out.push({ kind: 'time_range', value: `${normalizeTimecode(range[1], text)} → ${normalizeTimecode(range[2], text)}` });
+    const from = normalizeTimecode(range[1], text);
+    out.push({ kind: 'time_range', value: `${from} → ${resolveRangeEndLabel(from, normalizeTimecode(range[2], text))}` });
   }
   return out.slice(0, 6);
 }

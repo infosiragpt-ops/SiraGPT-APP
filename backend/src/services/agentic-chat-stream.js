@@ -2640,6 +2640,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
     function onEvent(evt) {
+      // transcribe_url opened a login-walled recording in the chat computer:
+      // open that panel on the client so the user can sign in there.
+      if (evt?.type === 'computer_navigate') {
+        if (!signal?.aborted && typeof evt.url === 'string' && /^https?:\/\//i.test(evt.url)) {
+          writeSse(res, { type: 'computer_navigate', url: evt.url.slice(0, 4000), chatId: String(toolContext.chatId || ''), tool: String(evt.tool || '') });
+        }
+        return;
+      }
       if (evt?.type === 'coding_preview_ready') {
         if (codingWorkspace && !signal?.aborted
           && evt.chatId === String(toolContext.chatId)

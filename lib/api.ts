@@ -9,6 +9,7 @@ import {
   withTimeout,
 } from "./sse-idle"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
+import { emitComputerNavigate, sanitizeNavigateUrl } from "./computer-navigate"
 import {
   authenticatedFetch,
   prepareAuthenticatedRequest,
@@ -3024,6 +3025,14 @@ class ApiClient {
               } else if (jsonData.type === 'coding_workspace') {
                 const workspace = parseCodingWorkspacePayload(jsonData);
                 if (workspace && workspace.chatId === data.chatId) options.onCodingWorkspace?.(workspace);
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'computer_navigate' && typeof jsonData.url === 'string') {
+                // A tool (transcribe_url behind a login) opened a page in the
+                // chat computer: show that panel so the user can sign in.
+                const target = sanitizeNavigateUrl(jsonData.url)
+                if (target.ok && (!jsonData.chatId || jsonData.chatId === data.chatId)) {
+                  emitComputerNavigate({ url: target.url, conversationId: data.chatId, tool: typeof jsonData.tool === 'string' ? jsonData.tool : undefined })
+                }
                 lastProcessTime = Date.now();
               } else if (jsonData.type === 'coding_preview_ready') {
                 const preview = parseCodingPreviewPayload(jsonData);

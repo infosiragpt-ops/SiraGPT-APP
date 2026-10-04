@@ -87,14 +87,14 @@ test('safety: the browser never opens IP literals, localhost or .internal hosts'
 
 // ── transcribe_url ladder on a fake browser ────────────────────────────────
 
-function runnerWith({ probeOk = new Set(), download = true } = {}) {
+function runnerWith({ probeOk = new Set(), download = true, duration = 2400 } = {}) {
   const calls = [];
   const runCommand = async (bin, args, { cwd } = {}) => {
     calls.push({ bin, args });
     const target = args[args.length - 1];
     if (bin === 'yt-dlp' && args.includes('--dump-single-json')) {
       if (!probeOk.has(target)) return { code: 1, stdout: '', stderr: `ERROR: Unsupported URL: ${target}` };
-      return { code: 0, stdout: JSON.stringify({ title: 'Clase 7', duration: 2400 }), stderr: '' };
+      return { code: 0, stdout: JSON.stringify({ title: 'Clase 7', duration }), stderr: '' };
     }
     if (bin === 'yt-dlp') {
       if (!download) return { code: 1, stdout: '', stderr: 'ERROR: HTTP Error 403: Forbidden' };
@@ -121,6 +121,7 @@ function ladderDeps(over = {}) {
       discoverMedia: over.discoverMedia,
       cookieJar: { save: async (userId, text) => { saves.push({ userId, text }); return { hosts: jar.cookieHosts(text) }; }, load: async () => over.savedJar || null },
       loadAttachedCookies: async () => over.attached || null,
+      computer: over.computer === undefined ? null : over.computer,
       transcribe: async () => ({ ok: true, transcript: 'texto', segments: [], language: 'es' }),
       saveArtifact: (input) => ({ id: 'a1', filename: input.filename, mime: input.mime, format: 'txt', sizeBytes: 1, downloadUrl: '/x' }),
     },
@@ -244,6 +245,67 @@ test('attached cookies: a Netscape .txt among the turn\'s files is picked by own
   assert.equal(await tool.loadAttachedCookies({ prisma, userId: 'u1', fileIds: [] }), null);
 });
 
+test('ladder: behind a login, the chat computer (the user\'s signed-in Chrome) finds the stream and the download uses ITS session', async () => {
+  const seen = [];
+  const d = ladderDeps({
+    runner: { probeOk: new Set([STREAM]), duration: 2 * 3600 },
+    discoverMedia: async () => ({ ok: false, reason: 'login_wall', loginWall: true, candidates: [] }),
+    computer: {
+      available: async (ctx) => { seen.push(['available', ctx.userId]); return true; },
+      discover: async (url, ctx, opts) => {
+        seen.push(['discover', url, ctx.chatId, opts.timeoutMs >= 60_000]);
+        return { session: { sessionId: 's1' }, disc: { ok: true, candidates: [{ url: STREAM, kind: 'hls' }], title: 'Clase 7', userAgent: 'UA-COMPUTER', cookiesNetscape: '# Netscape HTTP Cookie File\n.class.com\tTRUE\t/\tTRUE\t0\tsession\tS9\n' } };
+      },
+      show: async () => { throw new Error('nothing to show: the stream was found'); },
+    },
+  });
+  const res = await tool.executeTranscribeUrl({ url: PAGE, start: '1:00:00', end: '1:20' }, { userId: 'u1', chatId: 'c1' }, d.deps);
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.via, 'computer+yt-dlp');
+  assert.deepEqual(seen, [['available', 'u1'], ['discover', PAGE, 'c1', true]]);
+  assert.equal(res.discovery.computer.candidates, 1);
+  assert.deepEqual(res.range, { start: 3600, end: 4800, label: '1:00:00 → 1:20:00' }, '«del minuto 60 al 1:20» is 1:00:00 → 1:20:00');
+  const dl = d.calls.find((c) => c.bin === 'yt-dlp' && !c.args.includes('--dump-single-json'));
+  assert.ok(dl.args.includes('--cookies') && dl.args.includes('*3600-4800'));
+  assert.ok(dl.args.includes('User-Agent:UA-COMPUTER'));
+  assert.equal(d.saves.length, 0, 'the computer session is never copied into the saved jar');
+});
+
+test('ladder: the computer also hits the login → the page opens in the computer panel and the user is asked to sign in there', async () => {
+  const shown = []; const events = [];
+  const d = ladderDeps({
+    discoverMedia: async () => ({ ok: false, reason: 'login_wall', loginWall: true, candidates: [] }),
+    computer: {
+      available: async () => true,
+      discover: async () => ({ session: { sessionId: 's1' }, disc: { ok: false, reason: 'login_wall', loginWall: true, candidates: [] } }),
+      show: async (session, url) => { shown.push([session.sessionId, url]); },
+    },
+  });
+  const res = await tool.executeTranscribeUrl({ url: PAGE }, { userId: 'u1', chatId: 'c1', onEvent: (e) => events.push(e) }, d.deps);
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'media_login_in_computer');
+  assert.deepEqual(res.computerLogin, { url: PAGE, host: 'upn.class.com' });
+  assert.match(res.userMessage, /computadora de este chat/);
+  assert.match(res.userMessage, /«listo»/);
+  assert.deepEqual(shown, [['s1', PAGE]]);
+  assert.deepEqual(events, [{ type: 'computer_navigate', url: PAGE, tool: 'transcribe_url' }]);
+  // No computer for this user (flag off, cold failure) → the attach-a-file / cookies.txt paths.
+  for (const computer of [null, { available: async () => false }, { available: async () => true, discover: async () => { throw new Error('desktop down'); } }]) {
+    const off = ladderDeps({ discoverMedia: async () => ({ ok: false, reason: 'login_wall', loginWall: true, candidates: [] }), computer });
+    const r = await tool.executeTranscribeUrl({ url: PAGE }, { userId: 'u1', chatId: 'c1' }, off.deps);
+    assert.equal(r.code, 'media_login_required', JSON.stringify(r));
+  }
+});
+
+test('ranges: an «a:bb» end before an hour-plus start reads as hours:minutes; real minutes:seconds stay', () => {
+  const s = tool.parseTimecode('1:00:00');
+  assert.equal(tool.resolveRangeEnd(s, tool.parseTimecode('1:20'), '1:20'), 4800);
+  assert.equal(tool.resolveRangeEnd(90, 600, '10:00'), 600);
+  assert.equal(tool.resolveRangeEnd(3600, 80, '80'), 80, 'only the a:bb form is reinterpreted');
+  assert.equal(tool.resolveRangeEnd(7200, 4800, '1:20'), 4800, 'still before the start → left for the range check');
+  assert.equal(tool.resolveRangeEnd(600, 300, '5:00'), 300, 'before the hour «del 10:00 al 5:00» stays an invalid range');
+});
+
 // ── one real browser run (skipped where Chromium cannot launch) ──────────
 
 test('real browser: an SPA player that only fetches its HLS after JS runs is discovered; a login redirect is reported as a wall', { timeout: 90_000 }, async (t) => {
@@ -281,5 +343,57 @@ test('real browser: an SPA player that only fetches its HLS after JS runs is dis
     assert.match(wall.finalUrl, /\/login$/);
   } finally {
     server.close();
+  }
+});
+
+test('real browser, attached: works in a NEW tab of an existing signed-in browser, exports only the page/media cookies and leaves the user\'s tabs alone', { timeout: 90_000 }, async (t) => {
+  const pw = discovery.getPlaywright();
+  if (!pw || !pw.chromium) return t.skip('playwright not installed');
+  const hostname = 'attached-test.example';
+  let browser;
+  try {
+    browser = await pw.chromium.launch({ ...discovery.chromiumLaunchOptions(), args: [...(discovery.chromiumLaunchOptions().args || []), `--host-resolver-rules=MAP ${hostname} 127.0.0.1`] });
+  } catch (err) { return t.skip(`chromium cannot launch here: ${String(err && err.message).slice(0, 80)}`); }
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    const signedIn = /(?:^|;\s*)session=S1/.test(req.headers.cookie || '');
+    if (u.pathname === '/player') {
+      if (!signedIn) { res.writeHead(302, { location: '/login' }); return res.end(); }
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end('<html><head><title>Clase 9</title></head><body><script>fetch("/stream/master.m3u8")</script></body></html>');
+    }
+    if (u.pathname === '/stream/master.m3u8') { res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl' }); return res.end('#EXTM3U\n'); }
+    if (u.pathname === '/login') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<html><body>Iniciar sesión<input type="password"></body></html>'); }
+    res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><body>home</body></html>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://${hostname}:${server.address().port}`;
+  try {
+    // The «user's» signed-in browser: a session cookie for the site, a cookie
+    // of another site, and a tab of their own that must survive.
+    const context = await browser.newContext();
+    await context.addCookies([
+      { name: 'session', value: 'S1', url: origin },
+      { name: 'private', value: 'P', domain: 'other-site.example', path: '/' },
+    ]);
+    const userTab = await context.newPage();
+    await userTab.goto(`${origin}/home`);
+    let disconnected = 0;
+    const handle = { browser: { contexts: () => [context], close: async () => { disconnected += 1; } }, context };
+    const found = await discovery.discoverMedia(`${origin}/player`, { attach: async () => handle, dnsCheck: async () => true, timeoutMs: 25_000 });
+    assert.equal(found.ok, true, JSON.stringify(found));
+    assert.equal(found.best.url, `${origin}/stream/master.m3u8`);
+    assert.equal(found.title, 'Clase 9');
+    assert.match(found.cookiesNetscape, /\tsession\tS1/);
+    assert.doesNotMatch(found.cookiesNetscape, /private/, 'other sites\' cookies never leave the browser');
+    assert.equal(disconnected, 1, 'the attached browser is only disconnected');
+    assert.deepEqual(context.pages(), [userTab], 'the discovery tab is closed, the user\'s tab stays');
+    assert.equal(userTab.url(), `${origin}/home`);
+    await context.clearCookies();
+    const wall = await discovery.discoverMedia(`${origin}/player`, { attach: async () => handle, dnsCheck: async () => true, timeoutMs: 25_000 });
+    assert.equal(wall.loginWall, true, 'without the session the same page is a login wall');
+  } finally {
+    server.close();
+    await browser.close();
   }
 });
