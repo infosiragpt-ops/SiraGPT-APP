@@ -38,7 +38,7 @@ const chat = {
   messages: [] as unknown[],
 }
 
-const catalog: unknown[] = []
+const catalog: Record<string, unknown>[] = []
 const discover = { ok: true, featured: null, forYou: [], latest: [], categories: [], items: [], total: 0, memoryUsed: false }
 
 async function fulfillJson(route: Route, payload: unknown, status = 200) {
