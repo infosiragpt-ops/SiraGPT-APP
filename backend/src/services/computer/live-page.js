@@ -625,4 +625,4 @@ async function restoreBrowserPresentation(session, env = process.env, signal) {
   });
 }
 
-module.exports = { observePage, navigatePage, actPage, browserState, browserAction, validateBrowserAction, restoreBrowserPresentation };
+module.exports = { observePage, navigatePage, actPage, browserState, browserAction, validateBrowserAction, restoreBrowserPresentation, connectLiveBrowser };

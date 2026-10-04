@@ -63,6 +63,8 @@ const MAX_TEXT_CHARS = 60_000;
 const MAX_COMMAND_OUTPUT = 2 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 60_000;
 const DISCOVERY_TIMEOUT_MS = 30_000;
+/** The chat computer may be cold (container + Chrome) and the player is a heavy SPA. */
+const COMPUTER_DISCOVERY_TIMEOUT_MS = 60_000;
 /** yt-dlp verdicts that mean «the page is not a platform yt-dlp knows» — worth a look with the browser. */
 const DISCOVERY_ELIGIBLE = new Set(['media_unsupported_url', 'media_download_failed', 'media_login_required', 'media_not_found']);
 
@@ -100,6 +102,19 @@ function parseTimecode(value) {
   m = /^(\d+(?:\.\d+)?)\s*(?:s|seg|segundos?|sec|secs)?$/.exec(raw);
   if (m) return Number(m[1]);
   return null;
+}
+
+/**
+ * «del minuto 60 al minuto 1:20» — after a start past the hour, an «a:bb» end
+ * that would fall BEFORE the start is hours:minutes (1:20 → 1:20:00), not
+ * minutes:seconds. Returns the corrected end, or the parsed one unchanged.
+ */
+function resolveRangeEnd(start, end, rawEnd) {
+  if (start == null || end == null || end > start || start < 3600) return end;
+  const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(String(rawEnd == null ? '' : rawEnd));
+  if (!m) return end;
+  const asHours = Number(m[1]) * 3600 + Number(m[2]) * 60;
+  return asHours > start ? asHours : end;
 }
 
 function fmtClock(seconds) {
@@ -157,6 +172,7 @@ function classifyDownloadFailure(stderr, err) {
 
 const USER_MESSAGES = Object.freeze({
   media_login_required: 'El enlace pide iniciar sesión (cuenta institucional, video privado o acceso restringido), así que sin tu sesión no puedo sacar el audio desde aquí. Dos caminos: (1) descarga el video o audio desde la plataforma y adjúntalo en el chat; (2) adjunta UNA sola vez tu archivo cookies.txt de ese sitio (expórtalo con la extensión «Get cookies.txt LOCALLY» en Chrome/Edge con la sesión abierta) y lo guardaré cifrado para que los próximos enlaces de esa plataforma se transcriban solos.',
+  media_login_in_computer: 'La grabación pide iniciar sesión. La abrí en la computadora de este chat (panel de la derecha): entra ahí con tu cuenta —la contraseña la escribes tú, yo no la veo— y luego escribe «listo». La sesión queda guardada en esa computadora, así que los próximos enlaces de ese sitio se transcriben sin volver a pedírtela. También puedes adjuntar el video o el audio.',
   media_unsupported_url: 'Abrí el enlace con el navegador y no encontré ningún video o audio reproducible en esa página. Pásame el enlace directo del video, o adjunta el archivo; si la página pide iniciar sesión, adjunta tu cookies.txt de ese sitio una vez.',
   media_not_found: 'El enlace no existe o el contenido fue retirado (404). Revisa el enlace.',
   media_rate_limited: 'La plataforma del enlace limitó las descargas por ahora. Intenta en unos minutos o adjunta el archivo.',
@@ -246,6 +262,41 @@ async function loadAttachedCookies(ctx = {}, deps = {}) {
   return null;
 }
 
+/**
+ * The chat computer as a discovery rung: `available(ctx)`, `discover(url, ctx,
+ * opts) → { disc, session }` (media-discovery attached to the computer's live
+ * Chrome over CDP) and `show(session, url, ctx)` (open the page in the visible
+ * tab for the sign-in). Off when the computer feature is off for the user.
+ */
+function defaultComputer(env) {
+  return {
+    available: (ctx = {}) => {
+      if (!ctx.userId || String(env.TRANSCRIBE_URL_COMPUTER || '1') === '0') return false;
+      try { return Boolean(require('../../computer/persistent').computerToolsAvailable({ userId: ctx.userId, env })); } catch (_) { return false; }
+    },
+    discover: async (pageUrl, ctx = {}, opts = {}) => {
+      const persistent = require('../../computer/persistent');
+      const livePage = require('../../computer/live-page');
+      const session = await persistent.ensureSession({ userId: ctx.userId, conversationId: ctx.chatId || '', env });
+      const disc = await mediaDiscovery.discoverMedia(pageUrl, {
+        ...opts,
+        attach: async () => {
+          const browser = await livePage.connectLiveBrowser(session, env, opts.signal || undefined);
+          return { browser, context: browser.contexts()[0] };
+        },
+      });
+      return { disc, session };
+    },
+    show: async (session, pageUrl, ctx = {}) => {
+      await require('../../computer/live-page').navigatePage(session, pageUrl, env, ctx.signal || undefined);
+    },
+  };
+}
+
+async function safeAvailable(computer, ctx) {
+  try { return Boolean(await computer.available(ctx)); } catch (_) { return false; }
+}
+
 async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const env = deps.env || process.env;
   const run = deps.runCommand || runCommand;
@@ -255,6 +306,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const discoverImpl = deps.discoverMedia || mediaDiscovery.discoverMedia;
   const jar = deps.cookieJar || { save: (userId, text) => cookieJar.saveUserCookies(userId, text, { env }), load: (userId) => cookieJar.loadUserCookies(userId, { env }) };
   const loadAttached = deps.loadAttachedCookies || loadAttachedCookies;
+  const computer = deps.computer === undefined ? defaultComputer(env) : deps.computer;
   const fsImpl = deps.fs || fs;
   const ytdlp = env.TRANSCRIBE_URL_YTDLP || 'yt-dlp';
   const ffmpeg = env.FFMPEG_PATH || 'ffmpeg';
@@ -277,7 +329,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
 
   // Range
   const start = parseTimecode(args.start);
-  const end = parseTimecode(args.end);
+  const end = resolveRangeEnd(start, parseTimecode(args.end), args.end);
   if ((args.start != null && args.start !== '' && start == null) || (args.end != null && args.end !== '' && end == null)) {
     return errorResult('invalid_range', 'start/end must be seconds or mm:ss / hh:mm:ss');
   }
@@ -358,19 +410,53 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
         elapsedMs: disc.elapsedMs || null,
         ...(disc.detail ? { detail: disc.detail } : {}),
       };
-      let candidate = null;
-      for (const c of Array.isArray(disc.candidates) ? disc.candidates : []) {
-        try { assertSafeUrl(c.url); await dnsCheck(new URL(c.url).hostname); candidate = c; break; } catch (_) { /* skip unsafe */ }
+      const pickSafe = async (found) => {
+        for (const c of Array.isArray(found && found.candidates) ? found.candidates : []) {
+          try { assertSafeUrl(c.url); await dnsCheck(new URL(c.url).hostname); return c; } catch (_) { /* skip unsafe */ }
+        }
+        return null;
+      };
+      let candidate = await pickSafe(disc);
+      let viaBrowser = 'browser';
+      // The chat computer's Chrome keeps the user's own sign-ins (they log in
+      // there once, the profile persists): a recording behind a login is read
+      // from INSIDE that browser — same tab logic, the user's real session.
+      if (!candidate && computer && (await safeAvailable(computer, ctx))) {
+        let comp = null;
+        try {
+          comp = await computer.discover(url.href, ctx, { timeoutMs: Math.max(discoveryTimeoutMs, COMPUTER_DISCOVERY_TIMEOUT_MS), dnsCheck, env, signal });
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          comp = { disc: { ok: false, reason: 'computer_unavailable', detail: String((err && err.message) || err).slice(0, 200) } };
+        }
+        const cdisc = (comp && comp.disc) || { ok: false, reason: 'computer_unavailable' };
+        discovery.computer = { reason: cdisc.reason || null, candidates: Array.isArray(cdisc.candidates) ? cdisc.candidates.length : 0, loginWall: Boolean(cdisc.loginWall), elapsedMs: cdisc.elapsedMs || null };
+        candidate = await pickSafe(cdisc);
+        if (candidate) {
+          disc = cdisc;
+          viaBrowser = 'computer';
+        } else if (comp && comp.session && cdisc.reason !== 'computer_unavailable' && cdisc.reason !== 'browser_unavailable') {
+          // Show the page in the computer panel so the user can sign in there.
+          try { if (typeof computer.show === 'function') await computer.show(comp.session, url.href, ctx); } catch (_) { /* the panel event below still opens it */ }
+          if (ctx && typeof ctx.onEvent === 'function') {
+            try { ctx.onEvent({ type: 'computer_navigate', url: url.href, tool: 'transcribe_url' }); } catch (_) { /* UI plumbing never fails the tool */ }
+          }
+          return errorResult('media_login_in_computer', cdisc.detail || cdisc.reason || 'no media in the computer browser', {
+            discovery,
+            computerLogin: { url: url.href, host: url.hostname },
+            ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
+          });
+        }
       }
       if (candidate) {
         if (disc.cookiesNetscape) { cookiesText = cookieJar.mergeNetscapeCookies(cookiesText, disc.cookiesNetscape); await writeCookies(); }
-        target = { href: candidate.url, referer: url.href, userAgent: disc.userAgent || mediaDiscovery.DESKTOP_UA, via: 'browser+yt-dlp', direct: false, titleHint: disc.title || null, kind: candidate.kind };
+        target = { href: candidate.url, referer: url.href, userAgent: disc.userAgent || mediaDiscovery.DESKTOP_UA, via: `${viaBrowser}+yt-dlp`, direct: false, titleHint: disc.title || null, kind: candidate.kind };
         discovery.picked = { kind: candidate.kind, host: (() => { try { return new URL(candidate.url).hostname; } catch (_) { return null; } })() };
         probe = await probeWith(target);
         if (!probe.ok) {
           // yt-dlp refused the stream itself — ffmpeg reads HLS/DASH/MP4 directly.
           discovery.ytdlpOnCandidate = probe.code;
-          target.via = 'browser+ffmpeg';
+          target.via = `${viaBrowser}+ffmpeg`;
           target.direct = true;
           probe = { ok: true, info: { title: disc.title || null, duration: null } };
         }
@@ -573,14 +659,16 @@ function buildTranscribeUrlTool(deps = {}) {
       'WHEN TO USE: the user pastes a URL of a video, podcast, lecture, meeting or audio and asks for a transcription, subtitles, a summary of what is said, or what is said at a given minute. Pass start/end exactly as the user asked (convert "minuto 1.5" to "1:30").',
       'WHEN NOT TO USE: the user attached the audio file itself (the attachment is already transcribed); a web page with text (use web_fetch).',
       'It handles platform links (yt-dlp) AND player pages (a headless browser opens the page with the user\'s saved cookies, presses play and grabs the real stream). If the user attached a cookies.txt in this turn it is used and saved for later links of that site.',
-      'Results are structured: ok:false with code "media_login_required" means the link needs the user\'s own session — relay userMessage: attach the video/audio file, or attach a cookies.txt of that site once; "media_too_long" means ask for a range. `cookies.saved:true` means the session was stored: say so. Never retry the same URL more than once per failure.',
+      'If the page is behind a login it is also opened INSIDE the chat computer\'s browser, which keeps the user\'s own sign-ins.',
+      'Ranges: "del minuto 60 al 1:20" means 1:00:00 → 1:20:00 — pass hh:mm:ss when past the hour.',
+      'Results are structured: ok:false with code "media_login_in_computer" means the recording is now open in the chat computer waiting for the user to sign in — relay userMessage and, when the user says they are signed in («listo»), call transcribe_url AGAIN with the same url and range (that retry is expected). "media_login_required" means the link needs the user\'s own session — relay userMessage: attach the video/audio file, or attach a cookies.txt of that site once; "media_too_long" means ask for a range. `cookies.saved:true` means the session was stored: say so. Otherwise never retry the same URL more than once per failure.',
     ].join(' '),
     inputSchema,
     permissionTier: 'auto',
     humanDescription: (args = {}) => {
       let host = 'un enlace';
       try { host = new URL(String(args.url)).hostname.replace(/^www\./, ''); } catch (_) { /* keep */ }
-      const s = parseTimecode(args.start); const e = parseTimecode(args.end);
+      const s = parseTimecode(args.start); const e = resolveRangeEnd(s, parseTimecode(args.end), args.end);
       const range = s != null || e != null ? ` (${s != null ? fmtClock(s) : 'inicio'} → ${e != null ? fmtClock(e) : 'fin'})` : '';
       return `Transcribiendo el audio de ${host}${range}`;
     },
@@ -594,6 +682,8 @@ module.exports = {
   loadAttachedCookies,
   DISCOVERY_ELIGIBLE,
   parseTimecode,
+  resolveRangeEnd,
+  defaultComputer,
   fmtClock,
   fmtSrtTime,
   classifyDownloadFailure,

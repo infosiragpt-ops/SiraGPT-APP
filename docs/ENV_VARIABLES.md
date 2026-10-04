@@ -167,6 +167,7 @@ Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado
 | `TRANSCRIBE_URL_REMOTE_COMPONENTS` | (vacío) | Pasa `--remote-components` a yt-dlp (p. ej. `ejs:github`) si la imagen no trae `yt-dlp-ejs` |
 | `TRANSCRIBE_URL_BROWSER_DISCOVERY` | `1` | Peldaño del navegador headless (Chromium de la imagen) para páginas de reproductor que yt-dlp no conoce; `0` lo apaga |
 | `TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS` | `30000` | Tope del descubrimiento con navegador por enlace |
+| `TRANSCRIBE_URL_COMPUTER` | `1` | `0` desactiva el paso que abre una grabación con login dentro del Chrome de la computadora del chat (usa la sesión que el usuario inició ahí; tope 60 s) |
 | `SIRAGPT_COOKIE_JAR_DIR` | `<UPLOAD_DIR>/cookie-jars` | Carpeta de los `cookies.txt` cifrados por usuario (AES-256 con `ENCRYPTION_KEY`) |
 
 **Escalera (added 2026-10-03, segundo paso):** yt-dlp → si no conoce la página («Unsupported URL», 401/403,
