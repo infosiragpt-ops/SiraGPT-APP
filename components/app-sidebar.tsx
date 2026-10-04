@@ -120,6 +120,9 @@ import { SKILL_NEW_CHAT_EVENT } from "@/lib/chat/skills-events"
 import { CHAT_ACTION_EVENT, NAVIGATE_EVENT, type ChatActionDetail } from "@/lib/chat/chat-actions"
 import { useCloudCodingProjects } from "@/hooks/use-chat-coding-workspace"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
+import { SidebarMoreMedia } from "./sidebar/sidebar-more-media"
+import { announceMediaModeLaunch, storeMediaModeLaunch } from "@/lib/chat/media-mode-launch"
+import type { MediaMode } from "@/lib/chat/media-mode-chips"
 import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
   normalizeNavigationHref,
@@ -1098,7 +1101,10 @@ export function AppSidebar() {
     setChatPendingDelete({ id: chat.id, title })
   }, [])
 
-  const handleNewChat = () => {
+  // `mediaMode` («··· Más» → Video/Voz/Imagen/Música) opens the new chat with
+  // that composer mode selected: it is stored before the reset and announced
+  // after it, so the reset never wipes it (lib/chat/media-mode-launch).
+  const startNewChat = (mediaMode?: MediaMode) => {
     // Guest preview (public home): starting a chat requires a session.
     if (!user) {
       router.push("/auth/login")
@@ -1107,11 +1113,13 @@ export function AppSidebar() {
     markNewChatIntent()
     setCurrentChat(null);
     localStorage.removeItem('currentChatId');
+    if (mediaMode) storeMediaModeLaunch(mediaMode)
 
     // Reset connector/tool state after the click frame has painted.
     // Dispatching synchronously blocks the visual "new chat" reset.
     window.setTimeout(() => {
       window.dispatchEvent(new CustomEvent('resetChatState'));
+      if (mediaMode) announceMediaModeLaunch(mediaMode)
     }, 0);
 
     const hasQuery = typeof window !== "undefined" && window.location.search.length > 0
@@ -1124,6 +1132,7 @@ export function AppSidebar() {
       setOpenMobile(false);
     }
   }
+  const handleNewChat = () => startNewChat()
 
   // «Probar» / «Crear con SiraGPT» in Ajustes → Skills: close the dialog and
   // start a fresh chat; the composer picks the skill up (skills-events).
@@ -1635,6 +1644,15 @@ export function AppSidebar() {
             prefetchOnHover={prefetchOnHover}
             navigate={navigate}
             onNavigate={closeMobileSidebar}
+          />
+
+          <SidebarMoreMedia
+            rowClassName={NAV_ROW}
+            activeRowClassName={NAV_ROW_ACTIVE}
+            iconClassName={NAV_ICON}
+            sidebarState={state}
+            isMobile={isMobile}
+            onSelect={startNewChat}
           />
 
         </TooltipProvider>
