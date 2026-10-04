@@ -134,6 +134,9 @@ function createToolRegistry() {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
+      // The harness wrapper reads it (event-stream wrapTools): without it a
+      // tool's own bound was lost and every call was cut at the global 2 min.
+      ...(tool.timeoutMs ? { timeoutMs: tool.timeoutMs } : {}),
       execute: async (args, ctx) => {
         const validation = validateArgs(tool.name, args);
         if (!validation.ok) throw new Error(validation.error);

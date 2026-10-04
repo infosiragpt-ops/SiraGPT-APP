@@ -51,6 +51,8 @@ function deps(over = {}) {
       discoverMedia: over.discoverMedia || (async () => ({ ok: false, reason: 'no_media_found', candidates: [], loginWall: false })),
       cookieJar: over.cookieJar || { save: async () => ({ hosts: [] }), load: async () => null },
       loadAttachedCookies: over.loadAttachedCookies || (async () => null),
+      computer: over.computer === undefined ? null : over.computer,
+      capture: over.capture === undefined ? null : over.capture,
       transcribe: over.transcribe || (async (filePath, mime, name, opts) => {
         transcribed.push({ filePath, mime, name, opts });
         return {
