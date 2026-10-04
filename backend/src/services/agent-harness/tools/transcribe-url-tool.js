@@ -56,6 +56,7 @@ const { assertSafeUrl } = require('./web-fetch-tool');
 const { buildUntrustedChildEnv } = require('../../../utils/untrusted-child-env');
 const mediaDiscovery = require('./media-discovery');
 const cookieJar = require('./cookie-jar-store');
+const mediaCapture = require('./media-capture');
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_SECONDS = 3 * 60 * 60;
@@ -65,8 +66,21 @@ const PROBE_TIMEOUT_MS = 60_000;
 const DISCOVERY_TIMEOUT_MS = 30_000;
 /** The chat computer may be cold (container + Chrome) and the player is a heavy SPA. */
 const COMPUTER_DISCOVERY_TIMEOUT_MS = 60_000;
+/** Time kept for transcription + delivery after a capture. */
+const TRANSCRIBE_RESERVE_MS = 4 * 60 * 1000;
+
+/**
+ * The harness timeout for one transcribe_url call (it otherwise cuts every
+ * tool at 2 min, far below a download + transcription of a long class).
+ */
+function toolTimeoutMs(env = process.env) {
+  const explicit = Number(env.TRANSCRIBE_URL_TOOL_TIMEOUT_MS);
+  if (explicit > 0) return explicit;
+  const step = Number(env.TRANSCRIBE_URL_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
+  return step + 10 * 60 * 1000;
+}
 /** yt-dlp verdicts that mean «the page is not a platform yt-dlp knows» — worth a look with the browser. */
-const DISCOVERY_ELIGIBLE = new Set(['media_unsupported_url', 'media_download_failed', 'media_login_required', 'media_not_found']);
+const DISCOVERY_ELIGIBLE = new Set(['media_unsupported_url', 'media_download_failed', 'media_login_required', 'media_not_found', 'ytdlp_missing', 'media_rate_limited', 'media_timeout']);
 
 class TranscribeUrlError extends Error {
   constructor(code, message, extra = {}) {
@@ -287,9 +301,41 @@ function defaultComputer(env) {
       });
       return { disc, session };
     },
+    capture: async (pageUrl, ctx = {}, opts = {}) => {
+      const persistent = require('../../computer/persistent');
+      const livePage = require('../../computer/live-page');
+      const session = await persistent.ensureSession({ userId: ctx.userId, conversationId: ctx.chatId || '', env });
+      return mediaCapture.captureMediaAudio(pageUrl, {
+        ...opts,
+        cookies: [],
+        attach: async () => {
+          const browser = await livePage.connectLiveBrowser(session, env, opts.signal || undefined);
+          return { browser, context: browser.contexts()[0] };
+        },
+      });
+    },
     show: async (session, pageUrl, ctx = {}) => {
       await require('../../computer/live-page').navigatePage(session, pageUrl, env, ctx.signal || undefined);
     },
+  };
+}
+
+/**
+ * The capture rung: the chat computer's Chrome first (the user's sessions,
+ * real codecs), then a headless Chromium with the saved cookies.
+ */
+function defaultCapture(env, computer) {
+  return async (pageUrl, ctx = {}, opts = {}) => {
+    if (computer && typeof computer.capture === 'function' && (await safeAvailable(computer, ctx))) {
+      try {
+        const r = await computer.capture(pageUrl, ctx, opts);
+        if (r && (r.ok || r.reason === 'drm_protected' || r.reason === 'login_wall')) return { ...r, browser: 'computer' };
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+      }
+    }
+    const r = await mediaCapture.captureMediaAudio(pageUrl, { ...opts, env });
+    return { ...r, browser: 'browser' };
   };
 }
 
@@ -307,6 +353,8 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const jar = deps.cookieJar || { save: (userId, text) => cookieJar.saveUserCookies(userId, text, { env }), load: (userId) => cookieJar.loadUserCookies(userId, { env }) };
   const loadAttached = deps.loadAttachedCookies || loadAttachedCookies;
   const computer = deps.computer === undefined ? defaultComputer(env) : deps.computer;
+  const captureImpl = String(env.TRANSCRIBE_URL_CAPTURE || '1') === '0' ? null : (deps.capture === undefined ? defaultCapture(env, computer) : deps.capture);
+  const captureMaxRate = Math.min(4, Math.max(1, Number(env.TRANSCRIBE_URL_CAPTURE_MAX_RATE) || 2));
   const fsImpl = deps.fs || fs;
   const ytdlp = env.TRANSCRIBE_URL_YTDLP || 'yt-dlp';
   const ffmpeg = env.FFMPEG_PATH || 'ffmpeg';
@@ -316,6 +364,8 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const discoveryTimeoutMs = Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) : DISCOVERY_TIMEOUT_MS;
   const signal = ctx.signal || null;
   const startedAt = Date.now();
+  // Whole-call deadline (the harness cuts the tool at toolTimeoutMs(env)).
+  const toolDeadline = startedAt + toolTimeoutMs(env) - 30_000;
 
   // 1. URL
   let url;
@@ -390,10 +440,166 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       }
     };
 
-    // 2. Probe — yt-dlp first; the browser when yt-dlp does not know the page.
     let target = { href: url.href, referer: null, userAgent: null, via: 'yt-dlp', direct: false, titleHint: null };
-    let probe = await probeWith(target);
     let discovery = null;
+
+    // 4–5. Transcribe the clip and deliver it (shared by every acquisition path).
+    const finish = async ({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via, partial = null }) => {
+      const clipName = `${safeTitle(title)}${sectioned ? ` ${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart)}` : ''}.m4a`;
+      let result;
+      try {
+        result = await transcribeImpl(clipPath, 'audio/mp4', clipName, {
+          signal,
+          ...(args.language ? { language: String(args.language) } : {}),
+          onProgress: ctx.onProgress,
+        });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        return errorResult('transcription_failed', err && err.message, { title });
+      }
+      if (!result || result.ok === false) {
+        return errorResult(result && result.status === 'no_speech' ? 'transcription_failed' : 'transcription_failed', result && (result.reasonCode || result.status), { title, noSpeech: Boolean(result && result.status === 'no_speech') });
+      }
+      const segments = Array.isArray(result.segments) ? result.segments : [];
+      const offset = rangeStart;
+      const transcript = String(result.transcript || result.text || '').trim();
+      const body = segments.length >= 2 ? buildTimestampedText(segments, { offset }) : transcript;
+      const rangeLabel = `${fmtClock(rangeStart)} → ${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + (duration || 0))}`;
+      const header = `Transcripción de «${title}» (${url.hostname.replace(/^www\./, '')}) · ${rangeLabel}${result.language ? ` · idioma: ${result.language}` : ''}\n\n`;
+      const fullText = header + body;
+
+      // 5. Deliver
+      let artifact = null; let srtArtifact = null;
+      try {
+        const saved = saveArtifactImpl({
+          filename: `${safeTitle(title)} transcripcion ${fmtClock(rangeStart).replace(/:/g, '-')}.txt`,
+          base64: Buffer.from(fullText, 'utf8').toString('base64'),
+          mime: 'text/plain',
+          ownerUserId: ctx.userId || null,
+          chatId: ctx.chatId || null,
+          category: 'agent_artifact',
+          validation: null,
+        });
+        artifact = { id: saved.id, filename: saved.filename, mime: saved.mime, format: saved.format, sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl };
+        if (args.subtitles && segments.length) {
+          const srt = saveArtifactImpl({
+            filename: `${safeTitle(title)} ${fmtClock(rangeStart).replace(/:/g, '-')}.srt`,
+            base64: Buffer.from(buildSrt(segments, { offset }), 'utf8').toString('base64'),
+            mime: 'application/x-subrip',
+            ownerUserId: ctx.userId || null,
+            chatId: ctx.chatId || null,
+            category: 'agent_artifact',
+            validation: null,
+          });
+          srtArtifact = { id: srt.id, filename: srt.filename, mime: srt.mime, format: srt.format, sizeBytes: srt.sizeBytes, downloadUrl: srt.downloadUrl };
+        }
+        if (ctx && typeof ctx.onEvent === 'function') {
+          for (const a of [artifact, srtArtifact].filter(Boolean)) {
+            try { ctx.onEvent({ type: 'file_artifact', artifact: { ...a, previewHtml: null, validation: null } }); } catch (_) { /* UI plumbing never fails the tool */ }
+          }
+        }
+      } catch (_) { artifact = artifact || null; }
+
+      const truncated = body.length > MAX_TEXT_CHARS;
+      return {
+        ok: true,
+        title,
+        source: url.href,
+        host: url.hostname.replace(/^www\./, ''),
+        range: { start: rangeStart, end: rangeEnd, label: rangeLabel },
+        durationSeconds: duration,
+        method: result.method || null,
+        model: result.model || null,
+        language: result.language || null,
+        segments: segments.length,
+        text: truncated ? `${body.slice(0, MAX_TEXT_CHARS)}\n… [transcripción recortada en la respuesta; el archivo adjunto tiene el texto completo]` : body,
+        truncated,
+        artifact,
+        ...(srtArtifact ? { srtArtifact } : {}),
+        via,
+        ...(partial ? { partial } : {}),
+        ...(discovery ? { discovery } : {}),
+        ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
+        elapsedMs: Date.now() - startedAt,
+      };
+    };
+
+    // Last rung («rastrear el audio»): play the recording in a browser and
+    // record what it plays. Covers players with no downloadable stream
+    // (MediaSource/blob, tokenised segments, iframes). Returns a finish()
+    // payload, or null when it could not record anything.
+    let lastCapture = null;
+    const tryCapture = async (why) => {
+      // One capture per call: defaultCapture already falls back from the
+      // computer to the headless browser.
+      if (!captureImpl || lastCapture) return null;
+      const rangeStart = start != null ? start : 0;
+      const span = end != null ? end - rangeStart : maxSeconds;
+      const budgetMs = toolDeadline - Date.now() - TRANSCRIBE_RESERVE_MS;
+      let rate = mediaCapture.pickCaptureRate(Math.min(span, maxSeconds), budgetMs, captureMaxRate);
+      let captureEnd = end;
+      let budgetCut = false;
+      if (rate == null) {
+        if (end != null) {
+          // An explicit range longer than the call can play: ask for parts.
+          lastCapture = { why, reason: 'over_time_budget' };
+          discovery = { ...(discovery || {}), capture: lastCapture };
+          return null;
+        }
+        // Open range of unknown length: record what fits and say so.
+        rate = captureMaxRate;
+        captureEnd = rangeStart + Math.floor((budgetMs / 1000) * rate * 0.9);
+        budgetCut = true;
+      }
+      const outPath = path.join(workDir, 'capture.webm');
+      let cap;
+      try {
+        cap = await captureImpl(url.href, ctx, {
+          start: rangeStart, end: captureEnd, rate, maxSeconds, timeoutMs: budgetMs, outPath,
+          cookies: cookiesText ? mediaDiscovery.parseNetscapeCookies(cookiesText) : [], dnsCheck, env, signal,
+        });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        cap = { ok: false, reason: 'capture_failed', detail: String((err && err.message) || err).slice(0, 200) };
+      }
+      lastCapture = { why, reason: cap.reason || null, browser: cap.browser || null, seconds: cap.seconds || 0, rate, stopped: cap.stopped || null, ...(cap.detail ? { detail: cap.detail } : {}) };
+      discovery = { ...(discovery || {}), capture: lastCapture };
+      if (!cap.ok) return null;
+      // Played at `rate` × with pitch preserved: slow the file back so the
+      // transcript's timestamps follow the recording's own clock.
+      const clipPath = path.join(workDir, 'clip.m4a');
+      const ffArgs = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', outPath, '-t', String(Math.max(1, cap.seconds / rate) + 1)];
+      if (rate !== 1) ffArgs.push('-filter:a', `atempo=${(1 / rate).toFixed(4)}`);
+      ffArgs.push('-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', clipPath);
+      try {
+        const ff = await run(ffmpeg, ffArgs, { signal, timeoutMs: Math.max(60_000, toolDeadline - Date.now()), cwd: workDir });
+        if (ff.code !== 0) { lastCapture.reason = 'convert_failed'; lastCapture.detail = lastLine(ff.stderr); return null; }
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        lastCapture.reason = 'convert_failed';
+        return null;
+      }
+      const complete = cap.stopped === 'media_ended' || (cap.stopped === 'range_end' && !budgetCut);
+      return {
+        clipPath,
+        title: cap.title || target.titleHint || url.hostname,
+        rangeStart,
+        rangeEnd: rangeStart + cap.seconds,
+        duration: null,
+        sectioned: start != null || end != null,
+        via: `${cap.browser || 'browser'}+capture`,
+        partial: complete ? null : (budgetCut && cap.stopped === 'range_end' ? 'time_budget' : cap.stopped || 'incomplete'),
+      };
+    };
+    const captureOr = async (why, failure) => {
+      const clip = await tryCapture(why);
+      if (clip) return finish(clip);
+      if (failure && discovery) failure.discovery = discovery;
+      return failure;
+    };
+
+    // 2. Probe — yt-dlp first; the browser when yt-dlp does not know the page.
+    let probe = await probeWith(target);
     if (!probe.ok && discoveryEnabled && DISCOVERY_ELIGIBLE.has(probe.code)) {
       const browserCookies = cookiesText ? mediaDiscovery.parseNetscapeCookies(cookiesText) : [];
       let disc;
@@ -418,6 +624,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       };
       let candidate = await pickSafe(disc);
       let viaBrowser = 'browser';
+      let clip = null;
       // The chat computer's Chrome keeps the user's own sign-ins (they log in
       // there once, the profile persists): a recording behind a login is read
       // from INSIDE that browser — same tab logic, the user's real session.
@@ -435,7 +642,10 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
         if (candidate) {
           disc = cdisc;
           viaBrowser = 'computer';
-        } else if (comp && comp.session && cdisc.reason !== 'computer_unavailable' && cdisc.reason !== 'browser_unavailable') {
+        } else if (comp && comp.session && !cdisc.loginWall && cdisc.reason === 'no_media_found' && (clip = await tryCapture('no_stream_in_computer'))) {
+          return finish(clip);
+        } else if (comp && comp.session && cdisc.reason !== 'computer_unavailable' && cdisc.reason !== 'browser_unavailable'
+          && (cdisc.loginWall || !lastCapture || lastCapture.reason === 'login_wall')) {
           // Show the page in the computer panel so the user can sign in there.
           try { if (typeof computer.show === 'function') await computer.show(comp.session, url.href, ctx); } catch (_) { /* the panel event below still opens it */ }
           if (ctx && typeof ctx.onEvent === 'function') {
@@ -463,10 +673,10 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       } else if (disc.loginWall) {
         return errorResult('media_login_required', disc.detail || 'login wall after browser discovery', { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) });
       } else {
-        return errorResult(probe.code === 'media_download_failed' && disc.reason === 'no_media_found' ? 'media_unsupported_url' : probe.code, probe.detail, { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) });
+        return captureOr('no_stream_found', errorResult(probe.code === 'media_download_failed' && disc.reason === 'no_media_found' ? 'media_unsupported_url' : probe.code, probe.detail, { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) }));
       }
     } else if (!probe.ok) {
-      return errorResult(probe.code, probe.detail, cookiesInfo ? { cookies: cookiesInfo } : {});
+      return captureOr('ytdlp_failed', errorResult(probe.code, probe.detail, cookiesInfo ? { cookies: cookiesInfo } : {}));
     }
 
     const info = probe.info;
@@ -502,10 +712,10 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       ffArgs.push('-t', String(limit), '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', clipPath);
       try {
         const ff = await run(ffmpeg, ffArgs, { signal, timeoutMs, cwd: workDir });
-        if (ff.code !== 0) return errorResult('media_download_failed', lastLine(ff.stderr), { title, discovery });
+        if (ff.code !== 0) return captureOr('stream_unreadable', errorResult('media_download_failed', lastLine(ff.stderr), { title, discovery }));
       } catch (err) {
         if (err && err.name === 'AbortError') throw err;
-        return errorResult(err && err.code === 'ENOENT' ? 'ffmpeg_failed' : 'media_download_failed', err && err.message, { title, discovery });
+        return captureOr('stream_unreadable', errorResult(err && err.code === 'ENOENT' ? 'ffmpeg_failed' : 'media_download_failed', err && err.message, { title, discovery }));
       }
     } else {
       const rawTemplate = path.join(workDir, 'source.%(ext)s');
@@ -534,13 +744,13 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
         }
         // A non-zero exit AFTER the media landed (a post-processing hiccup) is
         // not a download failure: the file is what we need.
-        if (dl.code !== 0 && !(await sourceFiles()).length) return errorResult(classifyDownloadFailure(dl.stderr), lastLine(dl.stderr), { title, ...(discovery ? { discovery } : {}) });
+        if (dl.code !== 0 && !(await sourceFiles()).length) return captureOr('download_failed', errorResult(classifyDownloadFailure(dl.stderr), lastLine(dl.stderr), { title, discovery }));
       } catch (err) {
         if (err && err.name === 'AbortError') throw err;
-        return errorResult(classifyDownloadFailure('', err), err && err.message, { title, ...(discovery ? { discovery } : {}) });
+        return captureOr('download_failed', errorResult(classifyDownloadFailure('', err), err && err.message, { title, discovery }));
       }
       const files = await sourceFiles();
-      if (!files.length) return errorResult('media_download_failed', 'yt-dlp produced no file', { title });
+      if (!files.length) return captureOr('download_failed', errorResult('media_download_failed', 'yt-dlp produced no file', { title, discovery }));
       const sourcePath = path.join(workDir, files[0]);
       // With --download-sections the file already starts at rangeStart: trim
       // relative to the clip; otherwise trim absolute times.
@@ -561,83 +771,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       }
     }
 
-    // 4. Transcribe
-    const clipName = `${safeTitle(title)}${sectioned ? ` ${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart)}` : ''}.m4a`;
-    let result;
-    try {
-      result = await transcribeImpl(clipPath, 'audio/mp4', clipName, {
-        signal,
-        ...(args.language ? { language: String(args.language) } : {}),
-        onProgress: ctx.onProgress,
-      });
-    } catch (err) {
-      if (err && err.name === 'AbortError') throw err;
-      return errorResult('transcription_failed', err && err.message, { title });
-    }
-    if (!result || result.ok === false) {
-      return errorResult(result && result.status === 'no_speech' ? 'transcription_failed' : 'transcription_failed', result && (result.reasonCode || result.status), { title, noSpeech: Boolean(result && result.status === 'no_speech') });
-    }
-    const segments = Array.isArray(result.segments) ? result.segments : [];
-    const offset = rangeStart;
-    const transcript = String(result.transcript || result.text || '').trim();
-    const body = segments.length >= 2 ? buildTimestampedText(segments, { offset }) : transcript;
-    const rangeLabel = `${fmtClock(rangeStart)} → ${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + (duration || 0))}`;
-    const header = `Transcripción de «${title}» (${url.hostname.replace(/^www\./, '')}) · ${rangeLabel}${result.language ? ` · idioma: ${result.language}` : ''}\n\n`;
-    const fullText = header + body;
-
-    // 5. Deliver
-    let artifact = null; let srtArtifact = null;
-    try {
-      const saved = saveArtifactImpl({
-        filename: `${safeTitle(title)} transcripcion ${fmtClock(rangeStart).replace(/:/g, '-')}.txt`,
-        base64: Buffer.from(fullText, 'utf8').toString('base64'),
-        mime: 'text/plain',
-        ownerUserId: ctx.userId || null,
-        chatId: ctx.chatId || null,
-        category: 'agent_artifact',
-        validation: null,
-      });
-      artifact = { id: saved.id, filename: saved.filename, mime: saved.mime, format: saved.format, sizeBytes: saved.sizeBytes, downloadUrl: saved.downloadUrl };
-      if (args.subtitles && segments.length) {
-        const srt = saveArtifactImpl({
-          filename: `${safeTitle(title)} ${fmtClock(rangeStart).replace(/:/g, '-')}.srt`,
-          base64: Buffer.from(buildSrt(segments, { offset }), 'utf8').toString('base64'),
-          mime: 'application/x-subrip',
-          ownerUserId: ctx.userId || null,
-          chatId: ctx.chatId || null,
-          category: 'agent_artifact',
-          validation: null,
-        });
-        srtArtifact = { id: srt.id, filename: srt.filename, mime: srt.mime, format: srt.format, sizeBytes: srt.sizeBytes, downloadUrl: srt.downloadUrl };
-      }
-      if (ctx && typeof ctx.onEvent === 'function') {
-        for (const a of [artifact, srtArtifact].filter(Boolean)) {
-          try { ctx.onEvent({ type: 'file_artifact', artifact: { ...a, previewHtml: null, validation: null } }); } catch (_) { /* UI plumbing never fails the tool */ }
-        }
-      }
-    } catch (_) { artifact = artifact || null; }
-
-    const truncated = body.length > MAX_TEXT_CHARS;
-    return {
-      ok: true,
-      title,
-      source: url.href,
-      host: url.hostname.replace(/^www\./, ''),
-      range: { start: rangeStart, end: rangeEnd, label: rangeLabel },
-      durationSeconds: duration,
-      method: result.method || null,
-      model: result.model || null,
-      language: result.language || null,
-      segments: segments.length,
-      text: truncated ? `${body.slice(0, MAX_TEXT_CHARS)}\n… [transcripción recortada en la respuesta; el archivo adjunto tiene el texto completo]` : body,
-      truncated,
-      artifact,
-      ...(srtArtifact ? { srtArtifact } : {}),
-      via: target.via,
-      ...(discovery ? { discovery } : {}),
-      ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
-      elapsedMs: Date.now() - startedAt,
-    };
+    return finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via });
   } finally {
     await cleanup();
   }
@@ -660,11 +794,13 @@ function buildTranscribeUrlTool(deps = {}) {
       'WHEN NOT TO USE: the user attached the audio file itself (the attachment is already transcribed); a web page with text (use web_fetch).',
       'It handles platform links (yt-dlp) AND player pages (a headless browser opens the page with the user\'s saved cookies, presses play and grabs the real stream). If the user attached a cookies.txt in this turn it is used and saved for later links of that site.',
       'If the page is behind a login it is also opened INSIDE the chat computer\'s browser, which keeps the user\'s own sign-ins.',
+      'When no stream can be downloaded (MediaSource/blob players, tokenised segments, iframes), it PLAYS the recording in that browser and records the audio it plays (via ends in "+capture"); this can take as long as the requested range. `partial` (time_budget / stalled) means it stopped early: tell the user which part (range) was transcribed and offer the rest.',
       'Ranges: "del minuto 60 al 1:20" means 1:00:00 → 1:20:00 — pass hh:mm:ss when past the hour.',
       'Results are structured: ok:false with code "media_login_in_computer" means the recording is now open in the chat computer waiting for the user to sign in — relay userMessage and, when the user says they are signed in («listo»), call transcribe_url AGAIN with the same url and range (that retry is expected). "media_login_required" means the link needs the user\'s own session — relay userMessage: attach the video/audio file, or attach a cookies.txt of that site once; "media_too_long" means ask for a range. `cookies.saved:true` means the session was stored: say so. Otherwise never retry the same URL more than once per failure.',
     ].join(' '),
     inputSchema,
     permissionTier: 'auto',
+    timeoutMs: toolTimeoutMs(deps.env || process.env),
     humanDescription: (args = {}) => {
       let host = 'un enlace';
       try { host = new URL(String(args.url)).hostname.replace(/^www\./, ''); } catch (_) { /* keep */ }
@@ -684,6 +820,8 @@ module.exports = {
   parseTimecode,
   resolveRangeEnd,
   defaultComputer,
+  defaultCapture,
+  toolTimeoutMs,
   fmtClock,
   fmtSrtTime,
   classifyDownloadFailure,

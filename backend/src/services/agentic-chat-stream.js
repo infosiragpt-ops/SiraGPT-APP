@@ -2411,7 +2411,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const isAutonomous = isGoalCommand || isRepoTask || /\b(meses?|semanas?|sin.?detene|no.?pare?s|background|segundo.?plano|auto.?ejecut|contin[uú]a.?trabajando|trabaja.?por.?meses|no.?funciona.?a[uú]n|todav[ií]a.?no.?funciona)\b/i.test(userQuery);
 
     let maxStepsOverride = isAutonomous ? Math.max(maxSteps, isGoalCommand ? 60 : 30) : maxSteps;
-    const maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
+    // A pasted link + «transcribe…»: transcribe_url downloads (or plays and
+    // records) the recording and transcribes it, which can take as long as the
+    // class itself — give the turn the tool's own budget plus room to answer.
+    const isLinkTranscription = /https?:\/\/\S+/i.test(userQuery) && /\b(?:transcri|trascri|transcir|subt[ií]tul|qu[eé] dice|qu[eé] dicen)/i.test(userQuery);
+    let maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
+    if (isLinkTranscription) {
+      const transcribeBudget = require('./agent-harness/tools/transcribe-url-tool').toolTimeoutMs(process.env);
+      maxRuntimeOverride = Math.max(maxRuntimeOverride, transcribeBudget + 5 * 60 * 1000);
+    }
     // Prompted mode: budgets enforced in code, not prompts. Weak models drift
     // on long horizons; a tighter step budget converges to finalize sooner
     // (the loop already force-narrows to finalize on the last step).

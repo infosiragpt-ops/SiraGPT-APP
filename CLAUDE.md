@@ -1982,6 +1982,30 @@ sesión UPN del usuario, que el Chromium headless del backend no tiene.
 - Tests: `backend/tests/media-discovery.test.js` (+4: peldaño computadora, handoff de login, rangos,
   Chromium real en modo adjunto con cookies de otro sitio y pestaña del usuario intactas).
 
+## Transcribir cualquier enlace: tope de 2 min y «rastrear el audio» (added 2026-10-04)
+
+«podes transcribir y rastrear el audio de cualquier link, obligatorio». Causa real del «no respondió a
+tiempo»: el harness cortaba `transcribe_url` a los **120 s** (tope global de `event-stream.wrapTools`)
+porque `tool-registry.toAgentTool` descartaba el `timeoutMs` de la definición, y el turno agéntico
+tenía 5 min. Bajar + transcribir un tramo de 20 min nunca cabía.
+- `toAgentTool` conserva `timeoutMs` (afecta a todo tool del harness que lo declare; sandbox-doc-tools
+  pasa de 120 s a su propio 65 s). `transcribe_url` declara `toolTimeoutMs(env)` (30 min por defecto,
+  `TRANSCRIBE_URL_TOOL_TIMEOUT_MS`), y `agentic-chat-stream` da a un turno «enlace + transcribe» ese
+  tope + 5 min (`isLinkTranscription`).
+- **`media-capture.js`** (último peldaño): reproduce la grabación en una pestaña (computadora del chat
+  por `attach()`, si no headless con las cookies) y graba el audio que suena (`captureStream` +
+  `MediaRecorder` opus, elemento silenciado, busca el reproductor también en iframes, pulsa play,
+  `seek` al inicio, corta en el fin). Cubre MSE/blob, segmentos con token, iframes. DRM (MediaKeys) ⇒
+  `drm_protected`, no se graba. Velocidad `pickCaptureRate` (tiempo real si cabe, hasta
+  `TRANSCRIBE_URL_CAPTURE_MAX_RATE`=2, luego `atempo` lo devuelve al reloj real). Rango abierto de
+  duración desconocida ⇒ graba lo que quepa y marca `partial: time_budget`.
+- `transcribe_url`: `captureOr()` intenta la captura (una sola por llamada) en cada punto donde antes se
+  rendía (sin stream, yt-dlp sin descarga, ffmpeg no lee el stream, sin stream en la computadora);
+  yt-dlp ausente / 429 / timeout también pasan por el navegador. `via: computer|browser+capture`.
+  Kill switch `TRANSCRIBE_URL_CAPTURE=0`.
+- Tests: `backend/tests/media-capture.test.js` (6, incluye Chromium real: `<audio>`, MSE/blob e iframe,
+  solo el rango, audio real medido con ffmpeg volumedetect).
+
 ## Volcado de producción 2026-10-03 — pegado, OCR, cierre HTTP, computadora (added 2026-10-03)
 
 Del log del 3-oct (09:20Z → 16:51Z) que pegó Luis, «corregir y dejarlo en producción». Dos

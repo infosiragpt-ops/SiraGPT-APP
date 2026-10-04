@@ -168,6 +168,9 @@ Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado
 | `TRANSCRIBE_URL_BROWSER_DISCOVERY` | `1` | Peldaño del navegador headless (Chromium de la imagen) para páginas de reproductor que yt-dlp no conoce; `0` lo apaga |
 | `TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS` | `30000` | Tope del descubrimiento con navegador por enlace |
 | `TRANSCRIBE_URL_COMPUTER` | `1` | `0` desactiva el paso que abre una grabación con login dentro del Chrome de la computadora del chat (usa la sesión que el usuario inició ahí; tope 60 s) |
+| `TRANSCRIBE_URL_CAPTURE` | `1` | `0` desactiva el último recurso: reproducir la grabación en el navegador (computadora del chat o headless) y grabar su audio (`captureStream` + `MediaRecorder`) cuando no hay stream descargable |
+| `TRANSCRIBE_URL_CAPTURE_MAX_RATE` | `2` | Velocidad máxima de reproducción al grabar (1–4); el audio se ralentiza con `atempo` para conservar los tiempos |
+| `TRANSCRIBE_URL_TOOL_TIMEOUT_MS` | `TRANSCRIBE_URL_TIMEOUT_MS` + 10 min (30 min) | Tope del harness para una llamada a `transcribe_url` (antes heredaba el tope global de 2 min); un turno de chat con enlace + «transcribe» recibe este tope + 5 min |
 | `SIRAGPT_COOKIE_JAR_DIR` | `<UPLOAD_DIR>/cookie-jars` | Carpeta de los `cookies.txt` cifrados por usuario (AES-256 con `ENCRYPTION_KEY`) |
 
 **Escalera (added 2026-10-03, segundo paso):** yt-dlp → si no conoce la página («Unsupported URL», 401/403,

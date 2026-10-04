@@ -122,6 +122,7 @@ function ladderDeps(over = {}) {
       cookieJar: { save: async (userId, text) => { saves.push({ userId, text }); return { hosts: jar.cookieHosts(text) }; }, load: async () => over.savedJar || null },
       loadAttachedCookies: async () => over.attached || null,
       computer: over.computer === undefined ? null : over.computer,
+      capture: over.capture === undefined ? null : over.capture,
       transcribe: async () => ({ ok: true, transcript: 'texto', segments: [], language: 'es' }),
       saveArtifact: (input) => ({ id: 'a1', filename: input.filename, mime: input.mime, format: 'txt', sizeBytes: 1, downloadUrl: '/x' }),
     },
