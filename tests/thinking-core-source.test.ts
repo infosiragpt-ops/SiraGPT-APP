@@ -13,7 +13,7 @@ import {
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
 describe("ThinkingCore — the «Pensando» glyph", () => {
-  it("ships a pure-SVG atom (three orbits, three electrons, nucleus) drawn in currentColor (no clover, no gradients)", () => {
+  it("ships a pure-SVG glyph of three orbiting electrons drawn in currentColor (no nucleus, no clover, no gradients)", () => {
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /export function ThinkingCore\(\{ size = 20, active = true, tone = "default", color, className, title/)
     assert.match(core, /data-thinking-core=\{active \? "active" : "idle"\}/)
@@ -22,7 +22,7 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(core, /color: tint/)
     assert.match(core, /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
     // Luis (2026-10-02): the same geometry as the AtomMark logo — orbits at
-    // −90° / 30° / 150° (62/170 ellipses), one electron each, solid nucleus.
+    // −90° / 30° / 150° (62/170 ellipses), one electron each.
     assert.match(core, /\{ key: "a", angle: -90, dur: "2\.6s", begin: "0s" \}/)
     assert.match(core, /\{ key: "b", angle: 30, dur: "3\.1s", begin: "-1\.1s" \}/)
     assert.match(core, /\{ key: "c", angle: 150, dur: "3\.6s", begin: "-2\.3s" \}/)
@@ -41,14 +41,14 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(core, /thinking-core__electron--\$\{key\}/)
     assert.match(core, /thinking-core__electron-live/)
     assert.match(core, /thinking-core__electron-still/)
-    assert.match(core, /thinking-core__core/)
+    // Luis (2026-10-05): no centre dot — only the three dots orbit.
+    assert.doesNotMatch(core, /thinking-core__core|cx="12" cy="12" r="2\.6"/)
     assert.doesNotMatch(core, /thinking-core__ripple/)
     // Monochrome: electrons inherit the ink; the only colour is the error tone (destructive red).
     assert.doesNotMatch(core, /--think-electron-/)
     assert.match(core, /const ERROR_TINT = "hsl\(var\(--destructive\)\)"/)
     assert.match(core, /const tint = failed \? ERROR_TINT : color \|\| `var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)`/)
     assert.match(core, /\{active \? \(\n\s+<circle className="thinking-core__electron-live"/, "idle renders no moving electron")
-    assert.match(core, /<circle className="thinking-core__core" cx="12" cy="12" r="2\.6" fill="currentColor" \/>/)
     assert.match(core, /<g>\n\s+\{ELECTRONS\.map/, "outer <g> stays attribute-free")
     assert.match(source("components/brand/index.ts"), /export \{ ThinkingCore \} from "\.\/thinking-core"/)
   })
@@ -68,20 +68,17 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(source("components/agent-trace.tsx"), /<ClaudeAsterisk size=\{14\} active=\{false\} color="currentColor" \/>/)
   })
 
-  it("beats the nucleus in CSS, hides the static electrons while active, and falls back to the static logo under reduced motion", () => {
+  it("hides the static electrons while active and falls back to the still dots under reduced motion (no nucleus beat)", () => {
     const css = source("app/globals.css")
     assert.doesNotMatch(css, /@keyframes thinking-core-orbit|@keyframes thinking-core-ripple/, "orbits are SMIL now; no ripple")
-    assert.match(css, /@keyframes thinking-core-pulse \{\n\s+0%, 100% \{ transform: scale\(0\.85\); opacity: 0\.7; \}\n\s+50% \{ transform: scale\(1\.1\); opacity: 1; \}/)
-    assert.match(css, /@keyframes thinking-core-soft \{/)
+    assert.doesNotMatch(css, /@keyframes thinking-core-(pulse|soft)|thinking-core__core/, "no nucleus to beat")
     assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: none; \}/)
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__core \{\n\s+animation: thinking-core-pulse 1\.2s ease-in-out infinite;/)
     assert.match(css, /\.thinking-live-label \{ animation: thinking-live-label-pulse 1\.2s ease-in-out infinite; \}/)
     const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce) {\n  .claude-asterisk--active .thinking-core__electron-live"))
     assert.match(reduced, /\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
     assert.doesNotMatch(css, /thinking-core__trail/)
     assert.match(reduced, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: inline; \}/)
     assert.match(reduced, /\.thinking-live-label \{ animation: none; \}/)
-    assert.match(reduced, /\.claude-asterisk--active \.thinking-core__core \{ animation: thinking-core-soft 2s ease-in-out infinite; \}/)
     assert.doesNotMatch(css, /claude-asterisk-spin|claude-asterisk-breathe/)
   })
 

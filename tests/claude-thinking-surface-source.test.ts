@@ -43,11 +43,10 @@ describe("Claude-style thinking surface", () => {
     assert.match(css, /--step-running: var\(--think-text, #57534E\);/)
     assert.match(css, /--think-dim: #737373;/)
     assert.match(css, /--think-dim: #A3A3A3;/)
-    assert.match(css, /@keyframes thinking-core-pulse/)
-    assert.match(css, /@keyframes thinking-core-soft/)
+    assert.doesNotMatch(css, /@keyframes thinking-core-(pulse|soft)/, "no nucleus beat: only the three dots move")
     assert.doesNotMatch(css, /@keyframes thinking-core-(orbit|ripple)/, "orbits are SMIL now; no ripple")
     assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: none; \}/)
-    // Reduced motion: the moving electrons hide, the static logo shows, the nucleus only pulses softly.
+    // Reduced motion: the moving electrons hide and the three still dots show.
     assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
     assert.doesNotMatch(css, /thinking-core__trail/)
     assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: inline; \}/)

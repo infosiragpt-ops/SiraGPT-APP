@@ -102,7 +102,7 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     const css = source("app/globals.css")
     assert.match(css, /--brand: #0A0A0A;/)
     assert.match(css, /--brand: #FAFAFA;/)
-    // The thinking glyph — nucleus AND electrons — is the foreground (black on light, white on dark), in both
+    // The thinking glyph — its three electrons — is the foreground (black on light, white on dark), in both
     // themes (Luis, 2026-10-03: monochrome; the electron colour tokens of 2026-10-02 are gone). Red only on error.
     assert.equal((css.match(/--think-accent: hsl\(var\(--foreground\)\);/g) || []).length, 2)
     assert.doesNotMatch(css, /--think-accent: #(2E7D32|66BB6A);/i)

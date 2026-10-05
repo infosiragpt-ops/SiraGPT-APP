@@ -8722,34 +8722,18 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 }
 
 /* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx):
-   the SiraGPT atom in motion, monochrome dots only (no trail, no colour; red
-   via `.claude-asterisk--error` only when the system fails). The
+   three monochrome dots orbiting, no nucleus, no rings, no trail, no colour
+   (red via `.claude-asterisk--error` only when the system fails). The
    `.claude-asterisk*` class names are historical and shared by every
    consumer. The electrons travel their orbits with SMIL (animateMotion,
-   inside the component); CSS owns the nucleus beat and reduced motion. While
-   active the static electrons are hidden and the moving ones shown; idle
-   (and reduced motion) shows the static logo — electrons at the apex of each
-   orbit — with only a soft opacity pulse on the nucleus.
+   inside the component); CSS only swaps live/static dots. While active the
+   static electrons are hidden and the moving ones shown; idle (and reduced
+   motion) shows the three still dots at the apex of each orbit.
    The outer <g> stays attribute-free; rules target inner classes. */
-@keyframes thinking-core-pulse {
-  0%, 100% { transform: scale(0.85); opacity: 0.7; }
-  50% { transform: scale(1.1); opacity: 1; }
-}
-@keyframes thinking-core-soft {
-  0%, 100% { opacity: 0.65; }
-  50% { opacity: 1; }
-}
 .claude-asterisk { transform-origin: 50% 50%; overflow: visible; }
-.claude-asterisk .thinking-core__core {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-}
 .claude-asterisk--active .thinking-core__electron-still { display: none; }
-.claude-asterisk--active .thinking-core__core {
-  animation: thinking-core-pulse 1.2s ease-in-out infinite;
-}
 
-/* Live «Pensando…» label beats in sync with the core. */
+/* Live «Pensando…» label beats softly while the dots orbit. */
 @keyframes thinking-live-label-pulse {
   0%, 100% { opacity: 0.75; }
   50% { opacity: 1; }
@@ -8760,7 +8744,6 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
   .claude-asterisk--active .thinking-core__electron-live { display: none; }
   .claude-asterisk--active .thinking-core__electron-still { display: inline; }
   .thinking-live-label { animation: none; }
-  .claude-asterisk--active .thinking-core__core { animation: thinking-core-soft 2s ease-in-out infinite; }
 }
 .run-trace-step--pending { color: var(--step-pending); }
 .run-trace-step--running { color: var(--step-running); }
@@ -9618,8 +9601,8 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 :root {
   --celeste: 199 89% 48%;
   --success-green: 142 71% 40%;
-  /* The «Pensando» atom (ThinkingCore) is monochrome — nucleus and electrons
-     in the ink (--think-accent); it only turns red (--destructive) on error
+  /* The «Pensando» dots (ThinkingCore) are monochrome — three electrons, no
+     nucleus, in the ink (--think-accent); they only turn red (--destructive) on error
      (Luis, 2026-10-03). The former --think-electron-a|b|c colour tokens are gone. */
 }
 .dark {

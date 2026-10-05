@@ -33,7 +33,7 @@ describe("Claude-style activity rail", () => {
     assert.match(core, /viewBox="0 0 24 24"/)
     assert.doesNotMatch(core, /thinking-core__ring/, "dots only: no orbit rings (Luis, 2026-10-02)")
     assert.match(core, /r="1\.7" fill="currentColor"/, "electrons are small dots")
-    assert.match(core, /<circle className="thinking-core__core" cx="12" cy="12" r="2\.6" fill="currentColor" \/>/)
+    assert.doesNotMatch(core, /thinking-core__core/, "no centre dot: only the three orbiting dots (Luis, 2026-10-05)")
     const loader = source("components/thinking-status-loader.tsx")
     assert.match(loader, /chip: 22,\n\s+glyph: 16,/)
     const bars = source("components/pensando-bars.tsx")

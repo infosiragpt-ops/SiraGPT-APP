@@ -1919,6 +1919,9 @@ re-baselineado para los archivos tocados.
   en `hsl(var(--destructive))` y añade `claude-asterisk--error` + `data-thinking-tone`.
   `thinking-status-loader` usa el átomo estático en rojo como glifo terminal de error (el check
   de «completado» no cambia).
+- **Sin núcleo (2026-10-05)**: «el puntito del medio no, solo los 3 puntitos dando vueltas» →
+  ThinkingCore ya no dibuja `thinking-core__core`; se eliminaron `thinking-core-pulse`/`-soft`.
+  Activo: tres electrones orbitando; idle y reduced motion: los tres puntos quietos.
 - Tests: `tests/mobile-thinking-polish-source.test.ts` (nuevo); actualizados
   `thinking-core-source`, `claude-thinking-surface-source`, `brand-clover-source` y el snapshot
   de `long-operation-indicator`.
