@@ -17,28 +17,25 @@ export type ThinkingCoreProps = React.SVGAttributes<SVGSVGElement> & {
 }
 
 /**
- * ThinkingCore — the «Pensando» glyph: the SiraGPT atom in motion, dots only.
- * The same geometry as the brand mark (`components/brand/atom-mark.tsx`): a
- * solid nucleus and three elliptical orbits rotated −90° / 30° / 150° with one
- * electron each — but the orbit rings are NOT drawn (Luis, 2026-10-02: «solo
- * quiero los puntitos sin las líneas»). While active, the three electrons
- * travel their invisible orbits around the nucleus, which beats; each starts
- * at a different point of its orbit so the three dots are never aligned.
- * Idle renders the static logo (electron at the apex of its orbit), so a
- * finished turn ends on the brand itself.
+ * ThinkingCore — the «Pensando» glyph: three dots orbiting, nothing else.
+ * The orbits follow the brand atom (`components/brand/atom-mark.tsx`): three
+ * ellipses rotated −90° / 30° / 150° with one electron each. Neither the
+ * orbit rings (Luis, 2026-10-02: «solo quiero los puntitos sin las líneas»)
+ * nor the nucleus (Luis, 2026-10-05: «el puntito del medio no, solo los 3
+ * puntitos dando vueltas») are drawn. While active the three electrons travel
+ * their invisible orbits, each starting at a different point so they are
+ * never aligned. Idle renders the three dots at the apex of their orbits.
  *
- * Monochrome (Luis, 2026-10-03: «blanco y negro para que sea profesional»):
- * nucleus AND electrons take `currentColor` (`--think-accent`, the foreground
- * ink). No trail («estela») and no per-electron colour — plain dots orbiting.
- * The ONLY colour is `tone="error"`: when the system fails, the whole atom
- * turns the destructive red. Electrons move with SMIL `animateMotion` along
- * the exact orbit path (constant speed) at every size (12 px rail → 48 px).
+ * Monochrome (Luis, 2026-10-03): the dots take `currentColor`
+ * (`--think-accent`, the foreground ink). The ONLY colour is
+ * `tone="error"`: when the system fails, the dots turn the destructive red.
+ * Electrons move with SMIL `animateMotion` along the exact orbit path
+ * (constant speed) at every size (12 px rail → 48 px).
  *
- * The nucleus beat and reduced motion live in `app/globals.css` under the
- * historical `.claude-asterisk` classes: with `prefers-reduced-motion` the
- * moving electrons are hidden and the static electrons shown, the nucleus
- * keeps a soft opacity pulse only. The outer `<g>` stays attribute-free —
- * CSS targets inner classes, never attributes.
+ * Reduced motion lives in `app/globals.css` under the historical
+ * `.claude-asterisk` classes: with `prefers-reduced-motion` the moving
+ * electrons are hidden and the static ones shown. The outer `<g>` stays
+ * attribute-free — CSS targets inner classes, never attributes.
  */
 
 const CX = 12
@@ -95,7 +92,6 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
             </g>
           </g>
         ))}
-        <circle className="thinking-core__core" cx="12" cy="12" r="2.6" fill="currentColor" />
       </g>
     </svg>
   )

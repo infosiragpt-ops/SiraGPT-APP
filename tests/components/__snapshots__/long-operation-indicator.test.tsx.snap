@@ -126,13 +126,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
                 />
               </g>
             </g>
-            <circle
-              class="thinking-core__core"
-              cx="12"
-              cy="12"
-              fill="currentColor"
-              r="2.6"
-            />
           </g>
         </svg>
       </span>
@@ -282,13 +275,6 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
                 />
               </g>
             </g>
-            <circle
-              class="thinking-core__core"
-              cx="12"
-              cy="12"
-              fill="currentColor"
-              r="2.6"
-            />
           </g>
         </svg>
       </span>
