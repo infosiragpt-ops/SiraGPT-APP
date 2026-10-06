@@ -248,7 +248,12 @@ async function appendDesignedSlide({ PptxGenJS, buffer, item, position = null, d
   const sldIds = slides.map((s) => s.sldId).filter(Number.isFinite);
   const newSldId = (sldIds.length ? Math.max(...sldIds) : 255) + 1;
   const total = slides.length + 1;
-  let place = Number.isInteger(position) ? position : (lastSlideIsClosing(zip) ? slides.length : total);
+  // Default position: before the deck's closing slide, so new content never
+  // lands after «Gracias»; a NEW closing slide («agrega una lámina de
+  // gracias») goes last even when the deck already ends with one.
+  let place = Number.isInteger(position)
+    ? position
+    : ((layout !== 'closing' && lastSlideIsClosing(zip)) ? slides.length : total);
   place = Math.max(2, Math.min(total, place)); // never before the cover
   const entry = `<p:sldId id="${newSldId}" r:id="${newRid}"/>`;
   if (place >= total) {

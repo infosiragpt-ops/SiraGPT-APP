@@ -67,9 +67,13 @@ test('every base tool accepts an optional description without injecting it into 
   }
   const create = tools.BASE_TOOL_DEFINITIONS.find((d) => d.function.name === 'create_presentation');
   const slide = create.function.parameters.properties.outline.items.properties;
-  assert.deepEqual(Object.keys(slide), ['title', 'bullets', 'chart', 'layout', 'role', 'subtitle']);
-  for (const key of ['layout', 'role', 'subtitle']) assert.equal(slide[key].properties, undefined, `${key} is a scalar, no nested description`);
+  assert.deepEqual(Object.keys(slide), ['title', 'bullets', 'layout', 'role', 'subtitle', 'notes', 'columns', 'steps', 'table', 'quote', 'chart']);
+  for (const key of ['layout', 'role', 'subtitle', 'notes']) assert.equal(slide[key].properties, undefined, `${key} is a scalar, no nested description`);
   assert.equal(slide.chart.properties.description, undefined);
+  for (const key of ['table', 'quote']) assert.equal(slide[key].properties.description, undefined, `${key}: no tool-call note inside the slide data`);
+  assert.equal(slide.columns.items.properties.description, undefined, 'columns: no tool-call note inside the slide data');
+  // A step's `description` is slide content (what the stage does), not the tool-call note.
+  assert.deepEqual(slide.steps.items.properties.description, { type: 'string' });
 });
 
 test('makeToolExecutors: office executors merged ON, absent OFF', () => {

@@ -250,6 +250,33 @@ test('add_slide keeps the theme, lands before the closing slide and renumbers ev
   assert.ok(v3[5].includes('06 / 06'));
 });
 
+test('add_slide: a new closing slide goes last even when the deck already ends with «Gracias»', async () => {
+  const PptxGenJS = require('pptxgenjs');
+  const { sandbox } = await createDeck({
+    topic: 'gestión', title: 'Gestión administrativa', filename: 'gestion.pptx',
+    outline: [
+      { title: 'Contexto', bullets: ['Planificación con metas medibles'] },
+      { title: 'Indicadores', bullets: ['35% reducción de consumo'] },
+      { title: 'Gracias', bullets: [] },
+    ],
+  });
+  // «agrega una lámina de gracias al final»: the runner's fast path asks for a closing slide.
+  const added = await deckAppend.appendDesignedSlide({
+    PptxGenJS, buffer: sandbox.files.get('outputs/gestion.pptx'), item: { title: 'Gracias', bullets: [], layout: 'closing' },
+  });
+  assert.equal(added.slideNumber, 5, 'after the existing closing, not before it');
+  assert.equal(added.total, 5);
+  const slides = orderedSlideXml(new PizZip(added.buffer));
+  assert.equal(slides.length, 5);
+  assert.ok(slides[4].includes('Gracias') && slides[4].includes('05 / 05'), 'new closing slide is the last one, footer renumbered');
+  assert.ok(slides[3].includes('Gracias') && slides[3].includes('04 / 05'), 'the previous closing is now 4 / 5');
+  // Content (not a closing) still lands before the deck's closing slide.
+  const content = await deckAppend.appendDesignedSlide({
+    PptxGenJS, buffer: sandbox.files.get('outputs/gestion.pptx'), item: { title: 'Riesgos', bullets: ['Dependencia de un proveedor'] },
+  });
+  assert.equal(content.slideNumber, 4, 'before «Gracias»');
+});
+
 test('add_slide refuses charts and decks SiraGPT did not design; the color-locked theme is kept', async () => {
   const { sandbox, executors } = await createDeck({
     topic: 'embarazo', title: 'Embarazo saludable', color: 'rosado', filename: 'rosa.pptx',

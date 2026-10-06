@@ -1387,7 +1387,6 @@ async function runAgentRunner({
     const verifies = [];
     const executors = {
       ...makeToolExecutors(toolSandbox, {
-        deck: { prompt: task },
         office: {
           onFailure: reportOfficeFailure,
           visionVerifier: buildVisionVerifier({
@@ -1399,6 +1398,8 @@ async function runAgentRunner({
           thumbs: agentThumbsEnabled(),
           onVerify: (v) => { lastVerify = v; verifies.push(v); recordVerify(v); },
         },
+        // The user's words pick the deck theme when the model passes none.
+        deck: { prompt: task },
       }),
       ...f8.executors,
     };
