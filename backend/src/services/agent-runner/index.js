@@ -242,21 +242,28 @@ function designThemeForTask(task) {
 const SIRA_OFFICE_ENGINE_REL = OFFICE_ENGINE_REL;
 const installSiraOfficeEngine = installOfficeEngine;
 
-// Create verbs users actually type for a new deck/document. «haz una
-// presentación», «genérame una ppt», «elabora / prepara un informe» used to
-// miss the claim and land on the generic pipeline (a different, flatter
-// deck), so the same request produced two different designs.
-const CREATE_DOC_RE = /\b(crea|creame|créame|genera|generame|genérame|haz|hazme|hazlo|arma|armame|ármame|diseña|diseñame|diséñame|designa|elabora|elaborame|elabórame|prepara|preparame|prepárame|redacta|make|create|prepare|draft)\b/i;
+const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|deck|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
-// «quiero / necesito una presentación sobre…»: a wish with an INDEFINITE
-// article is a creation request. «quiero la presentación en azul» (definite
-// article) is an edit of the existing deck and keeps the follow-up paths.
-const CREATE_DOC_PHRASE_RE = /\b(?:quiero|necesito|requiero|quisiera|me\s+gustar[ií]a|podr[ií]as\s+(?:hacerme|crearme|armarme|prepararme))\s+(?:que\s+(?:me\s+)?(?:hagas|crees|generes|armes|prepares|elabores|dise[nñ]es)\s+)?(?:una?|otr[oa])\s+(?:nuev[oa]\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|l[aá]minas?|slides?|deck|word|docx|documento|excel|xlsx|hoja\s+de\s+c[aá]lculo)\b/i;
+// PRESENTATIONS only: the verbs users type for a new deck beyond «crea /
+// hazme» («haz una presentación», «genérame una ppt», «elabora / prepara una
+// presentación», «quiero / necesito una ppt sobre…», «hazme 10
+// diapositivas»). Those requests used to miss the claim and land on the
+// generic pipeline (a flatter deck), so one request gave two designs. Deck
+// nouns only: «prepara el informe en Word y PDF» or «prepara un SPSS y un
+// Excel» are multi-artifact turns the agentic loop owns (their tests pin it).
+const DECK_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|slides?|deck)\b/i;
+const CREATE_DECK_VERB_RE = /\b(haz|hazlo|generame|genérame|elabora|elaborame|elabórame|prepara|preparame|prepárame|armame|ármame|diseñame|diséñame|construye|desarrolla|prepare|draft|build)\b/i;
+// A wish with an INDEFINITE article (or a count) is a creation request;
+// «quiero la presentación en azul» (definite article) is an edit of the
+// existing deck and keeps the follow-up paths.
+const CREATE_DECK_PHRASE_RE = /\b(?:quiero|necesito|requiero|quisiera|me\s+gustar[ií]a|podr[ií]as\s+(?:hacerme|crearme|armarme|prepararme))\s+(?:que\s+(?:me\s+)?(?:hagas|crees|generes|armes|prepares|elabores|dise[nñ]es)\s+)?(?:una?|otr[oa]|\d{1,2})\s+(?:nuev[oa]s?\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|slides?|deck)\b/i;
 
-/** Create-a-document request: verb + document noun, or an explicit wish for a new one. */
+/** Create-a-document request: verb + document noun, or a presentation asked for in any of its usual phrasings. */
 function isCreateDocumentRequest(text) {
   const t = String(text || '');
-  return (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) || CREATE_DOC_PHRASE_RE.test(t);
+  if (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) return true;
+  if (CREATE_DECK_VERB_RE.test(t) && DECK_NOUN_RE.test(t)) return true;
+  return CREATE_DECK_PHRASE_RE.test(t);
 }
 const DIRECT_SAV_FILE_REQUEST_RE = /\bdame\s+(?:un|una|el|la)\s+(?:documentos?|archivos?|ficheros?|bases?(?:\s+de\s+datos)?)\s+(?:de\s+)?(?:spss|sav)\b/i;
 const SOURCE_COPY_RE = /\b(?:copia|versi[oó]n)(?:\s+(?:nueva|corregida|editada|actualizada|modificada)){0,2}\s+(?:de\s+)?(?:este|esta|mi|del|de\s+la|de\s+los|de\s+las)\b/i;
@@ -2261,7 +2268,9 @@ module.exports = {
   MAX_OUTPUT_RETRIES,
   CREATE_DOC_RE,
   DOC_NOUN_RE,
-  CREATE_DOC_PHRASE_RE,
+  DECK_NOUN_RE,
+  CREATE_DECK_VERB_RE,
+  CREATE_DECK_PHRASE_RE,
   isCreateDocumentRequest,
   isDeckColorRestyleRequest,
   isSiraDesignedDeck,

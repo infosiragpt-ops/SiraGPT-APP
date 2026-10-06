@@ -29,20 +29,28 @@ const CREATE_PHRASES = [
   'genérame una ppt de marketing digital',
   'generame una presentacion de la empresa',
   'elabora una presentación sobre el cambio climático',
-  'prepara un word con el plan de trabajo',
+  'prepara una presentación ejecutiva para el directorio',
   'hazme 10 diapositivas sobre nutrición',
+  'quiero 10 diapositivas sobre nutrición',
   'necesito una presentación sobre ventas para mañana',
   'quiero que me hagas una ppt del embarazo',
   'quiero una nueva presentación para el directorio',
-  'redacta un documento con las conclusiones',
   'crea una ppt del embarazo de color rosado',
   'hazme una presentación en powerpoint sobre ventas',
-  'draft a word document about the quarterly results',
+  'build a deck about our 2027 roadmap',
 ];
 
+// Word / Excel / PDF keep the original claim («crea / genera / hazme + noun»);
+// «prepara» alone never claims them: the multi-artifact SAV+Excel and Word+PDF
+// turns belong to the agentic loop (agentic-chat-stream tests pin it).
 const NOT_CREATE = [
   'quiero la presentación en azul',
   'necesito el word corregido para hoy',
+  'prepara un word con el plan de trabajo',
+  'Prepara el informe en Word y PDF',
+  'Prepara un documento SPSS y un Excel con datos sintéticos',
+  'prepara un documento de SPSS con una muestra de 20 de 20 preguntas y un Excel',
+  'redacta un documento con las conclusiones',
   'para ya, no quiero el archivo',
   'dame un resumen del documento de SPSS y el Excel',
   'hola',
@@ -65,6 +73,8 @@ test('create-deck phrasings claim the runner and are runner-only; chat and defin
     assert.equal(agentRunner.shouldRunAgentRunner({ text: phrase, hasPriorArtifacts: true }), false, `never claims: "${phrase}"`);
   }
   assert.equal(agentRunner.shouldRunAgentRunner({ text: 'dame un resumen del documento de SPSS y el Excel' }), false);
+  assert.equal(agentRunner.shouldRunAgentRunner({ text: 'investiga y prepara un paquete con un SAV y un Excel de una muestra de 20 con 20 preguntas' }), false);
+  assert.equal(agentRunner.shouldRunAgentRunner({ text: 'Prepara un documento SPSS y un Excel con datos sintéticos' }), false);
 });
 
 test('isDeckColorRestyleRequest: whole-deck colors yes; elements, single slides and questions no', () => {
@@ -82,6 +92,11 @@ test('runner prompt and tool list carry the deck design rules and add_slide', ()
   assert.match(prompt, /never more than 2 consecutive bullet slides/);
   assert.match(prompt, /`notes` on EVERY slide/);
   assert.match(prompt, /designWarnings/);
+  assert.match(prompt, /With an attached template/);
+  // Other tests detect the redesign / template sections by these literals:
+  // the always-on rules must never carry them.
+  assert.equal(prompt.includes('DESIGN WORKFLOW'), false);
+  assert.equal(prompt.includes('TEMPLATE WORKFLOW'), false);
   assert.match(prompt, /add_slide: add ONE designed slide/);
   const followup = buildAgentRunnerPrompt({ fileNames: ['plan.pptx'], priorArtifactNames: ['plan.pptx'] });
   assert.match(followup, /add_slide \(keeps the theme, renumbers the footer/);

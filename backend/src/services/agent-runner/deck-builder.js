@@ -146,7 +146,10 @@ function resolveLayout(item, idx, plan, { appendMode = false } = {}) {
   if (quoteParts(item && item.quote)) return 'quote';
   if (wanted === 'agenda' || AGENDA_RE.test(String(item && item.title || ''))) return 'agenda';
   if (wanted === 'closing') return 'closing';
-  if (CLOSING_RE.test(String(item && item.title || '')) && bullets.length <= 3) return 'closing';
+  // A closing title with a few lines closes a NEW deck; appended to an
+  // existing one («agrega una lámina de conclusiones») it stays a content
+  // slide unless asked for (layout: 'closing') or it carries no bullets.
+  if (CLOSING_RE.test(String(item && item.title || '')) && bullets.length <= 3 && (!appendMode || bullets.length === 0)) return 'closing';
   if (wanted === 'section') return 'section';
   if (bullets.length === 0) return (!appendMode && idx === plan.length - 1) ? 'closing' : 'section';
   return 'bullets';
@@ -338,18 +341,24 @@ async function buildThemedDeck({ PptxGenJS, title, topic, plan, theme, colorLock
         const row = twoCols ? i % perCol : i;
         const x = 0.7 + col * (colW + 0.4);
         const y = top + row * rowH;
-        slide.addText(String(i + 1), {
-          shape: S.ellipse, x, y: y + (rowH - 0.42) / 2, w: 0.42, h: 0.42,
-          fill: { color: pal.accent }, line: { type: 'none' },
-          fontFace: fonts.display, fontSize: 13, bold: true, color: onColor(pal.accent), align: 'center', valign: 'middle', margin: 0,
-          objectName: `SiraChip ${i + 1}`,
-        });
-        slide.addText(String(text).replace(/^\s*\d{1,2}[.)]\s*/, ''), {
-          x: x + 0.6, y, w: colW - 0.7, h: rowH, fontFace: fonts.body, fontSize: size, color: pal.ink, valign: 'middle', margin: 0, fit: 'shrink',
+        // The outline's words are kept verbatim: an item that already carries
+        // its own number («1. Planificación») gets no chip in front of it.
+        const numbered = /^\s*\d{1,2}[.)]\s/.test(String(text));
+        if (!numbered) {
+          slide.addText(String(i + 1), {
+            shape: S.ellipse, x, y: y + (rowH - 0.42) / 2, w: 0.42, h: 0.42,
+            fill: { color: pal.accent }, line: { type: 'none' },
+            fontFace: fonts.display, fontSize: 13, bold: true, color: onColor(pal.accent), align: 'center', valign: 'middle', margin: 0,
+            objectName: `SiraChip ${i + 1}`,
+          });
+        }
+        const textX = numbered ? x + 0.1 : x + 0.6;
+        slide.addText(String(text), {
+          x: textX, y, w: colW - (textX - x) - 0.1, h: rowH, fontFace: fonts.body, fontSize: size, color: pal.ink, valign: 'middle', margin: 0, fit: 'shrink',
           objectName: `SiraAgenda ${i + 1}`,
         });
         if (i < items.length - 1 && (!twoCols || row < perCol - 1)) {
-          rect(slide, x + 0.6, y + rowH - 0.02, colW - 0.7, 0.012, pal.line, `Agenda rule ${i + 1}`);
+          rect(slide, textX, y + rowH - 0.02, colW - (textX - x) - 0.1, 0.012, pal.line, `Agenda rule ${i + 1}`);
         }
       });
       footer(slide, number, isDarkHex(pal.bg));

@@ -255,9 +255,11 @@ function auditDeckPlan(plan) {
   if (list.length >= 3 && layouts[layouts.length - 1] !== 'closing') {
     warnings.push('Falta una diapositiva de cierre («Conclusiones», «Próximos pasos» o «Gracias», layout closing).');
   }
-  const withNotes = list.filter((item) => typeof item.notes === 'string' && item.notes.trim()).length;
-  if (withNotes === 0) warnings.push('Ninguna diapositiva tiene notas del orador (`notes`): añade 1-3 frases por diapositiva.');
-  else if (withNotes < list.length) warnings.push(`${list.length - withNotes} diapositiva(s) sin notas del orador (\`notes\`).`);
+  // Section dividers carry a title only; every other slide should have notes.
+  const needNotes = list.filter((item, idx) => layouts[idx] !== 'section');
+  const withNotes = needNotes.filter((item) => typeof item.notes === 'string' && item.notes.trim()).length;
+  if (needNotes.length && withNotes === 0) warnings.push('Ninguna diapositiva tiene notas del orador (`notes`): añade 1-3 frases por diapositiva.');
+  else if (withNotes < needNotes.length) warnings.push(`${needNotes.length - withNotes} diapositiva(s) sin notas del orador (\`notes\`).`);
   return warnings;
 }
 

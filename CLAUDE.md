@@ -2139,11 +2139,15 @@ Pedido: que cualquier «hazme una ppt» salga con diseño de consultor y que cad
 posterior la mejore sin perder ese diseño. Todo backend (sin UI). El camino por defecto en
 producción es el AgentRunner (`create_presentation` → pptxgenjs); el pipeline avanzado solo
 corre cuando el runner no reclama el turno.
-- **Un solo motor** (`agent-runner/index.js` `isCreateDocumentRequest`): el reclamo del runner
-  cubre «haz / genérame / elabora / prepara / redacta / draft» + «quiero / necesito una (nueva)
-  presentación…» (artículo indefinido; «quiero la presentación en azul» sigue siendo edición) y
-  los plurales «diapositivas / láminas / presentaciones / deck». Antes esos pedidos caían en el
-  pipeline genérico con otro diseño. El orquestador usa el mismo clasificador.
+- **Un solo motor** (`agent-runner/index.js` `isCreateDocumentRequest`): para PRESENTACIONES el
+  reclamo del runner cubre «haz / genérame / elabora / prepara / draft / build una presentación»
+  (`CREATE_DECK_VERB_RE` × `DECK_NOUN_RE`) + «quiero / necesito una (nueva) ppt…» / «quiero 10
+  diapositivas…» (`CREATE_DECK_PHRASE_RE`; artículo indefinido o conteo: «quiero la presentación
+  en azul» sigue siendo edición) y los plurales «diapositivas / láminas / presentaciones / deck».
+  Word / Excel / PDF conservan el reclamo original («crea / genera / hazme + sustantivo»):
+  «prepara el informe en Word y PDF» o «prepara un SPSS y un Excel» siguen en el loop agéntico
+  (sus tests lo fijan). Antes los pedidos de deck con esos verbos caían en el pipeline genérico
+  con otro diseño. El orquestador usa el mismo clasificador.
 - **Layouts** (`agent-runner/deck-builder.js`): además de cards / KPI / lista, cada entrada de la
   outline acepta `layout` (agenda · columns · timeline · table · quote · section · closing),
   `subtitle`, `notes` (notas del orador), `columns [{title,bullets}]` (2-3), `steps
