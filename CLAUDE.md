@@ -1834,6 +1834,305 @@ alfa de `--foreground`) para que claro / oscuro / medianoche compartan un lengua
 - Test: `tests/ui-professional-finish-source.test.ts` (único bloque, monocromo sin literales
   cromáticos, exclusiones del compositor, reduced motion).
 
+## Reconocer lo que pega el usuario + transcribir enlaces por minuto (added 2026-10-03)
+
+Pedido de Luis con captura de un chat: un enlace de grabación (upn.class.com) pegado por el
+usuario se veía como texto plano, y «transcribir del minuto 1.5 al 10» terminó en «no pude»
+sin intentar nada. Tres frentes, todos obligatorios:
+- **Burbuja del usuario rica** (`lib/chat/user-text-tokens.ts` puro + `components/chat/
+  rich-user-text.tsx`): links (http/https y `www.`) como anclas celestes con la URL completa en
+  el title y vista acotada (`host/ruta…`), puntuación final fuera del enlace (paréntesis
+  balanceado se conserva), correos `mailto:`, nombres de archivo con extensión como chip mono
+  (sin espacios: «informe final.docx» chipea «final.docx»), timecodes `1:30` / `01:02:03` en
+  cifras tabulares y `` `código` ``. Texto plano se renderiza idéntico. Montado dentro de
+  `<p className="chat-user-bubble-inner">` (invariante del test de wrap). CSS al final de
+  `globals.css` («Rich user text»): los links del usuario Y de la respuesta
+  (`.chat-assistant-message .prose a`) usan la excepción `--celeste`.
+- **`transcribe_url`** (`backend/src/services/agent-harness/tools/transcribe-url-tool.js`):
+  herramienta del harness, tier `auto`. URL con la misma postura SSRF que `web_fetch` →
+  sondeo `yt-dlp --dump-single-json` (título, duración; login/privado ⇒ `media_login_required`)
+  → descarga solo la sección (`--download-sections *start-end`) como mejor audio → ffmpeg
+  recorta y codifica mono 16 kHz AAC → `audio-transcriber.transcribe` (escalera + whisper.cpp
+  local) → segmentos desplazados al reloj de la grabación, texto `[mm:ss] …` acotado a 60k
+  para el modelo y `.txt` completo (y `.srt` si `subtitles`) como tarjeta de descarga
+  (`file_artifact`). Errores estructurados con `userMessage` en español
+  (`media_login_required` ofrece adjuntar el audio o abrir la grabación en la computadora del
+  chat; `media_too_long` pide un rango; `ytdlp_missing`). `start`/`end` aceptan segundos,
+  `mm:ss`, `hh:mm:ss`, «1.5 min». Inyectable (`runCommand`, `transcribe`, `saveArtifact`,
+  `dnsCheck`) — tests sin red ni binarios. Registrada en `run-agent-turn.buildHarnessTools`,
+  etiqueta en `LIVE_DECISION_VERBS`, línea de política en el prompt del loop, y el
+  `tool-selector` la conserva en turnos con «transcri/subtít/minuto» o la señal
+  `transcribeUrl` (que la ruta deriva del brief). **`backend/Dockerfile` instala `yt-dlp`**.
+- **Brief del pedido**: detecta la transcripción (tolerante a «transcirbir», «trascribir»),
+  el enlace como objeto (`target.kind='url'`, solo el host en el payload público) y el rango
+  `del minuto 1.5 al 10` → restricción `time_range` «01:30 → 10:00»; el bloque de sistema
+  ordena usar `transcribe_url` y no decir «no puedo» sin haberla llamado; un enlace nunca
+  dispara la pregunta de «¿qué quieres que transcriba?».
+- Tests: `backend/tests/transcribe-url-tool.test.js` (10: rango/sección/offset/artefactos,
+  login, clasificación de fallos, validación de rangos, URLs inseguras, cap, registro),
+  +2 en `request-brief.test.js`, `tests/lib/user-text-tokens.test.ts` (6),
+  `tests/components/rich-user-text.test.tsx` (3). Envs en `docs/ENV_VARIABLES.md`.
+
+## OCR local con GLM-OCR — `ollama run glm-ocr` en la Lenovo (added 2026-10-03)
+
+Pedido de Luis: incorporar GLM-OCR (Z.ai, 0,9B, nº 1 OmniDocBench v1.5) a la plataforma.
+- **`backend/src/services/ollama-ocr.js`**: cliente de la API nativa de Ollama
+  (`POST /api/chat` con `images` base64 y el prompt de tarea del modelo `Text Recognition:` /
+  `Table Recognition:` / `Figure Recognition:`; salida Markdown). Sondeo de disponibilidad con
+  `GET /api/tags` memoizado (`OLLAMA_OCR_PROBE_TTL_MS`, 5 min): sin Ollama o sin el modelo
+  descargado responde `{available:false, reason}` en < 3 s y NUNCA lanza. `createOllamaOcrClient`
+  inyectable (`env`, `fetchImpl`, `now`, `sharpImpl`) para tests sin red. Default ON salvo
+  `NODE_ENV=test`; kill switch `SIRAGPT_OLLAMA_OCR=0`.
+- **Escalera** (`ocr-engine.js`): Tesseract → **`runOllamaOcrFallback`** → OpenAI
+  (`runVisionFallback`). Una lectura local válida termina ahí (status `vision_fallback`,
+  provider `ollama:glm-ocr`, confianza 95 como la del modelo de nube); cualquier otro resultado
+  sigue al peldaño de pago y, sin `OPENAI_API_KEY`, el fallo expone `ocr.ollamaOcr` con la razón
+  local. `runVisionPdfFallback` etiqueta el proveedor con los que realmente leyeron páginas.
+  Cubre imágenes adjuntas, PDFs escaneados, imágenes dentro de Office y `OCR_MODE=vision`.
+- **Producción**: `docker-compose.prod.yml` pasa `SIRAGPT_OLLAMA_OCR` / `OLLAMA_OCR_BASE_URL`
+  (`http://siragpt-ollama:11434`, la misma Ollama de SiraGPT Mini en la red `iliagpt-app`) /
+  `OLLAMA_OCR_MODEL` (`glm-ocr`) al backend. **El modelo se instala solo**: si el sondeo ve la
+  Ollama viva sin `glm-ocr`, el cliente lanza `POST /api/pull` una vez en segundo plano (~1,9 GB,
+  `model_pulling` mientras tanto, reintento tras `OLLAMA_OCR_PULL_RETRY_MS` si falla) y re-sondea
+  al terminar — Luis no necesita shell en la Lenovo. `OLLAMA_OCR_AUTO_PULL=0` lo apaga. Envs en
+  `docs/ENV_VARIABLES.md` y `docs/operations/ENVIRONMENT.md`.
+- Tests: `backend/tests/ollama-ocr.test.js` (12: config/alias `/v1`, listado de tags, sondeo y
+  memo, auto-pull único + reintento parqueado, request/respuesta, fallos HTTP/timeout/caída,
+  integración con el motor y PDF).
+
+## Pulido móvil: sin tooltips táctiles + átomo «Pensando» monocromo (added 2026-10-03)
+
+Pedido de Luis con captura de iPhone: al tocar el botón de contraer el sidebar aparecía la
+burbuja negra «Contraer barra lateral ⌘B»; y el indicador de pensar debe ser «simplemente
+puntitos dando vueltas, en blanco y negro», rojo solo si el sistema falla. UI lock
+re-baselineado para los archivos tocados.
+- **Tooltips en táctil**: `components/ui/tooltip.tsx` añade la clase `ui-tooltip` a todo
+  `TooltipContent`; bloque «Touch devices: no hover tooltips» al final de `globals.css`:
+  `@media (hover: none)` oculta `.ui-tooltip` y su wrapper Radix (`:has`). Radix abre el
+  tooltip al enfocar y un toque enfoca el botón; en un dispositivo sin hover solo sobra. Los
+  `aria-label` siguen (lector de pantalla).
+- **ThinkingCore monocromo** (`components/brand/thinking-core.tsx`): sin estela (`Trail` y el
+  dash `stroke-dashoffset` eliminados) y sin color por electrón (tokens `--think-electron-a|b|c`
+  eliminados de `globals.css`): núcleo y los tres electrones en `currentColor` (`--think-accent`,
+  la tinta), SMIL `animateMotion` por la elipse exacta con fases distintas (0 / −1.1 / −2.3 s).
+  Prop `tone: "default" | "error"` (también en `ClaudeAsterisk`): `error` pinta el átomo entero
+  en `hsl(var(--destructive))` y añade `claude-asterisk--error` + `data-thinking-tone`.
+  `thinking-status-loader` usa el átomo estático en rojo como glifo terminal de error (el check
+  de «completado» no cambia).
+- **Sin núcleo (2026-10-05)**: «el puntito del medio no, solo los 3 puntitos dando vueltas» →
+  ThinkingCore ya no dibuja `thinking-core__core`; se eliminaron `thinking-core-pulse`/`-soft`.
+  Activo: tres electrones orbitando; idle y reduced motion: los tres puntos quietos.
+- Tests: `tests/mobile-thinking-polish-source.test.ts` (nuevo); actualizados
+  `thinking-core-source`, `claude-thinking-surface-source`, `brand-clover-source` y el snapshot
+  de `long-operation-indicator`.
+
+## Transcribir CUALQUIER enlace: navegador headless + cookies del usuario (added 2026-10-03)
+
+Reporte de Luis: «el sistema todavía no puede transcribir el video que le di en el link… tiene
+que entrar al video y sacar el audio sí o sí» (grabaciones de clase en upn.class.com, YouTube,
+cualquier enlace). Diagnóstico: (1) YouTube exige desde 2025-11 un runtime JS + el solucionador
+`yt-dlp-ejs`, y el `yt-dlp` de apk no lo trae; (2) los reproductores institucionales son SPAs sin
+medios en el HTML (yt-dlp: «Unsupported URL»); (3) una grabación privada solo baja con la sesión
+del usuario. Tres piezas, todas en `backend/src/services/agent-harness/tools/`:
+- **`media-discovery.js`**: abre la página en el Chromium de la imagen (Playwright,
+  `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`) con las cookies del usuario, pulsa play y registra las
+  peticiones de medios (HLS/DASH/MP4/M4A, no segmentos) + `<video>/<source>`/og:video/JSON-LD;
+  ranking (master m3u8 > mpd > mp4 > audio), detección de muro de login (redirección a /login,
+  `input[type=password]` sin medios), exporta las cookies del contexto en formato Netscape.
+  Postura SSRF de web_fetch en CADA petición de la página (route interception: sin IP literales ni
+  localhost/.internal, DNS verificado por host). `discoverMedia(url, {cookies, timeoutMs, dnsCheck,
+  launch})`; degrada a `browser_unavailable` sin Chromium.
+- **`cookie-jar-store.js`**: `cookies.txt` (Netscape) por usuario, cifrado con `utils/encryption`
+  (AES-256, `ENCRYPTION_KEY`) en `SIRAGPT_COOKIE_JAR_DIR` (`<UPLOAD_DIR>/cookie-jars`). Nunca se
+  loguean ni devuelven valores: solo hosts. `isNetscapeCookieText`, `saveUserCookies`,
+  `loadUserCookies`, `mergeNetscapeCookies`.
+- **`transcribe-url-tool.js`** (escalera): yt-dlp (con `--no-js-runtimes --js-runtimes
+  node:<process.execPath>`, `--cookies` del jar) → si no conoce la página (`DISCOVERY_ELIGIBLE`)
+  → `media-discovery` → candidato seguro a yt-dlp con `--referer` + UA + cookies del navegador →
+  si yt-dlp lo rechaza, **ffmpeg directo** (`-headers Referer/User-Agent/Cookie` solo del host, `-ss`,
+  `-t`). Un `cookies.txt` adjunto en el turno (`loadAttachedCookies`: `ctx.fileIds` + ownership) se
+  usa y se guarda para los próximos enlaces; sin adjunto se carga el jar guardado. Muro de login
+  sin medios ⇒ `media_login_required` con los dos caminos (adjuntar archivo / adjuntar cookies.txt
+  una vez). Resultado: `via` (`yt-dlp` | `browser+yt-dlp` | `browser+ffmpeg`), `discovery`,
+  `cookies {source, hosts, saved}`.
+- **`backend/Dockerfile`**: `pip3 install "yt-dlp[default]>=2026.8"` (trae `yt-dlp-ejs`) en vez
+  del apk; el runtime JS es el Node 22 de la imagen.
+- **Verificación real (sin red externa en este sandbox)**: `backend/tests/media-discovery.test.js`
+  (9, incluye un caso con Chromium real: SPA que carga el HLS por JS → descubierto; redirección a
+  /login → muro) + e2e manual con yt-dlp 2026.08 y ffmpeg reales contra un servidor local
+  (archivo directo, reproductor SPA con HLS, reproductor privado sin/con cookies). YouTube y
+  upn.class.com NO se pudieron probar desde el sandbox (el proxy de egreso los bloquea): la
+  prueba final es en producción con un enlace real.
+- Envs en `docs/ENV_VARIABLES.md` (`TRANSCRIBE_URL_JS_RUNTIME`, `_REMOTE_COMPONENTS`,
+  `_BROWSER_DISCOVERY`, `_DISCOVERY_TIMEOUT_MS`, `SIRAGPT_COOKIE_JAR_DIR`).
+
+## Transcribir grabaciones con login desde la computadora del chat (added 2026-10-04)
+
+Reporte: «del minuto 60 al minuto 1:20» de una grabación de upn.class.com terminó en «el reproductor
+de Class no respondió a tiempo». Dos causas: el rango se leía 1:00:00 → 01:20 y la grabación exige la
+sesión UPN del usuario, que el Chromium headless del backend no tiene.
+- **Rango**: pasada la hora, un fin «a:bb» anterior al inicio es horas:minutos («1:20» → 1:20:00):
+  `transcribe-url-tool.resolveRangeEnd` y `request-brief.resolveRangeEndLabel`. Antes de la hora no cambia.
+- **Peldaño «computadora»** (`transcribe_url`, tras yt-dlp y el headless): `media-discovery.discoverMedia`
+  acepta `attach()` y trabaja en una pestaña NUEVA del Chrome de la computadora del chat
+  (`live-page.connectLiveBrowser`, perfil persistente por usuario, ahí ya está logueado): mismo guard SSRF
+  por pestaña, cierra solo su pestaña, desconecta CDP y exporta solo las cookies de la página y de los
+  hosts de medios (nunca se guardan en el jar). Encontrado ⇒ `via: computer+yt-dlp|ffmpeg`. Sin medios
+  (login) ⇒ abre la página en la pestaña visible (`navigatePage`), emite `computer_navigate` (SSE → el
+  panel de la computadora se abre solo, `lib/api.ts`) y devuelve `media_login_in_computer`: «inicia sesión
+  ahí y escribe «listo»»; el modelo reintenta la misma URL y rango. Sin computadora para el usuario ⇒
+  `media_login_required` de siempre. Kill switch `TRANSCRIBE_URL_COMPUTER=0`; tope 60 s.
+- Tests: `backend/tests/media-discovery.test.js` (+4: peldaño computadora, handoff de login, rangos,
+  Chromium real en modo adjunto con cookies de otro sitio y pestaña del usuario intactas).
+
+## Transcribir cualquier enlace: tope de 2 min y «rastrear el audio» (added 2026-10-04)
+
+«podes transcribir y rastrear el audio de cualquier link, obligatorio». Causa real del «no respondió a
+tiempo»: el harness cortaba `transcribe_url` a los **120 s** (tope global de `event-stream.wrapTools`)
+porque `tool-registry.toAgentTool` descartaba el `timeoutMs` de la definición, y el turno agéntico
+tenía 5 min. Bajar + transcribir un tramo de 20 min nunca cabía.
+- `toAgentTool` conserva `timeoutMs` (afecta a todo tool del harness que lo declare; sandbox-doc-tools
+  pasa de 120 s a su propio 65 s). `transcribe_url` declara `toolTimeoutMs(env)` (30 min por defecto,
+  `TRANSCRIBE_URL_TOOL_TIMEOUT_MS`), y `agentic-chat-stream` da a un turno «enlace + transcribe» ese
+  tope + 5 min (`isLinkTranscription`).
+- **`media-capture.js`** (último peldaño): reproduce la grabación en una pestaña (computadora del chat
+  por `attach()`, si no headless con las cookies) y graba el audio que suena (`captureStream` +
+  `MediaRecorder` opus, elemento silenciado, busca el reproductor también en iframes, pulsa play,
+  `seek` al inicio, corta en el fin). Cubre MSE/blob, segmentos con token, iframes. DRM (MediaKeys) ⇒
+  `drm_protected`, no se graba. Velocidad `pickCaptureRate` (tiempo real si cabe, hasta
+  `TRANSCRIBE_URL_CAPTURE_MAX_RATE`=2, luego `atempo` lo devuelve al reloj real). Rango abierto de
+  duración desconocida ⇒ graba lo que quepa y marca `partial: time_budget`.
+- `transcribe_url`: `captureOr()` intenta la captura (una sola por llamada) en cada punto donde antes se
+  rendía (sin stream, yt-dlp sin descarga, ffmpeg no lee el stream, sin stream en la computadora);
+  yt-dlp ausente / 429 / timeout también pasan por el navegador. `via: computer|browser+capture`.
+  Kill switch `TRANSCRIBE_URL_CAPTURE=0`.
+- Tests: `backend/tests/media-capture.test.js` (6, incluye Chromium real: `<audio>`, MSE/blob e iframe,
+  solo el rango, audio real medido con ffmpeg volumedetect).
+
+## Volcado de producción 2026-10-03 — pegado, OCR, cierre HTTP, computadora (added 2026-10-03)
+
+Del log del 3-oct (09:20Z → 16:51Z) que pegó Luis, «corregir y dejarlo en producción». Dos
+PR en paralelo: **#990** (pegado + importación de artefactos) y **#992** (OCR, cierre HTTP,
+pase correctivo); #992 se fusionó con la base de #990 conservando la versión de #990.
+- **Pegado de texto roto desde siempre** (#990): `auto-file-bridge.ingestPastedContent` pasaba
+  `source:'paste'` y `metadata:{…}` a `prisma.file.create` — el modelo `File` no tiene esas
+  columnas («Unknown argument `source`», cada pegado ≥200 chars) — y llamaba
+  `documentIntelligence.analyzeFile(fileRecord, content)` con la firma equivocada. La
+  procedencia vive ahora en `DocumentAnalysis.metadata` (columna Json), `getAutoFilesForChat`
+  filtra por el prefijo `auto/` del `path`, y los fallos se registran como `E_FILE_INGESTION` /
+  `E_FILE_INDEXING` (el mensaje de Prisma podía contener el documento entero). Test de #992
+  `auto-file-bridge-prisma-fields` valida cada `data`/`where`/`select` contra las columnas
+  reales de `schema.prisma`.
+- **OCR local acotado** (#992, `ocr-engine.js`): una foto de WhatsApp tuvo a Tesseract 371 s
+  (cientos de «Image too small to scale!!») antes de que GLM-OCR/visión vieran la imagen.
+  `recognizeBestVariant` acepta `deadlineAt`; `runLocalImageOcr` fija UN presupuesto para
+  ambas pasadas (`SIRAGPT_OCR_LOCAL_IMAGE_BUDGET_MS`, 20 s), `recognizeWithin` carrera el
+  `recognize()` contra el plazo y **termina el worker** si se pasa (único modo de parar el job
+  WASM); con `timedOut` no hay pase por mosaicos y el fallo se etiqueta `local_ocr_timeout`.
+  Todo `createWorker` recibe `tesseractWorkerOptions()` (errorHandler que silencia el ruido del
+  core; los errores reales del worker siguen en WARN). Seams en `ocrEngine._internals`.
+- **`http_server_close` siempre vencía** (#992, 5 s): `keepAliveTimeout` es 120 s y los SSE
+  siguen abiertos, así que `server.close()` nunca terminaba. `utils/http-server-close.js`
+  `closeHttpServer(server, {graceMs, onCut})`: cierra el listener, suelta los sockets ociosos
+  (`closeIdleConnections`), espera la gracia (`SIRAGPT_HTTP_CLOSE_GRACE_MS`, 3.5 s) y corta el
+  resto (`closeAllConnections`); nunca rechaza. El orden de pasos no cambia.
+- **Computadora: 502 en `GET /api/agent-computer/activity?sessionId=ac_luis&browser=1`** (346
+  líneas en una tarde, más `/action` y `/navigate`): es el sondeo del navegador integrado
+  (#981/#988/#989) fallando en `connectLiveBrowser` → `/sessions/<id>/cdp/json/version`.
+  **Causa de código (PR posterior a #992)**: el escritorio arranca Chrome con
+  `--remote-debugging-port=9222` (`start-desktop.sh`), pero toda relanzada desde el backend
+  (`chromeMaximizeOrLaunch`, `chromeOpenUrlCommand`) arrancaba Chrome SIN el puerto: en cuanto
+  el usuario cerraba Chrome en el escritorio, CDP quedaba muerto hasta reiniciar el contenedor y
+  cada sondeo de 4 s respondía 502. Arreglo: `CHROME_CDP_FLAGS` dentro de `CHROME_DOCKER_FLAGS`
+  (`chrome-desktop-flags.js`); `live-page.connectLiveBrowser` con CDP inalcanzable relanza Chrome
+  en el MISMO escritorio (`persistent.dockerExec` + `chromeMaximizeOrLaunch`, una vez por
+  `CHROME_RECOVERY_COOLDOWN_MS` = 20 s por sesión) y espera hasta 8 s el puerto; contenedor
+  ausente ⇒ `desktop_unavailable` (503, «Vuelve a abrir la computadora»), lo demás ⇒
+  `browser_observation_unavailable` (502). `agent-computer.js`: `failComputer` registra UNA línea
+  WARN por código cada 30 s (`[agent-computer] <code> status= route= session= cause=`, causa
+  saneada con `looksLikeSecretOrStack`, repeticiones contadas en `suppressed=`); el sondeo
+  `browser=1` responde `200 {ok:false, browser:null, error, message}` cuando el escritorio o su
+  Chrome no están (nunca `ok:true`; el panel muestra el error y «Reintentar» igual), en vez de un
+  5xx por tick; `browser_viewport_failed` y los demás conservan su estado. Acciones y navegación
+  siguen en 5xx con el código real. Tests: `chrome-desktop-flags` (+2),
+  `computer-browser-controls` (+3: relanzada, cooldown, contenedor ausente),
+  `computer-browser-poll-unavailable` (4).
+- **Importación de artefactos a cowork** (#990): leía primero R2 (objeto aún no subido) y luego
+  el local (ya borrado por el espejo) → «Artifact content is not available». Ahora local
+  primero (handle acotado, realpath dentro de `ARTIFACT_DIR`) y solo con ENOENT una lectura
+  remota.
+- **Pase correctivo** (#992): «corrective pass failed: Request was aborted.» era nuestro propio
+  tope de 8 s (el SDK de OpenAI lanza `APIUserAbortError`, no `AbortError`). Se clasifica por
+  señales: tope → «abandoned», Stop del usuario → silencio, otro → fallo real.
+- Sin arreglo en código (upstream): turnos degradados `step_timeout` a 60 s con xAI grok-4.7
+  + 16 tools (CONVERSAR), `feedback-exemplars > 900ms` (consulta lenta), sondas CVE a
+  `/metabase`, y el 502 de `/action` tras un reinicio (escritorio reiniciando).
+- Tests (#992): `auto-file-bridge-prisma-fields` (3), `ocr-engine-local-budget` (7),
+  `http-server-close` (5, servidor real con SSE + keep-alive), `ai-service-corrective-abort-source` (1).
+
+## Plantilla PPT obligatoria + edición quirúrgica de láminas (added 2026-10-03)
+
+Pedido de Luis: «si le doy un formato de ppt quiero que el software lo siga obligatorio y hacer
+cambios quirúrgicos en documentos». Auditoría con agentes (12 lectores + recorrido de escenarios +
+verificación adversarial) sobre el pipeline de documentos: todo turno «crea una ppt con este
+formato» + Plantilla.pptx terminaba en un deck aurora de pptxgenjs y la plantilla se reducía a un
+excerpt de «material de referencia»; no existía ninguna operación para añadir/duplicar/borrar/mover
+láminas ni para pintar el fondo de UNA sola. Solo backend; UI lock intacto.
+- **`backend/src/services/document-template-intent.js`** (puro): `detectTemplateIntent({prompt,
+  fileNames, priorArtifactNames})` → `{isTemplateFill, templateFile, contentFiles, outputFormat}`.
+  `.potx/.dotx/.xltx` son plantilla siempre; `.pptx/.docx/.xlsx` solo con cue («con este formato»,
+  «usa/usando esta plantilla», «siguiendo el diseño», «como esta», «pasa mi informe al formato de la
+  plantilla», par contenido+plantilla) y una intención de crear/convertir/usar-para. Una edición
+  acotada («cambia el título de la lámina 3 manteniendo el formato») NUNCA es relleno de plantilla.
+- **`backend/src/services/document-template-lineage.js`** (puro, pizzip): `summarizeTemplate`
+  (layouts con placeholders, masters, láminas de muestra, fuentes/paleta del tema →
+  `describeTemplateForPrompt`) y `verifyTemplateLineage({templateBuffer, outputBuffer})`: el
+  entregable debe compartir esquema de color+fuentes del tema, masters (spTree), layouts (por
+  nombre), cada lámina referencia un layout y no quedan láminas de muestra ni texto «Haga clic…».
+  Para docx: estilos, tema, encabezados/pies, geometría de página, sin XXXX/lorem.
+- **Runner** (`agent-runner/index.js`): el turno con plantilla fuerza `creatingNewFile`, no es
+  `isEdit` (la barrera de delta no aplica), emite el paso «Leyendo la plantilla adjunta» con el
+  inventario, y `buildAgentRunnerPrompt({templateFill})` sustituye el OFFICE_WORKFLOW quirúrgico y
+  la regla «NEW PPTX ⇒ create_presentation» por **TEMPLATE WORKFLOW** (`prompt.js
+  templateWorkflow`): construir SOBRE `uploads/<plantilla>`; nunca pptxgenjs/sira_design/tema.
+  `collectValidOutputs` corre `verifyTemplateLineage` sobre cada salida del formato de la plantilla:
+  fallo ⇒ `output_invalid template_not_followed`, el archivo no se entrega y el reintento le dice
+  al modelo por qué. Kill switch `SIRAGPT_TEMPLATE_LINEAGE=0`. `shouldRunAgentRunner` reclama
+  «haz una presentación como esta» / «usa esta plantilla para una ppt» (cue + sustantivo + adjunto).
+- **`create_presentation` con `template`** (`tools.js`): llama a `sira_office.py build_from_template`
+  (abre la plantilla, convierte .potx a presentación, elimina las láminas de muestra, crea cada
+  lámina desde un layout PROPIO elegido por `layout`/`role` o por placeholders —cover/content/
+  section/closing— y rellena título/subtítulo/viñetas; masters/layouts/tema byte-idénticos).
+  Entradas del outline aceptan `layout`, `role`, `subtitle`. Reporta `leftover_placeholder_text_on`
+  y `warnings` (gráficas: python-pptx sobre la MISMA salida).
+- **Ops de lámina en `office_edit`** (`sira_office.py pptx_apply_slide_op`): `add_slide{layout?,
+  role?, title?, subtitle?, bullets?, body?, position?}`, `duplicate_slide{slide, position?, title?,
+  bullets?}` (clona la lámina y sus partes propias —gráficos, incrustados—, descarta sus notas),
+  `delete_slide{slide}`, `move_slide{slide, position}`, `set_slide_background{slide|slides|"all",
+  color}` (SOLO esas láminas; `<p:bg>` en la lámina, nunca el master) y `list_layouts{}`.
+  Comandos CLI `build_from_template` y `layouts`.
+- **Fast path del fondo** (`extractSlideScope`): «solo en la 2» / «la segunda lámina» ⇒ `slide_number`
+  escalado a esa lámina; «2, 3 y 5», «de la 2 a la 4», «la última» ⇒ sin fast path (el loop usa
+  `set_slide_background{slides}`); «todas» ⇒ todo el deck como antes. Nunca en un turno con plantilla.
+- **Brief del pedido** (`request-brief.js`): restricción `template` (primera, con `file`/`format`),
+  acción `create`, entregable por formato de la plantilla, resumen «Crear una presentación con el
+  formato de «X.pptx» · 8 láminas», línea PLANTILLA OBLIGATORIA en el bloque tier 0 (sin la línea
+  «Objeto: … trabaja sobre SU contenido»), `routingHints().templateFile/templateFormat`. El refinado
+  LLM no puede inventar una plantilla.
+- **doc-agent**: `EXT_TO_SKILL` mapea `.potx/.pptm/.odp→pptx`, `.dotx/.docm/.odt→docx`,
+  `.xltx/.xlsm/.ods→xlsx`; `surgical-rules.buildSurgicalPromptAddition({fileNames})` añade
+  `TEMPLATE_FILL_RULES` cuando el turno es relleno de plantilla; `validate.validateEditedFile({
+  templateFill:true})` tolera la eliminación de láminas/notas de muestra y los cambios de
+  `presentation.xml`/rels/`[Content_Types].xml`, nunca de masters/layouts/tema.
+- Tests: `document-template-intent` (7), `document-template-lineage` (5), `agent-runner-template-fill`
+  (6: reclamo, prompt, create_presentation template=, ops expuestas, barrera de linaje + kill switch,
+  scope de láminas), `pptx-slide-ops-engine` (2, motor real con lxml sobre `defensa_demo.pptx`;
+  skip honesto sin lxml). Verificado a mano: `build_from_template` y las 5 ops sobre el fixture
+  producen paquetes coherentes (content types, rels, sldIdLst) que pasan el linaje. En este sandbox
+  `soffice` no carga ni el fixture original (fallo de entorno), así que el render queda para CI.
+- Pre-existentes en este entorno (idénticos en el árbol limpio): `agent-runner-scenario-bank`
+  («scripted client exhausted», 37) y `agent-runner.test.js` «runAgentRunnerForDocRoute … file shape».
+
 ## Presentaciones profesionales en el chat — generación y mejora iterativa (added 2026-10-06)
 
 Pedido: que cualquier «hazme una ppt» salga con diseño de consultor y que cada instrucción

@@ -18,6 +18,9 @@
 
 const path = require('path');
 const fs = require('fs');
+const os = require('node:os');
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
 const objectStorage = require('../object-storage');
@@ -93,6 +96,9 @@ const ADVANCED_DOCUMENT_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'pdf', 'csv',
 
 const ACTIVE_TEXT_ARTIFACT_EXTENSIONS = new Set(['html', 'htm', 'svg', 'json']);
 const ACTIVE_TEXT_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
+// Match the document sandbox's 100 MiB output ceiling. Verification fails
+// explicitly above it; it never reports a truncated document as verified.
+const VERIFY_ARTIFACT_MAX_BYTES = 100 * 1024 * 1024;
 
 const DANGEROUS_ARTIFACT_EXTENSIONS = new Set([
   'app', 'apk', 'bat', 'cmd', 'com', 'cpl', 'dll', 'dmg', 'exe', 'gadget',
@@ -1744,6 +1750,56 @@ const compareDocuments = {
 // python_exec — that way we don't add new top-level deps and the
 // detector code lives next to the writer code.
 
+// The shared materializer enforces ownership and locates the canonical
+// artifact. Its default toLocalTemp has no byte/cancellation bound, so this
+// verifier supplies a bounded storage adapter without changing other callers.
+async function materializeVerificationBinary(ref, callerSignal) {
+  if (!objectStorage.isRemote(ref)) throw new Error('invalid artifact storage reference');
+  const deadline = AbortSignal.timeout(12000);
+  const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
+  let stream;
+  let dir;
+  const cleanup = async () => { if (dir) await fs.promises.rm(dir, { recursive: true, force: true }); };
+  try {
+    signal.throwIfAborted();
+    // readStream does not yet take a signal. Stop waiting on cancellation,
+    // and destroy a late response so an aborted call cannot leak a body.
+    const response = await new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      Promise.resolve().then(() => objectStorage.readStream(ref)).then(value => {
+        if (signal.aborted) { value.stream?.destroy(); reject(signal.reason); }
+        else resolve(value);
+      }, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+    stream = response.stream;
+    if (Number(response.contentLength) > VERIFY_ARTIFACT_MAX_BYTES) {
+      throw Object.assign(new Error('artifact exceeds verification size limit'), { code: 'ARTIFACT_SIZE_LIMIT' });
+    }
+    signal.throwIfAborted();
+    dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sira-verify-artifact-'));
+    const target = path.join(dir, 'source');
+    let bytes = 0;
+    const limiter = new Transform({ transform(chunk, encoding, callback) {
+      bytes += chunk.length;
+      callback(bytes > VERIFY_ARTIFACT_MAX_BYTES
+        ? Object.assign(new Error('artifact exceeds verification size limit'), { code: 'ARTIFACT_SIZE_LIMIT' })
+        : null, chunk);
+    } });
+    await pipeline(stream, limiter, fs.createWriteStream(target, { flags: 'wx', mode: 0o600 }), { signal });
+    return { path: target, cleanup };
+  } catch (error) {
+    stream?.destroy();
+    await cleanup();
+    if (signal.aborted) {
+      throw Object.assign(new Error('artifact verification interrupted'), {
+        code: deadline.aborted ? 'ARTIFACT_READ_TIMEOUT' : 'ARTIFACT_READ_CANCELLED',
+      });
+    }
+    throw error;
+  }
+}
+
 const verifyArtifact = {
   name: 'verify_artifact',
   description: 'Read an artifact you just created back from disk and return a structured summary (sheet/row counts for xlsx, paragraph counts for docx, line/row counts for csv/txt, key list for json). Call this AFTER create_document to confirm the file actually contains what the user asked for. If verification reveals a gap (wrong row count, missing column, empty sheet), call create_document again with a corrected script.',
@@ -1789,6 +1845,8 @@ const verifyArtifact = {
       }
     }
 
+    let hydrated = null;
+    try {
     // Resolve the on-disk path. Cycle artifacts are grouped under
     // ARTIFACT_DIR/<folderCode>/ and record `storedRelPath` in their flat
     // metadata; legacy artifacts live at the top level under `<id>-<name>`.
@@ -1814,12 +1872,35 @@ const verifyArtifact = {
       entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`)) || null;
       if (entry) full = path.join(ARTIFACT_DIR, entry);
     }
+    if (!full && metadata?.storageRef) {
+      // Unlike legacy local fixtures, remote bytes always require an
+      // authenticated owner. Do not infer it from the metadata itself.
+      if (!ctx.userId) return { ok: false, error: 'artifact ownership metadata missing' };
+      if (Number(metadata.sizeBytes) > VERIFY_ARTIFACT_MAX_BYTES) {
+        throw Object.assign(new Error('artifact exceeds verification size limit'), { code: 'ARTIFACT_SIZE_LIMIT' });
+      }
+      let hydrationError;
+      const resolved = await materializeArtifactSource({
+        id, artifactDir: ARTIFACT_DIR, ownerUserId: ctx.userId,
+        storage: { async toLocalTemp(ref) {
+          try { return await materializeVerificationBinary(ref, ctx.signal); }
+          catch (error) { hydrationError = error; throw error; }
+        } },
+      });
+      if (!resolved.ok) throw hydrationError || new Error('artifact could not be opened');
+      hydrated = resolved;
+      full = resolved.sourcePath;
+      entry = `${id}-${resolved.filename}`;
+    }
     if (!full || !entry) {
       ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: 'artifact not found' });
       return { ok: false, error: `artifact ${id} not found` };
     }
     const ext = path.extname(entry).slice(1).toLowerCase();
     const sizeBytes = fs.statSync(full).size;
+    if (sizeBytes > VERIFY_ARTIFACT_MAX_BYTES) {
+      throw Object.assign(new Error('artifact exceeds verification size limit'), { code: 'ARTIFACT_SIZE_LIMIT' });
+    }
 
     if (ext === 'sav') {
       const summary = await inspectSavArtifact(full, ctx.signal);
@@ -1949,7 +2030,7 @@ print(json.dumps(result))
       }
     }
     summary.sizeBytes = summary.sizeBytes || sizeBytes;
-    summary.filename = entry.slice(id.length + 1);
+    summary.filename = metadata?.filename || entry.slice(id.length + 1);
     summary.artifactId = id;
     summary.validation = metadata?.validation || null;
     ctx.onEvent?.({
@@ -1959,6 +2040,18 @@ print(json.dumps(result))
       preview: summarisePreview(summary),
     });
     return summary;
+    } catch (error) {
+      const code = ['ARTIFACT_SIZE_LIMIT', 'ARTIFACT_READ_CANCELLED', 'ARTIFACT_READ_TIMEOUT'].includes(error?.code)
+        ? error.code : 'ARTIFACT_READ_FAILED';
+      const message = code === 'ARTIFACT_SIZE_LIMIT' ? 'artifact exceeds verification size limit (100 MiB)'
+        : code === 'ARTIFACT_READ_CANCELLED' ? 'artifact verification cancelled'
+          : code === 'ARTIFACT_READ_TIMEOUT' ? 'artifact verification timed out'
+            : 'artifact could not be read for verification';
+      ctx.onEvent?.({ type: 'tool_output', tool: 'verify_artifact', ok: false, preview: message });
+      return { ok: false, code, error: message };
+    } finally {
+      await hydrated?.cleanup();
+    }
   },
 };
 
@@ -2334,6 +2427,7 @@ module.exports = {
     assertArtifactSizeWithinLimit,
     ACTIVE_TEXT_ARTIFACT_EXTENSIONS,
     ACTIVE_TEXT_ARTIFACT_MAX_BYTES,
+    VERIFY_ARTIFACT_MAX_BYTES,
     clampTimeoutMs,
     clampInt,
     describeFileIdTruncation,

@@ -90,8 +90,9 @@ async function ingestPastedContent(userId, content, opts = {}) {
   // can be up to MAX_PASTE_LENGTH = 2 MB).
   const lineCount = content.split('\n').length;
 
+  let fileRecord = null;
   try {
-    const fileRecord = await prisma.file.create({
+    fileRecord = await prisma.file.create({
       data: {
         userId,
         originalName: fileName,
@@ -103,40 +104,35 @@ async function ingestPastedContent(userId, content, opts = {}) {
         size: sizeBytes,
         extractedText: content,
         processingStage: 'uploaded',
-        source: 'paste',
-        metadata: {
-          autoFiled: true,
-          detectedFormat: detected.format,
-          charCount: content.length,
-          lineCount,
-          createdAt: new Date().toISOString(),
-        },
       },
     });
 
     await fileProcessingStatus.setStage(prisma, fileRecord.id, 'extracting', { userId });
 
-    const analysis = await documentIntelligence.analyzeFile(fileRecord, content);
+    const analysis = await documentIntelligence.analyzeFile(prisma, {
+      userId,
+      fileId: fileRecord.id,
+      fileRecord,
+    });
 
-    await prisma.file.update({
-      where: { id: fileRecord.id },
+    // File has no source/metadata columns. Keep the virtual document in the
+    // existing auto/ namespace and store its provenance with the analysis.
+    await prisma.documentAnalysis.update({
+      where: { fileId: fileRecord.id },
       data: {
-        // Persist the extracted text + analysis metadata only. Do NOT write
-        // processingStage here: 'analyzing' is not a valid stage in the
-        // file-processing state machine (STAGES = uploaded…validating…
-        // extracting…chunking…embedding…indexing…ready/failed). Writing it
-        // directly bypassed setStage()'s validation and left an invalid stage
-        // that consumers/isTerminal can't map. The stage stays 'extracting'
-        // (set above) until scheduleAutoFileRagIndex + setStage('ready') advance
-        // it through the real machine.
-        extractedText: content,
         metadata: {
-          ...fileRecord.metadata,
+          ...analysis.metadata,
+          source: 'paste',
+          autoFiled: true,
+          detectedFormat: detected.format,
+          charCount: content.length,
+          lineCount,
+          createdAt: fileRecord.createdAt.toISOString(),
           analysis: {
             language: analysis.language,
-            chunkCount: analysis.chunks?.length || 0,
-            tableCount: analysis.tables?.length || 0,
-            hasUsefulText: analysis.hasUsefulText,
+            chunkCount: analysis.chunkCount,
+            tableCount: analysis.tableCount,
+            hasUsefulText: analysis.status === 'ready',
           },
         },
       },
@@ -160,7 +156,7 @@ async function ingestPastedContent(userId, content, opts = {}) {
         size: sizeBytes,
       });
     } catch (_e) {
-      console.warn('[auto-file-bridge] intent analysis failed (continuing without):', _e && _e.message);
+      console.warn('[auto-file-bridge] intent analysis failed (continuing without): E_FILE_INTENT');
       intentAnalysis = null;
     }
 
@@ -179,20 +175,25 @@ async function ingestPastedContent(userId, content, opts = {}) {
       lineCount,
       analysis: {
         language: analysis.language,
-        chunkCount: analysis.chunks?.length || 0,
-        tableCount: analysis.tables?.length || 0,
+        chunkCount: analysis.chunkCount,
+        tableCount: analysis.tableCount,
       },
       intent: intentAnalysis,
     };
-  } catch (err) {
-    // Surface total ingestion failure (DB create/update, analyzeFile, setStage):
-    // the caller only sees autoFiled:false and silently skips the auto-filed
-    // prompt block, so without this a regression here is invisible in prod logs.
-    console.warn('[auto-file-bridge] ingestPastedContent failed:', err && err.message);
+  } catch (_err) {
+    // Prisma validation messages can contain the entire pasted document.
+    // Keep both the observable failure and the client response content-free.
+    console.warn('[auto-file-bridge] ingestPastedContent failed: E_FILE_INGESTION');
+    if (fileRecord) {
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
+        userId, error: 'E_FILE_INGESTION',
+      });
+    }
     return {
       autoFiled: false,
       reason: 'ingestion_failed',
-      error: err.message,
+      code: 'E_FILE_INGESTION',
+      error: 'No se pudo guardar el contenido pegado. Vuelve a intentarlo.',
     };
   }
 }
@@ -211,16 +212,20 @@ function scheduleAutoFileRagIndex(userId, fileRecord, text) {
     try {
       await fileProcessingStatus.setStage(prisma, fileRecord.id, 'chunking', { userId });
       await fileProcessingStatus.setStage(prisma, fileRecord.id, 'embedding', { userId });
-      await operationalRag.ensureIndexed({
+      const indexed = await operationalRag.ensureIndexed({
         rag,
         userId,
         collection: operationalRag.DEFAULT_COLLECTION,
         docs,
       });
+      if (indexed?.indexed !== true) throw new Error('E_FILE_INDEXING');
       await fileProcessingStatus.setStage(prisma, fileRecord.id, 'indexing', { userId });
       await fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
-    } catch (err) {
-      console.warn('[auto-file-bridge] RAG indexing failed:', err.message);
+    } catch (_err) {
+      console.warn('[auto-file-bridge] RAG indexing failed: E_FILE_INDEXING');
+      await fileProcessingStatus.setStage(prisma, fileRecord.id, 'failed', {
+        userId, error: 'E_FILE_INDEXING',
+      });
     }
   });
   return true;
@@ -240,7 +245,7 @@ async function ingestDroppedFiles(userId, files, opts = {}) {
         results.push({ autoFiled: false, reason: 'content_too_short', fileName: file.name });
       }
     } catch (err) {
-      results.push({ autoFiled: false, reason: 'error', error: err.message, fileName: file.name });
+      results.push({ autoFiled: false, reason: 'error', code: 'E_FILE_INGESTION', error: 'No se pudo guardar el contenido pegado. Vuelve a intentarlo.', fileName: file.name });
     }
   }
   return results;
@@ -251,7 +256,8 @@ async function getAutoFilesForChat(userId, chatId, opts = {}) {
   const files = await prisma.file.findMany({
     where: {
       userId,
-      source: 'paste',
+      path: { startsWith: 'auto/' },
+      deletedAt: null,
       createdAt: { gte: new Date(Date.now() - AUTO_FILE_TTL_MS) },
     },
     orderBy: { createdAt: 'desc' },
@@ -263,10 +269,13 @@ async function getAutoFilesForChat(userId, chatId, opts = {}) {
       size: true,
       processingStage: true,
       createdAt: true,
-      metadata: true,
+      documentAnalysis: { select: { metadata: true } },
     },
   });
-  return files;
+  return files.map(({ documentAnalysis: analysis, ...file }) => ({
+    ...file,
+    metadata: analysis?.metadata || null,
+  }));
 }
 
 module.exports = {

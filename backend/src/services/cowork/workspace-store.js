@@ -2,9 +2,11 @@
 
 const crypto = require('node:crypto');
 const fsp = require('node:fs/promises');
+const { constants: fsConstants } = require('node:fs');
 const path = require('node:path');
 const archiver = require('archiver');
 const objectStorage = require('../object-storage');
+const { throwIfAborted } = require('../../utils/abort-signals');
 
 const MAX_FILE_BYTES = Math.max(
   1024,
@@ -685,13 +687,74 @@ async function exportWorkspaceZip(prisma, { workspaceId, userId }) {
   };
 }
 
+// Import from a bounded file handle so a concurrent mirror unlink is safe
+// after open, and a growing source cannot allocate beyond the workspace cap.
+async function readLocalArtifactBuffer(local, artifactDir) {
+  const [root, actual] = await Promise.all([fsp.realpath(artifactDir), fsp.realpath(local)]);
+  if (!actual.startsWith(`${root}${path.sep}`)) {
+    throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
+  }
+  const handle = await fsp.open(local, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  let stream;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
+    }
+    assertSize({ length: stat.size });
+    stream = handle.createReadStream({ start: 0, end: MAX_FILE_BYTES, autoClose: false });
+    return await streamToBuffer(stream);
+  } finally {
+    if (stream) stream.destroy();
+    await handle.close();
+  }
+}
+
+async function readArtifactImportBuffer(metadata, artifactDir, id) {
+  const root = path.resolve(artifactDir);
+  try {
+    if (metadata.storedRelPath != null) {
+      if (typeof metadata.storedRelPath !== 'string' || !metadata.storedRelPath
+        || path.isAbsolute(metadata.storedRelPath)
+        || !path.resolve(root, metadata.storedRelPath).startsWith(`${root}${path.sep}`)) {
+        throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
+      }
+    }
+    const { resolveLocalArtifactPath } = require('../agents/artifact-local-source');
+    const local = resolveLocalArtifactPath(metadata, root, id)
+      || (metadata.storedRelPath ? path.resolve(root, metadata.storedRelPath) : null);
+    if (local) return await readLocalArtifactBuffer(local, root);
+    // The resolver's legacy search is best-effort. Confirm the directory can
+    // actually be searched, so EACCES is not mistaken for missing bytes.
+    await fsp.readdir(root);
+  } catch (error) {
+    if (error?.code === 'workspace_file_too_large') throw error;
+    if (error?.code !== 'ENOENT') {
+      throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
+    }
+  }
+  // Only a missing local copy permits the one remote read. This ordering
+  // avoids missing both copies when offload finishes between remote and local.
+  if (objectStorage.isRemote(metadata.storageRef)) {
+    try {
+      return await readStorageBuffer(metadata.storageRef);
+    } catch (error) {
+      if (error?.code === 'workspace_file_too_large') throw error;
+      throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 502);
+    }
+  }
+  throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
+}
+
 async function importAgentArtifact(prisma, {
   workspaceId,
   userId,
   artifactId,
   targetPath = null,
   authorRunId = null,
+  signal = null,
 }) {
+  throwIfAborted(signal);
   const { ARTIFACT_DIR } = require('../agents/task-tools');
   const id = String(artifactId || '').trim();
   if (!/^[a-f0-9]{8,64}$/i.test(id)) {
@@ -706,23 +769,16 @@ async function importAgentArtifact(prisma, {
   if (String(metadata.ownerUserId || '') !== String(userId)) {
     throw new CoworkWorkspaceError('artifact_not_found', 'Artifact not found.', 404);
   }
-  let buffer = null;
-  if (metadata.storageRef) {
-    try { buffer = await readStorageBuffer(metadata.storageRef); } catch (_) { /* try local */ }
-  }
-  if (!buffer && metadata.storedRelPath) {
-    const root = path.resolve(ARTIFACT_DIR);
-    const local = path.resolve(root, metadata.storedRelPath);
-    if (local.startsWith(`${root}${path.sep}`)) {
-      try { buffer = await fsp.readFile(local); } catch (_) { /* missing after R2 mirror */ }
-    }
-  }
-  if (!buffer) throw new CoworkWorkspaceError('artifact_content_unavailable', 'Artifact content is not available.', 404);
+  await getWorkspace(prisma, { workspaceId, userId });
   const resolvedPath = normalizeWorkspacePath(targetPath || `deliverables/${metadata.filename || `${id}.bin`}`);
+  throwIfAborted(signal);
+  const buffer = await readArtifactImportBuffer(metadata, ARTIFACT_DIR, id);
+  throwIfAborted(signal);
   const existing = await prisma.coworkFile.findUnique({
     where: { workspaceId_path: { workspaceId: String(workspaceId), path: resolvedPath } },
     select: { currentVersion: true },
   });
+  throwIfAborted(signal);
   return writeFile(prisma, {
     workspaceId,
     userId,

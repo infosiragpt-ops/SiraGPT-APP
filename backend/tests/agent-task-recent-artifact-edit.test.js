@@ -30,6 +30,7 @@ function clearAgentModules() {
   for (const modulePath of [
     '../src/services/agents/agent-task-runner',
     '../src/services/agents/task-store',
+    '../src/services/agents/agent-task-workspace-delivery',
   ]) {
     try { delete require.cache[require.resolve(modulePath)]; } catch { /* ignore */ }
   }
@@ -64,7 +65,26 @@ async function withRecentArtifactEnv({ label, runnerOverrides, quickEdit, reactR
     resolve: taskContractResolver.resolveTaskContract,
     generate: autoDocument.generateAutoDocument,
   };
-  const counters = { genericPipeline: 0, react: 0 };
+  const counters = { genericPipeline: 0, react: 0, imported: 0 };
+  const messages = [];
+  const ownerOf = chatId => `user-${String(chatId).slice('chat-'.length)}`;
+  const prisma = {
+    chat: { findFirst: async ({ where }) => where.id?.startsWith('chat-task-p14-') && where.userId === ownerOf(where.id)
+      ? { id: where.id, title: 'Synthetic document edit', coworkWorkspaceId: `workspace-${where.id}` } : null },
+    message: {
+      create: async ({ data }) => { const row = { id: `message-${messages.length + 1}`, ...data }; messages.push(row); return row; },
+      update: async ({ where, data }) => ({ id: where.id, ...data }),
+      findFirst: async ({ where }) => {
+        assert.equal(where.chat.userId, ownerOf(where.chatId));
+        assert.equal(where.role, 'USER');
+        return messages.find(row => row.chatId === where.chatId && row.role === 'USER'
+          && row.metadata.taskId === where.metadata.equals && !row.deletedAt) || null;
+      },
+      findMany: async ({ where }) => { assert.equal(where.chat.userId, ownerOf(where.chatId)); return []; },
+    },
+    coworkWorkspace: { findFirst: async ({ where }) => where.id === `workspace-chat-${where.userId.slice('user-'.length)}`
+      ? { id: where.id, userId: where.userId } : null },
+  };
   persistence.upsertAgentTask = async () => null;
   persistence.appendAgentTaskEvent = async () => null;
   persistence.persistGeneratedArtifact = async () => null;
@@ -79,7 +99,21 @@ async function withRecentArtifactEnv({ label, runnerOverrides, quickEdit, reactR
   };
 
   const originalLoad = Module._load;
-  Module._load = function patched(request) {
+  Module._load = function patched(request, parent) {
+    if (request === '../../config/database' && parent?.filename.endsWith('/agents/agent-task-runner.js')) return prisma;
+    if (request === '../cowork/workspace-store' && parent?.filename.endsWith('/agents/agent-task-workspace-delivery.js')) {
+      const actual = originalLoad.apply(this, arguments);
+      return { ...actual, importAgentArtifact: async (db, args) => {
+        assert.equal(db, prisma);
+        assert.equal(args.workspaceId, `workspace-chat-${args.userId.slice('user-'.length)}`);
+        assert.equal(args.artifactId, DECK.id);
+        assert.match(args.artifactId, /^[a-f0-9]{8,64}$/);
+        assert.equal(args.signal.aborted, false);
+        counters.imported += 1;
+        return { id: 'file-p14', path: `deliverables/${DECK.filename}`, currentVersion: 1,
+          mime: DECK.mime, size: DECK.sizeBytes, artifactId: DECK.id };
+      } };
+    }
     if (request === '../agent-runner' || request.endsWith('/agent-runner')) {
       return { ...agentRunner, ...runnerOverrides };
     }
@@ -125,12 +159,12 @@ function payload(taskId) {
 }
 
 const DECK = {
-  id: 'art-p14-v2',
+  id: 'abcdef0000000014',
   filename: 'gestion-administrativa-v2.pptx',
   format: 'pptx',
   mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   sizeBytes: 4321,
-  downloadUrl: '/api/agent/artifact/art-p14-v2',
+  downloadUrl: '/api/agent/artifact/abcdef0000000014',
 };
 
 test('isRecentArtifactEditTurn: edits and design upgrades yes, a new document or small talk no', () => {
@@ -174,6 +208,7 @@ test('quick editor without a base → the AgentRunner edits the latest file (no 
     assert.equal(snapshot.streamState.artifacts[0].filename, 'gestion-administrativa-v2.pptx');
     assert.equal(counters.genericPipeline, 0);
     assert.equal(counters.react, 0);
+    assert.equal(counters.imported, 1);
   });
 });
 

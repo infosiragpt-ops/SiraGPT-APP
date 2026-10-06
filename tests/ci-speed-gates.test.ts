@@ -58,6 +58,39 @@ describe("fast CI layout", () => {
     assert.match(gate, /needs\.e2e-critical\.result/)
   })
 
+  for (const [job, name] of [
+    ["frontend", "Cache Next.js build"],
+    ["e2e-critical", "Cache Next.js e2e build"],
+  ]) {
+    it(`${name} reuses compiled assets only for matching frontend sources and CSS configuration`, () => {
+      const source = jobSource(job)
+      const marker = `      - name: ${name}\n`
+      const start = source.indexOf(marker)
+      assert.notEqual(start, -1, `missing cache step: ${name}`)
+      const end = source.indexOf("\n      - name:", start + marker.length)
+      const cache = source.slice(start, end === -1 ? undefined : end)
+      assert.match(cache, /^\s*path: \.next\/cache\s*$/m)
+      const key = cache.match(/^\s*key: (.+)$/m)?.[1]
+      assert.ok(key, "cache must have a source-aware key")
+      for (const input of [
+        "package-lock.json",
+        ...["app", "components", "lib", "hooks"].flatMap((directory) =>
+          ["ts", "tsx", "js", "jsx", "css"].map((extension) => `${directory}/**/*.${extension}`)),
+        "styles/**/*.css",
+        ...["src", "pages"].flatMap((directory) => ["ts", "tsx"].map((extension) => `${directory}/**/*.${extension}`)),
+        ...["js", "ts", "jsx", "tsx", "mdx"].map((extension) => `*.${extension}`),
+        "next.config.mjs",
+        "tailwind.config.js",
+        "postcss.config.js",
+        "postcss.config.mjs",
+      ]) {
+        assert.ok(key.includes(`'${input}'`), `${name} must hash ${input}`)
+      }
+      assert.doesNotMatch(cache, /^\s*restore-keys:/m,
+        "partial restores can reuse compiled CSS from different frontend sources")
+    })
+  }
+
   it("covers every backend test bucket exactly once (shard 1: 1/7, shards 2–4: 2/7)", () => {
     const backend = jobSource("backend")
     assert.match(backend, /bash scripts\/test-shard\.sh 1 7/)

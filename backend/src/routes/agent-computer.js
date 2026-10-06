@@ -11,6 +11,7 @@ const {
   ISOLATION_REFUSED_ES,
   OPEN_FAILED_ES,
   publicComputerError,
+  looksLikeSecretOrStack,
   isolationError,
   sessionMatchesConversation,
   readIsolationKey,
@@ -274,21 +275,76 @@ function desktopFocusError(err, focus) {
   return mapped;
 }
 
+// Admin → Logs only showed «request errored — failed with status code 502»
+// for the computer routes (prod 2026-10-03): the cause never reached the
+// log. One WARN line per failure code every 30 s names the route, the code
+// and the sanitised cause; repeats in the window are counted, not printed.
+const COMPUTER_WARN_WINDOW_MS = 30_000;
+const computerWarnBuckets = new Map();
+const UNAVAILABLE_CODES = new Set(['browser_observation_unavailable', 'desktop_unavailable']);
+
+function causeSummary(err) {
+  const cause = err && err.cause;
+  const upstream = err && err.upstream && err.upstream.error;
+  const raw = String((cause && (cause.code || cause.message)) || upstream || '').replace(/\s+/g, ' ').trim();
+  if (!raw || looksLikeSecretOrStack(raw)) return cause && cause.code ? String(cause.code) : (raw ? 'redacted' : '');
+  return raw.slice(0, 160);
+}
+
+function warnComputerFailure(res, err, code) {
+  const status = Number(err && err.status) || 500;
+  if (status < 500) return;
+  const now = Date.now();
+  const bucket = computerWarnBuckets.get(code);
+  if (bucket && now - bucket.at < COMPUTER_WARN_WINDOW_MS) { bucket.suppressed += 1; return; }
+  const suppressed = bucket ? bucket.suppressed : 0;
+  computerWarnBuckets.set(code, { at: now, suppressed: 0 });
+  const req = res && res.req;
+  const route = req ? `${req.method} ${String(req.originalUrl || req.url || '').split('?')[0]}` : 'computer';
+  const sessionId = String((req && ((req.body && req.body.sessionId) || (req.query && req.query.sessionId))) || '').slice(0, 64);
+  try {
+    console.warn(`[agent-computer] ${code} status=${status} route=${route}${sessionId ? ` session=${sessionId}` : ''} cause=${causeSummary(err) || 'n/a'}${suppressed ? ` suppressed=${suppressed}` : ''}`);
+  } catch (_) { /* logging must never break a response */ }
+}
+
 function failComputer(res, err, fallbackCode) {
+  const code = err.code || fallbackCode;
+  warnComputerFailure(res, err, code);
   return res.status(err.status || 500).json({
-    error: err.code || fallbackCode,
+    error: code,
     message: publicComputerError(err, err.code === 'isolation_required' ? ISOLATION_REFUSED_ES : OPEN_FAILED_ES),
   });
 }
 
-async function navigateMemberDesktop(session, url, signal) {
+async function existingMemberDesktop(req, res) {
+  const id = req.body?.sessionId || req.query?.sessionId;
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    res.status(400).json({ error: 'browser_session_required', message: 'Abre el navegador antes de continuar.' });
+    return null;
+  }
+  const session = rewriteUrls(await orchFetch('/sessions/' + encodeURIComponent(id)));
+  if (!ownedOrDeny(session, req, res)) return null;
+  return session;
+}
+
+function browserFailure(error, code) {
+  if (['browser_action_invalid', 'browser_tab_missing', 'browser_presentation_capacity', 'browser_viewport_failed', ...UNAVAILABLE_CODES].includes(error?.code)) return error;
+  const safe = new Error('No se pudo completar la acción del navegador. Vuelve a intentarlo.', { cause: error });
+  safe.code = code;
+  safe.status = 502;
+  safe.publicMessage = safe.message;
+  return safe;
+}
+
+async function navigateMemberDesktop(session, url, signal, tabId) {
   try {
     // Navigate the attached browser itself. A background process launch is not
     // evidence that this desktop loaded the page (or even opened a browser).
     const { navigatePage } = require('../services/computer/live-page');
-    const result = await navigatePage(session, url, process.env, signal);
+    const result = await navigatePage(session, url, process.env, signal, { tabId });
     return { ok: true, url: result.url, sessionId: session.sessionId };
   } catch (cause) {
+    if (['browser_tab_missing', 'browser_action_invalid', 'browser_viewport_failed', ...UNAVAILABLE_CODES].includes(cause?.code)) throw cause;
     const err = new Error('No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.', { cause });
     err.code = 'navigate_failed';
     err.status = 502;
@@ -301,8 +357,9 @@ router.post('/navigate', requireFlag, authenticateToken, async (req, res) => {
   const signal = requestAbortSignal(req);
   try {
     const url = sanitizeNavigateUrl(req.body && (req.body.url || req.body.href));
-    const desktop = await ensureMemberDesktop(req);
-    const out = await navigateMemberDesktop(desktop, url, signal);
+    const desktop = req.body?.sessionId ? await existingMemberDesktop(req, res) : await ensureMemberDesktop(req);
+    if (!desktop) return;
+    const out = await navigateMemberDesktop(desktop, url, signal, req.body?.tabId);
     return res.json(withConversation(out, identityFor(req)));
   } catch (err) {
     return failComputer(res, err, 'navigate_failed');
@@ -397,6 +454,11 @@ async function handleAction(req, res, session) {
   });
   const focus = String((req.body && (req.body.focus || req.body.app)) || '').trim().toLowerCase();
   if (focus && FOCUS_CMDS[focus]) {
+    if (focus !== 'chrome' && focus !== 'browser') {
+      try {
+        await require('../services/computer/live-page').restoreBrowserPresentation(session, process.env, signal);
+      } catch (err) { throw browserFailure(err, 'browser_restore_failed'); }
+    }
     let out;
     try {
       out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus], { signal });
@@ -452,6 +514,13 @@ async function handleAction(req, res, session) {
       conversationBound: identity.conversationBound,
     });
   }
+  if (typeName.startsWith('browser_')) {
+    const { browserAction } = require('../services/computer/live-page');
+    try {
+      const browser = await browserAction(session, rawAction, process.env, signal);
+      return res.json(withConversation({ ok: true, sessionId: session.sessionId, browser }, identity));
+    } catch (err) { throw browserFailure(err, 'browser_action_failed'); }
+  }
   const mapped = applyActionMapClosed({
     action: rawAction.type || rawAction.action ? rawAction : null,
     actions: Array.isArray(rawAction.actions) ? rawAction.actions : (rawAction.type || rawAction.action ? [rawAction] : []),
@@ -471,7 +540,15 @@ async function handleAction(req, res, session) {
 }
 
 router.post('/action', requireFlag, authenticateToken, async (req, res) => {
-  try { return await handleAction(req, res, await ensureMemberDesktop(req)); }
+  try {
+    const action = req.body?.action || req.body || {};
+    const type = String(action.type || action.action || action.tool || '').toLowerCase();
+    // Browser controls only operate the desktop already opened by this member.
+    // In particular polling/actions cannot implicitly create another session.
+    const session = type.startsWith('browser_') ? await existingMemberDesktop(req, res) : await ensureMemberDesktop(req);
+    if (!session) return;
+    return await handleAction(req, res, session);
+  }
   catch (err) { return failComputer(res, err, 'action_failed'); }
 });
 
@@ -491,6 +568,28 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
 // reports the last recorded agent action plus a best-effort page peek.
 router.get('/activity', requireFlag, authenticateToken, async (req, res) => {
   try {
+    if (req.query.browser === '1') {
+      const session = await existingMemberDesktop(req, res);
+      if (!session) return;
+      try {
+        const { browserState } = require('../services/computer/live-page');
+        const browser = await browserState(session, process.env, requestAbortSignal(req));
+        return res.json(withConversation({ ok: true, sessionId: session.sessionId, browser }, identityFor(req)));
+      } catch (err) {
+        // The panel polls this every 4 s. A desktop whose Chrome or container
+        // is gone is reported as a plain «not available» probe result (never
+        // ok:true), not as a 5xx of this API on every tick; the cause goes to
+        // the rate-limited WARN above. Viewport/tab failures keep their status.
+        if (UNAVAILABLE_CODES.has(err?.code)) {
+          warnComputerFailure(res, err, err.code);
+          return res.json(withConversation({
+            ok: false, sessionId: session.sessionId, browser: null, error: err.code,
+            message: publicComputerError(err, OPEN_FAILED_ES),
+          }, identityFor(req)));
+        }
+        throw browserFailure(err, 'browser_state_failed');
+      }
+    }
     const identity = identityFor(req);
     requireProvenIsolation(identity);
     const { getActivity } = require('../services/computer/live-actions');

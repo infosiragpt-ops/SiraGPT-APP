@@ -278,8 +278,9 @@ const SLIDE_SCHEMA = {
   properties: {
     title: { type: 'string', description: 'Takeaway title, ≤ 8 words.' },
     bullets: { type: 'array', items: { type: 'string' }, description: '3-5 bullets of ≤ 14 words. «35% ahorro anual» (figure first) renders as a KPI tile.' },
-    layout: { type: 'string', description: 'Optional: bullets | columns | timeline | table | quote | agenda | section | closing. Default auto (inferred from the fields).' },
-    subtitle: { type: 'string', description: 'Optional one-line context under the title.' },
+    layout: { type: 'string', description: 'Optional. Design mode: bullets | columns | timeline | table | quote | agenda | section | closing (default auto, inferred from the fields). Template mode: the template layout name or index for this slide.' },
+    role: { type: 'string', enum: ['cover', 'content', 'section', 'closing'], description: 'Template mode: which kind of layout to pick when `layout` is omitted.' },
+    subtitle: { type: 'string', description: 'Optional one-line context under the title (template mode: the subtitle placeholder text).' },
     notes: { type: 'string', description: 'Speaker notes: 1-3 sentences the presenter says on this slide.' },
     columns: {
       type: 'array',
@@ -472,7 +473,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'create_presentation',
       description:
-        'Create a NEW PowerPoint from scratch with a professional design system (cover, agenda, cards, KPI tiles, comparison columns, process timelines, styled tables, quotes, section dividers, closing slide, footer «NN / TT», speaker notes). Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover. Each entry has a title and ONE of: bullets (3-5, ≤14 words; «35% ahorro» becomes a KPI tile), columns (2-3 {title,bullets} to compare), steps (2-6 {title,description} of a process), table ({headers,rows} ≤14×8), quote ({text,author}), or a native editable `chart`; plus optional `layout`, `subtitle` and speaker `notes`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme. The result lists `designWarnings` (dense slides, long titles, missing notes…): fix them and call again with the same filename. Writes /workspace/outputs/<file>.pptx.',
+        'Create a NEW PowerPoint. With `template` (an uploaded .pptx/.potx the user asked to follow: "con este formato", "usa esta plantilla") the deck is BUILT ON that file: its masters, layouts, theme, fonts and logos are kept byte-identical, its sample slides are removed and every outline entry fills one of ITS layouts (optional per-entry `layout` name/index and `role` cover|content|section|closing). Without `template` it starts from scratch with the professional design system (cover, agenda, cards, KPI tiles, comparison columns, process timelines, styled tables, quotes, section dividers, closing slide, footer «NN / TT», speaker notes). Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover. Each entry has a title and ONE of: bullets (3-5, ≤14 words; «35% ahorro» becomes a KPI tile), columns (2-3 {title,bullets} to compare), steps (2-6 {title,description} of a process), table ({headers,rows} ≤14×8), quote ({text,author}), or a native editable `chart`; plus optional `layout`, `subtitle` and speaker `notes`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme; never pass theme or color together with `template`. Without a template the result lists `designWarnings` (dense slides, long titles, missing notes…): fix them and call again with the same filename. Writes /workspace/outputs/<file>.pptx.',
       parameters: {
         type: 'object',
         properties: {
@@ -492,6 +493,9 @@ const BASE_TOOL_DEFINITIONS = [
           },
           slides: { type: 'integer', description: 'Slide count when no outline is given (2-20).' },
           filename: { type: 'string', description: 'Output filename ending in .pptx' },
+          template: { type: 'string', description: 'MANDATORY when the user attached a format/template: path of the uploaded .pptx/.potx (uploads/<name>). The deck is built on it; never pass a SiraGPT theme or color together with it.' },
+          subtitle: { type: 'string', description: 'Cover subtitle (template mode).' },
+          keep_sample_slides: { type: 'boolean', description: 'Template mode: keep the template\'s own sample slides before the new ones (default false: they are removed).' },
         },
         required: ['topic'],
         additionalProperties: false,
@@ -503,7 +507,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'add_slide',
       description:
-        'Add ONE new slide to an EXISTING deck created by SiraGPT (create_presentation or a sira_design restyle), keeping its theme, fonts, cards and footer numbering. Give it REAL content with the same fields as a create_presentation outline entry: title plus bullets, columns, steps, table or quote, optional layout / subtitle / notes. `position` is the 1-based place of the new slide (default: before the closing slide when the deck ends with one, else last). Writes /workspace/outputs/<stem>-v2.pptx (or -v(N+1)). Not for charts (use execute_python) nor for decks made elsewhere (the tool answers ERROR: copy an existing slide\'s format with python-pptx instead). Never rebuild the deck to add a slide.',
+        'Add ONE new slide to an EXISTING deck created by SiraGPT (create_presentation or a sira_design restyle), keeping its theme, fonts, cards and footer numbering. Give it REAL content with the same fields as a create_presentation outline entry: title plus bullets, columns, steps, table or quote, optional layout / subtitle / notes. `position` is the 1-based place of the new slide (default: before the closing slide when the deck ends with one, else last). Writes /workspace/outputs/<stem>-v2.pptx (or -v(N+1)). Not for charts (use execute_python) nor for decks made elsewhere (the tool answers ERROR: copy an existing slide\'s format with python-pptx instead). On a deck built from the user\'s template use office_edit ops add_slide / duplicate_slide (they reuse the template layouts). Never rebuild the deck to add a slide.',
       parameters: {
         type: 'object',
         properties: {
@@ -697,9 +701,57 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
       }
     },
 
-    async create_presentation(args) {
+    async create_presentation(args, ctx = {}) {
       const topic = String(args?.topic || args?.title || 'Presentación').trim();
       const title = String(args?.title || topic).trim();
+      // Template mode: the user handed us a format. The deck is built ON the
+      // uploaded file by the office engine (masters/layouts/theme intact);
+      // SiraGPT themes and colors never apply here.
+      if (args?.template) {
+        const templateRel = String(args.template).trim().replace(/^\/workspace\/?/, '').replace(/\\/g, '/');
+        if (!templateRel || templateRel.startsWith('/') || templateRel.split('/').includes('..')) return 'ERROR: template must be a path under /workspace (uploads/<file>)';
+        if (!/\.(pptx|potx|pptm)$/i.test(templateRel)) return `ERROR: template must be a .pptx/.potx file (got ${templateRel}); a .docx/.xlsx template needs python-docx/openpyxl in execute_python`;
+        let outline;
+        try { outline = normalizeOutline(args?.outline); } catch (err) { return `ERROR: ${err.message}`; }
+        const filename = String(args?.filename || `${topic.replace(/[^\w\-]+/g, '-').slice(0, 40) || 'presentacion'}.pptx`).replace(/\.(pptx|potx|pptm)$/i, '') + '.pptx';
+        const outRel = `outputs/${filename}`;
+        const rawOutline = Array.isArray(args?.outline) ? args.outline : [];
+        const items = outline.map((item, i) => ({
+          title: item.title,
+          bullets: item.bullets,
+          ...(item.chart ? { chart: item.chart } : {}),
+          ...(rawOutline[i] && rawOutline[i].layout ? { layout: rawOutline[i].layout } : {}),
+          ...(rawOutline[i] && rawOutline[i].role ? { role: rawOutline[i].role } : {}),
+          ...(rawOutline[i] && rawOutline[i].subtitle ? { subtitle: rawOutline[i].subtitle } : {}),
+        }));
+        try {
+          const { runEngine } = require('./tools.office');
+          const res = await runEngine(sandbox, 'build_from_template', {
+            template: templateRel,
+            dst: outRel,
+            title,
+            subtitle: args?.subtitle ? String(args.subtitle) : undefined,
+            outline: items,
+            keep_sample_slides: Boolean(args?.keep_sample_slides),
+          }, { signal: ctx.signal });
+          if (!res || res.ok === false) return `ERROR: ${(res && res.error) || 'build_from_template failed'}`;
+          return cap(JSON.stringify({
+            ok: true,
+            path: `/workspace/${outRel}`,
+            template: templateRel,
+            theme: 'template',
+            slides: res.slides,
+            layoutsUsed: (res.created || []).map((c) => c.layout),
+            removedSampleSlides: res.removed_sample_slides,
+            leftoverPlaceholderTextOn: res.leftover_placeholder_text_on || [],
+            warnings: res.warnings || [],
+            outlineProvided: outline.length > 0,
+            filename,
+          }));
+        } catch (err) {
+          return `ERROR: ${err.message}`;
+        }
+      }
       // The color is whatever the USER asked for (any name or #hex). When the
       // request has no color, fall back to a clean LIGHT theme — never pink.
       const requestedHex = normalizeHex(args?.color);

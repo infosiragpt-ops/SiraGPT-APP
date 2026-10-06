@@ -3,6 +3,7 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
 import { PensandoBars } from "@/components/pensando-bars"
+import { ClaudeAsterisk } from "@/components/claude-asterisk"
 import {
   type LoaderState,
   LOADER_LABELS,
@@ -122,6 +123,21 @@ export function announcementKey(text: string): string {
 
 function TerminalGlyph({ state, px }: { state: "completado" | "error"; px: number }) {
   const failed = state === "error"
+  // Error: the same atom, static, in the destructive red (Luis, 2026-10-03:
+  // «si el sistema comete algún error, marca con rojo»). Done: a check in the
+  // muted done tone.
+  if (failed) {
+    return (
+      <span
+        aria-hidden="true"
+        data-thinking-loader-glyph="error"
+        className="pointer-events-none inline-flex select-none"
+        style={{ width: px, height: px, lineHeight: 0 }}
+      >
+        <ClaudeAsterisk size={px} active={false} tone="error" />
+      </span>
+    )
+  }
   return (
     <svg
       viewBox="0 0 16 16"

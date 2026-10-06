@@ -77,7 +77,7 @@ import {
   COMPUTER_NAVIGATE_WINDOW_EVENT,
   type ComputerNavigateDetail,
 } from "@/lib/computer-navigate"
-import { browserUrlFromPrompt, DEFAULT_BROWSER_HOME } from "@/lib/computer-navigate-client"
+import { browserUrlFromPrompt } from "@/lib/computer-navigate-client"
 import {
   getSpeechRecognitionCtor,
   isIgnorableSpeechError,
@@ -483,7 +483,9 @@ import {
   MEDIA_MODE_CHIP_CLOSE_CLASS,
   VOICE_STABILITY_SLIDER_CLASS,
   mediaModeChipChrome,
+  type MediaMode,
 } from "@/lib/chat/media-mode-chips"
+import { consumeMediaModeLaunch, isMediaMode, MEDIA_MODE_LAUNCH_EVENT } from "@/lib/chat/media-mode-launch"
 import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from "@/lib/chat/video-duration"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
@@ -9234,6 +9236,47 @@ But first, you need to connect your Spotify account securely using the button be
     };
   }, [resetAllToolsAndConnectors]);
 
+  // Sidebar «··· Más» → Video / Voz / Imagen / Música opens a fresh chat with
+  // that mode selected. The launch is picked up on mount (navigation from
+  // another page) or live, always one macrotask after the sidebar's reset, and
+  // applied by the effect below — declared after the chat-switch reset so a
+  // same-commit reset can never wipe it.
+  const [pendingMediaLaunch, setPendingMediaLaunch] = React.useState<MediaMode | null>(null);
+  React.useEffect(() => {
+    const pickUp = (fallback?: unknown) => {
+      const mode = consumeMediaModeLaunch() ?? (isMediaMode(fallback) ? fallback : null);
+      if (mode) setPendingMediaLaunch(mode);
+    };
+    const mountTimer = window.setTimeout(() => pickUp(), 0);
+    const onLaunch = (event: Event) => pickUp((event as CustomEvent<unknown>).detail);
+    window.addEventListener(MEDIA_MODE_LAUNCH_EVENT, onLaunch);
+    return () => {
+      window.clearTimeout(mountTimer);
+      window.removeEventListener(MEDIA_MODE_LAUNCH_EVENT, onLaunch);
+    };
+  }, []);
+  React.useEffect(() => {
+    if (!pendingMediaLaunch) return;
+    const mode = pendingMediaLaunch;
+    setPendingMediaLaunch(null);
+    closeAllToolsAndConnectors();
+    if (mode === 'image') {
+      setChatType('image');
+      setIsImageGenerationActive(true);
+    } else if (mode === 'video') {
+      isVideoGenerationActiveRef.current = true;
+      setChatType('video');
+      setIsVideoGenerationActive(true);
+    } else if (mode === 'voice') {
+      setChatType('text');
+      setIsVoiceGenerationActive(true);
+    } else if (mode === 'music') {
+      setChatType('text');
+      setAudioTab('music');
+      setIsMusicGenerationActive(true);
+    }
+  }, [pendingMediaLaunch, closeAllToolsAndConnectors, setChatType]);
+
 
 
   // Additional effect: Load content when Word Connector becomes active and ref is ready
@@ -13234,9 +13277,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setComputerBrowserMode(Boolean(opts?.browser));
     setComputerProjectPreview(Boolean(opts?.browser && opts?.projectPreview));
     setComputerAgentNavigating(Boolean(opts?.agentNavigating));
-    if (opts?.url) setComputerNavigateUrl(opts.url);
+    setComputerNavigateUrl(opts?.url || "");
     setComputerPanelOpen(true);
-    if (!currentChatIdRef.current) {
+    // The browser can use the authenticated member desktop on /agentes home.
+    // Opening it does not create a chat; conversation desktops remain isolated.
+    if (!opts?.browser && !currentChatIdRef.current) {
       void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
     }
   }, [closeArtifactPanel, createNewChat]);
@@ -13264,7 +13309,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const computer = params.get("computer");
     if (computer === "1" || computer === "true") openComputerPanel();
     const browser = params.get("browser");
-    if (browser === "1" || browser === "true") openComputerPanel({ browser: true, url: DEFAULT_BROWSER_HOME });
+    if (browser === "1" || browser === "true") openComputerPanel({ browser: true });
     const login = params.get("login");
     if (login === "1" || login === "true") {
       setLoginHandoffActive(true);
@@ -14777,7 +14822,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <Button
                   variant={computerPanelOpen && computerBrowserMode ? "secondary" : "ghost"}
                   size="icon"
-                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel(codeWorkspace ? { browser: true, projectPreview: true } : { browser: true, url: DEFAULT_BROWSER_HOME })}
+                  onClick={() => computerPanelOpen && computerBrowserMode ? setComputerPanelOpen(false) : openComputerPanel(codeWorkspace ? { browser: true, projectPreview: true } : { browser: true })}
                   title="Navegador"
                   aria-label="Navegador"
                   aria-pressed={computerPanelOpen && computerBrowserMode}

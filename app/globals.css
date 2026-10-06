@@ -3974,6 +3974,121 @@ summary:focus-visible,
   outline: none !important;
 }
 
+/* Embedded browser chrome: the live page owns every pixel below this header. */
+.sira-browser-window {
+  overflow: hidden;
+  border: 1px solid #dedede;
+  border-radius: 12px;
+  box-shadow: 0 1px 5px rgb(0 0 0 / 0.08);
+}
+.sira-browser-toolbar { font-family: Arial, Helvetica, sans-serif; }
+.sira-browser-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  min-width: 0;
+  padding: 3px 4px 1px;
+}
+.sira-browser-tab-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.sira-browser-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.sira-browser-tabs::-webkit-scrollbar { display: none; }
+.sira-browser-tab {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 190px;
+  height: 26px;
+  border-radius: 7px;
+}
+.sira-browser-tab-active { background: #e9e9e9; }
+.sira-browser-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 3px 0 7px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  text-align: left;
+}
+.sira-browser-site-icon { width: 14px; height: 14px; flex-shrink: 0; object-fit: contain; }
+.sira-browser-window-controls { display: flex; align-items: center; gap: 0; margin-left: auto; flex-shrink: 0; }
+.sira-browser-button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: #262626;
+  transition: background-color 120ms ease;
+}
+.sira-browser-button > svg { width: 15px; height: 15px; stroke-width: 1.7; }
+.sira-browser-button:hover { background-color: rgb(0 0 0 / 0.055); }
+.sira-browser-button:disabled { pointer-events: none; opacity: 0.4; }
+.sira-browser-button:focus-visible, .sira-browser-tab-label:focus-visible { box-shadow: inset 0 0 0 2px hsl(var(--celeste)); }
+.sira-browser-button[aria-label="Anotar página"][aria-pressed="true"] { color: #0284c7; background-color: #e0f2fe; }
+.sira-browser-button.sira-browser-tab-close { width: 24px; height: 24px; margin-right: 1px; }
+.sira-browser-tab-close > svg { width: 12px; height: 12px; }
+.sira-browser-navigation { display: flex; align-items: center; gap: 0; height: 34px; padding: 1px 4px 5px; min-width: 0; }
+.sira-browser-navigation > .sira-browser-button { width: 26px; }
+.sira-browser-address-wrap { position: relative; min-width: 0; flex: 1; margin: 0 7px; }
+input.sira-browser-address {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  border: 1px solid #e4e4e4;
+  border-radius: 6px;
+  background: white;
+  padding: 0 27px 0 9px;
+  outline: none;
+  font: 14px/1 Arial, Helvetica, sans-serif;
+  text-align: center;
+  box-shadow: 0 0 1px rgb(0 0 0 / 0.03);
+}
+input.sira-browser-address::placeholder { color: #919191; text-align: left; }
+input.sira-browser-address:focus { text-align: left; }
+input.sira-browser-address:disabled { opacity: 0.6; }
+input.sira-browser-address-display { color: transparent; }
+.sira-browser-address-label {
+  position: absolute;
+  inset: 0 27px 0 9px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+  line-height: 25px;
+  font-size: 14px;
+  pointer-events: none;
+}
+.sira-browser-button.sira-browser-address-action { position: absolute; right: 2px; top: 1px; width: 23px; height: 23px; }
+.dark .sira-browser-window { border-color: #404040; }
+.dark .sira-browser-tab-active { background: #303030; }
+.dark .sira-browser-button { color: #e5e5e5; }
+.dark .sira-browser-button:hover { background-color: rgb(255 255 255 / 0.08); }
+.dark input.sira-browser-address { background: #18181b; border-color: #404040; }
+@media (pointer: coarse) {
+  .sira-browser-tab-row, .sira-browser-navigation { height: 44px; }
+  .sira-browser-button, .sira-browser-navigation > .sira-browser-button { width: 36px; height: 36px; }
+  .sira-browser-tab, .sira-browser-tab-label { height: 34px; }
+  input.sira-browser-address { height: 34px; font-size: 16px; }
+  .sira-browser-address-label { line-height: 34px; font-size: 16px; }
+  .sira-browser-button.sira-browser-address-action { height: 32px; }
+  .sira-browser-address-wrap { margin: 0 2px; }
+}
+@media (prefers-reduced-motion: reduce) { .sira-browser-button { transition: none; } }
+
+/* The address input keeps visible focus in both themes, including when
+   the dark default-border utility is emitted after this stylesheet. */
+input.sira-browser-address:focus {
+  border-color: hsl(var(--celeste));
+  box-shadow: 0 0 0 2px hsl(var(--celeste) / 0.2);
+}
+
 /* Brand text selection — a calm violet wash (the --ring accent) instead
    of the browser-default blue, so highlighted text matches the premium
    palette in both themes. Additive only; keeps the text color readable
@@ -8607,33 +8722,18 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 }
 
 /* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx):
-   the SiraGPT atom in motion. The `.claude-asterisk*` class names are
-   historical and shared by every consumer. The electrons travel their orbits
-   with SMIL (animateMotion + a synced dash trail, inside the component); CSS
-   owns the nucleus beat, the colours and reduced motion. While active the
+   three monochrome dots orbiting, no nucleus, no rings, no trail, no colour
+   (red via `.claude-asterisk--error` only when the system fails). The
+   `.claude-asterisk*` class names are historical and shared by every
+   consumer. The electrons travel their orbits with SMIL (animateMotion,
+   inside the component); CSS only swaps live/static dots. While active the
    static electrons are hidden and the moving ones shown; idle (and reduced
-   motion) shows the static logo — electrons at the apex of each orbit, no
-   trail — with only a soft opacity pulse on the nucleus.
+   motion) shows the three still dots at the apex of each orbit.
    The outer <g> stays attribute-free; rules target inner classes. */
-@keyframes thinking-core-pulse {
-  0%, 100% { transform: scale(0.85); opacity: 0.7; }
-  50% { transform: scale(1.1); opacity: 1; }
-}
-@keyframes thinking-core-soft {
-  0%, 100% { opacity: 0.65; }
-  50% { opacity: 1; }
-}
 .claude-asterisk { transform-origin: 50% 50%; overflow: visible; }
-.claude-asterisk .thinking-core__core {
-  transform-box: view-box;
-  transform-origin: 50% 50%;
-}
 .claude-asterisk--active .thinking-core__electron-still { display: none; }
-.claude-asterisk--active .thinking-core__core {
-  animation: thinking-core-pulse 1.2s ease-in-out infinite;
-}
 
-/* Live «Pensando…» label beats in sync with the core. */
+/* Live «Pensando…» label beats softly while the dots orbit. */
 @keyframes thinking-live-label-pulse {
   0%, 100% { opacity: 0.75; }
   50% { opacity: 1; }
@@ -8641,11 +8741,9 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .thinking-live-label { animation: thinking-live-label-pulse 1.2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .claude-asterisk--active .thinking-core__trail,
   .claude-asterisk--active .thinking-core__electron-live { display: none; }
   .claude-asterisk--active .thinking-core__electron-still { display: inline; }
   .thinking-live-label { animation: none; }
-  .claude-asterisk--active .thinking-core__core { animation: thinking-core-soft 2s ease-in-out infinite; }
 }
 .run-trace-step--pending { color: var(--step-pending); }
 .run-trace-step--running { color: var(--step-running); }
@@ -9503,20 +9601,13 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 :root {
   --celeste: 199 89% 48%;
   --success-green: 142 71% 40%;
-  /* The three electrons of the «Pensando» atom (ThinkingCore) — the only
-     colour on a thinking surface; orbits and nucleus stay in the ink
-     (--think-accent). Luis (2026-10-02): «tres puntos de color giran con
-     estela alrededor del punto central». */
-  --think-electron-a: #38BDF8;
-  --think-electron-b: #A78BFA;
-  --think-electron-c: #FBBF24;
+  /* The «Pensando» dots (ThinkingCore) are monochrome — three electrons, no
+     nucleus, in the ink (--think-accent); they only turn red (--destructive) on error
+     (Luis, 2026-10-03). The former --think-electron-a|b|c colour tokens are gone. */
 }
 .dark {
   --celeste: 199 92% 58%;
   --success-green: 142 66% 48%;
-  --think-electron-a: #5BC8FA;
-  --think-electron-b: #B9A3FC;
-  --think-electron-c: #FCD34D;
 }
 
 /* Sidebar brand lockup: atom mark + «SiraGPT» wordmark (2026-10-01; atom since 2026-10-02). */
@@ -10040,5 +10131,73 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   .animate-pulse.rounded-md.bg-muted {
     animation: none;
     background-image: none;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────
+ * Rich user text — what the user pasted, rendered as what it is
+ * (Luis, 2026-10-03): «los links deberían marcarse de color celeste».
+ * Links (user bubble AND assistant answer) use the --celeste exception;
+ * file names, timecodes and `code` inside the user bubble get mono chips.
+ * ─────────────────────────────────────────────────────────────── */
+.chat-user-link,
+.chat-assistant-message .prose a:not(.anchor-link) {
+  color: hsl(var(--celeste));
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: hsl(var(--celeste) / 0.45);
+  text-underline-offset: 0.16em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  transition: text-decoration-color var(--duration-fast, 150ms) ease-out, color var(--duration-fast, 150ms) ease-out;
+}
+.chat-user-link:hover,
+.chat-assistant-message .prose a:not(.anchor-link):hover {
+  text-decoration-color: hsl(var(--celeste));
+}
+.chat-user-link:focus-visible,
+.chat-assistant-message .prose a:not(.anchor-link):focus-visible {
+  outline: 2px solid hsl(var(--celeste) / 0.6);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+.chat-user-file,
+.chat-user-code,
+.chat-user-timecode {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.86em;
+  line-height: 1.2;
+  padding: 0.1em 0.4em;
+  border-radius: 0.375rem;
+  background: hsl(var(--foreground) / 0.06);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.08);
+  white-space: nowrap;
+}
+.chat-user-file {
+  font-weight: 500;
+}
+.chat-user-timecode {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.dark .chat-user-file,
+.dark .chat-user-code,
+.dark .chat-user-timecode {
+  background: hsl(var(--foreground) / 0.1);
+  box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.12);
+}
+
+/* ── Touch devices: no hover tooltips ─────────────────────────────────────
+   Luis (2026-10-03, iPhone): tapping the sidebar toggle showed the black
+   «Contraer barra lateral ⌘B» tooltip (Radix opens tooltips on focus, and a
+   tap focuses the button). A tooltip is a hover affordance; on a device with
+   no hover it only adds a stray black bubble — and «⌘B» means nothing there.
+   Every TooltipContent carries `.ui-tooltip`; the aria-labels stay for
+   assistive tech. */
+@media (hover: none) {
+  .ui-tooltip,
+  [data-radix-popper-content-wrapper]:has(> .ui-tooltip) {
+    display: none !important;
   }
 }

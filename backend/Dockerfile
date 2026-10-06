@@ -71,6 +71,11 @@ WORKDIR /app
 # (universal-document-extractor; members are piped to stdout, never unpacked).
 # bash: SiraCode workspace exec spawns /bin/bash -lc (Planificar permission
 # resume). Alpine's node image does not ship it; do not fall back to sh.
+# yt-dlp: the chat tool transcribe_url downloads the audio of a video / audio /
+# recording link (whole or a timecode range) before whisper. It is installed
+# from PyPI below (not apk): YouTube now needs a current extractor plus the
+# yt-dlp-ejs challenge solver (`yt-dlp[default]`) and a JS runtime — the tool
+# points it at this image's own Node 22 (`--js-runtimes node:<execPath>`).
 RUN apk add --no-cache \
     bash \
     chromium \
@@ -100,6 +105,12 @@ RUN apk add --no-cache \
     libgomp \
     libstdc++ \
     wget
+
+# yt-dlp from PyPI with its extras: `[default]` brings yt-dlp-ejs (the YouTube
+# challenge solver) which the apk package lacks. Pinned to a floor, not a
+# version: YouTube breaks old extractors within weeks.
+RUN pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]>=2026.8" \
+    && yt-dlp --version
 
 # Create non-root user and group if they don't exist
 RUN addgroup -S appgroup 2>/dev/null || true; \

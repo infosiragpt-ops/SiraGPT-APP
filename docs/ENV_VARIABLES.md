@@ -147,6 +147,81 @@ ruteo (editor de documentos / AgentRunner).
 | `SIRAGPT_REQUEST_BRIEF_LLM` | `1` | `0` desactiva el refinado con el tier gratuito (Cerebras) de los briefs de baja confianza con historial; sin `CEREBRAS_API_KEY` nunca corre |
 | `SIRAGPT_REQUEST_BRIEF_LLM_TIMEOUT_MS` | `900` | Tope de la llamada de refinado; al agotarse se conserva el brief heurístico |
 
+### Transcripción de enlaces — herramienta `transcribe_url` (added 2026-10-03)
+
+`backend/src/services/agent-harness/tools/transcribe-url-tool.js`: el agente transcribe el
+audio de un enlace (YouTube, Vimeo, Drive público, .mp4/.mp3 directos…) entero o de un
+minuto a otro. Descarga solo la sección con `yt-dlp --download-sections`, recorta y codifica
+con ffmpeg (mono 16 kHz AAC) y transcribe con la escalera de `audio-transcriber` (OpenAI →
+Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado) devuelve
+`media_login_required` con dos caminos para el usuario. La imagen del backend instala
+`yt-dlp` (apk) junto a `ffmpeg`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TRANSCRIBE_URL_YTDLP` | `yt-dlp` | Binario del descargador |
+| `FFMPEG_PATH` | `ffmpeg` | Binario de ffmpeg (compartido con whisper local) |
+| `TRANSCRIBE_URL_MAX_SECONDS` | `10800` | Máximo de audio por llamada (3 h); por encima pide un rango (`media_too_long`) |
+| `TRANSCRIBE_URL_TIMEOUT_MS` | `1200000` | Tope por proceso (descarga / ffmpeg) y para la transcripción (20 min) |
+| `TRANSCRIBE_URL_JS_RUNTIME` | `node` | Runtime JS para el desafío de YouTube: `node` (el Node del propio backend, `--js-runtimes node:<execPath>`), `deno` o `none` |
+| `TRANSCRIBE_URL_REMOTE_COMPONENTS` | (vacío) | Pasa `--remote-components` a yt-dlp (p. ej. `ejs:github`) si la imagen no trae `yt-dlp-ejs` |
+| `TRANSCRIBE_URL_BROWSER_DISCOVERY` | `1` | Peldaño del navegador headless (Chromium de la imagen) para páginas de reproductor que yt-dlp no conoce; `0` lo apaga |
+| `TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS` | `30000` | Tope del descubrimiento con navegador por enlace |
+| `TRANSCRIBE_URL_COMPUTER` | `1` | `0` desactiva el paso que abre una grabación con login dentro del Chrome de la computadora del chat (usa la sesión que el usuario inició ahí; tope 60 s) |
+| `TRANSCRIBE_URL_CAPTURE` | `1` | `0` desactiva el último recurso: reproducir la grabación en el navegador (computadora del chat o headless) y grabar su audio (`captureStream` + `MediaRecorder`) cuando no hay stream descargable |
+| `TRANSCRIBE_URL_CAPTURE_MAX_RATE` | `2` | Velocidad máxima de reproducción al grabar (1–4); el audio se ralentiza con `atempo` para conservar los tiempos |
+| `TRANSCRIBE_URL_TOOL_TIMEOUT_MS` | `TRANSCRIBE_URL_TIMEOUT_MS` + 10 min (30 min) | Tope del harness para una llamada a `transcribe_url` (antes heredaba el tope global de 2 min); un turno de chat con enlace + «transcribe» recibe este tope + 5 min |
+| `SIRAGPT_COOKIE_JAR_DIR` | `<UPLOAD_DIR>/cookie-jars` | Carpeta de los `cookies.txt` cifrados por usuario (AES-256 con `ENCRYPTION_KEY`) |
+
+**Escalera (added 2026-10-03, segundo paso):** yt-dlp → si no conoce la página («Unsupported URL», 401/403,
+fallo genérico) el **Chromium de la imagen abre la página con las cookies del usuario**, pulsa play y registra
+el HLS/DASH/MP4 real que pide el reproductor (`media-discovery.js`); esa URL vuelve a yt-dlp con `Referer` y
+las cookies del navegador, y si yt-dlp aún la rechaza, **ffmpeg lee el stream directo** con las cabeceras.
+Un reproductor que sigue mostrando login sin medios ⇒ `media_login_required` con dos caminos: adjuntar el
+archivo o adjuntar UNA vez `cookies.txt` del sitio (`cookie-jar-store.js` lo guarda cifrado por usuario y
+lo reutiliza en los próximos enlaces de esa plataforma; solo viajan las cookies del host del enlace).
+La imagen instala `yt-dlp[default]` desde PyPI (trae `yt-dlp-ejs`, el solucionador del desafío de YouTube)
+y cada llamada usa el Node 22 del backend como runtime JS.
+
+---
+
+### OCR local con GLM-OCR (Ollama de la Lenovo) — `ollama run glm-ocr` (added 2026-10-03)
+
+`backend/src/services/ollama-ocr.js` + `ocr-engine.runOllamaOcrFallback`: GLM-OCR (Z.ai, 0,9B,
+nº 1 en OmniDocBench v1.5) servido por la Ollama que ya corre SiraGPT Mini
+(`siragpt-ollama:11434`) es el **primer peldaño del OCR por visión**: Tesseract → **GLM-OCR
+local** → modelo de visión de pago (OpenAI). Cubre imágenes adjuntas, PDFs escaneados, imágenes
+dentro de Office y el camino `vision`. Llamada nativa `POST /api/chat` con el prompt de tarea
+del modelo (`Text Recognition:` / `Table Recognition:` / `Figure Recognition:`), imagen reducida
+a `OLLAMA_OCR_MAX_SIDE` y salida Markdown (tablas, fórmulas LaTeX). La disponibilidad se sondea
+con `GET /api/tags` y se memoiza `OLLAMA_OCR_PROBE_TTL_MS`: sin Ollama o sin el modelo
+descargado el motor sigue al peldaño de pago en < 3 s, sin error para el usuario. Proveedor
+reportado: `ollama:glm-ocr`. En `NODE_ENV=test` queda apagado salvo `SIRAGPT_OLLAMA_OCR=1`.
+
+**Instalación del modelo: automática.** Si el sondeo ve la Ollama viva pero sin `glm-ocr`, el
+backend le pide descargarlo (`POST /api/pull`, una sola vez, en segundo plano, ~1,9 GB) y vuelve a
+sondear al terminar — no hace falta shell en la Lenovo ni reiniciar nada; el primer arranque tras
+publicar lo deja instalado. Mientras descarga el motor sigue con el modelo de nube
+(`reason: model_pulling`). Un pull fallido se reintenta cada `OLLAMA_OCR_PULL_RETRY_MS`.
+Alternativa manual: `docker exec siragpt-ollama ollama pull glm-ocr`. Con `OCR_MODE=vision`
+GLM-OCR lee directo sin pasar por Tesseract.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_OLLAMA_OCR` | `1` (`0` apaga) | Interruptor del peldaño local |
+| `OLLAMA_OCR_BASE_URL` | `http://siragpt-ollama:11434` | Ollama a usar (acepta `…/v1`, se normaliza). Alias: `OLLAMA_BASE_URL` |
+| `OLLAMA_OCR_MODEL` | `glm-ocr` | Modelo (p. ej. `glm-ocr:q8_0`, `glm-ocr:bf16`) |
+| `OLLAMA_OCR_TASK` | `text` | Prompt de tarea por defecto: `text` / `table` / `figure` |
+| `OLLAMA_OCR_TIMEOUT_MS` | `90000` | Tope por imagen/página |
+| `OLLAMA_OCR_PROBE_TIMEOUT_MS` | `2500` | Tope del sondeo `/api/tags` |
+| `OLLAMA_OCR_PROBE_TTL_MS` | `300000` | Memo del veredicto disponible/no disponible (5 min) |
+| `OLLAMA_OCR_MAX_SIDE` | `2048` | Lado máximo (px) de la imagen enviada |
+| `OLLAMA_OCR_NUM_PREDICT` | `8192` | Tokens máximos de salida |
+| `OLLAMA_OCR_KEEP_ALIVE` | `30m` | Cuánto queda el modelo cargado en Ollama tras una lectura |
+| `OLLAMA_OCR_AUTO_PULL` | `1` (`0` apaga) | Descargar el modelo automáticamente cuando falta |
+| `OLLAMA_OCR_PULL_TIMEOUT_MS` | `2700000` | Tope de la descarga (45 min) |
+| `OLLAMA_OCR_PULL_RETRY_MS` | `1800000` | Espera antes de reintentar un pull fallido (30 min) |
+
 ---
 
 ## Embeddings ladder (RAG + memory)
@@ -731,6 +806,19 @@ uncaught exceptions, unhandled rejections, Express 5xx and `/api/telemetry/error
 
 El aviso «run bootstrap failed (legacy chat continues)» se registra como WARN
 una vez por minuto (con el recuento del minuto anterior) y el resto a `info`.
+
+## Volcado de producción 2026-10-03 — OCR local acotado y cierre HTTP
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `SIRAGPT_OCR_LOCAL_IMAGE_BUDGET_MS` | `20000` | Presupuesto de reloj (ms) de TODO el intento local de Tesseract sobre UNA imagen (ambas pasadas). Pasado el plazo no arranca otra variante, un `recognize()` colgado se abandona terminando el worker y la imagen pasa a los peldaños de visión (GLM-OCR local → nube). Una foto de WhatsApp retuvo la subida 371 s en producción. El pase por mosaicos conserva su propio `SIRAGPT_OCR_IMAGE_BUDGET_MS` (12 s). |
+| `SIRAGPT_HTTP_CLOSE_GRACE_MS` | `3500` | Gracia (ms) que `http_server_close` da a las peticiones en vuelo antes de cortar los sockets que sigan abiertos (SSE, long-poll). Debe quedar por debajo del presupuesto de 5 s del paso; con `keepAliveTimeout` de 2 min un `server.close()` a secas nunca terminaba. Los sockets ociosos keep-alive se sueltan de inmediato. |
+
+## Plantilla obligatoria y edición quirúrgica de láminas (added 2026-10-03)
+
+| Variable | Default | Descripción |
+|---|---|---|
+| `SIRAGPT_TEMPLATE_LINEAGE` | on | `0` desactiva la barrera de linaje: con ella activa, un turno «crea una ppt/word con este formato» + plantilla adjunta (.pptx/.potx/.docx/.dotx) solo entrega archivos que DESCIENDEN de la plantilla (mismo esquema de color y fuentes del tema, mismos masters, mismos layouts, sin láminas de muestra). Un deck reconstruido con un tema de SiraGPT se marca `template_not_followed`, no se entrega y el modelo recibe la causa para rehacerlo sobre la plantilla. |
 
 ## Billing failover and provider keys (optional)
 

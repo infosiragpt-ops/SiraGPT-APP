@@ -193,9 +193,14 @@ function clearAgentModules() {
  * agent-task-runner resolves to the real module with the given overrides
  * (same pattern as the F1 agentic-chat-stream tests).
  */
-function withStubbedAgentRunner(overrides, fn) {
+function withStubbedAgentRunner(overrides, fn, { prisma, quickEdit } = {}) {
   const originalLoad = Module._load;
-  Module._load = function patched(request) {
+  Module._load = function patched(request, parent) {
+    const worker = parent?.filename?.endsWith('/services/agents/agent-task-runner.js');
+    if (worker && request === '../../config/database' && prisma) return prisma;
+    if (worker && request === '../source-preserving-document-edit' && quickEdit) {
+      return { ...originalLoad.apply(this, arguments), tryGenerateSourcePreservingDocumentEdit: quickEdit };
+    }
     if (request === '../agent-runner' || request.endsWith('/agent-runner')) {
       return { ...agentRunner, ...overrides };
     }
@@ -431,8 +436,40 @@ test('agent-task: non-claimed goal never invokes the runner and keeps the normal
 test('agent-task: claimed EDIT turn + runner failure keeps the loop but bans create_document + auto pipeline', async () => {
   const env = setupAgentTaskEnv('edit-continues');
   let loopToolNames = null;
+  let loopHistory = '';
+  let quickEditCalls = 0;
+  const originalRecords = 'Trimestre,importe\nT1,12\nT2,30';
+  const messages = [{ id: 'prior-user', chatId: 'chat-f2-4', role: 'USER', content: originalRecords,
+    timestamp: new Date('2026-01-01T00:00:00Z'), metadata: {} }];
+  // This routing contract deliberately reaches the loop after the quick
+  // editor reports no base. Supply its DB boundary explicitly, never a live
+  // CI database: the new history guard still executes against owned turns.
+  const prisma = {
+    chat: { findFirst: async ({ where }) => where.id === 'chat-f2-4' && where.userId === 'user-f2-4'
+      ? { id: where.id, userId: where.userId } : null },
+    generatedArtifact: { findMany: async () => [] },
+    file: { findMany: async () => [] },
+    message: {
+      create: async ({ data }) => { const row = { id: `current-${messages.length}`, ...data }; messages.push(row); return row; },
+      update: async ({ where, data }) => ({ id: where.id, ...data }),
+      findFirst: async ({ where }) => {
+        assert.equal(where.chat.userId, 'user-f2-4');
+        assert.equal(where.chatId, 'chat-f2-4');
+        assert.equal(where.role, 'USER');
+        return messages.find(row => row.chatId === where.chatId && row.role === where.role
+          && row.metadata?.taskId === where.metadata.equals) || null;
+      },
+      findMany: async ({ where }) => {
+        assert.equal(where.chat.userId, 'user-f2-4');
+        assert.equal(where.chatId, 'chat-f2-4');
+        assert.equal(where.deletedAt, null);
+        return [messages[0]];
+      },
+    },
+  };
   env.setReactRun(async (_client, args) => {
     loopToolNames = (args.tools || []).map((tool) => tool && tool.name).filter(Boolean);
+    loopHistory = args.extraSystem;
     return { finalAnswer: 'Apliqué los cambios solicitados en el archivo anterior.', steps: [], stoppedReason: 'completed' };
   });
   try {
@@ -473,7 +510,9 @@ test('agent-task: claimed EDIT turn + runner failure keeps the loop but bans cre
       assert.equal(snapshot.documentPolicy.autoGenerate, false, 'the auto-document pipeline must stay banned');
       assert.equal(snapshot.documentPolicy.thresholds.agentRunnerFailure, 'no_output');
       assert.equal(result.artifacts, 0);
-    });
+      assert.equal(quickEditCalls, 1);
+      assert.ok(loopHistory.includes(originalRecords), 'the allowed edit loop retains the original user records');
+    }, { prisma, quickEdit: async () => { quickEditCalls += 1; return null; } });
   } finally {
     env.cleanup();
   }

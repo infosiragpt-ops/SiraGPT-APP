@@ -59,6 +59,16 @@ function buildActionCommand(body) {
     : String(action.button || '').toLowerCase() === 'middle' ? 2 : 1;
 
   switch (type) {
+    case 'browser_viewport': {
+      const { width, height } = action;
+      if (!Number.isInteger(width) || !Number.isInteger(height) || width < 32 || height < 32 || width > 1920 || height > 1080) return null;
+      // Fixed origin, bounded numeric dimensions; never accept arbitrary shell,
+      // display names or x11vnc commands from a browser request.
+      return `x11vnc -sync -remote ${shellQuote('clip:' + width + 'x' + height + '+0+0')}`;
+    }
+    case 'browser_restore_viewport':
+      return "x11vnc -sync -remote 'clip:'";
+
     case 'click':
       return `xdotool mousemove ${x} ${y} click ${button}`;
     case 'double_click':

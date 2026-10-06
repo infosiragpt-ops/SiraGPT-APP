@@ -950,6 +950,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
     requireRedisUrl();
     const job = await enqueueAgentTask({
       taskId: snapshot.taskId,
+      createdAt: snapshot.createdAt,
       traceId: snapshot.traceId || crypto.randomUUID(),
       user: {
         id: req.user?.id,
@@ -1868,6 +1869,8 @@ router.post(
     }
 
     try {
+      const conversationHistory = await require('../services/agents/task-conversation-history')
+        .loadTaskConversationHistory(prisma, { userId: req.user?.id, chatId, taskId, before: task.createdAt });
       const result = await reactAgent.run(openai, {
         query: agentGoal,
         tools,
@@ -1890,7 +1893,7 @@ router.post(
           uploadedFileContext,
           openclawRuntimeProfile,
           agentGoal
-        ) + (req.body.generatedArtifactRefs?.length
+        ) + (conversationHistory ? `\n\n${conversationHistory}` : '') + (req.body.generatedArtifactRefs?.length
           ? `\n\n${buildGeneratedArtifactReadContext(req.body.generatedArtifactRefs, agentGoal)}`
           : '') + require('../services/chat-skills').selectedSkillsSuffix({ userId: req.user?.id, names: req.body.skills }),
         ctx: toolCtx,
@@ -1966,6 +1969,12 @@ router.post(
         }
       }
 
+      const delivery = await require('../services/agents/agent-task-workspace-delivery').finalizeWorkspaceDelivery({
+        prisma, userId: req.user?.id, chatId, artifacts, finalMarkdown, stoppedReason,
+        signal: controller.signal, emit,
+      });
+      finalMarkdown = delivery.finalMarkdown;
+      stoppedReason = delivery.stoppedReason;
       await finishProgressPersistence(statusForAgentStopReason(stoppedReason));
       if (finalMarkdown) {
         emit({ type: 'final_text', markdown: finalMarkdown });
@@ -2001,6 +2010,7 @@ router.post(
                 agenticOperatingCore,
                 durableExecution: enterpriseRuntimeProfile.durableExecution,
                 stoppedReason,
+                workspaceDelivery: delivery.workspaceDelivery,
                 maxSteps,
                 maxRuntimeMs,
                 updatedAt: new Date().toISOString(),
@@ -2039,7 +2049,7 @@ router.post(
               steps: result.steps.length,
               artifacts: artifacts.length,
               durationMs: Date.now() - taskStartedAt,
-              stoppedReason: result.stoppedReason,
+              stoppedReason,
             },
           });
         } catch (err) {
@@ -2055,7 +2065,7 @@ router.post(
         userId: req.user?.id || null,
         chatId,
         status: task.status,
-        stoppedReason: result.stoppedReason,
+        stoppedReason,
         steps: result.steps.length,
         artifacts: artifacts.length,
         durationMs: Date.now() - taskStartedAt,
@@ -2068,7 +2078,7 @@ router.post(
       console.error('[agent-task] fatal:', err);
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
       await finishProgressPersistence(controller.signal.aborted ? 'cancelled' : 'error');
-      emit({ type: 'error', message });
+      emit({ type: 'error', message, ...(err.code === 'E_HISTORY_UNAVAILABLE' ? { code: err.code } : {}) });
       taskStore.markTaskStatus(task, task.status, {
         streamState,
         stats: { durationMs: Date.now() - taskStartedAt, error: message },
@@ -2202,6 +2212,7 @@ function checkUserInflightCap(req, res) {
 }
 
 async function handleQueuedTaskRequest(req, res) {
+  const createdAt = new Date().toISOString();
   const rawGoal = String(req.body.goal || '');
   if (!checkUserInflightCap(req, res)) return undefined;
   try {
@@ -2211,6 +2222,7 @@ async function handleQueuedTaskRequest(req, res) {
     // keeps working regardless of request type. The in-process runner
     // handles documents, transcription, and plain chat goals.
     return handleLocalTaskRequest(req, res, {
+      createdAt,
       fallbackReason: 'redis_unavailable',
       fallbackDetail: err.message,
     });
@@ -2225,6 +2237,7 @@ async function handleQueuedTaskRequest(req, res) {
   const { isRedisRecentlyUnhealthy, getLastRedisFailureMessage } = require('../services/agents/redis-resilience');
   if (isRedisRecentlyUnhealthy()) {
     return handleLocalTaskRequest(req, res, {
+      createdAt,
       fallbackReason: 'redis_unhealthy',
       fallbackDetail: getLastRedisFailureMessage() || 'recent transient redis error',
     });
@@ -2238,6 +2251,7 @@ async function handleQueuedTaskRequest(req, res) {
     const queueReady = await waitForQueueReady(1500).catch(() => false);
     if (!queueReady) {
       return handleLocalTaskRequest(req, res, {
+        createdAt,
         fallbackReason: 'redis_unready',
         fallbackDetail: 'queue connection not ready (producer liveness check)',
       });
@@ -2271,6 +2285,7 @@ async function handleQueuedTaskRequest(req, res) {
   });
   if (shouldRunAttachmentTaskLocally({ fileIds, goal: agentGoal, documentPolicy })) {
     return handleLocalTaskRequest(req, res, {
+      createdAt,
       fallbackReason: 'attachment_local_runtime',
       fallbackDetail: 'attached document/image chat analysis bypassed queued runtime',
     });
@@ -2292,6 +2307,7 @@ async function handleQueuedTaskRequest(req, res) {
 
   const payload = {
     taskId,
+    createdAt,
     traceId,
     user: {
       id: req.user?.id,
@@ -2341,6 +2357,7 @@ async function handleQueuedTaskRequest(req, res) {
     // also covers non-redis enqueue errors that previously bubbled to Express.
     console.warn('[agent-task] enqueue failed, falling back to local runtime:', message);
     return handleLocalTaskRequest(req, res, {
+      createdAt,
       fallbackReason: isRedisFailure ? 'redis_unavailable' : 'enqueue_failed',
       fallbackDetail: message,
     });
@@ -2348,6 +2365,7 @@ async function handleQueuedTaskRequest(req, res) {
   let streamState = initialAgentState();
   const snapshot = {
     taskId,
+    createdAt,
     userId: req.user?.id,
     userClearance: payload.user?.clearance || resolveUserSkillClearance(req.user),
     chatId,
@@ -2479,7 +2497,9 @@ async function handleQueuedTaskRequest(req, res) {
   return streamTaskEvents(req, res, taskId, req.user?.id);
 }
 
-async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallback', fallbackDetail = '' } = {}) {
+async function handleLocalTaskRequest(req, res, {
+  fallbackReason = 'local_fallback', fallbackDetail = '', createdAt = new Date().toISOString(),
+} = {}) {
   const rawGoal = String(req.body.goal || '');
   const displayGoal = normalizeDisplayGoal(req.body.displayGoal || rawGoal);
   const agentGoal = normalizeDisplayGoal(rawGoal);
@@ -2521,6 +2541,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
   let streamState = initialAgentState();
   const snapshot = {
     taskId,
+    createdAt,
     userId: req.user?.id,
     userClearance: resolveUserSkillClearance(req.user),
     chatId,
@@ -2598,6 +2619,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
 
   const payload = {
     taskId,
+    createdAt,
     traceId,
     user: {
       id: req.user?.id,
@@ -3157,10 +3179,16 @@ function createTaskRecord({
   documentPolicy = null,
   status = 'running',
   modelPinned = false,
+  createdAt = null,
 }) {
   pruneOldTasks();
   const now = new Date().toISOString();
   const existingSnapshot = taskStore.getTaskSnapshotForUser(taskId, userId);
+  // Preserve the acceptance boundary across queued execution and retries.
+  // A worker may have written progress before the producer's snapshot lands.
+  const acceptedAt = [existingSnapshot?.createdAt, createdAt]
+    .filter(value => value && Number.isFinite(Date.parse(value)))
+    .sort((a, b) => Date.parse(a) - Date.parse(b))[0] || now;
   const record = {
     taskId,
     userId: String(userId || ''),
@@ -3181,7 +3209,7 @@ function createTaskRecord({
     agentGoal: existingSnapshot?.agentGoal || displayGoal,
     systemContract: existingSnapshot?.systemContract || '',
     fileIds: existingSnapshot?.fileIds || [],
-    createdAt: now,
+    createdAt: acceptedAt,
     updatedAt: now,
     lastEventAt: now,
     streamState: streamState || existingSnapshot?.streamState || initialAgentState(),
