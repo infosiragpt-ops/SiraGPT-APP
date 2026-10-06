@@ -43,11 +43,20 @@ function appendTextSlide({ buffer, title = 'Gracias' } = {}) {
   if (newXml === lastXml) {
     throw new Error('appendTextSlide: no text run to rewrite');
   }
+  // The clone keeps the source's layout but not its words: every run after
+  // the title is blanked, so «Gracias» never carries the last slide's bullets.
+  let first = true;
+  newXml = newXml.replace(/(<a:t[^>]*>)([^<]*)(<\/a:t>)/g, (full, open, _text, close) => {
+    if (first) { first = false; return full; }
+    return `${open}${close}`;
+  });
   zip.file(`ppt/slides/slide${newN}.xml`, newXml);
 
   const lastRels = zip.file(`ppt/slides/_rels/slide${lastN}.xml.rels`);
   if (lastRels) {
-    zip.file(`ppt/slides/_rels/slide${newN}.xml.rels`, lastRels.asText());
+    // Two slides must never share one notes part (PowerPoint repairs the file).
+    const rels = lastRels.asText().replace(/<Relationship\b[^>]*notesSlide[^>]*\/>/g, '');
+    zip.file(`ppt/slides/_rels/slide${newN}.xml.rels`, rels);
   }
 
   let ct = zip.file('[Content_Types].xml')?.asText() || '';

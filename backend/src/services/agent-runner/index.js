@@ -238,8 +238,22 @@ function designThemeForTask(task) {
 const SIRA_OFFICE_ENGINE_REL = OFFICE_ENGINE_REL;
 const installSiraOfficeEngine = installOfficeEngine;
 
-const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
-const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
+// Create verbs users actually type for a new deck/document. «haz una
+// presentación», «genérame una ppt», «elabora / prepara un informe» used to
+// miss the claim and land on the generic pipeline (a different, flatter
+// deck), so the same request produced two different designs.
+const CREATE_DOC_RE = /\b(crea|creame|créame|genera|generame|genérame|haz|hazme|hazlo|arma|armame|ármame|diseña|diseñame|diséñame|designa|elabora|elaborame|elabórame|prepara|preparame|prepárame|redacta|make|create|prepare|draft)\b/i;
+const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|deck|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
+// «quiero / necesito una presentación sobre…»: a wish with an INDEFINITE
+// article is a creation request. «quiero la presentación en azul» (definite
+// article) is an edit of the existing deck and keeps the follow-up paths.
+const CREATE_DOC_PHRASE_RE = /\b(?:quiero|necesito|requiero|quisiera|me\s+gustar[ií]a|podr[ií]as\s+(?:hacerme|crearme|armarme|prepararme))\s+(?:que\s+(?:me\s+)?(?:hagas|crees|generes|armes|prepares|elabores|dise[nñ]es)\s+)?(?:una?|otr[oa])\s+(?:nuev[oa]\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|l[aá]minas?|slides?|deck|word|docx|documento|excel|xlsx|hoja\s+de\s+c[aá]lculo)\b/i;
+
+/** Create-a-document request: verb + document noun, or an explicit wish for a new one. */
+function isCreateDocumentRequest(text) {
+  const t = String(text || '');
+  return (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) || CREATE_DOC_PHRASE_RE.test(t);
+}
 const DIRECT_SAV_FILE_REQUEST_RE = /\bdame\s+(?:un|una|el|la)\s+(?:documentos?|archivos?|ficheros?|bases?(?:\s+de\s+datos)?)\s+(?:de\s+)?(?:spss|sav)\b/i;
 const SOURCE_COPY_RE = /\b(?:copia|versi[oó]n)(?:\s+(?:nueva|corregida|editada|actualizada|modificada)){0,2}\s+(?:de\s+)?(?:este|esta|mi|del|de\s+la|de\s+los|de\s+las)\b/i;
 
@@ -288,6 +302,64 @@ const SHAPE_TARGET_RE = /\b(notas?|cuadros?|recuadros?|t[ií]tulos?|subt[ií]tul
 function isSlideBackgroundColorRequest(text) {
   const t = String(text || '');
   return SLIDE_BACKGROUND_RE.test(t) && !SHAPE_TARGET_RE.test(t);
+}
+// A whole-deck color follow-up on a deck SiraGPT designed: «ahora en azul»,
+// «ponla verde», «cámbiala a #1E3A8A», «ponlas todas rosadas». A named
+// element («el título en rojo», «la gráfica en verde»), one slide («la
+// portada azul», «la lámina 3») or a question keep their own paths.
+const COLOR_SCOPE_SINGLE_SLIDE_RE = /\b(portada|contraportada)\b|\b(diapositiva|l[aá]mina|slide)\s+(\d+|final|[uú]ltima|primera|inicial)\b/i;
+function isDeckColorRestyleRequest(text) {
+  const raw = String(text || '');
+  if (!raw.trim() || !COLOR_WORD_RE.test(raw)) return false;
+  if (isQuestionOrAdviceRequest(raw)) return false;
+  if (SHAPE_TARGET_RE.test(raw)) return false;
+  const t = normalizeIntentText(raw);
+  if (CHART_EDIT_TARGET_RE.test(t) || NON_DOC_OBJECT_RE.test(t)) return false;
+  if (COLOR_SCOPE_SINGLE_SLIDE_RE.test(raw) && !SLIDE_BACKGROUND_RE.test(raw)) return false;
+  return true;
+}
+/** The staged pptx carries «SiraDeco[<theme>]» shapes (create_presentation / sira_design). */
+async function isSiraDesignedDeck(sandbox, rel) {
+  try {
+    const buf = await sandbox.readFile(rel);
+    return require('./deck-append').isSiraDeckBuffer(buf);
+  } catch (_) {
+    return false;
+  }
+}
+/**
+ * Deterministic restyle of a SiraGPT deck with the requested color locked
+ * (sira_design.restyle with themeFromColor tokens): backgrounds, cards,
+ * chips, KPI tiles, footer and charts change together and every text keeps
+ * WCAG contrast — unlike painting backgrounds + recoloring every run. No LLM
+ * call. Returns { ok:false } on any failure so the caller falls through.
+ */
+async function restyleSiraDeckWithColor({ sandbox, executors, source, colorHex, onEvent }) {
+  const emit = (ev) => { try { onEvent(ev); } catch (_) { /* trace only */ } };
+  try {
+    const { themeFromColor } = require('./design-theme');
+    const theme = themeFromColor(colorHex);
+    if (!theme) return { ok: false };
+    await sandbox.writeFile('tmp/sira_theme.json', JSON.stringify({ ...theme, pinned: true }, null, 2));
+    const code = [
+      'import sys, json',
+      "sys.path.insert(0, '/workspace/tmp')",
+      'import sira_design as sd',
+      `print(json.dumps(sd.restyle(${JSON.stringify(source)})))`,
+    ].join('\n');
+    emit({ type: 'tool_call', tool: 'execute_python', label: 'Ejecutando código', preview: `sira_design.restyle #${colorHex}` });
+    const text = String(await executors.execute_python({ code }) || '');
+    const line = text.split('\n').map((l) => l.trim()).reverse().find((l) => l.startsWith('{'));
+    let report = null;
+    try { report = line ? JSON.parse(line) : null; } catch (_) { report = null; }
+    const ok = Boolean(report && report.ok === true && !text.startsWith('ERROR:')
+      && (!Array.isArray(report.warnings) || report.warnings.length === 0));
+    emit({ type: 'tool_result', tool: 'execute_python', ok, preview: text.slice(0, 2000), label: ok ? 'Verificando resultado' : 'Reintentando' });
+    return { ok, report };
+  } catch (err) {
+    emit({ type: 'tool_result', tool: 'execute_python', ok: false, preview: err?.message || String(err), label: 'Reintentando' });
+    return { ok: false };
+  }
 }
 // Pictures are read by the vision runtime, never by the document runner: an
 // attached screenshot must not turn «¿cuánto es?» into a document task.
@@ -564,7 +636,7 @@ function isCreateOrStyleRunnerOnly(text) {
     const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('../agents/software-build-intent');
     if (isSoftwareBuildRequest(t) && !isExplicitDocumentRequest(t)) return false;
   } catch (_) { /* classifier is local */ }
-  if ((CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) || requestsSavExcelDelivery(t)) return true;
+  if (isCreateDocumentRequest(t) || requestsSavExcelDelivery(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
   if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
   return false;
@@ -1170,8 +1242,7 @@ async function runAgentRunner({
       userId, chatId, instruction: task, prisma, memoryStore, mcpToolLoader,
     });
     const pairEdit = require('../agents/generated-artifact-followup').isSavXlsxPairEditRequest(task);
-    const isCreateRequest = !pairEdit && ((CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task))
-      || requestsSavExcelDelivery(task));
+    const isCreateRequest = !pairEdit && (isCreateDocumentRequest(task) || requestsSavExcelDelivery(task));
     const creatingNewFile = isCreateRequest && !SOURCE_COPY_RE.test(task);
     // «agrégale más diseño / hazla más profesional» on an existing Office
     // file: the prompt switches to the DESIGN WORKFLOW (restyle the same
@@ -1215,6 +1286,7 @@ async function runAgentRunner({
     const verifies = [];
     const executors = {
       ...makeToolExecutors(toolSandbox, {
+        deck: { prompt: task },
         office: {
           onFailure: reportOfficeFailure,
           visionVerifier: buildVisionVerifier({
@@ -1241,9 +1313,23 @@ async function runAgentRunner({
     const color = inferColorFromText(task);
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
     let fastPathUsed = false;
+    let fastPathTool = color ? 'set_slide_background' : 'execute_python';
+    // A deck this platform designed: a whole-deck color follow-up («ahora en
+    // azul», «ponlas todas rosadas») restyles the whole design with that
+    // color locked instead of repainting backgrounds over every text run.
+    const siraDeck = pptxUpload && !isCreateRequest ? await isSiraDesignedDeck(sandbox, `uploads/${pptxUpload}`) : false;
+    if (color && pptxUpload && siraDeck && !isCreateRequest && !designUpgrade && isDeckColorRestyleRequest(task)) {
+      const restyled = await restyleSiraDeckWithColor({
+        sandbox: toolSandbox, executors, source: `uploads/${pptxUpload}`, colorHex: color, onEvent,
+      });
+      if (restyled.ok) {
+        fastPathUsed = true;
+        fastPathTool = 'execute_python';
+      }
+    }
     // A redesign that mentions a color («rediséñala con fondo azul») is not a
     // plain repaint: the loop restyles the whole deck with that color.
-    if (color && pptxUpload && !isCreateRequest && !designUpgrade && isSlideBackgroundColorRequest(task)) {
+    if (!fastPathUsed && color && pptxUpload && !isCreateRequest && !designUpgrade && isSlideBackgroundColorRequest(task)) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
       const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
       onEvent({
@@ -1255,25 +1341,40 @@ async function runAgentRunner({
       });
       fastPathUsed = !String(painted).startsWith('ERROR:');
     } else if (
-      pptxUpload
+      !fastPathUsed
+      && pptxUpload
       && !designUpgrade
       && /\b(gracias|thanks)\b/i.test(task)
       && /\b(l[aá]mina|diapositiva|slide|ppt|agrega|a[nñ]ade|pon)\b/i.test(task)
     ) {
-      onEvent({ type: 'tool_call', tool: 'execute_python', label: 'Ejecutando código', preview: 'append_text_slide Gracias' });
+      onEvent({ type: 'tool_call', tool: 'execute_python', label: 'Ejecutando código', preview: siraDeck ? 'add_slide Gracias' : 'append_text_slide Gracias' });
       try {
-        const { appendTextSlide } = require('./office-helpers');
         const srcBuf = await sandbox.readFile(`uploads/${pptxUpload}`);
-        const added = appendTextSlide({ buffer: srcBuf, title: 'Gracias' });
-        await sandbox.writeFile('outputs/deck-gracias.pptx', added.buffer);
+        let added;
+        let outName;
+        if (siraDeck) {
+          // The closing slide of the deck's own design (dark band, centred
+          // title, renumbered footers), not a clone of the last slide.
+          const { appendDesignedSlide, nextVersionName } = require('./deck-append');
+          added = await appendDesignedSlide({
+            PptxGenJS: require('pptxgenjs'), buffer: srcBuf, item: { title: 'Gracias', bullets: [], layout: 'closing' },
+          });
+          outName = nextVersionName(pptxUpload);
+        } else {
+          const { appendTextSlide } = require('./office-helpers');
+          added = appendTextSlide({ buffer: srcBuf, title: 'Gracias' });
+          outName = 'deck-gracias.pptx';
+        }
+        await sandbox.writeFile(`outputs/${outName}`, added.buffer);
         onEvent({
           type: 'tool_result',
           tool: 'execute_python',
           ok: true,
-          preview: JSON.stringify({ ok: true, path: '/workspace/outputs/deck-gracias.pptx', slide: added.slideNumber }),
+          preview: JSON.stringify({ ok: true, path: `/workspace/outputs/${outName}`, slide: added.slideNumber }),
           label: 'Verificando resultado',
         });
         fastPathUsed = true;
+        fastPathTool = 'execute_python';
       } catch (err) {
         onEvent({
           type: 'tool_result',
@@ -1299,7 +1400,7 @@ async function runAgentRunner({
         label: 'Verificando resultado',
       });
       const fastPathSteps = [
-        { tool: color ? 'set_slide_background' : 'execute_python', ok: true },
+        { tool: fastPathTool, ok: true },
         { tool: 'render_preview', ok: rendered },
       ];
       if (!rendered) {
@@ -2047,6 +2148,10 @@ module.exports = {
   MAX_OUTPUT_RETRIES,
   CREATE_DOC_RE,
   DOC_NOUN_RE,
+  CREATE_DOC_PHRASE_RE,
+  isCreateDocumentRequest,
+  isDeckColorRestyleRequest,
+  isSiraDesignedDeck,
   STYLE_EDIT_RE,
   hasConversationArtifacts,
   getConversationArtifactFormat,

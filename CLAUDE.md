@@ -1834,6 +1834,63 @@ alfa de `--foreground`) para que claro / oscuro / medianoche compartan un lengua
 - Test: `tests/ui-professional-finish-source.test.ts` (único bloque, monocromo sin literales
   cromáticos, exclusiones del compositor, reduced motion).
 
+## Presentaciones profesionales en el chat — generación y mejora iterativa (added 2026-10-06)
+
+Pedido: que cualquier «hazme una ppt» salga con diseño de consultor y que cada instrucción
+posterior la mejore sin perder ese diseño. Todo backend (sin UI). El camino por defecto en
+producción es el AgentRunner (`create_presentation` → pptxgenjs); el pipeline avanzado solo
+corre cuando el runner no reclama el turno.
+- **Un solo motor** (`agent-runner/index.js` `isCreateDocumentRequest`): el reclamo del runner
+  cubre «haz / genérame / elabora / prepara / redacta / draft» + «quiero / necesito una (nueva)
+  presentación…» (artículo indefinido; «quiero la presentación en azul» sigue siendo edición) y
+  los plurales «diapositivas / láminas / presentaciones / deck». Antes esos pedidos caían en el
+  pipeline genérico con otro diseño. El orquestador usa el mismo clasificador.
+- **Layouts** (`agent-runner/deck-builder.js`): además de cards / KPI / lista, cada entrada de la
+  outline acepta `layout` (agenda · columns · timeline · table · quote · section · closing),
+  `subtitle`, `notes` (notas del orador), `columns [{title,bullets}]` (2-3), `steps
+  [{title,description}]` (2-6), `table {headers,rows}` (≤14×8; si no cabe → `E_PARAMS`, nunca se
+  recorta), `quote {text,author}`. La agenda sin viñetas lista los títulos reales del deck; el
+  cierre admite hasta 3 líneas de llamado a la acción; el divisor lleva número; todo texto usa
+  `fit:'shrink'`. `resolveLayout` / `planLayouts` son puros.
+- **Auditoría de diseño** (`tools.js` `auditDeckPlan`): el resultado de `create_presentation` trae
+  `layouts`, `notesSlides` y `designWarnings` (título >70 chars, >6 viñetas, viñeta >160 chars,
+  títulos repetidos o de relleno, >3 láminas seguidas de viñetas, sin cierre, sin notas); el
+  prompt ordena corregirlas con una segunda llamada al mismo `filename`.
+- **Tema según las palabras del usuario**: `makeToolExecutors(sandbox, { deck: { prompt } })` →
+  `resolveDesignTheme({ prompt })` cuando el modelo no pasa `theme` ni hay color. Regla nueva en
+  `pptx-design-system.js`: «ejecutiva / directorio / inversionistas» → boardroom (los adjetivos
+  visuales siguen ganando: «ejecutiva y minimalista» → minimal).
+- **Mejora iterativa**:
+  - `add_slide` (tool nueva, `agent-runner/deck-append.js` `appendDesignedSlide`): añade UNA
+    diapositiva diseñada a un deck de SiraGPT (tema detectado por `SiraDeco[<id>]`, color
+    bloqueado incluido), la inserta en `position` (por defecto antes del cierre), renumera todos
+    los pies «NN / TT», lleva notas y escribe `<stem>-v2.pptx` (`nextVersionName`). Rechaza
+    gráficas (`E_UNSUPPORTED`) y decks ajenos (`E_NOT_SIRA_DECK`): ahí el modelo usa python-pptx.
+  - Color sobre un deck de SiraGPT («ahora en azul», «ponlas todas rosadas»,
+    `isDeckColorRestyleRequest`): fast path determinista `restyleSiraDeckWithColor` →
+    `sira_design.restyle` con `themeFromColor` bloqueado (tarjetas, chips, KPI, pies y gráficas
+    con contraste WCAG), sin llamada al LLM; si falla cae a los caminos previos. Un deck ajeno
+    conserva `set_slide_background`. Elementos («el título en rojo»), una sola lámina («la
+    portada azul») y preguntas quedan fuera.
+  - «Agrega una lámina de gracias» sobre un deck de SiraGPT → cierre temado vía
+    `appendDesignedSlide`; en decks ajenos el clon (`office-helpers.appendTextSlide`) ya no
+    repite las viñetas de la última lámina ni comparte su parte de notas.
+- **Prompt** (`prompt.js`): bloque «DECK DESIGN RULES» (estructura cover → agenda (6+) → bloques
+  → cierre, una idea por lámina, título ≤ 8 palabras como conclusión, 3-5 viñetas ≤ 14 palabras,
+  nunca más de 2 láminas seguidas de viñetas, notas en todas, tema por audiencia, corregir
+  `designWarnings`, `add_slide` / restyle para los follow-ups).
+- **Nombres de forma**: `SiraDeco[...]` solo para decoraciones que `sira_design` redibuja (barras,
+  reglas, pie); lo nuevo usa `SiraChip` (bandas de columnas, pasos), `SiraKpi quote value`,
+  `SiraSection number`, `SiraRail`, `SiraAgenda`, `SiraStep`, `SiraQuote`, `SiraColumn`,
+  `SiraTable`, de modo que un rediseño posterior los recolorea en vez de borrarlos.
+- Tests (registrados en `backend/package.json`): `backend/tests/deck-builder-layouts.test.js`
+  (layouts, notas, shrink, auditoría, tema por prompt, add_slide, clon),
+  `backend/tests/agent-runner-create-routing.test.js` (reclamo ampliado, clasificador de color,
+  prompt y tools; wiring real con python-pptx + LibreOffice) y un caso nuevo en
+  `pptx-design-system.test.js`.
+- Gotcha de entorno: sin `node_modules` (pizzip/pptxgenjs) solo corren los tests puros
+  (`pptx-design-system`); los de pptxgenjs los valida el CI.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

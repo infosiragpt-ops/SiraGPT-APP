@@ -79,6 +79,10 @@ test('pickPptxTheme: prompt styling keywords override the template default', () 
   assert.equal(pickPptxTheme({ template: 'business', prompt: 'una ppt oscura y elegante' }).id, 'boardroom');
   assert.equal(pickPptxTheme({ template: 'legal', prompt: 'algo minimalista y limpio' }).id, 'minimal');
   assert.equal(pickPptxTheme({ template: 'business', prompt: 'presentación ejecutiva y minimalista' }).id, 'minimal');
+  // Audience words pick the executive look only when no visual adjective does.
+  assert.equal(pickPptxTheme({ prompt: 'presentación ejecutiva para el directorio' }).id, 'boardroom');
+  assert.equal(pickPptxTheme({ prompt: 'resultados para inversionistas' }).id, 'boardroom');
+  assert.equal(pickPptxTheme({ prompt: 'presentación ejecutiva cálida y educativa' }).id, 'editorial');
   assert.equal(pickPptxTheme({ template: 'business', prompt: 'presentación educativa cálida' }).id, 'editorial');
   assert.equal(pickPptxTheme({ template: 'academic', prompt: 'deck de estrategia corporativa' }).id, 'consulting');
 });

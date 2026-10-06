@@ -24,6 +24,22 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Presentations requested in the chat get a consultant-grade design on the
+  default path (AgentRunner `create_presentation`): agenda, comparison
+  columns, process timelines, styled tables, quotes, numbered section
+  dividers, closing slides with call-to-action lines, speaker notes and
+  shrink-to-fit text; the tool result carries `designWarnings` (dense slides,
+  long titles, missing notes, no closing) the model must fix before
+  delivering. «haz / genérame / elabora / prepara / quiero una
+  presentación…» now claim the same engine as «crea / hazme», so one request
+  no longer yields two different designs. Follow-ups keep the design: the new
+  `add_slide` tool inserts a themed slide into an existing SiraGPT deck
+  (renumbered footers, notes, `<stem>-v2.pptx`), a whole-deck color («ahora en
+  azul», «ponlas todas rosadas») restyles the design with that color locked
+  instead of repainting backgrounds over every text run, and «agrega una
+  lámina de gracias» appends the themed closing slide. «Presentación
+  ejecutiva / para el directorio» picks the boardroom theme.
+
 - Start coding from a normal chat message: named cloud project folders, an optional code button in the chat header, owner-scoped project preparation after quota/provider preflight, and repository import locking. Preserve the same project across edits and reconnects; see `docs/coding/chat-native-status.md` for validation and remaining capability limits.
 
 - RLCD document analysis phase 3: retrieval-score + page-citation
