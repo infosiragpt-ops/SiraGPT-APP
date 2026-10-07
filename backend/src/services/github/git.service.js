@@ -22,7 +22,10 @@
 const path = require('path');
 let simpleGit;
 try {
-  simpleGit = require('simple-git');
+  // simple-git v4 dropped the callable default export: the factory is the
+  // named `simpleGit` export (v3 exposed the module itself as the factory).
+  const simpleGitModule = require('simple-git');
+  simpleGit = typeof simpleGitModule === 'function' ? simpleGitModule : simpleGitModule.simpleGit;
 } catch {
   simpleGit = null;
 }
@@ -71,13 +74,30 @@ function scrubToken(message, token) {
   return out;
 }
 
+// simple-git v4 guards the environment variables that can change what `git`
+// executes (every GIT_* plus EDITOR / VISUAL / PAGER / PREFIX / SSH_ASKPASS):
+// ambient ones are dropped silently, but anything handed to `.env()` counts as
+// explicit and throws unless it is in `allowEnvironment`. Copy the ambient
+// environment without those keys so a GIT_SSH_COMMAND or EDITOR set on the
+// host never aborts a clone, and allowlist the one hardening variable we set.
+const GUARDED_ENV_KEYS = new Set(['editor', 'pager', 'prefix', 'ssh_askpass', 'visual']);
+function ambientGitEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    const normalized = key.toLowerCase().trim();
+    if (normalized.startsWith('git_') || GUARDED_ENV_KEYS.has(normalized)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 /** A simple-git instance hardened against prompts + host credential store. */
 function hardenedGit(baseDir) {
   return simpleGit({
     baseDir,
     timeout: { block: CLONE_TIMEOUT_MS },
     // Set credential.helper to EMPTY so git never reads the host credential
-    // store or blocks on a prompt. simple-git v3 guards `credential.helper`
+    // store or blocks on a prompt. simple-git (v3 and v4) guards `credential.helper`
     // as "unsafe" by default; we're disabling it (the safe direction), so we
     // opt in explicitly to satisfy the guard.
     config: ['credential.helper='],
@@ -93,8 +113,9 @@ function hardenedGit(baseDir) {
       // allowUnsafeGit: true,
       // allowUnsafeGitConfig: true,
       // allowUnsafeGitConfigLocal: true,
-    }
-  }).env({ ...process.env, GIT_TERMINAL_PROMPT: '0' });
+    },
+    allowEnvironment: ['GIT_TERMINAL_PROMPT'],
+  }).env({ ...ambientGitEnv(), GIT_TERMINAL_PROMPT: '0' });
 }
 
 /**

@@ -6,6 +6,20 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Security
+
+- Dependency patch for the advisories that turned the production audits red
+  on 2026-10-06: `sharp` 0.35.4 → 0.35.5 (root + backend, librsvg
+  CVE-2026-96889), `@capacitor/android|core|ios|cli` 8.3.1 → 8.5.2 (remote
+  content at the app origin via the internal HTTP proxy path),
+  `source-map-js` 1.2.1 → 1.2.2, and in the backend
+  `@modelcontextprotocol/sdk` 1.30.0 → 1.32.1 (OAuth client credentials
+  sent to a server-chosen authorization server), `simple-git` 3.36 → 4.0.2
+  (`@simple-git/argv-parser` unsafe-editor detection; the import moves to the
+  named `simpleGit` export and `GIT_TERMINAL_PROMPT` is allowlisted for v4's
+  environment guard), `compression` 1.8.1 → 1.8.2 and `proxy-addr` 2.0.7 →
+  2.0.8. `THIRD_PARTY_LICENSES.md` updated for the new versions.
+
 ### Fixed
 
 - Refresh the visible cloud app after verified same-URL edits, preserve execution outcomes throughout bounded answer verification, and retain the selected model and existing review limits.

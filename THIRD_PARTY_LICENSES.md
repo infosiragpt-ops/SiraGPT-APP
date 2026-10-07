@@ -222,7 +222,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `puppeteer-core` | 25.10.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `readdir-glob` | 1.1.3 | Apache-2.0 | [link](https://github.com/Yqnn/node-readdir-glob) |
 | `semifies` | 1.0.0 | Apache-2.0 | [link](https://github.com/holepunchto/semifies) |
-| `sharp` | 0.35.4 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
+| `sharp` | 0.35.5 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
 | `spdx-correct` | 3.2.0 | Apache-2.0 | [link](https://github.com/jslicense/spdx-correct.js) |
 | `ssh2-sftp-client` | 11.0.0 | Apache-2.0 | [link](https://github.com/theophilusx/ssh2-sftp-client) |
 | `swagger-ui-dist` | 5.32.5 | Apache-2.0 | [link](https://github.com/swagger-api/swagger-ui) |
@@ -294,7 +294,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `robot3` | 0.4.1 | BSD-2-Clause | [link](https://github.com/matthewp/robot) |
 | `rw` | 1.3.3 | BSD-3-Clause | [link](https://github.com/mbostock/rw) |
 | `source-map` | 0.6.1 | BSD-3-Clause | [link](https://github.com/mozilla/source-map) |
-| `source-map-js` | 1.2.1 | BSD-3-Clause | [link](https://github.com/7rulnik/source-map-js) |
+| `source-map-js` | 1.2.2 | BSD-3-Clause | [link](https://github.com/7rulnik/source-map-js) |
 | `sprintf-js` | 1.0.3, 1.1.3 | BSD-3-Clause | [link](https://github.com/alexei/sprintf.js) |
 | `tough-cookie` | 5.1.2 | BSD-3-Clause | [link](https://github.com/salesforce/tough-cookie) |
 | `url-template` | 2.0.8 | BSD | [link](https://github.com/bramstein/url-template) |
@@ -469,9 +469,9 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@bull-board/api` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
 | `@bull-board/express` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
 | `@bull-board/ui` | 6.12.0 | MIT | [link](https://github.com/felixmosh/bull-board) |
-| `@capacitor/android` | 8.3.1 | MIT | [link](https://github.com/ionic-team/capacitor) |
-| `@capacitor/core` | 8.3.1 | MIT | [link](https://github.com/ionic-team/capacitor) |
-| `@capacitor/ios` | 8.3.1 | MIT | [link](https://github.com/ionic-team/capacitor) |
+| `@capacitor/android` | 8.5.2 | MIT | [link](https://github.com/ionic-team/capacitor) |
+| `@capacitor/core` | 8.5.2 | MIT | [link](https://github.com/ionic-team/capacitor) |
+| `@capacitor/ios` | 8.5.2 | MIT | [link](https://github.com/ionic-team/capacitor) |
 | `@cfworker/json-schema` | 4.1.1 | MIT | [link](https://github.com/cfworker/cfworker) |
 | `@csstools/color-helpers` | 5.1.0 | MIT-0 | [link](https://github.com/csstools/postcss-plugins) |
 | `@csstools/css-calc` | 2.1.4 | MIT | [link](https://github.com/csstools/postcss-plugins) |
@@ -529,7 +529,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@llamaindex/workflow` | 1.1.24, 1.1.25 | MIT | [link](https://github.com/run-llama/LlamaIndexTS) |
 | `@llamaindex/workflow-core` | 1.3.4 | MIT | [link](https://github.com/run-llama/workflows-ts) |
 | `@mermaid-js/parser` | 1.2.0 | MIT | [link](https://github.com/mermaid-js/mermaid) |
-| `@modelcontextprotocol/sdk` | 1.30.0 | MIT | [link](https://github.com/modelcontextprotocol/typescript-sdk) |
+| `@modelcontextprotocol/sdk` | 1.32.1 | MIT | [link](https://github.com/modelcontextprotocol/typescript-sdk) |
 | `@monaco-editor/loader` | 1.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-loader) |
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
 | `@napi-rs/canvas` | 0.1.100, 1.0.8 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
@@ -658,8 +658,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@shikijs/themes` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/types` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
 | `@shikijs/vscode-textmate` | 10.0.2 | MIT | [link](https://github.com/shikijs/vscode-textmate) |
-| `@simple-git/args-pathspec` | 1.0.3 | MIT | [link](https://github.com/steveukx/git-js) |
-| `@simple-git/argv-parser` | 1.1.1 | MIT | [link](https://github.com/steveukx/git-js) |
+| `@simple-git/args-pathspec` | 1.0.4 | MIT | [link](https://github.com/steveukx/git-js) |
+| `@simple-git/argv-parser` | 2.0.1 | MIT | [link](https://github.com/steveukx/git-js) |
 | `@simplewebauthn/server` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@simplewebauthn/types` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
@@ -872,7 +872,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `component-emitter` | 1.3.1 | MIT | [link](https://github.com/sindresorhus/component-emitter) |
 | `compress-commons` | 4.1.2 | MIT | [link](https://github.com/archiverjs/node-compress-commons) |
 | `compressible` | 2.0.18 | MIT | [link](https://github.com/jshttp/compressible) |
-| `compression` | 1.8.1 | MIT | [link](https://github.com/expressjs/compression) |
+| `compression` | 1.8.2 | MIT | [link](https://github.com/expressjs/compression) |
 | `concat-map` | 0.0.1 | MIT | [link](https://github.com/substack/node-concat-map) |
 | `concat-stream` | 2.0.0 | MIT | [link](https://github.com/maxogden/concat-stream) |
 | `confbox` | 0.1.8, 0.2.4 | MIT | [link](https://github.com/unjs/confbox) |
@@ -1353,7 +1353,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `prosemirror-tables` | 1.8.5 | MIT | [link](https://github.com/ProseMirror/prosemirror-tables) |
 | `prosemirror-transform` | 1.12.0 | MIT | [link](https://github.com/prosemirror/prosemirror-transform) |
 | `prosemirror-view` | 1.42.3 | MIT | [link](git+https://code.haverbeke.berlin/prosemirror/prosemirror-view) |
-| `proxy-addr` | 2.0.7 | MIT | [link](https://github.com/jshttp/proxy-addr) |
+| `proxy-addr` | 2.0.8 | MIT | [link](https://github.com/jshttp/proxy-addr) |
 | `proxy-from-env` | 2.1.0 | MIT | [link](https://github.com/Rob--W/proxy-from-env) |
 | `pump` | 3.0.4 | MIT | [link](https://github.com/mafintosh/pump) |
 | `punycode` | 2.3.1 | MIT | [link](https://github.com/mathiasbynens/punycode.js) |
@@ -1446,7 +1446,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `side-channel-weakmap` | 1.0.2 | MIT | [link](https://github.com/ljharb/side-channel-weakmap) |
 | `simple-concat` | 1.0.1 | MIT | [link](https://github.com/feross/simple-concat) |
 | `simple-get` | 4.0.1 | MIT | [link](https://github.com/feross/simple-get) |
-| `simple-git` | 3.36.0 | MIT | [link](https://github.com/steveukx/git-js) |
+| `simple-git` | 4.0.2 | MIT | [link](https://github.com/steveukx/git-js) |
 | `sonic-boom` | 4.2.1 | MIT | [link](https://github.com/pinojs/sonic-boom) |
 | `sonner` | 2.0.7 | MIT | [link](https://github.com/emilkowalski/sonner) |
 | `space-separated-tokens` | 2.0.2 | MIT | [link](https://github.com/wooorm/space-separated-tokens) |

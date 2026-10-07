@@ -2194,6 +2194,24 @@ corre cuando el runner no reclama el turno.
 - Gotcha de entorno: sin `node_modules` (pizzip/pptxgenjs) solo corren los tests puros
   (`pptx-design-system`); los de pptxgenjs los valida el CI.
 
+## Parche de dependencias — audits del 6-oct-2026 (added 2026-10-07)
+
+Los audits de producción (`npm audit --omit=dev` raíz + `scripts/audit-backend-production.cjs`)
+bloqueaban todo PR que tocara `package.json`. Parche en el PR de presentaciones (#1002):
+- Raíz: `sharp` 0.35.5 (pin exacto + `overrides` `$sharp`), `@capacitor/{android,core,ios,cli}`
+  8.5.2, `source-map-js` 1.2.2 (transitivo, `npm update --package-lock-only`).
+- Backend: `sharp` 0.35.5, `@modelcontextprotocol/sdk` 1.32.1, `simple-git` ^4.0.2,
+  `compression` 1.8.2 y `proxy-addr` 2.0.8 (transitivos). `image-size` sigue en alto pero el
+  gate lo acepta con el parche verificado (`backend/scripts/image-size-security-patch.cjs`).
+- **simple-git v4** (`github/git.service.js`): el export por defecto desapareció (`{ simpleGit }`)
+  y hay un guard de entorno: toda variable `GIT_*` / EDITOR / VISUAL / PAGER / PREFIX /
+  SSH_ASKPASS pasada por `.env()` cuenta como explícita y LANZA si no está en
+  `allowEnvironment` (las ambientales se descartan en silencio). `hardenedGit` copia
+  `process.env` sin esas claves (`ambientGitEnv`) y allowlista `GIT_TERMINAL_PROMPT`.
+  Nunca `.env({ ...process.env, ... })` a secas con v4.
+- `THIRD_PARTY_LICENSES.md` se editó a mano (sin `node_modules` aquí); si el job Licenses
+  marca drift, aplicar el diff que imprime y ya.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`
