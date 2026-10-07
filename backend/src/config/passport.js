@@ -72,10 +72,6 @@ if (googleOAuthConfigured) {
     scope: ['profile', 'email'],
   }, async (accessToken, refreshToken, profile, done) => {
     try {
-      console.log('Google OAuth callback - accessToken:', !!accessToken);
-      console.log('Google OAuth callback - refreshToken:', !!refreshToken);
-      console.log('Google OAuth callback - profile scopes:', profile._json?.scope);
-
       const result = await googleAuth.handleVerify({ accessToken, refreshToken, profile });
       return done(null, result.user);
     } catch (error) {

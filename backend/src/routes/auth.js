@@ -522,7 +522,6 @@ router.get('/google/callback',
   },
   async (req, res) => {
     try {
-      console.log('🟡 General Google OAuth callback triggered (NOT Gmail-specific)');
       // Create session token — include admin claims so the rate-limit
       // bypass + admin guards stay consistent with email/password
       // logins. aud/iss/expiry added by signSessionToken().

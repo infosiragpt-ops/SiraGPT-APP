@@ -99,11 +99,11 @@ function hasModel(prisma, name) {
  * error }` rather than throwing — the caller (boot path + interval)
  * must never crash out of a transient DB blip.
  */
-async function runGoalCleanupSweep({ logger, env = process.env } = {}) {
+async function runGoalCleanupSweep({ logger, env = process.env, prisma: injectedPrisma } = {}) {
   const startedAt = Date.now();
   const config = readConfig(env);
 
-  const prisma = getPrisma();
+  const prisma = injectedPrisma || getPrisma();
   if (!prisma) {
     return {
       deleted: 0,
@@ -171,6 +171,7 @@ async function startGoalCleanup({
   logger,
   env = process.env,
   runInterval = true,
+  prisma,
 } = {}) {
   const config = readConfig(env);
   if (!config.enabled) {
@@ -193,7 +194,7 @@ async function startGoalCleanup({
 
   let summary;
   try {
-    summary = await runGoalCleanupSweep({ logger, env });
+    summary = await runGoalCleanupSweep({ logger, env, prisma });
   } catch (err) {
     logWarn(
       logger,
@@ -214,18 +215,20 @@ async function startGoalCleanup({
     durationMs: summary.durationMs || 0,
     retentionMs: config.retentionMs,
   };
+  // Deleting terminal runs past retention is the sweeper doing its job, not
+  // a warning: it reads as INFO so Admin → Logs keeps WARN for real trouble.
   if (fields.deleted > 0) {
-    logWarn(logger, fields, 'goal_cleanup_boot_completed');
+    logInfo(logger, fields, 'goal_cleanup_boot_completed');
   } else {
     logInfo(logger, fields, 'goal_cleanup_boot_noop');
   }
 
   if (runInterval && !cleanupInterval && config.intervalMs > 0) {
     cleanupInterval = setInterval(() => {
-      runGoalCleanupSweep({ logger, env })
+      runGoalCleanupSweep({ logger, env, prisma })
         .then((result) => {
           if ((result.deleted || 0) > 0) {
-            logWarn(
+            logInfo(
               logger,
               {
                 deleted: result.deleted || 0,

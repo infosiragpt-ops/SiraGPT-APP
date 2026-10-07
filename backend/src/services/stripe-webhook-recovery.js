@@ -417,7 +417,12 @@ function createStripeWebhookRecovery({
       }
     }
 
-    log('info', result, 'stripe_webhook_recovery_completed');
+    // An idle leader pass (nothing scanned, nothing done) is a heartbeat, not
+    // an event: once a minute it was a quarter of the production log. Keep it
+    // searchable at debug; a pass that touched work stays at info.
+    const idle = Object.values(result.outbox).every((n) => n === 0)
+      && Object.values(result.unresolved).every((n) => n === 0);
+    log(idle ? 'debug' : 'info', { ...result, idle }, 'stripe_webhook_recovery_completed');
     return result;
   }
 

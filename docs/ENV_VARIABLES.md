@@ -131,6 +131,7 @@ El turno N era más lento que el N-1. Topes (0 = sin tope):
 | `SIRAGPT_UNDERSTANDING_RECENT_MAX_CHARS` | `6000` | Tope por fila para las últimas 6 filas que ve la pila de entendimiento |
 | `SIRAGPT_UNDERSTANDING_OLD_MAX_CHARS` | `1500` | Tope por fila para las filas anteriores de esa pila |
 | `COMPUTER_ACTION_TIMEOUT_MS` | `45000` | Tope del reenvío de una acción al orquestador del escritorio (`POST /api/agent-computer/action`); 504 `desktop_action_timeout` al agotarse |
+| `SIRAGPT_COMPUTER_SEARCH_URL` | `https://www.google.com/search?q=` | Buscador del navegador integrado para texto suelto («google», «clima en lima») escrito en la barra de direcciones o pasado a `computer_navigate`; debe ser http(s), si no se usa el default (`services/computer/navigate-url.js`) |
 
 ### Brief del pedido — entendimiento por turno (added 2026-10-03)
 
@@ -737,6 +738,22 @@ WARN `[local-whisper] unavailable: <motivo>` si el motor local no puede correr
 | `SIRAGPT_META_TRANSCRIPTION` | off | `1` habilita Meta (su API no tiene STT: respondía 404); sin la bandera se salta y se registra a nivel debug |
 | `TRANSCRIBE_PROVIDER_COOLDOWN_MS` | `1800000` (30 min) | Memoria de clave rechazada / sin saldo por proveedor (reusa `utils/provider-key-health`) |
 | `WHISPER_CPP_BIN` / `WHISPER_CPP_MODEL` | `/usr/local/bin/whisper-cli` / `/usr/local/share/whisper/ggml-base.bin` | Motor local; el modelo debe ser legible por `appuser` (uid 100): la imagen lo deja en `0644` |
+
+## Barrido de recuperación de transcripciones (`media-transcription-queue.js`)
+
+Cada minuto el backend busca archivos de audio/vídeo cuya transcripción quedó
+en una etapa pendiente (`uploaded` / `validating` / `extracting`) más de 2 min
+y los vuelve a encolar. Hasta 2026-10-07 el barrido cargaba TODAS las filas
+pendientes de cualquier tipo, con `extractedText`, y filtraba en Node: un
+atasco de documentos lo convertía en un bloqueo de ~2 s por minuto para todo
+el backend (los sondeos de `/api/agent-computer/activity` aparecían con 2 s).
+Ahora PostgreSQL filtra por MIME de medios, devuelve columnas estrechas y el
+pase es acotado; el siguiente pase continúa desde el cursor.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_MEDIA_RECONCILE_INTERVAL_MS` | `60000` (mín. 15000) | Cadencia del barrido de recuperación |
+| `SIRAGPT_MEDIA_RECONCILE_MAX_ROWS` | `500` (mín. 100) | Filas de medios visitadas por pase (páginas de 100); un backlog mayor sigue en el pase siguiente |
 
 ## Chat attachments — any format (optional)
 

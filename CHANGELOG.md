@@ -22,6 +22,38 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Production log 2026-10-07 (15:10 → 18:45 UTC). The one-minute media
+  recovery sweep (`media-transcription-queue.reconcilePendingMedia`) loaded
+  full `File` rows — any type, with `extractedText` — for every upload stuck
+  in a pending stage and only then asked `isMediaFile`; a backlog of stuck
+  documents made that one query a ~2 s stall for the whole backend once a
+  minute, visible as 2 s `304` polls of `/api/agent-computer/activity`,
+  `/login-handoff` and `/api/credits/me` ending at :50 every minute. The sweep
+  now asks PostgreSQL for media rows only (`audio/*`, `video/*`, generic
+  containers), selects narrow columns, is bounded per pass (500 rows,
+  `SIRAGPT_MEDIA_RECONCILE_MAX_ROWS`) and continues from its cursor on the
+  next pass; cadence via `SIRAGPT_MEDIA_RECONCILE_INTERVAL_MS`.
+- Integrated browser: «google» typed in the address bar became
+  `https://google/` → `ERR_NAME_NOT_RESOLVED` → a `502 navigate_failed`
+  ERROR for a typo. Plain words and free text are now a web search
+  (`SIRAGPT_COMPUTER_SEARCH_URL`, default Google) on both the backend gate
+  and its frontend twin; `localhost:3000` / `intranet:8080` are addresses, not
+  schemes. Navigation failures are classified: unresolvable or invalid
+  address → `422 navigate_host_unresolved` / `navigate_url_invalid` with a
+  message that names the host; site refusing/resetting → `502
+  navigate_site_unreachable`; bad certificate → `502 navigate_tls_failed`;
+  slow site → `504 navigate_timeout`. Unknown causes keep `navigate_failed`.
+- Log noise: `stripe_webhook_recovery_completed` with all-zero counters is a
+  debug heartbeat (216 identical INFO lines in 3.5 h); routine goal retention
+  deletes (`goal_cleanup_*_completed`) are INFO instead of WARN; the Google
+  OAuth callback no longer prints debug lines to stdout.
+- `/admin` error boundary: a tab running the previous deployment showed «No
+  se pudo cargar el admin · Reintentar» for a ChunkLoadError that `reset()`
+  can never fix. Both route boundaries now share `lib/client-bundle-recovery`
+  (one hard reload per build + error, 10-minute cooldown so a broken build
+  never loops), the admin boundary reports render errors to telemetry, and
+  its card explains the new version with a «Recargar» action.
+
 - Refresh the visible cloud app after verified same-URL edits, preserve execution outcomes throughout bounded answer verification, and retain the selected model and existing review limits.
 
 - Preserve the Linux file-lock conflict result when a rejected concurrent save also closes its input pipe; never overwrite the winning revision.
