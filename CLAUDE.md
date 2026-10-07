@@ -2285,6 +2285,11 @@ volcado ya no aparece tras el despliegue; lo nuevo:
   en código: `/api/admin/models` 6,5 s (sondas), `codex/projects/by-chat` 404 (normal),
   `/uploads/gpt-icons/…jpeg` 404 (archivo ausente), 401 anónimos del navegador in-app de
   Facebook.
+- **CI**: el shard 1 del gate `E2E · critical UI gate` instala por `apt` Chromium con deps y
+  las herramientas de escritorio (xvfb, xdotool…) y gastaba ~15,5 de sus 18 min en un run
+  normal; en el run de este PR `apt` tardó 12 min y el tope canceló el job con 50/59 specs en
+  verde (la app de GitHub de Claude no puede relanzar jobs: 403). `timeout-minutes` 18 → 25
+  en `.github/workflows/ci.yml` (ningún test fija ese valor).
 - Tests: `tests/lib/authenticated-fetch-session-guard.test.ts` (7, nuevo),
   `tests/lib/credits-service-session-guard.test.ts` (3, nuevo), `api.test.tsx` /
   `refresh-token.test.ts` resetean el guard; `backend/tests/agent-task-runner-remapped-runner-spec.test.js`

@@ -1011,10 +1011,16 @@ jobs:
   # every route on first hit (~9 min for 57 tests); a prod server answers
   # instantly and the three shards build concurrently with a warm cache.
   # All shards must pass: the required `ci` job needs `e2e-critical`.
+  # Budget: shard 1 alone installs the backend, Chromium with its apt deps
+  # and the desktop input tools (apt) before its ~5.5 min of specs — 922 s on
+  # a normal runner (PR #1006). On 2026-10-07 the two apt steps took 12 min
+  # instead of 5.5 and the 18-minute cap cancelled the job with 50/59 specs
+  # green and none failed (PR #1007). 25 min absorbs that apt variance; a
+  # real hang still stops well before the hosted-runner limit.
   e2e-critical:
     name: E2E · critical UI gate (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
