@@ -2373,7 +2373,7 @@ async function buildCoverAccentPng(accent = '2E7D32', accent2 = '66BB6A') {
 }
 
 async function buildPptx(plan, outputPath) {
-  const { CANVAS, assertFrame, addMeasuredText } = require('./pptx-layout');
+  const { CANVAS, assertFrame, addMeasuredText, fitText } = require('./pptx-layout');
   const fallbackPlan = buildPptxContentPlan({
     title: plan.title, prompt: plan.userRequest || plan.title, template: plan.template,
     sections: plan.sections, blocks: plan.blocks, referenceBriefs: plan.referenceBriefs,
@@ -2420,12 +2420,13 @@ async function buildPptx(plan, outputPath) {
     fill: { color }, line: { color: tokens.line, width: 0.6 },
   });
   const title = (target, value, kicker = '') => {
-    text(target, kicker, { x: 0.72, y: 0.28, w: 11.9, h: 0.25, fontSize: 11, bold: true, color: tokens.accent });
+    // Keep the semantic slide title first in OOXML for existing validators.
     text(target, value, { x: 0.72, y: 0.68, w: 11.9, h: 1.08, fontFace: theme.fonts.display, fontSize: 36, minFontSize: 28, bold: true, color: tokens.ink });
+    text(target, kicker, { x: 0.72, y: 0.28, w: 11.9, h: 0.25, fontSize: 11, bold: true, color: tokens.accent });
   };
   const footer = (target, citations = []) => {
     const sources = citations.filter(Boolean);
-    text(target, sources.length ? `Fuentes: ${sources.join(' · ')}` : '', {
+    text(target, sources.length ? `Evidencia: ${sources.join(' · ')}` : '', {
       x: 0.72, y: 6.96, w: 10.9, h: 0.39, fontSize: 10.5, color: tokens.muted,
     });
     text(target, String(pageNumber).padStart(2, '0'), {
@@ -2531,10 +2532,16 @@ async function buildPptx(plan, outputPath) {
       text(slide, provenance, { x: 0.78, y: 6.26, w: 11.7, h: 0.4, fontSize: 11, color: tokens.muted });
     } else {
       const bullets = spec.bullets || [];
-      const takeaway = spec.takeaway && !bullets.some((bullet) => itemText(bullet) === spec.takeaway || bullet?.text === spec.takeaway) ? spec.takeaway : '';
+      const takeaway = spec.takeaway && spec.takeaway !== spec.summary && !bullets.some((bullet) => itemText(bullet) === spec.takeaway || bullet?.text === spec.takeaway) ? spec.takeaway : '';
       const width = takeaway ? 7.5 : 11.85;
-      text(slide, spec.summary, { x: 0.76, y: 2.04, w: width, h: 0.88, fontSize: 20, minFontSize: 17 });
-      const startY = spec.summary ? 3.1 : 2.12;
+      // Let the summary claim its measured height before placing the bullets.
+      // Reusing a fixed 0.88-inch box rejected valid scientific summaries even
+      // with ample room below it. Preserve text and the established font sizes.
+      const summaryHeight = spec.summary ? Math.max(0.88, fitText(spec.summary, {
+        x: 0.76, y: 2.04, w: width, h: 4.56, fontFace: theme.fonts.body, fontSize: 20, minFontSize: 17,
+      }, { slideNumber: pageNumber }).measuredHeight + 0.05) : 0;
+      text(slide, spec.summary, { x: 0.76, y: 2.04, w: width, h: summaryHeight, fontSize: 20, minFontSize: 17 });
+      const startY = spec.summary ? 2.04 + summaryHeight + 0.18 : 2.12;
       const rowHeight = (6.6 - startY) / Math.max(1, bullets.length);
       bullets.forEach((bullet, bulletIndex) => {
         const y = startY + bulletIndex * rowHeight;
@@ -2552,7 +2559,7 @@ async function buildPptx(plan, outputPath) {
   const references = contentPlan.references || [];
   if (contentPlan.manifest.includeReferences && references.length) {
     slide = newSlide();
-    title(slide, 'Referencias');
+    title(slide, 'Material de referencia');
     const columns = references.length > 6 ? 2 : 1;
     const rows = Math.ceil(references.length / columns);
     const rowHeight = contentFrame.h / rows;
@@ -2703,7 +2710,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     // bullets / forma legada
     const bullets = spec.bullets || [];
     const sparseBullets = !spec.summary && bullets.length > 0 && bullets.length <= 2;
-    const takeaway = spec.takeaway && !bullets.some((bullet) => (typeof bullet === 'string' ? bullet : bullet?.text) === spec.takeaway) ? spec.takeaway : '';
+    const takeaway = spec.takeaway && spec.takeaway !== spec.summary && !bullets.some((bullet) => (typeof bullet === 'string' ? bullet : bullet?.text) === spec.takeaway) ? spec.takeaway : '';
     return slideShell(`
       <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
       <div style="display:flex;gap:26px;padding:14px 40px 0;">
@@ -3420,7 +3427,9 @@ async function runAdvancedDocumentPipeline({
     try {
       if (artifact.outputPath) await fsp.unlink(artifact.outputPath);
     } catch { /* best effort cleanup before blocking delivery */ }
-    const error = new Error('La presentación necesita correcciones antes de entregarse. Revisa las diapositivas indicadas y conserva su contenido al ajustar el diseño.');
+    const error = new Error(blockedPptxDesign
+      ? 'La presentación necesita correcciones antes de entregarse. Revisa las diapositivas indicadas y conserva su contenido al ajustar el diseño.'
+      : 'La presentación científica no superó los controles de fidelidad y no se entregó. Revisa las fuentes seleccionadas o reduce el alcance.');
     error.code = 'E_PARAMS';
     error.validation = validation;
     throw error;
