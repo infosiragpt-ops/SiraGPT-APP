@@ -7,7 +7,7 @@
 // that caught the blank-page-1 / broken-table / half-empty-slide bugs.
 //
 // Doctrine: strictly best-effort. This module NEVER throws to the caller and
-// NEVER turns a successful generation into a failure — worst case it returns
+// leaves the delivery policy to its caller — worst case it returns
 // { skipped: true, reason }. Budgeted, env-gated, off in tests by default.
 
 const fsp = require('node:fs/promises');
@@ -56,6 +56,8 @@ async function renderDocumentToImages(filePath, format, { maxPages = MAX_PAGES, 
     const { pdf } = await import('pdf-to-img');
     const doc = await pdf(pdfPath, { scale: 1.2 });
     const images = [];
+    // Preserve the array API while recording full-document coverage.
+    images.totalPages = doc.length;
     let index = 0;
     for await (const png of doc) {
       images.push({ page: ++index, png });
@@ -113,8 +115,10 @@ async function critiqueRenderedPages(images, { expectation = '', model, signal, 
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
   const parsed = JSON.parse(jsonMatch[0]);
+  if (!['pass', 'needs_work'].includes(parsed.overall) || !Array.isArray(parsed.defects)) return null;
+  if (parsed.defects.some((d) => !d || typeof d.defect !== 'string' || !d.defect.trim() || !Number.isInteger(Number(d.page)))) return null;
   const defects = (Array.isArray(parsed.defects) ? parsed.defects : [])
-    .filter((d) => d && d.defect)
+    .filter((d) => d && d.defect && images.some((image) => image.page === Number(d.page)))
     .slice(0, 12)
     .map((d) => ({
       page: Number(d.page) || 0,
@@ -122,6 +126,7 @@ async function critiqueRenderedPages(images, { expectation = '', model, signal, 
       severity: /^(high|medium|low)$/.test(d.severity) ? d.severity : 'medium',
       suggestion: String(d.suggestion || '').slice(0, 200),
     }));
+  if (parsed.overall === 'needs_work' && defects.length === 0) return null;
   return {
     defects,
     overall: parsed.overall === 'pass' ? 'pass' : 'needs_work',
@@ -151,7 +156,7 @@ async function runRenderCritique({ filePath, format, expectation = '', env = pro
       if (images.length === 0) return { skipped: true, reason: 'no pages rendered' };
       const report = await critiqueRenderedPages(images, { expectation, signal: controller.signal, env });
       if (!report) return { skipped: true, reason: 'critique unparseable' };
-      return { skipped: false, pagesRendered: images.length, report, durationMs: Date.now() - startedAt };
+      return { skipped: false, pagesRendered: images.length, totalPages: images.totalPages, report, durationMs: Date.now() - startedAt };
     } finally {
       clearTimeout(timer);
     }

@@ -300,7 +300,7 @@ test('design-theme: style words pick a professional theme; fonts render everywhe
   assert.equal(designTheme.resolveDesignTheme({ prompt: 'rediseña la ppt minimalista' }).id, 'minimal');
   assert.equal(designTheme.resolveDesignTheme({ prompt: INCIDENT }).id, 'aurora');
   assert.equal(designTheme.resolveDesignTheme({ prompt: 'x', colorHex: 'F97316' }).id, 'user-color:F97316');
-  assert.deepEqual(designTheme.resolveDesignTheme({ prompt: INCIDENT }).fonts, { display: 'Calibri', body: 'Calibri' });
+  assert.deepEqual(designTheme.resolveDesignTheme({ prompt: INCIDENT }).fonts, { display: 'Arial', body: 'Arial' });
   assert.equal(agentRunner.designThemeForTask('rediseña la ppt en naranja').palette.bg, 'F97316');
 });
 

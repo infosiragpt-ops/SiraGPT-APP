@@ -203,3 +203,48 @@ test('advanced pipeline writes native explicit chart and previews all series wit
     assert.match(html, /2032/);
   } finally { await fs.rm(outputDir, { recursive: true, force: true }); }
 });
+
+
+test('dark theme chart serializes legible title, axes, legend and value labels in native OOXML', async () => {
+  const { buildPlan, INTERNAL } = require('../src/services/document-pipeline/advanced-document-pipeline');
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'siragpt-dark-chart-'));
+  try {
+    const plan = buildPlan({ prompt: 'Resultados del piloto', format: 'pptx', template: 'business' });
+    plan.presentationTheme = 'boardroom';
+    plan.slideTarget = null;
+    plan.slidePlan = {
+      topic: 'Resultados del piloto', thesis: 'Datos recibidos',
+      slides: [{ layout: 'chart', title: 'Actividades por semana', bullets: [], notes: 'Datos de prueba.', chart: {
+        type: 'column', title: 'Actividades completadas', labels: ['Semana 1', 'Semana 2', 'Semana 3'], values: [4, 8, 12],
+        xAxisTitle: 'Semana', yAxisTitle: 'Actividades', showLegend: true, showValue: true,
+      } }],
+    };
+    const { buffer } = await INTERNAL.buildDocumentFile({ plan, outputDir });
+    const { charts, workbook } = parts(buffer);
+    const xml = charts[0];
+    for (const tag of ['title', 'catAx', 'valAx', 'legend', 'dLbls']) {
+      const blocks = [...xml.matchAll(new RegExp(`<c:${tag}>([\\s\\S]*?)</c:${tag}>`, 'g'))];
+      assert.ok(blocks.length, `${tag} exists`);
+      for (const block of blocks) {
+        assert.match(block[1], /<a:srgbClr val="F8FAFC"\s*\//, `${tag} uses light theme ink`);
+        if (tag === 'catAx' || tag === 'valAx') {
+          const labels = block[1].match(/<c:txPr>([\s\S]*?)<\/c:txPr>/);
+          assert.ok(labels, `${tag} label properties exist`);
+          assert.match(labels[1], /<a:srgbClr val="F8FAFC"\s*\//, `${tag} tick labels use light theme ink`);
+        }
+      }
+    }
+    assert.ok(workbook, 'color repair preserves the editable workbook');
+    assert.match(xml, /<c:v>12<\/c:v>/);
+  } finally { await fs.rm(outputDir, { recursive: true, force: true }); }
+});
+
+test('chart text color remains opt-in for existing callers', () => {
+  let options;
+  addNativeChart({ addChart: (_type, _data, opts) => { options = opts; } }, { ChartType: { bar: 'bar' } }, {
+    type: 'column', labels: ['A'], values: [1],
+  });
+  for (const key of ['titleColor', 'catAxisLabelColor', 'valAxisLabelColor', 'catAxisTitleColor', 'valAxisTitleColor', 'legendColor', 'dataLabelColor']) {
+    assert.equal(options[key], undefined, `${key} keeps the library default`);
+  }
+});

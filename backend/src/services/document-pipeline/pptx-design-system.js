@@ -26,7 +26,7 @@ const THEMES = {
     id: 'aurora',
     label: 'Aurora',
     description: 'Moderno y luminoso: slate + azul eléctrico con acentos cian.',
-    fonts: { display: 'Aptos Display', body: 'Aptos' },
+    fonts: { display: 'Arial', body: 'Arial' },
     palette: {
       bg: 'F8FAFC',          // slide background
       surface: 'FFFFFF',     // cards
@@ -54,7 +54,7 @@ const THEMES = {
     id: 'boardroom',
     label: 'Boardroom',
     description: 'Ejecutivo oscuro: azul noche con acentos ámbar/dorado.',
-    fonts: { display: 'Aptos Display', body: 'Aptos' },
+    fonts: { display: 'Arial', body: 'Arial' },
     palette: {
       bg: '0B1220',
       surface: '111B2E',
@@ -82,14 +82,14 @@ const THEMES = {
     id: 'minimal',
     label: 'Minimal',
     description: 'Blanco, tinta casi negra y un solo acento vivo. Aire y foco.',
-    fonts: { display: 'Aptos Display', body: 'Aptos' },
+    fonts: { display: 'Arial', body: 'Arial' },
     palette: {
       bg: 'FFFFFF',
       surface: 'FFFFFF',
       surfaceAlt: 'F5F5F4',
       ink: '111827',
       body: '374151',
-      muted: '9CA3AF',
+      muted: '6B7280',
       line: 'E5E7EB',
       accent: 'E11D48',
       accent2: '111827',
@@ -110,7 +110,7 @@ const THEMES = {
     id: 'editorial',
     label: 'Editorial',
     description: 'Cálido y humano: crema, verde profundo y terracota.',
-    fonts: { display: 'Georgia', body: 'Aptos' },
+    fonts: { display: 'Times New Roman', body: 'Arial' },
     palette: {
       bg: 'FAF7F2',
       surface: 'FFFFFF',
@@ -138,7 +138,7 @@ const THEMES = {
     id: 'consulting',
     label: 'Consulting',
     description: 'Estructurado y sobrio: blanco, azul marino profundo y gris.',
-    fonts: { display: 'Aptos Display', body: 'Aptos' },
+    fonts: { display: 'Arial', body: 'Arial' },
     palette: {
       bg: 'FFFFFF',
       surface: 'FFFFFF',
@@ -250,7 +250,7 @@ function themeFromRequestedColor(hex) {
     id: `user-color:${color}`,
     label: 'Color pedido',
     description: `Paleta generada desde el color #${color} pedido por el usuario.`,
-    fonts: { display: 'Aptos Display', body: 'Aptos' },
+    fonts: { display: 'Arial', body: 'Arial' },
     palette: {
       bg: color,
       surface,

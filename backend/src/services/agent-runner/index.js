@@ -29,6 +29,8 @@ const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
 const { applySavXlsxDeliveryGate, createSavXlsxFinalEventGate } = require('./sav-xlsx-delivery');
 const { needsVerification } = require('./verify');
+const { auditPptxDesign } = require('../document-pipeline/pptx-design-audit');
+const { preserveUnchangedPptxSourceIssues } = require('../document-pipeline/pptx-design-preservation');
 
 function assessDelivery(run = {}) {
   const surgicalProof = run.stoppedReason === 'surgical_edit'
@@ -1065,6 +1067,38 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
     }
   }
+  // Check the actual deliverable, including create_presentation's deck-builder
+  // path. Keep this out of saveArtifact: uploads and historical files are not
+  // newly generated output and must remain available for editing.
+  for (const out of outputs) {
+    if (out.valid === false || !/\.pptx$/i.test(String(out.name || ''))) continue;
+    let audit = auditPptxDesign(out.buffer);
+    // A proven title-only edit must not force a redesign of untouched source
+    // slides. Generation, redesign and ambiguous/multi-part edits stay strict.
+    if (!audit.passed && editContext.isEdit
+      && out.validation?.scope === 'requested_slide_title_and_unchanged_other_parts'
+      && !CREATE_DOC_RE.test(String(editContext.instruction || ''))
+      && !isDesignUpgradeRequest(editContext.instruction, { officeTarget: 'pptx' })) {
+      const sources = (editContext.files || []).filter((file) => /\.pptx$/i.test(String(file.name || '')));
+      const source = resolveOutputEditSource(out.name, sources);
+      if (source) {
+        const edit = parsePresentationTitleEdit(editContext.instruction);
+        audit = preserveUnchangedPptxSourceIssues({ sourceBuffer: source.buffer, outputBuffer: out.buffer, audit, edit });
+      }
+    }
+    out.valid = audit.passed;
+    out.validation = {
+      ...(out.validation || {}),
+      ok: audit.passed,
+      passed: audit.passed,
+      pptxDesignAudit: audit,
+      ...(!audit.passed ? { engine: 'pptx_design_preflight', reason: 'pptx_design_failed' } : {}),
+    };
+    if (!audit.passed) onEvent({
+      type: 'output_invalid', name: out.name, reason: 'pptx_design_failed',
+      details: audit.issues.filter((issue) => issue.severity === 'error').slice(0, 12),
+    });
+  }
   outputs.sort((a, b) => Number(b.valid !== false) - Number(a.valid !== false));
   return outputs;
 }
@@ -1145,6 +1179,26 @@ function dropIntermediateOutputs(outputs = [], steps = []) {
   if (!consumed.size) return outputs;
   const kept = outputs.filter((out) => !consumed.has(out.name));
   return kept.length ? kept : outputs;
+}
+
+function rejectedPptxOutputs(outputs, steps) {
+  return dropIntermediateOutputs(outputs, steps).filter((out) => out.valid === false && out.validation?.reason === 'pptx_design_failed');
+}
+
+function pptxRepairFeedback(outputs, steps) {
+  const rejected = rejectedPptxOutputs(outputs, steps);
+  if (!rejected.length) return '';
+  const findings = rejected.slice(0, 10).map((out) => ({
+    file: out.name,
+    issues: out.validation.pptxDesignAudit.issues.filter((issue) => issue.severity === 'error').slice(0, 12),
+  }));
+  return 'The actual PPTX output failed static design checks. Repair these slide/shape identifiers: '
+    + JSON.stringify(findings) + '. '
+    + 'Keep all requested content and the original template/theme; move off-slide text into the slide, '
+    + 'use legible font sizes (including autofit scaling), and correct invisible text contrast. '
+    + 'Do not delete content, hide text or replace the PPTX with another format to bypass validation. '
+    + 'Overwrite the rejected file in /workspace/outputs/ (or remove its superseded version), preserve other valid outputs, '
+    + 'then render_preview and inspect the corrected presentation. These static checks do not replace visual verification. ';
 }
 
 async function runAgentRunner({
@@ -1534,7 +1588,7 @@ async function runAgentRunner({
     }
 
     let outputs = await collectTurnOutputs();
-    if (fastPathUsed && outputs.filter((o) => o.valid !== false).length > 0) {
+    if (fastPathUsed && outputs.filter((o) => o.valid !== false).length > 0 && !rejectedPptxOutputs(outputs).length) {
       const previewTarget = outputs.find((o) => o.valid !== false);
       onEvent({ type: 'tool_call', tool: 'render_preview', label: 'Verificando resultado', preview: previewTarget.name });
       const preview = await executors.render_preview({ path: `outputs/${previewTarget.name}` });
@@ -1651,7 +1705,7 @@ async function runAgentRunner({
       // latency and cannot succeed — stop retrying and surface the reason.
       && result.stoppedReason !== 'llm_402'
       && !noChangesNeeded(result.steps)
-      && outputs.filter((o) => o.valid !== false).length === 0
+      && (outputs.filter((o) => o.valid !== false).length === 0 || rejectedPptxOutputs(outputs, result.steps).length > 0)
       && outputAttempt < MAX_OUTPUT_RETRIES
     ) {
       outputAttempt += 1;
@@ -1662,12 +1716,15 @@ async function runAgentRunner({
         label: 'Reintentando',
       });
       const lineageRejects = outputs.filter((o) => o.valid === false && o.validation && o.validation.reason === 'template_not_followed');
+      const designFeedback = pptxRepairFeedback(outputs, result.steps);
       messages.push({
         role: 'user',
         content: lineageRejects.length
           ? `Your output ${lineageRejects.map((o) => o.name).join(', ')} was REJECTED (attempt ${outputAttempt}/${MAX_OUTPUT_RETRIES}): it does not descend from the user's template uploads/${editContext.templateFill.file} — ${lineageRejects.flatMap((o) => (o.validation.details || [])).slice(0, 4).join('; ')}. `
             + `Build it ON the template: ${String(editContext.templateFill.format) === 'pptx' ? 'create_presentation with template="uploads/' + editContext.templateFill.file + '" and the full outline (or python-pptx Presentation(\'uploads/' + editContext.templateFill.file + '\') using ITS slide_layouts, removing its sample slides)' : 'python-docx Document(\'uploads/' + editContext.templateFill.file + '\') writing the content with ITS styles'}, `
             + 'save under /workspace/outputs/ and verify. Never start from scratch or restyle with a SiraGPT theme. If this is the last attempt and it still fails, report the error honestly.'
+          : designFeedback
+          ? designFeedback + `Attempt ${outputAttempt}/${MAX_OUTPUT_RETRIES}. If it still fails, report the error honestly.`
           : `You have NOT produced a valid deliverable in /workspace/outputs (attempt ${outputAttempt}/${MAX_OUTPUT_RETRIES}). `
           + 'Use execute_python (python-pptx / python-docx / openpyxl / zipfile / tmp/office_helpers.py) to CREATE or EDIT the file, '
           + 'save it under /workspace/outputs/, then call render_preview and inspect the result. Do this now. '
@@ -1694,6 +1751,15 @@ async function runAgentRunner({
       outputs = await collectTurnOutputs();
     }
     outputs = dropIntermediateOutputs(outputs, result && result.steps);
+    if (rejectedPptxOutputs(outputs).length && result.stoppedReason === 'final') {
+      const hasOtherOutput = outputs.some((output) => output.valid !== false);
+      result = {
+        ...result,
+        ...(!hasOtherOutput ? { stoppedReason: 'verification_failed' } : {}),
+        finalText: 'No pude entregar la presentación: sigue teniendo errores de legibilidad o de estructura detectados al comprobar el archivo.'
+          + (hasOtherOutput ? ' Los demás archivos válidos se conservan.' : ' No entregué el archivo sin corregir.'),
+      };
+    }
 
     // Compare the exact output bytes before persistence or file_artifact SSE.
     // A readable SAV plus an OOXML workbook is insufficient for an explicit
@@ -1726,12 +1792,13 @@ async function runAgentRunner({
           reason: delivery.verificationNeeded ? 'verification_incomplete' : 'turn_incomplete' },
       })
       : outputs;
+    const validDeliverables = deliverableOutputs.filter((output) => output.valid !== false);
     onEvent({
       type: 'outputs',
-      count: delivery.blocked ? 0 : outputs.length,
-      names: delivery.blocked ? [] : outputs.map((o) => o.name),
+      count: validDeliverables.length,
+      names: validDeliverables.map((output) => output.name),
       label: delivery.verificationNeeded || (pairGate.active && !pairGate.ok)
-        ? 'Sin verificar' : delivery.blocked ? 'Incompleto' : 'Listo',
+        ? 'Sin verificar' : delivery.blocked || rejectedPptxOutputs(outputs).length ? 'Incompleto' : 'Listo',
     });
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.

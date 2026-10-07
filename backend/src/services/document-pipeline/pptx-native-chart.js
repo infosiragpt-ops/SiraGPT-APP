@@ -136,7 +136,7 @@ function normalizeNativeChart(raw, { defaultType = 'column' } = {}) {
   return chart;
 }
 
-function addNativeChart(slide, pptx, raw, { position, colors = PALETTE, fontFace = 'Calibri', defaultType = 'column' } = {}) {
+function addNativeChart(slide, pptx, raw, { position, colors = PALETTE, fontFace = 'Calibri', textColor, defaultType = 'column' } = {}) {
   const chart = normalizeNativeChart(raw, { defaultType });
   const circular = chart.type === 'pie' || chart.type === 'doughnut';
   const palette = Array.isArray(colors) && colors.length ? colors : PALETTE;
@@ -150,7 +150,14 @@ function addNativeChart(slide, pptx, raw, { position, colors = PALETTE, fontFace
   const writerValues = (values) => values.map((value) => value === 0 ? '0' : value);
   const data = chart.series.map((s) => ({ name: s.name, ...(chart.labels ? { labels: chart.labels.slice() } : {}), values: writerValues(s.values) }));
   if (chart.type === 'scatter') data.unshift({ name: chart.xAxisTitle || 'X', values: writerValues(chart.xValues) });
+  // Chart text does not inherit slide text colors in PptxGenJS. Keep the
+  // override opt-in so existing writers retain their established defaults.
+  const ink = textColor === undefined ? undefined : hex(textColor);
   const opts = {
+    ...(ink ? {
+      titleColor: ink, catAxisLabelColor: ink, valAxisLabelColor: ink,
+      catAxisTitleColor: ink, valAxisTitleColor: ink, legendColor: ink, dataLabelColor: ink,
+    } : {}),
     ...(position || { x: 0.75, y: 1.8, w: 11.8, h: 4.9 }), ...chart.position,
     catAxisLabelFontFace: fontFace, valAxisLabelFontFace: fontFace, dataLabelFontFace: fontFace,
     chartColors, title: chart.title, showTitle: chart.showTitle ?? true, showLegend: chart.showLegend ?? (chart.series.length > 1 || circular),
