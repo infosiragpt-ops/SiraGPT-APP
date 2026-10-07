@@ -2238,6 +2238,59 @@ transcripciones.
   `tests/client-bundle-recovery.test.ts` (4, nuevo), `tests/admin-error-boundary-source.test.ts`
   (3, nuevo), `tests/computer-navigate.test.ts` (+1).
 
+## Volcado de producción 2026-10-07 (2.º) — tormenta de refresh, Claude→DeepSeek, trazas Office (added 2026-10-07)
+
+Del log del 7-oct (14:36 → 22:39 UTC, build nuevo desde 19:43) que pegó Luis. Lo del primer
+volcado ya no aparece tras el despliegue; lo nuevo:
+- **Tormenta de `POST /api/auth/refresh → 401`** (20:15 → 22:37, ~20 peticiones fallidas por
+  minuto de UNA pestaña ya deslogueada, siempre en :47–:49 porque Chrome despierta los
+  timers de una pestaña en segundo plano una vez por minuto): `lib/authenticated-fetch.ts`
+  reintentaba el refresh en CADA 401 aunque el propio endpoint de refresh acabara de
+  responder 401, y los sondeos (`CreditsBadge` cada 30 s → `/api/credits/me`,
+  `/agent-computer/activity`, `/login-handoff`) seguían vivos. Ahora el transporte tiene un
+  **session guard** (`authenticatedFetch.sessionGuard`): un 401/403 del refresh es
+  definitivo y bloquea el refresh automático 5 min (`AUTH_REFRESH_FAILURE_COOLDOWN_MS`) para
+  ese bearer; se levanta si cambia el token (login en otra pestaña), si un handshake
+  (`/auth/me|login|register|refresh`) responde 2xx, con `apiClient.setToken(token)` o al
+  expirar. La petición original SIEMPRE se envía (su 401 es la respuesta al llamador); solo
+  se omite el refresh. Emite `siragpt:session-expired` una vez por bloqueo (el auth context
+  ya lo escucha). `ApiClient._tryRefresh` arma el mismo guard tras su escalera (bearer +
+  cookie) y `getMyCredits` devuelve `null` sin petición mientras el guard esté armado.
+  Exports: `isAuthRefreshBlocked`, `blockAuthRefresh`, `clearAuthRefreshBlock`. 5xx/red no
+  bloquean. UI lock re-baselineado para `lib/api.ts`, `lib/authenticated-fetch.ts`,
+  `lib/credits-service.ts` (solo lógica interna, sin cambio visual).
+- **`E_PROVIDER candidate_unavailable` con Claude elegido** (22:39, tarea de documento falló a
+  los 7 s): el worker no tiene runtime para un id `claude-*` pelado, remapeó la tarea a
+  DeepSeek (`runtimeModel=deepseek-v4-flash modelRemapped=true`) pero le pasaba al
+  AgentRunner `runnerModelSpec(detected?.provider /* null */, 'deepseek-v4-flash')` =
+  «Unresolved:deepseek-v4-flash», que el preflight rechaza. `agent-task-runner.js`
+  `runnerPickedModelSpec(profile)`: tras un remap el runner sigue el runtime real
+  (`DeepSeek:deepseek-v4-flash`); sin remap, el proveedor y modelo del picker; sin cliente,
+  honesto (`Unresolved:…`). `applyAgentRuntimeResolution` factoriza la mutación del perfil.
+  Pendiente de decisión de Luis: dar al worker de tareas un runtime Anthropic nativo para
+  que «Claude» no corra en DeepSeek (hoy el chat sí usa el SDK de Anthropic).
+- **`POST /api/doc/generate` → `edits:0` con `turn_wall` (×3, 395–408 s) y
+  `subtask_no_progress` (×1, 113 s)**: sin traza en el log no hay causa. El loop corta
+  `subtask_no_progress` tras 3 tool calls seguidas con `ok:false` (`cutSubtaskIfNoProgress`,
+  por diseño); el muro de 6 min (`SIRAGPT_AGENT_RUNNER_TURN_WALL_MS`) cae en turnos de
+  creación con investigación (5 `web_search` en 20 s) + construcción + render + verificación
+  con veto de visión. La línea `[office-edit]` lleva ahora `steps`, `failedCalls`,
+  `iterations`, `visionVetoes` / `checksFailVisionOk` (dirección del desacuerdo),
+  `toolTrace` («web_search✓1.9s→…→verify_visual✗35s», últimos 24 pasos, ≤700 chars) y
+  `lastError` (160 chars del último tool fallido). El evento de error del muro dice el tope
+  real («tope de 360 s») y no el «120 s» de la tabla 3H64 (`describeWallCut` en `loop.js`).
+  Subir el muro es decisión de Luis (env, hasta 20 min).
+- **Solo Luis (entorno)**: `STRIPE_SECRET_KEY` ausente/malformada (pagos deshabilitados),
+  `SENTRY_DSN`, endpoint OTEL, `MCP_ALLOWED_HOSTS`, SMTP, claves Groq/Kimi/Meta. Sin arreglo
+  en código: `/api/admin/models` 6,5 s (sondas), `codex/projects/by-chat` 404 (normal),
+  `/uploads/gpt-icons/…jpeg` 404 (archivo ausente), 401 anónimos del navegador in-app de
+  Facebook.
+- Tests: `tests/lib/authenticated-fetch-session-guard.test.ts` (7, nuevo),
+  `tests/lib/credits-service-session-guard.test.ts` (3, nuevo), `api.test.tsx` /
+  `refresh-token.test.ts` resetean el guard; `backend/tests/agent-task-runner-remapped-runner-spec.test.js`
+  (4, nuevo), `agent-runner-turn-wall-copy.test.js` (1, nuevo), `agent-runner-office-metrics.test.js`
+  (traza), `agent-runner-turn-honesty.test.js` (contrato del spec actualizado).
+
 ## Parche de dependencias — audits del 6-oct-2026 (added 2026-10-07)
 
 Los audits de producción (`npm audit --omit=dev` raíz + `scripts/audit-backend-production.cjs`)

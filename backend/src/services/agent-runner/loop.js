@@ -1441,6 +1441,12 @@ async function runAgentLoopInner({
   const enforceWall = (adapter) => (wallMsOverride
     ? (args) => adapter.enforceTotalTurnWall120s({ ...(args || {}), wallMs: wallMsOverride })
     : adapter.enforceTotalTurnWall120s);
+  // The 3H64 table copy names the engine default («120 s»); a document turn
+  // runs under its own wall, so the error names the cap that really fired.
+  const describeWallCut = (classified, code) => {
+    if ((code || 'turn_wall') !== 'turn_wall' || !wallMsOverride || !classified) return classified;
+    return { ...classified, message: `El turno superó el tope de ${Math.round(wallMsOverride / 1000)} s. Lo corté.` };
+  };
   const thumbsEnabled = thumbs == null ? agentThumbsEnabled() : Boolean(thumbs);
   // One transcript-repair log state per turn: WARN once, then debug.
   const transcriptRepairLog = { warned: false, count: 0 };
@@ -1820,7 +1826,7 @@ async function runAgentLoopInner({
           resetStallCountOnToken: adapter.resetStallCountOnToken,
         });
         if (wall && (wall.wallHalt || wall.remainingHalt)) {
-          const classifiedWall = classifyLoopError({ code: wall.code || 'turn_wall' });
+          const classifiedWall = describeWallCut(classifyLoopError({ code: wall.code || 'turn_wall' }), wall.code);
           onEvent({
             type: 'error',
             code: classifiedWall.code,
@@ -1918,7 +1924,7 @@ async function runAgentLoopInner({
           });
           if (cut && cut.cancel) stallCount = Math.max(stallCount, STREAM_STALL_CANCEL_AFTER);
           if (cut && (cut.wallHalt || cut.remainingHalt)) {
-            const classifiedWall = classifyLoopError({ code: cut.code || 'turn_wall' });
+            const classifiedWall = describeWallCut(classifyLoopError({ code: cut.code || 'turn_wall' }), cut.code);
             onEvent({
               type: 'error',
               code: classifiedWall.code,

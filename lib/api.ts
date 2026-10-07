@@ -12,6 +12,8 @@ import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import { emitComputerNavigate, sanitizeNavigateUrl } from "./computer-navigate"
 import {
   authenticatedFetch,
+  blockAuthRefresh,
+  clearAuthRefreshBlock,
   prepareAuthenticatedRequest,
 } from "./authenticated-fetch"
 import { reportClientLog, type ClientTurnReason } from "./client-logs"
@@ -1701,6 +1703,9 @@ class ApiClient {
     }
     if (Date.now() < this._refreshBlockedUntil) return false;
 
+    // Status of the last refresh answer: 401/403 means the session is over
+    // and the shared transport must stop refreshing on later 401s too.
+    let lastRefreshStatus: number | null = null;
     const tryRefreshRequest = async (includeBearer: boolean): Promise<boolean> => {
       const headers = new Headers({ 'Content-Type': 'application/json' });
       if (includeBearer && this.token) {
@@ -1723,7 +1728,10 @@ class ApiClient {
           bearerToken: includeBearer ? this.token : null,
         });
 
-        if (!res.ok) return false;
+        if (!res.ok) {
+          lastRefreshStatus = Number(res.status) || null;
+          return false;
+        }
 
         const data = await res.json();
         if (!data?.token) return false;
@@ -1753,6 +1761,10 @@ class ApiClient {
       // auth context the session is over so pollers stop instead of retrying.
       this.setToken(null);
       this._refreshBlockedUntil = Date.now() + this.REFRESH_FAILURE_COOLDOWN_MS;
+      // The transport's own guard was armed for the stale bearer; the token
+      // is gone now, so arm it for the bearer-less polls that follow (one
+      // definitive answer, not one refresh per 401 until the next login).
+      if (lastRefreshStatus === 401 || lastRefreshStatus === 403) blockAuthRefresh(null);
       if (typeof window !== 'undefined') {
         try { window.dispatchEvent(new CustomEvent('siragpt:session-expired')); } catch { /* noop */ }
       }
@@ -1766,7 +1778,10 @@ class ApiClient {
 
   setToken(token: string | null) {
     this.token = token;
-    if (token) this._refreshBlockedUntil = 0;
+    if (token) {
+      this._refreshBlockedUntil = 0;
+      clearAuthRefreshBlock();
+    }
     if (typeof window !== 'undefined') {
       if (token) {
         localStorage.setItem('auth-token', token);

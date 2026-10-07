@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiClient as api } from '@/lib/api'
 import { reportClientLog } from '@/lib/client-logs'
-import { authenticatedFetch, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
+import { authenticatedFetch, clearAuthRefreshBlock, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
 
 vi.mock('@/lib/client-logs', () => ({
   reportClientLog: vi.fn(),
@@ -18,6 +18,9 @@ describe('api client core', () => {
     vi.clearAllMocks()
     api.setToken(null)
     clearAuthenticatedFetchCsrfCache()
+    // A failing refresh in one test arms the shared session guard; each test
+    // starts with a live session.
+    clearAuthRefreshBlock()
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 

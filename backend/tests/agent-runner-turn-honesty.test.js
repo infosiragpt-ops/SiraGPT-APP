@@ -95,7 +95,12 @@ test('the runner follows the picked model on /api/doc/generate, /api/agent/task 
   const doc = read('src/routes/doc.js');
   assert.match(doc, /pickedModel: require\('\.\.\/services\/agent-runner'\)\s*\.runnerModelSpec\(resolveGenerateProvider\(req\.body\.provider, req\.body\.model\), req\.body\.model\)/);
   const task = read('src/services/agents/agent-task-runner.js');
-  assert.match(task, /pickedModel: agentRunner\.runnerModelSpec\(\s*runtimeModelProfile\.detected && runtimeModelProfile\.detected\.provider,\s*runtimeModelProfile\.runtimeModel,\s*\)/);
+  // The spec follows the runtime the task really runs on: the picker's
+  // provider + model, or the fallback runtime after a remap (a bare claude-*
+  // pick ran on DeepSeek and «Unresolved:deepseek-v4-flash» failed the
+  // preflight, prod 2026-10-07). See agent-task-runner-remapped-runner-spec.
+  assert.match(task, /pickedModel: runnerPickedModelSpec\(runtimeModelProfile, agentRunner\)/);
+  assert.match(task, /return agentRunner\.runnerModelSpec\(provider, profile && profile\.runtimeModel\);/);
   const index = read('src/services/agent-runner/index.js');
   assert.match(index, /pickedModel: params\.pickedModel \|\| null,/);
   assert.match(read('src/services/agent-runner/queue.js'), /pickedModel: data\.pickedModel \|\| null,/);

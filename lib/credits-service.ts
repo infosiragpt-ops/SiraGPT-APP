@@ -1,6 +1,6 @@
 "use client"
 
-import { authenticatedFetch } from "./authenticated-fetch"
+import { authenticatedFetch, isAuthRefreshBlocked } from "./authenticated-fetch"
 
 /**
  * credits-service — client for /api/credits/* (F2 PR7).
@@ -63,6 +63,10 @@ function authHeader(): Record<string, string> {
 }
 
 export async function getMyCredits(): Promise<Credits | null> {
+  // The session is known to be over (the refresh endpoint answered 401/403
+  // and nothing changed since): the badge keeps its 30 s cadence but asks
+  // the server nothing, instead of one 401 + one refresh per tick.
+  if (isAuthRefreshBlocked()) return null
   const res = await authenticatedFetch(`${API_ROOT}/credits/me`, {
     headers: authHeader(),
   })

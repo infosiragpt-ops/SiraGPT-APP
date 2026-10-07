@@ -1478,6 +1478,40 @@ function normalizeAgentRuntimeModel(selectedModel) {
   };
 }
 
+// Record the client resolution on the profile: the runtime the task really
+// drives (model + provider) and whether that differs from the picked model.
+function applyAgentRuntimeResolution(profile, resolution) {
+  if (!profile || !resolution || !resolution.client) return profile;
+  profile.runtimeModel = resolution.model;
+  profile.runtimeProvider = resolution.provider;
+  profile.remapped = resolution.model !== profile.displayModel
+    || resolution.provider !== (profile.detected && profile.detected.provider);
+  return profile;
+}
+
+// Provider names the AgentRunner accepts in a "Provider:model" spec.
+const RUNNER_SPEC_PROVIDERS = new Set(['DeepSeek', 'Meta', 'Gemini', 'xAI', 'OpenAI', 'OpenRouter', 'Anthropic']);
+
+/**
+ * "Provider:model" the AgentRunner follows for this task. Normally the
+ * picker's provider and model. After a remap — the picked model's provider
+ * has no usable key here, or its id is not a runtime the task worker drives
+ * (a bare `claude-*` id) — the task already runs on the fallback runtime that
+ * `resolveAgentRuntimeClient` chose, and the runner must follow THAT one.
+ * Pairing the original (unknown) provider with the fallback model id gave
+ * «Unresolved:deepseek-v4-flash», which the runner's preflight rejected as
+ * E_PROVIDER «El modelo seleccionado no está disponible» (prod 2026-10-07:
+ * Claude Sonnet picked, DeepSeek runtime, document task failed in 7 s).
+ */
+function runnerPickedModelSpec(profile, agentRunner = require('../agent-runner')) {
+  const detectedProvider = (profile && profile.detected && profile.detected.provider) || null;
+  const runtimeProvider = String((profile && profile.runtimeProvider) || '').trim();
+  const provider = profile && profile.remapped === true && RUNNER_SPEC_PROVIDERS.has(runtimeProvider)
+    ? runtimeProvider
+    : detectedProvider;
+  return agentRunner.runnerModelSpec(provider, profile && profile.runtimeModel);
+}
+
 function agentModelFailoverEnabled(env = process.env) {
   const flag = String(env.AGENT_TASK_MODEL_FAILOVER || '').trim();
   if (flag === '0') return false;
@@ -2047,12 +2081,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // would hard-fail whenever OPENAI_API_KEY was rate-limited.
   const runtimeClientResolution = resolveAgentRuntimeClient(runtimeModelProfile);
   const openai = runtimeClientResolution.client;
-  if (runtimeClientResolution.client) {
-    runtimeModelProfile.runtimeModel = runtimeClientResolution.model;
-    runtimeModelProfile.runtimeProvider = runtimeClientResolution.provider;
-    runtimeModelProfile.remapped = runtimeClientResolution.model !== runtimeModelProfile.displayModel
-      || runtimeClientResolution.provider !== runtimeModelProfile.detected?.provider;
-  }
+  applyAgentRuntimeResolution(runtimeModelProfile, runtimeClientResolution);
   const deterministicAttachmentAnswer = shouldUseDeterministicAttachmentAnswer({
     goal: displayGoal || goal,
     documentPolicy,
@@ -2939,11 +2968,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           instruction: runnerText,
           conversationContext: agentRunnerConversationContext,
           // Engines follow the model picked in the composer (the ladder
-          // only takes over on provider errors).
-          pickedModel: agentRunner.runnerModelSpec(
-            runtimeModelProfile.detected && runtimeModelProfile.detected.provider,
-            runtimeModelProfile.runtimeModel,
-          ),
+          // only takes over on provider errors); after a remap they follow
+          // the runtime this task already runs on.
+          pickedModel: runnerPickedModelSpec(runtimeModelProfile, agentRunner),
           signal: controller.signal,
           onEvent: (ev) => {
             if (!ev) return;
@@ -4631,6 +4658,8 @@ module.exports = {
   presentTaskError,
   toAgentTaskErrorEvent,
   normalizeAgentRuntimeModel,
+  applyAgentRuntimeResolution,
+  runnerPickedModelSpec,
   resolveAgentRuntimeClient,
   detectAgentRuntimeProvider,
   buildAttachmentGroundedFallbackAnswer,

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { apiClient as api } from '@/lib/api'
-import { authenticatedFetch, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
+import { authenticatedFetch, clearAuthRefreshBlock, clearAuthenticatedFetchCsrfCache } from '@/lib/authenticated-fetch'
 
 describe('refresh token', () => {
   const mockFetch = vi.fn()
@@ -13,7 +13,9 @@ describe('refresh token', () => {
     mockFetch.mockReset()
     api.setToken(null)
     ;(api as any)._refreshing = null
+    ;(api as any)._refreshBlockedUntil = 0
     clearAuthenticatedFetchCsrfCache()
+    clearAuthRefreshBlock()
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
