@@ -21,6 +21,38 @@ const MAX_STALLED_COUNT = 20;
 const PROGRESS_WRITE_INTERVAL_MS = 3000;
 const CHECKPOINT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const PENDING_STAGES = ['uploaded', 'validating', 'extracting'];
+// Recovery sweep (every minute by default). It used to load EVERY file stuck
+// in a pending stage — any type, full rows with `extractedText` — and only
+// then ask `isMediaFile`; a backlog of stuck documents made that one query a
+// multi-second stall for the whole backend once a minute. The sweep now asks
+// the database for media rows only, narrow columns, and a bounded number of
+// rows per pass; the next pass continues.
+const RECONCILE_INTERVAL_MS = Math.max(15_000, positiveMs(process.env.SIRAGPT_MEDIA_RECONCILE_INTERVAL_MS, 60_000));
+const RECONCILE_MAX_ROWS = Math.max(100, positiveMs(process.env.SIRAGPT_MEDIA_RECONCILE_MAX_ROWS, 500));
+const RECONCILE_PAGE_SIZE = 100;
+// Mirrors `isMediaFile`: audio/video by MIME, plus the generic containers
+// that are decided by file name (and an empty MIME, which `isMediaFile`
+// also resolves by name).
+const MEDIA_MIME_FILTER = Object.freeze([
+  { mimeType: { startsWith: 'audio/' } },
+  { mimeType: { startsWith: 'video/' } },
+  { mimeType: { in: ['application/ogg', 'application/octet-stream', ''] } },
+]);
+const RECONCILE_SELECT = Object.freeze({
+  id: true, userId: true, mimeType: true, originalName: true, processingStage: true, processingStageAt: true,
+});
+
+/** Prisma `where` for the recovery sweep: pending media only, past the grace period. */
+function pendingMediaWhere(nowMs, graceMs = 120000) {
+  return {
+    deletedAt: null,
+    processingStage: { in: PENDING_STAGES },
+    AND: [
+      { OR: [{ processingStageAt: { lt: new Date(nowMs - graceMs) } }, { processingStageAt: null }] },
+      { OR: MEDIA_MIME_FILTER.map(clause => ({ ...clause })) },
+    ],
+  };
+}
 
 function positiveMs(value, fallback) {
   const n = Number.parseInt(value, 10);
@@ -221,7 +253,7 @@ async function configureMediaQueue(queue) {
 
 function createMediaTranscriptionService({ prisma, getQueue, processFile, materialize = materializeMedia,
   validate = validateMedia, offload = offloadMedia, timeoutMs = PROCESS_TIMEOUT_MS, now = () => Date.now(),
-  createCheckpoint = row => checkpointFor(row) }) {
+  createCheckpoint = row => checkpointFor(row), reconcileMaxRows = RECONCILE_MAX_ROWS }) {
   const activeControllers = new Set();
   const loadOwned = async (fileId, userId) => {
     if (!fileId || !userId) throw failure('media_owner_required', 'Falta el archivo o su propietario.');
@@ -349,25 +381,38 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     }
   }
 
+  // Keyset position carried across passes: a backlog larger than one pass is
+  // walked round-robin instead of re-reading its head every minute while the
+  // tail starves. Reset once a pass reaches the end.
+  let sweepCursor = null;
   async function reconcilePendingMedia() {
-    // Keyset pagination visits every pending row without holding all uploaded
-    // files in RAM. The grace period avoids racing an HTTP validation write.
-    let cursor;
+    // Keyset pagination visits pending MEDIA rows without holding whole files
+    // in RAM: the database applies the media filter and returns narrow
+    // columns (never `extractedText`). The grace period avoids racing an HTTP
+    // validation write. A pass is bounded; a larger backlog continues on the
+    // next pass instead of stalling the event loop for seconds.
+    let cursor = sweepCursor;
     let recovered = 0;
+    let visited = 0;
+    let truncated = false;
+    const maxRows = Math.max(RECONCILE_PAGE_SIZE, Number(reconcileMaxRows) || RECONCILE_MAX_ROWS);
     do {
-      const rows = await prisma.file.findMany({ where: { deletedAt: null, processingStage: { in: PENDING_STAGES },
-        OR: [{ processingStageAt: { lt: new Date(now() - 120000) } }, { processingStageAt: null }] },
-      orderBy: { id: 'asc' }, take: 100, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+      const take = Math.min(RECONCILE_PAGE_SIZE, maxRows - visited);
+      const rows = await prisma.file.findMany({ where: pendingMediaWhere(now()), select: RECONCILE_SELECT,
+        orderBy: { id: 'asc' }, take, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
       if (!rows.length) break;
+      visited += rows.length;
       for (const row of rows) {
         if (!isMediaFile(row)) continue;
         await enqueueMediaTranscription({ fileId: row.id, userId: row.userId });
         recovered++;
       }
       cursor = rows[rows.length - 1].id;
-      if (rows.length < 100) break;
+      if (rows.length < take) break;
+      if (visited >= maxRows) { truncated = true; break; }
     } while (true);
-    return { recovered };
+    sweepCursor = truncated ? cursor : null;
+    return truncated ? { recovered, truncated: true } : { recovered };
   }
 
   // Live progress of the durable job, for the composer chip. Owner-scoped by
@@ -463,7 +508,7 @@ function startMediaTranscriptionWorker() {
     finally { recovering = false; }
   };
   worker.on('ready', () => { void ensureRunning(); void reconcile(); void sweepStaleCheckpoints().catch(() => {}); });
-  recoveryTimer = setInterval(() => { void ensureRunning(); void reconcile(); }, 60000);
+  recoveryTimer = setInterval(() => { void ensureRunning(); void reconcile(); }, RECONCILE_INTERVAL_MS);
   recoveryTimer.unref?.();
   return worker;
 }
@@ -490,6 +535,7 @@ module.exports = {
   readMediaProgress: payload => getService().readMediaProgress(payload),
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
-  startMediaTranscriptionWorker, closeMediaTranscriptionQueue,
+  startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere,
   QUEUE_NAME, CONCURRENCY, ATTEMPTS, PROCESS_TIMEOUT_MS, MAX_STALLED_COUNT,
+  RECONCILE_INTERVAL_MS, RECONCILE_MAX_ROWS, RECONCILE_PAGE_SIZE, RECONCILE_SELECT, MEDIA_MIME_FILTER,
 };

@@ -164,6 +164,47 @@ test('PostgreSQL scans select only due pending or expired leased work', () => {
   assert.match(STRIPE_PENDING_OUTBOX_SQL, /ORDER BY[\s\S]*nextDueAt/);
 });
 
+test('an idle leader pass is a debug heartbeat; a pass that touched work logs at info', async () => {
+  // Production 2026-10-07: 216 identical `stripe_webhook_recovery_completed`
+  // INFO lines (all zeros) in 3.5 h — a quarter of the log.
+  const entries = [];
+  const logger = {
+    debug(fields, message) { entries.push({ level: 'debug', fields, message }); },
+    info(fields, message) { entries.push({ level: 'info', fields, message }); },
+    warn(fields, message) { entries.push({ level: 'warn', fields, message }); },
+  };
+  const idle = createStripeWebhookRecovery({
+    prisma: makeRecoveryPrisma({ settings: [] }),
+    logger,
+    ownerId: 'worker-idle',
+    listPendingOutboxEvents: async () => [],
+    drainOutbox: async () => {},
+    processEvent: async () => {},
+  });
+  await idle.runOnce();
+  const heartbeat = entries.filter((e) => e.message === 'stripe_webhook_recovery_completed');
+  assert.equal(heartbeat.length, 1);
+  assert.equal(heartbeat[0].level, 'debug');
+  assert.equal(heartbeat[0].fields.idle, true);
+  assert.equal(heartbeat[0].fields.leader, true);
+
+  entries.length = 0;
+  const busy = createStripeWebhookRecovery({
+    prisma: makeRecoveryPrisma({ settings: [unresolvedSetting('evt_busy_1')] }),
+    logger,
+    ownerId: 'worker-busy',
+    listPendingOutboxEvents: async () => [{ stripeEventId: 'evt_outbox_busy' }],
+    drainOutbox: async () => {},
+    processEvent: async () => {},
+  });
+  await busy.runOnce();
+  const done = entries.find((e) => e.message === 'stripe_webhook_recovery_completed');
+  assert.equal(done.level, 'info');
+  assert.equal(done.fields.idle, false);
+  assert.equal(done.fields.outbox.completed, 1);
+  assert.equal(done.fields.unresolved.resolved, 1);
+});
+
 test('one leader performs bounded autonomous outbox and unresolved scans', async () => {
   let nowMs = Date.parse('2026-07-11T01:00:00.000Z');
   const prisma = makeRecoveryPrisma({

@@ -2194,6 +2194,50 @@ corre cuando el runner no reclama el turno.
 - Gotcha de entorno: sin `node_modules` (pizzip/pptxgenjs) solo corren los tests puros
   (`pptx-design-system`); los de pptxgenjs los valida el CI.
 
+## Volcado de producción 2026-10-07 — bloqueo de 2 s por minuto, navegador y ruido (added 2026-10-07)
+
+Del log del 7-oct (15:10 → 18:45 UTC) que pegó Luis. Diagnóstico: el visor Admin → Logs
+solo muestra lecturas ≥1,5 s (`live-logs/classify.js` `QUIET_MAX_MS`), así que los 104
+`304` de 2 s de `/api/agent-computer/activity` (sondeo cada 4 s), `/login-handoff` y
+`/api/credits/me` eran UN sondeo por minuto estancado, siempre el que arranca en :48 y
+termina en :50.2, con `stripe_webhook_recovery_completed` cerrando en :50.5 (víctima, no
+causa). El único trabajo pesado con esa cadencia era el barrido de recuperación de
+transcripciones.
+- **`media-transcription-queue.reconcilePendingMedia`**: cargaba filas COMPLETAS (con
+  `extractedText`) de todo archivo en etapa pendiente, de cualquier tipo, y filtraba
+  `isMediaFile` en Node. Ahora `pendingMediaWhere()` filtra en PostgreSQL por MIME de
+  medios, `RECONCILE_SELECT` trae columnas estrechas, el pase es acotado
+  (`SIRAGPT_MEDIA_RECONCILE_MAX_ROWS`, 500) y un cursor por servicio continúa el backlog en
+  el pase siguiente (sin releer la cabeza ni matar de hambre la cola). Cadencia
+  `SIRAGPT_MEDIA_RECONCILE_INTERVAL_MS` (60 s, mín. 15 s). Sin migración (no hay índice
+  sobre `processingStage`; el seq scan ya existía, lo caro era el volumen transferido y
+  parseado).
+- **Navegador integrado** (`computer/navigate-url.js` + gemelo `lib/computer-navigate.ts`):
+  «google» → búsqueda (`SIRAGPT_COMPUTER_SEARCH_URL`, default Google) en vez de
+  `https://google/`; `localhost:3000` es host:puerto, no esquema.
+  `classifyNavigationFailure(cause, url)` en `navigateMemberDesktop`: dirección
+  irresoluble/inválida ⇒ 422 (`navigate_host_unresolved` / `navigate_url_invalid`, mensaje
+  con el host; sin línea ERROR), sitio caído ⇒ 502 `navigate_site_unreachable`, certificado
+  ⇒ 502 `navigate_tls_failed`, lento ⇒ 504 `navigate_timeout`; lo demás sigue
+  `navigate_failed`.
+- **Ruido**: latido idle de Stripe a `debug` (campo `idle`), `goal_cleanup_*_completed` a
+  INFO, sin `console.log` en el callback de Google OAuth.
+- **`/admin` error boundary**: `lib/client-bundle-recovery.ts` compartido con
+  `app/error.tsx` (recarga única por build+error con cooldown de 10 min, detector ampliado a
+  chunks con nombre y módulos dinámicos); el admin reporta a telemetría y muestra «Hay una
+  versión nueva de SiraGPT · Recargar». UI lock re-baselineado para esos 4 archivos.
+- **Sin arreglo en código**: `POST /api/doc/generate` → `turn_wall` tras 395 s con
+  `edits:0 verifyAttempts:1 visionDisagreements:1` (el loop de edición Office agotó los 6 min
+  de `documentTurnWallMs()` sin producir un cambio verificado; hace falta la traza del turno,
+  no hay defecto evidente en el código del muro). `/api/admin/models` 6,5 s (sondas de salud
+  de modelos). `GET /api/codex/projects/by-chat/:id` 404 es la respuesta normal de un chat
+  sin proyecto codex.
+- Tests: `backend/tests/navigate-url.test.js` (+8), `computer-browser-route.test.js` (+1),
+  `media-transcription-queue.test.js` (+2, fixture honra el filtro MIME y `select`),
+  `stripe-webhook-recovery.test.js` (+1), `production-log-hygiene.test.js` (5, nuevo),
+  `tests/client-bundle-recovery.test.ts` (4, nuevo), `tests/admin-error-boundary-source.test.ts`
+  (3, nuevo), `tests/computer-navigate.test.ts` (+1).
+
 ## Parche de dependencias — audits del 6-oct-2026 (added 2026-10-07)
 
 Los audits de producción (`npm audit --omit=dev` raíz + `scripts/audit-backend-production.cjs`)

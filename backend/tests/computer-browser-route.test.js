@@ -85,6 +85,27 @@ test('browser controls preserve existing authenticated desktop ownership and rep
     assert.doesNotMatch(JSON.stringify(res.body), /private-session|secret-diagnostic/);
     navigationFailure = undefined;
   });
+  await t.test('an address Chromium cannot resolve is the caller\'s 422 with a plain Spanish message, never a 502 ERROR', async () => {
+    navigationFailure = new Error('page.goto: net::ERR_NAME_NOT_RESOLVED at https://google/\nCall log:\n  - navigating to "https://google/", waiting until "domcontentloaded"');
+    const res = await request(identityApp).post('/api/agent-computer/navigate').set('Authorization', auth.authHeader)
+      .send({ sessionId: 'owned-desktop', conversationId: 'chat-a', tabId: 'target-1', url: 'https://google/' });
+    assert.equal(res.status, 422);
+    assert.equal(res.body.error, 'navigate_host_unresolved');
+    assert.match(res.body.message, /No se encontró el sitio «google»/);
+    assert.doesNotMatch(JSON.stringify(res.body), /page\.goto|Call log|ERR_NAME_NOT_RESOLVED/);
+    navigationFailure = new Error('page.goto: net::ERR_CONNECTION_REFUSED at https://intranet.local/');
+    const down = await request(identityApp).post('/api/agent-computer/navigate').set('Authorization', auth.authHeader)
+      .send({ sessionId: 'owned-desktop', conversationId: 'chat-a', tabId: 'target-1', url: 'https://intranet.local/' });
+    assert.equal(down.status, 502);
+    assert.equal(down.body.error, 'navigate_site_unreachable');
+    assert.match(down.body.message, /«intranet\.local»/);
+    navigationFailure = new Error('browserContext.newPage: Target page, context or browser has been closed');
+    const generic = await request(identityApp).post('/api/agent-computer/navigate').set('Authorization', auth.authHeader)
+      .send({ sessionId: 'owned-desktop', conversationId: 'chat-a', tabId: 'target-1', url: 'https://example.com/' });
+    assert.equal(generic.status, 502);
+    assert.equal(generic.body.error, 'navigate_failed');
+    navigationFailure = undefined;
+  });
   await t.test('ownership, authentication, flag and missing session deny before CDP', async () => {
     const count = reads.length + controls.length;
     returnedOwner = 'different-member';

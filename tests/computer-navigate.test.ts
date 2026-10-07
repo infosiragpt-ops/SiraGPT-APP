@@ -6,8 +6,10 @@ import path from "node:path"
 import {
   browserUrlFromPrompt,
   DEFAULT_BROWSER_HOME,
+  DEFAULT_SEARCH_URL,
   extractHttpUrlFromText,
   isComputerNavigateTool,
+  looksLikeSearchQuery,
   parseNavigateUrlFromToolArgs,
   sanitizeNavigateUrl,
 } from "../lib/computer-navigate"
@@ -42,6 +44,36 @@ describe("client navigator URL gate", () => {
     const search = browserUrlFromPrompt("busca información sobre Scopus")
     assert.match(search, /^https:\/\/www\.google\.com\/search\?q=/)
     assert.match(search, /Scopus/)
+  })
+
+  // Production 2026-10-07: «google» in the address bar was sent as
+  // https://google/ and Chromium answered ERR_NAME_NOT_RESOLVED. Words are a
+  // search; the backend twin (navigate-url.js) applies the same rule.
+  it("turns plain words into a search and keeps real addresses, in lockstep with the backend gate", () => {
+    const word = sanitizeNavigateUrl("google")
+    assert.deepEqual(word, { ok: true, url: `${DEFAULT_SEARCH_URL}google` })
+    assert.deepEqual(sanitizeNavigateUrl("clima en lima"), { ok: true, url: `${DEFAULT_SEARCH_URL}clima%20en%20lima` })
+    assert.equal(parseNavigateUrlFromToolArgs({ url: "wikipedia" }), `${DEFAULT_SEARCH_URL}wikipedia`)
+    for (const raw of ["google", "clima en lima"]) assert.equal(looksLikeSearchQuery(raw), true, raw)
+    const addresses: Array<[string, string]> = [
+      ["scopus.com", "https://scopus.com/"],
+      ["localhost", "https://localhost/"],
+      ["localhost:3000/admin", "https://localhost:3000/admin"],
+      ["intranet:8080", "https://intranet:8080/"],
+      ["127.0.0.1", "https://127.0.0.1/"],
+      ["http://intranet", "http://intranet/"],
+      ["www.google.com/search?q=hello world", "https://www.google.com/search?q=hello%20world"],
+    ]
+    for (const [raw, expected] of addresses) {
+      assert.equal(looksLikeSearchQuery(raw), false, raw)
+      assert.deepEqual(sanitizeNavigateUrl(raw), { ok: true, url: expected }, raw)
+    }
+    assert.equal(sanitizeNavigateUrl("javascript:alert(1)").ok, false)
+    assert.equal(sanitizeNavigateUrl("://missing-scheme").ok, false)
+    assert.equal(sanitizeNavigateUrl("a".repeat(400)).ok ? (sanitizeNavigateUrl("a".repeat(400)) as { url: string }).url : "", `${DEFAULT_SEARCH_URL}${"a".repeat(180)}`)
+    const backend = source("backend/src/services/computer/navigate-url.js")
+    assert.match(backend, /function looksLikeSearchQuery/)
+    assert.match(backend, /const DEFAULT_SEARCH_URL = 'https:\/\/www\.google\.com\/search\?q='/)
   })
 
   it("covers 1000 https search URLs the address bar can submit", () => {

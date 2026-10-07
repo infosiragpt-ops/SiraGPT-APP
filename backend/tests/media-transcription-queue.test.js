@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const { Readable } = require('node:stream');
 const {
   createMediaTranscriptionService, isMediaFile, hasTranscript, jobIdFor,
-  isTransientMediaError, materializeMedia, CONCURRENCY,
+  isTransientMediaError, materializeMedia, CONCURRENCY, pendingMediaWhere, RECONCILE_SELECT, RECONCILE_MAX_ROWS,
 } = require('../src/services/media-transcription-queue');
 
 const NOW = Date.parse('2026-09-21T19:00:00Z');
@@ -19,7 +19,7 @@ function row(id, extra = {}) {
 function fixture(initial, overrides = {}) {
   const rows = new Map(initial.map(file => [file.id, { ...file }]));
   const jobs = new Map();
-  const calls = { processed: [], cleaned: [], retries: [], adds: 0, discarded: [] };
+  const calls = { processed: [], cleaned: [], retries: [], adds: 0, discarded: [], findMany: [] };
   const matches = (file, where) => file && file.id === where.id && file.userId === where.userId && file.deletedAt == null;
   const prisma = { file: {
     async findFirst({ where }) { const file = rows.get(where.id); return matches(file, where) ? { ...file } : null; },
@@ -29,10 +29,17 @@ function fixture(initial, overrides = {}) {
       Object.assign(file, data);
       return { count: 1 };
     },
-    async findMany({ where, cursor, take }) {
+    async findMany({ where, cursor, take, select }) {
+      calls.findMany.push({ where, cursor, take, select });
+      // Honour the media pre-filter the way PostgreSQL would: the clause list is
+      // an OR of mimeType predicates (startsWith / in) inside `where.AND`.
+      const mimeClauses = (where.AND || []).map(c => c.OR).find(or => or && or.some(c => c.mimeType)) || [];
+      const mimeMatches = file => mimeClauses.length === 0 || mimeClauses.some(c => (c.mimeType.startsWith != null
+        ? String(file.mimeType || '').startsWith(c.mimeType.startsWith) : c.mimeType.in.includes(String(file.mimeType || ''))));
+      const project = file => (select ? Object.fromEntries(Object.keys(select).filter(k => select[k]).map(k => [k, file[k]])) : { ...file });
       return [...rows.values()].filter(file => !file.deletedAt && where.processingStage.in.includes(file.processingStage)
-        && (!file.processingStageAt || file.processingStageAt.getTime() < NOW - 120000)
-        && (!cursor || file.id > cursor.id)).sort((a, b) => a.id.localeCompare(b.id)).slice(0, take).map(file => ({ ...file }));
+        && (!file.processingStageAt || file.processingStageAt.getTime() < NOW - 120000) && mimeMatches(file)
+        && (!cursor || file.id > cursor.id)).sort((a, b) => a.id.localeCompare(b.id)).slice(0, take).map(project);
     },
   } };
   const queue = {
@@ -165,6 +172,42 @@ test('recovery keyset pagination reaches more than 100 pending files without los
   const f = fixture(Array.from({ length: 205 }, (_, i) => row(`media-${String(i).padStart(3, '0')}`)));
   assert.deepEqual(await f.service.reconcilePendingMedia(), { recovered: 205 });
   assert.equal(f.jobs.size, 205);
+});
+
+test('recovery asks the database for pending MEDIA rows only, with narrow columns (never extractedText)', async () => {
+  // Production 2026-10-07: every minute the sweep loaded full rows for every
+  // file stuck in a pending stage (documents included) and stalled the
+  // backend ~2 s; the three polls in flight showed up as 2 s 304s.
+  const f = fixture([row('audio'), row('doc', { mimeType: 'application/pdf', extractedText: 'x'.repeat(50000) }),
+    row('ogg', { mimeType: 'application/ogg', originalName: 'ogg.ogg' }), row('clip', { mimeType: 'video/mp4', originalName: 'clip.mp4' })]);
+  assert.deepEqual(await f.service.reconcilePendingMedia(), { recovered: 3 });
+  assert.ok(f.calls.findMany.length >= 1);
+  const { where, select } = f.calls.findMany[0];
+  assert.deepEqual(select, RECONCILE_SELECT);
+  assert.equal(select.extractedText, undefined, 'the sweep never transfers transcripts or document text');
+  assert.deepEqual(where, pendingMediaWhere(NOW));
+  const mimeOr = where.AND.map(c => c.OR).find(or => or.some(c => c.mimeType));
+  assert.deepEqual(mimeOr, [
+    { mimeType: { startsWith: 'audio/' } },
+    { mimeType: { startsWith: 'video/' } },
+    { mimeType: { in: ['application/ogg', 'application/octet-stream', ''] } },
+  ]);
+  assert.deepEqual([...f.jobs.values()].map(job => job.data.fileId).sort(), ['audio', 'clip', 'ogg']);
+});
+
+test('a recovery pass is bounded and the next pass continues where it stopped (no head re-reading, no starving tail)', async () => {
+  const f = fixture(Array.from({ length: 350 }, (_, i) => row(`media-${String(i).padStart(3, '0')}`)), { reconcileMaxRows: 200 });
+  assert.deepEqual(await f.service.reconcilePendingMedia(), { recovered: 200, truncated: true });
+  assert.equal(f.jobs.size, 200);
+  assert.ok(f.calls.findMany.every(call => call.take <= 100), 'pages stay at 100 rows');
+  const firstPassReads = f.calls.findMany.length;
+  assert.deepEqual(await f.service.reconcilePendingMedia(), { recovered: 150 });
+  assert.equal(f.jobs.size, 350, 'the tail is reached on the second pass');
+  assert.equal(f.calls.findMany[firstPassReads].cursor.id, 'media-199', 'second pass resumes after the last visited row');
+  // The cursor resets once the backlog was walked to the end.
+  await f.service.reconcilePendingMedia();
+  assert.equal(f.calls.findMany.at(-1).cursor, undefined);
+  assert.ok(RECONCILE_MAX_ROWS >= 100);
 });
 
 test('Redis absence is an honest enqueue error and does not erase a persisted upload', async () => {

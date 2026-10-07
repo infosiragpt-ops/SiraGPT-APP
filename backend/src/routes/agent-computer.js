@@ -34,7 +34,7 @@ const {
   chromeMaximizeOrLaunch,
 } = require('../services/computer/chrome-desktop-flags');
 const { desktopAppFocusCommand } = require('../services/computer/desktop-app-focus');
-const { sanitizeNavigateUrl } = require('../services/computer/navigate-url');
+const { sanitizeNavigateUrl, classifyNavigationFailure } = require('../services/computer/navigate-url');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -345,9 +345,13 @@ async function navigateMemberDesktop(session, url, signal, tabId) {
     return { ok: true, url: result.url, sessionId: session.sessionId };
   } catch (cause) {
     if (['browser_tab_missing', 'browser_action_invalid', 'browser_viewport_failed', ...UNAVAILABLE_CODES].includes(cause?.code)) throw cause;
-    const err = new Error('No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.', { cause });
-    err.code = 'navigate_failed';
-    err.status = 502;
+    // The destination, not the computer, failed: an address nobody can
+    // resolve is the caller's 4xx (no ERROR line for a typo), a site that is
+    // down or slow stays 5xx with a message that names the site.
+    const classified = classifyNavigationFailure(cause, url);
+    const err = new Error(classified ? classified.message : 'No se pudo abrir la página. Revisa la dirección e inténtalo de nuevo.', { cause });
+    err.code = classified ? classified.code : 'navigate_failed';
+    err.status = classified ? classified.status : 502;
     err.publicMessage = err.message;
     throw err;
   }
