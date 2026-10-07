@@ -86,12 +86,12 @@ function shouldOrchestrate(text, _ctx = {}) {
   // Splitting it into specialist nodes would ask intermediate nodes to
   // deliver a full pair before they can finish, or mix different versions.
   if (require('../../agents/generated-artifact-followup').isSavXlsxPairEditRequest(t)) return false;
-  const { CREATE_DOC_RE, DOC_NOUN_RE } = runnerModule();
+  const { isCreateDocumentRequest } = runnerModule();
   const roles = new Set();
   if (RESEARCH_SIGNAL.test(t)) roles.add('researcher');
   if (CODER_SIGNAL.test(t)) roles.add('coder');
   if (DATA_SIGNAL.test(t)) roles.add('data_analyst');
-  if ((CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) || DOC_ALT_SIGNAL.test(t)) {
+  if (isCreateDocumentRequest(t) || DOC_ALT_SIGNAL.test(t)) {
     roles.add('document_editor');
   }
   if (roles.size < 2) return false;

@@ -137,10 +137,22 @@ function normalizeHex(raw) {
   return m ? m[1].toUpperCase() : null;
 }
 
-/** Accepts [{title,bullets}] or plain strings; drops empties, caps at 20. */
+const MAX_TABLE_ROWS = 14;
+const MAX_TABLE_COLS = 8;
+
+/**
+ * Accepts [{title,bullets}] or plain strings; drops empties, caps at 20.
+ * Every slide may also carry the design vocabulary of deck-builder:
+ * `layout` (bullets/columns/timeline/table/quote/agenda/section/closing),
+ * `subtitle`, speaker `notes`, `columns` [{title,bullets}], `steps`
+ * [{title,description}] or strings, `table` {headers,rows}, `quote`
+ * {text,author}. Content is kept verbatim (trimmed, bounded); a table that
+ * cannot fit one slide is refused instead of truncated.
+ */
 function normalizeOutline(raw) {
   if (!Array.isArray(raw)) return [];
   if (raw.length > 20 && raw.some((item) => item?.chart)) throw new Error('E_PARAMS: Más de 20 diapositivas con gráficas; usa execute_python sin recortar el contenido.');
+  const { normalizeLayoutName, stepParts, tableParts, columnParts, quoteParts } = require('./deck-builder');
   const out = [];
   for (const item of raw.slice(0, 20)) {
     if (typeof item === 'string') {
@@ -157,9 +169,98 @@ function normalizeOutline(raw) {
       .filter(Boolean)
       .slice(0, 10)
       .map((b) => b.slice(0, 300));
-    out.push({ title: t.slice(0, 200), bullets, ...(item.chart !== undefined ? { chart: normalizeNativeChart(item.chart) } : {}) });
+    const entry = { title: t.slice(0, 200), bullets };
+    const layout = normalizeLayoutName(item.layout);
+    if (layout !== 'auto') entry.layout = layout;
+    if (typeof item.subtitle === 'string' && item.subtitle.trim()) entry.subtitle = item.subtitle.trim().slice(0, 200);
+    if (typeof item.notes === 'string' && item.notes.trim()) entry.notes = item.notes.trim().slice(0, 1500);
+    const columns = columnParts(item.columns);
+    if (columns) {
+      entry.columns = columns.map((col) => ({
+        title: col.title.slice(0, 80),
+        bullets: col.bullets.slice(0, 8).map((b) => b.slice(0, 220)),
+      }));
+    } else if (Array.isArray(item.columns) && item.columns.length > 3) {
+      throw new Error(`E_PARAMS: «${entry.title}» tiene ${item.columns.length} columnas; máximo 3 por diapositiva (divide en dos diapositivas).`);
+    }
+    const steps = (Array.isArray(item.steps) ? item.steps : []).map(stepParts).filter(Boolean);
+    if (steps.length >= 2) {
+      if (steps.length > 8) throw new Error(`E_PARAMS: «${entry.title}» tiene ${steps.length} pasos; máximo 8 (divide el proceso en dos diapositivas).`);
+      entry.steps = steps.map((step) => ({ title: step.title.slice(0, 60), description: step.description.slice(0, 200) }));
+    }
+    const table = tableParts(item.table);
+    if (table) {
+      if (table.rows.length > MAX_TABLE_ROWS || table.cols > MAX_TABLE_COLS) {
+        throw new Error(`E_PARAMS: la tabla de «${entry.title}» tiene ${table.rows.length} filas × ${table.cols} columnas; máximo ${MAX_TABLE_ROWS} × ${MAX_TABLE_COLS} por diapositiva. Divide la tabla en varias diapositivas o usa execute_python.`);
+      }
+      entry.table = {
+        headers: table.headers.map((h) => h.slice(0, 60)),
+        rows: table.rows.map((row) => row.map((cell) => cell.slice(0, 120))),
+      };
+    }
+    const quote = quoteParts(item.quote);
+    if (quote) entry.quote = { text: quote.text.slice(0, 400), author: quote.author.slice(0, 120) };
+    if (item.chart !== undefined) entry.chart = normalizeNativeChart(item.chart);
+    out.push(entry);
   }
   return out;
+}
+
+const FILLER_TITLE_RE = /—\s*secci[oó]n\s+\d+\s*$/i;
+const FILLER_BULLET_RE = /\b(puntos clave sobre|informaci[oó]n clara,? verificable|contenido relevante sobre|aspectos importantes de)\b/i;
+const MAX_TITLE_CHARS = 70;
+const MAX_BULLETS_PER_SLIDE = 6;
+const MAX_BULLET_CHARS = 160;
+
+/**
+ * Design audit of a normalized outline — the rules of a professional deck
+ * the model can act on (the tool result carries them as `designWarnings`):
+ * long titles, dense slides, long bullets, duplicate or filler titles, no
+ * closing slide, missing speaker notes, runs of bullet-only slides. Pure.
+ */
+function auditDeckPlan(plan) {
+  const list = Array.isArray(plan) ? plan : [];
+  if (!list.length) return [];
+  const { planLayouts } = require('./deck-builder');
+  const layouts = planLayouts(list);
+  const warnings = [];
+  const seen = new Map();
+  let bulletRun = 0;
+  let bulletRunWarned = false;
+  list.forEach((item, idx) => {
+    const n = idx + 2;
+    const title = String(item.title || '');
+    const bullets = Array.isArray(item.bullets) ? item.bullets : [];
+    if (title.length > MAX_TITLE_CHARS) warnings.push(`Diapositiva ${n}: título de ${title.length} caracteres; máximo 8 palabras que expresen la conclusión.`);
+    if (bullets.length > MAX_BULLETS_PER_SLIDE) warnings.push(`Diapositiva ${n} («${title.slice(0, 40)}»): ${bullets.length} viñetas; máximo ${MAX_BULLETS_PER_SLIDE}. Divide en dos diapositivas o usa columns / steps / table.`);
+    const long = bullets.filter((b) => String(b).length > MAX_BULLET_CHARS).length;
+    if (long) warnings.push(`Diapositiva ${n}: ${long} viñeta(s) de más de ${MAX_BULLET_CHARS} caracteres; máximo 14 palabras por viñeta.`);
+    if (FILLER_TITLE_RE.test(title)) warnings.push(`Diapositiva ${n}: título genérico «${title.slice(0, 40)}»; escribe el tema real de la diapositiva.`);
+    if (bullets.some((b) => FILLER_BULLET_RE.test(String(b)))) warnings.push(`Diapositiva ${n}: viñetas de relleno; escribe contenido específico del tema.`);
+    const key = title.trim().toLowerCase();
+    if (key) {
+      if (seen.has(key)) warnings.push(`Diapositivas ${seen.get(key)} y ${n} repiten el título «${title.slice(0, 40)}».`);
+      else seen.set(key, n);
+    }
+    if (layouts[idx] === 'bullets') {
+      bulletRun += 1;
+      if (bulletRun > 3 && !bulletRunWarned) {
+        bulletRunWarned = true;
+        warnings.push(`Diapositivas ${n - bulletRun + 1}-${n}: ${bulletRun} diapositivas seguidas solo de viñetas; alterna columns / steps / table / quote / chart.`);
+      }
+    } else {
+      bulletRun = 0;
+    }
+  });
+  if (list.length >= 3 && layouts[layouts.length - 1] !== 'closing') {
+    warnings.push('Falta una diapositiva de cierre («Conclusiones», «Próximos pasos» o «Gracias», layout closing).');
+  }
+  // Section dividers carry a title only; every other slide should have notes.
+  const needNotes = list.filter((item, idx) => layouts[idx] !== 'section');
+  const withNotes = needNotes.filter((item) => typeof item.notes === 'string' && item.notes.trim()).length;
+  if (needNotes.length && withNotes === 0) warnings.push('Ninguna diapositiva tiene notas del orador (`notes`): añade 1-3 frases por diapositiva.');
+  else if (withNotes < needNotes.length) warnings.push(`${needNotes.length - withNotes} diapositiva(s) sin notas del orador (\`notes\`).`);
+  return warnings;
 }
 
 /** Minimal skeleton when no outline was provided — NO filler bullets. */
@@ -172,6 +273,46 @@ function buildSkeletonPlan({ title, topic, slides } = {}) {
   plan.push({ title: 'Gracias', bullets: [] });
   return plan;
 }
+
+// One outline entry of create_presentation (also the shape add_slide takes).
+const SLIDE_SCHEMA = {
+  type: 'object',
+  properties: {
+    title: { type: 'string', description: 'Takeaway title, ≤ 8 words.' },
+    bullets: { type: 'array', items: { type: 'string' }, description: '3-5 bullets of ≤ 14 words. «35% ahorro anual» (figure first) renders as a KPI tile.' },
+    layout: { type: 'string', description: 'Optional. Design mode: bullets | columns | timeline | table | quote | agenda | section | closing (default auto, inferred from the fields). Template mode: the template layout name or index for this slide.' },
+    role: { type: 'string', enum: ['cover', 'content', 'section', 'closing'], description: 'Template mode: which kind of layout to pick when `layout` is omitted.' },
+    subtitle: { type: 'string', description: 'Optional one-line context under the title (template mode: the subtitle placeholder text).' },
+    notes: { type: 'string', description: 'Speaker notes: 1-3 sentences the presenter says on this slide.' },
+    columns: {
+      type: 'array',
+      description: '2-3 columns to compare options/scenarios: [{title, bullets}].',
+      items: { type: 'object', properties: { title: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['title'], additionalProperties: false },
+    },
+    steps: {
+      type: 'array',
+      description: '2-6 stages of a process/timeline: [{title, description}].',
+      items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' } }, required: ['title'], additionalProperties: false },
+    },
+    table: {
+      type: 'object',
+      description: 'Styled table, max 14 rows × 8 columns: {headers: ["…"], rows: [["…"]]}.',
+      properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } } },
+      required: ['rows'],
+      additionalProperties: false,
+    },
+    quote: {
+      type: 'object',
+      description: 'A real quotation: {text, author}.',
+      properties: { text: { type: 'string' }, author: { type: 'string' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    chart: CHART_SCHEMA,
+  },
+  required: ['title'],
+  additionalProperties: false,
+};
 
 const BASE_TOOL_DEFINITIONS = [
   {
@@ -334,7 +475,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'create_presentation',
       description:
-        'Create a NEW PowerPoint. With `template` (an uploaded .pptx/.potx the user asked to follow: "con este formato", "usa esta plantilla") the deck is BUILT ON that file: its masters, layouts, theme, fonts and logos are kept byte-identical, its sample slides are removed and every outline entry fills one of ITS layouts (optional per-entry `layout` name/index and `role` cover|content|section|closing). Without `template` it starts from scratch. Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover, with titles, bullets and optional native editable `chart`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme. Writes /workspace/outputs/<file>.pptx.',
+        'Create a NEW PowerPoint. With `template` (an uploaded .pptx/.potx the user asked to follow: "con este formato", "usa esta plantilla") the deck is BUILT ON that file: its masters, layouts, theme, fonts and logos are kept byte-identical, its sample slides are removed and every outline entry fills one of ITS layouts (optional per-entry `layout` name/index and `role` cover|content|section|closing). Without `template` it starts from scratch with the professional design system (cover, agenda, cards, KPI tiles, comparison columns, process timelines, styled tables, quotes, section dividers, closing slide, footer «NN / TT», speaker notes). Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover. Each entry has a title and ONE of: bullets (3-5, ≤14 words; «35% ahorro» becomes a KPI tile), columns (2-3 {title,bullets} to compare), steps (2-6 {title,description} of a process), table ({headers,rows} ≤14×8), quote ({text,author}), or a native editable `chart`; plus optional `layout`, `subtitle` and speaker `notes`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme; never pass theme or color together with `template`. Without a template the result lists `designWarnings` (dense slides, long titles, missing notes…): fix them and call again with the same filename. Writes /workspace/outputs/<file>.pptx.',
       parameters: {
         type: 'object',
         properties: {
@@ -349,20 +490,8 @@ const BASE_TOOL_DEFINITIONS = [
           },
           outline: {
             type: 'array',
-            description: 'Content slides with REAL content: [{title, bullets: ["…"]}, …]. Exclude the cover: the tool adds one title slide. For N total slides (N >= 2), use N-1 entries; for a single slide or coverless deck use execute_python.',
-            items: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' },
-                bullets: { type: 'array', items: { type: 'string' } },
-                chart: CHART_SCHEMA,
-                layout: { type: 'string', description: 'Template mode: layout name or index of the template to use for this slide.' },
-                role: { type: 'string', enum: ['cover', 'content', 'section', 'closing'], description: 'Template mode: which kind of layout to pick when `layout` is omitted.' },
-                subtitle: { type: 'string', description: 'Template mode: subtitle placeholder text.' },
-              },
-              required: ['title'],
-              additionalProperties: false,
-            },
+            description: 'Content slides with REAL content: [{title, bullets: ["…"], notes: "…"}, …]. Exclude the cover: the tool adds one title slide. For N total slides (N >= 2), use N-1 entries; for a single slide or coverless deck use execute_python.',
+            items: SLIDE_SCHEMA,
           },
           slides: { type: 'integer', description: 'Slide count when no outline is given (2-20).' },
           filename: { type: 'string', description: 'Output filename ending in .pptx' },
@@ -371,6 +500,33 @@ const BASE_TOOL_DEFINITIONS = [
           keep_sample_slides: { type: 'boolean', description: 'Template mode: keep the template\'s own sample slides before the new ones (default false: they are removed).' },
         },
         required: ['topic'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'add_slide',
+      description:
+        'Add ONE new slide to an EXISTING deck created by SiraGPT (create_presentation or a sira_design restyle), keeping its theme, fonts, cards and footer numbering. Give it REAL content with the same fields as a create_presentation outline entry: title plus bullets, columns, steps, table or quote, optional layout / subtitle / notes. `position` is the 1-based place of the new slide (default: before the closing slide when the deck ends with one, else last). Writes /workspace/outputs/<stem>-v2.pptx (or -v(N+1)). Not for charts (use execute_python) nor for decks made elsewhere (the tool answers ERROR: copy an existing slide\'s format with python-pptx instead). On a deck built from the user\'s template use office_edit ops add_slide / duplicate_slide (they reuse the template layouts). Never rebuild the deck to add a slide.',
+      parameters: {
+        type: 'object',
+        properties: {
+          description: DESCRIPTION_PARAM,
+          path: { type: 'string', description: 'pptx path relative to /workspace (the LAST version of the deck).' },
+          title: { type: 'string', description: 'Slide title (≤ 8 words).' },
+          bullets: { type: 'array', items: { type: 'string' } },
+          layout: { type: 'string', description: 'bullets | columns | timeline | table | quote | section | closing (default auto).' },
+          subtitle: { type: 'string' },
+          notes: { type: 'string', description: 'Speaker notes (1-3 sentences).' },
+          columns: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['title'], additionalProperties: false } },
+          steps: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' } }, required: ['title'], additionalProperties: false } },
+          table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } } }, required: ['rows'], additionalProperties: false },
+          quote: { type: 'object', properties: { text: { type: 'string' }, author: { type: 'string' } }, required: ['text'], additionalProperties: false },
+          position: { type: 'integer', description: '1-based final position of the new slide (2 = right after the cover).' },
+        },
+        required: ['path', 'title'],
         additionalProperties: false,
       },
     },
@@ -426,8 +582,11 @@ function officeEngineEnabled(env = process.env) {
   return String((env && env.SIRAGPT_OFFICE_ENGINE) ?? '').trim() !== '0';
 }
 
-function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
+function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } = {}) {
   const doc = makeDocExecutors(sandbox);
+  // The user's words for this turn: style keywords («ejecutiva», «minimalista»)
+  // pick the theme when the model passes none and no color was requested.
+  const deckPrompt = String((deck && deck.prompt) || '');
   const applyBg = setSlideBackgrounds
     || require('../document-editing/pptx-adapter').setSlideBackgrounds;
 
@@ -613,12 +772,16 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
         const PptxGenJS = require('pptxgenjs');
         const { resolveDesignTheme } = require('./design-theme');
         const { buildThemedDeck } = require('./deck-builder');
-        const theme = resolveDesignTheme({ colorHex: requestedHex, themeId: requestedHex ? null : (args?.theme || 'aurora') });
+        const { planLayouts } = require('./deck-builder');
+        // Explicit theme from the model wins; else the user's style words
+        // («ejecutiva», «minimalista», «cálida»); else aurora.
+        const theme = resolveDesignTheme({ prompt: deckPrompt, colorHex: requestedHex, themeId: requestedHex ? null : (args?.theme || null) });
         if (theme && theme.palette) {
           if (!requestedHex) hex = theme.palette.bg;
           const buffer = await buildThemedDeck({ PptxGenJS, title, topic, plan, theme, colorLocked: Boolean(requestedHex) });
           const outRel = `outputs/${filename}`;
           await sandbox.writeFile(outRel, buffer);
+          const designWarnings = outline.length ? auditDeckPlan(plan) : ['Sin outline: la presentación solo tiene títulos de sección; vuelve a llamar con el contenido real.'];
           return cap(JSON.stringify({
             ok: true,
             path: `/workspace/${outRel}`,
@@ -626,7 +789,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
             defaultColor: !requestedHex,
             theme: theme.id,
             slides: plan.length + 1,
+            layouts: ['cover', ...planLayouts(plan)],
+            notesSlides: plan.filter((item) => typeof item.notes === 'string' && item.notes.trim()).length,
             outlineProvided: outline.length > 0,
+            designWarnings,
             filename,
           }));
         }
@@ -689,6 +855,45 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office } = {}) {
           slides: plan.length + 1,
           outlineProvided: outline.length > 0,
           filename,
+        }));
+      } catch (err) {
+        return `ERROR: ${err.message}`;
+      }
+    },
+
+    async add_slide(args) {
+      const rel = String(args?.path || '').replace(/^\/workspace\/?/, '');
+      if (!rel) return 'ERROR: path is required';
+      if (!/\.pptx$/i.test(rel)) return 'ERROR: add_slide only edits .pptx files';
+      let item;
+      try {
+        const [normalized] = normalizeOutline([{
+          title: args?.title, bullets: args?.bullets, layout: args?.layout, subtitle: args?.subtitle, notes: args?.notes,
+          columns: args?.columns, steps: args?.steps, table: args?.table, quote: args?.quote,
+        }]);
+        item = normalized;
+      } catch (err) {
+        return `ERROR: ${err.message}`;
+      }
+      if (!item) return 'ERROR: E_PARAMS: title is required';
+      try {
+        const PptxGenJS = require('pptxgenjs');
+        const { appendDesignedSlide, nextVersionName } = require('./deck-append');
+        const buffer = await sandbox.readFile(rel);
+        if (!Buffer.isBuffer(buffer) || !buffer.length) return `ERROR: file not found: ${rel}`;
+        const position = Number.isInteger(Number(args?.position)) && Number(args.position) > 0 ? Number(args.position) : null;
+        const result = await appendDesignedSlide({ PptxGenJS, buffer, item, position });
+        const outRel = `outputs/${nextVersionName(rel)}`;
+        await sandbox.writeFile(outRel, result.buffer);
+        return cap(JSON.stringify({
+          ok: true,
+          path: `/workspace/${outRel}`,
+          slideNumber: result.slideNumber,
+          slides: result.total,
+          theme: result.theme,
+          layout: result.layout,
+          notes: Boolean(item.notes),
+          hint: 'verify with expect.same_page_count=false (one slide was added).',
         }));
       } catch (err) {
         return `ERROR: ${err.message}`;
@@ -795,6 +1000,8 @@ module.exports = {
   webToolsEnabled,
   normalizeHex,
   normalizeOutline,
+  auditDeckPlan,
+  SLIDE_SCHEMA,
   NAMED_COLORS,
   DEFAULT_DECK_COLOR,
   CMD_TIMEOUT_MS,

@@ -6,6 +6,20 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Security
+
+- Dependency patch for the advisories that turned the production audits red
+  on 2026-10-06: `sharp` 0.35.4 → 0.35.5 (root + backend, librsvg
+  CVE-2026-96889), `@capacitor/android|core|ios|cli` 8.3.1 → 8.5.2 (remote
+  content at the app origin via the internal HTTP proxy path),
+  `source-map-js` 1.2.1 → 1.2.2, and in the backend
+  `@modelcontextprotocol/sdk` 1.30.0 → 1.32.1 (OAuth client credentials
+  sent to a server-chosen authorization server), `simple-git` 3.36 → 4.0.2
+  (`@simple-git/argv-parser` unsafe-editor detection; the import moves to the
+  named `simpleGit` export and `GIT_TERMINAL_PROMPT` is allowlisted for v4's
+  environment guard), `compression` 1.8.1 → 1.8.2 and `proxy-addr` 2.0.7 →
+  2.0.8. `THIRD_PARTY_LICENSES.md` updated for the new versions.
+
 ### Fixed
 
 - Refresh the visible cloud app after verified same-URL edits, preserve execution outcomes throughout bounded answer verification, and retain the selected model and existing review limits.
@@ -23,6 +37,22 @@ and improvement cycles follow a sequential number with the date the work landed.
   `runEval` / `runDocumentEval` and skips when missing.
 
 ### Added
+
+- Presentations requested in the chat get a consultant-grade design on the
+  default path (AgentRunner `create_presentation`): agenda, comparison
+  columns, process timelines, styled tables, quotes, numbered section
+  dividers, closing slides with call-to-action lines, speaker notes and
+  shrink-to-fit text; the tool result carries `designWarnings` (dense slides,
+  long titles, missing notes, no closing) the model must fix before
+  delivering. «haz / genérame / elabora / prepara / quiero una
+  presentación…» now claim the same engine as «crea / hazme», so one request
+  no longer yields two different designs. Follow-ups keep the design: the new
+  `add_slide` tool inserts a themed slide into an existing SiraGPT deck
+  (renumbered footers, notes, `<stem>-v2.pptx`), a whole-deck color («ahora en
+  azul», «ponlas todas rosadas») restyles the design with that color locked
+  instead of repainting backgrounds over every text run, and «agrega una
+  lámina de gracias» appends the themed closing slide. «Presentación
+  ejecutiva / para el directorio» picks the boardroom theme.
 
 - Start coding from a normal chat message: named cloud project folders, an optional code button in the chat header, owner-scoped project preparation after quota/provider preflight, and repository import locking. Preserve the same project across edits and reconnects; see `docs/coding/chat-native-status.md` for validation and remaining capability limits.
 

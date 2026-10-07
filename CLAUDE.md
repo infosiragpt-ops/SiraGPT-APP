@@ -2133,6 +2133,85 @@ láminas ni para pintar el fondo de UNA sola. Solo backend; UI lock intacto.
 - Pre-existentes en este entorno (idénticos en el árbol limpio): `agent-runner-scenario-bank`
   («scripted client exhausted», 37) y `agent-runner.test.js` «runAgentRunnerForDocRoute … file shape».
 
+## Presentaciones profesionales en el chat — generación y mejora iterativa (added 2026-10-06)
+
+Pedido: que cualquier «hazme una ppt» salga con diseño de consultor y que cada instrucción
+posterior la mejore sin perder ese diseño. Todo backend (sin UI). El camino por defecto en
+producción es el AgentRunner (`create_presentation` → pptxgenjs); el pipeline avanzado solo
+corre cuando el runner no reclama el turno.
+- **Un solo motor** (`agent-runner/index.js` `isCreateDocumentRequest`): para PRESENTACIONES el
+  reclamo del runner cubre «haz / genérame / elabora / prepara / draft / build una presentación»
+  (`CREATE_DECK_VERB_RE` × `DECK_NOUN_RE`) + «quiero / necesito una (nueva) ppt…» / «quiero 10
+  diapositivas…» (`CREATE_DECK_PHRASE_RE`; artículo indefinido o conteo: «quiero la presentación
+  en azul» sigue siendo edición) y los plurales «diapositivas / láminas / presentaciones / deck».
+  Word / Excel / PDF conservan el reclamo original («crea / genera / hazme + sustantivo»):
+  «prepara el informe en Word y PDF» o «prepara un SPSS y un Excel» siguen en el loop agéntico
+  (sus tests lo fijan). Antes los pedidos de deck con esos verbos caían en el pipeline genérico
+  con otro diseño. El orquestador usa el mismo clasificador.
+- **Layouts** (`agent-runner/deck-builder.js`): además de cards / KPI / lista, cada entrada de la
+  outline acepta `layout` (agenda · columns · timeline · table · quote · section · closing),
+  `subtitle`, `notes` (notas del orador), `columns [{title,bullets}]` (2-3), `steps
+  [{title,description}]` (2-6), `table {headers,rows}` (≤14×8; si no cabe → `E_PARAMS`, nunca se
+  recorta), `quote {text,author}`. La agenda sin viñetas lista los títulos reales del deck; el
+  cierre admite hasta 3 líneas de llamado a la acción; el divisor lleva número; todo texto usa
+  `fit:'shrink'`. `resolveLayout` / `planLayouts` son puros.
+- **Auditoría de diseño** (`tools.js` `auditDeckPlan`): el resultado de `create_presentation` trae
+  `layouts`, `notesSlides` y `designWarnings` (título >70 chars, >6 viñetas, viñeta >160 chars,
+  títulos repetidos o de relleno, >3 láminas seguidas de viñetas, sin cierre, sin notas); el
+  prompt ordena corregirlas con una segunda llamada al mismo `filename`.
+- **Tema según las palabras del usuario**: `makeToolExecutors(sandbox, { deck: { prompt } })` →
+  `resolveDesignTheme({ prompt })` cuando el modelo no pasa `theme` ni hay color. Regla nueva en
+  `pptx-design-system.js`: «ejecutiva / directorio / inversionistas» → boardroom (los adjetivos
+  visuales siguen ganando: «ejecutiva y minimalista» → minimal).
+- **Mejora iterativa**:
+  - `add_slide` (tool nueva, `agent-runner/deck-append.js` `appendDesignedSlide`): añade UNA
+    diapositiva diseñada a un deck de SiraGPT (tema detectado por `SiraDeco[<id>]`, color
+    bloqueado incluido), la inserta en `position` (por defecto antes del cierre), renumera todos
+    los pies «NN / TT», lleva notas y escribe `<stem>-v2.pptx` (`nextVersionName`). Rechaza
+    gráficas (`E_UNSUPPORTED`) y decks ajenos (`E_NOT_SIRA_DECK`): ahí el modelo usa python-pptx.
+  - Color sobre un deck de SiraGPT («ahora en azul», «ponlas todas rosadas»,
+    `isDeckColorRestyleRequest`): fast path determinista `restyleSiraDeckWithColor` →
+    `sira_design.restyle` con `themeFromColor` bloqueado (tarjetas, chips, KPI, pies y gráficas
+    con contraste WCAG), sin llamada al LLM; si falla cae a los caminos previos. Un deck ajeno
+    conserva `set_slide_background`. Elementos («el título en rojo»), una sola lámina («la
+    portada azul») y preguntas quedan fuera.
+  - «Agrega una lámina de gracias» sobre un deck de SiraGPT → cierre temado vía
+    `appendDesignedSlide`; en decks ajenos el clon (`office-helpers.appendTextSlide`) ya no
+    repite las viñetas de la última lámina ni comparte su parte de notas.
+- **Prompt** (`prompt.js`): bloque «DECK DESIGN RULES» (estructura cover → agenda (6+) → bloques
+  → cierre, una idea por lámina, título ≤ 8 palabras como conclusión, 3-5 viñetas ≤ 14 palabras,
+  nunca más de 2 láminas seguidas de viñetas, notas en todas, tema por audiencia, corregir
+  `designWarnings`, `add_slide` / restyle para los follow-ups).
+- **Nombres de forma**: `SiraDeco[...]` solo para decoraciones que `sira_design` redibuja (barras,
+  reglas, pie); lo nuevo usa `SiraChip` (bandas de columnas, pasos), `SiraKpi quote value`,
+  `SiraSection number`, `SiraRail`, `SiraAgenda`, `SiraStep`, `SiraQuote`, `SiraColumn`,
+  `SiraTable`, de modo que un rediseño posterior los recolorea en vez de borrarlos.
+- Tests (registrados en `backend/package.json`): `backend/tests/deck-builder-layouts.test.js`
+  (layouts, notas, shrink, auditoría, tema por prompt, add_slide, clon),
+  `backend/tests/agent-runner-create-routing.test.js` (reclamo ampliado, clasificador de color,
+  prompt y tools; wiring real con python-pptx + LibreOffice) y un caso nuevo en
+  `pptx-design-system.test.js`.
+- Gotcha de entorno: sin `node_modules` (pizzip/pptxgenjs) solo corren los tests puros
+  (`pptx-design-system`); los de pptxgenjs los valida el CI.
+
+## Parche de dependencias — audits del 6-oct-2026 (added 2026-10-07)
+
+Los audits de producción (`npm audit --omit=dev` raíz + `scripts/audit-backend-production.cjs`)
+bloqueaban todo PR que tocara `package.json`. Parche en el PR de presentaciones (#1002):
+- Raíz: `sharp` 0.35.5 (pin exacto + `overrides` `$sharp`), `@capacitor/{android,core,ios,cli}`
+  8.5.2, `source-map-js` 1.2.2 (transitivo, `npm update --package-lock-only`).
+- Backend: `sharp` 0.35.5, `@modelcontextprotocol/sdk` 1.32.1, `simple-git` ^4.0.2,
+  `compression` 1.8.2 y `proxy-addr` 2.0.8 (transitivos). `image-size` sigue en alto pero el
+  gate lo acepta con el parche verificado (`backend/scripts/image-size-security-patch.cjs`).
+- **simple-git v4** (`github/git.service.js`): el export por defecto desapareció (`{ simpleGit }`)
+  y hay un guard de entorno: toda variable `GIT_*` / EDITOR / VISUAL / PAGER / PREFIX /
+  SSH_ASKPASS pasada por `.env()` cuenta como explícita y LANZA si no está en
+  `allowEnvironment` (las ambientales se descartan en silencio). `hardenedGit` copia
+  `process.env` sin esas claves (`ambientGitEnv`) y allowlista `GIT_TERMINAL_PROMPT`.
+  Nunca `.env({ ...process.env, ... })` a secas con v4.
+- `THIRD_PARTY_LICENSES.md` se editó a mano (sin `node_modules` aquí); si el job Licenses
+  marca drift, aplicar el diff que imprime y ya.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

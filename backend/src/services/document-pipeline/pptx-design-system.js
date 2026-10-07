@@ -177,6 +177,9 @@ const PROMPT_THEME_RULES = [
   { re: /\b(c[aá]lid\w*|warm|editorial|educaci[oó]n|educativ\w*|cultural?|humanis\w*|creativ\w*|natur\w*)\b/i, theme: 'editorial' },
   { re: /\b(consultor\w*|consulting|estrateg\w*|strategy|corporativ\w*|corporate|negocio\w*|business|financier\w*|finanz\w*|banca)\b/i, theme: 'consulting' },
   { re: /\b(modern\w*|tecnol[oó]g\w*|tech|startup|innovaci[oó]n|digital)\b/i, theme: 'aurora' },
+  // Audience words come last: «ejecutiva y minimalista» stays minimal, while
+  // a plain «presentación ejecutiva para el directorio» gets the executive look.
+  { re: /\b(ejecutiv\w*|executive|directorio|board|inversionistas?|investors?|accionistas|gerencia\w*|c-level)\b/i, theme: 'boardroom' },
 ];
 
 // Template → theme fallback when the prompt doesn't say anything about style.
