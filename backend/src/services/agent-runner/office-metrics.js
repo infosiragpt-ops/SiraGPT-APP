@@ -20,6 +20,13 @@
 
 const OFFICE_TOOLS = new Set(['inspect_document', 'office_edit', 'render_preview', 'verify_visual']);
 const ATTEMPT_BUCKETS = [1, 2, 3, 4, 6];
+// Tool trace on the [office-edit] line: enough of the turn to see WHY it
+// ended with edits:0 (prod 2026-10-07: four turn_wall / subtask_no_progress
+// document turns with no step trace in the logs), bounded so a long turn
+// never floods a log line.
+const TRACE_MAX_STEPS = 24;
+const TRACE_MAX_CHARS = 700;
+const LAST_ERROR_MAX_CHARS = 160;
 const LATENCY_BUCKETS_MS = [100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 170000];
 
 let registry;
@@ -53,6 +60,30 @@ function recordVerify({ passed, checksOk = null, visionOk = null, paginationChan
 }
 
 /**
+ * Compact «tool✓1.9s→tool✗35s» sequence of the whole turn (every tool, not
+ * only the office ones), newest steps kept when the cap cuts.
+ */
+function toolTrace(list) {
+  const steps = list.filter((s) => s && s.tool);
+  const kept = steps.slice(-TRACE_MAX_STEPS);
+  const parts = kept.map((s) => {
+    const dur = Number(s.durationMs);
+    const secs = Number.isFinite(dur) && dur >= 0 ? `${(dur / 1000).toFixed(dur >= 10_000 ? 0 : 1)}s` : '';
+    return `${String(s.tool).slice(0, 40)}${s.ok === false ? '✗' : '✓'}${secs}`;
+  });
+  let text = parts.join('→');
+  if (text.length > TRACE_MAX_CHARS) text = `…${text.slice(-(TRACE_MAX_CHARS - 1))}`;
+  return steps.length > kept.length ? `…(${steps.length - kept.length} más)→${text}` : text;
+}
+
+function lastErrorPreview(list) {
+  const failed = list.filter((s) => s && s.ok === false && typeof s.resultPreview === 'string');
+  const last = failed[failed.length - 1];
+  if (!last) return null;
+  return String(last.resultPreview).replace(/\s+/g, ' ').trim().slice(0, LAST_ERROR_MAX_CHARS) || null;
+}
+
+/**
  * End of a runner turn: attempts per turn, per-tool latency and the
  * structured log line. Returns the record (null for non-office turns).
  */
@@ -82,8 +113,18 @@ function recordOfficeTurn({ steps = [], stoppedReason = null, verifies = [], cha
     ...(unavailable ? { renderUnavailable: unavailable } : {}),
     visionReviewed: verifyList.some((v) => v && v.visionOk !== null && v.visionOk !== undefined),
     visionDisagreements: verifyList.filter((v) => v && ((v.checksOk === true && v.visionOk === false) || (v.checksOk === false && v.visionOk === true))).length,
+    // Direction of the disagreements: a vision veto over passing checks
+    // (the model is told to fix what vision marked) vs checks that failed
+    // while vision approved.
+    visionVetoes: verifyList.filter((v) => v && v.checksOk === true && v.visionOk === false).length,
+    checksFailVisionOk: verifyList.filter((v) => v && v.checksOk === false && v.visionOk === true).length,
     paginationChanged: verifyList.some((v) => v && v.paginationChanged),
     stoppedReason: stoppedReason ? String(stoppedReason).slice(0, 60) : null,
+    steps: list.filter((s) => s && s.tool).length,
+    failedCalls: list.filter((s) => s && s.tool && s.ok === false).length,
+    iterations: list.reduce((max, s) => (s && Number.isInteger(s.iteration) && s.iteration > max ? s.iteration : max), 0) || null,
+    toolTrace: toolTrace(list),
+    ...(lastErrorPreview(list) ? { lastError: lastErrorPreview(list) } : {}),
     ...(chatId ? { chatId: String(chatId) } : {}),
     ts: new Date().toISOString(),
   };

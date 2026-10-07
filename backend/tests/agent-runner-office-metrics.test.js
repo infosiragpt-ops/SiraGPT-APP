@@ -69,6 +69,34 @@ test('recordOfficeTurn: one [office-edit] line per document turn; latency and at
     metricValue(after, /^office_tool_latency_ms_count\{tool="verify_visual"\}/) - metricValue(before, /^office_tool_latency_ms_count\{tool="verify_visual"\}/),
     2,
   );
+  // Diagnosability (prod 2026-10-07: edits:0 turn_wall lines with no step
+  // trace): the whole tool sequence, counts and the last tool error travel
+  // on the line, bounded.
+  assert.equal(record.steps, 5);
+  assert.equal(record.failedCalls, 1);
+  assert.equal(record.visionVetoes, 1);
+  assert.equal(record.checksFailVisionOk, 0);
+  assert.equal(record.toolTrace, 'inspect_document✓0.6s→office_edit✓0.8s→verify_visual✗5.0s→office_edit✓0.7s→verify_visual✓4.8s');
+  assert.equal(record.lastError, undefined, 'no resultPreview on the failed step → no lastError');
+  const walled = recordOfficeTurn({
+    steps: [
+      ...Array.from({ length: 30 }, (_, i) => ({ iteration: i + 1, tool: 'web_search', ok: true, durationMs: 1907 })),
+      { iteration: 31, tool: 'execute_python', ok: true, durationMs: 42_000 },
+      { iteration: 32, tool: 'render_preview', ok: true, durationMs: 9000 },
+      { iteration: 33, tool: 'verify_visual', ok: false, durationMs: 35_210, resultPreview: 'ERROR: verificación fallida\n• Motivo: revisión visual: ✗ la portada no tiene título\n• Checks: ✓' },
+    ],
+    stoppedReason: 'turn_wall',
+    verifies: [{ passed: false, checksOk: true, visionOk: false }],
+    log: () => {},
+  });
+  assert.equal(walled.edits, 0);
+  assert.equal(walled.steps, 33);
+  assert.equal(walled.iterations, 33);
+  assert.equal(walled.failedCalls, 1);
+  assert.match(walled.toolTrace, /^…\(9 más\)→web_search✓1\.9s→/, 'oldest steps are summarised, newest kept');
+  assert.match(walled.toolTrace, /execute_python✓42s→render_preview✓9\.0s→verify_visual✗35s$/);
+  assert.ok(walled.toolTrace.length <= 720);
+  assert.equal(walled.lastError, 'ERROR: verificación fallida • Motivo: revisión visual: ✗ la portada no tiene título • Checks: ✓');
   assert.equal(recordOfficeTurn({ steps: [{ tool: 'execute_python', ok: true }], log: () => lines.push('x') }), null, 'non-office turns log nothing');
   assert.equal(lines.length, 1);
   const unavailable = recordOfficeTurn({ steps: [{ tool: 'office_edit', ok: true }, { tool: 'verify_visual', ok: false, renderUnavailable: true }], log: () => {} });
