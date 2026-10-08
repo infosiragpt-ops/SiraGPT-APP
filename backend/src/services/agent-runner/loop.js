@@ -10,6 +10,7 @@ const {
   verificationNudge,
   isRendererUnavailable,
 } = require('./verify');
+const { shouldNudgeTimeBudget, timeBudgetNudge } = require('./time-budget');
 const { OUTPUTS_SNAPSHOT, changedOutputs: diffOutputSnapshots } = require('./tools.office');
 const { labelForToolCall, agentThumbsEnabled } = require('./trace');
 const { logProviderFailure } = require('./provider-failure-diagnostics');
@@ -1438,6 +1439,9 @@ async function runAgentLoopInner({
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
   const wallMsOverride = Number(turnWallMs) > 0 ? Number(turnWallMs) : null;
+  // One time-budget nudge per turn (time-budget.js): the model learns the
+  // wall exists before the wall cuts it.
+  let timeBudgetNudged = false;
   const enforceWall = (adapter) => (wallMsOverride
     ? (args) => adapter.enforceTotalTurnWall120s({ ...(args || {}), wallMs: wallMsOverride })
     : adapter.enforceTotalTurnWall120s);
@@ -3433,6 +3437,21 @@ async function runAgentLoopInner({
         }
       }
     } catch (_) { /* 3H61 fail-open */ }
+
+    // Time budget (document turns run under `turnWallMs`): once the remaining
+    // time drops under the threshold, tell the model ONCE to close the turn
+    // instead of starting another regeneration round the wall would cut.
+    if (wallMsOverride && !timeBudgetNudged) {
+      const elapsedMs = Date.now() - turnStartedAt;
+      if (shouldNudgeTimeBudget({ elapsedMs, wallMs: wallMsOverride, nudged: timeBudgetNudged })) {
+        timeBudgetNudged = true;
+        const remainingMs = Math.max(0, wallMsOverride - elapsedMs);
+        messages.push({ role: 'user', content: timeBudgetNudge(remainingMs) });
+        try {
+          onEvent({ type: 'time_budget', remainingMs, iteration, label: 'Queda poco tiempo: cerrando el turno' });
+        } catch (_) { /* trace only */ }
+      }
+    }
   }
 
   bail(cap);

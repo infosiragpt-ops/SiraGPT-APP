@@ -70,10 +70,19 @@ function loopSeesImages(env = process.env) {
 // AgentRunner turns do document work (sandbox, render, changed zones, vision
 // review, a correction round): the loop wall is longer than the 3H64 chat
 // default of 120 s, and stays under the runner's own max runtime (10 min).
-function documentTurnWallMs(env = process.env) {
-  const raw = Number(env.SIRAGPT_AGENT_RUNNER_TURN_WALL_MS);
-  if (Number.isFinite(raw) && raw >= 30_000) return Math.min(Math.floor(raw), 20 * 60_000);
-  return 6 * 60_000;
+// Creating a NEW document (research, outline, create, inspect, render, vision
+// review, one correction round) costs more than an edit: on 2026-10-07 four
+// creation turns were cut at the 6-min wall with the deck built and nothing
+// delivered (395–408 s). An explicit SIRAGPT_AGENT_RUNNER_TURN_WALL_MS wins for
+// both kinds; SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS sizes creation alone.
+const EDIT_TURN_WALL_MS = 6 * 60_000;
+const CREATE_TURN_WALL_MS = 8 * 60_000;
+function documentTurnWallMs(env = process.env, { creatingNewFile = false } = {}) {
+  const clamp = (raw) => (Number.isFinite(raw) && raw >= 30_000 ? Math.min(Math.floor(raw), 20 * 60_000) : null);
+  const explicit = clamp(Number(env.SIRAGPT_AGENT_RUNNER_TURN_WALL_MS));
+  if (explicit) return explicit;
+  if (creatingNewFile) return clamp(Number(env.SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS)) || CREATE_TURN_WALL_MS;
+  return EDIT_TURN_WALL_MS;
 }
 
 const OFFICE_FILE_RE = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
@@ -1598,7 +1607,7 @@ async function runAgentRunner({
       onEvent,
       signal: abortScope.signal,
       maxTokens: loopMaxTokens,
-      turnWallMs: documentTurnWallMs(),
+      turnWallMs: documentTurnWallMs(process.env, { creatingNewFile }),
       turnUserMessages,
     });
     throwIfAborted(abortScope.signal);
@@ -1648,7 +1657,7 @@ async function runAgentRunner({
         onEvent,
         signal: abortScope.signal,
         maxTokens: loopMaxTokens,
-        turnWallMs: documentTurnWallMs(),
+        turnWallMs: documentTurnWallMs(process.env, { creatingNewFile }),
         turnUserMessages,
       });
       throwIfAborted(abortScope.signal);
@@ -1873,6 +1882,9 @@ const AGENT_RUNNER_FAILURE_COPY = {
   no_output: 'el agente terminó sin producir un archivo verificado',
   verification_failed: 'el agente no pudo verificar que el archivo quedara correcto',
   max_iterations: 'el agente agotó sus pasos sin producir un archivo verificado',
+  turn_wall: 'el agente agotó el tiempo máximo del turno antes de terminar y verificar el archivo; si ya había generado uno, no se entregó sin verificar',
+  wall_clock: 'el agente agotó el tiempo máximo del turno antes de terminar y verificar el archivo; si ya había generado uno, no se entregó sin verificar',
+  subtask_no_progress: 'el agente encadenó tres pasos fallidos seguidos y se detuvo para no girar en vacío',
   exception: 'el agente falló con un error inesperado',
   // Transient infrastructure: the document sandbox was full / slow.
   sandbox_capacity: 'el entorno de documentos está ocupado; reintenta en un momento',
