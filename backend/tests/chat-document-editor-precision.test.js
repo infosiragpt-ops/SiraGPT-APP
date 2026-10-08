@@ -67,6 +67,17 @@ test('literal Word edits patch the original bytes and preserve filename and veri
   assert.match(result.summary, /1 cambio\(s\) exacto\(s\)/);
 });
 
+test('a literal Word edit treats the requested copy name separately from source and replacement text', async (t) => {
+  const { parseDocxPrecisionRequest } = require('../src/services/document-editing/docx-precision-intent');
+  const { calls, run } = fixture(t, { parse: parseDocxPrecisionRequest });
+  const result = await run({ instruction: 'En Original.docx cambia “a” por “Entrega Otro.docx”. Guarda como “Copia final.docx”.' });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(calls.model, 0);
+  assert.deepEqual(calls.applied[0].edit, { needle: 'a', replacement: 'Entrega Otro.docx' });
+  assert.equal(calls.saved[0].filename, 'Copia final.docx');
+  assert.equal(calls.saved[0].validation.documentEdit.sourceFilename, 'Original.docx');
+});
+
 test('a precise follow-up patches the latest owned artifact, not the original upload', async (t) => {
   const { calls, run, artifactDir } = fixture(t, { messages: [
     { role: 'ASSISTANT', files: [{ artifactId: 'bbccdd', filename: 'Original.docx' }] },

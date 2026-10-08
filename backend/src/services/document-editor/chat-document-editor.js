@@ -20,6 +20,7 @@
 const fs = require('fs');
 const path = require('path');
 const { composeAbortSignals } = require('../../utils/abort-signals');
+const { documentOutputIntent } = require('../document-editing/document-output-intent');
 
 const EDITABLE_EXT_RE = /\.(?:docx?|xlsx?|xlsm|pptx?|pdf|csv|txt|md)$/i;
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -701,7 +702,7 @@ function quotedReplacementCount(instruction) {
 }
 
 function isMultiOperationRequest(instruction) {
-  const text = unquotedInstruction(precisionInstruction(instruction))
+  const text = unquotedInstruction(documentOutputIntent(precisionInstruction(instruction)).sourceInstruction)
     .replace(/\b(?:sin\s+(?:cambiar|alterar|modificar|perder|tocar)|no\s+(?:cambies|alteres|modifiques|toques))\b/g, ' conservar ');
   return quotedReplacementCount(instruction) > 1
     || (text.match(/\b(?:agreg\w*|anad\w*|insert\w*|borr\w*|elimin\w*|reescrib\w*|traduc\w*|resum\w*|corrig\w*|reempla[zc]\w*|sustitu\w*|modific\w*|cambi\w*|revis\w*|mejora\w*|replace|change)\b/g) || []).length > 1;
@@ -715,7 +716,7 @@ function precisionInstruction(instruction) {
 }
 
 function sourceSelectionText(instruction) {
-  const text = String(instruction || '');
+  const text = documentOutputIntent(instruction).sourceInstruction;
   const value = '(?:"[^"\\r\\n]*"|“[^”\\r\\n]*”|«[^»\\r\\n]*»|\'[^\'\\r\\n]*\'|‘[^’\\r\\n]*’|`[^`\\r\\n]*`)';
   // Later pairs may share the first verb: "cambia A por B y C por D".
   // Inspect only the gap before each pair. A later "en A.docx con B.xlsx"
@@ -908,13 +909,32 @@ async function runResolvedDocumentEdit({
       message: `La cantidad de documentos indicada no coincide con los ${batchSize} disponibles. Indica los nombres o adjunta exactamente los archivos que deseas editar; no modifiqué ninguno.`,
     };
     if (sources.length > MAX_SOURCES) return { ok: false, code: 'TOO_MANY_DOCUMENTS', message: MESSAGES.TOO_MANY_DOCUMENTS };
+    const { outputNames } = documentOutputIntent(instruction);
+    if (outputNames.length && (batchSize !== 1 || outputNames.length !== 1)) return {
+      ok: false, code: 'E_PARAMS',
+      message: 'Para asignar nombres a varias copias, pide cada edición por separado. No modifiqué ningún documento.',
+    };
+    const requestedOutputName = outputNames[0] || null;
+    const sourceExt = extensionOf(sources[0].name);
+    const modernExt = { doc: 'docx', xls: 'xlsx', ppt: 'pptx' }[sourceExt] || sourceExt;
+    if (requestedOutputName && ![sourceExt, modernExt].includes(extensionOf(requestedOutputName))) return {
+      ok: false, code: 'E_PARAMS',
+      message: 'Esta edición conserva el formato original. Pide la conversión a otro formato en una petición separada; no modifiqué el documento.',
+    };
     emit({ label: 'Abriendo el documento', detail: sources.map((source) => source.name).join(', ') });
     const files = resolved?.files || await loadSourceFiles(sources, deps);
     if (sources.length > 1) return runDocumentEditBatch({ prisma, userId, chatId, fileIds, instruction, llm, signal, precisionOnly, onEvent }, sources, files, deps);
     const originalSaveArtifact = deps.saveArtifact;
     deps.saveArtifact = (input) => {
       const validation = { ...input.validation, documentEdit: sourceLineage(sources[0]) };
-      return { ...originalSaveArtifact({ ...input, validation }), validation };
+      // A destination names the verified output; it cannot relabel bytes as a
+      // different format or assign one filename to every member of a batch.
+      if (requestedOutputName && extensionOf(requestedOutputName) !== extensionOf(input.filename)) {
+        throw new DocumentEditError('NO_VALID_OUTPUT',
+          'El archivo editado no conserva el formato solicitado. No entregué una copia incompatible; el original se conserva.');
+      }
+      const filename = requestedOutputName || input.filename;
+      return { ...originalSaveArtifact({ ...input, filename, validation }), validation };
     };
     const batchContext = resolved?.batchNames
       ? `Este paso edita únicamente ${JSON.stringify(sources[0].name)} del conjunto ${JSON.stringify(resolved.batchNames)}. Los demás archivos se procesan en pasos separados y se entregan juntos; no afirmes que faltan ni pidas volver a adjuntarlos. Aplica solo los cambios autorizados para este archivo. Si un cambio concreto exige datos de otro documento que no están en este paso, identifica esa dependencia específica sin inventar contenido.`
@@ -1042,7 +1062,7 @@ async function runResolvedDocumentEdit({
     // presentation" in 1 s. Content the user expects the assistant to write
     // goes to the picked model with the resolved (latest) files.
     const followUpOnDelivered = sources.some((source) => source.kind === 'artifact');
-    if (!wordFile && !deps.isReformateoRequest(instruction) && !followUpOnDelivered && !isContentGeneratingOfficeRequest(instruction)) {
+    if (!wordFile && !outputNames.length && !deps.isReformateoRequest(instruction) && !followUpOnDelivered && !isContentGeneratingOfficeRequest(instruction)) {
       try {
         const deterministic = await deps.tryDeterministicEdit({
           prisma, userId, chatId, fileIds: sources.map((source) => source.row.id), prompt: instruction, displayPrompt: instruction, signal,
