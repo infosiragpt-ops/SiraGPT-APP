@@ -165,10 +165,13 @@ function createRunnerClient({
         }),
       // A scoped client assigns its own preview slot to project+run. Legacy
       // unscoped calls keep the historical per-project/no-arg behavior.
+      // `requestedPort` (chat: "en local 5000") pins the dev server port via
+      // the runner pool's pinnedPort semantics; omitted → pool assignment.
       startDev: (project, opts = {}) => call('POST', '/run', bodyFor({
         project: projectFor(project),
         basePath: opts.basePath || null,
         preferredPort: Number.isInteger(opts.preferredPort) ? opts.preferredPort : undefined,
+        requestedPort: Number.isInteger(opts.requestedPort) ? opts.requestedPort : undefined,
         // Public build-time variables (NEXT_PUBLIC_*, VITE_*); the runner
         // re-validates the keys before they reach the dev server.
         env: opts.env && typeof opts.env === 'object' ? opts.env : undefined,
