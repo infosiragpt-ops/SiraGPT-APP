@@ -39,16 +39,31 @@ function assessDelivery(run = {}) {
   return { complete, verificationNeeded, blocked: !complete || verificationNeeded };
 }
 
-// Edición milimétrica (Fase C): the before/after image is reviewed by a
-// separate vision model (multimodal/vision-ladder.js). Off under
-// NODE_ENV=test and with SIRAGPT_VISUAL_VERIFY_VISION=0.
-function buildVisionVerifier({ pickedModel, env = process.env, onFailover } = {}) {
-  if (String(env.SIRAGPT_VISUAL_VERIFY_VISION || '').trim() === '0' || env.NODE_ENV === 'test') return null;
+// The vision ladder (multimodal/vision-ladder.js): the loop model is usually
+// text-only, so every look at pixels — verify_visual's before/after review
+// AND the describe_image tool — goes to a separate vision-capable model with
+// failover. Null under NODE_ENV=test (no network) and when no provider with a
+// key can see images. Production 2026-10-08: describe_image rode the loop's
+// text model (DeepSeek V4 Flash) and failed on every call.
+function buildVisionLadderClient({ pickedModel, env = process.env, onFailover } = {}) {
+  if (env.NODE_ENV === 'test') return null;
   try {
     const { resolveVisionCandidates, createVisionClient } = require('./multimodal/vision-ladder');
+    return createVisionClient(resolveVisionCandidates({ pickedModel, env }), { onFailover }) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Edición milimétrica (Fase C): the before/after image is reviewed by the
+// vision ladder. Off under NODE_ENV=test and with SIRAGPT_VISUAL_VERIFY_VISION=0.
+// `client` reuses the ladder client the turn already built.
+function buildVisionVerifier({ pickedModel, env = process.env, onFailover, client = null } = {}) {
+  if (String(env.SIRAGPT_VISUAL_VERIFY_VISION || '').trim() === '0' || env.NODE_ENV === 'test') return null;
+  try {
     const { makeVisionVerifier } = require('./multimodal/visual-verifier');
-    const client = createVisionClient(resolveVisionCandidates({ pickedModel, env }), { onFailover });
-    return client ? makeVisionVerifier({ client }) : null;
+    const ladder = client || buildVisionLadderClient({ pickedModel, env, onFailover });
+    return ladder ? makeVisionVerifier({ client: ladder }) : null;
   } catch (_) {
     return null;
   }
@@ -1161,6 +1176,10 @@ async function runAgentRunner({
   openaiClient = null,
   synthesize = null,
   computerDriver = null,
+  // Vision ladder client shared by verify_visual's reviewer and
+  // describe_image (tests inject a fake; production builds it from the
+  // configured providers).
+  visionClient = null,
   // F8: cross-session memory + skills + per-user MCP. `prisma` is only used
   // by the MCP loader (mcp_servers rows); `memoryStore` / `mcpToolLoader`
   // are injectable for tests. `persistMemory` gates the post-turn episodic
@@ -1394,13 +1413,18 @@ async function runAgentRunner({
 
     let lastVerify = null;
     const verifies = [];
+    // One vision ladder per turn: verify_visual's reviewer and describe_image
+    // share it, so a text-only loop model (DeepSeek V4) never receives pixels.
+    const visionFailover = (info) => { try { onEvent({ type: 'vision_failover', ...info }); } catch (_) { /* trace only */ } };
+    const visionLadder = visionClient || buildVisionLadderClient({ pickedModel: model, onFailover: visionFailover });
     const executors = {
       ...makeToolExecutors(toolSandbox, {
         office: {
           onFailure: reportOfficeFailure,
           visionVerifier: buildVisionVerifier({
             pickedModel: model,
-            onFailover: (info) => { try { onEvent({ type: 'vision_failover', ...info }); } catch (_) { /* trace only */ } },
+            client: visionLadder,
+            onFailover: visionFailover,
           }),
           attachImages: loopSeesImages(),
           // Stage v2 thumbnails (render / verify) for the timeline.
@@ -1574,8 +1598,11 @@ async function runAgentRunner({
       f7 = prepareF7Extras({
         files,
         sandbox: toolSandbox,
-        client: llm,
-        model: resolvedModel,
+        // describe_image looks at pixels: it rides the vision ladder (the
+        // façade picks the model per call), never the loop's text model.
+        // Without a ladder the tool is not offered (multimodal/index.js).
+        client: visionLadder,
+        model: null,
         openaiClient,
         synthesize,
         computerDriver,
@@ -2275,6 +2302,7 @@ module.exports = {
   installSiraOfficeEngine,
   SIRA_OFFICE_ENGINE_REL,
   buildVisionVerifier,
+  buildVisionLadderClient,
   documentTurnMaxTokens,
   withVisionHonesty,
   MAX_ITERATIONS_DEFAULT,

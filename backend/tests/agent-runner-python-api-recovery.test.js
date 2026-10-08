@@ -85,7 +85,7 @@ test('success, timeout, abort, unrelated code and non-API errors do not acquire 
   assert.ok(!disabled.includes(marker), 'never advise a disabled Office tool');
 });
 
-test('the guided error still counts toward the unchanged three-failure no-progress guard', async () => {
+test('the guided error still counts toward the three-failure guard: one recovery nudge, then the dead letter', async () => {
   const executor = executorsFor({ exitCode: 1, stderr: 'Traceback (most recent call last):\nAttributeError: missing chart field' });
   let calls = 0;
   const client = { chat: { completions: { create: async () => ({ choices: [{ message: {
@@ -99,10 +99,13 @@ test('the guided error still counts toward the unchanged three-failure no-progre
     tools: tools.buildToolDefinitions({ NODE_ENV: 'test' }), executors: executor,
     maxIterations: 8, onEvent() {},
   });
-  assert.equal(result.stoppedReason, 'subtask_no_progress');
+  // Third failure → the no-progress guard nudges once (no-progress-nudge.js);
+  // the fourth model call insists on execute_python and the same-tool dead
+  // letter refuses it before a fourth execution.
+  assert.equal(result.stoppedReason, 'tool_dead_letter');
   assert.equal(result.steps.length, 3);
   assert.ok(result.steps.every(step => step.ok === false));
-  assert.equal(calls, 3);
+  assert.equal(calls, 4, 'the fourth model call answers the nudge; its execute_python is refused');
 });
 
 test('canonical inspector reopens the real XLSX and checks native line chart title, type and data', {

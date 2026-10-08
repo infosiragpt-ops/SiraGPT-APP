@@ -2337,6 +2337,42 @@ crear → render → revisión de visión → veto → regenerar → muro, sin e
   plumbing de `verify_visual` con páginas completas), `agent-runner-turn-honesty.test.js`
   (muros por tipo + contrato de las llamadas). Envs en `docs/ENV_VARIABLES.md`.
 
+## «No puede generar ppt» (2.ª) — describe_image sin visión + aviso antes del corte (added 2026-10-08)
+
+Captura de Jorge con #1009 ya publicado: el deck se construyó («Próximos pasos» renderizada en el
+timeline), luego «Revisando la línea de tiempo · falló» ×2 (icono de imagen) y «Recortando la línea
+de tiempo para revisar bordes · falló» (terminal), y el turno terminó con la copia nueva «encadenó tres
+pasos fallidos seguidos» sin entregar nada.
+- **Causa**: `describe_image` (herramienta F7 para mirar una imagen) se construía con el cliente y el
+  modelo del LOOP (`prepareF7Extras({ client: llm, model: resolvedModel })`): con DeepSeek V4 Flash
+  elegido, que no ve imágenes, cada llamada era un 400 y la herramienta fallaba SIEMPRE. El agente la
+  llamó dos veces sobre la lámina de línea de tiempo, intentó recortar el PNG con Python (tercer
+  fallo) y el guardia 3H59/3H61 `cutSubtaskIfNoProgress` (tres tool calls seguidas con `ok:false`,
+  `tokensDelta/artifactsDelta` siempre 0) cortó el turno. `verify_visual` nunca tuvo ese problema: su
+  revisor usa la escalera de visión (`multimodal/vision-ladder.js`: deepseek-flash → grok → gemini → gpt).
+- **Fix 1 — una sola escalera de visión por turno** (`agent-runner/index.js`
+  `buildVisionLadderClient({ pickedModel, env, onFailover })`, exportada): `verify_visual` y
+  `describe_image` comparten el mismo cliente (`visionLadder`); `prepareF7Extras` recibe
+  `client: visionLadder, model: null` (la fachada elige el modelo por llamada) y NUNCA `llm`. Sin
+  escalera (sin claves con visión, o `NODE_ENV=test`) `describe_image` no se ofrece: `multimodal/index.js`
+  `extraToolDefinitions({ env, vision })` + `extraExecutors` exigen `hasVisionClient(client)`. Seam
+  `visionClient` en `runAgentRunner` para tests. La descripción de la herramienta manda a
+  `verify_visual`/`render_preview` para Office.
+- **Fix 2 — el guardia de «sin progreso» avisa UNA vez antes de cortar** (`agent-runner/no-progress-nudge.js`,
+  cableado en `loop.js`): tras tres fallos seguidos inyecta `RECOVERY REQUIRED: …` con cada llamada
+  fallida (`tool: error`, ≤160 chars), prohíbe repetir el enfoque, ordena verificar lo que ya existe en
+  `outputs/` (`inspect_document` + `verify_visual` sin `before`) o cerrar con honestidad, y emite
+  `no_progress_recovery` («Tres pasos fallidos seguidos: cambiando de estrategia»). Tras el aviso el
+  guardia mira solo los pasos posteriores: tres fallos seguidos MÁS cortan igual (`subtask_no_progress`).
+  El dead letter del mismo tool (3 fallos → la siguiente llamada se rechaza, `tool_dead_letter`) no cambia:
+  tres fallos de `execute_python` ahora son aviso → el modelo insiste → dead letter antes de la 4.ª ejecución.
+- Tests: `backend/tests/agent-runner-no-progress-recovery.test.js` (6: texto del aviso, forma exacta de
+  producción → aviso y recuperación, tres fallos más → corte sin segundo aviso, gate de `describe_image`,
+  escalera sin el modelo de texto, contrato de cableado en `index.js`); actualizados
+  `ola-3h61-invariants` (M-001: 3+3 fallos), `agent-runner-tool-failure-recovery`,
+  `agent-runner-python-api-recovery` (aviso → dead letter) y `agent-runner-f7-multimodal` (seam
+  `visionClient`; sin visión no hay `describe_image`).
+
 ## Parche de dependencias — audits del 6-oct-2026 (added 2026-10-07)
 
 Los audits de producción (`npm audit --omit=dev` raíz + `scripts/audit-backend-production.cjs`)

@@ -23,9 +23,18 @@ const vision = require('./vision');
 const voice = require('./voice');
 const computer = require('./computer');
 
-function extraToolDefinitions({ env = process.env } = {}) {
+/** An OpenAI-compatible client that can take `image_url` content (the vision ladder or a test fake). */
+function hasVisionClient(client) {
+  return Boolean(client && client.chat && client.chat.completions && typeof client.chat.completions.create === 'function');
+}
+
+// `vision` = a vision-capable client exists this turn. describe_image looks at
+// pixels, so without one the tool is not offered at all: production
+// 2026-10-08 wired it to the loop's text model (DeepSeek V4 Flash), every call
+// failed, and three failed calls in a row cut a turn whose deck was finished.
+function extraToolDefinitions({ env = process.env, vision: visionAvailable = true } = {}) {
   const defs = [];
-  if (flags.visionEnabled(env)) defs.push(...vision.VISION_TOOL_DEFINITIONS);
+  if (flags.visionEnabled(env) && visionAvailable) defs.push(...vision.VISION_TOOL_DEFINITIONS);
   if (flags.voiceEnabled(env)) defs.push(...voice.VOICE_TOOL_DEFINITIONS);
   if (flags.computerEnabled(env)) defs.push(...computer.COMPUTER_TOOL_DEFINITIONS);
   return defs;
@@ -52,7 +61,7 @@ function extraExecutors({
 } = {}) {
   const executors = {};
   let computerCleanup = null;
-  if (flags.visionEnabled(env)) {
+  if (flags.visionEnabled(env) && hasVisionClient(client)) {
     executors.describe_image = vision.makeDescribeImageExecutor({ sandbox, client, model, format });
   }
   if (flags.voiceEnabled(env)) {
@@ -90,7 +99,7 @@ function prepareF7Extras({
   synthesize = null,
   computerDriver = null,
 } = {}) {
-  const toolDefinitions = extraToolDefinitions({ env });
+  const toolDefinitions = extraToolDefinitions({ env, vision: hasVisionClient(client) });
   const { executors, cleanup } = extraExecutors({
     env, sandbox, client, model, format, openaiClient, synthesize, computerDriver,
   });
@@ -126,6 +135,7 @@ module.exports = {
   voiceEnabled: flags.voiceEnabled,
   computerEnabled: flags.computerEnabled,
   // wiring
+  hasVisionClient,
   extraToolDefinitions,
   extraExecutors,
   prepareF7Extras,

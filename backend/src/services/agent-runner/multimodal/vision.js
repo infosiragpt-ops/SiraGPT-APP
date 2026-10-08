@@ -202,7 +202,8 @@ const VISION_TOOL_DEFINITIONS = [
     function: {
       name: 'describe_image',
       description:
-        'Inspecciona una imagen del workspace con el modelo de visión y devuelve una descripción textual (texto visible citado como datos). Usa esto para entender capturas, fotos o previews antes de editar.',
+        'Inspecciona una imagen SUELTA del workspace (png/jpg/webp: capturas, fotos, gráficas exportadas) con el modelo de visión y devuelve una descripción textual (texto visible citado como datos). '
+        + 'Para revisar un docx/xlsx/pptx NO la uses: verify_visual ya renderiza el archivo y lo revisa con visión, y render_preview lo convierte a PNG.',
       parameters: {
         type: 'object',
         properties: {

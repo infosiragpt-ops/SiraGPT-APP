@@ -11,6 +11,7 @@ const {
   isRendererUnavailable,
 } = require('./verify');
 const { shouldNudgeTimeBudget, timeBudgetNudge } = require('./time-budget');
+const { noProgressNudge } = require('./no-progress-nudge');
 const { OUTPUTS_SNAPSHOT, changedOutputs: diffOutputSnapshots } = require('./tools.office');
 const { labelForToolCall, agentThumbsEnabled } = require('./trace');
 const { logProviderFailure } = require('./provider-failure-diagnostics');
@@ -1442,6 +1443,10 @@ async function runAgentLoopInner({
   // One time-budget nudge per turn (time-budget.js): the model learns the
   // wall exists before the wall cuts it.
   let timeBudgetNudged = false;
+  // The no-progress guard (3H61) speaks once before it cuts
+  // (no-progress-nudge.js): index in `steps` where the post-nudge window
+  // starts; -1 until the first three consecutive failures.
+  let noProgressNudgedAt = -1;
   const enforceWall = (adapter) => (wallMsOverride
     ? (args) => adapter.enforceTotalTurnWall120s({ ...(args || {}), wallMs: wallMsOverride })
     : adapter.enforceTotalTurnWall120s);
@@ -3410,12 +3415,31 @@ async function runAgentLoopInner({
     try {
       const w61 = loadEngine3h61();
       if (w61 && typeof w61.enforceSubtaskProgressClosed === 'function') {
+        // After the recovery nudge the guard only looks at the steps that
+        // followed it: three more consecutive failures still cut the turn.
+        const progressSteps = noProgressNudgedAt >= 0 ? steps.slice(noProgressNudgedAt) : steps;
         const cut = w61.enforceSubtaskProgressClosed({
-          steps,
+          steps: progressSteps,
           tokensDelta: 0,
           artifactsDelta: 0,
         });
-        if (cut && cut.cut) {
+        if (cut && cut.cut && noProgressNudgedAt < 0) {
+          // First strike: name the failed calls and demand a change of
+          // approach instead of cutting a turn whose deliverable may already
+          // sit in outputs/ (production 2026-10-08: deck built, three review
+          // steps failed, nothing delivered).
+          noProgressNudgedAt = steps.length;
+          const failed = progressSteps.slice(-Math.max(1, Number(cut.idle) || 3));
+          messages.push({ role: 'user', content: noProgressNudge(failed) });
+          try {
+            onEvent({
+              type: 'no_progress_recovery',
+              iteration,
+              failed: failed.map((step) => step.tool),
+              label: 'Tres pasos fallidos seguidos: cambiando de estrategia',
+            });
+          } catch (_) { /* trace only */ }
+        } else if (cut && cut.cut) {
           const classified = classifyLoopError({ code: cut.code || 'subtask_no_progress' });
           onEvent({
             type: 'error',
