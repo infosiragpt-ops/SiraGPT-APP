@@ -11776,7 +11776,9 @@ REWRITTEN TEXT:`;
           }
           break;
         case 'text':
-          if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
+          // Coding already owns this turn. A requested UI label such as
+          // "en el navegador" must not redirect the edit to a remote task.
+          if (!codingWorkspace && shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
             await runClassifiedAgentTask();
           } else {
             await runContextPipeline(intent);
