@@ -486,7 +486,14 @@ function makeOfficeToolExecutors(sandbox, {
         try {
           const images = [];
           for (const p of res.composites.slice(0, 3)) images.push(await readImage(sandbox, p));
-          const v = await visionVerifier({ images, checklist, summary: res.summary, signal: ctx.signal });
+          // A NEW document only has a contact sheet of thumbnails: add up to
+          // two full-size pages so the reviewer can actually read the text.
+          const pageImages = !before && res.visual && Array.isArray(res.visual.page_images) ? res.visual.page_images : [];
+          for (const p of pageImages.slice(0, 2)) {
+            if (images.length >= 3) break;
+            try { images.push(await readImage(sandbox, p)); } catch (_) { /* the sheet alone still reviews */ }
+          }
+          const v = await visionVerifier({ images, checklist, summary: res.summary, signal: ctx.signal, mode: before ? 'edit' : 'new' });
           visionOk = v ? v.ok : null;
           if (visionOk === false) visionVeto = String(v?.text || '').replace(/\s+/g, ' ').trim().slice(0, 240);
           text += `\n• Revisión visual (modelo de visión): ${v ? v.text : 'sin respuesta'}`;

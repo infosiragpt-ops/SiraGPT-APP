@@ -3573,12 +3573,14 @@ def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expec
     else:
         shown = list(range(1, min(na, 12) + 1))
         fa = _raster(after_pdf, after_dir, dpi, shown)
-        sheet = contact_sheet([fa[n] for n in shown], os.path.join(outdir, "contact.png"))
+        # Documento nuevo: miniaturas legibles (3 columnas de 480 px en vez de 4 de 300) y las dos
+        # primeras páginas a tamaño completo para el revisor de visión (verify_visual las adjunta).
+        sheet = contact_sheet([fa[n] for n in shown], os.path.join(outdir, "contact.png"), cols=3, thumb_w=480)
         composites.append(sheet)
         thumbs.append(make_thumb(sheet, os.path.join(outdir, "contact.thumb.jpg")))
         report["visual"] = {"page_count_before": None, "page_count_after": na, "pagination_changed": False,
                             "pages_changed": [], "pages": [{"page": n, "status": "nueva"} for n in range(1, na + 1)],
-                            "new_document": True}
+                            "new_document": True, "page_images": [fa[n] for n in shown[:2]]}
     report["composites"] = composites
     report["thumbs"] = thumbs
     # checks: la checklist del modelo convertida en pruebas

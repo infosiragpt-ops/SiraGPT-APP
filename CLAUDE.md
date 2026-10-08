@@ -2296,6 +2296,47 @@ volcado ya no aparece tras el despliegue; lo nuevo:
   (4, nuevo), `agent-runner-turn-wall-copy.test.js` (1, nuevo), `agent-runner-office-metrics.test.js`
   (traza), `agent-runner-turn-honesty.test.js` (contrato del spec actualizado).
 
+## «Generar una PPT no lo hace» — presupuesto de tiempo y revisor de visión para documentos nuevos (added 2026-10-08)
+
+Reporte de Jorge tras #1007. El log del 7-oct tiene CINCO generaciones de documento y las cinco
+fallaron: cuatro por `/api/doc/generate` (tres `turn_wall` a 395–408 s y un `subtask_no_progress`
+a 113 s, todas con `edits:0`) y una tarea con Claude elegido (`E_PROVIDER`, arreglada en #1007).
+El deck sí se construye (`deck-builder-layouts` 14/14 verdes aquí); lo que fallaba era el ciclo
+crear → render → revisión de visión → veto → regenerar → muro, sin entregar nada.
+- **El loop no sabía cuánto tiempo le quedaba** (`agent-runner/time-budget.js`, cableado en
+  `loop.js`): con ≤ 30 % del muro restante (tope 90 s; 108 s en un muro de 6 min, 144 s en uno de
+  8) inyecta UNA vez el mensaje `TIME BUDGET: about N s remain…` (no empezar otra regeneración;
+  `inspect_document` + `verify_visual` sobre lo que ya existe o corregir solo los ✗; si no alcanza,
+  cerrar y decir en español qué quedó sin verificar) y emite `time_budget` (fila
+  «Queda poco tiempo: cerrando el turno» en el timeline de `/api/doc/generate`; la ruta de tareas
+  ignora tipos desconocidos). Solo turnos con `turnWallMs` (documentos); el chat no cambia.
+- **Muro por tipo de turno** (`documentTurnWallMs(env, { creatingNewFile })`): ediciones 6 min;
+  CREACIÓN de un documento nuevo (incluye relleno de plantilla) 8 min
+  (`SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS`), bajo el tope de 10 min del job de la cola.
+  `SIRAGPT_AGENT_RUNNER_TURN_WALL_MS` explícito sigue mandando para ambos. Ambas llamadas a
+  `runAgentLoop` (loop principal y reintentos de salida) pasan `{ creatingNewFile }`.
+- **Revisor de visión para documentos NUEVOS** (`multimodal/visual-verifier.js`
+  `NEW_DOCUMENT_REVIEW_SYSTEM_PROMPT`, `mode:'new'|'edit'`): el prompt de ANTES/DESPUÉS pedía
+  buscar «elementos movidos o borrados» y «cambios fuera de lo pedido» en un deck recién creado y
+  juzgar notas del orador o conteos que una hoja de contacto de miniaturas de 300 px no muestra.
+  En modo `new`: `cumple: true|false|null` (null = no comprobable en la imagen, nunca falla), solo
+  defectos VISIBLES en `problemas` (texto cortado/desbordado, láminas vacías, marcadores, solapes,
+  contraste), sin juicio de gusto; un «fallo» sin requisito fallido ni problema visible NO veta
+  (se anota en el texto). El modo `edit` conserva el contrato anterior. `verify_visual` pasa
+  `mode` según haya `before`, y para documentos nuevos adjunta hasta dos páginas a tamaño
+  completo (`visual.page_images` del motor) junto a la hoja de contacto; `sira_office.py` genera
+  esa hoja con 3 columnas de 480 px (antes 4 de 300) y expone `page_images`.
+- **Copia de fallo**: `turn_wall` / `wall_clock` → «agotó el tiempo máximo del turno antes de
+  terminar y verificar el archivo; si ya había generado uno, no se entregó sin verificar»;
+  `subtask_no_progress` → «encadenó tres pasos fallidos seguidos y se detuvo». La política de no
+  entregar un archivo sin verificar NO cambia (decisión de producto); lo que cambia es que el turno
+  tiene tiempo y criterio para verificarlo.
+- Tests: `backend/tests/agent-runner-time-budget.test.js` (5: umbral, disparo único, texto, loop
+  real con muro de 2 s y control sin muro, copia), `agent-runner-vision-new-document.test.js`
+  (4: prompt por modo, null y «fallo» sin motivo, defecto visible y requisito fallido,
+  plumbing de `verify_visual` con páginas completas), `agent-runner-turn-honesty.test.js`
+  (muros por tipo + contrato de las llamadas). Envs en `docs/ENV_VARIABLES.md`.
+
 ## Parche de dependencias — audits del 6-oct-2026 (added 2026-10-07)
 
 Los audits de producción (`npm audit --omit=dev` raíz + `scripts/audit-backend-production.cjs`)

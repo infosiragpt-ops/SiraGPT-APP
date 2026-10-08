@@ -213,6 +213,15 @@ test('document turns get a longer loop wall than the 3H64 chat default (120 s)',
   assert.equal(runner.documentTurnWallMs({}), 6 * 60_000);
   assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_TURN_WALL_MS: '90000' }), 90_000);
   assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_TURN_WALL_MS: '5' }), 6 * 60_000, 'nonsense values keep the default');
+  // Creating a NEW document (research + outline + create + inspect + render +
+  // vision + one correction round) gets its own, longer wall; the explicit
+  // override still wins for both kinds (prod 2026-10-07: four creation turns
+  // cut at 6 min with the deck built and nothing delivered).
+  assert.equal(runner.documentTurnWallMs({}, { creatingNewFile: true }), 8 * 60_000);
+  assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS: '300000' }, { creatingNewFile: true }), 300_000);
+  assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS: '300000' }), 6 * 60_000, 'the creation knob never touches edits');
+  assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_TURN_WALL_MS: '90000', SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS: '300000' }, { creatingNewFile: true }), 90_000, 'the explicit wall wins for both kinds');
+  assert.equal(runner.documentTurnWallMs({ SIRAGPT_AGENT_RUNNER_CREATE_TURN_WALL_MS: '5' }, { creatingNewFile: true }), 8 * 60_000, 'nonsense creation values keep the creation default');
   // The wall really is the one passed: 1 s cuts a slow two-step turn, 60 s does not.
   const slowClient = () => {
     let n = 0;
@@ -230,7 +239,8 @@ test('document turns get a longer loop wall than the 3H64 chat default (120 s)',
   const ok = await runAgentLoop({ ...base, client: slowClient(), turnWallMs: 60_000 });
   assert.equal(ok.stoppedReason, 'final');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src/services/agent-runner/index.js'), 'utf8');
-  assert.equal((src.match(/turnWallMs: documentTurnWallMs\(\),/g) || []).length, 2, 'main loop and output retries');
+  assert.equal((src.match(/turnWallMs: documentTurnWallMs\(process\.env, \{ creatingNewFile \}\),/g) || []).length, 2, 'main loop and output retries size the wall by turn kind');
+  assert.doesNotMatch(src, /turnWallMs: documentTurnWallMs\(\),/, 'no call site ignores the turn kind');
 });
 
 test('«ya estaba así»: an unchanged office_edit needs no verification, no output retry, and the editor answers with the model text', async () => {
