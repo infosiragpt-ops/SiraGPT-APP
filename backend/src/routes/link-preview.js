@@ -28,6 +28,8 @@ const express = require('express');
 const cheerio = require('cheerio');
 const net = require('node:net');
 const dnsPromises = require('node:dns').promises;
+// Canonical private/reserved classifier shared with the web_fetch tool.
+const { isPrivateOrReservedAddress } = require('../services/connectors/web-fetch');
 
 const FETCH_TIMEOUT_MS = 5_000;
 const MAX_BODY_BYTES = 262_144; // 256 KiB
@@ -69,13 +71,34 @@ function isPrivateIPv6(ip) {
   return false;
 }
 
-/** Block a literal IP (v4 or v6) that points at private / internal space. */
+/**
+ * Block a literal IP (v4 or v6) that points at private / internal space.
+ * The local matchers run first; the canonical classifier shared with
+ * web_fetch then covers what they missed (security audit 2026-10-08): the
+ * hex IPv4-mapped form WHATWG URL produces for `[::ffff:127.0.0.1]`
+ * (`::ffff:7f00:1`), NAT64 `64:ff9b::`, CGNAT 100.64/10 (Alibaba metadata),
+ * Azure WireServer, benchmarking/TEST-NET/multicast ranges.
+ */
 function isBlockedAddress(address) {
   const addr = stripBrackets(address);
   const version = net.isIP(addr);
-  if (version === 4) return isPrivateIPv4(addr);
-  if (version === 6) return isPrivateIPv6(addr);
-  return false;
+  if (version === 0) return false;
+  if (version === 4 && isPrivateIPv4(addr)) return true;
+  if (version === 6 && isPrivateIPv6(addr)) return true;
+  return isPrivateOrReservedAddress(addr);
+}
+
+/** True when DNS fails, returns nothing, or any record points at blocked space. */
+async function resolvesToBlockedAddress(hostname, lookupImpl) {
+  let records;
+  try {
+    records = await lookupImpl(hostname, { all: true });
+  } catch {
+    return true;
+  }
+  const list = Array.isArray(records) ? records : [records];
+  if (list.length === 0) return true;
+  return list.some((record) => !record || !record.address || isBlockedAddress(String(record.address)));
 }
 
 /** Block by hostname BEFORE any DNS resolution happens. */
@@ -269,10 +292,17 @@ function createRouter(deps = {}) {
         ? response.url
         : target.toString();
 
-      // Redirects may have landed somewhere private — re-validate.
+      // Redirects may have landed somewhere private — re-validate the final
+      // host literally AND through DNS: a public-looking redirect target that
+      // resolves to 10.x passed the literal check and its page came back.
       let finalHostBlocked = true;
       try {
-        finalHostBlocked = isBlockedHost(new URL(finalUrl).hostname);
+        const finalHostname = new URL(finalUrl).hostname;
+        finalHostBlocked = isBlockedHost(finalHostname);
+        if (!finalHostBlocked && finalHostname !== target.hostname
+          && net.isIP(stripBrackets(finalHostname)) === 0) {
+          finalHostBlocked = await resolvesToBlockedAddress(finalHostname, lookupImpl);
+        }
       } catch {
         finalHostBlocked = true;
       }
@@ -324,6 +354,7 @@ module.exports._internals = {
   parseHtml,
   isBlockedHost,
   isBlockedAddress,
+  resolvesToBlockedAddress,
   readBodyCapped,
   CACHE_TTL_MS,
   CACHE_MAX_ENTRIES,

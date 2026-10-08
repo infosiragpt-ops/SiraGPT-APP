@@ -49,6 +49,9 @@ function roundFloats(value) {
   return value;
 }
 
+// How long a finished static-catalog pass satisfies the hot read paths.
+const STATIC_CATALOG_MEMO_MS = 10 * 60_000;
+
 class ModelSyncService {
   constructor(options = {}) {
     this.prisma = options.prismaClient || prisma;
@@ -60,6 +63,11 @@ class ModelSyncService {
       falVideo: { data: null, lastFetch: 0, ttl: 3600000 }
     };
     this._staticCatalogSyncFlights = new Map();
+    // Finished catalog passes per flight key ({ at, result }): hot GETs (the
+    // admin models page, the IMAGE/VIDEO pickers, every video generation)
+    // reuse a recent pass instead of re-running ~280 sequential UPDATEs.
+    this._staticCatalogSyncDone = new Map();
+    this._now = typeof options.now === 'function' ? options.now : Date.now;
   }
 
   getStaticVideoModels() {
@@ -1024,15 +1032,34 @@ class ModelSyncService {
     return types.length ? `types:${types.join(',')}` : 'types:*';
   }
 
+  /**
+   * Make sure the static catalog rows exist. `maxAgeMs` (opt-in) reuses the
+   * result of a pass that finished less than that long ago for the same set
+   * of types. Production 2026-10-08: `GET /api/admin/models` took ~6.5 s
+   * because every call re-ran one UPDATE per catalog model (~280 sequential
+   * writes), and the VIDEO picker and every video generation did the same.
+   * Without `maxAgeMs` (admin «Sync models») a pass always runs. Failures are
+   * never memoized; concurrent callers still share one in-flight pass.
+   */
   ensureStaticCatalogModels(options = {}) {
     const flightKey = this._getStaticCatalogSyncFlightKey(options);
+    const maxAgeMs = Number(options.maxAgeMs) || 0;
+    if (maxAgeMs > 0) {
+      const done = this._staticCatalogSyncDone.get(flightKey);
+      if (done && this._now() - done.at < maxAgeMs) return Promise.resolve(done.result);
+    }
     if (this._staticCatalogSyncFlights.has(flightKey)) {
       return this._staticCatalogSyncFlights.get(flightKey);
     }
 
-    const flight = this._ensureStaticCatalogModels(options).finally(() => {
-      this._staticCatalogSyncFlights.delete(flightKey);
-    });
+    const flight = this._ensureStaticCatalogModels(options)
+      .then((result) => {
+        this._staticCatalogSyncDone.set(flightKey, { at: this._now(), result });
+        return result;
+      })
+      .finally(() => {
+        this._staticCatalogSyncFlights.delete(flightKey);
+      });
     this._staticCatalogSyncFlights.set(flightKey, flight);
     return flight;
   }
@@ -1306,3 +1333,5 @@ const modelSyncService = new ModelSyncService();
 
 module.exports = modelSyncService;
 module.exports.ModelSyncService = ModelSyncService;
+ModelSyncService.STATIC_CATALOG_MEMO_MS = STATIC_CATALOG_MEMO_MS;
+module.exports.STATIC_CATALOG_MEMO_MS = STATIC_CATALOG_MEMO_MS;

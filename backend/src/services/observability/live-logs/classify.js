@@ -148,6 +148,7 @@ function summarizeJson(obj) {
   if (method && url) parts.push(`${method} ${url}`);
   if (status) parts.push(`→ ${status}`);
   if (Number.isFinite(dur) && dur >= 0 && (method || status)) parts.push(`(${Math.round(dur)} ms)`);
+  if (obj.aborted === true && (method || status)) parts.push('· cliente cerró');
   if (text && !(text === 'request completed' && parts.length)) parts.push(text);
   const alert = obj.alert && typeof obj.alert === 'object' ? obj.alert : null;
   if (alert && (alert.title || alert.message)) {

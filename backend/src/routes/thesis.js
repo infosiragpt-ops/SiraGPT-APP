@@ -9,6 +9,7 @@ const { createDocument } = require('../services/document-service');
 const { chromium } = require('playwright');
 const fs = require('fs').promises;
 const fsSync = require('fs');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -2237,8 +2238,7 @@ router.get('/download/:sessionId', authenticateToken, async (req, res) => {
       res.setHeader('Referrer-Policy', 'no-referrer');
       
       // Send file for preview
-      const fileStream = fsSync.createReadStream(session.documentPath);
-      fileStream.pipe(res);
+      pipeStreamToResponse(fsSync.createReadStream(session.documentPath), res, 'thesis-preview');
     } else {
       // For download, use res.download
       res.download(session.documentPath, session.documentFilename);
@@ -2288,8 +2288,7 @@ router.get('/files/:filename', async (req, res) => {
       res.setHeader('Referrer-Policy', 'no-referrer');
       
       // Send file for preview
-      const fileStream = fsSync.createReadStream(filePath);
-      fileStream.pipe(res);
+      pipeStreamToResponse(fsSync.createReadStream(filePath), res, 'thesis-preview');
     } else {
       // For download, use res.download
       res.download(filePath, filename);

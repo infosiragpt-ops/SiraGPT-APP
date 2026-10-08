@@ -20,6 +20,13 @@ export type AuthenticatedRequestOptions = {
   bearerToken?: string | null
   /** Disable only when a caller has already started consuming a response. */
   retryCsrfInvalid?: boolean
+  /**
+   * The transport refetches a trusted GET once after a 502/503/504 or a 429
+   * (bounded wait, Retry-After honoured). A caller with its own retry policy
+   * (ApiClient) passes `false` so a rate-limited server is not hit twice per
+   * attempt.
+   */
+  retryTransient?: boolean
 }
 
 export type AuthenticatedFetch = {
@@ -355,6 +362,33 @@ async function singleFlightRefresh(
   }
 }
 
+/** Longest the transport itself waits before its single transient refetch. */
+export const TRANSIENT_RETRY_MAX_WAIT_MS = 2_000
+
+/**
+ * RFC 9110 `Retry-After` → milliseconds from now, or null when the header is
+ * absent or unparseable. Both forms: delta-seconds (`30`) and HTTP-date
+ * (`Fri, 31 Dec 2030 23:59:59 GMT`). Negative deltas / past dates clamp to 0.
+ */
+export function parseRetryAfterMs(headerValue: string | null | undefined, now: () => number = Date.now): number | null {
+  if (typeof headerValue !== "string") return null
+  const trimmed = headerValue.trim()
+  if (!trimmed) return null
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10)
+    return Number.isFinite(seconds) ? Math.max(0, seconds) * 1000 : null
+  }
+  const epoch = Date.parse(trimmed)
+  if (Number.isNaN(epoch)) return null
+  return Math.max(0, epoch - now())
+}
+
+function transientRetryWaitMs(retryAfter: string | null, fallbackMs: number): number {
+  const parsed = parseRetryAfterMs(retryAfter)
+  if (parsed === null || parsed <= 0) return fallbackMs
+  return Math.min(TRANSIENT_RETRY_MAX_WAIT_MS, parsed)
+}
+
 export function createAuthenticatedFetch(
   options: AuthenticatedFetchFactoryOptions = {},
 ): AuthenticatedFetch {
@@ -420,22 +454,25 @@ export function createAuthenticatedFetch(
     const prepared = await prepare(input, init, requestOptions)
     let response = await fetchImpl(input, prepared)
     const method = resolveMethod(input, prepared)
-    if (
-      method === "GET"
+    const transientRetryAllowed = requestOptions.retryTransient !== false
+      && method === "GET"
       && isTrustedSiraApiUrl(input, apiBaseUrl)
+    if (
+      transientRetryAllowed
       && (response.status === 502 || response.status === 503 || response.status === 504)
     ) {
-      try { await new Promise((r) => setTimeout(r, 250)) } catch { /* ignore */ }
+      // A restart answers 502/504 with no hint; a 503 may say when to return.
+      const waitMs = response.status === 503
+        ? transientRetryWaitMs(response.headers.get("Retry-After"), 250)
+        : 250
+      try { await new Promise((r) => setTimeout(r, waitMs)) } catch { /* ignore */ }
+      if (prepared.signal?.aborted) return response
       response = await fetchImpl(input, prepared)
     }
-    if (
-      method === "GET"
-      && isTrustedSiraApiUrl(input, apiBaseUrl)
-      && response.status === 429
-    ) {
-      const ra = Number(response.headers.get("Retry-After") || 0)
-      const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(2000, ra * 1000) : 400
+    if (transientRetryAllowed && response.status === 429) {
+      const waitMs = transientRetryWaitMs(response.headers.get("Retry-After"), 400)
       try { await new Promise((r) => setTimeout(r, waitMs)) } catch { /* ignore */ }
+      if (prepared.signal?.aborted) return response
       response = await fetchImpl(input, prepared)
     }
     const usedBearer = new Headers(prepared.headers).has("Authorization")

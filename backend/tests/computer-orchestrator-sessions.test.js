@@ -208,7 +208,13 @@ describe('siragpt-computer-orchestrator session contract', () => {
     let listening = false;
     const novnc = net.createServer();
     const listenLater = setTimeout(() => {
-      novnc.listen(port, '127.0.0.1', () => { listening = true; });
+      // The kernel accepts the probe's connect as soon as listen() binds,
+      // BEFORE the 'listening' callback runs: a probe landing in that window
+      // read as «resolved before 6080 accepted» (CI shard 2, 2026-10-08).
+      // Flag at the call — never earlier than this timer, never later than
+      // the first accepted connection.
+      novnc.listen(port, '127.0.0.1');
+      listening = true;
     }, 280);
 
     const runtime = createDockerRuntime({
@@ -251,7 +257,13 @@ describe('siragpt-computer-orchestrator session contract', () => {
     let listening = false;
     const novnc = net.createServer();
     const listenLater = setTimeout(() => {
-      novnc.listen(port, '127.0.0.1', () => { listening = true; });
+      // The kernel accepts the probe's connect as soon as listen() binds,
+      // BEFORE the 'listening' callback runs: a probe landing in that window
+      // read as «resolved before 6080 accepted» (CI shard 2, 2026-10-08).
+      // Flag at the call — never earlier than this timer, never later than
+      // the first accepted connection.
+      novnc.listen(port, '127.0.0.1');
+      listening = true;
     }, 280);
 
     const runtime = createDockerRuntime({

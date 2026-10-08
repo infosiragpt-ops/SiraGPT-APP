@@ -282,10 +282,16 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
     const [chats, total] = await Promise.all([
       prisma.chat.findMany({
         where,
+        // Server-only Text/Json columns no list row reads (compaction
+        // summary, calendar context, composer draft) only cost transfer.
+        omit: { contextSummary: true, contextSummaryMeta: true, googleCalendarContext: true, draftText: true },
         include: {
           messages: {
             orderBy: { timestamp: 'asc' },
-            take: 1 // Get only the first message for preview
+            take: 1, // Get only the first message for preview
+            // The row keeps exactly these fields (see the map below); without
+            // `select` Postgres shipped files/metadata/reasoning blobs per chat.
+            select: { id: true, chatId: true, role: true, timestamp: true, content: true },
           },
           customGpt: {
             select: {
@@ -319,6 +325,14 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
     // The single preview message is trimmed to what a list row can show:
     // agent reasoning blobs (agent-task-state JSON) and file snapshots ran
     // to tens of KB per chat and were shipped 20x per page for nothing.
+    // ONE read of the task index for the whole page: it was re-read and
+    // re-parsed once per listed chat (~126 ms of event-loop blocking per
+    // sidebar page with 5k indexed tasks).
+    const activeTasksByChat = taskStore.listActiveTasksForChats(
+      chats.map((chat) => chat.id),
+      req.user.id,
+      { limitPerChat: 1 },
+    );
     const serializedChats = chats.map((chat) => {
       const row = serializeChat(chat);
       if (Array.isArray(row.messages)) {
@@ -330,7 +344,7 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
           content: String(m.content || '').slice(0, 240),
         }));
       }
-      const activeTasks = taskStore.listActiveTasksForChat(chat.id, req.user.id, { limit: 1 });
+      const activeTasks = activeTasksByChat.get(String(chat.id)) || [];
       row.activeTask = activeTasks[0] ? {
         taskId: activeTasks[0].taskId,
         status: activeTasks[0].status,
@@ -703,7 +717,11 @@ router.get('/:id', authenticateToken, async (req, res) => {
       include: {
         messages: {
           where: { deletedAt: null },
-          orderBy: { timestamp: 'asc' }
+          orderBy: { timestamp: 'asc' },
+          // The raw signed thinking chain is replayed to the provider only;
+          // don't even read it from Postgres (the delete below stays as the
+          // contract for rows other code paths may still attach).
+          omit: { reasoningDetails: true },
         },
         customGpt: {
           select: {
@@ -720,11 +738,15 @@ router.get('/:id', authenticateToken, async (req, res) => {
             conversationStarters: true,
             visibility: true,
             shareId: true,
+            // Never the extracted text: gpts.js forbids exposing a GPT's
+            // knowledge base to non-owners, and no client reads it here —
+            // GPT chats shipped MBs of it after every turn.
             knowledgeFiles: {
               select: {
                 id: true,
                 originalName: true,
-                extractedText: true,
+                mimeType: true,
+                size: true,
               }
             }
           }

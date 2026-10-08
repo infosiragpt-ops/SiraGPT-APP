@@ -33,6 +33,7 @@ const gitService = require('../services/github/git.service');
 const workspaceFiles = require('../services/github/workspace-files.service');
 const workspaceRunner = require('../services/github/workspace-runner.service');
 const { buildUpstreamRequestHeaders, isForwardableResponseHeader } = require('../utils/proxy-headers');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const {
   isOAuthStateInfrastructureError,
   sendOAuthStateUnavailable,
@@ -677,7 +678,9 @@ router.use('/connected/:id/proxy', authenticateToken, async (req, res) => {
     });
     res.setHeader('Cache-Control', 'no-store');
     if (req.method === 'HEAD' || !upstream.body) return res.end();
-    return Readable.fromWeb(upstream.body).pipe(res);
+    const body = Readable.fromWeb(upstream.body);
+    res.on('close', () => { if (!res.writableEnded) body.destroy(); });
+    return pipeStreamToResponse(body, res, 'workspace-proxy');
   } catch (err) {
     return res.status(err.status || 500).json({ error: err.message || 'preview_proxy_failed' });
   }

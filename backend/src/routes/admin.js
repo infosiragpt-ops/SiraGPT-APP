@@ -140,7 +140,8 @@ router.get('/providers', async (req, res) => {
 router.get('/models', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
-    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'] });
+    // Read path: a catalog pass from the last 10 min is reused (POST /models/sync always re-runs).
+    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'], maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });
     const models = await prisma.aiModel.findMany({
       orderBy: { createdAt: 'desc' }
     });
@@ -416,7 +417,8 @@ router.post('/models/sync', async (req, res) => {
 router.get('/models/stats', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
-    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'] });
+    // Read path: a catalog pass from the last 10 min is reused (POST /models/sync always re-runs).
+    await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'], maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });
     const stats = await modelSyncService.getProviderStats();
     const total = await prisma.aiModel.count();
     const active = await prisma.aiModel.count({ where: { isActive: true } });

@@ -432,6 +432,17 @@ router.put('/profile', [
     }
     let previousEmail = null;
     if (email) {
+      // Changing the account email re-binds Google sign-in and password reset
+      // to the new address with no re-authentication or verification (an
+      // attacker could pre-register a victim's address and capture their
+      // Gmail tokens on the victim's first Google login). No client sends
+      // `email` here; until a verified flow exists the profile refuses it.
+      if (email !== req.user.email) {
+        return res.status(400).json({
+          error: 'El cambio de correo requiere verificación y no está disponible desde el perfil.',
+          code: 'email_change_unsupported',
+        });
+      }
       // Check if email is already taken by another user
       const existingUser = await prisma.user.findFirst({
         where: {

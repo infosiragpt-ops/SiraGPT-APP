@@ -194,10 +194,10 @@ process.on('unhandledRejection', (reason, promise) => {
         }
         return;
     }
-    const reasonStr =
-        reason instanceof Error
-            ? `${reason.name}: ${reason.message}${reason.stack ? '\n' + reason.stack : ''}`
-            : String(reason);
+    // Name the root cause (`cause` chain, code / status / provider request
+    // id) and never print `[object Object]` for a non-Error reason.
+    const { describeErrorChain } = require('./src/utils/error-chain');
+    const reasonStr = `${describeErrorChain(reason)}${reason instanceof Error && reason.stack ? '\n' + reason.stack : ''}`;
     systemErrors.captureFatal(reason, 'unhandledRejection');
     console.error('[FATAL] unhandledRejection:', reasonStr);
     // In production, log and continue (let PM2/Docker restart if
@@ -805,6 +805,14 @@ app.use(createSamlAcsRateLimit());
 app.use(createSamlAcsBodyParser());
 app.use(createSamlAcsCorsMiddleware(globalCors));
 
+// Structured request logger — one JSON line per response. Mounted BEFORE the
+// rate limiters (express-rate-limit answers 429 without calling next(), so a
+// «Too many requests» storm used to leave zero lines in Admin → Logs) and
+// BEFORE body-parser so even malformed-body responses are logged. Also
+// generates `req.id` if no upstream middleware set it.
+const requestLogger = require('./src/middleware/request-logger');
+app.use(requestLogger);
+
 app.use('/api/auth', authLimiter);
 app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
@@ -828,11 +836,6 @@ app.use('/api/', apiLimiter);
 // further down — so the body-hash check can read req.body which
 // requires express.json to have parsed it first.
 
-// Structured request logger — one JSON line per response. Mounted
-// BEFORE body-parser so even malformed-body responses are logged. Also
-// generates `req.id` if no upstream middleware set it.
-const requestLogger = require('./src/middleware/request-logger');
-app.use(requestLogger);
 
 // HTTP metrics middleware — records siragpt_http_requests_total and
 // siragpt_http_request_duration_seconds for every request except

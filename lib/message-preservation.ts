@@ -507,12 +507,29 @@ const attachmentsCompatible = (a: DedupeMessageLike, b: DedupeMessageLike) => {
 // A stable assistant row that already holds an answer: plain text, or an
 // agent-task envelope that reached a terminal state. A running envelope or an
 // empty placeholder is not an answer yet.
-const isAnsweredAssistant = (message: DedupeMessageLike | undefined) => {
-  if (!message || !isStableMessage(message) || !isRole(message, 'ASSISTANT')) return false;
+//
+// Memoised per row object (invalidated when `content` changes): Pass B asks
+// this for every row between an optimistic bubble and each stable candidate
+// with the same text, on every stream flush. Agent-task rows are a JSON
+// envelope, so without the memo a long chat re-parsed every historical
+// envelope per frame — the «se pone lento» of 2026-10-02 in another guise.
+type AnsweredMemo = { content: unknown; answered: boolean };
+const answeredMemo = new WeakMap<object, AnsweredMemo>();
+
+const computeAnsweredAssistant = (message: DedupeMessageLike) => {
   const text = asText(message.content);
   if (!hasText(text) || isPlaceholderSentinel(text)) return false;
   const task = parseAgentTaskContent(text);
   return task.hasEnvelope ? task.done : true;
+};
+
+const isAnsweredAssistant = (message: DedupeMessageLike | undefined) => {
+  if (!message || !isStableMessage(message) || !isRole(message, 'ASSISTANT')) return false;
+  const hit = answeredMemo.get(message);
+  if (hit && hit.content === message.content) return hit.answered;
+  const answered = computeAnsweredAssistant(message);
+  answeredMemo.set(message, { content: message.content, answered });
+  return answered;
 };
 
 const answeredTurnBetween = (messages: DedupeMessageLike[], indexA: number, indexB: number) => {
@@ -651,8 +668,9 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
     const assistantA = collapsedAdjacent[i + 1];
     const userB = collapsedAdjacent[i + 2];
     const assistantB = collapsedAdjacent[i + 3];
-    const userGapMs = messageTimeMs(userB) - messageTimeMs(userA);
-    if (
+    // Cheap shape checks first; the timestamp parse and the content
+    // comparison only run for a USER/ASSISTANT/USER/ASSISTANT window.
+    const pairShaped =
       isStableMessage(userA) &&
       isStableMessage(assistantA) &&
       isStableMessage(userB) &&
@@ -660,11 +678,14 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
       isRole(userA, 'USER') &&
       isRole(userB, 'USER') &&
       isRole(assistantA, 'ASSISTANT') &&
-      isRole(assistantB, 'ASSISTANT') &&
-      sameContentNormalized(userA, userB) &&
+      isRole(assistantB, 'ASSISTANT');
+    const userGapMs = pairShaped ? messageTimeMs(userB) - messageTimeMs(userA) : NaN;
+    if (
+      pairShaped &&
       Number.isFinite(userGapMs) &&
       userGapMs >= 0 &&
-      userGapMs <= DUPLICATE_PAIR_WINDOW_MS
+      userGapMs <= DUPLICATE_PAIR_WINDOW_MS &&
+      sameContentNormalized(userA, userB)
     ) {
       collapsedPairs.push(userA, sameContentNormalized(assistantA, assistantB)
         ? richerMessage(assistantA, assistantB)

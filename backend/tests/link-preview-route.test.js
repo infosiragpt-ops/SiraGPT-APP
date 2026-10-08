@@ -280,3 +280,53 @@ test('readBodyCapped stops at the byte cap', async () => {
   const text = await _internals.readBodyCapped(response, _internals.MAX_BODY_BYTES);
   assert.equal(Buffer.byteLength(text, 'utf8'), _internals.MAX_BODY_BYTES);
 });
+
+// --- SSRF hardening 2026-10-08: encoded literals + redirect to a private-resolving host ---
+
+test('403 blocked_host for IPv4-mapped / NAT64 / CGNAT literals the local matchers missed', async () => {
+  const blocked = [
+    'http://[::ffff:127.0.0.1]/',          // WHATWG serialises as [::ffff:7f00:1]
+    'http://[::ffff:169.254.169.254]/',    // cloud metadata, mapped
+    'http://[::ffff:10.0.0.5]/internal',
+    'http://[64:ff9b::7f00:1]/',           // NAT64 loopback
+    'http://100.100.100.200/',             // Alibaba metadata (CGNAT 100.64/10)
+    'http://198.18.0.1/',                  // benchmarking range
+  ];
+  for (const url of blocked) {
+    const { status, json } = await request(previewPath(url));
+    assert.equal(status, 403, `expected 403 for ${url}`);
+    assert.equal(json.error, 'blocked_host');
+  }
+  assert.equal(fetchCalls.length, 0, 'no upstream fetch may happen for blocked literals');
+  assert.equal(_internals.isBlockedAddress('93.184.216.34'), false);
+  assert.equal(_internals.isBlockedAddress('2606:4700::1111'), false);
+  assert.equal(_internals.isBlockedAddress('[::ffff:7f00:1]'), true);
+  assert.equal(_internals.isBlockedAddress('not-an-ip'), false);
+});
+
+test('redirect to a public-looking host that resolves to private space is blocked (no title leak)', async () => {
+  lookupBehavior = async (hostname) => (hostname === 'intranet-portal.example.org'
+    ? [{ address: '10.0.0.5', family: 4 }]
+    : [{ address: '93.184.216.34', family: 4 }]);
+  fetchBehavior = async () => htmlResponse('<html><head><title>INTRANET-SECRET</title></head></html>', {
+    finalUrl: 'http://intranet-portal.example.org/wiki',
+  });
+  const { status, json, text } = await request(previewPath('https://redirect-to-intranet.example.com/go'));
+  assert.equal(status, 403);
+  assert.equal(json.error, 'blocked_host');
+  assert.equal(text.includes('INTRANET-SECRET'), false);
+});
+
+test('redirect to a public host that resolves publicly still renders; DNS failure fails closed', async () => {
+  fetchBehavior = async () => htmlResponse('<html><head><title>Público</title></head></html>', {
+    finalUrl: 'https://cdn-final.example.net/page',
+  });
+  const ok = await request(previewPath('https://redirect-public.example.com/go'));
+  assert.equal(ok.status, 200);
+  assert.equal(ok.json.title, 'Público');
+
+  assert.equal(await _internals.resolvesToBlockedAddress('x.example', async () => { throw new Error('ENOTFOUND'); }), true);
+  assert.equal(await _internals.resolvesToBlockedAddress('x.example', async () => []), true);
+  assert.equal(await _internals.resolvesToBlockedAddress('x.example', async () => [{ address: '93.184.216.34' }]), false);
+  assert.equal(await _internals.resolvesToBlockedAddress('x.example', async () => [{ address: '93.184.216.34' }, { address: '192.168.0.9' }]), true);
+});

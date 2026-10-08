@@ -59,3 +59,43 @@ test("resolveProcessingPollGiveUp never leaves a null stage spinning", () => {
     error: null,
   })
 })
+
+// --- ProcessingStatusMemo (shared poll memo, 2026-10-08) -------------------------
+
+import { ProcessingStatusMemo } from "@/lib/file-processing-status-client"
+
+test("ProcessingStatusMemo: terminal answers expire after ttl and the newest entries survive the cap", () => {
+  let now = 1_000
+  const memo = new ProcessingStatusMemo<string, string>({ ttlMs: 100, max: 2, now: () => now })
+  memo.rememberTerminal("a", "ready-a")
+  memo.rememberTerminal("b", "ready-b")
+  assert.equal(memo.terminal("a"), "ready-a")
+  memo.rememberTerminal("c", "ready-c")
+  assert.equal(memo.terminal("a"), null, "oldest entry evicted at the cap")
+  assert.equal(memo.terminal("b"), "ready-b")
+  assert.equal(memo.terminal("c"), "ready-c")
+  now += 101
+  assert.equal(memo.terminal("b"), null, "expired")
+  assert.equal(memo.terminal("missing"), null)
+})
+
+test("ProcessingStatusMemo: concurrent callers share one in-flight run, later callers start a new one", async () => {
+  const memo = new ProcessingStatusMemo<string, number>()
+  let runs = 0
+  let release: (value: number) => void = () => {}
+  const run = () => { runs += 1; return new Promise<number>((resolve) => { release = resolve }) }
+  const first = memo.shared("f", run)
+  const second = memo.shared("f", run)
+  assert.equal(runs, 1)
+  assert.equal(memo.inflightCount(), 1)
+  release(7)
+  assert.deepEqual(await Promise.all([first, second]), [7, 7])
+  assert.equal(memo.inflightCount(), 0)
+  const third = memo.shared("f", run)
+  assert.equal(runs, 2)
+  release(8)
+  assert.equal(await third, 8)
+  // A rejected run is not cached either.
+  await assert.rejects(memo.shared("g", () => Promise.reject(new Error("boom"))), /boom/)
+  assert.equal(memo.inflightCount(), 0)
+})

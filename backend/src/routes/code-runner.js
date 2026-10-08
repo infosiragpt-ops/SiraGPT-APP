@@ -33,6 +33,7 @@ const {
   buildUpstreamRequestHeaders,
   isForwardableResponseHeader,
 } = require('../utils/proxy-headers');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const {
   applyPreviewFrameHeaders,
   applyPreviewCorsHeaders,
@@ -310,7 +311,11 @@ router.use('/:runId/proxy', setPreviewFrameHeaders, authenticateToken, async (re
   res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'HEAD' || !upstream.body) return res.end();
-  return Readable.fromWeb(upstream.body).pipe(res);
+  // A body that errors (dev server restarted mid-response, 30 s abort on a
+  // long stream) must not become an unhandled 'error' → process exit.
+  const body = Readable.fromWeb(upstream.body);
+  res.on('close', () => { if (!res.writableEnded) body.destroy(); });
+  return pipeStreamToResponse(body, res, 'code-runner-proxy');
 });
 
 module.exports = router;

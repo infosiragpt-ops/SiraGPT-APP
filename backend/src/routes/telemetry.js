@@ -19,6 +19,7 @@ const alerting = require('../services/alerting');
 const prisma = require('../config/database');
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { writeAuditLog } = require('../utils/audit-log');
+const { slidingWindowRateLimitMiddleware } = require('../utils/sliding-window-rate-limiter');
 const {
   sanitizeClientEvent,
   buildClientEventAuditEntry,
@@ -35,7 +36,16 @@ function accepted(req, res) {
   return res.status(202).json(responseBody);
 }
 
-router.post('/error', express.json({ limit: '32kb' }), optionalAuth, async (req, res) => {
+// Anonymous beacons could flood the alert channel and the audit log (every
+// distinct `page` defeats the 5-minute alert dedup; the global limiter allows
+// 3000 req / 15 min per IP). One user or IP gets a bounded number per minute.
+const telemetryLimiter = slidingWindowRateLimitMiddleware({
+  windowMs: 60_000,
+  limit: Number(process.env.SIRAGPT_TELEMETRY_RATE_LIMIT_PER_MIN) || 20,
+  identifier: (req) => `telemetry:${(req.user && req.user.id) || req.ip || 'anon'}`,
+});
+
+router.post('/error', express.json({ limit: '32kb' }), optionalAuth, telemetryLimiter, async (req, res) => {
   const body = (req && req.body && typeof req.body === 'object') ? req.body : {};
   // Nothing reported → nothing recorded. Still 202: the beacon never retries.
   if (isEmptyClientEvent(body)) return accepted(req, res);
