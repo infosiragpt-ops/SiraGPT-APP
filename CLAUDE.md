@@ -2391,6 +2391,83 @@ bloqueaban todo PR que tocara `package.json`. Parche en el PR de presentaciones 
 - `THIRD_PARTY_LICENSES.md` se editó a mano (sin `node_modules` aquí); si el job Licenses
   marca drift, aplicar el diff que imprime y ya.
 
+## Diez mejoras de alto impacto — backend + frontend (added 2026-10-08)
+
+Pedido de Jorge: «Aplica 10 mejoras de alto impacto en frontend y backend». Auditoría con
+5 agentes (rendimiento, seguridad, resiliencia, observabilidad, frontend) sobre el árbol de
+producción; cada hallazgo verificado en código antes de elegirlo. Un solo PR, sin UI nueva
+(UI lock re-baselineado solo para `hooks/use-file-processing-status.ts`, `lib/api.ts`,
+`lib/authenticated-fetch.ts`, `lib/message-preservation.ts`: lógica interna, sin cambio visual).
+
+### Backend
+1. **Catálogo de modelos memoizado** (`model-sync-service.js`): `ensureStaticCatalogModels({ maxAgeMs })`
+   reutiliza un pase terminado hace menos de `STATIC_CATALOG_MEMO_MS` (10 min) para el mismo set de
+   tipos. `GET /api/admin/models` tardaba 6,5 s porque cada lectura re-ejecutaba ~280 UPDATEs
+   secuenciales; el picker IMAGE/VIDEO y cada generación de video hacían lo mismo. Las rutas de
+   lectura (`admin.js` GET /models y /models/stats, `ai.js` ×3) pasan `maxAgeMs`; «Sync models»
+   (POST) sigue ejecutando siempre. Los fallos nunca se memoizan.
+2. **API de chats más ligera** (`routes/chats.js`): `GET /:id` ya no lee `extractedText` de los
+   knowledgeFiles del GPT (gpts.js prohíbe exponerlo y ningún cliente lo leía — MBs por turno) ni
+   `reasoningDetails` (`omit` en la query; el `delete` posterior sigue como contrato). `GET /` omite
+   `contextSummary`/`contextSummaryMeta`/`googleCalendarContext`/`draftText`, el mensaje de preview
+   lleva `select` estrecho y el índice de tareas se lee UNA vez por página
+   (`task-store.listActiveTasksForChats`) en vez de una por chat.
+3. **Streams sin crash** (`utils/pipe-stream-to-response.js` en 6 rutas): `Readable.fromWeb(body).pipe(res)`
+   y `createReadStream().pipe(res)` sin listener de `error` convertían un reset upstream en
+   `uncaughtException` → `process.exit(1)`. `code-runner.js`, `github.js` (proxies: además destruyen el
+   body si el cliente cierra), `thesis.js` ×2, `rlhf.js` ×2, `agent-task.js`, `voice-studio.js`.
+4. **SSRF en `/api/link-preview`**: `isBlockedAddress` delega en `isPrivateOrReservedAddress`
+   (web-fetch) para lo que los matchers locales no veían: la forma hex de IPv4-mapped que produce WHATWG
+   URL (`[::ffff:127.0.0.1]` → `::ffff:7f00:1`), NAT64 `64:ff9b::`, CGNAT 100.64/10 (metadata de
+   Alibaba), Azure WireServer, rangos de benchmarking/TEST-NET. Tras la respuesta, el host final de una
+   redirección se re-valida también por DNS (`resolvesToBlockedAddress`): un destino público que resuelve
+   a 10.x devolvía su página.
+5. **Share links respetan el borrado** (`routes/public.js`): `/share/:shareId` exige `deletedAt: null`
+   en el chat y en sus mensajes; `/share/message/:shareId` responde 404 si el chat padre está borrado y
+   lee los mensajes con `findFirst({ deletedAt: null })`. Antes un chat borrado seguía legible por su
+   enlace hasta el purgado de 30 días.
+6. **Abuso y cuenta**: `SlidingWindowRateLimiter` honra `max` (apps-ai/apps-kv lo pasaban y corrían con
+   el default 60/min); `POST /api/telemetry/error` limitado por usuario/IP
+   (`SIRAGPT_TELEMETRY_RATE_LIMIT_PER_MIN`, 20) — beacons anónimos con `page` distinto saltaban el
+   dedupe de alertas; `PUT /api/users/profile` rechaza cambiar el email (400 `email_change_unsupported`):
+   re-vinculaba Google sign-in y el reset de contraseña sin verificación.
+7. **Observabilidad**: `react-agent.js` requería `../codex/model-telemetry` (ruta inexistente → la
+   telemetría de cada turno del react agent se saltaba en silencio); el request logger se monta ANTES
+   de los rate limiters (una tormenta de 429 no dejaba líneas en Admin → Logs); un cliente que cierra a
+   mitad de respuesta se loguea con `aborted: true` y Admin → Logs lo resume «· cliente cerró»;
+   `unhandledRejection` usa `utils/error-chain.describeErrorChain` (cadena `cause` con code/status/req id,
+   nunca `[object Object]`).
+
+### Frontend
+8. **Estado de archivos: un poll por archivo** (`hooks/use-file-processing-status.ts` +
+   `ProcessingStatusMemo` en `lib/file-processing-status-client.ts`): cada chip del mismo archivo
+   (compositor, burbuja, sync) abría su propio GET cada 2 s y un re-render remontaba todos; ahora
+   comparten UN loop por fileId, una respuesta terminal (`ready`/`failed`) se reutiliza 10 min entre
+   remontajes y el loop se pausa con la pestaña oculta (`visibilitychange`). Los estados de abandono
+   (401/403/410, techo) no se cachean.
+9. **Transporte**: `lib/api.ts` lee/escribe `auth-token` con try/catch (Safari privado y webviews con
+   storage bloqueado lanzaban en el constructor → la app no cargaba); `request()` pasa
+   `retryTransient: false` a `authenticatedFetch` (el transporte repetía cada GET 429/502/503/504 además
+   del propio reintento del ApiClient: el doble de peticiones contra un servidor que pidió alivio);
+   el transporte honra `Retry-After` también en 503 (`parseRetryAfterMs`, delta o HTTP-date, tope 2 s) y
+   nunca re-pide si la señal del llamador ya abortó.
+10. **Chats largos**: `isAnsweredAssistant` memoizado por objeto (`WeakMap`, invalidado por `content`) —
+    el Pass B del dedupe re-parseaba el sobre JSON `agent-task-state` de cada fila intermedia por frame;
+    el Pass D calcula el gap de tiempo solo tras las comprobaciones baratas.
+
+### Tests
+Backend (registrados en `backend/package.json`): `model-sync-catalog-memo` (7), `chats-api-slim` (3),
+`pipe-stream-guards` (3), `public-share-soft-delete` (5), `abuse-and-account-guards` (6),
+`observability-hygiene` (9), +3 en `link-preview-route`. Frontend: `tests/lib/file-processing-status-hook.test.tsx`
+(5), `tests/lib/authenticated-fetch-transient-retry.test.ts` (6), `tests/lib/api-token-storage.test.tsx` (3),
+`tests/message-dedupe-answered-memo.test.ts` (3), +2 en `tests/file-processing-status-client.test.ts`.
+
+### Pendientes detectados (no en este PR)
+Memo durable de `feedback-exemplars` (consulta >900 ms), batching de `hydrateChatMessageAttachments`,
+escrituras fs del cursor SSE por delta + Map `sseLastEventCursorBySession` sin tope, Map `thesisSessions`
+sin expiración, carrera read-modify-write en chunked upload, fetch sin timeout en ejecutores de apps,
+observador de consultas lentas, `omit apiKey` en el GET de modelos de admin, caché de créditos con pestaña oculta.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

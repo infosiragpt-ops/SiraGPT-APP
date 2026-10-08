@@ -949,7 +949,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     if (wantAudio) staticTypesToEnsure.push('AUDIO');
     if (wantMusic) staticTypesToEnsure.push('MUSIC');
     if (staticTypesToEnsure.length > 0) {
-      await modelSyncService.ensureStaticCatalogModels({ types: staticTypesToEnsure });
+      await modelSyncService.ensureStaticCatalogModels({ types: staticTypesToEnsure, maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });
     }
     if (wantText) {
       // TypeSafe Jev rows are created from code (no migration) the first time
@@ -12017,7 +12017,7 @@ router.post(
       }) : null;
 
       if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
-        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'] });
+        await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'], maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });
       }
       const adminModel = await prisma.aiModel.findUnique({
         where: { name: model },
@@ -12456,7 +12456,7 @@ router.post(
         });
       }
 
-      await modelSyncService.ensureStaticCatalogModels({ types: ['VIDEO'] });
+      await modelSyncService.ensureStaticCatalogModels({ types: ['VIDEO'], maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });
       const adminModel = await prisma.aiModel.findUnique({
         where: { name: requestedVideoModel },
         select: { displayName: true, isActive: true, type: true },

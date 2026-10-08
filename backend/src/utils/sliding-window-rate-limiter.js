@@ -54,11 +54,12 @@ class SlidingWindowRateLimiter {
   constructor(opts = {}) {
     this.windowMs = Number.isFinite(opts.windowMs) && opts.windowMs > 0
       ? opts.windowMs : DEFAULT_WINDOW_MS;
-    this.limit = Number.isFinite(opts.limit) && opts.limit > 0
-      ? Math.floor(opts.limit)
-      : (Number.isFinite(opts.maxRequests) && opts.maxRequests > 0
-        ? Math.floor(opts.maxRequests)
-        : DEFAULT_LIMIT);
+    // `limit`, `max` (express-rate-limit's name — apps-ai / apps-kv passed it
+    // and silently got the 60/min default, audit 2026-10-08) and the legacy
+    // `maxRequests` alias are all honoured; the first positive one wins.
+    const requested = [opts.limit, opts.max, opts.maxRequests]
+      .find((value) => Number.isFinite(value) && value > 0);
+    this.limit = requested ? Math.floor(requested) : DEFAULT_LIMIT;
     this.keyPrefix = opts.keyPrefix || 'srl';
     this.store = opts.store || new MapStore();
     this._now = opts.now || Date.now;

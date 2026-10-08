@@ -19,9 +19,52 @@ and improvement cycles follow a sequential number with the date the work landed.
   named `simpleGit` export and `GIT_TERMINAL_PROMPT` is allowlisted for v4's
   environment guard), `compression` 1.8.1 → 1.8.2 and `proxy-addr` 2.0.7 →
   2.0.8. `THIRD_PARTY_LICENSES.md` updated for the new versions.
+- Ten high-impact fixes across backend and frontend (2026-10-08), security
+  part: `/api/link-preview` now blocks the hex IPv4-mapped literals WHATWG
+  URL produces (`[::ffff:127.0.0.1]` → `::ffff:7f00:1`), NAT64 `64:ff9b::`,
+  CGNAT 100.64/10 (Alibaba metadata), Azure WireServer and the
+  benchmarking/TEST-NET ranges, and re-resolves the final host of a redirect
+  through DNS (a public-looking target resolving to 10.x used to render);
+  `/api/public/share/*` honours soft delete (a deleted chat stayed readable
+  through its share link until the 30-day purge); `PUT /api/users/profile`
+  refuses to change the account email (it re-bound Google sign-in and
+  password reset with no verification); `POST /api/telemetry/error` is
+  rate-limited per user/IP (`SIRAGPT_TELEMETRY_RATE_LIMIT_PER_MIN`, 20) and
+  `SlidingWindowRateLimiter` honours the `max` option apps-ai/apps-kv were
+  passing (they ran with the 60/min default); GPT knowledge-base text is no
+  longer shipped to every chat member through `GET /api/chats/:id`.
+
+### Changed
+
+- Performance (same 2026-10-08 batch): the static model catalog pass is
+  memoised for 10 min on read paths (`GET /api/admin/models` took 6.5 s
+  re-running ~280 UPDATEs; the IMAGE/VIDEO pickers and every video
+  generation did the same), `GET /api/chats` omits server-only Text/Json
+  columns, narrows the preview message and reads the agent-task index once
+  per page instead of once per chat, `GET /api/chats/:id` omits
+  `reasoningDetails` at the query; in the browser one poll loop per file id is
+  shared by every chip showing it (terminal answers reused for 10 min, loop
+  paused while the tab is hidden), the ApiClient opts out of the transport's
+  duplicate 429/5xx refetch, and the long-chat dedupe memoises the
+  «answered assistant turn» verdict per row instead of re-parsing every
+  agent-task envelope per frame.
 
 ### Fixed
 
+- Reliability (same 2026-10-08 batch): six routes piped upstream/file
+  streams to the response without an `error` listener, so one reset body
+  (`Readable.fromWeb(body).pipe(res)`, `createReadStream().pipe(res)`) became
+  an `uncaughtException` and `process.exit(1)` — all go through
+  `pipeStreamToResponse` now; `react-agent` required a nonexistent
+  `../codex/model-telemetry` path (its LLM telemetry silently never
+  recorded); the request logger is mounted before the rate limiters (a 429
+  storm left no lines in Admin → Logs), a client that closes mid-response is
+  logged `aborted: true` («· cliente cerró» in Admin → Logs), and
+  `unhandledRejection` names the root cause through the `cause` chain
+  (`describeErrorChain`) instead of `[object Object]`; the frontend
+  `ApiClient` no longer throws at module load when `localStorage` is blocked
+  (Safari private mode, embedded webviews), and the transport honours
+  `Retry-After` on 503 and never refetches an aborted request.
 - Production log 2026-10-07 (15:10 → 18:45 UTC). The one-minute media
   recovery sweep (`media-transcription-queue.reconcilePendingMedia`) loaded
   full `File` rows — any type, with `extractedText` — for every upload stuck

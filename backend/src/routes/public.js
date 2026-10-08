@@ -7,10 +7,14 @@ const router = express.Router();
 router.get('/share/:shareId', async (req, res) => {
     try {
         const { shareId } = req.params;
+        // A deleted chat (or account) keeps its shareId until the 30-day hard
+        // purge: without these filters anyone holding the link kept reading
+        // the transcript, files and metadata. Tombstones never resurface.
         const chat = await prisma.chat.findUnique({
-            where: { shareId, isShared: true },
+            where: { shareId, isShared: true, deletedAt: null },
             include: {
                 messages: {
+                    where: { deletedAt: null },
                     orderBy: { timestamp: 'asc' },
                     select: { 
                         id: true, 
@@ -65,23 +69,23 @@ router.get('/share/message/:shareId', async (req, res) => {
             where: { id: shareId },
             include: {
                 chat: {
-                    select: { title: true, model: true }
+                    select: { title: true, model: true, deletedAt: true }
                 }
             }
         });
 
-        if (!messageShare) {
+        if (!messageShare || (messageShare.chat && messageShare.chat.deletedAt)) {
             return res.status(404).json({ error: 'Shared message not found.' });
         }
 
-        // Get the user and assistant messages
-        const userMessage = await prisma.message.findUnique({
-            where: { id: messageShare.userMessageId },
+        // Get the user and assistant messages (soft-deleted rows are gone).
+        const userMessage = await prisma.message.findFirst({
+            where: { id: messageShare.userMessageId, deletedAt: null },
             select: { id: true, role: true, content: true, files: true, metadata: true, timestamp: true }
         });
 
-        const assistantMessage = await prisma.message.findUnique({
-            where: { id: messageShare.assistantMessageId },
+        const assistantMessage = await prisma.message.findFirst({
+            where: { id: messageShare.assistantMessageId, deletedAt: null },
             select: { id: true, role: true, content: true, files: true, metadata: true, timestamp: true }
         });
 

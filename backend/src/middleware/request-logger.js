@@ -114,6 +114,10 @@ function buildRequestLogger(opts = {}) {
         ip: _clientIp(req),
         ua: (req.headers && req.headers['user-agent']) ? String(req.headers['user-agent']) : '',
       };
+      // 'close' before 'finish' = the client (or a proxy) went away mid-
+      // response. An SSE turn cut at 40 s otherwise logs exactly like a
+      // completed one (`→ 200 (40000 ms)`).
+      if (res.writableFinished === false) payload.aborted = true;
       if (logBody && req.body) {
         try {
           const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);

@@ -1303,6 +1303,33 @@ export type DocumentEditStreamEvent =
     }
   | { type: 'done'; ok: boolean; code?: string; content: string; files: any[]; assistantMessageId: string | null; chatId: string }
 
+const AUTH_TOKEN_STORAGE_KEY = 'auth-token';
+
+/**
+ * `localStorage` throws (SecurityError) in Safari private mode, in webviews
+ * with storage blocked and when the quota is exhausted. The ApiClient is
+ * constructed at module load, so an unguarded read used to take the whole
+ * app down with it. The in-memory token still serves this tab.
+ */
+function readStoredAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuthToken(token: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (token) window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    else window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    /* storage blocked: the token lives in memory for this tab */
+  }
+}
+
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
@@ -1333,16 +1360,13 @@ class ApiClient {
   constructor(baseURL: string) {
     this.baseURL = baseURL;
 
-    // Get token from localStorage on client side
-    if (typeof window !== 'undefined') {
-      this.token = localStorage.getItem('auth-token');
-    }
+    // Get token from localStorage on client side (never throws).
+    this.token = readStoredAuthToken();
   }
 
   private _getAccessTokenSnapshot(): string | null {
     if (this.token) return this.token;
-    if (typeof window === 'undefined') return null;
-    const stored = localStorage.getItem('auth-token');
+    const stored = readStoredAuthToken();
     if (stored) {
       this.token = stored;
       return stored;
@@ -1491,6 +1515,10 @@ class ApiClient {
           bearerToken: isCredentialHandshake(endpoint, method)
             ? null
             : this._getAccessTokenSnapshot(),
+          // This loop owns the 429/503 (Retry-After) and 5xx backoff policy;
+          // the transport's own refetch doubled every attempt against a
+          // server that had just asked for relief.
+          retryTransient: false,
         });
 
         // HTTP-level success (2xx)
@@ -1782,13 +1810,7 @@ class ApiClient {
       this._refreshBlockedUntil = 0;
       clearAuthRefreshBlock();
     }
-    if (typeof window !== 'undefined') {
-      if (token) {
-        localStorage.setItem('auth-token', token);
-      } else {
-        localStorage.removeItem('auth-token');
-      }
-    }
+    writeStoredAuthToken(token);
   }
 
   // Auth endpoints
@@ -4915,7 +4937,7 @@ class ApiClient {
     return response.blob();
   }
   async getAnonQuota() {
-    localStorage.setItem('currentChatId', "")
+    try { localStorage.setItem('currentChatId', "") } catch { /* storage blocked */ }
 
     const res = await fetch(`${this.apiBaseURL}/ai/anon-quota`, {
       method: 'GET',

@@ -28,6 +28,7 @@
  */
 
 const fs = require('fs');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
@@ -482,14 +483,14 @@ router.get('/jobs/:id/artifact', authenticateToken, requireAdmin, handleErrors(a
 
   if (ref && objectStorage.isRemote(ref)) {
     const { stream } = await objectStorage.readStream(ref);
-    stream.pipe(res);
+    pipeStreamToResponse(stream, res, 'rlhf-export-remote');
     return;
   }
   const localPath = (priv && priv.localPath) || ref;
   if (!localPath || !fs.existsSync(localPath)) {
     return res.status(404).json({ error: 'artifact missing', code: 'E_PARAMS' });
   }
-  fs.createReadStream(localPath).pipe(res);
+  pipeStreamToResponse(fs.createReadStream(localPath), res, 'rlhf-export');
 }));
 
 router.post('/backfill', authenticateToken, requireAdmin, handleErrors(async (req, res) => {

@@ -1596,7 +1596,7 @@ async function run(openai, opts) {
         }
       }
       try {
-        require('../codex/model-telemetry').recordLlmTurn({
+        require('./codex/model-telemetry').recordLlmTurn({
           model: activeModel,
           provider: activeProvider,
           agent: 'react_agent',
@@ -1631,7 +1631,7 @@ async function run(openai, opts) {
         model: activeModel,
       });
       try {
-        require('../codex/model-telemetry').recordLlmTurn({
+        require('./codex/model-telemetry').recordLlmTurn({
           model: activeModel,
           provider: activeProvider,
           agent: 'react_agent',
@@ -1649,7 +1649,7 @@ async function run(openai, opts) {
       provider: activeProvider,
     });
     try {
-      require('../codex/model-telemetry').recordLlmTurn({
+      require('./codex/model-telemetry').recordLlmTurn({
         model: activeModel,
         provider: activeProvider,
         agent: 'react_agent',

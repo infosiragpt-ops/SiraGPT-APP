@@ -481,6 +481,7 @@ bounded body parser and request telemetry; production Redis outages return
 | `RATE_LIMIT_BILLING_REFUND_IP_MAX` | `50` | Admin grant/refund attempts per normalized shared IP |
 | `RATE_LIMIT_BILLING_REFUND_WINDOW_MS` | `3600000` | Admin refund window |
 | `SIRAGPT_API_KEY_AUDIT_COUNTER_MAX` | `10000` | Maximum in-process API-key audit-sampling counters |
+| `SIRAGPT_TELEMETRY_RATE_LIMIT_PER_MIN` | `20` | `POST /api/telemetry/error` beacons accepted per user (or IP when anonymous) per minute; the rest get `429` + `Retry-After` (added 2026-10-08) |
 
 Billing atomically consumes its user and IP dimensions, with a higher IP
 ceiling for offices and carrier NAT. IPv6 addresses are grouped by `/64`;

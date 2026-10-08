@@ -33,6 +33,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
 const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const OpenAI = require('openai');
@@ -566,7 +567,7 @@ router.get('/artifact/:id/preview.pdf', authenticateToken, async (req, res) => {
     res.setHeader('X-Preview-Native-Pdf', source.isPdf ? '1' : '0');
     const stream = fs.createReadStream(pdfPath);
     res.on('close', () => { if (!res.writableEnded) stream.destroy(); });
-    return stream.pipe(res);
+    return pipeStreamToResponse(stream, res, 'agent-task-preview-pdf');
   } catch (err) {
     try { await source.cleanup(); } catch { /* best-effort */ }
     // Conversion failed AFTER we had the bytes. The artifact exists;

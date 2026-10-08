@@ -778,6 +778,40 @@ function listActiveTasksForChat(chatId, userId, { limit = 10 } = {}) {
 }
 
 /**
+ * Active tasks for MANY chats with ONE read of the index. `GET /api/chats`
+ * called listActiveTasksForChat per listed row, i.e. N reads + JSON.parse
+ * of the all-users index per page. Same status set, sort and snapshot read
+ * as the singular helper.
+ * @returns {Map<string, object[]>} chatId → snapshots (most recent first)
+ */
+function listActiveTasksForChats(chatIds, userId, { limitPerChat = 1 } = {}) {
+  const wanted = new Set((Array.isArray(chatIds) ? chatIds : []).map((id) => String(id || '')).filter(Boolean));
+  const byChat = new Map();
+  if (!wanted.size) return byChat;
+  const index = readIndex();
+  const active = new Set(['running', 'queued', 'planning', 'executing', 'verifying', 'shipping']);
+  const grouped = new Map();
+  for (const [taskId, meta] of Object.entries(index)) {
+    const chatId = String((meta && meta.chatId) || '');
+    if (!wanted.has(chatId)) continue;
+    if (userId && String(meta.userId) !== String(userId)) continue;
+    if (!active.has(String(meta.status || ''))) continue;
+    if (!grouped.has(chatId)) grouped.set(chatId, []);
+    grouped.get(chatId).push([taskId, meta]);
+  }
+  for (const [chatId, entries] of grouped) {
+    entries.sort((a, b) => Date.parse(b[1].updatedAt || 0) - Date.parse(a[1].updatedAt || 0));
+    const rows = [];
+    for (const [taskId] of entries.slice(0, Math.max(1, Number(limitPerChat) || 1))) {
+      const snapshot = readTaskSnapshot(taskId);
+      if (snapshot) rows.push(snapshot);
+    }
+    byChat.set(chatId, rows);
+  }
+  return byChat;
+}
+
+/**
  * task for the chat (a chat can host multiple sequential agent tasks).
  * Indexed lookup — no full directory scan.
  */
@@ -1347,6 +1381,7 @@ module.exports = {
   findStaleRunningTasks,
   getLatestTaskForChat,
   listActiveTasksForChat,
+  listActiveTasksForChats,
   getRunningTasksForUser,
   getTaskByJobId,
   getTaskSnapshotForUser,
