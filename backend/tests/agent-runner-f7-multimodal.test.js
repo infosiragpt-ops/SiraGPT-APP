@@ -156,10 +156,14 @@ test('F7(a): an attached image rides into the first LLM call as vision content b
   await withEnv({ ...ENV_ON }, async () => {
     const captured = [];
     const client = scriptedClient([finalMsg('Listo, la imagen muestra un logo.')], captured);
+    // describe_image needs a vision-capable client (the ladder in production;
+    // a fake here) — without one the tool is not offered (see the test below).
+    const visionClient = scriptedClient([finalMsg('un logo')]);
     const result = await runAgentRunner({
       files: [{ name: 'captura.png', buffer: TINY_PNG }],
       instruction: 'Describe la imagen adjunta',
       client,
+      visionClient,
       driver: 'local',
       requireFileOutput: false,
     });
@@ -181,6 +185,26 @@ test('F7(a): an attached image rides into the first LLM call as vision content b
     assert.ok(textParts.some((p) => p.text.includes('Describe la imagen adjunta')));
     // data-not-instructions framing travels WITH the image
     assert.ok(textParts.some((p) => p.text.includes(vision.IMAGE_DATA_FRAMING)));
+  });
+});
+
+test('F7(a): without a vision-capable model describe_image is NOT offered — the loop text model never gets pixels', async () => {
+  // Production 2026-10-08: describe_image rode the loop client (DeepSeek V4
+  // Flash, text-only), failed on every call, and three failures in a row cut
+  // a turn whose deck was already built.
+  await withEnv({ ...ENV_ON }, async () => {
+    const captured = [];
+    const client = scriptedClient([finalMsg('Listo.')], captured);
+    await runAgentRunner({
+      files: [{ name: 'captura.png', buffer: TINY_PNG }],
+      instruction: 'Describe la imagen adjunta',
+      client,
+      driver: 'local',
+      requireFileOutput: false,
+    });
+    const toolNames = captured[0].payload.tools.map((t) => t.function.name);
+    assert.equal(toolNames.includes('describe_image'), false);
+    assert.ok(toolNames.includes('computer_screenshot'), 'the other F7 extras stay');
   });
 });
 

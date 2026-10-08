@@ -328,6 +328,8 @@ test('3H61-R-001 runAgentLoop invokes sandboxTimeoutThenCleanup on sandbox tool 
 test('3H61-M-001 runAgentLoop cuts idle subtask and accounts cancel once', async () => {
   const ac = new AbortController();
   const events = [];
+  let n = 0;
+  const empty = async () => { n += 1; return `ERROR: empty (${n})`; };
   const idle = runAgentLoop({
     client: scriptedClient([
       { toolCalls: [
@@ -335,22 +337,27 @@ test('3H61-M-001 runAgentLoop cuts idle subtask and accounts cancel once', async
         { name: 'glob', args: { pattern: '*.md' } },
         { name: 'grep', args: { pattern: 'zzz' } },
       ] },
+      // The guard speaks once after three consecutive failures
+      // (no-progress-nudge.js); three MORE failures cut the turn.
+      { toolCalls: [
+        { name: 'list_files', args: { path: 'b' } },
+        { name: 'glob', args: { pattern: '*.txt' } },
+        { name: 'grep', args: { pattern: 'yyy' } },
+      ] },
       { content: 'should-not-run' },
     ]),
     model: 'deepseek-v4-flash',
     messages: [{ role: 'user', content: 'lista' }],
     tools: [],
-    executors: {
-      async list_files() { return 'ERROR: empty'; },
-      async glob() { return 'ERROR: empty'; },
-      async grep() { return 'ERROR: empty'; },
-    },
+    executors: { list_files: empty, glob: empty, grep: empty },
     maxIterations: 6,
     onEvent: (ev) => events.push(ev),
   });
   const cut = await idle;
   assert.equal(cut.stoppedReason, 'subtask_no_progress');
   assert.equal(cut.errorCode, 'subtask_no_progress');
+  assert.notEqual(cut.finalText, 'should-not-run');
+  assert.equal(events.filter((ev) => ev && ev.type === 'no_progress_recovery').length, 1);
 
   const cancelLoop = runAgentLoop({
     client: scriptedClient([{ content: 'hola mundo extra' }]),

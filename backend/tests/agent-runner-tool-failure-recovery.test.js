@@ -72,12 +72,15 @@ test('successful Python work clears earlier failures before the later QA readbac
   assert.equal(events.some((event) => event.code === 'tool_dead_letter'), false);
 });
 
-test('three consecutive Python failures still halt before a fourth tool execution', async () => {
-  const { result, executed } = await runSequence([failed(1), failed(2), failed(3), {}]);
-  // The unchanged no-progress guard is stricter here: it fires immediately
-  // after the third failed result, before the next iteration's dead-letter check.
-  assert.equal(result.stoppedReason, 'subtask_no_progress');
+test('three consecutive Python failures: one recovery nudge, then the dead letter halts before a fourth execution', async () => {
+  const { result, executed, events } = await runSequence([failed(1), failed(2), failed(3), {}]);
+  // The no-progress guard speaks once after the third failed result
+  // (no-progress-nudge.js: change approach, verify what exists). The model
+  // asks for execute_python again and the same-tool dead letter refuses it
+  // before any fourth execution.
+  assert.equal(result.stoppedReason, 'tool_dead_letter');
   assert.equal(executed.length, 3);
+  assert.equal(events.filter((event) => event.type === 'no_progress_recovery').length, 1);
   const history = result.steps.map((step) => ({ tool: step.tool, code: 'tool_error' }));
   assert.equal(deadLetterSameToolAfterN(history.slice(0, 2)).halt, false);
   assert.equal(deadLetterSameToolAfterN(history).code, 'tool_dead_letter');
