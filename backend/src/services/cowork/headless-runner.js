@@ -60,6 +60,7 @@ async function runCoworkHeadless(prisma, {
   onEvent = null,
   maxRuntimeMs = 30 * 60 * 1000,
   resumeCheckpoint = null,
+  extraSystem = null,
 }) {
   if (!run?.id || !run?.userId || !run?.workspaceId) {
     const error = new Error('A persisted Cowork run with a workspace is required.');
@@ -94,7 +95,9 @@ async function runCoworkHeadless(prisma, {
       coworkRunId: run.id,
       onEvent,
     },
-    extraSystem: [
+    // Automations replace the workspace framing with their own (chat
+    // delivery, local time, NO_REPLY contract) — see services/automations.
+    extraSystem: extraSystem || [
       'You are running as a headless Cowork task.',
       'Work inside the mounted versioned workspace and deliver files there.',
       'Use update_checklist for multi-step work and verify deliverables before finalizing.',

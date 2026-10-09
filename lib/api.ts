@@ -313,7 +313,21 @@ export type SkillsDiscoverResponse = {
 
 export type SkillDetail = ChatSkillSummary & { body: string; enabled?: boolean }
 
-export type GenerateStreamRequest = { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; skills?: string[] }
+export type GenerateStreamRequest = { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, codingWorkspace?: boolean, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[]; imageModel?: string; imageProvider?: string; imageQuality?: string; skills?: string[]; timeZone?: string }
+
+/**
+ * The browser's IANA time zone, or undefined when Intl cannot tell (some
+ * webviews). Sent with every chat turn so server-side scheduling («mañana a
+ * las 9», automations) resolves in the user's local time.
+ */
+export function resolveClientTimeZone(): string | undefined {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    return typeof tz === 'string' && tz.length > 0 && tz.length <= 64 ? tz : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Error delivered to generate callers: always carries its policy kind. */
 export type GenerateStreamError = Error & {
@@ -2579,7 +2593,8 @@ class ApiClient {
       },
       // progressProtocol 2: this client renders stage progress / result
       // frames (stageId, detail, elapsedMs); older clients get begin-only frames.
-      body: JSON.stringify({ ...data, progressProtocol: 2 }),
+      // timeZone: the user's local zone for scheduling tools (automations).
+      body: JSON.stringify({ ...data, progressProtocol: 2, timeZone: data.timeZone ?? resolveClientTimeZone() }),
       ...(signal && { signal }),
     };
 

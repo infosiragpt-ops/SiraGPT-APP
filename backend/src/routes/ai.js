@@ -2317,6 +2317,9 @@ router.post(
     // Agent Skills picked in the composer («+ → Skills»): up to 3 names.
     body('skills').optional().isArray({ max: 3 }),
     body('skills.*').optional().isString().isLength({ min: 1, max: 64 }),
+    // Client IANA time zone (lib/api.ts sends Intl's): «mañana a las 9» in the
+    // automations tool means 09:00 where the user is. Validated downstream.
+    body('timeZone').optional({ nullable: true }).isString().isLength({ max: 64 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -8464,9 +8467,13 @@ router.post(
                       // A pasted link + «transcribe…»: keep transcribe_url in the
                       // per-turn tool subset (tool-selector core rule).
                       transcribeUrl: Boolean(__requestBrief && __requestBrief.deliverable && __requestBrief.deliverable.kind === 'transcription' && __requestBrief.target && __requestBrief.target.kind === 'url'),
+                      // «recuérdame…» / «cada lunes…»: keep the automations tool.
+                      automations: require('../services/automations/cues').mentionsAutomation(prompt),
                     },
                   },
                   toolContext: {
+                    // IANA zone from the client; UTC when absent or invalid.
+                    timeZone: require('../services/automations/schedule').normalizeTimeZone(req.body?.timeZone, 'UTC'),
                     codingWorkspace: verifiedCodingWorkspace,
                     coworkDisabled: Boolean(verifiedCodingWorkspace),
                     userId,

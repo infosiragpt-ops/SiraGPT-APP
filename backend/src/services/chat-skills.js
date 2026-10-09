@@ -610,6 +610,8 @@ module.exports = {
   BUILTIN_SKILLS,
   BUILTIN_CATEGORY,
   getSkillState,
+  saveSkillState,
+  reservedSkillName,
   listSkillLibrary,
   discoverSkills,
   rankForUser,

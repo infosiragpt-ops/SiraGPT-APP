@@ -133,7 +133,38 @@ function normalizeSkillState(raw) {
     const iso = typeof at === 'string' && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : null;
     installed[clean] = iso;
   }
-  return { installed, disabled: cleanNameList(src.disabled), removed: cleanNameList(src.removed) };
+  const imports = cleanImports(src.imports);
+  return {
+    installed,
+    disabled: cleanNameList(src.disabled),
+    removed: cleanNameList(src.removed),
+    // Only present when something was imported (keeps the legacy file shape).
+    ...(Object.keys(imports).length ? { imports } : {}),
+  };
+}
+
+const IMPORT_FIELDS = ['source', 'ref', 'url', 'version', 'sha256', 'importedAt', 'displayName'];
+const MAX_IMPORT_FIELD_CHARS = 400;
+
+/**
+ * Provenance of skills imported from a marketplace / repo / URL
+ * (services/skills-import): { [name]: { source, ref, url, version, sha256,
+ * importedAt, displayName } }. Strings only, bounded, names validated.
+ */
+function cleanImports(value) {
+  const out = {};
+  const src = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  for (const [name, meta] of Object.entries(src).slice(0, MAX_STATE_ENTRIES)) {
+    const clean = String(name || '').trim().toLowerCase();
+    if (!SKILL_NAME_RE.test(clean) || !meta || typeof meta !== 'object') continue;
+    const entry = {};
+    for (const field of IMPORT_FIELDS) {
+      if (typeof meta[field] === 'string' && meta[field].trim()) entry[field] = meta[field].trim().slice(0, MAX_IMPORT_FIELD_CHARS);
+    }
+    if (entry.importedAt && Number.isNaN(Date.parse(entry.importedAt))) delete entry.importedAt;
+    if (Object.keys(entry).length) out[clean] = entry;
+  }
+  return out;
 }
 
 function readSkillState({ userId, root = DEFAULT_ROOT } = {}) {

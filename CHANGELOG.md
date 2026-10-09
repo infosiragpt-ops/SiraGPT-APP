@@ -113,6 +113,25 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Automations the chat agent creates for the user, delivered back into the
+  same chat when they fire (2026-10-09, native rewrite of the OpenClaw MIT
+  cron/heartbeat ideas): one-shot reminders («recuérdame en 20 minutos…»),
+  recurring jobs («cada lunes a las 9…»), short loops («cada 10 minutos
+  revisa…») and a per-user heartbeat with active hours. Natural ES/EN
+  schedule parser in the user's time zone (the composer now sends
+  `timeZone`), `automations` harness tool, `/api/automations` routes, and
+  the Cowork scheduler worker runs them: `NO_REPLY` quiet runs, one-shot
+  rows deleted after success, failure backoff (30 s → 60 min) with
+  auto-pause after 10 failures and one notification. No schema migration:
+  the origin is encoded in `ScheduledAgentTask.createdFrom`.
+- Skills marketplace: `install_skill` / `search_skills_marketplace` harness
+  tools, `POST /api/skills/import` and `GET /api/skills/marketplace/search`
+  install Agent Skills by reference from ClawHub (security verdict checked
+  first; blocked skills refused), GitHub (`owner/repo[/path][@ref]`) or a
+  SKILL.md / .zip URL, with the `web_fetch` SSRF posture (public hosts
+  only, DNS re-validated per hop, byte caps, in-memory unzip) and
+  provenance recorded in the user's skills state.
+
 - Presentations requested in the chat get a consultant-grade design on the
   default path (AgentRunner `create_presentation`): agenda, comparison
   columns, process timelines, styled tables, quotes, numbered section

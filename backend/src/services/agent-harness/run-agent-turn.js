@@ -46,7 +46,9 @@ function buildHarnessTools(existingNames, opts = {}) {
   const { buildUseSkillTool } = require('./tools/use-skill-tool');
   const { buildSaveSkillTool } = require('./tools/save-skill-tool');
   const { buildTranscribeUrlTool } = require('./tools/transcribe-url-tool');
-  for (const build of [buildWebFetchTool, buildRunJavascriptTool, buildCreateArtifactTool, buildWebSearchTool, buildReadDeploymentLogsTool, buildApplyDeploymentFixTool, buildUseSkillTool, buildSaveSkillTool, buildTranscribeUrlTool]) {
+  const { buildAutomationsTool } = require('./tools/automations-tool');
+  const { buildSearchSkillsMarketplaceTool, buildInstallSkillTool } = require('./tools/skills-marketplace-tools');
+  for (const build of [buildWebFetchTool, buildRunJavascriptTool, buildCreateArtifactTool, buildWebSearchTool, buildReadDeploymentLogsTool, buildApplyDeploymentFixTool, buildUseSkillTool, buildSaveSkillTool, buildTranscribeUrlTool, buildAutomationsTool, buildSearchSkillsMarketplaceTool, buildInstallSkillTool]) {
     try {
       const def = build();
       if (!existingNames.has(def.name)) defs.push(def);
