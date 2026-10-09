@@ -991,7 +991,8 @@ function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {})
   for (const entry of fs.readdirSync(dir)) {
     if (!entry.endsWith('.json') || entry === INDEX_FILE) continue;
     try {
-      const snapshot = JSON.parse(fs.readFileSync(path.join(dir, entry), 'utf8'));
+      const snapshot = readTaskSnapshot(entry.slice(0, -5));
+      if (!snapshot) continue;
       if (snapshot.status !== 'running' && snapshot.status !== 'queued') continue;
       const updatedAt = Date.parse(snapshot.updatedAt || snapshot.createdAt || 0);
       if (!Number.isFinite(updatedAt) || updatedAt < cutoff) {
@@ -1060,10 +1061,16 @@ function recoverStaleRunningTasks({
   const stale = findStaleRunningTasks({ staleAfterMs });
   const recovered = [];
   const skipped = [];
+  const cutoff = Date.now() - staleAfterMs;
   const jobCutoff = Date.now() - Math.max(staleAfterMs, jobBackedStaleAfterMs);
   for (const row of stale) {
-    if (skipJobBacked && row.jobId) {
-      const rowUpdatedAt = Date.parse(row.updatedAt || 0);
+    // Disk enumeration is only a candidate list. A buffered heartbeat or
+    // terminal event is authoritative even before its write is flushed.
+    const snapshot = readTaskSnapshot(row.taskId);
+    if (!snapshot || (snapshot.status !== 'running' && snapshot.status !== 'queued')) continue;
+    const rowUpdatedAt = Date.parse(snapshot.updatedAt || snapshot.createdAt || 0);
+    if (Number.isFinite(rowUpdatedAt) && rowUpdatedAt >= cutoff) continue;
+    if (skipJobBacked && snapshot.jobId) {
       const withinJobGrace = Number.isFinite(rowUpdatedAt) && rowUpdatedAt >= jobCutoff;
       if (withinJobGrace) {
         skipped.push({ taskId: row.taskId, userId: row.userId, reason: 'job_backed' });
@@ -1071,8 +1078,6 @@ function recoverStaleRunningTasks({
       }
       // Beyond the hard ceiling: zombie job-backed task → recover below.
     }
-    const snapshot = readTaskSnapshot(row.taskId);
-    if (!snapshot) continue;
     const stamp = nowIso();
     const seq = (Number(snapshot.lastEventSeq) || 0) + 1;
     const recoveryEvent = {

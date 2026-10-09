@@ -95,3 +95,47 @@ test('boot resume persists its queued event when enqueue overlaps buffered progr
     assert.equal(fs.existsSync(path.join(dir, 'other.json')), true);
   } finally { await store.flushTaskStore(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('recovery respects same-task buffered heartbeats and terminal state over stale disk records', async () => {
+  const dir = temp(); process.env.AGENT_TASK_STORE_DIR = dir;
+  try {
+    for (const taskId of ['alive', 'finished', 'expired']) {
+      await store.writeTaskSnapshotAsync({ taskId, userId: 'u', status: 'running', events: [] });
+      await store.updateTaskSnapshotAsync(taskId, 'u', { updatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString() });
+    }
+    store.touchTaskHeartbeatBuffered('alive', 'u');
+    store.markTaskStatusBuffered({ taskId: 'finished', userId: 'u' }, 'completed', { streamState: { done: true } });
+    assert.deepEqual(store.findStaleRunningTasks({ staleAfterMs: 120000 }).map(row => row.taskId), ['expired']);
+    const result = store.recoverStaleRunningTasksBuffered({ staleAfterMs: 120000 });
+    await store.flushTaskStore();
+    assert.deepEqual(result.recovered.map(row => row.taskId), ['expired']);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'alive.json'))).status, 'running');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'finished.json'))).status, 'completed');
+  } finally { await store.flushTaskStore(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const status of ['running', 'completed']) {
+  test(`boot resume preserves ${status} progress produced before enqueue returns`, async () => {
+    const dir = temp(); process.env.AGENT_TASK_STORE_DIR = dir;
+    const recovery = require('../src/services/agents/agent-task-boot-recovery');
+    try {
+      await store.writeTaskSnapshotAsync({ taskId: 'resume-race', userId: 'u', status: 'error', jobId: 'old-job',
+        runnerCheckpoint: { stepsCompleted: 2 }, events: [], streamState: { done: true, steps: ['old'] } });
+      const result = await recovery.resumeCheckpointedTasks({ env: {}, taskStore: store,
+        recoveredRows: [{ taskId: 'resume-race', userId: 'u' }],
+        enqueue: async () => {
+          store.updateTaskSnapshotBuffered('resume-race', 'u', { status, jobId: 'new-job',
+            runnerCheckpoint: { stepsCompleted: 3 }, streamState: { done: status === 'completed', steps: ['old', 'new'] } });
+          return { id: 'new-job' };
+        },
+      });
+      assert.equal(result.resumed, 1);
+      const committed = JSON.parse(fs.readFileSync(path.join(dir, 'resume-race.json')));
+      assert.equal(committed.status, status);
+      assert.equal(committed.jobId, 'new-job');
+      assert.equal(committed.runnerCheckpoint.stepsCompleted, 3);
+      assert.deepEqual(committed.streamState.steps, ['old', 'new']);
+      assert.equal(committed.streamState.done, status === 'completed');
+    } finally { await store.flushTaskStore(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+}
