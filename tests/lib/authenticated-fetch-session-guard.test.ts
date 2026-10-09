@@ -27,9 +27,12 @@ function jsonResponse(status: number, body: Record<string, unknown> = {}): Respo
 describe("authenticatedFetch session guard", () => {
   beforeEach(() => {
     localStorage.clear()
+    // Session-guard cases start with a valid CSRF cookie.
+    document.cookie = "csrf_token=session-guard-csrf; path=/"
     clearAuthRefreshBlock()
   })
   afterEach(() => {
+    document.cookie = "csrf_token=; Max-Age=0; path=/"
     clearAuthRefreshBlock()
     vi.useRealTimers()
   })

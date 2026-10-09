@@ -5,8 +5,15 @@ const json = (status: number, body: object = {}) => new Response(JSON.stringify(
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return {promise, resolve} }
 const fresh = (init?: RequestInit) => new Headers(init?.headers).get("Authorization") === "Bearer refreshed"
 describe("refresh replay and session identity", () => {
-  beforeEach(() => localStorage.setItem("auth-token", "expired"))
-  afterEach(() => localStorage.clear())
+  beforeEach(() => {
+    localStorage.setItem("auth-token", "expired")
+    // These cases exercise session replay with an already valid CSRF cookie.
+    document.cookie = "csrf_token=replay-csrf; path=/"
+  })
+  afterEach(() => {
+    localStorage.clear()
+    document.cookie = "csrf_token=; Max-Age=0; path=/"
+  })
   it.each(["header", "option", "request"])("uses the minted credential with an explicit %s", async mode => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input instanceof Request ? input.url : input).endsWith("/auth/refresh") ? json(200,{token:"refreshed"}) : json(fresh(init)?200:401))
     const transport = createAuthenticatedFetch({apiBaseUrl:BASE,fetchImpl:fetchImpl as typeof fetch})

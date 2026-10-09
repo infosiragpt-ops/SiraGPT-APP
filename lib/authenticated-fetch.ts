@@ -48,7 +48,7 @@ export type AuthenticatedFetch = {
 
 export const SESSION_EXPIRED_EVENT = "siragpt:session-expired"
 /**
- * After `/auth/refresh` itself answers 401/403 the session is over: the
+ * After `/auth/refresh` answers 401 or a non-CSRF 403 the session is over: the
  * refresh cookie is gone or revoked and no retry mints a token until someone
  * logs in again. Production 2026-10-07: a logged-out tab kept its pollers
  * (credits badge, computer activity, login-handoff) and every 401 fired a
@@ -434,9 +434,25 @@ export function createAuthenticatedFetch(
           if (family) headers.set("x-refresh-family", family)
           if (version) headers.set("x-refresh-version", version)
         } catch { /* storage unavailable */ }
-        const res = await fetchImpl(apiBaseUrl + "/auth/refresh", { method: "POST", credentials: "include", headers })
+        // Refresh uses the cookie session, so it needs the same CSRF boundary
+        // as other cookie-only mutations. Token preparation may outlive logout.
+        const csrf = await csrfManager.getToken()
         if (!await markerCurrent(before)) return { ok: false, definitive: false }
-        if (!res.ok) return { ok: false, definitive: res.status === 401 || res.status === 403 }
+        if (csrf) headers.set("X-CSRF-Token", csrf)
+        let res = await fetchImpl(apiBaseUrl + "/auth/refresh", { method: "POST", credentials: "include", headers })
+        if (!await markerCurrent(before)) return { ok: false, definitive: false }
+        if (await isCsrfInvalid(res)) {
+          const fresh = await csrfManager.getToken(true)
+          if (!fresh || !await markerCurrent(before)) return { ok: false, definitive: false }
+          headers.set("X-CSRF-Token", fresh)
+          res = await fetchImpl(apiBaseUrl + "/auth/refresh", { method: "POST", credentials: "include", headers })
+          if (!await markerCurrent(before)) return { ok: false, definitive: false }
+        }
+        // A CSRF rejection does not prove that the authenticated session expired.
+        if (!res.ok) return {
+          ok: false,
+          definitive: res.status === 401 || (res.status === 403 && !await isCsrfInvalid(res)),
+        }
         const data = await res.json().catch(() => null) as { token?: unknown } | null
         const token = normalizeToken(data?.token)
         if (!await markerCurrent(before)) return { ok: false, definitive: false }
