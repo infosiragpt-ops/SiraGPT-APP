@@ -100,6 +100,7 @@ const WORKTREES_DIR = process.env.RUNNER_WORKTREES_DIR || `${WORKDIR}/worktrees`
 const EXPORT_DIR = process.env.EXPORT_DIR || "/export";
 const CONTROL_TOKEN = controlTokenForEnv(process.env);
 const FS_HELPER_PATH = process.env.CODE_RUNNER_FS_HELPER_PATH || "/opt/code-runner/code-runner-fs-helper.js";
+const SESSION_HELPER_PATH = process.env.CODE_RUNNER_SESSION_HELPER_PATH || "/scripts/code-runner-session.js";
 const TRUSTED_CANARY_RUN_RE = /^canary-[A-Za-z0-9_-]{1,72}-(?:a|b)$/;
 
 function envEnabled(value) {
@@ -135,6 +136,10 @@ const BUILD_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_BUILD_TIMEOUT_MS", 180_
 const DEV_READY_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_DEV_READY_TIMEOUT_MS", 90_000, 5_000, 30 * 60_000);
 const EXEC_DEFAULT_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_EXEC_TIMEOUT_MS", 30_000, 1_000, 30 * 60_000);
 const EXEC_MAX_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_EXEC_TIMEOUT_MAX_MS", 120_000, 1_000, 60 * 60_000);
+const SESSION_TTL_MS = boundedPositiveEnv("CODE_RUNNER_SESSION_TTL_MS", 2 * 60 * 60_000, 60_000, 24 * 60 * 60_000);
+const SESSION_IDLE_MS = boundedPositiveEnv("CODE_RUNNER_SESSION_IDLE_MS", 30 * 60_000, 60_000, 24 * 60 * 60_000);
+const SESSION_REAP_INTERVAL_MS = boundedPositiveEnv("CODE_RUNNER_SESSION_REAP_INTERVAL_MS", 60_000, 1_000, 10 * 60_000);
+const SESSION_MAX = boundedPositiveEnv("CODE_RUNNER_SESSION_MAX", 64, 1, 256);
 const KILL_GRACE_MS = boundedPositiveEnv("CODE_RUNNER_KILL_GRACE_MS", 4_000, 100, 30_000);
 const FS_HELPER_TIMEOUT_MS = boundedPositiveEnv("CODE_RUNNER_FS_HELPER_TIMEOUT_MS", 30_000, 1_000, 5 * 60_000);
 const WRITE_MAX_TOTAL_BYTES = boundedPositiveEnv("CODE_RUNNER_WRITE_MAX_TOTAL_BYTES", 20_000_000, 1_000_000, 100_000_000);
@@ -749,6 +754,127 @@ function killEntryProc(entry) {
   entry.proc = null;
 }
 
+const shellSessions = new Map();
+
+function sessionError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+function sessionToken() {
+  return randomBytes(24).toString('base64url');
+}
+
+function stopShellSession(session) {
+  if (!session) return;
+  killGroup(session.proc);
+  shellSessions.delete(session.id);
+}
+
+function createShellSession(projectId, runId, workspace) {
+  if (shellSessions.size >= SESSION_MAX) throw sessionError('session_limit');
+  const now = Date.now();
+  const proc = spawnSandboxed(projectId, ['node', SESSION_HELPER_PATH], {
+    cwd: workspace.dir,
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { SIRA_SESSION_ROOT: workspace.dir },
+  });
+  const session = {
+    id: sessionToken(),
+    projectId,
+    runId,
+    proc,
+    createdAt: now,
+    lastActivityAt: now,
+    pending: new Map(),
+    nextRequestId: 1,
+    buffer: '',
+  };
+  const decoder = new TextDecoder();
+  (async () => {
+    const reader = proc.stdout.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        session.buffer += decoder.decode(value, { stream: true });
+        for (;;) {
+          const index = session.buffer.indexOf('\n');
+          if (index < 0) break;
+          const line = session.buffer.slice(0, index);
+          session.buffer = session.buffer.slice(index + 1);
+          let payload;
+          try { payload = JSON.parse(line); } catch { continue; }
+          if (payload.type === 'ready') continue;
+          const pending = session.pending.get(payload.id);
+          if (!pending) continue;
+          session.pending.delete(payload.id);
+          pending.resolve(payload);
+        }
+      }
+    } catch {
+      /* session exit resolves pending requests below */
+    }
+  })();
+  proc.exited.then(() => {
+    for (const pending of session.pending.values()) pending.reject(sessionError('session_not_found'));
+    session.pending.clear();
+    shellSessions.delete(session.id);
+  }).catch(() => shellSessions.delete(session.id));
+  shellSessions.set(session.id, session);
+  return session;
+}
+
+function resolveShellSession(sessionId, projectId, runId) {
+  const session = shellSessions.get(String(sessionId || ''));
+  if (!session || session.projectId !== projectId || session.runId !== runId) throw sessionError('session_not_found');
+  return session;
+}
+
+function executeShellSession(session, cmd, timeoutMs) {
+  if (session.pending.size) throw sessionError('session_busy');
+  const id = session.nextRequestId++;
+  session.lastActivityAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      session.pending.delete(id);
+      stopShellSession(session);
+      reject(sessionError('session_timeout'));
+    }, Math.max(1_000, timeoutMs + KILL_GRACE_MS));
+    session.pending.set(id, {
+      resolve(payload) {
+        clearTimeout(timer);
+        session.lastActivityAt = Date.now();
+        resolve(payload);
+      },
+      reject(error) {
+        clearTimeout(timer);
+        reject(error);
+      },
+    });
+    try {
+      session.proc.stdin.write(`${JSON.stringify({ id, cmd, timeoutMs })}\n`);
+    } catch {
+      session.pending.delete(id);
+      clearTimeout(timer);
+      stopShellSession(session);
+      reject(sessionError('session_not_found'));
+    }
+  });
+}
+
+function reapShellSessions(now = Date.now()) {
+  for (const session of shellSessions.values()) {
+    if (now - session.createdAt >= SESSION_TTL_MS || now - session.lastActivityAt >= SESSION_IDLE_MS) {
+      stopShellSession(session);
+    }
+  }
+}
+
+
 function pushLog(entry, line) {
   entry.log.push(String(line).slice(0, 500));
   if (entry.log.length > 80) entry.log.shift();
@@ -1257,6 +1383,10 @@ setInterval(() => {
   }
 }, 60_000);
 
+// Reap shell sessions independently from the preview pool. Session activity only
+// comes from control-plane execs, never from a direct browser connection.
+setInterval(() => reapShellSessions(), SESSION_REAP_INTERVAL_MS);
+
 Bun.serve({
   port: CTRL_PORT,
   hostname: "0.0.0.0",
@@ -1508,13 +1638,37 @@ Bun.serve({
       }
     }
 
+    if (url.pathname === "/workspace/session" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const id = sanitizeProjectId(body.project);
+      const runId = sanitizeRunId(body.run);
+      if (!id || !runId) return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
+      try {
+        const workspace = ensureWorkspaceDirectory(id, runId);
+        const session = createShellSession(id, runId, workspace);
+        return Response.json({ ok: true, sessionId: session.id, project: id, run: runId, cwd: workspace.dir });
+      } catch (error) {
+        const status = ["worktree_not_found", "project_not_found"].includes(error.code) ? 404
+          : error.code === "session_limit" ? 429 : 409;
+        return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
+      }
+    }
+
+    if (url.pathname === "/workspace/session" && req.method === "DELETE") {
+      const session = shellSessions.get(String(url.searchParams.get("sessionId") || ""));
+      if (session) stopShellSession(session);
+      return Response.json({ ok: true });
+    }
+
     if (url.pathname === "/workspace/exec" && req.method === "POST") {
       const body = await req.json().catch(() => ({}));
       const id = sanitizeProjectId(body.project);
       const rawRunId = body.run == null || body.run === "" ? null : body.run;
       const runId = rawRunId == null ? null : sanitizeRunId(rawRunId);
       const cmd = body.cmd;
-      const rejection = commandRejectionReason(cmd);
+      const sessionId = body.sessionId == null || body.sessionId === "" ? null : String(body.sessionId);
+      const sessionControlCommand = sessionId && ["cd", "export"].includes(Array.isArray(cmd) ? cmd[0] : null);
+      const rejection = sessionControlCommand ? null : commandRejectionReason(cmd);
       if (!id || (rawRunId != null && !runId) || rejection) {
         return Response.json({ ok: false, error: rejection || "invalid_command" }, { status: 400 });
       }
@@ -1526,6 +1680,18 @@ Bun.serve({
         return Response.json({ ok: false, error: error.code || "workspace_unavailable" }, { status });
       }
       const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || EXEC_DEFAULT_TIMEOUT_MS, 1_000), EXEC_MAX_TIMEOUT_MS);
+      if (sessionId) {
+        if (!runId) return Response.json({ ok: false, error: "session_requires_run" }, { status: 400 });
+        try {
+          const session = resolveShellSession(sessionId, id, runId);
+          const started = Date.now();
+          const out = await executeShellSession(session, cmd, timeoutMs);
+          return Response.json({ ...out, sessionId, durationMs: Date.now() - started });
+        } catch (error) {
+          const status = error.code === "session_not_found" ? 404 : error.code === "session_busy" ? 409 : 502;
+          return Response.json({ ok: false, error: error.code || "session_failed" }, { status });
+        }
+      }
       try {
         return await workspaceMutationGuard.run(workspace.dir, async () => {
           const started = Date.now();
