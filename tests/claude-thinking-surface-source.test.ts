@@ -22,7 +22,7 @@ describe("Claude-style thinking surface", () => {
     // Luis (2026-10-03): monochrome — no trail, no per-part colour;
     // red (tone="error") is the only colour, and only when the system fails.
     assert.match(core, /data-brand-geometry="sira"/)
-    assert.match(core, /paint\(svg, frameAt\(now - anchor, geometry\)\)/)
+    assert.match(core, /paint\(svg, frameAt\(elapsed, geometry\)\)/)
     assert.doesNotMatch(core, /animateMotion|thinking-core__electron|thinking-core__orbit/, "no SMIL electrons")
     assert.doesNotMatch(core, /pathLength=\{100\}|attributeName="stroke-dashoffset"|thinking-core__trail|function Trail/, "no trail")
     assert.doesNotMatch(core, /--think-electron-/, "no per-electron colour")

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { CLAUDE_THINK_ACCENT } from "@/lib/thinking-loaders"
-import { frameAt, logoGeometryFor, openFrame, type SiraFrame, type SiraGeometry } from "@/lib/brand/sira-motion"
+import { SIRA_TIMING, frameAt, logoGeometryFor, openFrame, type SiraFrame, type SiraGeometry } from "@/lib/brand/sira-motion"
 
 export type ThinkingCoreTone = "default" | "error"
 
@@ -56,7 +56,10 @@ function paint(svg: SVGSVGElement, frame: SiraFrame) {
       line.setAttribute("x2", String(round(arm.x)))
       line.setAttribute("y2", String(round(arm.y)))
       // A zero-length arm would still draw its round caps: hide it instead.
-      line.setAttribute("visibility", arm.distance > 0 ? "visible" : "hidden")
+      // `display`, not `visibility`: a `visibility="visible"` child would
+      // pierce a hidden ancestor (CSS visibility is overridable per element),
+      // showing the arms inside an `invisible` pane.
+      line.setAttribute("display", arm.distance > 0 ? "inline" : "none")
     }
     if (tip) {
       tip.setAttribute("cx", String(round(arm.x)))
@@ -88,13 +91,20 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
     }
     let raf = 0
     let anchor: number | null = null
+    // Cycle time of the last painted frame. It starts at the close time,
+    // where the mark is exactly the open logo (what the markup already
+    // shows), so the first animated frame continues from it instead of
+    // popping to the closed state; a pause keeps it, so resuming carries on
+    // from the same phase instead of jumping.
+    let elapsed = SIRA_TIMING.close
     let inView = true
     let disposed = false
     const tick = (now: number) => {
       raf = 0
       if (disposed || document.hidden || !inView) return
-      if (anchor === null) anchor = now
-      paint(svg, frameAt(now - anchor, geometry))
+      if (anchor === null) anchor = now - elapsed
+      elapsed = now - anchor
+      paint(svg, frameAt(elapsed, geometry))
       raf = requestAnimationFrame(tick)
     }
     const start = () => {
@@ -104,6 +114,8 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
     const stop = () => {
       if (raf) cancelAnimationFrame(raf)
       raf = 0
+      // Re-anchor on the next frame so the clock does not count the pause.
+      anchor = null
     }
     const onVisibility = () => (document.hidden ? stop() : start())
     const onReduced = (event: MediaQueryListEvent) => {

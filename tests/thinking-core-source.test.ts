@@ -23,7 +23,7 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(core, /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
     // Luis (2026-10-09): the glyph IS the brand mark — same geometry as
     // SiraMark via the pure motion model; the resting frame is the logo.
-    assert.match(core, /import \{ frameAt, logoGeometryFor, openFrame, type SiraFrame, type SiraGeometry \} from "@\/lib\/brand\/sira-motion"/)
+    assert.match(core, /import \{ SIRA_TIMING, frameAt, logoGeometryFor, openFrame, type SiraFrame, type SiraGeometry \} from "@\/lib\/brand\/sira-motion"/)
     assert.match(core, /const geometry: SiraGeometry = React\.useMemo\(\(\) => logoGeometryFor\(size\), \[size\]\)/)
     assert.match(core, /const resting = React\.useMemo\(\(\) => openFrame\(geometry\), \[geometry\]\)/)
     // Eight arms stroked in the ink, eight tip dots and the centre filled in the ink.
@@ -35,13 +35,21 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.doesNotMatch(core, /Gradient|<filter|url\(#|#2E7D32"|LEAF_PATH|rotate\(\$\{deg\}\)|A170 62|animateMotion|thinking-core__electron|thinking-core__orbit/)
     // The animation moves attributes per frame (requestAnimationFrame) and
     // pauses when hidden or out of view; reduced motion and idle paint the resting frame.
-    assert.match(core, /paint\(svg, frameAt\(now - anchor, geometry\)\)/)
+    assert.match(core, /paint\(svg, frameAt\(elapsed, geometry\)\)/)
+    // The clock starts at the close time (= the open logo the markup shows, no pop
+    // to the closed state) and re-anchors after a pause (no phase jump on resume).
+    assert.match(core, /let elapsed = SIRA_TIMING\.close/)
+    assert.match(core, /if \(anchor === null\) anchor = now - elapsed/)
+    assert.match(core, /raf = 0\n\s+\/\/ Re-anchor on the next frame so the clock does not count the pause\.\n\s+anchor = null/)
     assert.match(core, /raf = requestAnimationFrame\(tick\)/)
     assert.match(core, /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/)
     assert.match(core, /if \(reduced\?\.matches\) \{\n\s+paint\(svg, resting\)/)
     assert.match(core, /document\.addEventListener\("visibilitychange", onVisibility\)/)
     assert.match(core, /new IntersectionObserver\(/)
-    assert.match(core, /line\.setAttribute\("visibility", arm\.distance > 0 \? "visible" : "hidden"\)/, "a closed arm never shows its round caps")
+    // Closed arms are hidden with `display`, never `visibility`: a visible
+    // child would pierce a hidden ancestor (an `invisible` pane).
+    assert.match(core, /line\.setAttribute\("display", arm\.distance > 0 \? "inline" : "none"\)/, "a closed arm never shows its round caps")
+    assert.doesNotMatch(core, /"visibility"/)
     assert.doesNotMatch(core, /pathLength=\{100\}|stroke-dashoffset|TRAIL_LONG|TRAIL_SHORT|thinking-core__trail|function Trail|thinking-core__ripple/)
     // Monochrome: the mark inherits the ink; the only colour is the error tone (destructive red).
     assert.doesNotMatch(core, /--think-electron-/)
