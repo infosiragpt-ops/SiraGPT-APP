@@ -1,14 +1,7 @@
 'use strict';
 
-// Production 2026-10-07 22:39Z: a document task picked «Claude Sonnet 5.5».
-// The task worker has no runtime for a bare `claude-*` id, so it remapped the
-// run to DeepSeek (`runtimeModel=deepseek-v4-flash runtimeProvider=DeepSeek`,
-// `modelRemapped=true`) — and then handed the AgentRunner the spec
-// «Unresolved:deepseek-v4-flash» (original provider + fallback model), which
-// its preflight rejected: `selected_model_failure … origin=preflight
-// category=candidate_unavailable` → E_PROVIDER «El modelo seleccionado no está
-// disponible» 7 s after the task started. The runner must follow the runtime
-// the task already runs on.
+// A model with no direct runtime is remapped to DeepSeek. The runner must
+// follow that resolved runtime rather than hand its preflight an unresolved spec.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -42,10 +35,10 @@ function withDeepSeekOnly(fn) {
 const taskRunner = require('../src/services/agents/agent-task-runner');
 const agentRunner = require('../src/services/agent-runner');
 
-test('a bare claude-* pick remapped to DeepSeek hands the runner the DeepSeek runtime, not «Unresolved:<fallback>»', () => {
+test('an unknown pick remapped to DeepSeek hands the runner the DeepSeek runtime, not «Unresolved:<fallback>»', () => {
   withDeepSeekOnly(() => {
-    const profile = taskRunner.normalizeAgentRuntimeModel('claude-sonnet-5-5');
-    assert.equal(profile.detected, null, 'the task worker has no runtime for a bare claude id');
+    const profile = taskRunner.normalizeAgentRuntimeModel('not-a-known-provider-model');
+    assert.equal(profile.detected, null, 'the task worker has no direct runtime for this model');
     const resolution = taskRunner.resolveAgentRuntimeClient(profile);
     assert.ok(resolution.client, 'DeepSeek is configured: the task runs on it');
     assert.equal(resolution.provider, 'DeepSeek');
@@ -80,7 +73,7 @@ test('with no client at all the spec stays honest: the runner reports the picked
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.NODE_ENV = 'test';
   try {
-    const profile = taskRunner.normalizeAgentRuntimeModel('claude-sonnet-5-5');
+    const profile = taskRunner.normalizeAgentRuntimeModel('not-a-known-provider-model');
     const resolution = taskRunner.resolveAgentRuntimeClient(profile);
     assert.equal(resolution.client, null);
     assert.equal(resolution.provider, 'unconfigured');
