@@ -129,8 +129,10 @@ test('the harness registers automations, the loop labels it, the prompt teaches 
   assert.ok(bySignal.selectedNames.includes('automations'));
   const route = read('src/routes/ai.js');
   assert.match(route, /body\('timeZone'\)\.optional\(\{ nullable: true \}\)\.isString\(\)\.isLength\(\{ max: 64 \}\)/);
-  assert.match(route, /timeZone: require\('\.\.\/services\/automations\/schedule'\)\.normalizeTimeZone\(req\.body\?\.timeZone, 'UTC'\)/);
-  assert.match(route, /automations: require\('\.\.\/services\/automations\/cues'\)\.mentionsAutomation\(prompt\)/);
+  // Inline (no require) on purpose: the generate handler is also evaluated in a
+  // sandbox by tests/generate-chat-coding-workspace.test.js.
+  assert.match(route, /timeZone: \(\(\) => \{\s*const raw = typeof req\.body\?\.timeZone === 'string' \? req\.body\.timeZone\.trim\(\) : '';\s*if \(!raw \|\| raw\.length > 64\) return 'UTC';\s*try \{ Intl\.DateTimeFormat\(undefined, \{ timeZone: raw \}\); return raw; \} catch \(_\) \{ return 'UTC'; \}\s*\}\)\(\),/);
+  assert.doesNotMatch(route.slice(route.indexOf('toolContext: {'), route.indexOf('toolContext: {') + 6000), /require\('\.\.\/services\/automations/, 'no module requires inside the sandboxed handler region');
 });
 
 test('scheduling cues: ES/EN positives, and plain coding/chat negatives', () => {

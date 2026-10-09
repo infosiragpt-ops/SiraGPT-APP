@@ -19,5 +19,5 @@ test("lib/api.ts sends the client time zone on every /ai/generate turn, guarded 
 test("the AI route validates the zone and exposes it to the harness tool context", () => {
   const route = read("backend/src/routes/ai.js")
   assert.match(route, /body\('timeZone'\)\.optional\(\{ nullable: true \}\)\.isString\(\)\.isLength\(\{ max: 64 \}\)/)
-  assert.match(route, /toolContext: \{\s*\/\/ IANA zone from the client; UTC when absent or invalid\.\s*timeZone: require\('\.\.\/services\/automations\/schedule'\)\.normalizeTimeZone\(req\.body\?\.timeZone, 'UTC'\)/)
+  assert.match(route, /chatId: canPersist \? chatId : null,[\s\S]{0,400}timeZone: \(\(\) => \{\s*const raw = typeof req\.body\?\.timeZone === 'string' \? req\.body\.timeZone\.trim\(\) : '';\s*if \(!raw \|\| raw\.length > 64\) return 'UTC';\s*try \{ Intl\.DateTimeFormat\(undefined, \{ timeZone: raw \}\); return raw; \} catch \(_\) \{ return 'UTC'; \}\s*\}\)\(\),/)
 })

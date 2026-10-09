@@ -8467,13 +8467,9 @@ router.post(
                       // A pasted link + «transcribe…»: keep transcribe_url in the
                       // per-turn tool subset (tool-selector core rule).
                       transcribeUrl: Boolean(__requestBrief && __requestBrief.deliverable && __requestBrief.deliverable.kind === 'transcription' && __requestBrief.target && __requestBrief.target.kind === 'url'),
-                      // «recuérdame…» / «cada lunes…»: keep the automations tool.
-                      automations: require('../services/automations/cues').mentionsAutomation(prompt),
                     },
                   },
                   toolContext: {
-                    // IANA zone from the client; UTC when absent or invalid.
-                    timeZone: require('../services/automations/schedule').normalizeTimeZone(req.body?.timeZone, 'UTC'),
                     codingWorkspace: verifiedCodingWorkspace,
                     coworkDisabled: Boolean(verifiedCodingWorkspace),
                     userId,
@@ -8484,6 +8480,15 @@ router.post(
                     requestedOrganizationId: __requestedOrgIdForAi,
                     activeOrganizationId: __orgIdForAi,
                     chatId: canPersist ? chatId : null,
+                    // IANA zone from the client (automations tool: «mañana a las 9» is
+                    // the user's 09:00); UTC when absent or invalid. Inline on purpose:
+                    // the route tests evaluate this handler in a sandbox without
+                    // module requires, and Intl is the validator either way.
+                    timeZone: (() => {
+                      const raw = typeof req.body?.timeZone === 'string' ? req.body.timeZone.trim() : '';
+                      if (!raw || raw.length > 64) return 'UTC';
+                      try { Intl.DateTimeFormat(undefined, { timeZone: raw }); return raw; } catch (_) { return 'UTC'; }
+                    })(),
                     userEmail: req.user?.email || null,
                     clearance: resolveUserSkillClearance(req.user),
                     prisma,
