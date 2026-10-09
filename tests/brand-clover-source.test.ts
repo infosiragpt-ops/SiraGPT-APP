@@ -153,7 +153,9 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     assert.doesNotMatch(siraMark, /<image|data:image|A170 62|rotate\(/)
     const motion = source("lib/brand/sira-motion.ts")
     assert.match(motion, /export const LOGO_GEOMETRY: SiraGeometry = Object\.freeze\(\{ size: 400, reach: 163, center: 48, seed: 38, tip: 37, stroke: 17 \}\)/)
-    assert.match(motion, /export const SIRA_TIMING: SiraTiming = Object\.freeze\(\{ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 \}\)/)
+    // Jorge (2026-10-09): the mark opens and closes in 1.5 s; the delivered 2 s canvas timing stays as the showcase reference.
+    assert.match(motion, /export const SIRA_TIMING: SiraTiming = Object\.freeze\(\{ cycle: 1500, start: 0, duration: 720, close: 750, stagger: 10 \}\)/)
+    assert.match(motion, /export const SHOWCASE_TIMING: SiraTiming = Object\.freeze\(\{ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 \}\)/)
     assert.match(motion, /export const ARM_RANKS: readonly number\[\] = Object\.freeze\(\[0, 2, 1, 3, 0, 2, 1, 3\]\)/)
     const asset = source("public/brand/sira-mark.svg")
     assert.match(asset, /viewBox="0 0 400 400"/)

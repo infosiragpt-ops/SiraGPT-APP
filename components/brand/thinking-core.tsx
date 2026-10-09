@@ -22,7 +22,7 @@ export type ThinkingCoreProps = React.SVGAttributes<SVGSVGElement> & {
  *
  * Official brand since 2026-10-09 (Luis): the eight-arm mark
  * (`components/brand/sira-mark.tsx`) and its animation — eight arms open and
- * close in a continuous two-second cycle, in four staggered ranks (opposite
+ * close in a continuous 1.5 s cycle (0.75 s each way), in four staggered ranks (opposite
  * arms move together), the dots bloom once they clear the centre and the
  * centre breathes between its seed and its full size. The motion model lives
  * in `lib/brand/sira-motion.ts` (pure, tested); this component only moves

@@ -5,6 +5,7 @@ import {
   LOGO_GEOMETRY,
   LOGO_GEOMETRY_SMALL,
   SHOWCASE_GEOMETRY,
+  SHOWCASE_TIMING,
   SIRA_TIMING,
   frameAt,
   logoGeometryFor,
@@ -37,14 +38,23 @@ describe("sira-motion — the brand motion model", () => {
     expect(1 - smooth(0.999)).toBeLessThan(1e-7)
   })
 
-  it("keeps the delivered timing: a two-second cycle, open for the first half, closed at the end", () => {
-    expect(SIRA_TIMING).toEqual({ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 })
+  it("keeps the delivered showcase timing and ships the 1.5 s product cycle: open for the first half, closed at the end", () => {
+    expect(SHOWCASE_TIMING).toEqual({ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 })
+    // Jorge (2026-10-09): open and close in 1–1.5 s. The last rank finishes
+    // opening exactly when the closing starts (duration = close − 3·stagger).
+    expect(SIRA_TIMING).toEqual({ cycle: 1500, start: 0, duration: 720, close: 750, stagger: 10 })
+    expect(SIRA_TIMING.close).toBe(SIRA_TIMING.cycle / 2)
+    expect(SIRA_TIMING.duration).toBe(SIRA_TIMING.close - 3 * SIRA_TIMING.stagger)
     expect(progressAt(0, 0)).toBe(0)
-    expect(progressAt(1000, 0)).toBeCloseTo(1, 5)
-    expect(progressAt(1999, 0)).toBeCloseTo(0, 2)
+    expect(progressAt(SIRA_TIMING.close, 0)).toBeCloseTo(1, 5)
+    expect(progressAt(SIRA_TIMING.close, 3)).toBeCloseTo(1, 5)
+    expect(progressAt(SIRA_TIMING.cycle - 1, 0)).toBeCloseTo(0, 2)
     // later ranks start later and close earlier
     expect(progressAt(300, 3)).toBeLessThan(progressAt(300, 0))
-    expect(progressAt(1500, 3)).toBeLessThan(progressAt(1500, 0))
+    expect(progressAt(1100, 3)).toBeLessThan(progressAt(1100, 0))
+    // the delivered timing still drives the showcase when asked for
+    expect(progressAt(1000, 0, SHOWCASE_TIMING)).toBeCloseTo(1, 5)
+    expect(progressAt(1999, 0, SHOWCASE_TIMING)).toBeCloseTo(0, 2)
   })
 
   it("the resting frame is the static logo: full reach, full dots, full centre, touching the box", () => {
@@ -63,18 +73,21 @@ describe("sira-motion — the brand motion model", () => {
     expect(early.openness).toBeGreaterThan(0)
     expect(early.openness).toBeLessThan(0.2)
     expect(early.arms[0].tipRadius).toBe(0)
-    const mid = frameAt(500)
+    // 375 ms: the four ranks sit symmetrically around half-way (smooth is point-symmetric about 0.5).
+    const mid = frameAt(375)
     expect(mid.openness).toBeCloseTo(0.5, 2)
     expect(mid.centerRadius).toBeGreaterThan(LOGO_GEOMETRY.seed)
     expect(mid.centerRadius).toBeLessThan(LOGO_GEOMETRY.center)
     expect(mid.arms[0].tipRadius).toBeCloseTo(LOGO_GEOMETRY.tip, 5)
     // opposite arms are identical at every instant
     for (let i = 0; i < 4; i += 1) expect(mid.arms[i].distance).toBeCloseTo(mid.arms[i + 4].distance, 9)
-    const closed = frameAt(1999)
+    const closed = frameAt(SIRA_TIMING.cycle - 1)
     expect(closed.openness).toBeLessThan(0.01)
     expect(closed.centerRadius).toBeCloseTo(LOGO_GEOMETRY.seed, 1)
     // negative times wrap into the cycle instead of exploding
-    expect(frameAt(-500).openness).toBeCloseTo(frameAt(1500).openness, 9)
+    expect(frameAt(-500).openness).toBeCloseTo(frameAt(SIRA_TIMING.cycle - 500).openness, 9)
+    // the frame at the close time is the fully open logo — what ThinkingCore starts from
+    expect(frameAt(SIRA_TIMING.close)).toEqual(openFrame())
   })
 
   it("the showcase geometry is the delivered canvas design", () => {

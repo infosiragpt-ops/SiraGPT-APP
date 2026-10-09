@@ -79,7 +79,7 @@ Step identity prefers `step_id`.
   (black on light, white on dark — the same ink as the `SiraMark` brand logo).
   Since 2026-10-09 the ThinkingCore is the **official SiraGPT mark in motion**
   (same geometry as the `SiraMark` logo, model in `lib/brand/sira-motion.ts`):
-  eight arms open and close in a continuous two-second cycle in four staggered
+  eight arms open and close in a continuous 1.5 s cycle (0.75 s each way) in four staggered
   ranks, the tip dots bloom once they clear the centre and the centre breathes;
   idle, the server render and reduced motion are the resting open frame — the
   static logo in ink. Monochrome: the only colour is `tone="error"` (destructive

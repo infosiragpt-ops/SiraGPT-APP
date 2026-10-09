@@ -2562,7 +2562,10 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   `LOGO_GEOMETRY` (caja 400: alcance 163, centro 48, semilla 38, punta 37, trazo 17 — proporciones
   medidas sobre el logo entregado, el mark abierto toca la caja), `LOGO_GEOMETRY_SMALL` (tamaño
   óptico para ≤ 32 px), `SHOWCASE_GEOMETRY` (los números exactos del canvas entregado, 720),
-  `SIRA_TIMING` (ciclo 2000 ms, apertura 970 ms, cierre desde 1000 ms, escalonado 10 ms por rango),
+  `SIRA_TIMING` (pedido de Jorge el mismo día: «abrirse y cerrarse en 1–1,5 s, profesional» → ciclo
+  1500 ms, apertura 720 ms, cierre desde 750 ms, escalonado 10 ms por rango; `duration = close −
+  3·stagger` para que el frame en `close` sea el logo abierto; `SHOWCASE_TIMING` conserva los 2 s
+  del canvas entregado; el ciclo de 1 s es cambiar esa constante),
   `ARM_RANKS` [0,2,1,3,0,2,1,3] (brazos opuestos comparten rango), `smooth` (smoothstep quíntico:
   velocidad y aceleración nulas en los extremos), `progressAt`, `frameAt(t)` (distancias de los
   brazos, radio de cada punta —florecen tras salir del centro— y radio del centro, que respira
