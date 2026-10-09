@@ -209,9 +209,7 @@
 //             // Check if file exists
 //             if (fs.existsSync(localImagePath)) {
 //               // Read the file and upload to Fal.ai
-//               const stat = await fs.promises.stat(localImagePath);
-  if (!stat.isFile() || stat.size > LIMITS.image) throw Object.assign(new Error('La imagen supera el tamaño permitido.'), { code: 'MEDIA_TOO_LARGE' });
-  const imageBuffer = await fs.promises.readFile(localImagePath);
+//               const imageBuffer = fs.readFileSync(localImagePath);
 //               const fileName = path.basename(localImagePath);
 
 //               // Create a Blob from the buffer
