@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react"
-import { AtomMark } from "@/components/brand"
+import { SiraMark } from "@/components/brand"
 
 const DISMISS_KEY = "siragpt.pwa.installPrompt.dismissedPermanently"
 const SESSION_KEY = "siragpt.pwa.installPrompt.sessionDismissed"
@@ -145,7 +145,7 @@ export default function PWAInstallPrompt({
       }
     >
       <div className="flex items-start gap-3">
-        <AtomMark size={28} className="mt-0.5 shrink-0 text-[color:var(--brand)]" />
+        <SiraMark size={28} className="mt-0.5 shrink-0 text-[color:var(--brand)]" />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
             Instalar SiraGPT

@@ -2552,6 +2552,62 @@ sin migración de Prisma; sin UI nueva.
 Pendiente (decisión de Luis): canales de negocio entrantes (WhatsApp/Telegram → chat) — requieren
 tokens de proveedor; y una vista de «Automatizaciones» en Ajustes (UI lock).
 
+## Marca oficial: el mark de ocho brazos + animación «Pensando» (added 2026-10-09)
+
+Pedido de Jorge con el logo (disco central, ocho brazos rectos —N, NE, E, SE, S, SO, O, NO— con
+un punto en cada extremo, una sola tinta) y la página «SiraGPT · Animación en blanco y negro»
+(canvas: los ocho brazos se abren y se cierran en un ciclo continuo de 2 s). Sustituye al átomo
+de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
+- **`lib/brand/sira-motion.ts`** (puro, testeado): el modelo del mark y de su movimiento.
+  `LOGO_GEOMETRY` (caja 400: alcance 163, centro 48, semilla 38, punta 37, trazo 17 — proporciones
+  medidas sobre el logo entregado, el mark abierto toca la caja), `LOGO_GEOMETRY_SMALL` (tamaño
+  óptico para ≤ 32 px), `SHOWCASE_GEOMETRY` (los números exactos del canvas entregado, 720),
+  `SIRA_TIMING` (ciclo 2000 ms, apertura 970 ms, cierre desde 1000 ms, escalonado 10 ms por rango),
+  `ARM_RANKS` [0,2,1,3,0,2,1,3] (brazos opuestos comparten rango), `smooth` (smoothstep quíntico:
+  velocidad y aceleración nulas en los extremos), `progressAt`, `frameAt(t)` (distancias de los
+  brazos, radio de cada punta —florecen tras salir del centro— y radio del centro, que respira
+  entre semilla y tamaño completo), `openFrame` (= el logo estático), `logoGeometryFor(size)`,
+  `siraMarkSvg()` (SVG del mark para assets y tests).
+- **`components/brand/sira-mark.tsx` (`SiraMark`)**: la marca estática, misma API que tenía
+  `AtomMark` (`size`, `title`, `weight`, `className`), `currentColor`, `data-brand="sira"`.
+  Renders: sidebar (lockup 22 px + rail 20 px), `BrandLogo`, `BrandCycle`, `PWAInstallPrompt`,
+  auth (login/registro/recuperar/reset). **`AtomMark`, `public/brand/atom.svg` y
+  `brand/atom-maskable-512.png` se eliminaron.** `CloverMark` sigue solo como componente de
+  documentos (sin consumidores en la app).
+- **`components/brand/thinking-core.tsx` (`ThinkingCore`, el único glifo «Pensando»)**: ahora es
+  el mark en movimiento. SVG con ocho `line` (`thinking-core__arm`), ocho `circle`
+  (`thinking-core__tip`) y el centro (`thinking-core__core`); un `requestAnimationFrame` mueve los
+  atributos con `frameAt` (sin SMIL ni canvas: nítido a 12–48 px y `currentColor`). El render del
+  servidor, `active={false}` y `prefers-reduced-motion` dibujan el frame abierto (el logo); se
+  pausa con la pestaña oculta o fuera de vista (`IntersectionObserver`). `tone="error"` pinta el
+  mark entero en `--destructive`. El bloque CSS `.claude-asterisk` de `globals.css` ya no tiene
+  reglas de electrones.
+- **Assets — `npm run brand:assets`** (`scripts/generate-brand-assets.cjs`, en el repo; transpila
+  `sira-motion.ts` en memoria y renderiza con sharp; `--only=web|social|android|ios|desktop|extension`):
+  `public/brand/sira-mark.svg` (precacheado por `sw.js`, `SCHEMA_VERSION` → `sira-v4`),
+  `public/icon.svg` (mark en tinta sobre tile blanco rx 96), `favicon.ico` (16/32/48 PNG-in-ICO con
+  la geometría pesada), `sira-gpt-{192,512}.png` / `sira-gpt.png` (tile redondeado con alfa),
+  `sira-gpt-180.png` = `apple-touch-icon.png` (OPACOS a sangre: iOS compone el alfa sobre negro y
+  aplica su propia máscara), `brand/sira-maskable-512.png` (zona segura 80 %); manifest `purpose: maskable` → ese archivo;
+  `layout.tsx` usa `?v=sira` para soltar el favicon átomo cacheado. **Fuera de la web** (eran el
+  trébol, el nudo o el default de Capacitor): `opengraph-image.png` / `twitter-image.png` (mark +
+  «SiraGPT» en Liberation Sans), Android `mipmap-*/ic_launcher{,_round,_foreground}.png` + los 11
+  `splash.png`, iOS `AppIcon-512@2x.png` (1024, opaco) + `Splash.imageset`, escritorio
+  `apps/desktop/assets/icon.{png,icns,ico}` (tile redondeado estilo macOS; ICNS con 11 entradas PNG,
+  ICO con DIB 16–128 + PNG 256; el mínimo del readiness para el `.icns` bajó a 60 kB porque el mark
+  plano comprime mucho mejor que el raster anterior) + tiles appx (vía
+  `generate-windows-appx-assets.js`, su `--check` sigue verde), el icono de ficha de Google Play
+  `docs/store-submission/assets/android/play-icon-512.png` (opaco a sangre, Play aplica su máscara;
+  `native-store-assets.json` apunta ahí) y `extension/icons/icon-{16,48,128}.png`. Las tarjetas
+  sociales rotulan «SiraGPT» en Liberation Sans vía fontconfig: el PNG commiteado es el artefacto
+  (CI nunca lo renderiza); regenerar con `fonts-liberation` instalada. Pendiente que requiere
+  Playwright: capturas de `docs/store-submission/assets` (`npm run native:store:assets:generate`).
+- Tests: `tests/lib/sira-motion.test.ts` (8, vitest), `brand-clover-source`,
+  `thinking-core-source`, `sidebar-brand-header-source`, `claude-thinking-surface-source`,
+  `claude-trace-rail-source`, `mobile-thinking-polish-source` actualizados; snapshot de
+  `long-operation-indicator` regenerado. El job «Visual regression» no bloquea (`|| warning`) y
+  no tiene PNG en el repo.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

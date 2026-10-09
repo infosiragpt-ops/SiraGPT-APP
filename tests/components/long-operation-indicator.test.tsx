@@ -12,9 +12,16 @@ describe('LongOperationIndicator (snapshot)', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    // The «Pensando» glyph (ThinkingCore) animates its SVG attributes on every
+    // animation frame; jsdom's frame clock is real time, so a live frame would
+    // make the snapshot drift by hundredths. Keep the glyph on its resting
+    // frame — the static logo — which is what the snapshot pins.
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 0))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     vi.useRealTimers()
   })
 

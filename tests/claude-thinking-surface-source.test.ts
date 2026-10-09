@@ -6,7 +6,7 @@ import path from "node:path"
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
 describe("Claude-style thinking surface", () => {
-  it("ships one animated ThinkingCore glyph — the atom in motion — in the think accent", () => {
+  it("ships one animated ThinkingCore glyph — the Sira mark in motion — in the think accent", () => {
     const asterisk = source("components/claude-asterisk.tsx")
     assert.match(asterisk, /export function ClaudeAsterisk/)
     assert.match(asterisk, /data-claude-asterisk=\{active \? "active" : "idle"\}/)
@@ -16,18 +16,22 @@ describe("Claude-style thinking surface", () => {
     assert.doesNotMatch(asterisk, /LEAF_PATH|\[0, 90, 180, 270\]/, "the clover is the brand logo, not the thinking glyph")
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /claude-asterisk--active/)
-    // Luis (2026-10-02): three electrons travel the three orbits of the atom
-    // logo; idle is the static logo. SMIL moves them along the exact ellipse.
-    // Luis (2026-10-03): monochrome dots only — no trail, no electron colour;
+    // Luis (2026-10-09): the glyph is the official eight-arm mark in motion —
+    // the arms open and close around a breathing centre (lib/brand/sira-motion.ts);
+    // idle and reduced motion are the static logo. Attributes move per frame; no SMIL.
+    // Luis (2026-10-03): monochrome — no trail, no per-part colour;
     // red (tone="error") is the only colour, and only when the system fails.
-    assert.match(core, /data-brand-geometry="atom"/)
-    assert.match(core, /<animateMotion path=\{ORBIT_PATH\}/)
+    assert.match(core, /data-brand-geometry="sira"/)
+    assert.match(core, /paint\(svg, frameAt\(elapsed, geometry\)\)/)
+    assert.doesNotMatch(core, /animateMotion|thinking-core__electron|thinking-core__orbit/, "no SMIL electrons")
     assert.doesNotMatch(core, /pathLength=\{100\}|attributeName="stroke-dashoffset"|thinking-core__trail|function Trail/, "no trail")
     assert.doesNotMatch(core, /--think-electron-/, "no per-electron colour")
     assert.match(core, /const ERROR_TINT = "hsl\(var\(--destructive\)\)"/)
     assert.match(core, /failed \? "claude-asterisk--error" : null/)
     assert.match(core, /data-thinking-tone=\{tone\}/)
-    assert.match(core, /thinking-core__electron-still/)
+    assert.match(core, /className="thinking-core__arm"/)
+    assert.match(core, /className="thinking-core__tip"/)
+    assert.match(core, /className="thinking-core__core"/)
     assert.doesNotMatch(core, /thinking-core__ripple/)
     const loaders = source("lib/thinking-loaders.ts")
     assert.match(loaders, /export const CLAUDE_THINK_ACCENT = "currentColor"/)
@@ -43,13 +47,11 @@ describe("Claude-style thinking surface", () => {
     assert.match(css, /--step-running: var\(--think-text, #57534E\);/)
     assert.match(css, /--think-dim: #737373;/)
     assert.match(css, /--think-dim: #A3A3A3;/)
-    assert.doesNotMatch(css, /@keyframes thinking-core-(pulse|soft)/, "no nucleus beat: only the three dots move")
-    assert.doesNotMatch(css, /@keyframes thinking-core-(orbit|ripple)/, "orbits are SMIL now; no ripple")
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: none; \}/)
-    // Reduced motion: the moving electrons hide and the three still dots show.
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
-    assert.doesNotMatch(css, /thinking-core__trail/)
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: inline; \}/)
+    assert.doesNotMatch(css, /@keyframes thinking-core-(pulse|soft)/, "no CSS nucleus beat: the component breathes the centre itself")
+    assert.doesNotMatch(css, /@keyframes thinking-core-(orbit|ripple)/, "no CSS orbit/ripple")
+    // The mark animates its own attributes and rests under reduced motion; CSS keeps no electron rules.
+    assert.doesNotMatch(css, /thinking-core__electron|thinking-core__trail/)
+    assert.match(css, /\.claude-asterisk \{ transform-origin: 50% 50%; overflow: visible; \}/)
     assert.match(css, /\.thinking-live-label \{ animation: none; \}/)
     assert.doesNotMatch(css, /@keyframes claude-asterisk-(spin|breathe)/)
     assert.doesNotMatch(css, /--step-running: #2563eb;/)

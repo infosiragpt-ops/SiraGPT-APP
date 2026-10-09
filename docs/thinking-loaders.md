@@ -77,12 +77,14 @@ Step identity prefers `step_id`.
   (`components/brand/thinking-core.tsx` via `components/claude-asterisk.tsx`),
   drawn in the monochrome think accent: `--think-accent` is the foreground
   (black on light, white on dark; the clover green stays the brand logo only).
-  Since 2026-10-02 the ThinkingCore is the **SiraGPT atom in motion** (same
-  geometry as the `AtomMark` logo): three electrons travel their orbits with a
-  trail («estela»), each in its own colour (`--think-electron-a|b|c`, the only
-  colour on a thinking surface), the nucleus beats; idle is the static logo in
-  ink. Reduced motion hides the moving electrons and keeps a soft pulse; the celeste 3×3 dot matrix
-  and the old sunburst are **retired** for live Pensando. Labels are muted
+  Since 2026-10-09 the ThinkingCore is the **official SiraGPT mark in motion**
+  (same geometry as the `SiraMark` logo, model in `lib/brand/sira-motion.ts`):
+  eight arms open and close in a continuous two-second cycle in four staggered
+  ranks, the tip dots bloom once they clear the centre and the centre breathes;
+  idle, the server render and reduced motion are the resting open frame — the
+  static logo in ink. Monochrome: the only colour is `tone="error"` (destructive
+  red). The atom of 2026-10-02, the celeste 3×3 dot matrix and the old sunburst
+  are **retired** for live Pensando. Labels are muted
   neutral greys (`--think-text`, `--think-dim`). Collapsed rows read
   «Pensó durante N s · N pasos» on every flow (chat, agent loop, agentic steps).
 - Live progress (stage v3): the header shows the **real current step**

@@ -2,14 +2,15 @@
 
 import * as React from "react"
 import { CLAUDE_THINK_ACCENT } from "@/lib/thinking-loaders"
+import { SIRA_TIMING, frameAt, logoGeometryFor, openFrame, type SiraFrame, type SiraGeometry } from "@/lib/brand/sira-motion"
 
 export type ThinkingCoreTone = "default" | "error"
 
 export type ThinkingCoreProps = React.SVGAttributes<SVGSVGElement> & {
   size?: number
-  /** Animated (thinking) or static (done); reduced motion is handled in CSS. */
+  /** Animated (thinking) or static (done). Reduced motion always renders the static mark. */
   active?: boolean
-  /** `error` paints the whole atom in the destructive red (the only colour a thinking surface ever shows). */
+  /** `error` paints the whole mark in the destructive red (the only colour a thinking surface ever shows). */
   tone?: ThinkingCoreTone
   color?: string
   className?: string
@@ -17,48 +18,136 @@ export type ThinkingCoreProps = React.SVGAttributes<SVGSVGElement> & {
 }
 
 /**
- * ThinkingCore — the «Pensando» glyph: three dots orbiting, nothing else.
- * The orbits follow the brand atom (`components/brand/atom-mark.tsx`): three
- * ellipses rotated −90° / 30° / 150° with one electron each. Neither the
- * orbit rings (Luis, 2026-10-02: «solo quiero los puntitos sin las líneas»)
- * nor the nucleus (Luis, 2026-10-05: «el puntito del medio no, solo los 3
- * puntitos dando vueltas») are drawn. While active the three electrons travel
- * their invisible orbits, each starting at a different point so they are
- * never aligned. Idle renders the three dots at the apex of their orbits.
+ * ThinkingCore — the «Pensando» glyph: the SiraGPT mark in motion.
  *
- * Monochrome (Luis, 2026-10-03): the dots take `currentColor`
- * (`--think-accent`, the foreground ink). The ONLY colour is
- * `tone="error"`: when the system fails, the dots turn the destructive red.
- * Electrons move with SMIL `animateMotion` along the exact orbit path
- * (constant speed) at every size (12 px rail → 48 px).
+ * Official brand since 2026-10-09 (Luis): the eight-arm mark
+ * (`components/brand/sira-mark.tsx`) and its animation — eight arms open and
+ * close in a continuous two-second cycle, in four staggered ranks (opposite
+ * arms move together), the dots bloom once they clear the centre and the
+ * centre breathes between its seed and its full size. The motion model lives
+ * in `lib/brand/sira-motion.ts` (pure, tested); this component only moves
+ * SVG attributes on each animation frame, so it is crisp at every size
+ * (12 px rail → 48 px) and themes with `currentColor` like every other mark.
  *
- * Reduced motion lives in `app/globals.css` under the historical
- * `.claude-asterisk` classes: with `prefers-reduced-motion` the moving
- * electrons are hidden and the static ones shown. The outer `<g>` stays
- * attribute-free — CSS targets inner classes, never attributes.
+ * Idle (`active={false}`) and `prefers-reduced-motion` render the resting
+ * open frame — exactly the static logo. The server render is that same
+ * frame, so there is no flash before hydration. Frames pause while the tab
+ * is hidden or the glyph is out of view.
+ *
+ * Monochrome (Luis, 2026-10-03): the ink is `currentColor` (`--think-accent`,
+ * the foreground). The ONLY colour is `tone="error"`: when the system fails
+ * the whole mark turns the destructive red.
  */
 
-const CX = 12
-const CY = 12
-const ORBIT_RX = 10
-/** 62/170 of the artwork, at rx 10. */
-const ORBIT_RY = 3.65
-const ORBIT_PATH = `M${CX + ORBIT_RX} ${CY}A${ORBIT_RX} ${ORBIT_RY} 0 1 1 ${CX - ORBIT_RX} ${CY}A${ORBIT_RX} ${ORBIT_RY} 0 1 1 ${CX + ORBIT_RX} ${CY}`
-
-const ELECTRONS = [
-  { key: "a", angle: -90, dur: "2.6s", begin: "0s" },
-  { key: "b", angle: 30, dur: "3.1s", begin: "-1.1s" },
-  { key: "c", angle: 150, dur: "3.6s", begin: "-2.3s" },
-] as const
-
 const ERROR_TINT = "hsl(var(--destructive))"
+
+function round(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function paint(svg: SVGSVGElement, frame: SiraFrame) {
+  const arms = svg.querySelectorAll<SVGLineElement>(".thinking-core__arm")
+  const tips = svg.querySelectorAll<SVGCircleElement>(".thinking-core__tip")
+  const core = svg.querySelector<SVGCircleElement>(".thinking-core__core")
+  frame.arms.forEach((arm, i) => {
+    const line = arms[i]
+    const tip = tips[i]
+    if (line) {
+      line.setAttribute("x2", String(round(arm.x)))
+      line.setAttribute("y2", String(round(arm.y)))
+      // A zero-length arm would still draw its round caps: hide it instead.
+      // `display`, not `visibility`: a `visibility="visible"` child would
+      // pierce a hidden ancestor (CSS visibility is overridable per element),
+      // showing the arms inside an `invisible` pane.
+      line.setAttribute("display", arm.distance > 0 ? "inline" : "none")
+    }
+    if (tip) {
+      tip.setAttribute("cx", String(round(arm.x)))
+      tip.setAttribute("cy", String(round(arm.y)))
+      tip.setAttribute("r", String(round(arm.tipRadius)))
+    }
+  })
+  if (core) core.setAttribute("r", String(round(frame.centerRadius)))
+}
 
 export function ThinkingCore({ size = 20, active = true, tone = "default", color, className, title, style, ...rest }: ThinkingCoreProps) {
   const failed = tone === "error"
   const tint = failed ? ERROR_TINT : color || `var(--think-accent, ${CLAUDE_THINK_ACCENT})`
+  const geometry: SiraGeometry = React.useMemo(() => logoGeometryFor(size), [size])
+  const resting = React.useMemo(() => openFrame(geometry), [geometry])
+  const svgRef = React.useRef<SVGSVGElement>(null)
+
+  React.useEffect(() => {
+    const svg = svgRef.current
+    if (!svg) return undefined
+    if (!active) {
+      paint(svg, resting)
+      return undefined
+    }
+    const reduced = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-reduced-motion: reduce)") : null
+    if (reduced?.matches) {
+      paint(svg, resting)
+      return undefined
+    }
+    let raf = 0
+    let anchor: number | null = null
+    // Cycle time of the last painted frame. It starts at the close time,
+    // where the mark is exactly the open logo (what the markup already
+    // shows), so the first animated frame continues from it instead of
+    // popping to the closed state; a pause keeps it, so resuming carries on
+    // from the same phase instead of jumping.
+    let elapsed = SIRA_TIMING.close
+    let inView = true
+    let disposed = false
+    const tick = (now: number) => {
+      raf = 0
+      if (disposed || document.hidden || !inView) return
+      if (anchor === null) anchor = now - elapsed
+      elapsed = now - anchor
+      paint(svg, frameAt(elapsed, geometry))
+      raf = requestAnimationFrame(tick)
+    }
+    const start = () => {
+      if (disposed || raf || document.hidden || !inView) return
+      raf = requestAnimationFrame(tick)
+    }
+    const stop = () => {
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+      // Re-anchor on the next frame so the clock does not count the pause.
+      anchor = null
+    }
+    const onVisibility = () => (document.hidden ? stop() : start())
+    const onReduced = (event: MediaQueryListEvent) => {
+      if (!event.matches) return
+      stop()
+      paint(svg, resting)
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+    reduced?.addEventListener?.("change", onReduced)
+    const observer = typeof IntersectionObserver === "function"
+      ? new IntersectionObserver((entries) => {
+        inView = entries.some((entry) => entry.isIntersecting)
+        if (inView) start()
+        else stop()
+      })
+      : null
+    observer?.observe(svg)
+    start()
+    return () => {
+      disposed = true
+      stop()
+      observer?.disconnect()
+      document.removeEventListener("visibilitychange", onVisibility)
+      reduced?.removeEventListener?.("change", onReduced)
+      paint(svg, resting)
+    }
+  }, [active, geometry, resting])
+
   return (
     <svg
-      viewBox="0 0 24 24"
+      ref={svgRef}
+      viewBox={`0 0 ${geometry.size} ${geometry.size}`}
       width={size}
       height={size}
       role={title ? "img" : undefined}
@@ -66,7 +155,7 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
       aria-label={title}
       data-thinking-core={active ? "active" : "idle"}
       data-thinking-tone={tone}
-      data-brand-geometry="atom"
+      data-brand-geometry="sira"
       className={[
         "claude-asterisk",
         "thinking-core",
@@ -79,19 +168,16 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
       style={{ display: "inline-block", flexShrink: 0, color: tint, ...style }}
       {...rest}
     >
-      <g>
-        {ELECTRONS.map(({ key, angle, dur, begin }) => (
-          <g key={key} className={`thinking-core__orbit thinking-core__orbit--${key}`} transform={`rotate(${angle} ${CX} ${CY})`}>
-            <g className={`thinking-core__electron thinking-core__electron--${key}`}>
-              {active ? (
-                <circle className="thinking-core__electron-live" r="1.7" fill="currentColor">
-                  <animateMotion path={ORBIT_PATH} dur={dur} begin={begin} repeatCount="indefinite" />
-                </circle>
-              ) : null}
-              <circle className="thinking-core__electron-still" cx={CX + ORBIT_RX} cy={CY} r="1.7" fill="currentColor" />
-            </g>
-          </g>
+      <g className="thinking-core__arms" stroke="currentColor" strokeWidth={geometry.stroke} strokeLinecap="round">
+        {resting.arms.map((arm) => (
+          <line key={arm.index} className="thinking-core__arm" x1={resting.centre} y1={resting.centre} x2={round(arm.x)} y2={round(arm.y)} />
         ))}
+      </g>
+      <g className="thinking-core__dots" fill="currentColor">
+        {resting.arms.map((arm) => (
+          <circle key={arm.index} className="thinking-core__tip" cx={round(arm.x)} cy={round(arm.y)} r={arm.tipRadius} />
+        ))}
+        <circle className="thinking-core__core" cx={resting.centre} cy={resting.centre} r={resting.centerRadius} />
       </g>
     </svg>
   )

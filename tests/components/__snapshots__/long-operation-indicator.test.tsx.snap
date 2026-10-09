@@ -31,101 +31,137 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
           aria-hidden="true"
           class="claude-asterisk thinking-core claude-asterisk--active"
           data-brand="thinking-core"
-          data-brand-geometry="atom"
+          data-brand-geometry="sira"
           data-claude-asterisk="active"
           data-claude-asterisk-weight="fine"
           data-thinking-core="active"
           data-thinking-tone="default"
           height="16"
           style="display: inline-block; flex-shrink: 0; color: var(--think-accent, currentColor);"
-          viewBox="0 0 24 24"
+          viewBox="0 0 400 400"
           width="16"
         >
-          <g>
-            <g
-              class="thinking-core__orbit thinking-core__orbit--a"
-              transform="rotate(-90 12 12)"
-            >
-              <g
-                class="thinking-core__electron thinking-core__electron--a"
-              >
-                <circle
-                  class="thinking-core__electron-live"
-                  fill="currentColor"
-                  r="1.7"
-                >
-                  <animatemotion
-                    begin="0s"
-                    dur="2.6s"
-                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle
-                  class="thinking-core__electron-still"
-                  cx="22"
-                  cy="12"
-                  fill="currentColor"
-                  r="1.7"
-                />
-              </g>
-            </g>
-            <g
-              class="thinking-core__orbit thinking-core__orbit--b"
-              transform="rotate(30 12 12)"
-            >
-              <g
-                class="thinking-core__electron thinking-core__electron--b"
-              >
-                <circle
-                  class="thinking-core__electron-live"
-                  fill="currentColor"
-                  r="1.7"
-                >
-                  <animatemotion
-                    begin="-1.1s"
-                    dur="3.1s"
-                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle
-                  class="thinking-core__electron-still"
-                  cx="22"
-                  cy="12"
-                  fill="currentColor"
-                  r="1.7"
-                />
-              </g>
-            </g>
-            <g
-              class="thinking-core__orbit thinking-core__orbit--c"
-              transform="rotate(150 12 12)"
-            >
-              <g
-                class="thinking-core__electron thinking-core__electron--c"
-              >
-                <circle
-                  class="thinking-core__electron-live"
-                  fill="currentColor"
-                  r="1.7"
-                >
-                  <animatemotion
-                    begin="-2.3s"
-                    dur="3.6s"
-                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle
-                  class="thinking-core__electron-still"
-                  cx="22"
-                  cy="12"
-                  fill="currentColor"
-                  r="1.7"
-                />
-              </g>
-            </g>
+          <g
+            class="thinking-core__arms"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-width="24"
+          >
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="200"
+              y1="200"
+              y2="40"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="313.14"
+              y1="200"
+              y2="86.86"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="360"
+              y1="200"
+              y2="200"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="313.14"
+              y1="200"
+              y2="313.14"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="200"
+              y1="200"
+              y2="360"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="86.86"
+              y1="200"
+              y2="313.14"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="40"
+              y1="200"
+              y2="200"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="86.86"
+              y1="200"
+              y2="86.86"
+            />
+          </g>
+          <g
+            class="thinking-core__dots"
+            fill="currentColor"
+          >
+            <circle
+              class="thinking-core__tip"
+              cx="200"
+              cy="40"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="313.14"
+              cy="86.86"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="360"
+              cy="200"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="313.14"
+              cy="313.14"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="200"
+              cy="360"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="86.86"
+              cy="313.14"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="40"
+              cy="200"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="86.86"
+              cy="86.86"
+              r="40"
+            />
+            <circle
+              class="thinking-core__core"
+              cx="200"
+              cy="200"
+              r="52"
+            />
           </g>
         </svg>
       </span>
@@ -180,101 +216,137 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
           aria-hidden="true"
           class="claude-asterisk thinking-core claude-asterisk--active"
           data-brand="thinking-core"
-          data-brand-geometry="atom"
+          data-brand-geometry="sira"
           data-claude-asterisk="active"
           data-claude-asterisk-weight="fine"
           data-thinking-core="active"
           data-thinking-tone="default"
           height="16"
           style="display: inline-block; flex-shrink: 0; color: var(--think-accent, currentColor);"
-          viewBox="0 0 24 24"
+          viewBox="0 0 400 400"
           width="16"
         >
-          <g>
-            <g
-              class="thinking-core__orbit thinking-core__orbit--a"
-              transform="rotate(-90 12 12)"
-            >
-              <g
-                class="thinking-core__electron thinking-core__electron--a"
-              >
-                <circle
-                  class="thinking-core__electron-live"
-                  fill="currentColor"
-                  r="1.7"
-                >
-                  <animatemotion
-                    begin="0s"
-                    dur="2.6s"
-                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle
-                  class="thinking-core__electron-still"
-                  cx="22"
-                  cy="12"
-                  fill="currentColor"
-                  r="1.7"
-                />
-              </g>
-            </g>
-            <g
-              class="thinking-core__orbit thinking-core__orbit--b"
-              transform="rotate(30 12 12)"
-            >
-              <g
-                class="thinking-core__electron thinking-core__electron--b"
-              >
-                <circle
-                  class="thinking-core__electron-live"
-                  fill="currentColor"
-                  r="1.7"
-                >
-                  <animatemotion
-                    begin="-1.1s"
-                    dur="3.1s"
-                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle
-                  class="thinking-core__electron-still"
-                  cx="22"
-                  cy="12"
-                  fill="currentColor"
-                  r="1.7"
-                />
-              </g>
-            </g>
-            <g
-              class="thinking-core__orbit thinking-core__orbit--c"
-              transform="rotate(150 12 12)"
-            >
-              <g
-                class="thinking-core__electron thinking-core__electron--c"
-              >
-                <circle
-                  class="thinking-core__electron-live"
-                  fill="currentColor"
-                  r="1.7"
-                >
-                  <animatemotion
-                    begin="-2.3s"
-                    dur="3.6s"
-                    path="M22 12A10 3.65 0 1 1 2 12A10 3.65 0 1 1 22 12"
-                    repeatCount="indefinite"
-                  />
-                </circle>
-                <circle
-                  class="thinking-core__electron-still"
-                  cx="22"
-                  cy="12"
-                  fill="currentColor"
-                  r="1.7"
-                />
-              </g>
-            </g>
+          <g
+            class="thinking-core__arms"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-width="24"
+          >
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="200"
+              y1="200"
+              y2="40"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="313.14"
+              y1="200"
+              y2="86.86"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="360"
+              y1="200"
+              y2="200"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="313.14"
+              y1="200"
+              y2="313.14"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="200"
+              y1="200"
+              y2="360"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="86.86"
+              y1="200"
+              y2="313.14"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="40"
+              y1="200"
+              y2="200"
+            />
+            <line
+              class="thinking-core__arm"
+              x1="200"
+              x2="86.86"
+              y1="200"
+              y2="86.86"
+            />
+          </g>
+          <g
+            class="thinking-core__dots"
+            fill="currentColor"
+          >
+            <circle
+              class="thinking-core__tip"
+              cx="200"
+              cy="40"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="313.14"
+              cy="86.86"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="360"
+              cy="200"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="313.14"
+              cy="313.14"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="200"
+              cy="360"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="86.86"
+              cy="313.14"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="40"
+              cy="200"
+              r="40"
+            />
+            <circle
+              class="thinking-core__tip"
+              cx="86.86"
+              cy="86.86"
+              r="40"
+            />
+            <circle
+              class="thinking-core__core"
+              cx="200"
+              cy="200"
+              r="52"
+            />
           </g>
         </svg>
       </span>

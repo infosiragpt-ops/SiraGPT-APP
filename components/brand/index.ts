@@ -1,6 +1,6 @@
 export { CloverMark, CloverBadge } from "./clover-mark"
 export type { CloverMarkProps, CloverBadgeProps } from "./clover-mark"
-export { AtomMark } from "./atom-mark"
-export type { AtomMarkProps } from "./atom-mark"
+export { SiraMark } from "./sira-mark"
+export type { SiraMarkProps } from "./sira-mark"
 export { ThinkingCore } from "./thinking-core"
 export type { ThinkingCoreProps } from "./thinking-core"
