@@ -212,7 +212,7 @@ local exists=redis.call('EXISTS',m)==1
 if op=='seed' then
   if not exists then
     local r=cjson.decode(ARGV[3]); redis.call('DEL',q)
-    redis.call('HSET',m,'base',r.basePosition,'next',r.nextPosition,'bytes',r.totalBytes,'complete',r.complete and '1' or '0','error',r.error or '')
+    redis.call('HSET',m,'base',r.basePosition,'next',r.nextPosition,'bytes',r.totalBytes,'complete',r.complete and '1' or '0','error',type(r.error)=='string' and r.error or '')
     for _,chunk in ipairs(r.chunks) do redis.call('RPUSH',q,chunk) end
   end
 elseif op=='append' then

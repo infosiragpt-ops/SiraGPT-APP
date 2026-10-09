@@ -178,7 +178,7 @@ function scanRepository(baseRef, { root = ROOT } = {}) {
   for (const file of baseFiles) {
     const absolute = path.join(root, file);
     const unchanged = fs.existsSync(absolute) && fs.lstatSync(absolute).isFile()
-      && !fs.lstatSync(absolute).isSymbolicLink()
+      && !fs.lstatSync(absolute).isSymbolicLink() && !fs.lstatSync(path.dirname(absolute)).isSymbolicLink()
       && fs.readFileSync(absolute).equals(git(['show', `${baseSha}:${file}`]));
     if (!unchanged) findings.push({ file, ruleId: 'migration-history-mutated', label: 'HISTORICAL MIGRATION CHANGED OR DELETED',
       severity: 'forbidden', hint: 'Applied migration bytes are immutable. Add a new reviewed migration instead.' });
@@ -186,6 +186,11 @@ function scanRepository(baseRef, { root = ROOT } = {}) {
   const pending = files.filter(file => !historical.has(path.relative(root, file).split(path.sep).join('/')));
   const newestHistorical = baseFiles.map(file => path.basename(path.dirname(file))).sort().at(-1);
   for (const file of pending) {
+    if (fs.lstatSync(file).isSymbolicLink() || fs.lstatSync(path.dirname(file)).isSymbolicLink()) {
+      findings.push({ file: path.relative(root, file), ruleId: 'migration-symlink', label: 'SYMLINKED MIGRATION',
+        severity: 'forbidden', hint: 'Migration SQL and directories must be regular source files.' });
+      continue;
+    }
     if (newestHistorical && path.basename(path.dirname(file)) <= newestHistorical) findings.push({
       file: path.relative(root, file), ruleId: 'migration-history-backdated', label: 'BACKDATED MIGRATION', severity: 'forbidden',
       hint: 'New migrations must sort after the baseline history.' });

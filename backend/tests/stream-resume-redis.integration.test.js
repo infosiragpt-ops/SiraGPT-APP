@@ -9,9 +9,11 @@ const skip = !url && 'Requires the isolated CI Redis service';
 test('real Redis Lua appends bounded frames, migrates V1 once and reads replay atomically', { skip }, async () => {
   assert.ok(['127.0.0.1', 'localhost'].includes(new URL(url).hostname), 'Only isolated loopback test Redis');
   const Redis = require('ioredis'); const redis = new Redis(url, { maxRetriesPerRequest: 1 });
-  const id = `ci-resume-${crypto.randomUUID()}`;
+  const id = `ci-resume-${crypto.randomUUID()}`; const freshId = `${id}-fresh`;
   try {
     resume._resetForTests(); resume._setInjectedRedis(redis);
+    await resume.open({ streamId: freshId });
+    assert.equal(await redis.exists(resume.redisKeys(freshId)[0]), 1, 'empty records persist before any content frame');
     await redis.set(`sira:sse-resume:${id}`, JSON.stringify({ chunks: ['legacy-first'], complete: false }), 'EX', 60);
     assert.deepEqual((await resume.openExisting({ streamId: id })).record.chunks, ['legacy-first']);
     await resume.append(id, 'second');
@@ -32,7 +34,7 @@ test('real Redis Lua appends bounded frames, migrates V1 once and reads replay a
     assert.deepEqual(resume.replayAfter(record, 19).chunks, [frame]);
     assert.equal(await resume.append(id, 'late'), 20);
   } finally {
-    await redis.del(`sira:sse-resume:${id}`, ...resume.redisKeys(id));
+    await redis.del(`sira:sse-resume:${id}`, ...resume.redisKeys(id), ...resume.redisKeys(freshId));
     resume._resetForTests(); await redis.quit();
   }
 });
