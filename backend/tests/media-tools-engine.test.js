@@ -169,20 +169,56 @@ test('edit_image edits from an explicit data: URL', async () => {
 test('edit_image resolves the image attached to the message (ctx.fileIds)', async () => {
   const tmpImage = path.join(ARTIFACT_DIR, 'uploaded.png');
   fs.writeFileSync(tmpImage, 'attached-bytes');
+  const record = { id: 'f-img', userId: 'user-1', mimeType: 'image/png', path: tmpImage, filename: 'uploaded.png' };
+  let revalidated = 0;
   const prisma = {
     file: {
       findMany: async ({ where }) => {
-        assert.deepEqual(where.id.in, ['f-img']);
-        return [{ id: 'f-img', userId: 'user-1', mimeType: 'image/png', path: tmpImage, filename: 'uploaded.png' }];
+        assert.deepEqual(where, { id: { in: ['f-img'] }, userId: 'user-1', deletedAt: null });
+        return [record];
       },
-      findFirst: async () => null,
+      findFirst: async ({ where }) => {
+        assert.deepEqual(where, { id: 'f-img', userId: 'user-1', deletedAt: null });
+        revalidated += 1;
+        return record;
+      },
     },
     message: { findMany: async () => [] },
   };
   const ctx = fakeCtx({ prisma, fileIds: ['f-img'] });
   const r = await tool('edit_image').execute({ instruction: 'ponle un sombrero' }, ctx);
   assert.equal(r.ok, true);
+  assert.equal(revalidated, 1, 'must revalidate the owned, visible reference before reading bytes');
+  assert.equal(engineCalls.edit.length, 1);
   assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'attached-bytes');
+});
+
+test('edit_image rejects an attachment that disappears after reference discovery', async () => {
+  const tmpImage = path.join(ARTIFACT_DIR, 'disappeared.png');
+  fs.writeFileSync(tmpImage, 'bytes-no-longer-authorized');
+  let revalidated = 0;
+  const prisma = {
+    file: {
+      findMany: async ({ where }) => {
+        assert.deepEqual(where, { id: { in: ['f-img'] }, userId: 'user-1', deletedAt: null });
+        return [{ id: 'f-img', userId: 'user-1', mimeType: 'image/png', path: tmpImage }];
+      },
+      findFirst: async ({ where }) => {
+        assert.deepEqual(where, { id: 'f-img', userId: 'user-1', deletedAt: null });
+        revalidated += 1;
+        return null;
+      },
+    },
+    message: { findMany: async () => [{ files: [{ type: 'image', fileId: 'unrelated-image' }] }] },
+  };
+  const ctx = fakeCtx({ prisma, fileIds: ['f-img'] });
+  const r = await tool('edit_image').execute({ instruction: 'ponle un sombrero' }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_source_required');
+  assert.equal(revalidated, 1);
+  assert.equal(engineCalls.edit.length, 0, 'must not edit stale bytes or an unrelated historical image');
+  assert.equal(engineCalls.generate.length, 0, 'must not silently create a substitute image');
+  assert.equal(ctx._events.some((event) => event.type === 'file_artifact'), false);
 });
 
 test('edit_image falls back to the most recent image in the chat', async () => {

@@ -3,6 +3,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { hasVerifiedSavBytes } = require('./sav-validation');
+const { hasVerifiedMediaBytes, MEDIA_PATH_RE } = require('./media-validation');
+const { fileConversionTarget } = require('./conversion-intent');
 
 /**
  * Conversation artifact registry.
@@ -21,7 +23,22 @@ function mimeToExt(mime, filename) {
   if (m.includes('word') || m.includes('docx')) return 'docx';
   if (m.includes('sheet') || m.includes('xlsx')) return 'xlsx';
   if (m.includes('pdf')) return 'pdf';
+  if (m === 'audio/mpeg') return 'mp3';
+  if (m === 'video/mp4') return 'mp4';
   return 'bin';
+}
+
+function conversionSourceSelection(text) {
+  if (!fileConversionTarget(text)) return null;
+  const aliases = { word: 'docx', docx: 'docx', pdf: 'pdf', mp3: 'mp3', mp4: 'mp4' };
+  const pair = text.match(/\b(word|docx|pdf|mp3|mp4)\b[^.!?\n]{0,50}?\b(?:a|al|en|to|into)\s+(?:(?:un|una|el|archivo|formato)\s+)*(word|docx|pdf|mp3|mp4)\b/i);
+  if (pair && aliases[pair[1].toLowerCase()] !== aliases[pair[2].toLowerCase()]) return { format: aliases[pair[1].toLowerCase()] };
+  const reversed = text.match(/\b(?:a|al|en|to|into)\s+(word|docx|pdf|mp3|mp4)\s+(?:(?:el|la|mi|este|esta|the|this|archivo|documento|audio|video|original)\s+)+(word|docx|pdf|mp3|mp4)\b/i);
+  if (reversed && aliases[reversed[1].toLowerCase()] !== aliases[reversed[2].toLowerCase()]) return { format: aliases[reversed[2].toLowerCase()] };
+  if (/\b(?:pptx?|powerpoint|presentacion|diapositivas?|excel|xlsx|csv|odt|rtf|html|imagen|png|jpe?g)\b/i.test(text)) return null;
+  // A destination never identifies the source: "convert this to PDF" may
+  // refer to a recent workbook, not an older Word document in the same chat.
+  return { latest: true };
 }
 
 // Match the exact workspace basename used by runAgentRunner. A prior output
@@ -76,6 +93,9 @@ async function getLatestConversationArtifact(prisma, { userId, chatId, instructi
   });
   if (named.length === 1) return named[0];
   const text = referenceText.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const conversionSource = conversionSourceSelection(text);
+  if (conversionSource?.latest) return rows[0] || null;
+  if (conversionSource?.format) return rows.find((row) => mimeToExt(row.mime, row.filename) === conversionSource.format) || null;
   const format = /\b(?:pptx?|powerpoint|presentacion|diapositiva\w*|lamina\w*|landin\w*|slide\w*)\b/.test(text) ? 'pptx'
     : /\b(?:docx|word)\b/.test(text) ? 'docx' : /\b(?:xlsx|excel|celda\w*|hoja\w*)\b/.test(text) ? 'xlsx'
       : /\bpdf\b/.test(text) ? 'pdf' : null;
@@ -294,6 +314,10 @@ async function persistOutputs({
       try { onEvent({ type: 'output_invalid', name: out.name, reason: 'sav_unverified' }); } catch { /* trace only */ }
       continue;
     }
+    if (MEDIA_PATH_RE.test(String(out.name)) && !hasVerifiedMediaBytes(out)) {
+      try { onEvent({ type: 'output_invalid', name: out.name, reason: 'media_unverified' }); } catch { /* trace only */ }
+      continue;
+    }
     eligible.push({ out, ext });
   }
   if (atomicSavXlsxPair && (eligible.length !== 2
@@ -365,6 +389,8 @@ async function persistOutputs({
       : ext === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       : ext === 'sav' ? 'application/x-spss-sav'
       : ext === 'pdf' ? 'application/pdf'
+      : ext === 'mp3' ? 'audio/mpeg'
+      : ext === 'mp4' ? 'video/mp4'
       : 'application/octet-stream'
     );
     let saved;

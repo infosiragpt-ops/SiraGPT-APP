@@ -3344,7 +3344,7 @@ class ApiClient {
     }
   }
   async generateImage(
-    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; operation?: 'generate' | 'edit' | 'reframe'; background?: 'transparent'; aspectRatio?: string; quality?: string; imageCount?: number; selection?: { kind?: string; x: number; y: number; width: number; height: number }; maskDataUrl?: string },
+    data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; referenceFileIds?: string[]; operation?: 'generate' | 'edit' | 'reframe'; background?: 'transparent'; aspectRatio?: string; quality?: string; imageCount?: number; selection?: { kind?: string; x: number; y: number; width: number; height: number }; maskDataUrl?: string },
     options: { signal?: AbortSignal } = {},
   ) {
     const timeoutMs = 210000;

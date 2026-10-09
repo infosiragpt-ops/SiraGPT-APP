@@ -232,7 +232,7 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 
 const generateImage = {
   name: 'generate_image',
-  description: 'Generate one or more NEW images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content. Do NOT use for "la misma imagen pero vertical/horizontal" or "hazla vertical" — that is edit_image (same scene, new frame).',
+  description: 'Generate one or more NEW images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content. When the user supplies image references to guide the result, use edit_image so the original reference pixels reach the model. Do NOT use for "la misma imagen pero vertical/horizontal" or "hazla vertical" — that is edit_image (same scene, new frame).',
   parameters: {
     type: 'object',
     properties: {
@@ -392,13 +392,14 @@ async function resolveEditSourceImage(args, ctx = {}) {
 
 const editImage = {
   name: 'edit_image',
-  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, reframe the SAME scene to another orientation ("la misma imagen pero vertical", "hazla horizontal"). The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Spoken targeting is understood ("en la imagen cambia el cielo a un atardecer", "cambia solo los ojos a verde"): the instruction is scoped to the detected target and everything else is preserved. An explicit `target` and/or `selection` (box 0..100, named region, label or mask ref) scopes the edit to a specific part. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "la misma imagen pero vertical", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
+  description: 'Edit / transform an EXISTING image with a natural-language instruction (img2img): remove or change the background, add/remove objects, change colors or style, retouch, restore, reframe the SAME scene to another orientation ("la misma imagen pero vertical", "hazla horizontal"). When using several reference images, pass their file IDs in referenceFileIds, in user order; fileId pins the primary image to edit. All references are delivered as image pixels to the selected model, never silently discarded. The source image is resolved automatically from the file the user attached, an explicit imageUrl/fileId, or the most recent image in this chat. Spoken targeting is understood ("en la imagen cambia el cielo a un atardecer", "cambia solo los ojos a verde"): the instruction is scoped to the detected target and everything else is preserved. An explicit `target` and/or `selection` (box 0..100, named region, label or mask ref) scopes the edit to a specific part. Use when the user says "edita/modifica/retoca esta foto", "quítale el fondo", "cámbiale el color", "la misma imagen pero vertical", "remove the background". Do NOT use to create brand-new images — that is generate_image.',
   parameters: {
     type: 'object',
     properties: {
       instruction: { type: 'string', description: 'The transformation to apply, in natural language (e.g. "quita el fondo y déjalo transparente", "make the sky sunset orange").' },
       imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
       fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
+      referenceFileIds: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'All image reference file IDs, in user order (up to 8 including the source). fileId remains the primary target; other images guide the requested style, layout or subjects.' },
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
       target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
       selection: { type: 'object', description: 'Optional rectangular selection: { x, y, width, height } in 0..100 (fractions 0..1 also accepted). Pixels outside it are protected. Invalid selections return an error.' },
@@ -409,7 +410,7 @@ const editImage = {
     required: ['instruction'],
     additionalProperties: false,
   },
-  async execute({ instruction, imageUrl, fileId, model, target, selection, aspectRatio, quality, count } = {}, ctx = {}) {
+  async execute({ instruction, imageUrl, fileId, referenceFileIds, model, target, selection, aspectRatio, quality, count } = {}, ctx = {}) {
     emitEvent(ctx, 'tool_call', { tool: 'edit_image', preview: instruction });
 
     try {
@@ -417,7 +418,10 @@ const editImage = {
       if (!cleanInstruction) return { ok: false, error: 'La instrucción de edición está vacía.' };
 
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
-      const source = await resolveEditSourceImage({ imageUrl, fileId }, ctx);
+      const needsFiles = !imageUrl || fileId || referenceFileIds?.length || ctx.fileIds?.length || /\/uploads\//.test(imageUrl);
+      const prisma = ctx.prisma || (needsFiles && (() => { try { return require('../../config/database'); } catch { return null; } })());
+      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
+      const [source] = sources;
       if (!source) {
         const msg = 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.';
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
@@ -443,6 +447,7 @@ const editImage = {
         prompt: editDirective.prompt,
         imageBuffer: canvas?.imageBuffer || source.buffer,
         mimeType: canvas?.mimeType || source.mimeType,
+        referenceImages: sources.slice(1).map((image) => ({ buffer: image.buffer, mimeType: image.mimeType })),
         maskBuffer: canvas?.maskBuffer,
         model: ctx.imageModel || model || undefined,
         provider: ctx.imageProvider || undefined,
@@ -467,6 +472,7 @@ const editImage = {
         const filename = `imagen_editada_${crypto.randomBytes(4).toString('hex')}.png`;
         const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
           parentFileId: source.fileId || null,
+          referenceFileIds: sources.map((image) => image.fileId).filter(Boolean),
           rootFileId: source.metadata?.rootFileId || source.fileId,
           version: (Number(source.metadata?.version) || 1) + 1,
           model: result.model, provider: result.provider, aspectRatio: ratio, quality: ctx.imageQuality || quality,
@@ -496,6 +502,7 @@ const editImage = {
         mime: 'image/png',
         instruction: cleanInstruction,
         sourceImage: source.source,
+        referenceFileIds: sources.map((image) => image.fileId).filter(Boolean),
         parentFileId: source.fileId || null,
         images: artifacts,
         provider: result.provider,
@@ -506,7 +513,7 @@ const editImage = {
     } catch (err) {
       const msg = err?.message || String(err);
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: `Error: ${msg}` });
-      return { ok: false, error: msg };
+      return { ok: false, error: msg, ...(err.code ? { code: err.code } : {}) };
     }
   },
 };

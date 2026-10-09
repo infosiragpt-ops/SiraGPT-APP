@@ -92,13 +92,13 @@ describe("chat video generation lifecycle source contract", () => {
     )
     assert.match(
       chatContext,
-      /\.\.\.\(Array\.isArray\(options\?\.sourceImageFiles\) \? options\.sourceImageFiles : \[\]\)/,
+      /sourceImageFiles: options\?\.sourceImageFiles/,
       "addVideoMessage should read image URLs from the captured source files"
     )
     assert.match(
       chatContext,
-      /const file = \(fileResponse as any\)\?\.file \|\| fileResponse/,
-      "addVideoMessage should support apiClient.getFile returning the file directly"
+      /resolveVideoReferenceUrls\([\s\S]{0,250}getFile: \(id\) => apiClient\.getFile\(id\)/,
+      "addVideoMessage must use the tested file resolver for selected references"
     )
     assert.match(
       chatContext,

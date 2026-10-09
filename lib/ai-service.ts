@@ -6,6 +6,7 @@ import { devLog } from "./dev-log"
 import { isLiveComputerUsePrompt } from "./computer-login-handoff"
 import { isSoftwareBuildRequest } from "./software-build-intent"
 import { isGeneratedArtifactReadRequest, isSavXlsxPairEditRequest } from "./generated-artifact-read-intent"
+import { fileConversionTarget } from "./file-conversion-intent"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -670,6 +671,7 @@ const addIntentNode = (
 const signalIntentFromText = (text: string): ChatIntent | null => {
   const normalized = normalizePrompt(text)
   if (!normalized) return null
+  if (fileConversionTarget(text)) return 'agent_task'
   if (GOAL_COMMAND_RE.test(text)) return 'agent_task'
 
   const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(normalized)
@@ -947,6 +949,7 @@ export function shouldRouteWorkModePromptThroughAgentTask(prompt: string, files:
 
 export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files: any[] = []): boolean {
   const normalized = normalizePrompt(prompt)
+  if (fileConversionTarget(prompt)) return true
   // Editing a SAV/XLSX pair needs the durable agent task to keep both source
   // files together and validate both outputs, including prior chat artifacts.
   if (isSavXlsxPairEditRequest(prompt)) return true
@@ -1141,6 +1144,7 @@ export function isComputerRequestPrompt(prompt: string): boolean {
 
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
+  if (fileConversionTarget(prompt)) return 'agent_task'
 
   if (isSavXlsxPairEditRequest(prompt)) return 'agent_task'
   if (isGeneratedArtifactReadRequest(prompt)) return 'agent_task'

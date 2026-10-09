@@ -745,3 +745,53 @@ test('editImage aborts the actual provider request when its deadline expires', a
     assert.equal(result.attempts.length, 1);
   } finally { restoreEnv(); }
 });
+
+
+test('multi-reference edits transmit all pixels in order to each selected provider', async () => {
+  const imageBuffer = Buffer.from('subject');
+  const referenceImages = [{ buffer: Buffer.from('palette'), mimeType: 'image/jpeg' }, { buffer: Buffer.from('logo'), mimeType: 'image/png' }];
+  for (const provider of ['openai', 'gemini', 'openrouter']) {
+    let called = 0;
+    try {
+      setEnv({ OPENAI_API_KEY: 'test', GEMINI_API_KEY: 'test', OPENROUTER_API_KEY: 'test' });
+      _internal.setOpenAIFactory(fakeOpenAIFactory({
+          onEdit: async (payload) => {
+            called++;
+            assert.equal(provider, 'openai');
+            assert.ok(Array.isArray(payload.image));
+            assert.deepEqual(await Promise.all(payload.image.map(async (file) => Buffer.isBuffer(file) ? file.toString() : Buffer.from(await file.arrayBuffer()).toString())), ['subject', 'palette', 'logo']);
+            assert.match(payload.prompt, /Image 1 is the source/);
+            return { data: [{ b64_json: 'b3V0cHV0' }] };
+          },
+          onChat: async (payload) => {
+            called++;
+            assert.equal(provider, 'openrouter');
+            const inputs = payload.messages[0].content.filter((part) => part.type === 'image_url');
+            assert.deepEqual(inputs.map((part) => Buffer.from(part.image_url.url.split(',')[1], 'base64').toString()), ['subject', 'palette', 'logo']);
+            return { choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,b3V0cHV0' } }] } }] };
+          },
+        }));
+      _internal.setGoogleGenAIFactory(() => ({ models: { generateContent: async (payload) => {
+          called++;
+          assert.equal(provider, 'gemini');
+          assert.deepEqual(payload.contents.filter((part) => part.inlineData).map((part) => Buffer.from(part.inlineData.data, 'base64').toString()), ['subject', 'palette', 'logo']);
+          return { candidates: [{ content: { parts: [{ inlineData: { data: 'b3V0cHV0', mimeType: 'image/png' } }] } }] };
+        } } }));
+      const model = { openai: 'gpt-image-2', gemini: 'gemini-2.5-flash-image', openrouter: 'google/gemini-2.5-flash-image' }[provider];
+      const result = await engine.editImage({ provider, model, prompt: 'Use the logo and palette in the subject image', imageBuffer, referenceImages });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.provider, provider);
+      assert.equal(result.model, model);
+      assert.equal(called, 1);
+    } finally { restoreEnv(); }
+  }
+});
+
+test('invalid or oversized reference sets fail before invoking a paid editor', async () => {
+  for (const referenceImages of [false, [{}], [{ buffer: Buffer.alloc(0) }], [{ buffer: Buffer.from('x'), mimeType: 'text/plain' }], Array.from({ length: 8 }, () => ({ buffer: Buffer.from('x') }))]) {
+    const result = await engine.editImage({ prompt: 'edit', imageBuffer: Buffer.from('source'), referenceImages });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'E_PARAMS');
+    assert.deepEqual(result.attempts, []);
+  }
+});

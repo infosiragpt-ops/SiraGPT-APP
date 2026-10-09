@@ -213,6 +213,8 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
   // ownership, storage paths or identity supplied by the artifact system.
   const imageVersion = imageMetadata ? {
     parentFileId: imageMetadata.parentFileId || null,
+    referenceFileIds: Array.isArray(imageMetadata.referenceFileIds)
+      ? [...new Set(imageMetadata.referenceFileIds.filter((id) => typeof id === 'string' && id.length <= 160))].slice(0, 8) : [],
     rootFileId: imageMetadata.rootFileId || `artifact:${id}`,
     version: imageMetadata.version || 1,
     model: imageMetadata.model, provider: imageMetadata.provider,

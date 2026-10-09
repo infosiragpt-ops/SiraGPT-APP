@@ -6,6 +6,19 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Added
+
+- Reference-guided image editing preserves the selected image and up to eight
+  ordered references. Video requests validate owned reference pixels and the
+  selected model's capacity before generation, without silently dropping images.
+- The document agent converts DOCX/PDF and MP3/MP4 in both directions using the
+  isolated sandbox. Originals remain intact; audio/video outputs are fully
+  decoded before delivery. PDF-to-Word reconstruction reports layout and OCR
+  limitations, and audio-to-video uses a disclosed static background.
+- Retrieved web sources remain readable from the task workspace beyond the
+  prompt preview and after context compaction. Missing dependency errors guide
+  the agent toward installed equivalents while preserving the original failure.
+
 ### Security
 
 - Dependency patch for the advisories that turned the production audits red

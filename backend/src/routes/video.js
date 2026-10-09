@@ -609,10 +609,6 @@ const {
   resolveConfinedFile,
 } = require('../middleware/file-response-safety');
 const {
-  normaliseUploadPath,
-  resolveConfinedPath,
-} = require('../middleware/upload-static-access');
-const {
   buildFalVideoInputPayload,
   extractFalVideoUrl,
   resolveFalVideoModelRequest,
@@ -621,6 +617,7 @@ const {
 const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const videoPromptDirector = require('../services/video-prompt-director');
+const { resolveVideoReferenceImages } = require('../services/media/video-reference-source');
 const { checkPaidTokenCap } = require('../services/plan-quota');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
@@ -649,38 +646,6 @@ function resolveVideoFile(rawFilename) {
   return resolveConfinedFile(videosDir, rawFilename, { allowedExtensions: ['.mp4'] });
 }
 
-function extractLocalUploadRelativePath(input) {
-  const raw = String(input || '').trim();
-  if (!raw) return null;
-
-  let candidate = raw;
-  try {
-    const parsed = new URL(raw);
-    candidate = parsed.pathname || '';
-  } catch {
-    candidate = raw.split('?')[0];
-  }
-
-  const marker = '/uploads/';
-  const markerIndex = candidate.indexOf(marker);
-  if (markerIndex >= 0) {
-    candidate = candidate.slice(markerIndex + marker.length);
-  }
-
-  candidate = candidate.replace(/^\/+/, '');
-  if (candidate.startsWith('uploads/')) {
-    candidate = candidate.slice('uploads/'.length);
-  }
-
-  return normaliseUploadPath(candidate);
-}
-
-function resolveLocalUploadFile(input) {
-  const relativePath = extractLocalUploadRelativePath(input);
-  if (!relativePath) return null;
-  return resolveConfinedPath(uploadRoot, relativePath);
-}
-
 function streamFile(res, filePath, { status = 200, headers = {}, start, end } = {}) {
   res.writeHead(status, headers);
   const stream = Number.isInteger(start) || Number.isInteger(end)
@@ -703,30 +668,6 @@ function streamFile(res, filePath, { status = 200, headers = {}, start, end } = 
 // Helper function to generate operation ID
 function generateOperationId() {
   return `veo3_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}`;
-}
-
-// Recent video history for a user (continuity / "hilación" between clips).
-// Reads the in-memory operations created by this instance, oldest first,
-// capped so prompts stay bounded. Entries expose the ORIGINAL prompt plus
-// capture settings so the prompt director can anchor the next generation.
-function getRecentVideoHistoryForUser(userId, limit = 5) {
-  const entries = [];
-  for (const op of activeOperations.values()) {
-    if (!op || op.userId !== userId) continue;
-    const prompt = op.originalPrompt || op.prompt;
-    if (!prompt) continue;
-    entries.push({
-      prompt,
-      enhancedPrompt: op.enhancedPrompt || null,
-      aspect_ratio: op.aspect_ratio || (op.result && op.result.aspect_ratio) || null,
-      resolution: op.resolution || (op.result && op.result.resolution) || null,
-      audio: typeof op.audio === 'boolean' ? op.audio : (op.result && typeof op.result.audio === 'boolean' ? op.result.audio : null),
-      model: (op.result && (op.result.model || op.result.modelDisplayName)) || op.resolvedModel || op.requestedModel || null,
-      createdAt: op.createdAt || null,
-    });
-  }
-  entries.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-  return entries.slice(-Math.max(1, Math.min(limit, 5)));
 }
 
 function resolveVeoFastDuration(requestedDuration, model) {
@@ -753,6 +694,7 @@ router.post('/generate', [
   body('image_urls').optional().isArray({ max: 12 }).withMessage('Image URLs must be an array'),
   body('image_urls.*').optional().isString().withMessage('Image URL must be a string'),
   body('model').optional().isString().withMessage('Model must be a string'),
+  body('chatId').optional().isString(),
   body('history').optional().isArray({ max: 5 }).withMessage('History must be an array'),
   body('continuation').optional().isBoolean().withMessage('Continuation must be a boolean'),
   body('professionalize').optional().isBoolean().withMessage('Professionalize must be a boolean')
@@ -828,11 +770,10 @@ router.post('/generate', [
     // Professional direction + cross-clip continuity ("hilación").
     // The prompt is directed once here (cinematic camera/pacing/quality +
     // bible anchor to the previous clip) so retries reuse the exact same
-    // directed prompt. Strict continuity locks capture settings to the
-    // previous clip so consecutive videos cut cleanly against each other.
-    const history = Array.isArray(providedHistory) && providedHistory.length
-      ? providedHistory.slice(-5)
-      : getRecentVideoHistoryForUser(req.user.id, 5);
+    // directed prompt. Visual continuity preserves selected controls.
+    // Only caller-authorized conversation history can anchor a clip. Never
+    // borrow scenes from another chat merely because the user is the same.
+    const history = Array.isArray(providedHistory) ? providedHistory.slice(-5) : [];
     const resolvedFalCaps = modelRouting.model?.apiData?.fal || {};
     let direction = null;
     try {
@@ -847,30 +788,16 @@ router.post('/generate', [
         history,
         continuation: typeof continuation === 'boolean' ? continuation : null,
         professionalize,
+        imageCount: inputImageUrls.length,
       });
     } catch (directorError) {
       console.error('🎬 Video prompt director failed, using raw prompt:', directorError?.message || directorError);
       direction = null;
     }
 
-    let effectiveAspectRatio = aspect_ratio;
-    let effectiveResolution = resolution;
-    let effectiveAudio = audio;
-    if (direction && direction.continuityMode === 'strict') {
-      if (direction.settings.aspect_ratio) effectiveAspectRatio = direction.settings.aspect_ratio;
-      if (direction.settings.resolution) effectiveResolution = direction.settings.resolution;
-      if (typeof direction.settings.audio === 'boolean') effectiveAudio = direction.settings.audio;
-      if (direction.settings.model && direction.settings.model !== resolvedModel) {
-        const lockedRouting = resolveFalVideoModelRequest(direction.settings.model, {
-          hasImage: inputImageUrls.length > 0,
-          imageCount: inputImageUrls.length,
-        });
-        if (lockedRouting.ok) {
-          modelRouting = lockedRouting;
-          resolvedModel = lockedRouting.endpoint;
-        }
-      }
-    }
+    const effectiveAspectRatio = aspect_ratio;
+    const effectiveResolution = resolution;
+    const effectiveAudio = audio;
 
     const effectiveSettings = validateFalVideoSettings({
       endpoint: resolvedModel, aspectRatio: effectiveAspectRatio,
@@ -928,6 +855,16 @@ router.post('/generate', [
     );
     if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
+    let preparedReferences;
+    try {
+      preparedReferences = await resolveVideoReferenceImages(inputImageUrls, {
+        prisma, userId: req.user.id, chatId: req.body.chatId,
+        requireChatOwnership: true,
+      });
+    } catch (error) {
+      return res.status(error.status || 422).json({ code: 'E_PARAMS', error: error.message, message: error.message });
+    }
+
     console.log('Calling Fal.ai Veo3 Video Generation API...');
 
     try {
@@ -968,6 +905,7 @@ router.post('/generate', [
         originalPrompt: prompt,
         continuityMode,
         settingsLocked,
+        preparedReferences,
       })
         .catch((error) => {
           console.error(`❌ Unhandled video generation failure for ${operationId}:`, error);
@@ -1065,38 +1003,12 @@ function normalizeVideoImageUrls(value) {
     .filter((item, index, items) => items.indexOf(item) === index);
 }
 
-async function prepareFalImageUrl(imageUrl) {
-  if (!imageUrl) return null;
-  if (!imageUrl.includes('localhost') && !imageUrl.includes('127.0.0.1') && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
-    return imageUrl;
-  }
-
-  console.log('📤 Uploading local image to Fal.ai for processing...');
-
-  const localImagePath = resolveLocalUploadFile(imageUrl);
-  if (!localImagePath) {
-    throw new Error('Invalid local image path');
-  }
-
-  console.log('📁 Local image path:', localImagePath);
-  if (!fs.existsSync(localImagePath)) {
-    throw new Error(`Local image file not found: ${localImagePath}`);
-  }
-
-  const imageBuffer = fs.readFileSync(localImagePath);
-  const fileName = path.basename(localImagePath);
-  const fileBlob = new Blob([imageBuffer], { type: getImageMimeType(fileName) });
-  const uploadedUrl = await fal.storage.upload(fileBlob);
-
-  console.log('✅ Image uploaded to Fal.ai successfully:', uploadedUrl);
-  return uploadedUrl;
-}
-
 // generateVideoAsync function with proper variable scoping and syntax fix
 async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrls = [], model = 'veo-fast', resolution = '720p', audio = true, opts = {}) {
   const maxRetries = 3;
   let retryCount = 0;
   const sourceImageUrls = normalizeVideoImageUrls(imageUrls);
+  let processedImageUrls = null;
   const directionMeta = {
     originalPrompt: typeof opts.originalPrompt === 'string' && opts.originalPrompt ? opts.originalPrompt : prompt,
     continuityMode: opts.continuityMode || null,
@@ -1123,12 +1035,13 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       operationData.updatedAt = new Date().toISOString();
       activeOperations.set(operationId, operationData);
 
-      let processedImageUrls = [];
-      try {
-        processedImageUrls = (await Promise.all(sourceImageUrls.map(prepareFalImageUrl))).filter(Boolean);
-      } catch (uploadError) {
-        console.error(' Failed to upload image to Fal.ai:', uploadError);
-        throw new Error(`Failed to process image for video generation: ${uploadError.message}`);
+      if (!processedImageUrls) {
+        const references = opts.preparedReferences || await resolveVideoReferenceImages(sourceImageUrls, { prisma, userId });
+        const uploadedUrls = [];
+        for (const reference of references) {
+          uploadedUrls.push(await fal.storage.upload(new Blob([reference.buffer], { type: reference.mimeType })));
+        }
+        processedImageUrls = uploadedUrls;
       }
       const processedImageUrl = processedImageUrls[0] || null;
 
@@ -1332,24 +1245,6 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       console.log(` Waiting ${waitTime}ms before retry ${retryCount + 1}/${maxRetries}...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
-  }
-}
-
-// Helper function to determine image MIME type
-function getImageMimeType(filename) {
-  const ext = path.extname(filename).toLowerCase();
-  switch (ext) {
-    case '.jpg':
-    case '.jpeg':
-      return 'image/jpeg';
-    case '.png':
-      return 'image/png';
-    case '.gif':
-      return 'image/gif';
-    case '.webp':
-      return 'image/webp';
-    default:
-      return 'image/jpeg'; // Default fallback
   }
 }
 

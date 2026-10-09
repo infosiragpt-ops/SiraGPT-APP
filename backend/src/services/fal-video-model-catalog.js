@@ -956,6 +956,9 @@ function resolveFalVideoModelRequest(modelId, { hasImage = false, imageCount = 0
     }
   }
 
+  const imageValidation = validateFalVideoImageCount(definition, hasImage ? Math.max(1, Number(imageCount) || 1) : 0);
+  if (!imageValidation.ok) return imageValidation;
+
   return {
     ok: true,
     requestedModel: requested,
@@ -979,6 +982,25 @@ function inferFalEndImageField(endpoint) {
   if (/kling-video\/v2\.(1|5)/.test(id)) return 'tail_image_url';
   if (/kling|seedance|pixverse/.test(id)) return 'end_image_url';
   return null;
+}
+
+// Validate both routing and payload construction: every accepted reference must
+// reach the selected model. A paired image endpoint may have a smaller capacity.
+function validateFalVideoImageCount(definition, count) {
+  if (!count) return { ok: true };
+  const id = definition.id || '';
+  const acceptsImages = definition.supportsImageInput || /image-to-video|reference-to-video/.test(definition.mode || id);
+  const supportsList = definition.supportsImageList || definition.imageField === 'image_urls' || id.includes('reference-to-video');
+  const maximum = !acceptsImages ? 0 : supportsList ? (definition.maxImageReferences || 9)
+    : (definition.endImageField || inferFalEndImageField(id)) ? 2 : 1;
+  if (count <= maximum) return { ok: true };
+  return {
+    ok: false,
+    code: 'E_PARAMS',
+    message: maximum === 0
+      ? 'El modelo seleccionado no admite imágenes de referencia. Elige un modelo de imagen a vídeo.'
+      : `El modelo seleccionado admite hasta ${maximum} ${maximum === 1 ? 'imagen' : 'imágenes'} de referencia; recibimos ${count}. Reduce las referencias o elige un modelo que admita todas.`,
+  };
 }
 
 function parseContractDuration(value) {
@@ -1065,10 +1087,18 @@ function buildFalVideoInputPayload({
     .filter(Boolean)
     .filter((value, index, values) => values.indexOf(value) === index);
 
+  const imageValidation = validateFalVideoImageCount(definition, usableImageUrls.length);
+  if (!imageValidation.ok) {
+    const error = new Error(imageValidation.message);
+    error.status = 422;
+    error.code = imageValidation.code;
+    error.body = { code: error.code, message: error.message };
+    throw error;
+  }
   if (usableImageUrls.length > 0) {
     const imageField = definition.imageField || inferFalImageField(endpoint);
     if (definition.supportsImageList || imageField === 'image_urls' || id.includes('reference-to-video')) {
-      payload.image_urls = usableImageUrls.slice(0, 9);
+      payload.image_urls = usableImageUrls;
     } else {
       payload[imageField] = usableImageUrls[0];
       const endImageField = definition.endImageField || inferFalEndImageField(endpoint);

@@ -32,7 +32,7 @@ function response() {
   };
 }
 
-function aiHarness({ chatUserId = 'owner', chatDeleted = false, serviceError = null } = {}) {
+function aiHarness({ chatUserId = 'owner', chatDeleted = false, serviceError = null, fileRecords = [], fileError = null } = {}) {
   const handlers = new Map();
   const calls = { http: [], history: [], chat: [], saved: [], usage: [], failures: [] };
   const recentMessages = [
@@ -41,6 +41,13 @@ function aiHarness({ chatUserId = 'owner', chatDeleted = false, serviceError = n
     { timestamp: 1, deletedAt: null, files: JSON.stringify([{ type: 'video', prompt: 'primer clip' }]) },
   ];
   const prisma = {
+    file: {
+      findMany: async ({ where }) => {
+        if (fileError) throw fileError;
+        assert.equal(where.userId, 'owner');
+        return fileRecords.filter((file) => where.id.in.includes(file.id) && (where.deletedAt !== null || !file.deletedAt));
+      },
+    },
     aiModel: { findUnique: async () => ({ displayName: 'Selected video', type: 'VIDEO', isActive: true }) },
     chat: {
       findFirst: async ({ where }) => {
@@ -90,7 +97,7 @@ function aiHarness({ chatUserId = 'owner', chatDeleted = false, serviceError = n
       post: (url, body, options) => internal('post', url, body, options),
       get: (url, options) => internal('get', url, null, options),
     } : nativeRequire(name),
-    process: { env: { PORT: '5000' } }, console: silentConsole,
+    process: { env: { PORT: '5000' } }, console: silentConsole, URL,
     modelSyncService: { ensureStaticCatalogModels: async () => {} }, prisma, checkPaidTokenCap,
     recordApiUsage: async (args) => { calls.usage.push(args); return {}; }, usagePayloadFor: () => ({}),
     turnFailures: { recordGenerationFailure: async (_req, failure) => { calls.failures.push(failure); } },
@@ -164,7 +171,7 @@ test('provider rejection remains a failure without saved processing message or u
   assert.equal(calls.failures.length, 1);
 });
 
-function serviceHarness({ user = {}, usage = 1000 } = {}) {
+function serviceHarness({ user = {}, usage = 1000, referenceError = null, history = [] } = {}) {
   let handler;
   let validators = [];
   const inputValidation = require('express-validator');
@@ -177,9 +184,10 @@ function serviceHarness({ user = {}, usage = 1000 } = {}) {
     body: inputValidation.body, authenticateToken() {}, requirePaidPlan: () => () => {},
     validationResult: inputValidation.validationResult, console: silentConsole,
     resolveFalApiKey: async () => ({ apiKey: 'synthetic-provider-key', source: 'test' }), fal: { config() {} },
-    resolveFalVideoModelRequest: (model) => model === 'selected-video' ? ({ ok: true, endpoint: model }) : resolveFalVideoModelRequest(model),
+    resolveFalVideoModelRequest: (model, options) => model === 'selected-video' ? ({ ok: true, endpoint: model }) : resolveFalVideoModelRequest(model, options),
     buildFalVideoInputPayload, validateFalVideoSettings,
-    resolveVeoFastDuration, getRecentVideoHistoryForUser: () => [],
+    resolveVeoFastDuration, getRecentVideoHistoryForUser: () => history,
+    resolveVideoReferenceImages: async () => { if (referenceError) throw referenceError; return []; },
     videoPromptDirector: { directVideoPrompt: () => null }, checkPaidTokenCap,
     prisma: { apiUsage: { aggregate: async () => ({ _sum: { tokens: usage } }), create: async () => { calls.usage++; } } },
     generateOperationId: () => 'op', randomUUID: () => 'fixture-uuid', activeOperations: calls.operations,
@@ -253,4 +261,53 @@ test('outer video request preserves actionable parameter errors and makes no wri
   assert.equal(res.body.message || res.body.error, message);
   assert.equal(calls.saved.length, 0);
   assert.equal(calls.usage.length, 0);
+});
+
+
+test('unreadable reference fails before operation, provider or usage', async () => {
+  const referenceError = Object.assign(new Error('No se pudo leer la imagen de referencia 1.'), { status: 422 });
+  const { request, calls } = serviceHarness({ user: { isSuperAdmin: true }, referenceError });
+  const res = await request({ model: 'fal-ai/veo3.1/fast', image_url: '/uploads/owner/broken.png' });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.body.code, 'E_PARAMS');
+  assert.equal(calls.generated, 0);
+  assert.equal(calls.usage, 0);
+  assert.equal(calls.operations.size, 0);
+});
+
+test('too many references fail before source processing or paid generation', async () => {
+  const { request, calls } = serviceHarness({ user: { isSuperAdmin: true } });
+  const res = await request({ model: 'fal-ai/veo3.1/fast', image_urls: ['https://example.com/a.png', 'https://example.com/b.png'] });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.body.code, 'E_PARAMS');
+  assert.equal(calls.generated, 0);
+  assert.equal(calls.usage, 0);
+});
+
+test('empty conversation history never inherits another chat for the same user', async () => {
+  const { request, calls } = serviceHarness({ user: { isSuperAdmin: true }, history: [{ prompt: 'private scene from another project' }] });
+  const res = await request({ history: [] });
+  assert.equal(res.statusCode, 200);
+  assert.equal(calls.operations.get('op').historyUsed, 0);
+});
+
+
+test('outer video missing selected file aborts instead of silently becoming text-only', async () => {
+  for (const options of [{}, { fileError: new Error('file lookup unavailable') }]) {
+    const { request, calls } = aiHarness(options);
+    const res = await request('POST /generate-video', { body: { chatId: null, files: ['missing'] } });
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.body.code, 'E_PARAMS');
+    assert.equal(calls.http.length, 0);
+    assert.equal(calls.saved.length, 0);
+    assert.equal(calls.usage.length, 0);
+  }
+});
+
+test('reply artifact remains one source and is forwarded for owned materialization', async () => {
+  const { request, calls } = aiHarness();
+  const res = await request('POST /generate-video', { body: { chatId: null, files: ['artifact:abcdef'], image_url: 'https://api.example.com/api/agent/artifact/abcdef' } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(plain(calls.http[0].body.image_urls), ['https://api.example.com/api/agent/artifact/abcdef']);
+  assert.deepEqual(plain(calls.http[0].body.history), []);
 });

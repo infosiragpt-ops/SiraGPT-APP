@@ -2,6 +2,7 @@ import { shouldEditExistingDocument } from "./ai-service"
 import { parseMessageFiles } from "./chat/composer-files"
 import { documentAttachment, documentEditReference, looksLikeExplicitDocumentEdit, isExplicitDocumentEdit, isNewDocumentCreationRequest } from "./document-sandbox-client"
 import { isSavXlsxPairEditRequest } from "./generated-artifact-read-intent"
+import { fileConversionTarget } from "./file-conversion-intent"
 
 export type DocumentSandboxRoute = "edit" | "clarify" | null
 export interface DocumentSandboxAdmission {
@@ -16,6 +17,8 @@ export interface DocumentSandboxAdmissionOptions {
 
 /** Never let an ambiguous legacy edit classification select an editor. */
 export function routeDocumentSandboxTurn(prompt: string, attachments: readonly unknown[]): "edit" | "clarify" | null {
+  // Conversions create a new format; the surgical editor preserves format.
+  if (fileConversionTarget(prompt)) return null
   if (isNewDocumentCreationRequest(prompt)) return null
   // F1 cannot edit .sav. Never select only the XLSX from a requested pair.
   if (isSavXlsxPairEditRequest(prompt)) return null
@@ -65,6 +68,7 @@ export function resolveDocumentSandboxAdmission(
   prompt: string,
   options: DocumentSandboxAdmissionOptions = {},
 ): DocumentSandboxAdmission {
+  if (fileConversionTarget(prompt)) return { route: null, attachments: [] }
   if (isNewDocumentCreationRequest(prompt)) return { route: null, attachments: [] }
   // The source-preserving agent must receive the SAV/XLSX pair together.
   // Filtering unsupported .sav from composer/history here would silently

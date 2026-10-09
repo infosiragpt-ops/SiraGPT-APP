@@ -25,6 +25,7 @@
  */
 
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
+const { capabilityRecoveryGuidance } = require('./capability-recovery');
 const { CHART_SCHEMA, normalizeNativeChart } = require('../document-pipeline/pptx-native-chart');
 const {
   DESCRIPTION_PARAM,
@@ -611,7 +612,8 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
       if (r.aborted) return `ERROR: sandbox command aborted\n${output}`;
       if (r.timedOut) return `ERROR: sandbox command timed out after ${CMD_TIMEOUT_MS}ms\n${output}`;
       if (Number(r.exitCode) !== 0) {
-        const guidance = officeApiReadbackGuidance(code, r.stderr, typeof executors.inspect_document === 'function');
+        const guidance = officeApiReadbackGuidance(code, r.stderr, typeof executors.inspect_document === 'function')
+          || capabilityRecoveryGuidance(r.stderr, { exitCode: r.exitCode });
         const detail = guidance ? cap(output, MAX_TOOL_RESULT_CHARS - guidance.length - 100) : output;
         return `ERROR: python failed\n${detail}${guidance ? `\n${guidance}` : ''}`;
       }
@@ -629,7 +631,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
       const output = cap(parts.join('\n'));
       if (r.aborted) return `ERROR: sandbox command aborted\n${output}`;
       if (r.timedOut) return `ERROR: sandbox command timed out after ${CMD_TIMEOUT_MS}ms\n${output}`;
-      if (Number(r.exitCode) !== 0) return `ERROR: sandbox command failed\n${output}`;
+      if (Number(r.exitCode) !== 0) {
+        const guidance = capabilityRecoveryGuidance(r.stderr, { language: 'bash', exitCode: r.exitCode });
+        return `ERROR: sandbox command failed\n${guidance ? cap(output, MAX_TOOL_RESULT_CHARS - guidance.length - 100) : output}${guidance ? `\n${guidance}` : ''}`;
+      }
       return output;
     },
     bash: (args) => doc.bash(args),
@@ -961,7 +966,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
   const webEnabled = webOpts.enabled !== undefined
     ? Boolean(webOpts.enabled)
     : webToolsEnabled(webOpts.env || process.env);
-  if (webEnabled) Object.assign(executors, makeWebToolExecutors(webOpts));
+  if (webEnabled) Object.assign(executors, makeWebToolExecutors({ ...webOpts, sandbox }));
 
   return executors;
 }

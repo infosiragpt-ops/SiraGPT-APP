@@ -352,8 +352,15 @@ jobs:
         if: matrix.shard == 1
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
+          sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils ffmpeg qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
           python -m pip install --disable-pip-version-check --no-cache-dir -r ../infra/doc-validation/requirements-test.txt
+
+      - name: Real Word/PDF and MP3/MP4 conversions
+        if: matrix.shard == 1
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir 'pdfplumber>=0.10,<1'
+          python -m unittest tests/python/test_sira_convert.py -v
+          node --test tests/agent-runner-media-validation.fixture.cjs
 
       # Edición milimétrica (docs/specs/edicion-milimetrica/SPEC.md, Fase A):
       # the office engine that runs inside the document sandbox. Shard 1 has

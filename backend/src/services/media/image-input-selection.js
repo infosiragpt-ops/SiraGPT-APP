@@ -10,7 +10,7 @@ async function resolveImageGenerationFileId({ fileId, chatId, generationOnly, fi
   return await findPreviousImageFileId(chatId) || fileId;
 }
 
-function resolveImageOperation({ operation, prompt, fileId, selection, maskDataUrl } = {}) {
+function resolveImageOperation({ operation, prompt, fileId, referenceFileIds, selection, maskDataUrl } = {}) {
   if (operation && !['generate', 'edit', 'reframe'].includes(operation)) {
     const error = new Error('La operación de imagen no es válida.');
     error.code = 'E_PARAMS'; error.status = 400; throw error;
@@ -23,7 +23,7 @@ function resolveImageOperation({ operation, prompt, fileId, selection, maskDataU
   if (operation === 'edit' && directive.detectImageReframe(prompt)) return 'reframe';
   if (operation) return operation;
   if (directive.detectImageReframe(prompt)) return 'reframe';
-  if (fileId || selection || maskDataUrl || intent.detectImageEditIntent(prompt)) return 'edit';
+  if (fileId || referenceFileIds?.length || selection || maskDataUrl || intent.detectImageEditIntent(prompt)) return 'edit';
   // New requests never inherit a historical image merely because the chosen
   // model supports editing. History is consulted only for edit/reframe.
   return 'generate';

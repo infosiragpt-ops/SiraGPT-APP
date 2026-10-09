@@ -9,6 +9,7 @@ import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
 import { apiClient, type AIUsagePayload, type ClarifyOptionsPayload, type RequestBriefPayload } from "./api"
+import { resolveVideoReferenceUrls } from "./chat/video-references"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
 import { appendActivity, finalizeActivity, type ActivityEvent, type ActivityStep } from "./chat/activity-log"
@@ -4242,48 +4243,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
       const backendBaseUrl = baseUrl.replace('/api', '');
-      const imageUrls: string[] = [];
-      const addImageUrl = (rawUrl?: string | null) => {
-        const raw = String(rawUrl || '').trim();
-        if (!raw) return;
-        const url = raw.startsWith('http') ? raw : `${backendBaseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`;
-        if (!imageUrls.includes(url)) imageUrls.push(url);
-      };
-
-      (options?.sourceImageUrls || []).forEach(addImageUrl);
-
-      const sourceFiles = [
-        ...(Array.isArray(options?.sourceImageFiles) ? options.sourceImageFiles : []),
-        ...(Array.isArray(uploadedFiles) ? uploadedFiles : []),
-      ];
-      sourceFiles
-        .filter(f => f?.type?.startsWith('image/') || f?.mimeType?.startsWith('image/'))
-        .forEach((imageFile) => {
-          addImageUrl(imageFile.url || imageFile.thumbnailUrl);
-          if (!imageFile.url && imageFile.filename && imageFile.userId) {
-            addImageUrl(`/uploads/${imageFile.userId}/${imageFile.filename}`);
-          }
-        });
-
-      // Fallback/enrichment from the API so every selected image id is included.
-      if (fileIds && fileIds.length > 0) {
-        try {
-          for (const fileId of fileIds) {
-            const fileResponse = await apiClient.getFile(fileId);
-            const file = (fileResponse as any)?.file || fileResponse;
-
-            if (file && file.mimeType?.startsWith('image/')) {
-              if (file.url) {
-                addImageUrl(file.url);
-              } else if (file.filename && file.userId) {
-                addImageUrl(`/uploads/${file.userId}/${file.filename}`);
-              }
-            }
-          }
-        } catch (err) {
-          console.error('Error getting file details for video generation:', err);
-        }
-      }
+      const imageUrls = await resolveVideoReferenceUrls({
+        fileIds,
+        sourceImageUrls: options?.sourceImageUrls,
+        sourceImageFiles: options?.sourceImageFiles,
+        uploadedFiles,
+        backendBaseUrl,
+        getFile: (id) => apiClient.getFile(id),
+      });
 
       const imageUrl = imageUrls[0] || null;
 

@@ -19,6 +19,7 @@ const { createDocumentTurnQueue } = require('./document-turn-queue');
 const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
 const { parseModelSpec, keyFor, resolveDocAgentCandidates, createFailoverClient, defaultCreateClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
+const { fileConversionTarget } = require('./conversion-intent');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { loadConversationContext, conversationContextMessage } = require('./conversation-context');
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
@@ -27,6 +28,7 @@ const { createOfficeFailureReporter, verificationFailureFromSteps } = require('.
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
+const { validateMediaOutput, MEDIA_PATH_RE } = require('./media-validation');
 const { applySavXlsxDeliveryGate, createSavXlsxFinalEventGate } = require('./sav-xlsx-delivery');
 const { needsVerification } = require('./verify');
 const { auditPptxDesign } = require('../document-pipeline/pptx-design-audit');
@@ -241,6 +243,14 @@ function loadSiraChartsPy({ dir } = {}) {
   try { text = fs.readFileSync(path.join(dir || __dirname, 'sira_charts.py'), 'utf8'); } catch (_) { /* optional helper */ }
   if (!dir) siraChartsPyCache = text;
   return text;
+}
+
+let siraConvertPyCache;
+function loadSiraConvertPy() {
+  if (siraConvertPyCache !== undefined) return siraConvertPyCache;
+  try { siraConvertPyCache = fs.readFileSync(path.join(__dirname, 'sira_convert.py'), 'utf8'); }
+  catch (_) { siraConvertPyCache = null; }
+  return siraConvertPyCache;
 }
 
 /**
@@ -638,11 +648,15 @@ function shouldRunAgentRunner({
   const hasFiles = documentFiles.length > 0
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
+  // A request for software that converts documents still asks for code.
+  // Reuse the chat's canonical classifier before looking at format nouns.
+  if (require('../agents/software-build-intent').detectCodingIntent(t).active) return false;
   // Text-only runner-only claims (create-a-doc, style/color follow-ups). The
   // design-upgrade branch of isRunnerOnlyDocumentTurn is NOT a claim on its
   // own: without files or a prior artifact there is nothing to redesign.
   if (isCreateOrStyleRunnerOnly(t)) return true;
   const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat);
+  if ((hasFiles || hasPrior) && fileConversionTarget(t)) return true;
   // A design claim needs an Office file to restyle: named in the text, the
   // latest artifact (pptx/docx/xlsx), or an upload. A prior html page, image
   // or script is edited by the chat loop, never «redesigned» here.
@@ -719,6 +733,8 @@ function isCreateOrStyleRunnerOnly(text) {
  */
 function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null } = {}) {
   const t = String(text || '');
+  if (require('../agents/software-build-intent').detectCodingIntent(t).active) return false;
+  if (fileConversionTarget(t)) return true;
   if (isCreateOrStyleRunnerOnly(t)) return true;
   const named = officeFormatNamedIn(normalizeIntentText(t));
   const target = named || officeFamily(priorArtifactFormat);
@@ -991,6 +1007,12 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
         out.validation = { ok: false, passed: false, reason, engine: 'office_package_preflight' };
         onEvent({ type: 'output_invalid', name: out.name, reason });
       }
+    } else if (MEDIA_PATH_RE.test(String(out.name))) {
+      const verdict = await validateMediaOutput(sandbox, out);
+      out.valid = verdict.ok;
+      out.validation = verdict.ok ? verdict.validation
+        : { ok: false, passed: false, engine: 'ffmpeg', reason: verdict.reason };
+      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: verdict.reason });
     } else if (ext === 'sav') {
       const verdict = await validateSavOutput(sandbox, out);
       out.valid = verdict.ok;
@@ -1063,6 +1085,7 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
       out.validation = {
         ...proof, ok: proof.passed, engine: 'agent_runner_edit_delta',
         ...(ext === 'sav' && out.validation?.spss ? { spss: out.validation.spss } : {}),
+        ...(MEDIA_PATH_RE.test(String(out.name)) && out.validation?.media ? { media: out.validation.media } : {}),
       };
       if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: proof.reason });
     }
@@ -1364,6 +1387,10 @@ async function runAgentRunner({
           if (siraChartsPy) {
             try { await sandbox.writeFile('tmp/sira_charts.py', siraChartsPy); } catch (_) { /* native libraries remain available */ }
           }
+          const siraConvertPy = loadSiraConvertPy();
+          if (siraConvertPy) {
+            try { await sandbox.writeFile('tmp/sira_convert.py', siraConvertPy); } catch (_) { /* installed native engines remain available */ }
+          }
           try { await installSiraOfficeEngine(sandbox); } catch (err) {
             if (officeEngineEnabled()) {
               reportOfficeFailure({ tool: 'office_engine', code: 'install_failed', error: err && err.message });
@@ -1384,9 +1411,12 @@ async function runAgentRunner({
       listFiles: async (...args) => { await prepareSandbox(); return sandbox.listFiles(...args); },
       collectOutputs: async (...args) => { await prepareSandbox(); return sandbox.collectOutputs(...args); },
     } : sandbox;
-    const collectTurnOutputs = async () => sandboxPrepared
-      ? dropPreviousTurnOutputs(await collectValidOutputs(sandbox, onEvent, editContext), previousOutputs, onEvent)
-      : [];
+    const collectTurnOutputs = async () => {
+      throwIfAborted(abortScope.signal);
+      const collected = sandboxPrepared ? await collectValidOutputs(sandbox, onEvent, editContext) : [];
+      throwIfAborted(abortScope.signal);
+      return dropPreviousTurnOutputs(collected, previousOutputs, onEvent);
+    };
 
     // ── F8 hook: memoria recall (DATA) + tools extra (skills / MCP) ────────
     const f8 = await prepareF8Extras({
@@ -1765,6 +1795,7 @@ async function runAgentRunner({
     // A readable SAV plus an OOXML workbook is insufficient for an explicit
     // 20 × 20 request unless all 400 values and 20 SAV labels agree.
     const pairGate = await applySavXlsxDeliveryGate({ instruction: task, sources: files, outputs, result, sandbox });
+    throwIfAborted(abortScope.signal);
     result = pairGate.result;
     outputs = pairGate.outputs;
     if (pairGate.active && !pairGate.ok && result.stoppedReason === 'verification_failed') {
@@ -1903,6 +1934,7 @@ async function runAgentRunnerForChat({
   // A structurally readable OOXML file is not a verified deliverable when the
   // loop exhausted or could not run its verification gate. Never publish a
   // download card or report success for it, including on iteration limits.
+  throwIfAborted(signal);
   const delivery = assessDelivery(run);
   const valid = delivery.blocked ? []
     : (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);

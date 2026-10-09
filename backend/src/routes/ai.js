@@ -264,7 +264,6 @@ const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(m
 const VERIFIED_CHAT_IMAGE_MODEL_NAMES = DEFAULT_ACTIVE_IMAGE_MODEL_NAMES;
 const { isGrokImageModelName, isActiveGrokImageModel, normalizeCatalogModelType } = require('../services/model-output-type');
 const { resolveImageOperation } = require('../services/media/image-input-selection');
-const { resolveImageSource } = require('../services/media/image-source');
 const { prepareEditCanvas, finishEditCanvas } = require('../services/media/image-edit-canvas');
 
 function isVerifiedChatImageModelName(name) {
@@ -11898,6 +11897,8 @@ router.post(
     body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
     body('fileId').optional().isString().isLength({ min: 1, max: 160 }),
+    body('referenceFileIds').optional().isArray({ max: 8 }),
+    body('referenceFileIds.*').isString().isLength({ min: 1, max: 160 }),
     body('operation').optional().isIn(['generate', 'edit', 'reframe']),
     body('background').optional().isIn(['transparent']),
     body('maskDataUrl').optional().isString().isLength({ max: 8 * 1024 * 1024 + 32 }),
@@ -11953,9 +11954,9 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
-      const operation = resolveImageOperation({ operation: requestedOperation, prompt, fileId, selection: editSelection, maskDataUrl });
-      if (operation === 'generate' && (fileId || editSelection || maskDataUrl)) {
+      let { prompt, chatId, provider, model, fileId, referenceFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      const operation = resolveImageOperation({ operation: requestedOperation, prompt, fileId, referenceFileIds, selection: editSelection, maskDataUrl });
+      if (operation === 'generate' && (fileId || referenceFileIds?.length || editSelection || maskDataUrl)) {
         return res.status(400).json({ error: 'Para trabajar sobre una imagen existente, elige editar.', code: 'E_PARAMS' });
       }
       if (background && (operation !== 'edit' || editSelection || maskDataUrl)) {
@@ -12007,20 +12008,21 @@ router.post(
         preValidatedChat = await prisma.chat.findFirst({ where: { id: chatId, userId, deletedAt: null } });
         if (!preValidatedChat) return res.status(404).json({ error: 'No se encontró la conversación.', code: 'E_PARAMS' });
       }
-      const sourceImage = operation === 'generate' ? null : await resolveImageSource({ fileId }, {
+      const sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds }, {
         prisma, userId, chatId, signal: requestAbortController.signal, requireChatOwnership: true,
       });
+      const [sourceImage] = sourceImages;
       if (operation !== 'generate' && !sourceImage) {
         return res.status(400).json({
           error: 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.',
           code: 'image_source_required',
         });
       }
-      let userMessageFiles;
-      if (sourceImage?.record && !sourceImage.metadata?.operation && !/^(?:generated-|image-)/.test(sourceImage.record.filename || '')) {
-        const input = sourceImage.record;
-        userMessageFiles = JSON.stringify([{ id: input.id, fileId: input.id, name: input.originalName, filename: input.filename, type: input.mimeType, url: publicUploadUrl(`/uploads/${userId}/${input.filename}`) }]);
-      }
+      const uploadedReferences = sourceImages.filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || ''));
+      const userMessageFiles = uploadedReferences.length ? JSON.stringify(uploadedReferences.map(({ record: input }) => ({
+        id: input.id, fileId: input.id, name: input.originalName, filename: input.filename,
+        type: input.mimeType, url: publicUploadUrl(`/uploads/${userId}/${input.filename}`),
+      }))) : undefined;
       // Existing composition is the default for an edit. Reframes alone change
       // the canvas, and the user's current spoken ratio may override defaults.
       if (operation === 'edit' && sourceImage?.metadata?.aspectRatio) aspectRatio = normalizeImageAspectRatio(sourceImage.metadata.aspectRatio);
@@ -12151,6 +12153,7 @@ router.post(
             prompt: editPrompt,
             imageBuffer: editCanvas.imageBuffer,
             mimeType: editCanvas.mimeType,
+            referenceImages: sourceImages.slice(1).map((source) => ({ buffer: source.buffer, mimeType: source.mimeType })),
             maskBuffer: editCanvas.maskBuffer,
             model, provider: toImageEngineProvider(provider), aspectRatio, quality, n: imageCount, background,
             failover: false,
@@ -12274,6 +12277,7 @@ router.post(
           prompt,
           fileId: newFileId,
           parentFileId: sourceImage?.fileId || null,
+          referenceFileIds: sourceImages.map((source) => source.fileId).filter(Boolean),
           rootFileId: sourceImage?.metadata?.rootFileId || sourceImage?.fileId || newFileId,
           version: sourceImage ? (Number(sourceImage.metadata?.version) || 1) + 1 : 1,
           operation, width, height,
@@ -12517,7 +12521,12 @@ router.post(
       const addProcessedImageUrl = (rawUrl) => {
         const value = String(rawUrl || '').trim();
         if (!value) return;
-        if (!processedImageUrls.includes(value)) processedImageUrls.push(value);
+        const uploadPath = (url) => {
+          try { const pathname = new URL(url, 'https://local.invalid').pathname; return /^\/(?:uploads\/|api\/agent\/artifact\/)/.test(pathname) ? pathname : null; }
+          catch { return null; }
+        };
+        const path = uploadPath(value);
+        if (!processedImageUrls.some((url) => url === value || (path && uploadPath(url) === path))) processedImageUrls.push(value);
       };
 
       if (Array.isArray(image_urls)) {
@@ -12528,24 +12537,34 @@ router.post(
       console.log('Initial image URLs:', processedImageUrls.length);
       if (files && files.length > 0) {
         try {
-          const imageFiles = await prisma.file.findMany({
+          const artifactFiles = files.filter((id) => /^(?:artifact:)?[a-f0-9]{6,64}$/i.test(String(id)) && (
+            String(id).startsWith('artifact:') || processedImageUrls.some((url) => url.includes(`/api/agent/artifact/${id}`))
+          ));
+          artifactFiles.forEach((id) => addProcessedImageUrl(`/api/agent/artifact/${String(id).replace(/^artifact:/, '')}`));
+          const storedFileIds = files.filter((id) => !artifactFiles.includes(id));
+          const imageFiles = storedFileIds.length ? await prisma.file.findMany({
             where: {
-              id: { in: files },
+              id: { in: storedFileIds },
               userId,
-              mimeType: { startsWith: 'image/' }
+              deletedAt: null,
             }
-          });
+          }) : [];
 
+          if (new Set(imageFiles.map((file) => file.id)).size !== new Set(storedFileIds).size) {
+            return res.status(422).json({ code: 'E_PARAMS', error: 'No se pudo recuperar uno de los archivos adjuntos. Vuelve a adjuntarlo antes de generar el vídeo.' });
+          }
           if (imageFiles.length > 0) {
             const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
             const fileOrder = new Map(files.map((id, index) => [id, index]));
             imageFiles
+              .filter((file) => file.mimeType?.startsWith('image/'))
               .sort((a, b) => (fileOrder.get(a.id) ?? 9999) - (fileOrder.get(b.id) ?? 9999))
               .forEach((imageFile) => addProcessedImageUrl(`${baseUrl}/uploads/${userId}/${imageFile.filename}`));
             console.log('🖼️ Using images for video generation:', processedImageUrls.length);
           }
         } catch (fileError) {
           console.error('Error processing files for video:', fileError);
+          return res.status(422).json({ code: 'E_PARAMS', error: 'No se pudieron recuperar los archivos de referencia. Vuelve a adjuntarlos antes de generar el vídeo.' });
         }
       }
       const processedImageUrl = processedImageUrls[0] || null;
@@ -12566,8 +12585,8 @@ router.post(
 
         // Continuity: anchor to previous videos in this chat so consecutive
         // clips keep the same universe / character / style ("hilación").
-        // Falls back to the video service's own per-user history when the
-        // chat has no prior videos.
+        // An empty history is intentional: a new chat must not inherit other
+        // projects or scenes from the same account.
         let videoHistory = Array.isArray(providedHistory) && providedHistory.length
           ? providedHistory.slice(-5)
           : [];
@@ -12617,7 +12636,8 @@ router.post(
           ...(processedImageUrl && { image_url: processedImageUrl }),
           ...(processedImageUrls.length > 0 && { image_urls: processedImageUrls }),
           model: requestedVideoModel,
-          ...(videoHistory.length && { history: videoHistory }),
+          history: videoHistory,
+          ...(chatId && { chatId }),
           ...(typeof continuation === 'boolean' && { continuation }),
           professionalize
         };
