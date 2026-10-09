@@ -292,6 +292,12 @@ async function executeAgentWebFetch(args, options = {}) {
       title = extracted.title;
       text = extracted.text;
     }
+    // Preserve the bounded extracted source before clipping the model-facing
+    // result. Internal consumers can retain it in the task workspace for
+    // recovery after compaction; this never expands the public tool payload.
+    if (response.status >= 200 && response.status < 300 && typeof options.onExtractedText === 'function') {
+      await options.onExtractedText({ text, url: current.toString(), truncated: bodyTruncated });
+    }
     const capped = capText(text, maxChars);
     return {
       url: args.url,

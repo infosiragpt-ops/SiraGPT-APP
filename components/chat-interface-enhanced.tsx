@@ -1,5 +1,6 @@
 "use client"
 
+import { collectLatestVideoReferenceUrls } from "@/lib/chat/video-references"
 import { detectCodingIntent } from "@/lib/software-build-intent"
 import { useChatGithubConnect } from "@/hooks/use-chat-github-connect"
 import { GITHUB_CONNECTION_CANCEL_EVENT, GITHUB_RESUME_TEXT, isExplicitGithubConnectRequest } from "@/lib/chat/github-connect-handoff"
@@ -422,6 +423,7 @@ import {
   shouldCreateLocalMediaPreview,
   snapshotComposerFilesForMessage,
 } from "@/lib/chat/composer-files"
+import { collectImageUploadFileIds } from "@/lib/chat/image-references"
 import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import {
   adoptUnboundComposerQueueItems,
@@ -659,7 +661,6 @@ const waitForAgentTaskRecoveryPoll = (ms: number, signal: AbortSignal): Promise<
   })
 }
 
-const VIDEO_SOURCE_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|heic|heif|avif|tiff?)$/i
 const IMAGE_TO_VIDEO_REFERENCE_RE =
   /\b(?:image[- ]?to[- ]?video|imagen(?:es)?\s+a\s+video|foto(?:s)?\s+a\s+video)\b|\b(?:pasa(?:r|la|lo|las|los)?|pasar(?:la|lo|las|los)?|convierte(?:la|lo|las|los)?|convertir(?:la|lo|las|los)?|transforma(?:la|lo|las|los)?|transformar(?:la|lo|las|los)?|vuelve(?:la|lo|las|los)?)\b.{0,64}\bvideo\b|\b(?:anima(?:r|la|lo|las|los)?|animala|animalo|dale movimiento|darle movimiento|que se mueva)\b/
 
@@ -674,31 +675,8 @@ const normalizeMediaPromptText = (value: string) =>
 const shouldUseLatestImageForVideo = (prompt: string) =>
   IMAGE_TO_VIDEO_REFERENCE_RE.test(normalizeMediaPromptText(prompt))
 
-const isVideoSourceImageAttachment = (file: any) => {
-  if (!file) return false
-  const mimeType = String(file?.mimeType || file?.type || file?.contentType || "").toLowerCase()
-  const name = String(file?.originalName || file?.name || file?.filename || file?.url || file?.imageUrl || "").toLowerCase()
-  if (mimeType.startsWith("image/") || file?.type === "image") return true
-  return VIDEO_SOURCE_IMAGE_EXT_RE.test(name)
-}
-
-const collectLatestGeneratedImageUrls = (messages: any[] = [], maxImages = 4) => {
-  for (const message of [...(Array.isArray(messages) ? messages : [])].reverse()) {
-    if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
-    const files = parseMessageFilesForRender(message?.files).filter(isVideoSourceImageAttachment)
-    const urls = files
-      .map((file: any) => resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL))
-      .map((url: string) => String(url || "").trim())
-      .filter(Boolean)
-    if (urls.length > 0) return urls.slice(0, maxImages)
-
-    const content = String(message?.content || "").trim()
-    if (/^https?:\/\//i.test(content) && /\.(?:png|jpe?g|webp|gif|avif)(?:\?|#|$)/i.test(content)) {
-      return [content]
-    }
-  }
-  return []
-}
+const collectLatestGeneratedImageUrls = (messages: any[] = []) =>
+  collectLatestVideoReferenceUrls(messages, (file: any) => resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL))
 
 type SearchActivityStatus = "running" | "complete" | "error" | "aborted"
 type SearchActivityEntryStatus = "running" | "complete" | "warning" | "error"
@@ -6066,6 +6044,12 @@ function ChatInterfaceContent() {
       if (!detail.id) return;
       const already = uploadedFilesRef.current.some((f: any) => (f.id || f.tempId) === detail.id);
       if (already) {
+        if (String(detail.mimeType || '').startsWith('image/')) {
+          setUploadedFiles((cur: any[]) => [
+            ...cur.filter((file: any) => (file.id || file.tempId) === detail.id),
+            ...cur.filter((file: any) => (file.id || file.tempId) !== detail.id),
+          ]);
+        }
         toast(`"${detail.name}" ya está adjunto al prompt`);
         return;
       }
@@ -6079,7 +6063,8 @@ function ChatInterfaceContent() {
         extractedText: detail.extractedText,
         status: 'completed',
       };
-      setUploadedFiles((cur: any[]) => [...cur, reused]);
+      setUploadedFiles((cur: any[]) => String(detail.mimeType || '').startsWith('image/')
+        ? [reused, ...cur] : [...cur, reused]);
       toast.success(`Adjuntado "${detail.name}" al prompt`);
     };
     window.addEventListener('sira:reuse-attachment', onReuse);
@@ -11501,7 +11486,7 @@ REWRITTEN TEXT:`;
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
-          await handleImageGeneration(msg, collectUploadFileIds(filesToSend), imageModelForSendOverride, imageEditTarget);
+          await handleImageGeneration(msg, collectImageUploadFileIds(filesToSend), imageModelForSendOverride, imageEditTarget);
           markQueuedSendSucceeded();
           return;
         }
@@ -11714,7 +11699,7 @@ REWRITTEN TEXT:`;
             await runContextPipeline('text');
             break;
           }
-          await handleImageGeneration(msg, collectUploadFileIds(filesToSend), undefined, imageEditTarget);
+          await handleImageGeneration(msg, collectImageUploadFileIds(filesToSend), undefined, imageEditTarget);
           break;
         case 'video':
           isGeneratingVideoRef.current = true;
@@ -12237,6 +12222,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       if (files && files[0]) {
         payload.fileId = files[0];
+        payload.referenceFileIds = [...new Set(files)];
       }
       if (editTarget) Object.assign(payload, editTarget);
       setUploadedFiles([]);

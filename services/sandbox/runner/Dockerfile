@@ -27,7 +27,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # agent-runner/sira_office.py. Metric-compatible fonts keep renders aligned
 # with Word/PowerPoint: Carlito ≙ Calibri, Caladea ≙ Cambria, Liberation ≙
 # Arial/Times New Roman/Courier New. qpdf + tesseract serve the PDF skills
-# (structural edits, OCR of scanned PDFs).
+# (structural edits, OCR of scanned PDFs). FFmpeg converts MP3/MP4 within
+# this same offline sandbox; multimedia bytes never execute on the host.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       bash coreutils findutils grep sed gawk \
       zip unzip \
@@ -35,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       nodejs npm \
       libreoffice --no-install-recommends \
       poppler-utils \
+      ffmpeg \
       qpdf \
       tesseract-ocr \
       fonts-dejavu-core \

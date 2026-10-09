@@ -42,6 +42,7 @@ const EXEC_TOOLS = new Set(['execute_python', 'execute_bash', 'bash']);
 const VISUAL_VERIFY = 'verify_visual';
 const OFFICE_PATH_RE = /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i;
 const SAV_PATH_RE = /\.sav$/i;
+const { MEDIA_PATH_RE } = require('./media-validation');
 const RENDERER_UNAVAILABLE_RE = /no está instalado|renderer_unavailable|no hay pdftoppm/i;
 
 function officeEngineOn(env = process.env) {
@@ -112,8 +113,14 @@ function isSavMutation(step) {
     && step.changedOutputs.every((path) => SAV_PATH_RE.test(outputPath(path)));
 }
 
+function isMediaMutation(step) {
+  return isRealEdit(step) && EXEC_TOOLS.has(step.tool)
+    && Array.isArray(step.changedOutputs) && step.changedOutputs.length > 0
+    && step.changedOutputs.every((path) => MEDIA_PATH_RE.test(outputPath(path)));
+}
+
 function legacyGate(steps) {
-  const lastEdit = lastIndex(steps, (s) => EDIT_TOOLS.has(s.tool) && s.ok !== false);
+  const lastEdit = lastIndex(steps, (s) => EDIT_TOOLS.has(s.tool) && s.ok !== false && !isMediaMutation(s));
   if (lastEdit === -1) return { needed: false, reason: null };
   const lastPreview = lastIndex(steps, (s) => s.tool === 'render_preview');
   if (lastPreview < lastEdit) {
@@ -181,7 +188,9 @@ function needsVerification(steps = [], { strict = officeEngineOn() } = {}) {
   // outputs exclusively; collectValidOutputs reopens those exact bytes with
   // pyreadstat before persistence. Office and other outputs still need their
   // own verification, regardless of the order in which SAV was generated.
-  const lastEdit = lastIndex(list, (step) => isRealEdit(step) && !isSavMutation(step));
+  // MP3/MP4 also have no Office renderer. Only an exclusively-media step is
+  // exempt: collection fully decodes its actual bytes before persistence.
+  const lastEdit = lastIndex(list, (step) => isRealEdit(step) && !isSavMutation(step) && !isMediaMutation(step));
   if (lastEdit === -1 || lastEdit <= lastOfficeEdit) return { needed: false, reason: null };
   const lastCheck = lastIndex(list, (s) => s && (s.tool === 'render_preview' || s.tool === VISUAL_VERIFY));
   if (lastCheck < lastEdit) return { needed: true, reason: 'missing_preview' };

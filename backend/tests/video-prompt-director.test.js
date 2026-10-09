@@ -127,7 +127,7 @@ test('directVideoPrompt: explicit supportsAudio override wins over family infere
 
 // ── Continuity modes ──────────────────────────────────────────────────
 
-test('directVideoPrompt: strict sequel embeds anchor + locks settings', () => {
+test('directVideoPrompt: strict sequel embeds anchor and preserves selected settings', () => {
   const history = [{
     prompt: 'una astronauta en marte con traje rojo',
     aspect_ratio: '9:16',
@@ -137,7 +137,7 @@ test('directVideoPrompt: strict sequel embeds anchor + locks settings', () => {
   }];
   const r = directVideoPrompt({
     prompt: 'continúa: la astronauta camina hacia una cueva',
-    aspectRatio: '16:9', // user changed it — strict must lock back to 9:16
+    aspectRatio: '16:9', // visual continuity never changes the selected format
     durationSeconds: 8,
     history,
   });
@@ -145,8 +145,8 @@ test('directVideoPrompt: strict sequel embeds anchor + locks settings', () => {
   assert.match(r.prompt, /Direct sequel to the previous shot/);
   assert.match(r.prompt, /same character, same wardrobe/);
   assert.ok(r.prompt.includes('una astronauta en marte con traje rojo'), 'anchor embedded');
-  assert.equal(r.settings.aspect_ratio, '9:16');
-  assert.ok(r.settingsLocked.includes('aspect_ratio'));
+  assert.equal(r.settings.aspect_ratio, '16:9');
+  assert.deepEqual(r.settingsLocked, []);
 });
 
 test('directVideoPrompt: style mode keeps new settings, adds universe bible', () => {
@@ -186,14 +186,14 @@ test('directVideoPrompt: re-enhancing an enhanced prompt does not stack anchors'
   assert.equal(count, 1, 'single sequel header after re-enhancement');
 });
 
-test('directVideoPrompt: prompt is capped at MAX_PROMPT_CHARS', () => {
+test('directVideoPrompt: long user instructions are preserved without generated overflow', () => {
   const longPrompt = 'una escena épica con dragones '.repeat(60);
   const r = directVideoPrompt({
     prompt: longPrompt,
     history: [{ prompt: 'un faro en una tormenta con olas gigantes y gaviotas al atardecer dorado' }],
     continuation: true,
   });
-  assert.ok(r.prompt.length <= director.MAX_PROMPT_CHARS, `len=${r.prompt.length}`);
+  assert.equal(r.prompt, longPrompt.trim());
 });
 
 test('directVideoPrompt: professionalize:false keeps user text, still adds bible on strict', () => {
@@ -273,7 +273,7 @@ test('buildFalVideoInputPayload: pixverse uses its audio switch field', () => {
 
 // ── Composition: director → locked settings → payload ─────────────────
 
-test('composition: strict continuity locks aspect in the final payload', () => {
+test('composition: strict continuity preserves selected aspect in the final payload', () => {
   const history = [{
     prompt: 'una astronauta en marte con traje rojo',
     aspect_ratio: '9:16',
@@ -299,7 +299,7 @@ test('composition: strict continuity locks aspect in the final payload', () => {
     resolution: direction.settings.resolution || '720p',
     audio: direction.settings.audio,
   });
-  assert.equal(payload.aspect_ratio, '9:16', 'locked to previous clip');
+  assert.equal(payload.aspect_ratio, '16:9', 'selected format is authoritative');
   assert.ok(payload.prompt.includes('Direct sequel to the previous shot'));
   assert.ok(payload.negative_prompt.includes('morphing'));
 });

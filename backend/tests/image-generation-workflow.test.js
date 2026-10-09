@@ -26,11 +26,12 @@ const fixtureDir = fs.mkdtemp(path.join(os.tmpdir(), 'image-handler-'));
 after(async () => fs.rm(await fixtureDir, { recursive: true, force: true }));
 const image = (color, width = 8, height = 4) => sharp({ create: { width, height, channels: 4, background: color } }).png().toBuffer();
 
-async function harness({ source = true, chatOwned = true, editable = true, user = {} } = {}) {
+async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [] } = {}) {
   const sourceBytes = await image('#de2070'); const outputBytes = await image('#1040fa');
   const sourcePath = path.join(await fixtureDir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
   const calls = { generate: [], edit: [], saves: [], messages: [], reads: 0 };
   const records = source ? { beach: { id: 'beach', filename: 'generated-beach.png', mimeType: 'image/png', path: sourcePath } } : {};
+  for (const id of references) records[id] = { id, filename: `${id}.png`, mimeType: 'image/png', path: sourcePath };
   const prisma = {
     chat: { findFirst: async () => chatOwned ? { id: 'chat', title: 'Image' } : null, update: async () => ({}) },
     file: { findFirst: async ({ where }) => records[where.id] || null },
@@ -157,4 +158,35 @@ test('remove background binds a real provider transparency parameter and rejects
   const supported = await request({ operation: 'edit', fileId: 'beach', background: 'transparent' });
   assert.ok(!supported.body.error); assert.equal(calls.edit[0].background, 'transparent');
   assert.equal(supported.body.files[0].background, 'transparent');
+});
+
+
+test('canonical edit preserves every reference and records source lineage with the explicit reply first', async () => {
+  const { request, calls, sourceBytes } = await harness({ references: ['palette', 'logo'] });
+  const res = await request({ fileId: 'beach', referenceFileIds: ['palette', 'beach', 'logo'], prompt: 'Usa el logo de la tercera imagen y los colores de la segunda' });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(calls.generate.length, 0);
+  assert.equal(calls.edit[0].referenceImages.length, 2);
+  assert.ok(calls.edit[0].referenceImages.every((image) => image.buffer.equals(sourceBytes)));
+  assert.equal(res.body.files[0].parentFileId, 'beach');
+  assert.deepEqual(Array.from(res.body.files[0].referenceFileIds), ['beach', 'palette', 'logo']);
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((file) => file.fileId), ['palette', 'logo']);
+});
+
+test('references without an explicit fileId select the first reference, never a historical source', async () => {
+  const { request, calls } = await harness({ references: ['logo', 'palette'] });
+  const res = await request({ referenceFileIds: ['logo', 'palette'], prompt: 'Diseña un anuncio profesional con estas referencias' });
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(res.body.files[0].parentFileId, 'logo');
+});
+
+test('an unavailable reference blocks generation before spending or persisting partial results', async () => {
+  const { request, calls } = await harness();
+  const res = await request({ fileId: 'beach', referenceFileIds: ['beach', 'missing'] });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.code, 'image_source_required');
+  assert.equal(calls.generate.length + calls.edit.length + calls.saves.length + calls.messages.length, 0);
 });

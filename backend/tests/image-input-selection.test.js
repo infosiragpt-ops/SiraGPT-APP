@@ -13,6 +13,7 @@ test('new generations are explicit and same-scene follow-ups require a source', 
   assert.equal(resolveImageOperation({ prompt: 'ahora 9:16' }), 'reframe');
   assert.equal(resolveImageOperation({ operation: 'edit', fileId: 'beach', prompt: 'ahora la misma imagen pero vertical porfavor' }), 'reframe');
   assert.equal(resolveImageOperation({ prompt: 'quita el fondo' }), 'edit');
+  assert.equal(resolveImageOperation({ prompt: 'anuncio profesional', referenceFileIds: ['source', 'logo'] }), 'edit');
   assert.equal(resolveImageOperation({ prompt: 'cambia el cielo', fileId: 'chosen' }), 'edit');
   assert.equal(resolveImageOperation({ operation: 'generate', prompt: 'otra imagen' }), 'generate');
   assert.throws(() => resolveImageOperation({ operation: 'unknown' }), { code: 'E_PARAMS' });

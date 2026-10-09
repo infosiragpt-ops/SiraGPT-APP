@@ -1,4 +1,5 @@
 'use strict';
+const { fileConversionTarget } = require('./conversion-intent');
 
 /**
  * Explicit Word / PPT / Excel format claims.
@@ -13,6 +14,8 @@ const CREATE_OR_WANT_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|desi
 function requestedOfficeFormat(text = '') {
   const t = String(text || '');
   if (!t.trim()) return null;
+  const conversion = fileConversionTarget(t);
+  if (conversion) return conversion === 'docx' ? 'docx' : null;
 
   const forbidExcel = /\b((?:sin|no|ni)\s+(?:convertirlo\s+a\s+)?(?:excel|xlsx))\b/i.test(t);
   const forbidPpt = /\b((?:sin|no|ni)\s+(?:convertirlo\s+a\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n(?:es)?))\b/i.test(t);

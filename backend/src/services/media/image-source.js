@@ -5,6 +5,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_REFERENCE_IMAGES = 8;
+const MAX_REFERENCE_BYTES = 40 * 1024 * 1024;
 const artifactIdFrom = (value) => String(value || '').match(/(?:^artifact:|\/api\/agent\/artifact\/)([a-f0-9]{6,64})(?:\b|$)/i)?.[1];
 const imageMime = (value) => /^image\/(png|jpeg|webp|gif|avif)$/i.test(String(value || ''));
 function messageFiles(message) {
@@ -95,23 +97,39 @@ async function resolveImageSource({ fileId, imageUrl, fileIds } = {}, ctx = {}) 
     const local = await fromUrl(imageUrl);
     if (local || /\/uploads\/|\/api\/agent\/artifact\//.test(String(imageUrl))) return local;
     if (/^https?:\/\//i.test(imageUrl)) {
+      let dispatcher;
+      let response;
       try {
-        const { assertSafeUrl } = require('../agent-harness/tools/web-fetch-tool');
-        assertSafeUrl(imageUrl);
-        const resp = await fetch(imageUrl, { redirect: 'error', signal: ctx.signal });
-        if (!resp.ok || !imageMime(resp.headers.get('content-type')?.split(';')[0])) return null;
-        if (Number(resp.headers.get('content-length')) > MAX_IMAGE_BYTES) return null;
+        const { assertSafeUrl, createPinnedDispatcher } = require('../agent-harness/tools/web-fetch-tool');
+        const { resolveAndAssertSafe } = require('../connectors/web-fetch');
+        const parsed = assertSafeUrl(imageUrl);
+        // Validate every DNS address, then pin the connection to those exact
+        // public addresses. A second resolver lookup must not reach a private
+        // host after the initial safety check (DNS rebinding).
+        const addresses = await resolveAndAssertSafe(parsed.hostname, ctx.lookup);
+        dispatcher = createPinnedDispatcher(parsed.hostname, addresses);
+        const fetchImage = ctx.fetch || require('undici').fetch;
+        response = await fetchImage(imageUrl, { dispatcher, redirect: 'error', signal: ctx.signal || AbortSignal.timeout(15000) });
+        if (!response.ok || !imageMime(response.headers.get('content-type')?.split(';')[0])) return null;
+        if (Number(response.headers.get('content-length')) > MAX_IMAGE_BYTES) return null;
         const chunks = []; let total = 0;
-        for await (const chunk of resp.body) { total += chunk.length; if (total > MAX_IMAGE_BYTES) return null; chunks.push(chunk); }
-        return total ? { buffer: Buffer.concat(chunks), mimeType: resp.headers.get('content-type').split(';')[0], source: imageUrl } : null;
+        for await (const chunk of response.body) { total += chunk.length; if (total > MAX_IMAGE_BYTES) return null; chunks.push(chunk); }
+        return total ? { buffer: Buffer.concat(chunks), mimeType: response.headers.get('content-type').split(';')[0], source: imageUrl } : null;
       } catch { return null; }
+      finally {
+        // Early MIME/size failures must release the body before closing the
+        // dispatcher; otherwise a slow or infinite response can hold the job.
+        if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
+        if (dispatcher) await dispatcher.close().catch(() => {});
+      }
     }
     return null;
   }
   const attachments = fileIds || ctx.fileIds;
   if (Array.isArray(attachments) && attachments.length && prisma?.file?.findMany) {
     const records = await prisma.file.findMany({ where: { id: { in: attachments.map(String) }, userId, deletedAt: null } });
-    const image = records.find((record) => imageMime(record.mimeType));
+    const image = attachments.map((id) => records.find((record) => String(record.id) === String(id)))
+      .find((record) => record && imageMime(record.mimeType));
     if (image) return fromRecord(image);
     return null;
   }
@@ -130,4 +148,45 @@ async function resolveImageSource({ fileId, imageUrl, fileIds } = {}, ctx = {}) 
   return null;
 }
 
-module.exports = { resolveImageSource, messageFiles, MAX_IMAGE_BYTES };
+/** Resolve every explicitly supplied reference in caller order. Never silently
+ * drop a missing reference, or replace it with an unrelated historical image. */
+async function resolveImageSources({ fileId, referenceFileIds, imageUrl } = {}, ctx = {}) {
+  // Agent tools receive the current turn's attachments in context. Include all
+  // images automatically; documents are not image references. Keep unresolved
+  // IDs so a missing/unowned attachment produces an error instead of vanishing.
+  if (ctx.userId && referenceFileIds === undefined && Array.isArray(ctx.fileIds) && ctx.fileIds.length && ctx.prisma?.file?.findMany) {
+    const records = await ctx.prisma.file.findMany({ where: { id: { in: ctx.fileIds.map(String) }, userId: ctx.userId, deletedAt: null } });
+    referenceFileIds = ctx.fileIds.map(String).filter((id) => {
+      const record = records.find((entry) => String(entry.id) === id);
+      return !record || imageMime(record.mimeType);
+    });
+  }
+  if (referenceFileIds !== undefined && (!Array.isArray(referenceFileIds)
+    || referenceFileIds.some((id) => typeof id !== 'string' || !id.trim() || id.length > 160))) {
+    throw Object.assign(new Error('Las referencias de imagen no son válidas.'), { code: 'E_PARAMS', status: 400 });
+  }
+  const ids = [...new Set([fileId, ...(referenceFileIds || [])].filter(Boolean))];
+  const explicitUrl = !fileId && Boolean(imageUrl);
+  if (ids.length + Number(explicitUrl) > MAX_REFERENCE_IMAGES) {
+    throw Object.assign(new Error(`Puedes usar hasta ${MAX_REFERENCE_IMAGES} imágenes de referencia por edición.`), { code: 'E_PARAMS', status: 400 });
+  }
+  const sources = [];
+  let bytes = 0;
+  const inputs = [...(explicitUrl ? [{ imageUrl }] : []), ...ids.map((id) => ({ fileId: id }))];
+  if (!inputs.length) inputs.push({});
+  for (const input of inputs) {
+    const source = await resolveImageSource(input, ctx);
+    if (!source) {
+      if (!ids.length && !explicitUrl) return [];
+      throw Object.assign(new Error('No pude abrir una de las imágenes de referencia. Vuelve a adjuntarla para continuar.'), { code: 'image_source_required', status: 400 });
+    }
+    bytes += source.buffer.length;
+    if (bytes > MAX_REFERENCE_BYTES) {
+      throw Object.assign(new Error('Las imágenes de referencia superan los 40 MB. Reduce su tamaño para continuar.'), { code: 'E_PARAMS', status: 400 });
+    }
+    sources.push(source);
+  }
+  return sources;
+}
+
+module.exports = { resolveImageSource, resolveImageSources, messageFiles, MAX_IMAGE_BYTES, MAX_REFERENCE_IMAGES, MAX_REFERENCE_BYTES };

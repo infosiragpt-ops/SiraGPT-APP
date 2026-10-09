@@ -18,8 +18,7 @@
  *      - `none`   — first video, no history to anchor to.
  *      - `style`  — soft bible: same visual universe / art direction / palette.
  *      - `strict` — direct sequel: same character, wardrobe, location, style +
- *        locked capture settings (aspect, resolution, audio, model) so the
- *        next clip cuts cleanly against the previous one.
+ *        visual continuity without overriding selected model/capture controls.
  *
  * Pure, dependency-free and deterministic — safe to call from routes, the
  * agent tool and unit tests.
@@ -71,7 +70,7 @@ const CAMERA_BY_ASPECT = {
 
 const DEFAULT_NEGATIVE_PROMPT =
   'blurry, low resolution, distorted face, deformed hands, extra fingers, ' +
-  'extra limbs, morphing, flickering, watermark, logo, text overlay, subtitles, ' +
+  'extra limbs, morphing, flickering, unwanted watermark, unwanted subtitles, ' +
   'abrupt scene cuts, shaky camera, oversaturated, noisy';
 
 const QUALITY_SUFFIX =
@@ -245,6 +244,13 @@ function directVideoPrompt(opts = {}) {
 
   const base = stripPreviousDirection(rawPrompt);
   const parts = [];
+  const imageCount = Math.max(0, Math.min(12, Number(opts.imageCount) || 0));
+  const references = imageCount > 0
+    ? (/reference-to-video/.test(opts.endpoint || '')
+      ? `Visual references: ${Array.from({ length: imageCount }, (_, i) => `@Image${i + 1}`).join(', ')}.`
+      : `Use the ${imageCount === 1 ? 'attached image' : 'attached start and end images'} as visual references.`)
+      + ' Preserve subject identity, product appearance, proportions and requested branding unless the user explicitly asks to change them. Animate the supplied references instead of substituting unrelated subjects.'
+    : '';
 
   let bible = null;
   if (last) {
@@ -270,7 +276,7 @@ function directVideoPrompt(opts = {}) {
     );
   }
 
-  parts.push(base);
+  if (references) parts.unshift(references);
 
   if (professionalize) {
     parts.push(`Pacing: ${pacingForDuration(durationSeconds)}.`);
@@ -280,20 +286,14 @@ function directVideoPrompt(opts = {}) {
     parts.push(`${QUALITY_SUFFIX}.`);
   }
 
-  let directed = cleanText(parts.join(' '));
-  if (directed.length > MAX_PROMPT_CHARS) {
-    // Never truncate the user's own words: shrink the bible anchor first.
-    const overflow = directed.length - MAX_PROMPT_CHARS;
-    if (bible && overflow < bible.anchor.length) {
-      const shorter = bible.anchor.slice(0, bible.anchor.length - overflow - 3).trim();
-      directed = directed.replace(bible.anchor, `${shorter}…`);
-      bible.anchor = `${shorter}…`;
-    } else {
-      directed = directed.slice(0, MAX_PROMPT_CHARS).trim();
-    }
-  }
+  // User text is binding. Bound generated guidance, never slice instructions
+  // from a long brief (especially corrections often written at its end).
+  const guidance = cleanText(parts.join(' '));
+  const remaining = Math.max(0, MAX_PROMPT_CHARS - base.length - 1);
+  const directed = cleanText([base, guidance.slice(0, remaining)].filter(Boolean).join(' '));
 
-  // Capture settings: strict mode locks them to the previous clip so cuts match.
+  // Continuity describes subjects/style. Controls selected for this request
+  // remain authoritative, including the provider and audio on/off.
   const settingsLocked = [];
   const settings = {
     aspect_ratio: aspectRatio,
@@ -301,18 +301,6 @@ function directVideoPrompt(opts = {}) {
     audio,
     model: opts.endpoint || opts.modelName || null,
   };
-  if (mode === 'strict' && last) {
-    for (const key of ['aspect_ratio', 'resolution', 'audio', 'model']) {
-      const prev = key === 'aspect_ratio' ? last.aspect_ratio
-        : key === 'resolution' ? last.resolution
-        : key === 'audio' ? last.audio
-        : last.model;
-      if (prev !== null && prev !== undefined && prev !== settings[key]) {
-        settings[key] = prev;
-        settingsLocked.push(key);
-      }
-    }
-  }
 
   return {
     prompt: directed,

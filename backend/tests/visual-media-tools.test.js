@@ -4257,3 +4257,40 @@ test('create_empathy_map: truncated persona does not split an XML entity', async
 test.after(() => {
   try { fs.rmSync(ARTIFACT_DIR, { recursive: true, force: true }); } catch {}
 });
+
+test('edit_image: all explicit references reach the pinned editor and stay in artifact lineage', async () => {
+  const engine = require(path.join(SERVICE_DIR, 'media/image-engine'));
+  const originalEdit = engine.editImage;
+  const captured = [];
+  const records = {};
+  for (const id of ['subject', 'palette', 'logo']) {
+    const filePath = path.join(ARTIFACT_DIR, `ref-${id}.png`);
+    fs.writeFileSync(filePath, `pixels-${id}`);
+    records[id] = { id, path: filePath, filename: `${id}.png`, mimeType: 'image/png' };
+  }
+  const prisma = {
+    chat: { findFirst: async () => ({ id: 'test-chat' }) },
+    message: { findMany: async () => [] },
+    file: { findFirst: async ({ where }) => where.userId === 'test-user' ? records[where.id] : null },
+  };
+  engine.editImage = async (spec) => { captured.push(spec); return originalEdit(spec); };
+  try {
+    const result = await tool('edit_image').execute({
+      instruction: 'Transforma el producto con el logo y los colores referenciales',
+      fileId: 'subject', referenceFileIds: ['palette', 'logo'],
+    }, fakeCtx({ prisma, imageModel: 'selected-model', imageProvider: 'selected-provider' }));
+    assert.equal(result.ok, true, result.error);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].imageBuffer.toString(), 'pixels-subject');
+    assert.deepEqual(captured[0].referenceImages.map((image) => image.buffer.toString()), ['pixels-palette', 'pixels-logo']);
+    assert.equal(captured[0].model, 'selected-model');
+    assert.equal(captured[0].provider, 'selected-provider');
+    assert.deepEqual(result.referenceFileIds, ['subject', 'palette', 'logo']);
+    const metadata = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${result.id}.json`), 'utf8'));
+    assert.deepEqual(metadata.referenceFileIds, ['subject', 'palette', 'logo']);
+    const missing = await tool('edit_image').execute({ instruction: 'edita', fileId: 'subject', referenceFileIds: ['missing'] }, fakeCtx({ prisma }));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.code, 'image_source_required');
+    assert.equal(captured.length, 1);
+  } finally { engine.editImage = originalEdit; }
+});
