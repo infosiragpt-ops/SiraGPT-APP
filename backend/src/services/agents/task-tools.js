@@ -708,7 +708,7 @@ const createDocument = {
     + 'PROFESSIONAL-DESIGN REQUIREMENTS (the user receives this file as a finished deliverable — style it like a person would by hand): '
     + 'XLSX (openpyxl): dark header fill (PatternFill solid 0F172A) with white bold font, ws.freeze_panes="A2", ws.auto_filter.ref over the data range, real column widths (ws.column_dimensions), number_format per column ("#,##0.00" money, "#,##0" counts, "dd/mm/yyyy" dates), zebra striping optional; KPIs/totals as REAL formulas (=SUM/AVERAGE), never hardcoded results. '
     + 'DOCX (python-docx): a real title (Heading 0/Title) — NEVER echo the user instruction as title —, body 11-12pt, headings per section, tables with header shading; no filler or meta text ("generado por", placeholders). '
-    + 'PPTX (python-pptx): fill the canvas — no half-empty slides; titles ≤8 words; one idea per slide. '
+    + 'PPTX (python-pptx): use precise slide coordinates, a consistent grid and intentional whitespace. Prefer portable fonts (Arial), 30-44pt titles, 16-24pt body and at least 9pt captions. Fit text by reflowing or resizing boxes, never by clipping, deleting requested content or unlimited shrinking. Keep charts and text editable. Respect the source deck and only redesign when asked. Inspect the saved file; if the design audit rejects it, repair the reported slide/shape and recreate before finalize. '
     + 'ALL: content must be topic-specific and realistic; never lorem/sample filler; Spanish accents intact. '
     + 'FILENAMES & TITLES: derive them from the CORE TOPIC only — delivery conditions (counts like "10 láminas", courtesy like "porfavor", quality words like "profesional") are instructions to honour, never part of names, titles or content.',
   parameters: {
@@ -819,11 +819,9 @@ const createDocument = {
     ctx.onEvent?.({ type: 'stage', label: 'Procesando archivo generado', pct: 85 });
     const raw = fs.readFileSync(tmpOut);
 
-    // Heuristic validation is now advisory: it runs, but it does NOT
-    // short-circuit. The TaskContract deterministic tests are the
-    // authoritative gate; without them we fall back to the heuristic
-    // pass/fail, but we always collect the contract feedback first so
-    // the agent's tool_result carries a concrete repair hint.
+    // Content heuristics may defer to the task contract. Invalid PPTX design
+    // and unreadable binaries do not: a content contract cannot approve an
+    // invisible presentation. Return evidence for the existing repair loop.
     let validation = null;
     let validationError = null;
     try {
@@ -834,12 +832,16 @@ const createDocument = {
     }
 
     const hasContract = ctx.taskContract && Array.isArray(ctx.taskContract.success_tests) && ctx.taskContract.success_tests.length > 0;
-    if ((!hasContract || ext === 'sav') && validationError) {
-      // Legacy path (no contract): keep the old hard-fail on heuristic.
+    const needsPptxDesignRepair = ext === 'pptx' && validation?.checks?.designSafety !== true;
+    if ((!hasContract || ext === 'sav' || needsPptxDesignRepair) && validationError) {
       try { fs.unlinkSync(tmpOut); } catch { /* best effort */ }
       const payload = {
         ok: false,
-        error: validationError,
+        error: needsPptxDesignRepair ? 'La presentación tiene problemas de diseño que deben corregirse.' : validationError,
+        ...(needsPptxDesignRepair ? {
+          code: 'E_PARAMS',
+          repairHint: 'Corrige los objetos indicados en validation.details.designAudit.issues (diapositiva y shapeId): conserva el contenido, coloca el texto dentro del lienzo, usa tamaños legibles y contraste visible. Recrea el archivo y verifica antes de finalizar.',
+        } : {}),
         validation,
         stderr: previewText(r.stderr || '', 1200),
         stdout: previewText(r.stdout || '', 600),
@@ -848,7 +850,9 @@ const createDocument = {
         type: 'tool_output',
         tool: 'create_document',
         ok: false,
-        preview: `${validationError}. Regenera el archivo con estructura profesional y vuelve a verificar.`,
+        preview: needsPptxDesignRepair
+          ? 'Corrigiendo el diseño: el archivo todavía no está listo para entregar.'
+          : `${validationError}. Regenera el archivo con estructura profesional y vuelve a verificar.`,
       });
       return payload;
     }

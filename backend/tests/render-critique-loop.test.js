@@ -55,7 +55,7 @@ test('critiqueRenderedPages parses the model JSON and clamps defects', async (t)
     }),
   });
   const report = await critiqueRenderedPages(
-    [{ page: 1, png: Buffer.from('png') }],
+    [{ page: 1, png: Buffer.from('png') }, { page: 2, png: Buffer.from('png') }],
     { env: { ANTHROPIC_API_KEY: 'k' } },
   );
   assert.equal(report.overall, 'needs_work');
@@ -67,4 +67,57 @@ test('critiqueRenderedPages parses the model JSON and clamps defects', async (t)
 
 test('critiqueRenderedPages returns null without a key (caller skips)', async () => {
   assert.equal(await critiqueRenderedPages([{ page: 1, png: Buffer.alloc(1) }], { env: {} }), null);
+});
+
+const { applyPptxVisualReview } = require('../src/services/document-pipeline/pptx-visual-review');
+const validDeck = () => ({ passed: true, checks: { designSafety: true }, details: { slides: 14 } });
+
+test('PPTX visual QA distinguishes unavailable, partial and complete inspection', () => {
+  const unavailable = applyPptxVisualReview(validDeck(), { skipped: true, reason: 'private provider error' });
+  assert.equal(unavailable.details.visualCritique.status, 'not_checked');
+  assert.equal(unavailable.passed, true, 'static checks remain independent');
+  assert.equal(unavailable.details.visualCritique.pagesRendered, 0);
+  assert.doesNotMatch(JSON.stringify(unavailable), /private provider/);
+  const result = { skipped: false, pagesRendered: 10, totalPages: 14, report: { overall: 'pass', defects: [], model: 'internal-only' } };
+  assert.equal(applyPptxVisualReview(validDeck(), result).details.visualCritique.status, 'partial');
+  const full = applyPptxVisualReview(validDeck(), { ...result, pagesRendered: 14 });
+  assert.equal(full.details.visualCritique.status, 'passed');
+  assert.doesNotMatch(JSON.stringify(full), /internal-only/);
+});
+
+test('PPTX visual defects block approval even when static checks passed', () => {
+  const blocked = applyPptxVisualReview(validDeck(), {
+    skipped: false, pagesRendered: 10, totalPages: 14,
+    report: { overall: 'pass', defects: [{ page: 4, severity: 'high', defect: 'Título cortado' }] },
+  });
+  assert.equal(blocked.passed, false);
+  assert.equal(blocked.checks.visualReview, false);
+  assert.equal(blocked.details.visualCritique.status, 'needs_work');
+  assert.equal(blocked.details.visualCritique.defects[0].page, 4);
+  const staticFailure = applyPptxVisualReview({ ...validDeck(), passed: false }, {
+    skipped: false, pagesRendered: 14, totalPages: 14, report: { overall: 'pass', defects: [] },
+  });
+  assert.equal(staticFailure.passed, false, 'vision does not override the structural gate');
+});
+
+test('vision critique ignores defect page numbers absent from the inspected batch', async (t) => {
+  const savedFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = savedFetch; });
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ type: 'text', text: JSON.stringify({
+    overall: 'needs_work', defects: [{ page: 99, defect: 'not inspected' }, { page: 1, defect: 'visible' }],
+  }) }] }) });
+  const report = await critiqueRenderedPages([{ page: 1, png: Buffer.alloc(1) }], { env: { ANTHROPIC_API_KEY: 'k' } });
+  assert.deepEqual(report.defects.map((defect) => defect.page), [1]);
+});
+
+
+test('malformed vision JSON is unavailable, not an invented design rejection', async (t) => {
+  const savedFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = savedFetch; });
+  for (const response of [{}, { overall: 'unexpected', defects: [] }, { overall: 'needs_work', defects: [] }, { overall: 'pass' }, { overall: 'pass', defects: [null] }]) {
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ content: [{ type: 'text', text: JSON.stringify(response) }] }) });
+    assert.equal(await critiqueRenderedPages([{ page: 1, png: Buffer.alloc(1) }], { env: { ANTHROPIC_API_KEY: 'k' } }), null);
+  }
+  assert.equal(applyPptxVisualReview(validDeck(), { skipped: false, pagesRendered: 14, report: {} }).details.visualCritique.status, 'not_checked');
+  assert.equal(applyPptxVisualReview(validDeck(), { skipped: false, pagesRendered: 10, totalPages: 10, report: { overall: 'pass', defects: [] } }).details.visualCritique.status, 'partial');
 });

@@ -121,3 +121,22 @@ slide.notes_slide.notes_text_frame.text = 'Guion del presentador…'
   sync; if you patch XML manually, update `p:sldIdLst`, the slide's
   `[Content_Types].xml` override and its `_rels` entry together.
 - Images live in `ppt/media/`; reuse relationship ids when swapping.
+
+
+## New decks and explicitly requested redesign
+- Start with the audience, one message per slide, a consistent grid and intentional
+  whitespace. Use precise coordinates in the actual slide dimensions.
+- Prefer portable fonts. Aim for 30–44 pt titles, 16–24 pt body, and at least 9 pt
+  captions; avoid shrinking all text to make an overloaded slide fit.
+- Measure or render long text. Enlarge the box, reflow the layout or split content
+  while respecting an exact requested slide count. Never silently omit content.
+- Keep text, shapes, tables and charts editable; preserve chart data and notes.
+- Reopen the saved PPTX. The static design audit can report slide/shape identifiers
+  for invisible text, invalid geometry or tiny fonts. Fix those objects and run
+  the check again before delivering; a task-content check cannot waive this gate.
+- When a renderer is available, inspect the actual exported slides, including the
+  last slide. Fix clipped text, accidental overlaps and poor contrast. Record
+  which slides were checked. A static pass or a partial render is not proof that
+  every slide was visually inspected; state unperformed checks accurately.
+- For uploaded decks, the surgical preservation rules above still apply. A local
+  text correction does not authorize a global redesign.

@@ -22,6 +22,8 @@ const ExcelJS = require('exceljs');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
 const { runRenderCritique } = require('./render-critique-loop');
+const { auditPptxDesign } = require('./pptx-design-audit');
+const { applyPptxVisualReview } = require('./pptx-visual-review');
 const { parseDocumentRequest } = require('./content/parse-document-request');
 const { buildPptxContentPlan, hasGenericPlaceholderText } = require('./pptx-content-planner');
 const { pickPptxTheme, pickChartType } = require('./pptx-design-system');
@@ -1310,6 +1312,7 @@ function validatePptx(buffer, expected = {}) {
   const requiredTerms = Array.isArray(expected.requiredTerms) ? expected.requiredTerms.filter(Boolean) : [];
   const normalizedReadable = normalizeForQuality(readableText);
   const minimumWords = Math.max(30, slideEntries.length * 22);
+  const designAudit = auditPptxDesign(buffer);
   const checks = {
     zipOpen: entries.length > 8,
     presentation: entries.includes('ppt/presentation.xml'),
@@ -1324,6 +1327,7 @@ function validatePptx(buffer, expected = {}) {
     requiredTerms: requiredTerms.every((term) => normalizedReadable.includes(normalizeForQuality(term))),
     promptFidelity: expected.promptFidelity !== false,
     layout: entries.includes('ppt/theme/theme1.xml'),
+    designSafety: designAudit.passed,
   };
   return {
     format: 'pptx',
@@ -1337,11 +1341,13 @@ function validatePptx(buffer, expected = {}) {
       contentDensity: checks.text && checks.contentSpecific,
       notes: checks.notes,
       theme: checks.layout,
+      designSafety: checks.designSafety,
     }),
     details: {
       entries: entries.length,
       slides: slideEntries.length,
       expectedSlides: expected.exactSlides || null,
+      designAudit,
       slideTitles,
       requiredTerms,
     },
@@ -1464,7 +1470,7 @@ function validateDocument({ format, buffer, expected = {} }) {
   }
   const integrityScore = buffer?.length ? Math.min(100, Math.round(buffer.length / 200)) : 0;
   const overallScore = Math.round((result.technicalScore * 0.5) + (result.qualityScore * 0.35) + (integrityScore * 0.15));
-  const blockingPptxChecks = ['exactSlideCount', 'promptFidelity', 'requiredTerms', 'uniqueTitles'];
+  const blockingPptxChecks = ['exactSlideCount', 'promptFidelity', 'requiredTerms', 'uniqueTitles', 'designSafety'];
   const hasBlockingFailure = format === 'pptx'
     && blockingPptxChecks.some((name) => result.checks?.[name] === false);
   return {
@@ -2367,301 +2373,208 @@ async function buildCoverAccentPng(accent = '2E7D32', accent2 = '66BB6A') {
 }
 
 async function buildPptx(plan, outputPath) {
+  const { CANVAS, assertFrame, addMeasuredText, fitText } = require('./pptx-layout');
   const fallbackPlan = buildPptxContentPlan({
-    title: plan.title,
-    prompt: plan.userRequest || plan.title,
-    template: plan.template,
-    sections: plan.sections,
-    blocks: plan.blocks,
-    referenceBriefs: plan.referenceBriefs,
+    title: plan.title, prompt: plan.userRequest || plan.title, template: plan.template,
+    sections: plan.sections, blocks: plan.blocks, referenceBriefs: plan.referenceBriefs,
   });
-  const rawContentPlan = (plan.slidePlan && Array.isArray(plan.slidePlan.slides) && plan.slidePlan.slides.length > 0)
-    ? plan.slidePlan
-    : fallbackPlan;
+  const rawContentPlan = plan.slidePlan?.slides?.length ? plan.slidePlan : fallbackPlan;
   const contentPlan = attachSourceCitations(reconcilePptxPlan(rawContentPlan, {
-    slideTarget: plan.slideTarget,
-    fallbackSlides: fallbackPlan.slides,
+    slideTarget: plan.slideTarget, fallbackSlides: fallbackPlan.slides,
     requiredItems: plan.presentationBrief?.mustInclude,
   }), { referenceBriefs: plan.referenceBriefs });
   assertChartPresent(plan.userRequest, contentPlan.slides);
   plan.slidePlan = contentPlan;
   const theme = pickPptxTheme({
-    template: plan.template,
-    prompt: plan.userRequest || plan.title,
-    themeId: plan.presentationTheme,
+    template: plan.template, prompt: plan.userRequest || plan.title, themeId: plan.presentationTheme,
   });
   const tokens = theme.palette;
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE';
-  pptx.author = 'siraGPT Document Pipeline';
+  pptx.author = 'SiraGPT';
   pptx.title = plan.title;
   pptx.subject = plan.template;
-  pptx.company = 'siraGPT';
-  pptx.theme = {
-    headFontFace: theme.fonts.display,
-    bodyFontFace: theme.fonts.body,
-    lang: 'es-ES',
+  pptx.company = 'SiraGPT';
+  pptx.theme = { headFontFace: theme.fonts.display, bodyFontFace: theme.fonts.body, lang: 'es-ES' };
+  let pageNumber = 0;
+  const measurements = [];
+  const text = (target, value, options) => {
+    if (value == null || value === '') return;
+    const result = addMeasuredText(target, value, {
+      fontFace: theme.fonts.body, color: tokens.body, ...options,
+    }, { slideNumber: pageNumber });
+    measurements.push({ slide: pageNumber, ...result });
   };
-  const palette = {
-    bg: tokens.bg,
-    dark: tokens.ink,
-    body: tokens.body,
-    accent: tokens.accent,
-    cyan: tokens.accent2,
-    muted: tokens.muted,
-    white: tokens.surface,
-    surface: tokens.surface,
-    surfaceAlt: tokens.surfaceAlt,
-    line: tokens.line,
-    chipLine: tokens.chipLine,
+  const shape = (target, type, options) => {
+    assertFrame(options, { slideNumber: pageNumber });
+    target.addShape(type, options);
   };
-  const addTitle = (slide, title, subtitle) => {
-    slide.background = { color: palette.bg };
-    slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: palette.bg }, line: { color: palette.bg } });
-    slide.addShape(pptx.ShapeType.arc, { x: 10.9, y: 0, w: 2.35, h: 2.35, line: { color: palette.cyan, transparency: 30 }, fill: { color: palette.surfaceAlt, transparency: 10 } });
-    slide.addText(title, { x: 0.65, y: 0.62, w: 10.4, h: 0.9, fontFace: theme.fonts.display, fontSize: 34, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
-    if (subtitle) slide.addText(subtitle, { x: 0.67, y: 1.48, w: 8.8, h: 0.36, fontSize: 15, color: palette.muted, margin: 0 });
+  const newSlide = (background = tokens.bg) => {
+    pageNumber += 1;
+    const target = pptx.addSlide();
+    target.background = { color: background };
+    return target;
   };
-  const formatBullet = (bullet) => {
-    if (!bullet) return '';
-    const label = bullet.label ? `${bullet.label}: ` : '';
-    return `• ${label}${bullet.text || ''}`;
+  const panel = (target, frame, color = tokens.surfaceAlt) => shape(target, pptx.ShapeType.roundRect, {
+    ...frame, radius: 0.12, rectRadius: 0.12,
+    fill: { color }, line: { color: tokens.line, width: 0.6 },
+  });
+  const title = (target, value, kicker = '') => {
+    // Keep the semantic slide title first in OOXML for existing validators.
+    text(target, value, { x: 0.72, y: 0.68, w: 11.9, h: 1.08, fontFace: theme.fonts.display, fontSize: 36, minFontSize: 28, bold: true, color: tokens.ink });
+    text(target, kicker, { x: 0.72, y: 0.28, w: 11.9, h: 0.25, fontSize: 11, bold: true, color: tokens.accent });
   };
-  const coverDescriptor = ({
-    business: 'Estrategia, operación y resultados',
-    legal: 'Decisiones, obligaciones y riesgos',
-    academic: 'Argumento, evidencia y conclusiones',
-    education: 'Conceptos, práctica y aprendizaje',
-    premium: 'Contexto, decisiones y próximos pasos',
-  })[plan.template] || 'Contexto, decisiones y próximos pasos';
-  let slide = pptx.addSlide();
-  slide.background = { color: tokens.coverBg };
-  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: tokens.coverBg }, line: { color: tokens.coverBg } });
-  slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.22, h: 7.5, fill: { color: palette.accent }, line: { color: palette.accent } });
-  slide.addText(theme.eyebrow, { x: 0.8, y: 0.75, w: 5.8, h: 0.3, fontSize: 11, color: palette.accent, bold: true, charSpace: 2 });
-  slide.addText(plan.title, { x: 0.78, y: 1.32, w: 9.3, h: 1.55, fontFace: theme.fonts.display, fontSize: 44, bold: true, color: tokens.coverInk, margin: 0, fit: 'shrink' });
-  slide.addText(contentPlan.thesis, { x: 0.82, y: 3.05, w: 7.8, h: 1.0, fontSize: 19, color: tokens.coverMuted, fit: 'shrink' });
-  slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y: 4.45, w: 3.45, h: 0.52, rectRadius: 0.09, fill: { color: palette.surface }, line: { color: palette.line } });
-  slide.addText(coverDescriptor, { x: 1.02, y: 4.59, w: 3.05, h: 0.2, fontSize: 11, bold: true, color: palette.dark, margin: 0 });
-  slide.addShape(pptx.ShapeType.arc, { x: 9.2, y: 0.85, w: 3.1, h: 3.1, line: { color: palette.cyan, transparency: 25 }, fill: { color: palette.surfaceAlt, transparency: 8 } });
-  const coverAccent = await buildCoverAccentPng(palette.accent, palette.cyan);
-  slide.addImage({ data: `data:image/png;base64,${coverAccent.toString('base64')}`, x: 10.35, y: 4.45, w: 1.7, h: 1.7 });
-  slide.addNotes(`Portada. Presentar el propósito central: ${contentPlan.thesis}`);
+  const footer = (target, citations = []) => {
+    const sources = citations.filter(Boolean);
+    text(target, sources.length ? `Evidencia: ${sources.join(' · ')}` : '', {
+      x: 0.72, y: 6.96, w: 10.9, h: 0.39, fontSize: 10.5, color: tokens.muted,
+    });
+    text(target, String(pageNumber).padStart(2, '0'), {
+      x: 11.95, y: 7.05, w: 0.65, h: 0.24, fontSize: 11, color: tokens.muted, align: 'right',
+    });
+  };
+  const notes = (target, value) => target.addNotes(String(value || ''));
+  const contentFrame = { x: 0.72, y: 2.02, w: 11.9, h: 4.58 };
+  const itemText = (item) => typeof item === 'string' ? item : [item?.label, item?.text].filter(Boolean).join(': ');
+  const contentError = (message) => {
+    const error = new Error(`La diapositiva ${pageNumber}: ${message}`);
+    error.code = 'PPTX_TEXT_OVERFLOW';
+    throw error;
+  };
+
+  let slide = newSlide(tokens.coverBg);
+  text(slide, plan.title, {
+    x: 0.8, y: 1.18, w: 10.5, h: 2.1, fontFace: theme.fonts.display,
+    fontSize: 46, minFontSize: 36, bold: true, color: tokens.coverInk,
+  });
+  text(slide, contentPlan.thesis, {
+    x: 0.82, y: 3.64, w: 8.5, h: 1.4, fontSize: 22, minFontSize: 18, color: tokens.coverMuted,
+  });
+  // Background art stays secondary; title, body and charts remain native.
+  const coverAccent = await buildCoverAccentPng(tokens.accent, tokens.accent2);
+  slide.addImage({ data: `data:image/png;base64,${coverAccent.toString('base64')}`, x: 10.3, y: 4.65, w: 1.9, h: 1.9 });
+  notes(slide, contentPlan.thesis);
 
   if (contentPlan.manifest.includeAgenda) {
-    slide = pptx.addSlide();
-    addTitle(slide, 'Agenda', 'Ruta de la presentación');
-  // Fill the canvas: ≥5 items flow into two balanced columns (the previous
-  // single half-width column left the right 50% of the slide empty — the
-  // "half-empty deck" the user flagged). ≤4 items keep one column plus a
-  // thesis panel on the right so the slide still reads full.
-  const agendaItems = contentPlan.agenda.slice(0, 8);
-  const twoColAgenda = agendaItems.length >= 5;
-  const perCol = twoColAgenda ? Math.ceil(agendaItems.length / 2) : agendaItems.length;
-  agendaItems.forEach((s, i) => {
-    const col = twoColAgenda ? Math.floor(i / perCol) : 0;
-    const row = twoColAgenda ? i % perCol : i;
-    const x = 0.9 + col * 6.15;
-    const rowH = twoColAgenda ? 0.72 : 0.62;
-    const y = 2.05 + row * rowH;
-    slide.addText(String(i + 1).padStart(2, '0'), { x, y: y + 0.06, w: 0.42, h: 0.3, fontSize: 11, bold: true, color: palette.accent, margin: 0 });
-    slide.addText(s, { x: x + 0.58, y, w: twoColAgenda ? 5.15 : 7.1, h: 0.36, fontSize: 16, color: palette.dark, bold: i === 0, fit: 'shrink' });
-    slide.addShape(pptx.ShapeType.rect, { x: x + 0.02, y: y + 0.44, w: twoColAgenda ? 5.6 : 7.5, h: 0.01, fill: { color: palette.line, transparency: 15 }, line: { color: palette.line, transparency: 100 } });
-  });
-  if (!twoColAgenda && contentPlan.thesis) {
-    slide.addShape(pptx.ShapeType.roundRect, { x: 8.55, y: 2.05, w: 4.0, h: 3.2, rectRadius: 0.1, fill: { color: palette.surfaceAlt }, line: { color: palette.chipLine } });
-    slide.addShape(pptx.ShapeType.rect, { x: 8.55, y: 2.05, w: 0.09, h: 3.2, fill: { color: palette.accent }, line: { color: palette.accent } });
-    slide.addText('TESIS DE LA PRESENTACIÓN', { x: 8.82, y: 2.3, w: 3.5, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
-    slide.addText(contentPlan.thesis, { x: 8.82, y: 2.66, w: 3.5, h: 2.35, fontSize: 16, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
-  }
-  slide.addNotes('Explicar la ruta de navegación y anticipar que cada lámina aterriza una decisión o aprendizaje.');
-  }
-
-  // ── Láminas de contenido — layouts profesionales por tipo ────────────
-  // El diseñador LLM marca cada slide con un layout; el plan heurístico
-  // legado (sin layout) renderiza como 'bullets' y solo muestra gráfico si
-  // trae métricas propias — nunca datos decorativos inventados.
-  const totalSlides = contentPlan.slides.length;
-  const addFooter = (target, pageIndex, slideSpec = {}) => {
-    const citations = Array.isArray(slideSpec.sourceCitations) ? slideSpec.sourceCitations.filter(Boolean).slice(0, 3) : [];
-    target.addShape(pptx.ShapeType.rect, { x: 0, y: 7.18, w: 13.333, h: 0.02, fill: { color: palette.line }, line: { color: palette.line, transparency: 100 } });
-    target.addText(contentPlan.topic || plan.title, { x: 0.65, y: 7.24, w: citations.length ? 4.6 : 6.4, h: 0.2, fontSize: 9, color: palette.muted, margin: 0 });
-    if (citations.length) {
-      target.addText(`Evidencia: ${citations.join(' · ')}`, { x: 5.2, y: 7.24, w: 6.5, h: 0.2, fontSize: 8.5, bold: true, color: palette.accent, align: 'right', margin: 0 });
-    }
-    target.addText(`${pageIndex}`, { x: 12.45, y: 7.24, w: 0.5, h: 0.2, fontSize: 9, color: palette.muted, align: 'right', margin: 0 });
-  };
-  const addTakeaway = (target, text) => {
-    if (!text) return;
-    target.addShape(pptx.ShapeType.roundRect, { x: 8.35, y: 2.05, w: 4.15, h: 1.9, rectRadius: 0.1, fill: { color: palette.surfaceAlt }, line: { color: palette.chipLine } });
-    target.addShape(pptx.ShapeType.rect, { x: 8.35, y: 2.05, w: 0.09, h: 1.9, fill: { color: palette.accent }, line: { color: palette.accent } });
-    target.addText('IDEA CLAVE', { x: 8.62, y: 2.28, w: 3.6, h: 0.22, fontSize: 9.5, bold: true, color: palette.accent, charSpace: 1.5, margin: 0 });
-    target.addText(text, { x: 8.62, y: 2.62, w: 3.66, h: 1.2, fontSize: 13.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0 });
-  };
-  const addReferencesSlide = () => {
-    const references = (contentPlan.references || []).slice(0, 12);
-    if (!contentPlan.manifest.includeReferences || references.length === 0) return;
-    slide = pptx.addSlide();
-    addTitle(slide, 'Material de referencia', 'Fuentes incorporadas al guion y a las citas visibles');
-    const columnCount = references.length > 6 ? 2 : 1;
-    const rowsPerColumn = Math.ceil(references.length / columnCount);
-    const rowHeight = Math.min(0.84, 4.9 / Math.max(1, rowsPerColumn));
-    references.forEach((ref, index) => {
-      const column = Math.floor(index / rowsPerColumn);
-      const row = index % rowsPerColumn;
-      const x = 0.82 + column * 6.22;
-      const y = 1.92 + row * rowHeight;
-      slide.addText(`${index + 1}. ${String(ref.name || '').replace(/\.txt$/i, '')}`, {
-        x, y, w: columnCount === 1 ? 5.45 : 5.65, h: 0.3,
-        fontSize: columnCount === 1 ? 14 : 12.5, bold: true, color: palette.dark, fit: 'shrink', margin: 0,
-      });
-      slide.addText(referenceDisplayExcerpt(ref, columnCount === 1 ? 220 : 145) || 'Sin metadatos estructurados disponibles.', {
-        x: columnCount === 1 ? x + 5.55 : x,
-        y: columnCount === 1 ? y - 0.02 : y + 0.34,
-        w: columnCount === 1 ? 5.95 : 5.65,
-        h: columnCount === 1 ? 0.5 : Math.max(0.28, rowHeight - 0.39),
-        fontSize: columnCount === 1 ? 11.5 : 9.5,
-        color: palette.muted, fit: 'shrink', margin: 0,
-      });
+    slide = newSlide();
+    title(slide, 'Agenda');
+    const items = contentPlan.agenda || [];
+    const columns = items.length > 5 ? 2 : 1;
+    const rows = Math.ceil(items.length / columns);
+    const rowHeight = Math.min(0.82, contentFrame.h / Math.max(1, rows));
+    items.forEach((item, index) => {
+      const column = Math.floor(index / rows);
+      const row = index % rows;
+      const x = 0.72 + column * 6.12;
+      const y = contentFrame.y + row * rowHeight;
+      text(slide, String(index + 1).padStart(2, '0'), { x, y, w: 0.5, h: 0.3, fontSize: 12, bold: true, color: tokens.accent });
+      text(slide, item, { x: x + 0.65, y, w: columns === 1 ? 10.9 : 5.05, h: rowHeight - 0.15, fontSize: 18, minFontSize: 14, color: tokens.ink });
     });
-    slide.addNotes('Cerrar con la trazabilidad de las fuentes utilizadas y recomendar la consulta del texto completo.');
-  };
+    notes(slide, items.join('\n'));
+    footer(slide);
+  }
 
-  const contentStartPage = 1 + (contentPlan.manifest.includeAgenda ? 1 : 0);
-
-  for (const [i, slideSpec] of contentPlan.slides.entries()) {
-    const layout = slideSpec.layout || 'bullets';
-    slide = pptx.addSlide();
-    const pageIndex = contentStartPage + i + 1;
-
+  for (const [index, spec] of contentPlan.slides.entries()) {
+    const layout = spec.layout || 'bullets';
+    slide = newSlide(layout === 'section' ? tokens.sectionBg : tokens.bg);
     if (layout === 'section') {
-      // Divider with presence: giant translucent section number, kicker,
-      // title, summary and a progress rail. The previous shape was a lone
-      // title floating on a dark canvas — read as unfinished.
-      const sectionNumber = String((contentPlan.slides.slice(0, i).filter((s) => (s.layout || '') === 'section').length + 1)).padStart(2, '0');
-      slide.background = { color: tokens.sectionBg };
-      slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 7.5, fill: { color: tokens.sectionBg }, line: { color: tokens.sectionBg } });
-      slide.addText(sectionNumber, { x: 8.7, y: 0.9, w: 4.3, h: 3.4, fontFace: theme.fonts.display, fontSize: 200, bold: true, color: palette.line, transparency: 72, align: 'right', margin: 0 });
-      slide.addShape(pptx.ShapeType.rect, { x: 0.65, y: 3.0, w: 0.85, h: 0.07, fill: { color: palette.cyan }, line: { color: palette.cyan } });
-      if (slideSpec.kicker) slide.addText(slideSpec.kicker.toUpperCase(), { x: 0.67, y: 2.5, w: 9.5, h: 0.3, fontSize: 12, bold: true, color: palette.cyan, charSpace: 2, margin: 0 });
-      slide.addText(slideSpec.title, { x: 0.65, y: 3.25, w: 11.6, h: 1.3, fontFace: theme.fonts.display, fontSize: 42, bold: true, color: tokens.sectionInk, fit: 'shrink', margin: 0 });
-      slide.addText(slideSpec.summary || `Sección ${sectionNumber} de la presentación: ${contentPlan.topic || plan.title}.`, { x: 0.67, y: 4.7, w: 9.4, h: 0.8, fontSize: 18, color: tokens.sectionMuted, fit: 'shrink', margin: 0 });
-      // Progress rail: one dot per content slide, current position accented.
-      const totalDots = Math.min(10, totalSlides);
-      for (let dot = 0; dot < totalDots; dot += 1) {
-        slide.addShape(pptx.ShapeType.ellipse, {
-          x: 0.68 + dot * 0.34, y: 6.75, w: 0.14, h: 0.14,
-          fill: { color: dot === Math.min(i, totalDots - 1) ? palette.cyan : palette.muted },
-          line: { color: dot === Math.min(i, totalDots - 1) ? palette.cyan : palette.muted },
+      text(slide, String(index + 1).padStart(2, '0'), { x: 0.75, y: 1.1, w: 2.6, h: 1.5, fontSize: 72, minFontSize: 72, bold: true, color: tokens.sectionMuted });
+      text(slide, spec.kicker, { x: 0.78, y: 2.95, w: 11.6, h: 0.35, fontSize: 14, bold: true, color: tokens.sectionMuted });
+      text(slide, spec.title, { x: 0.75, y: 3.52, w: 11.7, h: 1.55, fontFace: theme.fonts.display, fontSize: 42, minFontSize: 32, bold: true, color: tokens.sectionInk });
+      text(slide, spec.summary, { x: 0.78, y: 5.38, w: 10.8, h: 1.02, fontSize: 20, minFontSize: 16, color: tokens.sectionMuted });
+      notes(slide, spec.notes || spec.title);
+      continue;
+    }
+    title(slide, spec.title, spec.kicker || '');
+    footer(slide, spec.sourceCitations || []);
+
+    if (layout === 'two_column' && Array.isArray(spec.columns) && spec.columns.length >= 2) {
+      if (spec.columns.length > 2) contentError('distribuye las columnas adicionales en otra diapositiva.');
+      spec.columns.forEach((column, columnIndex) => {
+        const x = 0.72 + columnIndex * 6.1;
+        panel(slide, { x, y: contentFrame.y, w: 5.8, h: contentFrame.h }, columnIndex ? tokens.surfaceAlt : tokens.surface);
+        text(slide, column.heading, { x: x + 0.28, y: 2.31, w: 5.24, h: 0.74, fontSize: 22, minFontSize: 18, bold: true, color: tokens.ink });
+        const items = column.items || [];
+        const rowHeight = 3.22 / Math.max(1, items.length);
+        items.forEach((item, itemIndex) => {
+          text(slide, item, { x: x + 0.28, y: 3.13 + itemIndex * rowHeight, w: 5.24, h: rowHeight - 0.14, fontSize: 18, minFontSize: 15 });
+        });
+      });
+    } else if (layout === 'stat' && spec.stat) {
+      const support = (spec.support?.length ? spec.support : [spec.summary, spec.takeaway || spec.insight]).filter(Boolean);
+      panel(slide, { x: 0.72, y: 2.02, w: support.length ? 6.0 : 11.9, h: 4.58 });
+      text(slide, spec.stat.value, { x: 1.02, y: 2.45, w: support.length ? 5.4 : 10.7, h: 1.75, fontFace: theme.fonts.display, fontSize: 76, minFontSize: 44, bold: true, color: tokens.accent });
+      text(slide, spec.stat.caption, { x: 1.04, y: 4.58, w: support.length ? 5.36 : 10.6, h: 1.28, fontSize: 21, minFontSize: 17, color: tokens.ink });
+      if (support.length) {
+        const rowHeight = 3.88 / support.length;
+        support.forEach((item, itemIndex) => {
+          text(slide, item, { x: 7.19, y: 2.22 + itemIndex * rowHeight, w: 5.1, h: rowHeight - 0.18, fontSize: 19, minFontSize: 15 });
         });
       }
-      slide.addNotes(slideSpec.notes || slideSpec.title);
-      continue;
-    }
-
-    addTitle(slide, slideSpec.title, slideSpec.kicker || '');
-    addFooter(slide, pageIndex, slideSpec);
-
-    if (layout === 'two_column' && Array.isArray(slideSpec.columns) && slideSpec.columns.length >= 2) {
-      slideSpec.columns.slice(0, 2).forEach((column, columnIndex) => {
-        const x = 0.8 + columnIndex * 6.1;
-        const columnItems = column.items.slice(0, 4);
-        const singleItem = columnItems.length === 1;
-        slide.addShape(pptx.ShapeType.roundRect, { x, y: 2.05, w: 5.7, h: 4.5, rectRadius: 0.1, fill: { color: columnIndex === 0 ? palette.surface : palette.surfaceAlt }, line: { color: palette.line } });
-        slide.addText(column.heading || `Columna ${columnIndex + 1}`, { x: x + 0.3, y: 2.35, w: 5.1, h: 0.4, fontSize: 19, bold: true, color: columnIndex === 0 ? palette.dark : palette.accent, margin: 0 });
-        columnItems.forEach((item, itemIndex) => {
-          const itemY = singleItem ? 3.55 : 2.95 + itemIndex * 0.78;
-          slide.addText('•', { x: x + 0.32, y: itemY, w: 0.25, h: 0.3, fontSize: singleItem ? 20 : 17, color: palette.accent, margin: 0 });
-          slide.addText(item, { x: x + 0.62, y: itemY - 0.05, w: 4.75, h: singleItem ? 1.15 : 0.68, fontSize: singleItem ? 20 : 16, color: palette.body, fit: 'shrink', margin: 0 });
-        });
-      });
-      slide.addNotes(slideSpec.notes);
-      continue;
-    }
-
-    if (layout === 'stat' && slideSpec.stat) {
-      // The right rail must never render empty (the "60% blank stat slide"
-      // the user flagged): when the designer sent no support items, fall
-      // back to summary/takeaway/notes-derived cards so the canvas is full.
-      slide.addShape(pptx.ShapeType.roundRect, { x: 0.7, y: 2.0, w: 6.1, h: 4.55, rectRadius: 0.12, fill: { color: palette.surfaceAlt }, line: { color: palette.chipLine } });
-      slide.addText(slideSpec.stat.value, { x: 0.95, y: 2.45, w: 5.6, h: 2.0, fontFace: theme.fonts.display, fontSize: 84, bold: true, color: palette.accent, fit: 'shrink', margin: 0 });
-      slide.addText(slideSpec.stat.caption, { x: 1.0, y: 4.6, w: 5.5, h: 1.6, fontSize: 18, color: palette.dark, fit: 'shrink', margin: 0 });
-      const supportItems = (Array.isArray(slideSpec.support) && slideSpec.support.length > 0
-        ? slideSpec.support
-        : [slideSpec.summary, slideSpec.takeaway || slideSpec.insight, slideSpec.notes]
-      ).filter(Boolean).slice(0, 3);
-      supportItems.forEach((item, itemIndex) => {
-        const y = 2.0 + itemIndex * 1.55;
-        slide.addShape(pptx.ShapeType.roundRect, { x: 7.3, y, w: 5.2, h: 1.32, rectRadius: 0.1, fill: { color: palette.surface }, line: { color: palette.line } });
-        slide.addShape(pptx.ShapeType.rect, { x: 7.3, y, w: 0.08, h: 1.32, fill: { color: palette.cyan }, line: { color: palette.cyan } });
-        slide.addText(item, { x: 7.56, y: y + 0.18, w: 4.75, h: 0.96, fontSize: 16, color: palette.body, fit: 'shrink', margin: 0 });
-      });
-      if (slideSpec.stat.source) slide.addText(`Fuente: ${slideSpec.stat.source}`, { x: 7.34, y: 6.58, w: 4.95, h: 0.2, fontSize: 9, italic: true, color: palette.muted, margin: 0 });
-      slide.addNotes(slideSpec.notes);
-      continue;
-    }
-
-    if (layout === 'quote' && slideSpec.quote) {
-      slide.addText('“', { x: 0.7, y: 1.7, w: 1.2, h: 1.2, fontFace: theme.fonts.display, fontSize: 96, bold: true, color: palette.cyan, margin: 0 });
-      slide.addText(slideSpec.quote, { x: 1.6, y: 2.6, w: 10.2, h: 1.8, fontFace: theme.fonts.display, fontSize: 28, italic: true, color: palette.dark, fit: 'shrink', margin: 0 });
-      if (slideSpec.attribution) slide.addText(`— ${slideSpec.attribution}`, { x: 1.65, y: 4.7, w: 8.5, h: 0.4, fontSize: 16, bold: true, color: palette.muted, margin: 0 });
-      slide.addNotes(slideSpec.notes || slideSpec.quote);
-      continue;
-    }
-
-    if (layout === 'chart' && slideSpec.chart) {
-      const guessed = pickChartType(slideSpec.chart);
-      addNativeChart(slide, pptx, slideSpec.chart, {
-        position: { x: 0.75, y: 2.05, w: 7.0, h: 4.4 },
-        fontFace: theme.fonts.body, colors: theme.chartColors,
+      text(slide, spec.stat.source ? `Fuente: ${spec.stat.source}` : '', { x: 1.04, y: 6.03, w: support.length ? 5.36 : 10.6, h: 0.4, fontSize: 11, color: tokens.muted });
+    } else if (layout === 'quote' && spec.quote) {
+      text(slide, `“${spec.quote}”`, { x: 1.12, y: 2.45, w: 11.0, h: 2.72, fontFace: theme.fonts.display, fontSize: 30, minFontSize: 24, italic: true, color: tokens.ink });
+      text(slide, spec.attribution ? `— ${spec.attribution}` : '', { x: 1.15, y: 5.58, w: 10.8, h: 0.64, fontSize: 17, minFontSize: 15, bold: true, color: tokens.muted });
+    } else if (layout === 'chart' && spec.chart) {
+      const takeaway = spec.insight || spec.takeaway;
+      const chartFrame = { x: 0.75, y: 2.02, w: takeaway ? 7.45 : 11.8, h: 4.02 };
+      assertFrame(chartFrame, { slideNumber: pageNumber });
+      const guessed = pickChartType(spec.chart);
+      addNativeChart(slide, pptx, spec.chart, {
+        position: chartFrame, fontFace: theme.fonts.body, colors: theme.chartColors, textColor: tokens.ink,
         defaultType: guessed === 'bar' ? 'column' : guessed,
       });
-      if (slideSpec.chart.source) {
-        const provenance = [
-          `Fuente: ${slideSpec.chart.source}`,
-          slideSpec.chart.unit ? `Unidad: ${slideSpec.chart.unit}` : '',
-          slideSpec.chart.asOf ? `Corte: ${slideSpec.chart.asOf}` : '',
-        ].filter(Boolean).join(' · ');
-        slide.addText(provenance, { x: 0.78, y: 6.55, w: 6.8, h: 0.24, fontSize: 9.5, italic: true, color: palette.muted, margin: 0 });
+      if (takeaway) {
+        panel(slide, { x: 8.55, y: 2.12, w: 4.05, h: 3.94 });
+        text(slide, takeaway, { x: 8.84, y: 2.52, w: 3.47, h: 3.1, fontSize: 21, minFontSize: 17, bold: true, color: tokens.ink });
       }
-      addTakeaway(slide, slideSpec.insight || slideSpec.takeaway);
-      slide.addNotes(slideSpec.notes);
-      continue;
+      const provenance = [spec.chart.source ? `Fuente: ${spec.chart.source}` : '', spec.chart.unit ? `Unidad: ${spec.chart.unit}` : '', spec.chart.asOf ? `Corte: ${spec.chart.asOf}` : ''].filter(Boolean).join(' · ');
+      text(slide, provenance, { x: 0.78, y: 6.26, w: 11.7, h: 0.4, fontSize: 11, color: tokens.muted });
+    } else {
+      const bullets = spec.bullets || [];
+      const takeaway = spec.takeaway && spec.takeaway !== spec.summary && !bullets.some((bullet) => itemText(bullet) === spec.takeaway || bullet?.text === spec.takeaway) ? spec.takeaway : '';
+      const width = takeaway ? 7.5 : 11.85;
+      // Let the summary claim its measured height before placing the bullets.
+      // Reusing a fixed 0.88-inch box rejected valid scientific summaries even
+      // with ample room below it. Preserve text and the established font sizes.
+      const summaryHeight = spec.summary ? Math.max(0.88, fitText(spec.summary, {
+        x: 0.76, y: 2.04, w: width, h: 4.56, fontFace: theme.fonts.body, fontSize: 20, minFontSize: 17,
+      }, { slideNumber: pageNumber }).measuredHeight + 0.05) : 0;
+      text(slide, spec.summary, { x: 0.76, y: 2.04, w: width, h: summaryHeight, fontSize: 20, minFontSize: 17 });
+      const startY = spec.summary ? 2.04 + summaryHeight + 0.18 : 2.12;
+      const rowHeight = (6.6 - startY) / Math.max(1, bullets.length);
+      bullets.forEach((bullet, bulletIndex) => {
+        const y = startY + bulletIndex * rowHeight;
+        text(slide, String(bulletIndex + 1).padStart(2, '0'), { x: 0.76, y: y + 0.03, w: 0.5, h: 0.3, fontSize: 12, bold: true, color: tokens.accent });
+        text(slide, itemText(bullet), { x: 1.43, y, w: width - 0.67, h: rowHeight - 0.17, fontSize: 20, minFontSize: 16, color: tokens.ink });
+      });
+      if (takeaway) {
+        panel(slide, { x: 8.65, y: 2.08, w: 3.95, h: 4.48 });
+        text(slide, takeaway, { x: 8.95, y: 2.46, w: 3.35, h: 3.65, fontSize: 21, minFontSize: 17, bold: true, color: tokens.ink });
+      }
     }
-
-    // layout 'bullets' (y forma legada sin layout)
-    if (slideSpec.summary) {
-      slide.addText(slideSpec.summary, { x: 0.8, y: 1.95, w: 7.25, h: 0.9, fontSize: 17, color: palette.body, breakLine: true, fit: 'shrink' });
-    }
-    const visibleBullets = (slideSpec.bullets || []).slice(0, 4);
-    const sparseBullets = !slideSpec.summary && visibleBullets.length > 0 && visibleBullets.length <= 2;
-    visibleBullets.forEach((bullet, bulletIndex) => {
-      if (sparseBullets) {
-        const y = 2.15 + bulletIndex * 1.52;
-        slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 7.2, h: 1.25, rectRadius: 0.1, fill: { color: bulletIndex % 2 === 0 ? palette.surface : palette.surfaceAlt }, line: { color: palette.line } });
-        slide.addText(String(bulletIndex + 1), { x: 1.04, y: y + 0.42, w: 0.34, h: 0.25, fontSize: 12, bold: true, color: palette.accent, align: 'center', margin: 0 });
-        if (bullet.label) {
-          slide.addText(bullet.label, { x: 1.58, y: y + 0.22, w: 5.95, h: 0.32, fontSize: 18, bold: true, color: palette.dark, margin: 0, fit: 'shrink' });
-          slide.addText(bullet.text, { x: 1.58, y: y + 0.62, w: 5.95, h: 0.42, fontSize: 15.5, color: palette.body, margin: 0, fit: 'shrink' });
-        } else {
-          slide.addText(bullet.text, { x: 1.58, y: y + 0.34, w: 5.95, h: 0.58, fontSize: 18, color: palette.body, margin: 0, fit: 'shrink' });
-        }
-        return;
-      }
-      const y = (slideSpec.summary ? 3.0 : 2.2) + bulletIndex * 0.92;
-      slide.addShape(pptx.ShapeType.roundRect, { x: 0.82, y, w: 0.34, h: 0.34, rectRadius: 0.08, fill: { color: palette.surfaceAlt }, line: { color: palette.chipLine } });
-      slide.addText(String(bulletIndex + 1), { x: 0.82, y: y + 0.045, w: 0.34, h: 0.25, fontSize: 11, bold: true, color: palette.accent, align: 'center', margin: 0 });
-      if (bullet.label) {
-        slide.addText(bullet.label, { x: 1.34, y: y - 0.02, w: 6.6, h: 0.3, fontSize: 16, bold: true, color: palette.dark, margin: 0 });
-        slide.addText(bullet.text, { x: 1.34, y: y + 0.28, w: 6.6, h: 0.52, fontSize: 15, color: palette.body, fit: 'shrink', margin: 0 });
-      } else {
-        slide.addText(bullet.text, { x: 1.34, y: y + 0.02, w: 6.6, h: 0.66, fontSize: 16, color: palette.body, fit: 'shrink', margin: 0 });
-      }
-    });
-    addTakeaway(slide, slideSpec.takeaway || (slideSpec.bullets?.[0] ? `${slideSpec.bullets[0].label ? `${slideSpec.bullets[0].label}: ` : ''}${slideSpec.bullets[0].text}` : ''));
-    slide.addNotes(slideSpec.notes);
+    notes(slide, spec.notes || spec.title);
   }
-  addReferencesSlide();
+
+  const references = contentPlan.references || [];
+  if (contentPlan.manifest.includeReferences && references.length) {
+    slide = newSlide();
+    title(slide, 'Material de referencia');
+    const columns = references.length > 6 ? 2 : 1;
+    const rows = Math.ceil(references.length / columns);
+    const rowHeight = contentFrame.h / rows;
+    references.forEach((reference, index) => {
+      const column = Math.floor(index / rows);
+      const row = index % rows;
+      const x = 0.75 + column * 6.1;
+      const excerpt = referenceDisplayExcerpt(reference, Number.MAX_SAFE_INTEGER);
+      const content = [`${index + 1}. ${String(reference.name || '').replace(/\.txt$/i, '')}`, excerpt].filter(Boolean).join('\n');
+      text(slide, content, { x, y: 2.02 + row * rowHeight, w: columns === 1 ? 11.8 : 5.72, h: rowHeight - 0.16, fontSize: 14, minFontSize: 11, color: tokens.body });
+    });
+    notes(slide, references.map((reference) => referenceDisplayExcerpt(reference, Number.MAX_SAFE_INTEGER)).join('\n\n'));
+    footer(slide);
+  }
+  plan.pptxLayout = { canvas: CANVAS, textBoxes: measurements.length, fontMetrics: 'pdfkit-compatible', minFontSize: Math.min(...measurements.map((measurement) => measurement.fontSize)) };
   await pptx.writeFile({ fileName: outputPath });
   return await fsp.readFile(outputPath);
 }
@@ -2691,9 +2604,9 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const token = (name) => `#${theme.palette[name]}`;
 
   // El visor del chat SANITIZA el HTML (elimina <style>), así que toda la
-  // estética va en estilos inline: cada lámina se dibuja como tarjeta 16:9
-  // con el mismo sistema visual del PPTX (portada, divisores oscuros, stat
-  // hero, dos columnas, cita, bullets numerados + IDEA CLAVE).
+  // vista de contenido usa estilos inline. No sustituye el render del PPTX:
+  // mantiene todos los elementos del guion y permite leer tarjetas extensas
+  // sin ocultar texto ni prometer la geometría del archivo descargable.
   const INK = token('ink');
   const BODY = token('body');
   const MUTED = token('muted');
@@ -2706,14 +2619,14 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const SECTION_INK = token('sectionInk');
   const SECTION_MUTED = token('sectionMuted');
   const deckTitle = xmlEscape(contentPlan.topic || plan.title);
-  const slideShell = (inner, { dark = false } = {}) => `
-    <div style="position:relative;width:100%;max-width:860px;margin:0 auto 26px;aspect-ratio:16/9;border-radius:14px;border:1px solid ${dark ? SECTION_BG : LINE};background:${dark ? SECTION_BG : token('bg')};box-shadow:0 18px 44px -22px rgba(15,23,42,.28);overflow:hidden;font-family:Inter,system-ui,sans-serif;">
+  const slideShell = (inner, { dark = false, background = dark ? SECTION_BG : token('bg') } = {}) => `
+    <div role="region" aria-label="Contenido de la diapositiva" tabindex="0" style="position:relative;width:100%;max-width:860px;margin:0 auto 26px;aspect-ratio:16/9;min-height:min-content;border-radius:14px;border:1px solid ${dark ? SECTION_BG : LINE};background:${background};box-shadow:0 18px 44px -22px rgba(15,23,42,.28);overflow:auto;overflow-wrap:anywhere;font-family:Inter,system-ui,sans-serif;">
       ${inner}
     </div>`;
   const footer = (n, spec = null) => {
-    const citations = Array.isArray(spec?.sourceCitations) ? spec.sourceCitations.filter(Boolean).slice(0, 3) : [];
+    const citations = Array.isArray(spec?.sourceCitations) ? spec.sourceCitations.filter(Boolean) : [];
     return `
-    <div style="position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-between;padding:8px 22px;border-top:1px solid ${LINE};font-size:10px;color:${MUTED};background:${SURFACE};">
+    <div style="position:relative;display:flex;gap:12px;flex-wrap:wrap;justify-content:space-between;margin-top:24px;padding:8px 22px;border-top:1px solid ${LINE};font-size:10px;color:${MUTED};background:${SURFACE};">
       <span>${deckTitle}</span>${citations.length ? `<span style="font-weight:800;color:${ACCENT};">Evidencia: ${citations.map(xmlEscape).join(' · ')}</span>` : ''}<span>${n}</span>
     </div>`;
   };
@@ -2724,7 +2637,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     const layout = spec.layout || 'bullets';
     if (layout === 'section') {
       return slideShell(`
-        <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 56px;">
+        <div style="display:flex;flex-direction:column;justify-content:center;min-height:300px;padding:48px 56px;">
           <div style="width:54px;height:4px;background:${ACCENT_2};border-radius:2px;margin-bottom:16px;"></div>
           ${spec.kicker ? `<div style="font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:${ACCENT_2};margin-bottom:8px;">${xmlEscape(spec.kicker)}</div>` : ''}
           <div style="font-size:36px;font-weight:800;color:${SECTION_INK};line-height:1.1;">${xmlEscape(spec.title)}</div>
@@ -2741,7 +2654,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
             ${spec.stat.source ? `<div style="margin-top:14px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.stat.source)}</div>` : ''}
           </div>
           <div style="flex:1;display:flex;flex-direction:column;gap:10px;padding-top:8px;">
-            ${(spec.support || []).slice(0, 3).map((item) => `<div style="border:1px solid ${LINE};background:${SURFACE};border-radius:10px;padding:12px 14px;font-size:14px;color:${BODY};">${xmlEscape(item)}</div>`).join('')}
+            ${(spec.support?.length ? spec.support : [spec.summary, spec.takeaway || spec.insight]).filter(Boolean).map((item) => `<div style="border:1px solid ${LINE};background:${SURFACE};border-radius:10px;padding:12px 14px;font-size:14px;color:${BODY};">${xmlEscape(item)}</div>`).join('')}
           </div>
         </div>
         ${footer(pageNum, spec)}`);
@@ -2750,11 +2663,11 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
       return slideShell(`
         <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
         <div style="display:flex;gap:18px;padding:18px 40px 0;">
-          ${spec.columns.slice(0, 2).map((column, i) => `
+          ${spec.columns.map((column, i) => `
             <div style="flex:1;min-height:250px;border-radius:12px;padding:16px 18px;border:1px solid ${LINE};background:${i === 0 ? SURFACE : SURFACE_ALT};">
               <div style="font-size:15px;font-weight:800;color:${i === 0 ? INK : ACCENT};margin-bottom:10px;">${xmlEscape(column.heading || '')}</div>
               <div style="${(column.items || []).length === 1 ? 'padding-top:64px;' : ''}">
-                ${(column.items || []).slice(0, 4).map((item) => `<div style="display:flex;gap:8px;margin-bottom:8px;font-size:${(column.items || []).length === 1 ? '17px' : '14px'};color:${BODY};"><span style="color:${ACCENT};font-weight:800;">•</span><span>${xmlEscape(item)}</span></div>`).join('')}
+                ${(column.items || []).map((item) => `<div style="display:flex;gap:8px;margin-bottom:8px;font-size:${(column.items || []).length === 1 ? '17px' : '14px'};color:${BODY};"><span style="color:${ACCENT};font-weight:800;">•</span><span>${xmlEscape(item)}</span></div>`).join('')}
               </div>
             </div>`).join('')}
         </div>
@@ -2762,7 +2675,8 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     }
     if (layout === 'quote' && spec.quote) {
       return slideShell(`
-        <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 64px;">
+        <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
+        <div style="display:flex;flex-direction:column;justify-content:center;padding:36px 64px;">
           <div style="font-size:64px;font-weight:900;color:${ACCENT_2};line-height:.6;">“</div>
           <div style="font-size:22px;font-style:italic;font-weight:600;color:${INK};line-height:1.4;max-width:640px;">${xmlEscape(spec.quote)}</div>
           ${spec.attribution ? `<div style="margin-top:14px;font-size:13px;font-weight:700;color:${MUTED};">— ${xmlEscape(spec.attribution)}</div>` : ''}
@@ -2776,26 +2690,27 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
       return slideShell(`
         <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
         <div style="display:flex;gap:26px;padding:16px 40px 0;">
-          <div style="flex:1.4;min-width:0;max-height:270px;overflow:auto;">
-            <div style="font-size:11px;color:${MUTED};margin-bottom:8px;">Datos de la gráfica editable (${xmlEscape(chart.type)})</div>
+          <div style="flex:1.4;min-width:0;">
+            ${chart.title ? `<div style="font-size:15px;font-weight:700;color:${INK};margin-bottom:8px;">${xmlEscape(chart.title)}</div>` : ''}
+            <div style="font-size:11px;color:${MUTED};margin-bottom:8px;">Datos de la gráfica editable (${xmlEscape(chart.type)})${chart.yAxisTitle ? ` · ${xmlEscape(chart.yAxisTitle)}` : ''}</div>
             <table style="border-collapse:collapse;font-size:11px;color:${BODY};width:100%;">
               <thead><tr><th>${xmlEscape(chart.xAxisTitle || (chart.type === 'scatter' ? 'X' : 'Categoría'))}</th>${chart.series.map((series) => `<th>${xmlEscape(series.name)}</th>`).join('')}</tr></thead>
               <tbody>${labels.map((label, i) => `<tr><td>${xmlEscape(String(label))}</td>${chart.series.map((series) => `<td style="text-align:right;">${series.values[i] === null ? '—' : xmlEscape(String(series.values[i]))}</td>`).join('')}</tr>`).join('')}</tbody>
             </table>
-            ${spec.chart.source ? `<div style="margin-top:6px;font-size:10px;font-style:italic;color:${MUTED};">Fuente: ${xmlEscape(spec.chart.source)}${spec.chart.unit ? ` · Unidad: ${xmlEscape(spec.chart.unit)}` : ''}${spec.chart.asOf ? ` · Corte: ${xmlEscape(spec.chart.asOf)}` : ''}</div>` : ''}
+            ${[spec.chart.source ? `Fuente: ${spec.chart.source}` : '', spec.chart.unit ? `Unidad: ${spec.chart.unit}` : '', spec.chart.asOf ? `Corte: ${spec.chart.asOf}` : ''].some(Boolean) ? `<div style="margin-top:6px;font-size:10px;font-style:italic;color:${MUTED};">${[spec.chart.source ? `Fuente: ${spec.chart.source}` : '', spec.chart.unit ? `Unidad: ${spec.chart.unit}` : '', spec.chart.asOf ? `Corte: ${spec.chart.asOf}` : ''].filter(Boolean).map(xmlEscape).join(' · ')}</div>` : ''}
           </div>
-          ${spec.insight ? `
+          ${spec.insight || spec.takeaway ? `
           <div style="flex:1;border-left:3px solid ${ACCENT};background:${SURFACE_ALT};border-radius:10px;padding:14px 16px;align-self:flex-start;">
             <div style="font-size:10px;font-weight:800;letter-spacing:.12em;color:${ACCENT};margin-bottom:6px;">IDEA CLAVE</div>
-            <div style="font-size:14px;font-weight:700;color:${INK};">${xmlEscape(spec.insight)}</div>
+            <div style="font-size:14px;font-weight:700;color:${INK};">${xmlEscape(spec.insight || spec.takeaway)}</div>
           </div>` : ''}
         </div>
         ${footer(pageNum, spec)}`);
     }
     // bullets / forma legada
-    const bullets = (spec.bullets || []).slice(0, 4);
+    const bullets = spec.bullets || [];
     const sparseBullets = !spec.summary && bullets.length > 0 && bullets.length <= 2;
-    const takeaway = spec.takeaway || (bullets[0] ? `${bullets[0].label ? `${bullets[0].label}: ` : ''}${bullets[0].text}` : '');
+    const takeaway = spec.takeaway && spec.takeaway !== spec.summary && !bullets.some((bullet) => (typeof bullet === 'string' ? bullet : bullet?.text) === spec.takeaway) ? spec.takeaway : '';
     return slideShell(`
       <div style="padding:30px 40px 0;">${kickerHtml(spec.kicker)}${titleHtml(spec.title)}</div>
       <div style="display:flex;gap:26px;padding:14px 40px 0;">
@@ -2804,7 +2719,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
           ${bullets.map((bullet, i) => `
             <div style="display:flex;gap:12px;margin-bottom:12px;align-items:flex-start;${sparseBullets ? `border:1px solid ${LINE};background:${i % 2 === 0 ? SURFACE : SURFACE_ALT};border-radius:10px;padding:14px 16px;min-height:62px;` : ''}">
               <span style="flex:none;width:24px;height:24px;border-radius:7px;background:${SURFACE_ALT};border:1px solid ${LINE};color:${ACCENT};font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;">${i + 1}</span>
-              <span style="font-size:${sparseBullets ? '15px' : '14px'};color:${BODY};line-height:1.45;">${bullet.label ? `<strong style="color:${INK};">${xmlEscape(bullet.label)}.</strong> ` : ''}${xmlEscape(bullet.text)}</span>
+              <span style="font-size:${sparseBullets ? '15px' : '14px'};color:${BODY};line-height:1.45;">${bullet.label ? `<strong style="color:${INK};">${xmlEscape(bullet.label)}.</strong> ` : ''}${xmlEscape(typeof bullet === 'string' ? bullet : bullet.text)}</span>
             </div>`).join('')}
         </div>
         ${takeaway ? `
@@ -2817,18 +2732,15 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   };
 
   const cover = slideShell(`
-    <div style="position:absolute;inset:0;background:${token('coverBg')};"></div>
-    <div style="position:absolute;left:0;top:0;bottom:0;width:7px;background:${ACCENT};"></div>
-    <div style="position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:0 56px;">
-      <div style="font-size:11px;font-weight:800;letter-spacing:.2em;color:${ACCENT};margin-bottom:12px;">${xmlEscape(theme.eyebrow)}</div>
+    <div style="display:flex;flex-direction:column;justify-content:center;min-height:300px;padding:48px 56px;">
       <div style="font-size:42px;font-weight:900;color:${token('coverInk')};line-height:1.06;max-width:700px;">${xmlEscape(plan.title)}</div>
       <div style="margin-top:14px;font-size:17px;color:${token('coverMuted')};max-width:620px;">${xmlEscape(contentPlan.thesis)}</div>
-    </div>`);
+    </div>`, { background: token('coverBg') });
 
   const agenda = contentPlan.manifest.includeAgenda ? slideShell(`
     <div style="padding:30px 40px 0;">${titleHtml('Agenda')}<div style="font-size:12px;color:${MUTED};margin-top:4px;">Ruta de la presentación</div></div>
     <div style="padding:16px 40px 0;display:flex;flex-direction:column;gap:8px;">
-      ${contentPlan.agenda.slice(0, 7).map((item, i) => `
+      ${contentPlan.agenda.map((item, i) => `
         <div style="display:flex;gap:14px;align-items:center;border-bottom:1px solid ${LINE};padding-bottom:8px;">
           <span style="font-size:12px;font-weight:800;color:${ACCENT};">${String(i + 1).padStart(2, '0')}</span>
           <span style="font-size:15px;color:${INK};${i === 0 ? 'font-weight:700;' : ''}">${xmlEscape(item)}</span>
@@ -2840,10 +2752,10 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   const references = contentPlan.manifest.includeReferences ? slideShell(`
     <div style="padding:30px 40px 0;">${titleHtml('Material de referencia')}<div style="font-size:12px;color:${MUTED};margin-top:4px;">Fuentes incorporadas al guion</div></div>
     <div style="padding:18px 40px 0;display:flex;flex-direction:column;gap:10px;">
-      ${(contentPlan.references || []).slice(0, 5).map((ref, index) => `
+      ${(contentPlan.references || []).map((ref, index) => `
         <div style="display:grid;grid-template-columns:210px 1fr;gap:18px;border-bottom:1px solid ${LINE};padding:0 0 10px;">
           <div style="font-size:14px;font-weight:800;color:${INK};">${index + 1}. ${xmlEscape(String(ref.name || '').replace(/\.txt$/i, ''))}</div>
-          <div style="font-size:13px;color:${BODY};">${xmlEscape(referenceDisplayExcerpt(ref) || 'Sin texto extraído disponible.')}</div>
+          <div style="font-size:13px;color:${BODY};">${xmlEscape(referenceDisplayExcerpt(ref, Number.MAX_SAFE_INTEGER) || 'Sin texto extraído disponible.')}</div>
         </div>`).join('')}
     </div>
     ${footer(referencePage)}`) : '';
@@ -2862,6 +2774,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
     <div>
       <div style="font-size:11px;font-weight:800;letter-spacing:.16em;color:${ACCENT};">VISTA PREVIA · ${contentPlan.manifest.totalSlides} LÁMINAS</div>
       <div style="font-size:18px;font-weight:800;color:${INK};">${xmlEscape(filename)}</div>
+      <div style="font-size:12px;color:${MUTED};margin-top:6px;">Vista de contenido. El diseño final se encuentra en el archivo PowerPoint.</div>
     </div>
     <div style="border:1px solid ${passed ? '#bbf7d0' : '#fde68a'};background:${passed ? '#f0fdf4' : '#fffbeb'};color:${passed ? '#15803d' : '#92400e'};border-radius:999px;padding:7px 14px;font-size:12px;font-weight:800;">
       ${passed ? '✓ Validación técnica completa' : 'Validación con observaciones'}
@@ -2871,7 +2784,7 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
   ${agenda}
   ${slidesHtml}
   ${references}
-  <div style="max-width:860px;margin:0 auto;text-align:center;color:${MUTED};font-size:11px;">La vista previa replica el guion del archivo PowerPoint nativo. Descarga el .pptx para presentar.</div>
+  <div style="max-width:860px;margin:0 auto;text-align:center;color:${MUTED};font-size:11px;">Esta vista permite revisar el contenido. Descarga el .pptx para ver el diseño final y presentar.</div>
 </body></html>`;
 }
 
@@ -3435,38 +3348,46 @@ async function runAdvancedDocumentPipeline({
     attemptRecords.push({ attempt: attempts, validation, expected });
     emit(events, 'file_validation', validation.passed ? 'complete' : 'warning', 'Validación técnica calculada', { score: validation.overallScore, technicalScore: validation.technicalScore, qualityScore: validation.qualityScore });
     if (validation.passed) break;
+    // Replacing the authored deck with fallback prose cannot fix a measured
+    // layout defect safely. Return the diagnosis to the authoring agent.
+    if (plan.format === 'pptx' && validation.checks?.designSafety === false) break;
     if (attempts > maxRepairAttempts) break;
     emit(events, 'qa', 'warning', 'Documento por debajo del umbral; iniciando reparación', { checks: validation.checks });
     plan = repairPlan(plan, validation);
     emit(events, 'refactor', 'complete', 'Plan documental reforzado para regeneración', { sections: plan.sections.length });
   }
 
-  // Render → vision-critique (Claude-skills style visual QA): render the
-  // artifact with soffice, have a vision model adversarially inspect the
-  // pages and attach the findings to validation.details. Best-effort and
-  // budgeted — it can only ADD observability, never fail a delivery.
+  // Visual QA is optional, but observations are never an approval. Record
+  // coverage explicitly; a sampled or unavailable review cannot certify a deck.
+  let critique;
   try {
-    const critique = await runRenderCritique({
+    critique = await runRenderCritique({
       filePath: artifact.outputPath,
       format: plan.format,
       expectation: `${plan.title} (${plan.template}, ${plan.format}) — solicitud: ${String(plan.userRequest || '').slice(0, 300)}`,
     });
-    if (!critique.skipped) {
-      validation.details = { ...(validation.details || {}), visualCritique: critique.report };
-      const defectCount = critique.report.defects.length;
-      emit(
-        events,
-        'document_design',
-        critique.report.overall === 'pass' ? 'complete' : 'warning',
-        critique.report.overall === 'pass'
-          ? `Revisión visual aprobada (${critique.pagesRendered} página(s) inspeccionadas)`
-          : `Revisión visual: ${defectCount} observación(es) — ${critique.report.summary}`,
-        { pagesRendered: critique.pagesRendered, defects: critique.report.defects, durationMs: critique.durationMs },
-      );
-    } else {
-      emit(events, 'document_design', 'complete', 'Revisión visual omitida', { reason: critique.reason });
-    }
-  } catch { /* never blocks delivery */ }
+  } catch {
+    critique = { skipped: true, reason: 'review unavailable' };
+  }
+  if (plan.format === 'pptx') {
+    validation = applyPptxVisualReview(validation, critique);
+    const review = validation.details.visualCritique;
+    const label = review.status === 'passed'
+      ? `Revisión visual completada (${review.pagesRendered} diapositivas)`
+      : review.status === 'needs_work'
+        ? 'La revisión visual detectó correcciones pendientes'
+        : review.status === 'partial'
+          ? `Revisión visual parcial (${review.pagesRendered} de ${review.totalPages} diapositivas)`
+          : 'Revisión visual no realizada; se conservan los controles del archivo';
+    emit(events, 'document_design', review.status === 'passed' ? 'complete' : 'warning', label, review);
+  } else if (!critique.skipped) {
+    validation.details = { ...(validation.details || {}), visualCritique: critique.report };
+    emit(events, 'document_design', critique.report.overall === 'pass' ? 'complete' : 'warning',
+      `Revisión visual: ${critique.pagesRendered} página(s) inspeccionadas`,
+      { pagesRendered: critique.pagesRendered, defects: critique.report.defects, durationMs: critique.durationMs });
+  } else {
+    emit(events, 'document_design', 'warning', 'Revisión visual no realizada', { reason: critique.reason });
+  }
 
   if (!events.some((event) => event.role === 'qa')) {
     emit(events, 'qa', validation.passed ? 'complete' : 'warning', validation.passed ? 'QA sin fallos bloqueantes' : 'QA detectó advertencias persistentes', { passed: validation.passed });
@@ -3500,11 +3421,18 @@ async function runAdvancedDocumentPipeline({
   };
   const telemetryPath = await writeTelemetry(record, telemetryDir);
 
-  if (groundedResearchDeck && !validation.passed) {
+  const blockedPptxDesign = plan.format === 'pptx'
+    && (validation.checks?.designSafety === false || validation.checks?.visualReview === false);
+  if ((groundedResearchDeck && !validation.passed) || blockedPptxDesign) {
     try {
       if (artifact.outputPath) await fsp.unlink(artifact.outputPath);
     } catch { /* best effort cleanup before blocking delivery */ }
-    throw new Error('La presentación científica no superó los controles de fidelidad y no se entregó. Revisa las fuentes seleccionadas o reduce el alcance.');
+    const error = new Error(blockedPptxDesign
+      ? 'La presentación necesita correcciones antes de entregarse. Revisa las diapositivas indicadas y conserva su contenido al ajustar el diseño.'
+      : 'La presentación científica no superó los controles de fidelidad y no se entregó. Revisa las fuentes seleccionadas o reduce el alcance.');
+    error.code = 'E_PARAMS';
+    error.validation = validation;
+    throw error;
   }
 
   // ArtifactUrlResolver — persist the bytes once and hand the chat
