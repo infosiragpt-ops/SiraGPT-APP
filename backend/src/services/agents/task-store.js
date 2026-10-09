@@ -50,6 +50,7 @@ function markTaskStatusBuffered(...args) { return bufferedOperation(() => markTa
 function appendTaskEventBuffered(...args) { return bufferedOperation(() => appendTaskEvent(...args)); }
 function touchTaskHeartbeatBuffered(...args) { return bufferedOperation(() => touchTaskHeartbeat(...args)); }
 function updateTaskSnapshotBuffered(...args) { return bufferedOperation(() => updateTaskSnapshot(...args)); }
+function recoverStaleRunningTasksBuffered(...args) { return bufferedOperation(() => recoverStaleRunningTasks(...args)); }
 async function writeTaskSnapshotAsync(record) {
   const next = bufferedOperation(() => writeTaskSnapshot(record));
   await flushTask(next.taskId); return next;
@@ -1435,6 +1436,7 @@ module.exports = {
   appendTaskEventBuffered,
   appendTaskEventAsync,
   updateTaskSnapshotBuffered,
+  recoverStaleRunningTasksBuffered,
   updateTaskSnapshotAsync,
   writeTaskSnapshotAsync,
   markTaskStatusAsync,

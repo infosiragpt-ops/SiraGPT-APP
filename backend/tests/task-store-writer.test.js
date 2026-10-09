@@ -56,3 +56,42 @@ test('buffered progress is immediately readable but deletion waits for persisten
   assert.equal(fs.existsSync(path.join(dir, 'barrier.json')), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('runtime watchdog recovers a stale task while another task has buffered progress', async () => {
+  const dir = temp(); process.env.AGENT_TASK_STORE_DIR = dir;
+  const watchdog = require('../src/services/agents/agent-task-runtime-watchdog');
+  let tick;
+  try {
+    await store.writeTaskSnapshotAsync({ taskId: 'stalled', userId: 'u', status: 'running', events: [] });
+    await store.updateTaskSnapshotAsync('stalled', 'u', { updatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString() });
+    store.writeTaskSnapshotBuffered({ taskId: 'live', userId: 'u', status: 'running', events: [{ type: 'progress', seq: 1 }] });
+    watchdog.startAgentTaskRuntimeWatchdog({ env: {}, taskStore: store, setIntervalFn: callback => { tick = callback; return { unref() {} }; } });
+    await tick();
+    const committed = JSON.parse(fs.readFileSync(path.join(dir, 'stalled.json')));
+    assert.equal(committed.status, 'error');
+    assert.equal(committed.streamState.done, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'live.json'))).events.length, 1);
+    assert.equal(store.isTaskPersistencePending('stalled'), false);
+  } finally { watchdog.stopAgentTaskRuntimeWatchdog(); await store.flushTaskStore(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('boot resume persists its queued event when enqueue overlaps buffered progress', async () => {
+  const dir = temp(); process.env.AGENT_TASK_STORE_DIR = dir;
+  const recovery = require('../src/services/agents/agent-task-boot-recovery');
+  try {
+    await store.writeTaskSnapshotAsync({ taskId: 'resume', userId: 'u', status: 'error', displayGoal: 'resume safely',
+      runnerCheckpoint: { stepsCompleted: 2 }, events: [] });
+    const result = await recovery.resumeCheckpointedTasks({ env: {}, taskStore: store, recoveredRows: [{ taskId: 'resume', userId: 'u' }],
+      enqueue: async () => {
+        store.writeTaskSnapshotBuffered({ taskId: 'other', userId: 'u', status: 'running', events: [] });
+        return { id: 'resumed-job' };
+      },
+    });
+    assert.equal(result.resumed, 1);
+    const committed = JSON.parse(fs.readFileSync(path.join(dir, 'resume.json')));
+    assert.equal(committed.status, 'queued');
+    assert.equal(committed.jobId, 'resumed-job');
+    assert.equal(committed.events.at(-1).type, 'repair_attempt');
+    assert.equal(fs.existsSync(path.join(dir, 'other.json')), true);
+  } finally { await store.flushTaskStore(); fs.rmSync(dir, { recursive: true, force: true }); }
+});

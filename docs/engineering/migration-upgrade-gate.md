@@ -12,7 +12,7 @@ El artifact `migration-upgrade-evidence` incluye ambos SQL, snapshots (solo hash
 
 ## Drift heredado: no autoriza publicar
 
-El rehearsal local del BASE `f9a6c8d40` aplicó136 migraciones, pero encontró108 statements de drift frente a su schema. Se registra íntegro; **el gate schema del publisher permanece intacto y bloqueante**. No se reescribe historia ni se corrige el rehearsal con `db push`.
+El rehearsal local y CI del BASE `7a05da5d0` aplicó136 migraciones, pero encontró108 statements de drift frente a su schema. HEAD aplica138 migraciones y conserva108 statements: cero drift nuevo. Se registra íntegro; **el gate schema del publisher permanece intacto y bloqueante**. No se reescribe historia ni se corrige el rehearsal con `db push`.
 
 Plan de reconciliación separado y aditivo, sujeto a revisión de los SQL exactos:
 

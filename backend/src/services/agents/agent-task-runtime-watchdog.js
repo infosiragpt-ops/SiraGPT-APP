@@ -126,16 +126,25 @@ function startAgentTaskRuntimeWatchdog({
     MIN_WATCHDOG_INTERVAL_MS,
   );
 
-  const tick = () => {
+  let ticking = false;
+  const tick = async () => {
+    if (ticking) return;
+    ticking = true;
     try {
-      sweepStaleAgentTasks({ env, logger, taskStore });
+      // A live runner may have buffered progress for another task in the
+      // shared directory. Recovery must join that writer, not race its index.
+      const recoveryStore = typeof taskStore.recoverStaleRunningTasksBuffered === 'function'
+        ? { ...taskStore, recoverStaleRunningTasks: taskStore.recoverStaleRunningTasksBuffered }
+        : taskStore;
+      sweepStaleAgentTasks({ env, logger, taskStore: recoveryStore });
+      await taskStore.flushTaskStore?.();
     } catch (err) {
       logWarn(
         logger,
         { error: err && err.message ? err.message : String(err) },
         'agent_task_runtime_watchdog_tick_failed',
       );
-    }
+    } finally { ticking = false; }
   };
 
   // First sweep waits one interval so a just-started runner can pulse

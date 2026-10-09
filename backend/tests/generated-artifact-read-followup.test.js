@@ -235,8 +235,8 @@ test('HTTP files:[] follow-up reaches the selected model runner without an OpenA
     const snapshot = taskStore.getTaskSnapshotForUser(payload.taskId, payload.user.id);
     const state = { ...snapshot.streamState, done: true };
     const done = { type: 'done', taskId: payload.taskId, stoppedReason: 'test', stats: {} };
-    const written = taskStore.appendTaskEvent(snapshot, done, state);
-    taskStore.markTaskStatus(written, 'completed', { streamState: state });
+    const written = taskStore.appendTaskEventBuffered(snapshot, done, state);
+    await taskStore.markTaskStatusAsync(written, 'completed', { streamState: state });
   };
   const app = buildRouteTestApp('/api/agent', reloadModule('../src/routes/agent-task'));
   const response = await request(app).post('/api/agent/task')

@@ -82,7 +82,7 @@ async function resumeCheckpointedTasks({
         retryOf: snapshot.taskId,
         resumeCheckpoint: checkpoint,
       }, { priority: 1, jobId: `${snapshot.taskId}-boot-resume-${Date.now()}` });
-      taskStore.appendTaskEvent(
+      await taskStore.appendTaskEventAsync(
         { ...snapshot, status: 'queued', jobId: String(job.id) },
         {
           type: 'repair_attempt',
