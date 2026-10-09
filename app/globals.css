@@ -8722,16 +8722,16 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 }
 
 /* ThinkingCore — the single "thinking" glyph (components/brand/thinking-core.tsx):
-   three monochrome dots orbiting, no nucleus, no rings, no trail, no colour
-   (red via `.claude-asterisk--error` only when the system fails). The
+   the SiraGPT mark in motion — eight monochrome arms with dots that open and
+   close around a breathing centre (lib/brand/sira-motion.ts), one ink, no
+   colour (red via `.claude-asterisk--error` only when the system fails). The
    `.claude-asterisk*` class names are historical and shared by every
-   consumer. The electrons travel their orbits with SMIL (animateMotion,
-   inside the component); CSS only swaps live/static dots. While active the
-   static electrons are hidden and the moving ones shown; idle (and reduced
-   motion) shows the three still dots at the apex of each orbit.
-   The outer <g> stays attribute-free; rules target inner classes. */
+   consumer. The component moves the SVG attributes itself on each animation
+   frame and renders the resting open frame (the static logo) when idle, when
+   the tab is hidden and under prefers-reduced-motion, so CSS only keeps the
+   box stable. Rules target inner classes (`.thinking-core__arm`,
+   `.thinking-core__tip`, `.thinking-core__core`), never attributes. */
 .claude-asterisk { transform-origin: 50% 50%; overflow: visible; }
-.claude-asterisk--active .thinking-core__electron-still { display: none; }
 
 /* Live «Pensando…» label beats softly while the dots orbit. */
 @keyframes thinking-live-label-pulse {
@@ -8741,8 +8741,7 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .thinking-live-label { animation: thinking-live-label-pulse 1.2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .claude-asterisk--active .thinking-core__electron-live { display: none; }
-  .claude-asterisk--active .thinking-core__electron-still { display: inline; }
+  /* The thinking mark itself stops in the component (resting frame); only the label pulse lives here. */
   .thinking-live-label { animation: none; }
 }
 .run-trace-step--pending { color: var(--step-pending); }
@@ -9601,8 +9600,8 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 :root {
   --celeste: 199 89% 48%;
   --success-green: 142 71% 40%;
-  /* The «Pensando» dots (ThinkingCore) are monochrome — three electrons, no
-     nucleus, in the ink (--think-accent); they only turn red (--destructive) on error
+  /* The «Pensando» mark (ThinkingCore) is monochrome — the eight-arm brand mark
+     in the ink (--think-accent); it only turns red (--destructive) on error
      (Luis, 2026-10-03). The former --think-electron-a|b|c colour tokens are gone. */
 }
 .dark {

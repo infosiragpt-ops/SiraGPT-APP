@@ -113,6 +113,22 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Official brand mark (2026-10-09): the eight-arm Sira mark — a solid centre
+  with eight straight arms ending in dots, one ink — replaces the atom
+  everywhere in the app (sidebar lockup and rail, BrandLogo, auth pages, PWA
+  prompt), the favicon, the PWA/apple icons and the maskable icon. The
+  «Pensando» glyph is the same mark in motion: the arms open and close in a
+  continuous two-second cycle (four staggered ranks, quintic easing, dots
+  bloom after clearing the centre, breathing centre), driven by the pure
+  `lib/brand/sira-motion.ts` model and SVG attributes (no SMIL, no canvas);
+  idle and reduced-motion render the static logo. `npm run brand:assets`
+  (`scripts/generate-brand-assets.cjs`, committed) renders every raster from
+  that model: favicon/PWA icons, the Open Graph and Twitter cards, the
+  Capacitor Android launcher + splash PNGs, the iOS AppIcon + splash, the
+  Electron desktop `icon.png/.icns/.ico` + Windows appx tiles and the browser
+  extension icons — all of which still carried the clover, the knot or the
+  Capacitor default.
+
 - Automations the chat agent creates for the user, delivered back into the
   same chat when they fire (2026-10-09, native rewrite of the OpenClaw MIT
   cron/heartbeat ideas): one-shot reminders («recuérdame en 20 minutos…»),

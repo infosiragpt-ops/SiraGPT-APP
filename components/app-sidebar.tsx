@@ -57,7 +57,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
-import { AtomMark } from "@/components/brand"
+import { SiraMark } from "@/components/brand"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1458,7 +1458,7 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Brand lockup (atom mark + «SiraGPT») on the left; the only
+          {/* Brand lockup (Sira mark + «SiraGPT») on the left; the only
               control on the right is the collapse toggle (Luis, 2026-10-01:
               the bell and the new-chat disc left this strip — «Nuevo agente»
               lives in the nav row below and ⌘N still works). */}
@@ -1466,7 +1466,7 @@ export function AppSidebar() {
             className="sidebar-brand flex min-w-0 items-center gap-2 pl-0.5"
             data-testid="sidebar-brand"
           >
-            <AtomMark
+            <SiraMark
               size={22}
               title="SiraGPT"
               className="h-[22px] w-[22px] shrink-0 text-[color:var(--brand)]"
@@ -1493,7 +1493,7 @@ export function AppSidebar() {
             onClick={toggleSidebar}
             aria-label="Expandir barra lateral ⌘B"
           >
-            <AtomMark
+            <SiraMark
               size={20}
               title="SiraGPT"
               className="h-5 w-5 shrink-0 text-[color:var(--brand)] transition-opacity group-hover:opacity-0"

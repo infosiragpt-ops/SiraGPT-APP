@@ -13,43 +13,40 @@ import {
 const source = (rel: string) => fs.readFileSync(path.join(process.cwd(), rel), "utf8")
 
 describe("ThinkingCore — the «Pensando» glyph", () => {
-  it("ships a pure-SVG glyph of three orbiting electrons drawn in currentColor (no nucleus, no clover, no gradients)", () => {
+  it("ships the Sira mark in motion: eight arms + dots around a breathing centre, pure SVG in currentColor, animated by attributes (no SMIL, no colour)", () => {
     const core = source("components/brand/thinking-core.tsx")
     assert.match(core, /export function ThinkingCore\(\{ size = 20, active = true, tone = "default", color, className, title/)
     assert.match(core, /data-thinking-core=\{active \? "active" : "idle"\}/)
-    assert.match(core, /data-brand-geometry="atom"/)
-    assert.match(core, /viewBox="0 0 24 24"/)
+    assert.match(core, /data-brand-geometry="sira"/)
+    assert.match(core, /viewBox=\{`0 0 \$\{geometry\.size\} \$\{geometry\.size\}`\}/)
     assert.match(core, /color: tint/)
     assert.match(core, /var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)/)
-    // Luis (2026-10-02): the same geometry as the AtomMark logo — orbits at
-    // −90° / 30° / 150° (62/170 ellipses), one electron each.
-    assert.match(core, /\{ key: "a", angle: -90, dur: "2\.6s", begin: "0s" \}/)
-    assert.match(core, /\{ key: "b", angle: 30, dur: "3\.1s", begin: "-1\.1s" \}/)
-    assert.match(core, /\{ key: "c", angle: 150, dur: "3\.6s", begin: "-2\.3s" \}/)
-    assert.match(core, /const ORBIT_RY = 3\.65/)
-    assert.match(core, /transform=\{`rotate\(\$\{angle\} \$\{CX\} \$\{CY\}\)`\}/)
-    // Luis (2026-10-02, second pass): dots only — no orbit ring is drawn.
-    // Luis (2026-10-03): no trail either — nothing is stroked, only filled dots.
-    assert.equal((core.match(/stroke="currentColor"/g) || []).length, 0, "no stroke at all: dots only")
-    assert.doesNotMatch(core, /thinking-core__ring/)
-    assert.match(core, /fill="currentColor"/)
-    assert.doesNotMatch(core, /Gradient|<filter|url\(#|#2E7D32"|LEAF_PATH|rotate\(\$\{deg\}\)/)
-    // Electrons move along the exact orbit path with SMIL; no trail dash.
-    assert.match(core, /<animateMotion path=\{ORBIT_PATH\} dur=\{dur\} begin=\{begin\} repeatCount="indefinite" \/>/)
-    assert.doesNotMatch(core, /pathLength=\{100\}|stroke-dashoffset|TRAIL_LONG|TRAIL_SHORT|thinking-core__trail|function Trail/)
-    assert.match(core, /thinking-core__orbit--\$\{key\}/)
-    assert.match(core, /thinking-core__electron--\$\{key\}/)
-    assert.match(core, /thinking-core__electron-live/)
-    assert.match(core, /thinking-core__electron-still/)
-    // Luis (2026-10-05): no centre dot — only the three dots orbit.
-    assert.doesNotMatch(core, /thinking-core__core|cx="12" cy="12" r="2\.6"/)
-    assert.doesNotMatch(core, /thinking-core__ripple/)
-    // Monochrome: electrons inherit the ink; the only colour is the error tone (destructive red).
+    // Luis (2026-10-09): the glyph IS the brand mark — same geometry as
+    // SiraMark via the pure motion model; the resting frame is the logo.
+    assert.match(core, /import \{ frameAt, logoGeometryFor, openFrame, type SiraFrame, type SiraGeometry \} from "@\/lib\/brand\/sira-motion"/)
+    assert.match(core, /const geometry: SiraGeometry = React\.useMemo\(\(\) => logoGeometryFor\(size\), \[size\]\)/)
+    assert.match(core, /const resting = React\.useMemo\(\(\) => openFrame\(geometry\), \[geometry\]\)/)
+    // Eight arms stroked in the ink, eight tip dots and the centre filled in the ink.
+    assert.match(core, /<g className="thinking-core__arms" stroke="currentColor" strokeWidth=\{geometry\.stroke\} strokeLinecap="round">/)
+    assert.match(core, /<line key=\{arm\.index\} className="thinking-core__arm"/)
+    assert.match(core, /<g className="thinking-core__dots" fill="currentColor">/)
+    assert.match(core, /<circle key=\{arm\.index\} className="thinking-core__tip"/)
+    assert.match(core, /<circle className="thinking-core__core" cx=\{resting\.centre\} cy=\{resting\.centre\} r=\{resting\.centerRadius\} \/>/)
+    assert.doesNotMatch(core, /Gradient|<filter|url\(#|#2E7D32"|LEAF_PATH|rotate\(\$\{deg\}\)|A170 62|animateMotion|thinking-core__electron|thinking-core__orbit/)
+    // The animation moves attributes per frame (requestAnimationFrame) and
+    // pauses when hidden or out of view; reduced motion and idle paint the resting frame.
+    assert.match(core, /paint\(svg, frameAt\(now - anchor, geometry\)\)/)
+    assert.match(core, /raf = requestAnimationFrame\(tick\)/)
+    assert.match(core, /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/)
+    assert.match(core, /if \(reduced\?\.matches\) \{\n\s+paint\(svg, resting\)/)
+    assert.match(core, /document\.addEventListener\("visibilitychange", onVisibility\)/)
+    assert.match(core, /new IntersectionObserver\(/)
+    assert.match(core, /line\.setAttribute\("visibility", arm\.distance > 0 \? "visible" : "hidden"\)/, "a closed arm never shows its round caps")
+    assert.doesNotMatch(core, /pathLength=\{100\}|stroke-dashoffset|TRAIL_LONG|TRAIL_SHORT|thinking-core__trail|function Trail|thinking-core__ripple/)
+    // Monochrome: the mark inherits the ink; the only colour is the error tone (destructive red).
     assert.doesNotMatch(core, /--think-electron-/)
     assert.match(core, /const ERROR_TINT = "hsl\(var\(--destructive\)\)"/)
     assert.match(core, /const tint = failed \? ERROR_TINT : color \|\| `var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)`/)
-    assert.match(core, /\{active \? \(\n\s+<circle className="thinking-core__electron-live"/, "idle renders no moving electron")
-    assert.match(core, /<g>\n\s+\{ELECTRONS\.map/, "outer <g> stays attribute-free")
     assert.match(source("components/brand/index.ts"), /export \{ ThinkingCore \} from "\.\/thinking-core"/)
   })
 
@@ -68,17 +65,16 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(source("components/agent-trace.tsx"), /<ClaudeAsterisk size=\{14\} active=\{false\} color="currentColor" \/>/)
   })
 
-  it("hides the static electrons while active and falls back to the still dots under reduced motion (no nucleus beat)", () => {
+  it("keeps the CSS to the box and the label pulse: the mark animates itself and rests under reduced motion", () => {
     const css = source("app/globals.css")
-    assert.doesNotMatch(css, /@keyframes thinking-core-orbit|@keyframes thinking-core-ripple/, "orbits are SMIL now; no ripple")
-    assert.doesNotMatch(css, /@keyframes thinking-core-(pulse|soft)|thinking-core__core/, "no nucleus to beat")
-    assert.match(css, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: none; \}/)
+    assert.doesNotMatch(css, /@keyframes thinking-core-orbit|@keyframes thinking-core-ripple/, "no CSS orbit/ripple")
+    assert.doesNotMatch(css, /@keyframes thinking-core-(pulse|soft)/, "no CSS nucleus beat")
+    assert.doesNotMatch(css, /thinking-core__electron/, "no electron rules: the mark has arms, dots and a centre now")
+    assert.match(css, /\.claude-asterisk \{ transform-origin: 50% 50%; overflow: visible; \}/)
     assert.match(css, /\.thinking-live-label \{ animation: thinking-live-label-pulse 1\.2s ease-in-out infinite; \}/)
-    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce) {\n  .claude-asterisk--active .thinking-core__electron-live"))
-    assert.match(reduced, /\.claude-asterisk--active \.thinking-core__electron-live \{ display: none; \}/)
-    assert.doesNotMatch(css, /thinking-core__trail/)
-    assert.match(reduced, /\.claude-asterisk--active \.thinking-core__electron-still \{ display: inline; \}/)
+    const reduced = css.slice(css.indexOf("@media (prefers-reduced-motion: reduce) {\n  /* The thinking mark itself stops in the component"))
     assert.match(reduced, /\.thinking-live-label \{ animation: none; \}/)
+    assert.doesNotMatch(css, /thinking-core__trail/)
     assert.doesNotMatch(css, /claude-asterisk-spin|claude-asterisk-breathe/)
   })
 
