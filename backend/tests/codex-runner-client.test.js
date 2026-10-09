@@ -74,6 +74,19 @@ test('exec POSTs { project, cmd, timeoutMs } and returns the runner payload verb
   assert.deepEqual(calls[0].body, { project: 'p1', cmd: ['git', 'status'], timeoutMs: 5000 });
 });
 
+test('session client creates, scopes and closes a shell session', async () => {
+  const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, sessionId: 's'.repeat(32) }));
+  const base = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });
+  const scoped = base.forRun('run-7', 'p1');
+  await scoped.createSession('p1');
+  await scoped.exec('p1', ['ls'], { sessionId: 's'.repeat(32) });
+  await scoped.closeSession('s'.repeat(32));
+  assert.deepEqual(calls[0].body, { project: 'p1', run: 'run-7' });
+  assert.deepEqual(calls[1].body, { project: 'p1', cmd: ['ls'], run: 'run-7', sessionId: 's'.repeat(32) });
+  assert.equal(calls[2].url, `http://runner:4097/workspace/session?sessionId=${'s'.repeat(32)}`);
+  assert.equal(calls[2].method, 'DELETE');
+});
+
 test('readFile URL-encodes project and path', async () => {
   const { impl, calls } = fakeFetch(() => jsonResponse({ ok: true, path: 'a b.txt', content: 'x' }));
   const client = createRunnerClient({ fetchImpl: impl, baseUrl: 'http://runner:4097' });

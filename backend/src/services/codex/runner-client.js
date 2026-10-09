@@ -152,17 +152,27 @@ function createRunnerClient({
           null,
           { callTimeoutMs: 45_000 },
         ),
-      exec: (project, cmd, opts = {}) =>
-        // The HTTP abort must outlive the command's own budget — otherwise a
-        // 120s `bun install` gets chopped at the client's 30s default.
-        call('POST', '/workspace/exec', bodyFor({
+      createSession: (project, opts = {}) => call('POST', '/workspace/session', bodyFor({
+        project: projectFor(project),
+      }), { callTimeoutMs: opts.callTimeoutMs, signal: opts.signal }),
+      closeSession: (sessionId, opts = {}) => call('DELETE', `/workspace/session?sessionId=${encodeURIComponent(sessionId)}`, null, {
+        callTimeoutMs: opts.callTimeoutMs,
+        signal: opts.signal,
+      }),
+      exec: (project, cmd, opts = {}) => {
+        const body = bodyFor({
           project: projectFor(project),
           cmd,
           timeoutMs: opts.timeoutMs,
-        }), {
+        });
+        if (opts.sessionId) body.sessionId = opts.sessionId;
+        // The HTTP abort must outlive the command's own budget — otherwise a
+        // 120s `bun install` gets chopped at the client's 30s default.
+        return call('POST', '/workspace/exec', body, {
           callTimeoutMs: opts.timeoutMs ? Math.max(timeoutMs, opts.timeoutMs + 10_000) : undefined,
           signal: opts.signal,
-        }),
+        });
+      },
       // A scoped client assigns its own preview slot to project+run. Legacy
       // unscoped calls keep the historical per-project/no-arg behavior.
       startDev: (project, opts = {}) => call('POST', '/run', bodyFor({

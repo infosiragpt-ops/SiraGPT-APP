@@ -196,6 +196,23 @@ test('run scoping: forwards the run so the exec lands in wt-<run>', async () => 
   assert.deepEqual(runnerCalls.find((c) => c[0] === 'forRun'), ['forRun', 'run123', 'p1']);
 });
 
+test('session exec requires a run and forwards the sessionId to the run-scoped client', async () => {
+  let seen;
+  execImpl = async (project, cmd, opts) => {
+    seen = { project, cmd, opts };
+    return { ok: true, exitCode: 0, timedOut: false, stdout: '', stderr: '', sessionId: opts.sessionId, cwd: 'src' };
+  };
+  const token = 's'.repeat(32);
+  const rejected = await request(app()).post(URL).set(AUTH).send({ cmd: ['ls'], sessionId: token });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.error, 'session_requires_run');
+  const res = await request(app()).post(URL).set(AUTH).send({ cmd: ['ls'], run: 'run123', sessionId: token });
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen.opts, { timeoutMs: undefined, sessionId: token });
+  assert.equal(res.body.sessionId, token);
+  assert.equal(res.body.cwd, 'src');
+});
+
 test('nonzero exit is still a 200 with ok:false + exitCode', async () => {
   execImpl = async () => ({ ok: false, exitCode: 2, timedOut: false, stdout: '', stderr: 'fatal: not a git repository' });
   const res = await request(app()).post(URL).set(AUTH).send({ cmd: ['git', 'status'] });

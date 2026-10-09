@@ -390,6 +390,7 @@ services:
     volumes:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/scripts/code-runner.js:ro
+      - ./scripts/code-runner-session.js:/scripts/code-runner-session.js:ro
       - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
       - runner_bun_cache:/root/.bun/install/cache   # warm re-installs (vite/tailwind/framer-motion)
       # Hybrid "export to disk": Codex V2 mirrors each project's source here so
