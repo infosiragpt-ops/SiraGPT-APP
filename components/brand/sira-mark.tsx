@@ -8,7 +8,8 @@ import { logoGeometryFor, openFrame, type SiraGeometry } from "@/lib/brand/sira-
  * callers pick the ink with a text class (`text-foreground`, `text-white`, …).
  *
  * Proportions come from the supplied artwork (`lib/brand/sira-motion.ts`
- * LOGO_GEOMETRY) and are shared with the animated «Pensando» glyph
+ * LOGO_GEOMETRY; the eight arms are deliberately equal — see the note there)
+ * and are shared with the animated «Pensando» glyph
  * (`components/brand/thinking-core.tsx`), whose resting frame is exactly this
  * mark. Same drawing as `public/brand/sira-mark.svg`. Below 32 px the strokes
  * and dots get an optical size bump so the mark stays legible in the sidebar

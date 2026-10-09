@@ -2560,7 +2560,10 @@ un punto en cada extremo, una sola tinta) y la página «SiraGPT · Animación e
 de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
 - **`lib/brand/sira-motion.ts`** (puro, testeado): el modelo del mark y de su movimiento.
   `LOGO_GEOMETRY` (caja 400: alcance 163, centro 48, semilla 38, punta 37, trazo 17 — proporciones
-  medidas sobre el logo entregado, el mark abierto toca la caja), `LOGO_GEOMETRY_SMALL` (tamaño
+  medidas sobre el logo entregado, el mark abierto toca la caja; **los ocho brazos son iguales a
+  propósito**: la imagen entregada tiene las diagonales ≈ 10,6 % más largas, la animación entregada
+  no, y Jorge eligió los brazos iguales el 2026-10-09 —simetría perfecta y extensión circular para
+  los iconos maskable/adaptativos—; no «corregirlo» re-midiendo el logo), `LOGO_GEOMETRY_SMALL` (tamaño
   óptico para ≤ 32 px), `SHOWCASE_GEOMETRY` (los números exactos del canvas entregado, 720),
   `SIRA_TIMING` (pedido de Jorge el mismo día: «abrirse y cerrarse en 1–1,5 s, profesional» → ciclo
   1500 ms, apertura 720 ms, cierre desde 750 ms, escalonado 10 ms por rango; `duration = close −

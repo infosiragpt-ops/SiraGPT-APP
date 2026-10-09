@@ -53,6 +53,14 @@ export const SHOWCASE_GEOMETRY: SiraGeometry = Object.freeze({ size: 720, reach:
  * the fully open mark touching the box (outer radius 200 = reach + tip):
  * centre 0.24, tip 0.185, reach 0.815, stroke 0.085 of the outer radius.
  * `seed` keeps the closed state a visible dot (same ratio as the showcase).
+ *
+ * DELIBERATE: all eight arms share one `reach`. The supplied static artwork
+ * draws its four diagonal arms ≈ 10.6 % longer than the orthogonal ones
+ * (same dot size); the supplied animation uses a single reach for all eight,
+ * and so does this model — the owner chose the equal arms on 2026-10-09:
+ * perfect 8-fold symmetry, and the mark's extent is a circle, which the
+ * maskable / adaptive icon safe zones rely on. Do not "fix" this by
+ * re-measuring the artwork.
  */
 export const LOGO_GEOMETRY: SiraGeometry = Object.freeze({ size: 400, reach: 163, center: 48, seed: 38, tip: 37, stroke: 17 })
 
