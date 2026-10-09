@@ -485,6 +485,7 @@ const workspaceRunner = require('./src/services/github/workspace-runner.service'
 const hostingRoutes = require('./src/routes/hosting');
 const xSearchRoutes = require('./src/routes/x-search');
 const chatSkillsRoutes = require('./src/routes/chat-skills');
+const automationsRoutes = require('./src/routes/automations');
 const accountingRoutes = require('./src/routes/accounting');
 const linkPreviewRoutes = require('./src/routes/link-preview');
 const adminSecurityRoutes = require('./src/routes/admin/security');
@@ -985,6 +986,8 @@ app.use('/api/appshots/sessions', requireCsrf);
 app.use('/api/projects', requireCsrf);
 // Ajustes → Skills mutations (create/edit/install/delete) are cookie-auth too.
 app.use('/api/skills', requireCsrf);
+// Automations (reminders, recurring jobs, heartbeat) are cookie-auth mutations too.
+app.use('/api/automations', requireCsrf);
 app.use('/api/payments', createPaymentsCsrfMiddleware(requireCsrf));
 app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);
@@ -1374,6 +1377,8 @@ app.use('/api/hosting', hostingRoutes);
 app.use('/api/x-search', xSearchRoutes);
 // Agent Skills catalog for the composer «+ → Skills» (built-in + Biblioteca).
 app.use('/api/skills', chatSkillsRoutes);
+// Agent-created automations (reminders, recurring jobs, loops, heartbeat) — delivered into the originating chat.
+app.use('/api/automations', automationsRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/link-preview', linkPreviewRoutes);
 app.use('/api/doc-agent', docAgentRoutes);

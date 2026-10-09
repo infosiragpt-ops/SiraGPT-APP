@@ -17,6 +17,10 @@
  *   DELETE /api/skills/:name           → delete own / uninstall catalog
  *   GET    /api/skills/:name/download  → SKILL.md
  *
+ * Marketplace (services/skills-import — ClawHub / GitHub / SKILL.md URL):
+ *   GET    /api/skills/marketplace/search?q=  → { ok, query, results }   (per-user rate limit)
+ *   POST   /api/skills/import          → { source, name?, overwrite? } → { ok, skill, provenance }
+ *
  * All routes are user-scoped (auth required). «Para ti» ranks the catalog
  * against the user's memory (Ajustes → Memoria), best-effort.
  */
@@ -24,6 +28,11 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const chatSkills = require('../services/chat-skills');
+const defaultSkillsImport = require('../services/skills-import');
+const { SlidingWindowRateLimiter } = require('../utils/sliding-window-rate-limiter');
+
+// Marketplace searches fan out to a third party: cap them per user.
+const SEARCH_LIMIT_PER_MIN = Math.max(5, Number.parseInt(process.env.SIRAGPT_SKILL_SEARCH_RATE_LIMIT_PER_MIN || '30', 10) || 30);
 
 const MEMORY_SIGNAL_LIMIT = 80;
 const MEMORY_SIGNAL_TIMEOUT_MS = 1500;
@@ -50,13 +59,18 @@ function userIdOf(req) {
 
 function sendError(res, err, fallback) {
   const status = Number(err && err.status) || 500;
-  const message = status < 500 && err && err.message ? err.message : fallback;
-  const code = status < 500 && err && err.code ? err.code : undefined;
-  return res.status(status).json({ ok: false, error: message, code });
+  // SkillImportError messages are user-facing by construction (no upstream
+  // internals), so their 5xx (marketplace down / timeout) keep code + text.
+  const safe = status < 500 || (err && err.name === 'SkillImportError');
+  const message = safe && err && err.message ? err.message : fallback;
+  const code = safe && err && err.code ? err.code : undefined;
+  const details = safe && err && err.details && typeof err.details === 'object' ? err.details : undefined;
+  return res.status(status).json({ ok: false, error: message, code, ...(details ? { details } : {}) });
 }
 
-function createChatSkillsRouter({ auth = authenticateToken, skills = chatSkills, memorySignal = defaultMemorySignal } = {}) {
+function createChatSkillsRouter({ auth = authenticateToken, skills = chatSkills, memorySignal = defaultMemorySignal, skillsImport = defaultSkillsImport } = {}) {
   const router = express.Router();
+  const searchLimiter = new SlidingWindowRateLimiter({ windowMs: 60_000, maxRequests: SEARCH_LIMIT_PER_MIN });
 
   const notifyChanged = (res) => res.set('Cache-Control', 'no-store');
 
@@ -94,6 +108,44 @@ function createChatSkillsRouter({ auth = authenticateToken, skills = chatSkills,
       return res.json({ ok: true, ...result, memoryUsed: Boolean(memoryText) });
     } catch (err) {
       return sendError(res, err, 'No se pudo cargar el catálogo de skills.');
+    }
+  });
+
+  // ── Marketplace (before the /:name handlers) ─────────────────────────────
+  router.get('/marketplace/search', auth, async (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 200) : '';
+    if (!q) return res.status(400).json({ ok: false, error: 'Indica qué buscar (q).', code: 'query_required' });
+    try {
+      const verdict = await searchLimiter.check(`skills-search:${userIdOf(req)}`);
+      if (!verdict.allowed) {
+        res.set('Retry-After', String(Math.max(1, Math.ceil((verdict.retryAfterMs || 1000) / 1000))));
+        return res.status(429).json({ ok: false, error: 'Demasiadas búsquedas; espera un momento.', code: 'rate_limited' });
+      }
+      const limit = Math.min(20, Math.max(1, Number.parseInt(String(req.query.limit || '10'), 10) || 10));
+      const out = await skillsImport.searchMarketplace(q, { limit });
+      res.set('Cache-Control', 'private, no-cache');
+      return res.json({ ok: true, ...out });
+    } catch (err) {
+      return sendError(res, err, 'El marketplace de skills no respondió.');
+    }
+  });
+
+  router.post('/import', auth, express.json({ limit: '8kb' }), async (req, res) => {
+    try {
+      const body = req.body || {};
+      const source = typeof body.source === 'string' ? body.source.trim() : '';
+      if (!source) return res.status(400).json({ ok: false, error: 'Indica la skill a importar (source).', code: 'skill_source_required' });
+      if (source.length > 500) return res.status(400).json({ ok: false, error: 'La referencia es demasiado larga.', code: 'skill_source_invalid' });
+      const out = await skillsImport.importSkill({
+        userId: userIdOf(req),
+        source,
+        name: typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 64) : null,
+        overwrite: body.overwrite === true,
+      });
+      notifyChanged(res);
+      return res.status(201).json({ ok: true, skill: out.skill, provenance: out.provenance, replaced: out.replaced, renamed: out.renamed });
+    } catch (err) {
+      return sendError(res, err, 'No se pudo importar la skill.');
     }
   });
 
@@ -139,7 +191,11 @@ function createChatSkillsRouter({ auth = authenticateToken, skills = chatSkills,
     const skill = skills.loadChatSkill({ userId, name });
     if (!skill) return res.status(404).json({ ok: false, error: 'No existe esa skill.' });
     const state = skills.getSkillState({ userId });
-    return res.json({ ok: true, skill: { ...skill, enabled: !state.disabled.has(name) } });
+    let provenance = null;
+    try {
+      provenance = (skillsImport.listImports({ userId }) || {})[name] || null;
+    } catch (_) { provenance = null; }
+    return res.json({ ok: true, skill: { ...skill, enabled: !state.disabled.has(name), ...(provenance ? { provenance } : {}) } });
   });
 
   router.put('/:name', auth, express.json({ limit: '64kb' }), (req, res) => {
@@ -174,6 +230,7 @@ function createChatSkillsRouter({ auth = authenticateToken, skills = chatSkills,
   router.delete('/:name', auth, (req, res) => {
     try {
       const result = skills.removeSkill({ userId: userIdOf(req), name: req.params.name });
+      try { skillsImport.forgetImport({ userId: userIdOf(req), name: skills.normalizeSkillName(req.params.name) }); } catch (_) { /* provenance is advisory */ }
       notifyChanged(res);
       return res.json({ ok: true, ...result });
     } catch (err) {

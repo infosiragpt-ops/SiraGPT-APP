@@ -318,6 +318,9 @@ const LIVE_DECISION_VERBS = {
   read_url: ['leer una página', (n) => `leer ${n} páginas`],
   web_fetch: ['leer una página', (n) => `leer ${n} páginas`],
   transcribe_url: ['transcribir el audio de un enlace', (n) => `transcribir ${n} enlaces`],
+  automations: ['programar una automatización', (n) => `gestionar ${n} automatizaciones`],
+  search_skills_marketplace: ['buscar skills en el marketplace', (n) => `hacer ${n} búsquedas en el marketplace de skills`],
+  install_skill: ['instalar una skill', (n) => `instalar ${n} skills`],
   web_extract: ['extraer una página', (n) => `extraer ${n} páginas`],
   rag_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
   docintel_retrieve: ['consultar tus documentos', (n) => `consultar tus documentos ${n} veces`],
@@ -2501,7 +2504,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     let skillsPolicyLine = '';
     try {
       if (require('./agent-harness/run-agent-turn').harnessEnabled()) {
-        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill del usuario (las suyas o las que instaló en Ajustes → Skills), carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno. Si el usuario quiere convertir un procedimiento repetible en una skill, redáctala con él y, cuando la apruebe, guárdala con `save_skill`.';
+        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill del usuario (las suyas o las que instaló en Ajustes → Skills), carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno. Si el usuario quiere convertir un procedimiento repetible en una skill, redáctala con él y, cuando la apruebe, guárdala con `save_skill`. Marketplace: si pregunta si existe una skill para algo, quiere explorar o añadir skills de la comunidad (ClawHub), o pega un enlace de ClawHub/GitHub/SKILL.md para instalarla, busca con `search_skills_marketplace` y, solo cuando lo pida, instala con `install_skill` (pide confirmación; las skills bloqueadas por el marketplace se rechazan). Nunca afirmes que una skill quedó instalada sin haber llamado a la herramienta.';
       }
     } catch (_) { skillsPolicyLine = ''; }
     const extraSystem = codingWorkspace
@@ -2553,6 +2556,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       '  5. Si las pruebas pasan, haz `git add`, `git commit`, `git push` al repositorio.',
       '  6. Usa `check_ci_status` o `monitor_ci` para verificar GitHub Actions hasta verde; si CI falla, informa el fallo exacto y no afirmes que quedó en verde.',
       'Cuando el usuario pega el enlace de un video, audio, clase o grabación y pide transcribirlo, subtitularlo, resumir lo que se dice o saber qué dicen en cierto minuto: usa `transcribe_url` con `start`/`end` exactamente como lo pidió («del minuto 1.5 al 10» → start "1:30", end "10:00"; sin rango = todo). La herramienta entra sola a páginas de reproductor (navegador headless) y usa las cookies guardadas del usuario. Si devuelve `media_login_required`, transmite su `userMessage` tal cual (dos caminos: adjuntar el video/audio, o adjuntar UNA vez el archivo cookies.txt de ese sitio, que queda guardado para los próximos enlaces); si devuelve `cookies.saved: true`, dile que su sesión quedó guardada. Nunca digas que no puedes transcribir enlaces sin haber llamado a la herramienta.',
+      'Recordatorios y automatizaciones: cuando el usuario pida que le recuerdes algo, que le avises o envíes algo a una hora o con una frecuencia («recuérdame en 20 minutos…», «mañana a las 9 avísame…», «cada lunes a las 9 mándame el resumen…», «cada 10 minutos revisa si…», «todos los días a las 8…»), o quiera ver, pausar o borrar sus programaciones: usa `automations` (action create/list/pause/resume/remove, `schedule` con sus palabras exactas, `prompt` como instrucción completa para la ejecución futura). La herramienta interpreta la hora en la zona horaria del usuario y la ejecución responderá en ESTE chat; repite al usuario la hora/frecuencia exacta del `summary` para que pueda corregirla. Si no dijo cuándo, pregúntale antes de crear nada. Nunca afirmes que algo quedó programado sin haber llamado a la herramienta.',
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Memoria persistente: el índice del usuario ya está en el system prompt. Abre un tema con `memory_read_topic`, busca con `memory_search` (grep primero), recupera lo hablado en otros chats con `chat_history_search`, busca en Drive/Gmail del usuario con `connector_search`, y guarda hechos nuevos y duraderos con `memory_write` en esta misma conversación (nunca secretos ni detalles efímeros). Si el usuario pide olvidar algo, usa `memory_forget`.',
       preGroundedSources > 0

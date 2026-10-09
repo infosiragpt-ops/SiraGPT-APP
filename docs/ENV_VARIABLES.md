@@ -340,6 +340,29 @@ independently, and must not reuse `JWT_SECRET`, `ENCRYPTION_KEY`,
 
 ---
 
+## Automatizaciones + marketplace de skills (OpenClaw nativo, 2026-10-09)
+
+Automatizaciones creadas por el agente en el chat (recordatorios, cron, bucles, heartbeat;
+`backend/src/services/automations/`) y la importación de skills desde ClawHub / GitHub / URL
+(`backend/src/services/skills-import.js`). Las automatizaciones corren en el worker del scheduler
+Cowork (`SIRAGPT_COWORK_SCHEDULER_*` más abajo) y se entregan en el chat donde se pidieron.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_AUTOMATIONS_MAX_PER_USER` | `25` | Tope de automatizaciones (todas las clases) por usuario; `automation_limit_reached` (409) al superarlo. Máx. 200 |
+| `SIRAGPT_COWORK_SCHEDULER_MODEL` | `native-llm.FLASH` | Modelo del chat de entrega / del runner headless de las tareas programadas (antes `gpt-4o-mini`) |
+| `CLAWHUB_URL` | `https://clawhub.ai` | Base del marketplace de skills (API `/api/v1/*`); solo http(s) |
+| `CLAWHUB_TOKEN` | — | Token opcional (`Authorization: Bearer`) para la API de ClawHub; nunca se envía a un origen distinto del hub |
+| `SIRAGPT_SKILL_IMPORT_MAX_BYTES` | `2097152` (2 MB) | Tope del paquete `.zip/.skill` descargado (mín. 64 KB, máx. 32 MB). El `SKILL.md` suelto se acota a 256 KB |
+| `SIRAGPT_SKILL_IMPORT_DISABLED` | off | `1` desactiva `install_skill`, `POST /api/skills/import` y la búsqueda en el marketplace (503 `skill_import_disabled`) |
+| `SIRAGPT_SKILL_SEARCH_RATE_LIMIT_PER_MIN` | `30` | Búsquedas en el marketplace por usuario y minuto (`GET /api/skills/marketplace/search`, 429 `rate_limited`) |
+| `SIRAGPT_GITHUB_TOKEN` / `GITHUB_TOKEN` | — | Ya existentes; si están, la importación desde GitHub los usa para `raw.githubusercontent.com` (repos privados) |
+
+La zona horaria de los horarios («mañana a las 9») la envía el cliente (`timeZone` en
+`POST /api/ai/generate`, validada con Intl); sin ella se usa UTC.
+
+---
+
 ## Security / Middleware
 
 | Variable | Default | Purpose |

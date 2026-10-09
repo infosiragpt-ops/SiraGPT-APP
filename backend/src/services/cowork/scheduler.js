@@ -5,6 +5,9 @@ const cron = require('node-cron');
 const cronParser = require('cron-parser');
 const controlPlane = require('./control-plane');
 const { notify } = require('./notify');
+// Agent-created automations (reminders, recurring jobs, loops, heartbeat)
+// ride on the same table; `createdFrom` tells them apart (automations/origin).
+const automations = require('../automations');
 
 const WORKER_INTERVAL_MS = Math.max(
   15_000,
@@ -21,6 +24,20 @@ const BATCH_SIZE = Math.min(
 
 let workerTimer = null;
 let workerBusy = false;
+
+function frontendUrl() {
+  return String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '');
+}
+
+function chatUrl(chatId) {
+  return `${frontendUrl()}/agentes?id=${encodeURIComponent(chatId)}`;
+}
+
+function schedulerModel() {
+  // Flash tier by default (3H6 invariant): the cheapest model that runs the
+  // agentic loop well; `SIRAGPT_COWORK_SCHEDULER_MODEL` still overrides.
+  return process.env.SIRAGPT_COWORK_SCHEDULER_MODEL || require('../agent-runner/native-llm').FLASH;
+}
 
 function nextRun(cronExpr, tz, from = new Date()) {
   if (!cron.validate(String(cronExpr || ''))) {
@@ -185,6 +202,17 @@ async function claimTask(prisma, task, workerId, now = new Date()) {
 }
 
 async function ensureDeliveryChat(prisma, task) {
+  const origin = automations.decodeOrigin(task.createdFrom);
+  if (origin.isAutomation && origin.chatId) {
+    // Deliver into the chat where the user asked for the automation (like
+    // OpenClaw posts cron output to the originating channel). A deleted chat
+    // falls through to a fresh one so the result is never dropped.
+    const own = await prisma.chat.findFirst({
+      where: { id: origin.chatId, userId: task.userId, deletedAt: null },
+      select: { id: true },
+    });
+    if (own) return own.id;
+  }
   if (task.workspaceId) {
     const linked = await prisma.chat.findFirst({
       where: { userId: task.userId, coworkWorkspaceId: task.workspaceId, deletedAt: null },
@@ -196,8 +224,10 @@ async function ensureDeliveryChat(prisma, task) {
   const chat = await prisma.chat.create({
     data: {
       userId: task.userId,
-      title: `Scheduled: ${task.prompt.slice(0, 60)}`,
-      model: process.env.SIRAGPT_COWORK_SCHEDULER_MODEL || 'gpt-4o-mini',
+      title: origin.isAutomation
+        ? `Automatización: ${task.prompt.slice(0, 60)}`
+        : `Scheduled: ${task.prompt.slice(0, 60)}`,
+      model: schedulerModel(),
       coworkWorkspaceId: task.workspaceId,
     },
     select: { id: true },
@@ -205,26 +235,55 @@ async function ensureDeliveryChat(prisma, task) {
   return chat.id;
 }
 
+async function touchChat(prisma, chatId) {
+  try {
+    if (typeof prisma.chat?.update !== 'function') return;
+    await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
+  } catch (_) { /* best-effort: surfaces the chat in the sidebar */ }
+}
+
+function automationUserRowContent(task, origin) {
+  if (origin.kind === 'heartbeat') return 'Latido periódico de SiraGPT (automático).';
+  return task.prompt;
+}
+
 async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
+  const origin = automations.decodeOrigin(task.createdFrom);
   const chatId = await ensureDeliveryChat(prisma, task);
   const run = await controlPlane.createRun(prisma, {
     userId: task.userId,
     chatId,
     workspaceId: task.workspaceId,
     prompt: task.prompt,
-    kind: 'scheduled',
+    kind: origin.isAutomation ? `automation:${origin.kind}` : 'scheduled',
     maxSteps: task.maxSteps,
     maxCostUsd: task.maxCostUsd,
     status: 'running',
   });
-  await prisma.message.create({
-    data: {
-      chatId,
-      role: 'USER',
-      content: task.prompt,
-      metadata: { scheduledTaskId: task.id, coworkRunId: run.id },
-    },
-  });
+  const automationMeta = origin.isAutomation
+    ? { automation: { id: task.id, kind: origin.kind, cronExpr: task.cronExpr, tz: task.tz } }
+    : {};
+  let automationSystem = null;
+  if (origin.isAutomation) {
+    let chatTitle = null;
+    try {
+      const chat = await prisma.chat.findFirst({ where: { id: chatId }, select: { title: true } });
+      chatTitle = chat?.title || null;
+    } catch (_) { /* optional context */ }
+    automationSystem = automations.buildAutomationSystemPrompt({ kind: origin.kind, tz: task.tz, chatTitle });
+  } else {
+    // Legacy Cowork task: the prompt row is written before the run (the
+    // workspace chat shows the request while the task works).
+    await prisma.message.create({
+      data: {
+        chatId,
+        role: 'USER',
+        content: task.prompt,
+        metadata: { scheduledTaskId: task.id, coworkRunId: run.id },
+      },
+    });
+  }
+  const source = origin.isAutomation ? `automation:${task.id}` : `cowork-schedule:${task.id}`;
 
   let result;
   try {
@@ -234,8 +293,10 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
         prompt: task.prompt,
         thinking: 'low',
         mode: 'sandbox',
-        source: `cowork-schedule:${task.id}`,
+        source,
         maxSteps: task.maxSteps,
+        chatId,
+        ...(automationSystem ? { extraSystem: automationSystem, automation: automationMeta.automation } : {}),
       });
     } else {
       const { runCoworkHeadless } = require('./headless-runner');
@@ -243,8 +304,9 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
         run,
         chatId,
         prompt: task.prompt,
-        source: `cowork-schedule:${task.id}`,
+        source,
         model: process.env.SIRAGPT_COWORK_SCHEDULER_MODEL || null,
+        extraSystem: automationSystem,
       });
     }
     const answer = String(result?.answer || '(No answer)').trim();
@@ -252,6 +314,29 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
     const terminalStatus = /cancel|abort|budget_exhausted|max_steps/i.test(stoppedReason)
       ? 'cancelled'
       : (/error|failed/i.test(stoppedReason) ? 'failed' : 'completed');
+
+    // NO_REPLY contract (OpenClaw heartbeat/cron): nothing to report ⇒ no
+    // message in the chat, no notification, the run closes quietly.
+    if (origin.isAutomation && terminalStatus === 'completed' && automations.isNoReply(answer)) {
+      await controlPlane.finishRun(prisma, {
+        runId: run.id,
+        userId: task.userId,
+        status: 'completed',
+        lastEvent: 'Automation quiet (NO_REPLY)',
+      });
+      return { ok: true, status: 'quiet', runId: run.id, chatId, answer: '', stoppedReason, automation: origin };
+    }
+
+    if (origin.isAutomation) {
+      await prisma.message.create({
+        data: {
+          chatId,
+          role: 'USER',
+          content: automationUserRowContent(task, origin),
+          metadata: { scheduledTaskId: task.id, coworkRunId: run.id, ...automationMeta, automated: true },
+        },
+      });
+    }
     await prisma.message.create({
       data: {
         chatId,
@@ -261,6 +346,7 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
           scheduledTaskId: task.id,
           coworkRunId: run.id,
           stoppedReason,
+          ...automationMeta,
         },
       },
     });
@@ -269,17 +355,41 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
       userId: task.userId,
       status: terminalStatus,
       lastEvent: terminalStatus === 'completed'
-        ? 'Scheduled task completed'
+        ? (origin.isAutomation ? 'Automation delivered' : 'Scheduled task completed')
         : `Scheduled task stopped: ${stoppedReason}`,
     });
-    if (terminalStatus === 'completed' && task.deliver !== 'chat') {
+    if (origin.isAutomation) {
+      await touchChat(prisma, chatId);
+      if (terminalStatus === 'completed') {
+        await notify(prisma, {
+          userId: task.userId,
+          type: `automation_${origin.kind}`,
+          title: automations.notificationTitleFor(origin.kind),
+          message: answer.slice(0, 600),
+          channels: ['in_app', 'web_push'],
+          actionUrl: chatUrl(chatId),
+          metadata: { automationId: task.id, kind: origin.kind, runId: run.id, chatId },
+        });
+      } else {
+        await notify(prisma, {
+          userId: task.userId,
+          type: 'automation_stopped',
+          title: 'Automatización detenida',
+          message: `La automatización se detuvo: ${stoppedReason}`,
+          severity: 'warning',
+          channels: ['in_app', 'web_push'],
+          actionUrl: chatUrl(chatId),
+          metadata: { automationId: task.id, kind: origin.kind, runId: run.id, chatId, stoppedReason },
+        });
+      }
+    } else if (terminalStatus === 'completed' && task.deliver !== 'chat') {
       await notify(prisma, {
         userId: task.userId,
         type: 'cowork_scheduled_completed',
         title: 'Tarea programada completada',
         message: answer.slice(0, 3500),
         channels: ['in_app', task.deliver],
-        actionUrl: `${String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '')}/agentes?id=${encodeURIComponent(chatId)}`,
+        actionUrl: chatUrl(chatId),
         metadata: { taskId: task.id, runId: run.id, chatId },
       });
     } else if (terminalStatus !== 'completed') {
@@ -290,7 +400,7 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
         message: `La tarea se detuvo: ${stoppedReason}`,
         severity: 'warning',
         channels: ['in_app', 'web_push'],
-        actionUrl: `${String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '')}/agentes?id=${encodeURIComponent(chatId)}`,
+        actionUrl: chatUrl(chatId),
         metadata: { taskId: task.id, runId: run.id, chatId, stoppedReason },
       });
     }
@@ -301,6 +411,7 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
       chatId,
       answer,
       stoppedReason,
+      ...(origin.isAutomation ? { automation: origin } : {}),
     };
   } catch (error) {
     await controlPlane.finishRun(prisma, {
@@ -309,17 +420,57 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
       status: 'failed',
       lastEvent: error.message,
     }).catch(() => {});
-    await notify(prisma, {
-      userId: task.userId,
-      type: 'cowork_scheduled_failed',
-      title: 'Tarea programada detenida',
-      message: String(error.message || 'Unknown error').slice(0, 2000),
-      severity: 'warning',
-      channels: ['in_app', 'web_push'],
-      metadata: { taskId: task.id, runId: run.id },
-    });
+    if (!origin.isAutomation) {
+      // Automations retry with backoff and notify once when they give up
+      // (executeClaimedTask); a notification per attempt would be noise.
+      await notify(prisma, {
+        userId: task.userId,
+        type: 'cowork_scheduled_failed',
+        title: 'Tarea programada detenida',
+        message: String(error.message || 'Unknown error').slice(0, 2000),
+        severity: 'warning',
+        channels: ['in_app', 'web_push'],
+        metadata: { taskId: task.id, runId: run.id },
+      });
+    }
     throw error;
   }
+}
+
+async function settleAutomation(prisma, task, { result, failure, now }) {
+  const outcome = failure ? { ok: false, status: 'failed' } : result;
+  const state = automations.nextStateAfterRun(task, outcome, { now });
+  try {
+    if (state.action === 'delete') {
+      await prisma.scheduledAgentTask.deleteMany({ where: { id: task.id } });
+    } else {
+      await prisma.scheduledAgentTask.update({ where: { id: task.id }, data: state.data });
+    }
+  } catch (_) { /* the lock expires on its own; the next tick retries */ }
+  if (state.disabled) {
+    const origin = automations.decodeOrigin(task.createdFrom);
+    await notify(prisma, {
+      userId: task.userId,
+      type: 'automation_disabled',
+      title: 'Automatización pausada por fallos',
+      message: `«${String(task.prompt).slice(0, 120)}» falló ${state.failures} veces seguidas y quedó pausada. Puedes reactivarla desde el chat.`,
+      severity: 'warning',
+      channels: ['in_app', 'web_push'],
+      ...(origin.chatId ? { actionUrl: chatUrl(origin.chatId) } : {}),
+      metadata: { automationId: task.id, kind: origin.kind, failures: state.failures, chatId: origin.chatId },
+    }).catch(() => {});
+  }
+  if (failure) {
+    return { taskId: task.id, ok: false, error: failure.message, automation: true, failures: state.failures || 0, disabled: Boolean(state.disabled) };
+  }
+  return {
+    taskId: task.id,
+    ...result,
+    automation: true,
+    removed: state.action === 'delete',
+    ...(state.failures ? { failures: state.failures } : {}),
+    ...(state.disabled ? { disabled: true } : {}),
+  };
 }
 
 async function executeClaimedTask(prisma, task, {
@@ -327,6 +478,16 @@ async function executeClaimedTask(prisma, task, {
   runAgentImpl = null,
   nextRunAt = null,
 } = {}) {
+  if (automations.isAutomationOrigin(task.createdFrom)) {
+    let result = null;
+    let failure = null;
+    try {
+      result = await executeTask(prisma, task, { runAgentImpl });
+    } catch (error) {
+      failure = error;
+    }
+    return settleAutomation(prisma, task, { result, failure, now: now || new Date() });
+  }
   try {
     const result = await executeTask(prisma, task, { runAgentImpl });
     await prisma.scheduledAgentTask.update({
@@ -424,6 +585,8 @@ module.exports = {
   WORKER_INTERVAL_MS,
   LOCK_MS,
   nextRun,
+  ensureDeliveryChat,
+  settleAutomation,
   createScheduledTask,
   listScheduledTasks,
   updateScheduledTask,

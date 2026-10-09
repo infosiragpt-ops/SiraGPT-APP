@@ -29,6 +29,7 @@
 
 let defaultSkillAdapter = null;
 try { defaultSkillAdapter = require('../skill-tool-adapter'); } catch (_) { defaultSkillAdapter = null; }
+const { mentionsAutomation } = require('../automations/cues');
 
 const DEFAULT_MAX_TOOLS = Number(process.env.SIRAGPT_TOOL_SELECTION_MAX) || 16;
 const MIN_KEPT = Number(process.env.SIRAGPT_TOOL_SELECTION_MIN) || 8;
@@ -176,6 +177,12 @@ function selectTools(rawInput, deps = {}) {
     // A link + «transcribe / subtítulos / qué dicen en el minuto…»: the
     // transcription tool must survive the cap whatever the intent label.
     if (n === 'transcribe_url' && (signals.transcribeUrl || /transcri|subtit|minuto|timestamp/.test(String(input.userQuery || '').toLowerCase()))) coreSet.add(toName(t));
+    // «recuérdame…», «cada lunes…», «todos los días a las 8…»: the automations
+    // tool must survive the cap whatever the intent label (automations/cues).
+    if (n === 'automations' && (signals.automations || mentionsAutomation(input.userQuery))) coreSet.add(toName(t));
+    // «¿hay una skill para…?», «instala esta skill», «clawhub»: the marketplace
+    // tools (and use_skill) must survive the cap whatever the intent label.
+    if (/^(install_skill|search_skills_marketplace|use_skill)$/.test(n) && /\bskills?\b|habilidad|clawhub|marketplace/i.test(String(input.userQuery || ''))) coreSet.add(toName(t));
     const mentionedTools = new Set(
       (Array.isArray(signals.mentionedAppTools) ? signals.mentionedAppTools : [])
         .map((name) => String(name || '').toLowerCase())

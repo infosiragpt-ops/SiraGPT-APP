@@ -2468,6 +2468,90 @@ escrituras fs del cursor SSE por delta + Map `sseLastEventCursorBySession` sin t
 sin expiración, carrera read-modify-write en chunked upload, fetch sin timeout en ejecutores de apps,
 observador de consultas lentas, `omit apiKey` en el GET de modelos de admin, caché de créditos con pestaña oculta.
 
+## Automatizaciones + marketplace de skills (OpenClaw nativo) — added 2026-10-09
+
+Pedido de Jorge: «los clientes piden que incorporemos funcionalidad de alto impacto de
+https://github.com/openclaw/openclaw». OpenClaw es MIT; según `docs/code/openclaw-port-charter.md`
+se REESCRIBE en nativo (nunca se copia código). Las dos brechas de mayor impacto que SiraGPT no
+cubría: (A) automatizaciones creadas por el agente desde el chat (recordatorios, cron, `/loop`,
+heartbeat) entregadas en el MISMO chat, y (B) instalar skills de la comunidad por referencia
+(ClawHub / GitHub / URL) con verdicto de seguridad. Todo backend + `lib/api.ts` (zona horaria);
+sin migración de Prisma; sin UI nueva.
+
+### A · Automatizaciones (`backend/src/services/automations/`)
+- `schedule.js` (puro): `parseNaturalSchedule(texto, {now, tz})` ES/EN → `{ kind: at|every|cron,
+  cronExpr, tz, at, everyMs, adjusted, description }`: «en 20 minutos», «mañana a las 9», «el
+  viernes a las 10», «cada lunes a las 9», «todos los días a las 8:30», «lunes a viernes a las 9»,
+  «cada fin de semana», «cada mes el día 1», «cada 15 minutos» (minutos/horas se ajustan a divisores
+  cron y lo informa en `adjusted`), «15/10 a las 18», cron de 5 campos. Intervalos ≥ 1 día son
+  `cron`. Errores: `schedule_in_past` / `schedule_too_far` (1 año) / `schedule_too_frequent` (1 min);
+  texto irreconocible ⇒ `null` (la herramienta pregunta, no adivina). `describeSchedule`,
+  `nextRunFor`, `formatLocal`, `normalizeTimeZone` (Intl).
+- `origin.js`: una automatización es una fila de `ScheduledAgentTask` (tabla del scheduler Cowork) con
+  `createdFrom = agent:<once|recurring|loop|heartbeat>;chat=<chatId>` (≤ 60 chars). Las filas `ui`
+  conservan el comportamiento Cowork anterior.
+- `index.js`: `createAutomation` (tope `SIRAGPT_AUTOMATIONS_MAX_PER_USER` = 25, pasos/coste del plan
+  vía `controlPlane.loadUserLimits`, `deliver: 'chat'`), `listAutomations` (`?chatId`), `get/remove/
+  setAutomationEnabled` (reanudar recalcula `nextRunAt` y borra la racha de fallos; un recordatorio
+  vencido no se reanuda) / `runAutomationNow` (encola al próximo tick del worker), heartbeat por
+  usuario (`ensureHeartbeat`: cron `*/30 8-21 * * *` codifica cadencia 15/20/30/60 min + horas
+  activas, con cruce de medianoche; `disableHeartbeat`), `buildAutomationSystemPrompt` (hora local
+  del usuario + contrato `NO_REPLY`), `nextStateAfterRun` (one-shot se BORRA tras éxito; fallo ⇒
+  `lastStatus: failed:N` + backoff 30 s / 1 min / 5 / 15 / 60 min; 10 fallos seguidos ⇒
+  `enabled:false` + `lastStatus: disabled:failures` + notificación; recordatorios se rinden a los 3).
+- **Scheduler** (`cowork/scheduler.js`): `ensureDeliveryChat` entrega en el chat de origen (chat
+  borrado ⇒ chat nuevo «Automatización: …», nunca se pierde el resultado); `executeTask` usa
+  `kind: automation:<kind>`, pasa el system prompt de automatización al headless runner
+  (`headless-runner.runCoworkHeadless({ extraSystem })`), respuesta exactamente `NO_REPLY` ⇒ sin
+  mensaje, sin notificación, `lastStatus: quiet`; con respuesta ⇒ fila USER (el prompt; en heartbeat
+  una línea fija) + fila ASSISTANT con `metadata.automation {id, kind, cronExpr, tz}` + `automated:
+  true`, toca `chat.updatedAt`, notificación in_app + web_push («Recordatorio de SiraGPT» /
+  «SiraGPT tiene algo para ti» / «Automatización ejecutada») con `actionUrl → /agentes?id=<chat>`.
+  Fallos de automatización no notifican por intento (solo al pausarse). Modelo por defecto del chat
+  de entrega: `native-llm.FLASH` (invariante 3H6; antes `gpt-4o-mini`).
+- **Tool del harness `automations`** (`agent-harness/tools/automations-tool.js`, tier `auto`):
+  `create` (prompt + `schedule` con las palabras del usuario) / `list` / `remove` / `pause` /
+  `resume` / `run_now` / `heartbeat_on` / `heartbeat_off`; responde un `summary` en español con la
+  hora local exacta que el modelo repite tal cual. Zona horaria: `lib/api.ts` envía `timeZone`
+  (Intl, con try/catch) en cada `/api/ai/generate`; `routes/ai.js` la valida y la pone en
+  `toolContext.timeZone` (`normalizeTimeZone`, UTC si falta). Línea de política en el prompt del loop
+  agéntico, `LIVE_DECISION_VERBS.automations`, y `tool-selector` la conserva ante señales de
+  programación (`automations/cues.js` `mentionsAutomation`, también como `selection.signals.automations`).
+- **Rutas** `/api/automations` (`routes/automations.js`, CSRF): `GET /health` (público), `GET /`
+  (`?chatId`), `POST /` ({prompt, schedule, chatId, tz}), `GET|DELETE /:id`, `POST /:id/pause|resume|run`,
+  `GET|PUT|DELETE /heartbeat`.
+
+### B · Marketplace de skills (`backend/src/services/skills-import.js`)
+- Fuentes: ClawHub (`clawhub:<slug>`, slug a secas, `https://clawhub.ai/skills/<slug>`), GitHub
+  (`github:owner/repo[/ruta][@ref]`, `owner/repo`, URLs tree/blob), URL directa a un `SKILL.md` o
+  `.zip/.skill`. Flujo ClawHub: `GET /api/v1/skills/:slug/verify` (verdicto `fail`/bloqueada ⇒
+  `skill_blocked` 409 con motivos, sin descargar nada) → `/install` (archive `downloadUrl` o GitHub
+  fijado a commit; `ok:false` ⇒ bloqueada) → zip en memoria (pizzip, sin extraer a disco) →
+  `SKILL.md`. `CLAWHUB_TOKEN` solo viaja al origen del hub, nunca a un CDN ajeno.
+- Postura SSRF de `web_fetch`: `assertSafeUrl` por salto, DNS anti-rebinding (`connectors/web-fetch`
+  `resolveAndAssertSafe`), redirecciones manuales ≤ 3 re-validadas (sin reenviar `authorization`),
+  topes 256 KB (SKILL.md) / `SIRAGPT_SKILL_IMPORT_MAX_BYTES` (zip, 2 MB), HTML rechazado
+  (`skill_not_markdown`). Guarda con `chatSkills.createUserSkill` (misma validación que subir un
+  archivo); un nombre de skill integrada se guarda como `<nombre>-importada`; reimportar actualiza en
+  sitio; una skill propia con ese nombre exige `overwrite`. Procedencia en `.skills-state.json`
+  (`imports[name] = {source, ref, url, version, sha256, importedAt}`; `skills-persist.normalizeSkillState`
+  la conserva acotada y solo escribe la clave cuando hay algo). `searchMarketplace(q)` normaliza
+  `/api/v1/search`. Kill switch `SIRAGPT_SKILL_IMPORT_DISABLED=1`.
+- **Tools del harness**: `search_skills_marketplace` (auto) e `install_skill` (confirm), en
+  `agent-harness/tools/skills-marketplace-tools.js`; política añadida a la línea de Skills del prompt;
+  `tool-selector` las conserva (y `use_skill`) cuando el turno menciona skill/habilidad/clawhub/marketplace.
+- **Rutas** (`routes/chat-skills.js`): `GET /api/skills/marketplace/search?q=` (límite por usuario
+  `SIRAGPT_SKILL_SEARCH_RATE_LIMIT_PER_MIN` = 30, 429 `rate_limited`), `POST /api/skills/import`
+  ({source, name?, overwrite?} → 201 {skill, provenance}); `GET /api/skills/:name` expone
+  `provenance`; `DELETE` olvida la procedencia. `chat-skills` exporta `saveSkillState` y `reservedSkillName`.
+
+### Tests (todos offline)
+`automations-schedule` (10) · `automations-service` (11) · `automations-scheduler` (8) ·
+`automations-tool` (7) · `automations-routes` (5) · `skills-import` (10) · `skills-marketplace-tools`
+(6) · `tests/automations-timezone-source.test.ts` (2). Envs en `docs/ENV_VARIABLES.md`.
+Pendiente (decisión de Luis): canales de negocio entrantes (WhatsApp/Telegram → chat) — requieren
+tokens de proveedor; y una vista de «Automatizaciones» en Ajustes (UI lock).
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

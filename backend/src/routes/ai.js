@@ -2317,6 +2317,9 @@ router.post(
     // Agent Skills picked in the composer («+ → Skills»): up to 3 names.
     body('skills').optional().isArray({ max: 3 }),
     body('skills.*').optional().isString().isLength({ min: 1, max: 64 }),
+    // Client IANA time zone (lib/api.ts sends Intl's): «mañana a las 9» in the
+    // automations tool means 09:00 where the user is. Validated downstream.
+    body('timeZone').optional({ nullable: true }).isString().isLength({ max: 64 }),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -8477,6 +8480,15 @@ router.post(
                     requestedOrganizationId: __requestedOrgIdForAi,
                     activeOrganizationId: __orgIdForAi,
                     chatId: canPersist ? chatId : null,
+                    // IANA zone from the client (automations tool: «mañana a las 9» is
+                    // the user's 09:00); UTC when absent or invalid. Inline on purpose:
+                    // the route tests evaluate this handler in a sandbox without
+                    // module requires, and Intl is the validator either way.
+                    timeZone: (() => {
+                      const raw = typeof req.body?.timeZone === 'string' ? req.body.timeZone.trim() : '';
+                      if (!raw || raw.length > 64) return 'UTC';
+                      try { Intl.DateTimeFormat(undefined, { timeZone: raw }); return raw; } catch (_) { return 'UTC'; }
+                    })(),
                     userEmail: req.user?.email || null,
                     clearance: resolveUserSkillClearance(req.user),
                     prisma,
