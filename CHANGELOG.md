@@ -127,7 +127,8 @@ and improvement cycles follow a sequential number with the date the work landed.
   Capacitor Android launcher + splash PNGs, the iOS AppIcon + splash, the
   Electron desktop `icon.png/.icns/.ico` + Windows appx tiles and the browser
   extension icons — all of which still carried the clover, the knot or the
-  Capacitor default.
+  Capacitor default. The 14 store-listing screenshots under
+  `docs/store-submission/assets` were regenerated with the new mark too.
 
 - Automations the chat agent creates for the user, delivered back into the
   same chat when they fire (2026-10-09, native rewrite of the OpenClaw MIT

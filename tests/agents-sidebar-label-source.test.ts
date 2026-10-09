@@ -10,7 +10,7 @@ describe("agentes sidebar chrome", () => {
     const sidebar = source("components/app-sidebar.tsx")
     assert.doesNotMatch(sidebar, /Modo de la barra lateral/)
     assert.doesNotMatch(sidebar, /role="tablist"/)
-    // The header opens with the brand lockup (atom mark + «SiraGPT»); the browser
+    // The header opens with the brand lockup (Sira mark + «SiraGPT»); the browser
     // history buttons left the strip on 2026-10-01 to make room for the wordmark.
     assert.match(sidebar, /data-testid="sidebar-brand"/)
     assert.doesNotMatch(sidebar, /aria-label="Atrás"/)

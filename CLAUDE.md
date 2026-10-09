@@ -2579,9 +2579,13 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   (`thinking-core__tip`) y el centro (`thinking-core__core`); un `requestAnimationFrame` mueve los
   atributos con `frameAt` (sin SMIL ni canvas: nítido a 12–48 px y `currentColor`). El render del
   servidor, `active={false}` y `prefers-reduced-motion` dibujan el frame abierto (el logo); se
-  pausa con la pestaña oculta o fuera de vista (`IntersectionObserver`). `tone="error"` pinta el
-  mark entero en `--destructive`. El bloque CSS `.claude-asterisk` de `globals.css` ya no tiene
-  reglas de electrones.
+  pausa con la pestaña oculta o fuera de vista (`IntersectionObserver`) y conserva la fase al
+  reanudar; el reloj arranca en el frame abierto (sin salto al estado cerrado); los brazos cerrados
+  se ocultan con `display` (nunca `visibility`, que atravesaría un ancestro oculto); el flag de
+  `prefers-reduced-motion` se sigue en vivo (un cambio de pestaña nunca reanuda el loop con la
+  reducción activa). `tone="error"` pinta el mark entero en `--destructive`. El bloque CSS
+  `.claude-asterisk` de `globals.css` ya no tiene reglas de electrones. Tests de comportamiento:
+  `tests/components/thinking-core.test.tsx` (frames controlados).
 - **Assets — `npm run brand:assets`** (`scripts/generate-brand-assets.cjs`, en el repo; transpila
   `sira-motion.ts` en memoria y renderiza con sharp; `--only=web|social|android|ios|desktop|extension`):
   `public/brand/sira-mark.svg` (precacheado por `sw.js`, `SCHEMA_VERSION` → `sira-v4`),
@@ -2600,8 +2604,11 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   `docs/store-submission/assets/android/play-icon-512.png` (opaco a sangre, Play aplica su máscara;
   `native-store-assets.json` apunta ahí) y `extension/icons/icon-{16,48,128}.png`. Las tarjetas
   sociales rotulan «SiraGPT» en Liberation Sans vía fontconfig: el PNG commiteado es el artefacto
-  (CI nunca lo renderiza); regenerar con `fonts-liberation` instalada. Pendiente que requiere
-  Playwright: capturas de `docs/store-submission/assets` (`npm run native:store:assets:generate`).
+  (CI nunca lo renderiza); regenerar con `fonts-liberation` instalada. Las capturas de ficha de
+  tienda `docs/store-submission/assets/**` (14 PNG) se regeneraron con
+  `npm run native:store:assets:generate` (Playwright + Chromium; en un sandbox sin el build fijado,
+  un preload que fuerce `executablePath` al Chromium del sistema basta). Queda solo la copia
+  heredada `siraGPT/`, que no se compila ni se sirve.
 - Tests: `tests/lib/sira-motion.test.ts` (8, vitest), `brand-clover-source`,
   `thinking-core-source`, `sidebar-brand-header-source`, `claude-thinking-surface-source`,
   `claude-trace-rail-source`, `mobile-thinking-polish-source` actualizados; snapshot de

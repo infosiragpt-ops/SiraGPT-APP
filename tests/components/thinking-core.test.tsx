@@ -117,6 +117,53 @@ describe("ThinkingCore — frame loop", () => {
     expect(moved.x2).toBeCloseTo(expected.arms[2].x, 1)
   })
 
+  it("honours a reduced-motion flip while mounted: a visibility change never restarts the loop, flipping it back resumes", () => {
+    const listeners: Array<(event: { matches: boolean }) => void> = []
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: false,
+      addEventListener: (_type: string, cb: (event: { matches: boolean }) => void) => listeners.push(cb),
+      removeEventListener: vi.fn(),
+    })))
+    const { container } = render(<ThinkingCore size={20} />)
+    const svg = container.querySelector("svg") as SVGSVGElement
+    expect(callbacks).toHaveLength(1)
+    fire(1_000)
+    fire(1_400)
+    expect(readArm(svg, 0).y2).toBeGreaterThan(40)
+    expect(listeners).toHaveLength(1)
+
+    // The user switches reduced motion on: the loop stops and the logo rests.
+    act(() => listeners[0]({ matches: true }))
+    expect(readArm(svg, 0)).toMatchObject({ x2: 200, y2: 40 })
+    callbacks.splice(0)
+    // Tab hidden → visible again must NOT restart the animation.
+    hidden = true
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    hidden = false
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    expect(callbacks).toHaveLength(0)
+    expect(readArm(svg, 0)).toMatchObject({ x2: 200, y2: 40 })
+
+    // Switching it back off resumes the motion without a remount.
+    act(() => listeners[0]({ matches: false }))
+    expect(callbacks).toHaveLength(1)
+    fire(9_000)
+    fire(9_400)
+    expect(readArm(svg, 0).y2).toBeGreaterThan(40)
+  })
+
+  it("renders the resting logo and never animates when reduced motion is already on", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })))
+    const { container } = render(<ThinkingCore size={20} />)
+    const svg = container.querySelector("svg") as SVGSVGElement
+    expect(callbacks).toHaveLength(0)
+    expect(readArm(svg, 0)).toMatchObject({ x2: 200, y2: 40, display: "inline" })
+  })
+
   it("idle and unmount paint the resting logo", () => {
     const { container, rerender, unmount } = render(<ThinkingCore size={20} />)
     const svg = container.querySelector("svg") as SVGSVGElement

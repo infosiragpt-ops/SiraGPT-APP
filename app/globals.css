@@ -8733,7 +8733,7 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
    `.thinking-core__tip`, `.thinking-core__core`), never attributes. */
 .claude-asterisk { transform-origin: 50% 50%; overflow: visible; }
 
-/* Live «Pensando…» label beats softly while the dots orbit. */
+/* Live «Pensando…» label beats softly while the arms open and close. */
 @keyframes thinking-live-label-pulse {
   0%, 100% { opacity: 0.75; }
   50% { opacity: 1; }
@@ -9609,7 +9609,7 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   --success-green: 142 66% 48%;
 }
 
-/* Sidebar brand lockup: atom mark + «SiraGPT» wordmark (2026-10-01; atom since 2026-10-02). */
+/* Sidebar brand lockup: Sira mark + «SiraGPT» wordmark (2026-10-01; eight-arm mark since 2026-10-09). */
 .sidebar-brand__wordmark {
   font-weight: 600;
   letter-spacing: -0.02em;
