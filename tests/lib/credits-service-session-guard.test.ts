@@ -15,11 +15,14 @@ describe("getMyCredits while the session is known to be over", () => {
 
   beforeEach(() => {
     localStorage.clear()
+    // Session-guard cases start with a valid CSRF cookie.
+    document.cookie = "csrf_token=session-guard-csrf; path=/"
     clearAuthRefreshBlock()
     mockFetch.mockReset()
     globalThis.fetch = mockFetch as unknown as typeof fetch
   })
   afterEach(() => {
+    document.cookie = "csrf_token=; Max-Age=0; path=/"
     clearAuthRefreshBlock()
     globalThis.fetch = originalFetch
   })
