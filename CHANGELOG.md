@@ -118,7 +118,7 @@ and improvement cycles follow a sequential number with the date the work landed.
   everywhere in the app (sidebar lockup and rail, BrandLogo, auth pages, PWA
   prompt), the favicon, the PWA/apple icons and the maskable icon. The
   «Pensando» glyph is the same mark in motion: the arms open and close in a
-  continuous two-second cycle (four staggered ranks, quintic easing, dots
+  continuous 1.5 s cycle (the delivered canvas ran at 2 s; four staggered ranks, quintic easing, dots
   bloom after clearing the centre, breathing centre), driven by the pure
   `lib/brand/sira-motion.ts` model and SVG attributes (no SMIL, no canvas);
   idle and reduced-motion render the static logo. `npm run brand:assets`
@@ -127,7 +127,8 @@ and improvement cycles follow a sequential number with the date the work landed.
   Capacitor Android launcher + splash PNGs, the iOS AppIcon + splash, the
   Electron desktop `icon.png/.icns/.ico` + Windows appx tiles and the browser
   extension icons — all of which still carried the clover, the knot or the
-  Capacitor default.
+  Capacitor default. The 14 store-listing screenshots under
+  `docs/store-submission/assets` were regenerated with the new mark too.
 
 - Automations the chat agent creates for the user, delivered back into the
   same chat when they fire (2026-10-09, native rewrite of the OpenClaw MIT

@@ -22,7 +22,7 @@ export type ThinkingCoreProps = React.SVGAttributes<SVGSVGElement> & {
  *
  * Official brand since 2026-10-09 (Luis): the eight-arm mark
  * (`components/brand/sira-mark.tsx`) and its animation — eight arms open and
- * close in a continuous two-second cycle, in four staggered ranks (opposite
+ * close in a continuous 1.5 s cycle (0.75 s each way), in four staggered ranks (opposite
  * arms move together), the dots bloom once they clear the centre and the
  * centre breathes between its seed and its full size. The motion model lives
  * in `lib/brand/sira-motion.ts` (pure, tested); this component only moves
@@ -85,10 +85,10 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
       return undefined
     }
     const reduced = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-reduced-motion: reduce)") : null
-    if (reduced?.matches) {
-      paint(svg, resting)
-      return undefined
-    }
+    // Follows the media query while mounted, so a visibility or viewport
+    // change never restarts the loop after the user switched reduction on
+    // (and switching it off resumes the motion without a remount).
+    let motionAllowed = !reduced?.matches
     let raf = 0
     let anchor: number | null = null
     // Cycle time of the last painted frame. It starts at the close time,
@@ -108,7 +108,7 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
       raf = requestAnimationFrame(tick)
     }
     const start = () => {
-      if (disposed || raf || document.hidden || !inView) return
+      if (disposed || raf || !motionAllowed || document.hidden || !inView) return
       raf = requestAnimationFrame(tick)
     }
     const stop = () => {
@@ -119,7 +119,11 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
     }
     const onVisibility = () => (document.hidden ? stop() : start())
     const onReduced = (event: MediaQueryListEvent) => {
-      if (!event.matches) return
+      motionAllowed = !event.matches
+      if (motionAllowed) {
+        start()
+        return
+      }
       stop()
       paint(svg, resting)
     }
@@ -133,7 +137,8 @@ export function ThinkingCore({ size = 20, active = true, tone = "default", color
       })
       : null
     observer?.observe(svg)
-    start()
+    if (motionAllowed) start()
+    else paint(svg, resting)
     return () => {
       disposed = true
       stop()

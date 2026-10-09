@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import fs from "node:fs"
 import path from "node:path"
+import sharp from "sharp"
 
 const root = process.cwd()
 const source = (rel: string) => fs.readFileSync(path.join(root, rel), "utf8")
@@ -101,6 +102,33 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     assert.match(source("public/sw.js"), /const SCHEMA_VERSION = 'sira-v4'/)
   })
 
+  // Headers prove the containers; this proves the mark is actually drawn where
+  // it belongs — ink in the middle, white or transparent at the corners.
+  it("draws the ink mark in the middle of every generated raster, with white or transparent corners", async () => {
+    const px = async (rel: string, x: number, y: number) => {
+      const { data, info } = await sharp(path.join(root, rel)).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+      const i = (y * info.width + x) * 4
+      return [data[i], data[i + 1], data[i + 2], data[i + 3]]
+    }
+    const INK = [10, 10, 10, 255]
+    const WHITE = [255, 255, 255, 255]
+    assert.deepEqual(await px("public/opengraph-image.png", 600, 253), INK, "social card: the mark's centre is ink")
+    assert.deepEqual(await px("public/opengraph-image.png", 10, 10), WHITE, "social card: white background")
+    assert.deepEqual(await px("public/apple-touch-icon.png", 0, 0), WHITE, "apple icon: opaque white corner (no black corners on iOS)")
+    assert.deepEqual(await px("public/apple-touch-icon.png", 90, 90), INK)
+    assert.equal((await px("public/sira-gpt-512.png", 0, 0))[3], 0, "PWA tile: transparent rounded corner")
+    assert.deepEqual(await px("public/sira-gpt-512.png", 256, 256), INK)
+    assert.deepEqual(await px("public/brand/sira-maskable-512.png", 0, 0), WHITE, "maskable: full-bleed white")
+    assert.equal((await px("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png", 0, 0))[3], 0, "adaptive foreground: transparent outside the mark")
+    assert.deepEqual(await px("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png", 216, 216), INK)
+    assert.deepEqual(await px("ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png", 0, 0), WHITE, "App Store icon: opaque white corner")
+    assert.deepEqual(await px("ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png", 512, 512), INK)
+    assert.deepEqual(await px("docs/store-submission/assets/android/play-icon-512.png", 0, 0), WHITE, "Play icon: opaque full-bleed")
+    assert.equal((await px("apps/desktop/assets/icon.png", 0, 0))[3], 0, "desktop icon: rounded tile with transparent corner")
+    assert.deepEqual(await px("apps/desktop/assets/icon.png", 256, 256), INK)
+    assert.deepEqual(await px("extension/icons/icon-128.png", 64, 64), INK)
+  })
+
   it("keeps CloverMark for the document assets and uses the Sira mark for every in-app logo render", () => {
     const mark = source("components/brand/clover-mark.tsx")
     assert.match(mark, /export function CloverMark/)
@@ -125,7 +153,9 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     assert.doesNotMatch(siraMark, /<image|data:image|A170 62|rotate\(/)
     const motion = source("lib/brand/sira-motion.ts")
     assert.match(motion, /export const LOGO_GEOMETRY: SiraGeometry = Object\.freeze\(\{ size: 400, reach: 163, center: 48, seed: 38, tip: 37, stroke: 17 \}\)/)
-    assert.match(motion, /export const SIRA_TIMING: SiraTiming = Object\.freeze\(\{ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 \}\)/)
+    // Jorge (2026-10-09): the mark opens and closes in 1.5 s; the delivered 2 s canvas timing stays as the showcase reference.
+    assert.match(motion, /export const SIRA_TIMING: SiraTiming = Object\.freeze\(\{ cycle: 1500, start: 0, duration: 720, close: 750, stagger: 10 \}\)/)
+    assert.match(motion, /export const SHOWCASE_TIMING: SiraTiming = Object\.freeze\(\{ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 \}\)/)
     assert.match(motion, /export const ARM_RANKS: readonly number\[\] = Object\.freeze\(\[0, 2, 1, 3, 0, 2, 1, 3\]\)/)
     const asset = source("public/brand/sira-mark.svg")
     assert.match(asset, /viewBox="0 0 400 400"/)

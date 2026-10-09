@@ -4,7 +4,8 @@
  * The official logo (2026-10-09) is an eight-arm mark: a solid centre, eight
  * straight arms (N, NE, E, SE, S, SW, W, NW) ending in solid dots, one ink.
  * Its animation («Animación en blanco y negro», supplied as a canvas page)
- * opens and closes the arms in a continuous two-second cycle: the arms grow
+ * opens and closes the arms in a continuous cycle (1.5 s in the product,
+ * 2 s in the delivered showcase): the arms grow
  * out of the centre in four staggered ranks (opposite arms always share
  * their motion), the dots bloom once they have cleared the centre, and the
  * centre itself breathes from a seed to its full size. Velocity and
@@ -58,7 +59,17 @@ export const LOGO_GEOMETRY: SiraGeometry = Object.freeze({ size: 400, reach: 163
 /** Optical size for ≤ 32 px renders (sidebar 20–22 px, rails 12–16 px): heavier so nothing turns into hairlines. */
 export const LOGO_GEOMETRY_SMALL: SiraGeometry = Object.freeze({ size: 400, reach: 160, center: 52, seed: 42, tip: 40, stroke: 24 })
 
-export const SIRA_TIMING: SiraTiming = Object.freeze({ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 })
+/** The timing as delivered with the showcase canvas: a two-second cycle. */
+export const SHOWCASE_TIMING: SiraTiming = Object.freeze({ cycle: 2000, start: 0, duration: 970, close: 1000, stagger: 10 })
+
+/**
+ * The product timing (Jorge, 2026-10-09: the mark must open and close in
+ * 1–1.5 s, with a professional feel): a 1.5 s cycle, 0.75 s to open and
+ * 0.75 s to close, same stagger. `duration = close - 3 * stagger`, so the
+ * last rank finishes opening exactly when the closing starts and the frame
+ * at `close` is the fully open logo (the resting frame the markup shows).
+ */
+export const SIRA_TIMING: SiraTiming = Object.freeze({ cycle: 1500, start: 0, duration: 720, close: 750, stagger: 10 })
 
 /** Rank of each arm, N clockwise: opposite arms share a rank so they move together. */
 export const ARM_RANKS: readonly number[] = Object.freeze([0, 2, 1, 3, 0, 2, 1, 3])

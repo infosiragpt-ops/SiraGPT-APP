@@ -6,9 +6,9 @@ import type { ThinkingCoreTone } from "@/components/brand/thinking-core"
 
 export type ClaudeAsteriskProps = {
   size?: number
-  /** Animated (thinking) or static (done / reduced motion handled in CSS). */
+  /** Animated (thinking) or static (done). Reduced motion renders the static mark. */
   active?: boolean
-  /** `error` paints the atom in the destructive red (the only colour on a thinking surface). */
+  /** `error` paints the mark in the destructive red (the only colour on a thinking surface). */
   tone?: ThinkingCoreTone
   color?: string
   className?: string
@@ -17,9 +17,10 @@ export type ClaudeAsteriskProps = {
 
 /**
  * The SiraGPT "thinking" glyph. Historically the eight-arm asterisk, then
- * the four-leaf clover (PR #887); since the ThinkingCore change it is the
- * neural core (`components/brand/thinking-core.tsx`) — the clover stays the
- * brand logo everywhere else (sidebar, auth, PWA).
+ * the four-leaf clover (PR #887), the atom (2026-10-02); since 2026-10-09 it
+ * is the official eight-arm Sira mark in motion
+ * (`components/brand/thinking-core.tsx`), the same mark `SiraMark` draws
+ * everywhere else (sidebar, auth, PWA).
  *
  * This is a thin wrapper that keeps the historical name, the
  * `data-claude-asterisk` attributes and the `.claude-asterisk` CSS classes,

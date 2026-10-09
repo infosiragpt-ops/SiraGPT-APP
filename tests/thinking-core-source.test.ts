@@ -43,7 +43,12 @@ describe("ThinkingCore — the «Pensando» glyph", () => {
     assert.match(core, /raf = 0\n\s+\/\/ Re-anchor on the next frame so the clock does not count the pause\.\n\s+anchor = null/)
     assert.match(core, /raf = requestAnimationFrame\(tick\)/)
     assert.match(core, /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/)
-    assert.match(core, /if \(reduced\?\.matches\) \{\n\s+paint\(svg, resting\)/)
+    // Reduced motion is a live flag: the loop never (re)starts while it is on, and
+    // flipping it off resumes without a remount.
+    assert.match(core, /let motionAllowed = !reduced\?\.matches/)
+    assert.match(core, /if \(disposed \|\| raf \|\| !motionAllowed \|\| document\.hidden \|\| !inView\) return/)
+    assert.match(core, /motionAllowed = !event\.matches/)
+    assert.match(core, /if \(motionAllowed\) start\(\)\n\s+else paint\(svg, resting\)/)
     assert.match(core, /document\.addEventListener\("visibilitychange", onVisibility\)/)
     assert.match(core, /new IntersectionObserver\(/)
     // Closed arms are hidden with `display`, never `visibility`: a visible
