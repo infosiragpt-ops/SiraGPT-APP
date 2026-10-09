@@ -2586,15 +2586,21 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   `sira-motion.ts` en memoria y renderiza con sharp; `--only=web|social|android|ios|desktop|extension`):
   `public/brand/sira-mark.svg` (precacheado por `sw.js`, `SCHEMA_VERSION` → `sira-v4`),
   `public/icon.svg` (mark en tinta sobre tile blanco rx 96), `favicon.ico` (16/32/48 PNG-in-ICO con
-  la geometría pesada), `sira-gpt-{180,192,512}.png`, `sira-gpt.png`, `apple-touch-icon.png`,
-  `brand/sira-maskable-512.png` (zona segura 80 %); manifest `purpose: maskable` → ese archivo;
+  la geometría pesada), `sira-gpt-{192,512}.png` / `sira-gpt.png` (tile redondeado con alfa),
+  `sira-gpt-180.png` = `apple-touch-icon.png` (OPACOS a sangre: iOS compone el alfa sobre negro y
+  aplica su propia máscara), `brand/sira-maskable-512.png` (zona segura 80 %); manifest `purpose: maskable` → ese archivo;
   `layout.tsx` usa `?v=sira` para soltar el favicon átomo cacheado. **Fuera de la web** (eran el
   trébol, el nudo o el default de Capacitor): `opengraph-image.png` / `twitter-image.png` (mark +
   «SiraGPT» en Liberation Sans), Android `mipmap-*/ic_launcher{,_round,_foreground}.png` + los 11
   `splash.png`, iOS `AppIcon-512@2x.png` (1024, opaco) + `Splash.imageset`, escritorio
-  `apps/desktop/assets/icon.{png,icns,ico}` (ICNS con 11 entradas PNG, ICO con DIB 16–128 + PNG 256;
-  ambos sobre el mínimo del readiness) + tiles appx (vía `generate-windows-appx-assets.js`, su
-  `--check` sigue verde) y `extension/icons/icon-{16,48,128}.png`. Pendiente que requiere
+  `apps/desktop/assets/icon.{png,icns,ico}` (tile redondeado estilo macOS; ICNS con 11 entradas PNG,
+  ICO con DIB 16–128 + PNG 256; el mínimo del readiness para el `.icns` bajó a 60 kB porque el mark
+  plano comprime mucho mejor que el raster anterior) + tiles appx (vía
+  `generate-windows-appx-assets.js`, su `--check` sigue verde), el icono de ficha de Google Play
+  `docs/store-submission/assets/android/play-icon-512.png` (opaco a sangre, Play aplica su máscara;
+  `native-store-assets.json` apunta ahí) y `extension/icons/icon-{16,48,128}.png`. Las tarjetas
+  sociales rotulan «SiraGPT» en Liberation Sans vía fontconfig: el PNG commiteado es el artefacto
+  (CI nunca lo renderiza); regenerar con `fonts-liberation` instalada. Pendiente que requiere
   Playwright: capturas de `docs/store-submission/assets` (`npm run native:store:assets:generate`).
 - Tests: `tests/lib/sira-motion.test.ts` (8, vitest), `brand-clover-source`,
   `thinking-core-source`, `sidebar-brand-header-source`, `claude-thinking-surface-source`,

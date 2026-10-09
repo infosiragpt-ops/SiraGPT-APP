@@ -13,8 +13,12 @@
  * appx tiles via scripts/generate-windows-appx-assets.js) and the browser
  * extension icons. Ink is #0A0A0A on white; nothing else carries colour.
  *
- * Requires the root dependencies (sharp, typescript). Fonts for the social
- * cards come from the system (Liberation Sans / DejaVu Sans / Arial).
+ * Requires the root dependencies (sharp, typescript). The social cards set
+ * their wordmark in Liberation Sans (metric-compatible with Arial) resolved
+ * through fontconfig at render time; the committed PNGs are the artefact (CI
+ * never renders them), so regenerate them on a machine with the Liberation
+ * fonts installed (fonts-liberation on Debian/Ubuntu) to keep the wordmark
+ * identical.
  */
 
 const fs = require("fs")
@@ -220,8 +224,14 @@ async function web() {
   console.log("web (public/)")
   write("public/brand/sira-mark.svg", siraMarkSvg({ title: "SiraGPT" }) + "\n")
   write("public/icon.svg", tileSvg({ size: 512, ratio: 0.68, radius: TILE_RADIUS }))
-  for (const [rel, size] of [["public/sira-gpt-512.png", 512], ["public/sira-gpt.png", 512], ["public/sira-gpt-192.png", 192], ["public/sira-gpt-180.png", 180], ["public/apple-touch-icon.png", 180]]) {
+  for (const [rel, size] of [["public/sira-gpt-512.png", 512], ["public/sira-gpt.png", 512], ["public/sira-gpt-192.png", 192]]) {
     write(rel, await png(tileSvg({ size, ratio: 0.68, radius: TILE_RADIUS })))
+  }
+  // Apple touch icons: opaque, full-bleed. iOS composites transparent pixels on
+  // black and applies its own continuous-curvature mask, so a rounded tile with
+  // alpha would show black corners on the home screen.
+  for (const rel of ["public/sira-gpt-180.png", "public/apple-touch-icon.png"]) {
+    write(rel, await png(tileSvg({ size: 180, ratio: 0.68 }), { opaque: true }))
   }
   // Maskable: full-bleed white, the mark inside the 80 % safe zone.
   write("public/brand/sira-maskable-512.png", await png(tileSvg({ size: 512, ratio: 0.58 })))
@@ -252,6 +262,8 @@ async function android() {
     // Adaptive foreground: transparent, the mark inside the 66 dp safe circle (the mark's extent IS a circle).
     write(`${dir}/ic_launcher_foreground.png`, await png(tileSvg({ size: foreground, ratio: 0.58, background: null })))
   }
+  // Google Play listing icon: 512², opaque, full-bleed (Play applies its own mask).
+  write("docs/store-submission/assets/android/play-icon-512.png", await png(tileSvg({ size: 512, ratio: 0.68 }), { opaque: true }))
   const splash = {
     "drawable": [480, 320],
     "drawable-land-mdpi": [480, 320],
@@ -285,8 +297,7 @@ async function desktop() {
   const tiles = new Map()
   for (const size of [16, 24, 32, 48, 64, 128, 256, 512, 1024]) {
     const geometry = size <= 32 ? LOGO_GEOMETRY_SMALL : LOGO_GEOMETRY
-    // Level 6 keeps a margin over the store-readiness floor for icon.icns (100 kB) without changing pixels.
-    tiles.set(size, await png(tileSvg({ size, ratio: 0.66, radius: 0.22, geometry }), { level: 6 }))
+    tiles.set(size, await png(tileSvg({ size, ratio: 0.66, radius: 0.22, geometry })))
   }
   write("apps/desktop/assets/icon.png", tiles.get(512))
   write("apps/desktop/assets/icon.icns", buildIcns(tiles))

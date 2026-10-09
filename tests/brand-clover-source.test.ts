@@ -68,6 +68,15 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
       return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20), alpha: buf[25] === 6 }
     }
     assert.deepEqual(pngSize("public/opengraph-image.png"), { width: 1200, height: 630, alpha: true })
+    // Apple touch icons are opaque and full-bleed: iOS composites alpha on black under its own mask.
+    assert.deepEqual(pngSize("public/apple-touch-icon.png"), { width: 180, height: 180, alpha: false })
+    assert.ok(fs.readFileSync(path.join(root, "public/apple-touch-icon.png")).equals(fs.readFileSync(path.join(root, "public/sira-gpt-180.png"))), "sira-gpt-180 is the same opaque icon")
+    assert.deepEqual(pngSize("public/sira-gpt-512.png"), { width: 512, height: 512, alpha: true })
+    // Google Play listing icon: opaque full-bleed square, separate from the rounded desktop icon.
+    assert.deepEqual(pngSize("docs/store-submission/assets/android/play-icon-512.png"), { width: 512, height: 512, alpha: false })
+    const storeManifest = JSON.parse(source("docs/store-submission/native-store-assets.json"))
+    const playIcon = storeManifest.platforms.android.requiredAssets.find((a: { id: string }) => a.id === "play-high-res-icon")
+    assert.deepEqual({ path: playIcon.path, allowAlpha: playIcon.allowAlpha }, { path: "docs/store-submission/assets/android/play-icon-512.png", allowAlpha: false })
     assert.ok(fs.readFileSync(path.join(root, "public/opengraph-image.png")).equals(fs.readFileSync(path.join(root, "public/twitter-image.png"))), "one card for both networks")
     assert.deepEqual(pngSize("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png"), { width: 192, height: 192, alpha: true })
     assert.deepEqual(pngSize("android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png"), { width: 432, height: 432, alpha: true })
@@ -81,7 +90,8 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
     const icns = fs.readFileSync(path.join(root, "apps/desktop/assets/icon.icns"))
     assert.equal(icns.toString("latin1", 0, 4), "icns")
     assert.equal(icns.readUInt32BE(4), icns.length, "icns length header matches the file")
-    assert.ok(icns.length >= 100_000, "store readiness floor for icon.icns")
+    const icnsFloor = storeManifest.platforms.macos.requiredAssets.find((a: { id: string }) => a.id === "macos-icns-icon").minBytes
+    assert.ok(icns.length >= icnsFloor, `store readiness floor for icon.icns (${icns.length} < ${icnsFloor})`)
     const ico = fs.readFileSync(path.join(root, "apps/desktop/assets/icon.ico"))
     assert.deepEqual([ico.readUInt16LE(0), ico.readUInt16LE(2), ico.readUInt16LE(4)], [0, 1, 7], "ICO with 7 entries (16…256)")
     assert.ok(ico.length >= 50_000, "store readiness floor for icon.ico")

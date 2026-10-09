@@ -21,6 +21,9 @@ describe("sira-motion — the brand motion model", () => {
     expect(ARM_DIRECTIONS[2]).toMatchObject({ x: 1, y: 0, rank: 1 })
     expect(ARM_DIRECTIONS[4]).toMatchObject({ x: 0, y: 1, rank: 0 })
     for (let i = 0; i < 4; i += 1) expect(ARM_RANKS[i]).toBe(ARM_RANKS[i + 4])
+    // The delivered rank table: N/S first, E/W second, NE/SW third, SE/NW last.
+    expect([...ARM_RANKS]).toEqual([0, 2, 1, 3, 0, 2, 1, 3])
+    expect(ARM_DIRECTIONS.map((d) => d.rank)).toEqual([...ARM_RANKS])
   })
 
   it("smooth is a quintic smoothstep clamped to [0, 1]", () => {

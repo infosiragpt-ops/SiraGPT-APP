@@ -21,8 +21,9 @@
           "id": "play-high-res-icon",
           "label": "Google Play high-res icon",
           "stage": "store-listing",
-          "path": "apps/desktop/assets/icon.png",
+          "path": "docs/store-submission/assets/android/play-icon-512.png",
           "format": "png",
+          "allowAlpha": false,
           "dimensions": {
             "width": 512,
             "height": 512
@@ -148,7 +149,7 @@
           "stage": "packaged",
           "path": "apps/desktop/assets/icon.icns",
           "format": "icns",
-          "minBytes": 100000
+          "minBytes": 60000
         },
         {
           "id": "macos-png-icon-source",
