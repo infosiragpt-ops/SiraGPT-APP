@@ -207,8 +207,8 @@ function retryFixture(t, { workerStartsBeforeAck = false, failRetryMirror = fals
     },
     taskStore: {
       ...taskStore,
-      appendTaskEvent: (...args) => {
-        const row = taskStore.appendTaskEvent(...args);
+      appendTaskEventBuffered: (...args) => {
+        const row = taskStore.appendTaskEventBuffered(...args);
         if (workerStartsBeforeAck && !retryTask && args[1].type === 'repair_attempt') {
           retryTask = { ...row, status: 'running', controller: new AbortController() };
           active.set(retryTask.taskId, retryTask);
@@ -216,7 +216,7 @@ function retryFixture(t, { workerStartsBeforeAck = false, failRetryMirror = fals
         return row;
       },
     }, claimTaskCancel, buildCancelAck,
-    persistCancelRequest: (row) => taskStore.updateTaskSnapshot(row.taskId, row.userId, { cancelRequestedAt: row.cancelRequestedAt }),
+    persistCancelRequest: (row) => taskStore.updateTaskSnapshotBuffered(row.taskId, row.userId, { cancelRequestedAt: row.cancelRequestedAt }),
     resolveUserSkillClearance: () => 'authenticated',
     enqueueAgentTask: async () => ({ id: 'attempt-2' }),
     getQueueName: () => 'synthetic-queue',
@@ -233,7 +233,7 @@ function retryFixture(t, { workerStartsBeforeAck = false, failRetryMirror = fals
     TASK_EVENT_LIMIT: 1000,
     appendTaskEvent: (row, event, state) => {
       row.events.push(event);
-      taskStore.appendTaskEvent(row, event, state);
+      taskStore.appendTaskEventBuffered(row, event, state);
     },
     durableExecutionStore: {}, metrics: { counter() {} }, console,
     ...require('../src/services/agents/agent-task-honest-progress'),

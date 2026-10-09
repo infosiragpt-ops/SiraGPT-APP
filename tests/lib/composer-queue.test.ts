@@ -47,13 +47,13 @@ describe("durable composer queue", () => {
     expect(serialized[0]).not.toHaveProperty("ignoredSecret")
   })
 
-  it("bounds the number of durable attachments per queued task", () => {
+  it("never silently removes durable attachments before admission", () => {
     const serialized = serializeComposerQueueFiles(
       Array.from({ length: 60 }, (_, index) => ({ fileId: `upload-${index}`, name: `file-${index}.txt` })),
     )
 
-    expect(serialized).toHaveLength(50)
-    expect(serialized.at(-1)?.fileId).toBe("upload-49")
+    expect(serialized).toHaveLength(60)
+    expect(serialized.at(-1)?.fileId).toBe("upload-59")
   })
 
   it("restores all 50 recording IDs and failures after a reload", () => {
@@ -83,20 +83,28 @@ describe("durable composer queue", () => {
     expect(readPersistedComposerQueue("user-a")).toEqual([])
   })
 
-  it("bounds localStorage use and keeps the newest queued tasks", () => {
+  it("rejects an oversized admission without evicting earlier tasks", () => {
+    const first = queueItem()
+    expect(writePersistedComposerQueue("user-a", [first])).toBe(true)
     const items = Array.from({ length: 50 }, (_, index) => queueItem({
-      id: `queue-${index}`,
-      msg: `${index}:`.padEnd(64 * 1024, "x"),
-      idempotencyKey: `send-${index}`,
+      id: `queue-${index}`, msg: `${index}:`.padEnd(64 * 1024, "x"), idempotencyKey: `send-${index}`,
     }))
+    expect(writePersistedComposerQueue("user-a", items)).toBe(false)
+    expect(readPersistedComposerQueue("user-a")).toEqual([first])
+  })
 
-    expect(writePersistedComposerQueue("user-a", items)).toBe(true)
-    const raw = window.localStorage.getItem("sira:chat-composer-queue:v1:user-a") || ""
-    const restored = readPersistedComposerQueue("user-a")
+  it("rejects the 51st task and too many attachments without modifying storage", () => {
+    const first = queueItem()
+    writePersistedComposerQueue("user-a", [first])
+    expect(writePersistedComposerQueue("user-a", Array.from({ length: 51 }, (_, i) => queueItem({ id: `q${i}` })))).toBe(false)
+    expect(writePersistedComposerQueue("user-a", [queueItem({ files: Array.from({ length: 51 }, (_, i) => ({ id: `f${i}` })) })])).toBe(false)
+    expect(readPersistedComposerQueue("user-a")).toEqual([first])
+  })
 
-    expect(raw.length).toBeLessThanOrEqual(512 * 1024)
-    expect(restored.length).toBeLessThan(50)
-    expect(restored.at(-1)?.id).toBe("queue-49")
+  it("does not truncate the user's queued text and rejects a storage failure", () => {
+    const long = queueItem({ msg: "x".repeat(70 * 1024) })
+    expect(long.msg).toHaveLength(70 * 1024)
+    expect(writePersistedComposerQueue("user-a", [long])).toBe(false)
   })
 
   it("clears every account queue on logout cleanup", () => {

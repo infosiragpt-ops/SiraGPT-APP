@@ -18,8 +18,8 @@ describe("model selection persistence source contract", () => {
   })
 
   it("persists the picker choice on the conversation", () => {
-    assert.match(picker, /setLastModel\(model\.name\)/)
-    assert.match(picker, /updateChat\(currentChat\.id, \{ model: model\.name \}\)/)
+    assert.match(picker, /setLastModel\((?:next|choice)\.name\)/)
+    assert.match(picker, /updateChat\(chatId, \{ model: choice\.name \}\)/)
     assert.match(context, /applyChatModelSelection/)
   })
 })

@@ -218,3 +218,23 @@ test('analysePage: clamps confidence to [0, 1] range', async () => {
 test('run: rejects empty query', async () => {
   await assert.rejects(() => agent.run({ query: '' }), /query is required/);
 });
+
+test('analysePage preserves the explicitly selected model and signal, without attaching screenshots to a text model', async () => {
+  const controller = new AbortController();
+  let captured;
+  await analysePage({
+    pageData: { url: 'https://example.com', text: 'source', screenshotBase64: 'aGVsbG8=' },
+    paper: { title: 'source' }, query: 'query', model: 'selected-model', signal: controller.signal, strictModel: true, supportsVision: false,
+    aiClient: { chat: { completions: { create: async (body, options) => { captured = { body, options }; return { choices: [{ message: { content: '[]' } }] }; } } } },
+  });
+  assert.equal(captured.body.model, 'selected-model');
+  assert.equal(captured.options.signal, controller.signal);
+  assert.equal(captured.body.messages[0].content.some(item => item.type === 'image_url'), false);
+});
+
+test('analysePage does not silently replace a failed selected-model answer with an abstract', async () => {
+  await assert.rejects(analysePage({
+    pageData: { url: 'https://example.com' }, paper: { title: 'paper', abstract: 'fallback' }, query: 'query', model: 'selected-model', strictModel: true,
+    aiClient: { chat: { completions: { create: async () => { throw new Error('provider unavailable'); } } } },
+  }), /provider unavailable/);
+});

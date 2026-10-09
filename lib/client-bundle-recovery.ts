@@ -75,6 +75,8 @@ export function reloadOnceForStaleBundle(err: BoundaryError | null | undefined, 
     const previous = Number(storage.getItem(key) || 0)
     if (Number.isFinite(previous) && previous > 0 && now - previous < cooldownMs) return false
     storage.setItem(key, String(now))
+    // Synchronous listeners flush draft state before navigation starts.
+    if (hasWindow) window.dispatchEvent(new Event("siragpt:before-bundle-reload"))
     const reload = opts.reload ?? (() => window.location.reload())
     reload()
     return true

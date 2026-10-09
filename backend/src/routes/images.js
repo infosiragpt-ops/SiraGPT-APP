@@ -43,6 +43,8 @@ const imageProvider = require('../services/image-provider');
 const objectStorage = require('../services/object-storage');
 const crypto = require('crypto');
 const prisma = require('../config/database');
+const { getMediaJobStore } = require('../services/media/job-store');
+const { downloadAndStore } = require('../services/media/transfer');
 
 const router = express.Router();
 
@@ -81,15 +83,10 @@ async function persistAssetsToR2(userId, assets) {
     if (!src) continue;
     if (!objectStorage.enabled()) { urls.push(src); continue; }
     try {
-      const resp = await fetch(src, { signal: AbortSignal.timeout(Number(process.env.ASSET_FETCH_TIMEOUT_MS) || 30000) });
-      if (!resp.ok) { try { await resp.body?.cancel?.(); } catch { /* noop */ } urls.push(src); continue; }
-      const buf = Buffer.from(await resp.arrayBuffer());
-      const ct = resp.headers.get('content-type') || 'image/png';
-      const ext = ct.includes('jpeg') ? 'jpg' : ct.includes('webp') ? 'webp' : ct.includes('gif') ? 'gif' : 'png';
       const seg = objectStorage.sanitizeSegment(userId);
-      const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.${ext}`;
+      const filename = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}.png`;
       const key = `uploads/images/${seg}/${filename}`;
-      await objectStorage.putBuffer({ key, buffer: buf, contentType: ct });
+      await downloadAndStore(src, { key, kind: 'image', storage: objectStorage });
       urls.push(`/uploads/images/${seg}/${filename}`);
     } catch (err) {
       console.warn(`[images] R2 asset copy failed, keeping provider URL: ${err && err.message}`);
@@ -738,6 +735,14 @@ router.post(
 // ── GET /api/images/jobs/:id ───────────────────────────────────────
 router.get('/jobs/:id', authenticateToken, async (req, res, next) => {
   try {
+    const job = await getMediaJobStore().owned(req.params.id, req.user.id);
+    if (job?.lane === 'image') {
+      return res.json({ jobId: job.id, status: job.status,
+        phase: job.cancel_requested_at && ['queued', 'running'].includes(job.status) ? 'Cancelando' : job.phase,
+        progress: job.progress, result: job.result || null,
+        error: job.error_message || null, code: job.error_code || null,
+        ...(job.status === 'unknown' ? { retryable: false } : {}) });
+    }
     const row = await prisma.generatedImage.findUnique({ where: { id: req.params.id } });
     if (!row || row.userId !== req.user.id) {
       return res.status(404).json({ error: 'image not found' });
@@ -746,6 +751,16 @@ router.get('/jobs/:id', authenticateToken, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+router.post('/jobs/:id/cancel', authenticateToken, async (req, res, next) => {
+  try {
+    const store = getMediaJobStore();
+    const owned = await store.owned(req.params.id, req.user.id);
+    if (!owned || owned.lane !== 'image') return res.status(404).json({ error: 'image not found' });
+    const job = await store.cancel(req.user.id, req.params.id);
+    return res.json({ jobId: job.id, status: job.status, phase: ['queued', 'running'].includes(job.status) ? 'Cancelando' : job.phase, progress: job.progress });
+  } catch (error) { next(error); }
 });
 
 // ── GET /api/images/history ────────────────────────────────────────

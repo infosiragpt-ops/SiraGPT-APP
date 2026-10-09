@@ -88,3 +88,37 @@ test('flags user password mutations without a literal hash', () => {
   const findings = scanFile(f);
   assert.ok(findings.some((x) => x.ruleId === 'user-password-dml' && x.severity === 'forbidden'));
 });
+
+const { execFileSync } = require('node:child_process');
+const { scanRepository } = require('../../scripts/check-migration-safety');
+function historyFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'migration-history-'));
+  const old = path.join(root, 'backend/prisma/migrations/20260101000000_base/migration.sql');
+  fs.mkdirSync(path.dirname(old), { recursive: true }); fs.writeFileSync(old, 'CREATE TABLE immutable_history(id TEXT);');
+  execFileSync('git', ['init', '--quiet', root]);
+  execFileSync('git', ['-C', root, 'add', '.']);
+  execFileSync('git', ['-C', root, '-c', 'user.name=Migration test', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'fixture']);
+  return { root, old };
+}
+test('base-ref scans actual new SQL only, while immutable historical changes cannot be overridden', () => {
+  const { root, old } = historyFixture();
+  const next = path.join(root, 'backend/prisma/migrations/20260102000000_new/migration.sql');
+  fs.mkdirSync(path.dirname(next)); fs.writeFileSync(next, 'ALTER TABLE immutable_history ADD COLUMN optional TEXT;');
+  assert.equal(scanRepository('HEAD', { root }).files.length, 1);
+  assert.deepStrictEqual(scanRepository('HEAD', { root }).findings, []);
+  fs.appendFileSync(old, '\n-- migration-safety: allow-destructive reason="not valid for history"');
+  assert.ok(scanRepository('HEAD', { root }).findings.some(row => row.ruleId === 'migration-history-mutated' && row.severity === 'forbidden'));
+  fs.unlinkSync(old);
+  assert.ok(scanRepository('HEAD', { root }).findings.some(row => row.ruleId === 'migration-history-mutated'));
+});
+test('base-ref rejects newly destructive or backdated migrations', () => {
+  const { root } = historyFixture();
+  const next = path.join(root, 'backend/prisma/migrations/20250101000000_backdated/migration.sql');
+  fs.mkdirSync(path.dirname(next)); fs.writeFileSync(next, 'TRUNCATE immutable_history;');
+  const findings = scanRepository('HEAD', { root }).findings;
+  assert.ok(findings.some(row => row.ruleId === 'migration-history-backdated'));
+  assert.ok(findings.some(row => row.ruleId === 'truncate-data'));
+});
+test('adding required columns without backfill/default is unsafe on populated tables', () => {
+  assert.ok(scanFile(writeTmp('ALTER TABLE users ADD COLUMN required TEXT NOT NULL;')).some(row => row.ruleId === 'add-required-no-default'));
+});

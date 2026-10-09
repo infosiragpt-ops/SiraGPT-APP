@@ -1960,7 +1960,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     if (subTasks.length >= 2) {
       try {
         throwIfAborted(externalSignal);
-        taskStore.markTaskStatus({ taskId, userId: user.id }, 'running');
+        await taskStore.markTaskStatusAsync({ taskId, userId: user.id }, 'running');
         const fj = await forkJoin({
           subTasks,
           user,
@@ -1972,7 +1972,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             signal: externalSignal,
             onEvent: (type, data) => {
               try {
-                taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
+                taskStore.appendTaskEventBuffered({ taskId, userId: user.id }, { type, payload: data });
               } catch (err) {
                 // Best-effort: keep the multi-agent run going, but surface a lost
                 // sub-task event (durable trace + SSE replay feed off this hook).
@@ -1982,7 +1982,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
         throwIfAborted(externalSignal);
-        taskStore.markTaskStatus(
+        await taskStore.markTaskStatusAsync(
           { taskId, userId: user.id },
           fj.ok ? 'completed' : 'failed',
           { mergedSummary: fj.mergedSummary || null },
@@ -1990,7 +1990,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         return { ok: fj.ok, pattern: 'fork_join', mergedSummary: fj.mergedSummary, results: fj.results };
       } catch (error) {
         if (externalSignal?.aborted) {
-          taskStore.markTaskStatus({ taskId, userId: user.id }, 'cancelled');
+          await taskStore.markTaskStatusAsync({ taskId, userId: user.id }, 'cancelled');
         }
         throw error;
       }
@@ -2045,7 +2045,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const executiveSummary = require('../attribution-executive-summary');
       const attrSummary = executiveSummary.buildSummary({ prompt: String(goal || '') });
       try {
-        taskStore.appendTaskEvent({ taskId, userId: user.id }, {
+        taskStore.appendTaskEventBuffered({ taskId, userId: user.id }, {
           type: 'attribution_summary',
           payload: {
             headline: attrSummary.headline,
@@ -2169,7 +2169,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       : { graphId: enterpriseExecutionGraph.graph_id, persisted: false },
   };
 
-  const task = internals.createTaskRecord({
+  const task = await internals.createTaskRecordAsync({
     taskId,
     createdAt: payload.createdAt || existing?.createdAt,
     userId: user.id,
@@ -2246,7 +2246,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const enriched = enrichAgentTaskEvent(event, progressTracker);
     streamState = internals.reduceAgentState(streamState, enriched);
     task.streamState = streamState;
-    const written = taskStore.appendTaskEvent(task, enriched, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
+    const written = taskStore.appendTaskEventBuffered(task, enriched, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
     if (written) {
       task.events = written.events || task.events;
       task.checkpoints = written.checkpoints || task.checkpoints;
@@ -2492,7 +2492,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           });
         assistantMessageId = assistantMessageId || assistant?.id || null;
         task.assistantMessageId = assistantMessageId;
-        taskStore.markTaskStatus(task, 'running', { assistantMessageId, streamState });
+        await taskStore.markTaskStatusAsync(task, 'running', { assistantMessageId, streamState });
       }
     } catch {
       // DB persistence is intentionally non-fatal for local/dev.
@@ -2543,7 +2543,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   let lockHeartbeatLastWarnAt = 0;
   const tickHeartbeat = async () => {
     try {
-      taskStore.touchTaskHeartbeat(taskId, user.id);
+      taskStore.touchTaskHeartbeatBuffered(taskId, user.id);
     } catch { /* never break the live run */ }
     if (job && typeof job.extendLock === 'function' && job.token) {
       try {
@@ -2621,7 +2621,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
     }
 
-    taskStore.markTaskStatus(task, status, {
+    await taskStore.markTaskStatusAsync(task, status, {
       streamState,
       documentPolicy,
       stats: {
@@ -3479,7 +3479,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
       }
 
-      taskStore.markTaskStatus(task, status, {
+      await taskStore.markTaskStatusAsync(task, status, {
         streamState,
         stats: {
           steps: 2,
@@ -3638,7 +3638,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
       }
 
-      taskStore.markTaskStatus(task, status, {
+      await taskStore.markTaskStatusAsync(task, status, {
         streamState,
         stats: {
           steps: 1,
@@ -3971,8 +3971,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       maxSteps: effectiveMaxSteps,
       maxRuntimeMs,
       resumeCheckpoint,
-      onCheckpoint: (cp) => {
-        try { taskStore.saveRunnerCheckpoint(taskId, user.id, cp); } catch (cpErr) {
+      onCheckpoint: async (cp) => {
+        try { await taskStore.saveRunnerCheckpointAsync(taskId, user.id, cp); } catch (cpErr) {
           try { console.warn(`[agent-task-runner] checkpoint save failed for ${taskId}:`, cpErr?.message || cpErr); } catch (_) {}
         }
       },
@@ -4453,7 +4453,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
     }
 
-    taskStore.markTaskStatus(task, status, {
+    await taskStore.markTaskStatusAsync(task, status, {
       streamState,
       documentPolicy,
       stats: {
@@ -4590,7 +4590,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const message = errorEvent.message;
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
     emit(errorEvent);
-    taskStore.markTaskStatus(task, task.status, {
+    await taskStore.markTaskStatusAsync(task, task.status, {
       streamState,
       stats: { durationMs: Date.now() - startedAt, error: message },
     });
@@ -4621,7 +4621,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           : 'La tarea terminó sin evento terminal.';
         task.status = controller?.signal?.aborted ? 'cancelled' : 'error';
         emit({ type: 'error', message });
-        taskStore.markTaskStatus(task, task.status, {
+        await taskStore.markTaskStatusAsync(task, task.status, {
           streamState,
           stats: { durationMs: Date.now() - startedAt, error: message },
         });

@@ -12,17 +12,15 @@ const chatInterface = fs.readFileSync(chatInterfacePath, "utf8")
 const apiClient = fs.readFileSync(apiClientPath, "utf8")
 
 describe("chat image generation resilience source contract", () => {
-  it("keeps image generation alive after mobile/proxy socket close when a chat can persist the result", () => {
-    assert.match(
-      aiRoute,
-      /if\s*\(!detachOnDisconnect\)\s*\{\s*requestAbortController\.abort\(\);\s*\}/,
-      "server should only abort a closed image request before a valid chat persistence target exists"
-    )
-    assert.match(
-      aiRoute,
-      /requestAbortController\.signal\.aborted\s*&&\s*!clientDisconnected/,
-      "server should not treat a disconnected mobile/proxy socket as a real user abort"
-    )
+  it("acknowledges a durable image job before provider work and keeps the worker independent of the HTTP socket", () => {
+    const start = aiRoute.indexOf("async function handleChatImage(req, res)")
+    const handler = aiRoute.slice(start, aiRoute.indexOf("// Add this route", start))
+    assert.match(handler, /getMediaJobStore\(\)\.admit\(/, "admission must be committed before acknowledgement")
+    assert.match(handler, /return res\.status\(202\)\.json\(\{ jobId: job\.id/, "acknowledge a recoverable job id")
+    assert.ok(handler.indexOf("return res.status(202)") < handler.indexOf("const generateSingleImage"), "HTTP must return before provider execution")
+    assert.match(handler, /if \(!mediaContext && !res\.writableEnded\) requestAbortController\.abort\(\)/, "only pre-admission HTTP validation belongs to the socket")
+    assert.match(handler, /mediaContext\.signal\.addEventListener\('abort'/, "worker cancellation comes from the durable job controller")
+    assert.match(handler, /_mediaJobContext: ctx/, "recovered workers must re-enter the same rendering/persistence implementation")
   })
 
   it("polls the chat for generated images on recoverable long transport cuts", () => {

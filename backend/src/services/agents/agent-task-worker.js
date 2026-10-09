@@ -128,7 +128,9 @@ function startAgentTaskWorker() {
         const { INTERNAL } = require('../../routes/agent-task');
         const taskId = job.data && job.data.taskId;
         const userId = job.data && job.data.user && job.data.user.id;
-        INTERNAL.failTaskTerminal(taskId, userId, err);
+        Promise.resolve(INTERNAL.failTaskTerminalAsync(taskId, userId, err)).catch(terminalErr => {
+          console.warn('[agent-task-worker] terminal persistence failed:', terminalErr?.code || 'WRITE_FAILED');
+        });
       } catch (terminalErr) {
         console.warn('[agent-task-worker] failed to write terminal error event:', terminalErr?.message || terminalErr);
       }

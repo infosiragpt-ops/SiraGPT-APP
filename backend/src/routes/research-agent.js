@@ -43,32 +43,67 @@ router.post('/run', authenticateToken, validators, async (req, res) => {
   }
 });
 
-router.post('/stream', authenticateToken, validators, async (req, res) => {
+const prisma = require('../config/database');
+const { createResearchRuns } = require('../services/research-runs');
+const runs = createResearchRuns({ agent: researchAgent, prisma, resolveModel: async ({ model, provider }) => {
+  const ai = require('../services/ai-service');
+  const normalizedProvider = ai.normalizeChatProvider(provider, model);
+  if (!/^(OpenAI|OpenRouter|DeepSeek|Gemini|Anthropic|Kimi|Moonshot|xAI|Meta|Groq|Cerebras|Mistral|Z\.ai)$/i.test(normalizedProvider)) {
+    throw Object.assign(new Error('El modelo seleccionado no admite este modo de investigación.'), { status: 400 });
+  }
+  const normalizedModel = ai.normalizeModelForProvider(normalizedProvider, model);
+  return { aiClient: ai.getClient(normalizedProvider), model: normalizedModel, supportsVision: ai.modelSupportsVision(normalizedProvider, normalizedModel) };
+} });
+
+router.get('/runs/:runId', authenticateToken, async (req, res) => {
+  try { res.json(await runs.get(req.params.runId, req.user.id)); }
+  catch (err) { res.status(err.status || 500).json({ error: err.status ? err.message : 'research_status_failed' }); }
+});
+router.post('/runs/:runId/cancel', authenticateToken, async (req, res) => {
+  try { res.json(await runs.cancel(req.params.runId, req.user.id)); }
+  catch (err) { res.status(err.status || 500).json({ error: err.status ? err.message : 'research_cancel_failed' }); }
+});
+
+router.post('/stream', authenticateToken, validators, [
+  body('chatId').isString().isLength({ min: 1, max: 128 }),
+  body('runId').optional().matches(/^rr_[a-zA-Z0-9_-]{1,76}$/),
+  body('model').optional().isString().isLength({ min: 1, max: 200 }),
+  body('provider').optional().isString().isLength({ min: 1, max: 80 }),
+  body('userMessageId').optional().isString().isLength({ min: 1, max: 128 }),
+], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders?.();
-
-  function send(event) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-
-  const { query, depth, maxSteps, providers } = req.body;
+  const { query, depth, maxSteps, providers, runId, chatId, model, provider, userMessageId } = req.body;
+  let attachedId;
+  const pending = [];
+  let started = false;
+  const send = event => {
+    if (!started) { pending.push(event); return; }
+    if (!res.destroyed && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (['done', 'error', 'cancelled'].includes(event.type)) res.end();
+    }
+  };
   try {
-    send({ type: 'start', query });
-    const result = await researchAgent.run({
-      query, depth, maxSteps, providers,
-      onEvent: (e) => send(e),
-    });
-    send({ type: 'done', stats: result.stats });
+    const run = await runs.start(req.user.id, { query, depth, maxSteps, providers, runId, chatId, model, provider, userMessageId }, send);
+    attachedId = run.runId;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    started = true;
+    send({ type: 'start', runId: run.runId, chatId: run.chatId, status: run.status });
+    for (const event of pending) send(event);
+    if (run.status === 'completed') { send({ type: 'report', report: run.result, runId: run.runId }); send({ type: 'done', runId: run.runId }); }
+    else if (run.status !== 'running') send({ type: run.status === 'cancelled' ? 'cancelled' : 'error', message: run.error, runId: run.runId });
+    // A replay hitting another worker is recovered by the status endpoint.
+    else if (!runs.active.has(run.runId)) res.end();
+    const heartbeat = setInterval(() => { if (!res.destroyed && !res.writableEnded) res.write(': heartbeat\n\n'); }, 15_000);
+    heartbeat.unref?.();
+    res.once('close', () => { clearInterval(heartbeat); runs.detach(attachedId, send); });
   } catch (err) {
-    send({ type: 'error', message: err.message });
-  } finally {
-    res.end();
+    if (!res.headersSent) res.status(err.status || 500).json({ error: err.status ? err.message : 'research_agent_failed' });
+    else { send({ type: 'error', message: 'No se pudo iniciar la investigación.' }); }
   }
 });
 

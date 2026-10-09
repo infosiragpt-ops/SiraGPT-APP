@@ -39,7 +39,8 @@ test("compact composer documents poll processing-status and follow the live stag
     /file\.status === 'processing'\s*\n\s*\? INDEXING_STATUS_LABEL/,
     "document rows must not freeze on the default indexing copy after HTTP upload",
   )
-  assert.match(hook, /buildFileProcessingStatusUrl/)
+  assert.match(hook, /\/files\/processing-status\?ids=/)
+  assert.match(hook, /credentials: "include", signal: controller\.signal/)
   assert.match(hook, /decideProcessingStatusPoll/)
   assert.match(hook, /resolveProcessingPollGiveUp/)
 })

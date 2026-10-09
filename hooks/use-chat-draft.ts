@@ -155,9 +155,11 @@ export function useChatDraft(
   React.useEffect(() => {
     if (typeof window === "undefined") return
     const onHide = () => flush()
+    window.addEventListener("siragpt:before-bundle-reload", onHide)
     window.addEventListener("beforeunload", onHide)
     document.addEventListener("visibilitychange", onHide)
     return () => {
+      window.removeEventListener("siragpt:before-bundle-reload", onHide)
       window.removeEventListener("beforeunload", onHide)
       document.removeEventListener("visibilitychange", onHide)
       flush()

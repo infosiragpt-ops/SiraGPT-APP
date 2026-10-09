@@ -32,19 +32,29 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const MIGRATIONS_DIR = path.join(ROOT, 'backend', 'prisma', 'migrations');
 
 const argv = process.argv.slice(2);
 const opts = {
-  // Only check migrations newer than this many in the queue (default: all)
+  // Pending mode requires a real Git baseline (never guesses applied history).
   pending: argv.includes('--pending-only'),
   override: argv.includes('--allow-destructive') || process.env.MIGRATION_SAFETY_OVERRIDE === '1',
   json: argv.includes('--json'),
+  baseRef: argv.find(arg => arg.startsWith('--base-ref='))?.slice('--base-ref='.length)
+    || (argv.includes('--base-ref') ? argv[argv.indexOf('--base-ref') + 1] : null),
 };
 
 const RULES = [
+  { id: 'truncate-data', label: 'TRUNCATE', pattern: /\bTRUNCATE\b/i, severity: 'unsafe',
+    hint: 'Deleting existing data is not an additive migration.' },
+  { id: 'delete-data', label: 'DELETE FROM', pattern: /\bDELETE\s+FROM\b/i, severity: 'unsafe',
+    hint: 'Data removals need an explicit reviewed retention/backfill plan.' },
+  { id: 'add-required-no-default', label: 'ADD NOT NULL without DEFAULT',
+    pattern: /\bALTER\s+TABLE\b[^;]*\bADD\s+(?:COLUMN\s+)?[^;]*\bNOT\s+NULL\b(?![^;]*\bDEFAULT\b)/i,
+    severity: 'unsafe', hint: 'Add nullable, backfill existing rows, then constrain in a later migration.' },
   {
     id: 'credential-hash-literal',
     label: 'VERSIONED CREDENTIAL HASH',
@@ -107,12 +117,13 @@ const RULES = [
   },
 ];
 
-function findMigrationFiles() {
-  if (!fs.existsSync(MIGRATIONS_DIR)) return [];
+function findMigrationFiles(root = ROOT) {
+  const migrationsDir = path.join(root, 'backend/prisma/migrations');
+  if (!fs.existsSync(migrationsDir)) return [];
   return fs
-    .readdirSync(MIGRATIONS_DIR)
-    .filter((d) => fs.statSync(path.join(MIGRATIONS_DIR, d)).isDirectory())
-    .map((d) => path.join(MIGRATIONS_DIR, d, 'migration.sql'))
+    .readdirSync(migrationsDir)
+    .filter((d) => fs.statSync(path.join(migrationsDir, d)).isDirectory())
+    .map((d) => path.join(migrationsDir, d, 'migration.sql'))
     .filter((p) => fs.existsSync(p));
 }
 
@@ -129,7 +140,7 @@ function readAllowMarker(sql) {
   return allowed;
 }
 
-function scanFile(filePath) {
+function scanFile(filePath, root = ROOT) {
   const sql = fs.readFileSync(filePath, 'utf8');
   const markers = readAllowMarker(sql);
   const findings = [];
@@ -144,7 +155,7 @@ function scanFile(filePath) {
       continue;
     }
     findings.push({
-      file: path.relative(ROOT, filePath),
+      file: path.relative(root, filePath),
       ruleId: rule.id,
       label: rule.label,
       severity: rule.severity,
@@ -154,15 +165,42 @@ function scanFile(filePath) {
   return findings;
 }
 
-function main() {
-  const files = findMigrationFiles();
+function scanRepository(baseRef, { root = ROOT } = {}) {
+  const files = findMigrationFiles(root);
+  if (!baseRef) return { files, findings: files.flatMap(file => scanFile(file, root)), baseRef: null };
+  if (!/^[a-zA-Z0-9_./:-]+$/.test(baseRef)) throw new Error('Invalid base reference');
+  const git = args => execFileSync('git', ['-C', root, ...args], { maxBuffer: 32 * 1024 * 1024 });
+  const baseSha = git(['rev-parse', '--verify', '--end-of-options', `${baseRef}^{commit}`]).toString().trim();
+  const baseFiles = git(['ls-tree', '-r', '-z', '--name-only', baseSha, '--', 'backend/prisma/migrations'])
+    .toString().split('\0').filter(file => file.endsWith('/migration.sql'));
+  const historical = new Set(baseFiles);
   const findings = [];
-  for (const f of files) {
-    findings.push(...scanFile(f));
+  for (const file of baseFiles) {
+    const absolute = path.join(root, file);
+    const unchanged = fs.existsSync(absolute) && fs.lstatSync(absolute).isFile()
+      && !fs.lstatSync(absolute).isSymbolicLink()
+      && fs.readFileSync(absolute).equals(git(['show', `${baseSha}:${file}`]));
+    if (!unchanged) findings.push({ file, ruleId: 'migration-history-mutated', label: 'HISTORICAL MIGRATION CHANGED OR DELETED',
+      severity: 'forbidden', hint: 'Applied migration bytes are immutable. Add a new reviewed migration instead.' });
   }
+  const pending = files.filter(file => !historical.has(path.relative(root, file).split(path.sep).join('/')));
+  const newestHistorical = baseFiles.map(file => path.basename(path.dirname(file))).sort().at(-1);
+  for (const file of pending) {
+    if (newestHistorical && path.basename(path.dirname(file)) <= newestHistorical) findings.push({
+      file: path.relative(root, file), ruleId: 'migration-history-backdated', label: 'BACKDATED MIGRATION', severity: 'forbidden',
+      hint: 'New migrations must sort after the baseline history.' });
+    findings.push(...scanFile(file, root));
+  }
+  return { files: pending, historicalFiles: baseFiles.length, findings, baseRef: baseSha };
+}
+
+function main() {
+  if (opts.pending && !opts.baseRef) throw new Error('--pending-only requires --base-ref; applied history cannot be guessed');
+  const result = scanRepository(opts.baseRef);
+  const { files, findings } = result;
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ files: files.length, findings }, null, 2) + '\n');
+    process.stdout.write(JSON.stringify({ files: files.length, historicalFiles: result.historicalFiles || 0, baseRef: result.baseRef, findings }, null, 2) + '\n');
   } else {
     console.log(`[check-migration-safety] scanned ${files.length} migration file(s)`);
     if (!findings.length) {
@@ -192,4 +230,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { scanFile, findMigrationFiles, RULES };
+module.exports = { scanFile, findMigrationFiles, scanRepository, RULES };

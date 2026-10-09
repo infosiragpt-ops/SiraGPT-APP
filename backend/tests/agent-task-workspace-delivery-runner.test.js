@@ -55,7 +55,7 @@ async function workerFixture(t, { deterministic = false, failImport = false, blo
     return originalLoad.apply(this, arguments);
   };
   Module._load = intercept;
-  for (const target of [source, path.join(ROOT, 'src/services/agents/task-store.js'), path.join(ROOT, 'src/services/agents/agent-task-workspace-delivery.js')]) delete require.cache[target];
+  for (const target of [source, path.join(ROOT, 'src/services/agents/task-store.js'), path.join(ROOT, 'src/routes/agent-task.js'), path.join(ROOT, 'src/services/agents/agent-task-workspace-delivery.js')]) delete require.cache[target];
   t.after(() => {
     Module._load = originalLoad;
     for (const key of keys) oldEnv[key] === undefined ? delete process.env[key] : process.env[key] = oldEnv[key];
@@ -64,9 +64,9 @@ async function workerFixture(t, { deterministic = false, failImport = false, blo
   });
   const { runAgentTaskJob } = require(source);
   const taskStore = require(path.join(ROOT, 'src/services/agents/task-store.js'));
-  const append = taskStore.appendTaskEvent;
-  taskStore.appendTaskEvent = (task, event) => { events.push(event); return append(task, event); };
-  t.after(() => { taskStore.appendTaskEvent = append; });
+  const append = taskStore.appendTaskEventBuffered;
+  taskStore.appendTaskEventBuffered = (task, event) => { events.push(event); return append(task, event); };
+  t.after(() => { taskStore.appendTaskEventBuffered = append; });
   const run = () => runAgentTaskJob({ taskId: deterministic ? 'deterministic-delivery' : 'loop-delivery', createdAt: QUEUED_AT, user: { id: 'user-a' },
     goal: 'Crea un único archivo CSV descargable llamado qa.csv con los registros y guarda el archivo en el workspace.',
     displayGoal: 'Crea un único archivo CSV descargable llamado qa.csv con los registros y guarda el archivo en el workspace.',

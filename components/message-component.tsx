@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { ExpandedTableDialog } from "@/components/chat/expanded-table-dialog"
 import { RequestBriefLine, extractRequestBrief } from "@/components/chat/request-brief-line";
 import { RichUserText } from "@/components/chat/rich-user-text";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
@@ -34,8 +35,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import GmailConnectionCard from "./GmailConnectionCard"
-import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
+const GmailConnectionCard = dynamic(() => import('./GmailConnectionCard'), { ssr: false });
+const GoogleServicesConnectionCard = dynamic(() => import('./GoogleServicesConnectionCard'), { ssr: false });
 import {
     Copy, Clipboard, Pencil, FileText, Check, Volume2, VolumeX,
     ThumbsUp, ThumbsDown, Share2, Play, Pause, Download,
@@ -74,23 +75,23 @@ const ChartComponent = dynamic(() => import('./chart-component'), {
   ssr: false,
   loading: () => <div className="h-64 w-full animate-pulse bg-muted/30 rounded" aria-hidden="true" />,
 });
-import { FigmaDiagramDisplay } from './figma-diagram-component';
-import { PlanArtifactDisplay } from './plan/plan-artifact-display';
-import { VizArtifactDisplay } from './viz/viz-artifact-display';
-import { DocArtifactDisplay } from './doc/doc-artifact-display';
-import { InteractiveArtifactDisplay } from './artifact/interactive-artifact-display';
-import { PresentationView } from './presentation-view';
+const FigmaDiagramDisplay = dynamic(() => import('./figma-diagram-component').then(mod => mod.FigmaDiagramDisplay), { ssr: false });
+const PlanArtifactDisplay = dynamic(() => import('./plan/plan-artifact-display').then(mod => mod.PlanArtifactDisplay), { ssr: false });
+const VizArtifactDisplay = dynamic(() => import('./viz/viz-artifact-display').then(mod => mod.VizArtifactDisplay), { ssr: false });
+const DocArtifactDisplay = dynamic(() => import('./doc/doc-artifact-display').then(mod => mod.DocArtifactDisplay), { ssr: false });
+const InteractiveArtifactDisplay = dynamic(() => import('./artifact/interactive-artifact-display').then(mod => mod.InteractiveArtifactDisplay), { ssr: false });
+const PresentationView = dynamic(() => import('./presentation-view').then(mod => mod.PresentationView), { ssr: false });
 import { CustomCodeBlock } from "./ui/custom-code-block"
-import { PapersResultCard } from "./papers-result-card"
+const PapersResultCard = dynamic(() => import('./papers-result-card').then(mod => mod.PapersResultCard), { ssr: false });
 import { shouldUnwrapInteractiveFence } from "@/lib/interactive-message-blocks"
 import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
-import ProcessingGmailCard from "./ProcessingGmailCard"
-import ExtractedDataDownload from "./ExtractedDataDownload"
-import ThesisProgressComponent from "./ThesisProgressComponent"
-import ThesisProgressDisplay from "./ThesisProgressDisplay"
-import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
-import SpotifyConnectionCard from "./SpotifyConnectionCard"
-import SpotifyResults from "./spotify-results"
+const ProcessingGmailCard = dynamic(() => import('./ProcessingGmailCard'), { ssr: false });
+const ExtractedDataDownload = dynamic(() => import('./ExtractedDataDownload'), { ssr: false });
+const ThesisProgressComponent = dynamic(() => import('./ThesisProgressComponent'), { ssr: false });
+const ThesisProgressDisplay = dynamic(() => import('./ThesisProgressDisplay'), { ssr: false });
+const ProcessingGoogleServicesCard = dynamic(() => import('./ProcessingGoogleServicesCard'), { ssr: false });
+const SpotifyConnectionCard = dynamic(() => import('./SpotifyConnectionCard'), { ssr: false });
+const SpotifyResults = dynamic(() => import('./spotify-results'), { ssr: false });
 import { ThinkingPlaceholder } from "./thinking-placeholder"
 import { activityDurationMs, activitySignature, activityToPlaceholderSteps, hasPairedActivity, hydrateActivityTrace } from "@/lib/chat/activity-log";
 import { OWNED_ELSEWHERE_PHASES } from "@/lib/chat/live-progress";
@@ -1490,6 +1491,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const [fileContent, setFileContent] = useState<string>("");
     const [isContentLoading, setIsContentLoading] = useState(false);
     const [isTableExpanded, setIsTableExpanded] = useState(false);
+    const tableTriggerRef = useRef<HTMLElement | null>(null);
     const [tableData, setTableData] = useState<string[][]>([]);
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
 
@@ -2006,6 +2008,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     // Stable callbacks for the hoisted MessageMarkdown so its memo holds.
     const handleExpandTable = useCallback(({ headers, rows, title }: ExpandedTablePayload) => {
+        tableTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         setTableHeaders(headers);
         setTableData(rows);
         setTableTitle(title);
@@ -3562,27 +3565,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 </Avatar>
             )} */}
 
-            <Dialog open={!!selectedFile} onOpenChange={(isOpen) => { if (!isOpen) setSelectedFile(null) }}>
-                <DialogContent className="max-w-3xl h-[80vh] flex flex-col">
-                    <DialogHeader>
-                        <DialogTitle>{selectedFile?.originalName || 'File Content'}</DialogTitle>
-                    </DialogHeader>
-                    <div className="flex-grow overflow-y-auto p-1">
-                        {isContentLoading ? (
-                            <div className="flex items-center justify-center h-full">
-                                <ThinkingStatusLoader state="cargando-general" hideLabel compact announce={false} />
-                            </div>
-                        ) : (
-                            <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
-                        )}
-                    </div>
-                    <DialogFooter>
-                        <DialogClose asChild>
-                            <Button variant="outline">Close</Button>
-                        </DialogClose>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+
 
             <Dialog open={!!selectedFile} onOpenChange={(isOpen) => { if (!isOpen) setSelectedFile(null) }}>
                 <DialogContent className="max-w-3xl h-[80vh] flex flex-col">
@@ -3605,36 +3588,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-            {isTableExpanded && (
-                <div className="fixed inset-0 bg-background z-50 p-4 flex flex-col">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold">{tableTitle || 'Expanded Table View'}</h2>
-                        <Button variant="outline" onClick={() => setIsTableExpanded(false)}>Close</Button>
-                    </div>
-                    <div className="flex-grow overflow-auto border rounded-md">
-                        <div className="overflow-x-auto overflow-y-auto h-full">
-                            <table className="w-full border-collapse border border-muted" style={{ minWidth: 'max-content' }}>
-                                <thead className="sticky top-0 bg-background">
-                                    <tr>
-                                        {tableHeaders.map((header, index) => (
-                                            <th key={index} className="border border-muted px-4 py-3 bg-muted/50 text-left font-medium text-sm whitespace-nowrap min-w-[120px]">{header}</th>
-                                        ))}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {tableData.map((row, rowIndex) => (
-                                        <tr key={rowIndex} className="hover:bg-muted/20">
-                                            {row.map((cell, cellIndex) => (
-                                                <td key={cellIndex} className="border border-muted px-4 py-3 text-sm whitespace-nowrap min-w-[120px]">{cell}</td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ExpandedTableDialog open={isTableExpanded} onOpenChange={setIsTableExpanded}
+                title={tableTitle} headers={tableHeaders} rows={tableData} restoreFocus={tableTriggerRef.current} />
 
             {/* Fallback for message surfaces outside the canonical chat host. */}
             {selectedImage && (

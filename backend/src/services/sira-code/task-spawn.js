@@ -101,11 +101,11 @@ async function defaultEnqueue(payload, opts) {
   return enqueueAgentTask(payload, opts);
 }
 
-function defaultCreateRecord(payload) {
+async function defaultCreateRecord(payload) {
   try {
     const route = require('../../routes/agent-task');
-    if (route && route.INTERNAL && typeof route.INTERNAL.createTaskRecord === 'function') {
-      return route.INTERNAL.createTaskRecord({
+    if (route && route.INTERNAL && typeof route.INTERNAL.createTaskRecordAsync === 'function') {
+      return await route.INTERNAL.createTaskRecordAsync({
         taskId: payload.taskId,
         userId: payload.userId,
         chatId: payload.chatId || payload.parentSessionId || null,
@@ -114,8 +114,9 @@ function defaultCreateRecord(payload) {
         status: 'queued',
       });
     }
-  } catch {
-    // Route may be unavailable in isolated tests; enqueue is the contract.
+  } catch (err) {
+    // Do not acknowledge a child task whose durable creation failed.
+    throw err;
   }
   return { taskId: payload.taskId, status: 'queued' };
 }

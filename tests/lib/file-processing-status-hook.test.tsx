@@ -8,6 +8,8 @@ vi.mock("@/lib/authenticated-fetch", () => ({
 
 import {
   resetFileProcessingStatusMemo,
+  invalidateFileProcessingStatus,
+  subscribeToFileProcessingStatuses,
   useFileProcessingStatus,
 } from "@/hooks/use-file-processing-status"
 
@@ -90,13 +92,12 @@ describe("useFileProcessingStatus · shared polling", () => {
 
     act(() => setVisibility("hidden"))
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
-    // The tick that was already scheduled ran, found the tab hidden and parked.
-    expect(transport.fetch).toHaveBeenCalledTimes(2)
+    expect(transport.fetch).toHaveBeenCalledTimes(1)
     await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
-    expect(transport.fetch).toHaveBeenCalledTimes(2)
+    expect(transport.fetch).toHaveBeenCalledTimes(1)
 
     await act(async () => { setVisibility("visible"); await vi.advanceTimersByTimeAsync(0) })
-    expect(transport.fetch).toHaveBeenCalledTimes(3)
+    expect(transport.fetch).toHaveBeenCalledTimes(2)
     expect(result.current.stage).toBe("indexing")
     unmount()
   })
@@ -114,6 +115,32 @@ describe("useFileProcessingStatus · shared polling", () => {
     expect(transport.fetch).toHaveBeenCalledTimes(2)
     expect(relogged.result.current.stage).toBe("ready")
     relogged.unmount()
+  })
+
+  it("a collection of 50 files and an individual chip share one batch per tick", async () => {
+    const ids = Array.from({ length: 50 }, (_, i) => `f${i}`)
+    transport.fetch.mockImplementation(async () => statusResponse({ files: ids.map(id => ({ id, processingStage: "extracting", processingProgress: { percent: 25, etaSeconds: 10 } })) }))
+    const chip = renderHook(() => useFileProcessingStatus("f0"))
+    const unsubscribe = subscribeToFileProcessingStatuses(ids, () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(transport.fetch).toHaveBeenCalledTimes(1)
+    expect(chip.result.current.processingProgress).toMatchObject({ percent: 25, etaSeconds: 10 })
+    expect(decodeURIComponent(String(transport.fetch.mock.calls[0][0]))).toContain(ids.join(','))
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000) })
+    expect(transport.fetch).toHaveBeenCalledTimes(2)
+    unsubscribe(); chip.unmount()
+  })
+
+  it("an explicit retry invalidates the terminal cache of a mounted chip", async () => {
+    transport.fetch.mockImplementation(async () => ready("retry"))
+    const chip = renderHook(() => useFileProcessingStatus("retry"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(chip.result.current.stage).toBe("ready")
+    transport.fetch.mockImplementation(async () => indexing("retry"))
+    act(() => invalidateFileProcessingStatus("retry"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(chip.result.current.stage).toBe("indexing")
+    chip.unmount()
   })
 
   it("a blocked localStorage never breaks the poll", async () => {

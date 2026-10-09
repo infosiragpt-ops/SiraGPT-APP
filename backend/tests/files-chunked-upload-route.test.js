@@ -16,6 +16,7 @@ test('chunked upload routes are authenticated, scoped and rate-limited like /upl
   assert.match(src, /router\.put\('\/upload\/chunked\/:uploadId\/:index', authenticateToken, requireScope\('files:write'\), express\.raw\(\{ type: \(\) => true, limit: CHUNK_BODY_LIMIT \}\), async \(req, res\) => \{/);
   assert.match(src, /router\.delete\('\/upload\/chunked\/:uploadId', authenticateToken, requireScope\('files:write'\), async \(req, res\) => \{/);
   assert.match(src, /router\.post\('\/upload\/chunked\/:uploadId\/complete', authenticateToken, requireScope\('files:write'\), enforceOrgRateLimitSafe, async \(req, res\) => \{/);
+  assert.match(src, /router\.get\('\/upload\/chunked\/:uploadId\/status', authenticateToken, requireScope\('files:read'\)/);
   assert.match(src, /const CHUNK_BODY_LIMIT = chunkedUploads\.MAX_CHUNK_BYTES \+ 64 \* 1024;/);
 });
 
@@ -24,7 +25,9 @@ test('init validates the declared type and applies the media cap; complete reuse
   assert.match(src, /maxBytes: chunkedUploadCap\(declared\.mimetype, originalName\),/);
   assert.match(src, /return media \? limits\.mediaFileSize : limits\.fileSize;/);
   assert.match(src, /const file = await chunkedUploads\.completeChunkedUpload\(\{ userDir, uploadId: req\.params\.uploadId \}\);/);
-  assert.match(src, /const processedFiles = await processFilesForAsyncPreview\(\[file\], req\.user\.id, prisma\);\s*return res\.json\(\{ files: processedFiles, chunked: true \}\);/);
+  assert.match(src, /const processedFiles = await processFilesForAsyncPreview\(\[file\], req\.user\.id, prisma\);/);
+  assert.match(src, /await chunkedUploads\.saveCompletedResponse\(\{ userDir, uploadId: req\.params\.uploadId, response \}\);\s*return res\.json\(response\);/);
+  assert.match(src, /if \(replay\) return res\.json\(replay\);/);
 });
 
 test('audio/video extraction gets its own, longer budget', () => {

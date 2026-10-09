@@ -11,6 +11,65 @@
  */
 
 const fs = require('fs');
+const asyncWriter = require('./task-store-writer');
+const bufferedSnapshots = new Map();
+let bufferedDepth = 0;
+
+function bufferedOperation(fn) {
+  bufferedDepth += 1;
+  try { return fn(); } finally { bufferedDepth -= 1; }
+}
+async function flushTaskStore() {
+  await asyncWriter.flush();
+  // Cached states exist only while a buffered write is pending. A successful
+  // barrier releases memory; subsequent reads use the committed snapshot.
+  for (const file of bufferedSnapshots.keys()) {
+    if (!asyncWriter.hasPending(file)) bufferedSnapshots.delete(file);
+  }
+}
+function isTaskPersistencePending(taskId) { return asyncWriter.hasPending(snapshotPathFor(taskId)); }
+async function flushTask(taskId) {
+  // Shared index makes the flush a global barrier, not just a per-file one.
+  await flushTaskStore();
+  return readTaskSnapshot(taskId);
+}
+function persistSnapshotFile(snapshot) {
+  const file = snapshotPathFor(snapshot.taskId);
+  if (bufferedDepth) {
+    const immutable = structuredClone(snapshot);
+    bufferedSnapshots.set(file, immutable);
+    asyncWriter.enqueue(file, immutable);
+  } else {
+    if (asyncWriter.hasPendingDirectory(path.dirname(file))) throw new Error('task-store: await flush before legacy synchronous mutation');
+    bufferedSnapshots.delete(file);
+    atomicWriteJson(file, snapshot);
+  }
+}
+function writeTaskSnapshotBuffered(record) { return bufferedOperation(() => writeTaskSnapshot(record)); }
+function markTaskStatusBuffered(...args) { return bufferedOperation(() => markTaskStatus(...args)); }
+function appendTaskEventBuffered(...args) { return bufferedOperation(() => appendTaskEvent(...args)); }
+function touchTaskHeartbeatBuffered(...args) { return bufferedOperation(() => touchTaskHeartbeat(...args)); }
+function updateTaskSnapshotBuffered(...args) { return bufferedOperation(() => updateTaskSnapshot(...args)); }
+async function writeTaskSnapshotAsync(record) {
+  const next = bufferedOperation(() => writeTaskSnapshot(record));
+  await flushTask(next.taskId); return next;
+}
+async function markTaskStatusAsync(...args) {
+  const next = bufferedOperation(() => markTaskStatus(...args));
+  if (next) await flushTask(next.taskId); return next;
+}
+async function appendTaskEventAsync(...args) {
+  const next = appendTaskEventBuffered(...args);
+  if (next) await flushTask(next.taskId); return next;
+}
+async function updateTaskSnapshotAsync(...args) {
+  const next = updateTaskSnapshotBuffered(...args);
+  if (next) await flushTask(next.taskId); return next;
+}
+async function saveRunnerCheckpointAsync(...args) {
+  const next = bufferedOperation(() => saveRunnerCheckpoint(...args));
+  if (next) await flushTask(next.taskId); return next;
+}
 const path = require('path');
 const taskStorePrismaSync = require('./task-store-prisma-sync');
 const agentMetrics = require('./metrics');
@@ -139,8 +198,8 @@ function writeTaskSnapshot(record) {
   if (!snapshot.taskId) throw new Error('task-store: taskId is required');
   if (!snapshot.userId) throw new Error('task-store: userId is required');
   snapshot.updatedAt = snapshot.updatedAt || nowIso();
-  atomicWriteJson(snapshotPathFor(snapshot.taskId), snapshot);
-  try { updateIndexForSnapshot(snapshot); } catch (err) {
+  persistSnapshotFile(snapshot);
+  try { if (!bufferedDepth) updateIndexForSnapshot(snapshot); } catch (err) {
     // Snapshot is durable; a failed index update silently drops the task from
     // every index-backed listing/jobId lookup until a rebuild — surface it.
     console.warn('[task-store] index update failed for', snapshot.taskId, '-', err?.message || err);
@@ -152,6 +211,7 @@ function writeTaskSnapshot(record) {
 function readTaskSnapshot(taskId) {
   try {
     const file = snapshotPathFor(taskId);
+    if (bufferedSnapshots.has(file)) return structuredClone(bufferedSnapshots.get(file));
     if (!fs.existsSync(file)) return null;
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {
@@ -175,8 +235,8 @@ function updateTaskSnapshot(taskId, userId, patch = {}) {
     events: patch.events || existing.events,
     checkpoints: patch.checkpoints || existing.checkpoints,
   });
-  atomicWriteJson(snapshotPathFor(taskId), next);
-  try { updateIndexForSnapshot(next); } catch (err) {
+  persistSnapshotFile(next);
+  try { if (!bufferedDepth) updateIndexForSnapshot(next); } catch (err) {
     // A failed index update here leaves a stale index status (e.g. a task that
     // just went terminal still shows as running) — surface it.
     console.warn('[task-store] index update failed for', next.taskId, '-', err?.message || err);
@@ -378,7 +438,8 @@ function defaultTerminalNotifier({ task, status, env = process.env }) {
   // eslint-disable-next-line global-require
   const registry = require('../trigger-registry');
   Promise.resolve()
-    .then(() => registry.publish(built.event, built.payload, built.userId, { idempotencyTtlMs: TERMINAL_NOTIFY_IDEMPOTENCY_MS }))
+    .then(() => registry.publish(built.event, built.payload, built.userId, { idempotencyTtlMs: TERMINAL_NOTIFY_IDEMPOTENCY_MS,
+      idempotencyKey: `agent-task:${task.taskId}:${task.jobId || task.createdAt || ''}:${built.event}` }))
     .catch((err) => {
       if (env.NODE_ENV !== 'test') console.warn('[task-store] terminal notification failed:', err?.message || err);
     });
@@ -443,14 +504,14 @@ function persistTerminalMetricObservation({
   const written = persist(markerPatch);
 
   if (written && metricStatus && !alreadyRecorded) {
-    try {
-      agentMetrics.counter('agent_task_terminal_total', { status: metricStatus });
-    } catch {
-      // Best-effort process telemetry must never alter the task transition.
-    }
-    // Exactly-once per task by the same latch as the metric: the inbox row and
-    // the user's webhooks see one terminal event, not one per status rewrite.
-    notifyTerminalObservation(written, observedStatus);
+    const afterDurable = () => {
+      try { agentMetrics.counter('agent_task_terminal_total', { status: metricStatus }); } catch { /* advisory */ }
+      notifyTerminalObservation(written, observedStatus);
+    };
+    if (bufferedDepth) flushTask(written.taskId).then(afterDurable).catch(err => {
+      console.warn('[task-store] terminal persistence failed:', err?.code || 'WRITE_FAILED');
+    });
+    else afterDurable();
   }
   return written;
 }
@@ -496,7 +557,7 @@ function markTaskStatus(taskLike, status, patch = {}) {
   if (result) {
     taskStorePrismaSync.schedulePrismaSync(result);
   }
-  if (result && TERMINAL_STATUSES.has(status)) {
+  if (result && !bufferedDepth && TERMINAL_STATUSES.has(status)) {
     const eventCount = Array.isArray(result.events) ? result.events.length : 0;
     if (eventCount > AUTO_COMPACT_EVENT_THRESHOLD) {
       try {
@@ -533,6 +594,7 @@ function readIndex() {
 }
 
 function writeIndex(index) {
+  asyncWriter.invalidateIndex(getTaskStoreDir());
   atomicWriteJson(indexPath(), index);
 }
 
@@ -627,6 +689,8 @@ function listTaskSnapshotsForUser(userId, { limit = 50, useIndex = true } = {}) 
  * { ok, reason? } so callers branch on stable codes.
  */
 function deleteTaskSnapshot(taskId, userId, { force = false } = {}) {
+  const file = snapshotPathFor(taskId);
+  if (asyncWriter.hasPending(file)) return { ok: false, reason: 'persistence_pending' };
   const snapshot = getTaskSnapshotForUser(taskId, userId);
   if (!snapshot) return { ok: false, reason: 'not_found_or_forbidden' };
   if (!force && (snapshot.status === 'running' || snapshot.status === 'queued')) {
@@ -637,6 +701,8 @@ function deleteTaskSnapshot(taskId, userId, { force = false } = {}) {
   } catch (err) {
     if (err.code !== 'ENOENT') return { ok: false, reason: 'unlink_failed' };
   }
+  bufferedSnapshots.delete(file);
+  asyncWriter.invalidateIndex(getTaskStoreDir());
   try { removeFromIndex(taskId); } catch { /* index is best-effort */ }
   return { ok: true };
 }
@@ -646,6 +712,7 @@ function pruneTaskSnapshots({
   maxFiles = DEFAULT_MAX_FILES,
 } = {}) {
   const dir = ensureDir();
+  if (asyncWriter.hasPendingDirectory(dir)) return { deleted: 0, deletedCorrupt: 0, deletedOverflow: 0, skipped: 'persistence_pending' };
   const cutoff = Date.now() - retentionMs;
   let deleted = 0;
   let deletedCorrupt = 0;
@@ -661,6 +728,7 @@ function pruneTaskSnapshots({
       const running = snapshot.status === 'running' || snapshot.status === 'queued';
       if (!running && Number.isFinite(updated) && updated < cutoff) {
         fs.unlinkSync(full);
+        bufferedSnapshots.delete(full);
         removeFromIndex(snapshot.taskId);
         deleted++;
         continue;
@@ -685,6 +753,7 @@ function pruneTaskSnapshots({
       if (toRemove <= 0) break;
       try {
         fs.unlinkSync(row.full);
+        bufferedSnapshots.delete(row.full);
         removeFromIndex(row.taskId);
         deleted++;
         deletedOverflow++;
@@ -1038,6 +1107,7 @@ function recoverStaleRunningTasks({
  * Returns the new event count, or null if the task is missing.
  */
 function compactSnapshotEvents(taskId, userId, { keepRecent = 200 } = {}) {
+  if (asyncWriter.hasPendingDirectory(getTaskStoreDir())) return { skipped: 'persistence_pending' };
   const snapshot = userId
     ? getTaskSnapshotForUser(taskId, userId)
     : readTaskSnapshot(taskId);
@@ -1064,7 +1134,7 @@ function compactSnapshotEvents(taskId, userId, { keepRecent = 200 } = {}) {
     updatedAt: nowIso(),
   });
   atomicWriteJson(snapshotPathFor(snapshot.taskId), next);
-  try { updateIndexForSnapshot(next); } catch { /* index is best-effort */ }
+  try { if (!bufferedDepth) updateIndexForSnapshot(next); } catch { /* index is best-effort */ }
   return { compacted: cutoff, eventCount: next.events.length };
 }
 
@@ -1360,6 +1430,18 @@ function compressSnapshotBytes(rawBytes) {
 }
 
 module.exports = {
+  writeTaskSnapshotBuffered,
+  markTaskStatusBuffered,
+  appendTaskEventBuffered,
+  appendTaskEventAsync,
+  updateTaskSnapshotBuffered,
+  updateTaskSnapshotAsync,
+  writeTaskSnapshotAsync,
+  markTaskStatusAsync,
+  saveRunnerCheckpointAsync,
+  flushTask,
+  flushTaskStore,
+  isTaskPersistencePending,
   DEFAULT_EVENT_LIMIT,
   DEFAULT_MAX_FILES,
   TERMINAL_STATUS_TO_EVENT,
@@ -1399,6 +1481,7 @@ module.exports = {
   rebuildIndex,
   recoverStaleRunningTasks,
   touchTaskHeartbeat,
+  touchTaskHeartbeatBuffered,
   removeFromIndex,
   safeTaskId,
   sanitizeTaskRecord,

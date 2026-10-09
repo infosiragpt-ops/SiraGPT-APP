@@ -1,5 +1,9 @@
 "use client"
 
+import { useResearchGoal } from "@/hooks/use-research-goal"
+import { summarizeCommandPrompt } from "@/lib/chat/summarize-command"
+import { createModelSelectionWriter } from "@/lib/chat/model-selection-writer"
+import { isActiveCatalogSelection } from "@/lib/chat/catalog-model"
 import { detectCodingIntent } from "@/lib/software-build-intent"
 import { useChatGithubConnect } from "@/hooks/use-chat-github-connect"
 import { GITHUB_CONNECTION_CANCEL_EVENT, GITHUB_RESUME_TEXT, isExplicitGithubConnectRequest } from "@/lib/chat/github-connect-handoff"
@@ -175,7 +179,7 @@ import {
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import { FileProcessingStatusSync } from "@/components/file-processing-status-sync"
-import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
+import { invalidateFileProcessingStatus, subscribeToFileProcessingStatuses, type FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { describeComposerDocumentThumb, isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
@@ -273,7 +277,7 @@ import {
   buildResearchArtifactPrompt,
   type ResearchArtifactRequest,
 } from "@/lib/research-artifacts"
-import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
+const ResearchResultsWorkbench = dynamic(() => import("@/components/research/ResearchResultsWorkbench"), { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando investigación…" /> })
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
@@ -4050,24 +4054,33 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 }: any) {
   const { user } = useAuth()
   const liveSelectedModelData = availableModels.find((m: any) => m.name === selectedModel);
-  // Anti-flicker: hold the last model that actually matched `selectedModel`.
-  // refreshModels (dropdown-open / window-focus / tab-visibility) replaces the
-  // list with a new array; if it transiently omits the selected model, find()
-  // returns undefined for one render and the brand logo would flash to the
-  // generic Bot fallback. Holding the last-known-good entry keeps the chip
-  // stable until a real match (or an explicit selection change) replaces it.
-  const lastGoodSelectedModelRef = React.useRef<any>(liveSelectedModelData);
-  if (liveSelectedModelData) {
-    lastGoodSelectedModelRef.current = liveSelectedModelData;
-  } else if (
-    lastGoodSelectedModelRef.current &&
-    (availableModels.length === 0 || lastGoodSelectedModelRef.current.name !== selectedModel)
-  ) {
-    // A confirmed empty catalog or a genuinely different selection invalidates
-    // the old row. Never preserve an admin-disabled model as visual fallback.
-    lastGoodSelectedModelRef.current = undefined;
-  }
-  const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
+  // A removed model must not masquerade as an active catalog row. Keep its
+  // selected identity, but label it unavailable instead of choosing a fallback.
+  const selectedModelData = liveSelectedModelData;
+  const pickerChatRef = React.useRef(currentChat);
+  pickerChatRef.current = currentChat;
+  const modelWriterRef = React.useRef(createModelSelectionWriter<{ name: string; provider: string }>());
+  const saveModelPick = React.useCallback((model: any) => {
+    const previous = { name: selectedModel, provider: liveSelectedModelData?.provider || "" };
+    const next = { name: model.name, provider: model.provider || "" };
+    const chatId = currentChat?.id;
+    setSelectedModel(next.name);
+    setSelectedProvider(next.provider);
+    if (!chatId) { setLastModel(next.name); return Promise.resolve(true); }
+    setCurrentChat?.((chat: any) => chat?.id === chatId ? { ...chat, model: next.name } : chat);
+    return modelWriterRef.current({
+      scope: chatId, previous, next,
+      persist: (choice) => apiClient.updateChat(chatId, { model: choice.name }),
+      confirmed: (choice) => { setLastModel(choice.name); },
+      failed: (rollback) => {
+        if (pickerChatRef.current?.id !== chatId) return;
+        setSelectedModel(rollback.name);
+        setSelectedProvider(rollback.provider);
+        setCurrentChat?.((chat: any) => chat?.id === chatId ? { ...chat, model: rollback.name } : chat);
+        toast.error("No se pudo guardar el modelo. Se restauró la selección anterior. Vuelve a intentarlo.");
+      },
+    });
+  }, [currentChat?.id, selectedModel, liveSelectedModelData?.provider, setSelectedModel, setSelectedProvider, setCurrentChat]);
   const [searchQuery, setSearchQuery] = React.useState("");
   const [pinnedModel, setPinnedModelState] = React.useState("")
   const [rowMenu, setRowMenu] = React.useState<string | null>(null)
@@ -4118,18 +4131,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       return;
     }
 
-    setSelectedModel(nextModel.name);
-    setSelectedProvider(nextModel.provider);
-    recordRecent(nextModel.name);
-    setCurrentChat?.((chat: any) => chat ? { ...chat, model: nextModel.name } : chat);
-
-    try {
-      await apiClient.updateChat(currentChat.id, { model: nextModel.name });
+    if (await saveModelPick(nextModel)) {
       toast.success(`Modelo actualizado: ${brandModelLabel(nextModel)}`);
-    } catch (error) {
-      toast.error("No se pudo actualizar el modelo del GPT");
     }
-  }, [currentChat?.id, pickModelForTier, setCurrentChat, setSelectedModel, setSelectedProvider]);
+  }, [currentChat?.id, pickModelForTier, saveModelPick]);
 
   const startNewGptChat = React.useCallback(async () => {
     const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
@@ -4327,18 +4332,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
   const applyProjectModel = React.useCallback(async (model: any) => {
     if (!currentChat?.id || !model?.name) return;
-    setSelectedModel(model.name);
-    setSelectedProvider(model.provider);
     recordRecent(model.name);
-    setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
-
-    try {
-      await apiClient.updateChat(currentChat.id, { model: model.name });
+    if (await saveModelPick(model)) {
       toast.success(`Modelo de la empresa actualizado: ${brandModelLabel(model)}`);
-    } catch {
-      toast.error("No se pudo actualizar el modelo de la empresa");
     }
-  }, [currentChat?.id, setCurrentChat, setSelectedModel, setSelectedProvider]);
+  }, [currentChat?.id, saveModelPick]);
 
   const startNewProjectChat = React.useCallback(async () => {
     const projectId = currentChat?.project?.id || currentChat?.projectId;
@@ -5053,16 +5051,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   );
 
   const onPick = (model: any) => {
-    setSelectedModel(model.name);
-    setSelectedProvider(model.provider);
+    void saveModelPick(model);
     recordRecent(model.name);
-    setLastModel(model.name);
     setSearchQuery("");
     setRowMenu(null);
-    if (currentChat?.id) {
-      setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
-      void apiClient.updateChat(currentChat.id, { model: model.name }).catch(() => {});
-    }
     // Main model-picker funnel event. Programmatic model swaps
     // (auto-fallback, pickModelForTier, etc.) intentionally do NOT
     // emit — only direct user picks do. Dashboards can compare
@@ -5243,7 +5235,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
         <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">
-          {selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel ? brandModelLabel(selectedModel) : "Sin modelos activos"}
+          {selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel ? `${brandModelLabel(selectedModel)} · No disponible` : "Sin modelos activos"}
         </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
@@ -5888,6 +5880,7 @@ function ChatInterfaceContent() {
   ) => {
     setUploadedFiles((cur: any[]) => {
       const next = cur.map((file: any) => resolveUploadFileId(file) === fileId ? updater(file) : file);
+      if (next.every((file: any, index: number) => file === cur[index])) return cur;
       uploadedFilesRef.current = next;
       return next;
     });
@@ -5929,21 +5922,17 @@ function ChatInterfaceContent() {
     const fileId = status.fileId || resolveUploadFileId(file);
     if (!fileId || !status.stage) return;
 
-    updateUploadedFileById(fileId, (current: any) => ({
-      ...current,
-      processingStage: status.stage,
-      processingError: status.error,
-      status: status.stage === "failed"
-        ? "failed"
-        : status.stage === "ready"
-          ? "ready"
-          : current.status === "uploading"
-            ? "uploading"
-            : "processing",
-      uploadError: status.stage === "failed"
-        ? (status.error || current.uploadError || "No se pudo procesar el documento.")
-        : current.uploadError,
-    }));
+    updateUploadedFileById(fileId, (current: any) => {
+      const nextStatus = status.stage === "failed" ? "failed" : status.stage === "ready" ? "ready" : current.status === "uploading" ? "uploading" : "processing";
+      const progress = status.processingProgress ?? null;
+      if (current.processingStage === status.stage && (current.processingError ?? null) === status.error
+        && current.status === nextStatus && JSON.stringify(current.processingProgress ?? null) === JSON.stringify(progress)) return current;
+      return {
+        ...current, processingStage: status.stage, processingError: status.error, status: nextStatus,
+        processingProgress: progress,
+        uploadError: status.stage === "failed" ? (status.error || current.uploadError || "No se pudo procesar el documento.") : current.uploadError,
+      };
+    });
 
     if (status.stage === "ready") {
       void hydrateUploadedFileFromBackend(fileId);
@@ -5957,43 +5946,12 @@ function ChatInterfaceContent() {
   React.useEffect(() => {
     const ids = processingWatchKey ? processingWatchKey.split(',') : [];
     if (!ids.length) return undefined;
-    let cancelled = false;
-    let attempts = 0;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const tick = async () => {
-      if (cancelled) return;
-      attempts += 1;
-      try {
-        for (let start = 0; start < ids.length && !cancelled; start += 50) {
-          const body = await apiClient.getFilesProcessingStatus(ids.slice(start, start + 50));
-          if (cancelled) return;
-          const rows = Array.isArray(body?.files) ? body.files : Array.isArray(body?.statuses) ? body.statuses : [];
-          const byId = new Map<string, any>(rows.map((row: any) => [String(row.id || row.fileId), row]));
-          setUploadedFiles((current: any[]) => {
-            const next = current.map((file: any) => {
-              const row = byId.get(resolveUploadFileId(file) || "");
-              const stage = row?.processingStage || row?.stage;
-              if (!stage || file.status === "uploading") return file;
-              const error = row.processingError ?? row.error ?? null;
-              const status = stage === "ready" ? "ready" : stage === "failed" ? "failed" : "processing";
-              // Long recordings report live progress (%, ETA) from the media job.
-              const processingProgress = status === "processing" ? (row.processingProgress ?? null) : null;
-              const progressKey = processingProgress ? `${processingProgress.stage}:${processingProgress.percent}:${processingProgress.etaSeconds}` : "";
-              const currentProgressKey = file.processingProgress ? `${file.processingProgress.stage}:${file.processingProgress.percent}:${file.processingProgress.etaSeconds}` : "";
-              if (file.processingStage === stage && (file.processingError ?? null) === error && file.status === status && progressKey === currentProgressKey) return file;
-              return { ...file, processingStage: stage, processingError: error, status, processingProgress };
-            });
-            if (next.every((file: any, index: number) => file === current[index])) return current;
-            uploadedFilesRef.current = next;
-            return next;
-          });
-        }
-      } catch { /* A disconnected tab resumes polling without failing uploads. */ }
-      if (!cancelled) timer = setTimeout(tick, attempts < 15 ? 2000 : 5000);
-    };
-    timer = setTimeout(tick, 1000);
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [processingWatchKey, setUploadedFiles]);
+    return subscribeToFileProcessingStatuses(ids, (status) => {
+      if (status.pending || !status.stage) return;
+      const file = uploadedFilesRef.current.find((candidate: any) => resolveUploadFileId(candidate) === status.fileId);
+      if (file) handleFileProcessingStatusChange(file, status);
+    });
+  }, [processingWatchKey, handleFileProcessingStatusChange]);
 
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
@@ -6348,6 +6306,20 @@ function ChatInterfaceContent() {
   const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentEditorChat({
     currentChat, userId: user?.id || null, selectedModel, selectProvider, setCurrentChat, selectChat,
     markBusy: markLocalJobBusy, markIdle: markLocalJobIdle, notify: (message) => toast.error(message),
+  });
+
+  const refreshResearchChat = React.useCallback(async (chatId: string) => {
+    const result = await apiClient.getChat(chatId);
+    const refreshed = result?.chat || result;
+    if (!refreshed?.id) return;
+    setCurrentChat(previous => previous?.id === chatId
+      ? mergeChatPreservingUserMessages(refreshed, previous) as any
+      : previous);
+  }, [setCurrentChat]);
+  const { start: startResearchGoal, stop: stopResearchGoal } = useResearchGoal({
+    ownerId: user?.id ? String(user.id) : "", chat: currentChat, selectChat, recoveryEnabled: !isCurrentChatStreaming,
+    refreshChat: refreshResearchChat, markBusy: markLocalJobBusy, markIdle: markLocalJobIdle,
+    notify: (kind, text, id) => toast[kind](text, id ? { id } : undefined),
   });
 
   // ─── Durable agent-task recovery ───────────────────────────────────
@@ -6945,7 +6917,26 @@ function ChatInterfaceContent() {
     const targetChatId = currentChatId;
     // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
     if (stopDocumentSandbox(targetChatId)) return;
+    if (stopResearchGoal(targetChatId)) return;
     const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
+    if (targetChatId && imageAbortControllerRef.current && imageAbortControllerRef.current === scopedController) {
+      const cancellation = apiClient.cancelPendingImageGeneration(targetChatId);
+      if (cancellation) {
+        const imageController = imageAbortControllerRef.current;
+        void cancellation.then(() => {
+          imageController.abort();
+          if (imageAbortControllerRef.current === imageController) {
+            imageAbortControllerRef.current = null;
+            isGeneratingImageRef.current = false;
+            setIsGeneratingImage(false);
+          }
+          markLocalJobIdle(targetChatId, imageController);
+          markImageGenerationStopped();
+          toast.info("Generación de imagen detenida");
+        }).catch(() => toast.error("No se pudo confirmar la detención de la imagen. Vuelve a pulsar Detener."));
+        return;
+      }
+    }
     const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
 
     if (intentAbortControllerRef.current && ownsSendingState) {
@@ -7060,7 +7051,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, user?.id, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, user?.id, stopDocumentSandbox, stopResearchGoal, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -9713,6 +9704,7 @@ But first, you need to connect your Spotify account securely using the button be
   const retryUpload = React.useCallback(async (failedFile: any) => {
     const durableId = resolveUploadFileId(failedFile);
     if (durableId && (isAudioComposerFile(failedFile) || isVideoComposerFile(failedFile))) {
+      invalidateFileProcessingStatus(durableId);
       updateUploadedFileById(durableId, (current: any) => ({ ...current, status: "processing", processingStage: "uploaded", processingError: null, uploadError: null }));
       try { await apiClient.retryFileProcessing(durableId); }
       catch (error: any) {
@@ -10169,8 +10161,8 @@ But first, you need to connect your Spotify account securely using the button be
   }, []);
 
   const persistComposerQueue = React.useCallback(() => {
-    if (!queueOwnerId) return;
-    writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
+    if (!queueOwnerId) return false;
+    return writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
   }, [queueOwnerId]);
 
   const prevComposerChatIdRef = React.useRef<string | null>(currentChat?.id ?? null);
@@ -10231,9 +10223,14 @@ But first, you need to connect your Spotify account securely using the button be
       .map((item) => item.chatId === chatId && !queueDrainClaimsRef.current.has(item.id))
       .lastIndexOf(true);
     if (index < 0) return;
-    const [item] = pendingMsgQueueRef.current.splice(index, 1);
+    const item = pendingMsgQueueRef.current[index];
     if (!item) return;
-    persistComposerQueue();
+    const nextQueue = pendingMsgQueueRef.current.filter((_, itemIndex) => itemIndex !== index);
+    if (!queueOwnerId || !writePersistedComposerQueue(queueOwnerId, nextQueue)) {
+      toast.error("No se pudo actualizar la cola. La tarea sigue guardada; vuelve a intentarlo.");
+      return;
+    }
+    pendingMsgQueueRef.current = nextQueue;
     syncQueuedCount(chatId);
     // Merge with what the user is composing right now instead of overwriting
     // it: the queued message goes first, the in-progress draft after it.
@@ -10254,7 +10251,7 @@ But first, you need to connect your Spotify account securely using the button be
     uploadedFilesRef.current = mergedFiles;
     setUploadedFiles(mergedFiles);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
-  }, [chatDraft, persistComposerQueue, setUploadedFiles, syncQueuedCount]);
+  }, [chatDraft, queueOwnerId, setUploadedFiles, syncQueuedCount]);
 
   const removeLastQueuedMessage = React.useCallback(() => {
     const chatId = currentChatIdRef.current ?? null;
@@ -10262,11 +10259,15 @@ But first, you need to connect your Spotify account securely using the button be
       .map((item) => item.chatId === chatId && !queueDrainClaimsRef.current.has(item.id))
       .lastIndexOf(true);
     if (index < 0) return;
-    pendingMsgQueueRef.current.splice(index, 1);
-    persistComposerQueue();
+    const nextQueue = pendingMsgQueueRef.current.filter((_, itemIndex) => itemIndex !== index);
+    if (!queueOwnerId || !writePersistedComposerQueue(queueOwnerId, nextQueue)) {
+      toast.error("No se pudo actualizar la cola. La tarea sigue guardada; vuelve a intentarlo.");
+      return;
+    }
+    pendingMsgQueueRef.current = nextQueue;
     syncQueuedCount(chatId);
     toast.success("Tarea quitada de la cola");
-  }, [persistComposerQueue, syncQueuedCount]);
+  }, [queueOwnerId, syncQueuedCount]);
 
   // ────────────────────────────────────────────────────────────
   // Sidebar auto-collapse — when the user turns on any composer tool
@@ -10479,26 +10480,35 @@ But first, you need to connect your Spotify account securely using the button be
   // Routes parsed slash commands (/goal, /research) to dedicated backends.
   // Streams progress events via SSE or persists scientific result cards.
   //
-  // `/goal` remains a meta-action. `/research` creates or reuses a chat and
-  // persists both the query and the scientific result card.
-  // Resolves true only when the command produced its result; false tells
-  // handleSend to give the user's text back to the composer.
+  // Both commands persist their query; `/goal` observes a durable backend run
+  // and `/research` persists the scientific result card.
+  // Resolves true once the query is durably accepted; false keeps an unsent
+  // command in the composer (or leaves an already queued command intact).
   const runSlashCommand = React.useCallback(async (slash: { command: string; remainder: string }): Promise<boolean> => {
     const query = slash.remainder.trim();
     if (!query) {
       toast.info(`Escribe una consulta después de /${slash.command} (p. ej. /${slash.command} avances en X)`);
       return false;
     }
-    const token = (typeof window !== "undefined" ? localStorage.getItem("token") : null) || "";
+    if (slash.command === "goal") {
+      const chat = currentChatRef.current;
+      if (chat?.id && (activeStreamingChatIds.includes(chat.id) || activeLocalJobChatIdsRef.current.has(chat.id))) {
+        toast.info("Espera a que termine el trabajo actual o pulsa Detener.");
+        return false;
+      }
+      const model = String(chat?.model || selectedModelRef.current || "");
+      if (!isActiveCatalogSelection(model, availableModels)) {
+        toast.error("El modelo seleccionado no está disponible. Elige otro para iniciar la investigación.");
+        return false;
+      }
+      return startResearchGoal({ query, model, provider: String(selectProvider || ""), chat });
+    }
 
-    if (slash.command === "goal" || slash.command === "research") {
-      const endpoint = slash.command === "goal" ? "/api/research-agent/stream" : "/api/scientific-search";
-      const isStream = slash.command === "goal";
+    if (slash.command === "research") {
+      const endpoint = "/api/scientific-search";
 
       const toastId = toast.loading(
-        slash.command === "goal"
-          ? `🎯 Goal agent activado — buscando papers...`
-          : `🔬 Buscando "${query}" en arXiv/PubMed/OpenAlex/CrossRef/Europe PMC...`,
+        `🔬 Buscando "${query}" en arXiv/PubMed/OpenAlex/CrossRef/Europe PMC...`,
         { duration: Infinity },
       );
 
@@ -10507,7 +10517,7 @@ But first, you need to connect your Spotify account securely using the button be
           (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api");
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
-        if (!isStream) {
+        {
           const researchModel = clampDeepSeekModel(currentChatRef.current?.model || selectedModelRef.current)
           if (!researchModel) throw new Error("Selecciona un modelo antes de iniciar la investigación")
           const researchChat = await ensureResearchCommandChat({
@@ -10522,7 +10532,7 @@ But first, you need to connect your Spotify account securely using the button be
           // free OA PDFs (Unpaywall, gated on SIRAGPT_RESEARCH_EMAIL server-side).
           const request = await apiClient.prepareMutatingFetch({
             method: "POST",
-            headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query, limit: 25, unpaywall: true }),
           });
           const res = await authenticatedFetch(url, request);
@@ -10561,55 +10571,6 @@ But first, you need to connect your Spotify account securely using the button be
             duration: 6000,
           });
           return false;
-        } else {
-          // /goal → SSE stream the agent phases
-          const request = await apiClient.prepareMutatingFetch({
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-            body: JSON.stringify({ query, depth: "standard" }),
-          });
-          const res = await authenticatedFetch(url, request);
-          if (!res.ok || !res.body) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buf = "";
-          let papersSeen = 0;
-          let findingsSeen = 0;
-          let pagesSeen = 0;
-          let lastReport: any = null;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += decoder.decode(value, { stream: true });
-            // SSE frames separated by blank line
-            const frames = buf.split("\n\n");
-            buf = frames.pop() || "";
-            for (const frame of frames) {
-              const m = frame.match(/^data:\s*(.*)$/m);
-              if (!m) continue;
-              try {
-                const evt = JSON.parse(m[1]);
-                if (evt.type === "paper") papersSeen++;
-                if (evt.type === "finding") findingsSeen++;
-                if (evt.type === "page") pagesSeen++;
-                if (evt.type === "phase") {
-                  toast.loading(`🎯 ${evt.phase}: ${evt.label} · ${papersSeen} papers · ${pagesSeen} pages · ${findingsSeen} findings`, { id: toastId });
-                }
-                if (evt.type === "report") lastReport = evt.report;
-              } catch { /* malformed frame */ }
-            }
-          }
-          if (lastReport) {
-            toast.success(`✅ Goal completado — ${lastReport.stats.findingsExtracted} findings · ${lastReport.stats.papersFound} papers`, {
-              id: toastId,
-              duration: 8000,
-              description: "Reporte copiado al portapapeles — pégalo en el chat para discutirlo.",
-            });
-            await copyTextSafe(lastReport.report);
-            return true;
-          }
-          toast.error(`⚠️ Goal terminado sin reporte`, { id: toastId });
-          return false;
         }
       } catch (err: any) {
         // Never leak the transport status ("HTTP 502") or English copy.
@@ -10621,16 +10582,10 @@ But first, you need to connect your Spotify account securely using the button be
       }
     }
 
-    if (slash.command === "summarize") {
-      toast.info(`/summarize "${query.slice(0, 80)}..."`);
-      // Future: route to a summarization endpoint with current chat + attachments
-      return false;
-    }
-
     toast.error(`Comando desconocido: /${slash.command}`);
     return false;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectChat]);
+  }, [activeStreamingChatIds, availableModels, selectChat, selectProvider, startResearchGoal]);
 
   const handleSend = async () => {
     const queuedSend = queuedComposerSendRef.current;
@@ -10653,7 +10608,7 @@ But first, you need to connect your Spotify account securely using the button be
         { duration: 4500 },
       );
     }
-    const rawMsg = normalized.value.trim();
+    let rawMsg = normalized.value.trim();
     if (!rawMsg && composerFiles.length === 0) return;
 
     // If a send is already being processed FOR THIS CHAT, ignore accidental
@@ -10666,18 +10621,31 @@ But first, you need to connect your Spotify account securely using the button be
     // Slash commands use their dedicated backend routes. `/research` owns its
     // chat persistence so new and existing conversations behave identically.
     const slash = parseSlashPrefix(rawMsg);
-    if (slash) {
-      setInput("");
+    if (slash?.command === "summarize") {
+      const summaryPrompt = summarizeCommandPrompt(slash.remainder, composerFiles.length, currentChatRef.current?.messages || []);
+      if (!summaryPrompt) {
+        toast.info("Adjunta un documento o abre una conversación con un mensaje que resumir.");
+        return;
+      }
+      rawMsg = summaryPrompt;
+    } else if (slash) {
+      if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      if (!queuedSend) {
+        setInput("");
+        chatDraft.clear();
+      }
       let ok = false;
       try {
         ok = await runSlashCommand(slash);
       } catch (err: any) {
         toast.error(friendlyGenerateError(err) || `No se pudo completar /${slash.command}.`);
+      } finally {
+        sendInFlightChatsRef.current.delete(sendLatchKey);
       }
-      // A queued slash is consumed either way (retrying it would loop).
-      if (ok || queuedSend) markQueuedSendSucceeded();
+      if (ok) markQueuedSendSucceeded();
       // Give the text back when the command did not produce a result.
-      if (!ok) setInput(prev => prev || rawMsg);
+      if (!ok && !queuedSend) setInput(prev => prev || rawMsg);
       return;
     }
 
@@ -10849,8 +10817,13 @@ But first, you need to connect your Spotify account securely using the button be
         files: composerFiles.length ? composerFiles : snapshotDocumentEditTargets(sandboxDecision.attachments),
         idempotencyKey,
       });
-      pendingMsgQueueRef.current.push(queuedItem);
-      persistComposerQueue();
+      const nextQueue = [...pendingMsgQueueRef.current, queuedItem];
+      if (!queueOwnerId || !writePersistedComposerQueue(queueOwnerId, nextQueue)) {
+        toast.error("No se pudo guardar esta tarea en la cola. Tu texto y archivos siguen aquí; espera a que termine la tarea actual e inténtalo de nuevo.");
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
+      pendingMsgQueueRef.current = nextQueue;
       syncQueuedCount(currentChat?.id ?? null);
       setInput("");
       chatDraft.clear();

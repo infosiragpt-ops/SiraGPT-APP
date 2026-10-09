@@ -61,7 +61,9 @@ describe("chat composer input robustness", () => {
   it("gives the slash-command text back on failure with Spanish copy", () => {
     assert.match(source, /Escribe una consulta después de \/\$\{slash\.command\}/)
     assert.match(source, /No se pudo completar \/\$\{slash\.command\}\. Vuelve a intentarlo en unos segundos\./)
-    assert.match(source, /if \(!ok\) setInput\(prev => prev \|\| rawMsg\);/)
+    assert.match(source, /if \(!ok && !queuedSend\) setInput\(prev => prev \|\| rawMsg\);/)
+    assert.match(source, /if \(ok\) markQueuedSendSucceeded\(\);/)
+    assert.doesNotMatch(source, /if \(ok \|\| queuedSend\) markQueuedSendSucceeded/)
     assert.doesNotMatch(source, /failed: \$\{err\?\.message/)
   })
 

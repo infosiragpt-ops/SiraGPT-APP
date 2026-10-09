@@ -220,7 +220,7 @@ function createBrowserSession({ totalBudgetMs, validateUrl = null }) {
  * model to extract findings as a structured list. Falls back to text-only
  * extraction when vision isn't configured or the screenshot was skipped.
  */
-async function analysePage({ pageData, paper, query, aiClient }) {
+async function analysePage({ pageData, paper, query, aiClient, model, signal, strictModel = false, supportsVision = true }) {
   const findings = [];
   // Always extract at least the textual abstract if no model is wired
   if (!aiClient) {
@@ -258,7 +258,7 @@ For each finding, return a JSON object with:
 Reply with a JSON array only, no prose. If the page has nothing relevant,
 return [].`,
   });
-  if (pageData.screenshotBase64) {
+  if (pageData.screenshotBase64 && supportsVision) {
     blocks.push({
       type: 'image_url',
       image_url: { url: `data:image/png;base64,${pageData.screenshotBase64}`, detail: 'low' },
@@ -267,11 +267,11 @@ return [].`,
 
   try {
     const resp = await aiClient.chat.completions.create({
-      model: process.env.RESEARCH_VISION_MODEL || 'gpt-4o-mini',
+      model: model || process.env.RESEARCH_VISION_MODEL || 'gpt-4o-mini',
       messages: [{ role: 'user', content: blocks }],
       temperature: 0.2,
       max_tokens: 600,
-    });
+    }, { signal });
     const txt = resp.choices?.[0]?.message?.content || '[]';
     const jsonStart = txt.indexOf('[');
     const jsonEnd = txt.lastIndexOf(']');
@@ -289,6 +289,7 @@ return [].`,
       }
     }
   } catch (err) {
+    if (signal?.aborted || strictModel) throw err;
     // Vision failure → fall back to abstract. Log so a systemic vision outage
     // isn't indistinguishable from a page that genuinely yielded no findings.
     console.warn('[research-agent] vision analysis failed for', pageData.url, '-', err && err.message ? err.message : err);
@@ -402,8 +403,8 @@ async function run(opts = {}) {
     ...depthCfg,
     ...opts,
   };
-  const runId = researchRunStore.createRunId(query);
-  researchRunStore.saveRun({
+  const runId = opts.runId || researchRunStore.createRunId(query);
+  if (!opts.managed) researchRunStore.saveRun({
     id: runId,
     query,
     depth: opts.depth || 'standard',
@@ -412,7 +413,7 @@ async function run(opts = {}) {
     events: [],
   });
   const onEvent = (event) => {
-    researchRunStore.appendEvent(runId, event);
+    if (!opts.managed) researchRunStore.appendEvent(runId, event);
     if (typeof opts.onEvent === 'function') {
       try { opts.onEvent(event); } catch { /* best effort */ }
     }
@@ -422,18 +423,26 @@ async function run(opts = {}) {
   const allPapers = [];
   const allFindings = [];
   let aiClient = opts.aiClient;
-  if (!aiClient) {
+  if (!aiClient && !opts.model) {
     const ai = getAiService();
     if (ai && typeof ai.getOpenAIClient === 'function') {
       try { aiClient = ai.getOpenAIClient(); } catch (err) { console.warn('[research-agent] vision client init failed, using text-only mode:', err && err.message ? err.message : err); }
     }
   }
 
-  const browserSession = createBrowserSession({ totalBudgetMs: cfg.maxBrowserMs });
+  const browserSession = createBrowserSession({
+    totalBudgetMs: cfg.maxBrowserMs,
+    validateUrl: url => require('../utils/url-ssrf-guard').assertOutboundUrlSafe(url, { allowHttp: true }),
+  });
+  const checkAbort = () => { if (opts.signal?.aborted) throw Object.assign(new Error('research_cancelled'), { name: 'AbortError' }); };
+  const onAbort = () => { void browserSession.close(); };
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
+  checkAbort();
 
   try {
     let currentQuery = query;
     for (let step = 0; step < cfg.maxSteps; step++) {
+      checkAbort();
       emit(onEvent, { type: 'phase', phase: 'search', label: `step ${step + 1}/${cfg.maxSteps}: ${currentQuery}` });
 
       // ── Search across providers ──
@@ -455,6 +464,7 @@ async function run(opts = {}) {
       emit(onEvent, { type: 'phase', phase: 'browse', label: `visiting up to ${cfg.maxPagesToVisit} pages` });
       const topToVisit = newPapers.slice(0, cfg.maxPagesToVisit);
       for (const paper of topToVisit) {
+        checkAbort();
         const url = paper.htmlUrl || (paper.doi ? `https://doi.org/${paper.doi}` : null);
         if (!url) continue;
         const pageData = await browserSession.visit(url, {
@@ -473,7 +483,8 @@ async function run(opts = {}) {
 
         // ── Vision/text analysis ──
         emit(onEvent, { type: 'phase', phase: 'analyse', label: `extracting findings from ${paper.title.slice(0, 60)}…` });
-        const findings = await analysePage({ pageData, paper, query, aiClient });
+        checkAbort();
+        const findings = await analysePage({ pageData, paper, query, aiClient, model: opts.model, signal: opts.signal, strictModel: Boolean(opts.model), supportsVision: opts.supportsVision });
         for (const f of findings) {
           allFindings.push(f);
           emit(onEvent, { type: 'finding', finding: f });
@@ -509,9 +520,14 @@ async function run(opts = {}) {
         queryVariants: queriesTried.length,
       },
     };
-    emit(onEvent, { type: 'report', report: result });
+    checkAbort();
+    if (!opts.managed) {
+      researchRunStore.saveRun({ ...researchRunStore.loadRun(runId), status: 'completed', result });
+      emit(onEvent, { type: 'report', report: result });
+    }
     return result;
   } finally {
+    opts.signal?.removeEventListener('abort', onAbort);
     await browserSession.close();
   }
 }

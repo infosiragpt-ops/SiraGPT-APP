@@ -421,7 +421,7 @@ async function synthesizeSpeech({ text, voice = 'default', language = null, spee
     timeoutMs: options.timeoutMs || Number(envOf(options).VOICESTUDIO_TTS_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS,
   });
   try {
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = await require('../media/transfer').readLimitedResponse(response, { maxBytes: 32 * 1024 * 1024, signal });
     if (!buffer.length) throw new VoiceStudioError('VoiceStudio devolvió un audio vacío', { code: 'EMPTY_AUDIO', status: 502 });
     const mime = String(response.headers.get('content-type') || '').split(';')[0].trim() || 'audio/wav';
     const ext = mime === 'audio/mpeg' ? 'mp3' : mime === 'audio/flac' ? 'flac' : mime === 'audio/ogg' ? 'ogg' : 'wav';
@@ -718,15 +718,14 @@ async function downloadToFile(pathname, outPath, { signal, timeoutMs } = {}, opt
     signal,
     timeoutMs: timeoutMs || 30 * 60 * 1000,
   });
-  await fsPromises.mkdir(path.dirname(outPath), { recursive: true });
+  const temporary = `${outPath}.${require('crypto').randomUUID()}.partial`;
   try {
-    const { Readable } = require('stream');
-    const { pipeline } = require('stream/promises');
-    const nodeStream = response.body && typeof response.body.pipe === 'function'
-      ? response.body
-      : Readable.fromWeb(response.body);
-    await pipeline(nodeStream, fs.createWriteStream(outPath));
+    const transfer = require('../media/transfer');
+    const maxBytes = /\.(?:mp4|webm|mov)$/i.test(outPath) ? transfer.LIMITS.video : transfer.LIMITS.audio;
+    await transfer.downloadToFile(response, temporary, { maxBytes, signal });
+    await fsPromises.rename(temporary, outPath);
   } finally {
+    await fsPromises.unlink(temporary).catch(() => {});
     response.releaseTimeout?.();
   }
   const stat = await fsPromises.stat(outPath);

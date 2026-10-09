@@ -18,7 +18,7 @@ import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversation
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
-import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, reconcileSelectedCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
 import { emitGithubConnectionRequired, GITHUB_CONNECTION_TURN_SETTLED_EVENT } from "./chat/github-connect-handoff"
 import { emitCodingWorkspaceReady } from "./chat/coding-workspace-event"
@@ -1194,11 +1194,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const catalogModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : [];
         const activeModels = chatType === 'text' ? filterTextCatalogModels(catalogModels) : catalogModels;
         setAvailableModels(activeModels);
-        const preferred = pickPreferredCatalogModel(activeModels, {
-          current: selectedModelRef.current,
-          pinned: getPinnedModel(),
-          last: getLastModel(),
-        });
+        const preferred = (chatType === 'text' ? reconcileSelectedCatalogModel(activeModels, selectedModelRef.current) : null)
+          || pickPreferredCatalogModel(activeModels, { pinned: getPinnedModel(), last: getLastModel() });
         if (preferred?.name) {
           setSelectedModel(preferred.name);
           setSelectedProivder(preferred.provider || "");
@@ -1229,11 +1226,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (Array.isArray(r?.models)) {
         const activeModels = chatType === 'text' ? filterTextCatalogModels(r.models) : r.models;
         setAvailableModels(activeModels);
-        const preferred = pickPreferredCatalogModel(activeModels, {
-          current: selectedModelRef.current,
-          pinned: getPinnedModel(),
-          last: getLastModel(),
-        });
+        const preferred = reconcileSelectedCatalogModel(activeModels, selectedModelRef.current, selectProvider)
+          || pickPreferredCatalogModel(activeModels, { pinned: getPinnedModel(), last: getLastModel() });
         setSelectedModel(preferred?.name || "");
         setSelectedProivder(preferred?.provider || "");
       }
@@ -1241,7 +1235,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       /* best-effort: keep the existing list on a transient failure */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatType, hasInitialized]);
+  }, [chatType, hasInitialized, selectProvider]);
 
   // Pick up admin model changes when the user tabs back to the app.
   useEffect(() => {
@@ -1448,7 +1442,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !isAuthenticated) return false;
       if (chatType === 'text' && !isActiveCatalogSelection(selectedModel, availableModels)) {
-        toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+        toast.error(selectedModel ? 'El modelo elegido ya no está disponible. Elige otro modelo para continuar; no se cambió tu selección.' : 'Selecciona un modelo disponible para continuar.');
         return false;
       }
       const displayFiles = Array.isArray(fileIds)
@@ -3029,11 +3023,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const applyChatModelSelection = useCallback((chat: { model?: string | null } | null | undefined) => {
     const name = String(chat?.model || "").trim()
-    const preferred = pickPreferredCatalogModel(availableModels, {
-      current: name,
-      pinned: getPinnedModel(),
-      last: getLastModel(),
-    })
+    const preferred = reconcileSelectedCatalogModel(availableModels, name)
+      || pickPreferredCatalogModel(availableModels, { pinned: getPinnedModel(), last: getLastModel() })
     setSelectedModel(preferred?.name || "")
     setSelectedProivder(preferred?.provider || "")
   }, [availableModels])
@@ -3301,7 +3292,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // idle chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
     if (!isActiveCatalogSelection(selectedModel, availableModels)) {
-      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+      toast.error(selectedModel ? 'El modelo elegido ya no está disponible. Elige otro modelo para continuar; no se cambió tu selección.' : 'Selecciona un modelo disponible para continuar.');
       return;
     }
 
@@ -3676,7 +3667,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
     if (!isActiveCatalogSelection(selectedModel, availableModels)) {
-      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+      toast.error(selectedModel ? 'El modelo elegido ya no está disponible. Elige otro modelo para continuar; no se cambió tu selección.' : 'Selecciona un modelo disponible para continuar.');
       return;
     }
 

@@ -29,6 +29,7 @@ function response() {
     statusCode: 200,
     status(code) { this.statusCode = code; return this; },
     json(body) { this.body = body; return this; },
+    setHeader() {},
   };
 }
 
@@ -41,6 +42,7 @@ function aiHarness({ chatUserId = 'owner', chatDeleted = false, serviceError = n
     { timestamp: 1, deletedAt: null, files: JSON.stringify([{ type: 'video', prompt: 'primer clip' }]) },
   ];
   const prisma = {
+    user: { findUnique: async () => ({}) },
     aiModel: { findUnique: async () => ({ displayName: 'Selected video', type: 'VIDEO', isActive: true }) },
     chat: {
       findFirst: async ({ where }) => {
@@ -62,6 +64,7 @@ function aiHarness({ chatUserId = 'owner', chatDeleted = false, serviceError = n
         return recentMessages.filter((row) => query.where.deletedAt !== null || row.deletedAt === null);
       },
       create: async ({ data }) => { calls.saved.push(data); return { id: `msg-${calls.saved.length}` }; },
+      upsert: async ({ create }) => { calls.saved.push(create); return { id: create.id }; },
       update: async () => ({}),
     },
   };
@@ -139,7 +142,7 @@ test('continuity queries real timestamp and sends only nondeleted clips in order
   assert.equal(calls.history[0].orderBy.timestamp, 'desc');
   assert.equal(calls.history[0].where.deletedAt, null);
   assert.equal(calls.saved.length, 2);
-  assert.equal(calls.usage.length, 1);
+  assert.equal(calls.usage.length, 0, 'inner durable admission owns quota accounting');
 });
 
 test('foreign and deleted chats fail before history, internal generation or writes', async () => {
@@ -181,7 +184,15 @@ function serviceHarness({ user = {}, usage = 1000 } = {}) {
     buildFalVideoInputPayload, validateFalVideoSettings,
     resolveVeoFastDuration, getRecentVideoHistoryForUser: () => [],
     videoPromptDirector: { directVideoPrompt: () => null }, checkPaidTokenCap,
-    prisma: { apiUsage: { aggregate: async () => ({ _sum: { tokens: usage } }), create: async () => { calls.usage++; } } },
+    prisma: { aiModel: { findUnique: async () => ({ pricing: null }) } },
+    requestKey: () => 'fixture-key',
+    getMediaJobStore: () => ({ async admit(spec) {
+      const cap = checkPaidTokenCap({ id: 'owner', plan: 'PRO', apiUsage: usage, monthlyLimit: 500, ...user });
+      if (!cap.ok) throw Object.assign(new Error(cap.body.error), { status: cap.status, code: 'E_QUOTA' });
+      calls.generated++; calls.requests.push(spec.payload);
+      const job = { id: 'op', status: 'queued', payload: spec.payload, created_at: new Date(), updated_at: new Date() };
+      calls.operations.set(job.id, job); return { job, created: true };
+    } }), publicVideoOperation: require('../src/services/media/video-job-runner').publicVideoOperation,
     generateOperationId: () => 'op', randomUUID: () => 'fixture-uuid', activeOperations: calls.operations,
     generateVideoAsync: async (...args) => { calls.generated++; calls.requests.push(args); },
   }, { filename: videoFile });
@@ -201,14 +212,14 @@ test('inner video gate preserves paid cap and honors canonical unlimited exempti
   for (const { user, expected } of [
     { user: {}, expected: 429 },
     { user: { isAdmin: true }, expected: 429 },
-    { user: { isSuperAdmin: true }, expected: 200 },
-    { user: { monthlyLimit: 0 }, expected: 200 },
+    { user: { isSuperAdmin: true }, expected: 202 },
+    { user: { monthlyLimit: 0 }, expected: 202 },
   ]) {
     const { request, calls } = serviceHarness({ user });
     const res = await request();
     assert.equal(res.statusCode, expected, JSON.stringify(user));
-    assert.equal(calls.generated, expected === 200 ? 1 : 0);
-    assert.equal(calls.usage, expected === 200 ? 1 : 0);
+    assert.equal(calls.generated, expected === 202 ? 1 : 0);
+    assert.equal(calls.usage, 0);
   }
 });
 
@@ -231,16 +242,16 @@ test('unsupported selected video settings fail before operation, provider and us
 test('valid selected video settings reach generation without silent duration clamp', async () => {
   const { request, calls } = serviceHarness({ user: { isSuperAdmin: true } });
   const res = await request({ model: omniModel, resolution: '360p', duration: 3, audio: true, aspect_ratio: '9:16' });
-  assert.equal(res.statusCode, 200);
+  assert.equal(res.statusCode, 202);
   assert.equal(calls.generated, 1);
-  assert.equal(calls.usage, 1);
+  assert.equal(calls.usage, 0);
   const args = calls.requests[0];
-  assert.equal(args[2], '9:16');
-  assert.equal(args[3], '3s');
-  assert.equal(args[8], omniModel);
-  assert.equal(args[9], '360p');
-  assert.equal(args[10], true);
-  const payload = buildFalVideoInputPayload({ endpoint: args[8], prompt: args[1], aspectRatio: args[2], duration: args[3], resolution: args[9], audio: args[10] });
+  assert.equal(args.aspectRatio, '9:16');
+  assert.equal(args.duration, '3s');
+  assert.equal(args.model, omniModel);
+  assert.equal(args.resolution, '360p');
+  assert.equal(args.audio, true);
+  const payload = buildFalVideoInputPayload({ endpoint: args.model, prompt: args.prompt, aspectRatio: args.aspectRatio, duration: args.duration, resolution: args.resolution, audio: args.audio });
   assert.deepEqual(payload, { prompt: 'synthetic video', aspect_ratio: '9:16', duration: 3, resolution: '360p' });
 });
 

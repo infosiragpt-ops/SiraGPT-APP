@@ -112,7 +112,7 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
     return (
         <div
             data-copy-exclude=""
-            className="absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-full border border-border/50 bg-background/90 p-1 shadow-sm backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible focus-within:opacity-100 focus-within:visible transition-all duration-200 ease-out"
+            className="absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-full border border-border/50 bg-background/90 p-1 shadow-sm backdrop-blur-sm opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all duration-200 ease-out"
         >
             <Button
                 variant="ghost"

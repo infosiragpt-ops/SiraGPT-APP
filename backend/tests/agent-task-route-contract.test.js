@@ -717,7 +717,7 @@ test('agent task stream: normal request close does not cut off later task events
   state = INTERNAL.reduceAgentState(state, doneEvent);
   INTERNAL.appendTaskEvent(task, doneEvent, state);
   task.status = 'completed';
-  taskStore.markTaskStatus(task, 'completed', { streamState: state });
+  await taskStore.markTaskStatusAsync(task, 'completed', { streamState: state });
 
   await new Promise((resolve) => setTimeout(resolve, 600));
 

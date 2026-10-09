@@ -506,6 +506,14 @@ jobs:
       - name: Prisma · align residual schema.prisma drift for tests
         run: npx prisma db push --schema prisma/schema.prisma --accept-data-loss --skip-generate
 
+      - name: Durable media, webhook and Redis replay integration (no providers)
+        if: matrix.shard == 1
+        env:
+          NODE_ENV: test
+          MEDIA_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
+          DOC_SANDBOX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
+        run: node --test tests/media-jobs-postgres.test.js tests/webhook-outbox.integration.test.js tests/stream-resume-redis.integration.test.js
+
       - name: Release provenance contracts
         if: matrix.shard == 1
         run: npm run test:release-provenance
@@ -977,24 +985,62 @@ jobs:
           node backend/scripts/image-size-security-patch.cjs
           node scripts/audit-backend-production.cjs
 
+  # Keep this required-check ID: this is now an executed upgrade, not a
+  # migration-file count. Existing publisher schema gate remains unchanged.
   drizzle-migrations-dry-run:
-    name: Drizzle migrations · dry run
+    name: Prisma migrations · populated BASE upgrade
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openwebui
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openwebui"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
     steps:
-      - name: Checkout
+      - name: Checkout complete migration history
         uses: actions/checkout@v5
-
-      - name: Validate Prisma migrations are additive
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install existing backend migration tooling
+        run: npm ci --prefix backend --no-audit --no-fund
+      - name: Migration checker and preservation guard tests
+        run: node --test backend/tests/check-migration-safety.test.js backend/tests/migration-upgrade-guards.test.js
+      - name: Upgrade actual BASE history with existing nonempty data
+        env:
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          # Verify migration SQL files exist and are non-empty
-          MIGRATIONS=$(find backend/prisma/migrations -name "migration.sql" -type f 2>/dev/null | wc -l)
-          echo "Found ${MIGRATIONS} Prisma migration(s)"
-          if [ "${MIGRATIONS}" -eq 0 ]; then
-            echo "::warning::No Prisma migrations found"
-          else
-            echo "✓ Prisma migrations present"
+          set -euo pipefail
+          base_ref="$EVENT_BASE_REF"
+          if [[ -z "$base_ref" || "$base_ref" =~ ^0+$ ]]; then
+            base_ref=$(git merge-base HEAD origin/production-main)
           fi
+          node scripts/check-migration-safety.js --base-ref="$base_ref"
+          node scripts/check-migration-upgrade.cjs --base-ref="$base_ref" --artifacts="$RUNNER_TEMP/migration-upgrade-artifacts"
+      - name: Expose baseline drift, upgraded drift and preservation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: migration-upgrade-evidence
+          path: ${{ runner.temp }}/migration-upgrade-artifacts/
+          if-no-files-found: error
 
   # ───────────────────────────────────────────────────────────────────
   # E2E CRITICAL — hard-gated frontend critical-path smoke

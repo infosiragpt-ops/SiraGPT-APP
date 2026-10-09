@@ -9,6 +9,7 @@ const fs = require('fs');
 const fsPromises = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const { createHash } = require('crypto');
 
 const store = require('../src/services/chunked-upload-store');
 
@@ -44,14 +45,17 @@ describe('chunked upload store', () => {
     assert.equal(file.mimetype, 'video/mp4');
     assert.equal(file.size, total);
     assert.equal(file.fieldname, 'files');
-    assert.match(file.filename, /^files-\d+-[a-f0-9]{12}\.mp4$/);
+    assert.match(file.filename, /^files-[a-f0-9]{32}\.mp4$/);
     assert.equal(path.dirname(file.path), userDir);
     const data = await fsPromises.readFile(file.path);
     assert.equal(data.length, total);
     assert.equal(data[0], 0x11);
     assert.equal(data[chunkSize], 0x22);
     assert.equal(data[chunkSize * 2], 0x33);
-    assert.equal(fs.existsSync(path.join(userDir, store.PARTS_DIR, `${session.uploadId}.json`)), false, 'meta removed on completion');
+    assert.equal(fs.existsSync(path.join(userDir, store.PARTS_DIR, `${session.uploadId}.json`)), true, 'meta survives lost completion acknowledgement');
+    const replay = await store.completeChunkedUpload({ userDir, uploadId: session.uploadId });
+    assert.equal(replay.path, file.path);
+    assert.equal(replay.deterministicId, file.deterministicId);
   });
 
   test('validates sizes, indexes, caps and ownership-scoped ids', async () => {
@@ -72,8 +76,9 @@ describe('chunked upload store', () => {
     const chunkSize = store.MIN_CHUNK_BYTES;
     const session = await store.initChunkedUpload({ userDir, name: 'a.mp3', size: chunkSize, mimeType: 'audio/mpeg', chunkSize, maxBytes: Infinity });
     await store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 1) });
-    const again = await store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 2) });
+    const again = await store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 1) });
     assert.equal(again.received, 1);
+    await assert.rejects(() => store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 2) }), err => err.code === 'chunk_hash_mismatch');
     assert.equal(await store.abortChunkedUpload({ userDir, uploadId: session.uploadId }), true);
     await assert.rejects(() => store.completeChunkedUpload({ userDir, uploadId: session.uploadId }), /no existe o caducó/);
 
@@ -81,5 +86,31 @@ describe('chunked upload store', () => {
     const removed = await store.sweepStaleChunkedUploads(userDir, { maxAgeMs: 1, now: Date.now() + 60_000 });
     assert.equal(removed, 2, 'part + meta of the stale session removed');
     await assert.rejects(() => store.writeChunk({ userDir, uploadId: stale.uploadId, index: 0, buffer: bytes(chunkSize) }), /no existe o caducó/);
+  });
+
+  test('reselecting identical bytes resumes after restart, rejects mixed chunks, and complete replays its saved response', async () => {
+    const chunkSize = store.MIN_CHUNK_BYTES;
+    const chunks = [bytes(chunkSize, 4), bytes(17, 8)];
+    const chunkHashes = chunks.map(buffer => createHash('sha256').update(buffer).digest('hex'));
+    const input = { userDir, name: 'leccion.mp4', size: chunkSize + 17, mimeType: 'video/mp4', chunkSize, chunkHashes };
+    const original = await store.initChunkedUpload(input);
+    await store.writeChunk({ userDir, uploadId: original.uploadId, index: 0, buffer: chunks[0] });
+    delete require.cache[require.resolve('../src/services/chunked-upload-store')];
+    const restarted = require('../src/services/chunked-upload-store');
+    const resumed = await restarted.initChunkedUpload(input);
+    assert.equal(resumed.uploadId, original.uploadId);
+    assert.deepEqual(resumed.received, [0]);
+    await assert.rejects(() => restarted.writeChunk({ userDir, uploadId: resumed.uploadId, index: 1, buffer: bytes(17, 9) }), err => err.code === 'chunk_hash_mismatch');
+    await restarted.writeChunk({ userDir, uploadId: resumed.uploadId, index: 1, buffer: chunks[1] });
+    const file = await restarted.completeChunkedUpload({ userDir, uploadId: resumed.uploadId });
+    const response = { files: [{ id: file.deterministicId, name: file.originalname }], chunked: true };
+    await restarted.saveCompletedResponse({ userDir, uploadId: resumed.uploadId, response });
+    assert.deepEqual(await restarted.getCompletedResponse({ userDir, uploadId: resumed.uploadId }), response);
+    assert.deepEqual((await restarted.getChunkedUploadStatus({ userDir, uploadId: resumed.uploadId })).files, response.files);
+    assert.equal(await restarted.abortChunkedUpload({ userDir, uploadId: resumed.uploadId }), false);
+    assert.equal(fs.existsSync(file.path), true, 'cancellation after registration cannot delete the library binary');
+    const otherDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'sira-other-owner-'));
+    try { await assert.rejects(() => restarted.getChunkedUploadStatus({ userDir: otherDir, uploadId: resumed.uploadId }), err => err.status === 404); }
+    finally { await fsPromises.rm(otherDir, { recursive: true, force: true }); }
   });
 });

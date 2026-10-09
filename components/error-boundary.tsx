@@ -5,6 +5,7 @@ import { AlertTriangle, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { track } from "@/lib/analytics"
 import { reportErrorBoundary } from "@/lib/client-logs"
+import { reloadOnceForStaleBundle } from "@/lib/client-bundle-recovery"
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -58,9 +59,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       : `eb-${Date.now().toString(36)}`
     reportErrorBoundary(label, error, { digest, requestId })
     this.props.onError?.(error, info)
+    // Lazy imports can fail inside a message boundary, without reaching the
+    // route boundary. Reuse the same per-build reload guard here.
+    reloadOnceForStaleBundle(error)
   }
 
   reset = (): void => {
+    if (reloadOnceForStaleBundle(this.state.error)) return
     this.setState({ error: null })
   }
 

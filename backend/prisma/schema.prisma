@@ -11,6 +11,7 @@ datasource db {
 }
 
 model User {
+  mediaJobs MediaJob[]
   id               String  @id @default(cuid())
   email            String  @unique
   name             String
@@ -472,6 +473,7 @@ model Session {
 }
 
 model Chat {
+  mediaJobs MediaJob[]
   id        String   @id @default(cuid())
   userId    String
   title     String
@@ -1238,6 +1240,7 @@ model ResearchReferenceConflict {
 // to when a matching event is published. The secret is the HMAC key
 // the recipient uses to verify the signature header.
 model WebhookEndpoint {
+  deliveries WebhookDelivery[]
   id                      String    @id @default(cuid())
   userId                  String
   // Optional org scope. When set, this endpoint participates in org-level
@@ -1861,7 +1864,7 @@ model ApiUsage {
   userId    String
   model     String
   tokens    BigInt
-  cost      Float
+  cost      Float?
   timestamp DateTime @default(now())
 
   // Relations
@@ -4373,4 +4376,87 @@ model RlhfTrainJob {
   @@index([createdById, createdAt])
   @@index([scope, createdAt])
   @@map("rlhf_train_jobs")
+}
+
+model WebhookDelivery {
+  id              String    @id @default(uuid())
+  endpointId      String    @map("endpoint_id")
+  endpointUserId  String    @map("endpoint_user_id")
+  publisherUserId String?   @map("publisher_user_id")
+  organizationId String?    @map("organization_id")
+  url             String
+  event           String
+  payload         String    @db.Text
+  idempotencyKey  String    @unique @map("idempotency_key")
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  maxAttempts     Int       @default(4) @map("max_attempts")
+  nextAttemptAt   DateTime  @default(dbgenerated("timezone('UTC'::text, clock_timestamp())")) @map("next_attempt_at")
+  leaseToken      String?   @map("lease_token")
+  leaseUntil      DateTime? @map("lease_until")
+  lastError       String?   @map("last_error")
+  lastHttpStatus  Int?      @map("last_http_status")
+  durationMs      Int?      @map("duration_ms")
+  deliveredAt    DateTime? @map("delivered_at")
+  createdAt       DateTime  @default(dbgenerated("timezone('UTC'::text, clock_timestamp())")) @map("created_at")
+  updatedAt       DateTime  @default(dbgenerated("timezone('UTC'::text, clock_timestamp())")) @updatedAt @map("updated_at")
+  endpoint        WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade, map: "webhook_delivery_endpoint_fk")
+  @@index([status, nextAttemptAt], map: "webhook_deliveries_pending_idx")
+  @@index([endpointId, createdAt], map: "webhook_deliveries_endpoint_created_idx")
+  @@index([status, leaseUntil], map: "webhook_deliveries_lease_idx")
+  @@map("webhook_deliveries")
+}
+
+// Durable multimedia execution; dispatch/leases are managed by parameterized SQL.
+model MediaJob {
+  id String @id
+  userId String @map("user_id")
+  chatId String? @map("chat_id")
+  lane String
+  kind String
+  idempotencyKey String @map("idempotency_key")
+  payloadHash String @map("payload_hash")
+  payload Json
+  publicInput Json @default("{}") @map("public_input")
+  status String @default("queued")
+  phase String @default("Encolado")
+  progress Int @default(0)
+  attempt Int @default(0)
+  leaseToken String? @map("lease_token")
+  leaseUntil DateTime? @map("lease_until")
+  cancelRequestedAt DateTime? @map("cancel_requested_at")
+  checkpoint Json @default("{}")
+  result Json?
+  errorCode String? @map("error_code")
+  errorMessage String? @map("error_message")
+  quotaReservedUnits BigInt @default(0) @map("quota_reserved_units")
+  quotaUsedUnits BigInt? @map("quota_used_units")
+  quotaEpoch BigInt @default(0) @map("quota_epoch")
+  quotaSettledAt DateTime? @map("quota_settled_at")
+  pricingSnapshot Json? @map("pricing_snapshot")
+  estimatedCostUsd Decimal? @db.Decimal(18,8) @map("estimated_cost_usd")
+  actualCostUsd Decimal? @db.Decimal(18,8) @map("actual_cost_usd")
+  costSource String @default("unknown") @map("cost_source")
+  createdAt DateTime @default(dbgenerated("timezone('UTC'::text, clock_timestamp())")) @map("created_at")
+  updatedAt DateTime @default(dbgenerated("timezone('UTC'::text, clock_timestamp())")) @map("updated_at")
+  finishedAt DateTime? @map("finished_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chat Chat? @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  events MediaJobEvent[]
+  @@unique([userId,idempotencyKey], map: "media_jobs_user_id_idempotency_key_key")
+  @@index([userId,lane,createdAt(sort: Desc)], map: "media_jobs_owner_created_idx")
+  @@index([status,leaseUntil,createdAt], map: "media_jobs_dispatch_idx")
+  @@map("media_jobs")
+}
+model MediaJobEvent {
+  id BigInt @id @default(autoincrement())
+  jobId String @map("job_id")
+  seq Int
+  type String
+  payload Json
+  createdAt DateTime @default(dbgenerated("timezone('UTC'::text, clock_timestamp())")) @map("created_at")
+  job MediaJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  @@unique([jobId,seq], map: "media_job_events_job_id_seq_key")
+  @@index([jobId,seq], map: "media_job_events_replay_idx")
+  @@map("media_job_events")
 }

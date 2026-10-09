@@ -28,18 +28,15 @@ test('exports the documented surface', () => {
   assert.equal(STORE_DIR, TEST_STORE);
 });
 
-test('createRunId returns a deterministic-ish id: rr_<ts>_<12hex>', () => {
+test('createRunId returns an opaque UUID identity', () => {
   const id = createRunId('quantum mechanics');
-  assert.match(id, /^rr_\d+_[a-f0-9]{12}$/);
+  assert.match(id, /^rr_[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 });
 
-test('createRunId produces different ids for different queries (different hash prefix)', () => {
-  // Different queries hash to different prefixes; timestamps may coincide.
+test('separate turns always get distinct identities, including identical queries', () => {
   const a = createRunId('one');
-  const b = createRunId('two');
-  const aHash = a.split('_')[2];
-  const bHash = b.split('_')[2];
-  assert.notEqual(aHash, bHash);
+  const b = createRunId('one');
+  assert.notEqual(a, b);
 });
 
 test('loadRun returns null when the file does not exist', () => {
@@ -120,6 +117,7 @@ test('pruneOldRuns deletes files older than RETENTION_MS, leaves fresh ones', ()
   const fresh = 'rr_fresh_' + crypto.randomBytes(4).toString('hex');
   saveRun({ id: old, query: 'stale' });
   saveRun({ id: fresh, query: 'recent' });
+  store.requestCancel(old);
 
   // Backdate the old file by 5 minutes
   const oldFile = path.join(STORE_DIR, `${old}.json`);
@@ -129,16 +127,25 @@ test('pruneOldRuns deletes files older than RETENTION_MS, leaves fresh ones', ()
   const pruned = pruneOldRuns();
   assert.ok(pruned >= 1, 'must prune at least the backdated run');
   assert.equal(loadRun(old), null, 'stale run must be gone');
+  assert.equal(store.isCancelled(old), false, 'expired cancellation marker must be gone');
   assert.ok(loadRun(fresh), 'fresh run must remain');
 });
 
-test('runId sanitisation strips path separators from disk filename', () => {
-  // We can't observe runPath directly but appendEvent → saveRun goes through
-  // runPath. A traversal-y id must not escape STORE_DIR.
+test('crafted run identifiers are rejected instead of being aliased to another run', () => {
   const dirty = '../../escape/' + crypto.randomBytes(2).toString('hex');
-  appendEvent(dirty, { phase: 'attempt' });
+  assert.throws(() => appendEvent(dirty, { phase: 'attempt' }), { status: 400 });
   const allWithinRoot = fs.readdirSync(STORE_DIR).every((f) =>
     path.resolve(path.join(STORE_DIR, f)).startsWith(path.resolve(STORE_DIR))
   );
   assert.equal(allWithinRoot, true, 'no files may escape STORE_DIR via crafted run id');
+});
+
+test('exclusive claim cannot overwrite an existing run, and heartbeat cannot erase cancellation', () => {
+  const id = createRunId();
+  assert.equal(store.claimRun({ id, userId: 'owner' }), true);
+  assert.equal(store.claimRun({ id, userId: 'different' }), false);
+  assert.equal(loadRun(id).userId, 'owner');
+  store.requestCancel(id);
+  saveRun({ ...loadRun(id), heartbeatAt: Date.now() });
+  assert.equal(store.isCancelled(id), true);
 });

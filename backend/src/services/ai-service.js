@@ -2369,6 +2369,8 @@ service.__test = {
     closeGenerateSseWithError,
 };
 service.modelSupportsVision = modelSupportsVision;
+service.normalizeChatProvider = normalizeChatProvider;
+service.normalizeModelForProvider = normalizeModelForProvider;
 service.selectVisionRuntime = selectVisionRuntime;
 service.OPENAI_HTTP_TIMEOUT_MS = OPENAI_HTTP_TIMEOUT_MS;
 
