@@ -79,3 +79,55 @@ describe("ApiClient refresh identity",()=>{
   }finally{Object.defineProperty(window,"localStorage",descriptor)}
  })
 })
+
+describe("ApiClient CSRF recovery failures", () => {
+ beforeEach(() => {
+  vi.restoreAllMocks(); localStorage.clear(); api.setToken("expired");
+  (api as any)._refreshing = null; (api as any)._refreshBlockedUntil = 0;
+  clearAuthRefreshBlock(); authenticatedFetch.csrfManager.clear();
+  globalThis.fetch = fetchMock; fetchMock.mockReset();
+  vi.spyOn(authenticatedFetch.csrfManager, "getToken").mockResolvedValue("csrf-current");
+ })
+ afterEach(() => { vi.restoreAllMocks(); api.setToken(null); localStorage.clear() })
+
+ it("keeps credentials and the CSRF cause without starting the secondary refresh fallback", async () => {
+  const expired = vi.fn(); window.addEventListener("siragpt:session-expired", expired)
+  fetchMock.mockImplementation(async (url: RequestInfo | URL) => String(url).endsWith("/auth/refresh")
+   ? json(403, { code: "csrf_invalid", error: "Renew the security token" }) : json(401))
+  try {
+   for (let i = 0; i < 4; i++) await expect(api.getCurrentUser()).rejects.toMatchObject({ status: 403, code: "csrf_invalid" })
+   expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/auth/refresh"))).toHaveLength(2)
+   expect(localStorage.getItem("auth-token")).toBe("expired")
+   expect(expired).not.toHaveBeenCalled()
+  } finally { window.removeEventListener("siragpt:session-expired", expired) }
+ })
+
+ it("does not erase a token or fall back to cookies after an explicit refresh receives CSRF rejection", async () => {
+  const expired = vi.fn(); window.addEventListener("siragpt:session-expired", expired)
+  fetchMock.mockImplementation(async () => json(403, { error: "csrf_invalid" }))
+  try {
+   expect(await api._tryRefresh()).toBe(false)
+   expect(await api._tryRefresh()).toBe(false)
+   expect(fetchMock).toHaveBeenCalledTimes(1)
+   expect(localStorage.getItem("auth-token")).toBe("expired")
+   expect(expired).not.toHaveBeenCalled()
+  } finally { window.removeEventListener("siragpt:session-expired", expired) }
+ })
+ it("preserves credentials when the cookie fallback is rejected by CSRF after a bearer 401", async () => {
+  let calls = 0
+  fetchMock.mockImplementation(async () => ++calls === 1 ? json(401, { error: "invalid_token" }) : json(403, { code: "csrf_invalid" }))
+  expect(await api._tryRefresh()).toBe(false)
+  expect(await api._tryRefresh()).toBe(false)
+  expect(fetchMock).toHaveBeenCalledTimes(3)
+  expect(localStorage.getItem("auth-token")).toBe("expired")
+ })
+
+ it.each([401, 403])("still clears a genuinely expired session after authentication rejection %s", async status => {
+  fetchMock.mockImplementation(async () => json(status, { error: "session_expired" }))
+  expect(await api._tryRefresh()).toBe(false)
+  expect(localStorage.getItem("auth-token")).toBeNull()
+  expect(await api._tryRefresh()).toBe(false)
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+ })
+
+})
