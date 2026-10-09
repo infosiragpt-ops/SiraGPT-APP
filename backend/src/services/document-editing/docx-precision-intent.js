@@ -1,5 +1,7 @@
 'use strict';
 
+const { documentOutputIntent } = require('./document-output-intent');
+
 // Literal replacement is a data operation, not a request to rewrite a document.
 // Only instruction text is normalized; quoted document text is kept verbatim.
 const normalize = (text) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -36,7 +38,8 @@ function parseDocxPrecisionRequest(instruction = '') {
   if (!raw.trim()) return null;
   // Markers are internal tokens, never user-supplied syntax.
   if (/[\uE000\uE001]/u.test(raw)) return failure('INSTRUCTION_REQUIRED', 'Indica el texto original y el nuevo entre comillas.');
-  const { text, values } = quotedInstruction(raw);
+  const { sourceInstruction, outputNames } = documentOutputIntent(raw);
+  const { text, values } = quotedInstruction(sourceInstruction);
   const preserve = /\b(?:milimetric\w*|edicion exacta|edicion precisa|sin (?:cambiar|alterar|modificar|perder) (?:el )?formato|conserv\w* (?:el )?formato original|preserv\w* (?:el )?formato original)\b/.test(text);
   const replacementVerb = new RegExp(`\\b${VERB}\\b`).test(text);
   if (!replacementVerb) {
@@ -57,6 +60,8 @@ function parseDocxPrecisionRequest(instruction = '') {
     return null;
   }
   if (pairs.length !== 1) return failure('INSTRUCTION_REQUIRED', 'Para aplicar una edición exacta, indica un solo reemplazo por mensaje. El original no se modificó.');
+  if (outputNames.length > 1 || outputNames.some((name) => !/\.docx$/i.test(name)))
+    return failure('INSTRUCTION_REQUIRED', 'La edición exacta entrega una copia .docx. Pide otros formatos o copias en una petición separada; no modifiqué el original.');
   const pair = pairs[0];
   const before = text.slice(0, pair.index);
   if (/\b(?:no|nunca|sin)\s*$/.test(before)) return failure('INSTRUCTION_REQUIRED', 'No apliqué cambios. Indica el reemplazo que sí deseas realizar.');

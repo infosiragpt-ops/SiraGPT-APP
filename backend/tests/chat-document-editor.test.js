@@ -285,6 +285,114 @@ test('a missing or ambiguous named historical source never falls back to the new
     (err) => err.code === 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS');
 });
 
+test('output filename occurrences do not select sources or hide genuine missing sources', async (t) => {
+  const artifactDir = tempArtifactDir({
+    aaa111: { metadata: { filename: 'piloto-atencion-cliente.pptx', ownerUserId: USER }, bytes: Buffer.from('original-pilot') },
+    bbb222: { metadata: { filename: 'piloto-atencion-cliente-revisado.pptx', ownerUserId: USER }, bytes: Buffer.from('unrelated-output-name') },
+    ccc333: { metadata: { filename: 'Informe anual.xlsx', ownerUserId: USER }, bytes: Buffer.from('original-workbook') },
+    ddd444: { metadata: { filename: 'ajeno.pptx', ownerUserId: 'other-user' }, bytes: Buffer.from('private') },
+  });
+  t.after(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({ messages: [
+    { role: 'ASSISTANT', files: [{ artifactId: 'bbb222' }] },
+    { role: 'ASSISTANT', files: [{ artifactId: 'aaa111' }, { artifactId: 'ccc333' }, { artifactId: 'ddd444' }] },
+  ] });
+  const { deps } = baseDeps({ artifactDir });
+  const resolve = (instruction) => resolveEditSources({ prisma, userId: USER, chatId: 'c', instruction, deps });
+  const original = 'piloto-atencion-cliente.pptx';
+  for (const suffix of [
+    'Entrega piloto-nuevo.pptx.',
+    'Guarda como piloto-nuevo.pptx.',
+    'Devuélveme el archivo como “Piloto revisado.pptx”.',
+    'Save as pilot-new.pptx.',
+    'Guárdalo como Piloto-Nuevo.PPTX.',
+    'Return the result as pilot-new.pptx.',
+    'Entrega piloto-atencion-cliente-revisado.pptx.',
+    `Entrega ${original}.`,
+  ]) {
+    const sources = await resolve(`Edita ${original}: cambia el título, el gráfico y los márgenes. ${suffix}`);
+    assert.deepEqual(sources.map((source) => source.artifactId), ['aaa111'], suffix);
+  }
+  assert.deepEqual((await resolve(`Guarda como nuevo.pptx la edición de ${original}.`)).map((source) => source.artifactId), ['aaa111']);
+  assert.deepEqual((await resolve('Edita «Informe anual.xlsx» y entrega “Informe final.xlsx”.')).map((source) => source.artifactId), ['ccc333']);
+  assert.deepEqual((await resolve(`Edita ${original} y “Informe anual.xlsx”; entrega nuevo.pptx y nuevo.xlsx.`)).map((source) => source.artifactId), ['aaa111', 'ccc333']);
+  assert.deepEqual((await resolve(`Edita ${original}; guarda como nuevo.pptx; además edita “Informe anual.xlsx”.`)).map((source) => source.artifactId), ['aaa111', 'ccc333']);
+  for (const name of ['ausente.pptx', 'ajeno.pptx']) {
+    await assert.rejects(resolve(`Edita ${name}; entrega nuevo.pptx.`), { code: 'DOCUMENT_EDIT_SOURCE_NOT_FOUND' });
+  }
+  await assert.rejects(resolve(`Edita ${original} y ausente.xlsx; entrega nuevo.pptx.`), { code: 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS' });
+  assert.ok(prisma.calls.message.every((query) => query.where.chat.userId === USER));
+});
+
+test('a destination never resolves two independent originals with the same name', async (t) => {
+  const { deps } = baseDeps();
+  t.after(() => fs.rmSync(deps.artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({
+    files: [{ id: 'first', userId: USER, originalName: 'Base.pptx' }, { id: 'second', userId: USER, originalName: 'Base.pptx' }],
+    messages: [{ role: 'USER', files: [{ id: 'first' }, { id: 'second' }] }],
+  });
+  await assert.rejects(resolveEditSources({ prisma, userId: USER, chatId: 'c',
+    instruction: 'Edita Base.pptx; guarda como Revisado.pptx.', deps }), { code: 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS' });
+});
+
+test('a multi-edit PPTX follow-up keeps its original bytes and requested delivery name', async (t) => {
+  const artifactDir = tempArtifactDir({
+    aaa111: { metadata: { filename: 'piloto-atencion-cliente.pptx', ownerUserId: USER }, bytes: Buffer.from('original-pilot') },
+  });
+  t.after(() => fs.rmSync(artifactDir, { recursive: true, force: true }));
+  const prisma = fakePrisma({ messages: [{ role: 'ASSISTANT', files: [{ artifactId: 'aaa111' }] }] });
+  const instruction = 'Edita piloto-atencion-cliente.pptx: cambia el título, pon el texto del gráfico blanco, corrige los márgenes y añade el pie Datos sintéticos. Entrega piloto-atencion-cliente-revisado.pptx.';
+  const edits = [];
+  const { deps, saved } = baseDeps({ artifactDir,
+    runDocumentAgent: async (options) => {
+      edits.push(options);
+      return { stoppedReason: 'final', finalText: 'Cambios aplicados.', outputs: [{ name: 'engine-output.pptx', buffer: Buffer.from('edited-pilot'), valid: true }] };
+    },
+  });
+  const result = await runChatDocumentEdit({ prisma, userId: USER, chatId: 'c', instruction, llm: { client: {}, model: 'chosen' }, deps });
+  assert.equal(result.ok, true, result.message);
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].instruction, instruction, 'the engine must receive all four edits and the destination intact');
+  assert.equal(edits[0].files[0].buffer.toString(), 'original-pilot');
+  assert.equal(saved[0].filename, 'piloto-atencion-cliente-revisado.pptx');
+  assert.equal(saved[0].validation.documentEdit.parentArtifactId, 'aaa111');
+  assert.equal(result.artifacts[0].filename, saved[0].filename);
+});
+
+test('a destination cannot silently rename or accept an output in a different actual format', async (t) => {
+  for (const [originalName, outputName] of [['Original.pptx', 'engine.pdf'], ['Original.ppt', 'engine.pptx']]) {
+    const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName }] });
+    const { deps, saved } = baseDeps({
+      runDocumentAgent: async () => ({ stoppedReason: 'final', outputs: [{ name: outputName, valid: true, buffer: Buffer.from('different-format') }] }),
+    });
+    t.after(() => fs.rmSync(deps.artifactDir, { recursive: true, force: true }));
+    const result = await runChatDocumentEdit({ prisma, userId: USER, fileIds: ['f1'],
+      instruction: `Mejora ${originalName}; entrega Copia.${originalName.split('.').pop()}.`, llm: { client: {}, model: 'chosen' }, deps });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'NO_VALID_OUTPUT');
+    assert.equal(saved.length, 0, 'never publish mismatched bytes under the requested name or an unrequested alternate name');
+  }
+});
+
+test('unsupported output format or batch naming fails before reading or editing a source', async (t) => {
+  for (const instruction of [
+    'Mejora Original.pptx y entrega Copia.pdf.',
+    'Mejora Original.pptx y entrega Copia.pptx y Otra.pptx.',
+    'Edita todos los documentos y entrega Copia.pptx.',
+  ]) {
+    const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'Original.pptx' }, { id: 'f2', userId: USER, originalName: 'Otro.pptx' }] });
+    let reads = 0;
+    const { deps, saved, agentCalls } = baseDeps({ readSourceBuffer: async () => { reads += 1; throw new Error('must not read'); } });
+    t.after(() => fs.rmSync(deps.artifactDir, { recursive: true, force: true }));
+    const result = await runChatDocumentEdit({ prisma, userId: USER,
+      fileIds: instruction.includes('todos') ? ['f1', 'f2'] : ['f1'], instruction, llm: { client: {}, model: 'chosen' }, deps });
+    assert.equal(result.code, 'E_PARAMS', instruction);
+    assert.equal(reads, 0);
+    assert.equal(saved.length, 0);
+    assert.equal(agentCalls.length, 0);
+  }
+});
+
 test('semantic Word edits cannot use legacy annex fallback when the selected model is absent or fails', async () => {
   const prisma = fakePrisma({ files: [{ id: 'f1', userId: USER, originalName: 'formulario.docx' }] });
   let deterministicCalls = 0;
