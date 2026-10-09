@@ -66,10 +66,14 @@ describe("chunked upload wiring (source contract)", () => {
   it("the API client announces, streams chunks with retries and completes on the backend endpoints", () => {
     assert.match(api, /async uploadFileChunked\(/)
     assert.match(api, /authed\('\/files\/upload\/chunked\/init', \{/)
-    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session\.uploadId\}\/\$\{plan\.index\}`, \{\s*method: 'PUT',/)
+    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session!?\.uploadId\}\/\$\{plan\.index\}`, \{\s*method: 'PUT',/)
     assert.match(api, /body: file\.slice\(plan\.start, plan\.end\),/)
-    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session\.uploadId\}\/complete`, \{ method: 'POST'/)
-    assert.match(api, /if \(!retriable \|\| attempt >= maxRetries\) \{/)
+    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session!?\.uploadId\}\/complete`, \{ method: 'POST'/)
+    assert.match(api, /if \(!retriable \|\| attempt >= maxRetries\) throw/)
+    assert.match(api, /authed\('\/auth\/me', \{ method: 'GET' \}\)/)
+    assert.match(api, /matchesChunkedFileIdentity\(session!, identity\)/)
+    assert.match(api, /if \(received\.has\(plan\.index\)\) continue/)
+    assert.match(api, /opts\.signal\?\.aborted && uploadId && isAuthSessionCurrent\(sessionSnapshot\)/)
   })
 
   it("the composer isolates large media and sends it through the chunked transport with the same response handling", () => {

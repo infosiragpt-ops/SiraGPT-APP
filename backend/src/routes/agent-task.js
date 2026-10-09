@@ -833,7 +833,7 @@ router.post(
       resolvedBy: req.user?.id || null,
     };
     const streamState = reduceAgentState(task.streamState || initialAgentState(), event);
-    const written = taskStore.appendTaskEvent(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT }) || task;
+    const written = taskStore.appendTaskEventBuffered(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT }) || task;
     task.streamState = streamState;
     task.events = written.events || task.events || [];
     task.lastEventSeq = written.lastEventSeq || task.lastEventSeq || 0;
@@ -892,9 +892,9 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
     }, cancelTracker);
     streamState = reduceAgentState(streamState, cancelQueueEvent);
     const cancelEvent = enrichAgentTaskEvent({ type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' }, cancelTracker);
-    const writtenCancel = taskStore.appendTaskEvent(snapshot, cancelEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    const writtenCancel = taskStore.appendTaskEventBuffered(snapshot, cancelEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
     await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || cancelEvent);
-    taskStore.markTaskStatus(snapshot, 'cancelled', {
+    await taskStore.markTaskStatusAsync(snapshot, 'cancelled', {
       streamState,
     });
     await agentTaskPersistence.upsertAgentTask({ ...snapshot, status: 'cancelled', state: streamState });
@@ -922,7 +922,7 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
     error: 'Tarea detenida por el usuario.',
     errorCode: 'E_CANCELLED',
   });
-  taskStore.markTaskStatus(task, 'cancelled', { streamState: task.streamState });
+  await taskStore.markTaskStatusAsync(task, 'cancelled', { streamState: task.streamState });
   if (task.durableExecution?.graphId) {
     try {
       durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, 'cancelled', {
@@ -987,7 +987,8 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       message: 'Reintentando desde el último checkpoint durable.',
     };
     streamState = reduceAgentState(streamState, retryEvent);
-    const retryWritten = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, retryEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    const retryWritten = taskStore.appendTaskEventBuffered({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, retryEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    await taskStore.flushTask(snapshot.taskId);
     // The durable retry is now queued. Retire only the previous terminal
     // record before awaiting mirrors, so Stop reaches the new queued job even
     // if a persistence mirror fails. Preserve a worker that already started.
@@ -1010,8 +1011,8 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       position: null,
     }, retryProgress);
     streamState = reduceAgentState(streamState, queueEvent);
-    const queued = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
-    taskStore.markTaskStatus({ ...queued, userId: req.user?.id }, 'queued', {
+    const queued = taskStore.appendTaskEventBuffered({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    await taskStore.markTaskStatusAsync({ ...queued, userId: req.user?.id }, 'queued', {
       jobId: String(job.id),
       queueName: getQueueName(),
       streamState,
@@ -1149,7 +1150,7 @@ router.post(
     });
 
     const streamState = initialAgentState();
-    taskStore.writeTaskSnapshot({
+    await taskStore.writeTaskSnapshotAsync({
       taskId,
       userId: req.user?.id,
       userClearance: payload.user?.clearance || resolveUserSkillClearance(req.user),
@@ -1478,7 +1479,7 @@ router.post(
       files: fileIds,
     });
     let streamState = initialAgentState();
-    const task = createTaskRecord({
+    const task = await createTaskRecordAsync({
       taskId,
       userId: req.user?.id,
       userClearance: resolveUserSkillClearance(req.user),
@@ -1631,7 +1632,7 @@ router.post(
       task.status = status;
       task.updatedAt = new Date().toISOString();
       lastPersistAt = Date.now();
-      taskStore.markTaskStatus(task, status, { streamState });
+      await taskStore.markTaskStatusAsync(task, status, { streamState });
       try {
         await prisma.message.update({
           where: { id: assistantMessageId },
@@ -2033,7 +2034,7 @@ router.post(
       };
       task.status = terminalStatus;
       task.updatedAt = new Date().toISOString();
-      taskStore.markTaskStatus(task, terminalStatus, {
+      await taskStore.markTaskStatusAsync(task, terminalStatus, {
         streamState,
         stats: {
           steps: result.steps.length,
@@ -2079,11 +2080,12 @@ router.post(
       console.error('[agent-task] fatal:', err);
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
       await finishProgressPersistence(controller.signal.aborted ? 'cancelled' : 'error');
-      emit({ type: 'error', message, ...(err.code === 'E_HISTORY_UNAVAILABLE' ? { code: err.code } : {}) });
-      taskStore.markTaskStatus(task, task.status, {
+      const terminalErrorEvent = applyEvent({ type: 'error', message, ...(err.code === 'E_HISTORY_UNAVAILABLE' ? { code: err.code } : {}) });
+      await taskStore.markTaskStatusAsync(task, task.status, {
         streamState,
         stats: { durationMs: Date.now() - taskStartedAt, error: message },
       });
+      send(terminalErrorEvent);
       if (task.durableExecution?.graphId) {
         try {
           durableExecutionStore.markExecutionStatus(task.durableExecution.graphId, task.userId, task.status, {
@@ -2130,7 +2132,7 @@ function runAgentJobInProcess(payload, userId) {
         updateProgress: async () => {},
       });
     } catch (err) {
-      failTaskTerminal(payload.taskId, userId, err || 'agent task failed');
+      await failTaskTerminalAsync(payload.taskId, userId, err || 'agent task failed');
     }
   });
 }
@@ -2390,7 +2392,7 @@ async function handleQueuedTaskRequest(req, res) {
     events: [],
     artifacts: [],
   };
-  taskStore.writeTaskSnapshot(snapshot);
+  await taskStore.writeTaskSnapshotAsync(snapshot);
 
   const queueProgress = createHonestProgressTracker({
     startedAt: Date.now(),
@@ -2407,17 +2409,17 @@ async function handleQueuedTaskRequest(req, res) {
     estimatedWaitMs: null,
   }, queueProgress);
   streamState = reduceAgentState(streamState, queueEvent);
-  let written = taskStore.appendTaskEvent(snapshot, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || snapshot;
+  let written = taskStore.appendTaskEventBuffered(snapshot, queueEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || snapshot;
   await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || queueEvent);
 
   const policyEvent = { type: 'document_policy', policy: documentPolicy };
   streamState = reduceAgentState(streamState, policyEvent);
-  written = taskStore.appendTaskEvent({ ...written, streamState }, policyEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
+  written = taskStore.appendTaskEventBuffered({ ...written, streamState }, policyEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
   await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || policyEvent);
 
   for (const openclawEvent of openclawCapabilityKernel.buildOpenClawRuntimeEvents(openclawRuntimeProfile)) {
     streamState = reduceAgentState(streamState, openclawEvent);
-    written = taskStore.appendTaskEvent({ ...written, streamState }, openclawEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
+    written = taskStore.appendTaskEventBuffered({ ...written, streamState }, openclawEvent, streamState, { eventLimit: TASK_EVENT_LIMIT }) || written;
     await agentTaskPersistence.appendAgentTaskEvent(written, written.events?.[written.events.length - 1] || openclawEvent);
   }
 
@@ -2479,7 +2481,7 @@ async function handleQueuedTaskRequest(req, res) {
         // Flip status so the SSE poller stops reporting "queued"; the
         // in-process runner then drives it to completion/error.
         try {
-          taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'running', { streamState: latest.streamState });
+          await taskStore.markTaskStatusAsync({ ...latest, userId: req.user?.id }, 'running', { streamState: latest.streamState });
         } catch (_) { /* best-effort */ }
         runAgentJobInProcess(payload, req.user?.id);
       } catch (watchErr) {
@@ -2566,7 +2568,7 @@ async function handleLocalTaskRequest(req, res, {
     events: [],
     artifacts: [],
   };
-  taskStore.writeTaskSnapshot(snapshot);
+  await taskStore.writeTaskSnapshotAsync(snapshot);
 
   const localProgress = createHonestProgressTracker({
     startedAt: Date.now(),
@@ -2662,7 +2664,7 @@ async function handleLocalTaskRequest(req, res, {
       const errorEvent = toAgentTaskErrorEvent(err || 'agent task failed');
       const state = reduceAgentState(latest.streamState || streamState, errorEvent);
       appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
-      taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'error', {
+      await taskStore.markTaskStatusAsync({ ...latest, userId: req.user?.id }, 'error', {
         streamState: state,
         stats: { error: errorEvent.message, code: errorEvent.code },
       });
@@ -2685,7 +2687,7 @@ async function handleLocalTaskRequest(req, res, {
  * permanent agentic failure is visible to operations even when no SSE
  * client is attached. Disable with AGENT_TASK_FAILURE_ALERTS_DISABLED=1.
  */
-function failTaskTerminal(taskId, userId, message) {
+function failTaskTerminal(taskId, userId, message, { persistBuffered = false } = {}) {
   try {
     if (!taskId) return false;
     const latest = taskStore.getTaskSnapshotForUser(taskId, userId)
@@ -2694,16 +2696,24 @@ function failTaskTerminal(taskId, userId, message) {
     if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return false;
     const errorEvent = toAgentTaskErrorEvent(message || 'La tarea agéntica falló.');
     const state = reduceAgentState(latest.streamState || initialAgentState(), errorEvent);
-    appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
-    taskStore.markTaskStatus({ ...latest, userId: latest.userId || userId }, 'error', {
+    appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state, { persistBuffered });
+    const persistTerminal = persistBuffered ? taskStore.markTaskStatusBuffered : taskStore.markTaskStatus;
+    persistTerminal({ ...latest, userId: latest.userId || userId }, 'error', {
       streamState: state,
       stats: { error: errorEvent.message, code: errorEvent.code },
     });
     notifyAgentTaskFailure(latest, errorEvent.message);
     return true;
-  } catch (_) {
+  } catch (err) {
+    if (persistBuffered) throw err;
     return false;
   }
+}
+
+async function failTaskTerminalAsync(taskId, userId, message) {
+  const applied = failTaskTerminal(taskId, userId, message, { persistBuffered: true });
+  if (applied) await taskStore.flushTask(taskId);
+  return applied;
 }
 
 function notifyAgentTaskFailure(task, errorMessage) {
@@ -2820,6 +2830,10 @@ function streamTaskEvents(req, res, taskId, userId) {
       safeCloseQueuedConnection();
       return;
     }
+    // A terminal snapshot/event is not an acknowledgement while its async
+    // writer is pending. Keep the stream open until the durable flush commits.
+    if (['completed', 'cancelled', 'error', 'failed'].includes(snapshot.status)
+      && taskStore.isTaskPersistencePending(taskId)) return;
     if (lastSeq == null) {
       const started = beginSseResume({
         sinceSeq: sinceRaw,
@@ -3153,6 +3167,7 @@ function buildAgentSystemPrompt(
 }
 
 function createTaskRecord({
+  persistBuffered = false,
   taskId,
   userId,
   userClearance = 'authenticated',
@@ -3238,10 +3253,18 @@ function createTaskRecord({
   };
   ACTIVE_AGENT_TASKS.set(taskId, record);
   try {
-    taskStore.writeTaskSnapshot(record);
+    if (persistBuffered) taskStore.writeTaskSnapshotBuffered(record);
+    else taskStore.writeTaskSnapshot(record);
   } catch (err) {
+    if (persistBuffered) { ACTIVE_AGENT_TASKS.delete(taskId); throw err; }
     console.warn('[agent-task] durable task write failed:', err.message);
   }
+  return record;
+}
+
+async function createTaskRecordAsync(options) {
+  const record = createTaskRecord({ ...options, persistBuffered: true });
+  await taskStore.flushTask(record.taskId);
   return record;
 }
 
@@ -3256,7 +3279,7 @@ function getTaskForUser(taskId, userId) {
 function persistCancelRequest(task) {
   if (!task?.taskId || !task?.userId || !task.cancelRequestedAt) return;
   try {
-    taskStore.updateTaskSnapshot(task.taskId, task.userId, {
+    taskStore.updateTaskSnapshotBuffered(task.taskId, task.userId, {
       cancelRequestedAt: task.cancelRequestedAt,
     });
   } catch {
@@ -3264,7 +3287,7 @@ function persistCancelRequest(task) {
   }
 }
 
-function appendTaskEvent(task, event, streamState) {
+function appendTaskEvent(task, event, streamState, { persistBuffered = true } = {}) {
   if (!task) return;
   const lastSeq = Number(task.lastEventSeq || 0) || Math.max(0, ...task.events.map((evt) => Number(evt.seq) || 0));
   const seq = Number(event.seq) || lastSeq + 1;
@@ -3276,8 +3299,10 @@ function appendTaskEvent(task, event, streamState) {
   task.streamState = streamState;
   task.updatedAt = new Date().toISOString();
   try {
-    taskStore.appendTaskEvent(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    const persistEvent = persistBuffered ? taskStore.appendTaskEventBuffered : taskStore.appendTaskEvent;
+    persistEvent(task, event, streamState, { eventLimit: TASK_EVENT_LIMIT });
   } catch (err) {
+    if (persistBuffered) throw err;
     console.warn('[agent-task] durable event write failed:', err.message);
   }
   if (task.durableExecution?.graphId) {
@@ -3713,8 +3738,10 @@ router.INTERNAL = {
   buildAgentSystemPrompt,
   buildTaskEventsResumePayload,
   createTaskRecord,
+  createTaskRecordAsync,
   extractProfessionalContract,
   failTaskTerminal,
+  failTaskTerminalAsync,
   formatTaskPayload,
   getTaskForUser,
   inferIconFor,

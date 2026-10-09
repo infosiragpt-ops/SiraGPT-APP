@@ -744,8 +744,8 @@ function uploadResponseForFile(file, fileRecord, extra = {}) {
     processingStage: extra.processingStage || 'extracting',
     status: extra.status || 'uploaded',
     ragIndexed: extra.ragIndexed || 'pending',
-    success: true,
-    error: null,
+    success: extra.success !== false,
+    error: extra.error || null,
   };
 }
 
@@ -843,8 +843,19 @@ async function processFilesForAsyncPreview(files, userId, prismaClient) {
     const batchPromises = batch.map(async (file) => {
       let fileRecord = null;
       try {
-        fileRecord = await prismaClient.file.create({
+        if (file.deterministicId) {
+          const existing = await prismaClient.file.findFirst({ where: { id: file.deterministicId, userId, deletedAt: null } });
+          if (existing) {
+            if (!['uploaded', 'validating'].includes(existing.processingStage)) {
+              if (existing.processingStage === 'extracting') scheduleFileAfterFastUpload(file, userId, prismaClient, existing);
+              return uploadResponseForFile(file, existing, { processingStage: existing.processingStage, error: existing.processingError, success: existing.processingStage !== 'failed' });
+            }
+            fileRecord = existing; // resume a crash between registration and validation
+          }
+        }
+        if (!fileRecord) fileRecord = await prismaClient.file.create({
           data: {
+            ...(file.deterministicId ? { id: file.deterministicId } : {}),
             userId,
             filename: file.filename,
             originalName: file.originalname,
@@ -858,13 +869,26 @@ async function processFilesForAsyncPreview(files, userId, prismaClient) {
           },
         });
       } catch (createError) {
-        console.error('[files] could not create File row:', createError.message || createError);
-        await unlinkQuiet(file.path);
-        return {
-          name: file.originalname, size: file.size, type: file.mimetype,
-          success: false, error: 'No se pudo registrar el archivo en la base de datos.',
-          code: 'db_create_failed',
-        };
+        if (file.deterministicId) {
+          const existing = await prismaClient.file.findFirst({ where: { id: file.deterministicId, userId, deletedAt: null } }).catch(() => null);
+          if (existing) {
+            if (!['uploaded', 'validating'].includes(existing.processingStage)) {
+              if (existing.processingStage === 'extracting') scheduleFileAfterFastUpload(file, userId, prismaClient, existing);
+              return uploadResponseForFile(file, existing, { processingStage: existing.processingStage, error: existing.processingError, success: existing.processingStage !== 'failed' });
+            }
+            fileRecord = existing;
+          }
+          // Retain the assembled binary and metadata when registration is unavailable.
+          if (!fileRecord) throw createError;
+        } else {
+          console.error('[files] could not create File row:', createError.message || createError);
+          await unlinkQuiet(file.path);
+          return {
+            name: file.originalname, size: file.size, type: file.mimetype,
+            success: false, error: 'No se pudo registrar el archivo en la base de datos.',
+            code: 'db_create_failed',
+          };
+        }
       }
 
       try {
@@ -976,7 +1000,7 @@ function sendChunkedError(res, err) {
 
 router.post('/upload/chunked/init', authenticateToken, requireScope('files:write'), enforceOrgRateLimitSafe, async (req, res) => {
   try {
-    const { name, size, mimeType, chunkSize } = req.body || {};
+    const { name, size, mimeType, chunkSize, chunkHashes } = req.body || {};
     const originalName = upload.fixLatin1Filename(String(name || '').trim());
     if (!originalName) return res.status(400).json({ error: 'Falta el nombre del archivo.', code: 'bad_name' });
     const declared = { originalname: originalName, mimetype: String(mimeType || '').toLowerCase() || 'application/octet-stream' };
@@ -993,12 +1017,21 @@ router.post('/upload/chunked/init', authenticateToken, requireScope('files:write
       size: Number(size),
       mimeType: declared.mimetype,
       chunkSize,
+      chunkHashes,
       maxBytes: chunkedUploadCap(declared.mimetype, originalName),
     });
     return res.status(201).json({ ...session, maxChunkBytes: chunkedUploads.MAX_CHUNK_BYTES });
   } catch (err) {
     return sendChunkedError(res, err);
   }
+});
+
+router.get('/upload/chunked/:uploadId/status', authenticateToken, requireScope('files:read'), async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    return res.json(await chunkedUploads.getChunkedUploadStatus({ userDir, uploadId: req.params.uploadId }));
+  } catch (err) { return sendChunkedError(res, err); }
 });
 
 router.put('/upload/chunked/:uploadId/:index', authenticateToken, requireScope('files:write'), express.raw({ type: () => true, limit: CHUNK_BODY_LIMIT }), async (req, res) => {
@@ -1032,6 +1065,8 @@ router.post('/upload/chunked/:uploadId/complete', authenticateToken, requireScop
   try {
     const userDir = upload.resolveUserUploadDir(req.user.id);
     if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    const replay = await chunkedUploads.getCompletedResponse({ userDir, uploadId: req.params.uploadId });
+    if (replay) return res.json(replay);
     const file = await chunkedUploads.completeChunkedUpload({ userDir, uploadId: req.params.uploadId });
     const batchPolicy = validateDocumentBatch([file]);
     if (!batchPolicy.ok) {
@@ -1042,7 +1077,9 @@ router.post('/upload/chunked/:uploadId/complete', authenticateToken, requireScop
     // created now, extraction/transcription runs after this response and the
     // composer polls /processing-status until `ready`.
     const processedFiles = await processFilesForAsyncPreview([file], req.user.id, prisma);
-    return res.json({ files: processedFiles, chunked: true });
+    const response = { files: processedFiles, chunked: true };
+    await chunkedUploads.saveCompletedResponse({ userDir, uploadId: req.params.uploadId, response });
+    return res.json(response);
   } catch (err) {
     return sendChunkedError(res, err);
   }

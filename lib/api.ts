@@ -1337,6 +1337,7 @@ function writeStoredAuthToken(token: string | null): void {
 class ApiClient {
   private baseURL: string;
   private token: string | null = null;
+  private pendingImageJobs = new Map<string, { cancel: () => Promise<void> }>();
 
   // Retry config — transient network blips shouldn't fail the UI.
   // Only retries on network errors / 5xx; 4xx passes through immediately
@@ -2245,65 +2246,105 @@ class ApiClient {
       maxRetries?: number
     } = {}
   ): Promise<FileUploadResponse> {
-    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES } = await import('./composer/chunked-upload');
+    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES,
+      identifyChunkedFile, readChunkedUploadPointer, writeChunkedUploadPointer, matchesChunkedFileIdentity, waitForChunkRetry } = await import('./composer/chunked-upload');
+    const sessionSnapshot = captureAuthSession();
     const throwIfAborted = () => {
       if (opts.signal?.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
+      if (!isAuthSessionCurrent(sessionSnapshot)) throw Object.assign(new Error('La sesión cambió. Vuelve a adjuntar el archivo.'), { status: 401 });
     };
-    // Shared authenticated transport (bearer/CSRF/refresh handling) — the
-    // frontend contract forbids raw fetch for Sira endpoints.
-    const authed = (path: string, init: RequestInit) => this.authenticatedFetch(`${this.baseURL}${path}`, { ...init, signal: opts.signal });
+    const authed = (path: string, init: RequestInit) => { throwIfAborted(); return this.authenticatedFetch(`${this.baseURL}${path}`, { ...init, signal: opts.signal }); };
     const readError = async (res: Response, fallback: string) => {
       try { const j = await res.json(); return j?.error || fallback; } catch { return fallback; }
     };
-
     throwIfAborted();
-    const requestedChunk = opts.chunkBytes || CHUNKED_UPLOAD_CHUNK_BYTES;
-    const initRes = await authed('/files/upload/chunked/init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: file.name, size: file.size, mimeType: file.type || 'application/octet-stream', chunkSize: requestedChunk, sourceChannel: opts.sourceChannel || null }),
-    });
-    if (!initRes.ok) throw new Error(await readError(initRes, `HTTP ${initRes.status}`));
-    const session = await initRes.json() as { uploadId: string; chunkSize: number; totalChunks: number };
-    const plans = planChunks(file.size, session.chunkSize);
+    // Identity comes from the authenticated server, not a stale UI/user cache.
+    const ownerResponse = await authed('/auth/me', { method: 'GET' });
+    if (!ownerResponse.ok) throw new Error(await readError(ownerResponse, 'Inicia sesión para subir el archivo.'));
+    const ownerEnvelope = await ownerResponse.json();
+    const ownerId = String(ownerEnvelope?.user?.id || ownerEnvelope?.id || '');
+    if (!ownerId) throw new Error('No se pudo verificar la sesión para reanudar la subida.');
+    const { identity, fingerprint } = await identifyChunkedFile(file, opts.chunkBytes || CHUNKED_UPLOAD_CHUNK_BYTES, opts.signal);
+    throwIfAborted();
+    let uploadId = readChunkedUploadPointer(ownerId, fingerprint);
+    let session: import('./composer/chunked-upload').ResumableChunkSession | null = null;
     const maxRetries = Math.max(0, opts.maxRetries ?? 3);
-    let completedBytes = 0;
-    opts.onProgress?.(0, 0, file.size);
-
-    for (const plan of plans) {
-      let attempt = 0;
-      for (;;) {
-        throwIfAborted();
-        let res: Response | null = null;
-        let networkError: unknown = null;
-        try {
-          res = await authed(`/files/upload/chunked/${session.uploadId}/${plan.index}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: file.slice(plan.start, plan.end),
-          });
-        } catch (err) {
-          if ((err as any)?.name === 'AbortError') throw err;
-          networkError = err;
-        }
-        if (res && res.ok) break;
-        const status = res ? res.status : 0;
-        const retriable = networkError ? true : isRetriableChunkStatus(status);
-        if (!retriable || attempt >= maxRetries) {
-          try { await authed(`/files/upload/chunked/${session.uploadId}`, { method: 'DELETE' }); } catch { /* best effort */ }
-          throw new Error(res ? await readError(res, `HTTP ${status}`) : 'Network error during upload');
-        }
-        attempt += 1;
-        await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** attempt)));
+    try {
+      if (uploadId) {
+        const statusResponse = await authed(`/files/upload/chunked/${uploadId}/status`, { method: 'GET' });
+        if (statusResponse.ok) session = await statusResponse.json();
+        else if (statusResponse.status === 404) { uploadId = null; writeChunkedUploadPointer(ownerId, fingerprint, null); }
+        else throw new Error(await readError(statusResponse, 'No se pudo recuperar la subida. Vuelve a intentarlo.'));
       }
-      completedBytes += plan.bytes;
+      if (!session) {
+        const initRes = await authed('/files/upload/chunked/init', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...identity, sourceChannel: opts.sourceChannel || null }),
+        });
+        if (!initRes.ok) throw new Error(await readError(initRes, `HTTP ${initRes.status}`));
+        session = await initRes.json();
+        uploadId = session!.uploadId;
+        writeChunkedUploadPointer(ownerId, fingerprint, uploadId);
+      }
+      if (!matchesChunkedFileIdentity(session!, identity)) throw new Error('La subida guardada no coincide con el archivo seleccionado. Vuelve a adjuntarlo.');
+      if (session!.status === 'completed' && Array.isArray(session!.files)) {
+        opts.onProgress?.(100, file.size, file.size);
+        writeChunkedUploadPointer(ownerId, fingerprint, null);
+        return { files: session!.files, chunked: true } as FileUploadResponse;
+      }
+      const plans = planChunks(file.size, session!.chunkSize);
+      const received = new Set((session!.received || []).filter(index => Number.isInteger(index) && index >= 0 && index < plans.length));
+      let completedBytes = plans.filter(plan => received.has(plan.index)).reduce((sum, plan) => sum + plan.bytes, 0);
       opts.onProgress?.(chunkedUploadPercent(file.size, completedBytes), completedBytes, file.size);
+      for (const plan of plans) {
+        if (received.has(plan.index)) continue;
+        let attempt = 0;
+        for (;;) {
+          throwIfAborted();
+          let res: Response | null = null;
+          let networkError: unknown = null;
+          try {
+            res = await authed(`/files/upload/chunked/${session!.uploadId}/${plan.index}`, {
+              method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file.slice(plan.start, plan.end),
+            });
+          } catch (err) {
+            throwIfAborted();
+            networkError = err;
+          }
+          if (res?.ok) break;
+          const status = res ? res.status : 0;
+          const retriable = networkError ? true : isRetriableChunkStatus(status);
+          if (!retriable || attempt >= maxRetries) throw new Error(res ? await readError(res, `HTTP ${status}`) : 'La conexión se interrumpió. Reintenta con el mismo archivo para continuar.');
+          attempt += 1;
+          await waitForChunkRetry(Math.min(8000, 500 * 2 ** attempt), opts.signal);
+        }
+        completedBytes += plan.bytes;
+        opts.onProgress?.(chunkedUploadPercent(file.size, completedBytes), completedBytes, file.size);
+      }
+      // Completion replays the same File even if the final response was lost.
+      let doneRes: Response | null = null;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        throwIfAborted();
+        try { doneRes = await authed(`/files/upload/chunked/${session!.uploadId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); }
+        catch { throwIfAborted(); doneRes = null; }
+        if (doneRes?.ok) break;
+        if (doneRes && !isRetriableChunkStatus(doneRes.status) || attempt === maxRetries) throw new Error(doneRes ? await readError(doneRes, `HTTP ${doneRes.status}`) : 'No se pudo confirmar la subida. Reintenta con el mismo archivo.');
+        await waitForChunkRetry(Math.min(8000, 500 * 2 ** (attempt + 1)), opts.signal);
+      }
+      const result = await doneRes!.json() as FileUploadResponse;
+      writeChunkedUploadPointer(ownerId, fingerprint, null);
+      return result;
+    } catch (error) {
+      // Network failures leave durable parts available. Only an explicit chip
+      // cancellation may delete this owner's unfinished transfer.
+      if (opts.signal?.aborted && uploadId && isAuthSessionCurrent(sessionSnapshot)) {
+        try {
+          const cancellation = await this.authenticatedFetch(`${this.baseURL}/files/upload/chunked/${uploadId}`, { method: 'DELETE' });
+          if (cancellation.ok || cancellation.status === 404) writeChunkedUploadPointer(ownerId, fingerprint, null);
+        } catch { /* keep pointer if cancel was not acknowledged */ }
+      }
+      throw error;
     }
-
-    throwIfAborted();
-    const doneRes = await authed(`/files/upload/chunked/${session.uploadId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    if (!doneRes.ok) throw new Error(await readError(doneRes, `HTTP ${doneRes.status}`));
-    return await doneRes.json() as FileUploadResponse;
   }
 
   async getFiles(params?: { page?: number; limit?: number; type?: string }) {
@@ -3325,67 +3366,67 @@ class ApiClient {
       deliverStreamError(withGenerateFailure(lastError));
     }
   }
+  /** Returns null when this chat does not own a pending image; Stop awaits durable intent. */
+  cancelPendingImageGeneration(chatId: string): Promise<void> | null {
+    return this.pendingImageJobs.get(chatId)?.cancel() || null;
+  }
+
   async generateImage(
     data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; operation?: 'generate' | 'edit' | 'reframe'; background?: 'transparent'; aspectRatio?: string; quality?: string; imageCount?: number; selection?: { kind?: string; x: number; y: number; width: number; height: number }; maskDataUrl?: string },
-    options: { signal?: AbortSignal } = {},
+    options: { signal?: AbortSignal; idempotencyKey?: string } = {},
   ) {
+    if (options.signal?.aborted) throw Object.assign(new Error('Generación de imagen detenida.'), { name: 'AbortError' });
     const timeoutMs = 210000;
     const imageRequestStartedAt = Date.now();
-    const requestPromise = this.request('/ai/generate-image', {
-      method: 'POST',
-      body: JSON.stringify(pinGenerateRequest(data)),
-      signal: options.signal,
-      // Image generation routinely takes 60-180s (gpt-image-2, Seedream,
-      // Imagen). The backend enforces its own 200s deadline and answers
-      // with a real result or error by then — waiting 210s (> 200s)
-      // guarantees that verdict arrives within a single attempt instead
-      // of the client aborting at 180s while the server is still working.
-      timeoutMs: 210000,
-      // Never auto-retry: a retried generation is a NEW paid generation
-      // (3x provider spend) and 3x the wait. On timeout the caller falls
-      // back to waitForGeneratedImage(), which picks up the image the
-      // backend persists to the chat.
-      maxRetries: 0,
-      suppressFailureLog: true,
+    const session = captureAuthSession();
+    const idempotencyKey = options.idempotencyKey || `image-${safeUUID()}`;
+    // Kickoff is short and idempotent. Do not abort it before its job id is
+    // known: Stop can then acknowledge cancellation even during admission.
+    const accepted = this.request('/ai/generate-image', {
+      method: 'POST', headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify(pinGenerateRequest(data)), timeoutMs: 30000,
+      maxRetries: 1, suppressFailureLog: true,
+    });
+    let cancellation: Promise<void> | null = null;
+    const cancel = () => cancellation || (cancellation = (async () => {
+      if (!isAuthSessionCurrent(session)) throw new Error('La sesión cambió. No se pudo confirmar la detención.');
+      const job = await accepted;
+      if (!job?.jobId) return; // legacy synchronous response is already final
+      const response = await this.request(`/images/jobs/${encodeURIComponent(job.jobId)}/cancel`, { method: 'POST', body: '{}', timeoutMs: 20000, maxRetries: 1 });
+      if (response?.jobId !== job.jobId || response?.status === 'unknown') throw new Error('No se pudo confirmar la detención de la imagen.');
+    })().catch(error => { cancellation = null; throw error; }));
+    const entry = { cancel };
+    if (data.chatId) this.pendingImageJobs.set(data.chatId, entry);
+    const onAbort = () => { void cancel().catch(() => {}); };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    const requestPromise = (async () => {
+      const initial = await accepted;
+      if (options.signal?.aborted) { await cancel(); throw Object.assign(new Error('Generación de imagen detenida.'), { name: 'AbortError' }); }
+      if (!initial?.jobId) return initial;
+      const { waitForDurableImageJob } = await import('./chat/image-job-client');
+      const { waitForChunkRetry } = await import('./composer/chunked-upload');
+      return waitForDurableImageJob({
+        jobId: initial.jobId, signal: options.signal, timeoutMs, cancel, delay: waitForChunkRetry,
+        get: async () => {
+          if (!isAuthSessionCurrent(session)) throw Object.assign(new Error('La sesión cambió.'), { status: 401 });
+          return this.request(`/images/jobs/${encodeURIComponent(initial.jobId)}`, { signal: options.signal, timeoutMs: 20000, maxRetries: 0, suppressFailureLog: true });
+        },
+      });
+    })().finally(() => {
+      options.signal?.removeEventListener('abort', onAbort);
+      if (data.chatId && this.pendingImageJobs.get(data.chatId) === entry) this.pendingImageJobs.delete(data.chatId);
     });
     const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
-      chatId: data.chatId,
-      sinceMs: imageRequestStartedAt,
-      signal: options.signal,
-      timeoutMs,
+      chatId: data.chatId, sinceMs: imageRequestStartedAt, signal: options.signal, timeoutMs,
     });
-    // El backend ahora envía cabeceras 200 al inicio (para no morir
-    // en el proxy de 30 s) y, si la generación falla después, devuelve
-    // `{ error, code }` con status 200. Sin esta comprobación, la UI
-    // trataría el fallo como éxito.
     if (response && typeof response === 'object' && (response as any).error) {
-      const err: any = new Error((response as any).error);
-      err.code = (response as any).code;
-      throw err;
+      throw Object.assign(new Error((response as any).error), { code: (response as any).code });
     }
     return response;
   }
+
   async generateImageByImage(data: { fileId: string, prompt: string; chatId?: string, provider: string; model: string; }) {
-    const timeoutMs = 210000;
-    const imageRequestStartedAt = Date.now();
-    const requestPromise = this.request('/ai/generate-image', {
-      method: 'POST',
-      body: JSON.stringify(pinGenerateRequest(data)),
-      timeoutMs, // > backend 200s deadline; see generateImage
-      maxRetries: 0,     // non-idempotent paid generation — never auto-retry
-      suppressFailureLog: true,
-    })
-    const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
-      chatId: data.chatId,
-      sinceMs: imageRequestStartedAt,
-      timeoutMs,
-    });
-    if (response && typeof response === 'object' && (response as any).error) {
-      const err: any = new Error((response as any).error);
-      err.code = (response as any).code;
-      throw err;
-    }
-    return response
+    return this.generateImage(data);
   }
 
   private async resolveImageRequestWithChatRecovery(
@@ -4927,9 +4968,10 @@ class ApiClient {
     audio_url?: string;
     audio_urls?: string[];
     model?: string;
-  }, opts?: { signal?: AbortSignal }) {
+  }, opts?: { signal?: AbortSignal; idempotencyKey?: string }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
+      headers: { 'Idempotency-Key': opts?.idempotencyKey || `video-${safeUUID()}` },
       body: JSON.stringify(pinGenerateRequest({
         ...data,
         model: data.model,

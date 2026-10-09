@@ -1935,11 +1935,11 @@ router.get('/system-snapshot', requireSuperAdmin, async (_req, res) => {
       }
       return systemCronModule.status();
     }),
-    settle('webhooks', async () => ({
-      health: webhookDispatcher.health(),
-      deliveryStats: webhookDispatcher.stats(),
-      dlq: webhookDispatcher.dlqStats(),
-    })),
+    settle('webhooks', async () => {
+      const deliveryStats = await webhookDispatcher.statsDurable();
+      return { health: await webhookDispatcher.healthDurable(), deliveryStats,
+        dlq: { total: deliveryStats.counts?.failed || 0, durable: deliveryStats.durable === true } };
+    }),
   ]);
 
   res.json({
@@ -2515,13 +2515,13 @@ router.post('/users/:id/grant-credits', requireSuperAdmin, async (req, res) => {
 });
 
 // ── Webhook delivery monitor ───────────────────────────────────────────────
-router.get('/webhooks/deliveries', requireSuperAdmin, (req, res) => {
+router.get('/webhooks/deliveries', requireSuperAdmin, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const status = req.query.status ? String(req.query.status) : null;
     const event = req.query.event ? String(req.query.event) : null;
-    const deliveries = webhookDispatcher.listDeliveries({ limit, status, event });
-    res.json({ deliveries, stats: webhookDispatcher.stats() });
+    const deliveries = await webhookDispatcher.listDeliveriesDurable({ limit, status, event });
+    res.json({ deliveries, stats: await webhookDispatcher.statsDurable() });
   } catch (err) {
     console.error('[admin/webhooks] failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to list webhook deliveries' });
@@ -2530,7 +2530,7 @@ router.get('/webhooks/deliveries', requireSuperAdmin, (req, res) => {
 
 router.post('/webhooks/deliveries/:id/retry', requireSuperAdmin, async (req, res) => {
   try {
-    const result = await webhookDispatcher.retry(req.params.id, {
+    const result = await webhookDispatcher.retryDeliveryDurable(req.params.id, {
       secret: req.body?.secret || process.env.WEBHOOK_SECRET,
     });
     if (result?.reason === 'not_found') return res.status(404).json({ error: 'Delivery not found' });
@@ -2548,7 +2548,7 @@ router.post('/webhooks/deliveries/:id/retry', requireSuperAdmin, async (req, res
 // (including retry backoff), and the count of deliveries currently in
 // flight that have already retried at least once.
 //   GET /api/admin/webhooks/health?windowHours=24
-router.get('/webhooks/health', requireSuperAdmin, (req, res) => {
+router.get('/webhooks/health', requireSuperAdmin, async (req, res) => {
   try {
     // Clamp window between 1h and 30d so a typo can't make us scan a
     // negative or wildly out-of-range range. Default 24h matches the
@@ -2558,7 +2558,7 @@ router.get('/webhooks/health', requireSuperAdmin, (req, res) => {
       ? Math.min(hoursRaw, 24 * 30)
       : 24;
     const windowMs = hours * 60 * 60 * 1000;
-    const snapshot = webhookDispatcher.health({ windowMs });
+    const snapshot = await webhookDispatcher.healthDurable({ windowMs });
     res.json({ ...snapshot, windowHours: hours });
   } catch (err) {
     console.error('[admin/webhooks/health] failed:', err && err.message ? err.message : err);
@@ -2572,12 +2572,13 @@ router.get('/webhooks/health', requireSuperAdmin, (req, res) => {
 // + attempts and trigger a manual re-dispatch.
 //   GET  /api/admin/webhooks/dlq                  → list failed deliveries
 //   POST /api/admin/webhooks/dlq/:id/retry        → re-dispatch one item
-router.get('/webhooks/dlq', requireSuperAdmin, (req, res) => {
+router.get('/webhooks/dlq', requireSuperAdmin, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const event = req.query.event ? String(req.query.event) : null;
-    const items = webhookDispatcher.listDLQ({ limit, event });
-    res.json({ items, stats: webhookDispatcher.dlqStats() });
+    const items = await webhookDispatcher.listDLQDurable({ limit, event });
+    const stats = await webhookDispatcher.statsDurable();
+    res.json({ items, stats: { total: stats.counts?.failed || 0, durable: stats.durable || false } });
   } catch (err) {
     console.error('[admin/webhooks/dlq] failed:', err && err.message ? err.message : err);
     res.status(500).json({ error: 'Failed to list webhook DLQ' });
@@ -2586,7 +2587,7 @@ router.get('/webhooks/dlq', requireSuperAdmin, (req, res) => {
 
 router.post('/webhooks/dlq/:id/retry', requireSuperAdmin, async (req, res) => {
   try {
-    const result = await webhookDispatcher.retryDLQItem(req.params.id, {
+    const result = await webhookDispatcher.retryDeliveryDurable(req.params.id, {
       secret: req.body?.secret || process.env.WEBHOOK_SECRET,
     });
     if (!result?.ok && result?.reason === 'not_found') {
@@ -2610,7 +2611,7 @@ router.post('/webhooks/dlq/:id/retry', requireSuperAdmin, async (req, res) => {
 
 router.post('/webhooks/retry-failed', requireSuperAdmin, async (req, res) => {
   try {
-    const result = await webhookDispatcher.retryFailed({
+    const result = await webhookDispatcher.retryFailedDurable({
       limit: Math.min(parseInt(req.body?.limit, 10) || 100, 500),
       since: req.body?.since || null,
       secretResolver: () => req.body?.secret || process.env.WEBHOOK_SECRET,

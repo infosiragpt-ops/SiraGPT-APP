@@ -82,14 +82,15 @@ test('active high-water frames replay before follower subscription without advan
   const capture = source.slice(captureStart);
   assert.match(capture, /frames: \[\]/);
   assert.match(capture, /activeResume\.frames\.push\(\{[\s\S]*position:/);
-  assert.match(capture, /nextPosition <= streamResume\.DEFAULT_MAX_CHUNKS/);
+  assert.match(capture, /Number\.isSafeInteger\(nextPosition\)/);
+  assert.match(capture, /frameBytes > streamResume\.DEFAULT_MAX_BYTES/);
   assert.match(capture, /type: 'stream_resume_degraded'/);
   assert.match(source, /activeResume && Array\.isArray\(activeResume\.frames\)/);
   assert.ok(
     source.indexOf('activeResume && Array.isArray(activeResume.frames)')
       < source.indexOf('activeResume.subscribers.add(res)'),
   );
-  assert.match(source, /X-Stream-Cursor', `\$\{resumeSession\.streamId\}:\$\{resumeSession\.record\.chunks\.length\}`/);
+  assert.match(source, /X-Stream-Cursor', `\$\{resumeSession\.streamId\}:\$\{resumeSession\.record\.nextPosition\}`/);
 });
 
 function makeCursor(streamId, userId, chatId, secret) {

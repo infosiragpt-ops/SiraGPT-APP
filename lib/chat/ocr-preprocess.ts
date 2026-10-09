@@ -9,6 +9,13 @@
  *   5. Auto-retry at a larger scale when confidence is low
  */
 
+import { boundedOcrDimensions, createOcrMemo, createOcrScheduler } from './ocr-budget'
+
+const scheduleRecognition = createOcrScheduler(1)
+const schedulePreprocess = createOcrScheduler(1)
+const memoRecognition = createOcrMemo<ClientOcrResult>()
+const memoPreprocess = createOcrMemo<OcrPreprocessResult>()
+
 export const OCR_LOW_CONFIDENCE = 72
 export const OCR_MIN_USEFUL_CHARS = 8
 export const OCR_PLACEHOLDER_RE =
@@ -233,16 +240,22 @@ function writeGrayToImageData(gray: GrayBuffer, imageData: ImageData) {
   }
 }
 
-export async function preprocessImageForOcr(
+export function preprocessImageForOcr(
   source: Blob | File,
   opts: { scale?: number; binarize?: boolean; deskew?: boolean } = {},
 ): Promise<OcrPreprocessResult> {
+  return memoPreprocess(source, JSON.stringify([opts.scale, opts.binarize, opts.deskew]), () =>
+    schedulePreprocess(() => preprocessImageUncached(source, opts)))
+}
+
+async function preprocessImageUncached(
+  source: Blob | File,
+  opts: { scale?: number; binarize?: boolean; deskew?: boolean },
+): Promise<OcrPreprocessResult> {
   const img = await loadImageElement(source)
-  const scale = opts.scale ?? pickUpscaleFactor(img.naturalWidth || img.width, img.naturalHeight || img.height)
   const srcW = img.naturalWidth || img.width
   const srcH = img.naturalHeight || img.height
-  const width = Math.max(1, Math.round(srcW * scale))
-  const height = Math.max(1, Math.round(srcH * scale))
+  const { width, height, scale } = boundedOcrDimensions(srcW, srcH, opts.scale ?? pickUpscaleFactor(srcW, srcH))
 
   const canvas = document.createElement("canvas")
   canvas.width = width
@@ -253,6 +266,8 @@ export async function preprocessImageForOcr(
   ctx.drawImage(img, 0, 0, width, height)
 
   const imageData = ctx.getImageData(0, 0, width, height)
+  // Yield before the bounded CPU pass so attachment feedback can paint.
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
   const gray = grayscaleFromImageData(imageData)
   const angle = opts.deskew === false ? 0 : estimateDeskewAngle(gray)
   if (opts.binarize !== false) applyAdaptiveThreshold(gray)
@@ -314,9 +329,17 @@ async function createTesseractWorker(): Promise<TesseractWorkerLike | null> {
   }
 }
 
-export async function recognizeImageWithRetry(
+export function recognizeImageWithRetry(
   file: File,
   opts: { minConfidence?: number } = {},
+): Promise<ClientOcrResult> {
+  return memoRecognition(file, String(opts.minConfidence ?? OCR_LOW_CONFIDENCE), () =>
+    scheduleRecognition(() => recognizeImageUncached(file, opts)))
+}
+
+async function recognizeImageUncached(
+  file: File,
+  opts: { minConfidence?: number },
 ): Promise<ClientOcrResult> {
   const minConfidence = opts.minConfidence ?? OCR_LOW_CONFIDENCE
   const worker = await createTesseractWorker()

@@ -3059,6 +3059,14 @@ router.post(
                 : 'stream_resume_expired',
             });
           }
+          const replayBounds = streamResume.replayAfter(existingResume.record, parsed.position);
+          const localOwner = activeResumeStreams.get(parsed.streamId);
+          const pendingLocalTail = parsed.position > existingResume.record.nextPosition
+            && localOwner && parsed.position <= localOwner.nextPosition;
+          if (replayBounds.resyncRequired && !pendingLocalTail) {
+            return res.status(409).json({ error: 'stream_resume_resync_required',
+              message: 'Recarga el chat para recuperar la respuesta guardada.' });
+          }
           resumeSession = existingResume;
           // Keep the client-requested high-water mark. It may be ahead of the
           // durable snapshot while an active owner's append is waiting on
@@ -3096,7 +3104,7 @@ router.post(
             }
             if (typeof ad.detectSseGap === 'function') {
               const ring = Array.isArray(resumeSession && resumeSession.record && resumeSession.record.chunks)
-                ? resumeSession.record.chunks.map(function (content, i) { return { seq: i + 1, content: content }; })
+                ? resumeSession.record.chunks.map(function (content, i) { return { seq: resumeSession.record.basePosition + i + 1, content: content }; })
                 : [];
               ad.detectSseGap(String(parsed.position), ring);
             }
@@ -3105,7 +3113,7 @@ router.post(
               if (typeof w67rep.applySseReplayCloseClosed === 'function') {
                 const ring67 = Array.isArray(resumeSession && resumeSession.record && resumeSession.record.chunks)
                   ? resumeSession.record.chunks.map(function (content, i) {
-                    return { seq: i + 1, id: i + 1, content: content, at: Date.now() };
+                    return { seq: resumeSession.record.basePosition + i + 1, id: resumeSession.record.basePosition + i + 1, content: content, at: Date.now() };
                   })
                   : [];
                 w67rep.applySseReplayCloseClosed({
@@ -3148,12 +3156,12 @@ router.post(
           }
           try {
             res.setHeader('X-Stream-Id', resumeSession.streamId);
-            res.setHeader('X-Stream-Cursor', `${resumeSession.streamId}:${resumeSession.record.chunks.length}`);
+            res.setHeader('X-Stream-Cursor', `${resumeSession.streamId}:${resumeSession.record.nextPosition}`);
             if (!res.headersSent) {
               const w62 = require('../services/agent-runner/engine-3h62');
               const baked = w62.cookieForLastEventId({
                 sessionKey: resumeSession.streamId,
-                lastEventId: resumeSession.record.chunks.length,
+                lastEventId: resumeSession.record.nextPosition,
               });
               if (baked && baked.header) {
                 const prev = res.getHeader && res.getHeader('Set-Cookie');
@@ -3178,8 +3186,11 @@ router.post(
             const readyWorkspaceEvent = codingWorkspaceService.codingWorkspaceEvent(chatId, codingAccess) || activeResume?.codingWorkspaceEvent;
             if (readyWorkspaceEvent?.chatId === String(chatId)) res.write(`data: ${JSON.stringify(readyWorkspaceEvent)}\n\n`);
 
-            const durableReplayStart = inclusiveReplayStartFromRing(record.chunks, resumeReplayPosition);
-            const replay = record.chunks.slice(durableReplayStart);
+            const durableReplay = resumeReplayPosition > record.nextPosition
+              ? { chunks: [], startPosition: record.nextPosition }
+              : streamResume.replayAfter(record, resumeReplayPosition, { inclusive: true });
+            const durableReplayStart = durableReplay.startPosition;
+            const replay = durableReplay.chunks;
             for (let i = 0; i < replay.length; i += 1) {
               const position = durableReplayStart + i + 1;
               res.write(`id: ${resumeSession.streamId}:${position}\n`);
@@ -3191,7 +3202,7 @@ router.post(
             // before subscribing so a reconnect cannot miss that tail.
             if (activeResume && Array.isArray(activeResume.frames)) {
               for (const frame of activeResume.frames) {
-                if (frame.position <= resumeReplayPosition || frame.position <= record.chunks.length) continue;
+                if (frame.position <= resumeReplayPosition || frame.position <= record.nextPosition) continue;
                 res.write(frame.idFrame);
                 res.write(frame.payload);
               }
@@ -3225,7 +3236,7 @@ router.post(
             subscribers: new Set(),
             frames: [],
             resumeDegraded: false,
-            nextPosition: resumeSession.record.chunks.length,
+            nextPosition: resumeSession.record.nextPosition,
           });
         }
       } catch (resumeErr) {
@@ -7714,7 +7725,7 @@ router.post(
           subscribers: new Set(),
           frames: [],
           resumeDegraded: false,
-          nextPosition: resumeSession.record.chunks.length,
+          nextPosition: resumeSession.record.nextPosition,
         };
         activeResumeStreams.set(sid, activeResume);
         const broadcast = (payload) => {
@@ -7728,10 +7739,9 @@ router.post(
         };
         // Replay missing chunks
         try {
-          const replayStart = inclusiveReplayStartFromRing(resumeSession.record.chunks, resumeReplayPosition, {
-            sessionKey: sid,
-          });
-          const missing = resumeSession.record.chunks.slice(replayStart);
+          const replay = streamResume.replayAfter(resumeSession.record, resumeReplayPosition, { inclusive: true });
+          const replayStart = replay.startPosition;
+          const missing = replay.chunks;
           for (let i = 0; i < missing.length; i += 1) {
             const chunk = missing[i];
             const frame = 'data: ' + JSON.stringify({ content: chunk, _resumed: true }) + '\n\n';
@@ -7756,7 +7766,7 @@ router.post(
                 // re-append every full snapshot, duplicating/garbling the answer.
                 if (obj && typeof obj.content === 'string' && !obj._resumed && !obj.replace) {
                   const nextPosition = activeResume.nextPosition + 1;
-                  if (nextPosition <= streamResume.DEFAULT_MAX_CHUNKS) {
+                  if (Number.isSafeInteger(nextPosition)) {
                     activeResume.nextPosition = nextPosition;
                     contentFrameId = `${sid}:${activeResume.nextPosition}`;
                     const idFrame = `id: ${contentFrameId}\n`;
@@ -7766,8 +7776,11 @@ router.post(
                       idFrame,
                       payload: payloadFrame.endsWith('\n\n') ? payloadFrame : `${payloadFrame}\n\n`,
                     });
-                    if (activeResume.frames.length > streamResume.DEFAULT_MAX_CHUNKS) {
-                      activeResume.frames.shift();
+                    activeResume.frameBytes = (activeResume.frameBytes || 0) + Buffer.byteLength(activeResume.frames[activeResume.frames.length - 1].payload);
+                    while (activeResume.frames.length > streamResume.DEFAULT_MAX_CHUNKS
+                      || activeResume.frameBytes > streamResume.DEFAULT_MAX_BYTES) {
+                      const removed = activeResume.frames.shift();
+                      activeResume.frameBytes -= Buffer.byteLength(removed.payload);
                     }
                     // fire-and-forget — never block the write path. Memory is
                     // updated before the Redis write, so active reconnects see
@@ -10240,7 +10253,7 @@ router.post(
           if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
           const cursorStore = sseLastEventCursorBySession.get(sid);
           const last = resumeSession.record && Array.isArray(resumeSession.record.chunks)
-            ? resumeSession.record.chunks.length
+            ? resumeSession.record.nextPosition
             : undefined;
           try {
             const ad = require('../services/agent-runner/engine-adapter');
@@ -11331,7 +11344,7 @@ router.post(
 
           // Generate unique filename
           const timestamp = Date.now();
-          const filename = `generated-${timestamp}-${Math.random().toString(36).substr(2, 9)}.png`;
+          const filename = resourceId ? `generated-${resourceId}.png` : `generated-${timestamp}-${Math.random().toString(36).substr(2, 9)}.png`;
           const filepath = path.join(uploadsDir, filename);
 
           // Convert base64 to buffer and save
@@ -11836,7 +11849,7 @@ async function cropImageToAspectRatio(imageBuffer, aspectRatio) {
 }
 
 // Helper function to save a base64 encoded image to the filesystem
-async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1', { preservePixels = false } = {}) {
+async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1', { preservePixels = false, resourceId = null } = {}) {
   if (!base64Data) {
     throw new Error('No base64 data provided to save.');
   }
@@ -11863,17 +11876,13 @@ async function saveBase64Image(base64Data, userId, prompt, aspectRatio = '1:1', 
 
 
   const imageUrl = publicUploadUrl(`/uploads/images/${filename}`);
-  // Create a file record in the database
-  const newFile = await prisma.file.create({
-    data: {
-      userId: userId,
-      filename: filename,
-      originalName: prompt.substring(0, 100), // Use the prompt as the original name
-      mimeType: 'image/png',
-      size: imageBuffer.length,
-      path: filepath,
-    },
-  });
+  const storage = require('../services/object-storage');
+  const storedPath = storage.enabled() ? (await storage.persistLocalFileStream({ localPath: filepath,
+    key: `uploads/images/${filename}`, contentType: 'image/png' })).ref : filepath;
+  const data = { userId, filename, originalName: prompt.substring(0, 100), mimeType: 'image/png', size: imageBuffer.length, path: storedPath };
+  const newFile = resourceId
+    ? await prisma.file.upsert({ where: { id: resourceId }, update: {}, create: { ...data, id: resourceId } })
+    : await prisma.file.create({ data });
 
   console.log("Image saved locally and record created. URL:", imageUrl);
   return { imageUrl, fileId: newFile.id, width, height };
@@ -11899,39 +11908,17 @@ router.post(
   ],
   authenticateToken,
   requirePaidPlan({ feature: 'image_generation' }),
-  async (req, res) => {
+  handleChatImage
+);
+
+async function handleChatImage(req, res) {
     const __genStartedAt = Date.now();
+    const mediaContext = req._mediaJobContext;
     const requestAbortController = new AbortController();
-    let clientDisconnected = false;
-    // Declarado FUERA del try para que el bloque catch pueda invocarlo
-    // sin caer en ReferenceError (los `const` del try no están en
-    // scope dentro del catch). Se reasigna cuando arrancamos el
-    // heartbeat; mientras tanto es un no-op seguro.
-    let stopKeepAlive = () => {};
-    // Cuando hay un chatId válido la imagen se persiste como mensaje del
-    // chat, así que la generación debe SOBREVIVIR a un corte de conexión.
-    // El Load Balancer de la Reserved VM (GCE/GCLB) corta cualquier request
-    // a los ~30s y la imagen suele tardar más; ese timeout es un límite duro
-    // del tiempo total de respuesta que los heartbeats NO resetean. En ese
-    // caso NO abortamos al proveedor: dejamos que termine y guarde el
-    // resultado en el chat, y el frontend lo recupera por polling.
-    let detachOnDisconnect = false;
-    let persistChatId = null;
-    res.on('close', () => {
-      if (!res.writableEnded) {
-        clientDisconnected = true;
-        // In mobile Safari and behind edge/load-balancer proxies, the request
-        // socket can close while the user still expects the result. Once we
-        // have a valid chat target, keep the provider call alive and persist
-        // the image into the conversation; the client recovers it by polling.
-        // Before chat validation, abort normally because there is nowhere safe
-        // to store the result.
-        if (!detachOnDisconnect) {
-          requestAbortController.abort();
-        }
-      }
-      stopKeepAlive();
-    });
+    if (mediaContext) mediaContext.signal.addEventListener('abort', () => requestAbortController.abort(mediaContext.signal.reason), { once: true });
+    // HTTP only validates and admits. The durable worker owns generation;
+    // disconnecting this socket cannot cancel an already admitted job.
+    res.on('close', () => { if (!mediaContext && !res.writableEnded) requestAbortController.abort(); });
 
     // The picked image model's display name for the honest failure copy
     // («<modelo> no pudo generar la imagen: <causa>…»). Never a raw id.
@@ -11986,8 +11973,7 @@ router.post(
       console.log('userId', userId);
 
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js)
-      const quotaCap = checkPaidTokenCap(req.user);
-      if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
+      // The admission transaction below reserves commercial quota atomically.
 
       // Validate the conversation BEFORE reading history or spending quota.
       let preValidatedChat = null;
@@ -12021,7 +12007,7 @@ router.post(
       }
       const adminModel = await prisma.aiModel.findUnique({
         where: { name: model },
-        select: { id: true, name: true, provider: true, displayName: true, isActive: true, type: true },
+        select: { id: true, name: true, provider: true, displayName: true, isActive: true, type: true, pricing: true },
       });
       const activeGrokImage = adminModel && isActiveGrokImageModel(adminModel);
       imageModelLabel = await require('../services/ai/picked-model-label').resolvePickedModelLabel({
@@ -12073,45 +12059,24 @@ router.post(
         return res.status(400).json({ error: 'El modelo seleccionado no permite esta edición. Elige un modelo compatible.', code: 'image_edit_unsupported' });
       }
 
-      // Con un chat válido podemos persistir el resultado, así que a partir
-      // de aquí la generación continúa aunque el cliente (o el edge proxy a
-      // los ~30s) cierre la conexión. persistChatId se usa en el catch
-      // (donde `chatId` del try no está en scope) para registrar un error.
-      detachOnDisconnect = Boolean(chatId && preValidatedChat);
-      if (detachOnDisconnect) persistChatId = chatId;
-
-      // --- Keep-alive del proxy de ingreso ---------------------------------
-      // El edge de Replit Autoscale corta cualquier petición que no haya
-      // empezado a enviar headers de respuesta en ~30 s. La generación de
-      // imagen puede tardar 60-180 s, así que el cliente recibía
-      // "socket hang up / ECONNRESET" aunque el backend siguiera trabajando
-      // y la imagen se persistiera huérfana.
-      //
-      // Truco: enviamos cabeceras 200 + Content-Type JSON inmediatamente y
-      // escribimos un espacio cada 15 s mientras se genera. JSON.parse()
-      // ignora whitespace al inicio del cuerpo, así que el payload final
-      // sigue siendo válido para el cliente. Cualquier error funcional
-      // (proveedor no soportado, timeout, etc.) ya no puede ir como 4xx/5xx
-      // — debe viajar dentro del cuerpo JSON con un campo `error` y código.
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        // Desactiva el buffering en proxies estilo nginx para que los
-        // heartbeats lleguen al edge en cuanto los escribimos.
-        'X-Accel-Buffering': 'no',
-      });
-      if (typeof res.flushHeaders === 'function') res.flushHeaders();
-      let keepAliveTimer = setInterval(() => {
-        if (res.writableEnded || clientDisconnected) return;
-        try { res.write(' '); } catch (_e) { /* socket already closed */ }
-      }, 5_000);
-      keepAliveTimer.unref?.();
-      stopKeepAlive = () => {
-        if (keepAliveTimer) {
-          clearInterval(keepAliveTimer);
-          keepAliveTimer = null;
-        }
-      };
+      if (!mediaContext) {
+        const { getMediaJobStore, requestKey } = require('../services/media/job-store');
+        const { job, created } = await getMediaJobStore().admit({
+          userId, chatId: chatId || null, lane: 'image', kind: 'image.chat', key: requestKey(req),
+          quotaUnits: 1000 * imageCount, pricing: adminModel?.pricing,
+          fingerprint: req.body,
+          // Freeze the owned latest-image selection at admission. A worker
+          // must not pick a different "last image" after another job completes.
+          payload: { model, provider, count: imageCount, input: { ...req.body, model, provider,
+            ...(sourceImage ? { fileId: sourceImage.fileId } : {}) }, imageModelLabel },
+        });
+        if (!created) res.setHeader('Idempotency-Replayed', 'true');
+        return res.status(202).json({ jobId: job.id, status: job.status, quotaManaged: true,
+          checkUrl: `/api/images/jobs/${job.id}` });
+      }
+      if (mediaContext.job.checkpoint?.dispatchState === 'submitting') {
+        throw Object.assign(new Error('No se confirmó el resultado. No se duplicará automáticamente.'), { code: 'MEDIA_DISPATCH_UNKNOWN' });
+      }
 
       let imageResults;
       let imageTimeoutTimer;
@@ -12214,10 +12179,18 @@ router.post(
         }));
       };
 
-      imageResults = await Promise.race([
-        generateSingleImage(),
-        timeoutPromise,
-      ]).finally(() => { clearTimeout(imageTimeoutTimer); });
+      const imageCheckpoint = require('../services/media/image-checkpoint');
+      const persistedResults = mediaContext.job.checkpoint?.imageResults;
+      if (persistedResults) {
+        clearTimeout(imageTimeoutTimer);
+        imageResults = await imageCheckpoint.restoreImageResults(persistedResults, requestAbortController.signal);
+      } else {
+        await mediaContext.checkpoint({ dispatchState: 'submitting' }, { phase: 'Generando', progress: 10 });
+        imageResults = await Promise.race([ generateSingleImage(), timeoutPromise ])
+          .finally(() => { clearTimeout(imageTimeoutTimer); });
+        const refs = await imageCheckpoint.stageImageResults(mediaContext.jobId, imageResults, requestAbortController.signal);
+        await mediaContext.checkpoint({ imageResults: refs, dispatchState: 'returned' }, { phase: 'Posproceso', progress: 80 });
+      }
       imageResults = imageResults.flat().filter((item) => item && (item.b64 || typeof item === 'string'));
 
       if (!imageResults.length) {
@@ -12235,18 +12208,7 @@ router.post(
         startedAt: __genStartedAt,
       });
 
-      // Si el usuario canceló de verdad (abort explícito) no persistimos.
-      // Pero un simple cierre de conexión con chat válido (detachOnDisconnect)
-      // NO debe descartar la imagen: seguimos para guardarla en el chat.
-      if (requestAbortController.signal.aborted && !clientDisconnected) {
-        console.log('Image generation cancelled by client before persistence.');
-        return;
-      }
-      if (clientDisconnected && !detachOnDisconnect) {
-        console.log('Image generation cancelled by client before persistence.');
-        return;
-      }
-
+      mediaContext.signal.throwIfAborted();
       const generatedFiles = [];
       for (let index = 0; index < imageResults.length; index += 1) {
         const imageResult = typeof imageResults[index] === 'string'
@@ -12255,7 +12217,7 @@ router.post(
         const persistedB64 = editCanvas
           ? (await finishEditCanvas(Buffer.from(imageResult.b64, 'base64'), editCanvas)).toString('base64')
           : imageResult.b64;
-        const { imageUrl, fileId: newFileId, width, height } = await saveBase64Image(persistedB64, userId, prompt, aspectRatio, { preservePixels: Boolean(editCanvas) });
+        const { imageUrl, fileId: newFileId, width, height } = await saveBase64Image(persistedB64, userId, prompt, aspectRatio, { preservePixels: Boolean(editCanvas), resourceId: `image-${mediaContext.jobId}-${index}` });
         generatedFiles.push({
           type: 'image',
           url: imageUrl,
@@ -12279,11 +12241,13 @@ router.post(
 
       const primaryImageUrl = generatedFiles[0].url;
 
-      let messageId = null;
+      const messageId = chatId && preValidatedChat ? `image-${mediaContext.jobId}-assistant` : null;
+      const persistChatResult = async (tx, output) => {
       if (chatId && preValidatedChat) {
-        await prisma.message.create({
-          data: {
-            chatId,
+        await tx.message.upsert({
+          where: { id: `image-${mediaContext.jobId}-user` }, update: {},
+          create: {
+            id: `image-${mediaContext.jobId}-user`, chatId,
             role: 'USER',
             content: prompt,
             // Only attach files if they are real user uploads (not generated images)
@@ -12291,18 +12255,20 @@ router.post(
           }
         });
 
-        const savedImageMessage = await prisma.message.create({
-          data: {
-            chatId,
+        const savedImageMessage = await tx.message.upsert({
+          where: { id: `image-${mediaContext.jobId}-assistant` }, update: {},
+          create: {
+            id: `image-${mediaContext.jobId}-assistant`, chatId,
             role: 'ASSISTANT',
             content: primaryImageUrl,
-            tokens: 1000 * generatedFiles.length,
+            tokens: 0,
             files: JSON.stringify(generatedFiles)
           }
         });
 
-        messageId = savedImageMessage.id;
-        await prisma.chat.update({
+        // Message IDs are stable across lease recovery.
+        void savedImageMessage;
+        await tx.chat.update({
           where: { id: chatId },
           data: {
             updatedAt: new Date(),
@@ -12313,43 +12279,23 @@ router.post(
         });
       }
 
-      // ✅ Track usage (single source of truth: plan-quota.js)
-      const usageModel = generatedFiles[0]?.model || model;
-      const updatedUser = await recordApiUsage({ prisma, userId, model: usageModel, tokens: 1000 * generatedFiles.length });
+        output.usage = usagePayloadFor(await tx.user.findUnique({ where: { id: userId } }));
+      };
+      mediaContext.onCompleted(persistChatResult);
 
-      // Headers ya enviados arriba para sobrevivir al proxy; cerramos
-      // con el payload JSON real (los espacios de heartbeat al inicio
-      // son whitespace válido para JSON.parse).
-      stopKeepAlive();
-      // Si el cliente ya se desconectó (corte del edge proxy a los ~30s) la
-      // imagen ya quedó persistida en el chat y el frontend la recupera por
-      // polling; escribir en un socket cerrado lanzaría un error, así que
-      // solo cerramos la respuesta cuando la conexión sigue viva.
-      if (!clientDisconnected && !res.writableEnded) {
-        res.end(JSON.stringify({
-          imageUrl: primaryImageUrl,
-          files: generatedFiles, messageId, chatId,
-          imageUrls: generatedFiles.map((file) => file.url),
-          aspectRatio,
-          quality,
-          imageCount: generatedFiles.length,
-          tokens: 1000 * generatedFiles.length,
-          usage: usagePayloadFor(updatedUser)
-        }));
-      }
+      // The worker settles the reservation and records cost provenance once.
+      const updatedUser = await prisma.user.findUnique({ where: { id: userId } });
+      const response = {
+        imageUrl: primaryImageUrl, files: generatedFiles, messageId, chatId,
+        imageUrls: generatedFiles.map(file => file.url), aspectRatio, quality,
+        imageCount: generatedFiles.length, tokens: 1000 * generatedFiles.length, quotaUnits: 1000 * generatedFiles.length,
+        usage: usagePayloadFor(updatedUser), quotaManaged: true,
+      };
+      return res.json(response);
 
     } catch (error) {
-      stopKeepAlive();
-      // Cancelación REAL del usuario (abort explícito): no persistimos nada.
-      const wasRealAbort =
-        !clientDisconnected &&
-        requestAbortController.signal.aborted &&
-        error?.name === 'AbortError';
-      if (wasRealAbort) {
-        console.log('Image generation request aborted by client.');
-        if (!res.writableEnded) res.end();
-        return;
-      }
+      if (mediaContext && (mediaContext.signal.aborted || ['LEASE_LOST', 'MEDIA_DISPATCH_UNKNOWN'].includes(error?.code))) throw mediaContext.signal.reason || error;
+      if (!mediaContext && Number(error?.status) >= 400 && Number(error?.status) < 500) return res.status(error.status).json({ error: error.message, code: error.code });
       // Classify into a clean, client-safe shape: maps provider quota/429
       // (e.g. Gemini RESOURCE_EXHAUSTED) to HTTP 429 and never echoes the raw
       // multi-KB provider JSON to the client or into a persisted chat message.
@@ -12363,26 +12309,10 @@ router.post(
         startedAt: __genStartedAt,
         userSaw: `No se pudo generar la imagen: ${classified.message}`,
       }).catch(() => {});
-      // El cliente se fue (corte del edge proxy) pero teníamos un chat para
-      // persistir: dejamos constancia del fallo como mensaje del asistente
-      // para que el polling del frontend lo muestre en vez de colgarse.
-      if (clientDisconnected && detachOnDisconnect && persistChatId) {
-        try {
-          await prisma.message.create({
-            data: {
-              chatId: persistChatId,
-              role: 'ASSISTANT',
-              content: `⚠️ No se pudo generar la imagen: ${classified.message}`,
-            },
-          });
-        } catch (persistErr) {
-          console.error('Failed to persist image-generation error message:', persistErr);
-        }
-        return;
-      }
-      if (clientDisconnected) {
-        if (!res.writableEnded) res.end();
-        return;
+      if (mediaContext) {
+        error.publicMessage = classified.message;
+        error.code = error.code || classified.code;
+        throw error;
       }
       // retryable:false when re-asking cannot help (no balance, rejected
       // key, forbidden model, no connection); the per-minute wait travels as
@@ -12394,16 +12324,23 @@ router.post(
         ...(classified.failureReason ? { failureReason: classified.failureReason } : {}),
         ...(classified.retryAfterSeconds ? { retryAfterSeconds: classified.retryAfterSeconds } : {}),
       };
-      if (!res.headersSent) {
-        res.status(classified.httpStatus).json(imageErrorBody);
-      } else if (!res.writableEnded) {
-        // Headers ya enviados como 200 (estábamos en modo keep-alive).
-        // Mandamos el error en el cuerpo JSON para que el cliente lo vea.
-        res.end(JSON.stringify(imageErrorBody));
-      }
+      return res.status(classified.httpStatus).json(imageErrorBody);
     }
   }
-);
+require('../services/media/job-worker').registerMediaRunner('image.chat', async (ctx, spec) => {
+  const user = await prisma.user.findUnique({ where: { id: ctx.job.user_id } });
+  const request = { body: spec.input, user, headers: {}, _mediaJobContext: ctx };
+  let status = 200;
+  const response = { writableEnded: false, headersSent: false, on() {}, setHeader() {},
+    status(value) { status = value; return this; },
+    json(body) {
+      if (status >= 400 || body?.error) throw Object.assign(new Error(body.error || 'No se pudo generar.'), { code: body.code || 'E_PROVIDER', publicMessage: body.error, status });
+      return body;
+    },
+  };
+  return handleChatImage(request, response);
+});
+
 // Add this route after the existing generate-image route (around line 580)
 
 // ✅ Generate AI video response (New Video Generation Route)
@@ -12490,8 +12427,7 @@ router.post(
 
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js).
       // Keeps the domain-specific video limit message.
-      const quotaCap = checkPaidTokenCap(req.user, { message: 'Monthly video generation limit exceeded' });
-      if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
+      // The video store reserves quota once in the same transaction as admission.
 
       // Authorize the conversation before reading continuity or starting a
       // paid operation. The same validated row is used when saving below.
@@ -12596,7 +12532,8 @@ router.post(
         }
 
         const videoPayload = {
-          prompt,
+          prompt, chatId: chatId || undefined,
+          idempotencyKey: require('../services/media/job-store').requestKey(req),
           aspect_ratio: effectiveAspectRatio,
           resolution,
           duration: effectiveDuration,
@@ -12605,6 +12542,9 @@ router.post(
           ...(processedImageUrl && { image_url: processedImageUrl }),
           ...(processedImageUrls.length > 0 && { image_urls: processedImageUrls }),
           model: requestedVideoModel,
+          // Continuity read from the server may grow before an HTTP retry.
+          // It is frozen in the admitted payload, not part of user intent.
+          historyIsDerived: !(Array.isArray(providedHistory) && providedHistory.length),
           ...(videoHistory.length && { history: videoHistory }),
           ...(typeof continuation === 'boolean' && { continuation }),
           professionalize
@@ -12616,6 +12556,7 @@ router.post(
             // headers into req.token; cookies are absent on this loopback.
             'Authorization': `Bearer ${req.token}`,
             'Content-Type': 'application/json',
+            'Idempotency-Key': videoPayload.idempotencyKey,
             // Session fingerprint binding (session-fingerprint.js) ties the
             // token to `${req.ip}:hash(user-agent)`. Without forwarding the
             // ORIGINAL UA + IP, this loopback call presents UA "axios/x" and
@@ -12715,9 +12656,10 @@ router.post(
           }
 
           // Save user message with complete file information
-          await prisma.message.create({
-            data: {
-              chatId,
+          await prisma.message.upsert({
+            where: { id: `video-${videoResponse.data.operationId}-user` }, update: {},
+            create: {
+              id: `video-${videoResponse.data.operationId}-user`, chatId,
               role: 'USER',
               content: prompt,
               files: userMessageFiles // ✅ Now includes complete file info for frontend display
@@ -12725,14 +12667,15 @@ router.post(
           });
 
           // Save assistant message with video operation data
-          const assistantMessage = await prisma.message.create({
-            data: {
-              chatId,
+          const assistantMessage = await prisma.message.upsert({
+            where: { id: `video-${videoResponse.data.operationId}-assistant` }, update: {},
+            create: {
+              id: `video-${videoResponse.data.operationId}-assistant`, chatId,
               role: 'ASSISTANT',
               content: processedImageUrl ?
                 `Generating video from image: "${prompt}"...` :
                 `Generating video: "${prompt}"...`,
-              tokens: 1000, // Fixed token count for video generation
+              tokens: 0, // Media has no measured provider tokens
               // Store video data in files field as JSON
               files: JSON.stringify([{
                 type: 'video',
@@ -12776,7 +12719,7 @@ router.post(
 
         // ✅ Track usage (single source of truth: plan-quota.js)
         const tokens = 1000; // Fixed token count for video generation
-        const updatedUser = await recordApiUsage({ prisma, userId, model: videoResponse.data.model || requestedVideoModel, tokens });
+        const updatedUser = await prisma.user.findUnique({ where: { id: userId } });
 
         console.log('📊 Usage tracked for video generation');
 

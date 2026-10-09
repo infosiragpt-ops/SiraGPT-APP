@@ -134,6 +134,18 @@ export type PreferredModelOptions = {
   last?: string
 }
 
+/** A catalog refresh is not a user pick. Keep intent even if now unavailable. */
+export function reconcileSelectedCatalogModel(
+  models: CatalogModelLike[],
+  selectedModel: string,
+  provider = "",
+): { name: string; provider: string } | null {
+  const wanted = String(selectedModel || "").trim()
+  if (!wanted) return null
+  const resolved = resolveCatalogModel(wanted, models, provider)
+  return { name: resolved.name, provider: resolved.provider }
+}
+
 export function isActiveCatalogSelection(
   selectedModel: string,
   availableModels: CatalogModelLike[] = [],

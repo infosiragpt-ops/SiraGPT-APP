@@ -128,6 +128,10 @@ export class ProcessingStatusMemo<TStatus, TResult> {
     return this.inflight.size
   }
 
+  forget(fileId: string): void {
+    this.terminalByFile.delete(fileId)
+  }
+
   reset(): void {
     this.terminalByFile.clear()
     this.inflight.clear()

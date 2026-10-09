@@ -44,7 +44,7 @@ describe('/api/voice-studio (Sira Voz)', () => {
         async update({ where, data }) { const row = voiceRows.find((r) => r.id === where.id); Object.assign(row, data); return row; },
       },
       chat: { async findFirst({ where }) { return where.id === 'chat-1' && where.userId === user.id ? { id: 'chat-1' } : null; } },
-      message: { async create({ data }) { jobs.push({ message: data }); return { id: 'm1' }; } },
+      message: { async create({ data }) { jobs.push({ message: data }); return { id: 'm1' }; }, async upsert({ create }) { jobs.push({ message: create }); return { id: create.id }; } },
       file: { async findFirst() { return null; } },
       voiceStudioJob: {},
     });
@@ -68,7 +68,7 @@ describe('/api/voice-studio (Sira Voz)', () => {
     restoreJobs = mockResolvedModule(require.resolve('../src/services/voice-studio/jobs'), {
       getJobQueue: () => ({
         async activeCount() { return enqueued.filter((j) => j.status === 'queued').length; },
-        async enqueue(spec) { const job = { id: `job${enqueued.length + 1}`, status: 'queued', kind: spec.kind, title: spec.title, chatId: spec.chatId, input: spec.input, _runner: spec.runner }; enqueued.push(job); return { id: job.id, status: 'queued', kind: job.kind, title: job.title, chatId: job.chatId, input: job.input }; },
+        async enqueue(spec) { if (enqueued.some(j => j.status === 'queued')) throw Object.assign(new Error('Ya tienes un trabajo en curso.'), { code: 'job_limit', status: 429 }); assert.ok(spec.executionInput, 'complete input is durable'); assert.ok(spec.idempotencyKey); const job = { id: `job${enqueued.length + 1}`, status: 'queued', kind: spec.kind, title: spec.title, chatId: spec.chatId, input: spec.input, _runner: spec.runner }; enqueued.push(job); return { id: job.id, status: 'queued', kind: job.kind, title: job.title, chatId: job.chatId, input: job.input }; },
         async list() { return enqueued.map((j) => ({ id: j.id, status: j.status, kind: j.kind })); },
         async get(_userId, id) { const j = enqueued.find((x) => x.id === id); return j ? { id: j.id, status: j.status, kind: j.kind } : null; },
         async getRow(_userId, id) {

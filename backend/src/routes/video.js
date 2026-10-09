@@ -621,7 +621,10 @@ const {
 const { getFalApiKey, resolveFalApiKey } = require('../services/fal/fal-auth');
 const { classifyFalVideoError } = require('../services/fal/fal-video-errors');
 const videoPromptDirector = require('../services/video-prompt-director');
-const { checkPaidTokenCap } = require('../services/plan-quota');
+const { getMediaJobStore, requestKey } = require('../services/media/job-store');
+const { registerMediaRunner } = require('../services/media/job-worker');
+const { createVideoJobRunner, publicVideoOperation } = require('../services/media/video-job-runner');
+const { LIMITS } = require('../services/media/transfer');
 const objectStorage = require('../services/object-storage');
 const router = express.Router();
 const prisma = require('../config/database');
@@ -632,7 +635,8 @@ fal.config({
   credentials: getFalApiKey(),
 });
 
-// Store active operations
+// Deprecated inspection-only cache retained for compatibility with cleanup tests.
+// Public state and execution are exclusively backed by media_jobs.
 const activeOperations = new Map();
 const uploadRoot = process.env.UPLOAD_DIR
   ? path.resolve(process.env.UPLOAD_DIR)
@@ -709,24 +713,13 @@ function generateOperationId() {
 // Reads the in-memory operations created by this instance, oldest first,
 // capped so prompts stay bounded. Entries expose the ORIGINAL prompt plus
 // capture settings so the prompt director can anchor the next generation.
-function getRecentVideoHistoryForUser(userId, limit = 5) {
-  const entries = [];
-  for (const op of activeOperations.values()) {
-    if (!op || op.userId !== userId) continue;
-    const prompt = op.originalPrompt || op.prompt;
-    if (!prompt) continue;
-    entries.push({
-      prompt,
-      enhancedPrompt: op.enhancedPrompt || null,
-      aspect_ratio: op.aspect_ratio || (op.result && op.result.aspect_ratio) || null,
-      resolution: op.resolution || (op.result && op.result.resolution) || null,
-      audio: typeof op.audio === 'boolean' ? op.audio : (op.result && typeof op.result.audio === 'boolean' ? op.result.audio : null),
-      model: (op.result && (op.result.model || op.result.modelDisplayName)) || op.resolvedModel || op.requestedModel || null,
-      createdAt: op.createdAt || null,
-    });
-  }
-  entries.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
-  return entries.slice(-Math.max(1, Math.min(limit, 5)));
+async function getRecentVideoHistoryForUser(userId, limit = 5) {
+  const jobs = await getMediaJobStore().list(userId, 'video', { limit: Math.max(1, Math.min(limit, 5)) });
+  return jobs.reverse().map(publicVideoOperation).map(op => ({
+    prompt: op.originalPrompt || op.prompt, enhancedPrompt: op.enhancedPrompt || null,
+    aspect_ratio: op.aspect_ratio, resolution: op.resolution, audio: op.audio,
+    model: op.resolvedModel || op.requestedModel, createdAt: op.createdAt,
+  }));
 }
 
 function resolveVeoFastDuration(requestedDuration, model) {
@@ -832,7 +825,7 @@ router.post('/generate', [
     // previous clip so consecutive videos cut cleanly against each other.
     const history = Array.isArray(providedHistory) && providedHistory.length
       ? providedHistory.slice(-5)
-      : getRecentVideoHistoryForUser(req.user.id, 5);
+      : await getRecentVideoHistoryForUser(req.user.id, 5);
     const resolvedFalCaps = modelRouting.model?.apiData?.fal || {};
     let direction = null;
     try {
@@ -905,31 +898,7 @@ router.post('/generate', [
       settingsLocked,
     });
 
-    // Check user's monthly limit
-    const currentUsage = await prisma.apiUsage.aggregate({
-      where: {
-        userId: req.user.id,
-        timestamp: {
-          // UTC month start — `new Date(y,m,1)` is local-time and on a TZ-offset
-          // host drops the month's first hours, under-counting the Veo3 cap.
-          gte: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1))
-        },
-        model: 'veo-3.0'
-      },
-      _sum: {
-        tokens: true
-      }
-    });
-
-    const usageThisMonth = currentUsage._sum.tokens || 0;
-    const quotaCap = checkPaidTokenCap(
-      { ...req.user, apiUsage: usageThisMonth },
-      { message: 'Monthly video generation limit exceeded' },
-    );
-    if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
-
-    console.log('Calling Fal.ai Veo3 Video Generation API...');
-
+    // Quota and idempotency are reserved atomically by the durable store.
     try {
       const operationId = generateOperationId();
       const filename = `video_${Date.now()}_${randomUUID().replace(/-/g, '').slice(0, 12)}.mp4`;
@@ -961,43 +930,33 @@ router.post('/generate', [
         modelDisplayName: modelRouting.model?.displayName || resolvedModel,
         usingPairedEndpoint: modelRouting.usingPairedEndpoint
       };
-      activeOperations.set(operationId, operationData);
-
-      // Start video generation with Fal.ai (async)
-      generateVideoAsync(operationId, directedPrompt, effectiveAspectRatio, duration, effectiveNegativePrompt, filename, req.user.id, inputImageUrls, resolvedModel, effectiveResolution, effectiveAudio, {
-        originalPrompt: prompt,
-        continuityMode,
-        settingsLocked,
-      })
-        .catch((error) => {
-          console.error(`❌ Unhandled video generation failure for ${operationId}:`, error);
-          const failedData = activeOperations.get(operationId) || operationData;
-          if (failedData.status !== 'cancelled') {
-            failedData.status = 'failed';
-            failedData.error = error?.message || 'Video generation failed';
-            failedData.updatedAt = new Date().toISOString();
-            activeOperations.set(operationId, failedData);
-          }
-        });
-
-      // Track initial usage
-      await prisma.apiUsage.create({
-        data: {
-          userId: req.user.id,
-          model: resolvedModel,
-          tokens: prompt.length,
-          cost: 1.00 // Fixed cost for 8s video
-        }
+      const pricing = await prisma.aiModel.findUnique({ where: { name: resolvedModel }, select: { pricing: true } });
+      const fingerprint = {
+        prompt, aspect_ratio, resolution, requestedDuration, audio, negative_prompt: negative_prompt || null,
+        imageUrls: inputImageUrls, model, history: req.body.historyIsDerived === true ? null : providedHistory, continuation, professionalize,
+        chatId: req.body.chatId || null,
+      };
+      const admitted = await getMediaJobStore().admit({
+        id: operationId, userId: req.user.id, chatId: req.body.chatId || null,
+        lane: 'video', kind: 'video.generate', key: requestKey(req), fingerprint,
+        quotaUnits: 1000, pricing: pricing?.pricing,
+        payload: { model: resolvedModel, prompt: directedPrompt, aspectRatio: effectiveAspectRatio,
+          duration, durationSeconds: numericDuration, negativePrompt: effectiveNegativePrompt,
+          resolution: effectiveResolution, audio: effectiveAudio, imageUrls: inputImageUrls, filename,
+          publicOperation: operationData },
       });
+      const operation = publicVideoOperation(admitted.job);
+      if (!admitted.created) res.setHeader('Idempotency-Replayed', 'true');
+      res.status(202).json({
 
-      res.json({
         success: true,
-        operationId: operationId,
-        filename: filename,
-        status: 'processing',
+        operationId: operation.operationId,
+        filename: operation.filename,
+        status: operation.status,
+        quotaManaged: true,
         message: 'Video generation started successfully. This may take 2-5 minutes.',
         estimatedTime: '2-5 minutes',
-        checkUrl: `/video/status/${operationId}`,
+        checkUrl: `/video/status/${operation.operationId}`,
         prompt: prompt,
         duration: duration,
         aspect_ratio: effectiveAspectRatio,
@@ -1017,35 +976,10 @@ router.post('/generate', [
       });
 
     } catch (apiError) {
-      console.error('🚨 Fal.ai Veo3 API Error:', apiError);
-
-      if (apiError.status === 422) {
-        return res.status(422).json({
-          error: 'Invalid request parameters',
-          message: 'The request parameters are invalid for Fal.ai Veo3 API.',
-          code: 'VALIDATION_ERROR',
-          details: apiError.body || apiError.message
-        });
-      } else if (apiError.message?.includes('quota') || apiError.message?.includes('429')) {
-        return res.status(429).json({
-          error: 'API quota exceeded',
-          message: 'You have exceeded your Fal.ai API quota. Please try again later or upgrade your plan.',
-          code: 'QUOTA_EXCEEDED'
-        });
-      } else if (apiError.message?.includes('401') || apiError.message?.includes('403')) {
-        return res.status(401).json({
-          error: 'API authentication failed',
-          message: 'Invalid Fal.ai API key. Please check your configuration.',
-          code: 'AUTH_FAILED'
-        });
-      } else {
-        return res.status(500).json({
-          error: 'Video generation failed',
-          message: apiError.message || 'Unknown error occurred',
-          code: 'GENERATION_FAILED',
-          details: apiError.body || null
-        });
-      }
+      const status = Number(apiError.status) || 503;
+      return res.status(status).json({ code: apiError.code || 'E_PROVIDER',
+        error: status < 500 ? apiError.message : 'No se pudo iniciar la generación. Reintenta.',
+        message: status < 500 ? apiError.message : 'No se pudo iniciar la generación. Reintenta.' });
     }
 
   } catch (error) {
@@ -1083,7 +1017,9 @@ async function prepareFalImageUrl(imageUrl) {
     throw new Error(`Local image file not found: ${localImagePath}`);
   }
 
-  const imageBuffer = fs.readFileSync(localImagePath);
+  const stat = await fs.promises.stat(localImagePath);
+  if (!stat.isFile() || stat.size > LIMITS.image) throw Object.assign(new Error('La imagen supera el tamaño permitido.'), { code: 'MEDIA_TOO_LARGE' });
+  const imageBuffer = await fs.promises.readFile(localImagePath);
   const fileName = path.basename(localImagePath);
   const fileBlob = new Blob([imageBuffer], { type: getImageMimeType(fileName) });
   const uploadedUrl = await fal.storage.upload(fileBlob);
@@ -1092,250 +1028,16 @@ async function prepareFalImageUrl(imageUrl) {
   return uploadedUrl;
 }
 
-// generateVideoAsync function with proper variable scoping and syntax fix
-async function generateVideoAsync(operationId, prompt, aspectRatio, duration, negativePrompt, filename, userId, imageUrls = [], model = 'veo-fast', resolution = '720p', audio = true, opts = {}) {
-  const maxRetries = 3;
-  let retryCount = 0;
-  const sourceImageUrls = normalizeVideoImageUrls(imageUrls);
-  const directionMeta = {
-    originalPrompt: typeof opts.originalPrompt === 'string' && opts.originalPrompt ? opts.originalPrompt : prompt,
-    continuityMode: opts.continuityMode || null,
-    settingsLocked: Array.isArray(opts.settingsLocked) ? opts.settingsLocked : [],
-  };
+registerMediaRunner('video.generate', async (ctx, spec) => {
+  const { apiKey } = await resolveFalApiKey({ prisma });
+  if (!apiKey) throw Object.assign(new Error('Sira Vídeo no está disponible.'), { code: 'E_PROVIDER' });
+  fal.config({ credentials: apiKey });
+  return createVideoJobRunner({ fal, storage: objectStorage, prepareImageUrl: prepareFalImageUrl, videosDir,
+    submit: (endpoint, options) => require('../services/media/fal-submit-once').submitFalQueueOnce(endpoint,
+      { input: options.input, signal: options.abortSignal, credentials: apiKey }),
+  })(ctx, spec);
+});
 
-  while (retryCount < maxRetries) {
-    let activeEndpoint = null;
-    try {
-      if (activeOperations.get(operationId)?.status === 'cancelled') {
-        console.log(`🛑 Video generation already cancelled before provider call: ${operationId}`);
-        return;
-      }
-      console.log(`🎬 Starting video generation attempt ${retryCount + 1}/${maxRetries} for operation: ${operationId}`);
-      console.log(`🖼️ Generation Mode: ${sourceImageUrls.length > 1 ? 'Reference-to-Video' : (sourceImageUrls.length === 1 ? 'Image-to-Video' : 'Text-to-Video')}`);
-
-      // Update status
-      let operationData = activeOperations.get(operationId) || {};
-      if (operationData.status === 'cancelled') {
-        console.log(`🛑 Video generation cancelled before status update: ${operationId}`);
-        return;
-      }
-      operationData.status = 'processing';
-      operationData.updatedAt = new Date().toISOString();
-      activeOperations.set(operationId, operationData);
-
-      let processedImageUrls = [];
-      try {
-        processedImageUrls = (await Promise.all(sourceImageUrls.map(prepareFalImageUrl))).filter(Boolean);
-      } catch (uploadError) {
-        console.error(' Failed to upload image to Fal.ai:', uploadError);
-        throw new Error(`Failed to process image for video generation: ${uploadError.message}`);
-      }
-      const processedImageUrl = processedImageUrls[0] || null;
-
-      const modelRouting = resolveFalVideoModelRequest(model, {
-        hasImage: processedImageUrls.length > 0,
-        imageCount: processedImageUrls.length,
-      });
-      if (!modelRouting.ok) {
-        const validationError = new Error(modelRouting.message);
-        validationError.status = 422;
-        validationError.body = { code: modelRouting.code, requestedModel: model };
-        throw validationError;
-      }
-
-      const endpoint = modelRouting.endpoint;
-      activeEndpoint = endpoint;
-      const requestPayload = buildFalVideoInputPayload({
-        endpoint,
-        prompt,
-        aspectRatio,
-        duration,
-        negativePrompt,
-        imageUrl: processedImageUrl,
-        imageUrls: processedImageUrls,
-        resolution,
-        audio,
-      });
-
-      console.log(`${processedImageUrls.length ? '🖼️➡️🎬' : '📝➡️🎬'} Using fal.ai video model (${endpoint})`);
-      if (processedImageUrls.length) {
-        console.log('🔗 Using processed image URLs:', processedImageUrls.length);
-      }
-
-      const sanitizedPayload = { ...requestPayload };
-      for (const key of ['image_url', 'image_urls', 'start_image_url', 'first_image_url', 'end_image_url', 'tail_image_url', 'last_image_url', 'reference_image_urls']) {
-        if (sanitizedPayload[key]) sanitizedPayload[key] = Array.isArray(sanitizedPayload[key]) ? ['[PROCESSED_IMAGE_URL]'] : '[PROCESSED_IMAGE_URL]';
-      }
-      console.log('📡 Fal.ai request details:', {
-        endpoint: endpoint,
-        payload: sanitizedPayload,
-      });
-
-      //  Make API call with better error handling.
-      //  Bound the fal.subscribe poll: the SDK's own `timeout` is documented as
-      //  NOT enforced, so a provider stall / dropped queue entry would make this
-      //  await never settle (the op would stay 'processing' forever — neither the
-      //  cancel route nor the cleanup interval can unblock it). Race it against a
-      //  generous deadline (default 10 min, well above the 2-5 min healthy time)
-      //  and abort the in-flight poll on timeout. On a healthy generation the
-      //  deadline never fires; on a stall it throws into the existing
-      //  catch → classifyFalVideoError → op marked 'failed', identical to any
-      //  other provider error.
-      const subscribeTimeoutMs = Number(process.env.SIRAGPT_VIDEO_SUBSCRIBE_TIMEOUT_MS) || 600000;
-      const subscribeAbort = new AbortController();
-      let subscribeTimer = null;
-      const result = await Promise.race([
-        fal.subscribe(endpoint, {
-          input: requestPayload,
-          logs: true,
-          abortSignal: subscribeAbort.signal,
-          onQueueUpdate: (update) => {
-            let updateData = activeOperations.get(operationId) || {};
-            if (updateData.status === 'cancelled') return;
-            updateData.queuePosition = update.queue_position;
-            updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
-            updateData.updatedAt = new Date().toISOString();
-            activeOperations.set(operationId, updateData);
-
-            // Log progress updates
-            if (update.logs) {
-              update.logs.forEach(log => {
-                console.log(`📊 ${operationId}: ${log.message}`);
-              });
-            }
-          },
-        }),
-        new Promise((_resolve, reject) => {
-          subscribeTimer = setTimeout(() => {
-            try { subscribeAbort.abort(); } catch { /* noop */ }
-            reject(new Error(`fal.subscribe timed out after ${subscribeTimeoutMs}ms`));
-          }, subscribeTimeoutMs);
-          subscribeTimer.unref?.();
-        }),
-      ]).finally(() => { if (subscribeTimer) clearTimeout(subscribeTimer); });
-
-      console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
-      if (activeOperations.get(operationId)?.status === 'cancelled') {
-        console.log(`🛑 Video generation result ignored because operation was cancelled: ${operationId}`);
-        return;
-      }
-
-      const videoUrl = extractFalVideoUrl(result);
-      if (!videoUrl) {
-        throw new Error('Invalid API response: Missing video URL');
-      }
-
-      const resultData = result?.data || result || {};
-      const resultVideo = resultData.video || {};
-
-      // Download and save the video
-      console.log(`📥 Downloading video from: ${videoUrl}`);
-      const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(Number(process.env.VIDEO_FETCH_TIMEOUT_MS) || 120000) });
-      if (!resp.ok) {
-        // Drain the undici response body so the socket returns to the pool
-        // instead of leaking until GC across retries on a flaky CDN.
-        try { await resp.body?.cancel?.(); } catch { /* noop */ }
-        throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
-      }
-
-      const videoBuffer = await resp.arrayBuffer();
-      const videoBytes = Buffer.from(videoBuffer);
-
-      // Store the generated video off the VM in R2 (key mirrors the filename so
-      // /video/watch + /video/download serve it directly from R2). Falls back to
-      // local disk only when R2 is disabled (dev without R2 secrets).
-      if (objectStorage.enabled()) {
-        await objectStorage.putBuffer({ key: objectStorage.videoKey(filename), buffer: videoBytes, contentType: 'video/mp4' });
-        console.log(`☁️ Video stored in R2: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
-      } else {
-        ensureDir(videosDir);
-        fs.writeFileSync(path.join(videosDir, filename), videoBytes);
-        console.log(`📁 Video saved successfully: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
-      }
-
-      //  Update operation status to completed with enhanced metadata
-      let completedData = activeOperations.get(operationId) || {};
-      completedData.status = 'completed';
-      completedData.result = {
-        video_url: `/video/watch/${filename}`,
-        download_url: `/video/download/${filename}`,
-        filename,
-        duration,
-        file_size: videoBuffer.byteLength,
-        resolution: resultVideo.width && resultVideo.height ?
-          `${resultVideo.width}x${resultVideo.height}` : resolution,
-        aspect_ratio: aspectRatio,
-        audio: Boolean(audio),
-        fal_video_url: videoUrl,
-        request_id: result.requestId || resultData.request_id || null,
-        sourceImageUrl: sourceImageUrls[0] || null,
-        sourceImageUrls,
-        processedImageUrl,
-        processedImageUrls,
-        imageCount: sourceImageUrls.length,
-        generationType: sourceImageUrls.length > 1 ? 'reference-to-video' : (sourceImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
-        requestedModel: model,
-        model: endpoint,
-        prompt: prompt,
-        originalPrompt: directionMeta.originalPrompt,
-        enhanced_prompt: prompt,
-        continuityMode: directionMeta.continuityMode || operationData.continuityMode || 'none',
-        settingsLocked: directionMeta.settingsLocked.length ? directionMeta.settingsLocked : (operationData.settingsLocked || []),
-        completedAt: new Date().toISOString()
-      };
-      completedData.updatedAt = new Date().toISOString();
-      activeOperations.set(operationId, completedData);
-
-      console.log(`🎉 Video generation completed successfully for ${operationId}`);
-      break; // Success, exit retry loop
-
-    } catch (error) {
-      console.error(`❌ Video generation failed for ${operationId} (attempt ${retryCount + 1}/${maxRetries}):`, error);
-      if (activeOperations.get(operationId)?.status === 'cancelled') {
-        console.log(`🛑 Video generation retry stopped because operation was cancelled: ${operationId}`);
-        return;
-      }
-      const classified = classifyFalVideoError(error, { endpoint: activeEndpoint || model });
-
-      //  Enhanced error logging
-      if (classified.statusCode === 422 || classified.statusCode === 400) {
-        console.error('📋 Validation Error Details:', classified.body);
-      }
-
-      retryCount++;
-      if (!classified.retryable || retryCount >= maxRetries) {
-        let failedData = activeOperations.get(operationId) || {};
-        failedData.status = 'failed';
-        failedData.error = classified.message;
-        failedData.errorDetails = {
-          totalAttempts: retryCount,
-          timestamp: new Date().toISOString(),
-          error_type: error?.constructor?.name || 'Error',
-          code: classified.code,
-          retryable: classified.retryable,
-          provider_message: classified.providerMessage,
-          original_error: error?.message,
-          status_code: classified.statusCode,
-          response_body: classified.body,
-          generationType: sourceImageUrls.length > 1 ? 'reference-to-video' : (sourceImageUrls.length === 1 ? 'image-to-video' : 'text-to-video'),
-          endpoint: activeEndpoint || model
-        };
-        failedData.updatedAt = new Date().toISOString();
-        activeOperations.set(operationId, failedData);
-
-        console.error(` Final failure for ${operationId} after ${retryCount} attempts: ${classified.code}`);
-        break;
-      }
-
-      // Wait before retry with exponential backoff
-      const waitTime = Math.pow(2, retryCount) * 1000;
-      console.log(` Waiting ${waitTime}ms before retry ${retryCount + 1}/${maxRetries}...`);
-      await new Promise(resolve => setTimeout(resolve, waitTime));
-    }
-  }
-}
-
-// Helper function to determine image MIME type
 function getImageMimeType(filename) {
   const ext = path.extname(filename).toLowerCase();
   switch (ext) {
@@ -1355,75 +1057,19 @@ function getImageMimeType(filename) {
 
 router.post('/cancel/:operationId', authenticateToken, async (req, res) => {
   try {
-    const { operationId } = req.params;
-    const operationData = activeOperations.get(operationId);
-
-    if (!operationData) {
-      return res.status(404).json({
-        error: 'Operation not found',
-        message: 'The video generation operation was not found or has expired.',
-      });
-    }
-
-    if (operationData.userId !== req.user.id) {
-      return res.status(403).json({
-        error: 'Access denied',
-        message: 'You do not have permission to cancel this operation.',
-      });
-    }
-
-    if (operationData.status === 'completed' || operationData.status === 'failed') {
-      return res.json(operationData);
-    }
-
-    const cancelledData = {
-      ...operationData,
-      status: 'cancelled',
-      error: 'Video generation cancelled by user',
-      cancelledAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    activeOperations.set(operationId, cancelledData);
-    console.log(`🛑 Video generation cancelled by user: ${operationId}`);
-    res.json(cancelledData);
-  } catch (error) {
-    console.error('❌ Error cancelling video operation:', error);
-    res.status(500).json({ error: error.message || 'Failed to cancel video operation' });
-  }
+    const job = await getMediaJobStore().cancel(req.user.id, req.params.operationId);
+    if (!job || job.lane !== 'video') return res.status(404).json({ error: 'Operation not found' });
+    res.json(publicVideoOperation(job));
+  } catch { res.status(503).json({ code: 'E_PROVIDER', error: 'No se pudo cancelar. Reintenta.' }); }
 });
 
-// Check video generation status - THIS WAS MISSING!
 router.get('/status/:operationId', authenticateToken, async (req, res) => {
   try {
-    const { operationId } = req.params;
-    console.log('📊 Checking status for operation:', operationId);
-
-    const operationData = activeOperations.get(operationId);
-
-    if (!operationData) {
-      return res.status(404).json({
-        error: 'Operation not found',
-        message: 'The video generation operation was not found or has expired.'
-      });
-    }
-
-    // Check if this operation belongs to the current user
-    if (operationData.userId !== req.user.id) {
-      return res.status(403).json({
-        error: 'Access denied',
-        message: 'You do not have permission to access this operation.'
-      });
-    }
-
-    console.log(`📋 Operation ${operationId} status:`, operationData.status);
-    res.json(operationData);
-
-  } catch (error) {
-    console.error('❌ Error checking video status:', error);
-    res.status(500).json({ error: error.message });
-  }
+    const job = await getMediaJobStore().owned(req.params.operationId, req.user.id);
+    if (!job || job.lane !== 'video') return res.status(404).json({ error: 'Operation not found' });
+    res.json(publicVideoOperation(job));
+  } catch { res.status(503).json({ code: 'E_PROVIDER', error: 'No se pudo consultar el vídeo. Reintenta.' }); }
 });
-
 
 // Add a download endpoint for proper file downloads
 router.get('/download/:filename', async (req, res) => {
@@ -1578,14 +1224,11 @@ router.get('/history', authenticateToken, async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const offset = (page - 1) * limit;
 
-    // Get user's video operations from activeOperations (materialize + filter
-    // the map ONCE; total derives from the same array's length).
-    const userVideos = Array.from(activeOperations.values())
-      .filter(op => op.userId === req.user.id);
-    const total = userVideos.length;
-    const userOperations = userVideos
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .slice(offset, offset + limit);
+    const store = getMediaJobStore();
+    const [rows, total] = await Promise.all([
+      store.list(req.user.id, 'video', { limit, offset }), store.count(req.user.id, 'video'),
+    ]);
+    const userOperations = rows.map(publicVideoOperation);
 
     res.json({
       videos: userOperations,

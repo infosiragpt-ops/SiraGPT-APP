@@ -20,10 +20,14 @@ describe("long paste chip processing sync (source contract)", () => {
     )
   })
 
-  it("keeps a composer-wide safety net that re-reads processing attachments until they settle", () => {
+  it("shares the composer safety net with chip polling and re-reads all processing attachments until they settle", () => {
     assert.match(chatInterface, /const processingWatchKey = collectProcessingFileIds\(uploadedFiles\)\.join\(','\);/)
-    assert.match(chatInterface, /await apiClient\.getFilesProcessingStatus\(ids\.slice\(start, start \+ 50\)\)/)
-    assert.match(chatInterface, /if \(!cancelled\) timer = setTimeout\(tick, attempts < 15 \? 2000 : 5000\);/)
-    assert.match(chatInterface, /\}, \[processingWatchKey, setUploadedFiles\]\);/)
+    assert.match(chatInterface, /return subscribeToFileProcessingStatuses\(ids,/)
+    assert.match(chatInterface, /handleFileProcessingStatusChange\(/)
+    const hook = fs.readFileSync(path.join(process.cwd(), "hooks/use-file-processing-status.ts"), "utf8")
+    assert.match(hook, /entries\.slice\(start, start \+ 50\)/)
+    assert.match(hook, /\/files\/processing-status\?ids=/)
+    assert.match(hook, /navigator\.onLine/)
+    assert.doesNotMatch(chatInterface.slice(chatInterface.indexOf("const processingWatchKey ="), chatInterface.indexOf("const retryUpload =")), /getFilesProcessingStatus/)
   })
 })

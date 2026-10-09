@@ -40,16 +40,33 @@ async function harness({ source = true, chatOwned = true, editable = true, user 
         { files: [{ type: 'image/png', fileId: 'beach', version: 2, aspectRatio: '16:9', rootFileId: 'original' }] },
       ] : []; },
       create: async ({ data }) => { calls.messages.push(data); return { id: `message-${calls.messages.length}` }; },
+      upsert: async ({ create }) => { calls.messages.push(create); return { id: create.id }; },
     },
+    user: { findUnique: async () => currentUser },
     aiModel: { findUnique: async () => ({ name: 'gpt-image-2', provider: 'OpenAI', isActive: true, type: 'IMAGE' }) },
   };
-  let handler;
+  let handler, workerRunner, currentUser;
+  const queued = new Map(), imageBytes = new Map();
+  const nativeRequire = createRequire(routeFile);
   const chain = new Proxy(() => {}, { get: () => () => chain });
   const context = {
     router: { post: (_path, ...args) => { handler = args.at(-1); } },
     body: () => chain, authenticateToken: () => {}, requirePaidPlan: () => () => {},
     validationResult: () => ({ isEmpty: () => true }),
-    require: createRequire(routeFile), Buffer, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+    require: (name) => {
+      if (name === '../services/media/job-worker') return { registerMediaRunner(_kind, runner) { workerRunner = runner; } };
+      if (name === '../services/media/job-store') return { requestKey: () => 'fixture-key', getMediaJobStore: () => ({ async admit(spec) {
+        const cap = checkPaidTokenCap(currentUser);
+        if (!cap.ok) throw Object.assign(new Error(cap.body.error), { status: cap.status, code: 'E_QUOTA' });
+        const job = { id: 'fixture-job', user_id: 'owner', status: 'queued', payload: spec.payload, checkpoint: {} };
+        queued.set(job.id, job); return { job, created: true };
+      } }) };
+      if (name === '../services/media/image-checkpoint') return {
+        async stageImageResults(id, values) { imageBytes.set(id, values); return [{ ref: id }]; },
+        async restoreImageResults(values) { return imageBytes.get(values[0].ref); },
+      };
+      return nativeRequire(name);
+    }, Buffer, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
     console: { log() {}, warn() {}, error() {} },
     honorPickerModel: (model, { provider }) => ({ model, provider }), isGrokImageModelName: () => false,
     normalizeImageAspectRatio: (ratio) => ratio || '1:1', normalizeImageQuality: (quality) => quality || '2K', normalizeImageCount: (count) => Number(count) || 1,
@@ -76,14 +93,23 @@ async function harness({ source = true, chatOwned = true, editable = true, user 
     IMAGE_ASPECT_RATIOS: { '1:1': {}, '3:4': {}, '16:9': {}, '9:16': {} },
   };
   vm.runInNewContext(routeSource.slice(routeStart, routeEnd), context, { filename: routeFile });
-  async function request(body) {
+  async function request(body, { dispatch = true } = {}) {
     const res = new EventEmitter(); res.statusCode = 200; res.writableEnded = false;
     res.status = (code) => { res.statusCode = code; return res; };
     res.json = (payload) => { res.body = payload; res.writableEnded = true; return res; };
     res.writeHead = (code) => { res.statusCode = code; res.headersSent = true; };
     res.flushHeaders = () => {}; res.write = () => {};
     res.end = (payload) => { res.body = payload ? JSON.parse(payload) : null; res.writableEnded = true; };
-    await handler({ body: { prompt: 'edit', chatId: 'chat', provider: 'OpenAI', model: 'gpt-image-2', ...body }, user: { id: 'owner', ...user } }, res);
+    currentUser = { id: 'owner', ...user };
+    res.setHeader = () => {};
+    await handler({ body: { prompt: 'edit', chatId: 'chat', provider: 'OpenAI', model: 'gpt-image-2', ...body }, user: currentUser }, res);
+    if (res.statusCode === 202 && dispatch) {
+      const job = queued.get(res.body.jobId), completed = [];
+      const result = await workerRunner({ jobId: job.id, job, signal: new AbortController().signal,
+        onCompleted: callback => completed.push(callback), checkpoint: async patch => Object.assign(job.checkpoint, patch) }, job.payload);
+      for (const callback of completed) await callback(prisma, result);
+      res.statusCode = 200; res.body = result;
+    }
     return res;
   }
   return { request, calls, sourceBytes };
@@ -97,7 +123,7 @@ test('canonical route uses the same beach for vertical follow-up and stores link
   const spec = calls.edit[0]; assert.equal(spec.model, 'gpt-image-2'); assert.equal(spec.aspectRatio, '3:4'); assert.equal(spec.quality, '4K'); assert.equal(spec.n, 2); assert.equal(spec.failover, false);
   assert.ok(spec.maskBuffer); assert.equal(calls.saves[0].options.preservePixels, true);
   const file = res.body.files[0]; assert.equal(file.parentFileId, 'beach'); assert.equal(file.rootFileId, 'original'); assert.equal(file.version, 3); assert.equal(file.width / file.height, 3 / 4);
-  assert.equal(res.body.messageId, 'message-2'); assert.equal(res.body.chatId, 'chat');
+  assert.equal(res.body.messageId, 'image-fixture-job-assistant'); assert.equal(res.body.chatId, 'chat');
   const kept = await sharp(calls.saves[0].buffer).extract({ left: Math.floor((file.width - 8) / 2), top: Math.floor((file.height - 4) / 2), width: 8, height: 4 }).raw().toBuffer();
   assert.deepEqual(kept, await sharp(sourceBytes).raw().toBuffer());
   assert.equal(JSON.parse(calls.messages[1].files)[0].parentFileId, 'beach');
@@ -118,7 +144,7 @@ test('image route preserves paid quota and the canonical superAdmin exemption', 
     assert.equal(calls.generate.length, isSuperAdmin ? 1 : 0);
     if (!isSuperAdmin) {
       assert.equal(res.body.error, 'Monthly API limit exceeded');
-      assert.deepEqual(res.body.usage, { current: 500, limit: 500 });
+      assert.equal(res.body.code, 'E_QUOTA');
       assert.equal(calls.messages.length, 0);
     }
   }
@@ -157,4 +183,11 @@ test('remove background binds a real provider transparency parameter and rejects
   const supported = await request({ operation: 'edit', fileId: 'beach', background: 'transparent' });
   assert.ok(!supported.body.error); assert.equal(calls.edit[0].background, 'transparent');
   assert.equal(supported.body.files[0].background, 'transparent');
+});
+
+test('image admission returns202 before provider dispatch', async () => {
+  const { request, calls } = await harness();
+  const admitted = await request({ operation: 'edit' }, { dispatch: false });
+  assert.equal(admitted.statusCode, 202); assert.equal(admitted.body.jobId, 'fixture-job');
+  assert.equal(calls.generate.length + calls.edit.length, 0);
 });

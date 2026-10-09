@@ -123,7 +123,7 @@ function save(name, value) {
 async function history(db) {
   return (await db.query('SELECT id,migration_name,checksum,finished_at,rolled_back_at,started_at,applied_steps_count FROM "_prisma_migrations" ORDER BY migration_name')).rows;
 }
-async function snapshot(db, omitNewUserColumn) {
+async function snapshot(db, omitNewUserColumn, columnsByTable = null) {
   // Refuse unsupported data locations rather than silently excluding them from proof.
   const others = (await db.query("SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','f','m') AND n.nspname NOT IN ('public','information_schema') AND n.nspname !~ '^pg_' LIMIT 1")).rows;
   assert.equal(others.length, 0, 'REHEARSAL_UNSUPPORTED_NONPUBLIC_DATA');
@@ -140,7 +140,11 @@ async function snapshot(db, omitNewUserColumn) {
       WHERE a.attrelid=$1::regclass AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, [qualified])).rows;
     const indexes = (await db.query('SELECT indexdef FROM pg_indexes WHERE schemaname=$1 AND tablename=$2 ORDER BY indexname', ['public', name])).rows;
     const constraints = (await db.query('SELECT conname,pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid=$1::regclass ORDER BY conname', [qualified])).rows;
-    const expression = omitNewUserColumn && name === 'users' ? "to_jsonb(t)-'docQuotaEpoch'" : 'to_jsonb(t)';
+    let expression = omitNewUserColumn && name === 'users' ? "to_jsonb(t)-'docQuotaEpoch'" : 'to_jsonb(t)';
+    if (columnsByTable?.[name]) {
+      const added = columns.filter(column => !columnsByTable[name].includes(column.name)).map(column => column.name);
+      if (added.length) expression = `to_jsonb(t)-ARRAY[${added.map(column => "'" + column.replaceAll("'", "''") + "'").join(',')}]::text[]`;
+    }
     await db.query(`DECLARE rehearsal_rows NO SCROLL CURSOR FOR SELECT (${expression})::text AS value FROM ${qualified} t ORDER BY (${expression})::text COLLATE "C"`);
     const hash = crypto.createHash('sha256'); let count = 0;
     for (;;) {
@@ -167,9 +171,9 @@ async function snapshot(db, omitNewUserColumn) {
   const catalogSha256 = digest(canonical({ routines, views, triggers, policies }));
   return { tables, sequences, enums, extensions, catalogSha256, history: await history(db) };
 }
-async function consistentSnapshot(db, omitNewUserColumn = false) {
+async function consistentSnapshot(db, omitNewUserColumn = false, columnsByTable = null) {
   await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-  try { const result = await snapshot(db, omitNewUserColumn); await db.query('COMMIT'); return result; }
+  try { const result = await snapshot(db, omitNewUserColumn, columnsByTable); await db.query('COMMIT'); return result; }
   catch (error) { await db.query('ROLLBACK'); throw error; }
 }
 function deployMigration(database, source) {
@@ -289,4 +293,4 @@ if (require.main === module) main().catch(error => {
   console.error(JSON.stringify({ status: 'failed', code: typeof error.code === 'string' && /^[A-Z0-9_]{2,64}$/.test(error.code) ? error.code : 'REHEARSAL_FAILED', ...(reason ? { reason } : {}) }));
   process.exitCode = 1;
 });
-module.exports = { MIGRATION, SQL_SHA256, HOST, FORMAT, NEW_TABLES, options, connection, manifest, sourceAttestation, verifySourceAttestation, verifyHistory, verifyUpgrade, digest, quoteIdentifier };
+module.exports = { MIGRATION, SQL_SHA256, HOST, FORMAT, NEW_TABLES, options, connection, manifest, sourceAttestation, verifySourceAttestation, verifyHistory, verifyUpgrade, digest, quoteIdentifier, consistentSnapshot };

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ErrorBoundary } from '@/components/error-boundary'
 import * as analytics from '@/lib/analytics'
+import { reloadOnceForStaleBundle } from '@/lib/client-bundle-recovery'
+vi.mock('@/lib/client-bundle-recovery', () => ({ reloadOnceForStaleBundle: vi.fn(() => false) }))
 
 // Mock lucide-react icons
 vi.mock('lucide-react', () => ({
@@ -34,6 +36,12 @@ describe('ErrorBoundary', () => {
     vi.clearAllMocks()
     // Suppress console.error during error boundary tests
     vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  it('attempts guarded stale-bundle recovery when a message chunk fails', () => {
+    function Stale() { throw Object.assign(new Error('Loading chunk 42 failed'), { name: 'ChunkLoadError' }) }
+    render(<ErrorBoundary><Stale /></ErrorBoundary>)
+    expect(reloadOnceForStaleBundle).toHaveBeenCalledWith(expect.objectContaining({ name: 'ChunkLoadError' }))
   })
 
   it('renders children when no error occurs', () => {

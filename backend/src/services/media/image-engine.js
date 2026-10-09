@@ -30,6 +30,7 @@
  */
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.IMAGE_GEN_TIMEOUT_MS) || 120_000;
+const { readLimitedResponse, LIMITS } = require('./transfer');
 
 const PROVIDERS = ['openai', 'gemini', 'fal', 'openrouter', 'xai'];
 
@@ -201,6 +202,7 @@ async function imageResponseDataToBase64s(data, signal) {
   const doFetch = getFetch();
   for (const item of data || []) {
     if (item?.b64_json) {
+      if (item.b64_json.length > Math.ceil(LIMITS.image / 3) * 4) throw Object.assign(new Error('La imagen supera el tamaño permitido.'), { code: 'MEDIA_TOO_LARGE' });
       out.push(item.b64_json);
       continue;
     }
@@ -219,7 +221,7 @@ async function imageResponseDataToBase64s(data, signal) {
       try { await resp?.body?.cancel?.(); } catch { /* noop */ }
       throw new Error(`OpenAI: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
     }
-    out.push(Buffer.from(await resp.arrayBuffer()).toString('base64'));
+    out.push((await readLimitedResponse(resp, { signal })).toString('base64'));
   }
   return out.filter(Boolean);
 }
@@ -231,7 +233,7 @@ function createOpenAIClient({ apiKey, baseURL, defaultHeaders }) {
   // eslint-disable-next-line global-require
   const OpenAI = require('openai');
   const Ctor = OpenAI.OpenAI || OpenAI;
-  return new Ctor({ apiKey, ...(baseURL ? { baseURL } : {}), ...(defaultHeaders ? { defaultHeaders } : {}) });
+  return new Ctor({ apiKey, maxRetries: 0, ...(baseURL ? { baseURL } : {}), ...(defaultHeaders ? { defaultHeaders } : {}) });
 }
 
 function createGoogleGenAIClient() {
@@ -389,11 +391,19 @@ async function generateWithOpenRouter({ model, prompt, ratio, quality, n, signal
 async function generateWithFal({ model, prompt, ratio, n, signal, timeoutMs }) {
   const fal = createFalClient();
   const endpoint = String(model || DEFAULT_MODEL_BY_PROVIDER.fal).trim() || DEFAULT_MODEL_BY_PROVIDER.fal;
+  const input = { prompt, image_size: falImageSizeFor(ratio), num_images: Math.min(n, 4) };
+  const once = async () => {
+    // Keep the injected offline provider seam; production submission never
+    // uses the SDK's automatic paid-POST retries.
+    if (_falFactory) return fal.subscribe(endpoint, { input, logs: false, abortSignal: signal });
+    const accepted = await require('./fal-submit-once').submitFalQueueOnce(endpoint, { input, signal, credentials: providerApiKey('fal'), fetchImpl: getFetch() });
+    const requestId = accepted.request_id;
+    if (!requestId) throw Object.assign(new Error('No se confirmó la solicitud.'), { code: 'MEDIA_DISPATCH_UNKNOWN' });
+    await fal.queue.subscribeToStatus(endpoint, { requestId, logs: false, abortSignal: signal });
+    return fal.queue.result(endpoint, { requestId, abortSignal: signal });
+  };
   const result = await withTimeout(
-    fal.subscribe(endpoint, {
-      input: { prompt, image_size: falImageSizeFor(ratio), num_images: Math.min(n, 4) },
-      logs: false,
-    }),
+    once(),
     timeoutMs,
     `fal:${endpoint}`
   );
@@ -410,7 +420,7 @@ async function generateWithFal({ model, prompt, ratio, n, signal, timeoutMs }) {
       try { await resp?.body?.cancel?.(); } catch { /* noop */ }
       throw new Error(`fal.ai: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
     }
-    b64s.push(Buffer.from(await resp.arrayBuffer()).toString('base64'));
+    b64s.push((await readLimitedResponse(resp, { signal })).toString('base64'));
   }
   return b64s;
 }

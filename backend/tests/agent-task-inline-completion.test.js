@@ -23,7 +23,7 @@ function harness({ update = async () => ({}) } = {}) {
   const context = {
     Date: Clock, setTimeout, clearTimeout,
     task, streamState: state, taskId: task.taskId,
-    taskStore: { markTaskStatus: (_task, status) => writes.push(status) },
+    taskStore: { markTaskStatusAsync: async (_task, status) => writes.push(status) },
     prisma: { message: { update } },
     serializeAgentState: JSON.stringify,
     artifacts: [], displayGoal: 'Synthetic fixture', maxSteps: 1, maxRuntimeMs: 1000,

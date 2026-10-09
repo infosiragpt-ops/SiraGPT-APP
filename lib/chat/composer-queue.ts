@@ -83,7 +83,7 @@ function encodedBytes(value: unknown): number {
 
 export function serializeComposerQueueFiles(files: unknown[]): PersistedComposerFile[] {
   if (!Array.isArray(files)) return []
-  return files.slice(0, MAX_FILES_PER_ITEM).flatMap((file) => {
+  return files.flatMap((file) => {
     if (!file || typeof file !== "object") return []
     const source = file as Record<string, unknown>
     const uploadFileId = resolveUploadFileId(source)
@@ -97,7 +97,7 @@ export function serializeComposerQueueFiles(files: unknown[]): PersistedComposer
       if (value !== undefined) persisted[field] = value
     }
     if (!persisted.id && !persisted.fileId && !persisted.attachmentId) persisted.id = uploadFileId
-    return encodedBytes(persisted) <= MAX_FILE_BYTES ? [persisted] : []
+    return encodedBytes(persisted) <= MAX_FILE_BYTES ? [persisted] : [{ id: uploadFileId, name: String(source.name || source.originalName || "Archivo").slice(0, 500) }]
   })
 }
 
@@ -143,7 +143,7 @@ export function createPersistedComposerQueueItem(input: {
     id: input.id,
     ownerId: input.ownerId.trim(),
     chatId: typeof input.chatId === "string" && input.chatId.trim() ? input.chatId : null,
-    msg: input.msg.slice(0, MAX_MESSAGE_CHARS),
+    msg: input.msg,
     files: serializeComposerQueueFiles(input.files),
     idempotencyKey: input.idempotencyKey,
     createdAt: input.createdAt || new Date().toISOString(),
@@ -191,7 +191,6 @@ export function readPersistedComposerQueue(ownerId: string): PersistedComposerQu
     return parsed
       .map((item) => sanitizePersistedQueueItem(item, ownerId.trim()))
       .filter((item): item is PersistedComposerQueueItem => Boolean(item))
-      .slice(-MAX_QUEUE_ITEMS)
   } catch {
     return []
   }
@@ -205,21 +204,16 @@ export function writePersistedComposerQueue(
   const normalizedOwner = ownerId.trim()
   const key = storageKey(normalizedOwner)
   if (!key) return false
+  // Admission is atomic: never acknowledge a task by evicting older ones.
+  if (items.length > MAX_QUEUE_ITEMS || items.some(item => item.msg.length > MAX_MESSAGE_CHARS || item.files.length > MAX_FILES_PER_ITEM)) return false
   const safeItems = items
     .map((item) => sanitizePersistedQueueItem(item, normalizedOwner))
     .filter((item): item is PersistedComposerQueueItem => Boolean(item))
-    .slice(-MAX_QUEUE_ITEMS)
+  if (safeItems.length !== items.length) return false
   try {
     if (safeItems.length === 0) window.localStorage.removeItem(key)
     else {
-      // Retain newest tasks if storage is under pressure. The queue remains
-      // ordered, bounded and far below common browser localStorage quotas.
-      let boundedItems = safeItems
-      let serialized = JSON.stringify(boundedItems)
-      while (boundedItems.length > 1 && encodedBytes(serialized) > MAX_STORAGE_BYTES) {
-        boundedItems = boundedItems.slice(1)
-        serialized = JSON.stringify(boundedItems)
-      }
+      const serialized = JSON.stringify(safeItems)
       if (encodedBytes(serialized) > MAX_STORAGE_BYTES) return false
       window.localStorage.setItem(key, serialized)
     }

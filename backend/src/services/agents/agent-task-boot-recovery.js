@@ -82,15 +82,30 @@ async function resumeCheckpointedTasks({
         retryOf: snapshot.taskId,
         resumeCheckpoint: checkpoint,
       }, { priority: 1, jobId: `${snapshot.taskId}-boot-resume-${Date.now()}` });
-      taskStore.appendTaskEvent(
-        { ...snapshot, status: 'queued', jobId: String(job.id) },
-        {
-          type: 'repair_attempt',
-          status: 'queued',
-          message: `Reanudando automáticamente desde el paso ${checkpoint.stepsCompleted} tras un reinicio del servidor.`,
-        },
-        { ...(snapshot.streamState || {}), done: false, error: null },
-      );
+      // Enqueue may hand the task to a worker before it resolves. Never
+      // replace that worker's fresh progress with the pre-enqueue snapshot.
+      const current = taskStore.readTaskSnapshot(snapshot.taskId);
+      const jobId = String(job.id);
+      const workerOwnsAttempt = current && String(current.jobId || '') === jobId;
+      const stillRecoveredAttempt = current && String(current.jobId || '') === String(snapshot.jobId || '')
+        && current.status === snapshot.status;
+      if (!workerOwnsAttempt && !stillRecoveredAttempt) {
+        logWarn(logger, { taskId: snapshot.taskId, jobId }, 'agent_task_boot_resume_superseded');
+        continue;
+      }
+      if (!workerOwnsAttempt || current.status === 'queued') {
+        await taskStore.appendTaskEventAsync(
+          { ...current, status: 'queued', jobId },
+          {
+            type: 'repair_attempt',
+            status: 'queued',
+            message: `Reanudando automáticamente desde el paso ${checkpoint.stepsCompleted} tras un reinicio del servidor.`,
+          },
+          { ...(current.streamState || {}), done: false, error: null },
+        );
+      } else {
+        await taskStore.flushTaskStore?.();
+      }
       resumed += 1;
       logWarn(logger, { taskId: snapshot.taskId, step: checkpoint.stepsCompleted, jobId: String(job.id) }, 'agent_task_boot_resume_enqueued');
     } catch (err) {

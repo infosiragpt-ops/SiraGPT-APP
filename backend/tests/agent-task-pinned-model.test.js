@@ -26,6 +26,7 @@ function clearAgentModules() {
   for (const modulePath of [
     '../src/services/agents/agent-task-runner',
     '../src/services/agents/task-store',
+    '../src/routes/agent-task',
   ]) {
     try { delete require.cache[require.resolve(modulePath)]; } catch { /* ignore */ }
   }

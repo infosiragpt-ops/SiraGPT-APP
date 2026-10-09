@@ -27,7 +27,8 @@ const videosDir = path.join(uploadRoot, 'videos');
 
 const MODEL_LABEL = 'Sira Voz';
 
-function outputName(prefix, ext) {
+function outputName(prefix, ext, jobId) {
+  if (jobId) return `siravoz-${prefix}-${String(jobId).replace(/[^a-z0-9_-]/gi, '')}.${ext}`;
   return `siravoz-${prefix}-${Date.now()}-${randomUUID().replace(/-/g, '').slice(0, 10)}.${ext}`;
 }
 
@@ -137,29 +138,32 @@ async function runDubJob(ctx, input, options = {}) {
   const targetName = voiceStudio.languageName(input.targetLanguage);
   const targetCode = voiceStudio.languageCode(input.targetLanguage) || 'es';
 
-  await ctx.progress({ stage: 'subiendo a Sira Voz', progress: 2 });
-  const upload = await voiceStudio.dubUpload({
-    filePath: input.sourcePath,
-    filename: input.filename,
-    mime: input.mime,
-    inputType,
-    sourceLang: input.sourceLanguage,
-    signal,
-  }, options);
-  const vsJobId = upload.job_id;
-  const prepTaskId = upload.task_id;
+  const state = ctx.job?.checkpoint || {};
+  const checkpoint = async (patch) => { await ctx.checkpoint?.(patch); Object.assign(state, patch); };
+  if (state.dispatchState === 'submitting') throw Object.assign(new Error('No se pudo confirmar el inicio de Sira Voz.'), { code: 'MEDIA_DISPATCH_UNKNOWN' });
+  let vsJobId = state.vsJobId, prepTaskId = state.prepTaskId;
+  if (!vsJobId) {
+    await ctx.progress({ stage: 'subiendo a Sira Voz', progress: 2 });
+    await checkpoint({ dispatchState: 'submitting' });
+    const upload = await voiceStudio.dubUpload({ filePath: input.sourcePath, filename: input.filename,
+      mime: input.mime, inputType, sourceLang: input.sourceLanguage, signal }, options);
+    vsJobId = upload.job_id; prepTaskId = upload.task_id;
+    if (!vsJobId || !prepTaskId) throw Object.assign(new Error('No se confirmó la preparación.'), { code: 'MEDIA_DISPATCH_UNKNOWN' });
+    await checkpoint({ vsJobId, prepTaskId, providerRequestId: prepTaskId, dispatchState: 'submitted' });
+  }
   await ctx.progress({ stage: 'preparando el audio', progress: 5, result: { __private: { vsJobId } } });
 
   await voiceStudio.waitForDubReady(prepTaskId, {
     signal,
     onEvent: (evt) => {
       const mapped = prepStageLabel(evt);
-      if (mapped) void ctx.progress(mapped);
+      if (mapped) void ctx.progress(mapped).catch(() => {});
     },
   }, options);
 
   await ctx.progress({ stage: 'transcribiendo (reconocimiento de voz)', progress: 24 });
-  const transcript = await voiceStudio.dubTranscribe(vsJobId, { numSpeakers: input.numSpeakers || null, signal }, options);
+  const transcript = state.transcript || await voiceStudio.dubTranscribe(vsJobId, { numSpeakers: input.numSpeakers || null, signal }, options);
+  if (!state.transcript) await checkpoint({ transcript });
   const segments = transcript.segments.filter((s) => String(s.text || '').trim());
   if (!segments.length) {
     throw Object.assign(new Error('No se detectó voz en el archivo. Prueba con un vídeo o audio con diálogo claro.'), { code: 'NO_SPEECH' });
@@ -167,15 +171,19 @@ async function runDubJob(ctx, input, options = {}) {
   const sourceLang = transcript.sourceLang || voiceStudio.languageCode(input.sourceLanguage) || null;
 
   await ctx.progress({ stage: `traduciendo ${segments.length} frases al ${languageSpanish(targetName)}`, progress: 44 });
-  const translation = await translate.translateSegments(
+  const translation = state.translation || await translate.translateSegments(
     segments.map((s) => ({ id: s.id, text: s.text })),
     { targetLanguage: targetName, sourceLanguage: sourceLang, signal },
     options,
   );
 
+  if (!state.translation) await checkpoint({ translation });
   await ctx.progress({ stage: 'generando las voces dobladas', progress: 50 });
   const dubSegments = buildDubSegments(segments, translation.segments, { voiceProfileId: input.voiceProfileId || null });
-  const generate = await voiceStudio.dubGenerate(vsJobId, {
+  let generate = { taskId: state.generateTaskId };
+  if (!generate.taskId) {
+    await checkpoint({ providerRequestId: null, dispatchState: 'submitting' });
+    generate = await voiceStudio.dubGenerate(vsJobId, {
     segments: dubSegments,
     language: targetName,
     language_code: targetCode,
@@ -183,7 +191,9 @@ async function runDubJob(ctx, input, options = {}) {
     num_step: 16,
     guidance_scale: 2.0,
   }, { signal }, options);
-  if (!generate.taskId) throw new Error('VoiceStudio no devolvió el identificador de la generación');
+    if (!generate.taskId) throw Object.assign(new Error('Sira Voz no devolvió el identificador.'), { code: 'MEDIA_DISPATCH_UNKNOWN' });
+    await checkpoint({ generateTaskId: generate.taskId, providerRequestId: generate.taskId, dispatchState: 'submitted' });
+  }
 
   const total = dubSegments.length;
   await voiceStudio.waitForDubDone(generate.taskId, {
@@ -191,24 +201,25 @@ async function runDubJob(ctx, input, options = {}) {
     onEvent: (evt) => {
       if (evt?.type === 'progress' && Number.isFinite(Number(evt.current)) && total > 0) {
         const fraction = Math.min(1, Math.max(0, Number(evt.current) / (Number(evt.total) || total)));
-        void ctx.progress({ progress: 50 + Math.round(fraction * 40) });
+        void ctx.progress({ progress: 50 + Math.round(fraction * 40) }).catch(() => {});
       }
     },
   }, options);
 
+  await checkpoint({ dispatchState: 'returned' });
   await ctx.progress({ stage: 'exportando el resultado', progress: 92 });
   let outputPath;
   let filename;
   let mime;
   let downloadUrl;
   if (inputType === 'video') {
-    filename = outputName('doblaje', 'mp4');
+    filename = outputName('doblaje', 'mp4', ctx.jobId);
     outputPath = path.join(videosDir, filename);
     await voiceStudio.dubDownloadVideo({ jobId: vsJobId, outPath: outputPath, defaultTrack: targetCode, preserveBg: input.keepBackground !== false, signal }, options);
     mime = 'video/mp4';
     downloadUrl = `/api/video/watch/${filename}`;
   } else {
-    filename = outputName('doblaje', 'mp3');
+    filename = outputName('doblaje', 'mp3', ctx.jobId);
     outputPath = path.join(audioDir, filename);
     // Audio-only jobs export through the same /dub/download endpoint with an
     // `out_format` container (the -audio route only emits WAV).
@@ -276,13 +287,15 @@ async function runDubJob(ctx, input, options = {}) {
             kind: 'dub',
           }),
         }));
-      result.messageId = await chatPersistence.persistAssistantTurn({
+      const persistResult = async (tx) => { result.messageId = await chatPersistence.persistAssistantTurn({
         userId: input.userId,
         chatId: input.chatId,
         content,
         files,
+        messageId: `voice-${ctx.jobId}-assistant`,
         metadata: { voiceStudioJobId: ctx.jobId, kind: 'dub' },
-      });
+      }, tx); };
+      if (ctx.onCompleted) ctx.onCompleted(persistResult); else await persistResult();
     } catch (err) {
       result.persistWarning = String(err?.message || err).slice(0, 200);
     }
@@ -298,13 +311,17 @@ async function runDubJob(ctx, input, options = {}) {
  */
 async function runAudiobookJob(ctx, input, options = {}) {
   const { signal } = ctx;
-  let text = String(input.text || '').trim();
+  const state = ctx.job?.checkpoint || {};
+  const checkpoint = async (patch) => { await ctx.checkpoint?.(patch); Object.assign(state, patch); };
+  if (state.dispatchState === 'submitting') throw Object.assign(new Error('No se pudo confirmar el audiolibro. No se duplicará automáticamente.'), { code: 'MEDIA_DISPATCH_UNKNOWN' });
+  let text = String(state.importedText || input.text || '').trim();
   let chapters = 0;
   if (!text && input.sourcePath) {
     await ctx.progress({ stage: 'importando el libro', progress: 3 });
     const imported = await voiceStudio.audiobookImport({ filePath: input.sourcePath, filename: input.filename, mime: input.mime, signal }, options);
     text = imported.text;
     chapters = imported.chapters;
+    await checkpoint({ importedText: text, importedChapters: chapters });
   }
   if (!text) throw Object.assign(new Error('El audiolibro necesita texto o un archivo (.txt, .md, .epub, .pdf).'), { code: 'TEXT_REQUIRED' });
 
@@ -314,7 +331,8 @@ async function runAudiobookJob(ctx, input, options = {}) {
   await ctx.progress({ stage: 'generando los capítulos', progress: 8 });
 
   let totalChapters = chapters || 0;
-  const done = await voiceStudio.audiobookRender({
+  if (!state.audiobookResult) await checkpoint({ dispatchState: 'submitting' });
+  const done = state.audiobookResult || await voiceStudio.audiobookRender({
     text,
     defaultVoice: input.voiceProfileId || null,
     language: input.language || null,
@@ -325,22 +343,23 @@ async function runAudiobookJob(ctx, input, options = {}) {
     onEvent: (evt) => {
       if (evt?.type === 'started' && Number(evt.chapters) > 0) {
         totalChapters = Number(evt.chapters);
-        void ctx.progress({ stage: `narrando ${totalChapters} capítulo${totalChapters === 1 ? '' : 's'}`, progress: 10 });
+        void ctx.progress({ stage: `narrando ${totalChapters} capítulo${totalChapters === 1 ? '' : 's'}`, progress: 10 }).catch(() => {});
       } else if (evt?.type === 'chapter' && Number.isFinite(Number(evt.index))) {
         const total = Number(evt.total) || totalChapters || 1;
         const fraction = Math.min(1, (Number(evt.index) + 1) / total);
-        void ctx.progress({ stage: `capítulo ${Number(evt.index) + 1} de ${total} listo`, progress: 10 + Math.round(fraction * 78) });
+        void ctx.progress({ stage: `capítulo ${Number(evt.index) + 1} de ${total} listo`, progress: 10 + Math.round(fraction * 78) }).catch(() => {});
       } else if (evt?.type === 'assembling') {
-        void ctx.progress({ stage: 'uniendo los capítulos', progress: 90 });
+        void ctx.progress({ stage: 'uniendo los capítulos', progress: 90 }).catch(() => {});
       } else if (evt?.type === 'mastering') {
-        void ctx.progress({ stage: 'masterizando el audio', progress: 93 });
+        void ctx.progress({ stage: 'masterizando el audio', progress: 93 }).catch(() => {});
       }
     },
   }, options);
 
+  if (!state.audiobookResult) await checkpoint({ audiobookResult: done, dispatchState: 'returned' });
   await ctx.progress({ stage: 'exportando el audiolibro', progress: 96 });
   const ext = format === 'mp3' ? 'mp3' : 'm4b';
-  const filename = outputName('audiolibro', ext);
+  const filename = outputName('audiolibro', ext, ctx.jobId);
   const outputPath = path.join(audioDir, filename);
   await voiceStudio.downloadOutput(done.output, outputPath, { signal }, options);
   const stat = await fsPromises.stat(outputPath);
@@ -388,12 +407,14 @@ async function runAudiobookJob(ctx, input, options = {}) {
           kind: 'audiobook',
         }),
       }));
-      result.messageId = await chatPersistence.persistAssistantTurn({
+      const persistResult = async (tx) => { result.messageId = await chatPersistence.persistAssistantTurn({
         userId: input.userId,
         chatId: input.chatId,
         content,
+        messageId: `voice-${ctx.jobId}-assistant`,
         metadata: { voiceStudioJobId: ctx.jobId, kind: 'audiobook' },
-      });
+      }, tx); };
+      if (ctx.onCompleted) ctx.onCompleted(persistResult); else await persistResult();
     } catch (err) {
       result.persistWarning = String(err?.message || err).slice(0, 200);
     }

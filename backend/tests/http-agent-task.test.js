@@ -210,19 +210,36 @@ describe('HTTP admin queue route', () => {
   let restoreEnv;
   let adminAuth;
   let userAuth;
+  let restorePermissions;
 
   beforeEach(() => {
-    restoreEnv = rememberEnv(['REDIS_URL']);
+    restoreEnv = rememberEnv(['REDIS_URL', 'RBAC_ENFORCEMENT_MODE']);
     delete process.env.REDIS_URL;
-    adminAuth = installAuthSessionMock({ id: 'admin-http-1', email: 'admin-http@example.com', isAdmin: true });
-    userAuth = installAuthSessionMock({ id: 'user-http-2', email: 'user-http-2@example.com', isAdmin: false });
+    process.env.RBAC_ENFORCEMENT_MODE = 'enforce';
+    adminAuth = null;
+    userAuth = null;
+    const prisma = require('../src/config/database');
+    const permissions = require('../src/middleware/require-permission');
+    const findRoles = prisma.userRole.findMany;
+    const findSetting = prisma.systemSettings.findUnique;
+    prisma.userRole.findMany = async ({ where }) => where.userId === 'admin-http-1'
+      ? [{ role: { permissions: [{ permission: { code: 'admin.queues.read' } }] } }]
+      : [];
+    prisma.systemSettings.findUnique = async () => ({ value: '1' });
+    permissions.invalidatePermissionsCache();
+    restorePermissions = () => {
+      prisma.userRole.findMany = findRoles;
+      prisma.systemSettings.findUnique = findSetting;
+      permissions.invalidatePermissionsCache();
+    };
     delete require.cache[require.resolve('../src/routes/admin-queues')];
   });
 
   afterEach(() => {
     delete require.cache[require.resolve('../src/routes/admin-queues')];
-    userAuth.restore();
-    adminAuth.restore();
+    userAuth?.restore();
+    adminAuth?.restore();
+    restorePermissions();
     restoreEnv();
   });
 
@@ -231,16 +248,21 @@ describe('HTTP admin queue route', () => {
   }
 
   test('requires admin privileges for queue status', async () => {
+    userAuth = installAuthSessionMock({ id: 'user-http-2', email: 'user-http-2@example.com', isAdmin: false });
     const res = await request(buildApp())
       .get('/api/admin/queues/status')
       .set('Authorization', userAuth.authHeader);
 
     assert.equal(res.status, 403);
-    assert.equal(res.body.error, 'Admin access required');
+    assert.equal(res.body.error, 'forbidden');
+    assert.equal(res.body.missingPermission, 'admin.queues.read');
     assertContractResponse('admin.queues.status', 403, res.body);
   });
 
   test('reports disabled queue board cleanly without Redis', async () => {
+    // One live session fixture per test: stacking the single-session helper
+    // masks the first identity, returning 401 before exercising the route.
+    adminAuth = installAuthSessionMock({ id: 'admin-http-1', email: 'admin-http@example.com', isAdmin: true });
     const res = await request(buildApp())
       .get('/api/admin/queues/status')
       .set('Authorization', adminAuth.authHeader);

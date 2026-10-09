@@ -2565,6 +2565,16 @@ router.get('/:id/webhooks/stats', authenticateToken, async (req, res) => {
     });
 
     const windowMs = 24 * 60 * 60 * 1000;
+    if (prisma.webhookDelivery) {
+      const outbox = require('../services/webhook-outbox').getWebhookOutbox(prisma, webhookDispatcherForStats);
+      const rows = await outbox.endpointStats(endpoints.map(ep => ep.id), windowMs);
+      const byId = new Map(rows.map(row => [row.endpointId, row]));
+      return res.json({ orgId, windowMs, generatedAt: new Date().toISOString(), endpoints: endpoints.map(ep => {
+        const row = byId.get(ep.id);
+        return { id: ep.id, url: ep.url, events: ep.events, isActive: ep.isActive,
+          last24hDelivered: row?.delivered || 0, last24hFailed: row?.failed || 0, p95Ms: row?.p95Ms || 0 };
+      }) });
+    }
     const cutoff = Date.now() - windowMs;
 
     // Pull a large slice of deliveries once; filter per endpoint in
@@ -2645,6 +2655,12 @@ router.get('/:id/webhooks/dlq', authenticateToken, async (req, res) => {
       where: { organizationId: orgId },
       select: { id: true, url: true },
     });
+    if (prisma.webhookDelivery) {
+      const outbox = require('../services/webhook-outbox').getWebhookOutbox(prisma, webhookDispatcherForStats);
+      const items = await outbox.list({ limit, event, status: 'failed', endpointIds: endpoints.map(ep => ep.id) });
+      const scoped = await outbox.count({ event, status: 'failed', endpointIds: endpoints.map(ep => ep.id) });
+      return res.json({ items, stats: { scoped, durable: true } });
+    }
     const orgUrls = new Set(endpoints.map((e) => e.url));
 
     // Pull a large slice so org-filtering doesn't truncate the window;
@@ -2685,6 +2701,17 @@ router.post('/:id/webhooks/dlq/:dlqId/retry', authenticateToken, async (req, res
       return res.status(403).json({ error: 'insufficient role to retry webhook DLQ item' });
     }
 
+    if (prisma.webhookDelivery) {
+      const endpoints = await prisma.webhookEndpoint.findMany({ where: { organizationId: orgId }, select: { id: true } });
+      const ids = endpoints.map(ep => ep.id);
+      const outbox = require('../services/webhook-outbox').getWebhookOutbox(prisma, webhookDispatcherForStats);
+      const item = await outbox.get(dlqId, ids);
+      if (!item || item.status !== 'failed') return res.status(404).json({ error: 'DLQ item not found' });
+      const result = await outbox.retry(dlqId, ids);
+      void writeAuditLog(prisma, { action: 'org_webhook_dlq_retry', userId, resource: 'organization', resourceId: orgId,
+        before: { dlqId, endpointId: item.endpointId }, after: { status: result?.result?.status }, metadata: { orgId }, req });
+      return res.json(result);
+    }
     // Locate the DLQ item via the same listing the GET handler uses so
     // tests that stub the dispatcher see a consistent view.
     let dlqItem = null;

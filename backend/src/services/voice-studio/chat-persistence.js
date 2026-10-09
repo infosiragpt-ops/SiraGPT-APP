@@ -85,19 +85,19 @@ async function chatOwnedBy(userId, chatId, client = prisma) {
  * Append a USER message (what the user asked the studio to do). Returns the
  * message id or null when the chat is not the user's.
  */
-async function persistUserTurn({ userId, chatId, content, files = null }, client = prisma) {
+async function persistUserTurn({ userId, chatId, content, files = null, messageId = null }, client = prisma) {
   const chat = await chatOwnedBy(userId, chatId, client);
   if (!chat) return null;
-  const message = await client.message.create({
-    data: {
+  const data = {
       chatId,
       role: 'USER',
       content: String(content || '').slice(0, 4000),
       files: Array.isArray(files) && files.length ? JSON.stringify(files) : null,
       metadata: { source: 'sira-voz-studio' },
-    },
-    select: { id: true },
-  });
+    };
+  const message = messageId
+    ? await client.message.upsert({ where: { id: messageId }, update: {}, create: { ...data, id: messageId }, select: { id: true } })
+    : await client.message.create({ data, select: { id: true } });
   await client.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } }).catch(() => {});
   return message.id;
 }
@@ -106,19 +106,19 @@ async function persistUserTurn({ userId, chatId, content, files = null }, client
  * Append the ASSISTANT result. `content` is the rendered block (agent-task-state
  * or plain markdown); `files` is the optional attachment snapshot list.
  */
-async function persistAssistantTurn({ userId, chatId, content, files = null, metadata = null }, client = prisma) {
+async function persistAssistantTurn({ userId, chatId, content, files = null, metadata = null, messageId = null }, client = prisma) {
   const chat = await chatOwnedBy(userId, chatId, client);
   if (!chat) return null;
-  const message = await client.message.create({
-    data: {
+  const data = {
       chatId,
       role: 'ASSISTANT',
       content: String(content || ''),
       files: Array.isArray(files) && files.length ? JSON.stringify(files) : null,
       metadata: { source: 'sira-voz-studio', ...(metadata && typeof metadata === 'object' ? metadata : {}) },
-    },
-    select: { id: true },
-  });
+    };
+  const message = messageId
+    ? await client.message.upsert({ where: { id: messageId }, update: {}, create: { ...data, id: messageId }, select: { id: true } })
+    : await client.message.create({ data, select: { id: true } });
   await client.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } }).catch(() => {});
   return message.id;
 }

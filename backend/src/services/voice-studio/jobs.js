@@ -237,7 +237,7 @@ function createJobQueue({ client = prisma, env = process.env, logger = console }
 
 let defaultQueue = null;
 function getJobQueue() {
-  if (!defaultQueue) defaultQueue = createJobQueue();
+  if (!defaultQueue) defaultQueue = require('./durable-jobs').createDurableVoiceQueue();
   return defaultQueue;
 }
 

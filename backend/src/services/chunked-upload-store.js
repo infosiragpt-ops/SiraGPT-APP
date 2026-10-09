@@ -21,7 +21,7 @@
 const fs = require('fs');
 const fsPromises = require('fs/promises');
 const path = require('path');
-const { randomUUID } = require('crypto');
+const { randomUUID, createHash } = require('crypto');
 
 const MB = 1024 * 1024;
 const DEFAULT_CHUNK_BYTES = 16 * MB;
@@ -78,8 +78,34 @@ async function readMeta(userDir, uploadId) {
 async function writeMeta(userDir, meta) {
   const target = metaPathFor(userDir, meta.uploadId);
   const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await fsPromises.writeFile(tmp, JSON.stringify(meta), 'utf8');
+  const handle = await fsPromises.open(tmp, 'wx', 0o600);
+  try { await handle.writeFile(JSON.stringify(meta), 'utf8'); await handle.sync(); } finally { await handle.close(); }
   await fsPromises.rename(tmp, target);
+  const directory = await fsPromises.open(partsDirFor(userDir), 'r').catch(() => null);
+  if (directory) { try { await directory.sync(); } catch { /* some filesystems do not support directory fsync */ } finally { await directory.close(); } }
+}
+
+async function withUploadLock(userDir, uploadId, task) {
+  if (!isValidUploadId(uploadId)) throw new ChunkedUploadError(400, 'bad_upload_id', 'Identificador de subida inválido.');
+  await fsPromises.mkdir(partsDirFor(userDir), { recursive: true });
+  const lock = path.join(partsDirFor(userDir), `${uploadId}.lock`);
+  try { await fsPromises.mkdir(lock); }
+  catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    const stat = await fsPromises.stat(lock).catch(() => null);
+    if (stat && Date.now() - stat.mtimeMs > 120_000) {
+      const removed = await fsPromises.rmdir(lock).then(() => true).catch(() => false);
+      if (removed) return withUploadLock(userDir, uploadId, task);
+    }
+    throw new ChunkedUploadError(429, 'upload_busy', 'La subida está procesando otro trozo. Reintenta en unos segundos.');
+  }
+  try { return await task(); } finally { await fsPromises.rmdir(lock).catch(() => {}); }
+}
+
+function publicStatus(meta) {
+  return { uploadId: meta.uploadId, name: meta.name, mimeType: meta.mimeType, size: meta.size,
+    chunkSize: meta.chunkSize, totalChunks: meta.totalChunks, received: meta.received,
+    chunkHashes: meta.chunkHashes || [], status: meta.status || 'uploading', files: meta.response?.files };
 }
 
 function normalizeChunkSize(value) {
@@ -97,16 +123,25 @@ function normalizeChunkSize(value) {
  * @param {number} [opts.chunkSize]
  * @param {number} opts.maxBytes hard cap for this file family
  */
-async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, maxBytes } = {}) {
+async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, maxBytes, chunkHashes } = {}) {
   const total = Number(size);
   if (!userDir) throw new ChunkedUploadError(400, 'bad_owner', 'Propietario de la subida inválido.');
-  if (!Number.isFinite(total) || total <= 0) throw new ChunkedUploadError(400, 'bad_size', 'Tamaño de archivo inválido.');
+  if (!Number.isSafeInteger(total) || total <= 0) throw new ChunkedUploadError(400, 'bad_size', 'Tamaño de archivo inválido.');
   if (Number.isFinite(maxBytes) && total > maxBytes) {
     throw new ChunkedUploadError(413, 'file_too_large', `El archivo supera el máximo de ${Math.round(maxBytes / MB)} MB.`);
   }
   const chunk = normalizeChunkSize(chunkSize);
   const totalChunks = Math.ceil(total / chunk);
-  const uploadId = randomUUID().replace(/-/g, '');
+  if (chunkHashes !== undefined && (!Array.isArray(chunkHashes) || chunkHashes.length !== totalChunks || chunkHashes.some(hash => !/^[a-f0-9]{64}$/.test(hash)))) {
+    throw new ChunkedUploadError(400, 'bad_chunk_hashes', 'La identidad de los trozos es inválida.');
+  }
+  const identity = chunkHashes ? createHash('sha256').update(JSON.stringify({ name: String(name || 'archivo'), size: total, mimeType: String(mimeType || 'application/octet-stream'), chunkSize: chunk, chunkHashes })).digest('hex') : null;
+  const uploadId = identity ? identity.slice(0, 32) : randomUUID().replace(/-/g, '');
+  return withUploadLock(userDir, uploadId, async () => {
+  if (identity) {
+    const prior = await readMeta(userDir, uploadId).catch(err => { if (err.status === 404) return null; throw err; });
+    if (prior) return publicStatus(prior);
+  }
   const meta = {
     uploadId,
     name: String(name || 'archivo'),
@@ -115,6 +150,9 @@ async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, max
     chunkSize: chunk,
     totalChunks,
     received: [],
+    chunkHashes: chunkHashes || [],
+    receivedHashes: {},
+    status: 'uploading',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -123,10 +161,12 @@ async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, max
   const fh = await fsPromises.open(partPathFor(userDir, uploadId), 'w');
   await fh.close();
   await writeMeta(userDir, meta);
-  return { uploadId, chunkSize: chunk, totalChunks, size: total };
+  return publicStatus(meta);
+  });
 }
 
 async function writeChunk({ userDir, uploadId, index, buffer } = {}) {
+  return withUploadLock(userDir, uploadId, async () => {
   const meta = await readMeta(userDir, uploadId);
   const idx = Number(index);
   if (!Number.isInteger(idx) || idx < 0 || idx >= meta.totalChunks) {
@@ -140,17 +180,31 @@ async function writeChunk({ userDir, uploadId, index, buffer } = {}) {
   if (buffer.length !== expected) {
     throw new ChunkedUploadError(400, 'bad_chunk_size', `El trozo ${idx} debía medir ${expected} bytes y mide ${buffer.length}.`);
   }
+  const hash = createHash('sha256').update(buffer).digest('hex');
+  if ((meta.chunkHashes?.[idx] && meta.chunkHashes[idx] !== hash) || (meta.receivedHashes?.[idx] && meta.receivedHashes[idx] !== hash)) {
+    throw new ChunkedUploadError(409, 'chunk_hash_mismatch', 'El trozo no coincide con el archivo seleccionado.');
+  }
+  if (meta.received.includes(idx)) return { uploadId, index: idx, received: meta.received.length, totalChunks: meta.totalChunks };
+  if (meta.status !== 'uploading' && meta.status !== undefined) throw new ChunkedUploadError(409, 'upload_finalized', 'La subida ya fue ensamblada.');
   const fh = await fsPromises.open(partPathFor(userDir, uploadId), 'r+');
   try {
-    await fh.write(buffer, 0, buffer.length, idx * meta.chunkSize);
+    let written = 0;
+    while (written < buffer.length) {
+      const result = await fh.write(buffer, written, buffer.length - written, idx * meta.chunkSize + written);
+      if (!result.bytesWritten) throw new Error('chunk_write_failed');
+      written += result.bytesWritten;
+    }
+    await fh.sync();
   } finally {
     await fh.close();
   }
   if (!meta.received.includes(idx)) meta.received.push(idx);
   meta.received.sort((a, b) => a - b);
   meta.updatedAt = new Date().toISOString();
+  meta.receivedHashes = { ...meta.receivedHashes, [idx]: hash };
   await writeMeta(userDir, meta);
   return { uploadId, index: idx, received: meta.received.length, totalChunks: meta.totalChunks };
+  });
 }
 
 /**
@@ -158,21 +212,26 @@ async function writeChunk({ userDir, uploadId, index, buffer } = {}) {
  * Returns a multer-shaped file object the regular pipeline understands.
  */
 async function completeChunkedUpload({ userDir, uploadId } = {}) {
+  return withUploadLock(userDir, uploadId, async () => {
   const meta = await readMeta(userDir, uploadId);
   if (meta.received.length !== meta.totalChunks) {
     const missing = [];
     for (let i = 0; i < meta.totalChunks && missing.length < 5; i += 1) if (!meta.received.includes(i)) missing.push(i);
     throw new ChunkedUploadError(409, 'chunks_missing', `Faltan trozos por subir (${meta.totalChunks - meta.received.length}); ejemplo: ${missing.join(', ')}.`);
   }
+  const filename = meta.filename || `files-${uploadId}${safeExt(meta.name)}`;
+  const finalPath = path.join(userDir, filename);
   const partPath = partPathFor(userDir, uploadId);
-  const stat = await fsPromises.stat(partPath).catch(() => null);
+  const alreadyAssembled = await fsPromises.stat(finalPath).catch(() => null);
+  const stat = alreadyAssembled || await fsPromises.stat(partPath).catch(() => null);
   if (!stat || stat.size !== meta.size) {
     throw new ChunkedUploadError(409, 'size_mismatch', `El archivo ensamblado mide ${stat ? stat.size : 0} bytes y se anunciaron ${meta.size}.`);
   }
-  const filename = `files-${Date.now()}-${randomUUID().replace(/-/g, '').slice(0, 12)}${safeExt(meta.name)}`;
-  const finalPath = path.join(userDir, filename);
-  await fsPromises.rename(partPath, finalPath);
-  await fsPromises.unlink(metaPathFor(userDir, uploadId)).catch(() => {});
+  if (!alreadyAssembled) await fsPromises.rename(partPath, finalPath);
+  meta.filename = filename;
+  meta.status = meta.response ? 'completed' : 'assembled';
+  meta.updatedAt = new Date().toISOString();
+  await writeMeta(userDir, meta);
   return {
     fieldname: 'files',
     originalname: meta.name,
@@ -183,14 +242,33 @@ async function completeChunkedUpload({ userDir, uploadId } = {}) {
     filename,
     path: finalPath,
     chunked: true,
+    deterministicId: `upload_${createHash('sha256').update(`${path.resolve(userDir)}:${uploadId}`).digest('hex').slice(0, 40)}`,
   };
+  });
+}
+
+async function getChunkedUploadStatus({ userDir, uploadId } = {}) { return publicStatus(await readMeta(userDir, uploadId)); }
+async function getCompletedResponse({ userDir, uploadId } = {}) { return (await readMeta(userDir, uploadId)).response || null; }
+async function saveCompletedResponse({ userDir, uploadId, response } = {}) {
+  return withUploadLock(userDir, uploadId, async () => {
+    const meta = await readMeta(userDir, uploadId);
+    meta.response = response; meta.status = 'completed'; meta.updatedAt = new Date().toISOString();
+    await writeMeta(userDir, meta);
+    return response;
+  });
 }
 
 async function abortChunkedUpload({ userDir, uploadId } = {}) {
   if (!isValidUploadId(uploadId)) return false;
+  return withUploadLock(userDir, uploadId, async () => {
+  const meta = await readMeta(userDir, uploadId).catch(() => null);
+  // Assembly is the commit boundary: a File row may already exist while its
+  // final response is being saved. Never delete a registered binary on Cancel.
+  if (meta?.status === 'assembled' || meta?.status === 'completed') return false;
   await fsPromises.unlink(partPathFor(userDir, uploadId)).catch(() => {});
   await fsPromises.unlink(metaPathFor(userDir, uploadId)).catch(() => {});
   return true;
+  });
 }
 
 /** Remove sessions untouched for longer than `maxAgeMs`. Best-effort. */
@@ -229,6 +307,9 @@ module.exports = {
   initChunkedUpload,
   writeChunk,
   completeChunkedUpload,
+  getChunkedUploadStatus,
+  getCompletedResponse,
+  saveCompletedResponse,
   abortChunkedUpload,
   sweepStaleChunkedUploads,
   normalizeChunkSize,

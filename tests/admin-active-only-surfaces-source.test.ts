@@ -8,10 +8,13 @@ const codePanel = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
 const designComposer = readFileSync("components/design/design-composer.tsx", "utf8")
 
 describe("admin-active model surfaces", () => {
-  it("clears stale chat selections and blocks text sends without an active row", () => {
+  it("preserves the user's unavailable selection but blocks sends instead of silently switching models", () => {
     assert.match(chatContext, /isActiveCatalogSelection\(selectedModel, availableModels\)/)
-    assert.match(chatContext, /No hay modelos activos\. Activa uno desde Administración/)
+    assert.match(chatContext, /[Ee]l modelo (?:elegido|seleccionado)[\s\S]{0,160}(?:disponible|activo)/)
+    assert.match(chatContext, /reconcileSelectedCatalogModel\(activeModels, selectedModelRef\.current, selectProvider\)/)
+    assert.match(chatContext, /reconcileSelectedCatalogModel\(availableModels, name\)/)
     assert.match(chatContext, /setSelectedModel\(preferred\?\.name \|\| ""\)/)
+    assert.match(chatInterface, /No se pudo guardar el modelo\. Se restauró la selección anterior/)
   })
 
   it("does not manufacture code or design fallbacks when the catalog is empty", () => {

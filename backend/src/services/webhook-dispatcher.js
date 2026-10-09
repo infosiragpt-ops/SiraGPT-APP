@@ -412,7 +412,7 @@ async function dispatch(opts = {}) {
         failedAt: new Date(now()).toISOString(),
       });
     }
-    return { id, status: entry.status, attempts: entry.attempts, error: entry.lastError };
+    return { id, status: entry.status, attempts: entry.attempts, httpStatus: entry.httpStatus, error: entry.lastError };
   }
 }
 
@@ -607,7 +607,64 @@ function health({ windowMs = 24 * 60 * 60 * 1000, now = Date.now } = {}) {
   };
 }
 
+async function listDeliveriesDurable(options = {}) {
+  const prisma = require('../config/database');
+  if (!prisma?.webhookDelivery) {
+    if (process.env.NODE_ENV === 'production') throw Object.assign(new Error('Webhook outbox unavailable'), { code: 'WEBHOOK_OUTBOX_UNAVAILABLE' });
+    return listDeliveries(options);
+  }
+  return require('./webhook-outbox').getWebhookOutbox(prisma, module.exports).list(options);
+}
+async function listDLQDurable(options = {}) { return listDeliveriesDurable({ ...options, status: 'failed' }); }
+async function retryDeliveryDurable(id, { endpointIds, ...opts } = {}) {
+  const prisma = require('../config/database');
+  if (!prisma?.webhookDelivery) {
+    if (process.env.NODE_ENV === 'production') throw Object.assign(new Error('Webhook outbox unavailable'), { code: 'WEBHOOK_OUTBOX_UNAVAILABLE' });
+    return retryDLQItem(id, opts);
+  }
+  return require('./webhook-outbox').getWebhookOutbox(prisma, module.exports).retry(id, endpointIds);
+}
+async function healthDurable(options = {}) {
+  const prisma = require('../config/database');
+  if (!prisma?.webhookDelivery) {
+    if (process.env.NODE_ENV === 'production') throw Object.assign(new Error('Webhook outbox unavailable'), { code: 'WEBHOOK_OUTBOX_UNAVAILABLE' });
+    return health(options);
+  }
+  return require('./webhook-outbox').getWebhookOutbox(prisma, module.exports).health(options.windowMs);
+}
+async function retryFailedDurable(options = {}) {
+  const prisma = require('../config/database');
+  if (!prisma?.webhookDelivery) {
+    if (process.env.NODE_ENV === 'production') throw Object.assign(new Error('Webhook outbox unavailable'), { code: 'WEBHOOK_OUTBOX_UNAVAILABLE' });
+    return retryFailed(options);
+  }
+  const rows = await prisma.webhookDelivery.findMany({ where: { status: 'failed',
+    ...(options.since ? { createdAt: { gte: new Date(options.since) } } : {}) },
+    orderBy: { createdAt: 'asc' }, take: Math.max(1, Math.min(500, options.limit || 100)), select: { id: true } });
+  const outbox = require('./webhook-outbox').getWebhookOutbox(prisma, module.exports);
+  let retried = 0;
+  for (const row of rows) if ((await outbox.retry(row.id)).ok) retried += 1;
+  return { retried, recovered: 0, candidates: rows.length, queued: retried };
+}
+async function statsDurable(options = {}) {
+  const prisma = require('../config/database');
+  if (!prisma?.webhookDelivery) {
+    if (process.env.NODE_ENV === 'production') throw Object.assign(new Error('Webhook outbox unavailable'), { code: 'WEBHOOK_OUTBOX_UNAVAILABLE' });
+    return stats();
+  }
+  const rows = await prisma.webhookDelivery.groupBy({ by: ['status'], _count: { _all: true },
+    where: options.endpointIds ? { endpointId: { in: options.endpointIds } } : {} });
+  const counts = { pending: 0, delivered: 0, failed: 0, processing: 0 };
+  for (const row of rows) counts[row.status] = row._count._all;
+  return { total: Object.values(counts).reduce((n, v) => n + v, 0), counts, durable: true };
+}
 module.exports = {
+  listDeliveriesDurable,
+  listDLQDurable,
+  retryDeliveryDurable,
+  statsDurable,
+  healthDurable,
+  retryFailedDurable,
   SIGNATURE_HEADER,
   dispatch,
   retry,

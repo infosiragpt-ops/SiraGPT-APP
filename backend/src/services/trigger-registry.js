@@ -333,7 +333,7 @@ async function publish(event, payload, userId, opts = {}) {
   // (or `organizationId`). Endpoints already targeting the same row by
   // id are de-duplicated so an admin who created an endpoint as
   // {userId, orgId} doesn't receive it twice.
-  const prisma = getPrisma();
+  const prisma = opts.transaction || getPrisma();
   const dispatcher = getDispatcher();
   const orgId = payload && typeof payload === 'object'
     ? (payload.orgId || payload.organizationId || null)
@@ -378,6 +378,19 @@ async function publish(event, payload, userId, opts = {}) {
       const overrideRetries = (ep && typeof ep.maxRetries === 'number' && ep.maxRetries >= 0)
         ? ep.maxRetries
         : undefined;
+      // In production enqueue before returning; the worker owns HTTP/retries.
+      // A transaction client supplied by the producer makes this source-atomic.
+      if (prisma?.webhookDelivery || process.env.NODE_ENV === 'production') {
+        const { getWebhookOutbox } = require('./webhook-outbox');
+        const queued = await getWebhookOutbox(getPrisma(), dispatcher).enqueue({
+          endpoint: ep, event, publisherUserId: userId || null,
+          payload: { event, userId, orgId: ep.organizationId || orgId || null, data: payload, ts: now },
+          idempotencyKey: opts.idempotencyKey || `${hash}:${Math.floor(now / ttlMs)}`,
+        }, prisma);
+        if (!queued) throw Object.assign(new Error('Webhook delivery was not persisted'), { code: 'WEBHOOK_OUTBOX_ENQUEUE_FAILED' });
+        dispatched += 1;
+        continue;
+      }
       const result = await dispatcher.dispatch({
         url: ep.url,
         event,
@@ -481,6 +494,7 @@ async function publish(event, payload, userId, opts = {}) {
 function isKnownTrigger(name) { return KNOWN_SET.has(name); }
 
 function resetForTests() {
+  require('./webhook-outbox').resetRuntimeForTests();
   idemLru.clear();
   for (const entry of debounceTimers.values()) {
     clearTimeout(entry.timer);

@@ -188,10 +188,7 @@ test('generateImage retries dall-e without response_format when OpenAI rejects i
       return { data: [{ url: 'https://openai.example/generated.png' }] };
     },
   }));
-  _internal.setFetchImpl(async () => ({
-    ok: true,
-    arrayBuffer: async () => Buffer.from('openai-url-bytes'),
-  }));
+  _internal.setFetchImpl(async () => new Response(Buffer.from('openai-url-bytes')));
   try {
     const result = await engine.generateImage({ prompt: 'a cat', model: 'dall-e-3', aspectRatio: 'portrait', failover: false });
     assert.equal(result.ok, true);
@@ -362,10 +359,7 @@ test('generateImage via fal downloads the generated image as base64', async () =
       return { data: { images: [{ url: 'https://fal.example/img.png' }] } };
     },
   }));
-  _internal.setFetchImpl(async () => ({
-    ok: true,
-    arrayBuffer: async () => Buffer.from('fal-bytes'),
-  }));
+  _internal.setFetchImpl(async () => new Response(Buffer.from('fal-bytes')));
   try {
     const result = await engine.generateImage({ prompt: 'x', model: 'fal-ai/flux/schnell', aspectRatio: '9:16' });
     assert.equal(result.ok, true);

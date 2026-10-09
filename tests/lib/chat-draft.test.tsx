@@ -16,6 +16,14 @@ describe("useChatDraft", () => {
     window.localStorage.clear()
   })
 
+  it("flushes the pending draft synchronously before stale-bundle navigation", () => {
+    const hook = renderHook(() => useChatDraft("chat-a", "user-a"))
+    act(() => hook.result.current.save("sin perder últimas teclas"))
+    expect(window.localStorage.getItem("sira:chat-draft:user-a:chat-a")).toBeNull()
+    act(() => window.dispatchEvent(new Event("siragpt:before-bundle-reload")))
+    expect(window.localStorage.getItem("sira:chat-draft:user-a:chat-a")).toBe("sin perder últimas teclas")
+  })
+
   it("persists and restores a draft before the first chat exists", () => {
     const first = renderHook(() => useChatDraft(null, "user-a"))
 

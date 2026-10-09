@@ -1695,6 +1695,8 @@ async function startServer() {
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
     startAgentTaskWorker();
+    require('./src/services/media/job-worker').startMediaWorker();
+    require('./src/services/webhook-outbox').getWebhookOutbox(prisma, require('./src/services/webhook-dispatcher')).start();
     documentSandboxModule.start().catch(() => logger.error({ code: 'DOC_WORKER_START_FAILED' }, 'doc_sandbox'));
     try {
       const { startAgentRunnerWorker } = require('./src/services/agent-runner/queue');
@@ -2017,6 +2019,10 @@ async function startServer() {
         () => healthRoutes.closeQueueHealthProbe(),
         5000,
     );
+
+    shutdownRegistry.register('media_worker_stop', () => require('./src/services/media/job-worker').stopMediaWorker(), 15000);
+    shutdownRegistry.register('webhook_outbox_stop', () => require('./src/services/webhook-outbox').getWebhookOutbox(prisma, require('./src/services/webhook-dispatcher')).stop(), 15000);
+    shutdownRegistry.register('task_store_flush', () => require('./src/services/agents/task-store').flushTaskStore(), 15000);
 
     // Disconnect Prisma after write-behind and observability flushes.
     shutdownRegistry.register('prisma_disconnect', async () => {

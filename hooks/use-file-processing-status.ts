@@ -7,10 +7,11 @@ import {
   describeStage as describeStageVocab,
   friendlyFailureLabel as friendlyFailureLabelVocab,
 } from "@/lib/file-processing-vocab"
+import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import {
   ProcessingStatusMemo,
-  buildFileProcessingStatusUrl,
+
   decideProcessingStatusPoll,
   resolveProcessingPollGiveUp,
 } from "@/lib/file-processing-status-client"
@@ -57,6 +58,7 @@ export interface FileProcessingStatus {
   /** True when polling hit its ceiling before a terminal stage — the file
    *  is treated as usable so the UI never freezes on "Indexando". */
   timedOut?: boolean
+  processingProgress?: { stage?: string; percent?: number; etaSeconds?: number; [key: string]: unknown } | null
 }
 
 const INITIAL: FileProcessingStatus = {
@@ -72,206 +74,141 @@ const INITIAL: FileProcessingStatus = {
 const POLL_INTERVAL_MS = 2_000
 const MAX_POLLS = 900 // 30 minutes ceiling — OCR-heavy batches can legitimately take longer.
 
-type StatusPayload = {
-  fileId: string
-  stage: FileProcessingStage
-  error: string | null
-  stageAt: string | null
-  isTerminal: boolean
-}
-
-type PollOutcome =
-  | { kind: "response"; status: number; data: StatusPayload | null }
-  | { kind: "network_error" }
-
 type Subscriber = (status: FileProcessingStatus) => void
-
-type FilePoller = {
-  fileId: string
-  subscribers: Set<Subscriber>
-  last: FileProcessingStatus
-  polls: number
-  timer: ReturnType<typeof setTimeout> | null
-  onVisible: (() => void) | null
-  stopped: boolean
-}
-
-const statusMemo = new ProcessingStatusMemo<FileProcessingStatus, PollOutcome>()
+type FilePoller = { fileId: string; subscribers: Set<Subscriber>; last: FileProcessingStatus; polls: number; missing: number }
+const statusMemo = new ProcessingStatusMemo<FileProcessingStatus, never>()
 const pollers = new Map<string, FilePoller>()
+let timer: ReturnType<typeof setTimeout> | null = null
+let inFlight: AbortController | null = null
+let listening = false
 
 function pendingStatus(fileId: string): FileProcessingStatus {
   return { fileId, stage: null, error: null, stageAt: null, isTerminal: false, loading: true, pending: true }
 }
-
-function authHeader(): Record<string, string> {
-  if (typeof window === "undefined") return {}
-  let token: string | null = null
-  try {
-    token = window.localStorage.getItem("auth-token")
-  } catch {
-    // Storage blocked (private mode, embedded webview): cookie auth still works.
-    token = null
-  }
-  return token ? { Authorization: `Bearer ${token}` } : {}
+function canPoll(): boolean {
+  return (typeof document === "undefined" || document.visibilityState !== "hidden")
+    && (typeof navigator === "undefined" || navigator.onLine !== false)
 }
-
-function isDocumentHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden"
-}
-
-function fetchStatusShared(fileId: string): Promise<PollOutcome> {
-  return statusMemo.shared(fileId, async () => {
-    try {
-      const resp = await authenticatedFetch(
-        buildFileProcessingStatusUrl(fileId),
-        { headers: authHeader(), credentials: "include" },
-      )
-      if (resp.status !== 200) return { kind: "response", status: resp.status, data: null }
-      let data: StatusPayload | null = null
-      try {
-        data = await resp.json() as StatusPayload
-      } catch {
-        data = null
-      }
-      return { kind: "response", status: 200, data }
-    } catch {
-      return { kind: "network_error" }
-    }
-  })
-}
-
-function stopPoller(poller: FilePoller): void {
-  poller.stopped = true
-  if (poller.timer) clearTimeout(poller.timer)
-  poller.timer = null
-  if (poller.onVisible && typeof document !== "undefined") {
-    document.removeEventListener("visibilitychange", poller.onVisible)
-  }
-  poller.onVisible = null
-  if (pollers.get(poller.fileId) === poller) pollers.delete(poller.fileId)
-}
-
+function activePollers() { return [...pollers.values()].filter(p => !p.last.isTerminal && p.subscribers.size > 0) }
 function publish(poller: FilePoller, status: FileProcessingStatus): void {
   poller.last = status
-  for (const subscriber of poller.subscribers) {
-    try {
-      subscriber(status)
-    } catch {
-      /* a consumer's setState after unmount is harmless; never break the loop */
-    }
-  }
+  for (const subscriber of poller.subscribers) subscriber(status)
 }
-
 function giveUp(poller: FilePoller, timedOut: boolean): void {
   const next = resolveProcessingPollGiveUp(poller.last.stage)
-  publish(poller, {
-    ...poller.last,
-    loading: false,
-    pending: false,
-    isTerminal: true,
-    stage: next.stage,
-    error: poller.last.error || next.error,
-    ...(timedOut ? { timedOut: true } : {}),
-  })
-  stopPoller(poller)
+  publish(poller, { ...poller.last, ...next, error: poller.last.error || next.error, loading: false, pending: false, isTerminal: true, ...(timedOut ? { timedOut: true } : {}) })
 }
-
-function schedule(poller: FilePoller): void {
-  if (poller.stopped) return
-  if (isDocumentHidden()) {
-    // Nobody is looking: wait for the tab to come back instead of polling
-    // every 2 s in the background (Chrome throttles the timer anyway, but
-    // every wake-up still cost a request).
-    poller.onVisible = () => {
-      if (isDocumentHidden()) return
-      if (poller.onVisible) document.removeEventListener("visibilitychange", poller.onVisible)
-      poller.onVisible = null
-      if (!poller.stopped) void tick(poller)
-    }
-    document.addEventListener("visibilitychange", poller.onVisible)
+function schedule(delay = POLL_INTERVAL_MS): void {
+  if (timer || inFlight || !canPoll() || activePollers().length === 0) return
+  timer = setTimeout(() => { timer = null; void tick() }, delay)
+}
+function onWake(): void {
+  if (!canPoll()) {
+    if (timer) clearTimeout(timer)
+    timer = null
+    inFlight?.abort()
     return
   }
-  poller.timer = setTimeout(() => { poller.timer = null; void tick(poller) }, POLL_INTERVAL_MS)
+  schedule(0)
 }
-
-async function tick(poller: FilePoller): Promise<void> {
-  poller.polls += 1
-  const outcome = await fetchStatusShared(poller.fileId)
-  if (poller.stopped) return
-  if (outcome.kind === "response") {
-    const decision = decideProcessingStatusPoll(outcome.status, poller.polls)
-    if (decision === "stop") {
-      giveUp(poller, false)
-      return
-    }
-    if (decision === "apply" && outcome.data) {
-      const data = outcome.data
-      const isTerminal = data.isTerminal || TERMINAL.has(data.stage)
-      const next: FileProcessingStatus = {
-        fileId: data.fileId,
-        stage: data.stage,
-        error: data.error,
-        stageAt: data.stageAt,
-        isTerminal,
-        loading: !isTerminal,
-        pending: false,
-      }
-      publish(poller, next)
-      if (isTerminal) {
-        // Only a real server verdict is remembered; give-up states are not,
-        // so a re-login or a recovered worker is seen again.
-        statusMemo.rememberTerminal(poller.fileId, next)
-        stopPoller(poller)
-        return
-      }
-    }
-    // "retry" (5xx / 429 / early 404 / other non-OK) or a 200 without a
-    // readable body — keep polling.
-  }
-  // Transient network error — keep polling on the same cadence until the
-  // ceiling so a flaky connection doesn't permanently freeze the badge.
-  if (poller.polls >= MAX_POLLS) {
-    // Never leave the chip frozen on "Indexando" forever. The file is
-    // already uploaded and its text extracted — RAG indexing is a
-    // best-effort background enhancement, not a prerequisite for using
-    // the document. Resolve to a usable terminal state so the UI stops
-    // showing an in-progress spinner once the worker is clearly wedged.
-    giveUp(poller, true)
-    return
-  }
-  schedule(poller)
+function listen(): void {
+  if (listening || typeof window === "undefined") return
+  listening = true
+  document.addEventListener("visibilitychange", onWake)
+  window.addEventListener("online", onWake)
+  window.addEventListener("offline", onWake)
 }
-
-/** Attach to the (single) poll loop for `fileId`; returns the detach function. */
+function stopIfUnused(): void {
+  if (pollers.size) return
+  if (timer) clearTimeout(timer)
+  timer = null
+  inFlight?.abort()
+  if (listening) {
+    document.removeEventListener("visibilitychange", onWake)
+    window.removeEventListener("online", onWake)
+    window.removeEventListener("offline", onWake)
+  }
+  listening = false
+}
+async function tick(): Promise<void> {
+  if (inFlight || !canPoll()) return
+  const controller = new AbortController()
+  inFlight = controller
+  const entries = activePollers()
+  try {
+    for (let start = 0; start < entries.length && !controller.signal.aborted && canPoll(); start += 50) {
+      const batch = entries.slice(start, start + 50).filter(p => pollers.get(p.fileId) === p)
+      if (!batch.length) continue
+      const root = getSameOriginApiBaseUrl().replace(/\/+$/, "")
+      const response = await authenticatedFetch(`${root}/files/processing-status?ids=${encodeURIComponent(batch.map(p => p.fileId).join(','))}`, {
+        credentials: "include", signal: controller.signal,
+      })
+      if (controller.signal.aborted) return
+      const body = response.status === 200 ? await response.json().catch(() => null) : null
+      const rows: any[] = Array.isArray(body?.files) ? body.files : Array.isArray(body?.statuses) ? body.statuses : body?.fileId ? [body] : []
+      const byId = new Map(rows.map(row => [String(row.id || row.fileId), row]))
+      for (const poller of batch) {
+        if (pollers.get(poller.fileId) !== poller) continue
+        poller.polls += 1
+        const row = byId.get(poller.fileId)
+        const stage = row?.processingStage || row?.stage
+        if (response.status === 200 && stage) {
+          poller.missing = 0
+          const terminal = Boolean(row.isTerminal || TERMINAL.has(stage))
+          const next: FileProcessingStatus = {
+            fileId: poller.fileId, stage, error: row.processingError ?? row.error ?? null,
+            stageAt: row.processingStageAt ?? row.stageAt ?? null, isTerminal: terminal, loading: !terminal, pending: false,
+            processingProgress: terminal ? null : row.processingProgress ?? null,
+          }
+          publish(poller, next)
+          if (terminal) statusMemo.rememberTerminal(poller.fileId, next)
+        } else {
+          if (response.status === 200) poller.missing += 1
+          const status = response.status === 200 && !row ? 404 : response.status
+          if (decideProcessingStatusPoll(status, status === 404 ? poller.missing : poller.polls) === "stop") giveUp(poller, false)
+          else if (poller.polls >= MAX_POLLS) giveUp(poller, true)
+        }
+      }
+    }
+  } catch {
+    // Network errors never convert stored files into failures; visible/online resumes.
+  } finally {
+    if (inFlight === controller) inFlight = null
+    schedule()
+  }
+}
 function subscribeToFileStatus(fileId: string, subscriber: Subscriber): () => void {
   let poller = pollers.get(fileId)
   if (!poller) {
-    poller = {
-      fileId,
-      subscribers: new Set(),
-      last: pendingStatus(fileId),
-      polls: 0,
-      timer: null,
-      onVisible: null,
-      stopped: false,
-    }
+    poller = { fileId, subscribers: new Set(), last: statusMemo.terminal(fileId) || pendingStatus(fileId), polls: 0, missing: 0 }
     pollers.set(fileId, poller)
-    // Kick off the first read immediately; subsequent reads are paced.
-    void tick(poller)
   }
   poller.subscribers.add(subscriber)
-  if (!poller.last.pending) subscriber(poller.last)
+  subscriber(poller.last)
+  listen()
+  schedule(0)
   return () => {
     poller.subscribers.delete(subscriber)
-    if (poller.subscribers.size === 0) stopPoller(poller)
+    if (poller.subscribers.size === 0 && pollers.get(fileId) === poller) pollers.delete(fileId)
+    stopIfUnused()
   }
 }
-
-/** Test seam: forget cached terminal answers and stop every poll loop. */
+/** Retrying a processing job invalidates its old ready/failed verdict. */
+export function invalidateFileProcessingStatus(fileId: string): void {
+  statusMemo.forget(fileId)
+  const poller = pollers.get(fileId)
+  if (poller) { poller.polls = 0; poller.missing = 0; publish(poller, pendingStatus(fileId)); schedule(0) }
+}
 export function resetFileProcessingStatusMemo(): void {
-  for (const poller of [...pollers.values()]) stopPoller(poller)
   pollers.clear()
+  stopIfUnused()
   statusMemo.reset()
+}
+
+/** Collection subscribers and chips share the very same batched transport. */
+export function subscribeToFileProcessingStatuses(fileIds: string[], subscriber: Subscriber): () => void {
+  const unsubscribe = [...new Set(fileIds)].map(id => subscribeToFileStatus(id, subscriber))
+  return () => unsubscribe.forEach(stop => stop())
 }
 
 export function useFileProcessingStatus(
@@ -288,7 +225,7 @@ export function useFileProcessingStatus(
     if (cached) {
       // The server already said ready/failed for this file: no request.
       setState(cached)
-      return
+      return subscribeToFileStatus(fileId, setState)
     }
     setState(pendingStatus(fileId))
     return subscribeToFileStatus(fileId, setState)
