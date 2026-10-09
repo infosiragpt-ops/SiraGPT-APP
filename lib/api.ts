@@ -14,6 +14,10 @@ import {
   authenticatedFetch,
   blockAuthRefresh,
   clearAuthRefreshBlock,
+  captureAuthSession,
+  invalidateAuthSession,
+  isAuthSessionCurrent,
+  type AuthSessionSnapshot,
   prepareAuthenticatedRequest,
 } from "./authenticated-fetch"
 import { reportClientLog, type ClientTurnReason } from "./client-logs"
@@ -1347,6 +1351,7 @@ class ApiClient {
   // Refresh-token state — when a 401 fires, we attempt /auth/refresh once
   // and queue concurrent requests until it resolves.
   private _refreshing: Promise<boolean> | null = null;
+  private _lastRefreshSession: AuthSessionSnapshot | null = null;
   // After a refresh fails, every polling 401 retried it (prod 2026-09-27:
   // «POST /api/auth/refresh → 403» every ~15 s from one Safari tab). One
   // failure closes the session and blocks new attempts for a minute.
@@ -1362,16 +1367,19 @@ class ApiClient {
 
     // Get token from localStorage on client side (never throws).
     this.token = readStoredAuthToken();
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", event => {
+        if (event.key === null || event.key === "auth-token") this.token = readStoredAuthToken();
+      });
+    }
   }
 
   private _getAccessTokenSnapshot(): string | null {
-    if (this.token) return this.token;
     const stored = readStoredAuthToken();
-    if (stored) {
-      this.token = stored;
-      return stored;
-    }
-    return null;
+    if (stored) this.token = stored;
+    // Preserve token-only/private-mode clients when storage is unavailable
+    // or deliberately empty; explicit logout goes through setToken(null).
+    return this.token;
   }
 
   private _reportApiFailure(args: {
@@ -1426,6 +1434,8 @@ class ApiClient {
    */
   private async request(endpoint: string, options: RequestInit & { timeoutMs?: number; maxRetries?: number; suppressFailureLog?: boolean } = {}) {
     const url = `${this.baseURL}${endpoint}`;
+    let requestSession = captureAuthSession();
+    let authRefreshAttempted = false;
     const timeoutMs = options.timeoutMs ?? this.DEFAULT_TIMEOUT_MS;
     const callerSignal = options.signal as AbortSignal | undefined;
     const makeAbortError = () => {
@@ -1488,6 +1498,12 @@ class ApiClient {
     let lastError: Error & { status?: number; statusCode?: number; errorData?: any } | null = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      if (captureAuthSession().epoch !== requestSession.epoch) throw requestError(401, { error: "session_changed" });
+      if (!isCredentialHandshake(endpoint, method)) {
+        const currentToken = this._getAccessTokenSnapshot();
+        if (currentToken) headers.set("Authorization", `Bearer ${currentToken}`);
+        else headers.delete("Authorization");
+      }
       if (callerSignal?.aborted) {
         throw makeAbortError();
       }
@@ -1519,6 +1535,7 @@ class ApiClient {
           // the transport's own refetch doubled every attempt against a
           // server that had just asked for relief.
           retryTransient: false,
+          onTokenRefreshed: token => { this.token = token; },
         });
 
         // HTTP-level success (2xx)
@@ -1569,10 +1586,17 @@ class ApiClient {
           if (
             response.status === 401 &&
             this.token &&
+            !authRefreshAttempted &&
+            endpoint !== '/auth/logout' &&
+            isAuthSessionCurrent(requestSession) &&
             !isCredentialHandshake(endpoint, method)
           ) {
+            authRefreshAttempted = true;
             const refreshed = await this._tryRefresh();
-            if (refreshed) {
+            if (refreshed && this._lastRefreshSession
+              && requestSession.epoch === this._lastRefreshSession.epoch
+              && isAuthSessionCurrent(this._lastRefreshSession)) {
+              requestSession = this._lastRefreshSession;
               // Update Authorization header with new token
               headers.set('Authorization', `Bearer ${this.token}`);
               clearTimeout(timeoutId);
@@ -1676,6 +1700,7 @@ class ApiClient {
   private authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     return authenticatedFetch(input, init, {
       bearerToken: this._getAccessTokenSnapshot(),
+      onTokenRefreshed: token => { this.token = token; },
     });
   }
 
@@ -1730,6 +1755,8 @@ class ApiClient {
       return this._refreshing;
     }
     if (Date.now() < this._refreshBlockedUntil) return false;
+    this._getAccessTokenSnapshot();
+    const session = captureAuthSession();
 
     // Status of the last refresh answer: 401/403 means the session is over
     // and the shared transport must stop refreshing on later 401s too.
@@ -1756,21 +1783,28 @@ class ApiClient {
           bearerToken: includeBearer ? this.token : null,
         });
 
+        if (!isAuthSessionCurrent(session)) return false;
         if (!res.ok) {
           lastRefreshStatus = Number(res.status) || null;
           return false;
         }
 
         const data = await res.json();
-        if (!data?.token) return false;
-        this.setToken(data.token);
+        if (!data?.token || !isAuthSessionCurrent(session)) return false;
+        // Rotation stays in the same identity generation. Public setToken
+        // is reserved for login/logout and invalidates pending old work.
+        this.token = data.token;
+        writeStoredAuthToken(data.token);
+        this._refreshBlockedUntil = 0;
+        clearAuthRefreshBlock();
+        this._lastRefreshSession = captureAuthSession();
         return true;
       } catch {
         return false;
       }
     };
 
-    this._refreshing = (async () => {
+    const refreshing = (async () => {
       // Legacy/browser clients can have a stale localStorage `auth-token`
       // while the httpOnly/session cookie is still valid (common after
       // deploys, mobile Safari restores, or older token refresh bugs). The
@@ -1780,9 +1814,11 @@ class ApiClient {
       // token-only clients, then fall back once to cookie-only refresh.
       const refreshedWithBearer = this.token ? await tryRefreshRequest(true) : false;
       if (refreshedWithBearer) return true;
+      if (!isAuthSessionCurrent(session)) return false;
 
       const refreshedWithCookie = await tryRefreshRequest(false);
       if (refreshedWithCookie) return true;
+      if (!isAuthSessionCurrent(session)) return false;
 
       // Refresh failed — clear stale localStorage token so the next request
       // does not keep sending a poisoned Authorization header, and tell the
@@ -1799,12 +1835,13 @@ class ApiClient {
       return false;
     })();
 
-    const result = await this._refreshing;
-    this._refreshing = null;
-    return result;
+    this._refreshing = refreshing;
+    try { return await refreshing; }
+    finally { if (this._refreshing === refreshing) this._refreshing = null; }
   }
 
   setToken(token: string | null) {
+    invalidateAuthSession();
     this.token = token;
     if (token) {
       this._refreshBlockedUntil = 0;
@@ -1822,11 +1859,14 @@ class ApiClient {
   // auth-context (which uses a narrower local User type with `id: string`)
   // doesn't need a refactor in this cycle.
   async register(data: RegisterRequest): Promise<any> {
+    invalidateAuthSession();
+    const session = captureAuthSession();
     const result = await this.request('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     });
 
+    if (captureAuthSession().epoch !== session.epoch) throw requestError(401, { error: "session_changed" });
     if (result?.token) {
       this.setToken(result.token);
     }
@@ -1835,11 +1875,14 @@ class ApiClient {
   }
 
   async login(data: LoginRequest): Promise<any> {
+    invalidateAuthSession();
+    const session = captureAuthSession();
     const result = await this.request('/auth/login', {
       method: 'POST',
       body: JSON.stringify(data),
     });
 
+    if (captureAuthSession().epoch !== session.epoch) throw requestError(401, { error: "session_changed" });
     if (result?.token) {
       this.setToken(result.token);
     }
@@ -1848,8 +1891,10 @@ class ApiClient {
   }
 
   async logout() {
+    invalidateAuthSession();
+    const session = captureAuthSession();
     await this.request('/auth/logout', { method: 'POST' });
-    this.setToken(null);
+    if (captureAuthSession().epoch === session.epoch) this.setToken(null);
   }
 
   // Super Admin Impersonation. Backend requires a `reason` (min 10 chars)

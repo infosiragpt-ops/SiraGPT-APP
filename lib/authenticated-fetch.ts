@@ -27,6 +27,8 @@ export type AuthenticatedRequestOptions = {
    * attempt.
    */
   retryTransient?: boolean
+  /** Keep token-only clients in sync when browser storage is unavailable. */
+  onTokenRefreshed?: (token: string) => void
 }
 
 export type AuthenticatedFetch = {
@@ -66,7 +68,42 @@ export type SessionGuard = {
   clear(): void
 }
 
-type RefreshOutcome = { ok: boolean; definitive: boolean }
+export type AuthSessionSnapshot = { epoch: number; storage: string | null }
+let authSessionEpoch = 0
+
+/** Identity changes invalidate pending work, including logout followed by login. */
+export function invalidateAuthSession(): void { authSessionEpoch += 1 }
+
+export function captureAuthSession(): AuthSessionSnapshot {
+  let storage: string | null = null
+  try {
+    if (typeof window !== "undefined") storage = JSON.stringify([
+      window.localStorage.getItem("auth-token"),
+      window.localStorage.getItem("siragpt:refresh-family"),
+      window.localStorage.getItem("siragpt:refresh-version"),
+    ])
+  } catch { /* unavailable storage: epoch still protects this tab */ }
+  return { epoch: authSessionEpoch, storage }
+}
+
+function sameAuthSession(a: AuthSessionSnapshot, b: AuthSessionSnapshot): boolean {
+  return a.epoch === b.epoch && a.storage === b.storage
+}
+
+export function isAuthSessionCurrent(snapshot: AuthSessionSnapshot): boolean {
+  return sameAuthSession(snapshot, captureAuthSession())
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", event => {
+    if (event.key === null || ["auth-token", "siragpt:refresh-family", "siragpt:refresh-version"].includes(event.key)) {
+      invalidateAuthSession()
+    }
+  })
+}
+
+type RefreshMarker = { session: AuthSessionSnapshot; bearer: string | null }
+type RefreshOutcome = { ok: boolean; definitive: boolean; token?: string | null; marker?: RefreshMarker }
 
 type CsrfTokenManagerOptions = {
   apiBaseUrl: string
@@ -251,7 +288,6 @@ function defaultFetch(): typeof fetch {
     globalThis.fetch(input, init)) as typeof fetch
 }
 
-let refreshFlight: Promise<RefreshOutcome> | null = null
 
 function isAuthRefreshPath(input: RequestInfo | URL, apiBaseUrl: string): boolean {
   const url = toUrl(input, runtimeBaseUrl(apiBaseUrl))
@@ -321,47 +357,6 @@ function createSessionGuard(
   }
 }
 
-async function singleFlightRefresh(
-  apiBaseUrl: string,
-  fetchImpl: typeof fetch,
-): Promise<RefreshOutcome> {
-  if (refreshFlight) return refreshFlight
-  refreshFlight = (async (): Promise<RefreshOutcome> => {
-    try {
-      const headers = new Headers({ Accept: "application/json", "Content-Type": "application/json" })
-      try {
-        if (typeof window !== "undefined") {
-          const family = window.localStorage.getItem("siragpt:refresh-family")
-          const version = window.localStorage.getItem("siragpt:refresh-version")
-          if (family) headers.set("x-refresh-family", family)
-          if (version) headers.set("x-refresh-version", version)
-        }
-      } catch { /* private mode */ }
-      const res = await fetchImpl(`${apiBaseUrl.replace(/\/+$/, "")}/auth/refresh`, {
-        method: "POST",
-        credentials: "include",
-        headers,
-      })
-      // 401/403 from the refresh endpoint itself is final: the refresh
-      // cookie is missing, expired or revoked. 5xx and network errors are not.
-      if (!res.ok) return { ok: false, definitive: res.status === 401 || res.status === 403 }
-      const data = await res.json().catch(() => null) as { token?: unknown } | null
-      const token = typeof data?.token === "string" && data.token.trim() ? data.token.trim() : null
-      if (token && typeof window !== "undefined") {
-        try { window.localStorage.setItem("auth-token", token) } catch { /* ignore */ }
-      }
-      return { ok: Boolean(token) || res.ok, definitive: false }
-    } catch {
-      return { ok: false, definitive: false }
-    }
-  })()
-  try {
-    return await refreshFlight
-  } finally {
-    refreshFlight = null
-  }
-}
-
 /** Longest the transport itself waits before its single transient refetch. */
 export const TRANSIENT_RETRY_MAX_WAIT_MS = 2_000
 
@@ -405,6 +400,59 @@ export function createAuthenticatedFetch(
     return typeof token === "string" ? token : null
   })
 
+  const readMarker = async (): Promise<RefreshMarker> => {
+    const session = captureAuthSession()
+    const bearer = normalizeToken(await getBearerToken())
+    return { session, bearer }
+  }
+  const sameMarker = (a: RefreshMarker, b: RefreshMarker) =>
+    sameAuthSession(a.session, b.session) && a.bearer === b.bearer
+  const markerCurrent = async (marker: RefreshMarker, rotatedToken?: string | null) => {
+    const current = await readMarker()
+    return sameAuthSession(marker.session, current.session)
+      && (marker.bearer === current.bearer || Boolean(rotatedToken && current.bearer === rotatedToken))
+      && isAuthSessionCurrent(current.session)
+  }
+  let refreshFlight: { before: RefreshMarker; promise: Promise<RefreshOutcome> } | null = null
+  let lastRefresh: { before: RefreshMarker; result: RefreshOutcome } | null = null
+
+  const singleFlightRefresh = async (before: RefreshMarker): Promise<RefreshOutcome> => {
+    // A delayed 401 from a concurrent request may arrive after our refresh
+    // finished. Reuse only that same session's still-current rotation.
+    if (lastRefresh && sameMarker(lastRefresh.before, before)
+      && lastRefresh.result.marker && await markerCurrent(lastRefresh.result.marker, lastRefresh.result.token)) return lastRefresh.result
+    if (refreshFlight && sameMarker(refreshFlight.before, before)) return refreshFlight.promise
+    if (!await markerCurrent(before)) return { ok: false, definitive: false }
+    if (refreshFlight && sameMarker(refreshFlight.before, before)) return refreshFlight.promise
+    const flight = { before, promise: Promise.resolve<RefreshOutcome>({ ok: false, definitive: false }) }
+    flight.promise = (async (): Promise<RefreshOutcome> => {
+      try {
+        const headers = new Headers({ Accept: "application/json", "Content-Type": "application/json" })
+        try {
+          const family = window.localStorage.getItem("siragpt:refresh-family")
+          const version = window.localStorage.getItem("siragpt:refresh-version")
+          if (family) headers.set("x-refresh-family", family)
+          if (version) headers.set("x-refresh-version", version)
+        } catch { /* storage unavailable */ }
+        const res = await fetchImpl(apiBaseUrl + "/auth/refresh", { method: "POST", credentials: "include", headers })
+        if (!await markerCurrent(before)) return { ok: false, definitive: false }
+        if (!res.ok) return { ok: false, definitive: res.status === 401 || res.status === 403 }
+        const data = await res.json().catch(() => null) as { token?: unknown } | null
+        const token = normalizeToken(data?.token)
+        if (!await markerCurrent(before)) return { ok: false, definitive: false }
+        if (token && typeof window !== "undefined") {
+          try { window.localStorage.setItem("auth-token", token) } catch { /* memory-only replay */ }
+        }
+        const result: RefreshOutcome = { ok: true, definitive: false, token, marker: await readMarker() }
+        lastRefresh = { before, result }
+        return result
+      } catch { return { ok: false, definitive: false } }
+    })()
+    refreshFlight = flight
+    try { return await flight.promise }
+    finally { if (refreshFlight === flight) refreshFlight = null }
+  }
+
   const prepare = async (
     input: RequestInfo | URL,
     init: RequestInit = {},
@@ -430,6 +478,7 @@ export function createAuthenticatedFetch(
         ? requestOptions.bearerToken
         : await getBearerToken(),
     )
+    if (hasExplicitBearer && requestOptions.bearerToken === null) headers.delete("Authorization")
     if (bearer && !headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${bearer}`)
     }
@@ -451,8 +500,14 @@ export function createAuthenticatedFetch(
     init: RequestInit = {},
     requestOptions: AuthenticatedRequestOptions = {},
   ): Promise<Response> => {
+    const marker = await readMarker()
+    // Retain an unconsumed template; native fetch consumes Request bodies.
+    const template = typeof Request !== "undefined" && input instanceof Request ? input.clone() : input
+    const dispatch = (prepared: RequestInit) => fetchImpl(
+      typeof Request !== "undefined" && template instanceof Request ? template.clone() : template, prepared,
+    )
     const prepared = await prepare(input, init, requestOptions)
-    let response = await fetchImpl(input, prepared)
+    let response = await dispatch(prepared)
     const method = resolveMethod(input, prepared)
     const transientRetryAllowed = requestOptions.retryTransient !== false
       && method === "GET"
@@ -467,13 +522,13 @@ export function createAuthenticatedFetch(
         : 250
       try { await new Promise((r) => setTimeout(r, waitMs)) } catch { /* ignore */ }
       if (prepared.signal?.aborted) return response
-      response = await fetchImpl(input, prepared)
+      response = await dispatch(prepared)
     }
     if (transientRetryAllowed && response.status === 429) {
       const waitMs = transientRetryWaitMs(response.headers.get("Retry-After"), 400)
       try { await new Promise((r) => setTimeout(r, waitMs)) } catch { /* ignore */ }
       if (prepared.signal?.aborted) return response
-      response = await fetchImpl(input, prepared)
+      response = await dispatch(prepared)
     }
     const usedBearer = new Headers(prepared.headers).has("Authorization")
 
@@ -488,7 +543,7 @@ export function createAuthenticatedFetch(
       if (!fresh) return response
       const retryHeaders = new Headers(prepared.headers)
       retryHeaders.set("X-CSRF-Token", fresh)
-      return fetchImpl(input, { ...prepared, headers: retryHeaders })
+      return dispatch({ ...prepared, headers: retryHeaders })
     }
 
     if (response.ok && isSessionHandshakePath(input, apiBaseUrl)) sessionGuard.clear()
@@ -503,12 +558,20 @@ export function createAuthenticatedFetch(
       // to be over for the bearer this request carried.
       const sentBearer = bearerFromHeaders(prepared.headers)
       if (sessionGuard.isBlocked(sentBearer)) return response
-      const refreshed = await singleFlightRefresh(apiBaseUrl, fetchImpl)
-      if (refreshed.ok) {
-        const retried = await prepare(input, init, requestOptions)
-        return fetchImpl(input, retried)
+      const refreshed = await singleFlightRefresh(marker)
+      if (refreshed.ok && refreshed.marker && await markerCurrent(refreshed.marker, refreshed.token)) {
+        if (prepared.signal?.aborted) return response
+        const retryHeaders = new Headers(prepared.headers)
+        retryHeaders.delete("Authorization")
+        const bearerToken = requestOptions.bearerToken === null ? null : refreshed.token ?? null
+        if (bearerToken) retryHeaders.set("Authorization", `Bearer ${bearerToken}`)
+        const retried = await prepare(input, { ...prepared, headers: retryHeaders }, { ...requestOptions, bearerToken })
+        if (prepared.signal?.aborted || !await markerCurrent(refreshed.marker, refreshed.token)) return response
+        if (refreshed.token) requestOptions.onTokenRefreshed?.(refreshed.token)
+        if (!isAuthSessionCurrent(refreshed.marker.session)) return response
+        return dispatch(retried)
       }
-      if (refreshed.definitive) sessionGuard.block(sentBearer)
+      if (refreshed.definitive && await markerCurrent(marker)) sessionGuard.block(sentBearer)
     }
 
     return response
