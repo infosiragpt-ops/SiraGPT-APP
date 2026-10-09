@@ -17,6 +17,7 @@ import {
   captureAuthSession,
   invalidateAuthSession,
   isAuthSessionCurrent,
+  isCsrfInvalid,
   type AuthSessionSnapshot,
   prepareAuthenticatedRequest,
 } from "./authenticated-fetch"
@@ -1772,9 +1773,10 @@ class ApiClient {
     this._getAccessTokenSnapshot();
     const session = captureAuthSession();
 
-    // Status of the last refresh answer: 401/403 means the session is over
-    // and the shared transport must stop refreshing on later 401s too.
+    // Only an authentication rejection proves the session is over. A CSRF
+    // failure must remain recoverable without erasing the user's credentials.
     let lastRefreshStatus: number | null = null;
+    let csrfRejected = false;
     const tryRefreshRequest = async (includeBearer: boolean): Promise<boolean> => {
       const headers = new Headers({ 'Content-Type': 'application/json' });
       if (includeBearer && this.token) {
@@ -1800,6 +1802,7 @@ class ApiClient {
         if (!isAuthSessionCurrent(session)) return false;
         if (!res.ok) {
           lastRefreshStatus = Number(res.status) || null;
+          csrfRejected = await isCsrfInvalid(res);
           return false;
         }
 
@@ -1828,11 +1831,11 @@ class ApiClient {
       // token-only clients, then fall back once to cookie-only refresh.
       const refreshedWithBearer = this.token ? await tryRefreshRequest(true) : false;
       if (refreshedWithBearer) return true;
-      if (!isAuthSessionCurrent(session)) return false;
+      if (csrfRejected || !isAuthSessionCurrent(session)) return false;
 
       const refreshedWithCookie = await tryRefreshRequest(false);
       if (refreshedWithCookie) return true;
-      if (!isAuthSessionCurrent(session)) return false;
+      if (csrfRejected || !isAuthSessionCurrent(session)) return false;
 
       // Refresh failed — clear stale localStorage token so the next request
       // does not keep sending a poisoned Authorization header, and tell the

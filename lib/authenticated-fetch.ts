@@ -103,7 +103,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 }
 
 type RefreshMarker = { session: AuthSessionSnapshot; bearer: string | null }
-type RefreshOutcome = { ok: boolean; definitive: boolean; token?: string | null; marker?: RefreshMarker }
+type RefreshOutcome = { ok: boolean; definitive: boolean; token?: string | null; marker?: RefreshMarker; csrfResponse?: Response }
 
 type CsrfTokenManagerOptions = {
   apiBaseUrl: string
@@ -212,7 +212,7 @@ function mergeRequestHeaders(input: RequestInfo | URL, init?: RequestInit): Head
   return headers
 }
 
-async function isCsrfInvalid(response: Response): Promise<boolean> {
+export async function isCsrfInvalid(response: Response): Promise<boolean> {
   if (response.status !== 403) return false
   try {
     const body = await response.clone().json() as { error?: unknown; code?: unknown }
@@ -226,6 +226,7 @@ export class CsrfTokenManager {
   private cachedToken: string | null = null
   private inFlight: Promise<string | null> | null = null
   private epoch = 0
+  private observedCookie: string | null = null
   private readonly apiBaseUrl: string
   private readonly fetchImpl: typeof fetch
   private readonly readCsrfCookie: () => string | null
@@ -234,6 +235,7 @@ export class CsrfTokenManager {
     this.apiBaseUrl = options.apiBaseUrl.replace(/\/+$/, "")
     this.fetchImpl = options.fetchImpl
     this.readCsrfCookie = options.readCsrfCookie
+    this.observedCookie = normalizeToken(this.readCsrfCookie())
   }
 
   clear(): void {
@@ -242,8 +244,19 @@ export class CsrfTokenManager {
     this.inFlight = null
   }
 
+  /** Changes only with CSRF credentials or an explicit cache reset, not time. */
+  get revision(): number {
+    const cookie = normalizeToken(this.readCsrfCookie())
+    if (cookie !== this.observedCookie) {
+      this.observedCookie = cookie
+      this.clear()
+    }
+    return this.epoch
+  }
+
   async getToken(forceRefresh = false): Promise<string | null> {
     if (typeof window === "undefined") return null
+    void this.revision
     if (forceRefresh) this.clear()
 
     if (this.cachedToken) return this.cachedToken
@@ -254,6 +267,7 @@ export class CsrfTokenManager {
     if (this.inFlight) return this.inFlight
 
     const requestEpoch = this.epoch
+    const requestCookie = this.observedCookie
     const request = (async () => {
       try {
         const response = await this.fetchImpl(`${this.apiBaseUrl}${CSRF_PATH}`, {
@@ -263,8 +277,18 @@ export class CsrfTokenManager {
         })
         if (!response.ok) return null
         const body = await response.json().catch(() => null) as { csrfToken?: unknown } | null
-        const token = normalizeToken(body?.csrfToken) || normalizeToken(this.readCsrfCookie())
-        if (token && this.epoch === requestEpoch) this.cachedToken = token
+        const cookie = normalizeToken(this.readCsrfCookie())
+        // The cookie may have rotated in this response or in another tab.
+        // A late response cannot assign its old body to newer credentials.
+        if (this.epoch !== requestEpoch || cookie !== requestCookie) {
+          void this.revision
+          return this.cachedToken || cookie
+        }
+        const token = normalizeToken(body?.csrfToken) || cookie
+        if (token) {
+          if (this.cachedToken !== token) this.epoch += 1
+          this.cachedToken = token
+        }
         return token
       } catch {
         return null
@@ -415,6 +439,23 @@ export function createAuthenticatedFetch(
   }
   let refreshFlight: { before: RefreshMarker; promise: Promise<RefreshOutcome> } | null = null
   let lastRefresh: { before: RefreshMarker; result: RefreshOutcome } | null = null
+  let csrfFailure: { marker: RefreshMarker; revision: number; response: Response } | null = null
+
+  const currentCsrfFailure = (marker: RefreshMarker): Response | null => {
+    if (!csrfFailure) return null
+    if (!sameMarker(csrfFailure.marker, marker) || csrfFailure.revision !== csrfManager.revision) {
+      csrfFailure = null
+      return null
+    }
+    return csrfFailure.response.clone()
+  }
+  const rememberCsrfFailure = async (marker: RefreshMarker, revision: number, response: Response) => {
+    // Keep the real cause for pollers, without declaring the session expired.
+    // A changed identity, cookie or explicit cache reset permits recovery.
+    if (await markerCurrent(marker) && revision === csrfManager.revision) {
+      csrfFailure = { marker, revision, response: response.clone() }
+    }
+  }
 
   const singleFlightRefresh = async (before: RefreshMarker): Promise<RefreshOutcome> => {
     // A delayed 401 from a concurrent request may arrive after our refresh
@@ -424,6 +465,8 @@ export function createAuthenticatedFetch(
     if (refreshFlight && sameMarker(refreshFlight.before, before)) return refreshFlight.promise
     if (!await markerCurrent(before)) return { ok: false, definitive: false }
     if (refreshFlight && sameMarker(refreshFlight.before, before)) return refreshFlight.promise
+    const csrfResponse = currentCsrfFailure(before)
+    if (csrfResponse) return { ok: false, definitive: false, csrfResponse }
     const flight = { before, promise: Promise.resolve<RefreshOutcome>({ ok: false, definitive: false }) }
     flight.promise = (async (): Promise<RefreshOutcome> => {
       try {
@@ -439,19 +482,29 @@ export function createAuthenticatedFetch(
         const csrf = await csrfManager.getToken()
         if (!await markerCurrent(before)) return { ok: false, definitive: false }
         if (csrf) headers.set("X-CSRF-Token", csrf)
+        let csrfRevision = csrfManager.revision
         let res = await fetchImpl(apiBaseUrl + "/auth/refresh", { method: "POST", credentials: "include", headers })
         if (!await markerCurrent(before)) return { ok: false, definitive: false }
         if (await isCsrfInvalid(res)) {
           const fresh = await csrfManager.getToken(true)
-          if (!fresh || !await markerCurrent(before)) return { ok: false, definitive: false }
+          if (!await markerCurrent(before)) return { ok: false, definitive: false }
+          csrfRevision = csrfManager.revision
+          if (!fresh) {
+            await rememberCsrfFailure(before, csrfRevision, res)
+            return { ok: false, definitive: false, csrfResponse: res }
+          }
           headers.set("X-CSRF-Token", fresh)
           res = await fetchImpl(apiBaseUrl + "/auth/refresh", { method: "POST", credentials: "include", headers })
           if (!await markerCurrent(before)) return { ok: false, definitive: false }
         }
         // A CSRF rejection does not prove that the authenticated session expired.
+        if (await isCsrfInvalid(res)) {
+          await rememberCsrfFailure(before, csrfRevision, res)
+          return { ok: false, definitive: false, csrfResponse: res }
+        }
         if (!res.ok) return {
           ok: false,
-          definitive: res.status === 401 || (res.status === 403 && !await isCsrfInvalid(res)),
+          definitive: res.status === 401 || res.status === 403,
         }
         const data = await res.json().catch(() => null) as { token?: unknown } | null
         const token = normalizeToken(data?.token)
@@ -517,12 +570,19 @@ export function createAuthenticatedFetch(
     requestOptions: AuthenticatedRequestOptions = {},
   ): Promise<Response> => {
     const marker = await readMarker()
+    const refreshRequest = resolveMethod(input, init) === "POST"
+      && isTrustedSiraApiUrl(input, apiBaseUrl) && isAuthRefreshPath(input, apiBaseUrl)
+    if (refreshRequest) {
+      const failure = currentCsrfFailure(marker)
+      if (failure) return failure
+    }
     // Retain an unconsumed template; native fetch consumes Request bodies.
     const template = typeof Request !== "undefined" && input instanceof Request ? input.clone() : input
     const dispatch = (prepared: RequestInit) => fetchImpl(
       typeof Request !== "undefined" && template instanceof Request ? template.clone() : template, prepared,
     )
     const prepared = await prepare(input, init, requestOptions)
+    let csrfRevision = csrfManager.revision
     let response = await dispatch(prepared)
     const method = resolveMethod(input, prepared)
     const transientRetryAllowed = requestOptions.retryTransient !== false
@@ -547,6 +607,7 @@ export function createAuthenticatedFetch(
       response = await dispatch(prepared)
     }
     const usedBearer = new Headers(prepared.headers).has("Authorization")
+    let csrfRecoveryAttempted = false
 
     if (
       requestOptions.retryCsrfInvalid !== false
@@ -555,14 +616,24 @@ export function createAuthenticatedFetch(
       && isTrustedSiraApiUrl(input, apiBaseUrl)
       && await isCsrfInvalid(response)
     ) {
+      csrfRecoveryAttempted = true
       const fresh = await csrfManager.getToken(true)
-      if (!fresh) return response
-      const retryHeaders = new Headers(prepared.headers)
-      retryHeaders.set("X-CSRF-Token", fresh)
-      return dispatch({ ...prepared, headers: retryHeaders })
+      csrfRevision = csrfManager.revision
+      if (fresh) {
+        const retryHeaders = new Headers(prepared.headers)
+        retryHeaders.set("X-CSRF-Token", fresh)
+        response = await dispatch({ ...prepared, headers: retryHeaders })
+      }
     }
 
-    if (response.ok && isSessionHandshakePath(input, apiBaseUrl)) sessionGuard.clear()
+    if (refreshRequest && await isCsrfInvalid(response)) {
+      await rememberCsrfFailure(marker, csrfRevision, response)
+    }
+    if (response.ok && isSessionHandshakePath(input, apiBaseUrl) && await markerCurrent(marker)) {
+      sessionGuard.clear()
+      csrfFailure = null
+    }
+    if (csrfRecoveryAttempted) return response
 
     if (
       response.status === 401
@@ -587,6 +658,7 @@ export function createAuthenticatedFetch(
         if (!isAuthSessionCurrent(refreshed.marker.session)) return response
         return dispatch(retried)
       }
+      if (refreshed.csrfResponse && await markerCurrent(marker)) return refreshed.csrfResponse.clone()
       if (refreshed.definitive && await markerCurrent(marker)) sessionGuard.block(sentBearer)
     }
 
