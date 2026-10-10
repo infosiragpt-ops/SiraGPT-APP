@@ -46,10 +46,10 @@ test('the brief block is a tier-0, never-pruned system block, first after the ma
 });
 
 test('the routing gate consumes the brief: answer edits never reach the editors, Office style edits reach the runner', () => {
-  assert.match(ai, /if \(documentEditRequested && __requestBriefHints\.editsPreviousAnswer\) \{\s*documentEditRequested = false;/);
+  assert.match(ai, /if \(documentEditRequested && \(__requestBriefHints\.editsPreviousAnswer \|\| __requestBriefHints\.editsInlineText\)\) \{\s*documentEditRequested = false;/);
   assert.match(ai, /\|\| __requestBriefHints\.editsGeneratedOfficeFile\)\s*\) \{/);
   assert.match(ai, /if \(!createDocRequested && __requestBriefHints\.editsGeneratedOfficeFile && hasPriorArtifacts\) \{\s*createDocRequested = true;/);
-  assert.match(ai, /else if \(createDocRequested && __requestBriefHints\.editsPreviousAnswer && !\(processedFiles \|\| \[\]\)\.some\(\(f\) => f && !isImageMime\(f\.mimeType \|\| f\.type\)\)\) \{\s*createDocRequested = false;/);
+  assert.match(ai, /else if \(createDocRequested && \(__requestBriefHints\.editsPreviousAnswer \|\| __requestBriefHints\.editsInlineText\) && !\(processedFiles \|\| \[\]\)\.some\(\(f\) => f && !isImageMime\(f\.mimeType \|\| f\.type\)\)\) \{\s*createDocRequested = false;/);
   // The loop receives the brief and its block.
   assert.match(ai, /requestBrief: __requestBriefPublic,\s*requestBriefBlock: __requestBriefBlock \? __requestBriefBlock\.trim\(\) : '',/);
 });
@@ -57,6 +57,8 @@ test('the routing gate consumes the brief: answer edits never reach the editors,
 test('the agentic loop honours the brief in its own runner / editor claims and prompt', () => {
   assert.match(loop, /requestBrief = null,\s*requestBriefBlock = '',\s*\} = opts \|\| \{\};/);
   assert.match(loop, /const briefTargetsPreviousAnswer = Boolean\(requestBrief && requestBrief\.target && requestBrief\.target\.kind === 'previous_answer'/);
+  // Text pasted in the message after an answer is chat text: same veto.
+  assert.match(loop, /\|\| Boolean\(requestBrief && requestBrief\.target && requestBrief\.target\.kind === 'none' && requestBrief\.target\.source === 'inline'/);
   assert.match(loop, /const briefTargetsGeneratedOffice = Boolean\(requestBrief && requestBrief\.target && requestBrief\.target\.kind === 'generated_artifact'/);
   assert.match(loop, /const runnerClaim = !codingWorkspace && !briefTargetsPreviousAnswer && \(shouldRunAgentRunner\(\{[\s\S]*?\}\) \|\| \(briefTargetsGeneratedOffice && prior && uploadedFileRefs\.length === 0\)\);/);
   assert.match(loop, /&& isDocumentEditRequest\(userQuery\)\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*&& !briefTargetsPreviousAnswer/);

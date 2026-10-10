@@ -6,6 +6,27 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Fixed
+
+- The first message of a new chat is answered when it already carries its
+  material. «Traduce al inglés: Hola», «corrige: yo a ido al colegio», text
+  pasted on the next line or before the order, «resume la revolución
+  francesa», «compara Python y JavaScript», «convierte 25 °C a fahrenheit»,
+  «haz un gráfico de la inflación», «dibuja un gato», «¿cómo eliminar mi
+  cuenta?» or «¿puedes hacer gráficos?» used to get «¿Qué quieres que…? No veo
+  un archivo adjunto ni un texto en este chat.» without calling the model. The
+  question remains when the object is missing or is material nobody gave
+  («tradúcelo», «resume el documento», «mejora mi CV», «corrige mi ensayo:
+  tiene errores»). Mid-chat, text pasted after «:» or between quotes is
+  translated or corrected instead of the previous answer and is never routed
+  to a file editor; scopes, instructions and edits of a generated file keep
+  their target. How-to questions are no longer read as edits. Polite orders
+  («¿Puedes hacer diapositivas sobre la célula?», «¿puedes buscar vuelos…?»),
+  a question followed by an order, how-to questions about the generated file,
+  the answer or a pasted link, and «dibuja» over data keep their order.
+  Generic documents («el informe de ventas»), the user's own figures («analiza
+  mis ventas») and short notes after «:» or Enter still ask or redo the answer.
+
 ### Added
 
 - Reference-guided image editing preserves the selected image and up to eight
