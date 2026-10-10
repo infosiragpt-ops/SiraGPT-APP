@@ -416,7 +416,7 @@ test('after an answer, text pasted after «:», between quotes or on the next li
     assert.equal(hints.editsPreviousAnswer, false, p);
     assert.equal(hints.editsInlineText, true, p); // never a file for the runner or the editors
     assert.equal(rb.publicRequestBrief(b).target.source, 'inline', p);
-    assert.match(rb.buildRequestBriefPromptBlock(b), /Objeto: el texto que el usuario escribió en ESTE mensaje/, p);
+    assert.match(rb.buildRequestBriefPromptBlock(b), /Objeto: probablemente el texto que el usuario escribió en este mensaje/, p);
   }
   // A text pasted in a chat that holds an older generated Word keeps the veto.
   const old = brief('corrige: yo a ido al cine ayer con mis amigos', { recentTurns: docxTurns, priorArtifact: docx });
@@ -492,4 +492,63 @@ test('the detector runs in linear time on crafted input (no catastrophic backtra
       assert.ok(ms < 50, `${p.slice(0, 40)}… took ${ms.toFixed(1)} ms`);
     }
   }
+});
+
+test('round two: drawing only for a drawing order, never for «la Ilustración», «ilustra con un ejemplo» or «drawbacks»', () => {
+  for (const p of ['¿Qué fue la Ilustración?', 'Explica la Ilustración', '¿Qué es el despotismo ilustrado?', 'Ilustra con un ejemplo la ley de Ohm',
+    'Dame un ejemplo ilustrativo de oferta y demanda', 'quién fue el ilustrador de El Principito', 'What are the drawbacks of remote work?', 'what is technical drawing?']) {
+    assert.notEqual(brief(p).deliverable.kind, 'image', p);
+  }
+  assert.equal(brief('Escribe un cuento ilustrado para niños sobre el reciclaje').deliverable.kind, 'text');
+  assert.equal(brief('traduce al inglés: La Ilustración fue un movimiento cultural').action, 'transform');
+  for (const p of ['dibuja un gato', 'dibújame un perro', '¿me dibujas un gato?', '¿puedes dibujar un gato?', 'draw me a dragon']) {
+    const b = brief(p);
+    assert.equal(b.action, 'create', p);
+    assert.equal(b.deliverable.kind, 'image', p);
+  }
+});
+
+test('round two: a polite «¿puedes …?» mid-chat is an order on the answer or the generated file, not a capability question', () => {
+  const deckTurns = [{ role: 'user', text: 'hazme una presentación sobre la fotosíntesis' }, { role: 'assistant', text: 'Listo, aquí tienes informe.pptx.' }];
+  for (const p of ['¿puedes cambiar a azul?', '¿Podrías cambiar todo a azul?', '¿puedes agregar un logo?', '¿Podrías quitar una diapositiva?']) {
+    const b = brief(p, { recentTurns: deckTurns, priorArtifact: deck });
+    assert.equal(b.target.kind, 'generated_artifact', p);
+    assert.equal(rb.routingHints(b).editsGeneratedOfficeFile, true, p);
+  }
+  assert.equal(brief('¿Puedes convertir a PDF?', { recentTurns: prev, priorArtifact: docx }).target.kind, 'generated_artifact');
+  for (const p of ['¿puedes traducir al inglés?', '¿Podrías agregar una conclusión?', '¿puedes agregar más ejemplos?']) {
+    assert.equal(rb.routingHints(brief(p, { recentTurns: prev })).editsPreviousAnswer, true, p);
+  }
+  // A link, a formula or data is material: an order even as a question.
+  const link = brief('¿puedes transcribir https://upn.class.com/classes/rec/123 del minuto 1.5 al 10?');
+  assert.equal(link.deliverable.kind, 'transcription');
+  assert.equal(link.target.kind, 'url');
+  assert.match(rb.buildRequestBriefPromptBlock(link), /transcribe_url/);
+  assert.equal(brief('¿Puedes graficar f(x) = 2x + 3?').action, 'visualize');
+  assert.equal(brief('¿puedes hacer gráficos?').action, 'answer');
+});
+
+test('round two: scopes, corrections and short notes are not pasted material; multi-line pastes are', () => {
+  for (const p of ['traduce al inglés: el segundo y tercer párrafo', 'Traduce al inglés\nSolo la conclusión', 'traduce al inglés: Solo el último párrafo',
+    'traduce al inglés: cada sección por separado', 'traduce: lo último', 'corrige: hay un error en la ecuación', 'corrige: no es en la mitocondria, es en el cloroplasto']) {
+    assert.equal(brief(p, { recentTurns: prev }).target.kind, 'previous_answer', p);
+  }
+  for (const p of ['Traduce al inglés: Hola, me llamo Ana.\nEstudio medicina en Lima y tengo 20 años.', 'Corrige: yo a ido al cine ayer.\nDespués fuimos a comer y no avia mesa.']) {
+    const b = brief(p, { recentTurns: prev });
+    assert.equal(b.target.source, 'inline', p);
+    assert.equal(rb.routingHints(b).editsInlineText, true, p);
+  }
+  // A file requested from the pasted text is runner work: no chat-text veto.
+  assert.equal(rb.routingHints(brief('traduce al inglés en un word: Hola, ¿cómo estás? Me llamo Ana.', { recentTurns: prev })).editsInlineText, false);
+  for (const p of ['corrige el ensayo y dime los errores', 'resume el informe para mi jefe', 'revisa el informe antes de enviarlo', 'summarize the book for my exam',
+    'Traduce mi partida de nacimiento al inglés\nLa necesito para un trámite de visa', 'Corrige mi ensayo\nTiene muchos errores de ortografía y no sé cómo arreglarlos',
+    'Mejora mi carta de presentación\nEs para una beca en España', 'Tengo un ensayo para mañana\n\nCorrígelo', 'Traduce el pdf\nEs urgente', 'Mejora mi CV\nQuiero postular a un banco',
+    'Resume el documento\nQue sea corto', 'haz un gráfico con esto', 'parafrasea con otras palabras', 'fix the grammar']) {
+    assert.equal(brief(p).ambiguity.ask, true, p);
+  }
+  for (const p of ['resume la revolución francesa para el examen', 'resume el capítulo 3 de Don Quijote para mañana', 'Hola, me llamo Ana y vivo en Lima. Tradúcelo al inglés']) {
+    assert.equal(brief(p).ambiguity.ask, false, p);
+  }
+  // The «ask for missing material» line is only for a first message.
+  assert.doesNotMatch(rb.buildRequestBriefPromptBlock(brief('hazme un resumen', { recentTurns: prev })), /pídeselo en una frase/);
 });

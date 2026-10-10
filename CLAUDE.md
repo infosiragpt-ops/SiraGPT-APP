@@ -1804,19 +1804,27 @@ el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recib
   posesivo). `carriesOwnMaterial` cuenta como fuente el texto tras «:», entre comillas o en las
   líneas siguientes, el texto pegado ANTES de la orden («<texto>⏎tradúcelo»), un tema u obra con
   nombre, una comparación, un valor y las preguntas de cómo hacer algo o de capacidad («¿cómo
-  eliminar mi cuenta?», «¿puedes hacer gráficos?» ⇒ acción `answer`); «dibuja un gato» es
-  `create` + imagen. Lo que sigue a «:» se juzga: instrucción, alcance, emoticono, otra referencia
-  o una descripción corta de una obra larga («corrige mi ensayo: tiene errores») no son material.
+  eliminar mi cuenta?», «¿puedes hacer gráficos?» ⇒ acción `answer`; la de capacidad SOLO sin
+  respuesta ni archivo previos: a mitad de chat «¿puedes cambiar a azul?» es una orden, y un enlace,
+  un dato o «esto» la vuelven orden también en el primer mensaje). «dibuja un gato» es `create` +
+  imagen solo con un VERBO de dibujo al inicio de la orden (nunca «la Ilustración», «dibujante»,
+  «drawbacks»). Lo que sigue a «:» o al salto de línea se juzga: instrucción, alcance («el segundo
+  párrafo», «lo último»), corrección («no es X»), emoticono, otra referencia o una nota corta sobre
+  una obra larga o propia («corrige mi ensayo: tiene errores», «Traduce el pdf⏎Es urgente») no son
+  material; tras una obra genérica, una segunda cláusula o un propósito («corrige el ensayo y dime
+  los errores», «resume el informe para mi jefe») siguen pidiendo el material.
   Antes, TODO primer mensaje así recibía la pregunta (solo contaba un pegado de ≥ 45 palabras).
   A mitad de chat, solo con verbos de texto (traduce/corrige/parafrasea/revisa/mejora/resume) y
   solo un sustantivo de texto (o nada) antes del delimitador, el texto pegado es el objeto
-  (target `none`, source `inline`, `publicRequestBrief.target.source`), con el mismo veto que la
+  (target `none`, source `inline`, `publicRequestBrief.target.source`; también si el pegado ocupa
+  varias líneas; nunca si se pide un archivo, «pásalo a word: …»), con el mismo veto que la
   respuesta anterior: `routingHints().editsInlineText` en `ai.js` y `briefTargetsPreviousAnswer`
   en `agentic-chat-stream` ⇒ nunca runner ni editor de documentos. Valores, alcances e
   instrucciones («cambia el título a: X», «traduce al inglés: solo el primer párrafo», «agrega
   ejemplos: 2 por punto») siguen en la respuesta, y con un archivo generado nombrado en el mensaje
-  decide el archivo. Si el brief no pregunta, el bloque tier 0 pide al modelo solicitar el
-  material que falte en vez de inventarlo. Los sustantivos se comparan POR TOKEN (Sets, regex de
+  decide el archivo. La línea Objeto del texto pegado dice «probablemente» y manda aplicar a la
+  respuesta lo que sea una parte, instrucción o corrección. En un primer mensaje sin pregunta, el
+  bloque tier 0 pide al modelo solicitar el material que falte en vez de inventarlo. Los sustantivos se comparan POR TOKEN (Sets, regex de
   una palabra, bucles acotados): un grupo cuantificado de alternativas solapadas («más
   importantes» y «más» + «importantes») bloqueaba el event loop de forma exponencial; test de
   tiempo lineal en la suite.
@@ -1826,7 +1834,7 @@ el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recib
   `components/chat/request-brief-line.tsx` muestra «Entendí: … · supuesto» bajo la respuesta con
   «Corregir» (prefill del compositor «No era eso. Lo que quiero es: »); se oculta en small talk.
   UI lock re-baselineado para los 4 archivos tocados.
-- Tests: `backend/tests/request-brief.test.js` (33), `request-brief-routing-source.test.js` (7),
+- Tests: `backend/tests/request-brief.test.js` (36), `request-brief-routing-source.test.js` (7),
   `tests/request-brief-frontend-source.test.ts` (4), `tests/components/request-brief-line.test.tsx` (3).
   Envs en `docs/ENV_VARIABLES.md` (`SIRAGPT_REQUEST_BRIEF*`).
 
