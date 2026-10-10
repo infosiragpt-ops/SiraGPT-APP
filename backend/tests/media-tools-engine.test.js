@@ -503,11 +503,35 @@ test('generate_image with an image attachment and a non-editing model reports im
   const r = await tool('generate_image').execute({ prompt: 'hazme un logo con este logo' }, ctx);
   assert.equal(r.ok, false);
   assert.equal(r.code, 'image_edit_unsupported');
-  assert.match(r.error, /fal-ai\/flux\/schnell/);
-  assert.match(r.error, /no permite editar imágenes/);
+  // Display-name policy: never a raw id, a provider slug or OpenRouter in copy.
+  assert.doesNotMatch(r.error, /fal-ai|\/|openrouter|gpt-image-1|gemini-2\.5/i);
+  assert.match(r.error, /El modelo de imagen seleccionado no permite editar imágenes/);
+  assert.match(r.error, /GPT Image o Gemini Flash Image/);
   assert.match(r.error, /sin adjuntar imágenes/);
   assert.equal(engineCalls.generate.length, 0);
   assert.equal(engineCalls.edit.length, 0);
+  // With a catalog row the picker's display name is used.
+  const prisma = { aiModel: { findFirst: async ({ where }) => (where.name === 'fal-ai/flux/schnell' ? { name: 'fal-ai/flux/schnell', displayName: 'Flux Schnell', provider: 'fal' } : null) }, file: { findMany: async () => [] } };
+  const named = await tool('generate_image').execute({ prompt: 'hazme un logo con este logo' }, fakeCtx({ ...ctx, prisma }));
+  assert.match(named.error, /^Flux Schnell no permite editar imágenes/);
+  assert.doesNotMatch(named.error, /fal-ai/);
+});
+
+test('generate_image → edit_image redirect marks the tool that ran, so the finalize gate credits edit_image', async () => {
+  const ctx = fakeCtx({ fileIds: ['img-1'], fileMetadata: [{ id: 'img-1', mimeType: 'image/png' }], prisma: attachmentPrisma([
+    { id: 'img-1', userId: 'user-1', mimeType: 'image/png', path: (() => { const p = path.join(ARTIFACT_DIR, 'redirect-src.png'); fs.writeFileSync(p, 'src'); return p; })(), filename: 'redirect-src.png' },
+  ]) });
+  const r = await tool('generate_image').execute({ prompt: 'genera un banner con este logo' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.executedTool, 'edit_image');
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.generate.length, 0);
+  // «banner» frames the deliverable: 16:9 travels to the editor.
+  assert.equal(engineCalls.edit[0].aspectRatio, '16:9');
+  const { successfulToolCalls } = require(path.join(AGENTS_DIR, 'agentic-execution-profile'));
+  const counts = successfulToolCalls([{ actions: [{ tool: 'generate_image', observation: r }] }]);
+  assert.equal(counts.get('edit_image'), 1);
+  assert.equal(counts.get('generate_image'), undefined);
 });
 
 test('generate_image ignores ids the loop recovered from history (no redirect)', async () => {
@@ -525,13 +549,44 @@ test('edit_image failure envelope carries the engine code and names the selected
   const r = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, ctx);
   assert.equal(r.ok, false);
   assert.equal(r.code, 'image_edit_unsupported');
-  assert.match(r.error, /grok-2-image/);
-  assert.match(r.error, /gpt-image-1, gemini-2\.5-flash-image o google\/gemini-3\.1-flash-image-preview/);
+  assert.doesNotMatch(r.error, /grok-2-image|gpt-image-1|gemini-2\.5|\//);
+  assert.match(r.error, /El modelo de imagen seleccionado no permite editar imágenes/);
+  assert.match(r.error, /Elige un modelo de edición de imágenes \(GPT Image o Gemini Flash Image\)/);
   assert.deepEqual(r.attempts, []);
   engineEditResult = { ok: false, code: 'E_PROVIDER', error: 'fallo del proveedor', attempts: [{ ok: false }] };
   const r2 = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, fakeCtx());
   assert.equal(r2.code, 'E_PROVIDER');
   assert.equal(r2.error, 'fallo del proveedor');
+  // NO_PROVIDER (credentials missing for a model that CAN edit) keeps the
+  // engine's own copy instead of telling the user to pick the model they picked.
+  engineEditResult = { ok: false, code: 'NO_PROVIDER', error: 'El modelo seleccionado no está disponible.', attempts: [] };
+  const r3 = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, fakeCtx({ imageModel: 'gpt-image-1' }));
+  assert.equal(r3.code, 'NO_PROVIDER');
+  assert.equal(r3.error, 'El modelo seleccionado no está disponible.');
+});
+
+test('edit_image with no resolvable source returns the image_source_required code', async () => {
+  const prisma = { file: { findMany: async () => [], findFirst: async () => null }, message: { findMany: async () => [] } };
+  const r = await tool('edit_image').execute({ instruction: 'quita el fondo' }, fakeCtx({ prisma }));
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_source_required');
+  assert.match(r.error, /No encontré la imagen/);
+});
+
+test('edit_image: a pinned non-attachment fileId stays the canvas even with a previous-image cue', async () => {
+  const chosen = path.join(ARTIFACT_DIR, 'chosen-older.png'); fs.writeFileSync(chosen, 'chosen-pixels');
+  const newest = path.join(ARTIFACT_DIR, 'newest-generated.png'); fs.writeFileSync(newest, 'newest-pixels');
+  const logo = path.join(ARTIFACT_DIR, 'logo-2.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'chosen', userId: 'user-1', mimeType: 'image/png', path: chosen, filename: 'chosen-older.png' },
+    { id: 'newest', userId: 'user-1', mimeType: 'image/png', path: newest, filename: 'newest-generated.png' },
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'logo-2.png' },
+  ], { history: [{ files: JSON.stringify([{ type: 'image', fileId: 'newest' }]) }, { files: JSON.stringify([{ type: 'image', fileId: 'chosen' }]) }] });
+  const ctx = fakeCtx({ prisma, fileIds: ['logo'], userQuery: 'ponle este logo a la primera imagen' });
+  const r = await tool('edit_image').execute({ instruction: 'ponle el logo', fileId: 'chosen', referenceFileIds: ['logo'] }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'chosen-pixels', 'the pinned image is the canvas');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
 });
 
 test('edit_image on a plain edit keeps the source frame and records the real ratio in the lineage', async () => {

@@ -76,3 +76,29 @@ test('aspectRatioFromBuffer is best-effort: real images resolve, other bytes ret
   assert.equal(await aspectRatioFromBuffer(Buffer.from('source-image')), null);
   assert.equal(await aspectRatioFromBuffer(null), null);
 });
+
+test('a document delivered after the picture ends the image context for the chat loop, not for the composer', () => {
+  const picture = { role: 'user', content: 'mira', files: [{ type: 'image/png', id: 'shot' }] };
+  const docRow = { role: 'assistant', content: sentinel('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'informe.docx') };
+  assert.equal(historyHasRecentImage([picture, { role: 'assistant', content: 'veo un gato' }]), true);
+  assert.equal(historyHasRecentImage([picture, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'hazme un word' }, docRow]), false);
+  assert.equal(historyHasRecentImage([picture, { role: 'user', content: 'x', files: [{ type: 'application/pdf', id: 'd' }] }]), false);
+  assert.equal(historyHasRecentImage([picture, { role: 'assistant', content: 'Descarga: /uploads/docs/informe.pdf' }]), false);
+  // The composer only produces images: a later document does not end its context.
+  assert.equal(historyHasRecentImage([picture, docRow], { documentEndsContext: false }), true);
+  // A picture AFTER the document restores the context.
+  assert.equal(historyHasRecentImage([docRow, picture]), true);
+  // External markdown images from a web answer are not editable chat images.
+  assert.equal(historyHasRecentImage([{ role: 'assistant', content: '![Torre](https://upload.wikimedia.org/x/Tour_Eiffel.jpg)' }]), false);
+});
+
+test('chatHasRecentImage keeps the picture past a later PDF upload (composer semantics)', async () => {
+  const prisma = {
+    chat: { findFirst: async () => ({ id: 'chat' }) },
+    message: { findMany: async () => [
+      { files: JSON.stringify([{ type: 'application/pdf', id: 'document' }]), content: '' },
+      { files: JSON.stringify([{ type: 'image/png', fileId: 'beach' }]), content: '' },
+    ] },
+  };
+  assert.equal(await chatHasRecentImage(prisma, { userId: 'owner', chatId: 'chat' }), true);
+});

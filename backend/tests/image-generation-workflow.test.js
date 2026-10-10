@@ -26,7 +26,7 @@ const fixtureDir = fs.mkdtemp(path.join(os.tmpdir(), 'image-handler-'));
 after(async () => fs.rm(await fixtureDir, { recursive: true, force: true }));
 const image = (color, width = 8, height = 4) => sharp({ create: { width, height, channels: 4, background: color } }).png().toBuffer();
 
-async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [], sourceAspect = '16:9' } = {}) {
+async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [], sourceAspect = '16:9', history = null } = {}) {
   const sourceBytes = await image('#de2070'); const outputBytes = await image('#1040fa');
   const sourcePath = path.join(await fixtureDir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
   const calls = { generate: [], edit: [], saves: [], messages: [], reads: 0 };
@@ -36,7 +36,7 @@ async function harness({ source = true, chatOwned = true, editable = true, user 
     chat: { findFirst: async () => chatOwned ? { id: 'chat', title: 'Image' } : null, update: async () => ({}) },
     file: { findFirst: async ({ where }) => records[where.id] || null },
     message: {
-      findMany: async () => { calls.reads++; return source ? [
+      findMany: async () => { calls.reads++; if (history) return history; return source ? [
         { files: [{ type: 'application/pdf', id: 'document' }] },
         { files: [{ type: 'image/png', fileId: 'beach', version: 2, ...(sourceAspect ? { aspectRatio: sourceAspect } : {}), rootFileId: 'original' }] },
       ] : []; },
@@ -223,6 +223,32 @@ test('a previous-image cue makes the chat image the canvas and the attachment a 
 test('an upload without a stored aspect ratio keeps its own frame instead of the picker default', async () => {
   const { request, calls } = await harness({ sourceAspect: null });
   const res = await request({ operation: 'edit', fileId: 'beach', prompt: 'cambia el fondo a azul' });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(calls.edit[0].aspectRatio, '16:9');
+});
+
+test('a follow-up promoted to an edit by the history pre-check generates when nothing in the chat can be opened', async () => {
+  // The chat's last row only mentions an upload URL in its text (no files
+  // entry, no artifact id): the pre-check sees an image, the resolver cannot
+  // open it → generate instead of a 400.
+  const { request, calls } = await harness({ source: false, history: [{ files: null, content: '/uploads/images/old-result.png' }] });
+  const res = await request({ prompt: 'ahora en azul' });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.generate.length, 1); assert.equal(calls.edit.length, 0);
+});
+
+test('a viewer-chosen canvas stays the canvas even when the prompt names the previous image', async () => {
+  const { request, calls } = await harness({ references: ['older', 'logo'] });
+  const res = await request({ prompt: 'ponle el logo de la última imagen', operation: 'edit', fileId: 'older', referenceFileIds: ['logo'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(res.body.files[0].parentFileId, 'older');
+});
+
+test('a framed deliverable built from an upload takes its frame from the words, not from the upload', async () => {
+  const { request, calls } = await harness({ sourceAspect: null, references: ['logo'] });
+  const res = await request({ prompt: 'crea un banner con este logo', fileId: 'logo', referenceFileIds: ['logo'] });
   assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
   assert.equal(calls.edit.length, 1);
   assert.equal(calls.edit[0].aspectRatio, '16:9');

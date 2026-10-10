@@ -898,11 +898,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     } catch (_) { /* detector is best-effort */ }
     // An attached picture + an edit / reference-guided image request lives in
     // the loop (edit_image): the plain stream would drop the reference pixels.
-    const hasImageAttachment = files.some((f) => f && (/^image\//i.test(String(f.mimeType || f.type || f.contentType || '')) || f.attachmentKind === 'image'));
-    if (hasImageAttachment) {
+    const { isImageAttachment, isImageMediaRequest } = require('./agents/media-intent');
+    if (files.some(isImageAttachment)) {
       try {
-        if (detectMediaIntents(text, { hasImageAttachment: true })
-          .some((i) => i && (i.kind === 'image-edit' || (i.tool === 'generate_image' && i.confidence === 'high')))) return true;
+        if (isImageMediaRequest(text)) return true;
       } catch (_) { /* detector is best-effort */ }
     }
     return isArtifactDeliverableRequest(text)
@@ -1240,15 +1239,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       toolContext.goal = toolContext.goal || userQuery;
     }
     const { historyHasRecentImage } = require('./media/image-followup-context');
+    const { isImageAttachment } = require('./agents/media-intent');
     const imageAttached = toolContext.hasImageAttachment === true
-      || (Array.isArray(toolContext.fileMetadata) && toolContext.fileMetadata.some((f) => f && /^image\//i.test(String(f.mimeType || f.type || ''))));
-    const recentImage = !imageAttached && historyHasRecentImage(history);
+      || (Array.isArray(toolContext.fileMetadata) && toolContext.fileMetadata.some(isImageAttachment));
+    // Only the last few turns count, and a document delivered after the
+    // picture ends the image context («hazlo más grande» then means the doc).
+    const recentImage = !imageAttached && historyHasRecentImage(history, { limit: 6 });
+    // Decided below, once the chat's latest artifact format is known: an
+    // image edit turn (the runner's own predicate) skips the document runner.
     let imageEditTurn = false;
-    try {
-      imageEditTurn = (imageAttached || recentImage)
-        && detectMediaIntents(userQuery, { hasImageAttachment: imageAttached, hasRecentImage: recentImage })
-          .some((i) => i && i.kind === 'image-edit');
-    } catch (_) { /* detector is best-effort */ }
     toolContext.hasRecentImage = recentImage;
     const githubHandoffModule = require('./github/github-chat-handoff');
     const githubHandoff = githubHandoffModule.createGithubChatHandoff({
@@ -1626,7 +1625,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         }
       }
       const imageIds = new Set(uploadedFileRefs
-        .filter((f) => f && /^image\//i.test(String(f.mimeType || f.type || '')))
+        .filter((f) => f && isImageAttachment(f))
         .map((f) => String(f.id)));
       const runnerClaim = !codingWorkspace && !briefTargetsPreviousAnswer && (shouldRunAgentRunner({
         files: uploadedFileRefs,
@@ -1635,6 +1634,17 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         priorArtifactFormat,
         text: userQuery,
       }) || (briefTargetsGeneratedOffice && prior && uploadedFileRefs.length === 0));
+      // The veto follows the runner's own predicate: a document noun or an
+      // Office artifact in the chat keeps the runner («crea una ppt con esta
+      // imagen de fondo», «ponle el logo a la portada»); an edit of the
+      // attached / last picture skips it.
+      try {
+        const { isImageMediaTurn } = require('./agent-runner');
+        imageEditTurn = isImageMediaTurn(userQuery, {
+          files: uploadedFileRefs,
+          priorArtifactFormat: priorArtifactFormat || (recentImage ? 'png' : null),
+        });
+      } catch (_) { imageEditTurn = false; }
       if (runnerClaim && !imageEditTurn) {
         const finished = await invokeAgentRunner();
         if (finished) return finished;

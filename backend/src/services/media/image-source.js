@@ -132,27 +132,33 @@ async function resolveImageSource({ fileId, imageUrl, fileIds } = {}, ctx = {}) 
   // Ids recovered from chat history are not this turn's attachments (see
   // resolveImageSources): the newest image in the chat is the default instead.
   const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
-  const attachments = (Array.isArray(fileIds) ? fileIds : ctx.fileIds);
-  const freshAttachments = Array.isArray(attachments) ? attachments.filter((id) => !recovered.has(String(id))) : attachments;
+  const requested = (Array.isArray(fileIds) ? fileIds : ctx.fileIds);
+  const freshAttachments = Array.isArray(requested) ? requested.filter((id) => !recovered.has(String(id))) : requested;
   if (Array.isArray(freshAttachments) && freshAttachments.length && prisma?.file?.findMany) {
-    const attachments = freshAttachments;
-    const records = await prisma.file.findMany({ where: { id: { in: attachments.map(String) }, userId, deletedAt: null } });
-    const image = attachments.map((id) => records.find((record) => String(record.id) === String(id)))
+    const records = await prisma.file.findMany({ where: { id: { in: freshAttachments.map(String) }, userId, deletedAt: null } });
+    const image = freshAttachments.map((id) => records.find((record) => String(record.id) === String(id)))
       .find((record) => record && imageMime(record.mimeType));
     if (image) return fromRecord(image);
     return null;
   }
+  // Files the caller rules out of the history scan: this turn's own
+  // attachments when the "previous image" is wanted (on Regenerar or after
+  // a triage clarification the user row with those files is already the
+  // newest message in the chat).
+  const excluded = new Set((Array.isArray(ctx.excludeFileIds) ? ctx.excludeFileIds : []).map(String));
   for (const message of await history()) {
     for (const file of messageFiles(message)) {
       if (!file || file.deletedAt || !(file.type === 'image' || imageMime(file.mimeType || file.mime || file.type))) continue;
-      const resolved = await fromId(file.fileId || file.id, file) || await fromUrl(file.url || file.downloadUrl, file);
+      const id = file.fileId || file.id;
+      if (excluded.size && (excluded.has(String(id)) || (artifactIdFrom(id) && excluded.has(`artifact:${artifactIdFrom(id)}`)))) continue;
+      const resolved = await fromId(id, file) || await fromUrl(file.url || file.downloadUrl, file);
       if (resolved) return resolved;
     }
     for (const id of allArtifactIdsFrom(message.content)) {
       const hiddenArtifact = messageFiles(message).some((file) => file.deletedAt && (
         artifactIdFrom(file.fileId || file.id) === id || String(file.fileId || file.id) === id || artifactIdFrom(file.url || file.downloadUrl) === id
       ));
-      if (hiddenArtifact) continue;
+      if (hiddenArtifact || excluded.has(`artifact:${id}`)) continue;
       const resolved = await fromArtifact(id);
       if (resolved) return resolved;
     }
@@ -180,17 +186,24 @@ async function resolveImageSources({ fileId, referenceFileIds, imageUrl, primary
   // Ids the loop recovered from chat history are NOT this turn's attachments:
   // they are skipped here so the newest image in the chat stays the default
   // canvas (an older upload used to displace the image just generated).
-  if (ctx.userId && !referenceFileIds?.length && Array.isArray(ctx.fileIds) && ctx.fileIds.length && ctx.prisma?.file?.findMany) {
-    const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
-    const fresh = ctx.fileIds.map(String).filter((id) => !recovered.has(id));
-    if (fresh.length) {
-      const records = await ctx.prisma.file.findMany({ where: { id: { in: fresh }, userId: ctx.userId, deletedAt: null } });
-      referenceFileIds = fresh.filter((id) => {
-        const record = records.find((entry) => String(entry.id) === id);
-        return !record || imageMime(record.mimeType);
-      });
-    } else {
-      referenceFileIds = undefined;
+  const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
+  const contextIds = Array.isArray(ctx.fileIds) ? ctx.fileIds.map(String) : [];
+  const fresh = contextIds.filter((id) => !recovered.has(id));
+  const imageIdsAmong = async (candidates) => {
+    if (!candidates.length || !ctx.userId || !ctx.prisma?.file?.findMany) return candidates;
+    const records = await ctx.prisma.file.findMany({ where: { id: { in: candidates }, userId: ctx.userId, deletedAt: null } });
+    return candidates.filter((id) => {
+      const record = records.find((entry) => String(entry.id) === id);
+      return !record || imageMime(record.mimeType);
+    });
+  };
+  if (ctx.userId && !referenceFileIds?.length && contextIds.length && ctx.prisma?.file?.findMany) {
+    referenceFileIds = fresh.length ? await imageIdsAmong(fresh) : undefined;
+    // «ponle este logo a la imagen anterior» after a clarification: the logo
+    // is a recovered id, still the reference the cue names.
+    if (!fresh.length && primaryFromHistory && !fileId) {
+      const recoveredImages = await imageIdsAmong(contextIds.filter((id) => recovered.has(id)));
+      if (recoveredImages.length) referenceFileIds = recoveredImages;
     }
   }
   if (Array.isArray(referenceFileIds)
@@ -204,14 +217,23 @@ async function resolveImageSources({ fileId, referenceFileIds, imageUrl, primary
   }
   const sources = [];
   let bytes = 0;
-  if (primaryFromHistory && !explicitUrl && ids.length) {
+  // An explicit fileId that is NOT one of this turn's attachments (the
+  // composer lists its uploads in referenceFileIds too) is a canvas the user
+  // chose (viewer «Editar»): the cue never demotes it to a reference.
+  const explicitCanvas = Boolean(fileId) && !fresh.includes(String(fileId)) && !recovered.has(String(fileId))
+    && !(Array.isArray(referenceFileIds) && referenceFileIds.map(String).includes(String(fileId)));
+  if (primaryFromHistory && !explicitUrl && ids.length && !explicitCanvas) {
     // An empty `fileIds` bypasses the attachment branch of resolveImageSource;
-    // the newest message in the chat wins (upload or generated artifact).
-    const previous = await resolveImageSource({}, { ...ctx, fileIds: [] });
+    // the newest message in the chat wins (upload or generated artifact),
+    // skipping the references themselves (already persisted on Regenerar).
+    const previous = await resolveImageSource({}, { ...ctx, fileIds: [], excludeFileIds: ids });
     if (previous) {
+      ids = ids.filter((id) => !sameSource({ fileId: id }, previous));
+      if (ids.length + 1 + Number(explicitUrl) > MAX_REFERENCE_IMAGES) {
+        throw Object.assign(new Error(`Puedes usar hasta ${MAX_REFERENCE_IMAGES} imágenes por edición contando la imagen anterior del chat.`), { code: 'E_PARAMS', status: 400 });
+      }
       sources.push(previous);
       bytes += previous.buffer.length;
-      ids = ids.filter((id) => !sameSource({ fileId: id }, previous));
     }
   }
   const inputs = [...(explicitUrl ? [{ imageUrl }] : []), ...ids.map((id) => ({ fileId: id }))];

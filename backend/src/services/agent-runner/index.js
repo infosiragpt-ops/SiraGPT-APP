@@ -470,9 +470,15 @@ function officeFormatNamedIn(normalized) {
 // Image artifact formats: a prior png is edited by the chat loop's
 // edit_image, never «redesigned» by the document runner.
 const IMAGE_PRIOR_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg']);
+// Parts of a deck / document a request can aim at: with an Office file in
+// the chat, «ponle el logo a la portada» places the attached picture INTO
+// the file (runner), it does not edit the picture.
+const DOC_PART_RE = /\b(?:portada|diapositivas?|laminas?|slides?|paginas?|encabezados?|pies? de pagina|celdas?|hojas?|parrafos?|titulos? de la|seccion(?:es)?|capitulos?|cover|headers?|footers?|cells?|sheets?)\b/;
 /**
  * An image edit / generation turn with image evidence (an attached picture
  * or a prior image artifact) and no document noun: the chat loop owns it.
+ * With an Office artifact in the chat the picture is material for that file
+ * unless the text names the picture itself as the object.
  */
 function isImageMediaTurn(text, { files = [], priorArtifactFormat = null } = {}) {
   const t = normalizeIntentText(text);
@@ -484,10 +490,16 @@ function isImageMediaTurn(text, { files = [], priorArtifactFormat = null } = {})
   if (!imageAttached && !imagePrior) return false;
   if (list.some((f) => f && !isImageFile(f))) return false;
   if (officeFormatNamedIn(t) || DOC_NOUN_RE.test(String(text || '')) || GENERIC_DOC_REF_RE.test(t)) return false;
+  let mediaIntent;
+  try { mediaIntent = require('../agents/media-intent'); } catch (_) { return false; }
+  if (officeFamily(priorArtifactFormat)) {
+    const namesImage = mediaIntent._internal.ANY_IMAGE_REF.test(mediaIntent._internal.normalize(String(text || '')));
+    if (DOC_PART_RE.test(t) || !namesImage) return false;
+  }
   try {
-    return require('../agents/media-intent')
+    return mediaIntent
       .detectMediaIntents(String(text || ''), { hasImageAttachment: imageAttached, hasRecentImage: imagePrior })
-      .some((i) => i && (i.kind === 'image-edit' || i.kind === 'image'));
+      .some((i) => i && (i.kind === 'image-edit' || (i.kind === 'image' && i.confidence === 'high')));
   } catch (_) { return false; }
 }
 
@@ -680,8 +692,11 @@ function shouldRunAgentRunner({
   // design-upgrade branch of isRunnerOnlyDocumentTurn is NOT a claim on its
   // own: without files or a prior artifact there is nothing to redesign.
   if (isCreateOrStyleRunnerOnly(t, { imageTurn })) return true;
-  const priorFormat = String(priorArtifactFormat || '').toLowerCase().replace(/^.*\./, '');
-  const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat) && !IMAGE_PRIOR_FORMATS.has(priorFormat);
+  // A prior png still counts as prior work: the deck generated two turns
+  // ago is edited by «agrégale una conclusión» even though the chat's
+  // latest artifact is an image. Image edits of that png are excluded by
+  // `imageTurn` on the work branch below, not here.
+  const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat);
   if ((hasFiles || hasPrior) && fileConversionTarget(t)) return true;
   // A design claim needs an Office file to restyle: named in the text, the
   // latest artifact (pptx/docx/xlsx), or an upload. A prior html page, image

@@ -309,3 +309,46 @@ test('stream: after an unsupported edit, generate_image is refused and finalize 
     restore();
   }
 });
+
+// ── (4) Round 2: a prior Office file keeps the runner; a prior png is still prior work ──
+
+test('isImageMediaTurn: with an Office artifact in the chat the picture is material unless named as the object', () => {
+  for (const text of ['ponle el logo a la portada', 'cambia el fondo a #FF00AA', 'ponlas todas de color rosa', 'cambia el título a rojo', 'ponle este logo a la portada']) {
+    assert.equal(agentRunner.isImageMediaTurn(text, { files: IMAGE_FILES, priorArtifactFormat: 'pptx' }), false, text);
+    assert.equal(agentRunner.shouldRunAgentRunner({ files: IMAGE_FILES, fileIds: ['img1'], hasPriorArtifacts: true, priorArtifactFormat: 'pptx', text }), true, text);
+  }
+  for (const text of ['quita el fondo de esta imagen', 'cambia el color del logo a azul']) {
+    assert.equal(agentRunner.isImageMediaTurn(text, { files: IMAGE_FILES, priorArtifactFormat: 'pptx' }), true, text);
+  }
+  // Deck follow-ups after generating an image keep the runner (the png is not the only prior work).
+  for (const text of ['agrégale una conclusión a la misma', 'inserta la imagen en la portada', 'cambia el fondo de todas las láminas a azul']) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ hasPriorArtifacts: true, priorArtifactFormat: 'png', text }), true, `prior png: ${text}`);
+  }
+  // …while edits of that png stay with the chat loop.
+  for (const text of ['ponle un sombrero', 'quítale el fondo', 'hazla más oscura']) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ hasPriorArtifacts: true, priorArtifactFormat: 'png', text }), false, `prior png: ${text}`);
+  }
+});
+
+test('stream: «crea una ppt con esta imagen de fondo» with only a picture attached reaches the document runner', async () => {
+  const { fresh, spies, restore } = loadStream();
+  const { tools, calls } = imageTools();
+  const openai = scriptedClient([]);
+  try {
+    const { res } = fakeRes();
+    await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'crea una ppt con esta imagen de fondo',
+      history: [],
+      res,
+      maxSteps: 3,
+      toolContext: IMAGE_TOOL_CONTEXT(),
+      toolsOverride: tools,
+    });
+    assert.equal(spies.runnerCalls.length, 1, 'the document runner claims the deck');
+    assert.equal(calls.edit.length, 0, 'the picture is material for the deck, never edited');
+  } finally {
+    restore();
+  }
+});

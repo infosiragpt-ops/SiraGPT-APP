@@ -166,7 +166,21 @@ const HAZLA_ORIENTATION = /\b(?:hazla|ponla|pasala|vuelvela|make it|make this)\s
 // types (logo, avatar, portada, banner…) to frames, so "la misma imagen pero
 // con el logo más grande" used to become a square reframe that dropped the
 // request.
-const ORIENTATION_TOKEN_RE = /\b(?:1:1|2:3|3:2|3:4|9:16|4:3|16:9|1x1|2x3|3x2|3x4|9x16|4x3|16x9|vertical(?:es)?|horizontal(?:es)?|cuadrad[oa]s?|portrait|landscape|square|apaisad[oa]s?|panoramic[oa]s?|widescreen|retrato|rectangular(?:es)?|mas alto que ancho|mas ancho que alto|histori(?:a|as)|story|stories|reels?|tiktok|shorts?|formato movil|para movil)\b/;
+// «retrato» and «historia» are also image TYPES («mejora este retrato»); they
+// only mean a frame in a framing position («pero retrato», «para historias»).
+const ORIENTATION_TOKEN_RE = /\b(?:1:1|2:3|3:2|3:4|9:16|4:3|16:9|1x1|2x3|3x2|3x4|9x16|4x3|16x9|vertical(?:es)?|horizontal(?:es)?|cuadrad[oa]s?|portrait|landscape|square|apaisad[oa]s?|panoramic[oa]s?|widescreen|rectangular(?:es)?|mas alto que ancho|mas ancho que alto|(?:pero|en|formato|a|como|modo)\s+retrato|(?:para|formato|en|como|de)\s+(?:histori(?:a|as)|story|stories)|reels?|tiktok|shorts?|formato movil|para movil)\b/;
+
+/** Frame named by the FIRST spoken orientation token, or null. */
+function frameFromOrientationToken(norm) {
+  const match = String(norm || '').match(ORIENTATION_TOKEN_RE);
+  if (!match) return null;
+  const token = match[0].replace(/^(?:pero|en|formato|a|como|modo|para|de)\s+/, '').replace('x', ':');
+  if (IMAGE_FRAMES[token]) return { frame: token, orientation: IMAGE_FRAMES[token].orientation };
+  if (/^(?:histori|story|stories|reel|tiktok|short|formato movil|para movil)/.test(token)) return { frame: '9:16', orientation: 'portrait' };
+  if (/^(?:vertical|retrato|portrait|mas alto)/.test(token)) return { frame: '3:4', orientation: 'portrait' };
+  if (/^(?:cuadrad|square)/.test(token)) return { frame: '1:1', orientation: 'square' };
+  return { frame: '16:9', orientation: 'landscape' };
+}
 
 // The user attached an image and wants the result built FROM it ("como esta",
 // "con este logo", "de referencia", "basada en esta foto"). Matched on
@@ -175,22 +189,48 @@ const ORIENTATION_TOKEN_RE = /\b(?:1:1|2:3|3:2|3:4|9:16|4:3|16:9|1x1|2x3|3x2|3x4
 // de esta foto" are vision questions. The cue needs a comparison, a
 // reference word, or a creation verb that takes the attachment as material.
 const REFERENCE_IMAGE_NOUN = '(?:logo|logotipo|foto|fotos|fotografia|imagen|imagenes|dibujo|ilustracion|diseno|retrato|captura|screenshot)';
+// «como esta» only means «like this one» when it closes the clause or leads
+// into a variation («como esta pero…»); «cómo está vestida» is a question.
 const REFERENCE_CUE_RE = new RegExp([
-  '\\bcomo est[ae]s?\\b', '\\bigual (?:a|que) est[ae]s?\\b', '\\bparecid[ao]s? a est[ae]s?\\b',
+  `\\bcomo est[ae]s?(?:\\s+${REFERENCE_IMAGE_NOUN})?(?=\\s*(?:$|[,.;:!?]|\\b(?:pero|con|sin|en|y|para|solo|solamente)\\b))`,
+  '\\bigual (?:a|que) est[ae]s?\\b', '\\bparecid[ao]s? a est[ae]s?\\b',
   `\\b(?:est[ae]s?|es[ae]s?|la|el|mi|mis)\\s+(?:${REFERENCE_IMAGE_NOUN}\\s+)?(?:de|como) referencia\\b`, '\\badjunt[ao]s? (?:de|como) referencia\\b',
   '\\bbasad[ao]s? en (?:est[ae]s?|es[ae]s?|mi|mis)\\b', '\\ba partir de (?:est[ae]s?|es[ae]s?|mi|mis)\\b',
   `\\bcon (?:este|esta|estos|estas|mi|mis) ${REFERENCE_IMAGE_NOUN}\\b`,
   `\\busando (?:esta|este|la|el|mi)\\b.{0,24}\\b${REFERENCE_IMAGE_NOUN}\\b`,
   `\\b(?:crea(?:me)?|genera(?:me)?|haz(?:me)?|hag(?:a|ame)|dibuja(?:me)?|disena(?:me)?|elabora(?:me)?|make|create|generate|draw|design)\\b[^.]{0,60}\\b(?:de|con|sobre|desde) (?:este|esta|mi) ${REFERENCE_IMAGE_NOUN}\\b`,
-  '\\blike this\\b', '\\bbased on (?:this|that|the|my)\\b', '\\bas (?:a )?reference\\b',
+  '\\blike this(?:\\s+(?:one|photo|image|picture|logo))?(?=\\s*(?:$|[,.;:!?]|\\b(?:but|with|without|in|and)\\b))', '\\bbased on (?:this|that|the|my)\\b', '\\bas (?:a )?reference\\b',
   '\\bfrom (?:this|my) (?:photo|image|picture|logo)\\b', '\\bwith (?:this|my) (?:logo|photo|image|picture|drawing)\\b',
   '\\b(?:make|create|generate|draw|design)\\b[^.]{0,60}\\b(?:this|my) (?:logo|photo|image|picture|drawing)\\b',
 ].join('|'));
+// Greetings and indirect questions share the words of the comparison cue.
+const REFERENCE_CUE_QUESTION_FRAME_RE = /\b(?:hola|buenas|buenos dias|buenas tardes|buenas noches|hey|hi|hello|que tal|dime|cuentame|explicame|saber|se|sabes|sabe|ver|mira|pregunto|i|we|you|they|do you|really)\b[^a-z0-9]*\b(?:como est[ae]s?|like this)\b/;
+// A text deliverable built FROM the picture («haz un resumen de esta imagen»)
+// is a vision answer, never an image to edit.
+const TEXT_DELIVERABLE_NOUN = '(?:resumen(?:es)?|lista(?:do)?s?|informes?|reportes?|tablas?|analisis|descripcion(?:es)?|textos?|transcripcion(?:es)?|traduccion(?:es)?|documentos?|explicacion(?:es)?|titulos?|nombres?|ideas|preguntas?|respuestas?|cuentos?|poemas?|caption|summary|summaries|list|report|table|description|analysis|transcription|translation|explanation|story|poem|titles?|names?|questions?)';
+const TEXT_DELIVERABLE_CUE_RE = new RegExp(`\\b(?:crea(?:me)?|genera(?:me)?|haz(?:me)?|hag(?:a|ame)|elabora(?:me)?|dame|escribe(?:me)?|redacta(?:me)?|make|create|generate|write|give me)\\b[^.]{0,40}\\b${TEXT_DELIVERABLE_NOUN}\\b`);
 
 /** True when the request leans on an attached image as its reference. */
 function detectReferenceCue(text) {
   const norm = canonicalText(text);
-  return Boolean(norm) && REFERENCE_CUE_RE.test(norm);
+  if (!norm || REFERENCE_CUE_QUESTION_FRAME_RE.test(norm) || TEXT_DELIVERABLE_CUE_RE.test(norm)) return false;
+  return REFERENCE_CUE_RE.test(norm);
+}
+
+// A creation request whose material is the attachment and whose DELIVERABLE
+// has its own shape («crea un banner con este logo»): the output frame comes
+// from the deliverable, never from the reference's pixels.
+const FRAMED_DELIVERABLE_RE = /\b(banners?|portadas?|covers?|cabeceras?|encabezados?|posters?|carteles|cartel|flyers?|afiches?|miniaturas?|thumbnails?|wallpapers?|fondos? de pantalla|histori(?:a|as)|story|stories|reels?|avatar(?:es)?|iconos?|icons?|stickers?|fotos? de perfil|profile pictures?)\b/;
+function detectReferenceDeliverableFrame(text) {
+  const norm = canonicalText(text);
+  if (!norm || !detectReferenceCue(text) || !REFERENCE_CREATE_VERB_RE.test(norm)) return null;
+  const withoutMaterial = norm.replace(new RegExp(`\\b(?:con|de|usando|from|with|sobre|desde|a partir de|basad[ao]s? en)\\s+(?:este|esta|estos|estas|mi|mis|this|my|la|el)\\s+${REFERENCE_IMAGE_NOUN}\\b`, 'g'), ' ');
+  const match = withoutMaterial.match(FRAMED_DELIVERABLE_RE);
+  if (!match) return null;
+  const noun = match[1];
+  if (/^(?:histori|story|stories|reel)/.test(noun)) return { frame: '9:16', orientation: 'portrait', deliverable: noun };
+  if (/^(?:avatar|icon|sticker|foto|profile)/.test(noun)) return { frame: '1:1', orientation: 'square', deliverable: noun };
+  return { frame: '16:9', orientation: 'landscape', deliverable: noun };
 }
 
 // The user names the PREVIOUS image as the thing to edit while attaching a
@@ -198,7 +238,7 @@ function detectReferenceCue(text) {
 // reference, the chat's last image is the canvas.
 const PREVIOUS_IMAGE_CUE_RE = new RegExp([
   '\\b(?:la|a la|en la|de la|sobre la|al|el) (?:imagen|foto|fotografia|ilustracion|dibujo|resultado)(?: que)? (?:anterior|de antes|de arriba|previ[ao]|generad[ao]|ultim[ao]|generaste|hiciste|creaste|editaste|me diste)\\b',
-  '\\bla (?:ultima|primera) (?:imagen|foto)\\b', '\\ba la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
+  '\\bla ultima (?:imagen|foto)\\b', '\\ba la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
   // Object clitic = the previous image, demonstrative = the new upload:
   // "hazla como esta foto", "ponle este logo a la camiseta".
   '\\b(?:hazl[ao]|ponl[ao]|dejal[ao]|vuelvel[ao])\\b[^.]{0,40}\\b(?:como|igual a|igual que|parecid[ao] a) (?:est[ae]s?|es[ae]s?)\\b',
@@ -206,10 +246,15 @@ const PREVIOUS_IMAGE_CUE_RE = new RegExp([
   '\\bthe (?:previous|last|earlier) (?:image|picture|photo|one)\\b', '\\bthe (?:image|picture|photo) (?:you (?:generated|made|created)|from before)\\b',
 ].join('|'));
 
+// «la primera imagen», «the second photo»: a specific OTHER image the user
+// selects, never the previous one.
+const ORDINAL_IMAGE_SELECTOR_RE = new RegExp(`\\b(?:la|el|a la|al|en la|de la) (?:primer[ao]|segund[ao]|tercer[ao]|cuart[ao]|quint[ao]|penultim[ao]|otr[ao]) (?:${REFERENCE_IMAGE_NOUN})\\b|\\bthe (?:first|second|third|other) (?:image|picture|photo)\\b`);
+
 /** True when the instruction targets the chat's previous image explicitly. */
 function detectPreviousImageCue(text) {
   const norm = canonicalText(text);
-  return Boolean(norm) && PREVIOUS_IMAGE_CUE_RE.test(norm);
+  if (!norm || ORDINAL_IMAGE_SELECTOR_RE.test(norm)) return false;
+  return PREVIOUS_IMAGE_CUE_RE.test(norm);
 }
 
 /**
@@ -219,8 +264,8 @@ function detectPreviousImageCue(text) {
  */
 function detectSpokenImageFrame(text) {
   const norm = canonicalText(text);
-  if (!norm || !ORIENTATION_TOKEN_RE.test(norm)) return null;
-  return detectImageFrame(text);
+  if (!norm) return null;
+  return frameFromOrientationToken(norm);
 }
 
 /**
@@ -230,14 +275,15 @@ function detectSpokenImageFrame(text) {
 function detectImageReframe(text) {
   const norm = canonicalText(text);
   if (!norm) return null;
-  const frame = detectImageFrame(text);
+  // The spoken orientation decides («hazla horizontal con el logo» is 16:9,
+  // not the logo's square).
+  const frame = frameFromOrientationToken(norm);
   if (!frame) return null;
-  if (!ORIENTATION_TOKEN_RE.test(norm)) return null;
   if (SAME_IMAGE_REF.test(norm) || HAZLA_ORIENTATION.test(norm) || /^(?:ahora|ahora en|now|now in)\s+(?:formato\s+)?(?:vertical|horizontal|\d+:\d+)(?:\s+(?:por favor|porfavor|please))?[.!]?$/i.test(norm)) return frame;
   return null;
 }
 
-const REFRAME_FILLER_RE = /\b(?:ahora|now|pero|but|en|in|a|to|formato|format|la|el|lo|los|las|misma|mismo|mismas|mismos|imagen|imagenes|foto|fotos|fotografia|ilustracion|image|photo|picture|por|favor|porfavor|please|pasala|hazla|hazlo|ponla|vuelvela|make|it|this|that|the|same|esa|ese|esta|este|y|and|con|with|de|del|version|quiero|dame|hazme|haz|me|un|una|otra|otro|pon|ponme|igual|solo|solamente|version)\b/g;
+const REFRAME_FILLER_RE = /\b(?:ahora|now|pero|but|en|in|a|to|formato|format|la|el|lo|los|las|misma|mismo|mismas|mismos|imagen|imagenes|foto|fotos|fotografia|ilustracion|image|photo|picture|por|favor|porfavor|please|pasala|hazla|hazlo|ponla|vuelvela|make|it|this|that|the|same|esa|ese|esta|este|y|and|con|with|de|del|version|quiero|dame|hazme|haz|me|un|una|otra|otro|pon|ponme|igual|solo|solamente)\b/g;
 
 function resolveReframeDirective(text, aspectRatio) {
   const detected = (aspectRatio && detectImageFrame(aspectRatio)) || detectImageReframe(text) || detectImageFrame(text);
@@ -266,7 +312,7 @@ function resolveReframeDirective(text, aspectRatio) {
   const prompt = parts.join(' ');
   return {
     prompt,
-    instruction: String(text || '').trim(),
+    instruction,
     operation: 'reframe',
     frame: ratio,
     orientation,
@@ -725,7 +771,9 @@ function selectionClause(selection, language) {
   return '';
 }
 
-const REFERENCE_CREATE_VERB_RE = /\b(?:cr[ée]a(?:me)?|gener(?:a|ame)|haz(?:me)?|hag(?:a|ame)|dibuj(?:a|ame)|dise[nñ](?:a|ame)|elabor(?:a|ame)|us(?:a|ando)|make|create|generate|draw|design|render|use|using)\b/;
+// The creation verbs media-intent routes with, plus «usa / use»: a verb added
+// there reaches the reference-preservation clause here too.
+const REFERENCE_CREATE_VERB_RE = new RegExp(`\\b(?:${require('./media-intent')._internal.CREATE_VERB_SOURCE}|us(?:a|ando)|use|using)\\b`);
 
 function pickEditLanguage(instruction) {
   const norm = canonicalText(instruction);
@@ -800,7 +848,7 @@ function resolveEditDirective(instruction, opts = {}) {
   const original = String(instruction == null ? '' : instruction).trim();
   const parsed = parseImageEdit(original);
   const explicitTarget = String(opts.target || '').trim();
-  const target = (explicitTarget || parsed.target || '').slice(0, 120) || null;
+  const resolvedTarget = (explicitTarget || parsed.target || '').slice(0, 120) || null;
 
   let selection = null;
   if (opts.selection !== undefined && opts.selection !== null) {
@@ -809,8 +857,17 @@ function resolveEditDirective(instruction, opts = {}) {
   }
 
   const language = pickEditLanguage(original);
+  // «crea un banner con este logo»: the attachment is material for a NEW
+  // layout, so the deliverable noun is never the part being edited and the
+  // clause asks for a new composition instead of preserving the old one.
+  const deliverable = explicitTarget ? null : detectReferenceDeliverableFrame(original);
+  const target = deliverable ? (explicitTarget || null) : resolvedTarget;
   let prompt = original;
-  if (target && parsed.operation !== 'remove-background') {
+  if (deliverable) {
+    prompt += language === 'en'
+      ? ` Use the attached image as material: keep its identity and colors and build a new ${deliverable.deliverable} composition (${deliverable.frame}) around it.`
+      : ` Usa la imagen adjunta como material: conserva su identidad y colores y construye alrededor de ella una nueva composición de ${deliverable.deliverable} (${deliverable.frame}).`;
+  } else if (target && parsed.operation !== 'remove-background') {
     prompt += language === 'en'
       ? ` Focus the change on ${target}; keep the rest of the image exactly the same (composition, colors, background, lighting and all other elements).`
       : ` Enfoca el cambio en ${target}; conserva el resto de la imagen exactamente igual (composición, colores, fondo, iluminación y todos los demás elementos).`;
@@ -818,7 +875,7 @@ function resolveEditDirective(instruction, opts = {}) {
     prompt += language === 'en'
       ? ' Remove the background completely and keep the main subject unchanged.'
       : ' Quita el fondo por completo y conserva el sujeto principal sin cambios.';
-  } else if (detectReferenceCue(original) && (REFERENCE_CREATE_VERB_RE.test(canonicalText(original)) || !parsed.operation)) {
+  } else if (!target && detectReferenceCue(original) && (REFERENCE_CREATE_VERB_RE.test(canonicalText(original)) || !parsed.operation)) {
     // "genera una imagen como esta pero con fondo azul": a creation verb
     // with the attachment as its reference. The provider only receives the
     // identity contract when there are several images, so a single
@@ -866,4 +923,5 @@ module.exports = {
   detectReferenceCue,
   detectPreviousImageCue,
   detectSpokenImageFrame,
+  detectReferenceDeliverableFrame,
 };

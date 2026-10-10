@@ -919,7 +919,7 @@ function getVisualMediaManifests() {
       forbidden_formats: [],
       expected_errors: [
         { code: "image_source_required", description: "No source or reference image could be resolved.", repair_hint: "Ask the user to attach or select the image again; never generate a substitute." },
-        { code: "image_edit_unsupported", description: "The selected image model cannot edit images.", repair_hint: "Tell the user to pick an edit model (gpt-image-1, gemini-2.5-flash-image, google/gemini-3.1-flash-image-preview); never switch it yourself." },
+        { code: "image_edit_unsupported", description: "The selected image model cannot edit images.", repair_hint: "Relay the tool's Spanish message as is (it names the picked model and asks the user to pick an image-editing model); never switch models yourself, never show raw model ids or OpenRouter slugs." },
         { code: "NO_PROVIDER", description: "No image-edit provider is configured or the selected one lacks credentials.", repair_hint: "Report it to the user; do not fall back to generate_image." },
         { code: "E_PARAMS", description: "Invalid selection, references or image sizes (max 8 images, 20 MB each, 40 MB total).", repair_hint: "Fix the arguments and retry once." },
         { code: "E_PROVIDER", description: "The edit model returned an error.", repair_hint: "Surface the error; retry at most once with the same model." },

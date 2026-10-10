@@ -6,9 +6,16 @@
 
 const IMAGE_FILE_RE = /^image\/(?:png|jpeg|jpg|webp|gif|avif)$/i;
 const IMAGE_URL_RE = /\.(?:png|jpe?g|webp|gif|avif)(?:[?#]|$)/i;
-// Agentic sentinel cards, artifact links, upload URLs (the composer stores
-// the generated image's URL as the assistant row's content) and markdown.
-const SENTINEL_IMAGE_RE = /"(?:mime|mimeType|type)"\s*:\s*"image\/(?:png|jpeg|jpg|webp|gif|avif)"|\/api\/agent\/artifact\/[a-f0-9]{6,64}\?name=[^"\s]*\.(?:png|jpe?g|webp|gif|avif)\b|\/uploads\/[^\s)"'<>]*\.(?:png|jpe?g|webp|gif|avif)\b|!\[[^\]]*\]\([^)\s]*\.(?:png|jpe?g|webp|gif|avif)(?:[?#][^)]*)?\)/i;
+// Agentic sentinel cards, artifact links and upload URLs (the composer stores
+// the generated image's URL as the assistant row's content). Only evidence
+// the source resolver can act on counts: an external markdown image from a
+// web answer is not an image this chat can edit.
+const SENTINEL_IMAGE_RE = /"(?:mime|mimeType|type)"\s*:\s*"image\/(?:png|jpeg|jpg|webp|gif|avif)"|\/api\/agent\/artifact\/[a-f0-9]{6,64}\?name=[^"\s]*\.(?:png|jpe?g|webp|gif|avif)\b|\/uploads\/[^\s)"'<>]*\.(?:png|jpe?g|webp|gif|avif)\b/i;
+// A document / deck / sheet delivered AFTER the picture ends the image
+// context: «hazlo más grande» then talks about that file, not the image.
+const DOC_EXT = 'pdf|docx?|pptx?|xlsx?|csv|txt|md|html?|zip';
+const DOC_MIME_RE = /^(?:application\/(?:pdf|msword|vnd\.openxmlformats-officedocument\.[a-z.]+|vnd\.ms-[a-z.]+|zip|json|octet-stream)|text\/)/i;
+const SENTINEL_DOC_RE = new RegExp(`"(?:mime|mimeType)"\\s*:\\s*"(?:application\\/(?:pdf|msword|vnd\\.openxmlformats-officedocument\\.[a-z.]+|vnd\\.ms-[a-z.]+)|text\\/[a-z-]+)"|\\/api\\/agent\\/artifact\\/[a-f0-9]{6,64}\\?name=[^"\\s]*\\.(?:${DOC_EXT})\\b|\\/uploads\\/[^\\s)"'<>]*\\.(?:${DOC_EXT})\\b`, 'i');
 
 function fileList(message) {
   try {
@@ -38,16 +45,31 @@ function hasImagePart(content) {
     && (part.type === 'image_url' || part.type === 'image' || part.image_url || part.inlineData));
 }
 
-/** True when one of the latest `limit` messages carries an image (upload or generated). */
-function historyHasRecentImage(messages, { limit = 12 } = {}) {
+function isDocumentEntry(file) {
+  if (!file || typeof file !== 'object' || file.deletedAt || isImageEntry(file)) return false;
+  if (DOC_MIME_RE.test(String(file.mimeType || file.mime || file.type || ''))) return true;
+  const name = String(file.name || file.originalName || file.filename || file.url || file.downloadUrl || file.path || '');
+  return new RegExp(`\\.(?:${DOC_EXT})(?:[?#]|$)`, 'i').test(name);
+}
+
+/**
+ * True when one of the latest `limit` messages carries an image (upload or
+ * generated). With `documentEndsContext` (the chat loop's setting) a document
+ * delivered after the picture ends the image context; the image composer
+ * keeps the picture (it can only produce images).
+ */
+function historyHasRecentImage(messages, { limit = 12, documentEndsContext = true } = {}) {
   if (!Array.isArray(messages) || !messages.length) return false;
   const recent = messages.slice(-Math.max(1, limit));
   for (let index = recent.length - 1; index >= 0; index -= 1) {
     const message = recent[index];
     if (!message) continue;
-    if (fileList(message).some(isImageEntry)) return true;
+    const files = fileList(message);
+    if (files.some(isImageEntry)) return true;
     if (hasImagePart(message.content)) return true;
-    if (SENTINEL_IMAGE_RE.test(textOf(message.content))) return true;
+    const text = textOf(message.content);
+    if (SENTINEL_IMAGE_RE.test(text)) return true;
+    if (documentEndsContext && (files.some(isDocumentEntry) || SENTINEL_DOC_RE.test(text))) return false;
   }
   return false;
 }
@@ -70,7 +92,7 @@ async function chatHasRecentImage(prisma, { userId, chatId, take = 12 } = {}) {
       take: Math.max(1, Math.min(50, Number(take) || 12)),
       select: { files: true, content: true },
     });
-    return historyHasRecentImage(Array.isArray(rows) ? rows.slice().reverse() : [], { limit: 50 });
+    return historyHasRecentImage(Array.isArray(rows) ? rows.slice().reverse() : [], { limit: 50, documentEndsContext: false });
   } catch { return false; }
 }
 
@@ -112,5 +134,5 @@ module.exports = {
   nearestAspectRatio,
   aspectRatioFromBuffer,
   KNOWN_RATIOS,
-  _internal: { isImageEntry, fileList },
+  _internal: { isImageEntry, isDocumentEntry, fileList },
 };

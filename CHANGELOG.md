@@ -31,7 +31,14 @@ and improvement cycles follow a sequential number with the date the work landed.
   claims image turns; «ponle este logo a la imagen anterior» keeps the previous
   image as the canvas; an uploaded photo keeps its own frame (the OpenAI editor
   sends `size: 'auto'`); a model that cannot edit refuses honestly, naming the
-  model, and the turn never falls back to a brand-new generation.
+  model by its display name, and the turn never falls back to a brand-new
+  generation. Documents built with a picture («crea una ppt con esta imagen de
+  fondo», «ponle el logo a la portada» with a deck in the chat) stay with the
+  document runner; text about a picture («genera una descripción de esta
+  imagen») stays on the vision stream; a viewer-chosen canvas is never demoted
+  by «la imagen anterior»; «la misma imagen pero de noche», «now in blue» and
+  «crea una versión anime de esta foto» edit the chat's picture; «crea un banner
+  con este logo» frames the result as a banner (16:9).
 
 ### Security
 

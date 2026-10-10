@@ -241,3 +241,40 @@ test('an empty referenceFileIds array keeps every attachment, and recovered ids 
   const mixed = { ...ctx, fileIds: ['upload', 'subject'], recoveredFileIds: ['upload'] };
   assert.deepEqual((await resolveImageSources({}, mixed)).map((source) => source.fileId), ['subject']);
 });
+
+test('primaryFromHistory never demotes a canvas the user chose; references are excluded from the history pick', async () => {
+  // Viewer «Editar» on an older image + «ponle el logo de la última imagen»:
+  // the chosen image stays the canvas, the upload is the reference.
+  const chosen = await context([{ files: [{ type: 'image', fileId: 'newest' }] }, { files: [{ type: 'image', fileId: 'older' }] }], { newest: {}, older: {}, logo: {} });
+  const pinned = await resolveImageSources({ fileId: 'older', referenceFileIds: ['logo'], primaryFromHistory: true }, chosen);
+  assert.deepEqual(pinned.map((source) => source.fileId), ['older', 'logo']);
+  // Regenerar: the user row (with the logo) is already the newest message —
+  // the previous image is still the canvas, never the logo itself.
+  const regen = await context([
+    { files: [{ type: 'image', fileId: 'logo' }] },
+    { files: [{ type: 'image', fileId: 'previous' }] },
+  ], { previous: {}, logo: {} });
+  regen.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const composer = await resolveImageSources({ fileId: 'logo', referenceFileIds: ['logo'], primaryFromHistory: true }, regen);
+  assert.deepEqual(composer.map((source) => source.fileId), ['previous', 'logo']);
+  const agent = await resolveImageSources({ primaryFromHistory: true }, { ...regen, fileIds: ['logo'] });
+  assert.deepEqual(agent.map((source) => source.fileId), ['previous', 'logo']);
+  // After a clarification the logo is a RECOVERED id: still the reference the cue names.
+  const recovered = await resolveImageSources({ primaryFromHistory: true }, { ...regen, fileIds: ['logo'], recoveredFileIds: ['logo'] });
+  assert.deepEqual(recovered.map((source) => source.fileId), ['previous', 'logo']);
+  // Without the cue a recovered id never displaces the newest image (unchanged).
+  assert.deepEqual((await resolveImageSources({}, { ...regen, fileIds: ['logo'], recoveredFileIds: ['logo'] })).map((source) => source.fileId), ['logo']);
+});
+
+test('the reference cap counts the previous image before any reference is read', async () => {
+  const records = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`r${i}`, {}]));
+  const ctx = await context([{ files: [{ type: 'image', fileId: 'r8' }] }], records);
+  let reads = 0;
+  const findFirst = ctx.prisma.file.findFirst;
+  ctx.prisma.file.findFirst = async (args) => { reads += 1; return findFirst(args); };
+  await assert.rejects(
+    () => resolveImageSources({ referenceFileIds: ['r0', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'], primaryFromHistory: true }, ctx),
+    (error) => error.code === 'E_PARAMS' && /imagen anterior/.test(error.message),
+  );
+  assert.ok(reads <= 1, `only the history canvas was read (${reads})`);
+});

@@ -236,7 +236,15 @@ test('resolveEditDirective binds a single reference to its subject on creation p
   const guided = directive.resolveEditDirective('genera una imagen como esta pero con fondo azul');
   assert.match(guided.prompt, /^genera una imagen como esta pero con fondo azul/);
   assert.match(guided.prompt, /conserva su sujeto, identidad, composición y estilo/);
-  assert.match(directive.resolveEditDirective('make a poster like this').prompt, /keep its subject, identity, composition and style/);
+  assert.match(directive.resolveEditDirective('make an image like this but at night').prompt, /keep its subject, identity, composition and style/);
+  // A framed deliverable built from the attachment gets the material clause
+  // (identity + colours kept, a new composition around it) and its frame.
+  const banner = directive.resolveEditDirective('crea un banner con este logo');
+  assert.match(banner.prompt, /Usa la imagen adjunta como material/);
+  assert.match(banner.prompt, /banner \(16:9\)/);
+  assert.doesNotMatch(banner.prompt, /conserva su sujeto, identidad, composición y estilo/);
+  assert.match(directive.resolveEditDirective('make a poster like this').prompt, /Use the attached image as material[\s\S]*poster composition \(16:9\)/);
+  assert.match(directive.resolveEditDirective('haz una historia con esta foto').prompt, /historia \(9:16\)/);
   // Scoped edits keep their own clause and never get the reference one.
   const scoped = directive.resolveEditDirective('cambia solo los ojos a color verde');
   assert.doesNotMatch(scoped.prompt, /referencia/);
@@ -247,4 +255,58 @@ test('parseImageEdit never turns a comparison or the previous image into the edi
   assert.equal(directive.parseImageEdit('hazla como esta foto').target, null);
   assert.doesNotMatch(directive.resolveEditDirective('hazla como esta foto').prompt, /Enfoca el cambio en como/);
   assert.equal(directive.parseImageEdit('ponle este logo a la imagen anterior').target, 'este logo');
+});
+
+// ── Round 2: review findings I1, I2, I5, I6, R4, HYG-3/6 ──────────────────
+
+test('bare nouns («retrato», «historia») are not orientations; orientation phrases still are', () => {
+  for (const text of ['mejora la calidad del retrato', 'quítale el fondo al retrato', 'ponle el texto de la historia de la empresa', 'cuenta la historia del logo']) {
+    assert.equal(directive.detectSpokenImageFrame(text), null, text);
+    assert.equal(directive.detectImageReframe(text), null, text);
+  }
+  assert.equal(directive.detectSpokenImageFrame('hazla en formato retrato').frame, '3:4');
+  assert.equal(directive.detectSpokenImageFrame('una imagen para historias de instagram').frame, '9:16');
+  assert.equal(directive.detectSpokenImageFrame('para reels').frame, '9:16');
+  assert.equal(directive.detectSpokenImageFrame('hazla vertical').frame, '3:4');
+  assert.equal(directive.detectSpokenImageFrame('en 16:9').frame, '16:9');
+  assert.equal(directive.detectImageReframe('la misma imagen pero para historias').frame, '9:16');
+});
+
+test('detectReferenceCue: greetings, indirect questions and text deliverables are not references', () => {
+  for (const text of [
+    'hola, ¿cómo estás?', 'buenas, como estas', 'dime como esta la imagen', 'i like this',
+    'genera una descripción de esta imagen', 'hazme un resumen de esta imagen', 'crea una tabla con los datos de esta imagen',
+    'genera 5 ideas de post con esta imagen', 'write a summary of this photo',
+  ]) assert.equal(directive.detectReferenceCue(text), false, text);
+  for (const text of ['genera una imagen como esta', 'crea una imagen como esta, pero de noche', 'make one like this but darker', 'crea un banner con este logo']) {
+    assert.equal(directive.detectReferenceCue(text), true, text);
+  }
+});
+
+test('detectReferenceDeliverableFrame: banner / historia / avatar frames, nothing else', () => {
+  assert.deepEqual(directive.detectReferenceDeliverableFrame('crea un banner con este logo'), { frame: '16:9', orientation: 'landscape', deliverable: 'banner' });
+  assert.equal(directive.detectReferenceDeliverableFrame('haz una historia con esta foto').frame, '9:16');
+  assert.equal(directive.detectReferenceDeliverableFrame('crea un avatar con esta foto').frame, '1:1');
+  assert.equal(directive.detectReferenceDeliverableFrame('make a poster like this').frame, '16:9');
+  assert.equal(directive.detectReferenceDeliverableFrame('genera una imagen como esta pero con fondo azul'), null);
+  assert.equal(directive.detectReferenceDeliverableFrame('quítale el fondo'), null);
+  assert.equal(directive.detectReferenceDeliverableFrame('crea un banner horizontal con este logo').frame, '16:9');
+});
+
+test('detectPreviousImageCue: «la primera imagen» is not the previous image; clitic forms are', () => {
+  assert.equal(directive.detectPreviousImageCue('ponle este logo a la primera imagen'), false);
+  for (const text of ['ponle este logo a la última imagen', 'hazla igual a esta', 'ponlo en la imagen anterior', 'déjala como esta foto']) {
+    assert.equal(directive.detectPreviousImageCue(text), true, text);
+  }
+});
+
+test('resolveReframeDirective returns its trimmed instruction once; the filler list has no duplicate tokens', () => {
+  const out = directive.resolveReframeDirective('  hazla vertical  ');
+  assert.equal(out.instruction, 'hazla vertical');
+  const source = require('fs').readFileSync(require.resolve('../src/services/agents/image-directive'), 'utf8');
+  const filler = source.match(/const REFRAME_FILLER_RE = \/\\b\(\?:([^)]+)\)/)[1].split('|');
+  assert.equal(new Set(filler).size, filler.length, 'no duplicate filler token');
+  // The creation verbs come from media-intent (one list for routing and rendering).
+  assert.match(source, /REFERENCE_CREATE_VERB_RE = new RegExp\(`\\\\b\(\?:\$\{require\('\.\/media-intent'\)\._internal\.CREATE_VERB_SOURCE\}/);
+  assert.match(directive.resolveEditDirective('créame una imagen como esta pero de noche').prompt, /conserva su sujeto/);
 });

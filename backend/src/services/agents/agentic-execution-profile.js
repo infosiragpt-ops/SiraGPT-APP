@@ -215,9 +215,12 @@ function successfulToolCalls(steps = []) {
   for (const step of steps) {
     const actions = step && Array.isArray(step.actions) ? step.actions : [];
     for (const action of actions) {
-      const tool = action.tool;
-      if (!tool) continue;
       const obs = action.observation || {};
+      // A tool that delegated the whole call (generate_image → edit_image
+      // when a picture is attached) reports the tool that did the work, so
+      // the gate on edit_image is satisfied without a second edit.
+      const tool = (typeof obs.executedTool === 'string' && obs.executedTool) || action.tool;
+      if (!tool) continue;
       const ok = !obs.error && obs.ok !== false;
       if (ok) counts.set(tool, (counts.get(tool) || 0) + 1);
     }

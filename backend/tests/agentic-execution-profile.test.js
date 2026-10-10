@@ -341,3 +341,18 @@ test('agentic execution profile: image edits gate on edit_image, never on a seco
   ]);
   assert.equal(edited.ok, true);
 });
+
+test('validateFinalize credits the tool that actually ran when a call was delegated (generate_image → edit_image)', () => {
+  const { successfulToolCalls } = require('../src/services/agents/agentic-execution-profile');
+  const profile = buildExecutionProfile({ goal: 'genera un banner con este logo', hasImageAttachment: true });
+  assert.deepEqual(profile.requiredTools, ['edit_image']);
+  const redirected = [{ actions: [{ tool: 'generate_image', observation: { ok: true, url: '/edited.png', executedTool: 'edit_image' } }] }];
+  assert.equal(validateFinalize(profile, redirected).ok, true, 'no second edit is demanded');
+  assert.equal(successfulToolCalls(redirected).get('edit_image'), 1);
+  // Without the marker the gate still asks for edit_image (unchanged).
+  const plain = [{ actions: [{ tool: 'generate_image', observation: { ok: true, url: '/new.png' } }] }];
+  assert.equal(validateFinalize(profile, plain).ok, false);
+  // A failed delegated call credits nothing.
+  const failed = [{ actions: [{ tool: 'generate_image', observation: { ok: false, executedTool: 'edit_image', error: 'x' } }] }];
+  assert.equal(successfulToolCalls(failed).get('edit_image'), undefined);
+});

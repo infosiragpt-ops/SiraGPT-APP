@@ -230,9 +230,27 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 // Tool 1: generate_image
 // ─────────────────────────────────────────────────────────────────────────
 
-// Spanish, names the model, never switches it (product rule).
-function unsupportedEditMessage(model) {
-  return `El modelo de imagen seleccionado (${model || 'el modelo actual'}) no permite editar imágenes. Elige un modelo de edición (gpt-image-1, gemini-2.5-flash-image o google/gemini-3.1-flash-image-preview) para conservar tu imagen.`;
+// Spanish, names the picked model by its DISPLAY name (never a raw id or an
+// OpenRouter slug — picked-model-label policy), never switches it.
+async function unsupportedEditMessage(ctx = {}, model) {
+  const picked = ctx.imageModel || null;
+  let label = '';
+  try {
+    label = await require('../ai/picked-model-label').resolvePickedModelLabel({
+      model: picked || model || '', provider: ctx.imageProvider || '', prisma: ctx.prisma || null,
+    });
+  } catch (_) { label = ''; }
+  const subject = label
+    ? `${label} no permite editar imágenes`
+    : (picked ? 'El modelo de imagen seleccionado no permite editar imágenes' : 'El modelo de imagen de este turno no permite editar imágenes');
+  return `${subject}. Elige un modelo de edición de imágenes (GPT Image o Gemini Flash Image) en el selector para conservar tu imagen.`;
+}
+
+const { isImageAttachment } = require('./media-intent');
+// Ids attached in THIS turn (the loop marks ids recovered from history).
+function freshAttachmentIds(ctx = {}) {
+  const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
+  return (Array.isArray(ctx.fileIds) ? ctx.fileIds.map(String) : []).filter((id) => !recovered.has(id));
 }
 
 const generateImage = {
@@ -268,20 +286,20 @@ const generateImage = {
     // «con este logo») only reaches the model through edit_image.
     const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
     const attachedImages = (Array.isArray(ctx.fileMetadata) ? ctx.fileMetadata : [])
-      .filter((f) => f && f.id && /^image\//i.test(String(f.mimeType || f.type || '')) && !recovered.has(String(f.id)))
+      .filter((f) => f && f.id && isImageAttachment(f) && !recovered.has(String(f.id)))
       .map((f) => String(f.id));
-    const freshIds = (Array.isArray(ctx.fileIds) ? ctx.fileIds.map(String) : []).filter((id) => !recovered.has(id));
+    const freshIds = freshAttachmentIds(ctx);
     const hasFreshImage = attachedImages.length > 0 || (ctx.hasImageAttachment === true && freshIds.length > 0);
     if (hasFreshImage) {
       const engine = getImageEngine();
       const editable = typeof engine.canEditImage !== 'function'
         || engine.canEditImage({ model: ctx.imageModel || model || undefined, provider: ctx.imageProvider || undefined });
       if (!editable) {
-        const msg = `${unsupportedEditMessage(ctx.imageModel || model)} O pide una imagen nueva sin adjuntar imágenes.`;
+        const msg = `${await unsupportedEditMessage(ctx, model)} O pide una imagen nueva sin adjuntar imágenes.`;
         emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: msg });
         return { ok: false, code: 'image_edit_unsupported', error: msg };
       }
-      return editImage.execute({
+      const edited = await editImage.execute({
         instruction: rawPrompt,
         aspectRatio: ratioArg,
         quality: qualityArg,
@@ -289,6 +307,9 @@ const generateImage = {
         model,
         ...(attachedImages.length ? { referenceFileIds: attachedImages } : {}),
       }, ctx);
+      // The loop records this step under the tool the model invoked; the
+      // marker lets the finalize gate credit the edit that actually ran.
+      return edited && typeof edited === 'object' ? { ...edited, executedTool: 'edit_image' } : edited;
     }
     // Spoken context fills the gaps: "dame una imagen vertical",
     // "una imagen orisontal para la portada", "3 imágenes estilo anime".
@@ -452,14 +473,18 @@ const editImage = {
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
       const needsFiles = !imageUrl || fileId || referenceFileIds?.length || ctx.fileIds?.length || /\/uploads\//.test(imageUrl);
       const prisma = ctx.prisma || (needsFiles && (() => { try { return require('../../config/database'); } catch { return null; } })());
+      // «ponle este logo a la imagen anterior»: the chat's last image is the
+      // canvas — unless the model pinned a NON-attachment fileId (an older
+      // image the user chose), which stays the canvas.
       const previousCue = !imageUrl && (imageDirective.detectPreviousImageCue(cleanInstruction)
         || imageDirective.detectPreviousImageCue(String(ctx.userQuery || '')));
-      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds, primaryFromHistory: previousCue }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
+      const primaryFromHistory = Boolean(previousCue) && (!fileId || freshAttachmentIds(ctx).includes(String(fileId)));
+      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds, primaryFromHistory }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
       const [source] = sources;
       if (!source) {
         const msg = 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.';
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
-        return { ok: false, error: msg };
+        return { ok: false, code: 'image_source_required', error: msg };
       }
 
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Aplicando la edición a la imagen…', partial: true });
@@ -472,9 +497,13 @@ const editImage = {
         ? imageDirective.resolveReframeDirective(cleanInstruction, aspectRatio)
         : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
       // A plain edit keeps the source frame: the model's aspectRatio only
-      // counts for reframes or when the user's own words name an orientation.
+      // counts for reframes, when the user's own words name an orientation,
+      // or when the attachment is material for a framed deliverable («crea
+      // un banner con este logo» → 16:9, «una historia con esta foto» → 9:16).
       const spokenFrame = reframe ? null : imageDirective.detectSpokenImageFrame(cleanInstruction);
-      const ratio = reframe ? (aspectRatio || reframe.frame) : (spokenFrame ? (aspectRatio || spokenFrame.frame) : null);
+      const deliverableFrame = (reframe || spokenFrame) ? null : imageDirective.detectReferenceDeliverableFrame(cleanInstruction);
+      const wordedFrame = spokenFrame || deliverableFrame;
+      const ratio = reframe ? (aspectRatio || reframe.frame) : (wordedFrame ? (aspectRatio || wordedFrame.frame) : null);
       const { prepareEditCanvas, finishEditCanvas } = require('../media/image-edit-canvas');
       const canvas = (reframe || selection) ? await prepareEditCanvas({
         imageBuffer: source.buffer, operation: reframe ? 'reframe' : 'edit',
@@ -497,8 +526,11 @@ const editImage = {
       });
 
       if (!result.ok || !result.images?.length) {
-        const msg = (result.code === 'image_edit_unsupported' || result.code === 'NO_PROVIDER')
-          ? unsupportedEditMessage(ctx.imageModel || model)
+        // NO_PROVIDER (missing credentials for a model that CAN edit) keeps
+        // the engine's own copy: telling the user to pick the model they
+        // already picked would be wrong.
+        const msg = result.code === 'image_edit_unsupported'
+          ? await unsupportedEditMessage(ctx, model)
           : (result.error || 'El servicio de edición de imágenes no devolvió resultado.');
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
         return { ok: false, error: msg, code: result.code, attempts: result.attempts };
