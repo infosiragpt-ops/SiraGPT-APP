@@ -1795,25 +1795,38 @@ el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recib
   `lib/chat-work-status` convierte en el panel de decisión sobre el compositor (chips + respuesta
   libre), en vivo y tras recargar.
 - **Material propio (2026-10-10)**: la pregunta `missing_source` («¿Qué quieres que traduzca? No
-  veo un archivo adjunto ni un texto») solo salta si el objeto falta o es un archivo no adjunto:
-  vacío («resume», «traduce al inglés»), pronombre («tradúcelo», «traduce esto», «ponlas
-  rosadas»), sustantivo de material («el documento», «el texto», «la redacción», «los errores»,
-  «el último párrafo») o posesivo («mi tesis», «mi CV»). `carriesOwnMaterial` cuenta como fuente
-  el texto tras «:» o entre comillas, un tema («resume la revolución francesa»), una comparación,
-  un valor («convierte 25 °C a fahrenheit») y las preguntas de cómo hacer algo (`HOWTO_RE` ⇒
-  acción `answer`, nunca edición de la respuesta ni del archivo generado). Antes, TODO primer
-  mensaje así recibía la pregunta en vez de la respuesta (solo contaba un pegado de ≥ 45
-  palabras). A mitad de chat, el texto pegado tras «:» o entre comillas es el objeto (target
-  `none`, source `inline`), no «TU RESPUESTA ANTERIOR»; pronombres, anclas («ahora en inglés»),
-  «tu explicación» e instrucciones («cambia el título a: X», «corrige eso: …») siguen apuntando
-  a la respuesta.
+  veo un archivo adjunto ni un texto») solo salta si el objeto falta o es material que nadie dio:
+  vacío («resume», «traduce al inglés»), pronombre o deíctico aunque lleve relleno («tradúcelo»,
+  «traduce esto pls», «lo que te mandé»), demostrativo («resume esta clase»), archivo («el
+  documento sobre X»), texto con artículo («el texto», «el último párrafo»), obra o parte genérica
+  («el libro», «la tarea de matemáticas», «el ensayo que hice», «los errores») o posesivo de
+  material («mi tesis», «mi marco teórico»; con traducir/resumir/parafrasear, cualquier
+  posesivo). `carriesOwnMaterial` cuenta como fuente el texto tras «:», entre comillas o en las
+  líneas siguientes, el texto pegado ANTES de la orden («<texto>⏎tradúcelo»), un tema u obra con
+  nombre, una comparación, un valor y las preguntas de cómo hacer algo o de capacidad («¿cómo
+  eliminar mi cuenta?», «¿puedes hacer gráficos?» ⇒ acción `answer`); «dibuja un gato» es
+  `create` + imagen. Lo que sigue a «:» se juzga: instrucción, alcance, emoticono, otra referencia
+  o una descripción corta de una obra larga («corrige mi ensayo: tiene errores») no son material.
+  Antes, TODO primer mensaje así recibía la pregunta (solo contaba un pegado de ≥ 45 palabras).
+  A mitad de chat, solo con verbos de texto (traduce/corrige/parafrasea/revisa/mejora/resume) y
+  solo un sustantivo de texto (o nada) antes del delimitador, el texto pegado es el objeto
+  (target `none`, source `inline`, `publicRequestBrief.target.source`), con el mismo veto que la
+  respuesta anterior: `routingHints().editsInlineText` en `ai.js` y `briefTargetsPreviousAnswer`
+  en `agentic-chat-stream` ⇒ nunca runner ni editor de documentos. Valores, alcances e
+  instrucciones («cambia el título a: X», «traduce al inglés: solo el primer párrafo», «agrega
+  ejemplos: 2 por punto») siguen en la respuesta, y con un archivo generado nombrado en el mensaje
+  decide el archivo. Si el brief no pregunta, el bloque tier 0 pide al modelo solicitar el
+  material que falte en vez de inventarlo. Los sustantivos se comparan POR TOKEN (Sets, regex de
+  una palabra, bucles acotados): un grupo cuantificado de alternativas solapadas («más
+  importantes» y «más» + «importantes») bloqueaba el event loop de forma exponencial; test de
+  tiempo lineal en la suite.
 - **Frontend**: `lib/api.ts` parsea `request_brief` / `intent.clarify_options`
   (`RequestBriefPayload`, `ClarifyOptionsPayload`); `chat-context-integrated` guarda
   `message.requestBrief` y convierte el frame de aclaración en `metadata.kind='clarification'`;
   `components/chat/request-brief-line.tsx` muestra «Entendí: … · supuesto» bajo la respuesta con
   «Corregir» (prefill del compositor «No era eso. Lo que quiero es: »); se oculta en small talk.
   UI lock re-baselineado para los 4 archivos tocados.
-- Tests: `backend/tests/request-brief.test.js` (31), `request-brief-routing-source.test.js` (7),
+- Tests: `backend/tests/request-brief.test.js` (33), `request-brief-routing-source.test.js` (7),
   `tests/request-brief-frontend-source.test.ts` (4), `tests/components/request-brief-line.test.tsx` (3).
   Envs en `docs/ENV_VARIABLES.md` (`SIRAGPT_REQUEST_BRIEF*`).
 

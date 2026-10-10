@@ -243,9 +243,13 @@ function pickAction(text, { deliverables, hasAttachments, hasPrevAssistant, isQu
   const hasCode = CODE_RE.test(text) || (deliverables.includes('code') && (hasCreate || hasEdit));
   const artifactNoun = deliverables.some((k) => !['translation', 'summary', 'text'].includes(k));
 
-  // «¿cómo eliminar mi cuenta?», «consejos para mejorar…»: the edit verb is
-  // the topic of a how-to question, not an order on some material.
-  if (!hasAttachments && !hasCreate && !clitic && !hasCode && !hasSearch && HOWTO_RE.test(text)) return 'answer';
+  // «¿cómo eliminar mi cuenta?», «¿puedes hacer gráficos?»: the verb is the
+  // topic of a how-to or capability question, not an order on some material.
+  if (!hasAttachments && !clitic && (isQuestionAbout(text, isQuestion)
+    || (!hasCreate && !hasCode && !hasSearch && isHowTo(text)))) return 'answer';
+  // «dibuja un gato»: a drawing, not a chart of data.
+  if (!hasEdit && !clitic && DRAW_RE.test(text) && !/\b(?:grafica\w*|visualiza\w*|plotea\w*|diagrama\w*|esquematiza\w*|plot|graph|visuali[sz]e)\b/.test(text)
+    && !deliverables.some((k) => ['chart', 'diagram', 'table'].includes(k)) && !/\b(?:datos?|cifras?|valores?|funcion(?:es)?|ecuacion(?:es)?)\b|\d/.test(text)) return 'create';
   if (deliverables.includes('transcription')) return 'transform';
   if (hasTransform && !hasCreate) return 'transform';
   if (hasVisualize && !hasEdit && !/\b(?:grafic[ao]s?|chart) (?:anterior|generad\w*)\b/.test(text)) return 'visualize';
@@ -293,7 +297,7 @@ function pickDeliverable(text, action, deliverables, formats, target) {
   if (action === 'analyze') kind = /\bresum|sintesis|summar/.test(text) ? 'summary' : (kind === 'table' || kind === 'chart' ? kind : 'text');
   if (action === 'visualize' && !kind) kind = 'chart';
   if (action === 'code' && !kind) kind = 'code';
-  if (action === 'create' && !kind) kind = 'text';
+  if (action === 'create' && !kind) kind = DRAW_RE.test(text) ? 'image' : 'text';
   if (action === 'converse' || action === 'continue') kind = kind || null;
   const format = kind && DEFAULT_FORMAT[kind] && ['presentation', 'document', 'spreadsheet', 'pdf'].includes(kind)
     ? (kind === 'document' && explicitFormat === 'pdf' ? 'pdf' : (kind === 'spreadsheet' && explicitFormat === 'csv' ? 'csv' : DEFAULT_FORMAT[kind]))
@@ -341,7 +345,7 @@ function resolveTarget(text, ctx) {
   // «traduce al inglés: Hola…», «corrige: yo a ido…» after an answer: the
   // text pasted after «:» or between quotes is the object, not the answer.
   if (!attachments.length && hasPrevAssistant && ['edit', 'transform'].includes(action)
-    && !CLITIC_RE.test(text) && inlineObjectMaterial(text)) {
+    && inlineReplacesAnswer(text, ctx.raw || text, { priorArtifact, officeNoun: deliverables.some((k) => ['presentation', 'document', 'spreadsheet', 'pdf'].includes(k)) })) {
     return { kind: 'none', name: null, format: null, source: 'inline' };
   }
   // «crea un word con esta información», «grafica estos datos» after an
@@ -483,32 +487,79 @@ function detectTemplateIntentSafe(raw, attachments, priorArtifact) {
 // ─── Own material: does the message already carry its object? ───────────
 // The early question «¿Qué quieres que traduzca? No veo un archivo adjunto ni
 // un texto en este chat.» is for a request whose object is missing
-// («tradúcelo», «resume», «traduce esto») or lives in a file nobody attached
+// («tradúcelo», «resume», «traduce esto») or lives in material nobody gave
 // («resume el documento», «mejora mi CV»). A message that carries its own
-// object is answered, never held back: text after «:» or between quotes
-// («traduce al inglés: Hola»), a topic («resume la revolución francesa»), a
+// object is answered, never held back: text after «:», between quotes or on
+// the next line («traduce al inglés: Hola»), text pasted before the order
+// («<texto>⏎tradúcelo»), a topic («resume la revolución francesa»), a
 // comparison («compara Python y JavaScript»), a value («convierte 25 °C a
-// fahrenheit») or a how-to question («¿cómo eliminar mi cuenta?»). Until
-// 2026-10-10 every such FIRST message of a new chat got the question instead
-// of an answer, because only a ≥ 45-word paste counted as material.
-const SOURCE_VERB_RES = [TRANSFORM_RE, ANALYZE_RE, EDIT_RE, VISUALIZE_RE];
+// fahrenheit»), a how-to or capability question («¿cómo eliminar mi cuenta?»,
+// «¿puedes hacer gráficos?»). Until 2026-10-10 every such FIRST message of a
+// new chat got the question instead of an answer, because only a ≥ 45-word
+// paste counted as material.
+//
+// Material nouns are matched PER TOKEN (anchored single-word patterns, Sets,
+// bounded loops): a quantified group of overlapping alternatives over the
+// message («ideas más importantes más importantes …») backtracks
+// exponentially and would block the event loop.
+const SOURCE_VERB_RES = [TRANSFORM_RE, ANALYZE_RE, EDIT_RE, VISUALIZE_RE, CLITIC_RE];
 const LANGS = 'ingles|espanol|castellano|portugues|frances|aleman|italiano|chino|mandarin|japones|coreano|ruso|arabe|catalan|euskera|gallego|quechua|aimara|latin|english|spanish|portuguese|french|german|italian|chinese|japanese|korean|russian|arabic';
-const MATERIAL_FILE = 'documentos?|archivos?|adjuntos?|pdfs?|word|docx|excel|xlsx|ppts?|pptx|powerpoint|presentacion(?:es)?|diapositivas?|laminas?|capturas?|grabacion(?:es)?|planillas?|attachments?|documents?|files?|slides?|spreadsheets?';
-const MATERIAL_TEXT = 'textos?|parrafos?|frases?|oracion(?:es)?|contenido|informacion|datos|mensajes?|correos?|emails?|imagen(?:es)?|fotos?|audios?|videos?|tablas?|hojas?|codigo|scripts?|lecturas?|enlaces?|links?|text|paragraphs?|sentences?|content|data|messages?|images?|photos?|tables?|code|lyrics';
-const MATERIAL_WORK = 'libros?|novelas?|poemas?|cuentos?|articulos?|capitulos?|cancion(?:es)?|letras?|ensayos?|informes?|reportes?|tesis|trabajos?|monografias?|cartas?|discursos?|guion(?:es)?|tareas?|examen(?:es)?|ejercicios?|problemas?|preguntas?|redaccion|ortografia|gramatica|estilo|formato|resumen(?:es)?|traduccion(?:es)?|version(?:es)?|borrador(?:es)?|cv|curriculum|proyectos?|investigacion(?:es)?|apuntes|notas|respuestas?|explicacion(?:es)?|propuestas?|instrucciones|enunciados?|consignas?|books?|essays?|articles?|chapters?|poems?|songs?|reports?|thesis|papers?|letters?|drafts?|exercises?|homework|questions?|resumes?';
-// Parts of an unseen text: «agrega una conclusión», «corrige los errores».
-const MATERIAL_PART = 'ideas?|puntos?|errores|error|faltas?|conclusion(?:es)?|introduccion|titulos?|subtitulos?|bibliografia|referencias|citas|palabras clave|palabras|argumentos?|ejemplos?|partes?|secciones?|seccion|aspectos?|conceptos?|formulas?|ecuacion(?:es)?|calculos?|operacion(?:es)?|resultados?|fechas?|nombres?|cifras?|numeros?|telefonos?|direcciones?|entidades|fuentes|key points?|main ideas?|mistakes|errors|typos|dates|names|numbers|results?';
-const PART_ADJ = 'principales|principal|clave|importantes|mas importantes|relevantes|centrales|basicos|basicas|ortograficos|ortograficas|gramaticales|de ortografia|de redaccion|de gramatica|breves?|finales?|nuevos?|nuevas?|adicionales|faltantes|mas|key|main';
-const OBJ_ARTICLE = 'el|la|los|las|lo|este|esta|estos|estas|ese|esa|esos|esas|aquel|aquella|un|una|unos|unas|dicho|dicha|al|del|the|this|that|these|those|a|an';
-const OBJ_QUALIFIER = 'dos|tres|cuatro|cinco|ambos|ambas|\\d+|siguientes?|presente|mism[oa]s?|anterior(?:es)?|nuev[oa]s?|adjunt[oa]s?|ultim[oa]s?|penultim[oa]s?|primer[oa]?s?|segund[oa]s?|tercer[oa]?s?|cuart[oa]s?|quint[oa]s?|unic[oa]s?|final(?:es)?|first|second|third|last';
-const OBJ_TRAILER = 'adjunt[oa]s?|anterior(?:es)?|siguientes?|de arriba|de abajo|completo|completa|entero|entera|que te (?:pase|envie|mande|comparti|di|adjunte|pegue|subi)|que (?:subi|adjunte|envie|pase|pegue)|\\d+|[ivxlc]+';
-const OBJ_POSSESSIVE = 'mi|mis|tu|tus|nuestro|nuestra|nuestros|nuestras|my|your|our';
+// A file: names the user's material whatever follows («el documento sobre X»).
+const FILE_NOUN_RE = /^(?:documentos?|archivos?|adjuntos?|pdfs?|word|docx|excel|xlsx|ppts?|pptx|powerpoint|presentacion(?:es)?|diapositivas?|diapos?|laminas?|capturas?|grabacion(?:es)?|planillas?|attachments?|documents?|files?|slides?|spreadsheets?|recordings?)$/;
+// The user's text: material when a determiner points at it («el texto», «la frase»).
+const TEXT_NOUN_RE = /^(?:textos?|parrafos?|frases?|oracion(?:es)?|contenido|informacion|datos|mensajes?|correos?|emails?|imagen(?:es)?|fotos?|audios?|videos?|tablas?|hojas?|codigo|scripts?|lecturas?|enlaces?|links?|estrofas?|versos?|text|paragraphs?|sentences?|content|data|messages?|images?|photos?|tables?|code|lyrics)$/;
+// A piece of work: material when nothing names a specific one («el libro» vs
+// «el libro Cien años de soledad»).
+const WORK_NOUN_RE = /^(?:libros?|novelas?|poemas?|cuentos?|articulos?|capitulos?|cancion(?:es)?|letras?|ensayos?|informes?|reportes?|tesis|trabajos?|monografias?|cartas?|discursos?|guion(?:es)?|tareas?|deberes|examen(?:es)?|pruebas?|ejercicios?|problemas?|preguntas?|respuestas?|redaccion|ortografia|gramatica|estilo|formato|resumen(?:es)?|traduccion(?:es)?|version(?:es)?|borrador(?:es)?|cv|curriculum|curriculo|proyectos?|investigacion(?:es)?|apuntes|notas|explicacion(?:es)?|propuestas?|instrucciones|enunciados?|consignas?|clases?|sesion(?:es)?|unidad(?:es)?|modulos?|temas?|paginas?|entrevistas?|reunion(?:es)?|conferencias?|charlas?|exposicion(?:es)?|graficos?|graficas?|casos?|contratos?|demandas?|expedientes?|sentencias?|manual(?:es)?|certificados?|facturas?|encuestas?|cuestionarios?|presupuestos?|balances?|portafolios?|pitch(?:es)?|antecedentes|justificacion|hipotesis|metodologia|objetivos?|planteamiento|abstract|books?|essays?|articles?|chapters?|poems?|songs?|reports?|thesis|papers?|letters?|drafts?|exercises?|homework|questions?|resumes?|lectures?|notes|contracts?|speech(?:es)?|meetings?|interviews?|pages?|cases?)$/;
+// A part of an unseen text: «agrega una conclusión», «corrige los errores».
+const PART_NOUN_RE = /^(?:ideas?|puntos?|errores|error|faltas?|conclusion(?:es)?|introduccion|titulos?|subtitulos?|bibliografia|referencias|citas|palabras|argumentos?|ejemplos?|partes?|secciones?|seccion|aspectos?|conceptos?|formulas?|ecuacion(?:es)?|calculos?|operacion(?:es)?|resultados?|fechas?|nombres?|cifras?|numeros?|telefonos?|direcciones?|entidades|fuentes|mistakes|errors|typos|dates|names|numbers|results?|points?)$/;
+const MULTI_NOUNS = new Set([
+  'marco teorico', 'marco conceptual', 'matriz de consistencia', 'plan de negocios', 'planteamiento del problema',
+  'historia clinica', 'estados financieros', 'estado financiero', 'analisis de sangre', 'partida de nacimiento',
+  'carta de presentacion', 'poder notarial', 'control de lectura', 'palabras clave', 'key points', 'main ideas', 'cover letter',
+]);
+const DETERMINERS = new Set(['el', 'la', 'los', 'las', 'lo', 'este', 'esta', 'estos', 'estas', 'ese', 'esa', 'esos', 'esas', 'aquel', 'aquella', 'aquellos', 'aquellas', 'un', 'una', 'unos', 'unas', 'dicho', 'dicha', 'al', 'del', 'the', 'this', 'that', 'these', 'those', 'a', 'an']);
+const DEMONSTRATIVES = new Set(['este', 'esta', 'estos', 'estas', 'ese', 'esa', 'esos', 'esas', 'aquel', 'aquella', 'aquellos', 'aquellas', 'this', 'these', 'those']);
+const INDEFINITES = new Set(['un', 'una', 'unos', 'unas', 'a', 'an']);
+const POSSESSIVES = new Set(['mi', 'mis', 'tu', 'tus', 'nuestro', 'nuestra', 'nuestros', 'nuestras', 'my', 'your', 'our']);
+const QUALIFIER_RE = /^(?:dos|tres|cuatro|cinco|ambos|ambas|\d+[a-z]?|siguientes?|presente|mism[oa]s?|anterior(?:es)?|nuev[oa]s?|adjunt[oa]s?|ultim[oa]s?|penultim[oa]s?|primer[oa]?s?|segund[oa]s?|tercer[oa]?s?|cuart[oa]s?|quint[oa]s?|unic[oa]s?|final(?:es)?|first|second|third|last|propi[oa]s?)$/;
+const TRAILER_RE = /^(?:adjunt[oa]s?|anterior(?:es)?|siguientes?|complet[oa]s?|enter[oa]s?|principal(?:es)?|clave|importantes|relevantes|centrales|basic[oa]s|ortografic[oa]s|gramaticales|breves?|finales?|nuev[oa]s?|adicionales|faltantes|mas|key|main|argumentativ[oa]s?|anual(?:es)?|mensual(?:es)?|semanal(?:es)?|trimestral(?:es)?|cientific[oa]s?|academic[oa]s?|grupal(?:es)?|formal(?:es)?|clinic[oa]s?|escolar(?:es)?|universitari[oa]s?|cort[oa]s?|larg[oa]s?|ejecutiv[oa]s?|tecnic[oa]s?|propi[oa]s?|pendientes?|\d+[a-z]?|[ivxlc]{1,4}|y|e)$/;
+// «la tarea de matemáticas», «el resumen de la clase»: a generic complement
+// still points at the user's material; «de Don Quijote» names a work.
+const SUBJECT_RE = /^(?:matematicas?|biologia|historia|fisica|quimica|lenguaje|literatura|filosofia|economia|ingles|espanol|ciencias?|sociales|comunicacion|estadistica|derecho|contabilidad|marketing|programacion|geografia|arte|musica|psicologia|sociologia|administracion|finanzas|medicina|enfermeria|ingenieria|calculo|algebra|geometria|clase|curso|universidad|escuela|colegio|profe|profesor|profesora|maestro|maestra|semana|hoy|ayer|manana|mes|semestre|ciclo|grupo|equipo|empresa|oficina|jefe)$/;
+const REL_CLAUSE_RE = /^que (?:yo )?(?:hice|escribi|lei|tengo|redacte|prepare|hicimos|escribimos|estoy haciendo|estoy escribiendo|voy a|me (?:dejaron|mandaron|pidieron|dieron|asignaron|enviaron|toca)|te (?:pase|envie|mande|comparti|di|adjunte|pegue|voy a)|subi|adjunte|envie|pase|pegue)\b/;
+const DEICTIC_OBJECT_RE = /^(?:tod[oa]s?\s+)?(?:esto|eso|aquello|lo|la|los|las|le|les|el|este|esta|ese|esa|estos|estas|esos|esas|el siguiente|la siguiente|lo siguiente|los siguientes|las siguientes|lo de arriba|lo de abajo|lo anterior|lo mismo|this|that|it|these|those|the following|the above)$/;
+const DEICTIC_RELATIVE_RE = /^(?:esto|eso|lo|el texto|la info|la informacion) que (?:te )?(?:pase|envie|mande|escribi|puse|pegue|adjunte|comparti|subi|voy a|vo a)\b/;
+// «corrige eso: …» points back at the answer; «traduce esto: …» points ahead.
+const BACKWARD_DEIXIS_RE = /^(?:eso|esa|ese|esos|esas|aquello|lo anterior|lo de arriba|lo mismo|that|it|the above)$/;
+const FORWARD_DEIXIS_RE = /^(?:esto|esta|este|estos|estas|lo siguiente|el siguiente|la siguiente|los siguientes|las siguientes|this|these|the following)$/;
+// «traduce esto pls», «resume esto rápido»: words that do not make a topic.
+const FILLER_WORDS = new Set(['pls', 'plis', 'pliss', 'plz', 'pliz', 'porfi', 'porfis', 'porfa', 'porfavor', 'xfa', 'xfavor', 'pf', 'pfv', 'bro', 'amigo', 'amiga', 'ya', 'rapido', 'urgente', 'ahora', 'ahorita', 'asap', 'aqui', 'aca', 'hoy', 'ayer', 'now', 'quick', 'quickly', 'please', 'gracias', 'thanks', 'xd', 'jaja', 'jajaja', 'ok', 'okay', 'tambien']);
+const FILLER_PHRASES = ['por fa', 'por fis', 'x fa', 'x favor', 'por favor', 'de aqui', 'de aca', 'de arriba', 'de abajo', 'por correo', 'que te voy a pasar', 'que te voy a mandar', 'que te voy a enviar', 'que te voy a pegar', 'que te voy a compartir', 'que te paso'];
+// Verbs whose object can only be a text («traduce mi partida de nacimiento»
+// cannot be done without it), and verbs whose object IS the pasted text.
+const TEXT_ONLY_VERB_RE = /^(?:traduc|translat|parafrase|paraphras|resum|summar|sintetiz|reformul|rephras)/;
+const TEXT_OBJECT_VERB_RE = /^(?:traduc|translat|corrig|correg|fix|parafrase|paraphras|reformul|rephras|revis|review|mejor|improv|reescrib|rewrit|resum|summar|sintetiz)/;
+// A file or long work the user owns: a few words after «:» describe it
+// («corrige mi ensayo: tiene errores»), they are not the work itself.
+const LONG_WORK_RE = /^(?:ensayos?|tesis|informes?|reportes?|trabajos?|monografias?|cv|curriculum|curriculo|proyectos?|investigacion(?:es)?|contratos?|essays?|reports?|thesis|papers?|resumes?)$/;
+const PASTE_INSTRUCTION_RE = /^(?:solo|solamente|unicamente|que (?:sea|suene|tenga|quede|no)|sin |con (?:mas|menos)|mas |menos |maximo|minimo|hasta|de (?:manera|forma|modo)|en tono|manten|no (?:cambies|toques|uses|modifiques)|es para|lo necesito|por favor|porfa|urgente|gracias|tod[oa]s? (?:el|la|los|las)\b|tod[oa]s?$|completo|entero)/;
+const NAMING_WORD_RE = /\b(?:titulad[oa]s?|llamad[oa]s?|denominad[oa]s?|titled|named|called)\s*$/;
 
-// «¿cómo eliminar mi cuenta?», «consejos para mejorar…», «how to convert…»:
-// a question about HOW to do something, not an order to edit some material.
-// «como experto, corrige…» («as an expert») is not one: after «como» it needs
-// «se …», a modal + infinitive, or an infinitive.
-const HOWTO_RE = /^(?:[¿]\s*)?(?:y\s+)?(?:como\s+(?:se\s+\p{L}+|(?:(?:puedo|podria|podemos|hago(?: para)?|hacer(?: para)?|debo|deberia|tengo que|hay que)\s+)?\p{L}+(?:ar|er|ir)(?:lo|la|los|las|le|les|me|te|se|nos)?)\b|consejos?\s+(?:para|de|sobre)\b|tips?\s+(?:para|de|sobre|to|for)\b|ideas?\s+(?:para|de|sobre)\b|(?:formas?|maneras?|pasos)\s+(?:para|de)\b|que\s+(?:puedo|debo|tengo que)\s+hacer\s+para\b|how\s+(?:to|do|can|should|would)\b|(?:ways|steps)\s+to\b)/u;
+// «¿cómo eliminar mi cuenta?», «consejos para mejorar…», «how to convert…»,
+// «qué hago para…», «cuál es la mejor forma de…»: a question about HOW to do
+// something, not an order to edit some material.
+const HOWTO_RE = /^(?:[¿]\s*)?(?:y\s+)?(?:(?:necesito|quiero|busco|dame|me das|me recomiendas|me puedes dar|podrias darme|me podrias dar)\s+(?:(?:unos|unas|algunos|algunas)\s+)?)?(?:como\s+(?:se\s+\p{L}+|(?:(?:puedo|podria|podemos|hago para|hago|hacer para|hacer|debo|deberia|tengo que|hay que)\s+)?\p{L}+(?:ar|er|ir)(?:lo|la|los|las|le|les|me|te|se|nos)?|hago\s+(?:un|una|el|la)|\p{L}{3,}o\s+(?:un|una|el|la|los|las|mi|mis|en|con))\b|(?:consejos?|tips?|ideas?|recomendaciones?|sugerencias?|tecnicas?|estrategias?|guia|claves?)\s+(?:para|de|sobre|to|for)\b|(?:formas?|maneras?|pasos)\s+(?:para|de)\b|que\s+(?:puedo|debo|tengo que)\s+hacer\s+para\b|que\s+hago\s+para\b|(?:de\s+)?que\s+(?:manera|forma)\s+(?:puedo|debo|podria|se puede)\b|cual\s+es\s+la\s+mejor\s+(?:forma|manera)\s+de\b|cuales\s+son\s+(?:los|las)\s+(?:pasos|formas|maneras|tecnicas)\b|how\s+(?:to|do|can|should|would)\b|what(?:\s+is|s)?\s+the\s+best\s+way\s+to\b|(?:ways|steps|tips)\s+to\b)/u;
+// «como primer paso, …», «como líder del equipo, mejora…»: «as …», not «how».
+const HOWTO_FRAMING_RE = /^(?:y\s+)?como\s+[^,?¿.;:]{1,40},/;
+const HOWTO_STOP_RE = /^(?:[¿]\s*)?(?:y\s+)?como\s+(?:primer|primero|primera|tercer|lider|mujer|hombre|ayer|lugar|titular|familiar|auxiliar|militar|popular|particular|similar|experto|experta|profesor|profesora|estudiante|alumno|alumna|abogado|abogada|medico|medica|doctor|doctora|ingeniero|ingeniera|gerente|jefe|jefa|padre|madre|ejemplo|dato|siempre|antes|dije|te dije|de costumbre|resultado|consecuencia|parte|base|referencia|tal|tu|su|mi|un|una|el|la)\b/;
+// «¿cuál es la diferencia entre resumir y sintetizar?», «¿puedes hacer
+// gráficos?»: a question ABOUT the verb, never an order on missing material.
+const CONCEPT_QUESTION_RE = /^(?:[¿]\s*)?(?:cual(?:es)?\s+(?:es|son)\s+(?:la|las)\s+diferencias?\s+entre|que\s+diferencias?\s+hay\s+entre|en\s+que\s+se\s+diferencian|que\s+es\s+mejor|para\s+que\s+sirven?|por\s+que\s+es\s+importante|que\s+significa|que\s+quiere\s+decir|cual\s+es\s+la\s+importancia\s+de|what\s+is\s+the\s+difference\s+between|why\s+is\s+it\s+important\s+to)\b/;
+const CAPABILITY_RE = /^(?:[¿]\s*)?(?:tu\s+)?(?:puedes|podrias|sabes|se\s+puede|es\s+posible|eres\s+capaz\s+de|can\s+you|could\s+you|are\s+you\s+able\s+to|do\s+you)\s+(?:\p{L}+(?:ar|er|ir)|translate|summari[sz]e|convert|edit|make|create|draw|analy[sz]e|review|fix|read)\b/u;
+const CHART_NOUN_RE = /\b(?:grafic[ao]s?|charts?|histogramas?|histograms?|dashboards?|plots?|infografias?|infographics?)\b/;
+const CHART_KINDS = new Set(['barras', 'barra', 'lineas', 'linea', 'torta', 'pastel', 'circular', 'circulares', 'dispersion', 'area', 'areas', 'estadistico', 'estadistica', 'estadisticos', 'comparativo', 'comparativa', 'bar', 'pie', 'line', 'scatter', 'donut', 'dona', 'de']);
+const DRAW_RE = /\b(?:dibuja\w*|draw\w*|ilustra\w*)\b/;
 
 const OBJECT_TAIL_RES = [
   new RegExp(`\\b(?:del?|desde|from)\\s+(?:${LANGS})\\b`, 'g'),
@@ -517,34 +568,48 @@ const OBJECT_TAIL_RES = [
   /\b(?:de|con|en|in)\s+(?:(?:una|un|a)\s+)?(?:forma|manera|modo|tono|estilo|lenguaje|registro|way|tone|style)\s+\p{L}+/gu,
   /\b(?:mas|menos|more|less)\s+(?:formal|informal|corto|corta|largo|larga|breve|sencillo|sencilla|simple|profesional|claro|clara|academico|academica|tecnico|tecnica|natural|fluido|fluida|concise|clear)\b/g,
   /\b(?:en|con|de|in)\s+(?:maximo\s+|menos de\s+|no mas de\s+)?(?:\d+|un|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|pocas|pocos|few)\s+(?:palabras|lineas|oraciones|frases|parrafos?|puntos|ideas|paginas?|renglones|vinetas|words|lines|sentences|paragraphs?|points|bullets)\b/g,
+  /\b(?:maximo|minimo|no mas de|menos de|hasta)\s+\d+\s+(?:palabras|lineas|oraciones|frases|parrafos?|paginas?|caracteres|words|lines|sentences|paragraphs?|characters)\b/g,
   /\b(?:brevemente|detalladamente|rapidamente|formalmente|briefly|quickly)\b/g,
   new RegExp(AUDIENCE_RE.source, 'g'),
   /\b(?:por favor|porfa(?:vor)?|please|gracias|thanks)\b/g,
 ];
 const OBJECT_LEAD_RE = /^(?:(?:y|e|o|u|and|or|then|luego|despues|tambien|ahora|me|nos|te|tod[oa]s?|all)\s+)+/;
 const OBJECT_PREP_RE = /^(?:(?:de|del|sobre|acerca de|acerca del|respecto a|respecto al|respecto de|referente a|of|about|on|for)\s+)+/;
+const OBJECT_DANGLING_RE = /(?:\s+(?:de|del|en|a|al|sobre|para|con|of|to|for|in))+$/;
 const DELIVERABLE_HEAD_RE = /^(?:(?:un|una|el|la|a|an|the)\s+)?(?:resumen(?:es)?|traduccion(?:es)?|analisis|correccion(?:es)?|comparacion(?:es)?|comparativa|conversion(?:es)?|revision(?:es)?|evaluacion(?:es)?|sintesis|parafrasis|summary|translation|analysis|review|comparison)(?:\s+(?:breve|corto|corta|completo|completa|detallado|detallada|rapido|rapida|general|ejecutivo|brief|short|quick|detailed))?(?=\s|$)/;
-const DEICTIC_OBJECT_RE = /^(?:tod[oa]s?\s+)?(?:esto|eso|aquello|lo|la|los|las|le|les|el|este|esta|ese|esa|estos|estas|esos|esas|lo siguiente|lo de arriba|lo de abajo|lo anterior|lo mismo|lo que (?:te )?(?:pase|envie|mande|escribi|puse|pegue|adjunte|comparti|subi)|this|that|it|these|those|the following|the above)$/;
-// «corrige eso: …» points back at the answer; «traduce esto: …» points ahead.
-const BACKWARD_DEIXIS_RE = /^(?:eso|esa|ese|esos|esas|aquello|lo anterior|lo de arriba|lo mismo|that|it|the above)$/;
-const POSSESSIVE_MATERIAL_RE = new RegExp(`^(?:${OBJ_POSSESSIVE})\\s+(?:\\p{L}+\\s+)?(?:${MATERIAL_FILE}|${MATERIAL_TEXT}|${MATERIAL_WORK}|${MATERIAL_PART})\\b`, 'u');
-const FILE_OBJECT_RE = new RegExp(`^(?:(?:${OBJ_ARTICLE})\\s+)?(?:(?:${OBJ_QUALIFIER})\\s+)?(?:${MATERIAL_FILE})\\b|^(?:${OBJ_ARTICLE})\\s+(?:(?:${OBJ_QUALIFIER})\\s+)?(?:${MATERIAL_TEXT})\\b`);
-const WORK_OBJECT_RE = new RegExp(`^(?:(?:${OBJ_ARTICLE})\\s+)?(?:(?:${OBJ_QUALIFIER})\\s+)?(?:${MATERIAL_WORK}|${MATERIAL_PART})(?:\\s+(?:${PART_ADJ}|${OBJ_TRAILER}))*$`);
-const MATERIAL_ANYWHERE_RE = new RegExp(`\\b(?:(?:${OBJ_POSSESSIVE}|este|esta|estos|estas|ese|esa|esos|esas|this|these)\\s+(?:\\p{L}+\\s+)?(?:${MATERIAL_FILE}|${MATERIAL_TEXT}|${MATERIAL_WORK}|${MATERIAL_PART})|(?:el|la|los|las|del|al|de la|de los|de las|en el|en la|the)\\s+(?:${MATERIAL_FILE}|textos?|parrafos?|imagen(?:es)?|fotos?|audios?|videos?|lecturas?|grabacion(?:es)?|capturas?))\\b`, 'u');
 
-/** Earliest edit/transform/analyze/visualize verb of the folded text. */
+/** Earliest edit/transform/analyze/visualize verb (or pronominal verb) of the folded text. */
 function firstSourceVerb(text) {
   let best = null;
   for (const re of SOURCE_VERB_RES) {
     const m = re.exec(text);
-    if (m && (!best || m.index < best.index)) best = { index: m.index, end: m.index + m[0].length };
+    if (m && (!best || m.index < best.index)) best = { index: m.index, end: m.index + m[0].length, token: m[0] };
   }
   return best;
 }
 
-/** The object phrase of a verb: no punctuation, language/format/tone/length tails or fillers. */
+function stripFillers(core) {
+  let s = core;
+  for (let guard = 0; guard < 12 && s; guard += 1) {
+    const before = s;
+    const phrase = FILLER_PHRASES.find((f) => s === f || s.endsWith(` ${f}`));
+    if (phrase) s = s.slice(0, Math.max(0, s.length - phrase.length)).trim();
+    else {
+      const cut = s.lastIndexOf(' ');
+      const last = cut < 0 ? s : s.slice(cut + 1);
+      if (FILLER_WORDS.has(last)) s = cut < 0 ? '' : s.slice(0, cut).trim();
+    }
+    if (s === before) break;
+  }
+  return s;
+}
+
+/** The object phrase of a verb: no punctuation, emoticons, language/format/tone/length tails or fillers. */
 function objectCore(span) {
-  let s = ` ${String(span || '')} `.replace(/[^\p{L}\p{N}%$€£°\s]/gu, ' ');
+  let s = ` ${String(span || '').slice(0, 240)} `
+    // «:D», «:v», «;)», «xd»: emoticons are not an object.
+    .replace(/(^|\s)[:;=]['-]?[\p{L}\p{N}()[\]/\\|*<>]{1,2}(?=\s|$)/gu, ' ')
+    .replace(/[^\p{L}\p{N}%$€£°\s]/gu, ' ');
   for (const re of OBJECT_TAIL_RES) s = s.replace(re, ' ');
   s = s.replace(/\s+/g, ' ').trim();
   for (let i = 0; i < 4; i += 1) {
@@ -553,50 +618,253 @@ function objectCore(span) {
     // «revisa y corrige mi ensayo»: a second verb opens the same object.
     const verb = firstSourceVerb(s);
     if (verb && verb.index === 0) s = s.slice(verb.end).trim();
+    s = s.replace(OBJECT_DANGLING_RE, '').trim();
     if (s === before) break;
   }
-  return s;
+  return stripFillers(s).replace(OBJECT_DANGLING_RE, '').trim();
 }
 
-/** True when the object names material the user did not give (a file, «mi tesis», «el texto», «esto»). */
+/** The material noun starting at token i, if any. */
+function nounAt(tokens, i) {
+  if (i < 0 || i >= tokens.length) return null;
+  for (const len of [3, 2]) {
+    if (i + len <= tokens.length && MULTI_NOUNS.has(tokens.slice(i, i + len).join(' '))) return { kind: 'work', end: i + len, token: tokens.slice(i, i + len).join(' ') };
+  }
+  const t = tokens[i];
+  if (FILE_NOUN_RE.test(t)) return { kind: 'file', end: i + 1, token: t };
+  if (TEXT_NOUN_RE.test(t)) return { kind: 'text', end: i + 1, token: t };
+  if (WORK_NOUN_RE.test(t)) return { kind: 'work', end: i + 1, token: t };
+  if (PART_NOUN_RE.test(t)) return { kind: 'part', end: i + 1, token: t };
+  return null;
+}
+
+/** After a work/part noun: only qualifiers and generic complements («de mi curso», «que hice»)? */
+function restIsGeneric(tokens, i) {
+  for (let guard = 0; i < tokens.length && guard < 40; guard += 1) {
+    const t = tokens[i];
+    if (TRAILER_RE.test(t)) { i += 1; continue; }
+    if (t === 'de' && (tokens[i + 1] === 'arriba' || tokens[i + 1] === 'abajo')) { i += 2; continue; }
+    if (t === 'que') return REL_CLAUSE_RE.test(tokens.slice(i, i + 5).join(' '));
+    if (['de', 'del', 'en', 'of'].includes(t)) {
+      const n = tokens[i + 1];
+      if (!n || POSSESSIVES.has(n)) return true; // «el ensayo de mi hermano»
+      if (SUBJECT_RE.test(n)) { i += 2; continue; }
+      const article = ['la', 'el', 'los', 'las'].includes(n);
+      if (article && tokens[i + 2] && SUBJECT_RE.test(tokens[i + 2])) { i += 3; continue; }
+      const noun = nounAt(tokens, article ? i + 2 : i + 1);
+      if (noun) { i = noun.end; continue; } // «el capítulo 3 del libro»
+      return false; // «de Don Quijote»: a named work
+    }
+    return false;
+  }
+  return true;
+}
+
+const ANYWHERE_TEXT_RE = /^(?:textos?|parrafos?|imagen(?:es)?|fotos?|audios?|videos?|lecturas?|grabacion(?:es)?|capturas?)$/;
+/** «… de mi ensayo», «… de este libro», «… del documento» anywhere in the object. */
+function materialAnywhere(tokens) {
+  for (let i = 0; i < tokens.length - 1 && i < 40; i += 1) {
+    const t = tokens[i];
+    if (POSSESSIVES.has(t) || DEMONSTRATIVES.has(t)) {
+      if (nounAt(tokens, i + 1) || nounAt(tokens, i + 2)) return true;
+    } else if (['el', 'la', 'los', 'las', 'del', 'al', 'the'].includes(t)) {
+      const n = nounAt(tokens, i + 1);
+      if (n && (n.kind === 'file' || ANYWHERE_TEXT_RE.test(tokens[i + 1]))) return true;
+    }
+  }
+  return false;
+}
+
+/** True when the object names material the user did not give («el documento», «mi tesis», «esto»). */
 function isMaterialReference(core) {
   if (!core) return true;
-  return DEICTIC_OBJECT_RE.test(core) || POSSESSIVE_MATERIAL_RE.test(core)
-    || FILE_OBJECT_RE.test(core) || WORK_OBJECT_RE.test(core) || MATERIAL_ANYWHERE_RE.test(core);
+  if (DEICTIC_OBJECT_RE.test(core) || DEICTIC_RELATIVE_RE.test(core)) return true;
+  const tokens = core.split(' ').slice(0, 40);
+  const first = tokens[0];
+  if (DEMONSTRATIVES.has(first)) return true; // «resume esta clase», «summarize this article»
+  if (POSSESSIVES.has(first)) return Boolean(nounAt(tokens, 1) || nounAt(tokens, 2)); // «mi tesis» yes, «mi productividad» no
+  let i = DETERMINERS.has(first) ? 1 : 0;
+  for (let q = 0; q < 2 && i < tokens.length && QUALIFIER_RE.test(tokens[i]); q += 1) i += 1;
+  const noun = nounAt(tokens, i);
+  if (noun && noun.kind === 'file') return true; // «el documento sobre la reforma»
+  if (noun && noun.kind === 'text' && i > 0) return true; // «el texto», «la siguiente frase»
+  if (noun && (noun.kind === 'work' || noun.kind === 'part') && restIsGeneric(tokens, noun.end)) return true;
+  return materialAnywhere(tokens);
+}
+
+function headIsLongWork(core) {
+  const tokens = String(core || '').split(' ');
+  let i = DETERMINERS.has(tokens[0]) || POSSESSIVES.has(tokens[0]) ? 1 : 0;
+  if (tokens[i] && QUALIFIER_RE.test(tokens[i])) i += 1;
+  const noun = nounAt(tokens, i) || (POSSESSIVES.has(tokens[0]) ? nounAt(tokens, i + 1) : null);
+  return Boolean(noun && (noun.kind === 'file' || LONG_WORK_RE.test(noun.token)));
 }
 
 /**
- * Text the user pasted as the OBJECT of the verb: after «:» or between
- * quotes/fences, with nothing but the verb, a forward deictic or a material
- * noun before it («corrige: …», «traduce al inglés: …», «traduce la frase
- * "carpe diem"», «revisa mi ortografía: …»). «cambia el título a: X» or
- * «corrige eso: …» are instructions about something else, not pasted material.
+ * Text the user put in the message as the object of the verb: after «:»,
+ * between quotes or code fences, or on the lines after the instruction.
+ * Returns the parts so callers judge what precedes and what follows.
  */
-function inlineObjectMaterial(text) {
+function inlinePaste(text, raw) {
+  const r = String(raw || '');
+  const nl = r.indexOf('\n');
+  if (nl > 0) {
+    const head = fold(r.slice(0, nl));
+    const verb = firstSourceVerb(head);
+    const rest = r.slice(nl + 1).trim();
+    if (verb && rest) return { kind: 'newline', verb, between: head.slice(verb.end).replace(/:\s*$/, ''), after: fold(rest), afterRaw: rest };
+  }
   const t = String(text || '');
   const verb = firstSourceVerb(t);
   const tail = t.slice(verb ? verb.end : 0);
-  const m = /```|(?<!\d):(?!\/\/)|[«"“]/.exec(tail);
-  if (!m) return false;
+  const m = /```|(?<!\d):(?!\/\/)|[«"“‘]|(?<!\S)'/.exec(tail);
+  if (!m) return null;
   const after = tail.slice(m.index + m[0].length);
-  const carries = m[0] === '```' ? /^\s*\S/.test(after)
-    : m[0] === ':' ? /^\s*["«“'¿¡(\[]?[\p{L}\p{N}]/u.test(after)
-      : /^[^»"”]{2,}[»"”]/.test(after);
-  if (!carries) return false;
-  const between = objectCore(tail.slice(0, m.index));
-  return !between || (!BACKWARD_DEIXIS_RE.test(between) && isMaterialReference(between));
+  const between = tail.slice(0, m.index);
+  if (m[0] === ':') {
+    const rawColon = /(?<!\d):(?!\/\/)/.exec(r);
+    return { kind: 'colon', verb, between, after: after.trim(), afterRaw: rawColon ? r.slice(rawColon.index + 1).trim() : '' };
+  }
+  if (m[0] === '```') return { kind: 'fence', verb, between, after: after.replace(/```[\s\S]*$/, '').trim(), afterRaw: '' };
+  const close = { '«': '»', '"': '"', '“': '”', '‘': '’', "'": "'" }[m[0]];
+  const end = after.indexOf(close);
+  if (end < 2) return null;
+  return { kind: 'quote', verb, between, after: after.slice(0, end).trim(), afterRaw: '' };
+}
+
+/** Is what follows the delimiter the material itself (not an instruction, a scope, an emoticon or another reference)? */
+function pasteIsMaterial(p) {
+  const after = String(p && p.after || '').trim();
+  if (after.replace(/[^\p{L}\p{N}]/gu, '').length < 2) return false; // «:D», «:v»
+  if (p.kind === 'quote' && (NAMING_WORD_RE.test(p.between) || /\.[a-z0-9]{2,5}$/.test(after))) return false; // «titulado "X"», «"ventas.xlsx"»
+  // «: solo el primer párrafo», «: que sea más corto», «: máximo 200 palabras»
+  if (p.kind !== 'quote' && PASTE_INSTRUCTION_RE.test(after) && !/^\p{Lu}/u.test(p.afterRaw || '')) return false;
+  const core = objectCore(after);
+  if (!core) return false; // only constraints: «: en 5 líneas», «: al inglés»
+  const short = core.split(' ').length <= 6;
+  if (short && (BACKWARD_DEIXIS_RE.test(core) || isMaterialReference(core))) return false; // «: el documento que te envié», «: mi ensayo», «: lo de arriba»
+  return true;
+}
+
+/** What precedes the delimiter: nothing, «esto», or a noun for the material itself. */
+function pasteHeadAccepts(p, { strict = false } = {}) {
+  const between = objectCore(p.between);
+  if (!between) return true;
+  if (BACKWARD_DEIXIS_RE.test(between)) return false;
+  if (FORWARD_DEIXIS_RE.test(between)) return true;
+  if (strict) {
+    // Mid-chat only text nouns: «el título: X» or «una diapositiva: X» is a
+    // value for the answer or the file, not pasted material.
+    const tokens = between.split(' ');
+    let i = DETERMINERS.has(tokens[0]) || POSSESSIVES.has(tokens[0]) ? 1 : 0;
+    if (tokens[i] && QUALIFIER_RE.test(tokens[i])) i += 1;
+    const noun = nounAt(tokens, i);
+    return Boolean(noun && noun.end === tokens.length
+      && (noun.kind === 'text' || /^(?:ortografia|redaccion|gramatica|poemas?|cartas?|estrofas?)$/.test(noun.token)));
+  }
+  if (!isMaterialReference(between)) return false;
+  // «corrige mi ensayo: tiene errores»: a few words after a long work describe it.
+  if (p.kind === 'colon' && headIsLongWork(between) && wordCount(p.after) < 15) return false;
+  return true;
+}
+
+/** «<texto pegado>⏎tradúcelo al inglés», «<texto>. Resúmelo»: the material comes first. */
+function pastedBeforeInstruction(raw) {
+  const s = String(raw || '').trim();
+  if (!s || s.length > 4000) return false;
+  let parts = s.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const byLines = parts.length >= 2;
+  if (!byLines) parts = s.split(/(?<=[.!?…])\s+/).filter(Boolean);
+  if (parts.length < 2) return false;
+  const instruction = fold(parts[parts.length - 1]);
+  if (wordCount(instruction) > 12) return false;
+  const clitic = CLITIC_RE.test(instruction);
+  const verb = firstSourceVerb(instruction);
+  if (!verb) return false;
+  const pasted = fold(parts.slice(0, -1).join(' '));
+  if (wordCount(pasted) < (byLines ? 5 : 8)) return false;
+  if (!byLines) {
+    // «Tengo un ensayo para mañana. Corrígelo.» describes the work, it is not it.
+    const head = pasted.split(' ').slice(0, 8);
+    for (let i = 0; i < head.length - 1; i += 1) {
+      if (['un', 'una', 'mi', 'mis', 'el', 'la'].includes(head[i]) && nounAt(head, i + 1)) return false;
+    }
+  }
+  if (!clitic) {
+    const core = objectCore(instruction.slice(verb.end));
+    if (core && !FORWARD_DEIXIS_RE.test(core) && !DEICTIC_OBJECT_RE.test(core) && isMaterialReference(core)) return false; // «…⏎resume el documento»
+  }
+  return true;
+}
+
+/** «¿cómo eliminar mi cuenta?» yes; «como primer paso, …» and «¿cómo traduzco esto?» no. */
+function isHowTo(text) {
+  const m = HOWTO_RE.exec(text);
+  if (!m) return false;
+  if (!/[?¿]/.test(text) && (HOWTO_FRAMING_RE.test(text) || HOWTO_STOP_RE.test(text))) return false;
+  const tokens = objectCore(text.slice(m.index + m[0].length)).split(' ').filter(Boolean);
+  const last = tokens[tokens.length - 1];
+  if (last && /^(?:esto|eso|this|that|it)$/.test(last)) return false;
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (DEMONSTRATIVES.has(tokens[i]) && (i === tokens.length - 1 || nounAt(tokens, i + 1))) return false;
+  }
+  return true;
+}
+
+/** A question ABOUT the verb («¿qué es mejor, resumir o parafrasear?», «¿puedes hacer gráficos?»). */
+function isQuestionAbout(text, isQuestion) {
+  if (CONCEPT_QUESTION_RE.test(text)) return true;
+  const m = isQuestion ? CAPABILITY_RE.exec(text) : null;
+  if (!m) return false;
+  const core = objectCore(text.slice(m.index + m[0].length));
+  if (!core) return true;
+  const first = core.split(' ')[0];
+  if (POSSESSIVES.has(first) || DEICTIC_OBJECT_RE.test(core) || DEMONSTRATIVES.has(first)) return false;
+  // «¿puedes traducir un pdf?» asks about the capability; «¿puedes hacer una
+  // presentación sobre X?» is a polite order.
+  if (INDEFINITES.has(first)) return !CREATE_RE.test(m[0]);
+  return !DETERMINERS.has(first);
 }
 
 /** The message carries what to work on: no «¿qué quieres que…?» question. */
-function carriesOwnMaterial(text) {
+function carriesOwnMaterial(text, raw = text) {
   const t = String(text || '');
   if (!t) return false;
-  if (HOWTO_RE.test(t) || inlineObjectMaterial(t)) return true;
+  if (pastedBeforeInstruction(raw)) return true;
+  const p = inlinePaste(t, raw);
+  if (p && pasteIsMaterial(p) && pasteHeadAccepts(p)) return true;
   // «ponlas todas rosadas», «tradúcelo al inglés»: the pronoun IS the object.
   if (CLITIC_RE.test(t)) return false;
+  if (isHowTo(t) || isQuestionAbout(t, /[?¿]/.test(String(raw || t)))) return true;
   const verb = firstSourceVerb(t);
-  if (!verb) return false;
-  return !isMaterialReference(objectCore(t.slice(verb.end)));
+  if (verb) {
+    const core = objectCore(t.slice(verb.end));
+    // «traduce mi partida de nacimiento»: nothing to translate was given.
+    if (TEXT_ONLY_VERB_RE.test(verb.token) && POSSESSIVES.has(core.split(' ')[0])) return false;
+    return !isMaterialReference(core);
+  }
+  // «haz un gráfico de la inflación en Argentina»: the chart noun anchors the topic.
+  const chart = CHART_NOUN_RE.exec(t);
+  if (!chart) return false;
+  const tokens = objectCore(t.slice(chart.index + chart[0].length)).split(' ').filter(Boolean);
+  let i = 0;
+  while (i < tokens.length && CHART_KINDS.has(tokens[i])) i += 1;
+  const core = objectCore(tokens.slice(i).join(' '));
+  return !isMaterialReference(core);
+}
+
+/**
+ * Mid-chat: «traduce al inglés: Hola…», «corrige: yo a ido…» — the text
+ * pasted in the message is the object, not the previous answer. Only verbs
+ * whose object is a text, only a text noun (or nothing) before the
+ * delimiter, never when the message names the chat's generated file.
+ */
+function inlineReplacesAnswer(text, raw, { priorArtifact, officeNoun }) {
+  if (CLITIC_RE.test(text)) return false;
+  if (priorArtifact && (officeNoun || GENERATED_ARTIFACT_RE.test(text) || STYLE_RE.test(text))) return false;
+  const p = inlinePaste(text, raw);
+  if (!p || !p.verb || !TEXT_OBJECT_VERB_RE.test(p.verb.token)) return false;
+  return pasteIsMaterial(p) && pasteHeadAccepts(p, { strict: true });
 }
 
 /** Inline material the user pasted (quotes, colons + long text, code fences). */
@@ -627,7 +895,7 @@ function detectAmbiguity(text, raw, ctx) {
     }
   }
   const needsSource = ['transform', 'analyze', 'edit'].includes(action) || (action === 'visualize' && !/\b(?:datos?|cifras?|valores?|\d)/.test(text));
-  if (needsSource && target.kind === 'none' && !attachments.length && !hasPrevAssistant && !hasInlineSource(raw, words) && !URL_RE.test(raw) && !carriesOwnMaterial(text)) {
+  if (needsSource && target.kind === 'none' && !attachments.length && !hasPrevAssistant && !hasInlineSource(raw, words) && !URL_RE.test(raw) && !carriesOwnMaterial(text, raw)) {
     reasons.push('missing_source');
     score = Math.max(score, 0.85);
     const what = action === 'transform' ? (deliverables.includes('translation') ? 'traducir' : 'convertir')
@@ -876,7 +1144,7 @@ function publicRequestBrief(brief) {
     confidence: brief.confidence,
     trivial: Boolean(brief.trivial),
     deliverable: { kind: brief.deliverable.kind || null, format: brief.deliverable.format || null },
-    target: { kind: brief.target.kind, name: brief.target.name || null, format: brief.target.format || null },
+    target: { kind: brief.target.kind, name: brief.target.name || null, format: brief.target.format || null, source: brief.target.source || 'none' },
     constraints: brief.constraints.map((c) => ({ kind: c.kind, value: c.value })),
     ambiguity: {
       score: brief.ambiguity.score,
@@ -922,6 +1190,11 @@ function buildRequestBriefPromptBlock(brief) {
       }
       break;
     default:
+      if (brief.target.source === 'inline') {
+        lines.push('- Objeto: el texto que el usuario escribió en ESTE mensaje (tras «:», entre comillas o en las líneas siguientes), no tu respuesta anterior. Trabaja sobre ese texto en el chat.');
+      } else if (['edit', 'transform', 'analyze', 'visualize'].includes(brief.action) && !templateConstraint) {
+        lines.push('- Objeto: el texto, tema o dato que el usuario dio en este mensaje. Si se refiere a un texto o archivo que no está en el chat, pídeselo en una frase en vez de inventarlo.');
+      }
       break;
   }
   const template = brief.constraints.find((c) => c.kind === 'template' && c.file);
@@ -1046,12 +1319,15 @@ async function refineRequestBriefWithLlm(brief, ctx = {}, deps = {}) {
 
 /** Routing hints the gates consume (one place, so the regexes stop disagreeing). */
 function routingHints(brief) {
-  if (!brief) return { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null, templateFile: null, templateFormat: null };
+  if (!brief) return { editsPreviousAnswer: false, editsInlineText: false, editsGeneratedOfficeFile: false, officeTargetFormat: null, templateFile: null, templateFormat: null };
   const officeFormat = brief.target.kind === 'generated_artifact' && OFFICE_FORMATS.has(String(brief.target.format || '')) && brief.target.format !== 'csv'
     ? brief.target.format : null;
   const template = (brief.constraints || []).find((c) => c && c.kind === 'template' && c.file) || null;
   return {
     editsPreviousAnswer: brief.target.kind === 'previous_answer' && ['edit', 'transform', 'continue', 'analyze'].includes(brief.action),
+    // «traduce al inglés: <texto>» after an answer: the text pasted in the
+    // message is chat text — never a file for the runner or the editors.
+    editsInlineText: brief.target.kind === 'none' && brief.target.source === 'inline' && ['edit', 'transform', 'analyze'].includes(brief.action),
     editsGeneratedOfficeFile: Boolean(officeFormat) && ['edit', 'transform'].includes(brief.action),
     officeTargetFormat: officeFormat,
     // «con este formato» + attached template: the AgentRunner builds ON it.
@@ -1076,5 +1352,5 @@ module.exports = {
   mergeLlmBrief,
   routingHints,
   // exported for tests
-  _internal: { fold, detectConstraints, resolveTarget, detectAmbiguity, pickAction, carriesOwnMaterial, inlineObjectMaterial, objectCore },
+  _internal: { fold, detectConstraints, resolveTarget, detectAmbiguity, pickAction, carriesOwnMaterial, inlinePaste, inlineReplacesAnswer, isMaterialReference, isHowTo, objectCore },
 };

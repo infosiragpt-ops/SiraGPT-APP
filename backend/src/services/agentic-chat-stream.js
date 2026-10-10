@@ -1178,7 +1178,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       requestBriefBlock = '',
     } = opts || {};
     const briefTargetsPreviousAnswer = Boolean(requestBrief && requestBrief.target && requestBrief.target.kind === 'previous_answer'
-      && ['edit', 'transform', 'continue', 'analyze'].includes(requestBrief.action));
+      && ['edit', 'transform', 'continue', 'analyze'].includes(requestBrief.action))
+      // «traduce al inglés: <texto>» after an answer: the text pasted in the
+      // message is chat text too — never a file for the runner or the editor.
+      || Boolean(requestBrief && requestBrief.target && requestBrief.target.kind === 'none' && requestBrief.target.source === 'inline'
+        && ['edit', 'transform', 'analyze'].includes(requestBrief.action));
     const briefTargetsGeneratedOffice = Boolean(requestBrief && requestBrief.target && requestBrief.target.kind === 'generated_artifact'
       && /^(?:docx|pptx|xlsx|pdf)$/.test(String(requestBrief.target.format || ''))
       && ['edit', 'transform'].includes(requestBrief.action));

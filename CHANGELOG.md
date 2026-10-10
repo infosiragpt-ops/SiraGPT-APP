@@ -9,15 +9,18 @@ and improvement cycles follow a sequential number with the date the work landed.
 ### Fixed
 
 - The first message of a new chat is answered when it already carries its
-  material. «Traduce al inglés: Hola», «corrige: yo a ido al colegio»,
-  «resume la revolución francesa», «compara Python y JavaScript», «convierte
-  25 °C a fahrenheit», «dibuja un gato» or «¿cómo eliminar mi cuenta?» used to
-  get «¿Qué quieres que…? No veo un archivo adjunto ni un texto en este chat.»
-  without calling the model. The question remains for requests whose object is
-  missing or lives in a file nobody attached («tradúcelo», «resume el
-  documento», «mejora mi CV»). Mid-chat, text pasted after «:» or between
-  quotes is translated or corrected instead of the previous answer, and how-to
-  questions are no longer read as edits of the answer or of a generated file.
+  material. «Traduce al inglés: Hola», «corrige: yo a ido al colegio», text
+  pasted on the next line or before the order, «resume la revolución
+  francesa», «compara Python y JavaScript», «convierte 25 °C a fahrenheit»,
+  «haz un gráfico de la inflación», «dibuja un gato», «¿cómo eliminar mi
+  cuenta?» or «¿puedes hacer gráficos?» used to get «¿Qué quieres que…? No veo
+  un archivo adjunto ni un texto en este chat.» without calling the model. The
+  question remains when the object is missing or is material nobody gave
+  («tradúcelo», «resume el documento», «mejora mi CV», «corrige mi ensayo:
+  tiene errores»). Mid-chat, text pasted after «:» or between quotes is
+  translated or corrected instead of the previous answer and is never routed
+  to a file editor; scopes, instructions and edits of a generated file keep
+  their target. How-to questions are no longer read as edits.
 
 ### Added
 

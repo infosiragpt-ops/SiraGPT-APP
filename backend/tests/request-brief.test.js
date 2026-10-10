@@ -277,7 +277,7 @@ test('an empty prompt yields a trivial brief and nothing throws on odd input', (
   assert.doesNotThrow(() => brief('x'.repeat(20000), { attachments: [null, {}], recentTurns: [null, { role: 'assistant' }] }));
   assert.equal(rb.publicRequestBrief(null), null);
   assert.equal(rb.buildRequestBriefPromptBlock(null), '');
-  assert.deepEqual(rb.routingHints(null), { editsPreviousAnswer: false, editsGeneratedOfficeFile: false, officeTargetFormat: null, templateFile: null, templateFormat: null });
+  assert.deepEqual(rb.routingHints(null), { editsPreviousAnswer: false, editsInlineText: false, editsGeneratedOfficeFile: false, officeTargetFormat: null, templateFile: null, templateFormat: null });
 });
 
 test('a pasted link is the object: «transcribe este video del minuto 1.5 al 10» → transcription of the URL with a time range', () => {
@@ -319,56 +319,80 @@ test('links with other verbs keep their action; mm:ss ranges and seconds are nor
 // traduzca? No veo un archivo adjunto ni un texto en este chat.» instead of
 // an answer: only a ≥ 45-word paste counted as material.
 
-test('first message with its own text, topic, value or how-to question is answered, never asked', () => {
+const email = 'Estimado profesor, le escribo para informarle que no podré asistir a la clase de mañana por motivos de salud. Adjuntaré el certificado médico.';
+const docxTurns = [
+  { role: 'user', text: 'crea un word sobre la fotosíntesis' }, { role: 'assistant', text: 'Listo, generé informe.docx.' },
+  { role: 'user', text: 'explícame la fase luminosa en 3 párrafos' }, { role: 'assistant', text: 'La fase luminosa ocurre en los tilacoides. En conclusión, produce ATP y NADPH.' },
+];
+
+test('first message with its own text, topic, value or question is answered, never asked', () => {
   const prompts = [
-    'traduce al inglés: Hola, ¿cómo estás?',
-    'Traduce "buenos días a todos" al francés',
-    'corrige: yo a ido al colegio',
-    'parafrasea: La educación es la base del desarrollo de un país.',
-    'resume el libro Cien años de soledad',
-    'resume la revolución francesa',
-    'hazme un resumen de la segunda guerra mundial',
-    'analiza el poema Masa de César Vallejo',
-    'convierte 25 °C a fahrenheit',
-    'convierte 100 dólares a soles',
-    'compara Python y JavaScript',
-    'ponme un ejemplo de metáfora',
-    'agrega 5 ideas para mi negocio de café',
-    'verifica si 17 es primo',
-    'identifica el sujeto: María canta bonito',
-    'translate to spanish: I love you',
-    'evalúa las ventajas de la energía solar',
-    'clasifica estos animales: perro, águila, tiburón',
-    'revisa mi ortografía: ayer fuy al cine',
-    'corrige este texto: yo a ido al colegio ayer',
-    'resume el capítulo 3 de Don Quijote',
-    'grafica la función seno',
-    'dibuja un gato',
-    'haz un diagrama de flujo del proceso de compra',
-    '¿cómo eliminar mi cuenta de facebook?',
-    '¿cómo se elimina una cuenta de gmail?',
-    'consejos para mejorar mi productividad',
-    'cómo convertir un pdf a word',
-    'how to remove a virus from my pc',
+    // text after «:», between quotes or on the next line
+    'traduce al inglés: Hola, ¿cómo estás?', 'Traduce "buenos días a todos" al francés', 'corrige: yo a ido al colegio',
+    'parafrasea: La educación es la base del desarrollo de un país.', 'identifica el sujeto: María canta bonito', 'translate to spanish: I love you',
+    'clasifica estos animales: perro, águila, tiburón', 'revisa mi ortografía: ayer fuy al cine', 'corrige este texto: yo a ido al colegio ayer',
+    'corrige mi poema: Las rosas son rojas y el cielo azul', 'traduce al inglés: más vale tarde que nunca', "corrige la frase 'yo a ido al cine'",
+    'traduce esta frase al inglés\nme gusta el café', `traduce este texto al inglés\n${email}`, `resume este correo\n${email}`,
+    // text pasted before the order
+    `${email}\ntradúcelo al inglés`, 'El cambio climático es uno de los mayores desafíos de nuestro tiempo. Las temperaturas globales siguen subiendo.\ntraduce al inglés',
+    'Querido cliente, le escribimos para informarle que su pedido llegará el próximo lunes. Gracias por su preferencia.\nhazlo más formal',
+    // a pronoun pointing at the text after «:»
+    'hazlo más formal: hola profe, no podré ir mañana', 'ponlo más formal: hola profe, no podré ir mañana',
+    // topics, named works, comparisons, values
+    'resume el libro Cien años de soledad', 'resume el libro: Cien años de soledad', 'resume la revolución francesa', 'hazme un resumen de la segunda guerra mundial',
+    'analiza el poema Masa de César Vallejo', 'resume el capítulo 3 de Don Quijote', 'convierte 25 °C a fahrenheit', 'convierte 100 dólares a soles',
+    'compara Python y JavaScript', 'ponme un ejemplo de metáfora', 'agrega 5 ideas para mi negocio de café', 'verifica si 17 es primo',
+    'evalúa las ventajas de la energía solar', 'mejora mi productividad', 'mejora mi inglés', 'corrige mi postura',
+    // charts and drawings with a topic
+    'grafica la función seno', 'haz un gráfico de la inflación en Argentina', 'make a pie chart of the world religions',
+    'genera un histograma de una distribución normal', 'haz un diagrama de flujo del proceso de compra', 'dibuja un gato',
+    // how-to and capability questions
+    '¿cómo eliminar mi cuenta de facebook?', '¿cómo se elimina una cuenta de gmail?', 'consejos para mejorar mi productividad', 'cómo convertir un pdf a word',
+    'how to remove a virus from my pc', 'qué hago para mejorar mi CV', 'recomendaciones para mejorar mi CV', 'de qué manera puedo mejorar mi CV',
+    'cuál es la mejor manera de mejorar mi redacción', 'cuáles son los pasos para convertir un word a pdf', 'cómo grafico una función en GeoGebra',
+    'what is the best way to summarize a book', 'cuál es la diferencia entre resumir y sintetizar', '¿sabes traducir al quechua?',
+    '¿se puede traducir un pdf completo?', 'puedes hacer gráficos?', 'can you translate documents?',
   ];
   for (const p of prompts) {
     const b = brief(p);
     assert.equal(b.ambiguity.ask, false, p);
     assert.ok(!b.ambiguity.reasons.includes('missing_source'), p);
-    assert.equal(rb._internal.carriesOwnMaterial(rb._internal.fold(p)), true, p);
   }
+  assert.equal(brief('dibuja un gato').deliverable.kind, 'image');
+  assert.equal(brief('¿cómo eliminar mi cuenta de facebook?').action, 'answer');
+  // A polite order to create something is still an order.
+  assert.equal(brief('¿puedes hacer una presentación sobre el cambio climático?').action, 'create');
 });
 
-test('requests whose object is missing or lives in a file nobody attached still ask, with the two options', () => {
+test('requests whose object is missing or lives in material nobody gave still ask, with the two options', () => {
   const prompts = [
-    'tradúcelo al inglés', 'resume', 'hazme un resumen', 'traduce al inglés', 'traduce:', 'traduce esto',
-    'traduce lo siguiente', 'traduce este texto al inglés', 'resume mi tesis', 'resume el documento', 'resume el pdf',
-    'resume el libro', 'resume el capítulo 3', 'resume el documento sobre la reforma', 'mejora mi CV', 'corrige el texto',
-    'corrige mi ensayo de 500 palabras', 'reformula mi introducción', 'mejora la redacción', 'revisa la ortografía',
-    'corrige los errores', 'agrega una conclusión', 'quita el último párrafo', 'extrae las ideas principales',
-    'extrae las ideas principales del texto', 'extrae las fechas', 'verifica la fórmula', 'compara estos dos textos',
-    'analiza el archivo adjunto', 'analiza esta imagen', 'convierte este pdf a word', 'grafica esto',
-    'ponlas todas rosadas', 'ponlo en azul', 'agrega 2 ejemplos más a tu explicación', 'como experto, corrige mi ensayo',
+    // empty, pronoun or deictic object
+    'tradúcelo al inglés', 'resume', 'hazme un resumen', 'traduce al inglés', 'traduce:', 'traduce esto', 'traduce lo siguiente', 'grafica esto',
+    'ponlas todas rosadas', 'ponlo en azul', 'traduce esto pls', 'resume esto rápido', 'traduce esto de aquí', 'traduce la siguiente',
+    'resume lo que te mandé por correo', 'corrige lo que escribí ayer', 'traduce esto :D',
+    // a file, a text or a part of it nobody attached
+    'resume el documento', 'resume el pdf', 'resume el documento sobre la reforma', 'traduce este texto al inglés', 'corrige el texto',
+    'analiza el archivo adjunto', 'analiza esta imagen', 'convierte este pdf a word', 'compara estos dos textos', 'resume esta clase', 'analiza este caso',
+    'resume el libro', 'resume el capítulo 3', 'resume el capítulo 3 del libro', 'resume los capítulos 1 y 2', 'corrige el ejercicio 4b',
+    'corrige la tarea de matemáticas', 'corrige el ensayo que hice', 'corrige el ensayo de mi hermano', 'corrige el ensayo argumentativo',
+    'resume el informe anual', 'resume el libro de biología', 'resume la clase', 'resume la reunión', 'resume la página 5', 'resume el tema 3',
+    'analiza el gráfico', 'traduce el contrato', 'mejora la redacción', 'revisa la ortografía', 'corrige los errores', 'agrega una conclusión',
+    'quita el último párrafo', 'extrae las ideas principales', 'extrae las ideas principales del texto', 'extrae las fechas', 'verifica la fórmula',
+    'haz un gráfico de barras', 'resume el documento\nen 3 puntos',
+    // the user's own work
+    'resume mi tesis', 'mejora mi CV', 'corrige mi ensayo de 500 palabras', 'reformula mi introducción', 'mejora mi marco teórico',
+    'corrige mis antecedentes', 'revisa mi contrato', 'analiza mi encuesta', 'mejora mi plan de negocios', 'interpreta mis análisis de sangre',
+    'traduce mi abstract al inglés', 'resume mi historia clínica', 'traduce mi partida de nacimiento', 'summarize my notes', 'review my contract',
+    'agrega 2 ejemplos más a tu explicación', 'como experto, corrige mi ensayo', 'como primer paso, resume el documento',
+    'como líder del equipo, mejora mi discurso', 'Tengo un ensayo sobre el cambio climático para mañana. Corrígelo.',
+    // «:» or quotes that carry an instruction, a description or another reference — not the material
+    'Resume el texto: en 5 líneas', 'corrige mi ensayo: tiene muchos errores', 'revisa mi tesis: necesito que suene más formal',
+    'resume el documento: máximo 200 palabras', 'traduce el pdf: es urgente', 'mejora mi CV: quiero postular a un banco', 'resume el pdf: son 30 páginas',
+    'corrige el texto: por favor', 'traduce al inglés: el documento que te envié', 'resume: el documento', 'corrige: mi ensayo', 'traduce: al inglés',
+    'traduce "el texto"', 'corrige mi ensayo :c', 'corrige mi ensayo titulado "La contaminación"', 'analiza el archivo "ventas.xlsx"',
+    // questions whose object is missing
+    '¿cómo se traduce esto al inglés?', '¿cómo puedo resumir esto?', 'how do I fix this?', 'cómo hago para resumir este pdf',
+    '¿cómo se ve mi cv? revísalo', 'tips para mejorar mi ensayo, revísalo por favor',
   ];
   for (const p of prompts) {
     const b = brief(p);
@@ -380,21 +404,48 @@ test('requests whose object is missing or lives in a file nobody attached still 
   assert.deepEqual(brief('quiero el informe en word o pdf').ambiguity.reasons, ['format_conflict']);
 });
 
-test('after an answer, text pasted after «:» or between quotes is the object, not the previous answer', () => {
+test('after an answer, text pasted after «:», between quotes or on the next line is the object, with the chat-text veto', () => {
   for (const p of ['traduce al inglés: Hola, ¿cómo estás?', 'corrige: yo a ido al colegio', 'parafrasea: el sol sale por el este',
-    'traduce "buenos días" al francés', 'traduce este texto: Hello world, how are you', 'ahora traduce al francés: me gusta el cine']) {
+    'traduce "buenos días" al francés', 'traduce este texto: Hello world, how are you', 'ahora traduce al francés: me gusta el cine',
+    'traduce al inglés\nHola, ¿cómo estás? Me llamo Ana.']) {
     const b = brief(p, { recentTurns: prev });
     assert.equal(b.target.kind, 'none', p);
     assert.equal(b.target.source, 'inline', p);
     assert.doesNotMatch(b.summary, /respuesta anterior/, p);
-    assert.equal(rb.routingHints(b).editsPreviousAnswer, false, p);
-    assert.doesNotMatch(rb.buildRequestBriefPromptBlock(b), /TU RESPUESTA ANTERIOR/, p);
+    const hints = rb.routingHints(b);
+    assert.equal(hints.editsPreviousAnswer, false, p);
+    assert.equal(hints.editsInlineText, true, p); // never a file for the runner or the editors
+    assert.equal(rb.publicRequestBrief(b).target.source, 'inline', p);
+    assert.match(rb.buildRequestBriefPromptBlock(b), /Objeto: el texto que el usuario escribió en ESTE mensaje/, p);
   }
-  // Pronouns, anchors, explicit references and instructions about the answer
-  // keep targeting it.
-  for (const p of ['hazlo más formal', 'tradúcelo al inglés', 'ahora en inglés', 'agrega 2 ejemplos más a tu explicación',
-    'corrige eso: el año es 1990', 'cambia el título a: Fotosíntesis']) {
+  // A text pasted in a chat that holds an older generated Word keeps the veto.
+  const old = brief('corrige: yo a ido al cine ayer con mis amigos', { recentTurns: docxTurns, priorArtifact: docx });
+  assert.equal(old.target.source, 'inline');
+  assert.equal(rb.routingHints(old).editsInlineText, true);
+});
+
+test('after an answer, pronouns, scopes, instructions and values keep targeting the answer or the generated file', () => {
+  const answer = ['hazlo más formal', 'tradúcelo al inglés', 'ahora en inglés', 'agrega 2 ejemplos más a tu explicación', 'corrige eso: el año es 1990',
+    'cambia el título a: Fotosíntesis', 'traduce al inglés: solo el primer párrafo', 'traduce al francés: todo', 'traduce al inglés: lo de arriba',
+    'traduce al inglés: la respuesta completa', 'traduce al inglés: de manera formal', 'mejora la explicación: con analogías para niños',
+    'acorta el texto: máximo 100 palabras', 'agrega ejemplos: 2 o 3 por cada punto', 'cambia la segunda parte: que sea más corta',
+    'agrega esto: la clorofila absorbe luz roja y azul', 'agrega un ejemplo: las plantas de maíz', 'mejora: que sea más corto',
+    'parafrasea: que no se note que es IA', 'traduce al inglés: mantén los términos técnicos', 'como líder del equipo, mejora mi discurso'];
+  for (const p of answer) {
     const b = brief(p, { recentTurns: prev });
+    assert.equal(b.target.kind, 'previous_answer', p);
+    assert.equal(rb.routingHints(b).editsPreviousAnswer, true, p);
+  }
+  const deckTurns = [{ role: 'user', text: 'crea una presentación sobre la fotosíntesis' }, { role: 'assistant', text: 'Listo, generé informe.pptx con 8 diapositivas.' }];
+  for (const p of ['mejora la presentación: más visual y con menos texto', 'traduce la presentación al inglés: todas las diapositivas',
+    'cambia el título de la presentación: Fotosíntesis', 'agrega una diapositiva: Conclusiones', 'pon el título "Fotosíntesis" en azul',
+    'reemplaza "Lima" por "Arequipa" en la presentación', 'como primer paso, cambia el fondo a azul']) {
+    const b = brief(p, { recentTurns: deckTurns, priorArtifact: deck });
+    assert.equal(b.target.kind, 'generated_artifact', p);
+    assert.equal(rb.routingHints(b).editsGeneratedOfficeFile, true, p);
+  }
+  for (const p of ['agrega ejemplos: 2 o 3 por cada punto', 'cambia "ATP" por "adenosín trifosfato"', 'borra el párrafo que dice "En conclusión"']) {
+    const b = brief(p, { recentTurns: docxTurns, priorArtifact: docx });
     assert.equal(b.target.kind, 'previous_answer', p);
     assert.equal(rb.routingHints(b).editsPreviousAnswer, true, p);
   }
@@ -410,25 +461,35 @@ test('a how-to question is answered, never read as an edit of the answer or of t
       assert.equal(rb.routingHints(b).editsGeneratedOfficeFile, false, p);
     }
   }
-  // «como experto, …» is «as an expert», not a how-to question.
-  assert.equal(brief('como experto, corrige mi ensayo').action, 'edit');
-  // With an attachment the edit verb still acts on it.
+  // «como …, <orden>» is «as …», not a how-to question.
+  for (const p of ['como experto, corrige mi ensayo', 'como primer paso, agrega una conclusión', 'como mujer emprendedora, mejora mi CV']) {
+    assert.equal(brief(p).action, 'edit', p);
+  }
   assert.equal(brief('¿cómo mejorar este documento?', { attachments: [{ originalName: 'tesis.docx' }] }).target.kind, 'attachment');
 });
 
-test('inline material helpers: delimiter after the verb, nothing but a material noun before it', () => {
-  const { inlineObjectMaterial, carriesOwnMaterial, objectCore, fold } = rb._internal;
-  assert.equal(inlineObjectMaterial(fold('traduce al inglés: Hola')), true);
-  assert.equal(inlineObjectMaterial(fold('traduce al inglés:')), false);
-  assert.equal(inlineObjectMaterial(fold('traduce esto :)')), false);
-  assert.equal(inlineObjectMaterial(fold('Importante: resume el documento')), false);
-  assert.equal(inlineObjectMaterial(fold('resume la reunión de las 10:30')), false);
-  assert.equal(inlineObjectMaterial(fold('cambia el título a: Informe final')), false);
-  assert.equal(inlineObjectMaterial(fold('corrige eso: el año es 1990')), false);
-  assert.equal(inlineObjectMaterial(fold('revisa mi ortografía: ayer fuy al cine')), true);
-  assert.equal(inlineObjectMaterial(fold('traduce la frase "carpe diem"')), true);
-  assert.equal(carriesOwnMaterial(''), false);
-  assert.equal(carriesOwnMaterial(fold('resume')), false);
-  assert.equal(objectCore(fold(' al inglés de forma formal en 3 párrafos por favor')), '');
-  assert.equal(objectCore(fold(' un resumen breve de la revolución francesa')), 'la revolucion francesa');
+test('when the brief does not ask, the block tells the model to request missing material instead of inventing it', () => {
+  const block = rb.buildRequestBriefPromptBlock(brief('mejora mi pitch de ventas'));
+  assert.match(block, /Si se refiere a un texto o archivo que no está en el chat, pídeselo en una frase en vez de inventarlo/);
+  assert.doesNotMatch(rb.buildRequestBriefPromptBlock(brief('cuál es la capital de Francia')), /pídeselo en una frase/);
+});
+
+test('the detector runs in linear time on crafted input (no catastrophic backtracking)', () => {
+  const crafted = [
+    `resume las ideas ${'más.importantes.'.repeat(240)}zzz`,
+    `corrige las ideas ${'más importantes '.repeat(230)}zzz: hola`,
+    `resume el ensayo ${'argumentativo '.repeat(280)}zzz`,
+    `traduce ${'esto pls '.repeat(440)}`,
+    `haz un gráfico ${'de barras '.repeat(390)}`,
+    `${`${'palabra '.repeat(30)}\n`.repeat(15)}tradúcelo`,
+  ];
+  for (const p of crafted) {
+    for (const ctx of [{}, { recentTurns: prev }]) {
+      brief(p, ctx);
+      const t0 = process.hrtime.bigint();
+      brief(p, ctx);
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      assert.ok(ms < 50, `${p.slice(0, 40)}… took ${ms.toFixed(1)} ms`);
+    }
+  }
 });

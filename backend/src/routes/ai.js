@@ -8164,7 +8164,7 @@ router.post(
               // «agrega 2 ejemplos más a tu explicación»: the brief resolved
               // the target to the previous ANSWER — the edit verb must not
               // send the turn to the document editor.
-              if (documentEditRequested && __requestBriefHints.editsPreviousAnswer) {
+              if (documentEditRequested && (__requestBriefHints.editsPreviousAnswer || __requestBriefHints.editsInlineText)) {
                 documentEditRequested = false;
                 generateLog.info('routing.request_brief_veto', { gate: 'document_edit', target: 'previous_answer' });
               }
@@ -8224,7 +8224,7 @@ router.post(
                 if (!createDocRequested && __requestBriefHints.editsGeneratedOfficeFile && hasPriorArtifacts) {
                   createDocRequested = true;
                   generateLog.info('routing.request_brief_claim', { gate: 'agent_runner', format: __requestBriefHints.officeTargetFormat });
-                } else if (createDocRequested && __requestBriefHints.editsPreviousAnswer && !(processedFiles || []).some((f) => f && !isImageMime(f.mimeType || f.type))) {
+                } else if (createDocRequested && (__requestBriefHints.editsPreviousAnswer || __requestBriefHints.editsInlineText) && !(processedFiles || []).some((f) => f && !isImageMime(f.mimeType || f.type))) {
                   createDocRequested = false;
                   generateLog.info('routing.request_brief_veto', { gate: 'agent_runner', target: 'previous_answer' });
                 }
