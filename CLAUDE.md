@@ -1827,14 +1827,30 @@ el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recib
   bloque tier 0 pide al modelo solicitar el material que falte en vez de inventarlo. Los sustantivos se comparan POR TOKEN (Sets, regex de
   una palabra, bucles acotados): un grupo cuantificado de alternativas solapadas («más
   importantes» y «más» + «importantes») bloqueaba el event loop de forma exponencial; test de
-  tiempo lineal en la suite.
+  tiempo lineal en la suite. Tercera revisión (regresiones contra producción, todas cerradas): un
+  «¿puedes …?» con verbo de crear/programar/buscar y un tema o una cantidad es una ORDEN
+  («¿Puedes hacer diapositivas sobre la célula?», «¿puedes buscar vuelos…?»; solo «¿puedes crear
+  presentaciones?» a secas es de capacidad); «el informe de ventas», «la carta de motivación» (de +
+  palabra en minúscula) y «la ortografía y la gramática» siguen preguntando, «el libro de
+  Cervantes» (mayúscula) no; léxico ampliado (estudios médicos, pasaporte, podcast, chat de
+  whatsapp, csv/json/srt, plantilla, mp3, ficha, boleta, plan, guía, «arhivo»/«cvs» a una errata) y
+  «analiza mis ventas» / «grafica las ventas del mes» / «cambia el color a azul» piden el material;
+  una nota corta tras «:» o Enter («⏎pero deja los nombres», «: eso no es cierto», «: lo del
+  estroma») rehace la respuesta y en un primer mensaje pregunta; a mitad de chat un how-to sobre
+  la respuesta o el archivo generado («¿cómo agregar 3 diapositivas más?», «¿cómo resumir esto para
+  mi examen?», «¿cómo traducir tu respuesta?») sigue siendo orden, igual que un how-to con enlace
+  («¿cómo transcribo https://…?» ⇒ `transcribe_url`) y una pregunta seguida de una orden («¿Para
+  qué sirve un KPI? Agrega 3 a la presentación»); «dibuja» sobre datos (Excel/CSV adjunto,
+  «dibújalo» tras una respuesta con cifras o junto a un documento, «la curva de oferta y demanda»,
+  «las ventas del excel») es gráfica; un `answer` sobre el archivo generado dice «Responde sobre
+  él», nunca «Modifícalo»; con un enlace no se pide el material.
 - **Frontend**: `lib/api.ts` parsea `request_brief` / `intent.clarify_options`
   (`RequestBriefPayload`, `ClarifyOptionsPayload`); `chat-context-integrated` guarda
   `message.requestBrief` y convierte el frame de aclaración en `metadata.kind='clarification'`;
   `components/chat/request-brief-line.tsx` muestra «Entendí: … · supuesto» bajo la respuesta con
   «Corregir» (prefill del compositor «No era eso. Lo que quiero es: »); se oculta en small talk.
   UI lock re-baselineado para los 4 archivos tocados.
-- Tests: `backend/tests/request-brief.test.js` (36), `request-brief-routing-source.test.js` (7),
+- Tests: `backend/tests/request-brief.test.js` (42), `request-brief-routing-source.test.js` (7),
   `tests/request-brief-frontend-source.test.ts` (4), `tests/components/request-brief-line.test.tsx` (3).
   Envs en `docs/ENV_VARIABLES.md` (`SIRAGPT_REQUEST_BRIEF*`).
 

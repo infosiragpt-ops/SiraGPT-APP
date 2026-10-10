@@ -20,7 +20,12 @@ and improvement cycles follow a sequential number with the date the work landed.
   tiene errores»). Mid-chat, text pasted after «:» or between quotes is
   translated or corrected instead of the previous answer and is never routed
   to a file editor; scopes, instructions and edits of a generated file keep
-  their target. How-to questions are no longer read as edits.
+  their target. How-to questions are no longer read as edits. Polite orders
+  («¿Puedes hacer diapositivas sobre la célula?», «¿puedes buscar vuelos…?»),
+  a question followed by an order, how-to questions about the generated file,
+  the answer or a pasted link, and «dibuja» over data keep their order.
+  Generic documents («el informe de ventas»), the user's own figures («analiza
+  mis ventas») and short notes after «:» or Enter still ask or redo the answer.
 
 ### Added
 

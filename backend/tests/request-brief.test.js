@@ -552,3 +552,107 @@ test('round two: scopes, corrections and short notes are not pasted material; mu
   // The «ask for missing material» line is only for a first message.
   assert.doesNotMatch(rb.buildRequestBriefPromptBlock(brief('hazme un resumen', { recentTurns: prev })), /pídeselo en una frase/);
 });
+
+// Round three: each case below is production behaviour that an earlier
+// revision of the material detector lost.
+const dataTurns = [
+  { role: 'user', text: 'dame las ventas de 2024' },
+  { role: 'assistant', text: 'Ventas 2024: enero 120, febrero 135, marzo 160.' },
+];
+const deckTurns = [
+  { role: 'user', text: 'hazme una presentación sobre la fotosíntesis' },
+  { role: 'assistant', text: 'Listo, aquí tienes informe.pptx.' },
+];
+const xlsx = { id: 'f1', originalName: 'ventas.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+
+test('round three: a polite «¿puedes …?» that orders a file, code or a search on a first message is an order', () => {
+  for (const [p, action] of [['¿Puedes hacer diapositivas sobre la célula?', 'create'], ['¿Podrías hacer cinco láminas sobre la Revolución Industrial?', 'create'],
+    ['¿Puedes generar imágenes de gatos?', 'create'], ['Can you create slides about climate change?', 'create'],
+    ['¿Puedes programar una página web para mi restaurante?', 'code'], ['¿puedes generar código en python?', 'code'],
+    ['¿Puedes buscar vuelos baratos a Cusco?', 'search'], ['¿puedes buscar información sobre el dengue en Piura?', 'search']]) {
+    const b = brief(p);
+    assert.equal(b.action, action, p);
+    assert.equal(b.ambiguity.ask, false, p);
+    assert.doesNotMatch(rb.buildRequestBriefPromptBlock(b), /no generes archivos/, p);
+  }
+  for (const p of ['¿puedes hacer gráficos?', '¿Puedes crear presentaciones?', '¿puedes traducir documentos?', '¿puedes resumir libros?']) {
+    assert.equal(brief(p).action, 'answer', p);
+  }
+  for (const p of ['¿Puedes hacer un resumen?', '¿puedes corregir algo?']) assert.equal(brief(p).ambiguity.ask, true, p);
+});
+
+test('round three: a document kind, a coordinated part or a known material noun still asks; a named work does not', () => {
+  for (const p of ['Analiza el informe de ventas', 'Revisa la ortografía y la gramática', 'Mejora la redacción y la coherencia', 'revisa la carta de motivacion',
+    'traduce el contrato de arrendamiento', 'Fix grammar and spelling', 'interpreta la ecografia', 'traduce el pasaporte', 'resume el podcast',
+    'resume la conversacion de whatsapp', 'Tengo un chat de whatsapp con mi jefe. Resúmelo.', 'analiza el csv', 'corrige la plantilla', 'resume el mp3',
+    'resumen corto pls', 'traduce: solo la primera pagina', 'cambia el color a azul', 'haz un grafico de mis ventas', 'grafica mis gastos',
+    'grafica las ventas del mes', 'analiza mis ventas', 'analiza el plan de marketing', 'resume la clase grabada', 'analiza el arhivo', 'analiza el cvs', 'corrige el apa']) {
+    assert.equal(brief(p).ambiguity.ask, true, p);
+  }
+  for (const p of ['resume el libro de Harry Potter', 'resume la novela de Cervantes', 'resume el documental Cosmos', 'resume la historia de la radiografía',
+    'mejora mi productividad', 'mejora mis ventas', 'grafica la funcion seno en azul', 'analiza las ventas de Apple en 2023', 'corrige el json: {"a":1,"b":}']) {
+    assert.equal(brief(p).ambiguity.ask, false, p);
+  }
+});
+
+test('round three: how-to wording mid-chat keeps the generated file, the answer and a pasted link as the object', () => {
+  for (const p of ['¿cómo agregar 3 diapositivas más?', '¿cómo eliminar las diapositivas 4 y 5?', '¿cómo exportarlo a pdf?']) {
+    const b = brief(p, { recentTurns: deckTurns, priorArtifact: deck });
+    assert.equal(b.target.kind, 'generated_artifact', p);
+    assert.equal(rb.routingHints(b).editsGeneratedOfficeFile, true, p);
+  }
+  for (const p of ['¿cómo agregar diapositivas en PowerPoint?', 'como mejorar mi cv', 'cómo convertir un pdf a word']) {
+    assert.equal(brief(p, { recentTurns: deckTurns, priorArtifact: deck }).action, 'answer', p);
+  }
+  for (const p of ['¿cómo podría resumir esto para mi examen?', '¿cómo traducir tu respuesta al inglés?', '¿cómo resumir lo anterior?']) {
+    assert.notEqual(brief(p, { recentTurns: prev }).action, 'answer', p);
+  }
+  assert.equal(brief('¿cómo eliminar mi cuenta?', { recentTurns: prev }).action, 'answer');
+  const upn = brief('como transcribo la clase https://upn.class.com/classes/1/recordings/a del minuto 3 al 7');
+  assert.equal(upn.deliverable.kind, 'transcription');
+  assert.equal(upn.target.kind, 'url');
+  assert.ok(upn.constraints.some((c) => c.kind === 'time_range'));
+  assert.match(rb.buildRequestBriefPromptBlock(upn), /transcribe_url/);
+  assert.equal(brief('como resumir https://es.wikipedia.org/wiki/Revolucion_francesa').target.kind, 'url');
+  assert.equal(brief('¿cómo transcribo un audio?').action, 'answer');
+  assert.doesNotMatch(rb.buildRequestBriefPromptBlock(brief('mejora el texto de https://midominio.com/blog/post')), /pídeselo/);
+});
+
+test('round three: a short note after «:» or Enter mid-chat redoes the answer; real pastes stay inline', () => {
+  for (const p of ['Traduce al inglés\npero deja los nombres en español', 'Parafrasea\ncon palabras más simples', 'corrige: eso no es cierto',
+    'corrige: lo del estroma', 'reescribe: como si fuera para un niño', 'traduce: el título y los subtítulos']) {
+    const b = brief(p, { recentTurns: prev });
+    assert.equal(b.target.kind, 'previous_answer', p);
+    assert.equal(rb.routingHints(b).editsPreviousAnswer, true, p);
+  }
+  assert.equal(brief('Traduce al inglés\npero deja los nombres en español').ambiguity.ask, true);
+  for (const p of ['traduce al inglés: Hola, ¿cómo estás?', 'corrige: yo a ido al colegio', 'parafrasea: el sol sale por el este']) {
+    assert.equal(brief(p, { recentTurns: prev }).target.source, 'inline', p);
+  }
+});
+
+test('round three: «dibuja» over data is a chart; a drawing beside a document or a photo is a picture', () => {
+  assert.equal(brief('dibújalo', { attachments: [xlsx] }).action, 'visualize');
+  for (const p of ['ahora dibújalo', 'dibuja estos resultados']) assert.equal(brief(p, { recentTurns: dataTurns }).action, 'visualize', p);
+  for (const p of ['dibuja la curva de oferta y demanda', 'dibuja la piramide de maslow']) assert.equal(brief(p).action, 'visualize', p);
+  const office = brief('dibuja las ventas del excel', { attachments: [xlsx] });
+  assert.equal(office.action, 'visualize');
+  assert.match(rb.describeRequestBrief(office).label, /Graficar/);
+  for (const ctx of [{}, { recentTurns: dataTurns }, { attachments: [{ id: 'd', originalName: 'tesis.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }] }]) {
+    const b = brief('dibuja un gato', ctx);
+    assert.equal(b.action, 'create');
+    assert.equal(b.deliverable.kind, 'image');
+  }
+  assert.equal(brief('can you draw a cat?').deliverable.kind, 'image');
+});
+
+test('round three: a question followed by an order keeps the order', () => {
+  const b = brief('¿Para qué sirve un KPI? Agrega 3 KPIs a la presentación', { recentTurns: prev, priorArtifact: deck });
+  assert.equal(b.action, 'edit');
+  assert.equal(rb.routingHints(b).editsGeneratedOfficeFile, true);
+  assert.equal(brief('¿Qué significa ATP? amplía ese punto', { recentTurns: prev }).target.kind, 'previous_answer');
+  for (const p of ['¿qué significa APA? explícamelo', '¿qué es mejor, barras o pastel? ¿cuál recomiendas?']) assert.equal(brief(p).action, 'answer', p);
+  // An answer about the generated file never tells the model to modify it.
+  const about = brief('¿cómo agregar diapositivas en PowerPoint?', { recentTurns: deckTurns, priorArtifact: deck });
+  assert.doesNotMatch(rb.buildRequestBriefPromptBlock(about), /Modifícalo/);
+});
