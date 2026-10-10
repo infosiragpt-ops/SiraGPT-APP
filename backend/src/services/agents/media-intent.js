@@ -341,7 +341,7 @@ function detectImageEditIntent(text, opts = {}) {
   if (opts.hasImageAttachment && detectReferenceCue(text)) return true;
   const imageContext = Boolean(opts.hasImageAttachment || opts.hasRecentImage);
   if (!EDIT_VERB.test(norm)) {
-    return Boolean(opts.hasRecentImage) && detectImageFollowupEdit(norm);
+    return imageContext && detectImageFollowupEdit(norm);
   }
   if (IMPLICIT_EDIT_OP.test(norm)) return true;
   if (EXISTING_IMAGE_REF.test(norm)) return true;
@@ -350,7 +350,7 @@ function detectImageEditIntent(text, opts = {}) {
   // With an image attached, an edit verb + any image noun is enough
   // ("mejora la calidad", "recorta la imagen").
   if (opts.hasImageAttachment && (IMAGE_NOUNS.test(norm) || /\b(fondo|background|calidad|colores?)\b/.test(norm))) return true;
-  if (opts.hasRecentImage && detectImageFollowupEdit(norm)) return true;
+  if (imageContext && detectImageFollowupEdit(norm)) return true;
   return false;
 }
 
@@ -536,7 +536,7 @@ function detectMediaIntents(text, opts = {}) {
   const hasCreateVerb = CREATE_VERB.test(norm);
   // "que sea de noche" after an image starts like a question but is a
   // follow-up edit; the short-continuation rule already vetted it.
-  const followupEdit = kinds.includes('image-edit') && Boolean(opts.hasRecentImage) && detectImageFollowupEdit(norm);
+  const followupEdit = kinds.includes('image-edit') && Boolean(opts.hasRecentImage || opts.hasImageAttachment) && detectImageFollowupEdit(norm);
   let confidence = 'medium';
   if ((QUESTION_START.test(norm) && !followupEdit) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
   else if (hasCreateVerb || kinds.includes('image-edit')) confidence = 'high';

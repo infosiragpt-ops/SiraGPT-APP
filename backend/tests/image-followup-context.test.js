@@ -17,6 +17,13 @@ test('historyHasRecentImage sees uploads, composer images and agentic artifacts'
   assert.equal(historyHasRecentImage([{ role: 'assistant', content: 'listo', files: JSON.stringify([{ type: 'image', fileId: 'beach', url: '/uploads/images/x.png' }]) }]), true);
   assert.equal(historyHasRecentImage([{ role: 'assistant', content: sentinel('image/png') }]), true);
   assert.equal(historyHasRecentImage([{ role: 'assistant', content: [{ type: 'text', text: sentinel('image/webp') }] }]), true);
+  // The composer stores the generated image URL as the assistant content; a
+  // vision turn in LLM shape carries an image_url part.
+  assert.equal(historyHasRecentImage([{ role: 'assistant', content: '/uploads/images/result-3.png' }]), true);
+  assert.equal(historyHasRecentImage([{ role: 'assistant', content: 'https://siragpt.com/uploads/u1/foto.jpg' }]), true);
+  assert.equal(historyHasRecentImage([{ role: 'assistant', content: 'Aquí tienes: ![logo](/api/agent/artifact/abc123def456?name=logo.png)' }]), true);
+  assert.equal(historyHasRecentImage([{ role: 'user', content: [{ type: 'text', text: 'qué ves' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }]), true);
+  assert.equal(historyHasRecentImage([{ role: 'assistant', content: 'Descarga el informe en /uploads/docs/informe.pdf' }]), false);
 });
 
 test('historyHasRecentImage ignores documents, tombstones and old rows', () => {

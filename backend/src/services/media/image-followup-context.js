@@ -6,7 +6,9 @@
 
 const IMAGE_FILE_RE = /^image\/(?:png|jpeg|jpg|webp|gif|avif)$/i;
 const IMAGE_URL_RE = /\.(?:png|jpe?g|webp|gif|avif)(?:[?#]|$)/i;
-const SENTINEL_IMAGE_RE = /"(?:mime|mimeType|type)"\s*:\s*"image\/(?:png|jpeg|jpg|webp|gif|avif)"|\/api\/agent\/artifact\/[a-f0-9]{6,64}\?name=[^"\s]*\.(?:png|jpe?g|webp|gif|avif)\b/i;
+// Agentic sentinel cards, artifact links, upload URLs (the composer stores
+// the generated image's URL as the assistant row's content) and markdown.
+const SENTINEL_IMAGE_RE = /"(?:mime|mimeType|type)"\s*:\s*"image\/(?:png|jpeg|jpg|webp|gif|avif)"|\/api\/agent\/artifact\/[a-f0-9]{6,64}\?name=[^"\s]*\.(?:png|jpe?g|webp|gif|avif)\b|\/uploads\/[^\s)"'<>]*\.(?:png|jpe?g|webp|gif|avif)\b|!\[[^\]]*\]\([^)\s]*\.(?:png|jpe?g|webp|gif|avif)(?:[?#][^)]*)?\)/i;
 
 function fileList(message) {
   try {
@@ -30,6 +32,12 @@ function textOf(content) {
   return '';
 }
 
+// A vision turn in LLM shape: [{ type:'text' }, { type:'image_url', … }].
+function hasImagePart(content) {
+  return Array.isArray(content) && content.some((part) => part && typeof part === 'object'
+    && (part.type === 'image_url' || part.type === 'image' || part.image_url || part.inlineData));
+}
+
 /** True when one of the latest `limit` messages carries an image (upload or generated). */
 function historyHasRecentImage(messages, { limit = 12 } = {}) {
   if (!Array.isArray(messages) || !messages.length) return false;
@@ -38,6 +46,7 @@ function historyHasRecentImage(messages, { limit = 12 } = {}) {
     const message = recent[index];
     if (!message) continue;
     if (fileList(message).some(isImageEntry)) return true;
+    if (hasImagePart(message.content)) return true;
     if (SENTINEL_IMAGE_RE.test(textOf(message.content))) return true;
   }
   return false;

@@ -304,3 +304,40 @@ test('agentic execution profile: prompt exposes deterministic gates without user
   assert.match(prompt, /python_exec/);
   assert.doesNotMatch(prompt, /Calcula Cronbach/);
 });
+
+test('agentic execution profile: image edits gate on edit_image, never on a second generate_image', () => {
+  const vertical = buildExecutionProfile({ goal: 'hazme la misma imagen pero en vertical' });
+  assert.ok(vertical.requiredTools.includes('edit_image'));
+  assert.ok(!vertical.requiredTools.includes('generate_image'));
+  assert.equal(vertical.capabilities.mediaKind, 'image-edit');
+
+  const withReference = buildExecutionProfile({ goal: 'genera una imagen como esta pero con fondo azul', hasImageAttachment: true });
+  assert.ok(withReference.requiredTools.includes('edit_image'));
+  assert.ok(!withReference.requiredTools.includes('generate_image'));
+  const withoutReference = buildExecutionProfile({ goal: 'genera una imagen como esta pero con fondo azul' });
+  assert.ok(withoutReference.requiredTools.includes('generate_image'));
+  assert.ok(!withoutReference.requiredTools.includes('edit_image'));
+
+  // Image-only attachment metadata counts as an attached image too.
+  const metadataOnly = buildExecutionProfile({
+    goal: 'genera una imagen como esta pero con fondo azul',
+    fileIds: ['img1'],
+    fileMetadata: [{ id: 'img1', mimeType: 'image/png' }],
+  });
+  assert.ok(metadataOnly.requiredTools.includes('edit_image'));
+
+  const followup = buildExecutionProfile({ goal: 'ahora en azul', hasRecentImage: true });
+  assert.ok(followup.requiredTools.includes('edit_image'));
+  const noContext = buildExecutionProfile({ goal: 'ahora en azul' });
+  assert.equal(noContext.capabilities.needsMedia, false);
+  assert.ok(!noContext.requiredTools.includes('edit_image'));
+  assert.ok(!noContext.requiredTools.includes('generate_image'));
+
+  const video = buildExecutionProfile({ goal: 'crea un video de un gato' });
+  assert.ok(video.requiredTools.includes('generate_video'));
+
+  const edited = validateFinalize(vertical, [
+    { actions: [{ tool: 'edit_image', observation: { ok: true, url: '/edited.png' } }] },
+  ]);
+  assert.equal(edited.ok, true);
+});

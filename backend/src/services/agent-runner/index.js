@@ -467,6 +467,30 @@ function officeFormatNamedIn(normalized) {
   return null;
 }
 
+// Image artifact formats: a prior png is edited by the chat loop's
+// edit_image, never «redesigned» by the document runner.
+const IMAGE_PRIOR_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg']);
+/**
+ * An image edit / generation turn with image evidence (an attached picture
+ * or a prior image artifact) and no document noun: the chat loop owns it.
+ */
+function isImageMediaTurn(text, { files = [], priorArtifactFormat = null } = {}) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  const list = Array.isArray(files) ? files : [];
+  const fmt = String(priorArtifactFormat || '').toLowerCase().replace(/^.*\./, '');
+  const imageAttached = list.some(isImageFile);
+  const imagePrior = IMAGE_PRIOR_FORMATS.has(fmt);
+  if (!imageAttached && !imagePrior) return false;
+  if (list.some((f) => f && !isImageFile(f))) return false;
+  if (officeFormatNamedIn(t) || DOC_NOUN_RE.test(String(text || '')) || GENERIC_DOC_REF_RE.test(t)) return false;
+  try {
+    return require('../agents/media-intent')
+      .detectMediaIntents(String(text || ''), { hasImageAttachment: imageAttached, hasRecentImage: imagePrior })
+      .some((i) => i && (i.kind === 'image-edit' || i.kind === 'image'));
+  } catch (_) { return false; }
+}
+
 /**
  * The Office file a design request would restyle: a format named in the
  * text wins, then the conversation's latest artifact, then an uploaded
@@ -651,11 +675,13 @@ function shouldRunAgentRunner({
   // A request for software that converts documents still asks for code.
   // Reuse the chat's canonical classifier before looking at format nouns.
   if (require('../agents/software-build-intent').detectCodingIntent(t).active) return false;
+  const imageTurn = isImageMediaTurn(t, { files, priorArtifactFormat });
   // Text-only runner-only claims (create-a-doc, style/color follow-ups). The
   // design-upgrade branch of isRunnerOnlyDocumentTurn is NOT a claim on its
   // own: without files or a prior artifact there is nothing to redesign.
-  if (isCreateOrStyleRunnerOnly(t)) return true;
-  const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat);
+  if (isCreateOrStyleRunnerOnly(t, { imageTurn })) return true;
+  const priorFormat = String(priorArtifactFormat || '').toLowerCase().replace(/^.*\./, '');
+  const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat) && !IMAGE_PRIOR_FORMATS.has(priorFormat);
   if ((hasFiles || hasPrior) && fileConversionTarget(t)) return true;
   // A design claim needs an Office file to restyle: named in the text, the
   // latest artifact (pptx/docx/xlsx), or an upload. A prior html page, image
@@ -668,7 +694,7 @@ function shouldRunAgentRunner({
     || isFollowupDocumentEdit(t)
     || (['pptx', 'xlsx'].includes(designTarget) && isChartDocumentEdit(t))
     || designClaim;
-  if ((hasFiles || hasPrior) && work) return true;
+  if ((hasFiles || hasPrior) && work && !imageTurn) return true;
   // «haz una presentación como esta» / «usa esta plantilla para una ppt de…»:
   // a format to follow + a deliverable noun is runner work even without a
   // WORK_RE verb (the surgical editor would refuse it as an edit).
@@ -710,7 +736,7 @@ function extractSlideScope(text) {
  * (Edit turns claimed via attached files + a work verb are NOT runner-only:
  * the surgical document_edit path may still legitimately handle them.)
  */
-function isCreateOrStyleRunnerOnly(text) {
+function isCreateOrStyleRunnerOnly(text, { imageTurn = false } = {}) {
   const t = String(text || '');
   try {
     const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('../agents/software-build-intent');
@@ -718,7 +744,7 @@ function isCreateOrStyleRunnerOnly(text) {
   } catch (_) { /* classifier is local */ }
   if (isCreateDocumentRequest(t) || requestsSavExcelDelivery(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
-  if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
+  if (!imageTurn && STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
   return false;
 }
 
@@ -731,11 +757,12 @@ function isCreateOrStyleRunnerOnly(text) {
  * failed runner therefore ends with an honest error. A prior html page or
  * image is NOT an Office target: those turns keep the chat loop.
  */
-function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null } = {}) {
+function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null, files = [] } = {}) {
   const t = String(text || '');
   if (require('../agents/software-build-intent').detectCodingIntent(t).active) return false;
   if (fileConversionTarget(t)) return true;
-  if (isCreateOrStyleRunnerOnly(t)) return true;
+  const imageTurn = isImageMediaTurn(t, { files, priorArtifactFormat });
+  if (isCreateOrStyleRunnerOnly(t, { imageTurn })) return true;
   const named = officeFormatNamedIn(normalizeIntentText(t));
   const target = named || officeFamily(priorArtifactFormat);
   if (['pptx', 'xlsx'].includes(target) && isChartDocumentEdit(t)) return true;
@@ -2371,6 +2398,7 @@ module.exports = {
   explicitRunnerModel,
   canCallLlm,
   isRunnerOnlyDocumentTurn,
+  isImageMediaTurn,
   isDesignUpgradeRequest,
   isFollowupDocumentEdit,
   isQuestionOrAdviceRequest,

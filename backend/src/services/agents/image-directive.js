@@ -213,6 +213,17 @@ function detectPreviousImageCue(text) {
 }
 
 /**
+ * A frame the user actually SPOKE («vertical», «9:16», «cuadrada»), as
+ * opposed to one inferred from a visual type («logo» → 1:1): the latter must
+ * never re-frame an edit of an existing image.
+ */
+function detectSpokenImageFrame(text) {
+  const norm = canonicalText(text);
+  if (!norm || !ORIENTATION_TOKEN_RE.test(norm)) return null;
+  return detectImageFrame(text);
+}
+
+/**
  * "la misma imagen pero vertical" — keep the scene, change only the frame.
  * Not a new generation. Returns the detected frame or null.
  */
@@ -854,4 +865,5 @@ module.exports = {
   resolveReframeDirective,
   detectReferenceCue,
   detectPreviousImageCue,
+  detectSpokenImageFrame,
 };

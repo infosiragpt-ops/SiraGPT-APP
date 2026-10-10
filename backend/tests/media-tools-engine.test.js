@@ -46,8 +46,10 @@ require.cache[require.resolve(path.join(AGENTS_DIR, 'agent-task-persistence'))] 
 const engineCalls = { generate: [], edit: [] };
 let engineGenerateResult = null;
 let engineEditResult = null;
+let engineCanEdit = () => true;
 require.cache[require.resolve(path.join(SERVICE_DIR, 'media/image-engine'))] = {
   exports: {
+    canEditImage: (spec) => engineCanEdit(spec),
     generateImage: async (spec) => {
       engineCalls.generate.push(spec);
       return engineGenerateResult || {
@@ -95,6 +97,7 @@ test.beforeEach(() => {
   engineCalls.edit.length = 0;
   engineGenerateResult = null;
   engineEditResult = null;
+  engineCanEdit = () => true;
 });
 
 // ── generate_image ────────────────────────────────────────────────────────
@@ -447,4 +450,125 @@ test('image picker context overrides inferred tool model and survives artifact m
   const editMeta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${edited.id}.json`), 'utf8'));
   assert.equal(editMeta.parentFileId, `artifact:${generated.id}`);
   assert.equal(editMeta.rootFileId, `artifact:${generated.id}`); assert.equal(editMeta.version, 2);
+});
+
+// ── Image context: fresh attachment ⇒ reference-guided edit ───────────────
+
+function attachmentPrisma(records, { history = [] } = {}) {
+  const byId = Object.fromEntries(records.map((record) => [record.id, record]));
+  return {
+    file: {
+      findMany: async ({ where }) => {
+        assert.equal(where.userId, 'user-1');
+        assert.equal(where.deletedAt, null);
+        return where.id.in.map((id) => byId[id]).filter(Boolean);
+      },
+      findFirst: async ({ where }) => {
+        assert.equal(where.userId, 'user-1');
+        return byId[where.id] || null;
+      },
+    },
+    message: { findMany: async () => history },
+  };
+}
+
+test('generate_image with a fresh image attachment routes to edit_image with the attachment pixels', async () => {
+  const tmpImage = path.join(ARTIFACT_DIR, 'reference-upload.png');
+  fs.writeFileSync(tmpImage, 'reference-pixels');
+  const prisma = attachmentPrisma([{ id: 'img-1', userId: 'user-1', mimeType: 'image/png', path: tmpImage, filename: 'reference-upload.png' }]);
+  const ctx = fakeCtx({ prisma, fileIds: ['img-1'], fileMetadata: [{ id: 'img-1', mimeType: 'image/png', name: 'reference-upload.png' }], hasImageAttachment: true });
+  const r = await tool('generate_image').execute({ prompt: 'genera una imagen como esta pero con fondo azul' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.generate.length, 0, 'the text-only generator must not drop the reference pixels');
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'reference-pixels');
+  assert.match(engineCalls.edit[0].prompt, /referencia|reference/i);
+  assert.equal(engineCalls.edit[0].aspectRatio, null, 'a plain edit keeps the source frame');
+  const artifactEvent = ctx._events.find((e) => e.type === 'file_artifact');
+  assert.ok(artifactEvent);
+  assert.equal(artifactEvent.artifact.prompt, 'genera una imagen como esta pero con fondo azul');
+});
+
+test('generate_image with only a PDF attached still generates a new image', async () => {
+  const ctx = fakeCtx({ fileIds: ['doc-1'], fileMetadata: [{ id: 'doc-1', mimeType: 'application/pdf', name: 'brief.pdf' }] });
+  const r = await tool('generate_image').execute({ prompt: 'un gato astronauta' }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate.length, 1);
+  assert.equal(engineCalls.edit.length, 0);
+});
+
+test('generate_image with an image attachment and a non-editing model reports image_edit_unsupported without switching models', async () => {
+  engineCanEdit = () => false;
+  const ctx = fakeCtx({ imageModel: 'fal-ai/flux/schnell', imageProvider: 'fal', fileIds: ['img-1'], fileMetadata: [{ id: 'img-1', mimeType: 'image/png' }] });
+  const r = await tool('generate_image').execute({ prompt: 'hazme un logo con este logo' }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_edit_unsupported');
+  assert.match(r.error, /fal-ai\/flux\/schnell/);
+  assert.match(r.error, /no permite editar imágenes/);
+  assert.match(r.error, /sin adjuntar imágenes/);
+  assert.equal(engineCalls.generate.length, 0);
+  assert.equal(engineCalls.edit.length, 0);
+});
+
+test('generate_image ignores ids the loop recovered from history (no redirect)', async () => {
+  const ctx = fakeCtx({ fileIds: ['old'], recoveredFileIds: ['old'], hasImageAttachment: true });
+  const r = await tool('generate_image').execute({ prompt: 'una playa al atardecer' }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate.length, 1);
+  assert.equal(engineCalls.edit.length, 0);
+});
+
+test('edit_image failure envelope carries the engine code and names the selected model', async () => {
+  engineEditResult = { ok: false, code: 'image_edit_unsupported', error: 'El modelo seleccionado no permite esta edición.', attempts: [] };
+  const dataUrl = `data:image/png;base64,${Buffer.from('source-image').toString('base64')}`;
+  const ctx = fakeCtx({ imageModel: 'grok-2-image' });
+  const r = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_edit_unsupported');
+  assert.match(r.error, /grok-2-image/);
+  assert.match(r.error, /gpt-image-1, gemini-2\.5-flash-image o google\/gemini-3\.1-flash-image-preview/);
+  assert.deepEqual(r.attempts, []);
+  engineEditResult = { ok: false, code: 'E_PROVIDER', error: 'fallo del proveedor', attempts: [{ ok: false }] };
+  const r2 = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, fakeCtx());
+  assert.equal(r2.code, 'E_PROVIDER');
+  assert.equal(r2.error, 'fallo del proveedor');
+});
+
+test('edit_image on a plain edit keeps the source frame and records the real ratio in the lineage', async () => {
+  const png = await require('sharp')({ create: { width: 160, height: 90, channels: 4, background: 'blue' } }).png().toBuffer();
+  const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+  const ctx = fakeCtx();
+  const r = await tool('edit_image').execute({ instruction: 'cambia el cielo a rosa', imageUrl: dataUrl }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit[0].aspectRatio, null);
+  const meta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${r.id}.json`), 'utf8'));
+  assert.equal(meta.aspectRatio, '16:9');
+  assert.equal(ctx._events.find((e) => e.type === 'file_artifact').artifact.aspectRatio, '16:9');
+  assert.equal(ctx._events.find((e) => e.type === 'file_artifact').artifact.prompt, 'cambia el cielo a rosa');
+  const ignored = await tool('edit_image').execute({ instruction: 'cambia el cielo a rosa', imageUrl: dataUrl, aspectRatio: 'portrait' }, fakeCtx());
+  assert.equal(ignored.ok, true);
+  assert.equal(engineCalls.edit[1].aspectRatio, null, 'an LLM aspectRatio on a plain edit is ignored');
+  engineEditResult = { ok: true, images: [{ b64: png.toString('base64') }], provider: 'gemini', model: 'gemini-2.5-flash-image', attempts: [] };
+  const spoken = await tool('edit_image').execute({ instruction: 'hazla vertical', imageUrl: dataUrl }, fakeCtx());
+  assert.equal(spoken.ok, true, spoken.error);
+  assert.equal(engineCalls.edit[2].aspectRatio, '3:4', 'a spoken frame still reframes');
+});
+
+test('edit_image "ponle este logo a la imagen anterior" keeps the chat image as canvas and the upload as reference', async () => {
+  const previous = path.join(ARTIFACT_DIR, 'previous-generated.png');
+  fs.writeFileSync(previous, 'previous-chat-image');
+  const logo = path.join(ARTIFACT_DIR, 'logo-upload.png');
+  fs.writeFileSync(logo, 'logo-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'file-9', userId: 'user-1', mimeType: 'image/png', path: previous, filename: 'previous-generated.png' },
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'logo-upload.png' },
+  ], { history: [{ files: JSON.stringify([{ type: 'image', fileId: 'file-9', url: '/uploads/images/x.png' }]) }] });
+  const ctx = fakeCtx({ prisma, fileIds: ['logo'], userQuery: 'ponle este logo a la imagen anterior' });
+  const r = await tool('edit_image').execute({ instruction: 'ponle el logo', fileId: 'logo' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'previous-chat-image');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+  assert.equal(engineCalls.edit[0].aspectRatio, null, '«logo» is a visual type, not a spoken frame');
+  assert.deepEqual(r.referenceFileIds, ['file-9', 'logo']);
 });

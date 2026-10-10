@@ -2929,3 +2929,24 @@ test('live progress: a failed model call names the model and the exact cause', a
   ]);
   assert.doesNotMatch(timeline, /org_secret_7|Insufficient/);
 });
+
+test('shouldUseAgenticChat routes image edit / reference turns with an attached picture into the loop', () => {
+  const image = [{ mimeType: 'image/png' }];
+  for (const prompt of [
+    'quítale el fondo',
+    'hazla vertical',
+    'mejora la calidad',
+    'genera una imagen como esta pero con fondo azul',
+    'crea un banner con este logo',
+  ]) {
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt, files: image }), true, prompt);
+  }
+  // Vision Q&A over the picture stays on the plain stream.
+  for (const prompt of ['describe esta imagen', '¿qué ves en esta foto?', 'lee el texto de esta imagen', 'traduce esta foto']) {
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt, files: image }), false, prompt);
+  }
+  // A document attachment does not trip the image branch.
+  for (const prompt of ['hazla vertical', 'mejora la calidad']) {
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt, files: [{ mimeType: 'application/pdf' }] }), false, prompt);
+  }
+});

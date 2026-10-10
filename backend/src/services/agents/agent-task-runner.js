@@ -3066,6 +3066,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           } catch (_) { /* routing falls back to what was read */ }
         }
         if (agentRunner.shouldRunAgentRunner({
+          files: fileMetadata,
           fileIds: files,
           hasPriorArtifacts: agentRunnerPriorArtifacts,
           priorArtifactFormat: agentRunnerPriorFormat,
@@ -3073,6 +3074,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         })) {
           agentRunnerRunnerOnly = agentRunner.isRunnerOnlyDocumentTurn(agentRunnerText, {
             priorArtifactFormat: agentRunnerPriorFormat,
+            files: fileMetadata,
           });
           const finished = await invokeAgentRunnerTurn();
           if (finished) return finished;

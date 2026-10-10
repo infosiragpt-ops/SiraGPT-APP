@@ -616,3 +616,30 @@ test('chat: claimed EDIT turn + runner failure removes create_document from the 
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
   }
 });
+
+// ── Image turns never belong to the document runner ─────────────────────
+
+test('F2: an image edit / reference turn with image evidence is never claimed by the document runner', () => {
+  const files = [{ id: 'img1', name: 'foto.png', mimeType: 'image/png' }];
+  for (const text of [
+    'cambia el color del logo a azul',
+    'ahora quítale el fondo',
+    'ponle un sombrero al gato',
+    'edita la imagen y ponle un fondo blanco',
+    'genera una imagen como esta pero con fondo azul',
+    'cambia el fondo a #FF00AA',
+  ]) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ files, text }), false, `attached photo: ${text}`);
+    assert.equal(agentRunner.shouldRunAgentRunner({ hasPriorArtifacts: true, priorArtifactFormat: 'png', text }), false, `prior png: ${text}`);
+    assert.equal(agentRunner.isRunnerOnlyDocumentTurn(text, { priorArtifactFormat: 'png', files }), false, `runner-only: ${text}`);
+  }
+  // A photo attached to a DOCUMENT request still claims the runner.
+  for (const text of ['crea un documento con estas fotos', 'genera un pdf con la foto adjunta', 'crea una ppt con esta imagen de fondo']) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ files, text }), true, text);
+  }
+  for (const text of ['inserta esta imagen en el word', 'ponle el logo a la portada de la ppt']) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ files, fileIds: ['img1'], text }), true, text);
+  }
+  // No image evidence ⇒ no veto (the style follow-up tests above still hold).
+  assert.equal(agentRunner.shouldRunAgentRunner({ fileIds: ['f1'], text: 'mejora el diseño' }), true);
+});

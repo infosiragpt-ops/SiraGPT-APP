@@ -231,6 +231,45 @@ function withToolBudget(tools, names, limit, exhaustedMessage) {
 }
 
 /**
+ * Per-turn image guard: once edit_image refuses (no provider / unsupported /
+ * no source), generate_image is refused too — a text-only fallback would
+ * replace the user's image with an unrelated one.
+ */
+function withImageEditGuard(tools) {
+  let refusal = null;
+  const refused = new Set();
+  const guard = { refusedTools: () => Array.from(refused) };
+  const wrapped = (Array.isArray(tools) ? tools : []).map((tool) => {
+    if (!tool || !['edit_image', 'generate_image'].includes(tool.name) || typeof tool.execute !== 'function') return tool;
+    const inner = tool.execute;
+    return {
+      ...tool,
+      execute: async (args, ctx) => {
+        if (refused.has(tool.name) && refusal) {
+          return { ok: false, code: refusal.code, error: refusal.error, refusedAfterEdit: true };
+        }
+        const result = await inner(args, ctx);
+        if (tool.name === 'edit_image' && result && result.ok === false) {
+          if (result.code === 'image_edit_unsupported' || result.code === 'NO_PROVIDER') {
+            refusal = { code: result.code, error: result.error };
+            refused.add('edit_image');
+            refused.add('generate_image');
+          } else if (result.code === 'image_source_required') {
+            refusal = {
+              code: result.code,
+              error: 'No encontré la imagen que quieres editar; adjúntala o selecciónala para continuar. No voy a generar una imagen nueva para no perder tu imagen.',
+            };
+            refused.add('generate_image');
+          }
+        }
+        return result;
+      },
+    };
+  });
+  return { tools: wrapped, guard };
+}
+
+/**
  * Same budgets enforced where every tool call is dispatched (react-agent's
  * `ctx.checkToolBudget`, prefetch and sequential paths alike). The per-tool
  * wrappers stay as a second layer; in production a news turn still completed
@@ -857,6 +896,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       const { isDocumentMergeRequest } = require('./agents/document-merge');
       if (isDocumentMergeRequest(text, { fileCount: files.length })) return true;
     } catch (_) { /* detector is best-effort */ }
+    // An attached picture + an edit / reference-guided image request lives in
+    // the loop (edit_image): the plain stream would drop the reference pixels.
+    const hasImageAttachment = files.some((f) => f && (/^image\//i.test(String(f.mimeType || f.type || f.contentType || '')) || f.attachmentKind === 'image'));
+    if (hasImageAttachment) {
+      try {
+        if (detectMediaIntents(text, { hasImageAttachment: true })
+          .some((i) => i && (i.kind === 'image-edit' || (i.tool === 'generate_image' && i.confidence === 'high')))) return true;
+      } catch (_) { /* detector is best-effort */ }
+    }
     return isArtifactDeliverableRequest(text)
       || isDocumentEditRequest(text)
       || customGptPolicy.requiresSkill;
@@ -925,6 +973,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     fileIds = [],
     fileMetadata = [],
     hasImageAttachment = false,
+    hasRecentImage = false,
     availableToolNames = new Set(),
     artifactDeliveryContract = null,
   } = {}) {
@@ -937,7 +986,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       : (imageOnlyFallback
         ? fileIds.map((id) => ({ id, mimeType: 'image/*' }))
         : []);
-    const profile = buildExecutionProfile({ goal: userQuery, fileIds, fileMetadata: effectiveMetadata });
+    const profile = buildExecutionProfile({ goal: userQuery, fileIds, fileMetadata: effectiveMetadata, hasImageAttachment, hasRecentImage });
     if (SIMPLE_CHAT_PROMPT.test(String(userQuery || '').trim())) {
       return {
         ...profile,
@@ -1190,6 +1239,17 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       toolContext.userQuery = toolContext.userQuery || userQuery;
       toolContext.goal = toolContext.goal || userQuery;
     }
+    const { historyHasRecentImage } = require('./media/image-followup-context');
+    const imageAttached = toolContext.hasImageAttachment === true
+      || (Array.isArray(toolContext.fileMetadata) && toolContext.fileMetadata.some((f) => f && /^image\//i.test(String(f.mimeType || f.type || ''))));
+    const recentImage = !imageAttached && historyHasRecentImage(history);
+    let imageEditTurn = false;
+    try {
+      imageEditTurn = (imageAttached || recentImage)
+        && detectMediaIntents(userQuery, { hasImageAttachment: imageAttached, hasRecentImage: recentImage })
+          .some((i) => i && i.kind === 'image-edit');
+    } catch (_) { /* detector is best-effort */ }
+    toolContext.hasRecentImage = recentImage;
     const githubHandoffModule = require('./github/github-chat-handoff');
     const githubHandoff = githubHandoffModule.createGithubChatHandoff({
       userId: toolContext.userId, chatId: toolContext.chatId, signal,
@@ -1260,6 +1320,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (Array.isArray(recoveredIds) && recoveredIds.length > 0) {
           preloopFileIds.push(...recoveredIds.map(String).filter(Boolean));
           toolContext.fileIds = [...preloopFileIds];
+          toolContext.recoveredFileIds = recoveredIds.map(String).filter(Boolean);
         }
       } catch (_) { /* recovery is best-effort */ }
     }
@@ -1564,14 +1625,17 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           } catch (_) { priorArtifactFormat = null; }
         }
       }
+      const imageIds = new Set(uploadedFileRefs
+        .filter((f) => f && /^image\//i.test(String(f.mimeType || f.type || '')))
+        .map((f) => String(f.id)));
       const runnerClaim = !codingWorkspace && !briefTargetsPreviousAnswer && (shouldRunAgentRunner({
         files: uploadedFileRefs,
-        fileIds: preloopFileIds,
+        fileIds: preloopFileIds.filter((id) => !imageIds.has(String(id))),
         hasPriorArtifacts: prior,
         priorArtifactFormat,
         text: userQuery,
       }) || (briefTargetsGeneratedOffice && prior && uploadedFileRefs.length === 0));
-      if (runnerClaim) {
+      if (runnerClaim && !imageEditTurn) {
         const finished = await invokeAgentRunner();
         if (finished) return finished;
       }
@@ -1819,7 +1883,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       let answer = null;
       try {
         const { isRunnerOnlyDocumentTurn, buildAgentRunnerFailureMessage } = require('./agent-runner');
-        runnerOnly = isRunnerOnlyDocumentTurn(userQuery, { priorArtifactFormat });
+        runnerOnly = isRunnerOnlyDocumentTurn(userQuery, { priorArtifactFormat, files: uploadedFileRefs });
         // A picked model without a connection: its name and «no configurada».
         answer = (await runnerUnconfiguredAnswer(agentRunnerFailure, provider, model, toolContext.prisma || null))
           || buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
@@ -1998,7 +2062,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // primary (intents[0]) drives the forced first tool call, and the hint
     // instructs the model to call every requested tool before finalizing.
     const mediaIntents = detectMediaIntents(userQuery, {
-      hasImageAttachment: Boolean(toolContext && toolContext.hasImageAttachment),
+      hasImageAttachment: Boolean(toolContext && toolContext.hasImageAttachment) || imageAttached,
+      hasRecentImage: recentImage,
     });
     const mediaIntent = mediaIntents[0] || null;
 
@@ -2160,6 +2225,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // SMALL, ordered toolset — weak models depend on harness quality far more
     // than flagships, and a ~70-tool catalog rendered as prose overwhelms
     // them. Intent tools (media, file/RAG) are pinned so they survive the cap.
+    const imageGuarded = withImageEditGuard(tools);
+    tools = imageGuarded.tools;
+    const imageGuard = imageGuarded.guard;
     if (toolCallMode === 'prompted' && !toolsOverride) {
       try {
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
@@ -2354,7 +2422,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       userQuery: codingWorkspace ? '' : userQuery,
       fileIds: Array.isArray(toolContext.fileIds) ? toolContext.fileIds : [],
       fileMetadata: Array.isArray(toolContext.fileMetadata) ? toolContext.fileMetadata : [],
-      hasImageAttachment: toolContext.hasImageAttachment === true,
+      hasImageAttachment: toolContext.hasImageAttachment === true || imageAttached,
+      hasRecentImage: recentImage,
       availableToolNames,
       artifactDeliveryContract,
     });
@@ -2751,7 +2820,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     const composedFinalizeGuard = planVerify.composeFinalizeGuards([
       executionProfile.requiredTools.length
-        ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, { unavailableTools })
+        ? ({ steps, unavailableTools }) => validateFinalize(executionProfile, steps, {
+          unavailableTools: [...(Array.isArray(unavailableTools) ? unavailableTools : []), ...imageGuard.refusedTools()],
+        })
         : null,
       artifactDeliveryContract.active
         ? async ({ steps, unavailableTools }) => {
@@ -3987,6 +4058,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       checkWebToolBudget,
       withWebSearchBudget,
       withWebReadBudget,
+      withImageEditGuard,
       buildChatFinalizeProfile,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,

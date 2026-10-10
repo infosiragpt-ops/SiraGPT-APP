@@ -404,6 +404,11 @@ test('"ponle …" is an edit verb again (the typo canonicaliser used to make it 
   assert.equal(detectMediaIntents('ponle este logo a la camiseta')[0]?.tool, 'edit_image');
   assert.equal(detectMediaIntents('ponle un sombrero a esta foto', { hasImageAttachment: true })[0]?.tool, 'edit_image');
   assert.equal(detectImageEditIntent('ponle este logo a la camiseta'), true);
+  // An attached picture is image context too: a subject-less follow-up edits it.
+  for (const phrase of ['ponle un sombrero al gato', 'hazla más oscura', 'ahora en azul', 'que sea de noche']) {
+    assert.equal(detectMediaIntents(phrase, { hasImageAttachment: true })[0]?.tool, 'edit_image', phrase);
+    assert.equal(detectMediaIntents(phrase, { hasImageAttachment: true })[0]?.confidence, 'high', phrase);
+  }
 });
 
 test('an attached image used as a reference makes a creation request an edit', () => {
