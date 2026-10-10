@@ -304,3 +304,55 @@ test('agentic execution profile: prompt exposes deterministic gates without user
   assert.match(prompt, /python_exec/);
   assert.doesNotMatch(prompt, /Calcula Cronbach/);
 });
+
+test('agentic execution profile: image edits gate on edit_image, never on a second generate_image', () => {
+  const vertical = buildExecutionProfile({ goal: 'hazme la misma imagen pero en vertical' });
+  assert.ok(vertical.requiredTools.includes('edit_image'));
+  assert.ok(!vertical.requiredTools.includes('generate_image'));
+  assert.equal(vertical.capabilities.mediaKind, 'image-edit');
+
+  const withReference = buildExecutionProfile({ goal: 'genera una imagen como esta pero con fondo azul', hasImageAttachment: true });
+  assert.ok(withReference.requiredTools.includes('edit_image'));
+  assert.ok(!withReference.requiredTools.includes('generate_image'));
+  const withoutReference = buildExecutionProfile({ goal: 'genera una imagen como esta pero con fondo azul' });
+  assert.ok(withoutReference.requiredTools.includes('generate_image'));
+  assert.ok(!withoutReference.requiredTools.includes('edit_image'));
+
+  // Image-only attachment metadata counts as an attached image too.
+  const metadataOnly = buildExecutionProfile({
+    goal: 'genera una imagen como esta pero con fondo azul',
+    fileIds: ['img1'],
+    fileMetadata: [{ id: 'img1', mimeType: 'image/png' }],
+  });
+  assert.ok(metadataOnly.requiredTools.includes('edit_image'));
+
+  const followup = buildExecutionProfile({ goal: 'ahora en azul', hasRecentImage: true });
+  assert.ok(followup.requiredTools.includes('edit_image'));
+  const noContext = buildExecutionProfile({ goal: 'ahora en azul' });
+  assert.equal(noContext.capabilities.needsMedia, false);
+  assert.ok(!noContext.requiredTools.includes('edit_image'));
+  assert.ok(!noContext.requiredTools.includes('generate_image'));
+
+  const video = buildExecutionProfile({ goal: 'crea un video de un gato' });
+  assert.ok(video.requiredTools.includes('generate_video'));
+
+  const edited = validateFinalize(vertical, [
+    { actions: [{ tool: 'edit_image', observation: { ok: true, url: '/edited.png' } }] },
+  ]);
+  assert.equal(edited.ok, true);
+});
+
+test('validateFinalize credits the tool that actually ran when a call was delegated (generate_image → edit_image)', () => {
+  const { successfulToolCalls } = require('../src/services/agents/agentic-execution-profile');
+  const profile = buildExecutionProfile({ goal: 'genera un banner con este logo', hasImageAttachment: true });
+  assert.deepEqual(profile.requiredTools, ['edit_image']);
+  const redirected = [{ actions: [{ tool: 'generate_image', observation: { ok: true, url: '/edited.png', executedTool: 'edit_image' } }] }];
+  assert.equal(validateFinalize(profile, redirected).ok, true, 'no second edit is demanded');
+  assert.equal(successfulToolCalls(redirected).get('edit_image'), 1);
+  // Without the marker the gate still asks for edit_image (unchanged).
+  const plain = [{ actions: [{ tool: 'generate_image', observation: { ok: true, url: '/new.png' } }] }];
+  assert.equal(validateFinalize(profile, plain).ok, false);
+  // A failed delegated call credits nothing.
+  const failed = [{ actions: [{ tool: 'generate_image', observation: { ok: false, executedTool: 'edit_image', error: 'x' } }] }];
+  assert.equal(successfulToolCalls(failed).get('edit_image'), undefined);
+});

@@ -263,22 +263,113 @@ const KIND_TO_TOOL = {
 // existing image, not create a new one. Routed to `edit_image`, which
 // resolves the source from the chat (attachment or last generated image).
 
-const EDIT_VERB = /\b(edita(?:r|me|la|lo)?|modific(?:a|ame|ar|alo|ala)|retoc(?:a|ame|ar)|ajust(?:a|ale|ar)|cambi(?:a|ale|ar|emos)|quit(?:a|ale|ar|emos)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|agreg(?:a|ale|ar)|anad(?:e|ele|ir)|recort(?:a|ame|ar)|restaur(?:a|ame|ar)|coloriz(?:a|ar)|aclar(?:a|ar)|oscurec(?:e|er)|volte(?:a|ar)|gir(?:a|ar)|rot(?:a|ar)|amplia(?:r)?|escala(?:r)?|mejor(?:a|ame|ar)|ponle|edit|modify|retouch|adjust|remove|erase|crop|restore|colorize|brighten|darken|flip|rotate|upscale|enhance|improve)\b/;
+const EDIT_VERB = /\b(edita(?:r|me|la|lo)?|modific(?:a|ame|ar|alo|ala)|retoc(?:a|ame|ar)|ajust(?:a|ale|ar)|cambi(?:a|ale|ar|emos)|quit(?:a|ale|ar|emos)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|agreg(?:a|ale|ar)|anad(?:e|ele|ir)|recort(?:a|ame|ar)|restaur(?:a|ame|ar)|coloriz(?:a|ar)|aclar(?:a|ar)|oscurec(?:e|er)|volte(?:a|ar)|gir(?:a|ar)|rot(?:a|ar)|amplia(?:r)?|escala(?:r)?|mejor(?:a|ame|ar)|conviert(?:e|elo|ela)|convertir|transform(?:a|alo|ala|ar)|reemplaz(?:a|alo|ala|ar)|sustituy(?:e|elo|ela)|coloc(?:a|ale|ar)|inviert(?:e|elo|ela)|desenfoc(?:a|ar)|ponle|ponl[ao]s?|ponles|dejal[ao]s?|hazl[ao]s?|vuelvel[ao]s?|dale|edit|modify|retouch|adjust|remove|erase|crop|restore|colorize|brighten|darken|flip|rotate|upscale|enhance|improve|add|replace|transform|invert|blur|sharpen)\b/;
+
+// One noun list for every "existing image" reference below, so a noun added
+// here («captura») classifies the same in both forms.
+const IMAGE_REF_NOUN = 'imagen(?:es)?|foto(?:s|grafias?)?|ilustracion(?:es)?|dibujos?|logos?|logotipos?|retratos?|avatar(?:es)?|capturas?|screenshots?|images?|photos?|pictures?|drawings?';
 
 // A reference to an EXISTING image ("esta foto", "la imagen", "mi logo",
 // "the picture") — required so edit verbs inside generation requests
 // ("crea una imagen y cámbiale el fondo" → generation) don't misroute.
-const EXISTING_IMAGE_REF = /\b(?:est[ae]s?|es[ae]s?|aquell[ao]s?|la|mi|tu|dich[ao]|this|that|the|my)\s+(?:ultim[ao]\s+|misma?\s+|last\s+)?(?:imagen(?:es)?|foto(?:s|grafias?)?|ilustracion(?:es)?|dibujos?|logos?|logotipos?|retratos?|avatar(?:es)?|images?|photos?|pictures?|drawings?)\b/;
+const EXISTING_IMAGE_REF = new RegExp(`\\b(?:est[ae]s?|es[ae]s?|aquell[ao]s?|la|mi|tu|dich[ao]|this|that|the|my)\\s+(?:ultim[ao]\\s+|misma?\\s+|last\\s+)?(?:${IMAGE_REF_NOUN})\\b`);
+
+// "cambia el color del logo", "cámbiale el fondo al retrato": the article
+// forms a creation sentence also uses ("crea una imagen del logo"), so this
+// wider reference only counts when no strict creation verb is present. Only
+// the extra determiners differ from EXISTING_IMAGE_REF.
+const WIDE_IMAGE_REF = new RegExp(`\\b(?:el|los|las|del|al|este|esta|ese|esa|estos|estas)\\s+(?:ultim[ao]\\s+|misma?\\s+)?(?:${IMAGE_REF_NOUN})\\b`);
+const ANY_IMAGE_REF = new RegExp(`${EXISTING_IMAGE_REF.source}|${WIDE_IMAGE_REF.source}`);
+const ANY_IMAGE_REF_GLOBAL = new RegExp(ANY_IMAGE_REF.source, 'g');
+
+// «dale un vistazo a esta imagen», «take a look at this photo»: a request
+// to LOOK, never an edit, whatever the picture.
+const LOOK_REQUEST_RE = /\b(?:dale|echale|echa|da|pega(?:le)?)\s+(?:un|una)\s+(?:vistazo|mirada|ojo|ojeada|revisada|leida|chequeo)\b|\b(?:take|have)\s+a\s+look\b|\bcheck\s+(?:this|that)\s+out\b/;
 
 // Standalone edit operations that imply an existing image even without an
 // explicit noun reference ("quita el fondo", "remove the background").
 const IMPLICIT_EDIT_OP = /\b(?:quit(?:a|ale|ar)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|remove|erase)\b.{0,24}\b(?:fondo|background)\b|\bsin fondo\b|\bbackground removal\b/;
 
+// Attribute edits that are only unambiguous once an image is in play
+// ("cámbiale el fondo a rojo", "ponle otro color"): with no attachment and
+// no recent image the same words describe a document or a deck.
+const CONTEXTUAL_EDIT_OP = /\bcambi(?:a|ale|ar)\b.{0,24}\b(?:fondo|background|color(?:es)?|cielo|ojos|pelo|cabello|ropa|luz|iluminacion)\b|\b(?:pon(?:le)?|dale)\s+(?:otro|otra|un|una|el|la|los|las|mas|menos)?\s*(?:color(?:es)?|fondo|luz|brillo|contraste|sombra|borde|marco)\b/;
+
+// Short, subject-less continuations after an image ("ahora en azul", "que
+// sea de noche", "hazla más oscura", "la misma pero con sombrero").
+const FOLLOWUP_ATTRIBUTE_RE = /\b(?:fondo|background|luz|iluminacion|brillo|contraste|saturacion|nitidez|calidad|resolucion|color(?:es)?|estilo|style|sombra|borde|marco|sombrero|gorra|gafas|lentes|barba|bigote|pelo|cabello|ojos|ropa|camisa|vestido|logo|marca|noche|dia|atardecer|amanecer|lluvia|nieve|sol|nublado|invierno|verano|cielo|arbol(?:es)?|flores|sepia|blanco y negro|vintage|retro|anime|caricatura|realista|fotorrealista|acuarela|oleo|3d|minimalista|oscur[ao]|clar[ao]|grande|pequen[ao]|brillante|nitid[ao]|rojo|roja|azul|verde|amarill[ao]|naranja|morad[ao]|rosa|rosad[ao]|negr[ao]|blanc[ao]|gris|dorad[ao]|platead[ao]|celeste|turquesa|violeta|marron|cafe|beige|darker|brighter|lighter|bigger|smaller|larger|night|day|sunset|sunrise|red|blue|green|yellow|black|white|pink|purple|orange|gold|golden|silver|hat|cap|glasses|sunglasses|beard|mustache|hair|eyes|clothes|shirt|dress|sky|trees?|flowers|rain|snow|winter|summer|frame|border|shadow|watercolor|cartoon|realistic)\b/;
+// «la misma imagen pero de noche», «the same image but at night»: the noun
+// may sit between «misma» and «pero»; the same picture can only be an
+// existing one.
+const FOLLOWUP_SAME_RE = /\b(?:(?:la|el|lo|esa|ese|esta|este) mism[ao](?:\s+(?:imagen|foto|fotografia|ilustracion|dibujo|logo|retrato|image|photo|picture))? pero|igual pero|otra vez pero|de nuevo pero|(?:the |that |this )?same(?:\s+(?:image|photo|picture|one))? but)\b/;
+// A connector that leads a continuation, with or without a lead word:
+// «ahora en azul», «pero más oscura», «now in blue», «but darker».
+const FOLLOWUP_LEAD_RE = /^(?:(?:ahora|y|pero|mejor|ok|vale|si|now|and|but|also)\b[\s,]*(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|make it|in|with|without|more|less)?|(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|make it|in|with|without|more|less))\b/;
+// Words that make a short follow-up about something other than the image.
+const FOLLOWUP_EXCLUDE_RE = /\b(?:diapositivas?|laminas?|slides?|ppt|pptx|presentacion(?:es)?|documento|docx|word|excel|xlsx|hoja|celdas?|paginas?|parrafos?|codigo|script|funcion|programa|python|javascript|html|css|sql|videos?|clips?|cancion(?:es)?|musica|audio|voz|narracion|tabla|grafic[oa]s?|informe|reporte|archivo|texto del|redaccion|resumen)\b/;
+// A deck / document / code deliverable: never an image request, even when
+// an image is attached as material («crea una ppt con esta imagen de fondo»).
+const OFFICE_DELIVERABLE_SOURCE = 'ppt|pptx|powerpoint|presentacion(?:es)?|diapositivas?|laminas?|slides?|deck|word|docx|excel|xlsx|hoja de calculo|celdas?|html|css|codigo|script|pagina web|sitio web|documents?|spreadsheets?|presentations?';
+const OFFICE_DELIVERABLE_RE = new RegExp(`\\b(?:${OFFICE_DELIVERABLE_SOURCE})\\b`);
+// «ponle esta foto al excel», «put this photo in the deck»: the document is
+// the destination of the picture.
+const DOC_DESTINATION_RE = new RegExp(`\\b(?:a|al|en|dentro de|sobre|into|in|to|onto)\\s+(?:el|la|los|las|mi|mis|este|esta|estos|estas|the|my|this)?\\s*(?:${OFFICE_DELIVERABLE_SOURCE})\\b`);
+const DEMONSTRATIVE_RE = /\b(?:est[ae]s?|es[ae]s?|this|that)\b/;
+
+/**
+ * The document deliverable is the OBJECT of the request when it is named
+ * before any image reference («crea una ppt con esta imagen de fondo»,
+ * «cambia el fondo de la diapositiva») or as the destination of the picture
+ * («ponle esta foto al excel»). An image named first keeps the image as the
+ * object («quita el fondo de esta imagen para el informe»).
+ */
+function documentDeliverableVeto(norm) {
+  const doc = norm.search(OFFICE_DELIVERABLE_RE);
+  if (doc < 0) return false;
+  if (DOC_DESTINATION_RE.test(norm)) return true;
+  const ref = norm.search(ANY_IMAGE_REF);
+  return ref < 0 || doc < ref;
+}
+
+/**
+ * Short continuation that only makes sense as an edit of the image the chat
+ * already has. Pure text check; the caller supplies the image context.
+ */
+function detectImageFollowupEdit(norm) {
+  if (!norm) return false;
+  const words = norm.split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 16) return false;
+  if (STRICT_CREATE_VERB.test(norm) && IMAGE_NOUNS.test(norm) && !FOLLOWUP_SAME_RE.test(norm)) return false;
+  if (FOLLOWUP_EXCLUDE_RE.test(norm)) return false;
+  if (VIDEO_NOUNS.test(norm) || MUSIC_NOUNS.test(norm) || AUDIO_NOUNS.test(norm)) return false;
+  const attribute = FOLLOWUP_ATTRIBUTE_RE.test(norm) || IMAGE_NOUNS.test(norm);
+  if (EDIT_VERB.test(norm) && attribute) return true;
+  if (FOLLOWUP_SAME_RE.test(norm)) return true;
+  if (FOLLOWUP_LEAD_RE.test(norm) && attribute) return true;
+  return false;
+}
+
+function detectReferenceCue(text) {
+  try { return getImageDirective().detectReferenceCue(text); } catch { return false; }
+}
+
+/** Cheap pre-check for callers that must look up the chat's last image lazily. */
+function isImageFollowupCandidate(text) {
+  const norm = canonicalNorm(text);
+  if (!norm || OFFICE_DELIVERABLE_RE.test(norm)) return false;
+  // «crea una versión anime de esta foto» names the chat's photo as its
+  // material; worth one bounded history read.
+  if (DEMONSTRATIVE_RE.test(norm) && detectReferenceCue(text)) return true;
+  return detectImageFollowupEdit(norm);
+}
+
 /**
  * Detect an image-EDIT intent (transform an existing image).
  * @param {string} text raw user message
- * @param {{hasImageAttachment?: boolean}} [opts] context hint: the message
- *   carries an attached image, so referential cues can be implicit.
+ * @param {{hasImageAttachment?: boolean, hasRecentImage?: boolean}} [opts]
+ *   context hints: the message carries an attached image (referential cues
+ *   can be implicit, a reference cue means "build from it") or the chat
+ *   already holds an image (short continuations edit it).
  * @returns {boolean}
  */
 function detectImageEditIntent(text, opts = {}) {
@@ -287,12 +378,30 @@ function detectImageEditIntent(text, opts = {}) {
   try {
     if (getImageDirective().detectImageReframe(text)) return true;
   } catch { /* parser optional */ }
-  if (!EDIT_VERB.test(norm)) return false;
+  // A deck, document or code deliverable is never an image edit, whatever
+  // picture sits in the chat («cambia el fondo de la diapositiva a azul»).
+  if (documentDeliverableVeto(norm)) return false;
+  if (LOOK_REQUEST_RE.test(norm)) return false;
+  const explicitImageRef = ANY_IMAGE_REF.test(norm);
+  if (FOLLOWUP_EXCLUDE_RE.test(norm) && !explicitImageRef) return false;
+  // "genera una imagen como esta", "crea un banner con este logo": the
+  // attachment is the reference, which only edit_image can deliver as pixels.
+  // After a generated image, «crea una versión anime de esta foto» points at
+  // the chat's picture the same way.
+  if (opts.hasImageAttachment && detectReferenceCue(text)) return true;
+  if (opts.hasRecentImage && DEMONSTRATIVE_RE.test(norm) && detectReferenceCue(text)) return true;
+  const imageContext = Boolean(opts.hasImageAttachment || opts.hasRecentImage);
+  if (!EDIT_VERB.test(norm)) {
+    return imageContext && detectImageFollowupEdit(norm);
+  }
   if (IMPLICIT_EDIT_OP.test(norm)) return true;
   if (EXISTING_IMAGE_REF.test(norm)) return true;
+  if (!STRICT_CREATE_VERB.test(norm) && WIDE_IMAGE_REF.test(norm)) return true;
+  if (imageContext && CONTEXTUAL_EDIT_OP.test(norm)) return true;
   // With an image attached, an edit verb + any image noun is enough
   // ("mejora la calidad", "recorta la imagen").
   if (opts.hasImageAttachment && (IMAGE_NOUNS.test(norm) || /\b(fondo|background|calidad|colores?)\b/.test(norm))) return true;
+  if (imageContext && detectImageFollowupEdit(norm)) return true;
   return false;
 }
 
@@ -412,7 +521,67 @@ function detectMediaIntent(text) {
 // the request, a generation intent beats an edit cue inside the same message
 // ("crea una imagen de un perro y quítale el fondo" → generation; the
 // prompt itself carries the "sin fondo" requirement).
-const STRICT_CREATE_VERB = /\b(cr[ée]a|cre[ée]me|gener(?:a|ame|ar)|haz(?:me)?|hag(?:a|ame)|dibuj(?:a|ame|ar)|dise[nñ](?:a|ame|ar)|elabor(?:a|ame|ar)|make|create|generate|draw|design|render)\b/;
+// Shared with image-directive's reference-preservation clause so a verb
+// added here routes AND renders the same way.
+const CREATE_VERB_SOURCE = 'cr[ée]a(?:me)?|cre[ée]me|gener(?:a|ame|ar)|haz(?:me)?|hag(?:a|ame)|dibuj(?:a|ame|ar)|dise[nñ](?:a|ame|ar)|elabor(?:a|ame|ar)|make|create|generate|draw|design|render';
+const STRICT_CREATE_VERB = new RegExp(`\\b(${CREATE_VERB_SOURCE})\\b`);
+
+/** Attachment metadata that describes an image (every caller's shape). */
+function isImageAttachment(file) {
+  if (!file || typeof file !== 'object') return false;
+  if (file.attachmentKind === 'image') return true;
+  return /^image\//i.test(String(file.mimeType || file.mime || file.type || file.contentType || ''));
+}
+
+/**
+ * Does this turn, with a picture attached, ask for IMAGE work the chat loop
+ * must do (an edit, a reference-guided creation, or a new image)? Vision
+ * Q&A («describe esta imagen», «genera un alt text para esta imagen») stays
+ * on the plain stream: there the only image noun names the attachment.
+ * One predicate for the route gate and the loop gate, so they never disagree.
+ */
+function isImageMediaRequest(text, opts = {}) {
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) return false;
+  let intents = [];
+  try { intents = detectMediaIntents(raw, { hasImageAttachment: true, ...opts }); } catch { return false; }
+  if (intents.some((i) => i && i.kind === 'image-edit')) return true;
+  if (!intents.some((i) => i && i.tool === 'generate_image' && i.confidence === 'high')) return false;
+  const norm = canonicalNorm(raw);
+  const withoutReferences = norm.replace(ANY_IMAGE_REF_GLOBAL, ' ');
+  return IMAGE_NOUNS.test(withoutReferences);
+}
+
+/**
+ * Shared edit-vs-generate decision for an IMAGE request, so the composer
+ * route and the chat loop never disagree. A reference cue with an attachment
+ * ("genera una imagen como esta") is an edit even with a creation verb; a
+ * creation verb + image noun without a reference stays a generation even
+ * when it carries edit wording ("crea una imagen de un perro sin fondo").
+ *
+ * @returns {{operation: 'generate'|'edit'|'reframe'|null, referenceGuided: boolean, reason: string}}
+ */
+function classifyImageRequest(text, opts = {}) {
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) return { operation: null, referenceGuided: false, reason: 'empty' };
+  const norm = canonicalNorm(raw);
+  try {
+    if (getImageDirective().detectImageReframe(raw)) return { operation: 'reframe', referenceGuided: false, reason: 'reframe' };
+  } catch { /* parser optional */ }
+  if (documentDeliverableVeto(norm)) return { operation: null, referenceGuided: false, reason: 'document-deliverable' };
+  const referenceGuided = Boolean(opts.hasImageAttachment) && detectReferenceCue(raw);
+  const historyReference = !opts.hasImageAttachment && Boolean(opts.hasRecentImage) && DEMONSTRATIVE_RE.test(norm) && detectReferenceCue(raw);
+  const editIntent = detectImageEditIntent(raw, opts);
+  const hasImageNoun = IMAGE_NOUNS.test(norm);
+  const sameImage = FOLLOWUP_SAME_RE.test(norm) && Boolean(opts.hasImageAttachment || opts.hasRecentImage);
+  if (editIntent && (referenceGuided || historyReference || sameImage || !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm)))) {
+    return { operation: 'edit', referenceGuided, reason: referenceGuided ? 'reference-guided' : 'edit' };
+  }
+  if (hasImageNoun || (DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm))) {
+    return { operation: 'generate', referenceGuided: false, reason: 'image-noun' };
+  }
+  return { operation: null, referenceGuided: false, reason: 'no-image-intent' };
+}
 
 /**
  * Multi-intent variant of detectMediaIntent: detects EVERY media kind the
@@ -441,22 +610,21 @@ function detectMediaIntents(text, opts = {}) {
   // The generic "audio" noun loses to music ("audio de una canción" is a song).
   if (!kinds.includes('music') && AUDIO_NOUNS.test(norm)) kinds.push('audio');
 
-  const editIntent = detectImageEditIntent(raw, opts);
-  const hasImageNoun = IMAGE_NOUNS.test(norm);
-  if (editIntent && !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm))) {
-    kinds.push('image-edit');
-  } else if (hasImageNoun) {
-    kinds.push('image');
-  } else if (editIntent) {
-    kinds.push('image-edit');
-  }
+  const image = classifyImageRequest(raw, opts);
+  if (image.operation === 'edit' || image.operation === 'reframe') kinds.push('image-edit');
+  else if (image.operation === 'generate') kinds.push('image');
 
-  if (!kinds.length && DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm)) kinds.push('image');
   if (!kinds.length) return [];
 
   const hasCreateVerb = CREATE_VERB.test(norm);
+  // "que sea de noche" after an image starts like a question but is a
+  // follow-up edit; the short-continuation rule already vetted it.
+  const followupEdit = kinds.includes('image-edit') && Boolean(opts.hasRecentImage || opts.hasImageAttachment) && detectImageFollowupEdit(norm);
+  // Only the «que sea …» continuation is exempt from the question penalty;
+  // «¿cómo quito el fondo en gimp?» stays a question.
+  const questionWaived = followupEdit && /^[\s¿?]*(?:ahora|y|pero|mejor|ok|vale|si|now|and|but)?[\s,]*que (?:sea|tenga|este|quede)\b/.test(norm);
   let confidence = 'medium';
-  if (QUESTION_START.test(norm) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
+  if ((QUESTION_START.test(norm) && !questionWaived) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
   else if (hasCreateVerb || kinds.includes('image-edit')) confidence = 'high';
 
   return kinds.map((kind) => ({
@@ -465,7 +633,10 @@ function detectMediaIntents(text, opts = {}) {
     confidence,
     hasCreateVerb,
     specs: buildSpecsForKind(kind, norm, raw),
-    reason: kind === 'image-edit' ? 'edit-verb+image-ref' : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+    reason: kind === 'image-edit'
+      ? (image.referenceGuided ? 'reference-guided' : (followupEdit && !EDIT_VERB.test(norm) ? 'followup-edit' : 'edit-verb+image-ref'))
+      : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+    ...(kind === 'image-edit' ? { referenceGuided: image.referenceGuided } : {}),
     repaired: norm !== normalize(raw).replace(/\s+/g, ' ').trim(),
   }));
 }
@@ -495,7 +666,12 @@ function buildMediaIntentHint(intent) {
   const params = [];
   if (intent.kind === 'image-edit') {
     params.push('- instruction: la transformación que pidió el usuario (extráela literal del mensaje).');
-    params.push('- NO generes una imagen nueva con `generate_image`: el usuario quiere MODIFICAR una imagen existente (la adjunta o la última del chat).');
+    if (intent.referenceGuided) {
+      params.push('- El usuario adjuntó una imagen como REFERENCIA: llama a `edit_image` (recibe las imágenes adjuntas automáticamente, no hace falta pasar fileId) y conserva el sujeto, la identidad y la composición de la referencia aplicando solo la variación pedida.');
+      params.push('- NO uses `generate_image`: generaría una imagen nueva solo desde texto y perdería la referencia adjunta.');
+    } else {
+      params.push('- NO generes una imagen nueva con `generate_image`: el usuario quiere MODIFICAR una imagen existente (la adjunta o la última del chat).');
+    }
     if (s.editTarget) params.push(`- objetivo de la edición: "${s.editTarget}" — pásalo como \`target\` y aplica el cambio solo ahí, conservando el resto.`);
     if (s.editReplacement) params.push(`- resultado esperado en el objetivo: "${s.editReplacement}".`);
   } else if (intent.kind === 'image') {
@@ -561,6 +737,10 @@ module.exports = {
   detectMediaIntent,
   detectMediaIntents,
   detectImageEditIntent,
+  classifyImageRequest,
+  isImageFollowupCandidate,
+  isImageMediaRequest,
+  isImageAttachment,
   buildMediaIntentHint,
   buildMediaIntentsHint,
   resolveImageAspectRatio,
@@ -581,5 +761,11 @@ module.exports = {
     KIND_TO_TOOL,
     buildSpecsForKind,
     detectImageEditIntent,
+    detectImageFollowupEdit,
+    classifyImageRequest,
+    isImageMediaRequest,
+    documentDeliverableVeto,
+    CREATE_VERB_SOURCE,
+    ANY_IMAGE_REF,
   },
 };

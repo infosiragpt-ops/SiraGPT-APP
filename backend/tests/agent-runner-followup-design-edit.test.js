@@ -1034,3 +1034,13 @@ wb.save('presupuesto.xlsx')
   assert.match(sheet, /<f>B2\*C2<\/f>/, 'formula kept');
   assert.match(sheet, /<f>SUM\(D2:D4\)<\/f>/, 'total formula kept');
 });
+
+test('gate: WORK_RE phrasings on a prior IMAGE stay with the chat loop; on a prior deck they keep claiming', () => {
+  for (const text of ['ponle un sombrero', 'quítale el fondo', 'cambia el color del logo']) {
+    assert.equal(agentRunner.shouldRunAgentRunner({ hasPriorArtifacts: true, priorArtifactFormat: 'png', text }), false, `png: ${text}`);
+    assert.equal(agentRunner.isRunnerOnlyDocumentTurn(text, { priorArtifactFormat: 'png' }), false, `png runner-only: ${text}`);
+    assert.equal(agentRunner.shouldRunAgentRunner({ hasPriorArtifacts: true, priorArtifactFormat: 'pptx', text }), true, `pptx: ${text}`);
+  }
+  assert.equal(agentRunner.isRunnerOnlyDocumentTurn('cambia el color del logo', { priorArtifactFormat: 'pptx' }), true);
+  assert.equal(agentRunner.isRunnerOnlyDocumentTurn('ponle un sombrero', { priorArtifactFormat: 'pptx' }), false);
+});
