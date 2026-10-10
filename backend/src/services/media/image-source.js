@@ -8,6 +8,10 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_REFERENCE_IMAGES = 8;
 const MAX_REFERENCE_BYTES = 40 * 1024 * 1024;
 const artifactIdFrom = (value) => String(value || '').match(/(?:^artifact:|\/api\/agent\/artifact\/)([a-f0-9]{6,64})(?:\b|$)/i)?.[1];
+// Every artifact a message links, in document order: a turn that produced a
+// chart AND an image must still yield the image (the first id alone skipped
+// the whole message and fell back to an older picture).
+const allArtifactIdsFrom = (value) => [...new Set(Array.from(String(value || '').matchAll(/\/api\/agent\/artifact\/([a-f0-9]{6,64})(?:\b|$)/gi), (match) => match[1]))];
 const imageMime = (value) => /^image\/(png|jpeg|webp|gif|avif)$/i.test(String(value || ''));
 function messageFiles(message) {
   try {
@@ -125,8 +129,13 @@ async function resolveImageSource({ fileId, imageUrl, fileIds } = {}, ctx = {}) 
     }
     return null;
   }
-  const attachments = fileIds || ctx.fileIds;
-  if (Array.isArray(attachments) && attachments.length && prisma?.file?.findMany) {
+  // Ids recovered from chat history are not this turn's attachments (see
+  // resolveImageSources): the newest image in the chat is the default instead.
+  const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
+  const attachments = (Array.isArray(fileIds) ? fileIds : ctx.fileIds);
+  const freshAttachments = Array.isArray(attachments) ? attachments.filter((id) => !recovered.has(String(id))) : attachments;
+  if (Array.isArray(freshAttachments) && freshAttachments.length && prisma?.file?.findMany) {
+    const attachments = freshAttachments;
     const records = await prisma.file.findMany({ where: { id: { in: attachments.map(String) }, userId, deletedAt: null } });
     const image = attachments.map((id) => records.find((record) => String(record.id) === String(id)))
       .find((record) => record && imageMime(record.mimeType));
@@ -139,41 +148,74 @@ async function resolveImageSource({ fileId, imageUrl, fileIds } = {}, ctx = {}) 
       const resolved = await fromId(file.fileId || file.id, file) || await fromUrl(file.url || file.downloadUrl, file);
       if (resolved) return resolved;
     }
-    const id = artifactIdFrom(message.content);
-    const hiddenArtifact = id && messageFiles(message).some((file) => file.deletedAt && (
-      artifactIdFrom(file.fileId || file.id) === id || String(file.fileId || file.id) === id || artifactIdFrom(file.url || file.downloadUrl) === id
-    ));
-    if (id && !hiddenArtifact) { const resolved = await fromArtifact(id); if (resolved) return resolved; }
+    for (const id of allArtifactIdsFrom(message.content)) {
+      const hiddenArtifact = messageFiles(message).some((file) => file.deletedAt && (
+        artifactIdFrom(file.fileId || file.id) === id || String(file.fileId || file.id) === id || artifactIdFrom(file.url || file.downloadUrl) === id
+      ));
+      if (hiddenArtifact) continue;
+      const resolved = await fromArtifact(id);
+      if (resolved) return resolved;
+    }
   }
   return null;
 }
 
+const sameSource = (a, b) => Boolean(a && b) && (String(a.fileId || '') === String(b.fileId || '')
+  || (artifactIdFrom(a.fileId) && artifactIdFrom(a.fileId) === artifactIdFrom(b.fileId)));
+
 /** Resolve every explicitly supplied reference in caller order. Never silently
- * drop a missing reference, or replace it with an unrelated historical image. */
-async function resolveImageSources({ fileId, referenceFileIds, imageUrl } = {}, ctx = {}) {
+ * drop a missing reference, or replace it with an unrelated historical image.
+ *
+ * `primaryFromHistory` (opt-in, by an explicit cue such as "ponle este logo a
+ * la imagen anterior"): the chat's most recent image is the canvas and every
+ * supplied id is a reference. Without a historical image the call behaves as
+ * before, so the cue never costs the user their attachment. */
+async function resolveImageSources({ fileId, referenceFileIds, imageUrl, primaryFromHistory = false } = {}, ctx = {}) {
+  if (referenceFileIds !== undefined && referenceFileIds !== null && !Array.isArray(referenceFileIds)) {
+    throw Object.assign(new Error('Las referencias de imagen no son válidas.'), { code: 'E_PARAMS', status: 400 });
+  }
   // Agent tools receive the current turn's attachments in context. Include all
   // images automatically; documents are not image references. Keep unresolved
   // IDs so a missing/unowned attachment produces an error instead of vanishing.
-  if (ctx.userId && referenceFileIds === undefined && Array.isArray(ctx.fileIds) && ctx.fileIds.length && ctx.prisma?.file?.findMany) {
-    const records = await ctx.prisma.file.findMany({ where: { id: { in: ctx.fileIds.map(String) }, userId: ctx.userId, deletedAt: null } });
-    referenceFileIds = ctx.fileIds.map(String).filter((id) => {
-      const record = records.find((entry) => String(entry.id) === id);
-      return !record || imageMime(record.mimeType);
-    });
+  // Ids the loop recovered from chat history are NOT this turn's attachments:
+  // they are skipped here so the newest image in the chat stays the default
+  // canvas (an older upload used to displace the image just generated).
+  if (ctx.userId && !referenceFileIds?.length && Array.isArray(ctx.fileIds) && ctx.fileIds.length && ctx.prisma?.file?.findMany) {
+    const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
+    const fresh = ctx.fileIds.map(String).filter((id) => !recovered.has(id));
+    if (fresh.length) {
+      const records = await ctx.prisma.file.findMany({ where: { id: { in: fresh }, userId: ctx.userId, deletedAt: null } });
+      referenceFileIds = fresh.filter((id) => {
+        const record = records.find((entry) => String(entry.id) === id);
+        return !record || imageMime(record.mimeType);
+      });
+    } else {
+      referenceFileIds = undefined;
+    }
   }
-  if (referenceFileIds !== undefined && (!Array.isArray(referenceFileIds)
-    || referenceFileIds.some((id) => typeof id !== 'string' || !id.trim() || id.length > 160))) {
+  if (Array.isArray(referenceFileIds)
+    && referenceFileIds.some((id) => typeof id !== 'string' || !id.trim() || id.length > 160)) {
     throw Object.assign(new Error('Las referencias de imagen no son válidas.'), { code: 'E_PARAMS', status: 400 });
   }
-  const ids = [...new Set([fileId, ...(referenceFileIds || [])].filter(Boolean))];
+  let ids = [...new Set([fileId, ...(referenceFileIds || [])].filter(Boolean))];
   const explicitUrl = !fileId && Boolean(imageUrl);
   if (ids.length + Number(explicitUrl) > MAX_REFERENCE_IMAGES) {
     throw Object.assign(new Error(`Puedes usar hasta ${MAX_REFERENCE_IMAGES} imágenes de referencia por edición.`), { code: 'E_PARAMS', status: 400 });
   }
   const sources = [];
   let bytes = 0;
+  if (primaryFromHistory && !explicitUrl && ids.length) {
+    // An empty `fileIds` bypasses the attachment branch of resolveImageSource;
+    // the newest message in the chat wins (upload or generated artifact).
+    const previous = await resolveImageSource({}, { ...ctx, fileIds: [] });
+    if (previous) {
+      sources.push(previous);
+      bytes += previous.buffer.length;
+      ids = ids.filter((id) => !sameSource({ fileId: id }, previous));
+    }
+  }
   const inputs = [...(explicitUrl ? [{ imageUrl }] : []), ...ids.map((id) => ({ fileId: id }))];
-  if (!inputs.length) inputs.push({});
+  if (!inputs.length && !sources.length) inputs.push({});
   for (const input of inputs) {
     const source = await resolveImageSource(input, ctx);
     if (!source) {
@@ -185,6 +227,9 @@ async function resolveImageSources({ fileId, referenceFileIds, imageUrl } = {}, 
       throw Object.assign(new Error('Las imágenes de referencia superan los 40 MB. Reduce su tamaño para continuar.'), { code: 'E_PARAMS', status: 400 });
     }
     sources.push(source);
+  }
+  if (sources.length > MAX_REFERENCE_IMAGES) {
+    throw Object.assign(new Error(`Puedes usar hasta ${MAX_REFERENCE_IMAGES} imágenes de referencia por edición.`), { code: 'E_PARAMS', status: 400 });
   }
   return sources;
 }

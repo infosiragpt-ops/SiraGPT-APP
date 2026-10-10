@@ -263,22 +263,71 @@ const KIND_TO_TOOL = {
 // existing image, not create a new one. Routed to `edit_image`, which
 // resolves the source from the chat (attachment or last generated image).
 
-const EDIT_VERB = /\b(edita(?:r|me|la|lo)?|modific(?:a|ame|ar|alo|ala)|retoc(?:a|ame|ar)|ajust(?:a|ale|ar)|cambi(?:a|ale|ar|emos)|quit(?:a|ale|ar|emos)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|agreg(?:a|ale|ar)|anad(?:e|ele|ir)|recort(?:a|ame|ar)|restaur(?:a|ame|ar)|coloriz(?:a|ar)|aclar(?:a|ar)|oscurec(?:e|er)|volte(?:a|ar)|gir(?:a|ar)|rot(?:a|ar)|amplia(?:r)?|escala(?:r)?|mejor(?:a|ame|ar)|ponle|edit|modify|retouch|adjust|remove|erase|crop|restore|colorize|brighten|darken|flip|rotate|upscale|enhance|improve)\b/;
+const EDIT_VERB = /\b(edita(?:r|me|la|lo)?|modific(?:a|ame|ar|alo|ala)|retoc(?:a|ame|ar)|ajust(?:a|ale|ar)|cambi(?:a|ale|ar|emos)|quit(?:a|ale|ar|emos)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|agreg(?:a|ale|ar)|anad(?:e|ele|ir)|recort(?:a|ame|ar)|restaur(?:a|ame|ar)|coloriz(?:a|ar)|aclar(?:a|ar)|oscurec(?:e|er)|volte(?:a|ar)|gir(?:a|ar)|rot(?:a|ar)|amplia(?:r)?|escala(?:r)?|mejor(?:a|ame|ar)|ponle|ponl[ao]s?|ponles|dejal[ao]s?|hazl[ao]s?|vuelvel[ao]s?|edit|modify|retouch|adjust|remove|erase|crop|restore|colorize|brighten|darken|flip|rotate|upscale|enhance|improve)\b/;
 
 // A reference to an EXISTING image ("esta foto", "la imagen", "mi logo",
 // "the picture") — required so edit verbs inside generation requests
 // ("crea una imagen y cámbiale el fondo" → generation) don't misroute.
 const EXISTING_IMAGE_REF = /\b(?:est[ae]s?|es[ae]s?|aquell[ao]s?|la|mi|tu|dich[ao]|this|that|the|my)\s+(?:ultim[ao]\s+|misma?\s+|last\s+)?(?:imagen(?:es)?|foto(?:s|grafias?)?|ilustracion(?:es)?|dibujos?|logos?|logotipos?|retratos?|avatar(?:es)?|images?|photos?|pictures?|drawings?)\b/;
 
+// "cambia el color del logo", "cámbiale el fondo al retrato": the article
+// forms a creation sentence also uses ("crea una imagen del logo"), so this
+// wider reference only counts when no strict creation verb is present.
+const WIDE_IMAGE_REF = /\b(?:el|los|las|del|al|este|esta|ese|esa|estos|estas)\s+(?:ultim[ao]\s+|misma?\s+)?(?:imagen(?:es)?|foto(?:s|grafias?)?|ilustracion(?:es)?|dibujos?|logos?|logotipos?|retratos?|avatar(?:es)?|images?|photos?|pictures?|drawings?)\b/;
+
 // Standalone edit operations that imply an existing image even without an
 // explicit noun reference ("quita el fondo", "remove the background").
 const IMPLICIT_EDIT_OP = /\b(?:quit(?:a|ale|ar)|elimin(?:a|ale|ar)|borr(?:a|ale|ar)|remove|erase)\b.{0,24}\b(?:fondo|background)\b|\bsin fondo\b|\bbackground removal\b/;
 
+// Attribute edits that are only unambiguous once an image is in play
+// ("cámbiale el fondo a rojo", "ponle otro color"): with no attachment and
+// no recent image the same words describe a document or a deck.
+const CONTEXTUAL_EDIT_OP = /\bcambi(?:a|ale|ar)\b.{0,24}\b(?:fondo|background|color(?:es)?|cielo|ojos|pelo|cabello|ropa|luz|iluminacion)\b|\b(?:pon(?:le)?|dale)\s+(?:otro|otra|un|una|el|la|los|las|mas|menos)?\s*(?:color(?:es)?|fondo|luz|brillo|contraste|sombra|borde|marco)\b/;
+
+// Short, subject-less continuations after an image ("ahora en azul", "que
+// sea de noche", "hazla más oscura", "la misma pero con sombrero").
+const FOLLOWUP_ATTRIBUTE_RE = /\b(?:fondo|background|luz|iluminacion|brillo|contraste|saturacion|nitidez|calidad|resolucion|color(?:es)?|estilo|style|sombra|borde|marco|sombrero|gorra|gafas|lentes|barba|bigote|pelo|cabello|ojos|ropa|camisa|vestido|logo|marca|noche|dia|atardecer|amanecer|lluvia|nieve|sol|nublado|invierno|verano|cielo|arbol(?:es)?|flores|sepia|blanco y negro|vintage|retro|anime|caricatura|realista|fotorrealista|acuarela|oleo|3d|minimalista|oscur[ao]|clar[ao]|grande|pequen[ao]|brillante|nitid[ao]|rojo|roja|azul|verde|amarill[ao]|naranja|morad[ao]|rosa|rosad[ao]|negr[ao]|blanc[ao]|gris|dorad[ao]|platead[ao]|celeste|turquesa|violeta|marron|cafe|beige|darker|brighter|lighter|night|day|sunset|red|blue|green|yellow|black|white)\b/;
+const FOLLOWUP_CLITIC_RE = /\b(?:hazl[ao]s?|ponl[ao]s?|dejal[ao]s?|vuelvel[ao]s?|dale|agregale|anadele|quitale|cambiale|ponle)\b/;
+const FOLLOWUP_SAME_RE = /\b(?:la mism[ao] pero|el mismo pero|lo mismo pero|igual pero|otra vez pero|de nuevo pero|the same but|same but)\b/;
+const FOLLOWUP_LEAD_RE = /^(?:ahora|y|pero|mejor|ok|vale|si|now|and|but)?[\s,]*(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|pero (?:en|con|sin|mas|menos)|make it|with|without|more|less)\b/;
+// Words that make a short follow-up about something other than the image.
+const FOLLOWUP_EXCLUDE_RE = /\b(?:diapositivas?|laminas?|slides?|ppt|pptx|presentacion(?:es)?|documento|docx|word|excel|xlsx|hoja|celdas?|paginas?|parrafos?|codigo|script|funcion|programa|python|javascript|html|css|sql|videos?|clips?|cancion(?:es)?|musica|audio|voz|narracion|tabla|grafic[oa]s?|informe|reporte|archivo|texto del|redaccion|resumen)\b/;
+
+/**
+ * Short continuation that only makes sense as an edit of the image the chat
+ * already has. Pure text check; the caller supplies the image context.
+ */
+function detectImageFollowupEdit(norm) {
+  if (!norm) return false;
+  const words = norm.split(/\s+/).filter(Boolean);
+  if (!words.length || words.length > 16) return false;
+  if (STRICT_CREATE_VERB.test(norm) && IMAGE_NOUNS.test(norm)) return false;
+  if (FOLLOWUP_EXCLUDE_RE.test(norm)) return false;
+  if (VIDEO_NOUNS.test(norm) || MUSIC_NOUNS.test(norm) || AUDIO_NOUNS.test(norm)) return false;
+  const attribute = FOLLOWUP_ATTRIBUTE_RE.test(norm) || IMAGE_NOUNS.test(norm);
+  if (EDIT_VERB.test(norm) && attribute) return true;
+  if (FOLLOWUP_CLITIC_RE.test(norm) && attribute) return true;
+  if (FOLLOWUP_SAME_RE.test(norm)) return true;
+  if (FOLLOWUP_LEAD_RE.test(norm) && attribute) return true;
+  return false;
+}
+
+/** Cheap pre-check for callers that must look up the chat's last image lazily. */
+function isImageFollowupCandidate(text) {
+  return detectImageFollowupEdit(canonicalNorm(text));
+}
+
+function detectReferenceCue(text) {
+  try { return getImageDirective().detectReferenceCue(text); } catch { return false; }
+}
+
 /**
  * Detect an image-EDIT intent (transform an existing image).
  * @param {string} text raw user message
- * @param {{hasImageAttachment?: boolean}} [opts] context hint: the message
- *   carries an attached image, so referential cues can be implicit.
+ * @param {{hasImageAttachment?: boolean, hasRecentImage?: boolean}} [opts]
+ *   context hints: the message carries an attached image (referential cues
+ *   can be implicit, a reference cue means "build from it") or the chat
+ *   already holds an image (short continuations edit it).
  * @returns {boolean}
  */
 function detectImageEditIntent(text, opts = {}) {
@@ -287,12 +336,21 @@ function detectImageEditIntent(text, opts = {}) {
   try {
     if (getImageDirective().detectImageReframe(text)) return true;
   } catch { /* parser optional */ }
-  if (!EDIT_VERB.test(norm)) return false;
+  // "genera una imagen como esta", "crea un banner con este logo": the
+  // attachment is the reference, which only edit_image can deliver as pixels.
+  if (opts.hasImageAttachment && detectReferenceCue(text)) return true;
+  const imageContext = Boolean(opts.hasImageAttachment || opts.hasRecentImage);
+  if (!EDIT_VERB.test(norm)) {
+    return Boolean(opts.hasRecentImage) && detectImageFollowupEdit(norm);
+  }
   if (IMPLICIT_EDIT_OP.test(norm)) return true;
   if (EXISTING_IMAGE_REF.test(norm)) return true;
+  if (!STRICT_CREATE_VERB.test(norm) && WIDE_IMAGE_REF.test(norm)) return true;
+  if (imageContext && CONTEXTUAL_EDIT_OP.test(norm)) return true;
   // With an image attached, an edit verb + any image noun is enough
   // ("mejora la calidad", "recorta la imagen").
   if (opts.hasImageAttachment && (IMAGE_NOUNS.test(norm) || /\b(fondo|background|calidad|colores?)\b/.test(norm))) return true;
+  if (opts.hasRecentImage && detectImageFollowupEdit(norm)) return true;
   return false;
 }
 
@@ -415,6 +473,34 @@ function detectMediaIntent(text) {
 const STRICT_CREATE_VERB = /\b(cr[ée]a|cre[ée]me|gener(?:a|ame|ar)|haz(?:me)?|hag(?:a|ame)|dibuj(?:a|ame|ar)|dise[nñ](?:a|ame|ar)|elabor(?:a|ame|ar)|make|create|generate|draw|design|render)\b/;
 
 /**
+ * Shared edit-vs-generate decision for an IMAGE request, so the composer
+ * route and the chat loop never disagree. A reference cue with an attachment
+ * ("genera una imagen como esta") is an edit even with a creation verb; a
+ * creation verb + image noun without a reference stays a generation even
+ * when it carries edit wording ("crea una imagen de un perro sin fondo").
+ *
+ * @returns {{operation: 'generate'|'edit'|'reframe'|null, referenceGuided: boolean, reason: string}}
+ */
+function classifyImageRequest(text, opts = {}) {
+  const raw = String(text == null ? '' : text);
+  if (!raw.trim()) return { operation: null, referenceGuided: false, reason: 'empty' };
+  const norm = canonicalNorm(raw);
+  try {
+    if (getImageDirective().detectImageReframe(raw)) return { operation: 'reframe', referenceGuided: false, reason: 'reframe' };
+  } catch { /* parser optional */ }
+  const referenceGuided = Boolean(opts.hasImageAttachment) && detectReferenceCue(raw);
+  const editIntent = detectImageEditIntent(raw, opts);
+  const hasImageNoun = IMAGE_NOUNS.test(norm);
+  if (editIntent && (referenceGuided || !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm)))) {
+    return { operation: 'edit', referenceGuided, reason: referenceGuided ? 'reference-guided' : 'edit' };
+  }
+  if (hasImageNoun || (DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm))) {
+    return { operation: 'generate', referenceGuided: false, reason: 'image-noun' };
+  }
+  return { operation: null, referenceGuided: false, reason: 'no-image-intent' };
+}
+
+/**
  * Multi-intent variant of detectMediaIntent: detects EVERY media kind the
  * user asked for in a single message, so "crea un video y una foto de un
  * perro" activates BOTH generate_video and generate_image instead of only
@@ -441,22 +527,18 @@ function detectMediaIntents(text, opts = {}) {
   // The generic "audio" noun loses to music ("audio de una canción" is a song).
   if (!kinds.includes('music') && AUDIO_NOUNS.test(norm)) kinds.push('audio');
 
-  const editIntent = detectImageEditIntent(raw, opts);
-  const hasImageNoun = IMAGE_NOUNS.test(norm);
-  if (editIntent && !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm))) {
-    kinds.push('image-edit');
-  } else if (hasImageNoun) {
-    kinds.push('image');
-  } else if (editIntent) {
-    kinds.push('image-edit');
-  }
+  const image = classifyImageRequest(raw, opts);
+  if (image.operation === 'edit' || image.operation === 'reframe') kinds.push('image-edit');
+  else if (image.operation === 'generate') kinds.push('image');
 
-  if (!kinds.length && DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm)) kinds.push('image');
   if (!kinds.length) return [];
 
   const hasCreateVerb = CREATE_VERB.test(norm);
+  // "que sea de noche" after an image starts like a question but is a
+  // follow-up edit; the short-continuation rule already vetted it.
+  const followupEdit = kinds.includes('image-edit') && Boolean(opts.hasRecentImage) && detectImageFollowupEdit(norm);
   let confidence = 'medium';
-  if (QUESTION_START.test(norm) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
+  if ((QUESTION_START.test(norm) && !followupEdit) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
   else if (hasCreateVerb || kinds.includes('image-edit')) confidence = 'high';
 
   return kinds.map((kind) => ({
@@ -465,7 +547,10 @@ function detectMediaIntents(text, opts = {}) {
     confidence,
     hasCreateVerb,
     specs: buildSpecsForKind(kind, norm, raw),
-    reason: kind === 'image-edit' ? 'edit-verb+image-ref' : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+    reason: kind === 'image-edit'
+      ? (image.referenceGuided ? 'reference-guided' : (followupEdit && !EDIT_VERB.test(norm) ? 'followup-edit' : 'edit-verb+image-ref'))
+      : (hasCreateVerb ? 'create-verb+noun' : 'noun-only'),
+    ...(kind === 'image-edit' ? { referenceGuided: image.referenceGuided } : {}),
     repaired: norm !== normalize(raw).replace(/\s+/g, ' ').trim(),
   }));
 }
@@ -495,7 +580,12 @@ function buildMediaIntentHint(intent) {
   const params = [];
   if (intent.kind === 'image-edit') {
     params.push('- instruction: la transformación que pidió el usuario (extráela literal del mensaje).');
-    params.push('- NO generes una imagen nueva con `generate_image`: el usuario quiere MODIFICAR una imagen existente (la adjunta o la última del chat).');
+    if (intent.referenceGuided) {
+      params.push('- El usuario adjuntó una imagen como REFERENCIA: llama a `edit_image` (recibe las imágenes adjuntas automáticamente, no hace falta pasar fileId) y conserva el sujeto, la identidad y la composición de la referencia aplicando solo la variación pedida.');
+      params.push('- NO uses `generate_image`: generaría una imagen nueva solo desde texto y perdería la referencia adjunta.');
+    } else {
+      params.push('- NO generes una imagen nueva con `generate_image`: el usuario quiere MODIFICAR una imagen existente (la adjunta o la última del chat).');
+    }
     if (s.editTarget) params.push(`- objetivo de la edición: "${s.editTarget}" — pásalo como \`target\` y aplica el cambio solo ahí, conservando el resto.`);
     if (s.editReplacement) params.push(`- resultado esperado en el objetivo: "${s.editReplacement}".`);
   } else if (intent.kind === 'image') {
@@ -561,6 +651,8 @@ module.exports = {
   detectMediaIntent,
   detectMediaIntents,
   detectImageEditIntent,
+  classifyImageRequest,
+  isImageFollowupCandidate,
   buildMediaIntentHint,
   buildMediaIntentsHint,
   resolveImageAspectRatio,
@@ -581,5 +673,7 @@ module.exports = {
     KIND_TO_TOOL,
     buildSpecsForKind,
     detectImageEditIntent,
+    detectImageFollowupEdit,
+    classifyImageRequest,
   },
 };

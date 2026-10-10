@@ -183,3 +183,68 @@ test('canonicalizeImageTypos: fuzzy media tokens and split create verbs', () => 
   assert.equal(osaDistanceLe('imgaen', 'imagen', 2), 1);
   assert.equal(osaDistanceLe('foto', 'moto', 1), 1);
 });
+
+// ── Image context: reference / previous-image cues, reframe precision ──────
+
+test('canonicalizeImageTypos keeps clitic edit verbs ("ponle" is not "ponme")', () => {
+  const canon = (t) => directive.canonicalizeImageTypos(directive.normalizeImageText(t));
+  assert.equal(canon('ponle este logo a la camiseta'), 'ponle este logo a la camiseta');
+  assert.equal(canon('ponla en vertical'), 'ponla en vertical');
+  // The spoken subject survives command stripping.
+  assert.equal(directive.stripImageCommand('ponle este logo a la camiseta'), 'ponle este logo a la camiseta');
+});
+
+test('detectReferenceCue: the attachment as material, never a plain mention', () => {
+  for (const text of [
+    'genera una imagen como esta pero con fondo azul', 'crea un banner con este logo', 'usa esta foto de referencia',
+    'genera una imagen basada en esta foto', 'haz una ilustración a partir de esta imagen', 'genera una imagen de este logo en 3d',
+    'make a poster like this', 'draw this photo in anime style',
+  ]) assert.equal(directive.detectReferenceCue(text), true, text);
+  for (const text of [
+    'describe esta imagen', 'lee el texto de esta imagen', 'resume este dibujo', 'quítale el fondo',
+    'crea un logo de referencia para la marca', 'haz un poster basado en la película Alien',
+  ]) assert.equal(directive.detectReferenceCue(text), false, text);
+});
+
+test('detectPreviousImageCue: the chat\'s last image is the canvas, the upload a reference', () => {
+  for (const text of [
+    'ponle este logo a la imagen anterior', 'hazla como esta foto', 'ponle este logo a la que generaste',
+    'ponle este logo a la camiseta', 'put this logo on the previous image', 'cambia el fondo de la imagen anterior por este',
+  ]) assert.equal(directive.detectPreviousImageCue(text), true, text);
+  for (const text of ['quítale el fondo', 'genera una imagen como esta', 'edita esta foto', 'ponle un sombrero']) {
+    assert.equal(directive.detectPreviousImageCue(text), false, text);
+  }
+});
+
+test('a reframe needs a spoken orientation; visual-type words no longer reframe', () => {
+  assert.equal(directive.detectImageReframe('la misma imagen pero con el logo más grande'), null);
+  assert.equal(directive.detectImageReframe('la misma imagen pero para la portada'), null);
+  assert.equal(directive.detectImageReframe('la misma imagen pero vertical').frame, '3:4');
+  assert.equal(directive.detectImageReframe('hazla horizontal').frame, '16:9');
+});
+
+test('resolveReframeDirective carries the rest of the request into the reframe', () => {
+  const extra = directive.resolveReframeDirective('hazla vertical y más luminosa').prompt;
+  assert.match(extra, /luminosa/);
+  assert.match(extra, /same scene/i);
+  assert.match(extra, /3:4/);
+  const plain = directive.resolveReframeDirective('ahora la misma imagen pero vertical porfavor').prompt;
+  assert.doesNotMatch(plain, /Besides the new frame/);
+});
+
+test('resolveEditDirective binds a single reference to its subject on creation phrasings', () => {
+  const guided = directive.resolveEditDirective('genera una imagen como esta pero con fondo azul');
+  assert.match(guided.prompt, /^genera una imagen como esta pero con fondo azul/);
+  assert.match(guided.prompt, /conserva su sujeto, identidad, composición y estilo/);
+  assert.match(directive.resolveEditDirective('make a poster like this').prompt, /keep its subject, identity, composition and style/);
+  // Scoped edits keep their own clause and never get the reference one.
+  const scoped = directive.resolveEditDirective('cambia solo los ojos a color verde');
+  assert.doesNotMatch(scoped.prompt, /referencia/);
+  assert.doesNotMatch(directive.resolveEditDirective('quítale el fondo').prompt, /referencia/);
+});
+
+test('parseImageEdit never turns a comparison or the previous image into the edit target', () => {
+  assert.equal(directive.parseImageEdit('hazla como esta foto').target, null);
+  assert.doesNotMatch(directive.resolveEditDirective('hazla como esta foto').prompt, /Enfoca el cambio en como/);
+  assert.equal(directive.parseImageEdit('ponle este logo a la imagen anterior').target, 'este logo');
+});

@@ -378,3 +378,107 @@ test('fuzzy repair never rewrites ordinary words into media nouns', () => {
     assert.equal(r.kind, null, `${text} → ${JSON.stringify(r)}`);
   }
 });
+
+// ── Image context: follow-ups, wider references, reference-guided creation ──
+
+const { classifyImageRequest, isImageFollowupCandidate } = require('../src/services/agents/media-intent');
+
+test('edit verbs reach an image named with an article ("del logo", "al logo")', () => {
+  for (const phrase of ['cambia el color del logo', 'cámbiale el color al logo', 'quítale el texto de la imagen']) {
+    const [intent] = detectMediaIntents(phrase);
+    assert.equal(intent?.tool, 'edit_image', phrase);
+    assert.equal(intent?.confidence, 'high', phrase);
+  }
+  // The same article inside a creation sentence keeps the generation.
+  for (const phrase of [
+    'crea una imagen del logo de mi empresa y cambia el fondo a azul',
+    'dibuja el retrato de un rey y mejora los colores',
+    'crea un poster y ponme el logo arriba',
+  ]) {
+    assert.equal(detectMediaIntents(phrase)[0]?.tool, 'generate_image', phrase);
+    assert.equal(detectMediaIntents(phrase, { hasImageAttachment: true })[0]?.tool, 'generate_image', `${phrase} (attachment)`);
+  }
+});
+
+test('"ponle …" is an edit verb again (the typo canonicaliser used to make it "ponme")', () => {
+  assert.equal(detectMediaIntents('ponle este logo a la camiseta')[0]?.tool, 'edit_image');
+  assert.equal(detectMediaIntents('ponle un sombrero a esta foto', { hasImageAttachment: true })[0]?.tool, 'edit_image');
+  assert.equal(detectImageEditIntent('ponle este logo a la camiseta'), true);
+});
+
+test('an attached image used as a reference makes a creation request an edit', () => {
+  const phrases = [
+    'genera una imagen como esta pero con fondo azul',
+    'crea un banner con este logo',
+    'usa esta foto de referencia y hazla estilo anime',
+    'genera una imagen basada en esta foto',
+    'haz una ilustración a partir de esta imagen',
+    'diseña un afiche con esta imagen',
+    'make a poster like this',
+  ];
+  for (const phrase of phrases) {
+    const [intent] = detectMediaIntents(phrase, { hasImageAttachment: true });
+    assert.equal(intent?.tool, 'edit_image', phrase);
+    assert.equal(intent?.confidence, 'high', phrase);
+    assert.equal(intent?.referenceGuided, true, phrase);
+    assert.equal(classifyImageRequest(phrase, { hasImageAttachment: true }).reason, 'reference-guided', phrase);
+    // Without the attachment nothing is reference-guided…
+    assert.notEqual(detectMediaIntents(phrase)[0]?.referenceGuided, true, `${phrase} (no attachment)`);
+  }
+  // …and a creation verb alone is a generation ("usa esta foto … hazla" still
+  // names an existing photo with an edit verb, so it stays an edit).
+  for (const phrase of phrases.filter((p) => !/\bhazla\b/.test(p))) {
+    assert.equal(detectMediaIntents(phrase)[0]?.tool, 'generate_image', `${phrase} (no attachment)`);
+  }
+  const hint = buildMediaIntentsHint(detectMediaIntents('crea un banner con este logo', { hasImageAttachment: true }));
+  assert.match(hint, /edit_image/);
+  assert.match(hint, /REFERENCIA/);
+  assert.match(hint, /NO uses `generate_image`/);
+});
+
+test('vision questions about an attached image are never edits', () => {
+  for (const phrase of ['describe esta imagen', '¿qué ves en esta foto?', 'lee el texto de esta imagen', 'traduce esta foto', 'resume este dibujo']) {
+    const intents = detectMediaIntents(phrase, { hasImageAttachment: true });
+    assert.notEqual(intents[0]?.kind, 'image-edit', phrase);
+    assert.notEqual(intents[0]?.confidence, 'high', phrase);
+    assert.equal(detectImageEditIntent(phrase, { hasImageAttachment: true }), false, phrase);
+  }
+});
+
+test('short follow-ups edit the chat\'s recent image, and only then', () => {
+  const followups = [
+    'ahora en azul', 'que sea de noche', 'hazla más oscura', 'la misma pero en azul', 'cámbiale el fondo a rojo',
+    'mejora la calidad', 'ponle gafas', 'ahora sin fondo', 'más brillante', 'hazlo más realista', 'ponle un sombrero al gato',
+    'agrégale un sombrero', 'make it darker', 'igual pero de noche',
+  ];
+  for (const phrase of followups) {
+    const [intent] = detectMediaIntents(phrase, { hasRecentImage: true });
+    assert.equal(intent?.tool, 'edit_image', phrase);
+    assert.equal(intent?.confidence, 'high', phrase);
+    assert.equal(isImageFollowupCandidate(phrase), true, phrase);
+  }
+  // No recent image → the same words are not an image request.
+  for (const phrase of ['ahora en azul', 'que sea de noche', 'hazla más oscura', 'ponle gafas', 'más brillante']) {
+    assert.equal(detectMediaIntents(phrase).length, 0, phrase);
+  }
+  // Ordinary prose after an image stays prose.
+  for (const phrase of [
+    'en resumen, qué opinas?', 'con eso basta, gracias', 'cambia el tono del texto', 'ahora en azul el titulo de la diapositiva',
+    'que sea breve', 'ajusta el presupuesto', 'mejora el rendimiento del código', 'hazlo en python', 'ahora cuéntame un chiste', 'dame más ideas',
+  ]) {
+    assert.notEqual(detectMediaIntents(phrase, { hasRecentImage: true })[0]?.kind, 'image-edit', phrase);
+  }
+  assert.equal(isImageFollowupCandidate('crea otra imagen de una ciudad'), false);
+  assert.equal(isImageFollowupCandidate('hola'), false);
+});
+
+test('classifyImageRequest is the single edit/generate/reframe decision', () => {
+  assert.equal(classifyImageRequest('la misma imagen pero vertical').operation, 'reframe');
+  assert.equal(classifyImageRequest('quítale el fondo').operation, 'edit');
+  assert.equal(classifyImageRequest('crea una imagen de un perro y quítale el fondo').operation, 'generate');
+  assert.equal(classifyImageRequest('crea otra imagen de una ciudad', { hasRecentImage: true }).operation, 'generate');
+  assert.equal(classifyImageRequest('ahora en azul', { hasRecentImage: true }).operation, 'edit');
+  assert.equal(classifyImageRequest('ahora en azul').operation, null);
+  assert.equal(classifyImageRequest('cuéntame un chiste').operation, null);
+  assert.equal(classifyImageRequest('').operation, null);
+});

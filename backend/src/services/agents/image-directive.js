@@ -81,6 +81,9 @@ const FUZZY_STOP_WORDS = new Set([
   'perro', 'casa', 'auto', 'coche', 'tema', 'texto', 'todo', 'toda', 'nada', 'vida', 'ver', 'dato',
   'datos', 'sino', 'aun', 'aqui', 'algo', 'mira', 'fuera', 'cara', 'foto', 'video', 'audio', 'logo',
   'crea', 'dame', 'haz', 'pon', 'seria', 'serie', 'poema', 'canta', 'cuenta', 'idea', 'ideas',
+  // Clitic edit verbs sit one letter from "ponme" (a create verb): rewriting
+  // them turned every "ponle un sombrero" into a new generation.
+  'ponle', 'ponla', 'ponlo', 'ponles',
   // English media words are already recognised as-is by the lexicons; never
   // rewrite them into their Spanish neighbours ("image" → "imagen" broke
   // English reframe follow-ups).
@@ -159,6 +162,55 @@ function canonicalText(text) {
 
 const SAME_IMAGE_REF = /\b(?:(?:la|esta|esa|the)\s+misma(?:\s+(?:imagen|foto|fotografia|ilustracion))?|same\s+(?:image|photo|picture)|that\s+same\s+(?:image|photo|picture)|the\s+same\s+(?:image|photo|picture))\b/;
 const HAZLA_ORIENTATION = /\b(?:hazla|ponla|pasala|vuelvela|make it|make this)\s+(?:a\s+|en\s+)?(?:vertical|horizontal|cuadrad[oa]|portrait|landscape|square)\b/;
+// A reframe needs a spoken ORIENTATION. detectImageFrame also maps visual
+// types (logo, avatar, portada, banner…) to frames, so "la misma imagen pero
+// con el logo más grande" used to become a square reframe that dropped the
+// request.
+const ORIENTATION_TOKEN_RE = /\b(?:1:1|2:3|3:2|3:4|9:16|4:3|16:9|1x1|2x3|3x2|3x4|9x16|4x3|16x9|vertical(?:es)?|horizontal(?:es)?|cuadrad[oa]s?|portrait|landscape|square|apaisad[oa]s?|panoramic[oa]s?|widescreen|retrato|rectangular(?:es)?|mas alto que ancho|mas ancho que alto|histori(?:a|as)|story|stories|reels?|tiktok|shorts?|formato movil|para movil)\b/;
+
+// The user attached an image and wants the result built FROM it ("como esta",
+// "con este logo", "de referencia", "basada en esta foto"). Matched on
+// canonical text; the caller decides whether an attachment exists.
+// A bare "esta imagen" is NOT a cue: "describe esta imagen" / "lee el texto
+// de esta foto" are vision questions. The cue needs a comparison, a
+// reference word, or a creation verb that takes the attachment as material.
+const REFERENCE_IMAGE_NOUN = '(?:logo|logotipo|foto|fotos|fotografia|imagen|imagenes|dibujo|ilustracion|diseno|retrato|captura|screenshot)';
+const REFERENCE_CUE_RE = new RegExp([
+  '\\bcomo est[ae]s?\\b', '\\bigual (?:a|que) est[ae]s?\\b', '\\bparecid[ao]s? a est[ae]s?\\b',
+  `\\b(?:est[ae]s?|es[ae]s?|la|el|mi|mis)\\s+(?:${REFERENCE_IMAGE_NOUN}\\s+)?(?:de|como) referencia\\b`, '\\badjunt[ao]s? (?:de|como) referencia\\b',
+  '\\bbasad[ao]s? en (?:est[ae]s?|es[ae]s?|mi|mis)\\b', '\\ba partir de (?:est[ae]s?|es[ae]s?|mi|mis)\\b',
+  `\\bcon (?:este|esta|estos|estas|mi|mis) ${REFERENCE_IMAGE_NOUN}\\b`,
+  `\\busando (?:esta|este|la|el|mi)\\b.{0,24}\\b${REFERENCE_IMAGE_NOUN}\\b`,
+  `\\b(?:crea(?:me)?|genera(?:me)?|haz(?:me)?|hag(?:a|ame)|dibuja(?:me)?|disena(?:me)?|elabora(?:me)?|make|create|generate|draw|design)\\b[^.]{0,60}\\b(?:de|con|sobre|desde) (?:este|esta|mi) ${REFERENCE_IMAGE_NOUN}\\b`,
+  '\\blike this\\b', '\\bbased on (?:this|that|the|my)\\b', '\\bas (?:a )?reference\\b',
+  '\\bfrom (?:this|my) (?:photo|image|picture|logo)\\b', '\\bwith (?:this|my) (?:logo|photo|image|picture|drawing)\\b',
+  '\\b(?:make|create|generate|draw|design)\\b[^.]{0,60}\\b(?:this|my) (?:logo|photo|image|picture|drawing)\\b',
+].join('|'));
+
+/** True when the request leans on an attached image as its reference. */
+function detectReferenceCue(text) {
+  const norm = canonicalText(text);
+  return Boolean(norm) && REFERENCE_CUE_RE.test(norm);
+}
+
+// The user names the PREVIOUS image as the thing to edit while attaching a
+// new one ("ponle este logo a la imagen anterior"): the new file is a
+// reference, the chat's last image is the canvas.
+const PREVIOUS_IMAGE_CUE_RE = new RegExp([
+  '\\b(?:la|a la|en la|de la|sobre la|al|el) (?:imagen|foto|fotografia|ilustracion|dibujo|resultado)(?: que)? (?:anterior|de antes|de arriba|previ[ao]|generad[ao]|ultim[ao]|generaste|hiciste|creaste|editaste|me diste)\\b',
+  '\\bla (?:ultima|primera) (?:imagen|foto)\\b', '\\ba la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
+  // Object clitic = the previous image, demonstrative = the new upload:
+  // "hazla como esta foto", "ponle este logo a la camiseta".
+  '\\b(?:hazl[ao]|ponl[ao]|dejal[ao]|vuelvel[ao])\\b[^.]{0,40}\\b(?:como|igual a|igual que|parecid[ao] a) (?:est[ae]s?|es[ae]s?)\\b',
+  `\\bponl[eo]\\b[^.]{0,30}\\b(?:este|esta|mi) ${REFERENCE_IMAGE_NOUN}\\b[^.]{0,40}\\b(?:a la|al|en la|en el|sobre la|sobre el)\\b`,
+  '\\bthe (?:previous|last|earlier) (?:image|picture|photo|one)\\b', '\\bthe (?:image|picture|photo) (?:you (?:generated|made|created)|from before)\\b',
+].join('|'));
+
+/** True when the instruction targets the chat's previous image explicitly. */
+function detectPreviousImageCue(text) {
+  const norm = canonicalText(text);
+  return Boolean(norm) && PREVIOUS_IMAGE_CUE_RE.test(norm);
+}
 
 /**
  * "la misma imagen pero vertical" — keep the scene, change only the frame.
@@ -169,23 +221,38 @@ function detectImageReframe(text) {
   if (!norm) return null;
   const frame = detectImageFrame(text);
   if (!frame) return null;
+  if (!ORIENTATION_TOKEN_RE.test(norm)) return null;
   if (SAME_IMAGE_REF.test(norm) || HAZLA_ORIENTATION.test(norm) || /^(?:ahora|ahora en|now|now in)\s+(?:formato\s+)?(?:vertical|horizontal|\d+:\d+)(?:\s+(?:por favor|porfavor|please))?[.!]?$/i.test(norm)) return frame;
   return null;
 }
+
+const REFRAME_FILLER_RE = /\b(?:ahora|now|pero|but|en|in|a|to|formato|format|la|el|lo|los|las|misma|mismo|mismas|mismos|imagen|imagenes|foto|fotos|fotografia|ilustracion|image|photo|picture|por|favor|porfavor|please|pasala|hazla|hazlo|ponla|vuelvela|make|it|this|that|the|same|esa|ese|esta|este|y|and|con|with|de|del|version|quiero|dame|hazme|haz|me|un|una|otra|otro|pon|ponme|igual|solo|solamente|version)\b/g;
 
 function resolveReframeDirective(text, aspectRatio) {
   const detected = (aspectRatio && detectImageFrame(aspectRatio)) || detectImageReframe(text) || detectImageFrame(text);
   const ratio = detected && detected.frame ? detected.frame : '3:4';
   const orientation = detected && detected.orientation ? detected.orientation : 'portrait';
   const composition = (IMAGE_FRAMES[ratio] && IMAGE_FRAMES[ratio].prompt) || 'vertical portrait composition';
-  const prompt = [
+  const parts = [
     `Professionally reframe THIS exact photograph to a ${composition} (${ratio}).`,
     'Keep the same scene, subjects, location, lighting, weather, colors, camera style and identity.',
     'Do not invent a different place, person, animal or subject.',
     'Extend ONLY the transparent canvas outside the source photograph. Never crop, stretch or replace the existing photograph.',
     'Complete the surrounding scene naturally without borders, blank margins or duplicate subjects. The protected original area stays unchanged.',
     'Photorealistic continuity with the source image.',
-  ].join(' ');
+  ];
+  // "hazla vertical y más luminosa": the framing words are consumed above;
+  // anything else the user asked for travels with the reframe.
+  const residue = canonicalText(text)
+    .replace(SAME_IMAGE_REF, ' ')
+    .replace(HAZLA_ORIENTATION, ' ')
+    .replace(ORIENTATION_TOKEN_RE, ' ')
+    .replace(REFRAME_FILLER_RE, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .trim();
+  const instruction = String(text || '').trim();
+  if (residue && instruction) parts.push(`Besides the new frame, apply this request inside the same scene: "${instruction.slice(0, 500)}".`);
+  const prompt = parts.join(' ');
   return {
     prompt,
     instruction: String(text || '').trim(),
@@ -514,7 +581,10 @@ function parseImageEdit(text) {
   let target = null;
   const verbMatch = norm.match(/\b(quit|elimin|borr|agreg|anad|incluy|cambi|modific|convirt|transform|color|pint|retoc|mejor|restaur|recort|encuadr|volt|gir|rot|pon|haz|vuelv|aclar|oscurec|escal|remove|eras|delet|add|chang|modif|make|turn|recolor|retouch|enhanc|upscal|crop)[a-z]*\s*(solo|solamente|unicamente|only|just)?\s*([a-z0-9][a-z0-9\s'&\-]{1,60}?)(?=\s+(?:a|en|por|con|como|to|into|with|de la imagen|de esta foto)\b|$)/);
   if (verbMatch) {
-    const candidate = cleanTargetPhrase(verbMatch[3] || verbMatch[2]);
+    let candidate = cleanTargetPhrase(verbMatch[3] || verbMatch[2]);
+    // "hazla como esta foto" / "ponle … a la imagen anterior": a comparison
+    // or the previous image is never the PART being edited.
+    if (candidate && (/^(?:como|like)\b/.test(candidate) || PREVIOUS_IMAGE_CUE_RE.test(` ${candidate}`))) candidate = '';
     if (candidate && !WHOLE_IMAGE_TARGET.test(candidate) && candidate !== 'fondo' && candidate !== 'background') {
       target = candidate;
     } else if (operation === 'remove-background') {
@@ -644,6 +714,8 @@ function selectionClause(selection, language) {
   return '';
 }
 
+const REFERENCE_CREATE_VERB_RE = /\b(?:cr[ée]a(?:me)?|gener(?:a|ame)|haz(?:me)?|hag(?:a|ame)|dibuj(?:a|ame)|dise[nñ](?:a|ame)|elabor(?:a|ame)|us(?:a|ando)|make|create|generate|draw|design|render|use|using)\b/;
+
 function pickEditLanguage(instruction) {
   const norm = canonicalText(instruction);
   const spanish = /\b(el|la|los|las|una|para|cambia|quita|fondo|cielo|imagen|foto|haz|pon)\b/.test(norm);
@@ -735,6 +807,14 @@ function resolveEditDirective(instruction, opts = {}) {
     prompt += language === 'en'
       ? ' Remove the background completely and keep the main subject unchanged.'
       : ' Quita el fondo por completo y conserva el sujeto principal sin cambios.';
+  } else if (detectReferenceCue(original) && (REFERENCE_CREATE_VERB_RE.test(canonicalText(original)) || !parsed.operation)) {
+    // "genera una imagen como esta pero con fondo azul": a creation verb
+    // with the attachment as its reference. The provider only receives the
+    // identity contract when there are several images, so a single
+    // reference needs it spelled out or the subject gets reinvented.
+    prompt += language === 'en'
+      ? ' Use the attached image as the reference: keep its subject, identity, composition and style, and apply only the requested variation; do not reinvent the subject.'
+      : ' Usa la imagen adjunta como referencia: conserva su sujeto, identidad, composición y estilo, y aplica solo la variación pedida; no reinventes el sujeto.';
   }
   prompt += selectionClause(selection, language);
   prompt = prompt.replace(/\s+/g, ' ').trim().slice(0, 4000) || original;
@@ -772,4 +852,6 @@ module.exports = {
   resolveEditDirective,
   detectImageReframe,
   resolveReframeDirective,
+  detectReferenceCue,
+  detectPreviousImageCue,
 };
