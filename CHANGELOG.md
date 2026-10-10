@@ -19,6 +19,20 @@ and improvement cycles follow a sequential number with the date the work landed.
   prompt preview and after context compaction. Missing dependency errors guide
   the agent toward installed equivalents while preserving the original failure.
 
+### Fixed
+
+- Image edits keep their context. A follow-up on the chat's last image
+  («cambia el color del logo», «ponle un sombrero al gato», «ahora en azul»)
+  edits that image instead of generating an unrelated one, and a creation
+  request that leans on an attached picture («genera una imagen como esta»,
+  «crea un banner con este logo») reaches the model as pixels through
+  `edit_image` instead of the text-only generator. One classifier now drives
+  the composer route and the chat loop; the Office document runner no longer
+  claims image turns; «ponle este logo a la imagen anterior» keeps the previous
+  image as the canvas; an uploaded photo keeps its own frame (the OpenAI editor
+  sends `size: 'auto'`); a model that cannot edit refuses honestly, naming the
+  model, and the turn never falls back to a brand-new generation.
+
 ### Security
 
 - Dependency patch for the advisories that turned the production audits red
