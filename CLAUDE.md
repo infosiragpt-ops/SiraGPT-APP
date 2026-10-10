@@ -1794,13 +1794,26 @@ el prompt y nunca el ruteo, y el usuario no veía la interpretación hasta recib
   `intent.clarify_options` y persiste `{ kind:'clarification', question, options }`, que
   `lib/chat-work-status` convierte en el panel de decisión sobre el compositor (chips + respuesta
   libre), en vivo y tras recargar.
+- **Material propio (2026-10-10)**: la pregunta `missing_source` («¿Qué quieres que traduzca? No
+  veo un archivo adjunto ni un texto») solo salta si el objeto falta o es un archivo no adjunto:
+  vacío («resume», «traduce al inglés»), pronombre («tradúcelo», «traduce esto», «ponlas
+  rosadas»), sustantivo de material («el documento», «el texto», «la redacción», «los errores»,
+  «el último párrafo») o posesivo («mi tesis», «mi CV»). `carriesOwnMaterial` cuenta como fuente
+  el texto tras «:» o entre comillas, un tema («resume la revolución francesa»), una comparación,
+  un valor («convierte 25 °C a fahrenheit») y las preguntas de cómo hacer algo (`HOWTO_RE` ⇒
+  acción `answer`, nunca edición de la respuesta ni del archivo generado). Antes, TODO primer
+  mensaje así recibía la pregunta en vez de la respuesta (solo contaba un pegado de ≥ 45
+  palabras). A mitad de chat, el texto pegado tras «:» o entre comillas es el objeto (target
+  `none`, source `inline`), no «TU RESPUESTA ANTERIOR»; pronombres, anclas («ahora en inglés»),
+  «tu explicación» e instrucciones («cambia el título a: X», «corrige eso: …») siguen apuntando
+  a la respuesta.
 - **Frontend**: `lib/api.ts` parsea `request_brief` / `intent.clarify_options`
   (`RequestBriefPayload`, `ClarifyOptionsPayload`); `chat-context-integrated` guarda
   `message.requestBrief` y convierte el frame de aclaración en `metadata.kind='clarification'`;
   `components/chat/request-brief-line.tsx` muestra «Entendí: … · supuesto» bajo la respuesta con
   «Corregir» (prefill del compositor «No era eso. Lo que quiero es: »); se oculta en small talk.
   UI lock re-baselineado para los 4 archivos tocados.
-- Tests: `backend/tests/request-brief.test.js` (24), `request-brief-routing-source.test.js` (7),
+- Tests: `backend/tests/request-brief.test.js` (31), `request-brief-routing-source.test.js` (7),
   `tests/request-brief-frontend-source.test.ts` (4), `tests/components/request-brief-line.test.tsx` (3).
   Envs en `docs/ENV_VARIABLES.md` (`SIRAGPT_REQUEST_BRIEF*`).
 

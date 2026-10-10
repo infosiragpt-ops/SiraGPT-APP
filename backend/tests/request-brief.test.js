@@ -311,3 +311,124 @@ test('links with other verbs keep their action; mm:ss ranges and seconds are nor
   // A link means the source exists: no «¿qué quieres que transcriba?».
   assert.equal(brief('transcribe https://youtu.be/abc').ambiguity.ask, false);
 });
+
+// ─── 2026-10-10: a message that carries its own material is answered ─────
+// Until then every first message of a new chat with an edit/transform/
+// analyze verb and its own object («traduce al inglés: Hola», «resume la
+// revolución francesa», «compara Python y JavaScript») got «¿Qué quieres que
+// traduzca? No veo un archivo adjunto ni un texto en este chat.» instead of
+// an answer: only a ≥ 45-word paste counted as material.
+
+test('first message with its own text, topic, value or how-to question is answered, never asked', () => {
+  const prompts = [
+    'traduce al inglés: Hola, ¿cómo estás?',
+    'Traduce "buenos días a todos" al francés',
+    'corrige: yo a ido al colegio',
+    'parafrasea: La educación es la base del desarrollo de un país.',
+    'resume el libro Cien años de soledad',
+    'resume la revolución francesa',
+    'hazme un resumen de la segunda guerra mundial',
+    'analiza el poema Masa de César Vallejo',
+    'convierte 25 °C a fahrenheit',
+    'convierte 100 dólares a soles',
+    'compara Python y JavaScript',
+    'ponme un ejemplo de metáfora',
+    'agrega 5 ideas para mi negocio de café',
+    'verifica si 17 es primo',
+    'identifica el sujeto: María canta bonito',
+    'translate to spanish: I love you',
+    'evalúa las ventajas de la energía solar',
+    'clasifica estos animales: perro, águila, tiburón',
+    'revisa mi ortografía: ayer fuy al cine',
+    'corrige este texto: yo a ido al colegio ayer',
+    'resume el capítulo 3 de Don Quijote',
+    'grafica la función seno',
+    'dibuja un gato',
+    'haz un diagrama de flujo del proceso de compra',
+    '¿cómo eliminar mi cuenta de facebook?',
+    '¿cómo se elimina una cuenta de gmail?',
+    'consejos para mejorar mi productividad',
+    'cómo convertir un pdf a word',
+    'how to remove a virus from my pc',
+  ];
+  for (const p of prompts) {
+    const b = brief(p);
+    assert.equal(b.ambiguity.ask, false, p);
+    assert.ok(!b.ambiguity.reasons.includes('missing_source'), p);
+    assert.equal(rb._internal.carriesOwnMaterial(rb._internal.fold(p)), true, p);
+  }
+});
+
+test('requests whose object is missing or lives in a file nobody attached still ask, with the two options', () => {
+  const prompts = [
+    'tradúcelo al inglés', 'resume', 'hazme un resumen', 'traduce al inglés', 'traduce:', 'traduce esto',
+    'traduce lo siguiente', 'traduce este texto al inglés', 'resume mi tesis', 'resume el documento', 'resume el pdf',
+    'resume el libro', 'resume el capítulo 3', 'resume el documento sobre la reforma', 'mejora mi CV', 'corrige el texto',
+    'corrige mi ensayo de 500 palabras', 'reformula mi introducción', 'mejora la redacción', 'revisa la ortografía',
+    'corrige los errores', 'agrega una conclusión', 'quita el último párrafo', 'extrae las ideas principales',
+    'extrae las ideas principales del texto', 'extrae las fechas', 'verifica la fórmula', 'compara estos dos textos',
+    'analiza el archivo adjunto', 'analiza esta imagen', 'convierte este pdf a word', 'grafica esto',
+    'ponlas todas rosadas', 'ponlo en azul', 'agrega 2 ejemplos más a tu explicación', 'como experto, corrige mi ensayo',
+  ];
+  for (const p of prompts) {
+    const b = brief(p);
+    assert.equal(b.ambiguity.ask, true, p);
+    assert.ok(b.ambiguity.reasons.includes('missing_source'), p);
+    assert.equal(b.ambiguity.options.length, 2, p);
+  }
+  // A format conflict is a different question and is untouched.
+  assert.deepEqual(brief('quiero el informe en word o pdf').ambiguity.reasons, ['format_conflict']);
+});
+
+test('after an answer, text pasted after «:» or between quotes is the object, not the previous answer', () => {
+  for (const p of ['traduce al inglés: Hola, ¿cómo estás?', 'corrige: yo a ido al colegio', 'parafrasea: el sol sale por el este',
+    'traduce "buenos días" al francés', 'traduce este texto: Hello world, how are you', 'ahora traduce al francés: me gusta el cine']) {
+    const b = brief(p, { recentTurns: prev });
+    assert.equal(b.target.kind, 'none', p);
+    assert.equal(b.target.source, 'inline', p);
+    assert.doesNotMatch(b.summary, /respuesta anterior/, p);
+    assert.equal(rb.routingHints(b).editsPreviousAnswer, false, p);
+    assert.doesNotMatch(rb.buildRequestBriefPromptBlock(b), /TU RESPUESTA ANTERIOR/, p);
+  }
+  // Pronouns, anchors, explicit references and instructions about the answer
+  // keep targeting it.
+  for (const p of ['hazlo más formal', 'tradúcelo al inglés', 'ahora en inglés', 'agrega 2 ejemplos más a tu explicación',
+    'corrige eso: el año es 1990', 'cambia el título a: Fotosíntesis']) {
+    const b = brief(p, { recentTurns: prev });
+    assert.equal(b.target.kind, 'previous_answer', p);
+    assert.equal(rb.routingHints(b).editsPreviousAnswer, true, p);
+  }
+});
+
+test('a how-to question is answered, never read as an edit of the answer or of the generated file', () => {
+  for (const p of ['¿cómo eliminar mi cuenta de facebook?', 'como mejorar mi cv', 'how to convert a pdf to word', 'consejos para mejorar mi productividad']) {
+    for (const ctx of [{}, { recentTurns: prev }, { recentTurns: prev, priorArtifact: deck }]) {
+      const b = brief(p, ctx);
+      assert.equal(b.action, 'answer', p);
+      assert.equal(b.target.kind, 'none', p);
+      assert.equal(b.ambiguity.ask, false, p);
+      assert.equal(rb.routingHints(b).editsGeneratedOfficeFile, false, p);
+    }
+  }
+  // «como experto, …» is «as an expert», not a how-to question.
+  assert.equal(brief('como experto, corrige mi ensayo').action, 'edit');
+  // With an attachment the edit verb still acts on it.
+  assert.equal(brief('¿cómo mejorar este documento?', { attachments: [{ originalName: 'tesis.docx' }] }).target.kind, 'attachment');
+});
+
+test('inline material helpers: delimiter after the verb, nothing but a material noun before it', () => {
+  const { inlineObjectMaterial, carriesOwnMaterial, objectCore, fold } = rb._internal;
+  assert.equal(inlineObjectMaterial(fold('traduce al inglés: Hola')), true);
+  assert.equal(inlineObjectMaterial(fold('traduce al inglés:')), false);
+  assert.equal(inlineObjectMaterial(fold('traduce esto :)')), false);
+  assert.equal(inlineObjectMaterial(fold('Importante: resume el documento')), false);
+  assert.equal(inlineObjectMaterial(fold('resume la reunión de las 10:30')), false);
+  assert.equal(inlineObjectMaterial(fold('cambia el título a: Informe final')), false);
+  assert.equal(inlineObjectMaterial(fold('corrige eso: el año es 1990')), false);
+  assert.equal(inlineObjectMaterial(fold('revisa mi ortografía: ayer fuy al cine')), true);
+  assert.equal(inlineObjectMaterial(fold('traduce la frase "carpe diem"')), true);
+  assert.equal(carriesOwnMaterial(''), false);
+  assert.equal(carriesOwnMaterial(fold('resume')), false);
+  assert.equal(objectCore(fold(' al inglés de forma formal en 3 párrafos por favor')), '');
+  assert.equal(objectCore(fold(' un resumen breve de la revolución francesa')), 'la revolucion francesa');
+});
