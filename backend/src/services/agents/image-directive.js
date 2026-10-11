@@ -236,25 +236,39 @@ function detectReferenceDeliverableFrame(text) {
 // The user names the PREVIOUS image as the thing to edit while attaching a
 // new one ("ponle este logo a la imagen anterior"): the new file is a
 // reference, the chat's last image is the canvas.
-const PREVIOUS_IMAGE_CUE_RE = new RegExp([
+// Explicit words for the chat's previous image («la imagen anterior», «la
+// que generaste», «the previous image»).
+const PREVIOUS_IMAGE_EXPLICIT_RE = new RegExp([
   '\\b(?:la|a la|en la|de la|sobre la|al|el) (?:imagen|foto|fotografia|ilustracion|dibujo|resultado)(?: que)? (?:anterior|de antes|de arriba|previ[ao]|generad[ao]|ultim[ao]|generaste|hiciste|creaste|editaste|me diste)\\b',
-  '\\bla ultima (?:imagen|foto)\\b', '\\ba la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
-  // Object clitic = the previous image, demonstrative = the new upload:
-  // "hazla como esta foto", "ponle este logo a la camiseta".
-  '\\b(?:hazl[ao]|ponl[ao]|dejal[ao]|vuelvel[ao])\\b[^.]{0,40}\\b(?:como|igual a|igual que|parecid[ao] a) (?:est[ae]s?|es[ae]s?)\\b',
-  `\\bponl[eo]\\b[^.]{0,30}\\b(?:este|esta|mi) ${REFERENCE_IMAGE_NOUN}\\b[^.]{0,40}\\b(?:a la|al|en la|en el|sobre la|sobre el)\\b`,
+  // «a la misma» only with «a»: «en la misma posición / esquina» is a place
+  // inside the current picture, never the previous image.
+  '\\bla ultima (?:imagen|foto)\\b', '\\ba la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b',
+  '\\b(?:en|sobre) la (?:anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
   '\\bthe (?:previous|last|earlier) (?:image|picture|photo|one)\\b', '\\bthe (?:image|picture|photo) (?:you (?:generated|made|created)|from before)\\b',
 ].join('|'));
+// Object clitic = the previous image, demonstrative = the new upload:
+// "hazla como esta foto", "ponle este logo a la camiseta". Only holds with
+// ONE upload: with two («ponle este logo a la foto») the destination is the
+// other attachment, not the chat's previous image.
+const PREVIOUS_IMAGE_CLITIC_RE = new RegExp([
+  '\\b(?:hazl[ao]|ponl[ao]|dejal[ao]|vuelvel[ao])\\b[^.]{0,40}\\b(?:como|igual a|igual que|parecid[ao] a) (?:est[ae]s?|es[ae]s?)\\b',
+  `\\bponl[eo]\\b[^.]{0,30}\\b(?:este|esta|mi) ${REFERENCE_IMAGE_NOUN}\\b[^.]{0,40}\\b(?:a la|al|en la|en el|sobre la|sobre el)\\b`,
+].join('|'));
+const PREVIOUS_IMAGE_CUE_RE = new RegExp(`${PREVIOUS_IMAGE_EXPLICIT_RE.source}|${PREVIOUS_IMAGE_CLITIC_RE.source}`);
 
 // «la primera imagen», «the second photo»: a specific OTHER image the user
 // selects, never the previous one.
 const ORDINAL_IMAGE_SELECTOR_RE = new RegExp(`\\b(?:la|el|a la|al|en la|de la) (?:primer[ao]|segund[ao]|tercer[ao]|cuart[ao]|quint[ao]|penultim[ao]|otr[ao]) (?:${REFERENCE_IMAGE_NOUN})\\b|\\bthe (?:first|second|third|other) (?:image|picture|photo)\\b`);
 
-/** True when the instruction targets the chat's previous image explicitly. */
-function detectPreviousImageCue(text) {
+/**
+ * True when the instruction targets the chat's previous image. `strict`
+ * (callers with two or more uploads) accepts only the explicit words: the
+ * clitic form «ponle este logo a la foto» then names the other upload.
+ */
+function detectPreviousImageCue(text, { strict = false } = {}) {
   const norm = canonicalText(text);
   if (!norm || ORDINAL_IMAGE_SELECTOR_RE.test(norm)) return false;
-  return PREVIOUS_IMAGE_CUE_RE.test(norm);
+  return strict ? PREVIOUS_IMAGE_EXPLICIT_RE.test(norm) : PREVIOUS_IMAGE_CUE_RE.test(norm);
 }
 
 /**
@@ -924,4 +938,5 @@ module.exports = {
   detectPreviousImageCue,
   detectSpokenImageFrame,
   detectReferenceDeliverableFrame,
+  pickEditLanguage,
 };

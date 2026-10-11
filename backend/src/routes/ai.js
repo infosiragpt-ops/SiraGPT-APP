@@ -1035,6 +1035,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
         // honest error naming the model and the cause (billing-failover
         // buildFailureMessage). A per-minute window is not «Sin saldo».
         billingStatus: require('../services/ai/billing-failover').isOutOfCredit(connectionProvider) ? 'sin_saldo' : null,
+        // IMAGE rows: can the engine EDIT with this model? A generation-only
+        // row (DALL-E, Imagen, the legacy seeds) is visible as «no edita»
+        // before a user picks it for an edit; the picked model is never
+        // switched for them.
+        ...(() => { try { const caps = require('../services/media/image-model-capabilities').imageModelCapabilities(m); return caps ? { capabilities: caps } : {}; } catch (_) { return {}; } })(),
         planAccess: {
           currentPlan: modelPolicy.currentPlan,
           allowed: true,
@@ -11995,6 +12000,13 @@ router.post(
         model = honoredImagePick.model;
         provider = honoredImagePick.provider || provider;
       }
+      // The engine provider for THIS model: a catalog slug («google/gemini-…»,
+      // «openai/gpt-…-image») runs on OpenRouter whatever first-party family
+      // the chat inference assigned to it — the direct Google / OpenAI image
+      // APIs do not know the slug. Same resolution as capabilities.imageEdit.
+      const engineProviderForPick = (p = provider, m = model) => {
+        try { return require('../services/media/image-model-capabilities').engineProviderForModel(p, m) || toImageEngineProvider(p); } catch (_) { return toImageEngineProvider(p); }
+      };
       const grokImageRequested = isGrokImageModelName(model);
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
@@ -12047,10 +12059,23 @@ router.post(
       // canvas and the uploads are references — unless the user chose a
       // canvas in the viewer (an explicit operation, or a fileId that is not
       // one of this turn's uploads), which always stays the canvas.
-      const previousImageCue = (() => { try { return require('../services/agents/image-directive').detectPreviousImageCue(prompt); } catch (_) { return false; } })();
+      // The composer sends its uploads as fileId = files[0] + referenceFileIds
+      // = files: that is UPLOAD order, not a chosen canvas. With two or more
+      // uploads «ponle este logo a la foto» names the other upload, so only
+      // the explicit words («la imagen anterior») reach back into the history.
+      // API clients that send referenceFileIds alone keep the old contract
+      // (first reference = canvas, clitic cue honoured).
+      const composerUploads = Boolean(fileId) && Array.isArray(referenceFileIds) && referenceFileIds.length >= 2
+        && String(referenceFileIds[0]) === String(fileId);
+      const previousImageCue = (() => { try { return require('../services/agents/image-directive').detectPreviousImageCue(prompt, { strict: composerUploads }); } catch (_) { return false; } })();
       const primaryFromHistory = Boolean(previousImageCue) && !requestedOperation
         && (!fileId || (Array.isArray(referenceFileIds) && referenceFileIds.map(String).includes(String(fileId))));
-      let sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds, primaryFromHistory }, {
+      // With the composer's upload order the pictures and the words pick the
+      // canvas («ponle este logo a la foto» → the photo), never the first
+      // file by accident. A history canvas, when the cue finds one, still
+      // wins inside the resolver.
+      const arrangeByIntent = (!requestedOperation && composerUploads) ? prompt : null;
+      let sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds, primaryFromHistory, arrangeByIntent }, {
         prisma, userId, chatId, signal: requestAbortController.signal, requireChatOwnership: true,
       });
       // A follow-up promoted to an edit by the history pre-check, but the
@@ -12066,7 +12091,16 @@ router.post(
           code: 'image_source_required',
         });
       }
-      const uploadedReferences = sourceImages.filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || ''));
+      // The user's bubble lists the attachments in the order they were sent,
+      // whatever order the editor received them in.
+      const requestOrder = [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
+      const uploadedReferences = sourceImages
+        .filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || ''))
+        .slice()
+        .sort((a, b) => {
+          const ia = requestOrder.indexOf(String(a.fileId)); const ib = requestOrder.indexOf(String(b.fileId));
+          return (ia < 0 ? Number.MAX_SAFE_INTEGER : ia) - (ib < 0 ? Number.MAX_SAFE_INTEGER : ib);
+        });
       const userMessageFiles = uploadedReferences.length ? JSON.stringify(uploadedReferences.map(({ record: input }) => ({
         id: input.id, fileId: input.id, name: input.originalName, filename: input.filename,
         type: input.mimeType, url: publicUploadUrl(`/uploads/${userId}/${input.filename}`),
@@ -12137,10 +12171,10 @@ router.post(
         });
       }
 
-      if (background === 'transparent' && !imageEngine.canEditImage({ model, provider: toImageEngineProvider(provider), background })) {
+      if (background === 'transparent' && !imageEngine.canEditImage({ model, provider: engineProviderForPick(), background })) {
         return res.status(400).json({ error: 'El modelo seleccionado no admite quitar el fondo con transparencia real. Elige un modelo de edición compatible.', code: 'E_PARAMS' });
       }
-      if (sourceImage && !imageEngine.canEditImage({ model, provider: toImageEngineProvider(provider) })) {
+      if (sourceImage && !imageEngine.canEditImage({ model, provider: engineProviderForPick() })) {
         return res.status(400).json({ error: 'El modelo seleccionado no permite esta edición. Elige un modelo compatible.', code: 'image_edit_unsupported' });
       }
 
@@ -12201,18 +12235,28 @@ router.post(
       const generateSingleImage = async () => {
         if (sourceImage) {
           const imageDirective = require('../services/agents/image-directive');
-          const editPrompt = operation === 'reframe'
+          let editPrompt = operation === 'reframe'
             ? imageDirective.resolveReframeDirective(prompt, aspectRatio).prompt
             : imageDirective.resolveEditDirective(prompt, {
               target: typeof editTarget === 'string' ? editTarget : undefined, selection: editSelection,
             }).prompt;
+          // Several inputs whose roles are certain (viewer-chosen canvas,
+          // history canvas, ranked on evidence): name the canvas and the
+          // material for the editor. A coin toss or a composition gets none.
+          if (operation !== 'reframe' && sourceImages.length >= 2) {
+            const { describeInputRoles, isCompositionRequest } = require('../services/media/image-canvas-selection');
+            const origin = sourceImages.canvasOrigin || (requestedOperation && fileId ? 'pinned' : 'upload-order');
+            if (origin !== 'upload-order' && origin !== 'explicit' && !isCompositionRequest(prompt)) {
+              editPrompt = `${editPrompt}${describeInputRoles(sourceImages, { language: imageDirective.pickEditLanguage(prompt) })}`.trim();
+            }
+          }
           const result = await imageEngine.editImage({
             prompt: editPrompt,
             imageBuffer: editCanvas.imageBuffer,
             mimeType: editCanvas.mimeType,
             referenceImages: sourceImages.slice(1).map((source) => ({ buffer: source.buffer, mimeType: source.mimeType })),
             maskBuffer: editCanvas.maskBuffer,
-            model, provider: toImageEngineProvider(provider), aspectRatio, quality, n: imageCount, background,
+            model, provider: engineProviderForPick(), aspectRatio, quality, n: imageCount, background,
             failover: false,
             signal: requestAbortController.signal,
             timeoutMs: imageProviderAttemptTimeoutMs(),
@@ -12234,7 +12278,7 @@ router.post(
         let result = await imageEngine.generateImage({
           prompt: imagePrompt,
           model: grokImageRequested ? model.replace(/^(?:x-ai|xai)\//i, '') : model,
-          provider: toImageEngineProvider(provider),
+          provider: engineProviderForPick(),
           aspectRatio,
           quality,
           n: imageCount,
@@ -12245,7 +12289,7 @@ router.post(
         let substitutedFrom = null;
         if ((!result.ok || !result.images?.length) && isImageAuthFailure(result) && imageAuthFallbackEnabled() && !requestAbortController.signal.aborted) {
           try {
-            const alt = await pickImageAuthFallback({ prismaClient: prisma, failedProvider: toImageEngineProvider(provider), excludeModel: model });
+            const alt = await pickImageAuthFallback({ prismaClient: prisma, failedProvider: engineProviderForPick(), excludeModel: model });
             if (alt) {
               const retry = await imageEngine.generateImage({
                 prompt: imagePrompt,
