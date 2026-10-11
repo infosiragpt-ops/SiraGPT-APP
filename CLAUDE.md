@@ -2621,6 +2621,64 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   `long-operation-indicator` regenerado. El job «Visual regression» no bloquea (`|| warning`) y
   no tiene PNG en el repo.
 
+## Auto-instalación de capacidades — nivel 1: librerías Python del sandbox (added 2026-10-11)
+
+Pedido de Luis: «que el software, si algo no puede hacer, se auto-instale cosas en sí mismo
+y pueda ayudar al ser humano», empezando por la edición de documentos en Python. Auditoría
+previa con 7 lectores (lo que ya se instalaba solo: el modelo GLM-OCR, skills de ClawHub,
+npm en proyectos del usuario) y diseño por niveles: la decisión humana pasa de «aprobar
+cada instalación» a «aprobar la lista». Solo backend; sin migraciones (el libro mayor son
+filas de `AuditLog`); UI lock intacto.
+- **Política** (`backend/src/services/agent-runner/sandbox-packages/policy.js`, pura): allowlist
+  curada de distribuciones PyPI (datos, documentos, imágenes, texto, con dependencias
+  transitivas), mapa import→distribución (`cv2`→`opencv-python-headless`, `PIL`→`pillow`,
+  `sklearn`→`scikit-learn`, `fitz`→`pymupdf`…), `parseRequirement` estricto (nombre[extras]
+  [==versión]; nunca URLs, rutas, `git+`, opciones ni marcadores), `resolvePolicy(env)` con
+  `SIRAGPT_SANDBOX_PIP*` (on por defecto, off en `NODE_ENV=test`).
+- **Instalador** (`backend/src/services/doc-agent/sandbox-pip.js`, solo builtins; copia
+  byte-idéntica en `services/sandbox/lib/sandbox-pip.js` fijada por test): contenedor
+  instalador desechable (misma imagen, `--network <política>`, mismos límites, `--read-only`,
+  tmpfs, SIN volumen del workspace, sin secretos) → `pip install --user --only-binary=:all:
+  --report` → validación de CADA wheel resuelto contra `SIRA_PIP_ALLOW` dentro del contenedor
+  (un paquete no aprobado rechaza el lote entero, exit 3) → `tar` por stdout → `docker exec -i
+  <sandbox> tar -x` a un staging → `cp -a` al árbol final `/workspace/.sira-packages`.
+  Tope de bytes, timeout, abort y rollback del staging; `docker rm -f` del instalador si
+  algo falla. Drivers: docker (`installPythonPackages` en `doc-agent/sandbox.js`), local
+  (pip directo en `<root>/.sira-packages`), remoto (`POST /v1/sessions/:id/install` en
+  `services/sandbox/server.js`, con la misma validación del lado servidor). El sandbox de
+  ejecución sigue `--network none`.
+- **Runner** (`agent-runner/tools.js`): tool `install_sandbox_package` (solo si la política
+  está activa; validación → tope `maxPerTurn` → instalador → manifest
+  `.sira-packages/.sira/manifest.json`; mensajes honestos por código: `not_allowed`,
+  `not_found` (sin wheel), `network`, `timeout`, `too_large`, `disk`); `execute_python` y
+  `execute_bash` exportan `PYTHONUSERBASE=/workspace/.sira-packages` y `PATH`;
+  `capability-recovery.js` dice «aprobada → llama a install_sandbox_package una vez y
+  reintenta» o «no aprobada → reportada al administrador» (`detectMissingDependency`
+  también para binarios en bash); callbacks `capability.onGap/onInstall` (una señal por
+  distribución por turno). `index.js` emite `stage` `capability_gap` /
+  `capability_install` al timeline y escribe el libro mayor; `prompt.js` recibe
+  `packageInstaller.enabled`; etiqueta en `trace.js`.
+- **Libro mayor** (`backend/src/services/capability-ledger.js`): filas `AuditLog`
+  `agent.capability_gap` / `agent.capability_install` / `agent.host_bash` (tags
+  `capability`), nunca lanza, nada en test sin prisma inyectado; `GET /api/admin/capabilities`
+  (eventos, `gaps` agregados por paquete para decidir qué aprobar, política viva).
+- **`host_bash` gobernado** (`agents/host-bash-tool.js`): `npx` fuera; `npm exec|x|create|
+  init <inicializador>|config|set|login|publish|token` y `pip config` rechazados;
+  `npm install…`/`pip3 install…`/`python3 -m pip …` solo con nombres del registro
+  (`packageInstallGuard`: sin URLs, git+, file:, rutas, índices, `-r/-e`, `--target`, `-g`);
+  fila de auditoría por ejecución y por rechazo. `permission-manager`: las herramientas de
+  adquisición (`host_bash`, `clone_project`, `install_skill`, `save_skill`,
+  `install_sandbox_package`) nunca entran en «Permitir siempre en este chat».
+- Tests: `sandbox-package-policy` (5), `sandbox-pip-installer` (9: script, args del
+  contenedor, parser, tubería con tope/timeout/abort, driver local y docker end-to-end
+  con `docker`/`python3` falsos de `tests/helpers/`, drivers, remoto, paridad del espejo),
+  `agent-runner-install-sandbox-package` (5), `host-bash-install-guard` (5),
+  `capability-ledger` (4), +1 en `services/sandbox/server.test.js`. Envs en
+  `docs/ENV_VARIABLES.md`.
+- **Pendiente (decisión de Luis)**: red interna + devpi/verdaccio con hashes fijados
+  (`SIRAGPT_SANDBOX_PIP_NETWORK` / `_INDEX_URL`); paquetes npm en el sandbox; registro de
+  MCP desde el chat; puente «capability_gap → PR de Dockerfile»; desinstalación.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

@@ -70,6 +70,7 @@ const VERIFY_TOOLS = new Set(['render_preview', 'verify_visual']);
 // render_preview keeps «Verificando resultado» (F3 contract); the office
 // tools get their own phrase.
 const TOOL_CALL_LABELS = Object.freeze({
+  install_sandbox_package: 'Instalando una librería aprobada en el sandbox',
   // «Ejecutando código» for a file listing misled the timeline.
   list_files: STAGE_LABELS.listing,
   inspect_document: STAGE_LABELS.reading,

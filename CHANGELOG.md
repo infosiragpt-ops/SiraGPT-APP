@@ -8,6 +8,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- The document agent can now install APPROVED Python packages into its own
+  sandbox when an import fails (`install_sandbox_package`): a throw-away
+  installer container fetches binary wheels from the package index, every
+  resolved wheel is checked against the operator allowlist, and the tree is
+  streamed into the conversation workspace while the execution sandbox keeps
+  its network off. Packages outside the list are never installed; they are
+  recorded as capability gaps (Admin → Logs → Auditoría, `GET
+  /api/admin/capabilities`) so the administrator can extend the list.
+  `SIRAGPT_SANDBOX_PIP*` tune it; the sandbox microservice gained
+  `POST /v1/sessions/:id/install`.
 - Reference-guided image editing preserves the selected image and up to eight
   ordered references. Video requests validate owned reference pixels and the
   selected model's capacity before generation, without silently dropping images.
@@ -18,6 +28,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 - Retrieved web sources remain readable from the task workspace beyond the
   prompt preview and after context compaction. Missing dependency errors guide
   the agent toward installed equivalents while preserving the original failure.
+
+### Security
+
+- `host_bash` no longer offers `npx`, `npm exec|x|create`, `npm init
+  <initializer>`, registry/config mutations or global installs; `npm install`
+  and `pip3 install` accept registry package names only (no URLs, git/file
+  specs, paths, requirement files, alternate indexes or `--target`). Every
+  execution and refusal is recorded in the audit log, and «Permitir siempre
+  en este chat» never applies to tools that acquire capability (`host_bash`,
+  `clone_project`, `install_skill`, `save_skill`, `install_sandbox_package`).
 
 ### Fixed
 

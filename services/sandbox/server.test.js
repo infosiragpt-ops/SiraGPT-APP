@@ -282,3 +282,55 @@ test('Docker run timeout attempts removal by its known container name', async ()
   assert.equal(calls[1][0], 'rm');
   assert.equal(calls[1][2], calls[0][calls[0].indexOf('--name') + 1]);
 });
+
+test('POST /v1/sessions/:id/install validates the request, needs a container-backed session and returns the installer verdict', async () => {
+  assert.equal(sessions.size, 0);
+  let captured = null;
+  const server = buildServer({
+    isDockerAvailable: async () => true,
+    createSession: async () => ({ name: 'sira-doc-test', destroy: async () => {} }),
+    installRunner: async (opts) => { captured = opts; return { ok: true, code: 'ok', installed: [{ name: 'numpy', version: '2.1' }], bytes: 10, durationMs: 5, detail: '' }; },
+  });
+  const base = await listen(server);
+  try {
+    const created = await fetch(`${base}/v1/sessions`, { method: 'POST', headers: auth, body: JSON.stringify({ workspaceKey: 'chat1' }) });
+    const { sessionId } = await created.json();
+    const bad = await fetch(`${base}/v1/sessions/${sessionId}/install`, { method: 'POST', headers: auth, body: JSON.stringify({ requirements: ['git+https://x'], allow: ['numpy'] }) });
+    assert.equal(bad.status, 400);
+    assert.equal((await bad.json()).error, 'invalid_install_request');
+    const badAllow = await fetch(`${base}/v1/sessions/${sessionId}/install`, { method: 'POST', headers: auth, body: JSON.stringify({ requirements: ['numpy'], allow: ['Numpy; rm'] }) });
+    assert.equal(badAllow.status, 400);
+    const ok = await fetch(`${base}/v1/sessions/${sessionId}/install`, { method: 'POST', headers: auth, body: JSON.stringify({ requirements: ['numpy==2.1'], allow: ['numpy'], indexUrl: 'https://devpi.local/simple/', network: 'bridge', timeoutMs: 1, maxBytes: 1, tmpSize: '2g' }) });
+    assert.equal(ok.status, 200);
+    const body = await ok.json();
+    assert.equal(body.code, 'ok');
+    assert.equal(captured.kind, 'docker');
+    assert.equal(captured.containerName, 'sira-doc-test');
+    assert.equal(captured.runtime, null);
+    assert.deepEqual(captured.requirements, ['numpy==2.1']);
+    assert.equal(captured.allowJson, '["numpy"]');
+    assert.equal(captured.indexUrl, 'https://devpi.local/simple/');
+    assert.equal(captured.timeoutMs, 30_000, 'clamped');
+    assert.equal(captured.maxBytes, 10 * 1024 * 1024, 'clamped');
+    assert.equal(captured.tmpSize, '2g');
+    assert.deepEqual(captured.limits, { memory: '1g', cpus: '1', pidsLimit: 100 });
+    const unauth = await fetch(`${base}/v1/sessions/${sessionId}/install`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(unauth.status, 401);
+    await fetch(`${base}/v1/sessions/${sessionId}`, { method: 'DELETE', headers: auth });
+  } finally {
+    await close(server);
+    sessions.clear();
+  }
+  const nameless = buildServer({ isDockerAvailable: async () => true, createSession: async () => ({ destroy: async () => {} }) });
+  const base2 = await listen(nameless);
+  try {
+    const created = await fetch(`${base2}/v1/sessions`, { method: 'POST', headers: auth, body: '{}' });
+    const { sessionId } = await created.json();
+    const res = await fetch(`${base2}/v1/sessions/${sessionId}/install`, { method: 'POST', headers: auth, body: JSON.stringify({ requirements: ['numpy'], allow: ['numpy'] }) });
+    assert.equal(res.status, 409);
+    await fetch(`${base2}/v1/sessions/${sessionId}`, { method: 'DELETE', headers: auth });
+  } finally {
+    await close(nameless);
+    sessions.clear();
+  }
+});

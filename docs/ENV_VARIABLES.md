@@ -743,6 +743,61 @@ escenarios contra la ruta real: `node scripts/run-office-evals.js --user <id>
 | `DOC_SANDBOX_QUEUE_WAIT_MS` | `90000` | Espera máxima en cola cuando el servicio de sandbox responde `429 at_capacity` (sondeo cada 2–5 s, checkpoint «Esperando un sandbox libre…»). Agotada la espera el turno falla como `sandbox_capacity` (categoría `capacity`, reintentable, «Cancelado por el sistema» en Admin → Logs). `0` = fallar al primer 429 |
 | `SANDBOX_CREATE_TIMEOUT_MS` | `60000` | Tope por intento de `POST /v1/sessions` (arranque del contenedor). Cada intento tiene su propio presupuesto: la espera en cola no consume el tiempo del comando. `DOC_SANDBOX_CONCURRENCY` es la concurrencia del worker BullMQ del módulo `doc-sandbox` (TS), no la del AgentRunner; el límite real de contenedores vive en `SANDBOX_MAX_CONCURRENCY` del servicio `siragpt-sandbox` |
 
+## Librerías Python en el sandbox del agente de documentos — `install_sandbox_package` (added 2026-10-11)
+
+El sandbox de ejecución (`doc-agent/sandbox.js`, gVisor) sigue SIN red. Cuando un
+`execute_python` falla con `ModuleNotFoundError`, la guía de recuperación dice si la
+distribución está APROBADA; entonces el agente llama a `install_sandbox_package` y un
+contenedor instalador desechable (misma imagen, mismos límites, solo lectura, tmpfs,
+SIN el volumen del workspace, con la red de la política) corre
+`pip install --user --only-binary=:all:` (nunca se ejecuta un `setup.py`), valida CADA
+wheel resuelto contra la allowlist dentro del contenedor y envía el árbol como tar por
+`docker exec -i` al sandbox (`/workspace/.sira-packages`, persistente por conversación
+en el volumen `sira-ws-<chatId>`). Todo comando del sandbox exporta
+`PYTHONUSERBASE=/workspace/.sira-packages`, así que la librería queda importable sin
+reiniciar nada. Un paquete fuera de la lista nunca se instala: queda como
+`agent.capability_gap` en Admin → Logs → Auditoría (y en `GET /api/admin/capabilities`)
+para que el administrador decida si ampliar la lista. La allowlist por defecto vive en
+`backend/src/services/agent-runner/sandbox-packages/policy.js` (datos, documentos,
+imágenes, texto; con sus dependencias transitivas). Driver remoto: el microservicio
+`services/sandbox` expone `POST /v1/sessions/:id/install` con la misma validación.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_SANDBOX_PIP` | `1` (`0` en `NODE_ENV=test`) | `0` apaga el instalador: la herramienta no se ofrece y la guía vuelve a «el sandbox no tiene red» |
+| `SIRAGPT_SANDBOX_PIP_EXTRA_ALLOW` | — | Lista (comas/espacios) de distribuciones que se SUMAN a la allowlist (nombres PEP 503; `My_Pkg` → `my-pkg`) |
+| `SIRAGPT_SANDBOX_PIP_DENY` | — | Lista que se QUITA de la allowlist por defecto |
+| `SIRAGPT_SANDBOX_PIP_INDEX_URL` | PyPI | Índice de paquetes (`https://…`), p. ej. un devpi/proxy local con los paquetes fijados; solo http(s) |
+| `SIRAGPT_SANDBOX_PIP_NETWORK` | `bridge` | Red Docker del contenedor instalador (una red interna con solo el proxy es la postura más estricta) |
+| `SIRAGPT_SANDBOX_PIP_TIMEOUT_MS` | `180000` | Tope por instalación (30 s – 10 min) |
+| `SIRAGPT_SANDBOX_PIP_MAX_PER_TURN` | `3` | Llamadas a `install_sandbox_package` por turno de documento (1–10) |
+| `SIRAGPT_SANDBOX_PIP_MAX_PACKAGES` | `8` | Requisitos por llamada (1–20) |
+| `SIRAGPT_SANDBOX_PIP_MAX_BYTES` | `314572800` (300 MB) | Tope del tar que entra al sandbox; superado, se corta y no queda nada a medias |
+| `SIRAGPT_SANDBOX_PIP_TMP_SIZE` | `1g` | tmpfs del contenedor instalador (wheels + árbol antes del tar) |
+| `SANDBOX_PIP_NETWORK` (microservicio) | `bridge` | Red del instalador cuando el backend usa `SANDBOX_SERVICE_URL`; el cliente puede pedir otra, validada igual |
+
+## Herramientas de host en el chat (`host_bash`, `host_file`, `clone_project`)
+
+`host_bash` corre en el CONTENEDOR DEL BACKEND (no en un sandbox). Desde 2026-10-11:
+`npx` y `npm exec|x|create|init <inicializador>` no existen (descargan y ejecutan código
+arbitrario); `npm install|i|add|ci|update|uninstall` y `pip3 install|download` (también
+`python3 -m pip …`) solo aceptan NOMBRES del registro oficial, opcionalmente con versión
+(`lodash@4`, `pandas==2.2.3`): nunca URLs, `git+`, `file:`, rutas, `.tgz`/`.whl`,
+`-r`/`-e`, índices alternativos (`-i`, `--index-url`, `--extra-index-url`,
+`--find-links`), `--target` ni `-g/--global`; `npm config|set|login|publish|token` y
+`pip config` se rechazan. Cada ejecución (y cada rechazo) deja una fila
+`agent.host_bash` en Admin → Logs → Auditoría. «Permitir siempre en este chat» no
+aplica a `host_bash`, `clone_project`, `install_skill`, `save_skill` ni
+`install_sandbox_package`: cada llamada muestra su propia tarjeta.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_HOST_TOOLS_DISABLED` | — | `1` niega `host_bash` / `host_file` / `clone_project` para todos (kill switch) |
+| `SIRAGPT_HOST_TOOLS_REQUIRE_CLEARANCE` | — | Lista de clearances; solo usuarios con alguna de ellas pueden usar las herramientas de host |
+| `SIRAGPT_HOST_BASH_TIMEOUT_MS` | `120000` | Tope por comando |
+| `SIRAGPT_HOST_BASH_ENV_EXTRA` | — | Nombres de variables adicionales que el hijo puede ver (las que parecen secretos se rechazan igual) |
+| `SIRAGPT_ALLOW_SELF_MODIFY` | — | `1` permite operaciones git de escritura sobre el propio código de SiraGPT (nunca en producción) |
+
 ## Transcripción de audio (escalera)
 
 `backend/src/services/audio-transcriber.js`. Orden por defecto: OpenAI → Groq →

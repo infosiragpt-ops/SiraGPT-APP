@@ -58,6 +58,14 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { throwIfAborted } = require('../../utils/abort-signals');
+const sandboxPip = require('./sandbox-pip');
+
+// Packages installed by install_sandbox_package (sandbox-pip) live in the
+// workspace as a pip --user tree. Every command the drivers run sees it
+// through PYTHONUSERBASE (user site) and PATH (console scripts), so the tool
+// layer never has to decorate its commands.
+const { PACKAGES_DIR } = sandboxPip;
+const PACKAGES_PATH_EXPORT = `export PATH=${PACKAGES_DIR}/bin:"$PATH"; `;
 
 const CMD_TIMEOUT_MS = clampInt(process.env.SIRAGPT_DOC_SANDBOX_CMD_TIMEOUT_MS, 120_000, 1_000, 600_000);
 const MAX_OUTPUT_BYTES = clampInt(process.env.SIRAGPT_DOC_SANDBOX_MAX_OUTPUT_BYTES, 256 * 1024, 4 * 1024, 4 * 1024 * 1024);
@@ -352,7 +360,23 @@ function safeContainerRel(relPath) {
 
 /* ── local driver ───────────────────────────────────────────────────────── */
 
-async function createLocalSandbox({ signal, persistKey } = {}) {
+/**
+ * The install options a driver forwards to sandbox-pip (policy-derived by
+ * the tool layer: requirements already validated, allowlist as JSON).
+ */
+function pickInstallOpts(opts = {}) {
+  return {
+    requirements: Array.isArray(opts.requirements) ? opts.requirements.map(String) : [],
+    allowJson: typeof opts.allowJson === 'string' ? opts.allowJson : '[]',
+    indexUrl: opts.indexUrl || null,
+    network: opts.network || 'bridge',
+    timeoutMs: clampInt(opts.timeoutMs, 180_000, 30_000, 600_000),
+    maxBytes: clampInt(opts.maxBytes, 300 * 1024 * 1024, 10 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
+    tmpSize: safeSize(opts.tmpSize, '1g'),
+  };
+}
+
+async function createLocalSandbox({ signal, persistKey, installRunner = sandboxPip.runSandboxInstall } = {}) {
   throwIfAborted(signal);
   const key = safePersistKey(persistKey);
   const persistentRoot = key ? persistentWorkspaceRoot(key) : null;
@@ -361,11 +385,13 @@ async function createLocalSandbox({ signal, persistKey } = {}) {
   await fs.mkdir(path.join(root, 'outputs'), { recursive: true });
   let destroyed = false;
 
+  const packagesRoot = path.join(root, '.sira-packages');
   const scrubbedEnv = {
-    PATH: process.env.PATH,
+    PATH: `${path.join(packagesRoot, 'bin')}${path.delimiter}${process.env.PATH}`,
     HOME: root,
     TMPDIR: root,
     LANG: process.env.LANG || 'en_US.UTF-8',
+    PYTHONUSERBASE: packagesRoot,
     // Deliberately NO API keys / secrets from the parent environment.
   };
 
@@ -385,6 +411,13 @@ async function createLocalSandbox({ signal, persistKey } = {}) {
       // /workspace is a convenience alias in prompts; map it for local runs.
       const mapped = String(command).split('/workspace').join(root);
       return runProcess('bash', ['-c', mapped], { timeoutMs, cwd: root, env: scrubbedEnv, signal: opts.signal || signal });
+    },
+    // Allowlisted Python packages into <root>/.sira-packages (sandbox-pip):
+    // the local driver has no isolation to preserve, so pip simply runs here.
+    async installPythonPackages(opts = {}) {
+      if (destroyed) throw new Error('sandbox destroyed');
+      throwIfAborted(opts.signal || signal);
+      return installRunner({ kind: 'local', root, ...pickInstallOpts(opts), signal: opts.signal || signal });
     },
     async putFile(relPath, buffer) {
       throwIfAborted(signal);
@@ -480,6 +513,7 @@ async function createDockerSandbox({
   persistKey,
   availableRuntimes,
   env = process.env,
+  installRunner = sandboxPip.runSandboxInstall,
 } = {}) {
   throwIfAborted(signal);
   const key = safePersistKey(persistKey);
@@ -491,9 +525,10 @@ async function createDockerSandbox({
   const resolved = resolveSandboxRuntime({ env, availableRuntimes: runtimes });
   const limits = sandboxLimitsFromEnv(env);
   const name = `sira-doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const image = env.SIRAGPT_DOC_SANDBOX_IMAGE || DOCKER_IMAGE;
   const dockerArgs = buildDockerRunArgs({
     name,
-    image: env.SIRAGPT_DOC_SANDBOX_IMAGE || DOCKER_IMAGE,
+    image,
     runtime: resolved.runtime,
     persistKey: key,
     limits,
@@ -536,7 +571,27 @@ async function createDockerSandbox({
       // Forward the per-call signal (F3 cancel): killing the docker-exec CLI
       // detaches the stream immediately; the in-container process is reaped
       // by destroy() (`docker rm -f`), which the runner always runs.
-      return dexec(['exec', '-w', '/workspace', name, 'bash', '-c', String(command)], { timeoutMs, signal: opts.signal });
+      return dexec(
+        ['exec', '-w', '/workspace', '-e', `PYTHONUSERBASE=${PACKAGES_DIR}`, name, 'bash', '-c', `${PACKAGES_PATH_EXPORT}${String(command)}`],
+        { timeoutMs, signal: opts.signal },
+      );
+    },
+    // Allowlisted Python packages (sandbox-pip): a throw-away installer
+    // container with egress streams a tar of the wheels into THIS container
+    // over `docker exec -i`; the sandbox itself never leaves --network none.
+    async installPythonPackages(opts = {}) {
+      if (destroyed) throw new Error('sandbox destroyed');
+      throwIfAborted(opts.signal || signal);
+      return installRunner({
+        kind: 'docker',
+        containerName: name,
+        image,
+        runtime: resolved.runtime,
+        limits,
+        ...pickInstallOpts(opts),
+        signal: opts.signal || signal,
+        runCommand: (cmd, args, o = {}) => processRunner(cmd, args, { ...o, env: process.env }),
+      });
     },
     // File transfer goes through `docker exec` streams — NOT `docker cp` —
     // so it stays correct under gVisor (runsc caches directory listings and
@@ -622,9 +677,9 @@ async function createSandbox(opts = {}) {
         + '(sin frontera de aislamiento) queda deshabilitado.',
       );
     }
-    return createLocalSandbox({ signal: opts.signal, persistKey });
+    return createLocalSandbox({ signal: opts.signal, persistKey, installRunner: opts.installRunner });
   }
-  if (requested === 'docker') return createDockerSandbox({ signal: opts.signal, persistKey, env });
+  if (requested === 'docker') return createDockerSandbox({ signal: opts.signal, persistKey, env, installRunner: opts.installRunner });
   // auto: the remote sandbox microservice wins when configured (this is how a
   // Docker-less host like Replit gets real container isolation); then a local
   // Docker daemon; then the in-process local workspace fallback (dev/CI only:
@@ -639,7 +694,7 @@ async function createSandbox(opts = {}) {
   }
   if (await dockerAvailable(opts.signal)) {
     try {
-      return await createDockerSandbox({ signal: opts.signal, persistKey, env });
+      return await createDockerSandbox({ signal: opts.signal, persistKey, env, installRunner: opts.installRunner });
     } catch (err) {
       // Honest failures never degrade: a demanded-but-missing runtime, an
       // abort, or ANY docker failure in fail-closed mode propagates.
@@ -656,7 +711,7 @@ async function createSandbox(opts = {}) {
       + 'local SIN frontera de aislamiento (solo CI/dev).',
     );
   }
-  return createLocalSandbox({ signal: opts.signal, persistKey });
+  return createLocalSandbox({ signal: opts.signal, persistKey, installRunner: opts.installRunner });
 }
 
 module.exports = {
@@ -670,6 +725,9 @@ module.exports = {
   sandboxLimitsFromEnv,
   safeContainerRel,
   shQuote,
+  pickInstallOpts,
+  PACKAGES_DIR,
+  PACKAGES_PATH_EXPORT,
   SandboxRuntimeError,
   CMD_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,

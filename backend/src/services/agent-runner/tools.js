@@ -25,7 +25,9 @@
  */
 
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
-const { capabilityRecoveryGuidance } = require('./capability-recovery');
+const { capabilityRecoveryGuidance, detectMissingDependency } = require('./capability-recovery');
+const sandboxPackages = require('./sandbox-packages/policy');
+const { PACKAGES_DIR } = require('../doc-agent/sandbox-pip');
 const { CHART_SCHEMA, normalizeNativeChart } = require('../document-pipeline/pptx-native-chart');
 const {
   DESCRIPTION_PARAM,
@@ -42,6 +44,11 @@ const {
 
 const MAX_TOOL_RESULT_CHARS = 30_000;
 const CMD_TIMEOUT_MS = 120_000;
+// Packages installed by install_sandbox_package live in the conversation
+// workspace as a pip --user tree (PACKAGES_DIR). The sandbox DRIVERS export
+// PYTHONUSERBASE/PATH for every command (doc-agent/sandbox.js), so the tool
+// layer runs plain commands; the manifest is the tool's own bookkeeping.
+const MANIFEST_REL = '.sira-packages/.sira/manifest.json';
 
 // Clean light default for NEW decks when the user did not ask for a color.
 // NEVER pink: FFC0CB is only used when the user actually asked for rosado.
@@ -321,7 +328,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'execute_python',
       description:
-        'Run Python 3 inside the isolated /workspace sandbox. Libraries: python-pptx, python-docx, openpyxl, lxml, pypdf, Pillow. Uploaded files are in /workspace/uploads; write deliverables to /workspace/outputs. 120s timeout, no network.',
+        'Run Python 3 inside the isolated /workspace sandbox. Libraries: python-pptx, python-docx, openpyxl, lxml, pypdf, Pillow. Uploaded files are in /workspace/uploads; write deliverables to /workspace/outputs. 120s timeout, no network. If an import fails and the recovery note names an APPROVED distribution, install it with install_sandbox_package and retry.',
       parameters: {
         type: 'object',
         properties: {
@@ -553,6 +560,35 @@ const BASE_TOOL_DEFINITIONS = [
   },
 ];
 
+/**
+ * install_sandbox_package — offered only while the operator policy is on
+ * (sandbox-packages/policy.js). The execution sandbox never gets a network:
+ * a throw-away installer container fetches APPROVED wheels and streams them
+ * into the workspace (doc-agent/sandbox-pip.js).
+ */
+const INSTALL_TOOL_DEFINITION = {
+  type: 'function',
+  function: {
+    name: 'install_sandbox_package',
+    description:
+      'Install Python packages from the APPROVED allowlist into this conversation\'s sandbox (kept for later turns). Call it ONLY after an import failed with ModuleNotFoundError and the recovery note says the distribution is approved; pass exact PyPI names («opencv-python-headless», «seaborn==0.13.2»), never URLs, paths or modules («cv2»). Packages outside the list are refused and reported to the administrator automatically: do not retry them. execute_python keeps no network; only the installer reaches the package index.',
+    parameters: {
+      type: 'object',
+      properties: {
+        description: DESCRIPTION_PARAM,
+        packages: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'PyPI distribution names, optionally pinned: ["seaborn", "opencv-python-headless==4.12.0.88"].',
+        },
+        reason: { type: 'string', description: 'The failed import this install fixes (one line).' },
+      },
+      required: ['packages'],
+      additionalProperties: false,
+    },
+  },
+};
+
 const PREVIEW_SCRIPT = `
 import json, os, sys, glob
 out_dir = sys.argv[1]
@@ -583,8 +619,76 @@ function officeEngineEnabled(env = process.env) {
   return String((env && env.SIRAGPT_OFFICE_ENGINE) ?? '').trim() !== '0';
 }
 
-function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } = {}) {
+function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, capability } = {}) {
   const doc = makeDocExecutors(sandbox);
+  // Capability acquisition: the package policy decides what the agent may
+  // install into its own sandbox; onGap / onInstall feed the timeline and the
+  // capability ledger (agent-runner/index.js). Gaps are reported once per
+  // distribution per turn; installs are budgeted per turn.
+  const capabilityOpts = capability || {};
+  const policy = capabilityOpts.policy || sandboxPackages.resolvePolicy(capabilityOpts.env || process.env);
+  const onGap = typeof capabilityOpts.onGap === 'function' ? capabilityOpts.onGap : null;
+  const onInstall = typeof capabilityOpts.onInstall === 'function' ? capabilityOpts.onInstall : null;
+  const reportedGaps = new Set();
+  let installCalls = 0;
+  const reportGap = (gap) => {
+    const key = `${gap.kind}:${gap.package || gap.name}`;
+    if (!onGap || reportedGaps.has(key)) return;
+    reportedGaps.add(key);
+    try { onGap(gap); } catch (_) { /* telemetry never breaks a tool */ }
+  };
+  const recovery = (stderr, { language, exitCode, tool }) => {
+    const missing = detectMissingDependency(stderr, { language, exitCode });
+    if (!missing) return '';
+    const pkg = missing.kind === 'python_module' ? sandboxPackages.packageForModule(missing.name) : null;
+    const allowed = Boolean(pkg) && sandboxPackages.isAllowed(pkg, policy);
+    reportGap({
+      kind: missing.kind === 'python_module' ? 'python_package' : 'binary',
+      name: missing.raw || missing.name,
+      package: pkg,
+      allowed: policy.enabled && allowed,
+      tool,
+    });
+    return capabilityRecoveryGuidance(stderr, { language, exitCode, policy, package: pkg, allowed });
+  };
+  const explainInstallFailure = (result) => {
+    const code = String(result && result.code || 'install_failed');
+    const detail = String(result && result.detail || '').trim();
+    switch (code) {
+      case 'not_allowed':
+        return `the resolved dependencies include packages outside the approved list (${(result.notAllowed || []).join(', ')}); nothing was installed and the gap was reported to the administrator. Do not retry.`;
+      case 'not_found':
+        return `no binary wheel exists for ${(result.notFound || []).join(', ') || 'the request'} on this platform, or the name/version is wrong; nothing was installed. Check the exact PyPI name and version.`;
+      case 'network':
+        return 'the package index could not be reached; nothing was installed. Continue without it or retry once later.';
+      case 'timeout':
+        return `the install exceeded ${Math.round(policy.timeoutMs / 1000)} s; nothing was installed. Prefer smaller packages or continue without it.`;
+      case 'too_large':
+        return `the packages exceed the ${Math.round(policy.maxBytes / (1024 * 1024))} MB sandbox cap; nothing was installed.`;
+      case 'aborted':
+        return 'the install was cancelled; nothing was installed.';
+      case 'disk':
+        return 'the sandbox has no space left; nothing was installed.';
+      default:
+        return `the install failed (${code})${detail ? `: ${detail.slice(-300)}` : ''}; nothing was installed.`;
+    }
+  };
+  const updateManifest = async (installed, requested) => {
+    let manifest = { packages: {} };
+    try {
+      const raw = await sandbox.readFile(MANIFEST_REL);
+      const parsed = JSON.parse(String(raw));
+      if (parsed && typeof parsed === 'object' && parsed.packages && typeof parsed.packages === 'object') manifest = parsed;
+    } catch (_) { /* first install in this workspace */ }
+    const at = new Date().toISOString();
+    for (const item of installed || []) {
+      if (!item || !item.name) continue;
+      manifest.packages[item.name] = { version: item.version || '', installedAt: at };
+    }
+    manifest.requested = [...new Set([...(Array.isArray(manifest.requested) ? manifest.requested : []), ...requested])].slice(-200);
+    manifest.updatedAt = at;
+    try { await sandbox.writeFile(MANIFEST_REL, JSON.stringify(manifest, null, 2)); } catch (_) { /* best effort */ }
+  };
   // The user's words for this turn: style keywords («ejecutiva», «minimalista»)
   // pick the theme when the model passes none and no color was requested.
   const deckPrompt = String((deck && deck.prompt) || '');
@@ -613,7 +717,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
       if (r.timedOut) return `ERROR: sandbox command timed out after ${CMD_TIMEOUT_MS}ms\n${output}`;
       if (Number(r.exitCode) !== 0) {
         const guidance = officeApiReadbackGuidance(code, r.stderr, typeof executors.inspect_document === 'function')
-          || capabilityRecoveryGuidance(r.stderr, { exitCode: r.exitCode });
+          || recovery(r.stderr, { language: 'python', exitCode: r.exitCode, tool: 'execute_python' });
         const detail = guidance ? cap(output, MAX_TOOL_RESULT_CHARS - guidance.length - 100) : output;
         return `ERROR: python failed\n${detail}${guidance ? `\n${guidance}` : ''}`;
       }
@@ -632,10 +736,69 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
       if (r.aborted) return `ERROR: sandbox command aborted\n${output}`;
       if (r.timedOut) return `ERROR: sandbox command timed out after ${CMD_TIMEOUT_MS}ms\n${output}`;
       if (Number(r.exitCode) !== 0) {
-        const guidance = capabilityRecoveryGuidance(r.stderr, { language: 'bash', exitCode: r.exitCode });
+        const guidance = recovery(r.stderr, { language: 'bash', exitCode: r.exitCode, tool: 'execute_bash' });
         return `ERROR: sandbox command failed\n${guidance ? cap(output, MAX_TOOL_RESULT_CHARS - guidance.length - 100) : output}${guidance ? `\n${guidance}` : ''}`;
       }
       return output;
+    },
+
+    async install_sandbox_package(args, ctx = {}) {
+      if (!policy.enabled) return 'ERROR: package installation is disabled on this server. Use the installed libraries or state the missing capability.';
+      if (typeof sandbox.installPythonPackages !== 'function') return 'ERROR: this sandbox driver cannot install packages. Use the installed libraries or state the missing capability.';
+      const raw = args && args.packages;
+      const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      const checked = sandboxPackages.validateRequest(list, policy);
+      if (!checked.ok) {
+        const invalid = checked.rejected.filter((r) => r.reason === 'invalid_spec').map((r) => r.raw);
+        const denied = checked.rejected.filter((r) => r.reason === 'not_allowed').map((r) => r.name);
+        const tooMany = checked.rejected.find((r) => r.reason === 'too_many');
+        for (const name of denied) reportGap({ kind: 'python_package', name, package: name, allowed: false, tool: 'install_sandbox_package' });
+        const parts = ['ERROR: nothing was installed.'];
+        if (!list.length) parts.push('Pass packages: ["name", …].');
+        if (invalid.length) parts.push(`Invalid specs (only «name», «name[extra]», «name==1.2» are accepted; never URLs, paths or module names): ${invalid.join(', ')}.`);
+        if (denied.length) parts.push(`Not on the approved package list (reported to the administrator; do not retry them): ${denied.join(', ')}.`);
+        if (tooMany) parts.push(`At most ${tooMany.limit} packages per call.`);
+        parts.push('Use an installed equivalent or tell the user precisely which capability is missing.');
+        return parts.join(' ');
+      }
+      if (installCalls >= policy.maxPerTurn) {
+        return `ERROR: the install budget for this turn is exhausted (${policy.maxPerTurn} calls). Work with what is installed or state the missing capability.`;
+      }
+      installCalls += 1;
+      const specs = checked.requirements.map((r) => r.spec);
+      const startedAt = Date.now();
+      let result;
+      try {
+        result = await sandbox.installPythonPackages({
+          requirements: specs,
+          allowJson: sandboxPackages.allowlistJson(policy),
+          indexUrl: policy.indexUrl,
+          network: policy.network,
+          timeoutMs: policy.timeoutMs,
+          maxBytes: policy.maxBytes,
+          tmpSize: policy.tmpSize,
+          signal: ctx.signal,
+        });
+      } catch (err) {
+        result = {
+          ok: false, code: 'install_failed', installed: [], notAllowed: [], notFound: [], bytes: 0,
+          durationMs: Date.now() - startedAt, detail: String(err && err.message || err).slice(0, 300),
+        };
+      }
+      if (!result || typeof result !== 'object') result = { ok: false, code: 'install_failed', installed: [], notAllowed: [], notFound: [], bytes: 0, durationMs: Date.now() - startedAt, detail: '' };
+      if (onInstall) {
+        try { onInstall({ requested: specs, driver: sandbox.driver || null, ...result }); } catch (_) { /* telemetry never breaks a tool */ }
+      }
+      if (result.ok) {
+        const installed = Array.isArray(result.installed) ? result.installed : [];
+        await updateManifest(installed, specs);
+        const names = installed.map((i) => `${i.name}${i.version ? ` ${i.version}` : ''}`);
+        return names.length
+          ? `Installed into the sandbox: ${names.join(', ')}. Import them normally in execute_python (no restart needed).`
+          : `Already available: ${specs.join(', ')} (nothing new was needed). Import them normally in execute_python.`;
+      }
+      for (const name of result.notAllowed || []) reportGap({ kind: 'python_package', name, package: name, allowed: false, tool: 'install_sandbox_package' });
+      return `ERROR: ${explainInstallFailure(result)}`;
     },
     bash: (args) => doc.bash(args),
     read_file: (args) => doc.read_file(args),
@@ -977,7 +1140,13 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck } =
  */
 function buildToolDefinitions(env = process.env) {
   const base = officeEngineEnabled(env) ? withOfficeTools(BASE_TOOL_DEFINITIONS) : [...BASE_TOOL_DEFINITIONS];
+  if (sandboxPipEnabled(env)) base.push(INSTALL_TOOL_DEFINITION);
   return webToolsEnabled(env) ? [...base, ...WEB_TOOL_DEFINITIONS] : base;
+}
+
+/** install_sandbox_package is offered exactly when the package policy is on. */
+function sandboxPipEnabled(env = process.env) {
+  return Boolean(sandboxPackages.resolvePolicy(env).enabled);
 }
 
 /**
@@ -1003,6 +1172,10 @@ module.exports = {
   BASE_TOOL_DEFINITIONS,
   WEB_TOOL_DEFINITIONS,
   webToolsEnabled,
+  sandboxPipEnabled,
+  INSTALL_TOOL_DEFINITION,
+  PACKAGES_DIR,
+  MANIFEST_REL,
   normalizeHex,
   normalizeOutline,
   auditDeckPlan,

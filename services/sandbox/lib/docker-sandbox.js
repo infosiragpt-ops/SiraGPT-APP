@@ -118,7 +118,13 @@ async function createDockerSession({ workspaceKey, processRunner = runProcess, m
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('session destroyed');
       const timeoutMs = clampInt(opts.timeoutMs, CMD_TIMEOUT_MS, 1_000, 600_000);
-      return dexec(['exec', '-w', '/workspace', name, 'bash', '-c', String(command)], { timeoutMs });
+      // Packages installed through POST /v1/sessions/:id/install (lib/sandbox-pip.js)
+      // are a pip --user tree under /workspace/.sira-packages: PYTHONUSERBASE
+      // and PATH make them importable/callable in every command.
+      return dexec(
+        ['exec', '-w', '/workspace', '-e', 'PYTHONUSERBASE=/workspace/.sira-packages', name, 'bash', '-c', `export PATH=/workspace/.sira-packages/bin:"$PATH"; ${String(command)}`],
+        { timeoutMs },
+      );
     },
     async putFile(relPath, buffer) {
       const rel = safeRel(relPath);

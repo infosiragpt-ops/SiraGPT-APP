@@ -34,6 +34,7 @@ const {
   normalizeRoot,
 } = require('./workspace-roots');
 const { resolveHostPlatformCapabilities } = require('../host-platform-profile');
+const { recordHostCommand } = require('../capability-ledger');
 
 // ============================================================
 // Configuration — tune via env or defaults
@@ -47,8 +48,9 @@ const ALLOWED_COMMANDS = new Set([
   'git stash list', 'git tag',
   'git add', 'git commit', 'git push', 'git pull', 'git fetch', 'git checkout', 'git switch',
   'git config', 'git init',
-  // Node / npm
-  'node', 'npm', 'npx', 'node_modules/.bin',
+  // Node / npm (`npx` — download-and-run of arbitrary registry code — is NOT
+  // allowed; see the package-install guard below)
+  'node', 'npm', 'node_modules/.bin',
   // Python
   'python3', 'pip3',
   // System info
@@ -67,7 +69,7 @@ const DEFAULT_WORKING_DIR = defaultProjectsDir();
 
 const SIMPLE_COMMANDS = new Set([
   'ls', 'cat', 'head', 'tail', 'wc', 'find', 'grep', 'stat', 'du', 'file', 'tree',
-  'node', 'npm', 'npx', 'python3', 'pip3',
+  'node', 'npm', 'python3', 'pip3',
   'pwd', 'echo', 'which', 'uname', 'sw_vers', 'df', 'date',
   'whoami', 'id', 'hostname', 'uptime', 'free', 'lsb_release', 'ps',
   'make', 'cmake',
@@ -86,7 +88,7 @@ const SAFE_SYSTEMCTL_FLAGS = new Set(['--user', '--system', '--no-pager', '--pla
 // Environment hardening (defense against secret exfiltration)
 // ============================================================
 //
-// host_bash can run `node`, `npm`, `npx`, `python3` — which means any
+// host_bash can run `node`, `npm`, `python3` — which means any
 // command it executes can read its own `process.env`. The parent
 // (backend) process holds production secrets: OPENAI_API_KEY,
 // CEREBRAS_API_KEY, DATABASE_URL, the JWT signing secret, R2/S3 keys…
@@ -470,7 +472,6 @@ function spawnAllowedProgram(spec, options) {
     case 'git': return spawn('git', spec.args, options);
     case 'node': return spawn('node', spec.args, options);
     case 'npm': return spawn('npm', spec.args, options);
-    case 'npx': return spawn('npx', spec.args, options);
     case 'python3': return spawn('python3', spec.args, options);
     case 'pip3': return spawn('pip3', spec.args, options);
     case 'pwd': return spawn('pwd', spec.args, options);
@@ -493,6 +494,106 @@ function spawnAllowedProgram(spec, options) {
     default:
       throw new Error(`Unsupported command: ${spec.program}`);
   }
+}
+
+// ============================================================
+// Package installs (supply-chain guard)
+// ============================================================
+//
+// `npm install <x>` / `pip3 install <x>` run ON THE BACKEND HOST with its
+// registry egress. They stay available for the user's own cloned projects,
+// but every argument must be a package NAME (optionally versioned) — never a
+// URL, a git/file spec, a path, an alternate index, a global install or a
+// flag that changes where code comes from. Download-and-run commands
+// (`npx`, `npm exec|x|create`) and registry/config mutations are refused.
+// Every execution is recorded in the capability ledger (Admin → Logs).
+
+const NPM_INSTALL_SUBCOMMANDS = new Set(['install', 'i', 'add', 'ci', 'update', 'up', 'upgrade', 'uninstall', 'remove', 'rm', 'un', 'r', 'link', 'unlink', 'dedupe', 'ddp', 'prune']);
+const NPM_BLOCKED_SUBCOMMANDS = new Set(['exec', 'x', 'create', 'explore', 'config', 'c', 'set', 'get', 'login', 'adduser', 'logout', 'publish', 'unpublish', 'token', 'hook', 'access', 'owner', 'deprecate']);
+const NPM_INSTALL_FLAGS = new Set([
+  '--save', '-S', '--save-dev', '-D', '--save-exact', '-E', '--save-optional', '-O', '--save-peer', '--no-save',
+  '--no-audit', '--no-fund', '--silent', '--quiet', '-q', '--loglevel=error', '--legacy-peer-deps', '--prefer-offline',
+  '--omit=dev', '--omit=optional', '--production', '--ignore-scripts', '--no-package-lock', '--package-lock-only',
+  '--dry-run', '--include=dev', '--no-progress', '--prefer-dedupe',
+]);
+const PIP_INSTALL_SUBCOMMANDS = new Set(['install', 'download', 'wheel']);
+const PIP_BLOCKED_SUBCOMMANDS = new Set(['config']);
+const PIP_INSTALL_FLAGS = new Set([
+  '--user', '-U', '--upgrade', '--no-cache-dir', '-q', '--quiet', '--only-binary=:all:', '--prefer-binary',
+  '--disable-pip-version-check', '--no-input', '--break-system-packages', '--no-deps', '--no-warn-script-location',
+  '--dry-run', '--force-reinstall', '--no-compile', '--progress-bar=off',
+]);
+// npm name with optional scope and version/tag/range, nothing that can be a
+// location: no `://`, `git+`, `file:`, `.tgz`, leading `.`/`/`/`~`.
+const NPM_SPEC_RE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[A-Za-z0-9^~<>=|.*+-]{1,64})?$/;
+
+function npmPackageName(arg) {
+  const s = String(arg || '');
+  if (!NPM_SPEC_RE.test(s)) return null;
+  return s.replace(/(^|[^@])@[^@]*$/, '$1');
+}
+
+/**
+ * Classify a parsed command: `{ install, packages, blocked, reason }`.
+ * `blocked` is the code of the refusal (null when the command may run);
+ * `install` marks commands that fetch packages (for the audit row).
+ */
+function packageInstallGuard(spec) {
+  const out = { install: false, packages: [], blocked: null, reason: '' };
+  if (!spec || !spec.program) return out;
+  const program = spec.program;
+  let args = Array.isArray(spec.args) ? spec.args : [];
+  let manager = null;
+  if (program === 'npm') manager = 'npm';
+  else if (program === 'pip3') manager = 'pip';
+  else if (program === 'python3' && args[0] === '-m' && args[1] === 'pip') { manager = 'pip'; args = args.slice(2); }
+  else if (program === 'python3' && args[0] === '-m' && args[1] === 'pip3') { manager = 'pip'; args = args.slice(2); }
+  if (!manager) return out;
+  const sub = String(args[0] || '');
+  const rest = args.slice(1);
+  if (manager === 'npm') {
+    if (NPM_BLOCKED_SUBCOMMANDS.has(sub)) {
+      return { ...out, blocked: 'npm_subcommand', reason: `"npm ${sub}" no está permitido en host_bash (descarga y ejecuta código arbitrario o cambia el registro). Usa npm install <paquete> con nombres del registro oficial.` };
+    }
+    if (sub === 'init') {
+      // `npm init` (scaffold a package.json) is fine; `npm init <initializer>`
+      // downloads and runs create-<initializer>, exactly what npx did.
+      const positional = rest.filter((a) => !a.startsWith('-'));
+      if (positional.length) return { ...out, blocked: 'npm_init_initializer', reason: '"npm init <inicializador>" descarga y ejecuta código; usa "npm init -y" y añade dependencias con npm install <paquete>.' };
+      return out;
+    }
+    if (!NPM_INSTALL_SUBCOMMANDS.has(sub)) return out;
+    out.install = true;
+    for (const arg of rest) {
+      if (arg.startsWith('-')) {
+        if (arg === '-g' || arg === '--global') return { ...out, blocked: 'npm_global', reason: 'Instalaciones globales (-g/--global) no permitidas en host_bash: instala dentro del proyecto.' };
+        if (!NPM_INSTALL_FLAGS.has(arg)) return { ...out, blocked: 'npm_flag', reason: `Opción "${arg}" no permitida en "npm ${sub}" (solo flags de guardado/registro locales como --save-dev, --no-audit, --ignore-scripts).` };
+        continue;
+      }
+      const name = npmPackageName(arg);
+      if (!name) return { ...out, blocked: 'npm_spec', reason: `"${arg}" no es un nombre de paquete npm: solo nombres del registro (p. ej. lodash, @scope/pkg@1.2.3); nunca URLs, git+, file:, rutas ni archivos .tgz.` };
+      out.packages.push(name);
+    }
+    return out;
+  }
+  // pip
+  if (PIP_BLOCKED_SUBCOMMANDS.has(sub)) {
+    return { ...out, blocked: 'pip_subcommand', reason: `"pip ${sub}" no está permitido en host_bash (cambia el índice de paquetes).` };
+  }
+  if (!PIP_INSTALL_SUBCOMMANDS.has(sub)) return out;
+  out.install = true;
+  // eslint-disable-next-line global-require
+  const { parseRequirement } = require('../agent-runner/sandbox-packages/policy');
+  for (const arg of rest) {
+    if (arg.startsWith('-')) {
+      if (!PIP_INSTALL_FLAGS.has(arg)) return { ...out, blocked: 'pip_flag', reason: `Opción "${arg}" no permitida en "pip ${sub}": nada de -r/-e/-i/--index-url/--extra-index-url/--find-links/--trusted-host/--target; solo nombres de paquete del índice oficial.` };
+      continue;
+    }
+    const parsed = parseRequirement(arg);
+    if (!parsed) return { ...out, blocked: 'pip_spec', reason: `"${arg}" no es un requisito de paquete válido: solo nombre[extras][==versión] (p. ej. pandas==2.2.3); nunca URLs, git+, rutas, .whl ni .tar.gz.` };
+    out.packages.push(parsed.name);
+  }
+  return out;
 }
 
 // ============================================================
@@ -624,6 +725,15 @@ async function hostBash(args, ctx = {}) {
     };
   }
 
+  const guard = packageInstallGuard(commandSpec);
+  if (guard.blocked) {
+    void recordHostCommand({
+      prisma: ctx.prisma || null, userId: ctx.userId || null, chatId: ctx.chatId || null,
+      command, workingDir, ok: false, install: guard.install, packages: guard.packages, blocked: guard.blocked,
+    });
+    return { ok: false, code: 'package_install_blocked', blocked: guard.blocked, error: guard.reason };
+  }
+
   ctx.onEvent?.({ type: 'tool_call', tool: 'host_bash', preview: command.slice(0, 200) });
   ctx.onEvent?.({ type: 'stage', label: `Ejecutando: ${command.slice(0, 80)}`, pct: 30 });
 
@@ -638,6 +748,13 @@ async function hostBash(args, ctx = {}) {
     tool: 'host_bash',
     ok: result.ok,
     preview: result.ok ? stdoutPreview.slice(0, 600) : stderrPreview.slice(0, 600),
+  });
+  // Capability ledger: every host execution is visible in Admin → Logs;
+  // installs carry their package names. Fire-and-forget, never throws.
+  void recordHostCommand({
+    prisma: ctx.prisma || null, userId: ctx.userId || null, chatId: ctx.chatId || null,
+    command, workingDir, exitCode: result.exitCode, ok: result.ok, timedOut: result.timedOut,
+    install: guard.install, packages: guard.packages,
   });
 
   return {
@@ -661,7 +778,7 @@ async function hostBash(args, ctx = {}) {
 
 const hostBashTool = {
   name: 'host_bash',
-  description: 'Execute a shell command on the host machine. Use this to inspect files, run git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout/merge/rebase/reset/restore), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Destructive git operations such as --force push and --amend commit are blocked. Operations are restricted to the configured SiraGPT workspace roots.',
+  description: 'Execute a shell command on the host machine. Use this to inspect files, run git workflow commands (status/log/diff/show/add/commit/push/fetch/pull/checkout/merge/rebase/reset/restore), list directory contents, run npm/pip commands on cloned projects, and execute build/test scripts. Package installs accept registry package names only (npm install lodash@4, pip3 install pandas==2.2.3): never URLs, git+/file: specs, paths, alternate indexes or global installs; npx and npm exec/create are not available. Destructive git operations such as --force push and --amend commit are blocked. Operations are restricted to the configured SiraGPT workspace roots.',
   parameters: {
     type: 'object',
     properties: {
@@ -716,9 +833,12 @@ module.exports = {
   ALLOWED_COMMANDS,
   ALLOWED_DIRS,
   // Exported for testing:
+  packageInstallGuard,
   _internal: {
     isAllowedCommand,
     isAllowedDirectory,
+    packageInstallGuard,
+    npmPackageName,
     commandHasUnsafePathReference,
     runHostCommand,
     splitCommandLine,

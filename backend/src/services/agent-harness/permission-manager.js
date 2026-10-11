@@ -88,14 +88,30 @@ function enablePermissionAudit() {
   setPermissionAuditor(defaultPermissionAuditor);
 }
 
+/**
+ * Tools that ACQUIRE capability — run or install third-party code or
+ * playbooks on the user's behalf — never get a chat-wide grant: «Permitir
+ * siempre en este chat» on one of them behaves like a single «Permitir», so
+ * every later install still shows its own card with its own arguments.
+ */
+const ACQUISITION_TOOLS = Object.freeze(new Set([
+  'host_bash', 'clone_project', 'install_skill', 'save_skill', 'install_sandbox_package',
+]));
+
+function isAcquisitionTool(toolName) {
+  return ACQUISITION_TOOLS.has(String(toolName || ''));
+}
+
 function isAlwaysAllowed(chatId, toolName) {
   if (!chatId) return false;
+  if (isAcquisitionTool(toolName)) return false;
   const set = chatAllowlists.get(String(chatId));
   return Boolean(set && set.has(String(toolName)));
 }
 
 function allowAlwaysInChat(chatId, toolName) {
   if (!chatId || !toolName) return;
+  if (isAcquisitionTool(toolName)) return;
   const key = String(chatId);
   let set = chatAllowlists.get(key);
   if (!set) {
@@ -434,7 +450,7 @@ function resolvePermission({
   const normalized = verdict === 'deny' ? 'deny' : 'allow';
   settle(id, {
     decision: normalized,
-    scope: verdict === 'always_allow_in_chat' ? 'chat' : 'once',
+    scope: verdict === 'always_allow_in_chat' && !isAcquisitionTool(entry.toolName) ? 'chat' : 'once',
     ...(normalized === 'deny' ? { reason: 'user_denied' } : {}),
   });
   return { ok: true, decision: verdict };
@@ -498,6 +514,8 @@ module.exports = {
   cancelRun,
   isAlwaysAllowed,
   allowAlwaysInChat,
+  isAcquisitionTool,
+  ACQUISITION_TOOLS,
   resetForTests,
   setPermissionAuditor,
   enablePermissionAudit,
