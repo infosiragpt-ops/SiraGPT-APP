@@ -145,7 +145,11 @@ router.get('/models', async (req, res) => {
     const models = await prisma.aiModel.findMany({
       orderBy: { createdAt: 'desc' }
     });
-    res.json({ models });
+    // IMAGE rows carry `capabilities.imageEdit` so the admin sees which
+    // models only generate (legacy seeds, DALL-E, Imagen) before deciding
+    // whether to keep them active.
+    const { withImageCapabilities } = require('../services/media/image-model-capabilities');
+    res.json({ models: models.map((model) => { try { return withImageCapabilities(model); } catch (_) { return model; } }) });
   } catch (error) {
     console.error('Get models error:', error);
     res.status(500).json({ error: 'Failed to fetch models' });

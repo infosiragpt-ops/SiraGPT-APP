@@ -627,3 +627,28 @@ test('edit_image "ponle este logo a la imagen anterior" keeps the chat image as 
   assert.equal(engineCalls.edit[0].aspectRatio, null, '«logo» is a visual type, not a spoken frame');
   assert.deepEqual(r.referenceFileIds, ['file-9', 'logo']);
 });
+
+test('edit_image with two attachments: the photo is the canvas, the logo the material, and the editor is told so', async () => {
+  const logo = path.join(ARTIFACT_DIR, 'two-logo.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const foto = path.join(ARTIFACT_DIR, 'two-foto.jpg'); fs.writeFileSync(foto, 'foto-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'two-logo.png', originalName: 'logo.png' },
+    { id: 'foto', userId: 'user-1', mimeType: 'image/jpeg', path: foto, filename: 'two-foto.jpg', originalName: 'foto.jpg' },
+  ]);
+  // Upload order puts the logo first; nobody pinned a canvas.
+  const ctx = fakeCtx({ prisma, fileIds: ['logo', 'foto'], userQuery: 'ponle este logo a la foto, arriba a la derecha' });
+  const r = await tool('edit_image').execute({ instruction: 'ponle este logo a la foto, arriba a la derecha' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'foto-pixels', 'the photo is the canvas');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+  assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«foto\.jpg»\) es el lienzo que se edita; la imagen 2 \(«logo\.png»\) es material/);
+  assert.deepEqual(r.referenceFileIds, ['foto', 'logo']);
+  assert.ok(ctx._events.some((e) => e.type === 'tool_output' && /Lienzo: foto\.jpg; material: logo\.png/.test(e.preview || '')), 'the timeline shows the roles');
+  // A pinned fileId is the canvas whatever the pictures look like.
+  engineCalls.edit.length = 0;
+  const pinned = await tool('edit_image').execute({ instruction: 'ponle este logo a la foto', fileId: 'logo', referenceFileIds: ['foto'] }, fakeCtx({ prisma, fileIds: ['logo', 'foto'] }));
+  assert.equal(pinned.ok, true, pinned.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'logo-pixels');
+  assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«logo\.png»\) es el lienzo/);
+});

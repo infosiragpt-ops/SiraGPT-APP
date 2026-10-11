@@ -310,3 +310,13 @@ test('resolveReframeDirective returns its trimmed instruction once; the filler l
   assert.match(source, /REFERENCE_CREATE_VERB_RE = new RegExp\(`\\\\b\(\?:\$\{require\('\.\/media-intent'\)\._internal\.CREATE_VERB_SOURCE\}/);
   assert.match(directive.resolveEditDirective('créame una imagen como esta pero de noche').prompt, /conserva su sujeto/);
 });
+
+test('detectPreviousImageCue strict mode: with several uploads only the explicit words reach the chat\'s previous image', () => {
+  for (const text of ['ponle este logo a la foto', 'ponle este logo a la camiseta', 'hazla como esta foto']) {
+    assert.equal(directive.detectPreviousImageCue(text), true, `${text} (one upload)`);
+    assert.equal(directive.detectPreviousImageCue(text, { strict: true }), false, `${text} (two uploads)`);
+  }
+  for (const text of ['ponle este logo a la imagen anterior', 'ponlos en la que generaste', 'put this logo on the previous image', 'la última imagen con este sello']) {
+    assert.equal(directive.detectPreviousImageCue(text, { strict: true }), true, text);
+  }
+});

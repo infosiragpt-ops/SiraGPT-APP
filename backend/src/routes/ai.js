@@ -1035,6 +1035,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
         // honest error naming the model and the cause (billing-failover
         // buildFailureMessage). A per-minute window is not «Sin saldo».
         billingStatus: require('../services/ai/billing-failover').isOutOfCredit(connectionProvider) ? 'sin_saldo' : null,
+        // IMAGE rows: can the engine EDIT with this model? A generation-only
+        // row (DALL-E, Imagen, the legacy seeds) is visible as «no edita»
+        // before a user picks it for an edit; the picked model is never
+        // switched for them.
+        ...(() => { try { const caps = require('../services/media/image-model-capabilities').imageModelCapabilities(m); return caps ? { capabilities: caps } : {}; } catch (_) { return {}; } })(),
         planAccess: {
           currentPlan: modelPolicy.currentPlan,
           allowed: true,
@@ -12047,10 +12052,20 @@ router.post(
       // canvas and the uploads are references — unless the user chose a
       // canvas in the viewer (an explicit operation, or a fileId that is not
       // one of this turn's uploads), which always stays the canvas.
-      const previousImageCue = (() => { try { return require('../services/agents/image-directive').detectPreviousImageCue(prompt); } catch (_) { return false; } })();
+      // With two or more uploads «ponle este logo a la foto» names the other
+      // upload: only the explicit words («la imagen anterior») reach back
+      // into the history then.
+      const multiUpload = Array.isArray(referenceFileIds) && referenceFileIds.length >= 2;
+      const previousImageCue = (() => { try { return require('../services/agents/image-directive').detectPreviousImageCue(prompt, { strict: multiUpload }); } catch (_) { return false; } })();
       const primaryFromHistory = Boolean(previousImageCue) && !requestedOperation
         && (!fileId || (Array.isArray(referenceFileIds) && referenceFileIds.map(String).includes(String(fileId))));
-      let sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds, primaryFromHistory }, {
+      // The composer sends its uploads as fileId = files[0] + referenceFileIds
+      // = files: that is UPLOAD order, not a chosen canvas. With two or more
+      // uploads the pictures and the words pick the canvas («ponle este logo
+      // a la foto» → the photo), never the first file by accident. A history
+      // canvas, when the cue finds one, still wins inside the resolver.
+      const arrangeByIntent = (!requestedOperation && fileId && multiUpload && String(referenceFileIds[0]) === String(fileId)) ? prompt : null;
+      let sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds, primaryFromHistory, arrangeByIntent }, {
         prisma, userId, chatId, signal: requestAbortController.signal, requireChatOwnership: true,
       });
       // A follow-up promoted to an edit by the history pre-check, but the
@@ -12201,11 +12216,16 @@ router.post(
       const generateSingleImage = async () => {
         if (sourceImage) {
           const imageDirective = require('../services/agents/image-directive');
-          const editPrompt = operation === 'reframe'
+          let editPrompt = operation === 'reframe'
             ? imageDirective.resolveReframeDirective(prompt, aspectRatio).prompt
             : imageDirective.resolveEditDirective(prompt, {
               target: typeof editTarget === 'string' ? editTarget : undefined, selection: editSelection,
             }).prompt;
+          // Several inputs: name the canvas and the material for the editor.
+          if (operation !== 'reframe' && sourceImages.length >= 2) {
+            const { describeInputRoles } = require('../services/media/image-canvas-selection');
+            editPrompt = `${editPrompt}${describeInputRoles(sourceImages, { language: imageDirective.pickEditLanguage(prompt) })}`.trim();
+          }
           const result = await imageEngine.editImage({
             prompt: editPrompt,
             imageBuffer: editCanvas.imageBuffer,

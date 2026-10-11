@@ -21,6 +21,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Two pictures in one turn: the canvas and the material are chosen from the
+  file names («logo.png» vs «foto.jpg»), the pixels (a small transparent PNG
+  is a logo) and the request («ponle este logo a la foto»), never from the
+  upload order, in the chat loop and in the image composer; the editor is
+  told which input is the canvas and which is material; «ponle este logo a la
+  foto» with two uploads names the other upload, not the chat's previous
+  image. IMAGE catalog rows now carry `capabilities.imageEdit` in the picker
+  and in Admin → Modelos, so generation-only rows (DALL-E, Imagen, the legacy
+  seeds) are visible as «no edita».
 - Image edits keep their context. A follow-up on the chat's last image
   («cambia el color del logo», «ponle un sombrero al gato», «ahora en azul»)
   edits that image instead of generating an unrelated one, and a creation

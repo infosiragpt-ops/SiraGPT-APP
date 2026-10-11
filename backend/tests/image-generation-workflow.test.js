@@ -253,3 +253,20 @@ test('a framed deliverable built from an upload takes its frame from the words, 
   assert.equal(calls.edit.length, 1);
   assert.equal(calls.edit[0].aspectRatio, '16:9');
 });
+
+test('composer: two uploads in upload order → the photo is the canvas and the logo the material', async () => {
+  const { request, calls } = await harness({ source: false, references: ['logo', 'foto'] });
+  // The composer sends fileId = files[0] and referenceFileIds = files.
+  const res = await request({ prompt: 'ponle este logo a la foto', fileId: 'logo', referenceFileIds: ['logo', 'foto'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(res.body.files[0].parentFileId, 'foto', 'the photo is edited');
+  assert.equal(calls.edit[0].referenceImages.length, 1);
+  assert.match(calls.edit[0].prompt, /La imagen 1 \(«foto\.png»\) es el lienzo que se edita; la imagen 2 \(«logo\.png»\) es material/);
+  // Viewer «Editar» (explicit operation) keeps the chosen canvas.
+  const { request: request2, calls: calls2 } = await harness({ source: false, references: ['logo', 'foto'] });
+  const res2 = await request2({ prompt: 'ponle este logo a la foto', operation: 'edit', fileId: 'logo', referenceFileIds: ['foto'] });
+  assert.equal(res2.statusCode, 200); assert.ok(!res2.body.error, res2.body.error);
+  assert.equal(res2.body.files[0].parentFileId, 'logo');
+  assert.equal(calls2.edit.length, 1);
+});

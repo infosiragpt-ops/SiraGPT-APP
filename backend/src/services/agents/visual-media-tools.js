@@ -452,7 +452,7 @@ const editImage = {
       instruction: { type: 'string', description: 'The transformation to apply, in natural language (e.g. "quita el fondo y déjalo transparente", "make the sky sunset orange").' },
       imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
       fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
-      referenceFileIds: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'All image reference file IDs, in user order (up to 8 including the source). fileId remains the primary target; other images guide the requested style, layout or subjects.' },
+      referenceFileIds: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'All image reference file IDs (up to 8 including the source). fileId remains the primary target; other images guide the requested style, layout or subjects. Without fileId the canvas is chosen from the pictures and the request (a logo, signature or sticker is material placed on the photo), not from upload order.' },
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
       target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
       selection: { type: 'object', description: 'Optional rectangular selection: { x, y, width, height } in 0..100 (fractions 0..1 also accepted). Pixels outside it are protected. Invalid selections return an error.' },
@@ -476,10 +476,21 @@ const editImage = {
       // «ponle este logo a la imagen anterior»: the chat's last image is the
       // canvas — unless the model pinned a NON-attachment fileId (an older
       // image the user chose), which stays the canvas.
-      const previousCue = !imageUrl && (imageDirective.detectPreviousImageCue(cleanInstruction)
-        || imageDirective.detectPreviousImageCue(String(ctx.userQuery || '')));
-      const primaryFromHistory = Boolean(previousCue) && (!fileId || freshAttachmentIds(ctx).includes(String(fileId)));
-      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds, primaryFromHistory }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
+      // With two or more fresh uploads «ponle este logo a la foto» names the
+      // other upload, not the chat's previous image: only the explicit words
+      // («a la imagen anterior») reach back into the history then.
+      const freshIds = freshAttachmentIds(ctx);
+      const freshImageIds = (Array.isArray(ctx.fileMetadata) ? ctx.fileMetadata : [])
+        .filter((f) => f && f.id && isImageAttachment(f) && freshIds.includes(String(f.id))).map((f) => String(f.id));
+      const strict = (freshImageIds.length || (Array.isArray(referenceFileIds) ? referenceFileIds.length : 0) || freshIds.length) >= 2;
+      const previousCue = !imageUrl && (imageDirective.detectPreviousImageCue(cleanInstruction, { strict })
+        || imageDirective.detectPreviousImageCue(String(ctx.userQuery || ''), { strict }));
+      const primaryFromHistory = Boolean(previousCue) && (!fileId || freshIds.includes(String(fileId)));
+      // No pinned canvas: with several attachments the pictures and the words
+      // decide which one is edited («ponle este logo a la foto» → the photo).
+      // A history canvas, when the cue finds one, still wins inside the resolver.
+      const arrangeByIntent = (!fileId && !imageUrl) ? String(ctx.userQuery || cleanInstruction) : null;
+      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds, primaryFromHistory, arrangeByIntent }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
       const [source] = sources;
       if (!source) {
         const msg = 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.';
@@ -496,6 +507,15 @@ const editImage = {
       const editDirective = reframe
         ? imageDirective.resolveReframeDirective(cleanInstruction, aspectRatio)
         : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
+      // Several inputs: tell the editor which one is the canvas and which are
+      // material, so a logo is placed on the photo and not the other way round.
+      if (!reframe && sources.length >= 2) {
+        const { describeInputRoles } = require('../media/image-canvas-selection');
+        editDirective.prompt = `${editDirective.prompt}${describeInputRoles(sources, { language: imageDirective.pickEditLanguage(cleanInstruction) })}`.trim();
+      }
+      if (sources.arrangement) {
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: `Lienzo: ${sources[0].source || sources[0].fileId}; material: ${sources.slice(1).map((s) => s.source || s.fileId).join(', ')}`, partial: true });
+      }
       // A plain edit keeps the source frame: the model's aspectRatio only
       // counts for reframes, when the user's own words name an orientation,
       // or when the attachment is material for a framed deliverable («crea
