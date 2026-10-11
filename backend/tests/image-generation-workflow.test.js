@@ -270,3 +270,36 @@ test('composer: two uploads in upload order → the photo is the canvas and the 
   assert.equal(res2.body.files[0].parentFileId, 'logo');
   assert.equal(calls2.edit.length, 1);
 });
+
+test('composer: the user bubble keeps the upload order, API clients keep the first-reference contract, and a tie gets no clause', async () => {
+  const { request, calls } = await harness({ source: false, references: ['logo', 'foto'] });
+  const res = await request({ prompt: 'ponle este logo a la foto', fileId: 'logo', referenceFileIds: ['logo', 'foto'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(res.body.files[0].parentFileId, 'foto');
+  // The persisted user message lists the uploads as they were sent.
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((file) => file.id), ['logo', 'foto']);
+  // referenceFileIds alone (API clients, never the composer): first reference = canvas, as before.
+  const { request: requestApi, calls: callsApi } = await harness({ source: false, references: ['logo', 'foto'] });
+  const api = await requestApi({ prompt: 'ponle este logo a la foto', referenceFileIds: ['logo', 'foto'] });
+  assert.equal(api.statusCode, 200); assert.ok(!api.body.error, api.body.error);
+  assert.equal(api.body.files[0].parentFileId, 'logo');
+  assert.doesNotMatch(callsApi.edit[0].prompt, /es el lienzo/);
+  const { request: request2, calls: calls2 } = await harness({ source: false, references: ['a', 'b'] });
+  const res2 = await request2({ prompt: 'cambia el fondo de esta foto por este paisaje', fileId: 'a', referenceFileIds: ['a', 'b'] });
+  assert.equal(res2.statusCode, 200); assert.ok(!res2.body.error, res2.body.error);
+  assert.equal(res2.body.files[0].parentFileId, 'a', 'two photos: upload order');
+  assert.doesNotMatch(calls2.edit[0].prompt, /es el lienzo/);
+});
+
+test('composer: a catalog slug edits and generates through OpenRouter whatever family the chat inference gives it', async () => {
+  const { request, calls } = await harness({ references: ['logo'] });
+  const edit = await request({ prompt: 'ponle este logo', provider: 'Gemini', model: 'google/gemini-3.1-flash-image-preview', fileId: 'logo', referenceFileIds: ['logo'] });
+  assert.equal(edit.statusCode, 200); assert.ok(!edit.body.error, edit.body.error);
+  assert.equal(calls.edit[0].provider, 'openrouter');
+  const gen = await request({ prompt: 'un gato astronauta', provider: 'Gemini', model: 'google/gemini-3.1-flash-image-preview' });
+  assert.equal(gen.statusCode, 200); assert.ok(!gen.body.error, gen.body.error);
+  assert.equal(calls.generate[0].provider, 'openrouter');
+  // A bare id keeps its provider.
+  await request({ prompt: 'un gato', provider: 'Gemini', model: 'gemini-2.5-flash-image' });
+  assert.equal(calls.generate[1].provider, 'gemini');
+});

@@ -240,7 +240,10 @@ function detectReferenceDeliverableFrame(text) {
 // que generaste», «the previous image»).
 const PREVIOUS_IMAGE_EXPLICIT_RE = new RegExp([
   '\\b(?:la|a la|en la|de la|sobre la|al|el) (?:imagen|foto|fotografia|ilustracion|dibujo|resultado)(?: que)? (?:anterior|de antes|de arriba|previ[ao]|generad[ao]|ultim[ao]|generaste|hiciste|creaste|editaste|me diste)\\b',
-  '\\bla ultima (?:imagen|foto)\\b', '\\b(?:a|en|sobre) la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
+  // «a la misma» only with «a»: «en la misma posición / esquina» is a place
+  // inside the current picture, never the previous image.
+  '\\bla ultima (?:imagen|foto)\\b', '\\ba la (?:misma|anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b',
+  '\\b(?:en|sobre) la (?:anterior|de antes|de arriba|que (?:generaste|hiciste|creaste|editaste))\\b', '\\bal resultado (?:anterior|de antes)\\b',
   '\\bthe (?:previous|last|earlier) (?:image|picture|photo|one)\\b', '\\bthe (?:image|picture|photo) (?:you (?:generated|made|created)|from before)\\b',
 ].join('|'));
 // Object clitic = the previous image, demonstrative = the new upload:

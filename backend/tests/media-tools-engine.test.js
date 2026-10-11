@@ -652,3 +652,51 @@ test('edit_image with two attachments: the photo is the canvas, the logo the mat
   assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'logo-pixels');
   assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«logo\.png»\) es el lienzo/);
 });
+
+test('edit_image: a document + a logo with the clitic cue keeps the chat\'s previous image as canvas (task-runner ctx without metadata)', async () => {
+  const previous = path.join(ARTIFACT_DIR, 'prev-shirt.png'); fs.writeFileSync(previous, 'shirt-pixels');
+  const logo = path.join(ARTIFACT_DIR, 'cl2-logo.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const brief = path.join(ARTIFACT_DIR, 'brief.pdf'); fs.writeFileSync(brief, 'pdf-bytes');
+  const prisma = attachmentPrisma([
+    { id: 'shirt', userId: 'user-1', mimeType: 'image/png', path: previous, filename: 'prev-shirt.png', originalName: 'camiseta.png' },
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'cl2-logo.png', originalName: 'logo.png' },
+    { id: 'brief', userId: 'user-1', mimeType: 'application/pdf', path: brief, filename: 'brief.pdf', originalName: 'brief.pdf' },
+  ], { history: [{ files: JSON.stringify([{ type: 'image', fileId: 'shirt' }]) }] });
+  // The agent-task runner's tool ctx carries ids only: one picture + one PDF is ONE picture.
+  const r = await tool('edit_image').execute({ instruction: 'ponle este logo a la camiseta' }, fakeCtx({ prisma, fileIds: ['brief', 'logo'] }));
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'shirt-pixels', 'the previous image is the canvas');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+  assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«camiseta\.png»\) es el lienzo que se edita; la imagen 2 \(«logo\.png»\) es material/, 'the history canvas is certain: roles clause with the user\'s own file names');
+});
+
+test('edit_image: ties and compositions get no placement clause and no «Lienzo» row; English requests get the English clause', async () => {
+  const a = path.join(ARTIFACT_DIR, 'tie-a.jpg'); fs.writeFileSync(a, 'a-pixels');
+  const b = path.join(ARTIFACT_DIR, 'tie-b.jpg'); fs.writeFileSync(b, 'b-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'a', userId: 'user-1', mimeType: 'image/jpeg', path: a, filename: 'tie-a.jpg', originalName: 'a.jpg' },
+    { id: 'b', userId: 'user-1', mimeType: 'image/jpeg', path: b, filename: 'tie-b.jpg', originalName: 'b.jpg' },
+  ]);
+  const meta = [{ id: 'a', mimeType: 'image/jpeg', name: 'a.jpg' }, { id: 'b', mimeType: 'image/jpeg', name: 'b.jpg' }];
+  const tie = fakeCtx({ prisma, fileIds: ['a', 'b'], fileMetadata: meta, userQuery: 'cambia el fondo de esta foto por este paisaje' });
+  const r1 = await tool('edit_image').execute({ instruction: 'cambia el fondo de esta foto por este paisaje' }, tie);
+  assert.equal(r1.ok, true, r1.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'a-pixels', 'no evidence: upload order');
+  assert.doesNotMatch(engineCalls.edit[0].prompt, /es el lienzo/);
+  assert.ok(!tie._events.some((e) => /Lienzo:/.test(e.preview || '')), 'no roles row on a coin toss');
+  engineCalls.edit.length = 0;
+  const collage = fakeCtx({ prisma, fileIds: ['a', 'b'], fileMetadata: meta, userQuery: 'haz un collage con estas dos fotos' });
+  await tool('edit_image').execute({ instruction: 'haz un collage con estas dos fotos' }, collage);
+  assert.doesNotMatch(engineCalls.edit[0].prompt, /es el lienzo|is the canvas/);
+  engineCalls.edit.length = 0;
+  const logo = path.join(ARTIFACT_DIR, 'en-logo.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const prismaEn = attachmentPrisma([
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'en-logo.png', originalName: 'logo.png' },
+    { id: 'a', userId: 'user-1', mimeType: 'image/jpeg', path: a, filename: 'tie-a.jpg', originalName: 'photo.jpg' },
+  ]);
+  const en = fakeCtx({ prisma: prismaEn, fileIds: ['logo', 'a'], fileMetadata: [{ id: 'logo', mimeType: 'image/png' }, { id: 'a', mimeType: 'image/jpeg' }], userQuery: 'put this logo on the photo' });
+  const r3 = await tool('edit_image').execute({ instruction: 'put this logo on the photo' }, en);
+  assert.equal(r3.ok, true, r3.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'a-pixels');
+  assert.match(engineCalls.edit[0].prompt, /Input image 1 \(«photo\.jpg»\) is the canvas to edit; input image 2 \(«logo\.png»\) is material/);
+});

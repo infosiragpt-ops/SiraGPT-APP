@@ -23,13 +23,21 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 - Two pictures in one turn: the canvas and the material are chosen from the
   file names («logo.png» vs «foto.jpg»), the pixels (a small transparent PNG
-  is a logo) and the request («ponle este logo a la foto»), never from the
-  upload order, in the chat loop and in the image composer; the editor is
-  told which input is the canvas and which is material; «ponle este logo a la
-  foto» with two uploads names the other upload, not the chat's previous
-  image. IMAGE catalog rows now carry `capabilities.imageEdit` in the picker
-  and in Admin → Modelos, so generation-only rows (DALL-E, Imagen, the legacy
-  seeds) are visible as «no edita».
+  is a logo) and the request («ponle este logo a la foto» places the logo;
+  «cambia el color del logo» edits it), never from the upload order, in the
+  chat loop and in the image composer. Two ordinary photos, a composition
+  («combina estas dos fotos»), an explicit order («la primera imagen») or a
+  pinned canvas keep the user's order. The editor is told which input is the
+  canvas and which is material only when the roles are certain; «ponle este
+  logo a la foto» with two uploads names the other upload, not the chat's
+  previous image («en la misma esquina» never did). IMAGE catalog rows carry
+  `capabilities.imageEdit` in the picker and in Admin → Modelos, computed
+  the way the composer decides, so generation-only rows (DALL-E, Imagen, the
+  legacy seeds, Flux / Recraft / Ideogram via OpenRouter, Grok) are visible
+  as «no edita». The composer now runs a catalog slug
+  («google/gemini-3.1-flash-image-preview», «openai/gpt-5.4-image-2») on
+  OpenRouter instead of the direct Google / OpenAI image APIs, which never
+  knew the slug, so the default OpenRouter image model can edit again.
 - Image edits keep their context. A follow-up on the chat's last image
   («cambia el color del logo», «ponle un sombrero al gato», «ahora en azul»)
   edits that image instead of generating an unrelated one, and a creation

@@ -263,26 +263,36 @@ async function resolveImageSources({ fileId, referenceFileIds, imageUrl, primary
   if (sources.length > MAX_REFERENCE_IMAGES) {
     throw Object.assign(new Error(`Puedes usar hasta ${MAX_REFERENCE_IMAGES} imágenes de referencia por edición.`), { code: 'E_PARAMS', status: 400 });
   }
+  // Where the canvas came from, for the callers' prompt clause: a history
+  // canvas or a user-chosen fileId is certain; upload order is not.
+  if (sources.length >= 2) {
+    sources.canvasOrigin = canvasFromHistory ? 'history' : ((explicitCanvas || (fileId && typeof arrangeByIntent !== 'string')) ? 'pinned' : 'upload-order');
+  }
   // Several upload-ordered images and no pinned canvas: the pictures and the
   // words decide which one is edited. A history canvas or a user-chosen
   // fileId already settled it.
   if (typeof arrangeByIntent === 'string' && !explicitUrl && !canvasFromHistory && !explicitCanvas && sources.length >= 2) {
     const { imageMetrics, rankEditInputs } = require('./image-canvas-selection');
     const keyOf = (source, index) => String(source.fileId || `source-${index}`);
-    const metrics = await Promise.all(sources.map((source) => imageMetrics(source.buffer)));
-    const ranking = rankEditInputs({
-      instruction: arrangeByIntent,
-      images: sources.map((source, index) => ({
-        id: keyOf(source, index),
-        name: (source.record && (source.record.originalName || source.record.filename)) || source.source || '',
-        ...metrics[index],
-      })),
+    const describe = (source, index, metrics) => ({
+      id: keyOf(source, index),
+      name: (source.record && (source.record.originalName || source.record.filename)) || '',
+      ...(metrics || {}),
     });
+    // Names first (free); pixels only when the names leave it open.
+    let ranking = rankEditInputs({ instruction: arrangeByIntent, images: sources.map((source, index) => describe(source, index)) });
+    if (ranking.confidence !== 'high') {
+      const metrics = await Promise.all(sources.map((source) => imageMetrics(source.buffer)));
+      ranking = rankEditInputs({ instruction: arrangeByIntent, images: sources.map((source, index) => describe(source, index, metrics[index])) });
+    }
     const byKey = new Map(sources.map((source, index) => [keyOf(source, index), source]));
     const arranged = ranking.order.map((key) => byKey.get(key)).filter(Boolean);
     if (arranged.length === sources.length) sources.splice(0, sources.length, ...arranged);
     sources.forEach((source, index) => { source.role = index === 0 ? 'canvas' : 'material'; });
     sources.arrangement = { reason: ranking.reason, confidence: ranking.confidence, changed: ranking.changed, canvasId: sources[0].fileId || null };
+    // Evidence (names, transparency) or the user's own order make the roles
+    // certain; a coin toss stays «upload-order» and gets no placement clause.
+    sources.canvasOrigin = ranking.confidence === 'low' ? 'upload-order' : (ranking.reason === 'explicit-order' || ranking.reason === 'composition' ? 'explicit' : 'ranked');
   }
   return sources;
 }

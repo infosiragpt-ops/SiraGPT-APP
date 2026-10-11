@@ -252,6 +252,22 @@ function freshAttachmentIds(ctx = {}) {
   const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
   return (Array.isArray(ctx.fileIds) ? ctx.fileIds.map(String) : []).filter((id) => !recovered.has(id));
 }
+// How many of this turn's fresh attachments are pictures. Metadata when the
+// caller sent it (the chat loop); otherwise the owned file rows (the task
+// runner's ctx carries ids only). Documents never count.
+async function countFreshImages({ ctx = {}, freshIds = [], prisma = null } = {}) {
+  if (!freshIds.length) return 0;
+  if (Array.isArray(ctx.fileMetadata) && ctx.fileMetadata.length) {
+    return ctx.fileMetadata.filter((f) => f && f.id && isImageAttachment(f) && freshIds.includes(String(f.id))).length;
+  }
+  if (prisma?.file?.findMany && ctx.userId) {
+    try {
+      const rows = await prisma.file.findMany({ where: { id: { in: freshIds }, userId: ctx.userId, deletedAt: null } });
+      return (Array.isArray(rows) ? rows : []).filter((row) => row && isImageAttachment(row)).length;
+    } catch (_) { return 0; }
+  }
+  return 0;
+}
 
 const generateImage = {
   name: 'generate_image',
@@ -480,9 +496,8 @@ const editImage = {
       // other upload, not the chat's previous image: only the explicit words
       // («a la imagen anterior») reach back into the history then.
       const freshIds = freshAttachmentIds(ctx);
-      const freshImageIds = (Array.isArray(ctx.fileMetadata) ? ctx.fileMetadata : [])
-        .filter((f) => f && f.id && isImageAttachment(f) && freshIds.includes(String(f.id))).map((f) => String(f.id));
-      const strict = (freshImageIds.length || (Array.isArray(referenceFileIds) ? referenceFileIds.length : 0) || freshIds.length) >= 2;
+      const freshImageIds = await countFreshImages({ ctx, freshIds, prisma });
+      const strict = Math.max(freshImageIds, Array.isArray(referenceFileIds) ? referenceFileIds.length : 0) >= 2;
       const previousCue = !imageUrl && (imageDirective.detectPreviousImageCue(cleanInstruction, { strict })
         || imageDirective.detectPreviousImageCue(String(ctx.userQuery || ''), { strict }));
       const primaryFromHistory = Boolean(previousCue) && (!fileId || freshIds.includes(String(fileId)));
@@ -507,14 +522,20 @@ const editImage = {
       const editDirective = reframe
         ? imageDirective.resolveReframeDirective(cleanInstruction, aspectRatio)
         : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
-      // Several inputs: tell the editor which one is the canvas and which are
-      // material, so a logo is placed on the photo and not the other way round.
+      // Several inputs whose roles are certain (pinned, history canvas, or
+      // ranked on evidence): tell the editor which one is the canvas and
+      // which are material. A coin toss or a composition («combina estas dos
+      // fotos») gets no placement clause — the engine's neutral contract stays.
       if (!reframe && sources.length >= 2) {
-        const { describeInputRoles } = require('../media/image-canvas-selection');
-        editDirective.prompt = `${editDirective.prompt}${describeInputRoles(sources, { language: imageDirective.pickEditLanguage(cleanInstruction) })}`.trim();
+        const { describeInputRoles, isCompositionRequest } = require('../media/image-canvas-selection');
+        const certain = sources.canvasOrigin && sources.canvasOrigin !== 'upload-order' && sources.canvasOrigin !== 'explicit';
+        if (certain && !isCompositionRequest(cleanInstruction) && !isCompositionRequest(String(ctx.userQuery || ''))) {
+          editDirective.prompt = `${editDirective.prompt}${describeInputRoles(sources, { language: imageDirective.pickEditLanguage(cleanInstruction) })}`.trim();
+        }
       }
-      if (sources.arrangement) {
-        emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: `Lienzo: ${sources[0].source || sources[0].fileId}; material: ${sources.slice(1).map((s) => s.source || s.fileId).join(', ')}`, partial: true });
+      if (sources.arrangement && sources.arrangement.confidence !== 'low' && sources.canvasOrigin === 'ranked') {
+        const { _internal: { displayNameOf } } = require('../media/image-canvas-selection');
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: `Lienzo: ${displayNameOf(sources[0], 0)}; material: ${sources.slice(1).map((s, i) => displayNameOf(s, i + 1)).join(', ')}`, partial: true });
       }
       // A plain edit keeps the source frame: the model's aspectRatio only
       // counts for reframes, when the user's own words name an orientation,

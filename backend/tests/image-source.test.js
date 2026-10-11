@@ -318,3 +318,28 @@ test('arrangeByIntent: real pixels decide when the file names say nothing', asyn
   assert.deepEqual(arranged.map((source) => source.fileId), ['a2', 'a1']);
   assert.match(arranged.arrangement.reason, /alpha/);
 });
+
+test('arrangeByIntent: compositions, explicit order, two photos and a history canvas keep the caller\'s order and say why', async () => {
+  const ctx = await context([], { logo: { originalName: 'logo.png' }, foto: { originalName: 'foto.jpg' }, a: { originalName: 'a.jpg' }, b: { originalName: 'b.jpg' } });
+  ctx.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const collage = await resolveImageSources({ arrangeByIntent: 'haz un collage con estas dos imágenes' }, { ...ctx, fileIds: ['logo', 'foto'] });
+  assert.deepEqual(collage.map((source) => source.fileId), ['logo', 'foto']);
+  assert.equal(collage.arrangement.reason, 'composition');
+  assert.equal(collage.canvasOrigin, 'explicit');
+  const ordinal = await resolveImageSources({ arrangeByIntent: 'quita el fondo de la primera imagen' }, { ...ctx, fileIds: ['logo', 'foto'] });
+  assert.deepEqual([ordinal.map((source) => source.fileId), ordinal.arrangement.reason, ordinal.canvasOrigin], [['logo', 'foto'], 'explicit-order', 'explicit']);
+  const photos = await resolveImageSources({ arrangeByIntent: 'cambia el fondo de esta foto por este paisaje' }, { ...ctx, fileIds: ['a', 'b'] });
+  assert.deepEqual([photos.map((source) => source.fileId), photos.arrangement.reason, photos.canvasOrigin], [['a', 'b'], 'upload-order', 'upload-order']);
+  // The words edit the logo: the logo stays the canvas even if the photo were first.
+  const recolour = await resolveImageSources({ arrangeByIntent: 'cambia el color del logo' }, { ...ctx, fileIds: ['foto', 'logo'] });
+  assert.deepEqual([recolour.map((source) => source.fileId), recolour.canvasOrigin], [['logo', 'foto'], 'ranked']);
+  // Pinned and history canvases are certain.
+  const pinned = await resolveImageSources({ fileId: 'a', referenceFileIds: ['logo'] }, ctx);
+  assert.equal(pinned.canvasOrigin, 'pinned');
+  const history = await context([{ files: [{ type: 'image', fileId: 'previous' }] }], { previous: {}, logo: { originalName: 'logo.png' } });
+  history.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const cued = await resolveImageSources({ primaryFromHistory: true, arrangeByIntent: 'ponle este logo a la imagen anterior' }, { ...history, fileIds: ['logo'] });
+  assert.deepEqual([cued.map((source) => source.fileId), cued.canvasOrigin], [['previous', 'logo'], 'history']);
+  // A single source carries no origin.
+  assert.equal((await resolveImageSources({ fileId: 'a' }, ctx)).canvasOrigin, undefined);
+});

@@ -320,3 +320,12 @@ test('detectPreviousImageCue strict mode: with several uploads only the explicit
     assert.equal(directive.detectPreviousImageCue(text, { strict: true }), true, text);
   }
 });
+
+test('«en la misma posición / esquina» is a place inside the picture, never the previous image', () => {
+  for (const text of ['ponlo en la misma posición que antes', 'déjalo en la misma esquina', 'colócalo sobre la misma línea', 'put it in the same corner']) {
+    assert.equal(directive.detectPreviousImageCue(text), false, text);
+    assert.equal(directive.detectPreviousImageCue(text, { strict: true }), false, text);
+  }
+  assert.equal(directive.detectPreviousImageCue('ponle el sello a la misma'), true);
+  assert.equal(directive.detectPreviousImageCue('ponlo sobre la que generaste'), true);
+});
