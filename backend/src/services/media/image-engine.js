@@ -44,6 +44,7 @@ const DEFAULT_MODEL_BY_PROVIDER = {
 const EDIT_MODEL_BY_PROVIDER = {
   gemini: process.env.SIRAGPT_IMAGE_EDIT_MODEL_GEMINI || 'gemini-2.5-flash-image',
   openai: process.env.SIRAGPT_IMAGE_EDIT_MODEL_OPENAI || 'gpt-image-1',
+  openrouter: process.env.SIRAGPT_IMAGE_EDIT_MODEL_OPENROUTER || DEFAULT_MODEL_BY_PROVIDER.openrouter,
 };
 
 // ── Test seams ────────────────────────────────────────────────────────────
@@ -639,7 +640,8 @@ async function editWithOpenAI({ model, prompt, imageBuffer, mimeType, referenceI
     }
   } catch { /* unit tests and runtimes without File still pass a Buffer */ }
   const useModel = model || EDIT_MODEL_BY_PROVIDER.openai;
-  const size = aspectRatio ? gptImageSizeFor(normalizeAspectRatio(aspectRatio)) : '1024x1024';
+  // 'auto' keeps the source frame; a fixed 1024x1024 squared every 16:9 / 3:4 edit.
+  const size = aspectRatio ? gptImageSizeFor(normalizeAspectRatio(aspectRatio)) : 'auto';
   const response = await withTimeout(
     client.images.edit({
       image: referenceFiles.length ? [imageFile, ...referenceFiles] : imageFile,

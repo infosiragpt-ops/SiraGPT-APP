@@ -6274,6 +6274,9 @@ router.post(
               chatId: canPersist ? chatId : null,
               text: prompt,
               signature: req._rlcdSignature || null,
+              hasImageAttachment: (typeof processedFiles !== 'undefined' && Array.isArray(processedFiles))
+                ? processedFiles.some((file) => file && isImageMime(file.mimeType || file.type))
+                : false,
             });
             if (req._rlcdMedia.decisionId) req._rlcdDecisionIds.push(req._rlcdMedia.decisionId);
             // TypeSafe Jev (when configured) re-decides the uncertain band with a
@@ -8143,15 +8146,21 @@ router.post(
             let __chatGeneratedRefs = [];
             // ─── Agentic chat path (feature-flagged) ─────────────────
             // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
-            // do OpenAI-style tool calls AND there are no images
-            // attached (the function-calling loop currently only
-            // streams text), run a bounded react-agent loop with
-            // web_search + read_url instead of a plain LLM stream.
+            // do OpenAI-style tool calls, run a bounded react-agent loop
+            // with web_search + read_url instead of a plain LLM stream.
+            // Image turns enter the loop only with an edit / reference
+            // intent (only edit_image delivers the pixels); vision Q&A
+            // («describe esta imagen») stays on the plain stream.
             // On any failure we fall through to the standard stream so
             // the user never sees a blank reply.
             try {
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (processedFiles || []).some((f) => f && isImageMime(f.mimeType || f.type));
+              const __imageMediaTurn = hasImages && (() => {
+                try {
+                  return require('../services/agents/media-intent').isImageMediaRequest(prompt);
+                } catch (_) { return false; }
+              })();
               const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
               // Count Office/PDF attachments even when vision images were
               // stripped from filesForVision. The document-edit preloop needs
@@ -8229,6 +8238,15 @@ router.post(
                   generateLog.info('routing.request_brief_veto', { gate: 'agent_runner', target: 'previous_answer' });
                 }
               } catch (_) { createDocRequested = false; }
+              // «cambia el color del logo» with only an image attached: the
+              // Office runner would claim it and end with «No pude generar el
+              // documento». The runner's own predicate decides, so a document
+              // noun («crea una ppt con esta imagen de fondo») keeps the claim.
+              if (createDocRequested && __imageMediaTurn && !(processedFiles || []).some((f) => f && !isImageMime(f.mimeType || f.type))
+                && (() => { try { return require('../services/agent-runner').isImageMediaTurn(prompt, { files: processedFiles || [] }); } catch (_) { return false; } })()) {
+                createDocRequested = false;
+                generateLog.info('routing.image_turn_veto', { gate: 'agent_runner' });
+              }
               // Tool-calling fallback ladder: 'native' (OpenAI-style
               // tool_calls), 'prompted' (tools described in the system prompt,
               // fenced-JSON calls parsed back — lets ANY model drive the
@@ -8273,7 +8291,7 @@ router.post(
                 // decision adapter in aiService handles the whole turn.
                 && !/^typesafe$/i.test(String(actualProvider || ''))
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
-                && (!hasImages || Boolean(verifiedCodingWorkspace) || documentEditRequested || createDocRequested)
+                && (!hasImages || __imageMediaTurn || Boolean(verifiedCodingWorkspace) || documentEditRequested || createDocRequested)
               );
               // F2 telemetry: a document turn (the AgentRunner would claim it)
               // that does NOT enter the agentic loop is logged as 'skipped'
@@ -8306,7 +8324,7 @@ router.post(
                       ? 'caller_disabled'
                       : (__toolCallMode === 'none'
                         ? 'tool_call_mode_none'
-                        : ((hasImages && !documentEditRequested)
+                        : ((hasImages && !documentEditRequested && !__imageMediaTurn)
                           ? 'images_attached'
                           : (shouldRunAgentic ? null : 'routing_gate')))));
                 __turnPolicy = turnPolicyService.buildTurnPolicy({
@@ -11955,7 +11973,17 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
       let { prompt, chatId, provider, model, fileId, referenceFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
-      const operation = resolveImageOperation({ operation: requestedOperation, prompt, fileId, referenceFileIds, selection: editSelection, maskDataUrl });
+      // «ahora en azul» from the composer arrives with no fileId: one bounded
+      // history read, only for follow-up phrasings, keeps it an edit.
+      let hasRecentImage = false;
+      if (!requestedOperation && !fileId && !referenceFileIds?.length && !editSelection && !maskDataUrl && chatId) {
+        try {
+          if (require('../services/agents/media-intent').isImageFollowupCandidate(prompt)) {
+            hasRecentImage = await require('../services/media/image-followup-context').chatHasRecentImage(prisma, { userId: req.user.id, chatId });
+          }
+        } catch (_) { hasRecentImage = false; }
+      }
+      let operation = resolveImageOperation({ operation: requestedOperation, prompt, fileId, referenceFileIds, selection: editSelection, maskDataUrl, hasRecentImage });
       if (operation === 'generate' && (fileId || referenceFileIds?.length || editSelection || maskDataUrl)) {
         return res.status(400).json({ error: 'Para trabajar sobre una imagen existente, elige editar.', code: 'E_PARAMS' });
       }
@@ -11989,8 +12017,15 @@ router.post(
       // Sync the frame to what the user described in the prompt itself
       // ("rectangular", "vertical", "para facebook", "9:16"…), overriding the
       // picker default so the generated image matches the request.
+      // With a picture attached as material, the framed deliverable the words
+      // name («un banner con este logo» → 16:9) beats the visual-type guess
+      // («logo» → 1:1) and the picker default.
+      let editWordedFrame = null;
       try {
-        const promptAspect = require('../services/agents/media-intent').resolveImageAspectRatio(prompt);
+        const imageDirective = require('../services/agents/image-directive');
+        const deliverable = (fileId || referenceFileIds?.length) ? imageDirective.detectReferenceDeliverableFrame(prompt) : null;
+        editWordedFrame = imageDirective.detectSpokenImageFrame(prompt) || deliverable;
+        const promptAspect = (deliverable && deliverable.frame) || require('../services/agents/media-intent').resolveImageAspectRatio(prompt);
         if (promptAspect) aspectRatio = normalizeImageAspectRatio(promptAspect);
       } catch (_) { /* best-effort: keep the picker aspect ratio */ }
       const imagePrompt = promptWithImageAspectRatio(providerPromptBase, aspectRatio, quality);
@@ -12008,9 +12043,22 @@ router.post(
         preValidatedChat = await prisma.chat.findFirst({ where: { id: chatId, userId, deletedAt: null } });
         if (!preValidatedChat) return res.status(404).json({ error: 'No se encontró la conversación.', code: 'E_PARAMS' });
       }
-      const sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds }, {
+      // «ponle este logo a la imagen anterior»: the chat's last image is the
+      // canvas and the uploads are references — unless the user chose a
+      // canvas in the viewer (an explicit operation, or a fileId that is not
+      // one of this turn's uploads), which always stays the canvas.
+      const previousImageCue = (() => { try { return require('../services/agents/image-directive').detectPreviousImageCue(prompt); } catch (_) { return false; } })();
+      const primaryFromHistory = Boolean(previousImageCue) && !requestedOperation
+        && (!fileId || (Array.isArray(referenceFileIds) && referenceFileIds.map(String).includes(String(fileId))));
+      let sourceImages = operation === 'generate' ? [] : await require('../services/media/image-source').resolveImageSources({ fileId, referenceFileIds, primaryFromHistory }, {
         prisma, userId, chatId, signal: requestAbortController.signal, requireChatOwnership: true,
       });
+      // A follow-up promoted to an edit by the history pre-check, but the
+      // resolver found nothing it can open: generate instead of refusing.
+      if (operation !== 'generate' && !sourceImages.length && hasRecentImage && !fileId && !referenceFileIds?.length && !editSelection && !maskDataUrl && !background) {
+        operation = 'generate';
+        sourceImages = [];
+      }
       const [sourceImage] = sourceImages;
       if (operation !== 'generate' && !sourceImage) {
         return res.status(400).json({
@@ -12024,11 +12072,20 @@ router.post(
         type: input.mimeType, url: publicUploadUrl(`/uploads/${userId}/${input.filename}`),
       }))) : undefined;
       // Existing composition is the default for an edit. Reframes alone change
-      // the canvas, and the user's current spoken ratio may override defaults.
-      if (operation === 'edit' && sourceImage?.metadata?.aspectRatio) aspectRatio = normalizeImageAspectRatio(sourceImage.metadata.aspectRatio);
+      // the canvas, and the user's own words («hazla vertical», «un banner
+      // con esta foto») override that default.
+      if (operation === 'edit' && sourceImage?.metadata?.aspectRatio && !editWordedFrame) aspectRatio = normalizeImageAspectRatio(sourceImage.metadata.aspectRatio);
       const editCanvas = sourceImage ? await prepareEditCanvas({
         imageBuffer: sourceImage.buffer, operation, aspectRatio, selection: editSelection, maskDataUrl,
       }) : null;
+      // An upload has no stored ratio: the picker default '1:1' used to reach
+      // the editor and finishEditCanvas stretched the square result back.
+      if (operation === 'edit' && !sourceImage?.metadata?.aspectRatio && !editWordedFrame && editCanvas?.sourceWidth && editCanvas?.sourceHeight) {
+        try {
+          const derived = require('../services/media/image-followup-context').nearestAspectRatio(editCanvas.sourceWidth, editCanvas.sourceHeight, Object.keys(IMAGE_ASPECT_RATIOS));
+          if (derived) aspectRatio = normalizeImageAspectRatio(derived);
+        } catch (_) { /* keep the picker ratio */ }
+      }
 
       if (ADMIN_MANAGED_IMAGE_MODEL_NAMES.has(model)) {
         await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE'], maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });

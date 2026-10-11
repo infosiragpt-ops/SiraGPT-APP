@@ -56,3 +56,18 @@ test('existing edit-capable models retain implicit history and explicit input be
   assert.equal(await resolveImageGenerationFileId({ ...request, fileId: 'upload' }), 'upload');
   assert.equal(await resolveImageGenerationFileId({ ...request, chatId: undefined }), undefined);
 });
+
+test('follow-up edits of the chat\'s last image are edits, not blank generations', () => {
+  assert.equal(resolveImageOperation({ prompt: 'cambia el color del logo' }), 'edit');
+  assert.equal(resolveImageOperation({ prompt: 'ponle este logo a la camiseta' }), 'edit');
+  // Subject-less continuations need the chat to already hold an image.
+  assert.equal(resolveImageOperation({ prompt: 'ponle un sombrero al gato' }), 'generate');
+  assert.equal(resolveImageOperation({ prompt: 'ponle un sombrero al gato', hasRecentImage: true }), 'edit');
+  assert.equal(resolveImageOperation({ prompt: 'ahora en azul', hasRecentImage: true }), 'edit');
+  assert.equal(resolveImageOperation({ prompt: 'que sea de noche', hasRecentImage: true }), 'edit');
+  // A creation sentence with edit wording stays a generation (same guard as the chat loop).
+  assert.equal(resolveImageOperation({ prompt: 'crea una imagen de un perro y quítale el fondo' }), 'generate');
+  assert.equal(resolveImageOperation({ prompt: 'crea otra imagen de una ciudad', hasRecentImage: true }), 'generate');
+  // Explicit inputs still win over the text.
+  assert.equal(resolveImageOperation({ prompt: 'crea una imagen de un perro y quítale el fondo', fileId: 'f1' }), 'edit');
+});
