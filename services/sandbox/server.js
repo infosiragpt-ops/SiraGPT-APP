@@ -125,8 +125,10 @@ function validateInstallBody(body = {}) {
   if (allow.length > 2000 || !allow.every((n) => /^[a-z0-9][a-z0-9-]{0,99}$/.test(n))) return { error: 'allow: unsafe entry' };
   const indexUrl = body.indexUrl ? String(body.indexUrl) : null;
   if (!sandboxPip.isSafeIndexUrl(indexUrl)) return { error: 'indexUrl: unsafe' };
-  const network = body.network ? String(body.network) : (process.env.SANDBOX_PIP_NETWORK || 'bridge');
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(network)) return { error: 'network: unsafe' };
+  // The sandbox host's operator owns the installer network: SANDBOX_PIP_NETWORK
+  // wins over whatever a client asks for, and the host namespace is refused.
+  const network = process.env.SANDBOX_PIP_NETWORK || (body.network ? String(body.network) : 'bridge');
+  if (!sandboxPip.isSafeNetwork(network)) return { error: 'network: unsafe' };
   const tmpSize = body.tmpSize ? String(body.tmpSize) : '1g';
   if (!/^\d+(\.\d+)?[bkmg]?$/.test(tmpSize)) return { error: 'tmpSize: unsafe' };
   return {

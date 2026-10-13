@@ -49,6 +49,9 @@ const CMD_TIMEOUT_MS = 120_000;
 // PYTHONUSERBASE/PATH for every command (doc-agent/sandbox.js), so the tool
 // layer runs plain commands; the manifest is the tool's own bookkeeping.
 const MANIFEST_REL = '.sira-packages/.sira/manifest.json';
+// Modules SiraGPT stages in /workspace/tmp: a failed import of one of them is
+// a staging problem, never a missing PyPI distribution.
+const INTERNAL_MODULE_RE = /^(?:sira_\w+|office_helpers|preview_stat)$/;
 
 // Clean light default for NEW decks when the user did not ask for a color.
 // NEVER pink: FFC0CB is only used when the user actually asked for rosado.
@@ -638,9 +641,29 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
     try { onGap(gap); } catch (_) { /* telemetry never breaks a tool */ }
   };
   const recovery = (stderr, { language, exitCode, tool }) => {
-    const missing = detectMissingDependency(stderr, { language, exitCode });
+    let lang = language;
+    let missing = detectMissingDependency(stderr, { language: lang, exitCode });
+    // `python3 script.py` through execute_bash dies with a traceback (exit 1),
+    // not a 127: read it as the Python failure it is.
+    if (!missing && lang === 'bash') {
+      missing = detectMissingDependency(stderr, { language: 'python' });
+      if (missing) lang = 'python';
+    }
     if (!missing) return '';
-    const pkg = missing.kind === 'python_module' ? sandboxPackages.packageForModule(missing.name) : null;
+    if (missing.kind === 'python_module') {
+      // Python names the FIRST missing component, so «pptx.util2» means pptx
+      // is installed and the submodule does not exist: an API mistake, not a
+      // missing library. SiraGPT's own staged helpers are not distributions
+      // either. Neither is a capability gap nor something to install. A
+      // namespace root (google.*, azure.*) is the exception: there the second
+      // component IS the distribution.
+      const dotted = missing.raw.includes('.') && !sandboxPackages.isNamespaceRoot(missing.raw);
+      const notADistribution = dotted ? 'submodule' : (INTERNAL_MODULE_RE.test(missing.name) ? 'internal' : null);
+      if (notADistribution) {
+        return capabilityRecoveryGuidance(stderr, { language: lang, exitCode, notADistribution });
+      }
+    }
+    const pkg = missing.kind === 'python_module' ? sandboxPackages.packageForModule(missing.raw || missing.name) : null;
     const allowed = Boolean(pkg) && sandboxPackages.isAllowed(pkg, policy);
     reportGap({
       kind: missing.kind === 'python_module' ? 'python_package' : 'binary',
@@ -649,7 +672,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       allowed: policy.enabled && allowed,
       tool,
     });
-    return capabilityRecoveryGuidance(stderr, { language, exitCode, policy, package: pkg, allowed });
+    return capabilityRecoveryGuidance(stderr, { language: lang, exitCode, policy, package: pkg, allowed });
   };
   const explainInstallFailure = (result) => {
     const code = String(result && result.code || 'install_failed');
@@ -669,6 +692,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         return 'the install was cancelled; nothing was installed.';
       case 'disk':
         return 'the sandbox has no space left; nothing was installed.';
+      case 'conflict':
+        return 'the request conflicts with the libraries built into the sandbox image (their versions are fixed so numpy/pandas/lxml/python-pptx keep working); nothing was installed. Drop the version pin or use the installed version.';
+      case 'commit_failed':
+        return 'the packages were downloaded but could not be written into the workspace, so the package folder may be incomplete; do not rely on them in this turn.';
       default:
         return `the install failed (${code})${detail ? `: ${detail.slice(-300)}` : ''}; nothing was installed.`;
     }
@@ -811,8 +838,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       const pattern = String(args?.pattern || '').trim();
       if (!pattern) return 'ERROR: pattern is required';
       if (/[;&|`$]/.test(pattern)) return 'ERROR: pattern must be a plain glob, not a shell expression';
+      // Installed packages (install_sandbox_package) stay out of discovery
+      // unless the pattern asks for them explicitly.
+      const prune = /^(\.\/)?\.sira-packages/.test(pattern) ? '' : "-name '.sira-packages*' -prune -o ";
       const r = await sandbox.exec(
-        `cd /workspace && find . -type f -path ${JSON.stringify(`./${pattern.replace(/^\.\//, '')}`)} -exec ls -la {} + 2>/dev/null | head -200`,
+        `cd /workspace && find . ${prune}-type f -path ${JSON.stringify(`./${pattern.replace(/^\.\//, '')}`)} -exec ls -la {} + 2>/dev/null | head -200`,
         { timeoutMs: 30_000, signal: ctx.signal },
       );
       const out = String(r.stdout || '').trim();
@@ -824,8 +854,9 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       const pattern = String(args?.pattern || '');
       if (!pattern) return 'ERROR: pattern is required';
       const rel = String(args?.path || '.').replace(/^\/workspace\/?/, '') || '.';
+      const exclude = /^(\.\/)?\.sira-packages/.test(rel) ? '' : "--exclude-dir='.sira-packages*' ";
       const r = await sandbox.exec(
-        `cd /workspace && grep -rnE --binary-files=without-match -m 50 ${JSON.stringify(pattern)} ${JSON.stringify(rel)} 2>/dev/null | head -200`,
+        `cd /workspace && grep -rnE --binary-files=without-match ${exclude}-m 50 ${JSON.stringify(pattern)} ${JSON.stringify(rel)} 2>/dev/null | head -200`,
         { timeoutMs: 30_000, signal: ctx.signal },
       );
       const out = String(r.stdout || '').trim();

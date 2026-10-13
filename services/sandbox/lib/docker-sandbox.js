@@ -151,7 +151,9 @@ async function createDockerSession({ workspaceKey, processRunner = runProcess, m
       await this.putFile(relPath, Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'));
     },
     async listFiles(relDir = '.') {
-      const r = await this.exec(`cd /workspace && find ${JSON.stringify(relDir)} -type f -printf '%s %p\\n' 2>/dev/null | head -500`);
+      // Packages installed through /install never flood a workspace listing.
+      const prune = /^(\.\/)?\.sira-packages/.test(String(relDir)) ? '' : "-name '.sira-packages*' -prune -o ";
+      const r = await this.exec(`cd /workspace && find ${JSON.stringify(relDir)} ${prune}-type f -printf '%s %p\\n' 2>/dev/null | head -500`);
       return String(r.stdout || '').split('\n').filter(Boolean).map((line) => {
         const i = line.indexOf(' ');
         return { path: line.slice(i + 1).replace(/^\.\//, ''), size: Number(line.slice(0, i)) || 0 };

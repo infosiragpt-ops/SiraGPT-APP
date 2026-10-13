@@ -99,6 +99,15 @@ const MODULE_TO_PACKAGE = Object.freeze({
   pypdf2: 'pypdf2',
   psycopg2: 'psycopg2-binary',
   google: 'google-api-python-client',
+  // Namespace packages: the distribution is named by the SECOND component.
+  'google.protobuf': 'protobuf',
+  'google.auth': 'google-auth',
+  'google.genai': 'google-genai',
+  'google.generativeai': 'google-generativeai',
+  'google.cloud': 'google-cloud-core',
+  'mpl_toolkits.basemap': 'basemap',
+  'ruamel.yaml': 'ruamel-yaml',
+  'backports.zoneinfo': 'backports-zoneinfo',
   win32com: 'pywin32',
   docx2pdf: 'docx2pdf',
   pydub: 'pydub',
@@ -107,10 +116,25 @@ const MODULE_TO_PACKAGE = Object.freeze({
 
 /** Distribution name the sandbox would need for an import name. */
 function packageForModule(moduleName) {
-  const top = String(moduleName || '').split('.')[0].trim();
+  const parts = String(moduleName || '').trim().split('.');
+  const top = parts[0].trim();
   if (!top) return '';
   const key = top.toLowerCase();
+  if (parts.length > 1 && NAMESPACE_ROOTS.has(key)) {
+    const pair = `${key}.${parts[1].toLowerCase()}`;
+    return MODULE_TO_PACKAGE[pair] || normalizePackageName(`${top}-${parts[1]}`);
+  }
   return MODULE_TO_PACKAGE[key] || normalizePackageName(top);
+}
+
+/**
+ * Import roots shared by several distributions (PEP 420 / pkgutil
+ * namespaces): «No module named 'google.protobuf'» means the protobuf
+ * distribution is missing, not that google is installed with a wrong API.
+ */
+const NAMESPACE_ROOTS = new Set(['google', 'azure', 'zope', 'jaraco', 'mpl_toolkits', 'backports', 'sphinxcontrib', 'ruamel']);
+function isNamespaceRoot(moduleName) {
+  return NAMESPACE_ROOTS.has(String(moduleName || '').split('.')[0].trim().toLowerCase());
 }
 
 const NAME_RE = '[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?';
@@ -133,6 +157,9 @@ function parseRequirement(raw) {
   // Locations and shell syntax are never a requirement (`<`/`>` stay: they
   // are version operators and every spec is single-quoted before bash).
   if (/[/\\:@;#$`'"|&()]/.test(text)) return null;
+  // A spec ending like an archive is a LOCAL file to pip (an sdist builds
+  // and runs setup.py): «numpy==1.0.tar.gz», «evil-1.0-py3-none-any.whl».
+  if (/\.(?:whl|zip|tar|tgz|tbz2?|txz|gz|bz2|xz)$/i.test(text)) return null;
   const m = REQUIREMENT_RE.exec(text);
   if (!m) return null;
   const name = normalizePackageName(m[1]);
@@ -162,7 +189,8 @@ function safeSize(value, fallback) {
 
 function safeDockerNetwork(value, fallback) {
   const s = String(value == null ? '' : value).trim();
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(s) ? s : fallback;
+  // Never the host namespace: the installer has egress and runs untrusted wheels.
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(s) && s !== 'host' ? s : fallback;
 }
 
 function safeIndexUrl(value) {
@@ -178,7 +206,7 @@ function safeIndexUrl(value) {
  *  SIRAGPT_SANDBOX_PIP_EXTRA_ALLOW comma/space list added to the allowlist
  *  SIRAGPT_SANDBOX_PIP_DENY        comma/space list removed from the allowlist
  *  SIRAGPT_SANDBOX_PIP_INDEX_URL   package index (a local devpi/proxy), default PyPI
- *  SIRAGPT_SANDBOX_PIP_NETWORK     docker network of the installer container (default bridge)
+ *  SIRAGPT_SANDBOX_PIP_NETWORK     docker network of the installer container (default: the driver's — bridge locally, the sandbox host's SANDBOX_PIP_NETWORK remotely; never host)
  *  SIRAGPT_SANDBOX_PIP_TIMEOUT_MS  per install call (30 s – 10 min, default 180 s)
  *  SIRAGPT_SANDBOX_PIP_MAX_PER_TURN install calls per document turn (1–10, default 3)
  *  SIRAGPT_SANDBOX_PIP_MAX_PACKAGES requirements per call (1–20, default 8)
@@ -197,7 +225,9 @@ function resolvePolicy(env = process.env) {
     enabled,
     allow,
     indexUrl: safeIndexUrl(e.SIRAGPT_SANDBOX_PIP_INDEX_URL),
-    network: safeDockerNetwork(e.SIRAGPT_SANDBOX_PIP_NETWORK, 'bridge'),
+    // null = the driver's default (bridge for the local docker daemon; the
+    // sandbox host's own SANDBOX_PIP_NETWORK for the remote service).
+    network: safeDockerNetwork(e.SIRAGPT_SANDBOX_PIP_NETWORK, null),
     timeoutMs: clampInt(e.SIRAGPT_SANDBOX_PIP_TIMEOUT_MS, 180_000, 30_000, 600_000),
     maxPerTurn: clampInt(e.SIRAGPT_SANDBOX_PIP_MAX_PER_TURN, 3, 1, 10),
     maxPackages: clampInt(e.SIRAGPT_SANDBOX_PIP_MAX_PACKAGES, 8, 1, 20),
@@ -253,6 +283,7 @@ function allowlistJson(policy) {
 module.exports = {
   DEFAULT_ALLOWLIST,
   MODULE_TO_PACKAGE,
+  isNamespaceRoot,
   MAX_REQUIREMENT_CHARS,
   normalizePackageName,
   packageForModule,

@@ -750,10 +750,20 @@ El sandbox de ejecución (`doc-agent/sandbox.js`, gVisor) sigue SIN red. Cuando 
 distribución está APROBADA; entonces el agente llama a `install_sandbox_package` y un
 contenedor instalador desechable (misma imagen, mismos límites, solo lectura, tmpfs,
 SIN el volumen del workspace, con la red de la política) corre
-`pip install --user --only-binary=:all:` (nunca se ejecuta un `setup.py`), valida CADA
-wheel resuelto contra la allowlist dentro del contenedor y envía el árbol como tar por
-`docker exec -i` al sandbox (`/workspace/.sira-packages`, persistente por conversación
-en el volumen `sira-ws-<chatId>`). Todo comando del sandbox exporta
+`pip install --user --only-binary=:all:` (nunca se ejecuta un `setup.py`) con las
+versiones de la imagen congeladas como restricciones (`pip list --format=freeze` → `-c`:
+una instalación nunca reemplaza numpy/lxml/python-pptx de la imagen; si lo exigiría,
+falla como `conflict` sin instalar nada), valida CADA wheel resuelto contra la allowlist
+en un intérprete aislado (`python3 -I -s`, sin el site del usuario: un `.pth` de un wheel
+no puede falsificar el veredicto) y envía el árbol como tar por `docker exec -i` a un
+staging del sandbox que se publica con enlaces duros (`cp -al`) en
+`/workspace/.sira-packages` (persistente por conversación en el volumen
+`sira-ws-<chatId>`). Si el extractor muere, el instalador se corta en el acto
+(`extract_failed`). El árbol de paquetes no aparece en `glob`/`grep`/listados salvo que
+se pida explícitamente. Un `ModuleNotFoundError` de un submódulo (`pptx.util2`: la
+librería ESTÁ y la API es otra) o de un helper de SiraGPT (`sira_charts`) no se trata
+como paquete faltante; en raíces *namespace* (`google.protobuf`) la distribución es el
+segundo componente. Todo comando del sandbox exporta
 `PYTHONUSERBASE=/workspace/.sira-packages`, así que la librería queda importable sin
 reiniciar nada. Un paquete fuera de la lista nunca se instala: queda como
 `agent.capability_gap` en Admin → Logs → Auditoría (y en `GET /api/admin/capabilities`)
@@ -768,27 +778,37 @@ imágenes, texto; con sus dependencias transitivas). Driver remoto: el microserv
 | `SIRAGPT_SANDBOX_PIP_EXTRA_ALLOW` | — | Lista (comas/espacios) de distribuciones que se SUMAN a la allowlist (nombres PEP 503; `My_Pkg` → `my-pkg`) |
 | `SIRAGPT_SANDBOX_PIP_DENY` | — | Lista que se QUITA de la allowlist por defecto |
 | `SIRAGPT_SANDBOX_PIP_INDEX_URL` | PyPI | Índice de paquetes (`https://…`), p. ej. un devpi/proxy local con los paquetes fijados; solo http(s) |
-| `SIRAGPT_SANDBOX_PIP_NETWORK` | `bridge` | Red Docker del contenedor instalador (una red interna con solo el proxy es la postura más estricta) |
+| `SIRAGPT_SANDBOX_PIP_NETWORK` | `bridge` (driver docker/local) | Red Docker del contenedor instalador (una red interna con solo el proxy es la postura más estricta). `host` se rechaza siempre. Con el driver remoto, sin valor decide el microservicio |
 | `SIRAGPT_SANDBOX_PIP_TIMEOUT_MS` | `180000` | Tope por instalación (30 s – 10 min) |
 | `SIRAGPT_SANDBOX_PIP_MAX_PER_TURN` | `3` | Llamadas a `install_sandbox_package` por turno de documento (1–10) |
 | `SIRAGPT_SANDBOX_PIP_MAX_PACKAGES` | `8` | Requisitos por llamada (1–20) |
 | `SIRAGPT_SANDBOX_PIP_MAX_BYTES` | `314572800` (300 MB) | Tope del tar que entra al sandbox; superado, se corta y no queda nada a medias |
 | `SIRAGPT_SANDBOX_PIP_TMP_SIZE` | `1g` | tmpfs del contenedor instalador (wheels + árbol antes del tar) |
-| `SANDBOX_PIP_NETWORK` (microservicio) | `bridge` | Red del instalador cuando el backend usa `SANDBOX_SERVICE_URL`; el cliente puede pedir otra, validada igual |
+| `SANDBOX_PIP_NETWORK` (microservicio) | `bridge` | Red del instalador cuando el backend usa `SANDBOX_SERVICE_URL`. Si está definida MANDA sobre lo que pida el cliente; sin ella, el cliente puede pedir otra. `host` se rechaza siempre (400) |
 
 ## Herramientas de host en el chat (`host_bash`, `host_file`, `clone_project`)
 
 `host_bash` corre en el CONTENEDOR DEL BACKEND (no en un sandbox). Desde 2026-10-11:
 `npx` y `npm exec|x|create|init <inicializador>` no existen (descargan y ejecutan código
-arbitrario); `npm install|i|add|ci|update|uninstall` y `pip3 install|download` (también
-`python3 -m pip …`) solo aceptan NOMBRES del registro oficial, opcionalmente con versión
-(`lodash@4`, `pandas==2.2.3`): nunca URLs, `git+`, `file:`, rutas, `.tgz`/`.whl`,
-`-r`/`-e`, índices alternativos (`-i`, `--index-url`, `--extra-index-url`,
-`--find-links`), `--target` ni `-g/--global`; `npm config|set|login|publish|token` y
-`pip config` se rechazan. Cada ejecución (y cada rechazo) deja una fila
-`agent.host_bash` en Admin → Logs → Auditoría. «Permitir siempre en este chat» no
+arbitrario). npm y pip solo corren subcomandos de una lista EXACTA (npm acepta alias y
+abreviaturas —`npm exe`, `npm isntall`, `npm cre`—, así que todo lo demás se rechaza:
+`link`, `cache`, `edit`, `install-test`, `config`, `publish`…) y las opciones van
+DESPUÉS del subcomando (`npm -g install …` / `pip3 -q install …` se rechazan).
+`npm install|i|add|ci|update|uninstall` y `pip3 install|download` (también
+`python3 -m pip`, `-mpip`, `-u -m pip`, `-m pip3`) solo aceptan NOMBRES del registro
+oficial, opcionalmente con versión (`lodash@4`, `pandas==2.2.3`): nunca URLs, `git+`,
+`file:`, `user/repo`, rutas, nombres que terminan como archivo (`.tgz`, `.tar.gz`,
+`.whl`, `.zip`: npm y pip los instalan como archivo LOCAL), `-r`/`-e`, índices
+alternativos (`-i`, `--index-url`, `--extra-index-url`, `--find-links`), `--target` ni
+`-g/--global`. Un `npm install` dentro de un proyecto cuyo `.npmrc` (o el de un
+ancestro dentro del workspace) cambia el registro o lleva credenciales se rechaza
+(`npm_project_registry`), y `host_file` no escribe `.npmrc`, `.yarnrc(.yml)`,
+`pip.conf`, `pip.ini` ni `.pypirc`. `node -e` / `python3 -c` siguen disponibles para
+trabajar en proyectos clonados y quedan auditados. Cada ejecución (y cada rechazo)
+deja una fila `agent.host_bash` en Admin → Logs → Auditoría. «Permitir siempre en este chat» no
 aplica a `host_bash`, `clone_project`, `install_skill`, `save_skill` ni
-`install_sandbox_package`: cada llamada muestra su propia tarjeta.
+`install_sandbox_package`: cada llamada muestra su propia tarjeta, y responder
+«Permitir siempre» a una de ellas se aplica (y se informa) como un permiso único.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|

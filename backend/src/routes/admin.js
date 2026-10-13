@@ -162,7 +162,7 @@ router.get('/capabilities', async (req, res) => {
         enabled: policy.enabled,
         allowCount: policy.allow.size,
         indexUrl: policy.indexUrl ? 'custom' : 'pypi',
-        network: policy.network,
+        network: policy.network || 'default',
         timeoutMs: policy.timeoutMs,
         maxPerTurn: policy.maxPerTurn,
         maxPackages: policy.maxPackages,

@@ -1524,7 +1524,12 @@ async function runAgentRunner({
     // Capability acquisition (sandbox-packages/policy.js): the operator's
     // allowlist decides what the agent may install into its own sandbox;
     // every gap and install reaches the timeline and the capability ledger.
-    const packagePolicy = sandboxPackages.resolvePolicy();
+    // The tool list is the process-level snapshot (TOOL_DEFINITIONS): the
+    // prompt and the executor follow it, so the three can never disagree.
+    const livePolicy = sandboxPackages.resolvePolicy();
+    const installerOffered = livePolicy.enabled
+      && TOOL_DEFINITIONS.some((d) => d && d.function && d.function.name === 'install_sandbox_package');
+    const packagePolicy = installerOffered ? livePolicy : { ...livePolicy, enabled: false };
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,

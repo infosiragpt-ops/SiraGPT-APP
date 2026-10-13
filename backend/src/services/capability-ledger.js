@@ -30,7 +30,9 @@ function clip(value, max = MAX_TEXT) {
 }
 
 function lazyPrisma(env = process.env) {
-  if (String(env.NODE_ENV || '') === 'test') return null;
+  // Never the real database from a test process: NODE_ENV=test or a
+  // `node --test` child (the backend test script does not set NODE_ENV).
+  if (String(env.NODE_ENV || '') === 'test' || env.NODE_TEST_CONTEXT) return null;
   try {
     // eslint-disable-next-line global-require
     return require('../config/database');

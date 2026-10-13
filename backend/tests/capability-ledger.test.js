@@ -4,6 +4,10 @@
 // sandbox installs and host_bash executions, never throws, writes nothing
 // under NODE_ENV=test without an injected client, and lists/summarises
 // events for the admin route.
+// Pin the test env before the module is loaded: the ledger must never reach
+// the real database from this process.
+process.env.NODE_ENV = 'test';
+
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

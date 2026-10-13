@@ -170,6 +170,78 @@ test('the sandbox drivers (not the tools) export PYTHONUSERBASE and PATH, so ins
   assert.match(service, /'-e', 'PYTHONUSERBASE=\/workspace\/\.sira-packages', name, 'bash', '-c', `export PATH=\/workspace\/\.sira-packages\/bin:"\$PATH"; \$\{String\(command\)\}`/);
 });
 
+test('wrong submodules, SiraGPT helpers and bash tracebacks are classified before anything is offered for install', async () => {
+  const run = async (tool, execResult, args) => {
+    const gaps = [];
+    const sandbox = fakeSandbox({ execResult });
+    const ex = tools.makeToolExecutors(sandbox, { capability: { policy: ON, onGap: (g) => gaps.push(g) } });
+    return { out: await ex[tool](args), gaps, sandbox };
+  };
+  // «pptx.util2»: pptx IS installed, the submodule does not exist — an API mistake.
+  const sub = await run('execute_python', { exitCode: 1, stderr: "ModuleNotFoundError: No module named 'pptx.util2'" }, { code: 'import pptx.util2' });
+  assert.match(sub.out, /\[Capability recovery: missing_submodule\]/);
+  assert.match(sub.out, /Do not install anything/);
+  assert.doesNotMatch(sub.out, /install_sandbox_package/);
+  assert.deepEqual(sub.gaps, [], 'not a capability gap');
+  // A staged SiraGPT helper is a staging problem, never a PyPI distribution.
+  const helper = await run('execute_python', { exitCode: 1, stderr: "ModuleNotFoundError: No module named 'sira_charts'" }, { code: 'import sira_charts' });
+  assert.match(helper.out, /\[Capability recovery: missing_helper\]/);
+  assert.match(helper.out, /\/workspace\/tmp/);
+  assert.deepEqual(helper.gaps, []);
+  // A namespace root names the distribution by its second component.
+  const ns = await run('execute_python', { exitCode: 1, stderr: "ModuleNotFoundError: No module named 'google.protobuf'" }, { code: 'import google.protobuf' });
+  assert.match(ns.out, /\[Capability recovery: missing_dependency\]/);
+  assert.match(ns.out, /«protobuf» is NOT on the approved package list/);
+  assert.equal(ns.gaps[0].package, 'protobuf');
+  // `python3 script.py` through execute_bash fails with a traceback (exit 1):
+  // still read as the Python failure it is.
+  const bash = await run('execute_bash', { exitCode: 1, stderr: "Traceback (most recent call last):\n  File \"/workspace/s.py\", line 1\nModuleNotFoundError: No module named 'seaborn'" }, { command: 'python3 s.py' });
+  assert.match(bash.out, /«seaborn» is on the APPROVED list/);
+  assert.deepEqual(bash.gaps.map((g) => [g.kind, g.package, g.allowed, g.tool]), [['python_package', 'seaborn', true, 'execute_bash']]);
+});
+
+test('conflicts with the image and a failed commit are explained without inviting a retry loop', async () => {
+  for (const [code, re] of [
+    ['conflict', /conflicts with the libraries built into the sandbox image/],
+    ['commit_failed', /could not be written into the workspace/],
+  ]) {
+    const sandbox = fakeSandbox({ installResult: { ok: false, code, installed: [], notAllowed: [], notFound: [], bytes: 0, durationMs: 1, detail: '' } });
+    const ex = tools.makeToolExecutors(sandbox, { capability: { policy: ON } });
+    const out = await ex.install_sandbox_package({ packages: ['seaborn'] });
+    assert.match(out, /^ERROR: /, code);
+    assert.match(out, re, code);
+  }
+});
+
+test('installed packages stay out of glob/grep and workspace listings unless asked for explicitly', async () => {
+  const sandbox = fakeSandbox({ execResult: { exitCode: 0, stdout: './outputs/a.docx', stderr: '' } });
+  const ex = tools.makeToolExecutors(sandbox, { capability: { policy: ON } });
+  await ex.glob({ pattern: '**/*.py' });
+  await ex.glob({ pattern: '.sira-packages/lib/**/*.py' });
+  await ex.grep({ pattern: 'Document', path: '.' });
+  await ex.grep({ pattern: 'Document', path: '.sira-packages/lib' });
+  const [globAll, globPkgs, grepAll, grepPkgs] = sandbox.calls.exec;
+  assert.match(globAll, /find \. -name '\.sira-packages\*' -prune -o -type f/);
+  assert.doesNotMatch(globPkgs, /-prune/);
+  assert.match(grepAll, /--exclude-dir='\.sira-packages\*'/);
+  assert.doesNotMatch(grepPkgs, /--exclude-dir/);
+  // Local driver: the walk skips the package tree (and its staging dirs).
+  const sandboxModule = require('../src/services/doc-agent/sandbox');
+  const local = await sandboxModule._createLocalSandbox({});
+  try {
+    await local.writeFile('outputs/a.docx', 'x');
+    await local.writeFile('.sira-packages/lib/python3.12/site-packages/seaborn/__init__.py', 'x');
+    await local.writeFile('.sira-packages.staging-1/lib/x.py', 'x');
+    const listed = (await local.listFiles('.')).map((f) => f.path);
+    assert.ok(listed.includes(path.join('outputs', 'a.docx')));
+    assert.ok(!listed.some((p) => p.startsWith('.sira-packages')), listed.join(','));
+    const inside = (await local.listFiles('.sira-packages')).map((f) => f.path);
+    assert.ok(inside.some((p) => p.endsWith(path.join('seaborn', '__init__.py'))), 'asked for explicitly → listed');
+  } finally {
+    await local.destroy?.();
+  }
+});
+
 test('the tool is offered exactly when the policy is on, and the runner + prompt are wired to it', () => {
   const names = (env) => tools.buildToolDefinitions(env).map((d) => d.function.name);
   assert.ok(!names({ NODE_ENV: 'test' }).includes('install_sandbox_package'));
@@ -179,7 +251,11 @@ test('the tool is offered exactly when the policy is on, and the runner + prompt
   assert.deepEqual(tools.INSTALL_TOOL_DEFINITION.function.parameters.required, ['packages']);
   assert.match(tools.BASE_TOOL_DEFINITIONS.find((d) => d.function.name === 'execute_python').function.description, /install_sandbox_package/);
   const index = read('index.js');
-  assert.match(index, /const packagePolicy = sandboxPackages\.resolvePolicy\(\);/);
+  // Prompt, tool list and executor follow the same decision (the tool list is
+  // the process snapshot; the policy is read per turn).
+  assert.match(index, /const livePolicy = sandboxPackages\.resolvePolicy\(\);/);
+  assert.match(index, /TOOL_DEFINITIONS\.some\(\(d\) => d && d\.function && d\.function\.name === 'install_sandbox_package'\)/);
+  assert.match(index, /const packagePolicy = installerOffered \? livePolicy : \{ \.\.\.livePolicy, enabled: false \};/);
   assert.match(index, /packageInstaller: \{ enabled: packagePolicy\.enabled \}/);
   assert.match(index, /capability: \{ policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall \}/);
   assert.match(index, /step: 'capability_gap'/);

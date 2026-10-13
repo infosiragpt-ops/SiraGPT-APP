@@ -38,6 +38,18 @@ and improvement cycles follow a sequential number with the date the work landed.
   execution and refusal is recorded in the audit log, and «Permitir siempre
   en este chat» never applies to tools that acquire capability (`host_bash`,
   `clone_project`, `install_skill`, `save_skill`, `install_sandbox_package`).
+- The `host_bash` guard runs only exact npm/pip subcommands (npm accepts
+  aliases and abbreviations such as `npm exe`), refuses options placed before
+  the subcommand, sees every `python3 … -m pip` spelling, refuses
+  archive-looking names (installed as LOCAL files by npm and pip) and refuses
+  npm installs in a project whose `.npmrc` redirects the registry or carries
+  credentials; `host_file` no longer writes package-manager config files.
+- The sandbox package installer validates wheels in an isolated interpreter
+  (a wheel's `.pth` cannot forge the verdict), freezes the image's own
+  libraries as constraints, publishes the tree atomically with hard links,
+  stops at once when the extractor dies, applies the sandbox seccomp profile,
+  and never uses the host network; on the sandbox microservice the operator's
+  `SANDBOX_PIP_NETWORK` wins over the client.
 
 ### Fixed
 

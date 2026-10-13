@@ -438,6 +438,7 @@ async function createLocalSandbox({ signal, persistKey, installRunner = sandboxP
     },
     async listFiles(relDir = '.') {
       const base = await resolveReal(relDir);
+      const listingPackages = path.relative(root, base).split(path.sep)[0].startsWith('.sira-packages');
       const out = [];
       const walk = async (dir) => {
         let entries = [];
@@ -445,6 +446,9 @@ async function createLocalSandbox({ signal, persistKey, installRunner = sandboxP
         for (const e of entries) {
           const abs = path.join(dir, e.name);
           if (e.isSymbolicLink()) continue;
+          // Installed packages (sandbox-pip) stay out of workspace listings
+          // unless the listing was asked for inside the package tree itself.
+          if (e.isDirectory() && e.name.startsWith('.sira-packages') && !listingPackages) continue;
           if (e.isDirectory()) await walk(abs);
           else {
             let size = 0;
@@ -628,7 +632,10 @@ async function createDockerSandbox({
     },
     async listFiles(relDir = '.') {
       const safeRel = safeContainerRel(relDir);
-      const r = await this.exec(`cd /workspace && find ${shQuote(safeRel)} -type f -printf '%s %p\\n' 2>/dev/null | head -500`);
+      // The installed package tree (sandbox-pip) never floods a listing of the
+      // workspace; listing it explicitly still works.
+      const prune = /^(\.\/)?\.sira-packages/.test(safeRel) ? '' : "-name '.sira-packages*' -prune -o ";
+      const r = await this.exec(`cd /workspace && find ${shQuote(safeRel)} ${prune}-type f -printf '%s %p\\n' 2>/dev/null | head -500`);
       return String(r.stdout || '').split('\n').filter(Boolean).map((line) => {
         const i = line.indexOf(' ');
         return { path: line.slice(i + 1).replace(/^\.\//, ''), size: Number(line.slice(0, i)) || 0 };

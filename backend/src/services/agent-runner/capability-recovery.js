@@ -34,11 +34,11 @@ function detectMissingDependency(stderr, { language = 'python', exitCode } = {})
  * @param {string} [opts.package] distribution name for the module (policy.packageForModule)
  * @param {boolean} [opts.allowed]
  */
-function capabilityRecoveryGuidance(stderr, { language = 'python', exitCode, policy = null, package: pkg = null, allowed = null } = {}) {
+function capabilityRecoveryGuidance(stderr, { language = 'python', exitCode, policy = null, package: pkg = null, allowed = null, notADistribution = null } = {}) {
   const missing = detectMissingDependency(stderr, { language, exitCode });
   if (!missing) return '';
   const moduleName = missing.kind === 'python_module' ? missing.name : '';
-  let alternative = 'Inspect available tools with importlib.util.find_spec and shutil.which before choosing an installed equivalent.';
+  let alternative = '';
   if (/^(docx2pdf|pdf2docx)$/.test(moduleName)) {
     alternative = 'For DOCX↔PDF load_skill("media-conversion") and use from sira_convert import convert; it uses the installed document engines and reports fidelity limits.';
   } else if (/^(moviepy|pydub|ffmpeg)$/.test(moduleName)) {
@@ -46,6 +46,21 @@ function capabilityRecoveryGuidance(stderr, { language = 'python', exitCode, pol
   } else if (moduleName === 'python_docx') {
     alternative = 'The installed python-docx distribution is imported as docx; inspect importlib.util.find_spec("docx") and use from docx import Document.';
   }
+  // A converter request always points at the native converter; otherwise a
+  // wrong submodule or a missing staged helper is not a library to install.
+  if (!alternative && notADistribution === 'submodule') {
+    return [
+      '[Capability recovery: missing_submodule]',
+      `The package «${missing.name}» IS installed; the submodule in the failed import does not exist in it. This is an API mistake, not a missing library: inspect the real API (help(), dir(), importlib.util.find_spec) and fix the import. Do not install anything.`,
+    ].join('\n');
+  }
+  if (!alternative && notADistribution === 'internal') {
+    return [
+      '[Capability recovery: missing_helper]',
+      `«${missing.name}» is a SiraGPT helper staged in /workspace/tmp, not a library. Check it exists (ls /workspace/tmp) and import it from a script whose sys.path includes /workspace/tmp. Do not install anything.`,
+    ].join('\n');
+  }
+  if (!alternative) alternative = 'Inspect available tools with importlib.util.find_spec and shutil.which before choosing an installed equivalent.';
   const installerOn = Boolean(policy && policy.enabled) && missing.kind === 'python_module';
   let installLine;
   if (installerOn && allowed && pkg) {

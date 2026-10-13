@@ -17,6 +17,8 @@ test('requirements are names, never locations: URLs, paths, VCS, options and mar
   for (const bad of [
     'git+https://github.com/x/y', 'https://evil/x.whl', './wheel.whl', '/abs/path', '-r requirements.txt', '--index-url x',
     'pkg; python_version<"3"', 'pkg @ https://x', 'a|b', 'a&b', 'a>/tmp/x', '$(id)', '`id`', 'a b', '', null, 'x'.repeat(101),
+    // archive-looking specs are LOCAL files to pip (an sdist runs setup.py)
+    'numpy==1.0.tar.gz', 'numpy==1.0.zip', 'evil-1.0-py3-none-any.whl', 'pkg.tgz', 'pkg==2.tar.bz2',
   ]) assert.equal(policy.parseRequirement(bad), null, String(bad));
   assert.equal(policy.normalizePackageName('Scikit_Learn.Extra'), 'scikit-learn-extra');
 });
@@ -32,6 +34,14 @@ test('import names map to distributions, including packages that are NOT approve
   assert.equal(policy.packageForModule('dotenv'), 'python-dotenv');
   assert.equal(policy.packageForModule('sqlalchemy'), 'sqlalchemy');
   assert.equal(policy.packageForModule(''), '');
+  // Namespace roots: the second component names the distribution.
+  assert.equal(policy.packageForModule('google.protobuf'), 'protobuf');
+  assert.equal(policy.packageForModule('google.protobuf.json_format'), 'protobuf');
+  assert.equal(policy.packageForModule('google.genai'), 'google-genai');
+  assert.equal(policy.packageForModule('azure.storage'), 'azure-storage');
+  assert.equal(policy.packageForModule('google'), 'google-api-python-client');
+  assert.equal(policy.isNamespaceRoot('google.protobuf'), true);
+  assert.equal(policy.isNamespaceRoot('pptx.util'), false);
 });
 
 test('the policy reads the env at call time: default on (off under test), extend, deny, index, network, limits', () => {
@@ -57,6 +67,8 @@ test('the policy reads the env at call time: default on (off under test), extend
   assert.equal(custom.allow.has('numpy'), true);
   assert.equal(custom.indexUrl, 'https://devpi.local/root/pypi/+simple/');
   assert.equal(custom.network, 'iliagpt-app');
+  assert.equal(policy.resolvePolicy({}).network, null, 'default: the driver decides (bridge locally, the sandbox host remotely)');
+  assert.equal(policy.resolvePolicy({ SIRAGPT_SANDBOX_PIP_NETWORK: 'host' }).network, null, 'never the host namespace');
   assert.equal(custom.timeoutMs, 30_000, 'clamped to the minimum');
   assert.equal(custom.maxPerTurn, 10, 'clamped to the maximum');
   assert.equal(custom.maxPackages, 2);
@@ -65,7 +77,7 @@ test('the policy reads the env at call time: default on (off under test), extend
   // Unsafe values fall back instead of reaching docker / pip.
   const unsafe = policy.resolvePolicy({ SIRAGPT_SANDBOX_PIP_INDEX_URL: 'ftp://x; rm -rf /', SIRAGPT_SANDBOX_PIP_NETWORK: 'bad net', SIRAGPT_SANDBOX_PIP_TMP_SIZE: '1g; echo' });
   assert.equal(unsafe.indexUrl, null);
-  assert.equal(unsafe.network, 'bridge');
+  assert.equal(unsafe.network, null);
   assert.equal(unsafe.tmpSize, '1g');
 });
 
