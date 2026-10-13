@@ -53,6 +53,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- A coding task waiting on «Conectar GitHub» no longer resumes as a plain chat
+  when the page was reloaded: the continuation now waits until the chat's
+  coding-workspace lookup has answered (with an 8 s ceiling), so it resumes
+  inside its workspace. This race also made the critical e2e gate flaky.
 - Two pictures in one turn: the canvas and the material are chosen from the
   file names («logo.png» vs «foto.jpg»), the pixels (a small transparent PNG
   is a logo) and the request («ponle este logo a la foto» places the logo;

@@ -10,14 +10,24 @@ import { CODING_PREVIEW_READY_EVENT, readyCodingPreviewPath, type CodingPreviewD
 export function useChatCodingWorkspace(userId?: string, chatId?: string) {
   const [binding, setBinding] = React.useState<(CodingWorkspaceReadyDetail) | null>(null)
   const [refresh, setRefresh] = React.useState(0)
+  // Which (account, chat) lookup has settled: until then a caller cannot know
+  // whether the chat has a workspace (a reload resumes before it answers).
+  const [settledKey, setSettledKey] = React.useState<string | null>(null)
   React.useEffect(() => {
     let cancelled = false
+    let fallback: ReturnType<typeof setTimeout> | undefined
     if (userId && chatId && !chatId.startsWith("temp-chat-")) {
+      const key = `${userId}\u0000${chatId}`
+      // A lookup that never answers must not hold the chat forever.
+      fallback = setTimeout(() => { if (!cancelled) setSettledKey(key) }, 8_000)
       void projectsCodexApi.getProjectByChat(chatId).then((project) => {
         if (!cancelled && project?.id) setBinding({ userId, chatId, projectId: project.id, projectName: project.name })
-      }).catch(() => { /* No project is a normal conversation. */ })
+      }).catch(() => { /* No project is a normal conversation. */ }).finally(() => {
+        clearTimeout(fallback)
+        if (!cancelled) setSettledKey(key)
+      })
     }
-    return () => { cancelled = true }
+    return () => { cancelled = true; clearTimeout(fallback) }
   }, [userId, chatId, refresh])
   React.useEffect(() => {
     const onReady = (event: Event) => {
@@ -34,7 +44,11 @@ export function useChatCodingWorkspace(userId?: string, chatId?: string) {
   const onProjectReady = React.useCallback((ready: boolean) => {
     if (ready) setRefresh((version) => version + 1)
   }, [])
-  return { workspace, onProjectReady }
+  // The chat whose workspace question is answered (bound, or known unbound).
+  // Temporary chats have nothing to look up.
+  const resolvedChatId = !userId || !chatId ? null
+    : chatId.startsWith("temp-chat-") || workspace || settledKey === `${userId}\u0000${chatId}` ? chatId : null
+  return { workspace, onProjectReady, resolvedChatId }
 }
 
 /** The existing Carpetas section reads durable cloud projects in one request. */
