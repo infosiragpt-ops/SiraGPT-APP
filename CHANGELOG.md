@@ -8,6 +8,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- The document agent can now install APPROVED Python packages into its own
+  sandbox when an import fails (`install_sandbox_package`): a throw-away
+  installer container fetches binary wheels from the package index, every
+  resolved wheel is checked against the operator allowlist, and the tree is
+  streamed into the conversation workspace while the execution sandbox keeps
+  its network off. Packages outside the list are never installed; they are
+  recorded as capability gaps (Admin → Logs → Auditoría, `GET
+  /api/admin/capabilities`) so the administrator can extend the list.
+  `SIRAGPT_SANDBOX_PIP*` tune it; the sandbox microservice gained
+  `POST /v1/sessions/:id/install`.
 - Reference-guided image editing preserves the selected image and up to eight
   ordered references. Video requests validate owned reference pixels and the
   selected model's capacity before generation, without silently dropping images.
@@ -19,8 +29,34 @@ and improvement cycles follow a sequential number with the date the work landed.
   prompt preview and after context compaction. Missing dependency errors guide
   the agent toward installed equivalents while preserving the original failure.
 
+### Security
+
+- `host_bash` no longer offers `npx`, `npm exec|x|create`, `npm init
+  <initializer>`, registry/config mutations or global installs; `npm install`
+  and `pip3 install` accept registry package names only (no URLs, git/file
+  specs, paths, requirement files, alternate indexes or `--target`). Every
+  execution and refusal is recorded in the audit log, and «Permitir siempre
+  en este chat» never applies to tools that acquire capability (`host_bash`,
+  `clone_project`, `install_skill`, `save_skill`, `install_sandbox_package`).
+- The `host_bash` guard runs only exact npm/pip subcommands (npm accepts
+  aliases and abbreviations such as `npm exe`), refuses options placed before
+  the subcommand, sees every `python3 … -m pip` spelling, refuses
+  archive-looking names (installed as LOCAL files by npm and pip) and refuses
+  npm installs in a project whose `.npmrc` redirects the registry or carries
+  credentials; `host_file` no longer writes package-manager config files.
+- The sandbox package installer validates wheels in an isolated interpreter
+  (a wheel's `.pth` cannot forge the verdict), freezes the image's own
+  libraries as constraints, publishes the tree atomically with hard links,
+  stops at once when the extractor dies, applies the sandbox seccomp profile,
+  and never uses the host network; on the sandbox microservice the operator's
+  `SANDBOX_PIP_NETWORK` wins over the client.
+
 ### Fixed
 
+- A coding task waiting on «Conectar GitHub» no longer resumes as a plain chat
+  when the page was reloaded: the continuation now waits until the chat's
+  coding-workspace lookup has answered (with an 8 s ceiling), so it resumes
+  inside its workspace. This race also made the critical e2e gate flaky.
 - Two pictures in one turn: the canvas and the material are chosen from the
   file names («logo.png» vs «foto.jpg»), the pixels (a small transparent PNG
   is a logo) and the request («ponle este logo a la foto» places the logo;

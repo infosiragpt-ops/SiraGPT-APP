@@ -25,6 +25,8 @@ const { loadConversationContext, conversationContextMessage } = require('./conve
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
+const sandboxPackages = require('./sandbox-packages/policy');
+const capabilityLedger = require('../capability-ledger');
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
@@ -1519,6 +1521,15 @@ async function runAgentRunner({
         await toolSandbox.writeFile('tmp/sira_theme_alternates.json', JSON.stringify(alternateThemes(designTheme.id)));
       } catch (_) { /* tokens also ride in the prompt */ }
     }
+    // Capability acquisition (sandbox-packages/policy.js): the operator's
+    // allowlist decides what the agent may install into its own sandbox;
+    // every gap and install reaches the timeline and the capability ledger.
+    // The tool list is the process-level snapshot (TOOL_DEFINITIONS): the
+    // prompt and the executor follow it, so the three can never disagree.
+    const livePolicy = sandboxPackages.resolvePolicy();
+    const installerOffered = livePolicy.enabled
+      && TOOL_DEFINITIONS.some((d) => d && d.function && d.function.name === 'install_sandbox_package');
+    const packagePolicy = installerOffered ? livePolicy : { ...livePolicy, enabled: false };
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,
@@ -1527,7 +1538,28 @@ async function runAgentRunner({
       designUpgrade,
       designTheme,
       templateFill: templateFill ? { file: templateFill.file, format: templateFill.format, summary: templateFill.summary } : null,
+      packageInstaller: { enabled: packagePolicy.enabled },
     });
+    const onCapabilityGap = (gap) => {
+      const label = gap.allowed
+        ? `Falta la librería «${gap.package || gap.name}»: está aprobada, el agente puede instalarla`
+        : `Falta «${gap.package || gap.name}»: no está en la lista aprobada; se avisó al administrador`;
+      try { onEvent({ type: 'stage', step: 'capability_gap', tool: 'agent_runner', label, preview: String(gap.name || '').slice(0, 80) }); } catch (_) { /* trace only */ }
+      void capabilityLedger.recordCapabilityGap({
+        userId, chatId, kind: gap.kind, name: gap.name, package: gap.package, allowed: gap.allowed, tool: gap.tool, source: 'agent-runner',
+      });
+    };
+    const onCapabilityInstall = (info) => {
+      const names = (Array.isArray(info.installed) ? info.installed : []).map((i) => i && i.name).filter(Boolean);
+      const requested = Array.isArray(info.requested) ? info.requested : [];
+      const label = info.ok
+        ? `Librería instalada en el sandbox: ${(names.length ? names : requested).join(', ')}`
+        : `No se pudo instalar ${requested.join(', ')} (${info.code || 'error'})`;
+      try { onEvent({ type: 'stage', step: 'capability_install', tool: 'agent_runner', label }); } catch (_) { /* trace only */ }
+      void capabilityLedger.recordCapabilityInstall({
+        userId, chatId, requested, installed: info.installed, bytes: info.bytes, durationMs: info.durationMs, driver: info.driver, code: info.code,
+      });
+    };
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
       : baseSystem;
@@ -1559,6 +1591,7 @@ async function runAgentRunner({
         },
         // The user's words pick the deck theme when the model passes none.
         deck: { prompt: task },
+        capability: { policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall },
       }),
       ...f8.executors,
     };

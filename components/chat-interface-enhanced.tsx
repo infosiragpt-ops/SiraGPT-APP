@@ -6690,7 +6690,7 @@ function ChatInterfaceContent() {
   const [codePanelOpen, setCodePanelOpen] = React.useState(false);
   const [codePanelInitialPane, setCodePanelInitialPane] = React.useState<"editor" | "preview">("editor");
   const [codeOpening, setCodeOpening] = React.useState(false);
-  const { workspace: codeWorkspace, onProjectReady: onCodeProjectReady } = useChatCodingWorkspace(user?.id, currentChat?.id);
+  const { workspace: codeWorkspace, onProjectReady: onCodeProjectReady, resolvedChatId: codeWorkspaceResolvedChatId } = useChatCodingWorkspace(user?.id, currentChat?.id);
   const readyCodePreview = useChatCodingPreview(codeWorkspace);
   React.useEffect(() => {
     setCodePanelOpen(false);
@@ -6803,6 +6803,9 @@ function ChatInterfaceContent() {
     userId: user?.id,
     chatId: currentChatId,
     busy: isCurrentChatStreaming || isCurrentChatLocalJobBusy || (isSending && sendingChatId === currentChatId),
+    // After a reload the continuation waits for this chat's workspace lookup,
+    // so a coding task resumes inside its workspace and not as plain chat.
+    readyChatId: codeWorkspaceResolvedChatId,
     onConnected: async (detail) => {
       const targetChat = currentChatRef.current;
       if (detail.userId !== user?.id || targetChat?.id !== detail.chatId) return;

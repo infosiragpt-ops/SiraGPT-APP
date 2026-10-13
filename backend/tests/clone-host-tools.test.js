@@ -129,7 +129,8 @@ describe('host-bash-tool', () => {
   it('isAllowedCommand accepts node/npm/python', () => {
     assert.strictEqual(internal.isAllowedCommand('node --version'), true);
     assert.strictEqual(internal.isAllowedCommand('npm test'), true);
-    assert.strictEqual(internal.isAllowedCommand('npx jest'), true);
+    // npx downloads and runs arbitrary registry code: not a host_bash command.
+    assert.strictEqual(internal.isAllowedCommand('npx jest'), false);
     assert.strictEqual(internal.isAllowedCommand('python3 --version'), true);
     assert.strictEqual(internal.isAllowedCommand('pip3 list'), true);
   });

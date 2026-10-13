@@ -182,6 +182,7 @@ const ADMIN_ROUTE_POLICIES = Object.freeze({
   'POST /api/admin/webhooks/dlq/:id/retry': policy('webhooks.manage', true),
   'POST /api/admin/webhooks/retry-failed': policy('webhooks.manage', true),
   'GET /api/admin/audit-logs': policy('audit.read'),
+  'GET /api/admin/capabilities': policy('audit.read'),
   'GET /api/admin/audit-logs/search': policy('audit.read'),
   'GET /api/admin/audit-logs.csv': policy('audit.export'),
   'GET /api/admin/turn-failures': policy('audit.read'),

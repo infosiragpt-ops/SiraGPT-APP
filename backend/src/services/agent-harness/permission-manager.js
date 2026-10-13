@@ -88,14 +88,30 @@ function enablePermissionAudit() {
   setPermissionAuditor(defaultPermissionAuditor);
 }
 
+/**
+ * Tools that ACQUIRE capability — run or install third-party code or
+ * playbooks on the user's behalf — never get a chat-wide grant: «Permitir
+ * siempre en este chat» on one of them behaves like a single «Permitir», so
+ * every later install still shows its own card with its own arguments.
+ */
+const ACQUISITION_TOOLS = Object.freeze(new Set([
+  'host_bash', 'clone_project', 'install_skill', 'save_skill', 'install_sandbox_package',
+]));
+
+function isAcquisitionTool(toolName) {
+  return ACQUISITION_TOOLS.has(String(toolName || ''));
+}
+
 function isAlwaysAllowed(chatId, toolName) {
   if (!chatId) return false;
+  if (isAcquisitionTool(toolName)) return false;
   const set = chatAllowlists.get(String(chatId));
   return Boolean(set && set.has(String(toolName)));
 }
 
 function allowAlwaysInChat(chatId, toolName) {
   if (!chatId || !toolName) return;
+  if (isAcquisitionTool(toolName)) return;
   const key = String(chatId);
   let set = chatAllowlists.get(key);
   if (!set) {
@@ -356,6 +372,9 @@ async function resolveDurablePermission({
     return { ok: false, status: 410, error: 'permission request expired' };
   }
   const normalized = verdict === 'deny' ? 'denied' : 'approved';
+  // Durable twin of the in-memory rule: an acquisition tool's «always allow»
+  // is stored and reported as a single allow.
+  const effective = verdict === 'always_allow_in_chat' && isAcquisitionTool(durable.tool) ? 'allow' : verdict;
   const claimed = await prisma.$transaction(async (tx) => {
     const updated = await tx.agentApproval.updateMany({
       where: {
@@ -366,7 +385,7 @@ async function resolveDurablePermission({
       },
       data: {
         status: normalized,
-        decision: verdict,
+        decision: effective,
         resolvedAt: new Date(),
       },
     });
@@ -394,7 +413,7 @@ async function resolveDurablePermission({
   }
   return {
     ok: true,
-    decision: verdict,
+    decision: effective,
     durable: true,
     requiresResume: verdict !== 'deny' && Boolean(durable.runId),
     runId: durable.runId || null,
@@ -432,12 +451,14 @@ function resolvePermission({
     allowAlwaysInChat(entry.chatId, entry.toolName);
   }
   const normalized = verdict === 'deny' ? 'deny' : 'allow';
+  const scope = verdict === 'always_allow_in_chat' && !isAcquisitionTool(entry.toolName) ? 'chat' : 'once';
   settle(id, {
     decision: normalized,
-    scope: verdict === 'always_allow_in_chat' ? 'chat' : 'once',
+    scope,
     ...(normalized === 'deny' ? { reason: 'user_denied' } : {}),
   });
-  return { ok: true, decision: verdict };
+  // An acquisition tool never gets a chat-wide grant: report what took effect.
+  return { ok: true, decision: verdict === 'always_allow_in_chat' && scope !== 'chat' ? 'allow' : verdict, scope };
 }
 
 async function listPendingDurable(prisma, userId, { limit = 100 } = {}) {
@@ -498,6 +519,8 @@ module.exports = {
   cancelRun,
   isAlwaysAllowed,
   allowAlwaysInChat,
+  isAcquisitionTool,
+  ACQUISITION_TOOLS,
   resetForTests,
   setPermissionAuditor,
   enablePermissionAudit,

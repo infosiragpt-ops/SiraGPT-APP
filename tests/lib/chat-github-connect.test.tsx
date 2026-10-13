@@ -152,6 +152,23 @@ describe("GitHub authorization from the current chat", () => {
     emit(); await flush(); await tick(); expect(onConnected).toHaveBeenCalledTimes(1)
   })
 
+  it("after a reload, resumes only once the caller has resolved that chat's context", async () => {
+    const onConnected = vi.fn()
+    const first = renderHook(() => useChatGithubConnect({ userId: "u", chatId: "c", busy: false, onConnected }))
+    emit(); await flush(); first.unmount()
+    success()
+    // Reload: the chat's coding-workspace lookup has not answered yet.
+    const { rerender } = renderHook(({ readyChatId }) => useChatGithubConnect({ userId: "u", chatId: "c", busy: false, readyChatId, onConnected }), { initialProps: { readyChatId: null as string | null } })
+    await flush(); await tick()
+    expect(onConnected).not.toHaveBeenCalled()
+    // Another chat's context being ready does not release this one.
+    rerender({ readyChatId: "other" }); await flush()
+    expect(onConnected).not.toHaveBeenCalled()
+    rerender({ readyChatId: "c" }); await flush()
+    expect(onConnected).toHaveBeenCalledExactlyOnceWith(detail)
+    await tick(); expect(onConnected).toHaveBeenCalledTimes(1)
+  })
+
   it("retries a failed verification without consuming the handoff proof", async () => {
     const onConnected = vi.fn()
     renderHook(() => useChatGithubConnect({ userId: "u", chatId: "c", busy: false, onConnected }))

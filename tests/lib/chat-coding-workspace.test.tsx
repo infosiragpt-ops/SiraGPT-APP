@@ -58,9 +58,38 @@ describe("chat cloud workspace ownership", () => {
     expect(projectsCodexApi.getProjectByChat).toHaveBeenCalledWith("chat-a")
   })
 
+  it("reports the chat as resolved only after its own lookup settles (bound or not)", async () => {
+    const lookup = deferred<CodexProject>()
+    vi.mocked(projectsCodexApi.getProjectByChat).mockImplementation((id) => id === "chat-a" ? lookup.promise : Promise.reject(new Error("project_not_found")))
+    const { result, rerender } = renderHook(({ chatId }) => useChatCodingWorkspace("user-a", chatId), { initialProps: { chatId: "chat-a" } })
+    expect(result.current.resolvedChatId).toBeNull()
+    await act(async () => { lookup.resolve(project("a", "chat-a")) })
+    expect(result.current.workspace?.projectId).toBe("a")
+    expect(result.current.resolvedChatId).toBe("chat-a")
+    // A chat without a project is resolved too, once its lookup fails.
+    rerender({ chatId: "chat-b" })
+    expect(result.current.resolvedChatId).toBeNull()
+    await waitFor(() => expect(result.current.resolvedChatId).toBe("chat-b"))
+    expect(result.current.workspace).toBeNull()
+  })
+
+  it("does not hold a chat forever when its lookup never answers", async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(projectsCodexApi.getProjectByChat).mockImplementation(() => new Promise(() => {}))
+      const { result } = renderHook(() => useChatCodingWorkspace("user-a", "chat-a"))
+      expect(result.current.resolvedChatId).toBeNull()
+      await act(async () => { await vi.advanceTimersByTimeAsync(8_000) })
+      expect(result.current.resolvedChatId).toBe("chat-a")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("does not look up temporary chats", () => {
-    renderHook(() => useChatCodingWorkspace("user-a", "temp-chat-123"))
+    const { result } = renderHook(() => useChatCodingWorkspace("user-a", "temp-chat-123"))
     expect(projectsCodexApi.getProjectByChat).not.toHaveBeenCalled()
+    expect(result.current.resolvedChatId).toBe("temp-chat-123")
   })
 
   it("leaves anonymous and malformed events without an active workspace", () => {

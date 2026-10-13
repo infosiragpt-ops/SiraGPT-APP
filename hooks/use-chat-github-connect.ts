@@ -12,7 +12,10 @@ const consumedKey = (owner: string) => `siragpt:github-handoff-consumed:${owner}
 const storageKey = (owner: string) => `siragpt:github-handoff:${owner}`
 type Pending = GithubConnectionDetail & { expiresAt: number }
 type Live = Pending & { popup: Window | null; controller: AbortController; timer?: ReturnType<typeof setTimeout>; expiryTimer?: ReturnType<typeof setTimeout>; busy: boolean; navigated: boolean; authorizeUrl?: string }
-type Options = { userId?: string; chatId?: string | null; busy: boolean; onConnected: (detail: GithubConnectionDetail) => Promise<void> | void }
+// readyChatId: when given, the continuation waits until the caller has
+// resolved that chat's context (e.g. its coding workspace after a reload), so
+// a resumed task never starts without it.
+type Options = { userId?: string; chatId?: string | null; busy: boolean; readyChatId?: string | null; onConnected: (detail: GithubConnectionDetail) => Promise<void> | void }
 
 function closePopup(popup: Window | null) { try { popup?.close() } catch { /* Cross-origin context may already be gone. */ } }
 function readPending(owner: string): Pending[] {
@@ -133,7 +136,8 @@ export function useChatGithubConnect(options: Options) {
       }
       const verified = status.connected && status.verified === true && Boolean(receipt.connectionVersion)
         && status.connectionVersion === receipt.connectionVersion
-      if (verified && scope.current.chatId === row.chatId && !scope.current.busy && document.visibilityState !== "hidden") {
+      const contextReady = scope.current.readyChatId === undefined || scope.current.readyChatId === row.chatId
+      if (verified && scope.current.chatId === row.chatId && !scope.current.busy && contextReady && document.visibilityState !== "hidden") {
         // Remove before continuation: repeated callbacks/focus/polls cannot run it twice.
         finish(row)
         toast.success("GitHub conectado. Retomando la tarea pendiente.", { id: `github-result-${row.handoffId}` })
@@ -231,7 +235,7 @@ export function useChatGithubConnect(options: Options) {
 
   React.useEffect(() => {
     for (const row of pending.current.values()) if (row.navigated && row.chatId === options.chatId) void pollRef.current(row)
-  }, [options.chatId, options.busy])
+  }, [options.chatId, options.busy, options.readyChatId])
 
   const reserve = React.useCallback((text: string) => {
     const current = scope.current

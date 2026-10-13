@@ -137,6 +137,44 @@ router.get('/providers', async (req, res) => {
   }
 });
 // AI Models Management
+// Capability ledger — what the agent installed into its sandboxes by itself,
+// what it could not (gaps to allowlist next) and every host_bash execution.
+// AuditLog rows (agent.capability_*), so no schema change; the active
+// package policy rides along so the operator sees the live allowlist size.
+router.get('/capabilities', async (req, res) => {
+  try {
+    const ledger = require('../services/capability-ledger');
+    const { resolvePolicy } = require('../services/agent-runner/sandbox-packages/policy');
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+    const action = typeof req.query.action === 'string' && Object.values(ledger.ACTIONS).includes(req.query.action)
+      ? req.query.action
+      : null;
+    const sinceRaw = typeof req.query.since === 'string' ? new Date(req.query.since) : null;
+    const since = sinceRaw && !Number.isNaN(sinceRaw.getTime()) ? sinceRaw : null;
+    const userId = typeof req.query.userId === 'string' && req.query.userId.trim() ? req.query.userId.trim() : null;
+    const events = await ledger.listCapabilityEvents(prisma, { limit, action, userId, since });
+    const policy = resolvePolicy();
+    res.json({
+      events,
+      gaps: ledger.summarizeGaps(events),
+      actions: ledger.ACTIONS,
+      policy: {
+        enabled: policy.enabled,
+        allowCount: policy.allow.size,
+        indexUrl: policy.indexUrl ? 'custom' : 'pypi',
+        network: policy.network || 'default',
+        timeoutMs: policy.timeoutMs,
+        maxPerTurn: policy.maxPerTurn,
+        maxPackages: policy.maxPackages,
+        maxBytes: policy.maxBytes,
+      },
+    });
+  } catch (error) {
+    console.error('[admin/capabilities] failed:', error && error.message);
+    res.status(500).json({ error: 'capabilities_unavailable' });
+  }
+});
+
 router.get('/models', async (req, res) => {
   try {
     await modelSyncService.ensureDefaultInactiveOnce();
