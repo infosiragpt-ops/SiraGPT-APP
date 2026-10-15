@@ -76,6 +76,29 @@ describe('static upload access guard', () => {
     assert.deepEqual(classifyUploadPath('user-a/sub/icon-1-abcdef123456.png'), { kind: 'owned', userId: 'user-a' });
   });
 
+  test('never serves dot-directories (transcript sidecars, checkpoints)', async () => {
+    assert.deepEqual(classifyUploadPath('.transcripts/f1.json.gz'), { kind: 'blocked' });
+    assert.deepEqual(classifyUploadPath('.transcription-checkpoints/media-abc-1/seg-00000.json'), { kind: 'blocked' });
+    assert.deepEqual(classifyUploadPath('user-a/.cache/x.txt'), { kind: 'blocked' });
+    assert.deepEqual(classifyUploadPath('user-a/.env'), { kind: 'blocked' });
+    fs.mkdirSync(path.join(uploadDir, '.transcripts'), { recursive: true });
+    fs.writeFileSync(path.join(uploadDir, '.transcripts', 'f1.json.gz'), 'transcript sidecar');
+    // express.static alone (no dotfiles option) serves files inside a dot-directory.
+    const bare = express();
+    bare.use('/uploads', express.static(uploadDir));
+    assert.equal((await request(bare).get('/uploads/.transcripts/f1.json.gz')).status, 200);
+    // The guard refuses it before express.static, even for a signed-in user.
+    const res = await request(buildApp())
+      .get('/uploads/.transcripts/f1.json.gz')
+      .set('Authorization', auth.authHeader);
+    assert.equal(res.status, 404);
+    assert.notEqual(res.text, 'transcript sidecar');
+    const encoded = await request(buildApp())
+      .get('/uploads/%2Etranscripts/f1.json.gz')
+      .set('Authorization', auth.authHeader);
+    assert.equal(encoded.status, 404);
+  });
+
   test('requires authentication for user-scoped uploads', async () => {
     const res = await request(buildApp()).get('/uploads/user-a/private.txt');
 
