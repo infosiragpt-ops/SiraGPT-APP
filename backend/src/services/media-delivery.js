@@ -607,7 +607,7 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
       output: {
         documentFormat: output.documentFormat || (formats.has('pdf') ? 'pdf' : formats.has('docx') ? 'docx' : null),
         wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
-        range: delivery.range && Number.isFinite(Number(delivery.range.end)) ? delivery.range : null,
+        range: delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
         timeOffsetSec: Number(output.timeOffsetSec) || 0,
       },
       userId: delivery.userId,
@@ -723,7 +723,7 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
     userId: delivery.userId, chatId: delivery.deliveryChatId || delivery.chatId, prisma,
   });
   // A requested range («del minuto 30 al 45») is analysed alone.
-  const range = delivery?.range && Number.isFinite(Number(delivery.range.end)) ? delivery.range : null;
+  const range = delivery?.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null;
   let analysisRows = rows;
   if (range) {
     try {

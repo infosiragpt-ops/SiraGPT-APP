@@ -106,7 +106,7 @@ function mediaRowsForAnalysis(rows = [], transcripts = new Map(), range = null, 
     const result = transcriptResultFor(row, transcripts.get(row.id));
     if (!result.segments.length) return row;
     try {
-      const segments = fmt.sliceSegments(result.segments, range);
+      const segments = fmt.sliceSegments(result.segments, { start: range.start, end: range.end ?? null });
       if (!segments?.length) return row;
       const text = fmt.renderText({ ...result, segments }, { fileName: row.originalName || row.filename, header: false });
       return String(text || '').trim() ? { ...row, extractedText: text } : row;

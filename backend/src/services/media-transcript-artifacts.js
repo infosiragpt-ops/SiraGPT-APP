@@ -59,7 +59,9 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
   let range = null;
   try {
     const parsed = (formatter || defaultFormatter()).parseTimeRange?.(goal);
-    if (parsed && Number.isFinite(parsed.start) && Number.isFinite(parsed.end) && parsed.end > parsed.start) range = { start: parsed.start, end: parsed.end };
+    // An open range («desde el minuto 30») runs to the end of the recording.
+    if (parsed && Number.isFinite(parsed.start) && parsed.start >= 0
+      && (parsed.end == null || (Number.isFinite(parsed.end) && parsed.end > parsed.start))) range = { start: parsed.start, end: parsed.end ?? null };
   } catch (_) { range = null; }
   return { documentFormat, wantsSubtitles, range };
 }
@@ -124,10 +126,13 @@ function resultFor(row, transcript, output) {
 
 function applyRange(result, range, formatter) {
   if (!range || !result.segments.length) return { result, sliced: false };
-  const segments = normalizeSegments(formatter.sliceSegments(result.segments, range));
-  const gaps = result.gaps.filter((gap) => Number(gap.end) > range.start && Number(gap.start) < range.end);
+  const end = range.end == null ? null : Number(range.end);
+  // The formatter clips gaps to the window and recomputes coverage.
+  const sliced = typeof formatter.sliceResult === 'function' ? formatter.sliceResult(result, { start: range.start, end }) : null;
+  const segments = normalizeSegments(sliced ? sliced.segments : formatter.sliceSegments(result.segments, { start: range.start, end }));
+  const gaps = sliced ? sliced.gaps : result.gaps.filter((gap) => Number(gap.end) > range.start && (end == null || Number(gap.start) < end));
   const text = segments.map((seg) => seg.text).join(' ');
-  return { result: { ...result, segments, gaps, text, transcript: text, range }, sliced: true };
+  return { result: { ...result, ...(sliced || {}), segments, gaps, text, transcript: text, range: { start: range.start, end } }, sliced: true };
 }
 
 function clock(seconds, withHours) {
@@ -141,6 +146,7 @@ function clock(seconds, withHours) {
 
 function rangeLabel(range) {
   if (!range) return '';
+  if (range.end == null) return `desde ${clock(range.start, range.start >= 3600)}`;
   const withHours = range.end >= 3600;
   return `${clock(range.start, withHours)}–${clock(range.end, withHours)}`;
 }
