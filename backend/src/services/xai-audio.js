@@ -101,12 +101,49 @@ function transcriptionTextFromPayload(payload) {
   throw error;
 }
 
+/**
+ * Timed segments from an STT payload: `segments[{start,end,text}]` as is, or
+ * `words[{start,end,text|word}]` grouped on pauses (≥ 1 s), sentence ends and
+ * a 12 s ceiling. [] when the payload carries no timing.
+ */
+function segmentsFromPayload(payload) {
+  const timed = (item) => Number.isFinite(Number(item?.start)) && Number.isFinite(Number(item?.end));
+  if (Array.isArray(payload?.segments) && payload.segments.some(timed)) {
+    return payload.segments.filter(timed).map((segment) => ({
+      start: Number(segment.start),
+      end: Number(segment.end),
+      text: String(segment.text || segment.transcript || '').trim(),
+      ...(segment.speaker != null ? { speaker: String(segment.speaker) } : {}),
+    })).filter((segment) => segment.text);
+  }
+  if (!Array.isArray(payload?.words)) return [];
+  const out = [];
+  let current = null;
+  for (const word of payload.words.filter(timed)) {
+    const text = String(word.text ?? word.word ?? '').trim();
+    if (!text) continue;
+    const start = Number(word.start);
+    const end = Number(word.end);
+    const speaker = word.speaker != null ? String(word.speaker) : undefined;
+    if (current && (start - current.end >= 1 || end - current.start > 12 || speaker !== current.speaker || /[.!?…]$/.test(current.text))) {
+      out.push(current);
+      current = null;
+    }
+    if (!current) current = { start, end, text, ...(speaker !== undefined ? { speaker } : {}) };
+    else { current.end = end; current.text = `${current.text} ${text}`; }
+  }
+  if (current) out.push(current);
+  return out;
+}
+
 async function transcribeXaiAudioFile({
   filePath,
   originalName,
   mimeType,
   model,
   language,
+  detectLanguage = false,
+  timeoutMs,
   signal,
   env = process.env,
   axiosImpl = axios,
@@ -119,19 +156,24 @@ async function transcribeXaiAudioFile({
 
   const config = resolveXaiAudioConfig(env);
   const form = new FormData();
+  // Text fields BEFORE the file: a multipart parser that streams the file
+  // part only knows the fields it has already read.
+  form.append('model', normalizeOptionalString(model) || config.sttModel);
+  // A transcription job that wants detection must not inherit the TTS voice
+  // language (es) as a forced STT language.
+  const normalizedLanguage = normalizeOptionalString(language) || (detectLanguage ? null : normalizeOptionalString(config.ttsLanguage));
+  if (normalizedLanguage) form.append('language', normalizedLanguage);
   const audioStream = fs.createReadStream(filePath);
   form.append('file', audioStream, {
     filename: originalName || path.basename(filePath) || 'voice.webm',
     contentType: mimeType || 'application/octet-stream',
   });
-  form.append('model', normalizeOptionalString(model) || config.sttModel);
-  const normalizedLanguage = normalizeOptionalString(language || config.ttsLanguage);
-  if (normalizedLanguage) form.append('language', normalizedLanguage);
+  const explicitTimeout = Number(timeoutMs);
 
   try {
     const response = await axiosImpl.post(`${config.baseUrl}/stt`, form, {
       headers: xaiHeaders(config, form.getHeaders()),
-      timeout: config.timeoutMs,
+      timeout: Number.isFinite(explicitTimeout) && explicitTimeout > 0 ? explicitTimeout : config.timeoutMs,
       signal,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
@@ -141,6 +183,8 @@ async function transcribeXaiAudioFile({
       provider: 'xai',
       model: normalizeOptionalString(model) || config.sttModel,
       text: transcriptionTextFromPayload(response.data),
+      language: normalizeOptionalString(response.data?.language),
+      segments: segmentsFromPayload(response.data),
       raw: response.data,
     };
   } finally {
@@ -208,6 +252,7 @@ module.exports = {
   DEFAULT_XAI_TTS_LANGUAGE,
   DEFAULT_XAI_TTS_FORMAT,
   resolveXaiAudioConfig,
+  segmentsFromPayload,
   transcribeXaiAudioFile,
   synthesizeXaiSpeech,
   serializeAudioForJson,

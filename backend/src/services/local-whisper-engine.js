@@ -8,6 +8,13 @@
  *   FFMPEG_PATH / WHISPER_CPP_BIN / WHISPER_CPP_MODEL
  *   LOCAL_WHISPER_MODEL (faster-whisper / openai-whisper name, default base)
  *   LOCAL_WHISPER_TIMEOUT_MS (default 180000)
+ *   WHISPER_CPP_BEAM_SIZE (default 5 for media up to 10 min, 2 for longer
+ *   media: a 5-hour lecture decodes ~2x faster with a negligible accuracy cost)
+ *
+ * whisper.cpp runs WITH timestamp decoding (no `-nt`): segment offsets in the
+ * JSON output are real and decoding seeks on segment ends instead of hard
+ * 30 s windows. An unknown language is passed as `-l auto` — whisper-cli
+ * otherwise assumes English.
  */
 
 const { spawn } = require('child_process');
@@ -18,6 +25,10 @@ const path = require('path');
 const { buildUntrustedChildEnv } = require('../utils/untrusted-child-env');
 
 const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_BEAM_SIZE = 5;
+const LONG_MEDIA_BEAM_SIZE = 2;
+const LONG_MEDIA_SECONDS = 600;
+const MAX_PROMPT_CHARS = 1000;
 const PYTHON_SCRIPT = path.join(__dirname, '../../scripts/local-whisper.py');
 
 function envOf(options) {
@@ -68,19 +79,48 @@ function whisperTimeoutForWav(wavBytes, options = {}) {
   return Math.max(timeoutMs(options), scaled);
 }
 
-function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads }) {
+/**
+ * Beam width for whisper.cpp. Explicit `options.beamSize` or
+ * WHISPER_CPP_BEAM_SIZE (1-10) wins; otherwise 5 for clips up to 10 minutes
+ * and 2 for long media (the whole recording's length, not the segment's).
+ */
+function resolveBeamSize(options = {}) {
+  const raw = options.beamSize ?? envOf(options).WHISPER_CPP_BEAM_SIZE;
+  const n = Number.parseInt(raw, 10);
+  if (Number.isFinite(n) && n >= 1) return Math.min(10, n);
+  const media = Number(options.mediaDurationSeconds ?? options.durationSeconds) || 0;
+  return media > LONG_MEDIA_SECONDS ? LONG_MEDIA_BEAM_SIZE : DEFAULT_BEAM_SIZE;
+}
+
+/** ISO code for whisper.cpp, or 'auto' (whisper-cli assumes English without -l). */
+function whisperLanguageArg(language) {
+  const match = /^([a-z]{2,3})(?:[-_][a-z0-9]{1,8})*$/i.exec(String(language || '').trim());
+  if (!match) return 'auto';
+  return match[1].toLowerCase();
+}
+
+/** One line, no control characters, capped: it travels as a single argv entry. */
+function cleanPrompt(prompt) {
+  const text = String(prompt || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, MAX_PROMPT_CHARS) : '';
+}
+
+function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads, prompt, beamSize }) {
   const args = [
     '-m', modelPath,
     '-f', wavPath,
     '-otxt',
     '-oj',
     '-of', outBase,
-    '-nt',
     '--no-prints',
     '-ng',
     '-t', String(threads ?? 1),
+    '-l', whisperLanguageArg(language),
   ];
-  if (language) args.push('-l', language);
+  const beam = Number(beamSize);
+  if (Number.isFinite(beam) && beam >= 1) args.push('-bs', String(Math.floor(beam)));
+  const initialPrompt = cleanPrompt(prompt);
+  if (initialPrompt) args.push('--prompt', initialPrompt);
   return args;
 }
 
@@ -271,6 +311,16 @@ function runProcess(command, args, options = {}) {
   });
 }
 
+/**
+ * Decoding to WAV scales with the input: a whole-file run of a long recording
+ * must not die at the 3-minute floor (100 ms per audio second, like the
+ * segmentation pass).
+ */
+function conversionTimeoutMs(options = {}) {
+  const seconds = Number(options.mediaDurationSeconds ?? options.durationSeconds) || 0;
+  return Math.max(timeoutMs(options), Math.ceil(seconds * 100));
+}
+
 async function convertToWav(inputPath, wavPath, options = {}) {
   await runProcess(ffmpegPath(options), [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
@@ -351,6 +401,8 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
     outBase,
     language,
     threads: resolveThreadCount(options),
+    prompt: options.prompt,
+    beamSize: resolveBeamSize(options),
   });
 
   await runProcess(bin, args, scopedOptions);
@@ -370,10 +422,11 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
     err.code = 'LOCAL_WHISPER_EMPTY';
     throw err;
   }
+  const forced = whisperLanguageArg(language);
   return {
     text,
     segments: json.segments,
-    language: language || json.language || null,
+    language: (forced !== 'auto' ? forced : null) || json.language || null,
     model: path.basename(modelPath),
     engine: 'whisper.cpp',
   };
@@ -387,7 +440,8 @@ async function transcribeWithPython(wavPath, language, options = {}) {
     '--output', outPath,
     '--model', modelName(options),
   ];
-  if (language) args.push('--language', language);
+  const forced = whisperLanguageArg(language);
+  if (forced !== 'auto') args.push('--language', forced);
   const wavStat = await fsPromises.stat(wavPath).catch(() => null);
   await runProcess(pythonPath(options), args, { ...options, timeoutMs: whisperTimeoutForWav(wavStat?.size || 0, options) });
   const raw = await readIfExists(outPath);
@@ -410,7 +464,7 @@ async function transcribeWithPython(wavPath, language, options = {}) {
   return {
     text,
     segments,
-    language: parsed.language || language || null,
+    language: parsed.language || (forced !== 'auto' ? forced : null),
     model: parsed.model || modelName(options),
     engine: parsed.engine || 'faster-whisper',
   };
@@ -425,7 +479,7 @@ async function transcribeLocal(filePath, options = {}) {
   const wavPath = path.join(tmpDir, 'audio.wav');
   try {
     try {
-      await convertToWav(filePath, wavPath, options);
+      await convertToWav(filePath, wavPath, { ...options, timeoutMs: conversionTimeoutMs(options) });
     } catch (err) {
       if (err.code === 'LOCAL_WHISPER_UNAVAILABLE') {
         const reason = `ffmpeg missing (${ffmpegPath(options)})`;
@@ -477,5 +531,8 @@ module.exports = {
   candidateBins,
   candidateModels,
   resolveThreadCount,
+  resolveBeamSize,
+  whisperLanguageArg,
+  conversionTimeoutMs,
   buildWhisperCppArgs,
 };
