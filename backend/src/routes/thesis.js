@@ -142,8 +142,74 @@ function chunkResearchResults(allSearchResults, topics, maxResultsPerChunk = 10)
  * 5. Save thesis as document
  */
 
-// Store for thesis generation sessions
+// Store for thesis generation sessions.
+// Terminal sessions (completed/error) are evicted SIRAGPT_THESIS_SESSION_TTL_MS
+// after their last update, and the map is capped at SIRAGPT_THESIS_SESSION_MAX
+// entries (oldest terminal sessions first). A session whose background job is
+// still running is NEVER evicted: the job re-creates a missing session at every
+// step, and an in-flight status poll must not 404.
 const thesisSessions = new Map();
+const thesisJobsInFlight = new Set();
+const THESIS_SESSION_TERMINAL_STATUSES = new Set(['completed', 'error']);
+
+function thesisIntEnv(name, fallback, min) {
+  const value = Number.parseInt(process.env[name] || '', 10);
+  return Number.isFinite(value) && value >= min ? value : fallback;
+}
+
+const THESIS_SESSION_TTL_MS = thesisIntEnv('SIRAGPT_THESIS_SESSION_TTL_MS', 24 * 60 * 60 * 1000, 60 * 1000);
+const THESIS_SESSION_MAX = thesisIntEnv('SIRAGPT_THESIS_SESSION_MAX', 500, 1);
+const THESIS_SESSION_SWEEP_MS = 10 * 60 * 1000;
+
+function isThesisSessionRunning(sessionId, session) {
+  return thesisJobsInFlight.has(sessionId) || !THESIS_SESSION_TERMINAL_STATUSES.has(session?.status);
+}
+
+function thesisSessionUpdatedAt(session) {
+  const updatedAt = Date.parse(session?.lastUpdated || session?.createdAt || '');
+  return Number.isFinite(updatedAt) ? updatedAt : 0;
+}
+
+function sweepThesisSessions(now = Date.now(), { maxSessions = THESIS_SESSION_MAX } = {}) {
+  let removed = 0;
+  const evictable = [];
+  for (const [sessionId, session] of thesisSessions) {
+    if (isThesisSessionRunning(sessionId, session)) continue;
+    const updatedAt = thesisSessionUpdatedAt(session);
+    if (now - updatedAt >= THESIS_SESSION_TTL_MS) {
+      thesisSessions.delete(sessionId);
+      removed += 1;
+    } else {
+      evictable.push([sessionId, updatedAt]);
+    }
+  }
+  if (thesisSessions.size > maxSessions) {
+    evictable.sort((a, b) => a[1] - b[1]);
+    for (const [sessionId] of evictable) {
+      if (thesisSessions.size <= maxSessions) break;
+      thesisSessions.delete(sessionId);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+// A finished session only serves the status poll (sourcesCount + 6 links),
+// the download (documentPath) and the screenshot gate. Drop the scraped page
+// text and the thesis body, which nothing reads after the job ends.
+function compactThesisSession(session) {
+  if (!session) return;
+  session.thesisContent = null;
+  if (Array.isArray(session.searchResults)) {
+    session.searchResults = session.searchResults.map(({ source, url, topic }) => ({ source, url, topic }));
+  }
+}
+
+const thesisSessionSweepTimer = setInterval(() => {
+  const removed = sweepThesisSessions();
+  if (removed > 0) console.log(`🧹 Evicted ${removed} thesis session(s); ${thesisSessions.size} left`);
+}, THESIS_SESSION_SWEEP_MS);
+thesisSessionSweepTimer.unref?.();
 
 function safeFileSegment(value) {
   const segment = path.basename(String(value || ''));
@@ -1734,7 +1800,9 @@ router.post(
         lastUpdated: new Date().toISOString()
       };
 
+      sweepThesisSessions(Date.now(), { maxSessions: THESIS_SESSION_MAX - 1 });
       thesisSessions.set(sessionId, initialSession);
+      thesisJobsInFlight.add(sessionId);
       console.log(`✅ Session created: ${sessionId}`);
       console.log(`📊 Total active sessions: ${thesisSessions.size}`);
 
@@ -1766,6 +1834,9 @@ router.post(
             message: `Error: ${error.message}`
           });
         }
+      }).finally(() => {
+        thesisJobsInFlight.delete(sessionId);
+        compactThesisSession(thesisSessions.get(sessionId));
       });
 
     } catch (error) {
@@ -2147,12 +2218,6 @@ router.get('/status/:sessionId', authenticateToken, async (req, res) => {
     const { sessionId } = req.params;
     const userId = req.user.id;
 
-    // Log all active session IDs for debugging
-    if (thesisSessions.size > 0) {
-      const activeSessionIds = Array.from(thesisSessions.keys());
-      console.log(`📊 Active session IDs: ${activeSessionIds.join(', ')}`);
-    }
-
     const session = thesisSessions.get(sessionId);
 
     if (!session) {
@@ -2301,3 +2366,12 @@ router.get('/files/:filename', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.INTERNAL = {
+  thesisSessions,
+  thesisJobsInFlight,
+  sweepThesisSessions,
+  compactThesisSession,
+  thesisSessionSweepTimer,
+  THESIS_SESSION_TTL_MS,
+  THESIS_SESSION_MAX,
+};

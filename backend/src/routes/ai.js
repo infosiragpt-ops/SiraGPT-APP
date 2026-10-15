@@ -1484,7 +1484,11 @@ const activeGenerateTurns = new Map();
 // production JWT_SECRET is mandatory; when no signing secret is available we
 // disable resume rather than accepting a globally reusable cursor.
 const activeResumeStreams = new Map();
-const sseLastEventCursorBySession = new Map();
+// The owner's 3H62 write cursor lives on its activeResumeStreams entry
+// (activeResume.cursorStore), so it is released with that entry when the turn
+// ends instead of piling up in a module-level map. Its durable file is written
+// once, when the turn ends: nothing reads it mid-turn, and a synchronous
+// mkdir+write+rename per content delta sat on the token hot path.
 
 function streamResumeSigningSecret() {
   return process.env.SIRAGPT_STREAM_RESUME_SECRET
@@ -3075,8 +3079,12 @@ router.post(
             const w62 = require('../services/agent-runner/engine-3h62');
             const ad = require('../services/agent-runner/engine-adapter');
             const sid = parsed.streamId;
-            if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
-            const cursorStore = sseLastEventCursorBySession.get(sid);
+            // Request-local on purpose: the owner's cursor counts frames the
+            // server WROTE, not frames this client RECEIVED. Seeding the resume
+            // from it skipped exactly the gap a dropped connection lost
+            // (client at 5, owner at 10 → replay from 10). The client's
+            // Last-Event-ID stays authoritative; nothing is inserted per resume.
+            const cursorStore = {};
             if (typeof ad.persistSseLastEventIdCursor === 'function' && Number.isFinite(parsed.position)) {
               ad.persistSseLastEventIdCursor({ lastEventId: parsed.position, store: cursorStore });
             }
@@ -7786,8 +7794,7 @@ router.post(
                     try {
                       const w62 = require('../services/agent-runner/engine-3h62');
                       const ad = require('../services/agent-runner/engine-adapter');
-                      if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
-                      const cursorStore = sseLastEventCursorBySession.get(sid);
+                      const cursorStore = activeResume.cursorStore || (activeResume.cursorStore = {});
                       if (typeof ad.persistSseLastEventIdCursor === 'function') {
                         ad.persistSseLastEventIdCursor({
                           lastEventId: activeResume.nextPosition,
@@ -7795,14 +7802,8 @@ router.post(
                           store: cursorStore,
                         });
                       }
-                      if (typeof w62.persistLastEventIdClosed === 'function') {
-                        w62.persistLastEventIdClosed({
-                          sessionKey: sid,
-                          lastEventId: activeResume.nextPosition,
-                          store: cursorStore,
-                          persistCursor: ad.persistSseLastEventIdCursor,
-                        });
-                      }
+                      // The durable cursor file (persistLastEventIdClosed) is
+                      // written once in the owner's finally, not per delta.
                       if (!res.headersSent && typeof w62.cookieForLastEventId === 'function') {
                         const baked = w62.cookieForLastEventId({
                           sessionKey: sid,
@@ -10271,11 +10272,13 @@ router.post(
         }
         if (resumeSession && resumeSession.streamId && typeof w62.persistLastEventIdClosed === 'function') {
           const sid = resumeSession.streamId;
-          if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
-          const cursorStore = sseLastEventCursorBySession.get(sid);
-          const last = resumeSession.record && Array.isArray(resumeSession.record.chunks)
+          // Read before the owner's activeResumeStreams entry is released below.
+          const ownerResume = activeResumeStreams.get(sid);
+          const cursorStore = (ownerResume && ownerResume.cursorStore) || {};
+          const durableLast = resumeSession.record && Array.isArray(resumeSession.record.chunks)
             ? resumeSession.record.chunks.length
             : undefined;
+          const last = Math.max(Number(durableLast) || 0, Number(cursorStore.cursor) || 0);
           try {
             const ad = require('../services/agent-runner/engine-adapter');
             if (typeof ad.persistSseLastEventIdCursor === 'function' && Number.isFinite(last)) {

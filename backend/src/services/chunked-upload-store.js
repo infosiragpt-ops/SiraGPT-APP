@@ -22,6 +22,7 @@ const fs = require('fs');
 const fsPromises = require('fs/promises');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { createKeyMutex } = require('../utils/key-mutex');
 
 const MB = 1024 * 1024;
 const DEFAULT_CHUNK_BYTES = 16 * MB;
@@ -29,6 +30,18 @@ const MIN_CHUNK_BYTES = 1 * MB;
 const MAX_CHUNK_BYTES = 64 * MB;
 const DEFAULT_STALE_MS = 6 * 60 * 60 * 1000;
 const PARTS_DIR = '.parts';
+
+// Every operation on one upload (chunk, complete, abort) is a read-modify-write
+// of its meta JSON plus the part file. Requests for the same upload can overlap
+// (a retried chunk whose first attempt is still running, a client sending chunks
+// in parallel, a doubled complete), so they run one at a time per upload. The
+// body is already buffered by express.raw before the handler, so this only
+// serialises the short disk work. In-process: production runs one node process.
+const uploadLocks = createKeyMutex();
+
+function withUploadLock(userDir, uploadId, fn) {
+  return uploadLocks.withLock(metaPathFor(userDir, uploadId), fn);
+}
 
 class ChunkedUploadError extends Error {
   constructor(status, code, message) {
@@ -77,7 +90,7 @@ async function readMeta(userDir, uploadId) {
 
 async function writeMeta(userDir, meta) {
   const target = metaPathFor(userDir, meta.uploadId);
-  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  const tmp = `${target}.${process.pid}.${randomUUID()}.tmp`;
   await fsPromises.writeFile(tmp, JSON.stringify(meta), 'utf8');
   await fsPromises.rename(tmp, target);
 }
@@ -127,6 +140,11 @@ async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, max
 }
 
 async function writeChunk({ userDir, uploadId, index, buffer } = {}) {
+  if (!isValidUploadId(uploadId)) throw new ChunkedUploadError(400, 'bad_upload_id', 'Identificador de subida inválido.');
+  return withUploadLock(userDir, uploadId, () => writeChunkLocked({ userDir, uploadId, index, buffer }));
+}
+
+async function writeChunkLocked({ userDir, uploadId, index, buffer }) {
   const meta = await readMeta(userDir, uploadId);
   const idx = Number(index);
   if (!Number.isInteger(idx) || idx < 0 || idx >= meta.totalChunks) {
@@ -158,6 +176,11 @@ async function writeChunk({ userDir, uploadId, index, buffer } = {}) {
  * Returns a multer-shaped file object the regular pipeline understands.
  */
 async function completeChunkedUpload({ userDir, uploadId } = {}) {
+  if (!isValidUploadId(uploadId)) throw new ChunkedUploadError(400, 'bad_upload_id', 'Identificador de subida inválido.');
+  return withUploadLock(userDir, uploadId, () => completeChunkedUploadLocked({ userDir, uploadId }));
+}
+
+async function completeChunkedUploadLocked({ userDir, uploadId }) {
   const meta = await readMeta(userDir, uploadId);
   if (meta.received.length !== meta.totalChunks) {
     const missing = [];
@@ -188,9 +211,11 @@ async function completeChunkedUpload({ userDir, uploadId } = {}) {
 
 async function abortChunkedUpload({ userDir, uploadId } = {}) {
   if (!isValidUploadId(uploadId)) return false;
-  await fsPromises.unlink(partPathFor(userDir, uploadId)).catch(() => {});
-  await fsPromises.unlink(metaPathFor(userDir, uploadId)).catch(() => {});
-  return true;
+  return withUploadLock(userDir, uploadId, async () => {
+    await fsPromises.unlink(partPathFor(userDir, uploadId)).catch(() => {});
+    await fsPromises.unlink(metaPathFor(userDir, uploadId)).catch(() => {});
+    return true;
+  });
 }
 
 /** Remove sessions untouched for longer than `maxAgeMs`. Best-effort. */
@@ -204,7 +229,8 @@ async function sweepStaleChunkedUploads(userDir, { maxAgeMs = DEFAULT_STALE_MS, 
   }
   let removed = 0;
   for (const entry of entries) {
-    if (!/\.(json|part)$/.test(entry)) continue;
+    // `.tmp` is a meta write a crash interrupted between writeFile and rename.
+    if (!/\.(json|part|tmp)$/.test(entry)) continue;
     const full = path.join(dir, entry);
     const stat = await fsPromises.stat(full).catch(() => null);
     if (!stat) continue;

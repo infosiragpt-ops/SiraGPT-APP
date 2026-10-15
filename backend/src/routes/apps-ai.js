@@ -27,6 +27,17 @@ const MAX_TOTAL_CHARS = 16000;
 const MAX_SYSTEM_CHARS = 2000;
 const MAX_OUTPUT_TOKENS = 1024;
 const ROLES = new Set(['system', 'user', 'assistant']);
+// Upstream bound for one /chat call. The OpenAI SDK defaults to 10 min per
+// attempt with 2 retries and clears its timer once headers arrive, so a stalled
+// Cerebras call (or a stalled stream) pinned this public endpoint for minutes.
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_TIMEOUT_MS = 120_000;
+
+function appsAiTimeoutMs(env) {
+  const raw = Number(env?.APPS_AI_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_TIMEOUT_MS;
+  return Math.min(Math.floor(raw), MAX_TIMEOUT_MS);
+}
 
 const DEFAULT_SYSTEM =
   'Eres el asistente de IA integrado en una aplicación generada con SiraGPT Apps. ' +
@@ -82,6 +93,13 @@ function buildAppsAiRouter(deps = {}) {
       // Streaming support: client sends { stream: true } → SSE token-by-token
       // like ChatGPT. Otherwise the classic JSON response (backwards compatible).
       const wantStream = req.body?.stream === true;
+      // One signal for the whole call (headers AND stream body): the deadline,
+      // or the app closing its connection, stops the upstream request.
+      const upstream = new AbortController();
+      const deadline = setTimeout(() => upstream.abort(), appsAiTimeoutMs(env));
+      deadline.unref?.();
+      res.on('close', () => { if (!res.writableEnded) upstream.abort(); });
+      const requestOptions = { signal: upstream.signal };
       try {
         const client = deps.createClient ? deps.createClient({ env }) : createCerebrasClient({ env });
         if (!client) return res.status(503).json({ ok: false, error: 'ai_unavailable' });
@@ -102,11 +120,14 @@ function buildAppsAiRouter(deps = {}) {
             max_tokens: MAX_OUTPUT_TOKENS,
             temperature: 0.7,
             stream: true,
-          });
+          }, requestOptions);
           for await (const chunk of stream) {
             const delta = chunk?.choices?.[0]?.delta?.content;
             if (delta) res.write(`data: ${JSON.stringify({ delta })}\n\n`);
           }
+          // The SDK ends the iterator quietly when its request is aborted, so
+          // a deadline (or a closed app) must not be reported as a finished answer.
+          if (upstream.signal.aborted) throw new Error('ai_timeout');
           res.write('data: [DONE]\n\n');
           res.end();
         } else {
@@ -114,19 +135,25 @@ function buildAppsAiRouter(deps = {}) {
             model, messages,
             max_tokens: MAX_OUTPUT_TOKENS,
             temperature: 0.7,
-          });
+          }, requestOptions);
           const text = completion?.choices?.[0]?.message?.content || '';
           return res.json({ ok: true, text });
         }
       } catch (err) {
-        const msg = String(err?.message || err).slice(0, 200);
+        const timedOut = upstream.signal.aborted;
+        const msg = timedOut ? 'ai_timeout' : String(err?.message || err).slice(0, 200);
+        if (res.writableEnded || res.destroyed) return undefined;
         if (res.headersSent) {
           // Streaming already started — send the error as an SSE event.
           res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
           res.end();
         } else {
-          return res.status(502).json({ ok: false, error: 'ai_error', message: msg });
+          return timedOut
+            ? res.status(504).json({ ok: false, error: 'ai_timeout' })
+            : res.status(502).json({ ok: false, error: 'ai_error', message: msg });
         }
+      } finally {
+        clearTimeout(deadline);
       }
     },
   );
@@ -134,4 +161,4 @@ function buildAppsAiRouter(deps = {}) {
   return router;
 }
 
-module.exports = { buildAppsAiRouter, validateBody, MAX_MESSAGES, MAX_OUTPUT_TOKENS, DEFAULT_SYSTEM };
+module.exports = { buildAppsAiRouter, validateBody, appsAiTimeoutMs, MAX_MESSAGES, MAX_OUTPUT_TOKENS, DEFAULT_SYSTEM };

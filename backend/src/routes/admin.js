@@ -18,6 +18,8 @@ const {
   parseIsActive,
   countPublication,
   setAiModelActive,
+  toAdminModelView,
+  normalizeModelApiKeyInput,
 } = require('../services/ai-model-publication');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const adminStats = require('../services/admin-stats-aggregator');
@@ -180,9 +182,9 @@ router.get('/models', async (req, res) => {
     await modelSyncService.ensureDefaultInactiveOnce();
     // Read path: a catalog pass from the last 10 min is reused (POST /models/sync always re-runs).
     await modelSyncService.ensureStaticCatalogModels({ types: ['IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'], maxAgeMs: modelSyncService.STATIC_CATALOG_MEMO_MS });
-    const models = await prisma.aiModel.findMany({
+    const models = (await prisma.aiModel.findMany({
       orderBy: { createdAt: 'desc' }
-    });
+    })).map(toAdminModelView);
     // IMAGE rows carry `capabilities.imageEdit` so the admin sees which
     // models only generate (legacy seeds, DALL-E, Imagen) before deciding
     // whether to keep them active.
@@ -217,12 +219,12 @@ router.post('/models', [
         type,
         icon,
         description,
-        apiKey
+        apiKey: normalizeModelApiKeyInput(apiKey) ?? null
       }
     });
 
     invalidateAiModelsCache();
-    res.status(201).json({ model });
+    res.status(201).json({ model: toAdminModelView(model) });
   } catch (error) {
     console.error('Create model error:', error);
     if (error.code === 'P2002') {
@@ -299,7 +301,8 @@ router.put('/models/:id', [
     if (type) updateData.type = type;
     if (icon !== undefined) updateData.icon = icon;
     if (description !== undefined) updateData.description = description;
-    if (apiKey !== undefined) updateData.apiKey = apiKey;
+    const nextApiKey = normalizeModelApiKeyInput(apiKey);
+    if (nextApiKey !== undefined) updateData.apiKey = nextApiKey;
     const parsedActive = parseIsActive(isActive);
     if (typeof parsedActive === 'boolean') updateData.isActive = parsedActive;
     // The admin page already sends these two — they were silently dropped,
@@ -313,7 +316,7 @@ router.put('/models/:id', [
     });
 
     invalidateAiModelsCache();
-    const payload = { model };
+    const payload = { model: toAdminModelView(model) };
     if (typeof parsedActive === 'boolean') {
       payload.stats = await countPublication(prisma);
     }

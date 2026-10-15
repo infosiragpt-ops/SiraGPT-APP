@@ -2513,10 +2513,44 @@ Backend (registrados en `backend/package.json`): `model-sync-catalog-memo` (7), 
 `tests/message-dedupe-answered-memo.test.ts` (3), +2 en `tests/file-processing-status-client.test.ts`.
 
 ### Pendientes detectados (no en este PR)
-Memo durable de `feedback-exemplars` (consulta >900 ms), batching de `hydrateChatMessageAttachments`,
-escrituras fs del cursor SSE por delta + Map `sseLastEventCursorBySession` sin tope, Map `thesisSessions`
-sin expiración, carrera read-modify-write en chunked upload, fetch sin timeout en ejecutores de apps,
-observador de consultas lentas, `omit apiKey` en el GET de modelos de admin, caché de créditos con pestaña oculta.
+Caché de créditos con pestaña oculta. Los otros ocho se cerraron el 2026-10-15 (ver «Robustez — ocho
+pendientes de la auditoría del 2026-10-08»).
+
+### Robustez — ocho pendientes de la auditoría del 2026-10-08 (added 2026-10-15)
+Cada arreglo pasó por un verificador adversarial; sin migración ni UI.
+- **Apps con tiempo máximo**: `services/apps/gateway.js` da a cada herramienta un plazo total
+  (`SIRAGPT_APPS_TOOL_TIMEOUT_MS`, 30 s, máx. 120 s) con `AbortSignal.timeout` en cada fetch,
+  incluida la lectura del cuerpo → `tool_timeout`; en una escritura avisa que pudo completarse.
+  `executors.readJson` ya no convierte un cuerpo cortado en un éxito vacío. `routes/apps-ai.js`
+  (público): plazo `APPS_AI_TIMEOUT_MS` (30 s) → `504 ai_timeout` o evento SSE `ai_timeout`, y
+  cancela al proveedor si la app cierra. Gotcha: el SDK de OpenAI TERMINA el iterador en silencio
+  al abortar (no lanza), por eso se revisa `upstream.signal.aborted` antes de `[DONE]`.
+- **Modelos de admin**: `toAdminModelView` quita `apiKey` de GET/POST/PUT/PATCH `/api/admin/models`
+  y expone `apiKeySet`; `normalizeModelApiKeyInput`: `''` conserva, `null` borra (como Conexiones).
+- **Adjuntos del chat**: `hydrateChatMessageAttachments` hace UNA consulta por chat (en trozos de
+  `MAX_SIMULTANEOUS_DOCUMENTS`) con un select de 7 columnas, en vez de una por mensaje con
+  `documentAnalysis`.
+- **Ejemplos de feedback**: `feedback-ledger.ensureHydrated` memoiza la lectura de Message.feedback
+  por usuario (`SIRAGPT_RLHF_HYDRATE_TTL_MS`, 10 min; `0` = solo dedupe en vuelo), un embed por lotes
+  de 64 y sin reescribir filas ya durables. `preference-store.recordEvent` hidrata al usuario antes
+  de buscar el evento existente: el backfill diario y un re-thumb tras reinicio ya no duplican filas.
+- **Cursor SSE**: vive en la entrada de `activeResumeStreams` (se libera con el turno); la reanudación
+  usa un cursor local (manda el Last-Event-ID del cliente: antes saltaba los trozos perdidos); el
+  archivo del cursor se escribe solo al terminar el turno.
+- **Tesis**: `thesisSessions` olvida sesiones terminadas (`SIRAGPT_THESIS_SESSION_TTL_MS` 24 h,
+  tope `SIRAGPT_THESIS_SESSION_MAX` 500), las compacta al terminar y ya no imprime todos los ids
+  (son la credencial de `/screenshots`).
+- **Subidas por trozos**: `chunked-upload-store` serializa chunk/complete/abort por subida
+  (`createKeyMutex`), tmp con UUID y el barrido limpia `.tmp` huérfanos.
+- **Consultas lentas**: `db/slow-query-observer.js` recibe el `onQuery` de `pool-instrumentation`
+  y escribe `[slow-query] Model.action Nms threshold=… site=src/…:línea` (WARN, una por
+  Model.action por minuto). Nunca args, SQL ni mensaje de error; un P2034 sale como
+  `failed write_conflict` para no entrar en «Errores del sistema». `SIRAGPT_SLOW_QUERY_MS` (500,
+  `0` apaga). `slow-query-logger.js` y `/internal/db` siguen sin montar (código muerto).
+- Tests: `slow-query-observer`, `admin-models-apikey`, `message-attachments-hydrate-batch`,
+  `feedback-exemplars-hydrate-memo`, `ai-sse-cursor-lifecycle`, `thesis-session-retention` (+
+  `thesis-file-auth` registrado), y casos nuevos en `apps-connections`, `apps-ai-route` y
+  `chunked-upload-store`.
 
 ## Automatizaciones + marketplace de skills (OpenClaw nativo) — added 2026-10-09
 

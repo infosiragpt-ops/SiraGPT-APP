@@ -154,11 +154,17 @@ if (process.env.NODE_ENV !== 'development' && typeof basePrisma.$on === 'functio
 // `$use`, so the handle may supply an equivalent query-extension client; that
 // instrumented client becomes the one shared and exported by this module.
 const { instrumentPool } = require('../db/pool-instrumentation');
+// Operations slower than SIRAGPT_SLOW_QUERY_MS (500 ms) print one
+// `[slow-query] Model.action Nms` WARN line per fingerprint per minute in
+// Admin → Logs (never args/SQL). It reuses the timing above: no extra layer.
+const { createSlowQueryObserver } = require('../db/slow-query-observer');
+const slowQueryObserver = createSlowQueryObserver();
 const poolMetrics = instrumentPool(basePrisma, {
   poolMin: databasePoolConfig.poolMin,
   poolMax: databasePoolConfig.poolMax,
   capacityObservable: databasePoolCapacity.observable,
   capacityReason: databasePoolCapacity.reason,
+  onQuery: slowQueryObserver.observe,
 });
 const prisma = poolMetrics.client;
 
@@ -259,6 +265,7 @@ process.on('beforeExit', async () => {
 module.exports = prisma;
 module.exports.connectDatabase = connectDatabase;
 module.exports.poolMetrics = poolMetrics;
+module.exports.slowQueryObserver = slowQueryObserver;
 module.exports.databasePoolConfig = databasePoolConfig;
 module.exports.databasePoolCapacity = databasePoolCapacity;
 module.exports.resolveDatabasePoolConfig = resolveDatabasePoolConfig;
