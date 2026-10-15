@@ -379,3 +379,39 @@ test('batch progress labels', () => {
     files: [{ name: 'a.ogg', stage: 'pending', progress: { stage: 'preparing' } }] }), /^Preparando el audio de «a\.ogg»…/);
   assert.equal(batch.describeBatchProgress({ ready: 2, total: 3, pending: 1, failed: 0, files: [] }), '2/3 transcritos · 1 pendientes · 0 con incidencias');
 });
+
+test('a 5-hour transcript is analysed in bounded parallel chunks, in order, cut at paragraph breaks', async () => {
+  const paragraphs = Array.from({ length: 300 }, (_, i) => `[${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}:00] ${'palabra '.repeat(110)}`);
+  const text = `${paragraphs.join('\n')}\n`;
+  const row = { id: 'clase', originalName: 'clase.mp4', processingStage: 'ready', extractedText: text };
+  const chunks = batch.splitTranscript(text);
+  assert.equal(chunks.join(''), text, 'chunks concatenate back to the exact text');
+  assert.ok(chunks.slice(0, -1).every(chunk => chunk.endsWith('\n')), 'no paragraph is split');
+  let active = 0; let peak = 0; const seenParts = [];
+  let systemPrompt = '';
+  const result = await batch.analyzeMediaBatch({ rows: [row], goal: 'hazme el acta con capítulos', parallel: 3,
+    complete: async (messages, _signal, final) => {
+      if (final) { systemPrompt = messages[0].content; return 'Acta.'; }
+      const input = JSON.parse(messages[1].content);
+      if (input.part) seenParts.push(input.part);
+      active += 1; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active -= 1;
+      return `nota ${input.part ?? 'r'}`;
+    } });
+  assert.equal(result.summaries.length, 1);
+  assert.equal(peak, 3, 'three chunks at a time');
+  assert.deepEqual(seenParts.slice(0, chunks.length), chunks.map((_, i) => i + 1), 'chunks are requested in order');
+  assert.match(systemPrompt, /capítulos/);
+  assert.match(systemPrompt, /\[hh:mm:ss\]/);
+});
+
+test('minutes, chapters, key points and study notes count as analysis requests', () => {
+  for (const goal of ['hazme el acta de la reunión', 'dame la minuta', 'divídelo en capítulos', 'puntos clave de la clase',
+    'saca las ideas principales', 'hazme apuntes', 'arma un cuestionario', 'índice con tiempos']) {
+    assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
+  }
+  assert.equal(batch.wantsMediaAnalysis('transcribe el audio'), false);
+  assert.equal(batch.analysisParallel({ MEDIA_ANALYSIS_PARALLEL: '9' }), 6);
+  assert.equal(batch.analysisParallel({}), 3);
+});
