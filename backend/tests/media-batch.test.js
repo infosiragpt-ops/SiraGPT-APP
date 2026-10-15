@@ -415,3 +415,23 @@ test('minutes, chapters, key points and study notes count as analysis requests',
   assert.equal(batch.analysisParallel({ MEDIA_ANALYSIS_PARALLEL: '9' }), 6);
   assert.equal(batch.analysisParallel({}), 3);
 });
+
+test('a follow-up finds a recording delivered from a link (no user attachment), owner-checked', async () => {
+  const { rows, prisma } = fixture(1);
+  prisma.chat = { findFirst: async ({ where }) => (where.userId === 'u' && where.id === 'chat-u' ? { id: 'chat-u' } : null) };
+  prisma.message = {
+    findMany: async () => [{ files: null }],
+    findFirst: async ({ where }) => {
+      assert.equal(where.role, 'ASSISTANT');
+      assert.deepEqual(where.metadata, { path: ['servedBy'], equals: 'media_batch' });
+      return { metadata: { transcriptionFileIds: [rows[0].id] } };
+    },
+  };
+  assert.deepEqual(await batch.resolveChatMediaFileIds(prisma, { userId: 'u', chatId: 'chat-u' }), [rows[0].id]);
+  // Another user's file id in the metadata never resolves.
+  prisma.message.findFirst = async () => ({ metadata: { transcriptionFileIds: ['foreign'] } });
+  assert.deepEqual(await batch.resolveChatMediaFileIds(prisma, { userId: 'u', chatId: 'chat-u' }), []);
+  // No delivered media: nothing.
+  prisma.message.findFirst = async () => null;
+  assert.deepEqual(await batch.resolveChatMediaFileIds(prisma, { userId: 'u', chatId: 'chat-u' }), []);
+});

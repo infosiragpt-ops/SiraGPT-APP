@@ -49,6 +49,20 @@ async function resolveChatMediaFileIds(prisma, { userId, chatId }) {
     // 50-file batches or borrow recent uploads from another conversation.
     return rows ? rows.map(row => row.id) : [];
   }
+  // A recording that arrived through a link has no user attachment: its
+  // media file is named by the delivery message posted in this chat.
+  try {
+    const delivered = await prisma.message.findFirst({
+      where: { chatId: chat.id, role: 'ASSISTANT', deletedAt: null, metadata: { path: ['servedBy'], equals: 'media_batch' } },
+      orderBy: { timestamp: 'desc' }, select: { metadata: true },
+    });
+    const ids = Array.isArray(delivered?.metadata?.transcriptionFileIds)
+      ? delivered.metadata.transcriptionFileIds.filter(id => typeof id === 'string').slice(0, MAX_MEDIA_FILES) : [];
+    if (ids.length) {
+      const rows = await loadMediaBatch(prisma, { userId, fileIds: ids }).catch(() => null);
+      return rows ? rows.map(row => row.id) : [];
+    }
+  } catch (_) { /* best-effort: no delivered media in this chat */ }
   return [];
 }
 
