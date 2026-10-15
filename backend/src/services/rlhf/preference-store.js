@@ -186,6 +186,21 @@ async function persistEvent(event) {
   }
 }
 
+/** The stored event for (userId, runId), indexed by @@index([userId, runId]). Fail-open. */
+async function findDurableEvent(userId, runId) {
+  if (!hasPrismaModel() || typeof prismaClient.preferenceEvent.findFirst !== 'function') return undefined;
+  try {
+    const row = await prismaClient.preferenceEvent.findFirst({
+      where: { userId, OR: [{ runId }, { messageId: runId }] },
+      orderBy: { createdAt: 'asc' },
+    });
+    return row ? putMemory(fromPrismaRow(row)) : undefined;
+  } catch (err) {
+    console.warn('[rlhf] durable lookup failed:', err.message || err);
+    return undefined;
+  }
+}
+
 async function hydrateUser(userId) {
   if (!userId || hydrated.has(userId) || !hasPrismaModel()) return listMemory(userId);
   hydrated.add(userId);
@@ -310,12 +325,14 @@ async function recordEvent(args = {}) {
   const responseText = clampText(args.responseText ?? args.response ?? '', RESPONSE_MAX);
   const promptHash = args.promptHash || hashPrompt(promptText);
 
-  // The idempotency lookup is in-memory, and PreferenceEvent has no unique
-  // (userId, runId): after a restart, the daily backfill or a re-thumb would
-  // upsert a NEW row for an event already stored. Load the user's durable
-  // events first (memoized per process, fail-open), like ingestRegenerate.
+  // PreferenceEvent has no unique (userId, runId): after a restart, the daily
+  // backfill or a re-thumb upserted a NEW row for an event already stored.
+  // Load the user's durable events (memoized per process, fail-open), and on a
+  // memory miss ask the database: the boot pass (hydrateRecent) marks active
+  // users as hydrated with only part of their history in memory.
   await hydrateUser(userId);
-  const existing = listMemory(userId).find((e) => (e.runId || e.messageId) === runId);
+  let existing = listMemory(userId).find((e) => (e.runId || e.messageId) === runId);
+  if (!existing && (args.runId || args.messageId)) existing = await findDurableEvent(userId, runId);
   const id = existing?.id || args.id || newId();
 
   const embs = await embedBoth({

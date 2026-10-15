@@ -225,6 +225,45 @@ describe('feedback exemplars · cheap hydration and query', () => {
     }
   });
 
+  it('an active user hydrated by the boot pass still reuses an older durable row', async () => {
+    const at = (ms) => new Date(ms);
+    const row = (id, userId, runId, ms) => ({
+      id, userId, runId, messageId: runId, agent: 'chat', source: 'explicit', label: 'chosen',
+      promptText: `q ${runId}`, responseText: `a ${runId}`, promptHash: 'h', createdAt: at(ms),
+    });
+    const rowsDb = [
+      row('pe-A-old', 'u-active', 'm-old', 1000),
+      row('pe-B-1', 'u-other', 'b1', 2000),
+      row('pe-B-2', 'u-other', 'b2', 3000),
+      row('pe-A-new', 'u-active', 'm-new', 4000),
+    ];
+    const upserts = [];
+    const fake = { preferenceEvent: {
+      create: async () => {},
+      findMany: async ({ where, orderBy, take } = {}) => {
+        let out = rowsDb.filter((r) => !where?.userId || r.userId === where.userId);
+        out = out.sort((a, b) => (orderBy?.createdAt === 'desc' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt));
+        return out.slice(0, take || out.length);
+      },
+      findFirst: async ({ where }) => rowsDb.find((r) => r.userId === where.userId
+        && where.OR.some((c) => (c.runId && r.runId === c.runId) || (c.messageId && r.messageId === c.messageId))) || null,
+      upsert: async (args) => { upserts.push(args.where.id); },
+    } };
+    try {
+      ledger._reset();
+      store.attachPrisma(fake);
+      // Boot pass: the 2 newest rows mark u-active as hydrated with only m-new in memory.
+      await store.hydrateRecent({ limit: 2 });
+      await store.ingestThumb({
+        userId: 'u-active', runId: 'm-old', agent: 'chat', request: 'q m-old',
+        response: 'a m-old', helpful: false, embedder: countingEmbedder(), source: 'explicit',
+      });
+      assert.deepEqual(upserts, ['pe-A-old']);
+    } finally {
+      store.attachPrisma(null);
+    }
+  });
+
   it('a short embedding response stores entries without vectors, never misaligned', async () => {
     const partial = async (texts) => texts.slice(1).map(() => Float32Array.from([1, 1, 1]));
     await ledger.hydrateFromRows('u-partial', rows(3), partial);

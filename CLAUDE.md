@@ -2514,7 +2514,9 @@ Backend (registrados en `backend/package.json`): `model-sync-catalog-memo` (7), 
 
 ### Pendientes detectados (no en este PR)
 Caché de créditos con pestaña oculta. Los otros ocho se cerraron el 2026-10-15 (ver «Robustez — ocho
-pendientes de la auditoría del 2026-10-08»).
+pendientes de la auditoría del 2026-10-08»). Nuevo: `routes/thesis.js` aún escribe el id de su propia
+sesión en ~19 líneas de log (creación, búsqueda, `/screenshots`), y ese id es la única credencial de
+`GET /api/thesis/screenshots/:sessionId/:file`.
 
 ### Robustez — ocho pendientes de la auditoría del 2026-10-08 (added 2026-10-15)
 Cada arreglo pasó por un verificador adversarial; sin migración ni UI.
@@ -2533,19 +2535,23 @@ Cada arreglo pasó por un verificador adversarial; sin migración ni UI.
 - **Ejemplos de feedback**: `feedback-ledger.ensureHydrated` memoiza la lectura de Message.feedback
   por usuario (`SIRAGPT_RLHF_HYDRATE_TTL_MS`, 10 min; `0` = solo dedupe en vuelo), un embed por lotes
   de 64 y sin reescribir filas ya durables. `preference-store.recordEvent` hidrata al usuario antes
-  de buscar el evento existente: el backfill diario y un re-thumb tras reinicio ya no duplican filas.
+  de buscar el evento existente y, si no está en memoria, lo busca en la BD por (userId, runId)
+  (`findDurableEvent`; el pase de arranque `hydrateRecent` marca como hidratados a los usuarios
+  activos con solo parte de su historial): el backfill diario y un re-thumb tras reinicio ya no
+  duplican filas.
 - **Cursor SSE**: vive en la entrada de `activeResumeStreams` (se libera con el turno); la reanudación
   usa un cursor local (manda el Last-Event-ID del cliente: antes saltaba los trozos perdidos); el
   archivo del cursor se escribe solo al terminar el turno.
 - **Tesis**: `thesisSessions` olvida sesiones terminadas (`SIRAGPT_THESIS_SESSION_TTL_MS` 24 h,
-  tope `SIRAGPT_THESIS_SESSION_MAX` 500), las compacta al terminar y ya no imprime todos los ids
-  (son la credencial de `/screenshots`).
+  tope `SIRAGPT_THESIS_SESSION_MAX` 500), las compacta al terminar, y el sondeo de estado ya no
+  imprime los ids de TODAS las sesiones en cada consulta (son la credencial de `/screenshots`).
 - **Subidas por trozos**: `chunked-upload-store` serializa chunk/complete/abort por subida
   (`createKeyMutex`), tmp con UUID y el barrido limpia `.tmp` huérfanos.
 - **Consultas lentas**: `db/slow-query-observer.js` recibe el `onQuery` de `pool-instrumentation`
   y escribe `[slow-query] Model.action Nms threshold=… site=src/…:línea` (WARN, una por
   Model.action por minuto). Nunca args, SQL ni mensaje de error; un P2034 sale como
-  `failed write_conflict` para no entrar en «Errores del sistema». `SIRAGPT_SLOW_QUERY_MS` (500,
+  `failed write_conflict`, y `system-errors` solo convierte en issue una línea `[slow-query]` con
+  `failed code=P####` (una lenta exitosa no, aunque su ruta diga «prisma»). `SIRAGPT_SLOW_QUERY_MS` (500,
   `0` apaga). `slow-query-logger.js` y `/internal/db` siguen sin montar (código muerto).
 - Tests: `slow-query-observer`, `admin-models-apikey`, `message-attachments-hydrate-batch`,
   `feedback-exemplars-hydrate-memo`, `ai-sse-cursor-lifecycle`, `thesis-session-retention` (+
