@@ -316,6 +316,29 @@ describe('multipart upload gate · media cap vs document cap (MAX_FILE_SIZE=50)'
     assert.match(upload.fileTooLargeMessage(null), /^El archivo supera el tamaño máximo permitido/);
   });
 
+  test('GPT knowledge and icon uploads keep the document cap even for recordings', async () => {
+    const upload = reloadModule('../src/middleware/upload');
+    assert.equal(typeof upload.documentsOnly.array, 'function');
+    const app = express();
+    app.post('/knowledge', (req, _res, next) => { req.user = { id: 'http-user-1' }; next(); },
+      upload.documentsOnly.array('files', 10), (req, res) => res.json({ ok: true, files: (req.files || []).length }));
+    app.use((err, req, res, _next) => {
+      const { errorToResponse } = require('../src/middleware/error-handler');
+      const { statusCode, body } = errorToResponse(err, req);
+      res.status(statusCode).json(body);
+    });
+    const big = await request(app).post('/knowledge')
+      .attach('files', mp3Bytes(60 * MB), { filename: 'clase.mp3', contentType: 'audio/mpeg' });
+    assert.equal(big.status, 400);
+    assert.equal(big.body.code, 'LIMIT_FILE_SIZE');
+    assert.match(big.body.error, /supera el máximo de 50 MB permitido aquí/);
+    const small = await request(app).post('/knowledge')
+      .attach('files', Buffer.alloc(1024, 0x20), { filename: 'notas.txt', contentType: 'text/plain' });
+    assert.equal(small.status, 200, JSON.stringify(small.body));
+    const gptsSource = fs.readFileSync(path.join(__dirname, '../src/routes/gpts.js'), 'utf8');
+    assert.match(gptsSource, /const upload = uploadModule\.documentsOnly \|\| uploadModule;/);
+  });
+
   test('a 60 MB mp3 passes the multipart gate while a 60 MB pdf is refused in Spanish', async () => {
     const app = buildApp();
     const audio = await request(app)

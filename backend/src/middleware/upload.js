@@ -253,19 +253,42 @@ const upload = multer({
 
 // Every middleware this instance builds reports LIMIT_FILE_SIZE in Spanish,
 // naming the cap that applied (documents vs audio/video).
-for (const method of ['single', 'array', 'fields', 'any', 'none']) {
-  if (typeof upload[method] !== 'function') continue;
-  const build = upload[method].bind(upload);
-  upload[method] = (...args) => {
-    const middleware = build(...args);
-    return function localizedUploadMiddleware(req, res, next) {
-      return middleware(req, res, (err) => next(localizeUploadError(err, req)));
+function localizeInstance(instance, localize = localizeUploadError) {
+  for (const method of ['single', 'array', 'fields', 'any', 'none']) {
+    if (typeof instance[method] !== 'function') continue;
+    const build = instance[method].bind(instance);
+    instance[method] = (...args) => {
+      const middleware = build(...args);
+      return function localizedUploadMiddleware(req, res, next) {
+        return middleware(req, res, (err) => next(localize(err, req)));
+      };
     };
-  };
+  }
+  return instance;
 }
+localizeInstance(upload);
+
+// Routes that never take recordings (GPT knowledge files, GPT icons) keep
+// the document cap for every file: the 10 GB audio/video ceiling exists for
+// the chat's media pipeline, not for knowledge bases.
+const documentsOnlyUpload = localizeInstance(multer({
+  storage,
+  fileFilter,
+  limits: {
+    ...(Number.isFinite(finiteOrInfinity(uploadLimits.fileSize)) ? { fileSize: uploadLimits.fileSize } : {}),
+    files: uploadLimits.files,
+  },
+}), (err) => {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    err.message = `El archivo supera el máximo de ${formatLimit(finiteOrInfinity(uploadLimits.fileSize))} permitido aquí.`;
+    err.expose = true;
+  }
+  return err;
+});
 
 module.exports = upload;
 module.exports.uploadDir = uploadDir;
+module.exports.documentsOnly = documentsOnlyUpload;
 // The effective per-request file-count ceiling multer actually enforces. Routes
 // derive their `.array(field, maxCount)` from this so the advertised batch size
 // never exceeds what the instance accepts (otherwise large batches were silently

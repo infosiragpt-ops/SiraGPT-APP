@@ -3,7 +3,10 @@ const fs = require('fs').promises;
 const { constants: fsConstants } = require('fs');
 const path = require('path');
 const { authenticateToken } = require('../middleware/auth');
-const upload = require('../middleware/upload');
+// GPT icons and knowledge files keep the document size cap (the media
+// ceiling of the main instance is for chat recordings only).
+const uploadModule = require('../middleware/upload');
+const upload = uploadModule.documentsOnly || uploadModule;
 const fileProcessor = require('../services/fileProcessor');
 const { validateUploadPolicy } = require('../services/upload-security-policy');
 const {
@@ -18,7 +21,7 @@ const prisma = require('../config/database');
 const PUBLIC_GPT_ICON_PREFIX = 'gpt-icons';
 const PUBLIC_GPT_VISIBILITIES = new Set(['PUBLIC', 'UNLISTED']);
 
-function publicGptIconsDir(uploadRoot = upload.uploadDir) {
+function publicGptIconsDir(uploadRoot = uploadModule.uploadDir) {
   return path.join(path.resolve(uploadRoot || 'uploads'), PUBLIC_GPT_ICON_PREFIX);
 }
 
@@ -34,7 +37,7 @@ function parseUserScopedUploadIconUrl(iconUrl) {
   if (parts.length !== 2) return null;
   const [userId, filename] = parts;
   if (userId === PUBLIC_GPT_ICON_PREFIX) return null;
-  if (!upload.safeStorageSegment(userId) || !upload.safeStorageSegment(filename)) return null;
+  if (!uploadModule.safeStorageSegment(userId) || !uploadModule.safeStorageSegment(filename)) return null;
 
   return { userId, filename };
 }
@@ -46,7 +49,7 @@ function safePublicIconFilename({ gptId, sourceFilename }) {
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 120) || 'icon';
-  const safeGptId = upload.safeStorageSegment(gptId) || 'gpt';
+  const safeGptId = uploadModule.safeStorageSegment(gptId) || 'gpt';
   return `${safeGptId}-${stem}${ext}`;
 }
 
@@ -66,7 +69,7 @@ async function publicizeGptIconUrl({
   gptId,
   sourcePath,
   moveSource = false,
-  uploadRoot = upload.uploadDir,
+  uploadRoot = uploadModule.uploadDir,
 }) {
   if (!PUBLIC_GPT_VISIBILITIES.has(visibility)) {
     return { iconUrl, changed: false };
