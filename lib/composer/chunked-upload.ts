@@ -3,8 +3,10 @@
  * that rejects any single request body above 100 MB, so large media (a
  * lecture recording, a meeting video) must travel in chunks. This module
  * decides which files take that path and how they are split; the transport
- * lives in `lib/api.ts` (`uploadFileChunked`).
+ * lives in `lib/api.ts` (`uploadFileChunked`, engine in `./resumable-upload`).
  */
+
+import { isMediaUpload } from "../attachment-ingest"
 
 function envInt(value: string | undefined, fallback: number): number {
   const n = Number(value)
@@ -15,20 +17,36 @@ function envInt(value: string | undefined, fallback: number): number {
 export const CHUNKED_UPLOAD_THRESHOLD_BYTES =
   envInt(process.env.NEXT_PUBLIC_CHUNKED_UPLOAD_THRESHOLD_MB, 80) * 1024 * 1024
 
+/**
+ * Audio/video go chunked much earlier: a 5 h lecture at 24-32 kbps weighs
+ * 54-72 MB, and the chunked path is the one that survives a dropped
+ * connection (resume) and reports bytes/speed/ETA.
+ */
+export const CHUNKED_MEDIA_THRESHOLD_BYTES =
+  envInt(process.env.NEXT_PUBLIC_CHUNKED_MEDIA_THRESHOLD_MB, 32) * 1024 * 1024
+
 /** Chunk size: comfortably under the proxy limit, few round-trips. */
 export const CHUNKED_UPLOAD_CHUNK_BYTES =
   envInt(process.env.NEXT_PUBLIC_CHUNKED_UPLOAD_CHUNK_MB, 16) * 1024 * 1024
 
+/** Chunks in flight at once (2-3 fill a lossy / high-RTT uplink; capped at 4). */
+export const CHUNKED_UPLOAD_PARALLEL =
+  Math.min(4, Math.max(1, Math.floor(envInt(process.env.NEXT_PUBLIC_CHUNKED_UPLOAD_PARALLEL, 3))))
+
 export type ChunkPlan = { index: number; start: number; end: number; bytes: number }
 
-export type UploadSizeLike = { size?: number | null }
+export type UploadSizeLike = { size?: number | null; type?: string | null; name?: string | null }
 
 export function shouldUseChunkedUpload(
   file: UploadSizeLike | null | undefined,
   threshold: number = CHUNKED_UPLOAD_THRESHOLD_BYTES,
+  mediaThreshold: number = CHUNKED_MEDIA_THRESHOLD_BYTES,
 ): boolean {
   const size = Number(file?.size)
-  return Number.isFinite(size) && size >= threshold
+  if (!Number.isFinite(size)) return false
+  if (size >= threshold) return true
+  if (!(size >= mediaThreshold)) return false
+  return isMediaUpload({ type: file?.type ?? undefined, name: file?.name ?? undefined, size })
 }
 
 export function planChunks(totalBytes: number, chunkBytes: number = CHUNKED_UPLOAD_CHUNK_BYTES): ChunkPlan[] {

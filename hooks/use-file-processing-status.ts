@@ -12,6 +12,9 @@ import {
   ProcessingStatusMemo,
   buildFileProcessingStatusUrl,
   decideProcessingStatusPoll,
+  isLongProcessingJob,
+  processingPollCeilingReached,
+  processingPollDelayMs,
   resolveProcessingPollGiveUp,
 } from "@/lib/file-processing-status-client"
 
@@ -38,6 +41,11 @@ export const friendlyFailureLabel = friendlyFailureLabelVocab
  * remounts; and the loop pauses while the tab is hidden, resuming on the
  * next `visibilitychange`.
  *
+ * Long jobs (audio/video, or a status carrying `processingProgress`): a 5 h
+ * lecture transcribes for hours, so the loop backs off to 15 s after the
+ * first two minutes, has no 30-min ceiling, and NEVER turns a running stage
+ * into `ready` when it stops — only the server's verdict is terminal.
+ *
  * The hook is intentionally tolerant — a missing fileId, a 404
  * (legacy row), an auth failure, or a network blip all leave the
  * hook idle without throwing into the React tree.
@@ -54,9 +62,12 @@ export interface FileProcessingStatus {
   loading: boolean
   /** True while we have a fileId but haven't seen the first response yet. */
   pending: boolean
-  /** True when polling hit its ceiling before a terminal stage — the file
-   *  is treated as usable so the UI never freezes on "Indexando". */
+  /** True when polling hit its ceiling before a terminal stage — documents
+   *  are treated as usable so the UI never freezes on "Indexando"; long media
+   *  jobs keep their running stage (never claimed ready). */
   timedOut?: boolean
+  /** Audio/video transcription (or any job reporting progress): polled slower, no ceiling. */
+  longJob?: boolean
 }
 
 const INITIAL: FileProcessingStatus = {
@@ -69,8 +80,9 @@ const INITIAL: FileProcessingStatus = {
   pending: false,
 }
 
-const POLL_INTERVAL_MS = 2_000
-const MAX_POLLS = 900 // 30 minutes ceiling — OCR-heavy batches can legitimately take longer.
+// Cadence and ceilings live in lib/file-processing-status-client: 2 s polls,
+// a 30-min ceiling for documents (OCR-heavy batches can legitimately take that
+// long), and 15 s / no ceiling for long media jobs.
 
 type StatusPayload = {
   fileId: string
@@ -78,6 +90,10 @@ type StatusPayload = {
   error: string | null
   stageAt: string | null
   isTerminal: boolean
+  name?: string | null
+  mimeType?: string | null
+  size?: number | null
+  processingProgress?: unknown
 }
 
 type PollOutcome =
@@ -91,6 +107,9 @@ type FilePoller = {
   subscribers: Set<Subscriber>
   last: FileProcessingStatus
   polls: number
+  startedAt: number
+  /** Sticky once any response says audio/video or carries progress. */
+  longJob: boolean
   timer: ReturnType<typeof setTimeout> | null
   onVisible: (() => void) | null
   stopped: boolean
@@ -162,18 +181,25 @@ function publish(poller: FilePoller, status: FileProcessingStatus): void {
   }
 }
 
-function giveUp(poller: FilePoller, timedOut: boolean): void {
-  const next = resolveProcessingPollGiveUp(poller.last.stage)
+function giveUp(poller: FilePoller, timedOut: boolean, httpStatus?: number): void {
+  const next = resolveProcessingPollGiveUp(poller.last.stage, { longJob: poller.longJob, httpStatus })
   publish(poller, {
     ...poller.last,
     loading: false,
     pending: false,
-    isTerminal: true,
+    // A long media job that is still running stays non-terminal: the loop
+    // stops, but the chip never claims «listo» without the server's verdict.
+    isTerminal: next.terminal !== false,
     stage: next.stage,
     error: poller.last.error || next.error,
+    ...(poller.longJob ? { longJob: true } : {}),
     ...(timedOut ? { timedOut: true } : {}),
   })
   stopPoller(poller)
+}
+
+function elapsedMs(poller: FilePoller): number {
+  return Math.max(0, Date.now() - poller.startedAt)
 }
 
 function schedule(poller: FilePoller): void {
@@ -191,7 +217,8 @@ function schedule(poller: FilePoller): void {
     document.addEventListener("visibilitychange", poller.onVisible)
     return
   }
-  poller.timer = setTimeout(() => { poller.timer = null; void tick(poller) }, POLL_INTERVAL_MS)
+  const delay = processingPollDelayMs({ longJob: poller.longJob, elapsedMs: elapsedMs(poller) })
+  poller.timer = setTimeout(() => { poller.timer = null; void tick(poller) }, delay)
 }
 
 async function tick(poller: FilePoller): Promise<void> {
@@ -201,11 +228,12 @@ async function tick(poller: FilePoller): Promise<void> {
   if (outcome.kind === "response") {
     const decision = decideProcessingStatusPoll(outcome.status, poller.polls)
     if (decision === "stop") {
-      giveUp(poller, false)
+      giveUp(poller, false, outcome.status)
       return
     }
     if (decision === "apply" && outcome.data) {
       const data = outcome.data
+      if (!poller.longJob && isLongProcessingJob(data)) poller.longJob = true
       const isTerminal = data.isTerminal || TERMINAL.has(data.stage)
       const next: FileProcessingStatus = {
         fileId: data.fileId,
@@ -215,6 +243,7 @@ async function tick(poller: FilePoller): Promise<void> {
         isTerminal,
         loading: !isTerminal,
         pending: false,
+        ...(poller.longJob ? { longJob: true } : {}),
       }
       publish(poller, next)
       if (isTerminal) {
@@ -230,12 +259,12 @@ async function tick(poller: FilePoller): Promise<void> {
   }
   // Transient network error — keep polling on the same cadence until the
   // ceiling so a flaky connection doesn't permanently freeze the badge.
-  if (poller.polls >= MAX_POLLS) {
-    // Never leave the chip frozen on "Indexando" forever. The file is
-    // already uploaded and its text extracted — RAG indexing is a
-    // best-effort background enhancement, not a prerequisite for using
-    // the document. Resolve to a usable terminal state so the UI stops
-    // showing an in-progress spinner once the worker is clearly wedged.
+  if (processingPollCeilingReached({ longJob: poller.longJob, polls: poller.polls, elapsedMs: elapsedMs(poller) })) {
+    // Documents: never leave the chip frozen on "Indexando" forever. The file
+    // is already uploaded and its text extracted — RAG indexing is a
+    // best-effort background enhancement, not a prerequisite for using the
+    // document, so it resolves to a usable state once the worker is clearly
+    // wedged. Long media jobs have no 30-min ceiling and keep their stage.
     giveUp(poller, true)
     return
   }
@@ -251,6 +280,8 @@ function subscribeToFileStatus(fileId: string, subscriber: Subscriber): () => vo
       subscribers: new Set(),
       last: pendingStatus(fileId),
       polls: 0,
+      startedAt: Date.now(),
+      longJob: false,
       timer: null,
       onVisible: null,
       stopped: false,

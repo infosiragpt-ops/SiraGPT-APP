@@ -4,13 +4,16 @@ import fs from "node:fs"
 import path from "node:path"
 
 import {
+  CHUNKED_MEDIA_THRESHOLD_BYTES,
   CHUNKED_UPLOAD_CHUNK_BYTES,
+  CHUNKED_UPLOAD_PARALLEL,
   CHUNKED_UPLOAD_THRESHOLD_BYTES,
   chunkedUploadPercent,
   isRetriableChunkStatus,
   planChunks,
   shouldUseChunkedUpload,
 } from "../lib/composer/chunked-upload"
+import { classifyChunkFailure } from "../lib/composer/resumable-upload"
 import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "../lib/composer/upload-batching"
 
 const MB = 1024 * 1024
@@ -23,6 +26,34 @@ describe("chunked upload planning", () => {
     assert.equal(shouldUseChunkedUpload({ size: 79 * MB }), false)
     assert.equal(shouldUseChunkedUpload(null), false)
     assert.equal(shouldUseChunkedUpload({ size: 10 * MB }, 5 * MB), true)
+  })
+
+  it("routes audio/video from 32 MB (a 5 h lecture at 24-32 kbps is 54-72 MB) to the resumable path", () => {
+    assert.equal(CHUNKED_MEDIA_THRESHOLD_BYTES, 32 * MB)
+    assert.equal(shouldUseChunkedUpload({ name: "clase-5h.mp3", type: "audio/mpeg", size: 60 * MB }), true)
+    assert.equal(shouldUseChunkedUpload({ name: "clase.m4a", type: "", size: 32 * MB }), true, "extension fallback")
+    assert.equal(shouldUseChunkedUpload({ name: "clase.mp4", type: "video/mp4", size: 31 * MB }), false)
+    assert.equal(shouldUseChunkedUpload({ name: "informe.pdf", type: "application/pdf", size: 60 * MB }), false, "documents keep the 80 MB rule")
+    assert.equal(shouldUseChunkedUpload({ name: "app.ts", type: "video/mp2t", size: 1 * MB }), false)
+    const files = [{ name: "notas.pdf", type: "application/pdf", size: 5 * MB }, { name: "clase.mp3", type: "audio/mpeg", size: 60 * MB }]
+    const chunks = buildComposerUploadChunks(files, ["t1", "t2"], { ...COMPOSER_UPLOAD_BATCH_LIMITS, isolate: shouldUseChunkedUpload })
+    assert.deepEqual(chunks.map((c) => [c.files.map((f) => f.name), Boolean(c.isolated)]), [
+      [["notas.pdf"], false],
+      [["clase.mp3"], true],
+    ])
+  })
+
+  it("sends 3 chunks in parallel by default and classifies failures without deleting on transient ones", () => {
+    assert.equal(CHUNKED_UPLOAD_PARALLEL, 3)
+    for (const status of [0, 408, 425, 429, 502, 503, 504]) assert.equal(classifyChunkFailure(status), "transient", String(status))
+    assert.equal(classifyChunkFailure(500), "server")
+    assert.equal(classifyChunkFailure(401), "auth")
+    assert.equal(classifyChunkFailure(403), "auth")
+    assert.equal(classifyChunkFailure(404), "gone")
+    assert.equal(classifyChunkFailure(507), "storage")
+    assert.equal(classifyChunkFailure(409, "chunks_missing"), "missing")
+    assert.equal(classifyChunkFailure(409, "upload_completed"), "completed")
+    for (const status of [400, 409, 413, 415, 501]) assert.equal(classifyChunkFailure(status), "fatal", String(status))
   })
 
   it("splits into 16 MB chunks with an exact final chunk", () => {
@@ -60,16 +91,27 @@ describe("chunked upload planning", () => {
 
 describe("chunked upload wiring (source contract)", () => {
   const api = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
+  const engine = fs.readFileSync(path.join(process.cwd(), "lib", "composer", "resumable-upload.ts"), "utf8")
   const composer = fs.readFileSync(path.join(process.cwd(), "components", "chat-interface-enhanced.tsx"), "utf8")
   const ingest = fs.readFileSync(path.join(process.cwd(), "lib", "attachment-ingest.ts"), "utf8")
 
-  it("the API client announces, streams chunks with retries and completes on the backend endpoints", () => {
+  it("the API client runs the resumable engine over the authenticated transport", () => {
     assert.match(api, /async uploadFileChunked\(/)
-    assert.match(api, /authed\('\/files\/upload\/chunked\/init', \{/)
-    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session\.uploadId\}\/\$\{plan\.index\}`, \{\s*method: 'PUT',/)
-    assert.match(api, /body: file\.slice\(plan\.start, plan\.end\),/)
-    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session\.uploadId\}\/complete`, \{ method: 'POST'/)
-    assert.match(api, /if \(!retriable \|\| attempt >= maxRetries\) \{/)
+    assert.match(api, /engine\.createHttpChunkTransport<FileUploadResponse>\(\{/)
+    assert.match(api, /fetch: \(path, init\) => this\.authenticatedFetch\(`\$\{this\.baseURL\}\$\{path\}`, init\),/)
+    assert.match(api, /prepare: \(url, init\) => prepareAuthenticatedRequest\(url, init, \{ bearerToken: this\._getAccessTokenSnapshot\(\) \}\),/)
+    assert.match(api, /return engine\.runResumableUpload<FileUploadResponse>\(\{/)
+    assert.match(api, /parallel: opts\.parallel \?\? CHUNKED_UPLOAD_PARALLEL,/)
+  })
+
+  it("the engine announces, resumes from the status route, streams XHR chunks and completes", () => {
+    assert.match(engine, /deps\.fetch\("\/files\/upload\/chunked\/init", \{/)
+    assert.match(engine, /deps\.fetch\(`\/files\/upload\/chunked\/\$\{encodeURIComponent\(uploadId\)\}`, \{ method: "GET", signal \}\)/)
+    assert.match(engine, /const url = `\$\{base\}\/files\/upload\/chunked\/\$\{encodeURIComponent\(uploadId\)\}\/\$\{index\}`/)
+    assert.match(engine, /xhr\.open\("PUT", url, true\)/)
+    assert.match(engine, /body: file\.slice\(plan\.start, plan\.end\),/)
+    assert.match(engine, /deps\.fetch\(`\/files\/upload\/chunked\/\$\{encodeURIComponent\(uploadId\)\}\/complete`, \{/)
+    assert.match(engine, /\{ method: "DELETE", keepalive: true \}/)
   })
 
   it("the composer isolates large media and sends it through the chunked transport with the same response handling", () => {
