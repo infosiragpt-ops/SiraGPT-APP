@@ -419,10 +419,13 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
   }
 
   const usable = list.filter(isUsableRow);
+  const translating = delivery?.mode === 'translation';
   if (analysisText && String(analysisText).trim()) {
-    blocks.push(`### Análisis\n\n${String(analysisText).trim()}`);
+    blocks.push(`### ${translating ? 'Traducción' : 'Análisis'}\n\n${String(analysisText).trim()}`);
   } else if (analysisFailed && usable.length) {
-    blocks.push('No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.');
+    blocks.push(translating
+      ? 'No pude terminar la traducción que pediste. La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.'
+      : 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.');
   }
 
   if (usable.length && !(analysisText && String(analysisText).trim())) {
@@ -728,7 +731,19 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
       analysisRows = require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range);
     } catch (_) { analysisRows = rows; }
   }
-  const result = await require('./media-batch').analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete });
+  const mediaBatch = require('./media-batch');
+  const target = delivery?.mode === 'translation' ? mediaBatch.detectTranslationTarget(delivery.goal) : null;
+  if (target) {
+    const translation = await mediaBatch.translateMediaBatch({ rows: analysisRows, target, complete: completion.complete });
+    if (!translation.files.length) return '';
+    const pack = require('./media-transcript-artifacts');
+    const built = await pack.buildTranslationArtifacts({ files: translation.files, target,
+      output: { ...(delivery.output || {}), range }, userId: delivery.userId });
+    const first = translation.files[0].text;
+    const preview = first.length > 3000 ? `${first.slice(0, 3000)}…\n\n_Vista previa: el archivo adjunto tiene la traducción completa._` : first;
+    return { text: pack.escapeChatMarkdown(preview), artifacts: built.artifacts };
+  }
+  const result = await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete });
   return result?.text || '';
 }
 
@@ -896,12 +911,15 @@ function createMediaDeliveryService(deps = {}) {
     const usable = rows.filter(isUsableRow);
     let analysisText = '';
     let analysisFailed = false;
-    if (record.mode === 'analysis' && usable.length) {
+    let analysisArtifacts = [];
+    if ((record.mode === 'analysis' || record.mode === 'translation') && usable.length) {
       if (typeof analyze !== 'function') analysisFailed = true;
       else {
         try {
           const result = await analyze({ rows: usable, transcripts, delivery: { ...record, deliveryChatId: targetChatId, transcripts } });
           analysisText = String(typeof result === 'string' ? result : result?.text || '').trim();
+          // A translation returns its own files (TXT/Word) next to a preview.
+          if (Array.isArray(result?.artifacts)) analysisArtifacts = result.artifacts;
           if (!analysisText) analysisFailed = true;
         } catch (err) {
           analysisFailed = true;
@@ -911,7 +929,8 @@ function createMediaDeliveryService(deps = {}) {
       checkpoint();
     }
 
-    const specs = usable.length ? await buildArtifacts({ rows, transcripts, delivery: record }) : [];
+    const transcriptSpecs = usable.length && record.mode !== 'translation' ? await buildArtifacts({ rows, transcripts, delivery: record }) : [];
+    const specs = [...(Array.isArray(transcriptSpecs) ? transcriptSpecs : []), ...analysisArtifacts];
     const saved = [];
     for (const spec of Array.isArray(specs) ? specs : []) {
       if (!spec?.filename || typeof spec.base64 !== 'string') continue;

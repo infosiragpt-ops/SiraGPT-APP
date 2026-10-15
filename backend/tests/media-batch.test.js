@@ -435,3 +435,34 @@ test('a follow-up finds a recording delivered from a link (no user attachment), 
   prisma.message.findFirst = async () => null;
   assert.deepEqual(await batch.resolveChatMediaFileIds(prisma, { userId: 'u', chatId: 'chat-u' }), []);
 });
+
+test('«tradúcelo al inglés» after a transcription translates the full text instead of summarising it', async () => {
+  const transcript = 'Hola a todos. Hoy vemos la mitocondria y cómo produce energía para la célula.';
+  const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'ready', extractedText: transcript }];
+  const saved = [];
+  const calls = [];
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }) },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: 'tradúcelo al inglés', goal: 'tradúcelo al inglés',
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => { saved.push(artifact.filename); return { id: `a${saved.length}`, filename: artifact.filename }; },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => (name === '../media-transcript-artifacts' ? require('../src/services/media-transcript-artifacts')
+      : { createMediaAnalysisCompletion: () => ({ usage: null, complete: async (messages, _signal, final) => {
+        calls.push({ system: messages[0].content, final: Boolean(final) });
+        return 'Hello everyone. Today we look at the mitochondria and how it makes energy for the cell.';
+      } }) }),
+    ...mediaBranchHelpers(),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(calls.length, 1, 'one chunk, no summary pass');
+  assert.match(calls[0].system, /Traduce al inglés TODO el fragmento/);
+  assert.deepEqual(saved, ['clase (traducción al inglés).txt'], 'only the translation is delivered, not the transcript files again');
+  assert.match(result.finalMarkdown, /Traducción completa al inglés/);
+  assert.match(result.finalMarkdown, /Hello everyone/);
+  assert.equal(result.metadata.mediaBatch.translated, 1);
+  assert.equal(result.metadata.mediaBatch.translationLanguage, 'en');
+  assert.equal(result.stoppedReason, 'transcription_finalize');
+});

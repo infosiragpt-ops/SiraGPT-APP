@@ -21,7 +21,7 @@ const path = require('node:path');
 
 const DELIVERY_ID_RE = /^md_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RECORD_FILE_RE = /^(md_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
-const MODES = Object.freeze(['transcript', 'analysis', 'subtitles', 'document']);
+const MODES = Object.freeze(['transcript', 'analysis', 'subtitles', 'document', 'translation']);
 const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
 const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
 const MAX_FILES = 50;

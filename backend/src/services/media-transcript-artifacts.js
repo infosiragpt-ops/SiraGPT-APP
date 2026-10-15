@@ -236,6 +236,38 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
   return { artifacts, notes, formats: [...new Set(artifacts.map((artifact) => artifact.format))] };
 }
 
+/**
+ * Deliverables of a translation: one TXT per batch (each file under its own
+ * heading) and a Word copy for long texts or when asked.
+ * @param {{files: Array<{id, name, text}>, target: {code, name}}} input
+ */
+async function buildTranslationArtifacts({ files = [], target, output = {}, userId, createDocument = null, logger = console } = {}) {
+  const usable = files.filter((file) => String(file?.text || '').trim());
+  if (!usable.length || !target?.name) return { artifacts: [], notes: [] };
+  const notes = [];
+  const label = `traducción al ${target.name}`;
+  const base = usable.length === 1 ? `${sourceStem(usable[0].name)} (${label}` : `Traducciones al ${target.name} (${usable.length} archivos`;
+  const window = output.range ? ` ${rangeLabel(output.range).replace(/:/g, '.')}` : '';
+  const name = (ext) => `${base}${window}).${ext}`;
+  const txt = usable.length === 1 ? usable[0].text.trim()
+    : usable.map((file, index) => `${index + 1}. ${file.name}\n${'='.repeat(48)}\n${file.text.trim()}`).join('\n\n');
+  const artifacts = [toArtifact(name('txt'), `${txt}\n`, 'txt')];
+  const long = txt.length >= 20000;
+  const wanted = output.documentFormat || (long ? 'docx' : null);
+  if (wanted === 'docx' || wanted === 'pdf') {
+    const markdown = [`# ${usable.length === 1 ? `Traducción al ${target.name} — ${sourceStem(usable[0].name)}` : `Traducciones al ${target.name}`}`,
+      ...usable.map((file) => `${usable.length === 1 ? '' : `## ${sourceStem(file.name)}\n\n`}${file.text.trim().split(/\n+/).join('\n\n')}`)].join('\n\n');
+    try {
+      const filename = name(wanted);
+      artifacts.push(toArtifact(filename, await renderDocument({ userId, filename, markdown, format: wanted, createDocument }), wanted));
+    } catch (err) {
+      logger?.warn?.('[media-transcript-artifacts] translation document failed', err?.code || err?.message || 'render_error');
+      notes.push(`No pude generar el ${wanted === 'docx' ? 'Word' : 'PDF'} de la traducción; el TXT la tiene completa.`);
+    }
+  }
+  return { artifacts, notes };
+}
+
 function escapeChatMarkdown(value) {
   return String(value || '')
     .replace(/[\\`*_[\]<>|~]/g, (ch) => `\\${ch}`)
@@ -333,6 +365,8 @@ module.exports = {
   resolveTranscriptOutput,
   buildMediaTranscriptArtifacts,
   buildTranscriptChatPreview,
+  buildTranslationArtifacts,
+  escapeChatMarkdown,
   loadTranscripts,
   transcriptResultFor,
   normalizeSegments,

@@ -2696,7 +2696,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const ids = mediaBatchRows.map(row => row.id);
       const mediaGoal = String(displayGoal || goal || '');
       const retryRequested = /reintent|retry/i.test(mediaGoal);
-      const wantsAnalysis = (!plainTranscriptionRequest && !retryRequested) || mediaBatch.wantsMediaAnalysis(mediaGoal);
+      // «tradúcelo al inglés» is a full translation, never a summary.
+      const translationTarget = mediaBatch.detectTranslationTarget(mediaGoal);
+      const wantsAnalysis = translationTarget ? mediaBatch.wantsMediaAnalysis(mediaGoal)
+        : (!plainTranscriptionRequest && !retryRequested) || mediaBatch.wantsMediaAnalysis(mediaGoal);
+      // A follow-up translation does not re-deliver the transcript files.
+      const wantsTranscriptPack = !translationTarget || /transcri|subt[ií]tul|\bsrt\b|\bvtt\b/i.test(mediaGoal);
       const mediaArtifacts = require('../media-transcript-artifacts');
       const mediaOutput = mediaArtifacts.resolveTranscriptOutput(mediaGoal, { documentPolicy });
       await backfillUserMessageFilesForTranscription(prisma, {
@@ -2728,7 +2733,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             userId: user.id, chatId, taskId, assistantMessageId: assistantMessageId || null,
             fileIds: ids, fileNames: batch.rows.map(row => row.originalName || row.filename || row.id),
             goal: mediaGoal,
-            mode: wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
+            mode: translationTarget ? 'translation' : wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
             formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
             language: null,
             range: mediaOutput.range,
@@ -2763,7 +2768,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const readyRows = batch.rows.filter(row => mediaBatch.stateOf(row) === 'ready');
       const transcripts = batch.ready ? await mediaArtifacts.loadTranscripts(prisma, { userId: user.id, rows: readyRows }) : new Map();
       let packNotes = [];
-      if (batch.ready > 0) {
+      if (batch.ready > 0 && wantsTranscriptPack) {
         let built = null;
         try {
           built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, transcripts, output: mediaOutput, userId: user.id });
@@ -2785,6 +2790,39 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       let analysis = null;
       let analysisUnavailable = false;
       let mediaAnalysisUsage = null;
+      let translation = null;
+      let translationUnavailable = false;
+      if (batch.ready && translationTarget) {
+        emit({ type: 'step_start', id: 'media_translation', label: `Traduciendo al ${translationTarget.name}`, icon: 'languages' });
+        try {
+          if (!openai) throw new Error('selected_model_unavailable');
+          const completion = require('../media-analysis-runtime').createMediaAnalysisCompletion({
+            client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider,
+            userId: user.id, chatId, prisma,
+          });
+          mediaAnalysisUsage = completion.usage;
+          translation = await mediaBatch.translateMediaBatch({
+            rows: mediaRowsForAnalysis(batch.rows, transcripts, mediaOutput.range), target: translationTarget,
+            signal: controller.signal, complete: completion.complete,
+            onProgress: progress => emit({ type: 'checkpoint',
+              label: `Traduciendo ${progress.name} · parte ${progress.part}/${progress.parts}`,
+              status: 'saved', payload: { mediaTranslation: progress } }),
+          });
+          const built = await mediaArtifacts.buildTranslationArtifacts({ files: translation.files, target: translationTarget,
+            output: mediaOutput, userId: user.id });
+          packNotes = [...packNotes, ...built.notes];
+          for (const item of built.artifacts) {
+            const artifact = saveArtifact({ filename: item.filename, base64: item.base64, mime: item.mime, ownerUserId: user.id, chatId });
+            artifacts.push(artifact);
+            emit({ type: 'file_artifact', artifact });
+            await persistence.persistGeneratedArtifact({ artifact, task });
+          }
+        } catch (error) {
+          throwIfAborted(controller.signal);
+          translationUnavailable = true;
+        }
+        emit({ type: 'step_done', id: 'media_translation', ok: Boolean(translation?.files?.length) });
+      }
       if (batch.ready && wantsAnalysis) {
         emit({ type: 'step_start', id: 'media_analysis', label: 'Analizando cada transcripción', icon: 'braces' });
         try {
@@ -2820,9 +2858,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         analysis?.summaries?.length ? `Análisis realizado sobre ${analysis.summaries.length} ${fileWord(analysis.summaries.length)}, incluyendo todos sus fragmentos.` : '',
         analysis?.failed?.length ? `No se pudo analizar: ${analysis.failed.map(row => row.name).join(', ')}. Sus transcripciones siguen disponibles.` : '',
         analysisUnavailable ? 'El modelo seleccionado no pudo terminar el análisis. Las transcripciones están guardadas; puedes volver a solicitarlo.' : '',
+        translation?.files?.length ? `Traducción completa al ${translationTarget.name} (sin resumir), con las mismas marcas de tiempo: está en los adjuntos.` : '',
+        translation?.failed?.length ? `No se pudo traducir: ${translation.failed.map(row => row.name).join(', ')}.` : '',
+        translationUnavailable ? `El modelo seleccionado no pudo terminar la traducción al ${translationTarget.name}. La transcripción original está guardada; puedes volver a pedirla.` : '',
       ].filter(Boolean);
       if (analysis?.text) notices.push(analysis.text);
-      else if (batch.ready) {
+      else if (translation?.files?.length) {
+        const first = translation.files[0];
+        const head = String(first.text || '').slice(0, 3000);
+        const cut = head.length < String(first.text || '').length;
+        notices.push(`${translation.files.length > 1 ? `#### ${mediaArtifacts.escapeChatMarkdown(first.name)}\n\n` : ''}${mediaArtifacts.escapeChatMarkdown(cut ? head.slice(0, Math.max(head.lastIndexOf('\n'), 1500)) : head)}${cut ? '\n\n_Vista previa de la traducción. El archivo adjunto la tiene completa._' : ''}`);
+      } else if (batch.ready) {
         let preview = '';
         try { preview = mediaArtifacts.buildTranscriptChatPreview({ rows: readyRows, transcripts, output: mediaOutput }); }
         catch (_) { preview = ''; }
@@ -2838,10 +2884,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       task.documentPolicy = documentPolicy;
       return await finishDeterministicTask({ finalMarkdown: notices.join('\n\n'),
         stoppedReason: batch.failed === batch.total ? 'media_batch_failed'
-          : batch.failed || batch.pending || batch.partial || analysisUnavailable || analysis?.failed?.length ? 'media_batch_partial' : 'transcription_finalize',
+          : batch.failed || batch.pending || batch.partial || analysisUnavailable || analysis?.failed?.length
+            || translationUnavailable || translation?.failed?.length ? 'media_batch_partial' : 'transcription_finalize',
         steps: analysis ? 2 : 1, artifactsList: artifacts,
         metadata: { transcriptionFileIds: ids, mediaBatch: { total: batch.total, ready: batch.ready,
-          failed: batch.failed, pending: batch.pending, partial: batch.partial || 0, analyzed: analysis?.summaries?.length || 0 },
+          failed: batch.failed, pending: batch.pending, partial: batch.partial || 0, analyzed: analysis?.summaries?.length || 0,
+          translated: translation?.files?.length || 0, translationLanguage: translationTarget?.code || null },
         mediaAnalysis: analysis?.summaries || [], mediaAnalysisUsage },
       });
     }
