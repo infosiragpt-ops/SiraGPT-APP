@@ -2730,10 +2730,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             goal: mediaGoal,
             mode: wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
             formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
+            language: null,
             range: mediaOutput.range,
-            documentFormat: mediaOutput.documentFormat,
-            wantsSubtitles: mediaOutput.wantsSubtitles,
-            wantsAnalysis,
+            output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles },
             model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
           });
         } catch (error) {

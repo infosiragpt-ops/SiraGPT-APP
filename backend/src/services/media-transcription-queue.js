@@ -735,6 +735,10 @@ async function closeMediaTranscriptionQueue() {
   // Give aborted jobs a moment to park themselves (moveToDelayed) before
   // the connection is force-closed; they resume from checkpoints.
   if (service?.abortActive()) await new Promise(resolve => setTimeout(resolve, 1500));
+  // Deliveries in flight go back to pending (no attempt spent); the next
+  // process's sweep posts them.
+  try { await require('./media-delivery').closeMediaDelivery({ graceMs: 1500 }); }
+  catch (err) { console.warn('[media-transcription-queue] delivery shutdown incomplete', err?.code || 'delivery_close_error'); }
   const previous = { worker, queue, workerConnection, queueConnection };
   worker = queue = workerConnection = queueConnection = null;
   // Force-close the worker connection at shutdown. Its active jobs become

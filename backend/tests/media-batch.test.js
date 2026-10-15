@@ -214,7 +214,7 @@ test('a long recording ends the turn with «te aviso aquí» and a durable deliv
   assert.equal(created.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(created[0].fileIds)), ['clase']);
   assert.equal(created[0].chatId, 'chat');
-  assert.equal(created[0].documentFormat, 'docx');
+  assert.equal(created[0].output.documentFormat, 'docx');
   assert.deepEqual(JSON.parse(JSON.stringify(created[0].model)), { id: 'deepseek-v4-flash', provider: 'DeepSeek' });
 });
 

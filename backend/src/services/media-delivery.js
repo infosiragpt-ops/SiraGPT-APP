@@ -588,6 +588,34 @@ async function defaultBuildArtifacts({ rows = [], transcripts = {}, delivery = {
   return out;
 }
 
+/**
+ * The professional pack (header, timestamped paragraphs, Word, SRT/VTT,
+ * ranges, clip clock) from media-transcript-artifacts; the plain builder
+ * above stays as the fallback when the pack cannot be built.
+ */
+async function professionalBuildArtifacts({ rows = [], transcripts = {}, delivery = {} } = {}) {
+  try {
+    const pack = require('./media-transcript-artifacts');
+    const formats = new Set(Array.isArray(delivery.formats) ? delivery.formats : []);
+    const output = delivery.output || {};
+    const built = await pack.buildMediaTranscriptArtifacts({
+      rows: rows.filter(isUsableRow),
+      transcripts: new Map(Object.entries(transcripts || {})),
+      output: {
+        documentFormat: output.documentFormat || (formats.has('pdf') ? 'pdf' : formats.has('docx') ? 'docx' : null),
+        wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
+        range: delivery.range && Number.isFinite(Number(delivery.range.end)) ? delivery.range : null,
+        timeOffsetSec: Number(output.timeOffsetSec) || 0,
+      },
+      userId: delivery.userId,
+    });
+    if (built?.artifacts?.length) return built.artifacts;
+  } catch (err) {
+    defaultLogger.warn(`[media-delivery] professional pack unavailable: ${err?.code || err?.message || 'pack_error'}`);
+  }
+  return defaultBuildArtifacts({ rows, transcripts, delivery });
+}
+
 // ── default side effects (lazy; never loaded by tests that inject fakes) ──
 
 function defaultLoadFiles(prisma, userId, fileIds, { includeText = true } = {}) {
@@ -691,7 +719,16 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
     client: resolution.client, model: resolution.model, provider: resolution.provider,
     userId: delivery.userId, chatId: delivery.deliveryChatId || delivery.chatId, prisma,
   });
-  const result = await require('./media-batch').analyzeMediaBatch({ rows, goal: delivery.goal, complete: completion.complete });
+  // A requested range («del minuto 30 al 45») is analysed alone.
+  const range = delivery?.range && Number.isFinite(Number(delivery.range.end)) ? delivery.range : null;
+  let analysisRows = rows;
+  if (range) {
+    try {
+      const transcripts = new Map(Object.entries(delivery.transcripts || {}));
+      analysisRows = require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range);
+    } catch (_) { analysisRows = rows; }
+  }
+  const result = await require('./media-batch').analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete });
   return result?.text || '';
 }
 
@@ -756,7 +793,7 @@ function createMediaDeliveryService(deps = {}) {
   const loadFiles = deps.loadFiles || ((userId, fileIds, opts) => defaultLoadFiles(getPrisma(), userId, fileIds, opts));
   const loadTranscript = deps.loadTranscript || defaultLoadTranscript;
   const transcriptPrisma = () => (deps.loadTranscript ? (deps.prisma || null) : getPrisma());
-  const buildArtifacts = deps.buildArtifacts || defaultBuildArtifacts;
+  const buildArtifacts = deps.buildArtifacts || professionalBuildArtifacts;
   const saveArtifact = deps.saveArtifact || (args => require('./agents/task-tools').saveArtifact(args));
   const persistArtifact = deps.persistArtifact || defaultPersistArtifact;
   const postMessage = deps.postMessage || (args => defaultPostMessage(getPrisma(), args));
@@ -863,7 +900,7 @@ function createMediaDeliveryService(deps = {}) {
       if (typeof analyze !== 'function') analysisFailed = true;
       else {
         try {
-          const result = await analyze({ rows: usable, transcripts, delivery: { ...record, deliveryChatId: targetChatId } });
+          const result = await analyze({ rows: usable, transcripts, delivery: { ...record, deliveryChatId: targetChatId, transcripts } });
           analysisText = String(typeof result === 'string' ? result : result?.text || '').trim();
           if (!analysisText) analysisFailed = true;
         } catch (err) {
@@ -1136,6 +1173,7 @@ module.exports = {
   formatApproxDuration,
   formatClock,
   defaultBuildArtifacts,
+  professionalBuildArtifacts,
   TRANSCRIPTION_RTF,
   DEFAULT_INLINE_WAIT_MS,
   PENDING_CEILING_MS,

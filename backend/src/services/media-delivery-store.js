@@ -22,7 +22,7 @@ const path = require('node:path');
 const DELIVERY_ID_RE = /^md_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RECORD_FILE_RE = /^(md_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
 const MODES = Object.freeze(['transcript', 'analysis', 'subtitles', 'document']);
-const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx']);
+const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
 const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
 const MAX_FILES = 50;
 const DEFAULT_STALE_MS = 15 * 60 * 1000;
@@ -101,6 +101,26 @@ function normalizeModel(model) {
   return { id, provider: clipString(model.provider, 80) };
 }
 
+/** What the user asked the deliverables to look like (document, subtitles, clip clock). */
+function normalizeOutput(output) {
+  const value = output && typeof output === 'object' ? output : {};
+  const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
+  const offset = Number(value.timeOffsetSec);
+  return {
+    documentFormat,
+    wantsSubtitles: value.wantsSubtitles === true,
+    timeOffsetSec: Number.isFinite(offset) && offset > 0 ? Math.min(offset, 7 * 24 * 3600) : 0,
+  };
+}
+
+/** Where a link clip came from (shown in the delivered message). */
+function normalizeSource(source) {
+  if (!source || typeof source !== 'object') return null;
+  const url = clipString(source.url, 2000);
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  return { url, host: clipString(source.host, 200), title: clipString(source.title, 300) };
+}
+
 function normalizeLanguage(value) {
   const text = clipString(value, 16);
   return text && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/.test(text) ? text : null;
@@ -135,6 +155,8 @@ function normalizeNewRecord(input = {}, nowMs = Date.now()) {
     range: normalizeRange(input.range),
     language: normalizeLanguage(input.language),
     model: normalizeModel(input.model),
+    output: normalizeOutput(input.output),
+    source: normalizeSource(input.source),
     status: 'pending',
     attempts: 0,
     lastError: null,

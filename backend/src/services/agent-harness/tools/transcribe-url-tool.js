@@ -394,11 +394,11 @@ async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEn
     userId: ctx.userId, chatId: ctx.chatId, taskId: ctx.taskId || null,
     fileIds: [row.id], fileNames: [originalName], goal: `Transcripción de ${url.href}`,
     mode: subtitles ? 'subtitles' : 'transcript', formats: ['txt', ...(subtitles ? ['srt', 'vtt'] : [])],
-    range: null, wantsSubtitles: Boolean(subtitles), documentFormat: null, wantsAnalysis: false,
+    range: null,
     // The clip starts at rangeStart: delivered timestamps follow the
     // recording's own clock, like the inline path.
-    timeOffsetSec: sectioned ? rangeStart : 0,
-    source: { url: url.href, host: url.hostname, title, rangeStart, rangeEnd },
+    output: { documentFormat: null, wantsSubtitles: Boolean(subtitles), timeOffsetSec: sectioned ? rangeStart : 0 },
+    source: { url: url.href, host: url.hostname, title },
   });
   if (!record) return { ok: false, reason: 'delivery_unavailable', fileId: row.id };
   const etaSeconds = typeof delivery.estimateTranscriptionSeconds === 'function'
