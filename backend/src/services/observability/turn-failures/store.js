@@ -30,6 +30,9 @@ const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;
 const MAX_SIGNALS = 12;
 const MAX_NOTES = 40;
 const MAX_STAGES = 15;
+const FINAL_FIELDS = ['serverFinalAt', 'startedAt', 'totalMs', 'endReason', 'artifactsCount',
+  'whatUserSaw', 'errorCode', 'errorMessage', 'status', 'modelUsed', 'providerUsed',
+  'fallbackChain', 'ttfbMs', 'firstVisibleMs'];
 
 const SECRET_RES = [
   [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]'],
@@ -96,11 +99,30 @@ function mergeMetadata(prev = {}, next = {}) {
       merged[key] = incoming[key];
     }
   }
+  // Category/severity retain the worst observed failure, while final fields
+  // describe the authoritative server outcome, even if the idle report comes
+  // later. Zero and null are meaningful (no output / no terminal error).
+  const baseFinal = Date.parse(base.serverFinalAt || '');
+  const incomingFinal = Date.parse(incoming.serverFinalAt || '');
+  const final = Number.isFinite(incomingFinal) && (!Number.isFinite(baseFinal) || incomingFinal > baseFinal)
+    ? incoming : Number.isFinite(baseFinal) ? base : null;
+  if (final) {
+    for (const key of FINAL_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(final, key)) merged[key] = final[key];
+    }
+  }
   const signals = [
     ...(Array.isArray(base.signals) ? base.signals : []),
     ...(Array.isArray(incoming.signals) ? incoming.signals : []),
   ];
-  merged.signals = signals.slice(-MAX_SIGNALS);
+  const finalSignals = new Set();
+  merged.signals = signals.filter((s) => {
+    if (!s.terminal) return true;
+    const key = `${s.source}:${s.at}`;
+    if (finalSignals.has(key)) return false;
+    finalSignals.add(key);
+    return true;
+  }).slice(-MAX_SIGNALS);
   const notes = [
     ...(Array.isArray(base.notes) ? base.notes : []),
     ...(Array.isArray(incoming.notes) ? incoming.notes : []),
@@ -128,6 +150,8 @@ function createTurnFailureStore({
   const resourceIndex = new Map(); // resourceId -> { id, at }
   const floods = new Map(); // fingerprint -> { windowStart, count, suppressed }
   const emailCache = new Map(); // userId -> email
+  const terminalOutcomes = new Map();
+  const pendingRecords = new Map();
   let totalTurnsCache = { at: 0, since: 0, value: null };
 
   async function emailFor(userId) {
@@ -152,8 +176,10 @@ function createTurnFailureStore({
     return require('../../../config/database');
   }
 
-  function rememberResource(resourceId, id) {
-    resourceIndex.set(resourceId, { id, at: now() });
+  const resourceKey = (resourceId, userId) => JSON.stringify([userId || null, resourceId]);
+
+  function rememberResource(resourceId, userId, id) {
+    resourceIndex.set(resourceKey(resourceId, userId), { id, at: now() });
     if (resourceIndex.size > 4000) {
       const oldest = resourceIndex.keys().next().value;
       resourceIndex.delete(oldest);
@@ -180,8 +206,8 @@ function createTurnFailureStore({
     return { allowed: true, suppressed: 0 };
   }
 
-  async function findExisting(resourceId) {
-    const cached = resourceIndex.get(resourceId);
+  async function findExisting(resourceId, userId) {
+    const cached = resourceIndex.get(resourceKey(resourceId, userId));
     if (cached && now() - cached.at < MERGE_WINDOW_MS) return { id: cached.id, fromCache: true };
     const client = db();
     if (!client || !client.auditLog || typeof client.auditLog.findFirst !== 'function') return null;
@@ -190,6 +216,7 @@ function createTurnFailureStore({
         action: ACTION,
         resourceType: RESOURCE_TYPE,
         resourceId,
+        actorId: userId || null,
         createdAt: { gte: new Date(now() - MERGE_WINDOW_MS) },
       },
       orderBy: { createdAt: 'desc' },
@@ -203,18 +230,23 @@ function createTurnFailureStore({
    * @param {{resourceId: string, userId?: string|null, userEmail?: string|null, metadata: object}} entry
    * @returns {Promise<{id?: string, merged?: boolean, suppressed?: boolean}>}
    */
-  async function record(entry) {
+  async function recordNow(entry) {
     try {
       if (!entry || !entry.metadata || !entry.metadata.category || !CATEGORIES[entry.metadata.category]) return {};
       const client = db();
       if (!client || !client.auditLog || typeof client.auditLog.create !== 'function') return {};
       const resourceId = String(entry.resourceId || `sin-chat:${now()}`).slice(0, 190);
-      const metadata = sanitizeDeep({
+      let metadata = sanitizeDeep({
         ...entry.metadata,
         lastSignalAt: new Date(now()).toISOString(),
       });
+      const finalKey = resourceKey(resourceId, entry.userId);
+      const cachedFinal = terminalOutcomes.get(finalKey);
+      if (cachedFinal && now() - cachedFinal.at <= MERGE_WINDOW_MS) {
+        metadata = mergeMetadata(metadata, cachedFinal.metadata);
+      } else if (cachedFinal) terminalOutcomes.delete(finalKey);
 
-      const existing = await findExisting(resourceId).catch(() => null);
+      const existing = await findExisting(resourceId, entry.userId).catch(() => null);
       if (existing && existing.id) {
         let prevMeta = existing.metadata;
         if (!prevMeta && typeof client.auditLog.findUnique === 'function') {
@@ -223,7 +255,7 @@ function createTurnFailureStore({
         }
         const merged = mergeMetadata(prevMeta || {}, metadata);
         await client.auditLog.update({ where: { id: existing.id }, data: { metadata: merged } });
-        rememberResource(resourceId, existing.id);
+        rememberResource(resourceId, entry.userId, existing.id);
         return { id: existing.id, merged: true };
       }
 
@@ -247,12 +279,63 @@ function createTurnFailureStore({
         },
         select: { id: true },
       });
-      if (row && row.id) rememberResource(resourceId, row.id);
+      if (row && row.id) rememberResource(resourceId, entry.userId, row.id);
       return { id: row && row.id };
     } catch (err) {
       try { logger.warn?.(`[turn-failures] record failed: ${err && err.message ? err.message : err}`); } catch (_) { /* ignore */ }
       return {};
     }
+  }
+
+  // Serialize writes for the same user/turn so an idle report and finalizer
+  // cannot race a create/update in this process. Nothing is locked globally.
+  function serialize(entry, work) {
+    const key = resourceKey(entry?.resourceId || '', entry?.userId);
+    const pending = (pendingRecords.get(key) || Promise.resolve()).then(work, work);
+    pendingRecords.set(key, pending);
+    return pending.finally(() => {
+      if (pendingRecords.get(key) === pending) pendingRecords.delete(key);
+    });
+  }
+
+  function record(entry) {
+    return serialize(entry, () => recordNow(entry));
+  }
+
+  function recordOutcome(entry) {
+    return serialize(entry, async () => {
+      try {
+        if (!entry?.resourceId || !Number.isFinite(Date.parse(entry.metadata?.serverFinalAt || ''))) return {};
+        let metadata = sanitizeDeep(Object.fromEntries(
+          [...FINAL_FIELDS, 'signals', 'stages', 'notes', 'reqIds']
+            .filter((key) => Object.prototype.hasOwnProperty.call(entry.metadata, key))
+            .map((key) => [key, entry.metadata[key]]),
+        ));
+        const resourceId = String(entry.resourceId).slice(0, 190);
+        const key = resourceKey(resourceId, entry.userId);
+        const previous = terminalOutcomes.get(key);
+        if (previous && Date.parse(previous.metadata.serverFinalAt) > Date.parse(metadata.serverFinalAt)) {
+          metadata = previous.metadata;
+        }
+        terminalOutcomes.set(key, { at: now(), metadata });
+        // Retain a bounded, short-lived result for a late browser report.
+        for (const [cachedKey, value] of terminalOutcomes) {
+          if (now() - value.at > MERGE_WINDOW_MS) terminalOutcomes.delete(cachedKey);
+        }
+        if (terminalOutcomes.size > 1000) terminalOutcomes.delete(terminalOutcomes.keys().next().value);
+        const existing = await findExisting(resourceId, entry.userId);
+        if (!existing?.id) return {};
+        const client = db();
+        const prev = existing.metadata || (await client.auditLog.findUnique({
+          where: { id: existing.id }, select: { metadata: true },
+        }))?.metadata || {};
+        await client.auditLog.update({ where: { id: existing.id }, data: { metadata: mergeMetadata(prev, metadata) } });
+        return { id: existing.id, merged: true };
+      } catch (err) {
+        try { logger.warn?.(`[turn-failures] outcome update failed: ${err && err.message ? err.message : err}`); } catch (_) {}
+        return {};
+      }
+    });
   }
 
   function toItem(row) {
@@ -468,6 +551,7 @@ function createTurnFailureStore({
 
   return {
     record,
+    recordOutcome,
     list,
     recent,
     stats,

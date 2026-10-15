@@ -423,6 +423,45 @@ describe('store — record / merge / flood / queries', () => {
     assert.equal(prisma.rows.length, 2);
   });
 
+  it('does not reuse cached outcomes for another user or after their retention window', async () => {
+    const prisma = fakePrisma();
+    let now = Date.parse('2026-10-15T12:00:00Z');
+    const store = createTurnFailureStore({ prisma, now: () => now });
+    const metadata = { serverFinalAt: new Date(now).toISOString(), endReason: 'completed',
+      artifactsCount: 1, totalMs: 390000, signals: [{ source: 'server', terminal: true, at: new Date(now).toISOString() }] };
+    await store.recordOutcome({ resourceId: 'cache:private', userId: 'owner', metadata });
+    await store.recordOutcome({ resourceId: 'cache:expired', userId: 'owner', metadata });
+    assert.equal(prisma.rows.length, 0);
+    const idle = { category: 'colgado', severity: 'critical', cause: 'Idle',
+      endReason: 'client_no_activity', artifactsCount: 0 };
+    await store.record({ resourceId: 'cache:private', userId: 'another-user', metadata: idle });
+    assert.equal(prisma.rows[0].metadata.endReason, 'client_no_activity');
+    assert.equal(prisma.rows[0].metadata.artifactsCount, 0);
+    now += 7 * 60 * 60 * 1000;
+    await store.record({ resourceId: 'cache:expired', userId: 'owner', metadata: idle });
+    assert.equal(prisma.rows[1].metadata.endReason, 'client_no_activity');
+    assert.equal(prisma.rows[1].metadata.artifactsCount, 0);
+  });
+
+  it('never merges a coincident turn id into another user\'s incident', async () => {
+    const prisma = fakePrisma();
+    const store = createTurnFailureStore({ prisma });
+    const metadata = { category: 'colgado', severity: 'critical', cause: 'Idle',
+      endReason: 'client_no_activity', artifactsCount: 0 };
+    await store.record({ resourceId: 'same-chat:same-stream', userId: 'owner', metadata });
+    await store.recordOutcome({ resourceId: 'same-chat:same-stream', userId: 'other', metadata: {
+      serverFinalAt: new Date().toISOString(), endReason: 'completed', artifactsCount: 7,
+    } });
+    assert.equal(prisma.rows.length, 1);
+    assert.equal(prisma.rows[0].metadata.endReason, 'client_no_activity');
+    await store.record({ resourceId: 'same-chat:same-stream', userId: 'other', metadata });
+    assert.equal(prisma.rows.length, 2);
+    assert.equal(prisma.rows[0].actorId, 'owner');
+    assert.equal(prisma.rows[0].metadata.artifactsCount, 0);
+    assert.equal(prisma.rows[1].actorId, 'other');
+    assert.equal(prisma.rows[1].metadata.artifactsCount, 7);
+  });
+
   it('never throws when the database fails', async () => {
     const store = createTurnFailureStore({ prisma: fakePrisma({ failCreate: true }), logger: { warn() {} } });
     assert.deepEqual(await store.record({ resourceId: 'x', metadata: { category: 'sin_respuesta', severity: 'critical' } }), {});
@@ -664,6 +703,103 @@ describe('turn lifecycle — beginTurn / noteTurn / finishTurn', () => {
     await turnFailures.recordClientSignal({ turn: { chatId: 'c4', streamId: 's4', reason: 'no_activity', elapsedMs: 95000 } }, req({}));
     assert.equal(prisma.rows[0].metadata.category, 'colgado');
     assert.equal(prisma.rows[0].metadata.cause, 'Sin actividad en el navegador durante 95 s');
+    assert.equal(prisma.rows[0].metadata.totalMs, null, 'old clients only know idle time, not total duration');
+    assert.equal(prisma.rows[0].metadata.startedAt, null);
+    assert.equal(prisma.rows[0].metadata.client.idleMs, 95000);
+  });
+
+  it('keeps idle time separate from total turn duration', async () => {
+    await turnFailures.recordClientSignal({ turn: {
+      chatId: 'idle-chat', idempotencyKey: 'idle-turn', reason: 'no_activity',
+      elapsedMs: 390000, idleMs: 95000,
+    } }, req({}));
+    const m = prisma.rows[0].metadata;
+    assert.equal(m.cause, 'Sin actividad en el navegador durante 95 s');
+    assert.equal(m.totalMs, 390000);
+    assert.equal(m.client.idleMs, 95000);
+    assert.equal(m.client.elapsedMs, 390000);
+  });
+
+  for (const lateClient of [false, true]) {
+    it(`keeps a successful server outcome and the historical idle signal (late client: ${lateClient})`, async () => {
+      const r = req({ chatId: 'recovered-chat', idempotencyKey: 'recovered-turn' });
+      const res = fakeRes();
+      const startedAt = Date.now() - 390000;
+      const tap = turnFailures.beginTurn(r, res, { route: 'generate', startedAt,
+        context: { chatId: 'recovered-chat', idempotencyKey: 'recovered-turn' } });
+      const report = () => turnFailures.recordClientSignal({ turn: {
+        chatId: 'recovered-chat', idempotencyKey: 'recovered-turn',
+        reason: 'no_activity', elapsedMs: 300000, idleMs: 95000,
+      } }, r);
+      if (!lateClient) await report();
+      tap.note('provider_attempt_failed', { status: 503, message: 'Temporary upstream outage' });
+      res.write(frame({ content: 'Documento disponible.' }));
+      turnFailures.finishTurn(tap, { finalText: 'Documento disponible.', artifactsCount: 1,
+        streamCompleted: true, endReason: 'completed' });
+      await flush();
+      if (lateClient) {
+        assert.equal(prisma.rows.length, 0, 'successful turns alone create no incident');
+        await report();
+      }
+      assert.equal(prisma.rows.length, 1);
+      const m = prisma.rows[0].metadata;
+      assert.equal(m.category, 'colgado', 'the observed idle failure stays visible');
+      assert.equal(m.cause, 'Sin actividad en el navegador durante 95 s');
+      assert.equal(m.endReason, 'completed');
+      assert.equal(m.artifactsCount, 1);
+      assert.equal(m.whatUserSaw, 'Documento disponible.');
+      assert.equal(m.errorCode, null, 'a recovered provider attempt is not the terminal error');
+      assert.equal(m.errorMessage, null);
+      assert.ok(m.notes.some((n) => n.kind === 'provider_attempt_failed'), 'the recovered failure remains in the trace');
+      assert.equal(m.startedAt, new Date(startedAt).toISOString());
+      assert.ok(m.totalMs >= 390000);
+      assert.ok(m.signals.some((s) => s.source === 'client'));
+      assert.ok(m.signals.some((s) => s.source === 'server' && s.terminal === true));
+    });
+  }
+
+  it('preserves a real terminal timeout after an idle report and ignores later provisional fields', async () => {
+    const r = req({ chatId: 'timeout-chat', idempotencyKey: 'timeout-turn' });
+    const res = fakeRes();
+    const startedAt = Date.now() - 390000;
+    const tap = turnFailures.beginTurn(r, res, { route: 'generate', startedAt,
+      context: { chatId: 'timeout-chat', idempotencyKey: 'timeout-turn' } });
+    const report = () => turnFailures.recordClientSignal({ turn: {
+      chatId: 'timeout-chat', idempotencyKey: 'timeout-turn', reason: 'no_activity',
+      elapsedMs: 300000, idleMs: 95000,
+    } }, r);
+    await report();
+    res.write(frame({ error: true, code: 'E_TIMEOUT', message: 'El proveedor agotó el tiempo disponible.' }));
+    turnFailures.finishTurn(tap, { endReason: 'provider_timeout', artifactsCount: 0 });
+    await flush();
+    await report();
+    const m = prisma.rows[0].metadata;
+    assert.equal(prisma.rows.length, 1);
+    assert.equal(m.category, 'colgado');
+    assert.equal(m.endReason, 'provider_timeout');
+    assert.equal(m.errorCode, 'E_TIMEOUT');
+    assert.equal(m.errorMessage, 'El proveedor agotó el tiempo disponible.');
+    assert.equal(m.artifactsCount, 0);
+    assert.ok(m.totalMs >= 390000);
+    assert.ok(m.signals.some((s) => s.source === 'server' && s.category === 'error_visible'));
+  });
+
+  it('serializes an idle signal arriving concurrently with successful finalization', async () => {
+    const r = req({ chatId: 'race-chat', idempotencyKey: 'race-turn' });
+    const res = fakeRes();
+    const tap = turnFailures.beginTurn(r, res, { route: 'generate',
+      context: { chatId: 'race-chat', idempotencyKey: 'race-turn' } });
+    const pending = turnFailures.recordClientSignal({ turn: {
+      chatId: 'race-chat', idempotencyKey: 'race-turn', reason: 'no_activity',
+      elapsedMs: 120000, idleMs: 95000,
+    } }, r);
+    res.write(frame({ content: 'Documento disponible.' }));
+    turnFailures.finishTurn(tap, { finalText: 'Documento disponible.', endReason: 'completed', artifactsCount: 1 });
+    await pending;
+    await flush();
+    assert.equal(prisma.rows.length, 1);
+    assert.equal(prisma.rows[0].metadata.endReason, 'completed');
+    assert.equal(prisma.rows[0].metadata.artifactsCount, 1);
   });
 
   it('thumbs-down → usuario_reporto', async () => {

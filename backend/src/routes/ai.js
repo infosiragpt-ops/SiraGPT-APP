@@ -3412,7 +3412,9 @@ router.post(
               });
               if (hit && hit.abort) {
                 __ttfbAbortedAt = Date.now();
-                controller.abort();
+                controller.abort(Object.assign(new Error('First-byte deadline exceeded'), {
+                  name: 'TimeoutError', code: 'E_TIMEOUT',
+                }));
                 if (__firstByteWatchdog) {
                   clearInterval(__firstByteWatchdog);
                   __firstByteWatchdog = null;

@@ -13,6 +13,7 @@ import {
   TURN_IN_PROGRESS_MAX_WAIT_MS,
 } from '@/lib/generate-retry-policy'
 import { GENERATE_STREAM_CONNECT_MS } from '@/lib/sse-idle'
+import { reportClientLog } from '@/lib/client-logs'
 
 vi.mock('@/lib/client-logs', () => ({
   reportClientLog: vi.fn(),
@@ -103,6 +104,31 @@ describe('generateAIStream retry policy', () => {
     vi.useRealTimers()
     vi.restoreAllMocks()
     api.setToken(null)
+  })
+
+  it('reports elapsed turn time separately from the idle interval', async () => {
+    const encoder = new TextEncoder()
+    let writer!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({ start(controller) { writer = controller } })
+    mockFetch.mockResolvedValue({ ok: true, status: 200, headers: new Headers(), body })
+    const onError = vi.fn()
+    const pending = api.generateAIStream(streamData, vi.fn(), vi.fn(), onError)
+    await vi.advanceTimersByTimeAsync(0)
+    // Keep the transport alive, then deliver real progress after 30 s.
+    const ping = setInterval(() => writer.enqueue(encoder.encode(': ping\n\n')), 5000)
+    await vi.advanceTimersByTimeAsync(30000)
+    writer.enqueue(encoder.encode('data: {"content":"Preparando el documento."}\n\n'))
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(90000)
+    const reports = vi.mocked(reportClientLog).mock.calls.map(([entry]) => entry)
+      .filter((entry) => entry.turn?.reason === 'no_activity')
+    expect(reports).toHaveLength(1)
+    expect(reports[0].turn).toMatchObject({ elapsedMs: 120000, idleMs: 90000 })
+    clearInterval(ping)
+    writer.enqueue(encoder.encode('data: [DONE]\n\n'))
+    writer.close()
+    await pending
+    expect(onError).not.toHaveBeenCalled()
   })
 
   it('delivers only valid workspace metadata for the requested chat without treating it as a token', async () => {
