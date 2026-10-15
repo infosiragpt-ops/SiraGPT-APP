@@ -263,9 +263,9 @@ test('segmented cloud transcription reports progress per segment', async (t) => 
     async localTranscribe() { throw new Error('local must not run when the cloud ladder succeeds'); },
   });
   assert.equal(result.method, 'whisper');
-  assert.deepEqual(events.map((e) => e.stage), ['preparing', 'segments', 'transcribe', 'transcribe', 'transcribe', 'transcribe']);
-  assert.deepEqual(events.slice(1).map((e) => e.completed), [0, 1, 2, 3, 4]);
-  assert.ok(events.slice(1).every((e) => e.total === 4));
+  assert.deepEqual(events.map((e) => e.stage), ['preparing', 'segments', 'transcribe', 'transcribe', 'transcribe', 'transcribe', 'done']);
+  assert.deepEqual(events.slice(1).map((e) => e.completed), [0, 1, 2, 3, 4, 4]);
+  assert.ok(events.slice(1).every((e) => e.total === 4 && e.gaps === 0));
 });
 
 test('long local transcription resumes from per-segment checkpoints after a restart', async (t) => {
@@ -285,16 +285,21 @@ test('long local transcription resumes from per-segment checkpoints after a rest
     segmentAudio: fakeSegments(t, 60),
     checkpoint,
   };
-  // First run dies on segment 24 (whisper crash / container recreated).
-  const first = await audioTranscriber.transcribe(filePath, 'video/x-matroska', 'clase-10h.mkv', {
+  // First run dies on segment 24 (deploy / container recreated: the job is
+  // cancelled mid-file, it does not fail).
+  const controller = new AbortController();
+  await assert.rejects(audioTranscriber.transcribe(filePath, 'video/x-matroska', 'clase-10h.mkv', {
     ...base,
+    signal: controller.signal,
     async localTranscribe(segPath) {
       calls.push(segPath);
-      if (calls.length === 24) throw new Error('whisper process killed');
+      if (calls.length === 24) {
+        controller.abort();
+        throw Object.assign(new Error('local whisper cancelled'), { code: 'LOCAL_WHISPER_ABORTED' });
+      }
       return { text: `bloque ${calls.length} con suficientes palabras`, segments: [{ start: 0, end: 5, text: 'x' }], model: 'base' };
     },
-  });
-  assert.equal(first.method, 'placeholder');
+  }), { name: 'AbortError' });
   assert.equal(store.size, 23, 'every finished segment is persisted before the crash');
   const resumed = [];
   const events = [];
@@ -309,6 +314,8 @@ test('long local transcription resumes from per-segment checkpoints after a rest
   assert.equal(result.method, 'local-whisper');
   assert.equal(resumed.length, 37, 'only the 37 unfinished segments are transcribed again');
   assert.equal(store.size, 60);
+  assert.deepEqual(events.find((e) => e.stage === 'resuming'), { stage: 'resuming', durationSeconds: 36000, completed: 23, total: 60, gaps: 0 });
+  assert.equal(events.at(-1).stage, 'done');
   assert.equal(events.at(-1).completed, 60);
   assert.equal(events.at(-1).durationSeconds, 36000);
   assert.ok(result.transcript.startsWith('bloque 1 con suficientes palabras'));
