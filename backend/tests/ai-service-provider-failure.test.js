@@ -322,6 +322,159 @@ test('Stop before the first token (empty provider stream): a client abort, not Â
   assert.equal(getBreaker('xAI:grok-4.7').failureCount, 0);
 });
 
+for (const [provider, model, sdkName] of [
+  ['Anthropic', 'claude-fable-5-1', '@anthropic-ai/sdk'],
+  ['Gemini', 'gemini-3.8-flash', 'openai'],
+]) {
+  for (const partial of [false, true]) {
+    test(`${provider} SDK abort after Stop preserves ${partial ? 'partial text' : 'an empty result'} without a provider failure`, async () => {
+      const { APIUserAbortError } = require(sdkName);
+      const ctrl = new AbortController();
+      const failuresBefore = getBreaker(`${provider}:${model}`).failureCount;
+      const r = await runGenerate({
+        provider,
+        model,
+        signal: ctrl.signal,
+        primaryCreate: async () => ({
+          async *[Symbol.asyncIterator]() {
+            if (partial) yield { choices: [{ delta: { content: 'Respuesta parcial' } }] };
+            ctrl.abort();
+            throw new APIUserAbortError();
+          },
+        }),
+      });
+      assert.equal(r.primaryCalls, 1);
+      assert.equal(r.out, partial ? 'Respuesta parcial' : '');
+      assert.equal(errorFrame(r.frames), null);
+      assert.equal(r.failures.length, 0, 'the SDK cancellation must not become a provider incident');
+      assert.equal(r.failovers.length, 0);
+      assert.ok(getBreaker(`${provider}:${model}`).failureCount <= failuresBefore, 'Stop must not penalize the provider');
+    });
+  }
+  test(`${provider} SDK abort while connecting is neutral for the breaker`, async () => {
+    const { APIUserAbortError } = require(sdkName);
+    const ctrl = new AbortController();
+    const failuresBefore = getBreaker(`${provider}:${model}`).failureCount;
+    const r = await runGenerate({
+      provider,
+      model,
+      signal: ctrl.signal,
+      primaryCreate: async () => {
+        ctrl.abort();
+        throw new APIUserAbortError();
+      },
+    });
+    assert.equal(r.out, '');
+    assert.equal(errorFrame(r.frames), null);
+    assert.equal(r.primaryCalls, 1);
+    assert.equal(r.failures.length, 0);
+    assert.equal(getBreaker(`${provider}:${model}`).failureCount, failuresBefore);
+  });
+}
+
+test('an upstream AbortError without a cancelled caller remains a visible provider failure', async () => {
+  const ctrl = new AbortController();
+  const r = await runGenerate({
+    signal: ctrl.signal,
+    primaryError: Object.assign(new Error('Upstream stream was aborted'), { name: 'AbortError' }),
+  });
+  assert.equal(ctrl.signal.aborted, false);
+  assert.equal(r.primaryCalls, 1);
+  assert.equal(errorFrame(r.frames)?.code, 'E_TIMEOUT');
+  assert.equal(r.failures.length, 1);
+});
+
+test('a caller deadline remains E_TIMEOUT even when the SDK throws APIUserAbortError', async () => {
+  const { APIUserAbortError } = require('openai');
+  const ctrl = new AbortController();
+  const r = await runGenerate({
+    signal: ctrl.signal,
+    primaryCreate: async () => {
+      ctrl.abort(Object.assign(new Error('First-byte deadline exceeded'), { name: 'TimeoutError', code: 'E_TIMEOUT' }));
+      throw new APIUserAbortError();
+    },
+  });
+  assert.equal(r.primaryCalls, 1, 'an expired caller budget is not retried');
+  assert.equal(errorFrame(r.frames)?.code, 'E_TIMEOUT');
+  assert.equal(r.failures.length, 1);
+});
+
+test('a deadline before provider dispatch remains visible and sends no request', async () => {
+  const ctrl = new AbortController();
+  ctrl.abort(Object.assign(new Error('First-byte deadline exceeded'), { name: 'TimeoutError', code: 'E_TIMEOUT' }));
+  const r = await runGenerate({ signal: ctrl.signal });
+  assert.equal(r.primaryCalls, 0);
+  assert.equal(errorFrame(r.frames)?.code, 'E_TIMEOUT');
+  assert.equal(r.failures.length, 1);
+});
+
+test('a completed HTTP failure is not hidden by a simultaneous Stop', async () => {
+  const ctrl = new AbortController();
+  const r = await runGenerate({
+    signal: ctrl.signal,
+    primaryCreate: async () => {
+      ctrl.abort();
+      throw httpError(401, 'invalid x-api-key');
+    },
+  });
+  assert.equal(r.primaryCalls, 1);
+  assert.equal(errorFrame(r.frames)?.code, 'E_PROVIDER');
+  assert.equal(r.failures.length, 1);
+  assert.equal(r.failures[0].failureReason, 'auth');
+});
+
+test('a completed HTTP 503 survives a simultaneous Stop without retrying or neutralizing the breaker', async () => {
+  const ctrl = new AbortController();
+  const breaker = getBreaker('Anthropic:claude-fable-5-1');
+  const failuresBefore = breaker.failureCount;
+  const r = await runGenerate({
+    signal: ctrl.signal,
+    primaryCreate: async () => {
+      ctrl.abort();
+      throw httpError(503, 'Service unavailable');
+    },
+  });
+  assert.equal(r.primaryCalls, 1);
+  assert.equal(errorFrame(r.frames)?.code, 'E_PROVIDER');
+  assert.equal(r.failures.length, 1);
+  assert.equal(r.failures[0].failureReason, 'unavailable');
+  assert.equal(breaker.failureCount, failuresBefore + 1, 'the received 503 is a provider failure');
+});
+
+test('a completed HTTP 401 survives Stop and still counts as an answered request for the breaker', async () => {
+  const ctrl = new AbortController();
+  const breaker = getBreaker('Anthropic:claude-fable-5-1');
+  await assert.rejects(breaker.execute(async () => { throw httpError(503, 'Service unavailable'); }));
+  const failuresBefore = breaker.failureCount;
+  const r = await runGenerate({
+    signal: ctrl.signal,
+    primaryCreate: async () => {
+      ctrl.abort();
+      throw httpError(401, 'invalid x-api-key');
+    },
+  });
+  assert.equal(r.primaryCalls, 1);
+  assert.equal(errorFrame(r.frames)?.code, 'E_PROVIDER');
+  assert.equal(r.failures[0].failureReason, 'auth');
+  assert.equal(breaker.failureCount, failuresBefore - 1, 'an answered 401 drains the old transient failure');
+});
+
+test('Stop prevents the OpenAI parameter correction pass after an HTTP 400', async () => {
+  const ctrl = new AbortController();
+  const r = await runGenerate({
+    provider: 'OpenAI',
+    model: 'gpt-4o',
+    signal: ctrl.signal,
+    primaryCreate: async () => {
+      ctrl.abort();
+      throw httpError(400, "Unsupported value: 'temperature' does not support 0.55 with this model.");
+    },
+  });
+  assert.equal(r.primaryCalls, 1, 'a cancelled turn cannot send a corrected request');
+  assert.equal(r.failures.length, 1);
+  assert.ok(errorFrame(r.frames), 'the received HTTP failure remains visible');
+});
+
 test('SiraGPT Mini / Custom never fail over and never feed the memo', async () => {
   const r = await runGenerate({
     provider: 'Custom',

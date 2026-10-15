@@ -43,6 +43,7 @@ export type ClientTurnSignal = {
   attempts?: number | null
   hasContent?: boolean
   elapsedMs?: number | null
+  idleMs?: number | null
 }
 
 const MAX_MESSAGE = 700
@@ -67,6 +68,7 @@ function cleanTurn(turn: ClientTurnSignal | null | undefined): ClientTurnSignal 
     attempts: typeof turn.attempts === "number" && Number.isFinite(turn.attempts) ? turn.attempts : null,
     hasContent: turn.hasContent === true,
     elapsedMs: typeof turn.elapsedMs === "number" && Number.isFinite(turn.elapsedMs) ? Math.round(turn.elapsedMs) : null,
+    idleMs: typeof turn.idleMs === "number" && Number.isFinite(turn.idleMs) ? Math.max(0, Math.round(turn.idleMs)) : null,
   }
 }
 

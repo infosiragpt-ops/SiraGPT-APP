@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Cancelled responses distinguish a user Stop from a provider abort or an
+  expired deadline, preserve partial text, and retain HTTP errors already
+  received without issuing another request after cancellation.
+- Inactivity reports separate idle time from total turn duration. Final server
+  outcomes reconcile provisional incident details without deleting the original
+  report; completed replies clear recovered attempt errors and keep incident
+  records isolated by user and turn.
 - The first message of a new chat is answered when it already carries its
   material. «Traduce al inglés: Hola», «corrige: yo a ido al colegio», text
   pasted on the next line or before the order, «resume la revolución

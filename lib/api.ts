@@ -2646,7 +2646,7 @@ class ApiClient {
     const turnStartedAt = Date.now();
     let lastTurnActivityAt = turnStartedAt;
     const reportedTurnReasons = new Set<string>();
-    const reportTurn = (reason: ClientTurnReason, message: string, extra: { status?: number | null; elapsedMs?: number } = {}) => {
+    const reportTurn = (reason: ClientTurnReason, message: string, extra: { status?: number | null; idleMs?: number } = {}) => {
       if (reportedTurnReasons.has(reason) || signal?.aborted) return;
       reportedTurnReasons.add(reason);
       try {
@@ -2664,7 +2664,8 @@ class ApiClient {
             idempotencyKey: turnKey,
             model: data.model || null,
             hasContent: hasDeliveredAnyContent,
-            elapsedMs: extra.elapsedMs ?? (Date.now() - turnStartedAt),
+            elapsedMs: Date.now() - turnStartedAt,
+            ...(extra.idleMs != null ? { idleMs: extra.idleMs } : {}),
           },
         });
       } catch { /* observability never affects the stream */ }
@@ -2677,7 +2678,7 @@ class ApiClient {
         if (streamFinished || terminalErrorDelivered || signal?.aborted) return;
         const idle = Date.now() - lastTurnActivityAt;
         if (idle >= NO_ACTIVITY_REPORT_MS) {
-          reportTurn('no_activity', `Sin actividad durante ${Math.round(idle / 1000)} s`, { elapsedMs: idle });
+          reportTurn('no_activity', `Sin actividad durante ${Math.round(idle / 1000)} s`, { idleMs: idle });
           return;
         }
         scheduleActivityWatch();

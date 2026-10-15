@@ -328,11 +328,21 @@ function finishTurn(tap, final = {}) {
       attachmentTexts: ctx.attachmentTexts,
     };
     classification = classify.classifyTurnOutcome(outcome);
+    const cleanCtx = { ...ctx, artifactsCount, endedAt: outcome.endedAt, statusCode: status || null };
+    delete cleanCtx.attachmentTexts;
+    const serverFinalAt = new Date(outcome.endedAt).toISOString();
     if (classification) {
-      const cleanCtx = { ...ctx, artifactsCount, endedAt: outcome.endedAt, statusCode: status || null };
-      delete cleanCtx.attachmentTexts;
       if (httpFailure) cleanCtx.endReason = cleanCtx.endReason || `http_${status}`;
-      persist({ ctx: cleanCtx, classification, tap }).catch(() => {});
+      persist({ ctx: cleanCtx, classification, tap, extra: { serverFinalAt } }).catch(() => {});
+    } else if (typeof getStore().recordOutcome === 'function') {
+      // A browser may have already reported an idle interval. Preserve that
+      // incident, but reconcile its provisional fields with the real result.
+      // Normal successful turns still create no failure row.
+      cleanCtx.endReason = cleanCtx.endReason || (ctx.userStopped ? 'user_stopped' : 'completed');
+      const metadata = buildTurnMetadata({ ctx: cleanCtx, classification: {}, tap,
+        extra: { serverFinalAt, errorCode: null, errorMessage: null,
+          signals: [{ source: 'server', terminal: true, at: serverFinalAt }] } });
+      getStore().recordOutcome({ resourceId: turnKeyFor(cleanCtx), userId: cleanCtx.userId || null, metadata }).catch(() => {});
     }
   } catch (_) {
     classification = null;
@@ -384,8 +394,17 @@ function recordClientSignal(body = {}, req = null) {
     const chatId = cleanId(turn.chatId);
     const message = redact(body.message || turn.message || '', 300);
     let cause = CLIENT_REASON_CAUSE[reason];
-    if (reason === 'no_activity' && Number.isFinite(Number(turn.elapsedMs))) {
-      cause = `Sin actividad en el navegador durante ${Math.round(Number(turn.elapsedMs) / 1000)} s`;
+    const boundedMs = (value) => value != null && Number.isFinite(Number(value)) && Number(value) >= 0
+      ? Math.min(Number(value), 24 * 3600 * 1000) : null;
+    const elapsedMs = boundedMs(turn.elapsedMs);
+    // Older clients sent their idle interval as elapsedMs. Keep their cause
+    // readable while newer clients send the two different durations.
+    const reportedIdleMs = boundedMs(turn.idleMs);
+    const idleMs = reportedIdleMs ?? (reason === 'no_activity' ? elapsedMs : null);
+    const totalElapsedMs = reason === 'no_activity' && reportedIdleMs == null ? null : elapsedMs;
+    const observedAt = Date.now();
+    if (reason === 'no_activity' && idleMs != null) {
+      cause = `Sin actividad en el navegador durante ${Math.round(idleMs / 1000)} s`;
     }
     const classification = { category, label: meta.label, severity: meta.severity, sound: meta.sound, cause, reasons: [`client_${reason}`] };
     const ctx = {
@@ -399,8 +418,8 @@ function recordClientSignal(body = {}, req = null) {
       modelPicked: turn.model ? redact(turn.model, 80) : null,
       modelLabel: turn.model ? redact(turn.model, 80) : null,
       userAgent: req && req.headers ? req.headers['user-agent'] : null,
-      startedAt: Date.now() - (Number(turn.elapsedMs) > 0 ? Math.min(Number(turn.elapsedMs), 24 * 3600 * 1000) : 0),
-      endedAt: Date.now(),
+      startedAt: observedAt - (totalElapsedMs || 0),
+      endedAt: observedAt,
       endReason: `client_${reason}`,
       errorFrames: message ? [{ code: `client_${reason}`, message }] : [],
       visibleText: '',
@@ -414,11 +433,13 @@ function recordClientSignal(body = {}, req = null) {
       classification,
       source: 'client',
       extra: {
+        ...(totalElapsedMs == null ? { startedAt: null, totalMs: null } : {}),
         client: sanitizeDeep({
           reason,
           attempts: Number(turn.attempts) || null,
           hasContent: turn.hasContent === true,
-          elapsedMs: Number(turn.elapsedMs) || null,
+          elapsedMs: totalElapsedMs,
+          idleMs,
           status: Number(body.status) || null,
           endpoint: body.endpoint || null,
           page: body.page || null,

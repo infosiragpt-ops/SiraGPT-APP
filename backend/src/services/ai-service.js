@@ -153,11 +153,16 @@ function buildVisionReaderFailureMessage(reason) {
         + 'Elige un modelo que vea imágenes o escribe aquí el contenido de la imagen y lo resuelvo.';
 }
 
-// The abort the caller's signal carries (an AbortError DOMException by
-// default), or an equivalent one, so the catch below treats a stream cut by
-// the user exactly like any other client cancel.
+// SDKs use APIUserAbortError (name: "Error") for both Stop and deadlines.
+// The signal is the source of truth; the SDK error name is not provenance.
+function isTimeoutAbortReason(reason) {
+    return reason?.name === 'TimeoutError'
+        || /^(?:E_TIMEOUT|TIMEOUT|OPERATION_TIMEOUT|ETIMEDOUT)$/.test(String(reason?.code || ''));
+}
+
 function clientAbortError(signal) {
     const reason = signal && signal.reason;
+    if (isTimeoutAbortReason(reason)) return reason;
     if (reason && typeof reason === 'object' && reason.name === 'AbortError') return reason;
     return Object.assign(new Error('Request was aborted by the client.'), { name: 'AbortError', code: 'ABORT_ERR' });
 }
@@ -1192,7 +1197,7 @@ class AIService {
                 }
 
                 for (let attempt = 1; !skipUnfunded && attempt <= MAX_ATTEMPTS_PER_MODEL; attempt++) {
-                    if (signal && signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+                    if (signal && signal.aborted) throw clientAbortError(signal);
                     lastAttemptModel = currentModel;
                     progress({
                         type: 'attempt_start',
@@ -1210,7 +1215,7 @@ class AIService {
                     // attempt — not the whole turn — so the retry/fallback
                     // chain can try the next slot.
                     const attemptCtrl = new AbortController();
-                    const onParentAbort = () => attemptCtrl.abort(new Error('client aborted'));
+                    const onParentAbort = () => attemptCtrl.abort(clientAbortError(signal));
                     if (signal) signal.addEventListener('abort', onParentAbort, { once: true });
                     let firstByteSeen = false;
                     let timedOut = false;
@@ -1272,11 +1277,14 @@ class AIService {
                         // 408s, 5xx and network faults still count.
                         const breakerOpts = {
                             isFailure: (e) => {
-                                if (timedOut) return true;
                                 if (!e) return true;
-                                if (e.name === 'AbortError' || (signal && signal.aborted)) return 'ignore';
                                 const status = Number(e.status || e.statusCode || (e.response && e.response.status)) || 0;
+                                // A response already received is evidence even
+                                // if Stop raced with its delivery to this catch.
                                 if (status >= 400 && status < 500 && status !== 408) return false;
+                                if (status >= 400) return billingFailoverMod.failoverReasonFor(e) !== 'billing';
+                                if (timedOut) return true;
+                                if (signal && signal.aborted) return 'ignore';
                                 return billingFailoverMod.failoverReasonFor(e) !== 'billing';
                             },
                         };
@@ -1284,7 +1292,7 @@ class AIService {
                             try {
                                 return await attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal });
                             } catch (error) {
-                                if (currentProvider !== 'OpenAI' || Number(error?.status) !== 400) throw error;
+                                if (signal?.aborted || currentProvider !== 'OpenAI' || Number(error?.status) !== 400) throw error;
                                 // Reasoning-class OpenAI model that rejects a
                                 // sampling knob («Unsupported value:
                                 // 'temperature'»): retry once without it and
@@ -1481,8 +1489,10 @@ class AIService {
                         const isOurTimeout = timedOut || err.code === 'TIMEOUT';
                         lastFailure = { provider: currentProvider, model: currentModel, timedOut: isOurTimeout, error: err };
                         if (m === 0) firstFailure = lastFailure;
-                        const isClientCancel = !isOurTimeout && signal?.aborted && !isProviderClientError(err);
-                        if (isClientCancel) throw err;
+                        // Preserve the caller's cause even when an SDK throws
+                        // a plain Error. Both Stop and caller deadlines are
+                        // terminal; neither starts another provider attempt.
+                        if (signal?.aborted && !isProviderClientError(err)) throw clientAbortError(signal);
                         // Empty-completion reset (above) already cleared
                         // hasStreamedAnyContent + fullResponseContent, so
                         // this guard naturally lets EMPTY_COMPLETION fall
@@ -1500,7 +1510,8 @@ class AIService {
                             break;
                         }
 
-                        const retryable = isOurTimeout || isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION';
+                        const retryable = !signal?.aborted
+                            && (isOurTimeout || isTransientProviderError(err) || err.code === 'EMPTY_COMPLETION');
                         const isLastAttemptForModel = attempt >= MAX_ATTEMPTS_PER_MODEL;
                         const classified = classifyProviderError(err);
                         const reason = isOurTimeout ? 'first-byte timeout' : (classified.error_class || err.status || err.code || err.name || 'unknown');
@@ -1536,6 +1547,10 @@ class AIService {
                         if (signal) signal.removeEventListener('abort', onParentAbort);
                     }
                 }
+
+                // Preserve an HTTP error received concurrently with Stop. A
+                // new attempt/rung would replace it with a synthetic abort.
+                if (signal?.aborted) break;
 
                 const failoverReason = billingFailoverMod.failoverReasonFor(lastError);
                 const failoverEligible = Boolean(failoverReason) && !hasStreamedAnyContent
@@ -1645,7 +1660,7 @@ class AIService {
         } catch (apiError) {
             const providerHttpError = isProviderClientError(apiError);
             if (
-                apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError'
+                signal?.aborted && !isTimeoutAbortReason(signal.reason)
                 && !providerHttpError
             ) {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
