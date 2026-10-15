@@ -94,8 +94,13 @@ function describeUnextractedAttachment(row = {}) {
       + 'Sugiere al usuario subir una versión con texto seleccionable.]';
   }
   if (type.startsWith('audio/') || type.startsWith('video/')) {
-    return `[Archivo multimedia "${name}": no se obtuvo transcripción. `
-      + 'Indica al usuario que reintente o suba un formato compatible.]';
+    // History snapshots never carry media transcripts (they live once on the
+    // File row and are re-loaded for the turn). Reaching this line means the
+    // transcript is not available NOW — still processing or failed — never
+    // that the recording cannot be transcribed.
+    return `[Archivo multimedia "${name}": su transcripción no está disponible en este turno `
+      + '(puede seguir procesándose o haber fallado). No inventes su contenido: si el usuario pregunta por él, '
+      + 'pídele que escriba «transcribe el audio» o «reintenta» para recuperarla.]';
   }
   const size = Number(r.size || r.fileSize || 0);
   const sizeLabel = size > 0 ? `, ${formatAttachmentBytes(size)}` : '';
@@ -954,6 +959,40 @@ function serializeAttachmentRows({ ids, rowsById, clientMetadata = [], userId })
   });
 }
 
+/**
+ * Transcripts of media attached in earlier turns. Attachment snapshots keep
+ * media text out of every message (a 5-hour lecture is ~270k chars), so a
+ * follow-up turn («¿qué dijo sobre la mitocondria?») re-loads it here: one
+ * owner-scoped query for the newest `maxFiles` media attachments of the
+ * history. The caller caps what it puts in the prompt.
+ * @returns {Promise<Map<string, string>>} fileId → transcript
+ */
+async function loadHistoryMediaTranscripts(prisma, { userId, messages = [], maxFiles = 6 } = {}) {
+  const out = new Map();
+  if (!prisma?.file?.findMany || !userId || !Array.isArray(messages) || !messages.length) return out;
+  const { isMediaFile, hasTranscript } = require('./media-transcription-queue');
+  const ids = [];
+  for (let index = messages.length - 1; index >= 0 && ids.length < maxFiles; index -= 1) {
+    const files = parseMessageFilesValue(messages[index]?.files);
+    for (const file of files) {
+      const id = typeof file === 'string' ? file : file?.id;
+      if (!id || ids.includes(id) || ids.length >= maxFiles) continue;
+      if (typeof file === 'object' && String(file.extractedText || '').trim()) continue;
+      if (typeof file === 'object' && !isMediaFile({ mimeType: file.mimeType || file.type, originalName: file.originalName || file.name || file.filename })) continue;
+      ids.push(String(id));
+    }
+  }
+  if (!ids.length) return out;
+  try {
+    const rows = await prisma.file.findMany({ where: { id: { in: ids }, userId, deletedAt: null },
+      select: { id: true, extractedText: true, processingStage: true, processingError: true, mimeType: true, originalName: true } });
+    for (const row of rows) {
+      if (isMediaFile(row) && hasTranscript(row)) out.set(row.id, String(row.extractedText));
+    }
+  } catch (_) { /* history context is best-effort */ }
+  return out;
+}
+
 async function buildUploadedFileContext(prisma, {
   userId,
   fileIds = [],
@@ -1341,6 +1380,7 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 module.exports = {
   backfillUserMessageFilesForTranscription,
   hydrateChatMessageAttachments,
+  loadHistoryMediaTranscripts,
   messageFilesNeedHydration,
   buildFormatDirectiveLines: outputFormat.buildFormatDirectiveLines,
   parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,

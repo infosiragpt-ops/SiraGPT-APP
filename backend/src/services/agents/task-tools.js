@@ -72,6 +72,8 @@ const EXTENSION_TO_MIME = {
   svg:  'image/svg+xml',
   csv:  'text/csv',
   txt:  'text/plain',
+  srt:  'application/x-subrip',
+  vtt:  'text/vtt',
   json: 'application/json',
   md:   'text/markdown',
   html: 'text/html',

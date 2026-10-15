@@ -7261,6 +7261,12 @@ router.post(
       let messages = [systemInstruction];
       if (historyMessages.length) {
         const isHistoryImageAttachment = (f) => Boolean(f) && (isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image');
+        // Media transcripts are not stored in attachment snapshots; re-load
+        // the newest ones so a follow-up about an earlier recording reads
+        // its transcript instead of «no disponible».
+        const historyMediaTranscripts = await messageAttachments.loadHistoryMediaTranscripts(prisma, {
+          userId: req.user?.id, messages: historyMessages,
+        }).catch(() => new Map());
         const inlineImageRows = historyRowsWithInlineImages(historyMessages, isHistoryImageAttachment);
         for (const [historyIndex, m] of historyMessages.entries()) {
           const messageRole = m.role === 'USER' ? 'user' : 'assistant';
@@ -7277,6 +7283,10 @@ router.post(
               generateLog.warnError('history.files_parse_failed', e);
               parsedFiles = [];
             }
+          }
+          if (historyMediaTranscripts.size) {
+            parsedFiles = parsedFiles.map((f) => (f && f.id && !f.extractedText && historyMediaTranscripts.has(f.id)
+              ? { ...f, extractedText: historyMediaTranscripts.get(f.id) } : f));
           }
 
           // ✅ Check if message contains images. When the current turn
