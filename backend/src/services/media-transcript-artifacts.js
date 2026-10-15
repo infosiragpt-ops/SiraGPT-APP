@@ -102,6 +102,26 @@ function transcriptResultFor(row, transcript) {
   };
 }
 
+/**
+ * A clip cut from a longer recording (a link section «del minuto 60 al 90»)
+ * is transcribed from 0; its deliverables follow the recording's own clock.
+ */
+function shiftResult(result, offsetSec) {
+  const offset = Number(offsetSec) || 0;
+  if (!(offset > 0) || !result.segments.length) return result;
+  return {
+    ...result,
+    segments: result.segments.map((seg) => ({ ...seg, start: seg.start + offset, end: seg.end + offset })),
+    gaps: result.gaps.map((gap) => ({ ...gap, start: Number(gap.start) + offset, end: Number(gap.end) + offset })),
+    durationSec: result.durationSec ? result.durationSec + offset : result.durationSec,
+    timeOffsetSec: offset,
+  };
+}
+
+function resultFor(row, transcript, output) {
+  return shiftResult(transcriptResultFor(row, transcript), output?.timeOffsetSec);
+}
+
 function applyRange(result, range, formatter) {
   if (!range || !result.segments.length) return { result, sliced: false };
   const segments = normalizeSegments(formatter.sliceSegments(result.segments, range));
@@ -164,7 +184,7 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
   const notes = [];
   if (!ready.length) return { artifacts: [], notes, formats: [] };
   const entries = ready.map((row) => {
-    const base = transcriptResultFor(row, transcripts.get(row.id));
+    const base = resultFor(row, transcripts.get(row.id), output);
     const { result, sliced } = applyRange(base, output.range, fmt);
     if (output.range && !sliced) notes.push(`«${rowName(row)}» no tiene marcas de tiempo; se entrega completa en lugar del tramo ${rangeLabel(output.range)}.`);
     return { row, result, name: rowName(row) };
@@ -267,7 +287,7 @@ function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output
   let budget = PREVIEW_TOTAL_MAX_CHARS;
   let anyCut = false;
   for (const row of ready) {
-    const base = transcriptResultFor(row, transcripts.get(row.id));
+    const base = resultFor(row, transcripts.get(row.id), output);
     const { result } = applyRange(base, output.range, fmt);
     let body = '';
     let stats = {};
@@ -322,5 +342,6 @@ module.exports = {
   MIME,
   LONG_RECORDING_SECONDS,
   SUBTITLE_FILE_CAP,
+  shiftResult,
   _internals: { applyRange, headAtParagraph, sourceStem, isVideoRow },
 };

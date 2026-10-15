@@ -60,6 +60,12 @@ const mediaCapture = require('./media-capture');
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_SECONDS = 3 * 60 * 60;
+// Long sections leave the chat turn: the downloaded audio becomes the
+// user's own media file, the durable media queue transcribes it (resumable
+// across deploys, partial results, professional pack) and the result is
+// posted into this chat with a notification.
+const DEFAULT_DURABLE_MIN_SECONDS = 20 * 60;
+const DEFAULT_DURABLE_MAX_SECONDS = 12 * 60 * 60;
 const MAX_TEXT_CHARS = 60_000;
 const MAX_COMMAND_OUTPUT = 2 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 60_000;
@@ -343,6 +349,64 @@ async function safeAvailable(computer, ctx) {
   try { return Boolean(await computer.available(ctx)); } catch (_) { return false; }
 }
 
+function durableConfig(env = process.env, ctx = {}, deps = {}) {
+  const minRaw = Number(env.TRANSCRIBE_URL_DURABLE_MIN_SECONDS);
+  const maxRaw = Number(env.TRANSCRIBE_URL_DURABLE_MAX_SECONDS);
+  const enabled = String(env.TRANSCRIBE_URL_DURABLE || '1') !== '0' && Boolean(ctx.userId) && Boolean(ctx.chatId)
+    && (deps.durableHandoff !== null);
+  return {
+    enabled,
+    minSeconds: Number.isFinite(minRaw) && minRaw >= 0 ? minRaw : DEFAULT_DURABLE_MIN_SECONDS,
+    maxSeconds: Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : DEFAULT_DURABLE_MAX_SECONDS,
+  };
+}
+
+/**
+ * Default hand-off: copy the clip into the user's uploads, register it as a
+ * media File, enqueue the durable transcription and record a chat delivery.
+ * Returns { ok, fileId, deliveryId, message } or { ok:false, reason }.
+ */
+async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned, subtitles, ctx, env }) {
+  const crypto = require('node:crypto');
+  const prisma = require('../../../config/database');
+  const { enqueueMediaTranscription } = require('../../media-transcription-queue');
+  const delivery = require('../../media-delivery');
+  if (!delivery.isMediaDeliveryEnabled(env)) return { ok: false, reason: 'delivery_disabled' };
+  const uploadRoot = path.resolve(env.UPLOAD_DIR || 'uploads');
+  const userDir = path.join(uploadRoot, String(ctx.userId).replace(/[^a-zA-Z0-9_-]/g, '_'));
+  await fs.promises.mkdir(userDir, { recursive: true });
+  const label = sectioned ? ` (${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + spanSec)})` : '';
+  const originalName = `${safeTitle(title)}${label}.m4a`.replace(/:/g, '.');
+  const filename = `link-${crypto.randomBytes(8).toString('hex')}.m4a`;
+  const target = path.join(userDir, filename);
+  await fs.promises.copyFile(clipPath, target);
+  const { size } = await fs.promises.stat(target);
+  let row;
+  try {
+    row = await prisma.file.create({ data: { userId: ctx.userId, filename, originalName, mimeType: 'audio/mp4', size,
+      path: target, processingStage: 'uploaded', processingStageAt: new Date() } });
+  } catch (err) {
+    await fs.promises.rm(target, { force: true }).catch(() => {});
+    throw err;
+  }
+  await enqueueMediaTranscription({ fileId: row.id, userId: ctx.userId });
+  const record = await delivery.createDelivery({
+    userId: ctx.userId, chatId: ctx.chatId, taskId: ctx.taskId || null,
+    fileIds: [row.id], fileNames: [originalName], goal: `Transcripción de ${url.href}`,
+    mode: subtitles ? 'subtitles' : 'transcript', formats: ['txt', ...(subtitles ? ['srt', 'vtt'] : [])],
+    range: null, wantsSubtitles: Boolean(subtitles), documentFormat: null, wantsAnalysis: false,
+    // The clip starts at rangeStart: delivered timestamps follow the
+    // recording's own clock, like the inline path.
+    timeOffsetSec: sectioned ? rangeStart : 0,
+    source: { url: url.href, host: url.hostname, title, rangeStart, rangeEnd },
+  });
+  if (!record) return { ok: false, reason: 'delivery_unavailable', fileId: row.id };
+  const etaSeconds = typeof delivery.estimateTranscriptionSeconds === 'function'
+    ? delivery.estimateTranscriptionSeconds({ durationSec: spanSec }) : null;
+  const message = delivery.handOffMessage({ fileNames: [`${title}${label}`], durationSec: spanSec, etaSeconds });
+  return { ok: true, fileId: row.id, deliveryId: record.id, message };
+}
+
 async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const env = deps.env || process.env;
   const run = deps.runCommand || runCommand;
@@ -359,7 +423,12 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const ytdlp = env.TRANSCRIBE_URL_YTDLP || 'yt-dlp';
   const ffmpeg = env.FFMPEG_PATH || 'ffmpeg';
   const timeoutMs = Number(env.TRANSCRIBE_URL_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
-  const maxSeconds = Number(env.TRANSCRIBE_URL_MAX_SECONDS) > 0 ? Number(env.TRANSCRIBE_URL_MAX_SECONDS) : DEFAULT_MAX_SECONDS;
+  const inlineMaxSeconds = Number(env.TRANSCRIBE_URL_MAX_SECONDS) > 0 ? Number(env.TRANSCRIBE_URL_MAX_SECONDS) : DEFAULT_MAX_SECONDS;
+  const durable = durableConfig(env, ctx, deps);
+  const durableImpl = deps.durableHandoff || defaultDurableHandoff;
+  // With the durable path a 5-hour class fits in one call; without it the
+  // inline ceiling applies (the turn would hold the transcription).
+  const maxSeconds = durable.enabled ? Math.max(inlineMaxSeconds, durable.maxSeconds) : inlineMaxSeconds;
   const discoveryEnabled = String(env.TRANSCRIBE_URL_BROWSER_DISCOVERY || '1') !== '0';
   const discoveryTimeoutMs = Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) : DISCOVERY_TIMEOUT_MS;
   const signal = ctx.signal || null;
@@ -446,6 +515,39 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     // 4–5. Transcribe the clip and deliver it (shared by every acquisition path).
     const finish = async ({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via, partial = null }) => {
       const clipName = `${safeTitle(title)}${sectioned ? ` ${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart)}` : ''}.m4a`;
+      const spanSec = rangeEnd != null ? rangeEnd - rangeStart : (duration != null ? duration - rangeStart : null);
+      if (durable.enabled && !partial && spanSec != null && spanSec >= durable.minSeconds) {
+        try {
+          const handed = await durableImpl({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned,
+            subtitles: Boolean(args.subtitles), language: args.language || null, ctx, env });
+          if (handed && handed.ok) {
+            const rangeLabel = `${fmtClock(rangeStart)} → ${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + spanSec)}`;
+            return {
+              ok: true,
+              deferred: true,
+              title,
+              source: url.href,
+              host: url.hostname.replace(/^www\./, ''),
+              range: { start: rangeStart, end: rangeEnd, label: rangeLabel },
+              durationSeconds: duration,
+              fileId: handed.fileId,
+              delivery: handed.deliveryId,
+              userMessage: handed.message,
+              text: handed.message,
+              via,
+              ...(discovery ? { discovery } : {}),
+              ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
+              elapsedMs: Date.now() - startedAt,
+            };
+          }
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          // Fall through to the inline transcription below.
+        }
+        if (spanSec > inlineMaxSeconds) {
+          return errorResult('media_too_long', `durable hand-off unavailable; ${fmtClock(spanSec)} > inline max ${fmtClock(inlineMaxSeconds)}`, { durationSeconds: duration, maxSeconds: inlineMaxSeconds, title });
+        }
+      }
       let result;
       try {
         result = await transcribeImpl(clipPath, 'audio/mp4', clipName, {
@@ -796,6 +898,7 @@ function buildTranscribeUrlTool(deps = {}) {
       'If the page is behind a login it is also opened INSIDE the chat computer\'s browser, which keeps the user\'s own sign-ins.',
       'When no stream can be downloaded (MediaSource/blob players, tokenised segments, iframes), it PLAYS the recording in that browser and records the audio it plays (via ends in "+capture"); this can take as long as the requested range. `partial` (time_budget / stalled) means it stopped early: tell the user which part (range) was transcribed and offer the rest.',
       'Ranges: "del minuto 60 al 1:20" means 1:00:00 → 1:20:00 — pass hh:mm:ss when past the hour.',
+      'Long recordings (20 min or more, up to 12 h) are queued: the result is ok:true with deferred:true — relay userMessage as is (the transcript, TXT/Word/SRT files and a notification arrive in this chat when it finishes); never call the tool again for it and never say the transcription failed.',
       'Results are structured: ok:false with code "media_login_in_computer" means the recording is now open in the chat computer waiting for the user to sign in — relay userMessage and, when the user says they are signed in («listo»), call transcribe_url AGAIN with the same url and range (that retry is expected). "media_login_required" means the link needs the user\'s own session — relay userMessage: attach the video/audio file, or attach a cookies.txt of that site once; "media_too_long" means ask for a range. `cookies.saved:true` means the session was stored: say so. Otherwise never retry the same URL more than once per failure.',
     ].join(' '),
     inputSchema,
@@ -832,4 +935,8 @@ module.exports = {
   USER_MESSAGES,
   MAX_TEXT_CHARS,
   DEFAULT_MAX_SECONDS,
+  DEFAULT_DURABLE_MIN_SECONDS,
+  DEFAULT_DURABLE_MAX_SECONDS,
+  durableConfig,
+  defaultDurableHandoff,
 };
