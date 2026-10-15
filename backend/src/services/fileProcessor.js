@@ -1402,7 +1402,8 @@ class FileProcessor {
         : reason === 'file_empty' ? 'El archivo está vacío.'
           : reason === 'file_unavailable' ? 'No se pudo leer el archivo de audio.'
             : reason === 'audio_decode_failed' ? 'No se pudo decodificar el audio; comprueba que el archivo no esté dañado.'
-              : 'La transcripción no está disponible temporalmente. Puedes reintentarlo.';
+              : reason === 'low_coverage' ? 'Demasiados tramos no se pudieron transcribir esta vez. Reintentar recupera solo los tramos que faltan.'
+                : 'La transcripción no está disponible temporalmente. Puedes reintentarlo.';
       throw Object.assign(new Error(message), { code: reason });
     }
     return options.detailed ? result : result.text;

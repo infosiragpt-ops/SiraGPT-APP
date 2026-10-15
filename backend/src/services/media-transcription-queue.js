@@ -139,13 +139,18 @@ function createProgressTracker({ publish, now = () => Date.now(), intervalMs = P
       if (durations.length > 8) durations.shift();
       lastSegmentAt = at;
     }
+    // `resuming` reports the chunks reused from checkpoints after a restart;
+    // `done` closes the engine's work (the row turns ready right after).
     const percent = event.stage === 'preparing' ? 1
       : event.stage === 'segments' ? 2
-        : event.stage === 'transcribe' && total ? Math.min(99, Math.max(2, Math.round(2 + (97 * completed) / total))) : null;
+        : event.stage === 'done' ? 99
+          : (event.stage === 'transcribe' || event.stage === 'resuming') && total
+            ? Math.min(99, Math.max(2, Math.round(2 + (97 * completed) / total))) : null;
     const avg = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
     const progress = {
-      stage: event.stage === 'preparing' ? 'preparing' : 'transcribing',
+      stage: event.stage === 'preparing' ? 'preparing' : event.stage === 'resuming' ? 'resuming' : 'transcribing',
       completed, total, percent,
+      gaps: Math.max(0, Number(event.gaps) || 0),
       durationSeconds: Math.round(Number(event.durationSeconds) || 0),
       etaSeconds: avg && total > completed ? Math.round((avg * (total - completed)) / 1000) : null,
       startedAt: new Date(startedAt).toISOString(),
@@ -254,6 +259,7 @@ function publicFailureMessage(err) {
     case 'file_unavailable': case 'ENOENT': return 'No se pudo recuperar el archivo. Vuelve a subirlo.';
     case 'audio_decode_failed': case 'invalid_media': return 'No se pudo leer el audio. Comprueba que el archivo no esté dañado.';
     case 'media_timeout': return 'La transcripción superó el tiempo permitido. Puedes reintentar este archivo.';
+    case 'low_coverage': return 'Demasiados tramos no se pudieron transcribir. Reintentar recupera solo los tramos que faltan; lo ya transcrito se conserva.';
     default: return 'No se pudo transcribir este archivo. Puedes reintentarlo sin volver a subir los demás.';
   }
 }
@@ -263,7 +269,9 @@ function isTransientMediaError(err) {
   if (typeof err?.retryable === 'boolean') return err.retryable;
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
   if (status === 429 || status === 408 || status >= 500 && status <= 599) return true;
-  if (/^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENETUNREACH|P1001|P1002|P1008|P1017|P2024|P2034|media_timeout|media_shutdown|transcription_timeout|provider_timeout|local_unavailable)$/i.test(String(err?.code || ''))) return true;
+  // low_coverage: too many segments failed on every engine this time; a
+  // retry re-runs only those segments (the others are checkpointed).
+  if (/^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENETUNREACH|P1001|P1002|P1008|P1017|P2024|P2034|media_timeout|media_shutdown|transcription_timeout|provider_timeout|local_unavailable|low_coverage)$/i.test(String(err?.code || ''))) return true;
   return /rate.?limit|temporar(?:y|ily)|service unavailable|socket hang up|fetch failed|timed? out|timeout|\b429\b|\b50[234]\b/i.test(String(err?.message || ''));
 }
 

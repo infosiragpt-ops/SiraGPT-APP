@@ -231,3 +231,31 @@ test('each finished job logs one line with numbers only (never transcript text)'
   assert.match(line, /file=clase outcome=ready elapsedMs=\d+ durationSec=360 coverage=1\.000 engine=local providers=local:6 gaps=0 chars=\d+/);
   assert.doesNotMatch(line, /Frase/);
 });
+
+test('low coverage is retryable (only the missing segments are redone) and says so', async () => {
+  const { isTransientMediaError } = require('../src/services/media-transcription-queue');
+  assert.equal(isTransientMediaError({ code: 'low_coverage' }), true);
+  const f = fixture([row('clase')], { processFile: async () => ({ success: false, code: 'low_coverage', error: 'pocos tramos' }) });
+  await f.service.enqueueMediaTranscription({ fileId: 'clase', userId: 'u1' });
+  const job = [...f.jobs.values()][0];
+  await assert.rejects(f.service.processMediaJob(job));
+  assert.equal(f.rows.get('clase').processingStage, 'uploaded', 'scheduled for another attempt');
+  assert.deepEqual(f.cleared, [], 'checkpoints are kept for the retry');
+  job.attemptsMade = 2;
+  await assert.rejects(f.service.processMediaJob(job));
+  assert.match(f.rows.get('clase').processingError, /Reintentar recupera solo los tramos que faltan/);
+});
+
+test('progress maps the engine stages: resuming keeps its percent, done is 99, gaps are counted', () => {
+  const { createProgressTracker } = require('../src/services/media-transcription-queue');
+  const published = [];
+  let t = 0;
+  const track = createProgressTracker({ publish: p => published.push(p), now: () => (t += 5000), intervalMs: 0 });
+  track({ stage: 'resuming', completed: 10, total: 30, durationSeconds: 18000 });
+  track({ stage: 'transcribe', completed: 11, total: 30, gaps: 1, durationSeconds: 18000 });
+  track({ stage: 'done', completed: 30, total: 30, gaps: 1, durationSeconds: 18000 });
+  assert.equal(published[0].stage, 'resuming');
+  assert.equal(published[0].percent, 34);
+  assert.equal(published[1].gaps, 1);
+  assert.equal(published[2].percent, 99);
+});
