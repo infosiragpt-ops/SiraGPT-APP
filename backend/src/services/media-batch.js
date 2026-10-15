@@ -3,7 +3,7 @@
 // File rows are the durable source of truth. A chat waits on the shared media
 // worker; it never starts a second transcriber or keeps the only copy in SSE.
 const { setTimeout: delay } = require('node:timers/promises');
-const { isMediaFile, hasTranscript, enqueueMediaTranscription } = require('./media-transcription-queue');
+const { isMediaFile, hasTranscript, enqueueMediaTranscription, isPartialTranscript, isReprocessingPartial } = require('./media-transcription-queue');
 const { throwIfAborted } = require('../utils/abort-signals');
 const MAX_MEDIA_FILES = 50;
 // A chat turn may wait on a 10-hour recording. It keeps waiting while the
@@ -53,36 +53,47 @@ async function resolveChatMediaFileIds(prisma, { userId, chatId }) {
 }
 
 function stateOf(row) {
+  // A partial transcript whose gaps are being retried is still in flight.
+  if (isReprocessingPartial(row)) return 'pending';
   if (usableTranscript(row)) return 'ready';
   if (row.processingStage === 'failed') return 'failed';
   return 'pending';
 }
 
 function batchCounts(rows) {
-  const result = { total: rows.length, ready: 0, failed: 0, pending: 0 };
-  for (const row of rows) result[stateOf(row)]++;
+  const result = { total: rows.length, ready: 0, failed: 0, pending: 0, partial: 0 };
+  for (const row of rows) {
+    result[stateOf(row)]++;
+    if (isPartialTranscript(row)) result.partial++;
+  }
   return result;
 }
 
 async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = () => {},
   enqueue = enqueueMediaTranscription, wait = delay, now = Date.now,
   timeoutMs = 90 * 60_000, stallMs = MEDIA_WAIT_STALL_MS, pollMs = 4000, retryFailed = false,
-  readProgress = defaultReadProgress }) {
+  readProgress = defaultReadProgress, shouldStop = null }) {
   const ids = rows.map(row => row.id);
   let current = rows;
   const enqueueErrors = new Map();
   for (const row of rows) {
     throwIfAborted(signal);
-    if (stateOf(row) !== 'pending' && !(retryFailed && stateOf(row) === 'failed')) continue;
+    // «reintenta» also re-runs the missing segments of a partial transcript.
+    const retryThis = retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row));
+    if (stateOf(row) !== 'pending' && !retryThis) continue;
     try {
-      const result = await enqueue({ fileId: row.id, userId, retry: retryFailed && stateOf(row) === 'failed' });
+      const result = await enqueue({ fileId: row.id, userId, retry: retryThis });
+      if (result?.queued && retryThis && isPartialTranscript(row)) {
+        current = current.map(item => item.id === row.id ? { ...item, processingStage: 'uploaded', processingError: 'Reintentando los tramos sin transcribir…' } : item);
+      }
       if (result?.queued && stateOf(row) === 'failed') {
         current = current.map(item => item.id === row.id ? { ...item, processingStage: 'uploaded', extractedText: null } : item);
       }
     }
     catch { enqueueErrors.set(row.id, 'La cola no está disponible; vuelve a intentar este archivo.'); }
   }
-  const deadline = now() + Math.max(0, timeoutMs);
+  const startedAt = now();
+  const deadline = startedAt + Math.max(0, timeoutMs);
   let lastProgress = '';
   let lastMovedAt = now();
   let progressById = {};
@@ -106,13 +117,22 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     }
     const stalled = stallMs > 0 && now() - lastMovedAt >= stallMs;
     if (!counts.pending || now() >= deadline || stalled || current.every(row => stateOf(row) !== 'pending' || enqueueErrors.has(row.id))) break;
+    // The caller may stop waiting early (e.g. hand the long job off to the
+    // durable chat delivery as soon as its ETA is known).
+    if (typeof shouldStop === 'function') {
+      let stop = false;
+      try { stop = Boolean(await shouldStop({ ...counts, elapsedMs: now() - startedAt, files: current.map(row => ({ id: row.id,
+        name: row.originalName || row.filename, stage: stateOf(row), size: Number(row.size) || 0,
+        ...(progressById[row.id] ? { progress: progressById[row.id] } : {}) })) })); } catch (_) { stop = false; }
+      if (stop) return { rows: current, ...batchCounts(current), enqueueErrors, progress: progressById, stoppedEarly: true };
+    }
     await wait(Math.min(pollMs, Math.max(1, deadline - now())), undefined, { signal });
     const fresh = await prisma.file.findMany({ where: { userId, id: { in: ids }, deletedAt: null } });
     const byId = new Map(fresh.map(row => [row.id, row]));
     current = ids.map(id => byId.get(id) || { id, originalName: rows.find(row => row.id === id)?.originalName,
       processingStage: 'failed', processingError: 'El archivo ya no está disponible.' });
   }
-  return { rows: current, ...batchCounts(current), enqueueErrors };
+  return { rows: current, ...batchCounts(current), enqueueErrors, progress: progressById };
 }
 
 function formatRemaining(seconds) {

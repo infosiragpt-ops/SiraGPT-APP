@@ -148,6 +148,104 @@ test('negated analysis does not suppress a separate positive task', () => {
   ]) assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
 });
 
+// Free variables of the media branch that the runner module provides.
+function mediaBranchHelpers(overrides = {}) {
+  const handoff = require('../src/services/media-handoff');
+  return {
+    loadMediaDeliveryService: () => null,
+    mediaInlineWaitMs: handoff.mediaInlineWaitMs,
+    shouldHandOffMediaWait: handoff.shouldHandOffMediaWait,
+    estimateMediaBatchEta: handoff.estimateMediaBatchEta,
+    totalProgressDuration: handoff.totalProgressDuration,
+    mediaRowsForAnalysis: handoff.mediaRowsForAnalysis,
+    describeTranscriptDownloads: handoff.describeTranscriptDownloads,
+    process, console, assistantMessageId: null, model: 'deepseek-v4-flash',
+    runtimeModelProfile: { runtimeModel: 'deepseek-v4-flash', runtimeProvider: 'DeepSeek' },
+    ...overrides,
+  };
+}
+
+function runMediaBranch(context) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const filename = path.resolve(__dirname, '../src/services/agents/agent-task-runner.js');
+  const source = fs.readFileSync(filename, 'utf8');
+  const start = source.indexOf('    if (mediaBatchRows) {');
+  const end = source.indexOf('    // ── Image-only analysis turn', start);
+  assert.ok(start >= 0 && end > start, 'execute the actual media delivery branch');
+  return vm.runInNewContext(`(async () => { ${source.slice(start, end)} })()`, context, { filename });
+}
+
+test('a long recording ends the turn with «te aviso aquí» and a durable delivery record instead of waiting for hours', async () => {
+  const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+  const created = [];
+  const waits = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    estimateTranscriptionSeconds: ({ durationSec }) => Math.round(durationSec * 0.15),
+    createDelivery: async (record) => { created.push(record); return { id: 'md_1', ...record }; },
+    handOffMessage: ({ fileNames, durationSec, etaSeconds }) => `Recibí «${fileNames[0]}» (${durationSec} s, ~${etaSeconds} s). Te aviso aquí.`,
+  };
+  const result = await runMediaBranch({
+    mediaBatchRows: rows,
+    mediaBatch: { ...batch, waitForMediaBatch: async (options) => {
+      waits.push(options);
+      const progress = { clase: { stage: 'transcribing', durationSeconds: 18000, completed: 1, total: 30, etaSeconds: null } };
+      assert.equal(await options.shouldStop({ pending: 1, elapsedMs: 5000, files: [{ id: 'clase', stage: 'pending', progress: progress.clase }] }), true,
+        'a 5 h recording hands off as soon as its size is known');
+      return { rows, total: 1, ready: 0, failed: 0, pending: 1, partial: 0, progress, stoppedEarly: true };
+    } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: 'transcribe este video y hazme un word', goal: 'x',
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => { throw new Error('no artifacts before the transcript exists'); },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(waits.length, 1);
+  assert.equal(waits[0].timeoutMs, 240000, 'the inline wait is bounded by TRANSCRIBE_CHAT_INLINE_WAIT_MS');
+  assert.equal(result.stoppedReason, 'media_delivery_handoff');
+  assert.match(result.finalMarkdown, /Recibí «clase\.mp4» \(18000 s, ~2610 s\)\. Te aviso aquí\./);
+  assert.equal(result.metadata.mediaDelivery, 'md_1');
+  assert.equal(created.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(created[0].fileIds)), ['clase']);
+  assert.equal(created[0].chatId, 'chat');
+  assert.equal(created[0].documentFormat, 'docx');
+  assert.deepEqual(JSON.parse(JSON.stringify(created[0].model)), { id: 'deepseek-v4-flash', provider: 'DeepSeek' });
+});
+
+test('when the delivery cannot be created the turn keeps the previous inline wait', async () => {
+  const rows = [{ id: 'clase', originalName: 'clase.mp3', processingStage: 'extracting', extractedText: null }];
+  const waits = [];
+  const delivery = { isMediaDeliveryEnabled: () => true, createDelivery: async () => null, handOffMessage: () => 'never' };
+  const result = await runMediaBranch({
+    mediaBatchRows: rows,
+    mediaBatch: { ...batch, waitForMediaBatch: async (options) => {
+      waits.push(options);
+      if (waits.length === 1) return { rows, total: 1, ready: 0, failed: 0, pending: 1, partial: 0, progress: {} };
+      const done = [{ ...rows[0], processingStage: 'ready', extractedText: 'Texto completo de la clase de hoy.' }];
+      return { rows: done, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} };
+    } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: 'transcribe sin resumen', goal: 'transcribe sin resumen',
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }),
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: true, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(waits.length, 2);
+  assert.ok(waits[1].timeoutMs > 11 * 60 * 60_000, 'the rest of the media budget');
+  assert.equal(result.stoppedReason, 'transcription_finalize');
+  assert.match(result.finalMarkdown, /Texto completo de la clase de hoy/);
+});
+
 test('real media delivery returns the exact synthetic transcript without map/reduce for sin resumen', async () => {
   const fs = require('node:fs');
   const path = require('node:path');
@@ -171,7 +269,9 @@ test('real media delivery returns the exact synthetic transcript without map/red
     saveArtifact: (artifact) => { savedText = Buffer.from(artifact.base64, 'base64').toString('utf8'); return { id: 'txt', filename: artifact.filename }; },
     artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
     plainTranscriptionRequest: isPlainTranscriptionRequest(goal), openai: {}, task: {}, documentPolicy: {},
-    require: () => ({ createMediaAnalysisCompletion() { analysisCalls++; throw new Error('literal request must not call the model'); } }),
+    require: (name) => (name === '../media-transcript-artifacts' ? require('../src/services/media-transcript-artifacts')
+      : { createMediaAnalysisCompletion() { analysisCalls++; throw new Error('literal request must not call the model'); } }),
+    ...mediaBranchHelpers(),
     throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
   }, { filename });
   assert.equal(analysisCalls, 0);
