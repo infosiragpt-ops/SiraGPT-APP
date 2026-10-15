@@ -190,3 +190,156 @@ test('rejected remote image responses cancel unread bodies instead of holding th
   });
   assert.equal(source, null); assert.equal(cancelled, true);
 });
+
+// ── Image context: multi-artifact turns, previous-image cue, recovered ids ──
+
+test('a turn that produced a chart and an image still yields the image, not an older one', async () => {
+  const dir = await fixtures;
+  const chart = 'aaaa11112222'; const fresh = 'bbbb33334444'; const old = 'cccc55556666';
+  await fs.writeFile(path.join(dir, `${chart}.json`), JSON.stringify({ ownerUserId: 'owner', chatId: 'chat', mime: 'image/svg+xml', storedRelPath: `${chart}.svg` }));
+  await fs.writeFile(path.join(dir, `${chart}.svg`), '<svg/>');
+  for (const [id, pixels] of [[fresh, 'fresh-pixels'], [old, 'old-pixels']]) {
+    await fs.writeFile(path.join(dir, `${id}.json`), JSON.stringify({ ownerUserId: 'owner', chatId: 'chat', mime: 'image/png', storedRelPath: `${id}.png` }));
+    await fs.writeFile(path.join(dir, `${id}.png`), pixels);
+  }
+  const ctx = await context([
+    { content: `chart /api/agent/artifact/${chart}?name=chart.svg and /api/agent/artifact/${fresh}?name=image.png` },
+    { content: `![image](/api/agent/artifact/${old})` },
+  ]);
+  const source = await resolveImageSource({}, ctx);
+  assert.equal(source.fileId, `artifact:${fresh}`);
+  assert.equal(source.buffer.toString(), 'fresh-pixels');
+});
+
+test('primaryFromHistory: the previous image is the canvas and the upload a reference', async () => {
+  const ctx = await context([{ files: [{ type: 'image', fileId: 'previous', version: 2 }] }], { previous: {}, logo: {} });
+  ctx.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const cued = await resolveImageSources({ fileId: 'logo', referenceFileIds: ['logo'], primaryFromHistory: true }, ctx);
+  assert.deepEqual(cued.map((source) => source.fileId), ['previous', 'logo']);
+  assert.equal(cued[0].metadata.version, 2);
+  // The agent path: attachments arrive through ctx.fileIds.
+  const agent = await resolveImageSources({ primaryFromHistory: true }, { ...ctx, fileIds: ['logo'] });
+  assert.deepEqual(agent.map((source) => source.fileId), ['previous', 'logo']);
+  // Re-attaching the previous image never duplicates it.
+  const reused = await resolveImageSources({ referenceFileIds: ['previous', 'logo'], primaryFromHistory: true }, ctx);
+  assert.deepEqual(reused.map((source) => source.fileId), ['previous', 'logo']);
+  // Without the cue the behaviour is unchanged; without history the upload stays the canvas.
+  assert.deepEqual((await resolveImageSources({ fileId: 'logo', referenceFileIds: ['logo'] }, ctx)).map((source) => source.fileId), ['logo']);
+  const empty = await context([], { logo: {} });
+  assert.deepEqual((await resolveImageSources({ fileId: 'logo', primaryFromHistory: true }, empty)).map((source) => source.fileId), ['logo']);
+});
+
+test('an empty referenceFileIds array keeps every attachment, and recovered ids never displace the newest chat image', async () => {
+  const ctx = await context([{ files: [{ type: 'image', fileId: 'generated' }] }], { generated: {}, subject: {}, style: {}, upload: {} });
+  ctx.fileIds = ['subject', 'style'];
+  ctx.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  assert.deepEqual((await resolveImageSources({ referenceFileIds: [] }, ctx)).map((source) => source.fileId), ['subject', 'style']);
+  // History recovery re-surfaced an OLDER upload: it is not this turn's attachment.
+  const recovered = { ...ctx, fileIds: ['upload'], recoveredFileIds: ['upload'] };
+  assert.deepEqual((await resolveImageSources({}, recovered)).map((source) => source.fileId), ['generated']);
+  // A fresh attachment alongside a recovered id is still included.
+  const mixed = { ...ctx, fileIds: ['upload', 'subject'], recoveredFileIds: ['upload'] };
+  assert.deepEqual((await resolveImageSources({}, mixed)).map((source) => source.fileId), ['subject']);
+});
+
+test('primaryFromHistory never demotes a canvas the user chose; references are excluded from the history pick', async () => {
+  // Viewer «Editar» on an older image + «ponle el logo de la última imagen»:
+  // the chosen image stays the canvas, the upload is the reference.
+  const chosen = await context([{ files: [{ type: 'image', fileId: 'newest' }] }, { files: [{ type: 'image', fileId: 'older' }] }], { newest: {}, older: {}, logo: {} });
+  const pinned = await resolveImageSources({ fileId: 'older', referenceFileIds: ['logo'], primaryFromHistory: true }, chosen);
+  assert.deepEqual(pinned.map((source) => source.fileId), ['older', 'logo']);
+  // Regenerar: the user row (with the logo) is already the newest message —
+  // the previous image is still the canvas, never the logo itself.
+  const regen = await context([
+    { files: [{ type: 'image', fileId: 'logo' }] },
+    { files: [{ type: 'image', fileId: 'previous' }] },
+  ], { previous: {}, logo: {} });
+  regen.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const composer = await resolveImageSources({ fileId: 'logo', referenceFileIds: ['logo'], primaryFromHistory: true }, regen);
+  assert.deepEqual(composer.map((source) => source.fileId), ['previous', 'logo']);
+  const agent = await resolveImageSources({ primaryFromHistory: true }, { ...regen, fileIds: ['logo'] });
+  assert.deepEqual(agent.map((source) => source.fileId), ['previous', 'logo']);
+  // After a clarification the logo is a RECOVERED id: still the reference the cue names.
+  const recovered = await resolveImageSources({ primaryFromHistory: true }, { ...regen, fileIds: ['logo'], recoveredFileIds: ['logo'] });
+  assert.deepEqual(recovered.map((source) => source.fileId), ['previous', 'logo']);
+  // Without the cue a recovered id never displaces the newest image (unchanged).
+  assert.deepEqual((await resolveImageSources({}, { ...regen, fileIds: ['logo'], recoveredFileIds: ['logo'] })).map((source) => source.fileId), ['logo']);
+});
+
+test('the reference cap counts the previous image before any reference is read', async () => {
+  const records = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`r${i}`, {}]));
+  const ctx = await context([{ files: [{ type: 'image', fileId: 'r8' }] }], records);
+  let reads = 0;
+  const findFirst = ctx.prisma.file.findFirst;
+  ctx.prisma.file.findFirst = async (args) => { reads += 1; return findFirst(args); };
+  await assert.rejects(
+    () => resolveImageSources({ referenceFileIds: ['r0', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'], primaryFromHistory: true }, ctx),
+    (error) => error.code === 'E_PARAMS' && /imagen anterior/.test(error.message),
+  );
+  assert.ok(reads <= 1, `only the history canvas was read (${reads})`);
+});
+
+test('arrangeByIntent: with several upload-ordered attachments the photo is the canvas and the logo the material', async () => {
+  const ctx = await context([], { logo: { originalName: 'logo.png' }, foto: { originalName: 'foto.jpg' } });
+  ctx.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  // Chat attachments arrive through ctx.fileIds in upload order.
+  const arranged = await resolveImageSources({ arrangeByIntent: 'ponle este logo a la foto' }, { ...ctx, fileIds: ['logo', 'foto'] });
+  assert.deepEqual(arranged.map((source) => source.fileId), ['foto', 'logo']);
+  assert.deepEqual(arranged.map((source) => source.role), ['canvas', 'material']);
+  assert.equal(arranged.arrangement.changed, true);
+  assert.equal(arranged.arrangement.canvasId, 'foto');
+  // Composer default order: fileId = files[0] and referenceFileIds = files.
+  const composer = await resolveImageSources({ fileId: 'logo', referenceFileIds: ['logo', 'foto'], arrangeByIntent: 'ponle este logo a la foto' }, ctx);
+  assert.deepEqual(composer.map((source) => source.fileId), ['foto', 'logo']);
+  // Without the option the caller's order is law (explicit LLM / API order).
+  assert.deepEqual((await resolveImageSources({}, { ...ctx, fileIds: ['logo', 'foto'] })).map((source) => source.fileId), ['logo', 'foto']);
+  assert.equal((await resolveImageSources({}, { ...ctx, fileIds: ['logo', 'foto'] })).arrangement, undefined);
+  // A canvas the user chose (not one of the uploads) is never rearranged.
+  const chosen = await context([], { chosen: { originalName: 'logo-viejo.png' }, logo: { originalName: 'logo.png' }, foto: { originalName: 'foto.jpg' } });
+  const pinned = await resolveImageSources({ fileId: 'chosen', referenceFileIds: ['logo', 'foto'], arrangeByIntent: 'ponle este logo a la foto' }, chosen);
+  assert.deepEqual(pinned.map((source) => source.fileId), ['chosen', 'logo', 'foto']);
+  // A history canvas («la imagen anterior») is the canvas; the uploads stay material.
+  const history = await context([{ files: [{ type: 'image', fileId: 'previous' }] }], { previous: {}, logo: { originalName: 'logo.png' }, foto: { originalName: 'foto.jpg' } });
+  history.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const cued = await resolveImageSources({ primaryFromHistory: true, arrangeByIntent: 'ponle este logo a la imagen anterior' }, { ...history, fileIds: ['logo', 'foto'] });
+  assert.deepEqual(cued.map((source) => source.fileId), ['previous', 'logo', 'foto']);
+});
+
+test('arrangeByIntent: real pixels decide when the file names say nothing', async () => {
+  const sharp = require('sharp');
+  const dir = await fixtures;
+  const logoPath = path.join(dir, 'a-small-transparent.png');
+  const photoPath = path.join(dir, 'b-large-opaque.jpg');
+  await fs.writeFile(logoPath, await sharp({ create: { width: 120, height: 120, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer());
+  await fs.writeFile(photoPath, await sharp({ create: { width: 1200, height: 900, channels: 3, background: '#808080' } }).jpeg().toBuffer());
+  const ctx = await context([], { a1: { originalName: 'a1.png', path: logoPath }, a2: { originalName: 'a2.jpg', path: photoPath, mimeType: 'image/jpeg' } });
+  ctx.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: id === 'a2' ? 'image/jpeg' : 'image/png' }));
+  const arranged = await resolveImageSources({ arrangeByIntent: 'ponle este logo' }, { ...ctx, fileIds: ['a1', 'a2'] });
+  assert.deepEqual(arranged.map((source) => source.fileId), ['a2', 'a1']);
+  assert.match(arranged.arrangement.reason, /alpha/);
+});
+
+test('arrangeByIntent: compositions, explicit order, two photos and a history canvas keep the caller\'s order and say why', async () => {
+  const ctx = await context([], { logo: { originalName: 'logo.png' }, foto: { originalName: 'foto.jpg' }, a: { originalName: 'a.jpg' }, b: { originalName: 'b.jpg' } });
+  ctx.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const collage = await resolveImageSources({ arrangeByIntent: 'haz un collage con estas dos imágenes' }, { ...ctx, fileIds: ['logo', 'foto'] });
+  assert.deepEqual(collage.map((source) => source.fileId), ['logo', 'foto']);
+  assert.equal(collage.arrangement.reason, 'composition');
+  assert.equal(collage.canvasOrigin, 'explicit');
+  const ordinal = await resolveImageSources({ arrangeByIntent: 'quita el fondo de la primera imagen' }, { ...ctx, fileIds: ['logo', 'foto'] });
+  assert.deepEqual([ordinal.map((source) => source.fileId), ordinal.arrangement.reason, ordinal.canvasOrigin], [['logo', 'foto'], 'explicit-order', 'explicit']);
+  const photos = await resolveImageSources({ arrangeByIntent: 'cambia el fondo de esta foto por este paisaje' }, { ...ctx, fileIds: ['a', 'b'] });
+  assert.deepEqual([photos.map((source) => source.fileId), photos.arrangement.reason, photos.canvasOrigin], [['a', 'b'], 'upload-order', 'upload-order']);
+  // The words edit the logo: the logo stays the canvas even if the photo were first.
+  const recolour = await resolveImageSources({ arrangeByIntent: 'cambia el color del logo' }, { ...ctx, fileIds: ['foto', 'logo'] });
+  assert.deepEqual([recolour.map((source) => source.fileId), recolour.canvasOrigin], [['logo', 'foto'], 'ranked']);
+  // Pinned and history canvases are certain.
+  const pinned = await resolveImageSources({ fileId: 'a', referenceFileIds: ['logo'] }, ctx);
+  assert.equal(pinned.canvasOrigin, 'pinned');
+  const history = await context([{ files: [{ type: 'image', fileId: 'previous' }] }], { previous: {}, logo: { originalName: 'logo.png' } });
+  history.prisma.file.findMany = async ({ where }) => where.id.in.map((id) => ({ id, mimeType: 'image/png' }));
+  const cued = await resolveImageSources({ primaryFromHistory: true, arrangeByIntent: 'ponle este logo a la imagen anterior' }, { ...history, fileIds: ['logo'] });
+  assert.deepEqual([cued.map((source) => source.fileId), cued.canvasOrigin], [['previous', 'logo'], 'history']);
+  // A single source carries no origin.
+  assert.equal((await resolveImageSources({ fileId: 'a' }, ctx)).canvasOrigin, undefined);
+});

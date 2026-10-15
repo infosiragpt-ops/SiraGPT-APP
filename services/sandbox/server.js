@@ -17,6 +17,7 @@
  *   POST   /v1/sessions/:id/write           { path, contentBase64 }
  *   POST   /v1/sessions/:id/list            { path } → { files }
  *   GET    /v1/sessions/:id/outputs         → { outputs:[{name,contentBase64}] }
+ *   POST   /v1/sessions/:id/install         { requirements, allow, indexUrl?, network?, timeoutMs?, maxBytes?, tmpSize? } → sandbox-pip result
  *   DELETE /v1/sessions/:id                 → { ok }
  *
  * Capacity: SANDBOX_MAX_CONCURRENCY (default 15) live containers; create
@@ -30,6 +31,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const { createDockerSession, dockerAvailable, IMAGE, limits } = require('./lib/docker-sandbox');
+const sandboxPip = require('./lib/sandbox-pip');
 
 const PORT = Number(process.env.SANDBOX_PORT || 4000);
 const BIND = process.env.SANDBOX_BIND || '127.0.0.1';
@@ -109,7 +111,40 @@ setInterval(() => {
  * the full remote pipeline can be tested offline (no Docker) with a fake
  * session; production uses the real ephemeral-container factory.
  */
-function buildServer({ createSession = createDockerSession, isDockerAvailable = dockerAvailable } = {}) {
+/**
+ * Validate an install request from the backend and run it against the
+ * session's container. The backend already applied the operator policy;
+ * this re-validation only guarantees a stale or hostile client can never
+ * widen it (shapes, sizes, safe strings).
+ */
+function validateInstallBody(body = {}) {
+  const requirements = Array.isArray(body.requirements) ? body.requirements.map(String) : [];
+  if (!requirements.length || requirements.length > 20) return { error: 'requirements: 1-20 entries' };
+  if (!requirements.every((r) => sandboxPip.isSafeRequirement(r))) return { error: 'requirements: unsafe entry' };
+  const allow = Array.isArray(body.allow) ? body.allow.map(String) : [];
+  if (allow.length > 2000 || !allow.every((n) => /^[a-z0-9][a-z0-9-]{0,99}$/.test(n))) return { error: 'allow: unsafe entry' };
+  const indexUrl = body.indexUrl ? String(body.indexUrl) : null;
+  if (!sandboxPip.isSafeIndexUrl(indexUrl)) return { error: 'indexUrl: unsafe' };
+  // The sandbox host's operator owns the installer network: SANDBOX_PIP_NETWORK
+  // wins over whatever a client asks for, and the host namespace is refused.
+  const network = process.env.SANDBOX_PIP_NETWORK || (body.network ? String(body.network) : 'bridge');
+  if (!sandboxPip.isSafeNetwork(network)) return { error: 'network: unsafe' };
+  const tmpSize = body.tmpSize ? String(body.tmpSize) : '1g';
+  if (!/^\d+(\.\d+)?[bkmg]?$/.test(tmpSize)) return { error: 'tmpSize: unsafe' };
+  return {
+    value: {
+      requirements,
+      allowJson: JSON.stringify(allow),
+      indexUrl,
+      network,
+      timeoutMs: clampInt(body.timeoutMs, 180_000, 30_000, 600_000),
+      maxBytes: clampInt(body.maxBytes, 300 * 1024 * 1024, 10 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
+      tmpSize,
+    },
+  };
+}
+
+function buildServer({ createSession = createDockerSession, isDockerAvailable = dockerAvailable, installRunner = sandboxPip.runSandboxInstall } = {}) {
   let pendingCreates = 0;
   return http.createServer(async (req, res) => {
   try {
@@ -204,6 +239,20 @@ function buildServer({ createSession = createDockerSession, isDockerAvailable = 
           const files = await s.listFiles(String(body.path || '.') || '.');
           return send(res, 200, { files });
         }
+        if (action === 'install') {
+          if (!s.name) return send(res, 409, { error: 'install_unsupported' });
+          const checked = validateInstallBody(body);
+          if (checked.error) return send(res, 400, { error: 'invalid_install_request', detail: checked.error });
+          const result = await installRunner({
+            kind: 'docker',
+            containerName: s.name,
+            image: IMAGE,
+            runtime: null,
+            limits: { memory: limits.MEMORY, cpus: limits.CPUS, pidsLimit: limits.PIDS },
+            ...checked.value,
+          });
+          return send(res, 200, result);
+        }
       }
     }
 
@@ -231,4 +280,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { server, buildServer, sessions, authorized, _internal: { destroySession } };
+module.exports = { server, buildServer, validateInstallBody, sessions, authorized, _internal: { destroySession } };

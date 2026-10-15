@@ -46,8 +46,10 @@ require.cache[require.resolve(path.join(AGENTS_DIR, 'agent-task-persistence'))] 
 const engineCalls = { generate: [], edit: [] };
 let engineGenerateResult = null;
 let engineEditResult = null;
+let engineCanEdit = () => true;
 require.cache[require.resolve(path.join(SERVICE_DIR, 'media/image-engine'))] = {
   exports: {
+    canEditImage: (spec) => engineCanEdit(spec),
     generateImage: async (spec) => {
       engineCalls.generate.push(spec);
       return engineGenerateResult || {
@@ -95,6 +97,7 @@ test.beforeEach(() => {
   engineCalls.edit.length = 0;
   engineGenerateResult = null;
   engineEditResult = null;
+  engineCanEdit = () => true;
 });
 
 // ── generate_image ────────────────────────────────────────────────────────
@@ -447,4 +450,253 @@ test('image picker context overrides inferred tool model and survives artifact m
   const editMeta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${edited.id}.json`), 'utf8'));
   assert.equal(editMeta.parentFileId, `artifact:${generated.id}`);
   assert.equal(editMeta.rootFileId, `artifact:${generated.id}`); assert.equal(editMeta.version, 2);
+});
+
+// ── Image context: fresh attachment ⇒ reference-guided edit ───────────────
+
+function attachmentPrisma(records, { history = [] } = {}) {
+  const byId = Object.fromEntries(records.map((record) => [record.id, record]));
+  return {
+    file: {
+      findMany: async ({ where }) => {
+        assert.equal(where.userId, 'user-1');
+        assert.equal(where.deletedAt, null);
+        return where.id.in.map((id) => byId[id]).filter(Boolean);
+      },
+      findFirst: async ({ where }) => {
+        assert.equal(where.userId, 'user-1');
+        return byId[where.id] || null;
+      },
+    },
+    message: { findMany: async () => history },
+  };
+}
+
+test('generate_image with a fresh image attachment routes to edit_image with the attachment pixels', async () => {
+  const tmpImage = path.join(ARTIFACT_DIR, 'reference-upload.png');
+  fs.writeFileSync(tmpImage, 'reference-pixels');
+  const prisma = attachmentPrisma([{ id: 'img-1', userId: 'user-1', mimeType: 'image/png', path: tmpImage, filename: 'reference-upload.png' }]);
+  const ctx = fakeCtx({ prisma, fileIds: ['img-1'], fileMetadata: [{ id: 'img-1', mimeType: 'image/png', name: 'reference-upload.png' }], hasImageAttachment: true });
+  const r = await tool('generate_image').execute({ prompt: 'genera una imagen como esta pero con fondo azul' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.generate.length, 0, 'the text-only generator must not drop the reference pixels');
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'reference-pixels');
+  assert.match(engineCalls.edit[0].prompt, /referencia|reference/i);
+  assert.equal(engineCalls.edit[0].aspectRatio, null, 'a plain edit keeps the source frame');
+  const artifactEvent = ctx._events.find((e) => e.type === 'file_artifact');
+  assert.ok(artifactEvent);
+  assert.equal(artifactEvent.artifact.prompt, 'genera una imagen como esta pero con fondo azul');
+});
+
+test('generate_image with only a PDF attached still generates a new image', async () => {
+  const ctx = fakeCtx({ fileIds: ['doc-1'], fileMetadata: [{ id: 'doc-1', mimeType: 'application/pdf', name: 'brief.pdf' }] });
+  const r = await tool('generate_image').execute({ prompt: 'un gato astronauta' }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate.length, 1);
+  assert.equal(engineCalls.edit.length, 0);
+});
+
+test('generate_image with an image attachment and a non-editing model reports image_edit_unsupported without switching models', async () => {
+  engineCanEdit = () => false;
+  const ctx = fakeCtx({ imageModel: 'fal-ai/flux/schnell', imageProvider: 'fal', fileIds: ['img-1'], fileMetadata: [{ id: 'img-1', mimeType: 'image/png' }] });
+  const r = await tool('generate_image').execute({ prompt: 'hazme un logo con este logo' }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_edit_unsupported');
+  // Display-name policy: never a raw id, a provider slug or OpenRouter in copy.
+  assert.doesNotMatch(r.error, /fal-ai|\/|openrouter|gpt-image-1|gemini-2\.5/i);
+  assert.match(r.error, /El modelo de imagen seleccionado no permite editar imágenes/);
+  assert.match(r.error, /GPT Image o Gemini Flash Image/);
+  assert.match(r.error, /sin adjuntar imágenes/);
+  assert.equal(engineCalls.generate.length, 0);
+  assert.equal(engineCalls.edit.length, 0);
+  // With a catalog row the picker's display name is used.
+  const prisma = { aiModel: { findFirst: async ({ where }) => (where.name === 'fal-ai/flux/schnell' ? { name: 'fal-ai/flux/schnell', displayName: 'Flux Schnell', provider: 'fal' } : null) }, file: { findMany: async () => [] } };
+  const named = await tool('generate_image').execute({ prompt: 'hazme un logo con este logo' }, fakeCtx({ ...ctx, prisma }));
+  assert.match(named.error, /^Flux Schnell no permite editar imágenes/);
+  assert.doesNotMatch(named.error, /fal-ai/);
+});
+
+test('generate_image → edit_image redirect marks the tool that ran, so the finalize gate credits edit_image', async () => {
+  const ctx = fakeCtx({ fileIds: ['img-1'], fileMetadata: [{ id: 'img-1', mimeType: 'image/png' }], prisma: attachmentPrisma([
+    { id: 'img-1', userId: 'user-1', mimeType: 'image/png', path: (() => { const p = path.join(ARTIFACT_DIR, 'redirect-src.png'); fs.writeFileSync(p, 'src'); return p; })(), filename: 'redirect-src.png' },
+  ]) });
+  const r = await tool('generate_image').execute({ prompt: 'genera un banner con este logo' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.executedTool, 'edit_image');
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.generate.length, 0);
+  // «banner» frames the deliverable: 16:9 travels to the editor.
+  assert.equal(engineCalls.edit[0].aspectRatio, '16:9');
+  const { successfulToolCalls } = require(path.join(AGENTS_DIR, 'agentic-execution-profile'));
+  const counts = successfulToolCalls([{ actions: [{ tool: 'generate_image', observation: r }] }]);
+  assert.equal(counts.get('edit_image'), 1);
+  assert.equal(counts.get('generate_image'), undefined);
+});
+
+test('generate_image ignores ids the loop recovered from history (no redirect)', async () => {
+  const ctx = fakeCtx({ fileIds: ['old'], recoveredFileIds: ['old'], hasImageAttachment: true });
+  const r = await tool('generate_image').execute({ prompt: 'una playa al atardecer' }, ctx);
+  assert.equal(r.ok, true);
+  assert.equal(engineCalls.generate.length, 1);
+  assert.equal(engineCalls.edit.length, 0);
+});
+
+test('edit_image failure envelope carries the engine code and names the selected model', async () => {
+  engineEditResult = { ok: false, code: 'image_edit_unsupported', error: 'El modelo seleccionado no permite esta edición.', attempts: [] };
+  const dataUrl = `data:image/png;base64,${Buffer.from('source-image').toString('base64')}`;
+  const ctx = fakeCtx({ imageModel: 'grok-2-image' });
+  const r = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_edit_unsupported');
+  assert.doesNotMatch(r.error, /grok-2-image|gpt-image-1|gemini-2\.5|\//);
+  assert.match(r.error, /El modelo de imagen seleccionado no permite editar imágenes/);
+  assert.match(r.error, /Elige un modelo de edición de imágenes \(GPT Image o Gemini Flash Image\)/);
+  assert.deepEqual(r.attempts, []);
+  engineEditResult = { ok: false, code: 'E_PROVIDER', error: 'fallo del proveedor', attempts: [{ ok: false }] };
+  const r2 = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, fakeCtx());
+  assert.equal(r2.code, 'E_PROVIDER');
+  assert.equal(r2.error, 'fallo del proveedor');
+  // NO_PROVIDER (credentials missing for a model that CAN edit) keeps the
+  // engine's own copy instead of telling the user to pick the model they picked.
+  engineEditResult = { ok: false, code: 'NO_PROVIDER', error: 'El modelo seleccionado no está disponible.', attempts: [] };
+  const r3 = await tool('edit_image').execute({ instruction: 'quita el fondo', imageUrl: dataUrl }, fakeCtx({ imageModel: 'gpt-image-1' }));
+  assert.equal(r3.code, 'NO_PROVIDER');
+  assert.equal(r3.error, 'El modelo seleccionado no está disponible.');
+});
+
+test('edit_image with no resolvable source returns the image_source_required code', async () => {
+  const prisma = { file: { findMany: async () => [], findFirst: async () => null }, message: { findMany: async () => [] } };
+  const r = await tool('edit_image').execute({ instruction: 'quita el fondo' }, fakeCtx({ prisma }));
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'image_source_required');
+  assert.match(r.error, /No encontré la imagen/);
+});
+
+test('edit_image: a pinned non-attachment fileId stays the canvas even with a previous-image cue', async () => {
+  const chosen = path.join(ARTIFACT_DIR, 'chosen-older.png'); fs.writeFileSync(chosen, 'chosen-pixels');
+  const newest = path.join(ARTIFACT_DIR, 'newest-generated.png'); fs.writeFileSync(newest, 'newest-pixels');
+  const logo = path.join(ARTIFACT_DIR, 'logo-2.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'chosen', userId: 'user-1', mimeType: 'image/png', path: chosen, filename: 'chosen-older.png' },
+    { id: 'newest', userId: 'user-1', mimeType: 'image/png', path: newest, filename: 'newest-generated.png' },
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'logo-2.png' },
+  ], { history: [{ files: JSON.stringify([{ type: 'image', fileId: 'newest' }]) }, { files: JSON.stringify([{ type: 'image', fileId: 'chosen' }]) }] });
+  const ctx = fakeCtx({ prisma, fileIds: ['logo'], userQuery: 'ponle este logo a la primera imagen' });
+  const r = await tool('edit_image').execute({ instruction: 'ponle el logo', fileId: 'chosen', referenceFileIds: ['logo'] }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'chosen-pixels', 'the pinned image is the canvas');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+});
+
+test('edit_image on a plain edit keeps the source frame and records the real ratio in the lineage', async () => {
+  const png = await require('sharp')({ create: { width: 160, height: 90, channels: 4, background: 'blue' } }).png().toBuffer();
+  const dataUrl = `data:image/png;base64,${png.toString('base64')}`;
+  const ctx = fakeCtx();
+  const r = await tool('edit_image').execute({ instruction: 'cambia el cielo a rosa', imageUrl: dataUrl }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit[0].aspectRatio, null);
+  const meta = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${r.id}.json`), 'utf8'));
+  assert.equal(meta.aspectRatio, '16:9');
+  assert.equal(ctx._events.find((e) => e.type === 'file_artifact').artifact.aspectRatio, '16:9');
+  assert.equal(ctx._events.find((e) => e.type === 'file_artifact').artifact.prompt, 'cambia el cielo a rosa');
+  const ignored = await tool('edit_image').execute({ instruction: 'cambia el cielo a rosa', imageUrl: dataUrl, aspectRatio: 'portrait' }, fakeCtx());
+  assert.equal(ignored.ok, true);
+  assert.equal(engineCalls.edit[1].aspectRatio, null, 'an LLM aspectRatio on a plain edit is ignored');
+  engineEditResult = { ok: true, images: [{ b64: png.toString('base64') }], provider: 'gemini', model: 'gemini-2.5-flash-image', attempts: [] };
+  const spoken = await tool('edit_image').execute({ instruction: 'hazla vertical', imageUrl: dataUrl }, fakeCtx());
+  assert.equal(spoken.ok, true, spoken.error);
+  assert.equal(engineCalls.edit[2].aspectRatio, '3:4', 'a spoken frame still reframes');
+});
+
+test('edit_image "ponle este logo a la imagen anterior" keeps the chat image as canvas and the upload as reference', async () => {
+  const previous = path.join(ARTIFACT_DIR, 'previous-generated.png');
+  fs.writeFileSync(previous, 'previous-chat-image');
+  const logo = path.join(ARTIFACT_DIR, 'logo-upload.png');
+  fs.writeFileSync(logo, 'logo-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'file-9', userId: 'user-1', mimeType: 'image/png', path: previous, filename: 'previous-generated.png' },
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'logo-upload.png' },
+  ], { history: [{ files: JSON.stringify([{ type: 'image', fileId: 'file-9', url: '/uploads/images/x.png' }]) }] });
+  const ctx = fakeCtx({ prisma, fileIds: ['logo'], userQuery: 'ponle este logo a la imagen anterior' });
+  const r = await tool('edit_image').execute({ instruction: 'ponle el logo', fileId: 'logo' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'previous-chat-image');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+  assert.equal(engineCalls.edit[0].aspectRatio, null, '«logo» is a visual type, not a spoken frame');
+  assert.deepEqual(r.referenceFileIds, ['file-9', 'logo']);
+});
+
+test('edit_image with two attachments: the photo is the canvas, the logo the material, and the editor is told so', async () => {
+  const logo = path.join(ARTIFACT_DIR, 'two-logo.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const foto = path.join(ARTIFACT_DIR, 'two-foto.jpg'); fs.writeFileSync(foto, 'foto-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'two-logo.png', originalName: 'logo.png' },
+    { id: 'foto', userId: 'user-1', mimeType: 'image/jpeg', path: foto, filename: 'two-foto.jpg', originalName: 'foto.jpg' },
+  ]);
+  // Upload order puts the logo first; nobody pinned a canvas.
+  const ctx = fakeCtx({ prisma, fileIds: ['logo', 'foto'], userQuery: 'ponle este logo a la foto, arriba a la derecha' });
+  const r = await tool('edit_image').execute({ instruction: 'ponle este logo a la foto, arriba a la derecha' }, ctx);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit.length, 1);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'foto-pixels', 'the photo is the canvas');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+  assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«foto\.jpg»\) es el lienzo que se edita; la imagen 2 \(«logo\.png»\) es material/);
+  assert.deepEqual(r.referenceFileIds, ['foto', 'logo']);
+  assert.ok(ctx._events.some((e) => e.type === 'tool_output' && /Lienzo: foto\.jpg; material: logo\.png/.test(e.preview || '')), 'the timeline shows the roles');
+  // A pinned fileId is the canvas whatever the pictures look like.
+  engineCalls.edit.length = 0;
+  const pinned = await tool('edit_image').execute({ instruction: 'ponle este logo a la foto', fileId: 'logo', referenceFileIds: ['foto'] }, fakeCtx({ prisma, fileIds: ['logo', 'foto'] }));
+  assert.equal(pinned.ok, true, pinned.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'logo-pixels');
+  assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«logo\.png»\) es el lienzo/);
+});
+
+test('edit_image: a document + a logo with the clitic cue keeps the chat\'s previous image as canvas (task-runner ctx without metadata)', async () => {
+  const previous = path.join(ARTIFACT_DIR, 'prev-shirt.png'); fs.writeFileSync(previous, 'shirt-pixels');
+  const logo = path.join(ARTIFACT_DIR, 'cl2-logo.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const brief = path.join(ARTIFACT_DIR, 'brief.pdf'); fs.writeFileSync(brief, 'pdf-bytes');
+  const prisma = attachmentPrisma([
+    { id: 'shirt', userId: 'user-1', mimeType: 'image/png', path: previous, filename: 'prev-shirt.png', originalName: 'camiseta.png' },
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'cl2-logo.png', originalName: 'logo.png' },
+    { id: 'brief', userId: 'user-1', mimeType: 'application/pdf', path: brief, filename: 'brief.pdf', originalName: 'brief.pdf' },
+  ], { history: [{ files: JSON.stringify([{ type: 'image', fileId: 'shirt' }]) }] });
+  // The agent-task runner's tool ctx carries ids only: one picture + one PDF is ONE picture.
+  const r = await tool('edit_image').execute({ instruction: 'ponle este logo a la camiseta' }, fakeCtx({ prisma, fileIds: ['brief', 'logo'] }));
+  assert.equal(r.ok, true, r.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'shirt-pixels', 'the previous image is the canvas');
+  assert.deepEqual(engineCalls.edit[0].referenceImages.map((image) => image.buffer.toString()), ['logo-pixels']);
+  assert.match(engineCalls.edit[0].prompt, /La imagen 1 \(«camiseta\.png»\) es el lienzo que se edita; la imagen 2 \(«logo\.png»\) es material/, 'the history canvas is certain: roles clause with the user\'s own file names');
+});
+
+test('edit_image: ties and compositions get no placement clause and no «Lienzo» row; English requests get the English clause', async () => {
+  const a = path.join(ARTIFACT_DIR, 'tie-a.jpg'); fs.writeFileSync(a, 'a-pixels');
+  const b = path.join(ARTIFACT_DIR, 'tie-b.jpg'); fs.writeFileSync(b, 'b-pixels');
+  const prisma = attachmentPrisma([
+    { id: 'a', userId: 'user-1', mimeType: 'image/jpeg', path: a, filename: 'tie-a.jpg', originalName: 'a.jpg' },
+    { id: 'b', userId: 'user-1', mimeType: 'image/jpeg', path: b, filename: 'tie-b.jpg', originalName: 'b.jpg' },
+  ]);
+  const meta = [{ id: 'a', mimeType: 'image/jpeg', name: 'a.jpg' }, { id: 'b', mimeType: 'image/jpeg', name: 'b.jpg' }];
+  const tie = fakeCtx({ prisma, fileIds: ['a', 'b'], fileMetadata: meta, userQuery: 'cambia el fondo de esta foto por este paisaje' });
+  const r1 = await tool('edit_image').execute({ instruction: 'cambia el fondo de esta foto por este paisaje' }, tie);
+  assert.equal(r1.ok, true, r1.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'a-pixels', 'no evidence: upload order');
+  assert.doesNotMatch(engineCalls.edit[0].prompt, /es el lienzo/);
+  assert.ok(!tie._events.some((e) => /Lienzo:/.test(e.preview || '')), 'no roles row on a coin toss');
+  engineCalls.edit.length = 0;
+  const collage = fakeCtx({ prisma, fileIds: ['a', 'b'], fileMetadata: meta, userQuery: 'haz un collage con estas dos fotos' });
+  await tool('edit_image').execute({ instruction: 'haz un collage con estas dos fotos' }, collage);
+  assert.doesNotMatch(engineCalls.edit[0].prompt, /es el lienzo|is the canvas/);
+  engineCalls.edit.length = 0;
+  const logo = path.join(ARTIFACT_DIR, 'en-logo.png'); fs.writeFileSync(logo, 'logo-pixels');
+  const prismaEn = attachmentPrisma([
+    { id: 'logo', userId: 'user-1', mimeType: 'image/png', path: logo, filename: 'en-logo.png', originalName: 'logo.png' },
+    { id: 'a', userId: 'user-1', mimeType: 'image/jpeg', path: a, filename: 'tie-a.jpg', originalName: 'photo.jpg' },
+  ]);
+  const en = fakeCtx({ prisma: prismaEn, fileIds: ['logo', 'a'], fileMetadata: [{ id: 'logo', mimeType: 'image/png' }, { id: 'a', mimeType: 'image/jpeg' }], userQuery: 'put this logo on the photo' });
+  const r3 = await tool('edit_image').execute({ instruction: 'put this logo on the photo' }, en);
+  assert.equal(r3.ok, true, r3.error);
+  assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'a-pixels');
+  assert.match(engineCalls.edit[0].prompt, /Input image 1 \(«photo\.jpg»\) is the canvas to edit; input image 2 \(«logo\.png»\) is material/);
 });

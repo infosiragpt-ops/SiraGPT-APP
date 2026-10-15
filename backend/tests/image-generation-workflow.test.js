@@ -26,7 +26,7 @@ const fixtureDir = fs.mkdtemp(path.join(os.tmpdir(), 'image-handler-'));
 after(async () => fs.rm(await fixtureDir, { recursive: true, force: true }));
 const image = (color, width = 8, height = 4) => sharp({ create: { width, height, channels: 4, background: color } }).png().toBuffer();
 
-async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [] } = {}) {
+async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [], sourceAspect = '16:9', history = null } = {}) {
   const sourceBytes = await image('#de2070'); const outputBytes = await image('#1040fa');
   const sourcePath = path.join(await fixtureDir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
   const calls = { generate: [], edit: [], saves: [], messages: [], reads: 0 };
@@ -36,9 +36,9 @@ async function harness({ source = true, chatOwned = true, editable = true, user 
     chat: { findFirst: async () => chatOwned ? { id: 'chat', title: 'Image' } : null, update: async () => ({}) },
     file: { findFirst: async ({ where }) => records[where.id] || null },
     message: {
-      findMany: async () => { calls.reads++; return source ? [
+      findMany: async () => { calls.reads++; if (history) return history; return source ? [
         { files: [{ type: 'application/pdf', id: 'document' }] },
-        { files: [{ type: 'image/png', fileId: 'beach', version: 2, aspectRatio: '16:9', rootFileId: 'original' }] },
+        { files: [{ type: 'image/png', fileId: 'beach', version: 2, ...(sourceAspect ? { aspectRatio: sourceAspect } : {}), rootFileId: 'original' }] },
       ] : []; },
       create: async ({ data }) => { calls.messages.push(data); return { id: `message-${calls.messages.length}` }; },
     },
@@ -189,4 +189,117 @@ test('an unavailable reference blocks generation before spending or persisting p
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.code, 'image_source_required');
   assert.equal(calls.generate.length + calls.edit.length + calls.saves.length + calls.messages.length, 0);
+});
+
+// ── Follow-up context (composer image mode, no fileId) ─────────────────────
+
+test('«cambia el color del logo» without a fileId edits the chat image instead of generating an unrelated one', async () => {
+  const { request, calls } = await harness();
+  const res = await request({ prompt: 'cambia el color del logo' });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1); assert.equal(calls.generate.length, 0);
+  assert.ok(calls.reads >= 1);
+  assert.equal(res.body.files[0].parentFileId, 'beach');
+  assert.equal(JSON.parse(calls.messages[1].files)[0].parentFileId, 'beach');
+});
+
+test('«ponle un sombrero al gato» without a fileId is an edit of the chat image', async () => {
+  const { request, calls } = await harness();
+  const res = await request({ prompt: 'ponle un sombrero al gato' });
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1); assert.equal(calls.generate.length, 0);
+  assert.equal(res.body.files[0].parentFileId, 'beach');
+});
+
+test('a previous-image cue makes the chat image the canvas and the attachment a reference', async () => {
+  const { request, calls } = await harness({ references: ['logo'] });
+  const res = await request({ prompt: 'ponle este logo a la imagen anterior', fileId: 'logo', referenceFileIds: ['logo'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1); assert.equal(calls.generate.length, 0);
+  assert.equal(calls.edit[0].referenceImages.length, 1);
+  assert.equal(res.body.files[0].parentFileId, 'beach');
+});
+
+test('an upload without a stored aspect ratio keeps its own frame instead of the picker default', async () => {
+  const { request, calls } = await harness({ sourceAspect: null });
+  const res = await request({ operation: 'edit', fileId: 'beach', prompt: 'cambia el fondo a azul' });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(calls.edit[0].aspectRatio, '16:9');
+});
+
+test('a follow-up promoted to an edit by the history pre-check generates when nothing in the chat can be opened', async () => {
+  // The chat's last row only mentions an upload URL in its text (no files
+  // entry, no artifact id): the pre-check sees an image, the resolver cannot
+  // open it → generate instead of a 400.
+  const { request, calls } = await harness({ source: false, history: [{ files: null, content: '/uploads/images/old-result.png' }] });
+  const res = await request({ prompt: 'ahora en azul' });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.generate.length, 1); assert.equal(calls.edit.length, 0);
+});
+
+test('a viewer-chosen canvas stays the canvas even when the prompt names the previous image', async () => {
+  const { request, calls } = await harness({ references: ['older', 'logo'] });
+  const res = await request({ prompt: 'ponle el logo de la última imagen', operation: 'edit', fileId: 'older', referenceFileIds: ['logo'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(res.body.files[0].parentFileId, 'older');
+});
+
+test('a framed deliverable built from an upload takes its frame from the words, not from the upload', async () => {
+  const { request, calls } = await harness({ sourceAspect: null, references: ['logo'] });
+  const res = await request({ prompt: 'crea un banner con este logo', fileId: 'logo', referenceFileIds: ['logo'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(calls.edit[0].aspectRatio, '16:9');
+});
+
+test('composer: two uploads in upload order → the photo is the canvas and the logo the material', async () => {
+  const { request, calls } = await harness({ source: false, references: ['logo', 'foto'] });
+  // The composer sends fileId = files[0] and referenceFileIds = files.
+  const res = await request({ prompt: 'ponle este logo a la foto', fileId: 'logo', referenceFileIds: ['logo', 'foto'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(res.body.files[0].parentFileId, 'foto', 'the photo is edited');
+  assert.equal(calls.edit[0].referenceImages.length, 1);
+  assert.match(calls.edit[0].prompt, /La imagen 1 \(«foto\.png»\) es el lienzo que se edita; la imagen 2 \(«logo\.png»\) es material/);
+  // Viewer «Editar» (explicit operation) keeps the chosen canvas.
+  const { request: request2, calls: calls2 } = await harness({ source: false, references: ['logo', 'foto'] });
+  const res2 = await request2({ prompt: 'ponle este logo a la foto', operation: 'edit', fileId: 'logo', referenceFileIds: ['foto'] });
+  assert.equal(res2.statusCode, 200); assert.ok(!res2.body.error, res2.body.error);
+  assert.equal(res2.body.files[0].parentFileId, 'logo');
+  assert.equal(calls2.edit.length, 1);
+});
+
+test('composer: the user bubble keeps the upload order, API clients keep the first-reference contract, and a tie gets no clause', async () => {
+  const { request, calls } = await harness({ source: false, references: ['logo', 'foto'] });
+  const res = await request({ prompt: 'ponle este logo a la foto', fileId: 'logo', referenceFileIds: ['logo', 'foto'] });
+  assert.equal(res.statusCode, 200); assert.ok(!res.body.error, res.body.error);
+  assert.equal(res.body.files[0].parentFileId, 'foto');
+  // The persisted user message lists the uploads as they were sent.
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((file) => file.id), ['logo', 'foto']);
+  // referenceFileIds alone (API clients, never the composer): first reference = canvas, as before.
+  const { request: requestApi, calls: callsApi } = await harness({ source: false, references: ['logo', 'foto'] });
+  const api = await requestApi({ prompt: 'ponle este logo a la foto', referenceFileIds: ['logo', 'foto'] });
+  assert.equal(api.statusCode, 200); assert.ok(!api.body.error, api.body.error);
+  assert.equal(api.body.files[0].parentFileId, 'logo');
+  assert.doesNotMatch(callsApi.edit[0].prompt, /es el lienzo/);
+  const { request: request2, calls: calls2 } = await harness({ source: false, references: ['a', 'b'] });
+  const res2 = await request2({ prompt: 'cambia el fondo de esta foto por este paisaje', fileId: 'a', referenceFileIds: ['a', 'b'] });
+  assert.equal(res2.statusCode, 200); assert.ok(!res2.body.error, res2.body.error);
+  assert.equal(res2.body.files[0].parentFileId, 'a', 'two photos: upload order');
+  assert.doesNotMatch(calls2.edit[0].prompt, /es el lienzo/);
+});
+
+test('composer: a catalog slug edits and generates through OpenRouter whatever family the chat inference gives it', async () => {
+  const { request, calls } = await harness({ references: ['logo'] });
+  const edit = await request({ prompt: 'ponle este logo', provider: 'Gemini', model: 'google/gemini-3.1-flash-image-preview', fileId: 'logo', referenceFileIds: ['logo'] });
+  assert.equal(edit.statusCode, 200); assert.ok(!edit.body.error, edit.body.error);
+  assert.equal(calls.edit[0].provider, 'openrouter');
+  const gen = await request({ prompt: 'un gato astronauta', provider: 'Gemini', model: 'google/gemini-3.1-flash-image-preview' });
+  assert.equal(gen.statusCode, 200); assert.ok(!gen.body.error, gen.body.error);
+  assert.equal(calls.generate[0].provider, 'openrouter');
+  // A bare id keeps its provider.
+  await request({ prompt: 'un gato', provider: 'Gemini', model: 'gemini-2.5-flash-image' });
+  assert.equal(calls.generate[1].provider, 'gemini');
 });

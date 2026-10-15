@@ -795,3 +795,40 @@ test('invalid or oversized reference sets fail before invoking a paid editor', a
     assert.deepEqual(result.attempts, []);
   }
 });
+
+// ── Edit frame + openrouter default model (image-context fix) ─────────────
+
+test('editImage OpenAI keeps the source frame (size auto) when no aspectRatio is given', async () => {
+  setEnv({ OPENAI_API_KEY: 'sk-x' });
+  const edits = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({
+    onEdit: async (payload) => { edits.push(payload); return { data: [{ b64_json: 'KEEP_FRAME' }] }; },
+  }));
+  try {
+    const result = await engine.editImage({ prompt: 'ponle un sombrero', imageBuffer: Buffer.from('img'), provider: 'openai', model: 'gpt-image-1' });
+    assert.equal(result.ok, true);
+    assert.equal(edits.length, 1);
+    assert.equal(edits[0].size, 'auto');
+    assert.equal(edits[0].model, 'gpt-image-1');
+  } finally { restoreEnv(); }
+});
+
+test('editImage provider openrouter without a model resolves the openrouter default model', async () => {
+  setEnv({ OPENROUTER_API_KEY: 'or-x' });
+  const calls = [];
+  _internal.setOpenAIFactory(fakeOpenAIFactory({ onChat: async (payload, opts, config) => {
+    calls.push({ payload, config });
+    return { choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,RURJVA==' } }] } }] };
+  } }));
+  try {
+    const result = await engine.editImage({ prompt: 'cambia el fondo', imageBuffer: Buffer.from('img'), provider: 'openrouter' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.provider, 'openrouter');
+    const expected = process.env.SIRAGPT_IMAGE_EDIT_MODEL_OPENROUTER || process.env.SIRAGPT_IMAGE_MODEL_OPENROUTER || 'google/gemini-3.1-flash-image-preview';
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].config.baseURL, 'https://openrouter.ai/api/v1');
+    assert.equal(calls[0].payload.model, expected, 'model must never be undefined for a provider-only openrouter pin');
+    assert.equal(result.model, expected);
+    assert.equal(calls[0].payload.image_config.aspect_ratio, undefined, 'no ratio → the provider keeps the source frame');
+  } finally { restoreEnv(); }
+});

@@ -29,6 +29,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- The document agent can now install APPROVED Python packages into its own
+  sandbox when an import fails (`install_sandbox_package`): a throw-away
+  installer container fetches binary wheels from the package index, every
+  resolved wheel is checked against the operator allowlist, and the tree is
+  streamed into the conversation workspace while the execution sandbox keeps
+  its network off. Packages outside the list are never installed; they are
+  recorded as capability gaps (Admin → Logs → Auditoría, `GET
+  /api/admin/capabilities`) so the administrator can extend the list.
+  `SIRAGPT_SANDBOX_PIP*` tune it; the sandbox microservice gained
+  `POST /v1/sessions/:id/install`.
 - Reference-guided image editing preserves the selected image and up to eight
   ordered references. Video requests validate owned reference pixels and the
   selected model's capacity before generation, without silently dropping images.
@@ -39,6 +49,70 @@ and improvement cycles follow a sequential number with the date the work landed.
 - Retrieved web sources remain readable from the task workspace beyond the
   prompt preview and after context compaction. Missing dependency errors guide
   the agent toward installed equivalents while preserving the original failure.
+
+### Security
+
+- `host_bash` no longer offers `npx`, `npm exec|x|create`, `npm init
+  <initializer>`, registry/config mutations or global installs; `npm install`
+  and `pip3 install` accept registry package names only (no URLs, git/file
+  specs, paths, requirement files, alternate indexes or `--target`). Every
+  execution and refusal is recorded in the audit log, and «Permitir siempre
+  en este chat» never applies to tools that acquire capability (`host_bash`,
+  `clone_project`, `install_skill`, `save_skill`, `install_sandbox_package`).
+- The `host_bash` guard runs only exact npm/pip subcommands (npm accepts
+  aliases and abbreviations such as `npm exe`), refuses options placed before
+  the subcommand, sees every `python3 … -m pip` spelling, refuses
+  archive-looking names (installed as LOCAL files by npm and pip) and refuses
+  npm installs in a project whose `.npmrc` redirects the registry or carries
+  credentials; `host_file` no longer writes package-manager config files.
+- The sandbox package installer validates wheels in an isolated interpreter
+  (a wheel's `.pth` cannot forge the verdict), freezes the image's own
+  libraries as constraints, publishes the tree atomically with hard links,
+  stops at once when the extractor dies, applies the sandbox seccomp profile,
+  and never uses the host network; on the sandbox microservice the operator's
+  `SANDBOX_PIP_NETWORK` wins over the client.
+
+### Fixed
+
+- A coding task waiting on «Conectar GitHub» no longer resumes as a plain chat
+  when the page was reloaded: the continuation now waits until the chat's
+  coding-workspace lookup has answered (with an 8 s ceiling), so it resumes
+  inside its workspace. This race also made the critical e2e gate flaky.
+- Two pictures in one turn: the canvas and the material are chosen from the
+  file names («logo.png» vs «foto.jpg»), the pixels (a small transparent PNG
+  is a logo) and the request («ponle este logo a la foto» places the logo;
+  «cambia el color del logo» edits it), never from the upload order, in the
+  chat loop and in the image composer. Two ordinary photos, a composition
+  («combina estas dos fotos»), an explicit order («la primera imagen») or a
+  pinned canvas keep the user's order. The editor is told which input is the
+  canvas and which is material only when the roles are certain; «ponle este
+  logo a la foto» with two uploads names the other upload, not the chat's
+  previous image («en la misma esquina» never did). IMAGE catalog rows carry
+  `capabilities.imageEdit` in the picker and in Admin → Modelos, computed
+  the way the composer decides, so generation-only rows (DALL-E, Imagen, the
+  legacy seeds, Flux / Recraft / Ideogram via OpenRouter, Grok) are visible
+  as «no edita». The composer now runs a catalog slug
+  («google/gemini-3.1-flash-image-preview», «openai/gpt-5.4-image-2») on
+  OpenRouter instead of the direct Google / OpenAI image APIs, which never
+  knew the slug, so the default OpenRouter image model can edit again.
+- Image edits keep their context. A follow-up on the chat's last image
+  («cambia el color del logo», «ponle un sombrero al gato», «ahora en azul»)
+  edits that image instead of generating an unrelated one, and a creation
+  request that leans on an attached picture («genera una imagen como esta»,
+  «crea un banner con este logo») reaches the model as pixels through
+  `edit_image` instead of the text-only generator. One classifier now drives
+  the composer route and the chat loop; the Office document runner no longer
+  claims image turns; «ponle este logo a la imagen anterior» keeps the previous
+  image as the canvas; an uploaded photo keeps its own frame (the OpenAI editor
+  sends `size: 'auto'`); a model that cannot edit refuses honestly, naming the
+  model by its display name, and the turn never falls back to a brand-new
+  generation. Documents built with a picture («crea una ppt con esta imagen de
+  fondo», «ponle el logo a la portada» with a deck in the chat) stay with the
+  document runner; text about a picture («genera una descripción de esta
+  imagen») stays on the vision stream; a viewer-chosen canvas is never demoted
+  by «la imagen anterior»; «la misma imagen pero de noche», «now in blue» and
+  «crea una versión anime de esta foto» edit the chat's picture; «crea un banner
+  con este logo» frames the result as a banner (16:9).
 
 ### Security
 

@@ -315,6 +315,7 @@ const ALLOWED_EVENTS = new Set([
   'resume.replay_failed',
   'resume.signing_secret_missing',
   'routing.gateway_selected',
+  'routing.image_turn_veto',
   'routing.intent_triage_completed',
   'routing.intent_triage_failed',
   'routing.intent_triage_persistence_failed',

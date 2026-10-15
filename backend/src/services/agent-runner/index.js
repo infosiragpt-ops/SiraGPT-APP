@@ -25,6 +25,8 @@ const { loadConversationContext, conversationContextMessage } = require('./conve
 const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
+const sandboxPackages = require('./sandbox-packages/policy');
+const capabilityLedger = require('../capability-ledger');
 const { agentThumbsEnabled } = require('./trace');
 const { recordVerify, recordOfficeTurn } = require('./office-metrics');
 const { validateSavOutput } = require('./sav-validation');
@@ -467,6 +469,42 @@ function officeFormatNamedIn(normalized) {
   return null;
 }
 
+// Image artifact formats: a prior png is edited by the chat loop's
+// edit_image, never «redesigned» by the document runner.
+const IMAGE_PRIOR_FORMATS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 'svg']);
+// Parts of a deck / document a request can aim at: with an Office file in
+// the chat, «ponle el logo a la portada» places the attached picture INTO
+// the file (runner), it does not edit the picture.
+const DOC_PART_RE = /\b(?:portada|diapositivas?|laminas?|slides?|paginas?|encabezados?|pies? de pagina|celdas?|hojas?|parrafos?|titulos? de la|seccion(?:es)?|capitulos?|cover|headers?|footers?|cells?|sheets?)\b/;
+/**
+ * An image edit / generation turn with image evidence (an attached picture
+ * or a prior image artifact) and no document noun: the chat loop owns it.
+ * With an Office artifact in the chat the picture is material for that file
+ * unless the text names the picture itself as the object.
+ */
+function isImageMediaTurn(text, { files = [], priorArtifactFormat = null } = {}) {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  const list = Array.isArray(files) ? files : [];
+  const fmt = String(priorArtifactFormat || '').toLowerCase().replace(/^.*\./, '');
+  const imageAttached = list.some(isImageFile);
+  const imagePrior = IMAGE_PRIOR_FORMATS.has(fmt);
+  if (!imageAttached && !imagePrior) return false;
+  if (list.some((f) => f && !isImageFile(f))) return false;
+  if (officeFormatNamedIn(t) || DOC_NOUN_RE.test(String(text || '')) || GENERIC_DOC_REF_RE.test(t)) return false;
+  let mediaIntent;
+  try { mediaIntent = require('../agents/media-intent'); } catch (_) { return false; }
+  if (officeFamily(priorArtifactFormat)) {
+    const namesImage = mediaIntent._internal.ANY_IMAGE_REF.test(mediaIntent._internal.normalize(String(text || '')));
+    if (DOC_PART_RE.test(t) || !namesImage) return false;
+  }
+  try {
+    return mediaIntent
+      .detectMediaIntents(String(text || ''), { hasImageAttachment: imageAttached, hasRecentImage: imagePrior })
+      .some((i) => i && (i.kind === 'image-edit' || (i.kind === 'image' && i.confidence === 'high')));
+  } catch (_) { return false; }
+}
+
 /**
  * The Office file a design request would restyle: a format named in the
  * text wins, then the conversation's latest artifact, then an uploaded
@@ -651,10 +689,15 @@ function shouldRunAgentRunner({
   // A request for software that converts documents still asks for code.
   // Reuse the chat's canonical classifier before looking at format nouns.
   if (require('../agents/software-build-intent').detectCodingIntent(t).active) return false;
+  const imageTurn = isImageMediaTurn(t, { files, priorArtifactFormat });
   // Text-only runner-only claims (create-a-doc, style/color follow-ups). The
   // design-upgrade branch of isRunnerOnlyDocumentTurn is NOT a claim on its
   // own: without files or a prior artifact there is nothing to redesign.
-  if (isCreateOrStyleRunnerOnly(t)) return true;
+  if (isCreateOrStyleRunnerOnly(t, { imageTurn })) return true;
+  // A prior png still counts as prior work: the deck generated two turns
+  // ago is edited by «agrégale una conclusión» even though the chat's
+  // latest artifact is an image. Image edits of that png are excluded by
+  // `imageTurn` on the work branch below, not here.
   const hasPrior = Boolean(hasPriorArtifacts || priorArtifactFormat);
   if ((hasFiles || hasPrior) && fileConversionTarget(t)) return true;
   // A design claim needs an Office file to restyle: named in the text, the
@@ -668,7 +711,7 @@ function shouldRunAgentRunner({
     || isFollowupDocumentEdit(t)
     || (['pptx', 'xlsx'].includes(designTarget) && isChartDocumentEdit(t))
     || designClaim;
-  if ((hasFiles || hasPrior) && work) return true;
+  if ((hasFiles || hasPrior) && work && !imageTurn) return true;
   // «haz una presentación como esta» / «usa esta plantilla para una ppt de…»:
   // a format to follow + a deliverable noun is runner work even without a
   // WORK_RE verb (the surgical editor would refuse it as an edit).
@@ -710,7 +753,7 @@ function extractSlideScope(text) {
  * (Edit turns claimed via attached files + a work verb are NOT runner-only:
  * the surgical document_edit path may still legitimately handle them.)
  */
-function isCreateOrStyleRunnerOnly(text) {
+function isCreateOrStyleRunnerOnly(text, { imageTurn = false } = {}) {
   const t = String(text || '');
   try {
     const { isSoftwareBuildRequest, isExplicitDocumentRequest } = require('../agents/software-build-intent');
@@ -718,7 +761,7 @@ function isCreateOrStyleRunnerOnly(text) {
   } catch (_) { /* classifier is local */ }
   if (isCreateDocumentRequest(t) || requestsSavExcelDelivery(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
-  if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
+  if (!imageTurn && STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
   return false;
 }
 
@@ -731,11 +774,12 @@ function isCreateOrStyleRunnerOnly(text) {
  * failed runner therefore ends with an honest error. A prior html page or
  * image is NOT an Office target: those turns keep the chat loop.
  */
-function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null } = {}) {
+function isRunnerOnlyDocumentTurn(text, { priorArtifactFormat = null, files = [] } = {}) {
   const t = String(text || '');
   if (require('../agents/software-build-intent').detectCodingIntent(t).active) return false;
   if (fileConversionTarget(t)) return true;
-  if (isCreateOrStyleRunnerOnly(t)) return true;
+  const imageTurn = isImageMediaTurn(t, { files, priorArtifactFormat });
+  if (isCreateOrStyleRunnerOnly(t, { imageTurn })) return true;
   const named = officeFormatNamedIn(normalizeIntentText(t));
   const target = named || officeFamily(priorArtifactFormat);
   if (['pptx', 'xlsx'].includes(target) && isChartDocumentEdit(t)) return true;
@@ -1477,6 +1521,15 @@ async function runAgentRunner({
         await toolSandbox.writeFile('tmp/sira_theme_alternates.json', JSON.stringify(alternateThemes(designTheme.id)));
       } catch (_) { /* tokens also ride in the prompt */ }
     }
+    // Capability acquisition (sandbox-packages/policy.js): the operator's
+    // allowlist decides what the agent may install into its own sandbox;
+    // every gap and install reaches the timeline and the capability ledger.
+    // The tool list is the process-level snapshot (TOOL_DEFINITIONS): the
+    // prompt and the executor follow it, so the three can never disagree.
+    const livePolicy = sandboxPackages.resolvePolicy();
+    const installerOffered = livePolicy.enabled
+      && TOOL_DEFINITIONS.some((d) => d && d.function && d.function.name === 'install_sandbox_package');
+    const packagePolicy = installerOffered ? livePolicy : { ...livePolicy, enabled: false };
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,
@@ -1485,7 +1538,28 @@ async function runAgentRunner({
       designUpgrade,
       designTheme,
       templateFill: templateFill ? { file: templateFill.file, format: templateFill.format, summary: templateFill.summary } : null,
+      packageInstaller: { enabled: packagePolicy.enabled },
     });
+    const onCapabilityGap = (gap) => {
+      const label = gap.allowed
+        ? `Falta la librería «${gap.package || gap.name}»: está aprobada, el agente puede instalarla`
+        : `Falta «${gap.package || gap.name}»: no está en la lista aprobada; se avisó al administrador`;
+      try { onEvent({ type: 'stage', step: 'capability_gap', tool: 'agent_runner', label, preview: String(gap.name || '').slice(0, 80) }); } catch (_) { /* trace only */ }
+      void capabilityLedger.recordCapabilityGap({
+        userId, chatId, kind: gap.kind, name: gap.name, package: gap.package, allowed: gap.allowed, tool: gap.tool, source: 'agent-runner',
+      });
+    };
+    const onCapabilityInstall = (info) => {
+      const names = (Array.isArray(info.installed) ? info.installed : []).map((i) => i && i.name).filter(Boolean);
+      const requested = Array.isArray(info.requested) ? info.requested : [];
+      const label = info.ok
+        ? `Librería instalada en el sandbox: ${(names.length ? names : requested).join(', ')}`
+        : `No se pudo instalar ${requested.join(', ')} (${info.code || 'error'})`;
+      try { onEvent({ type: 'stage', step: 'capability_install', tool: 'agent_runner', label }); } catch (_) { /* trace only */ }
+      void capabilityLedger.recordCapabilityInstall({
+        userId, chatId, requested, installed: info.installed, bytes: info.bytes, durationMs: info.durationMs, driver: info.driver, code: info.code,
+      });
+    };
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
       : baseSystem;
@@ -1517,6 +1591,7 @@ async function runAgentRunner({
         },
         // The user's words pick the deck theme when the model passes none.
         deck: { prompt: task },
+        capability: { policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall },
       }),
       ...f8.executors,
     };
@@ -2371,6 +2446,7 @@ module.exports = {
   explicitRunnerModel,
   canCallLlm,
   isRunnerOnlyDocumentTurn,
+  isImageMediaTurn,
   isDesignUpgradeRequest,
   isFollowupDocumentEdit,
   isQuestionOrAdviceRequest,

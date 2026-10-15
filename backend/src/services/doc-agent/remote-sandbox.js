@@ -155,6 +155,27 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey,
     persistent: Boolean(persistKey),
     persistKey,
     root: '/workspace',
+    // Allowlisted Python packages: the sandbox host runs the installer
+    // container and streams the wheels into this session (same contract as
+    // the docker driver; see sandbox-pip.js). The service enforces the
+    // same validation again, so a stale backend can never widen it.
+    async installPythonPackages(opts = {}) {
+      if (destroyed) throw new Error('sandbox destroyed');
+      const id = await ensureSession();
+      const timeoutMs = Math.min(600_000, Math.max(30_000, Number(opts.timeoutMs) || 180_000));
+      let allow = [];
+      try { allow = JSON.parse(opts.allowJson || '[]'); } catch (_) { allow = []; }
+      const body = {
+        requirements: Array.isArray(opts.requirements) ? opts.requirements.map(String) : [],
+        allow: Array.isArray(allow) ? allow.map(String) : [],
+        indexUrl: opts.indexUrl || null,
+        network: opts.network || null,
+        timeoutMs,
+        maxBytes: opts.maxBytes || null,
+        tmpSize: opts.tmpSize || null,
+      };
+      return call('POST', `/v1/sessions/${id}/install`, body, { timeoutMs: timeoutMs + 15_000 });
+    },
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');
       const id = await ensureSession();

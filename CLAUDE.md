@@ -2671,6 +2671,86 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   `long-operation-indicator` regenerado. El job «Visual regression» no bloquea (`|| warning`) y
   no tiene PNG en el repo.
 
+## Auto-instalación de capacidades — nivel 1: librerías Python del sandbox (added 2026-10-11)
+
+Pedido de Luis: «que el software, si algo no puede hacer, se auto-instale cosas en sí mismo
+y pueda ayudar al ser humano», empezando por la edición de documentos en Python. Auditoría
+previa con 7 lectores (lo que ya se instalaba solo: el modelo GLM-OCR, skills de ClawHub,
+npm en proyectos del usuario) y diseño por niveles: la decisión humana pasa de «aprobar
+cada instalación» a «aprobar la lista». Solo backend; sin migraciones (el libro mayor son
+filas de `AuditLog`); UI lock intacto.
+- **Política** (`backend/src/services/agent-runner/sandbox-packages/policy.js`, pura): allowlist
+  curada de distribuciones PyPI (datos, documentos, imágenes, texto, con dependencias
+  transitivas), mapa import→distribución (`cv2`→`opencv-python-headless`, `PIL`→`pillow`,
+  `sklearn`→`scikit-learn`, `fitz`→`pymupdf`…), `parseRequirement` estricto (nombre[extras]
+  [==versión]; nunca URLs, rutas, `git+`, opciones ni marcadores), `resolvePolicy(env)` con
+  `SIRAGPT_SANDBOX_PIP*` (on por defecto, off en `NODE_ENV=test`).
+- **Instalador** (`backend/src/services/doc-agent/sandbox-pip.js`, solo builtins; copia
+  byte-idéntica en `services/sandbox/lib/sandbox-pip.js` fijada por test): contenedor
+  instalador desechable (misma imagen, `--network <política>`, mismos límites, `--read-only`,
+  tmpfs, seccomp del sandbox, SIN volumen del workspace, sin secretos; nunca red `host`) →
+  `pip install --user --only-binary=:all: -c <versiones de la imagen congeladas> --report`
+  (nunca sombrea numpy/lxml/python-pptx de la imagen; si lo exigiría → `conflict`) →
+  validación de CADA wheel resuelto contra `SIRA_PIP_ALLOW` en un intérprete aislado
+  (`PYTHONNOUSERSITE=1 python3 -I -s`: un `.pth` del wheel no puede falsificar `SIRA_PIP_OK`;
+  un paquete no aprobado rechaza el lote entero, exit 3) → `tar` por stdout → `docker exec -i
+  <sandbox> tar -x` a un staging → `cp -alf` (enlaces duros; respaldo `cp -af`) al árbol final
+  `/workspace/.sira-packages`. Si el extractor muere primero, se mata al productor
+  (`extract_failed`, no timeout).
+  Tope de bytes, timeout, abort y rollback del staging; `docker rm -f` del instalador si
+  algo falla. Drivers: docker (`installPythonPackages` en `doc-agent/sandbox.js`), local
+  (pip directo en `<root>/.sira-packages`), remoto (`POST /v1/sessions/:id/install` en
+  `services/sandbox/server.js`, con la misma validación del lado servidor; su
+  `SANDBOX_PIP_NETWORK` manda sobre el cliente). El sandbox de ejecución sigue
+  `--network none`. `glob`/`grep`/`listFiles` podan `.sira-packages*` salvo que se pida.
+- **Runner** (`agent-runner/tools.js`): tool `install_sandbox_package` (solo si la política
+  está activa; validación → tope `maxPerTurn` → instalador → manifest
+  `.sira-packages/.sira/manifest.json`; mensajes honestos por código: `not_allowed`,
+  `not_found` (sin wheel), `network`, `timeout`, `too_large`, `disk`, `conflict`,
+  `commit_failed`); la herramienta se ofrece solo si está en la lista de tools Y la política
+  está activa (prompt, lista y ejecutor siguen la misma decisión); `execute_python` y
+  `execute_bash` exportan `PYTHONUSERBASE=/workspace/.sira-packages` y `PATH`;
+  `capability-recovery.js` dice «aprobada → llama a install_sandbox_package una vez y
+  reintenta» o «no aprobada → reportada al administrador» (`detectMissingDependency`
+  también para binarios en bash, y un traceback de `python3 x.py` en bash se lee como
+  Python); un submódulo inexistente (`pptx.util2` → `missing_submodule`) o un helper de
+  SiraGPT (`sira_charts` → `missing_helper`) NO es un gap ni algo que instalar; en raíces
+  *namespace* (`google.protobuf` → `protobuf`) la distribución es el segundo componente;
+  callbacks `capability.onGap/onInstall` (una señal por
+  distribución por turno). `index.js` emite `stage` `capability_gap` /
+  `capability_install` al timeline y escribe el libro mayor; `prompt.js` recibe
+  `packageInstaller.enabled`; etiqueta en `trace.js`.
+- **Libro mayor** (`backend/src/services/capability-ledger.js`): filas `AuditLog`
+  `agent.capability_gap` / `agent.capability_install` / `agent.host_bash` (tags
+  `capability`), nunca lanza, nada en test sin prisma inyectado; `GET /api/admin/capabilities`
+  (eventos, `gaps` agregados por paquete para decidir qué aprobar, política viva).
+- **`host_bash` gobernado** (`agents/host-bash-tool.js`): `npx` fuera; npm/pip solo con
+  subcomandos de una lista EXACTA (npm acepta alias y abreviaturas: `npm exe`, `npm isntall`,
+  `npm cre` → `npm_subcommand`); opciones antes del subcomando → `npm_option_first` /
+  `pip_option_first`; todas las formas de `python3 … -m pip` (`-mpip`, `-u -m pip`, `-m pip3`)
+  pasan por el guard de pip; `npm install…`/`pip3 install…` solo con nombres del registro
+  (`packageInstallGuard`: sin URLs, git+, file:, `user/repo`, rutas, nombres-archivo
+  `.tgz`/`.tar.gz`/`.whl`/`.zip`, índices, `-r/-e`, `--target`, `-g`); un `.npmrc` del
+  proyecto que cambia el registro o lleva credenciales bloquea `npm install`
+  (`npm_project_registry`) y `host_file` no escribe `.npmrc`/`.yarnrc*`/`pip.conf`/`pip.ini`/
+  `.pypirc`; fila de auditoría por ejecución y por rechazo. `permission-manager`: las
+  herramientas de adquisición (`host_bash`, `clone_project`, `install_skill`, `save_skill`,
+  `install_sandbox_package`) nunca entran en «Permitir siempre en este chat» (la respuesta
+  devuelve `decision: 'allow', scope: 'once'`). El libro mayor no toca la BD desde un
+  proceso de test (`NODE_ENV=test` o `NODE_TEST_CONTEXT`).
+- Tests: `sandbox-package-policy` (5), `sandbox-pip-installer` (11: script, args del
+  contenedor, parser, tubería con tope/timeout/abort, driver local y docker end-to-end
+  con `docker`/`python3` falsos de `tests/helpers/`, wheel con `.pth` hostil, restricciones
+  `-c`, extractor que muere primero, drivers, remoto, paridad del espejo),
+  `agent-runner-install-sandbox-package` (8), `host-bash-install-guard` (9: evasiones por
+  alias/opciones/`-m pip`/archivos, `.npmrc`, `host_file`, permiso único),
+  `capability-ledger` (4), `sandbox-service-install-route` (2: la ruta del microservicio en
+  CI, autoridad de `SANDBOX_PIP_NETWORK`, `host` rechazada) + `services/sandbox/server.test.js`
+  (fuera de CI). Envs en `docs/ENV_VARIABLES.md`.
+- **Pendiente (decisión de Luis)**: red interna + devpi/verdaccio con hashes fijados
+  (`SIRAGPT_SANDBOX_PIP_NETWORK` / `_INDEX_URL`); paquetes npm en el sandbox; registro de
+  MCP desde el chat; puente «capability_gap → PR de Dockerfile»; desinstalación.
+
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP
 - Remoto: `origin`

@@ -38,6 +38,14 @@ const BLOCKED_BASENAMES = new Set([
   'id_dsa',
   'id_ecdsa',
   'id_ed25519',
+  // Package-manager config can redirect host_bash installs to another
+  // registry/index or carry tokens; the agent never writes it.
+  '.npmrc',
+  '.yarnrc',
+  '.yarnrc.yml',
+  'pip.conf',
+  'pip.ini',
+  '.pypirc',
 ]);
 
 function sha256(value) {

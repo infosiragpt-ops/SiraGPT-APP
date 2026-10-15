@@ -118,7 +118,13 @@ async function createDockerSession({ workspaceKey, processRunner = runProcess, m
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('session destroyed');
       const timeoutMs = clampInt(opts.timeoutMs, CMD_TIMEOUT_MS, 1_000, 600_000);
-      return dexec(['exec', '-w', '/workspace', name, 'bash', '-c', String(command)], { timeoutMs });
+      // Packages installed through POST /v1/sessions/:id/install (lib/sandbox-pip.js)
+      // are a pip --user tree under /workspace/.sira-packages: PYTHONUSERBASE
+      // and PATH make them importable/callable in every command.
+      return dexec(
+        ['exec', '-w', '/workspace', '-e', 'PYTHONUSERBASE=/workspace/.sira-packages', name, 'bash', '-c', `export PATH=/workspace/.sira-packages/bin:"$PATH"; ${String(command)}`],
+        { timeoutMs },
+      );
     },
     async putFile(relPath, buffer) {
       const rel = safeRel(relPath);
@@ -145,7 +151,9 @@ async function createDockerSession({ workspaceKey, processRunner = runProcess, m
       await this.putFile(relPath, Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'));
     },
     async listFiles(relDir = '.') {
-      const r = await this.exec(`cd /workspace && find ${JSON.stringify(relDir)} -type f -printf '%s %p\\n' 2>/dev/null | head -500`);
+      // Packages installed through /install never flood a workspace listing.
+      const prune = /^(\.\/)?\.sira-packages/.test(String(relDir)) ? '' : "-name '.sira-packages*' -prune -o ";
+      const r = await this.exec(`cd /workspace && find ${JSON.stringify(relDir)} ${prune}-type f -printf '%s %p\\n' 2>/dev/null | head -500`);
       return String(r.stdout || '').split('\n').filter(Boolean).map((line) => {
         const i = line.indexOf(' ');
         return { path: line.slice(i + 1).replace(/^\.\//, ''), size: Number(line.slice(0, i)) || 0 };

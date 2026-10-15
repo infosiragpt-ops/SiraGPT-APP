@@ -230,6 +230,45 @@ function generateScenesFromPrompt(prompt, totalDuration) {
 // Tool 1: generate_image
 // ─────────────────────────────────────────────────────────────────────────
 
+// Spanish, names the picked model by its DISPLAY name (never a raw id or an
+// OpenRouter slug — picked-model-label policy), never switches it.
+async function unsupportedEditMessage(ctx = {}, model) {
+  const picked = ctx.imageModel || null;
+  let label = '';
+  try {
+    label = await require('../ai/picked-model-label').resolvePickedModelLabel({
+      model: picked || model || '', provider: ctx.imageProvider || '', prisma: ctx.prisma || null,
+    });
+  } catch (_) { label = ''; }
+  const subject = label
+    ? `${label} no permite editar imágenes`
+    : (picked ? 'El modelo de imagen seleccionado no permite editar imágenes' : 'El modelo de imagen de este turno no permite editar imágenes');
+  return `${subject}. Elige un modelo de edición de imágenes (GPT Image o Gemini Flash Image) en el selector para conservar tu imagen.`;
+}
+
+const { isImageAttachment } = require('./media-intent');
+// Ids attached in THIS turn (the loop marks ids recovered from history).
+function freshAttachmentIds(ctx = {}) {
+  const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
+  return (Array.isArray(ctx.fileIds) ? ctx.fileIds.map(String) : []).filter((id) => !recovered.has(id));
+}
+// How many of this turn's fresh attachments are pictures. Metadata when the
+// caller sent it (the chat loop); otherwise the owned file rows (the task
+// runner's ctx carries ids only). Documents never count.
+async function countFreshImages({ ctx = {}, freshIds = [], prisma = null } = {}) {
+  if (!freshIds.length) return 0;
+  if (Array.isArray(ctx.fileMetadata) && ctx.fileMetadata.length) {
+    return ctx.fileMetadata.filter((f) => f && f.id && isImageAttachment(f) && freshIds.includes(String(f.id))).length;
+  }
+  if (prisma?.file?.findMany && ctx.userId) {
+    try {
+      const rows = await prisma.file.findMany({ where: { id: { in: freshIds }, userId: ctx.userId, deletedAt: null } });
+      return (Array.isArray(rows) ? rows : []).filter((row) => row && isImageAttachment(row)).length;
+    } catch (_) { return 0; }
+  }
+  return 0;
+}
+
 const generateImage = {
   name: 'generate_image',
   description: 'Generate one or more NEW images from a text description using ANY configured AI image model — OpenAI (gpt-image), Google (Imagen/Gemini), fal.ai (FLUX, etc.), OpenRouter or xAI. The selected model is routed to its own provider. A failure is reported without changing models or providers. Spoken framing is understood ("dame una imagen vertical", "una imagen horizontal para la portada", "3 imágenes estilo anime"): the tool extracts the exact frame, style/type and count from the prompt unless explicit arguments are passed. Pass count (1..5) for several variants in one call — each is saved as its own downloadable artifact. Use for photos, illustrations, concept art, product mockups, or any visual content. When the user supplies image references to guide the result, use edit_image so the original reference pixels reach the model. Do NOT use for "la misma imagen pero vertical/horizontal" or "hazla vertical" — that is edit_image (same scene, new frame).',
@@ -258,6 +297,35 @@ const generateImage = {
         quality: qualityArg,
         count: countArg,
       }, ctx);
+    }
+    // The generators are text-only: a fresh image attachment («como esta»,
+    // «con este logo») only reaches the model through edit_image.
+    const recovered = new Set((Array.isArray(ctx.recoveredFileIds) ? ctx.recoveredFileIds : []).map(String));
+    const attachedImages = (Array.isArray(ctx.fileMetadata) ? ctx.fileMetadata : [])
+      .filter((f) => f && f.id && isImageAttachment(f) && !recovered.has(String(f.id)))
+      .map((f) => String(f.id));
+    const freshIds = freshAttachmentIds(ctx);
+    const hasFreshImage = attachedImages.length > 0 || (ctx.hasImageAttachment === true && freshIds.length > 0);
+    if (hasFreshImage) {
+      const engine = getImageEngine();
+      const editable = typeof engine.canEditImage !== 'function'
+        || engine.canEditImage({ model: ctx.imageModel || model || undefined, provider: ctx.imageProvider || undefined });
+      if (!editable) {
+        const msg = `${await unsupportedEditMessage(ctx, model)} O pide una imagen nueva sin adjuntar imágenes.`;
+        emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: msg });
+        return { ok: false, code: 'image_edit_unsupported', error: msg };
+      }
+      const edited = await editImage.execute({
+        instruction: rawPrompt,
+        aspectRatio: ratioArg,
+        quality: qualityArg,
+        count: countArg,
+        model,
+        ...(attachedImages.length ? { referenceFileIds: attachedImages } : {}),
+      }, ctx);
+      // The loop records this step under the tool the model invoked; the
+      // marker lets the finalize gate credit the edit that actually ran.
+      return edited && typeof edited === 'object' ? { ...edited, executedTool: 'edit_image' } : edited;
     }
     // Spoken context fills the gaps: "dame una imagen vertical",
     // "una imagen orisontal para la portada", "3 imágenes estilo anime".
@@ -310,7 +378,7 @@ const generateImage = {
       if (!result.ok || !result.images?.length) {
         const msg = result.error || 'El servicio de imágenes no devolvió resultado. Reintenta con un prompt más simple.';
         emitEvent(ctx, 'tool_output', { tool: 'generate_image', ok: false, preview: msg });
-        return { ok: false, error: msg, attempts: result.attempts };
+        return { ok: false, error: msg, code: result.code, attempts: result.attempts };
       }
 
       // Every image becomes its own downloadable artifact (back-compat: the
@@ -343,6 +411,7 @@ const generateImage = {
             sizeBytes: artifact.sizeBytes,
             downloadUrl: artifact.downloadUrl,
             fileId: `artifact:${artifact.id}`, model: result.model, provider: result.provider, aspectRatio,
+            prompt,
           },
         });
       }
@@ -399,11 +468,11 @@ const editImage = {
       instruction: { type: 'string', description: 'The transformation to apply, in natural language (e.g. "quita el fondo y déjalo transparente", "make the sky sunset orange").' },
       imageUrl: { type: 'string', description: 'Optional URL of the source image (http(s), data: or an /uploads path from this chat).' },
       fileId: { type: 'string', description: 'Optional id of an uploaded file to edit. Defaults to the image attached to the message or the last image in the chat.' },
-      referenceFileIds: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'All image reference file IDs, in user order (up to 8 including the source). fileId remains the primary target; other images guide the requested style, layout or subjects.' },
+      referenceFileIds: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'All image reference file IDs (up to 8 including the source). fileId remains the primary target; other images guide the requested style, layout or subjects. Without fileId the canvas is chosen from the pictures and the request (a logo, signature or sticker is material placed on the photo), not from upload order.' },
       model: { type: 'string', description: 'Optional edit model override (e.g. "gemini-2.5-flash-image", "gpt-image-1"). Omit to use the best configured provider.' },
       target: { type: 'string', description: 'Optional explicit edit target ("el cielo", "los ojos"). Wins over the spoken target; the rest of the image is preserved.' },
       selection: { type: 'object', description: 'Optional rectangular selection: { x, y, width, height } in 0..100 (fractions 0..1 also accepted). Pixels outside it are protected. Invalid selections return an error.' },
-      aspectRatio: { type: 'string', description: 'Optional output frame for reframes: square|wide|portrait or 1:1|3:4|16:9|9:16.' },
+      aspectRatio: { type: 'string', description: 'Optional output frame, only honoured for reframes or when the instruction itself names a frame (square|wide|portrait or 1:1|3:4|16:9|9:16); otherwise the source frame is kept.' },
       quality: { type: 'string', enum: ['standard', 'hd', '512px', '1K', '2K', '4K'], description: 'Requested rendering quality; supported output dimensions depend on the selected model.' },
       count: { type: 'integer', minimum: 1, maximum: 5, description: 'Number of variants to edit from the same source (1 to 5).' },
     },
@@ -420,12 +489,28 @@ const editImage = {
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Buscando la imagen a editar…', partial: true });
       const needsFiles = !imageUrl || fileId || referenceFileIds?.length || ctx.fileIds?.length || /\/uploads\//.test(imageUrl);
       const prisma = ctx.prisma || (needsFiles && (() => { try { return require('../../config/database'); } catch { return null; } })());
-      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
+      // «ponle este logo a la imagen anterior»: the chat's last image is the
+      // canvas — unless the model pinned a NON-attachment fileId (an older
+      // image the user chose), which stays the canvas.
+      // With two or more fresh uploads «ponle este logo a la foto» names the
+      // other upload, not the chat's previous image: only the explicit words
+      // («a la imagen anterior») reach back into the history then.
+      const freshIds = freshAttachmentIds(ctx);
+      const freshImageIds = await countFreshImages({ ctx, freshIds, prisma });
+      const strict = Math.max(freshImageIds, Array.isArray(referenceFileIds) ? referenceFileIds.length : 0) >= 2;
+      const previousCue = !imageUrl && (imageDirective.detectPreviousImageCue(cleanInstruction, { strict })
+        || imageDirective.detectPreviousImageCue(String(ctx.userQuery || ''), { strict }));
+      const primaryFromHistory = Boolean(previousCue) && (!fileId || freshIds.includes(String(fileId)));
+      // No pinned canvas: with several attachments the pictures and the words
+      // decide which one is edited («ponle este logo a la foto» → the photo).
+      // A history canvas, when the cue finds one, still wins inside the resolver.
+      const arrangeByIntent = (!fileId && !imageUrl) ? String(ctx.userQuery || cleanInstruction) : null;
+      const sources = await require('../media/image-source').resolveImageSources({ imageUrl, fileId, referenceFileIds, primaryFromHistory, arrangeByIntent }, { ...ctx, prisma, artifactDir: ARTIFACT_DIR });
       const [source] = sources;
       if (!source) {
         const msg = 'No encontré la imagen que quieres editar. Selecciónala o adjúntala para continuar.';
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
-        return { ok: false, error: msg };
+        return { ok: false, code: 'image_source_required', error: msg };
       }
 
       emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: 'Aplicando la edición a la imagen…', partial: true });
@@ -437,7 +522,29 @@ const editImage = {
       const editDirective = reframe
         ? imageDirective.resolveReframeDirective(cleanInstruction, aspectRatio)
         : imageDirective.resolveEditDirective(cleanInstruction, { target, selection });
-      const ratio = aspectRatio || editDirective.frame || (reframe && reframe.frame);
+      // Several inputs whose roles are certain (pinned, history canvas, or
+      // ranked on evidence): tell the editor which one is the canvas and
+      // which are material. A coin toss or a composition («combina estas dos
+      // fotos») gets no placement clause — the engine's neutral contract stays.
+      if (!reframe && sources.length >= 2) {
+        const { describeInputRoles, isCompositionRequest } = require('../media/image-canvas-selection');
+        const certain = sources.canvasOrigin && sources.canvasOrigin !== 'upload-order' && sources.canvasOrigin !== 'explicit';
+        if (certain && !isCompositionRequest(cleanInstruction) && !isCompositionRequest(String(ctx.userQuery || ''))) {
+          editDirective.prompt = `${editDirective.prompt}${describeInputRoles(sources, { language: imageDirective.pickEditLanguage(cleanInstruction) })}`.trim();
+        }
+      }
+      if (sources.arrangement && sources.arrangement.confidence !== 'low' && sources.canvasOrigin === 'ranked') {
+        const { _internal: { displayNameOf } } = require('../media/image-canvas-selection');
+        emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: `Lienzo: ${displayNameOf(sources[0], 0)}; material: ${sources.slice(1).map((s, i) => displayNameOf(s, i + 1)).join(', ')}`, partial: true });
+      }
+      // A plain edit keeps the source frame: the model's aspectRatio only
+      // counts for reframes, when the user's own words name an orientation,
+      // or when the attachment is material for a framed deliverable («crea
+      // un banner con este logo» → 16:9, «una historia con esta foto» → 9:16).
+      const spokenFrame = reframe ? null : imageDirective.detectSpokenImageFrame(cleanInstruction);
+      const deliverableFrame = (reframe || spokenFrame) ? null : imageDirective.detectReferenceDeliverableFrame(cleanInstruction);
+      const wordedFrame = spokenFrame || deliverableFrame;
+      const ratio = reframe ? (aspectRatio || reframe.frame) : (wordedFrame ? (aspectRatio || wordedFrame.frame) : null);
       const { prepareEditCanvas, finishEditCanvas } = require('../media/image-edit-canvas');
       const canvas = (reframe || selection) ? await prepareEditCanvas({
         imageBuffer: source.buffer, operation: reframe ? 'reframe' : 'edit',
@@ -460,11 +567,17 @@ const editImage = {
       });
 
       if (!result.ok || !result.images?.length) {
-        const msg = result.error || 'El servicio de edición de imágenes no devolvió resultado.';
+        // NO_PROVIDER (missing credentials for a model that CAN edit) keeps
+        // the engine's own copy: telling the user to pick the model they
+        // already picked would be wrong.
+        const msg = result.code === 'image_edit_unsupported'
+          ? await unsupportedEditMessage(ctx, model)
+          : (result.error || 'El servicio de edición de imágenes no devolvió resultado.');
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', ok: false, preview: msg });
-        return { ok: false, error: msg, attempts: result.attempts };
+        return { ok: false, error: msg, code: result.code, attempts: result.attempts };
       }
 
+      const lineageRatio = ratio || (await require('../media/image-followup-context').aspectRatioFromBuffer(source.buffer)) || null;
       const artifacts = [];
       for (const image of result.images) {
         const raw = Buffer.from(image.b64, 'base64');
@@ -475,13 +588,13 @@ const editImage = {
           referenceFileIds: sources.map((image) => image.fileId).filter(Boolean),
           rootFileId: source.metadata?.rootFileId || source.fileId,
           version: (Number(source.metadata?.version) || 1) + 1,
-          model: result.model, provider: result.provider, aspectRatio: ratio, quality: ctx.imageQuality || quality,
+          model: result.model, provider: result.provider, aspectRatio: lineageRatio, quality: ctx.imageQuality || quality,
         } });
         artifacts.push(artifact);
         emitEvent(ctx, 'file_artifact', {
           artifact: { id: artifact.id, fileId: `artifact:${artifact.id}`, filename: artifact.filename, format: 'png', mime: 'image/png', sizeBytes: artifact.sizeBytes,
             downloadUrl: artifact.downloadUrl, parentFileId: source.fileId || null, version: (Number(source.metadata?.version) || 1) + 1,
-            model: result.model, provider: result.provider, aspectRatio: ratio,
+            model: result.model, provider: result.provider, aspectRatio: lineageRatio, prompt: cleanInstruction,
           },
         });
       }
