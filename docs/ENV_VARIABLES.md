@@ -548,6 +548,8 @@ so a Redis incident does not brick unrelated API reads.
 | `DATABASE_POOL_AUTOSCALE_MIN` | Advisory recommendation floor (default `2`, clamp `1..100`) |
 | `DATABASE_POOL_AUTOSCALE_MAX` | Advisory recommendation ceiling (default `50`, clamp `1..100` and never below min) |
 | `DATABASE_POOL_AUTOSCALE_COLD_SAMPLES` | Consecutive cold samples before advisory scale-down (default `3`, clamp `1..20`) |
+| `SIRAGPT_SLOW_QUERY_MS` | Prisma operations at or above this many ms print one `[slow-query] Model.action Nms threshold=… site=src/…:line` WARN line in Admin → Logs (default `500`, `0` disables). Never logs args, SQL, parameters or error messages; the duration includes waiting for a pool connection |
+| `SIRAGPT_SLOW_QUERY_LOG_COOLDOWN_MS` | One `[slow-query]` line per `Model.action` per window (default `60000`, clamp `1000..3600000`); repeats are counted as `suppressed=N maxMs=…` on the next line |
 | `REDIS_URL` | Redis connection string (sessions, queues, rate limits, cache) |
 | `SESSION_SECRET` | Express session signing secret |
 
@@ -631,6 +633,8 @@ Collects thumbs + regenerates into `preference_events`, fits an in-process Bradl
 | `SIRAGPT_RLCD_LANE_STEERING` | on | RLCD ledger: la probabilidad calibrada puede forzar el bucle agéntico en turnos de código |
 | `SIRAGPT_RLCD_LANE_THRESHOLD` | 0.6 | RLCD ledger: umbral de probabilidad calibrada para forzar el carril agéntico |
 | `SIRAGPT_RLHF_STEERING_MAX_CHARS` | 1800 | Size cap for the injected preference block |
+| `SIRAGPT_RLHF_HYDRATE_TTL_MS` | `600000` | How long a read of a user's rated answers (Message.feedback) is trusted before the chat turn reads it again. Concurrent first turns always share one read; a thumb or `clearUser` invalidates it at once. `0` keeps only the in-flight dedupe (a read every turn) |
+| `SIRAGPT_RLHF_HYDRATE_MAX_USERS` | `5000` | LRU cap of users remembered by that memo |
 | `SIRAGPT_RLHF_BEST_OF_N` | off | `1` / `true` / `on` enables inference-time best-of-N (multiplies token cost). Leave off in production |
 | `SIRAGPT_RLHF_RLAIF` | off | `1` / `true` / `on` allows synthetic HHH labels; abstains on mid scores. Leave off in production |
 | `SIRAGPT_RLHF_RLAIF_MAX_PER_USER` | 8 | Cap of synthetic rows per user per window |
@@ -855,6 +859,18 @@ pase es acotado; el siguiente pase continúa desde el cursor.
 |----------|---------|---------|
 | `SIRAGPT_MEDIA_RECONCILE_INTERVAL_MS` | `60000` (mín. 15000) | Cadencia del barrido de recuperación |
 | `SIRAGPT_MEDIA_RECONCILE_MAX_ROWS` | `500` (mín. 100) | Filas de medios visitadas por pase (páginas de 100); un backlog mayor sigue en el pase siguiente |
+
+## Robustez — tiempos máximos y retención (added 2026-10-15)
+
+Llamadas externas que antes podían quedar colgadas hasta 5 min (el tope de
+undici) y estado en memoria que crecía hasta el próximo reinicio.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_APPS_TOOL_TIMEOUT_MS` | `30000` (máx. `120000`) | Tiempo total de una herramienta de app conectada (GitHub / LinkedIn / X), incluida la lectura del cuerpo. Al vencer responde `tool_timeout`; en una escritura dice que la acción pudo haberse completado |
+| `APPS_AI_TIMEOUT_MS` | `30000` (máx. `120000`) | Tiempo total de una llamada a `/api/apps-ai/chat` (IA de las apps generadas). Al vencer: `504 ai_timeout`, o el evento SSE `{"error":"ai_timeout"}` si el stream ya empezó. Si la app cierra la conexión, la llamada al proveedor se cancela |
+| `SIRAGPT_THESIS_SESSION_TTL_MS` | `86400000` (mín. `60000`) | Una sesión de tesis terminada (completada o con error) se olvida tras este tiempo sin cambios. Una sesión en curso nunca se olvida |
+| `SIRAGPT_THESIS_SESSION_MAX` | `500` | Tope de sesiones de tesis en memoria; al superarlo se olvidan primero las terminadas más antiguas |
 
 ## Chat attachments — any format (optional)
 

@@ -39,6 +39,35 @@ const MAX_ENTRIES_PER_USER = 500;
 // userId → Array<Entry>
 const ledger = new Map();
 
+// Durable-hydration memo, userId → { at, promise }. A user with no rated
+// answers keeps an empty ledger, so findExemplars re-read Message.feedback on
+// EVERY chat turn, and two concurrent first turns hydrated twice; the lookup
+// then blew the chat enrichment budget («feedback-exemplars exceeded 900ms»).
+// One in-flight hydrate per user; a successful read is trusted for
+// SIRAGPT_RLHF_HYDRATE_TTL_MS (10 min; 0 keeps only the in-flight dedupe);
+// LRU-bounded by SIRAGPT_RLHF_HYDRATE_MAX_USERS (5000). record() (the thumb
+// write path) and clearUser() invalidate it; a failed read is retried on the
+// next turn.
+const DEFAULT_HYDRATE_TTL_MS = 10 * 60_000;
+const DEFAULT_HYDRATE_MAX_USERS = 5000;
+// rag.embed sends every cache miss in ONE provider call and Gemini's batch
+// endpoint takes at most 100 inputs, so hydration embeds in slices.
+const HYDRATE_EMBED_BATCH = 64;
+const hydration = new Map();
+
+function intEnv(value, fallback, min) {
+  if (value === undefined || value === null || String(value).trim() === '') return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= min ? Math.floor(n) : fallback;
+}
+
+function rememberHydration(userId, value) {
+  hydration.delete(userId);
+  hydration.set(userId, value);
+  const max = intEnv(process.env.SIRAGPT_RLHF_HYDRATE_MAX_USERS, DEFAULT_HYDRATE_MAX_USERS, 1);
+  while (hydration.size > max) hydration.delete(hydration.keys().next().value);
+}
+
 function nowMs() { return Date.now(); }
 
 function cosine(a, b) {
@@ -97,6 +126,7 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
 
   let list = ledger.get(userId);
   if (!list) { list = []; ledger.set(userId, list); }
+  hydration.delete(userId);
 
   // Dedup by runId — the second feedback for the same run replaces the first.
   const existingIdx = list.findIndex(e => e.runId === runId);
@@ -155,54 +185,65 @@ async function record({ userId, runId, agent, request, response, helpful, notes,
 /**
  * Load durable preference rows (from Postgres Message.feedback) into the
  * in-memory ledger. Used so RLHF-lite survives process restart. Dedupes
- * on runId via record().
+ * on runId via ingestLocal(). The rows are already durable, so they are NOT
+ * written back to the preference store (that re-ran an upsert, a response
+ * embedding and a retrain check per row on the chat read path), and the
+ * requests are embedded in ONE batched call instead of one call per row.
  */
 async function hydrateFromRows(userId, rows, embedder) {
   if (!userId || !Array.isArray(rows) || rows.length === 0) return { stored: 0 };
-  let stored = 0;
-  for (const row of rows) {
-    if (!row || !row.runId) continue;
-    await record({
+  const valid = rows.filter((row) => row && row.runId);
+  const texts = valid.map((row) => String(row.request || '').slice(0, 4000));
+  const vectors = new Array(valid.length).fill(null);
+  const toEmbed = texts.map((text, i) => (text ? i : -1)).filter((i) => i >= 0);
+  if (typeof embedder === 'function') {
+    for (let start = 0; start < toEmbed.length; start += HYDRATE_EMBED_BATCH) {
+      const slice = toEmbed.slice(start, start + HYDRATE_EMBED_BATCH);
+      try {
+        const out = await embedder(slice.map((i) => texts[i]));
+        // A short (partial) response cannot be aligned to its rows: keep the
+        // entries without vectors rather than pairing a request with another's.
+        if (Array.isArray(out) && out.length === slice.length) {
+          slice.forEach((i, j) => { vectors[i] = out[j] || null; });
+        }
+      } catch (err) {
+        // Non-fatal: store without embeddings.
+        console.warn('[feedback-ledger] hydrate embed failed:', err.message);
+      }
+    }
+  }
+  valid.forEach((row, i) => {
+    ingestLocal({
       userId,
       runId: String(row.runId),
-      chatId: row.chatId || null,
       agent: row.agent || 'chat',
       request: row.request,
       response: row.response,
       helpful: row.helpful === true,
       notes: row.notes,
-      embedder,
+      embedding: vectors[i],
     });
-    stored += 1;
-  }
-  return { stored };
+  });
+  return { stored: valid.length };
 }
 
 /**
- * Find top-K past feedback entries most similar to the current request.
- *
- * @param {object} args
- * @param {string} args.userId
- * @param {string} args.request  — the new ask
- * @param {function} args.embedder  — async (texts[]) => Float32Array[]
- * @param {number} [args.k=3]
- * @param {boolean} [args.onlyHelpful=true]
- * @param {string} [args.agent]  — filter to entries from the same specialist
- * @param {function} [args.loader] — async (userId) => preference rows from durable store
- *
- * @returns {Promise<Array<{ runId, request, response, helpful, notes, score }>>}
- *   Sorted descending by similarity.
+ * Read the user's durable feedback into the ledger: Message.feedback rows via
+ * `loader`, then the preference store when the ledger is still empty.
+ * Never throws; resolves false when the loader failed (retry next turn).
  */
-async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent, loader }) {
-  if (typeof loader === 'function' && (!ledger.get(userId) || ledger.get(userId).length === 0)) {
+async function hydrateFromDurable(userId, loader, embedder) {
+  let ok = true;
+  if (typeof loader === 'function') {
     try {
       const rows = await loader(userId);
       await hydrateFromRows(userId, rows, embedder);
     } catch (err) {
+      ok = false;
       console.warn('[feedback-ledger] durable hydrate failed:', err && err.message);
     }
   }
-  let list = ledger.get(userId);
+  const list = ledger.get(userId);
   if (!list || list.length === 0) {
     try {
       const store = require('../rlhf/preference-store');
@@ -225,11 +266,60 @@ async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = t
           at: e.createdAt || Date.now(),
         });
       }
-      list = ledger.get(userId);
     } catch { /* hydrate is best-effort */ }
   }
+  return ok;
+}
+
+async function ensureHydrated(userId, loader, embedder) {
+  const current = ledger.get(userId);
+  if (current && current.length > 0) return;
+  // Only a Message.feedback read is memoized: a loader-less caller must not
+  // mark the user as hydrated for the chat turn that brings the loader.
+  if (typeof loader !== 'function') {
+    await hydrateFromDurable(userId, null, embedder);
+    return;
+  }
+  const memo = hydration.get(userId);
+  if (memo && memo.promise) { await memo.promise; return; }
+  const ttlMs = intEnv(process.env.SIRAGPT_RLHF_HYDRATE_TTL_MS, DEFAULT_HYDRATE_TTL_MS, 0);
+  if (memo && ttlMs > 0 && nowMs() - memo.at < ttlMs) return;
+  const promise = hydrateFromDurable(userId, loader, embedder);
+  rememberHydration(userId, { at: nowMs(), promise });
+  const ok = await promise;
+  if (hydration.get(userId)?.promise !== promise) return; // invalidated meanwhile
+  if (ok && ttlMs > 0) rememberHydration(userId, { at: nowMs(), promise: null });
+  else hydration.delete(userId);
+}
+
+/**
+ * Find top-K past feedback entries most similar to the current request.
+ *
+ * @param {object} args
+ * @param {string} args.userId
+ * @param {string} args.request  — the new ask
+ * @param {function} args.embedder  — async (texts[]) => Float32Array[]
+ * @param {number} [args.k=3]
+ * @param {boolean} [args.onlyHelpful=true]
+ * @param {string} [args.agent]  — filter to entries from the same specialist
+ * @param {function} [args.loader] — async (userId) => preference rows from durable store
+ *
+ * @returns {Promise<Array<{ runId, request, response, helpful, notes, score }>>}
+ *   Sorted descending by similarity.
+ */
+async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = true, agent, loader }) {
+  await ensureHydrated(userId, loader, embedder);
+  const list = ledger.get(userId);
   if (!list || list.length === 0) return [];
   if (!request || typeof embedder !== 'function') return [];
+
+  // Filter BEFORE embedding the query: a ledger with no usable entry (only
+  // thumbs-down, another agent, no stored vectors) never needed that call.
+  const pool = list
+    .filter(e => e.embedding)
+    .filter(e => !onlyHelpful || e.helpful)
+    .filter(e => !agent || e.agent === agent);
+  if (pool.length === 0) return [];
 
   let queryVec;
   try {
@@ -240,12 +330,6 @@ async function findExemplars({ userId, request, embedder, k = 3, onlyHelpful = t
     return [];
   }
   if (!queryVec) return [];
-
-  const pool = list
-    .filter(e => e.embedding)
-    .filter(e => !onlyHelpful || e.helpful)
-    .filter(e => !agent || e.agent === agent);
-  if (pool.length === 0) return [];
 
   const scored = pool.map(e => ({
     runId: e.runId, agent: e.agent, request: e.request, response: e.response,
@@ -312,9 +396,10 @@ function ingestLocal({ userId, runId, agent, request, response, helpful, notes, 
   }
 }
 
-function clearUser(userId) { ledger.delete(userId); }
+function clearUser(userId) { ledger.delete(userId); hydration.delete(userId); }
 function _reset() {
   ledger.clear();
+  hydration.clear();
   try {
     require('../rlhf/preference-store')._reset();
     require('../rlhf/trainer')._reset();

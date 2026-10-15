@@ -57,6 +57,10 @@ const CONSOLE_SKIP_RE = /^\s*\[FATAL\]\s*(?:uncaughtException|unhandledRejection
 const DEBUG_TAG_RE = /(?:^|[-_:\s])(?:dbg|debug|trace|timing|perf|bench|verbose)(?:$|[-_:\s])/i;
 // A console.error WITHOUT an Error object must at least read like a failure.
 const ERROR_SIGNAL_RE = /error|exception|\bfail|fall[oó]|no se pudo|cannot|can't|could not|unable|crash|fatal|panic|timed? ?out|timeout|refused|reset|denied|invalid|unauthori[sz]ed|forbidden|reject|rechaz|not found|no encontrad|abort|\bE[A-Z]{3,}\b|\bERR\b|\b5\d\d\b|[❌✖🚨⛔💥]/iu;
+// [slow-query] timing lines (db/slow-query-observer.js) are advisory. Only a
+// slow query that FAILED with a Prisma code is an issue; a successful one is
+// not, even when its call site contains «prisma» or a number reads like a 5xx.
+const SLOW_QUERY_ADVISORY_RE = /^\s*\[slow-query\](?![^\n]*\sfailed code=P\d{4}\b)/;
 const HTTP_SKIP_RE = /^\/api\/(?:health|healthz|ready|live|metrics|version|telemetry)(?:\/|$)|^\/(?:health|healthz|ready|live|metrics)(?:\/|$)/;
 
 let storeInstance = null;
@@ -385,6 +389,10 @@ function captureConsole(level, args = []) {
   const errArg = args.find(isErrorLike) || null;
   const text = args.map((a) => (isErrorLike(a) ? `${a.name || 'Error'}: ${a.message}` : safeStringify(a))).join(' ');
   if (level === 'warning' && !WARN_CAPTURE_RE.test(text)) return null;
+  if (SLOW_QUERY_ADVISORY_RE.test(first)) {
+    counters.noise += 1;
+    return null;
+  }
   const tag = fingerprint.logTagOf(first);
   if (tag && DEBUG_TAG_RE.test(tag)) {
     counters.noise += 1;

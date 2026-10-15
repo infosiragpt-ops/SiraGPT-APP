@@ -15,6 +15,24 @@ function parseIsActive(value) {
   return undefined;
 }
 
+// `AiModel.apiKey` is a legacy per-model credential: nothing routes with it,
+// but POST/PUT still store it. Admin responses never echo it — they say
+// whether one is stored, like `apiKeySet` on Admin → Conexiones.
+function toAdminModelView(row) {
+  if (!row || typeof row !== 'object') return row;
+  const { apiKey, ...rest } = row;
+  return { ...rest, apiKeySet: typeof apiKey === 'string' && apiKey.length > 0 };
+}
+
+// Write-side twin of admin-connections: '' / whitespace = keep the stored
+// key, null = clear it, any other string = replace it (trimmed).
+function normalizeModelApiKeyInput(value) {
+  if (value === null) return null;
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 async function countPublication(prisma) {
   const [total, active] = await Promise.all([
     prisma.aiModel.count(),
@@ -52,7 +70,7 @@ async function setAiModelActive(prisma, { id, isActive, invalidateCache } = {}) 
       await invalidateCache();
     }
     const stats = await countPublication(prisma);
-    return { model, stats };
+    return { model: toAdminModelView(model), stats };
   } catch (error) {
     if (error && error.code === 'P2025') {
       const notFound = new Error('Modelo no encontrado');
@@ -76,6 +94,8 @@ function pickerIncludesActiveModel(catalog, model) {
 }
 
 module.exports = {
+  toAdminModelView,
+  normalizeModelApiKeyInput,
   parseIsActive,
   countPublication,
   setAiModelActive,

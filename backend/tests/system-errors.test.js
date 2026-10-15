@@ -268,8 +268,13 @@ describe('capture → issues (new, repeat, regression, ignored, spike)', () => {
     assert.equal(systemErrors.captureConsole('warning', ['[redis] swallowed transient rejection: ERR max requests limit exceeded']) !== null, true);
     assert.equal(systemErrors.captureConsole('warning', ['[intent-attr-graph] feats=12 themes=3']), null);
     assert.equal(systemErrors.captureConsole('warning', ['slow request 1200ms']), null);
+    // [slow-query] lines: a successful slow query is advisory even with «prisma» in its site and
+    // a 5xx-looking max; only a failure carrying a Prisma code is an issue.
+    assert.equal(systemErrors.captureConsole('warning', ['[slow-query] AuditLog.create 701ms threshold=500ms site=src/utils/prisma-accelerate-retry.js:50 suppressed=1 maxMs=548']), null);
+    assert.equal(systemErrors.captureConsole('warning', ['[slow-query] Message.create 640ms threshold=500ms site=src/utils/prisma-retry.js:9 failed write_conflict']), null);
+    assert.equal(systemErrors.captureConsole('warning', ['[slow-query] Chat.findMany 2310ms threshold=500ms site=src/routes/chats.js:212 failed code=P2024']) !== null, true);
     await systemErrors.flush();
-    assert.equal(issues(prisma).length, 2);
+    assert.equal(issues(prisma).length, 3);
     assert.ok(issues(prisma).every((r) => r.metadata.level === 'warning'));
   });
 

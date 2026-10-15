@@ -9,7 +9,11 @@ function jsonHeaders(accessToken, extra = {}) {
 }
 
 async function readJson(response) {
-  const body = await response.json().catch(() => ({}));
+  const body = await response.json().catch((error) => {
+    // A deadline that fires mid-body must not read as an empty success.
+    if (error?.name === 'TimeoutError' || error?.name === 'AbortError') throw error;
+    return {};
+  });
   return { ok: response.ok, status: response.status, body };
 }
 

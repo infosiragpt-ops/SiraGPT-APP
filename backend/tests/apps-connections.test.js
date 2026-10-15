@@ -347,3 +347,128 @@ test('syncFromExisting does not mark a source row connected without a health pro
   assert.equal(listed[0].connected, false);
   assert.equal(listed[0].lastHealthAt, null);
 });
+
+// ─── Provider deadline (fetch without timeout in app executors) ────────────
+
+const http = require('node:http');
+const { appToolTimeoutMs } = require('../src/services/apps');
+
+const HUNG = Symbol('hung');
+function withinMs(promise, ms) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => { timer = setTimeout(() => resolve(HUNG), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+// A provider that never answers: only an abort of the signal it was given
+// settles the call (exactly what a stalled upstream socket looks like).
+function stalledFetch(calls = []) {
+  return (url, init = {}) => {
+    calls.push({ url: String(url), signal: init.signal });
+    return new Promise((_, reject) => {
+      init.signal?.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    });
+  };
+}
+
+async function connectedGithub(userId) {
+  const prisma = memoryPrisma();
+  const account = prisma.seedGithub(userId);
+  await upsertFromOAuth(prisma, {
+    userId,
+    appId: 'github',
+    sourceId: account.id,
+    scopes: ['repo', 'read:user'],
+  });
+  return prisma;
+}
+
+test('appToolTimeoutMs: 30 s default, env override, capped at 120 s', () => {
+  assert.equal(appToolTimeoutMs({}), 30_000);
+  assert.equal(appToolTimeoutMs({ SIRAGPT_APPS_TOOL_TIMEOUT_MS: '5000' }), 5_000);
+  assert.equal(appToolTimeoutMs({ SIRAGPT_APPS_TOOL_TIMEOUT_MS: '0' }), 30_000);
+  assert.equal(appToolTimeoutMs({ SIRAGPT_APPS_TOOL_TIMEOUT_MS: 'nope' }), 30_000);
+  assert.equal(appToolTimeoutMs({ SIRAGPT_APPS_TOOL_TIMEOUT_MS: '-1' }), 30_000);
+  assert.equal(appToolTimeoutMs({ SIRAGPT_APPS_TOOL_TIMEOUT_MS: '999999' }), 120_000);
+});
+
+test('app executors hand every provider fetch an AbortSignal', async () => {
+  const prisma = await connectedGithub('user-sig');
+  let seen = null;
+  const result = await executeTool(prisma, {
+    userId: 'user-sig',
+    toolName: 'github_list_repos',
+    vault: identityVault,
+    env: {},
+    fetchImpl: async (_url, init) => {
+      seen = init.signal;
+      return new Response('[]', { status: 200 });
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.ok(seen instanceof AbortSignal, 'provider fetch must carry a signal');
+  assert.equal(seen.aborted, false);
+});
+
+test('a stalled provider ends as tool_timeout instead of pinning the request', async () => {
+  const prisma = await connectedGithub('user-stall');
+  const calls = [];
+  const out = await withinMs(executeTool(prisma, {
+    userId: 'user-stall',
+    toolName: 'github_list_repos',
+    vault: identityVault,
+    env: { SIRAGPT_APPS_TOOL_TIMEOUT_MS: '50' },
+    fetchImpl: stalledFetch(calls),
+  }), 2_000);
+  assert.notEqual(out, HUNG, 'executeTool must not hang on a stalled provider');
+  assert.equal(calls.length, 1);
+  assert.equal(out.ok, false);
+  assert.equal(out.result.error, 'tool_timeout');
+  assert.match(out.result.message, /no respondió a tiempo/);
+  const audit = prisma.audits.find((row) => JSON.stringify(row).includes('app_tool_called'));
+  assert.ok(JSON.stringify(audit).includes('tool_timeout'));
+});
+
+test('a stalled write says it may have completed (no blind retry)', async () => {
+  const prisma = await connectedGithub('user-write-stall');
+  const out = await withinMs(executeTool(prisma, {
+    userId: 'user-write-stall',
+    toolName: 'github_create_issue',
+    args: { owner: 'luis', repo: 'sira', title: 'Bug' },
+    approved: true,
+    vault: identityVault,
+    env: { SIRAGPT_APPS_TOOL_TIMEOUT_MS: '50' },
+    fetchImpl: stalledFetch(),
+  }), 2_000);
+  assert.notEqual(out, HUNG);
+  assert.equal(out.result.error, 'tool_timeout');
+  assert.match(out.result.message, /pudo haberse completado/);
+});
+
+test('a body that stalls after the headers is a timeout, never an empty success', async () => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('[{"full_name":"luis/sira"'); // never finishes the JSON
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const local = `http://127.0.0.1:${server.address().port}/user/repos`;
+  try {
+    const prisma = await connectedGithub('user-body-stall');
+    const out = await withinMs(executeTool(prisma, {
+      userId: 'user-body-stall',
+      toolName: 'github_list_repos',
+      vault: identityVault,
+      env: { SIRAGPT_APPS_TOOL_TIMEOUT_MS: '150' },
+      fetchImpl: (_url, init) => fetch(local, init),
+    }), 3_000);
+    assert.notEqual(out, HUNG, 'a stalled body must not hang the tool');
+    assert.equal(out.ok, false);
+    assert.equal(out.result.error, 'tool_timeout');
+    assert.equal(out.result.items, undefined);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});

@@ -7,6 +7,27 @@ const { EXECUTORS } = require('./executors');
 const { redactSecrets, assertNoSecrets } = require('./redact');
 const { auditAppEvent } = require('./audit');
 
+// Per-call deadline for app tool executors. The provider fetches carried no
+// signal, so a stalled GitHub/LinkedIn/X upstream pinned the request (and the
+// socket) until undici's 300 s headers/body timeouts. One deadline covers every
+// fetch the tool makes, including the body read. SIRAGPT_APPS_TOOL_TIMEOUT_MS
+// tunes it (capped at 120 s, the harness default per-tool timeout).
+const DEFAULT_APP_TOOL_TIMEOUT_MS = 30_000;
+const MAX_APP_TOOL_TIMEOUT_MS = 120_000;
+
+function appToolTimeoutMs(env = process.env) {
+  const raw = Number(env?.SIRAGPT_APPS_TOOL_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_APP_TOOL_TIMEOUT_MS;
+  return Math.min(Math.floor(raw), MAX_APP_TOOL_TIMEOUT_MS);
+}
+
+function fetchWithDeadline(fetchImpl, deadline) {
+  return (url, init = {}) => fetchImpl(url, {
+    ...init,
+    signal: init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
+  });
+}
+
 function truthy(value) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
@@ -51,20 +72,28 @@ async function executeTool(prisma, {
     return { ok: false, error: 'executor_missing', app: app.id };
   }
 
+  const deadline = AbortSignal.timeout(appToolTimeoutMs(env));
   let raw;
   try {
     raw = await executor({
       accessToken: opened.accessToken,
       args: args || {},
       approved: writeApproved,
-      fetchImpl,
+      fetchImpl: fetchWithDeadline(fetchImpl, deadline),
       env,
       vault,
       prisma,
       connectionRow: opened._meta?.row || null,
     });
   } catch (error) {
-    raw = { error: 'tool_failed', message: String(error?.message || 'tool_failed').slice(0, 180) };
+    raw = deadline.aborted
+      ? {
+        error: 'tool_timeout',
+        message: tool.kind === 'write'
+          ? `${app.name} no respondió a tiempo; la acción pudo haberse completado. Verifícalo antes de reintentar.`
+          : `${app.name} no respondió a tiempo.`,
+      }
+      : { error: 'tool_failed', message: String(error?.message || 'tool_failed').slice(0, 180) };
   }
 
   const safe = assertNoSecrets(redactSecrets(raw), tool.name);
@@ -115,6 +144,7 @@ function modelSafeSummary(app, connection) {
 
 module.exports = {
   executeTool,
+  appToolTimeoutMs,
   availableToolsForConnection,
   modelSafeSummary,
   publicConnection,

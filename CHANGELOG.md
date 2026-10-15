@@ -26,6 +26,24 @@ and improvement cycles follow a sequential number with the date the work landed.
   the answer or a pasted link, and «dibuja» over data keep their order.
   Generic documents («el informe de ventas»), the user's own figures («analiza
   mis ventas») and short notes after «:» or Enter still ask or redo the answer.
+- Eight robustness fixes from the 2026-10-08 audit. App tools (GitHub /
+  LinkedIn / X) and the AI endpoint of generated apps now give up after 30 s
+  instead of holding a request for up to 5 minutes. A provider body that stalls
+  after the headers is a timeout, never an empty success, and a cut stream is
+  never marked as finished. A chat turn no longer re-reads the user's rated
+  answers on every message, and hydrating them no longer writes them back or
+  embeds them one by one. The daily backfill and a re-thumb after a restart
+  update the stored preference row instead of adding a duplicate. A chat with
+  many incomplete attachment snapshots loads them in one owner-scoped query.
+  Reconnecting to a streamed answer resumes from the last chunk the browser
+  received; it used to skip the chunks a dropped connection lost. The per-chunk
+  disk write and the cursor map that never shrank are gone. Thesis sessions
+  expire and no longer print every session id in the logs. Parallel or
+  retried chunk uploads for one file no longer lose chunks or race a doubled
+  «complete». Admin model responses never echo a stored per-model API key.
+- Admin → Logs shows a throttled `[slow-query] Model.action Nms` WARN line for
+  Prisma operations slower than `SIRAGPT_SLOW_QUERY_MS` (500 ms), with the
+  calling file and line but never arguments, SQL or error text.
 
 ### Added
 

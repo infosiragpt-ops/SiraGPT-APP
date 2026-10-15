@@ -876,12 +876,47 @@ async function resolveChatDocumentFileIds(prisma, {
   return unique.filter((id) => allowed.has(id)).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 }
 
+// Only the columns serializeAttachmentRows reads: the chat-history snapshot
+// never uses documentAnalysis/chunks/tables, which loadFileRows pulls (and
+// Prisma resolves as extra relation queries per call).
+const ATTACHMENT_SNAPSHOT_SELECT = Object.freeze({
+  id: true,
+  filename: true,
+  originalName: true,
+  mimeType: true,
+  size: true,
+  extractedText: true,
+  openaiFileId: true,
+});
+
+// One findMany per MAX_SIMULTANEOUS_DOCUMENTS ids (owner-scoped). Fail-open
+// like loadFileRows: a DB error yields no rows, never a thrown request.
+async function loadAttachmentSnapshotRows(prisma, userId, fileIds = []) {
+  const rowsById = new Map();
+  if (!prisma?.file?.findMany || !userId || !Array.isArray(fileIds)) return rowsById;
+  const ids = Array.from(new Set(fileIds.map(String).filter(Boolean)));
+  for (let start = 0; start < ids.length; start += MAX_SIMULTANEOUS_DOCUMENTS) {
+    try {
+      const rows = await prisma.file.findMany({
+        where: { id: { in: ids.slice(start, start + MAX_SIMULTANEOUS_DOCUMENTS) }, userId },
+        select: ATTACHMENT_SNAPSHOT_SELECT,
+      });
+      for (const row of rows || []) if (row?.id) rowsById.set(row.id, row);
+    } catch {
+      /* fail-open: the snapshot falls back to client metadata */
+    }
+  }
+  return rowsById;
+}
+
 async function serializeMessageAttachments(prisma, { userId, fileIds = [], clientMetadata = [] } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return [];
+  const rowsById = await loadAttachmentSnapshotRows(prisma, userId, ids);
+  return serializeAttachmentRows({ ids, rowsById, clientMetadata, userId });
+}
 
-  const rows = await loadFileRows(prisma, userId, ids);
-  const rowsById = new Map(rows.map((row) => [row.id, row]));
+function serializeAttachmentRows({ ids, rowsById, clientMetadata = [], userId }) {
   const client = normalizeClientMetadata(clientMetadata, ids);
   const clientById = new Map(client.map((file) => [file.id, file]));
 
@@ -1151,29 +1186,34 @@ async function hydrateChatMessageAttachments(prisma, { userId, messages = [] } =
   if (!prisma || !userId || !Array.isArray(messages) || messages.length === 0) {
     return Array.isArray(messages) ? messages : [];
   }
-  const out = [];
-  for (const message of messages) {
-    if (!message || !messageFilesNeedHydration(message.files)) {
-      out.push(message);
-      continue;
-    }
+  // Collect every message that needs a snapshot first, then resolve all of
+  // their ids with ONE owner-scoped query instead of one per message.
+  const pendingIds = new Map();
+  const allIds = new Set();
+  messages.forEach((message, index) => {
+    if (!message || !messageFilesNeedHydration(message.files)) return;
     const ids = extractFileIdsFromMessageFiles(message.files);
-    if (ids.length === 0) {
-      out.push(message);
-      continue;
-    }
+    if (ids.length === 0) return;
+    pendingIds.set(index, ids);
+    for (const id of ids) allIds.add(id);
+  });
+  if (pendingIds.size === 0) return messages.slice();
+  const rowsById = await loadAttachmentSnapshotRows(prisma, userId, Array.from(allIds));
+  return messages.map((message, index) => {
+    const ids = pendingIds.get(index);
+    if (!ids) return message;
     try {
-      const serialized = await serializeMessageAttachments(prisma, {
-        userId,
-        fileIds: ids,
+      const serialized = serializeAttachmentRows({
+        ids,
+        rowsById,
         clientMetadata: parseMessageFilesValue(message.files),
+        userId,
       });
-      out.push(serialized.length ? { ...message, files: serialized } : message);
+      return serialized.length ? { ...message, files: serialized } : message;
     } catch {
-      out.push(message);
+      return message;
     }
-  }
-  return out;
+  });
 }
 
 /**

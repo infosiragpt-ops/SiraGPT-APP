@@ -83,3 +83,55 @@ describe('chunked upload store', () => {
     await assert.rejects(() => store.writeChunk({ userDir, uploadId: stale.uploadId, index: 0, buffer: bytes(chunkSize) }), /no existe o caducó/);
   });
 });
+
+describe('chunked upload store · concurrent requests for one upload', () => {
+  test('parallel chunks all land in the manifest (no lost update) and complete succeeds', async () => {
+    const chunkSize = store.MIN_CHUNK_BYTES;
+    const n = 6;
+    const session = await store.initChunkedUpload({ userDir, name: 'clase.mp4', size: chunkSize * n, mimeType: 'video/mp4', chunkSize, maxBytes: Infinity });
+    const results = await Promise.allSettled(
+      Array.from({ length: n }, (_, i) => store.writeChunk({ userDir, uploadId: session.uploadId, index: i, buffer: bytes(chunkSize, i + 1) })),
+    );
+    assert.deepEqual(results.map((r) => r.status), Array(n).fill('fulfilled'), 'no chunk request fails (no tmp-file collision)');
+    const meta = JSON.parse(await fsPromises.readFile(path.join(userDir, store.PARTS_DIR, `${session.uploadId}.json`), 'utf8'));
+    assert.deepEqual(meta.received, [0, 1, 2, 3, 4, 5], 'every chunk recorded');
+    const file = await store.completeChunkedUpload({ userDir, uploadId: session.uploadId });
+    const data = await fsPromises.readFile(file.path);
+    for (let i = 0; i < n; i += 1) assert.equal(data[i * chunkSize], i + 1);
+  });
+
+  test('a doubled complete finalises exactly once; the loser gets a typed 404, not a raw ENOENT', async () => {
+    const chunkSize = store.MIN_CHUNK_BYTES;
+    const session = await store.initChunkedUpload({ userDir, name: 'a.mp3', size: chunkSize, mimeType: 'audio/mpeg', chunkSize, maxBytes: Infinity });
+    await store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 7) });
+    const results = await Promise.allSettled([
+      store.completeChunkedUpload({ userDir, uploadId: session.uploadId }),
+      store.completeChunkedUpload({ userDir, uploadId: session.uploadId }),
+    ]);
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+    const loser = results.find((r) => r.status === 'rejected');
+    assert.equal(loser.reason.name, 'ChunkedUploadError');
+    assert.equal(loser.reason.status, 404);
+    assert.equal(loser.reason.code, 'upload_not_found');
+    const finals = (await fsPromises.readdir(userDir)).filter((f) => f.startsWith('files-'));
+    assert.equal(finals.length, 1);
+  });
+
+  test('a chunk racing a complete never resurrects the session meta', async () => {
+    const chunkSize = store.MIN_CHUNK_BYTES;
+    const session = await store.initChunkedUpload({ userDir, name: 'a.mp3', size: chunkSize, mimeType: 'audio/mpeg', chunkSize, maxBytes: Infinity });
+    await store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 7) });
+    const [done, late] = await Promise.allSettled([
+      store.completeChunkedUpload({ userDir, uploadId: session.uploadId }),
+      store.writeChunk({ userDir, uploadId: session.uploadId, index: 0, buffer: bytes(chunkSize, 7) }),
+    ]);
+    assert.equal(done.status, 'fulfilled');
+    // The complete took the upload's lock first, so the late chunk sees the
+    // session gone instead of re-creating its meta next to the final file.
+    assert.equal(late.status, 'rejected');
+    assert.equal(late.reason.name, 'ChunkedUploadError');
+    assert.equal(late.reason.code, 'upload_not_found');
+    const parts = await fsPromises.readdir(path.join(userDir, store.PARTS_DIR));
+    assert.deepEqual(parts, [], 'no orphan meta/part/tmp left behind');
+  });
+});
