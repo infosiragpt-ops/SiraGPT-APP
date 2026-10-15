@@ -6,6 +6,23 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Added
+
+- Professional transcription that copes with 5-hour recordings.
+  - **Long recordings no longer hold the chat.** The turn waits at most 4 minutes, then answers «Recibí «clase.mp4» (≈5 h)… te aviso aquí». The durable media job (resumable across deploys) posts the transcript, its files and any requested analysis into the same chat with an in-app and push notification.
+  - **Partial results are kept.** A segment no engine can read leaves a marked gap with its times instead of failing the whole file. «reintenta» re-runs only the missing segments without erasing the partial text.
+  - **Deliverables:**
+    - TXT with a header and `[hh:mm:ss]` paragraphs (speaker labels when the engine provides them);
+    - Word for recordings of 10 minutes or more, or on request; PDF on request;
+    - SRT/VTT subtitles for videos and long recordings, or on request;
+    - time ranges («del minuto 30 al 45», «desde el minuto 30»);
+    - full translations («tradúcelo al inglés») that keep the time marks;
+    - minutes, chapters and key points analysed over every chunk with time citations.
+  - **Engine.** whisper.cpp now decodes with real timestamps; it used to hard-cut every 30 s. Language is detected and locked, file-name terms bias spelling, and audio is cut once per job at silences. A 429 rate limit waits and retries instead of disabling the provider for 30 minutes. Cloud segments run in parallel.
+  - **Links.** Video/audio links of 20 minutes to 12 hours go through the same durable queue; they used to be refused above 3 hours.
+  - **Uploads.** Multi-GB uploads resume after a network drop or a deploy without resending received parts, upload in parallel, report speed and ETA, and ask before the page is closed. The file chip no longer reports «Listo» for a recording that is still being transcribed.
+  - **Composer routing.** «quiero la transcripción de este video», «hazme subtítulos», «resume la clase» and «qué dijo sobre X» now reach the transcription agent. They used to end in video generation, voice mode or «Solo se permiten archivos de imagen».
+
 ### Fixed
 
 - Cancelled responses distinguish a user Stop from a provider abort or an
@@ -77,6 +94,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Security
 
+- `/uploads` refuses every path inside a dot-directory (transcript sidecars, delivery records, checkpoints). Static serving would otherwise return them, and only the owner check kept them private.
+- GPT knowledge and icon uploads keep the document size cap; the 10 GB ceiling applies to chat recordings only.
 - `host_bash` no longer offers `npx`, `npm exec|x|create`, `npm init
   <initializer>`, registry/config mutations or global installs; `npm install`
   and `pip3 install` accept registry package names only (no URLs, git/file

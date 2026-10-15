@@ -162,7 +162,10 @@ Groq → xAI → whisper.cpp local). Un enlace con login (401/403, video privado
 |----------|---------|---------|
 | `TRANSCRIBE_URL_YTDLP` | `yt-dlp` | Binario del descargador |
 | `FFMPEG_PATH` | `ffmpeg` | Binario de ffmpeg (compartido con whisper local) |
-| `TRANSCRIBE_URL_MAX_SECONDS` | `10800` | Máximo de audio por llamada (3 h); por encima pide un rango (`media_too_long`) |
+| `TRANSCRIBE_URL_MAX_SECONDS` | `10800` | Máximo de audio transcrito DENTRO del turno (3 h). Con la ruta durable activa (abajo) un enlace admite hasta `TRANSCRIBE_URL_DURABLE_MAX_SECONDS`; sin ella, por encima pide un rango (`media_too_long`) |
+| `TRANSCRIBE_URL_DURABLE` | `1` | `0` desactiva la ruta durable de enlaces largos (el tramo descargado se guarda como archivo del usuario, entra a la cola de medios y el resultado se entrega en el chat). Requiere chat de origen |
+| `TRANSCRIBE_URL_DURABLE_MIN_SECONDS` | `1200` | Tramos de enlace desde este largo (20 min) van por la ruta durable; los más cortos se transcriben en el turno |
+| `TRANSCRIBE_URL_DURABLE_MAX_SECONDS` | `43200` | Máximo por enlace con la ruta durable (12 h) |
 | `TRANSCRIBE_URL_TIMEOUT_MS` | `1200000` | Tope por proceso (descarga / ffmpeg) y para la transcripción (20 min) |
 | `TRANSCRIBE_URL_JS_RUNTIME` | `node` | Runtime JS para el desafío de YouTube: `node` (el Node del propio backend, `--js-runtimes node:<execPath>`), `deno` o `none` |
 | `TRANSCRIBE_URL_REMOTE_COMPONENTS` | (vacío) | Pasa `--remote-components` a yt-dlp (p. ej. `ejs:github`) si la imagen no trae `yt-dlp-ejs` |
@@ -843,6 +846,18 @@ WARN `[local-whisper] unavailable: <motivo>` si el motor local no puede correr
 | `SIRAGPT_META_TRANSCRIPTION` | off | `1` habilita Meta (su API no tiene STT: respondía 404); sin la bandera se salta y se registra a nivel debug |
 | `TRANSCRIBE_PROVIDER_COOLDOWN_MS` | `1800000` (30 min) | Memoria de clave rechazada / sin saldo por proveedor (reusa `utils/provider-key-health`) |
 | `WHISPER_CPP_BIN` / `WHISPER_CPP_MODEL` | `/usr/local/bin/whisper-cli` / `/usr/local/share/whisper/ggml-base.bin` | Motor local; el modelo debe ser legible por `appuser` (uid 100): la imagen lo deja en `0644` |
+| `WHISPER_LANGUAGE` | (vacío; la imagen pone `es`) | Desde 2026-10-15 solo es una pista para clips cortos: las grabaciones de más de `TRANSCRIBE_AUTO_LANGUAGE_MIN_SECONDS` detectan el idioma en el primer tramo con voz y lo fijan para el resto |
+| `TRANSCRIBE_AUTO_LANGUAGE_MIN_SECONDS` | `60` | Duración a partir de la cual se detecta el idioma en vez de usar la pista |
+| `WHISPER_CPP_BEAM_SIZE` | `5` hasta 10 min, `2` más | Ancho del beam de whisper.cpp |
+| `TRANSCRIBE_CLOUD_PARALLEL` | `3` (1–8) | Tramos en vuelo a la vez por trabajo en proveedores de nube |
+| `TRANSCRIBE_LOCAL_PARALLEL` | `1` (1–4) | Procesos whisper.cpp a la vez por trabajo |
+| `TRANSCRIBE_MIN_COVERAGE` | `0.8` | Por debajo de esta cobertura (tramos transcritos / total) el trabajo falla con `low_coverage` y se reintenta solo lo que falta; por encima se entrega parcial con los huecos marcados |
+| `TRANSCRIBE_RATE_LIMIT_MAX_WAIT_MS` | `300000` | Espera máxima por un límite de uso (429 / Retry-After) antes de reintentar el mismo proveedor; una espera mayor (cuota diaria) salta ese proveedor en este trabajo. Un 429 de límite de uso ya NO activa la cuarentena de 30 min de «sin saldo» |
+| `TRANSCRIBE_RATE_LIMIT_RETRIES` | `5` | Esperas por límite de uso por tramo y proveedor |
+| `TRANSCRIBE_SEGMENT_RETRIES` | `2` | Reintentos de un tramo ante 5xx / timeout de nube antes de pasar ese tramo al siguiente proveedor |
+| `TRANSCRIBE_LOCAL_RETRIES` | `0` | Reintentos de un tramo en whisper.cpp |
+| `TRANSCRIBE_CLOUD_TIMEOUT_MS` | máx(120 s, 0,4 s por segundo de audio) | Tope por petición de un tramo en la nube |
+| `TRANSCRIBE_SILENCE_SNAP` | on | `0` corta los tramos en tiempos fijos en vez de alinearlos a silencios |
 
 ## Barrido de recuperación de transcripciones (`media-transcription-queue.js`)
 
@@ -859,6 +874,31 @@ pase es acotado; el siguiente pase continúa desde el cursor.
 |----------|---------|---------|
 | `SIRAGPT_MEDIA_RECONCILE_INTERVAL_MS` | `60000` (mín. 15000) | Cadencia del barrido de recuperación |
 | `SIRAGPT_MEDIA_RECONCILE_MAX_ROWS` | `500` (mín. 100) | Filas de medios visitadas por pase (páginas de 100); un backlog mayor sigue en el pase siguiente |
+
+## Transcripción profesional y grabaciones de 5 h (added 2026-10-15)
+
+Grabaciones largas: el chat espera como mucho `TRANSCRIBE_CHAT_INLINE_WAIT_MS`
+(o menos si el tiempo estimado ya lo supera), crea una entrega durable y
+termina con «te aviso aquí»; el trabajo de la cola (reanudable tras cada
+despliegue) publica el resultado en el mismo chat con notificación in-app y
+push. Resultados parciales con huecos marcados en vez de todo o nada; «reintenta»
+recupera solo los tramos que faltan. Entregables: TXT con cabecera y marcas
+`[hh:mm:ss]`, Word (≥ 10 min o a pedido), PDF a pedido, SRT/VTT (videos,
+grabaciones largas o a pedido), rangos («del minuto 30 al 45»), traducción
+completa. Sin migración: los segmentos viven en
+`<UPLOAD_DIR>/.transcripts/<fileId>.json.gz` (nunca servido por `/uploads`) y
+las entregas en `<UPLOAD_DIR>/.transcription-deliveries/`.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_MEDIA_DELIVERY` | on (off con `NODE_ENV=test` salvo `1`) | `0`/`off` desactiva la entrega durable: el chat vuelve a esperar dentro del turno |
+| `TRANSCRIBE_CHAT_INLINE_WAIT_MS` | `240000` (máx. 30 min) | Cuánto espera el turno antes de pasar la grabación a la entrega durable; `0` = pasarla siempre mientras haya algo pendiente |
+| `SIRAGPT_MEDIA_DELIVERY_STALE_MS` | `900000` (mín. `30000`) | Un bloqueo de entrega sin refrescar este tiempo (proceso caído) se puede reclamar |
+| `MEDIA_ANALYSIS_PARALLEL` | `3` (máx. 6) | Fragmentos de una grabación analizados o traducidos a la vez (resumen, acta, capítulos, traducción) |
+| `SIRAGPT_MEDIA_OWNERSHIP_CHECK_MS` | `60000` (mín. `5000`) | Cada cuánto un trabajo de transcripción comprueba que su archivo sigue existiendo; borrar el archivo lo detiene y borra sus checkpoints |
+| `SIRAGPT_CHUNKED_UPLOAD_STALE_MS` | `172800000` (48 h; 10 min – 30 días) | Cuánto se conserva una subida por partes sin terminar (se puede reanudar). Un barrido global cada 30 min libera las vencidas |
+| `NEXT_PUBLIC_CHUNKED_MEDIA_THRESHOLD_MB` | `32` | Audio/video desde este tamaño se suben por partes, reanudables |
+| `NEXT_PUBLIC_CHUNKED_UPLOAD_PARALLEL` | `3` (1–4) | Partes en vuelo a la vez durante una subida grande |
 
 ## Robustez — tiempos máximos y retención (added 2026-10-15)
 
