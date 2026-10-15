@@ -956,8 +956,17 @@ router.post('/media-token', authenticateToken, uploadMediaTokenHandler);
 // backend reassembles on disk (services/chunked-upload-store), then the file
 // enters the SAME async pipeline as a multipart upload (validation → text
 // extraction / transcription → RAG), returning the same response shape.
+// Resumable: GET /upload/chunked/:id says which chunks already landed, and a
+// repeated complete returns the same File row (the meta keeps its id).
 const chunkedUploads = require('../services/chunked-upload-store');
 const CHUNK_BODY_LIMIT = chunkedUploads.MAX_CHUNK_BYTES + 64 * 1024;
+
+// One process-wide sweeper over every <UPLOAD_DIR>/<user>/.parts: closed tabs
+// and abandoned uploads must not keep gigabytes on disk until that same user
+// happens to start another chunked upload. Unref'd; off under tests.
+if (process.env.NODE_ENV !== 'test') {
+  chunkedUploads.startChunkedUploadSweeper({ rootDir: upload.uploadDir });
+}
 
 function chunkedUploadCap(mimeType, originalName) {
   const limits = resolveUploadLimits();
@@ -969,6 +978,11 @@ function chunkedUploadCap(mimeType, originalName) {
 function sendChunkedError(res, err) {
   if (err && err.name === 'ChunkedUploadError') {
     return res.status(err.status || 400).json({ error: err.message, code: err.code });
+  }
+  const mapped = chunkedUploads.mapStorageError(err);
+  if (mapped && mapped.name === 'ChunkedUploadError') {
+    console.warn('[files] chunked upload: disk full —', err && err.code);
+    return res.status(mapped.status).json({ error: mapped.message, code: mapped.code });
   }
   console.error('[files] chunked upload failed:', err && err.message ? err.message : err);
   return res.status(500).json({ error: 'No se pudo completar la subida por trozos.', code: 'chunked_upload_failed' });
@@ -994,8 +1008,26 @@ router.post('/upload/chunked/init', authenticateToken, requireScope('files:write
       mimeType: declared.mimetype,
       chunkSize,
       maxBytes: chunkedUploadCap(declared.mimetype, originalName),
+      // 507 up front when the disk cannot hold size × 1.1, instead of an
+      // ENOSPC at chunk N of a multi-gigabyte lecture.
+      checkFreeSpace: true,
     });
     return res.status(201).json({ ...session, maxChunkBytes: chunkedUploads.MAX_CHUNK_BYTES });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+// Resume support: which chunks the server already has. Owner-scoped by
+// construction — the session is looked up in the caller's own upload dir, so
+// another user's id is a plain 404.
+router.get('/upload/chunked/:uploadId', authenticateToken, requireScope('files:write'), async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    const status = await chunkedUploads.getChunkedUploadStatus({ userDir, uploadId: req.params.uploadId });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ...status, maxChunkBytes: chunkedUploads.MAX_CHUNK_BYTES });
   } catch (err) {
     return sendChunkedError(res, err);
   }
@@ -1032,16 +1064,48 @@ router.post('/upload/chunked/:uploadId/complete', authenticateToken, requireScop
   try {
     const userDir = upload.resolveUserUploadDir(req.user.id);
     if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
-    const file = await chunkedUploads.completeChunkedUpload({ userDir, uploadId: req.params.uploadId });
-    const batchPolicy = validateDocumentBatch([file]);
-    if (!batchPolicy.ok) {
-      await unlinkQuiet(file.path);
-      return res.status(413).json({ error: batchPolicy.message, code: batchPolicy.code });
+    let rejectedBatch = null;
+    let processedFiles = null;
+    // The File row is created INSIDE the upload's lock (finalize), and its id
+    // is kept with the session: a doubled or retried complete — the first
+    // response lost to the network — answers the same row instead of a 404
+    // that made the client upload gigabytes again.
+    const file = await chunkedUploads.completeChunkedUpload({
+      userDir,
+      uploadId: req.params.uploadId,
+      finalize: async (assembled) => {
+        const batchPolicy = validateDocumentBatch([assembled]);
+        if (!batchPolicy.ok) {
+          await unlinkQuiet(assembled.path);
+          rejectedBatch = batchPolicy;
+          return { fileId: null };
+        }
+        // Same async pipeline as POST /upload with asyncProcessing=1: the row is
+        // created now, extraction/transcription runs after this response and the
+        // composer polls /processing-status until `ready`.
+        processedFiles = await processFilesForAsyncPreview([assembled], req.user.id, prisma);
+        const first = processedFiles && processedFiles[0];
+        return { fileId: first && first.success !== false && typeof first.id === 'string' ? first.id : null };
+      },
+    });
+    if (rejectedBatch) return res.status(413).json({ error: rejectedBatch.message, code: rejectedBatch.code });
+    if (file.replayed) {
+      const row = file.completedFileId
+        ? await prisma.file.findFirst({
+          where: softDeleteWhere({ id: file.completedFileId, userId: req.user.id }),
+          select: { id: true, userId: true, mimeType: true, processingStage: true },
+        })
+        : null;
+      if (!row) {
+        return res.status(404).json({ error: 'El archivo de esta subida ya no está disponible. Vuelve a adjuntarlo.', code: 'upload_not_found' });
+      }
+      const replayFile = { ...file, mimetype: row.mimeType || file.mimetype };
+      return res.json({
+        files: [uploadResponseForFile(replayFile, row, { processingStage: row.processingStage || 'uploaded' })],
+        chunked: true,
+        replayed: true,
+      });
     }
-    // Same async pipeline as POST /upload with asyncProcessing=1: the row is
-    // created now, extraction/transcription runs after this response and the
-    // composer polls /processing-status until `ready`.
-    const processedFiles = await processFilesForAsyncPreview([file], req.user.id, prisma);
     return res.json({ files: processedFiles, chunked: true });
   } catch (err) {
     return sendChunkedError(res, err);

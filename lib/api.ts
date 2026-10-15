@@ -118,6 +118,7 @@ import type {
   FileMetadata,
   AuthUser,
 } from "./api-types"
+import type { ChunkedUploadProgressCallback, ResumableTiming } from "./composer/resumable-upload"
 
 // Wrapper response shapes — the codegen models only the inner record,
 // but routes return wrappers. Defined here (cycle 42) so the most-called
@@ -2246,81 +2247,64 @@ class ApiClient {
   }
 
   /**
-   * Chunked upload for large media. The production edge rejects request
-   * bodies over 100 MB, so the file is announced (init), sent in ≤64 MB
-   * chunks (PUT, each retried on transient failures) and assembled by the
-   * backend (complete), which then runs the same async pipeline as
-   * `uploadFiles` and answers with the same `{ files: [...] }` shape.
+   * Chunked, resumable upload for large media. The production edge rejects
+   * request bodies over 100 MB, so the file is announced (init), sent in
+   * ≤64 MB chunks (2-3 parallel XHR PUTs with real upload progress) and
+   * assembled by the backend (complete), which then runs the same async
+   * pipeline as `uploadFiles` and answers with the same `{ files: [...] }`.
+   *
+   * Transient failures (network, offline, 408/425/429, 5xx, a stalled
+   * connection) pause the upload — up to ~45 min, woken early by `online` or
+   * the tab becoming visible — and it resumes with the chunks the server is
+   * missing (GET status). The server session is deleted only on a user cancel
+   * or a non-retriable 4xx. A reload or a re-attach of the same file resumes
+   * via a localStorage record. `onProgress` gets bytes/s, ETA and a Spanish
+   * label as a 4th argument (see `./composer/resumable-upload`).
    */
   async uploadFileChunked(
     file: File,
     opts: {
       sourceChannel?: string
       chunkBytes?: number
-      onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+      onProgress?: ChunkedUploadProgressCallback
       signal?: AbortSignal
+      /** Consecutive generic HTTP 500s tolerated before stopping (no delete). */
       maxRetries?: number
+      /** Chunks in flight (default NEXT_PUBLIC_CHUNKED_UPLOAD_PARALLEL, 3). */
+      parallel?: number
+      /** false: do not remember/resume this upload across reloads. */
+      resume?: boolean
+      /** Backoff / pause budget overrides (tests, diagnostics). */
+      timing?: Partial<ResumableTiming>
     } = {}
   ): Promise<FileUploadResponse> {
-    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES } = await import('./composer/chunked-upload');
-    const throwIfAborted = () => {
-      if (opts.signal?.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
-    };
+    const [{ CHUNKED_UPLOAD_CHUNK_BYTES, CHUNKED_UPLOAD_PARALLEL }, engine] = await Promise.all([
+      import('./composer/chunked-upload'),
+      import('./composer/resumable-upload'),
+    ]);
     // Shared authenticated transport (bearer/CSRF/refresh handling) — the
-    // frontend contract forbids raw fetch for Sira endpoints.
-    const authed = (path: string, init: RequestInit) => this.authenticatedFetch(`${this.baseURL}${path}`, { ...init, signal: opts.signal });
-    const readError = async (res: Response, fallback: string) => {
-      try { const j = await res.json(); return j?.error || fallback; } catch { return fallback; }
-    };
-
-    throwIfAborted();
-    const requestedChunk = opts.chunkBytes || CHUNKED_UPLOAD_CHUNK_BYTES;
-    const initRes = await authed('/files/upload/chunked/init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: file.name, size: file.size, mimeType: file.type || 'application/octet-stream', chunkSize: requestedChunk, sourceChannel: opts.sourceChannel || null }),
+    // frontend contract forbids raw fetch for Sira endpoints. Chunk PUTs go
+    // through XHR (upload progress) with the same prepared credentials.
+    const transport = engine.createHttpChunkTransport<FileUploadResponse>({
+      baseURL: this.baseURL,
+      fetch: (path, init) => this.authenticatedFetch(`${this.baseURL}${path}`, init),
+      prepare: (url, init) => prepareAuthenticatedRequest(url, init, { bearerToken: this._getAccessTokenSnapshot() }),
+      refreshCsrf: () => authenticatedFetch.csrfManager.getToken(true),
     });
-    if (!initRes.ok) throw new Error(await readError(initRes, `HTTP ${initRes.status}`));
-    const session = await initRes.json() as { uploadId: string; chunkSize: number; totalChunks: number };
-    const plans = planChunks(file.size, session.chunkSize);
-    const maxRetries = Math.max(0, opts.maxRetries ?? 3);
-    let completedBytes = 0;
-    opts.onProgress?.(0, 0, file.size);
-
-    for (const plan of plans) {
-      let attempt = 0;
-      for (;;) {
-        throwIfAborted();
-        let res: Response | null = null;
-        let networkError: unknown = null;
-        try {
-          res = await authed(`/files/upload/chunked/${session.uploadId}/${plan.index}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: file.slice(plan.start, plan.end),
-          });
-        } catch (err) {
-          if ((err as any)?.name === 'AbortError') throw err;
-          networkError = err;
-        }
-        if (res && res.ok) break;
-        const status = res ? res.status : 0;
-        const retriable = networkError ? true : isRetriableChunkStatus(status);
-        if (!retriable || attempt >= maxRetries) {
-          try { await authed(`/files/upload/chunked/${session.uploadId}`, { method: 'DELETE' }); } catch { /* best effort */ }
-          throw new Error(res ? await readError(res, `HTTP ${status}`) : 'Network error during upload');
-        }
-        attempt += 1;
-        await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** attempt)));
-      }
-      completedBytes += plan.bytes;
-      opts.onProgress?.(chunkedUploadPercent(file.size, completedBytes), completedBytes, file.size);
-    }
-
-    throwIfAborted();
-    const doneRes = await authed(`/files/upload/chunked/${session.uploadId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    if (!doneRes.ok) throw new Error(await readError(doneRes, `HTTP ${doneRes.status}`));
-    return await doneRes.json() as FileUploadResponse;
+    return engine.runResumableUpload<FileUploadResponse>({
+      file,
+      transport,
+      chunkBytes: opts.chunkBytes || CHUNKED_UPLOAD_CHUNK_BYTES,
+      parallel: opts.parallel ?? CHUNKED_UPLOAD_PARALLEL,
+      signal: opts.signal,
+      onProgress: opts.onProgress,
+      sourceChannel: opts.sourceChannel ?? null,
+      resumeStore: opts.resume === false ? null : undefined,
+      timing: {
+        ...(opts.maxRetries !== undefined ? { serverErrorRetries: Math.max(0, opts.maxRetries) } : {}),
+        ...(opts.timing || {}),
+      },
+    });
   }
 
   async getFiles(params?: { page?: number; limit?: number; type?: string }) {
