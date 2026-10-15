@@ -195,3 +195,39 @@ test('a gap retry whose job was lost is re-added by the recovery path instead of
   await f.service.enqueueMediaTranscription({ fileId: 'clase', userId: 'u1' });
   assert.equal(f.jobs.size, 1);
 });
+
+test('deleting the file during a long transcription aborts the job (no wasted hours, no write)', async () => {
+  let release;
+  const f = fixture([row('clase')], {
+    ownershipCheckMs: 10,
+    processFile: (_file, { signal }) => new Promise((resolve, reject) => {
+      release = resolve;
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+  await f.service.enqueueMediaTranscription({ fileId: 'clase', userId: 'u1' });
+  // The ownership timer is unref'd (it never keeps a process alive); keep
+  // the test's event loop alive while the fake transcription hangs.
+  const keepAlive = setInterval(() => {}, 1000);
+  const running = f.service.processMediaJob([...f.jobs.values()][0]);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  f.rows.get('clase').deletedAt = new Date();
+  try {
+    await assert.rejects(running, { code: 'media_not_found' });
+  } finally {
+    clearInterval(keepAlive);
+  }
+  assert.equal(f.rows.get('clase').extractedText, null);
+  assert.deepEqual(f.cleared, ['clase'], 'its checkpoints go with it');
+  assert.ok(release);
+});
+
+test('each finished job logs one line with numbers only (never transcript text)', async () => {
+  const lines = [];
+  const f = fixture([row('clase')], { logger: { info: line => lines.push(line), warn: line => lines.push(line) } });
+  await f.service.enqueueMediaTranscription({ fileId: 'clase', userId: 'u1' });
+  await f.service.processMediaJob([...f.jobs.values()][0]);
+  const line = lines.find(l => l.startsWith('[media-transcription]'));
+  assert.match(line, /file=clase outcome=ready elapsedMs=\d+ durationSec=360 coverage=1\.000 engine=local providers=local:6 gaps=0 chars=\d+/);
+  assert.doesNotMatch(line, /Frase/);
+});

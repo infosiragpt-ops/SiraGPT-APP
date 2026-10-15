@@ -19,6 +19,10 @@ const PROCESS_TIMEOUT_MS = positiveMs(process.env.SIRAGPT_MEDIA_PROCESS_TIMEOUT_
 // ceiling is far above BullMQ's default instead of failing on the 3rd deploy.
 const MAX_STALLED_COUNT = 20;
 const PROGRESS_WRITE_INTERVAL_MS = 3000;
+// While a long job runs, its file is re-checked on this cadence: deleting
+// the file (or the account) stops the transcription instead of burning
+// hours of CPU on a result nobody can read.
+const OWNERSHIP_CHECK_MS = Math.max(5000, positiveMs(process.env.SIRAGPT_MEDIA_OWNERSHIP_CHECK_MS, 60_000));
 const CHECKPOINT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const PENDING_STAGES = ['uploaded', 'validating', 'extracting'];
 // Recovery sweep (every minute by default). It used to load EVERY file stuck
@@ -317,7 +321,7 @@ async function configureMediaQueue(queue) {
 
 function createMediaTranscriptionService({ prisma, getQueue, processFile, materialize = materializeMedia,
   validate = validateMedia, offload = offloadMedia, timeoutMs = PROCESS_TIMEOUT_MS, now = () => Date.now(),
-  createCheckpoint = row => checkpointFor(row), reconcileMaxRows = RECONCILE_MAX_ROWS,
+  createCheckpoint = row => checkpointFor(row), reconcileMaxRows = RECONCILE_MAX_ROWS, ownershipCheckMs = OWNERSHIP_CHECK_MS,
   // Optional collaborators (wired by getService; tests inject fakes):
   // transcriptStore writes the segments sidecar + DocumentAnalysis pointer,
   // formatter renders the timestamped text, onTerminal hands a finished file
@@ -405,6 +409,26 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     return { id: fileId, queued: true, stage: 'uploaded' };
   }
 
+  // One line per job for Admin → Logs: ids and numbers only, never text.
+  function logJobOutcome({ fileId: id, outcome, transcription = null, elapsedMs = 0, chars = 0, code = null }) {
+    try {
+      const providers = transcription?.providers && typeof transcription.providers === 'object'
+        ? Object.entries(transcription.providers).map(([name, count]) => `${name}:${count}`).join(',') : '';
+      const fields = [`file=${id}`, `outcome=${outcome}`, `elapsedMs=${Math.round(elapsedMs)}`];
+      if (transcription) {
+        if (Number.isFinite(Number(transcription.durationSec))) fields.push(`durationSec=${Math.round(Number(transcription.durationSec))}`);
+        if (Number.isFinite(Number(transcription.coverage))) fields.push(`coverage=${Number(transcription.coverage).toFixed(3)}`);
+        if (transcription.engine) fields.push(`engine=${transcription.engine}`);
+        if (providers) fields.push(`providers=${providers}`);
+        if (transcription.language) fields.push(`lang=${transcription.language}`);
+        fields.push(`gaps=${Array.isArray(transcription.gaps) ? transcription.gaps.length : 0}`, `chars=${chars}`);
+      }
+      if (code) fields.push(`code=${String(code).slice(0, 40)}`);
+      const line = `[media-transcription] ${fields.join(' ')}`;
+      if (outcome === 'failed') logger?.warn?.(line); else logger?.info?.(line);
+    } catch (_) { /* logging is best-effort */ }
+  }
+
   async function writeTranscriptSidecar(row, transcription) {
     if (!transcriptStore?.writeSidecar || !timedSegments(transcription).length) return null;
     try {
@@ -435,6 +459,16 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     activeControllers.add(controller);
     const timer = setTimeout(() => controller.abort(failure('media_timeout', 'La transcripción superó el tiempo permitido.')), timeoutMs);
     timer.unref?.();
+    const jobStartedAt = now();
+    let ownershipTimer = null;
+    if (ownershipCheckMs > 0 && fileId && userId) {
+      ownershipTimer = setInterval(() => {
+        void prisma.file.findFirst({ where: { id: fileId, userId, deletedAt: null }, select: { id: true } })
+          .then(found => { if (!found && !controller.signal.aborted) controller.abort(failure('media_not_found', 'El archivo se eliminó durante la transcripción.')); })
+          .catch(() => { /* a DB blip never aborts a transcription */ });
+      }, ownershipCheckMs);
+      ownershipTimer.unref?.();
+    }
     try {
       const row = await loadOwned(fileId, userId);
       forced = Boolean(job.data?.force) && hasTranscript(row);
@@ -477,6 +511,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       // the missing segments (the 14-day sweep removes them otherwise).
       if (!partial) await checkpoint?.clear?.().catch(() => {});
       notifyTerminal(fileId, userId, partial ? 'partial' : 'ready');
+      logJobOutcome({ fileId, outcome: partial ? 'partial' : 'ready', transcription, elapsedMs: now() - jobStartedAt, chars: transcript.length });
       // Offload is optional enrichment after durable text is ready. Local
       // uploads live on the existing persistent volume if R2 is unavailable.
       // Never erase the local copy before updating the owner-scoped DB ref.
@@ -504,7 +539,10 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       }
       const transient = isTransientMediaError(err);
       const willRetry = transient && Number(job.attemptsMade || 0) + 1 < Number(job.opts?.attempts || ATTEMPTS);
+      logJobOutcome({ fileId, outcome: willRetry ? 'retry' : 'failed', code: err?.code || null, elapsedMs: now() - jobStartedAt });
       if (!transient) job.discard?.();
+      // A deleted file's partial work (segment audio + text) goes with it.
+      if (err?.code === 'media_not_found') await checkpoint?.clear?.().catch(() => {});
       // A deleted/foreign file must never be resurrected or mutated.
       if (err.code !== 'media_not_found' && err.code !== 'media_owner_required') {
         if (forced && previousRow) {
@@ -524,6 +562,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       throw err;
     } finally {
       clearTimeout(timer);
+      if (ownershipTimer) clearInterval(ownershipTimer);
       activeControllers.delete(controller);
       await local?.cleanup().catch(() => {});
     }
@@ -714,6 +753,6 @@ module.exports = {
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
   startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere,
-  QUEUE_NAME, CONCURRENCY, ATTEMPTS, PROCESS_TIMEOUT_MS, MAX_STALLED_COUNT,
+  QUEUE_NAME, CONCURRENCY, ATTEMPTS, PROCESS_TIMEOUT_MS, MAX_STALLED_COUNT, OWNERSHIP_CHECK_MS,
   RECONCILE_INTERVAL_MS, RECONCILE_MAX_ROWS, RECONCILE_PAGE_SIZE, RECONCILE_SELECT, MEDIA_MIME_FILTER,
 };
