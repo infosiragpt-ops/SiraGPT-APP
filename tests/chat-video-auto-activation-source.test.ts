@@ -199,7 +199,9 @@ describe("chat video auto-activation source contract", () => {
     )
     assert.match(
       source,
-      /if \(isVoiceGenerationActive\) \{[\s\S]{0,420}await handleVoiceGeneration\(msg, filesToSend\)/,
+      // A turn about an attached/last recording is the only exception
+      // (tests/chat-media-understanding-routing-source.test.ts).
+      /if \(isVoiceGenerationActive && !mediaUnderstandingTurn\) \{[\s\S]{0,420}await handleVoiceGeneration\(msg, filesToSend\)/,
       "Voice mode sends should bypass normal chat classification and call the deterministic speech artifact path"
     )
   })
@@ -207,7 +209,7 @@ describe("chat video auto-activation source contract", () => {
   it("routes active Music mode to the deterministic music generation path", () => {
     assert.match(
       source,
-      /if \(isMusicGenerationActive\) \{[\s\S]{0,420}await handleMusicGeneration\(msg, filesToSend\)/,
+      /if \(isMusicGenerationActive && !mediaUnderstandingTurn\) \{[\s\S]{0,420}await handleMusicGeneration\(msg, filesToSend\)/,
       "Music mode sends should bypass normal chat classification and call the deterministic music artifact path"
     )
     assert.doesNotMatch(

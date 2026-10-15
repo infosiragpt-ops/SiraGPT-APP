@@ -23,6 +23,7 @@ import {
   isImageAnalysisPrompt,
   shouldAutoActivateVideoGeneration,
 } from "@/lib/ai-service"
+import { isAudioComposerFile, isMediaUnderstandingTurn, isVideoComposerFile } from "@/lib/chat/composer-files"
 import { detectDocumentChatFormat } from "@/lib/document-chat-request"
 
 export type ComposerAutoMode = "image" | "video" | "music" | "voice" | "web_search" | "docx" | "xlsx" | "pptx"
@@ -144,6 +145,10 @@ function hasImageAttachment(ctx?: ComposerAutoContext): boolean {
   return Boolean(ctx?.attachments?.some((f) => /^image\//i.test(String(f?.mimeType || f?.type || "")) || /\.(?:png|jpe?g|webp|gif|heic)$/i.test(String(f?.name || ""))))
 }
 
+function hasMediaAttachment(ctx?: ComposerAutoContext): boolean {
+  return Boolean(ctx?.attachments?.some((f) => isAudioComposerFile(f) || isVideoComposerFile(f)))
+}
+
 function hasDocumentAttachment(ctx?: ComposerAutoContext): boolean {
   return Boolean(ctx?.attachments?.some((f) => {
     const mime = String(f?.mimeType || f?.type || "")
@@ -162,11 +167,18 @@ export function detectComposerAutoMode(input: string, ctx: ComposerAutoContext =
   const normalized = normalize(raw)
   if (!normalized || normalized.length < 6) return null
   if (QUESTION_OR_IDEATION_RE.test(normalized)) return null
+  // «quiero la transcripción de este video», «dame la transcripción del
+  // audio»: work on the attached recording (agent-task media branch), not a
+  // tool to switch on.
+  if (isMediaUnderstandingTurn(raw, ctx.attachments || [])) return null
   const attachedDoc = hasDocumentAttachment(ctx)
   const attachedImage = hasImageAttachment(ctx)
+  // Video and Voz only take text (or images, for video): an attached audio or
+  // video is never their input, so it never switches them on.
+  const attachedMedia = hasMediaAttachment(ctx)
 
   // Video (existing contract: same helper the typing effect already uses).
-  if (shouldAutoActivateVideoGeneration(raw) && !MUSIC_FALSE_POSITIVE_RE.test(normalized)) {
+  if (shouldAutoActivateVideoGeneration(raw) && !MUSIC_FALSE_POSITIVE_RE.test(normalized) && !attachedMedia) {
     const settings: ComposerAutoSettings = {}
     const duration = extractRequestedVideoDurationSeconds(raw)
     if (duration) settings.videoDuration = duration
@@ -195,6 +207,7 @@ export function detectComposerAutoMode(input: string, ctx: ComposerAutoContext =
     && !VOICE_FALSE_POSITIVE_RE.test(normalized)
     && !isImageAnalysisPrompt(raw)
     && !attachedDoc
+    && !attachedMedia
   ) {
     return { mode: "voice", confidence: "medium", settings: {}, cleanedPrompt: cleanVoicePrompt(raw), reason: "voice-create" }
   }
