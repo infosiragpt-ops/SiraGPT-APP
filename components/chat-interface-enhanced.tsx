@@ -6258,6 +6258,19 @@ function ChatInterfaceContent() {
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
+  // Leaving the page mid-upload (a multi-GB recording) asks first: the
+  // browser's own confirmation, no in-app UI. A resumable upload can be
+  // picked up again by re-selecting the same file, but closing the tab
+  // stops it.
+  React.useEffect(() => {
+    if (!isUploading || typeof window === 'undefined') return undefined;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isUploading]);
 
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
