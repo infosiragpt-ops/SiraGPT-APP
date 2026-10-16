@@ -154,11 +154,13 @@ const MEDIA_EXPORT_RE =
 
 // «del minuto 30 al 45», «minuto 1.5 hasta el 10», «del 1:30 al 10:00». Matched
 // against foldRoutingPrompt.
-const MEDIA_TIME_RANGE_RE = anyOf([
+const MEDIA_UNIT_RANGE_RE = anyOf([
   /\b(?:del|desde el|desde|a partir del|entre el|entre los|en el|from) (?:minuto|min|minute|segundo|second|hora|hour)s? ?\d/,
   /\bminutos? \d+(?:[.,]\d+)? ?(?:al?|y|hasta(?: el)?|-|–|to) ?(?:(?:el )?minuto )?\d/,
-  /\b\d{1,2}:\d{2}(?::\d{2})? ?(?:al?|y|hasta(?: el)?|-|–|to) ?\d{1,2}:\d{2}/,
 ])
+// A bare clock range is also a schedule («de 10:00 a 11:00»).
+const MEDIA_CLOCK_RANGE_RE = /\b\d{1,2}:\d{2}(?::\d{2})? ?(?:al?|y|hasta(?: el)?|-|–|to) ?\d{1,2}:\d{2}/
+const MEDIA_TIME_RANGE_RE = anyOf([MEDIA_UNIT_RANGE_RE, MEDIA_CLOCK_RANGE_RE])
 
 /** True when the text asks to transcribe, subtitle, summarize, export or question a recording. */
 export function isMediaUnderstandingPrompt(prompt: string): boolean {
@@ -226,18 +228,111 @@ const UNDERSTANDING_HEAD_RE = new RegExp(
 const MEDIA_NOUN_RE = /\b(?:audios?|videos?|grabaciones|grabacion|recordings?|notas? de voz|podcasts?|mp ?[34]|clips?)\b/
 // Outputs that only ever come from a recording.
 const RECORDING_OUTPUT_RE = /\b(?:transcripci\w*|subtitul\w*|srt|vtt|marcas? de tiempo|timestamps?|hablantes?)\b/
-// Something said aloud: a class, a meeting, the person who spoke.
+// Something said aloud: a class, a meeting, the person who spoke. «la clase
+// media/obrera» is a social class, not a lesson.
 const RECORDING_CONTEXT_RE =
-  /\b(?:clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|catedras?|audiencias?|juntas?|seminarios?|talleres|taller|episodios?|profesora?|profe|docentes?|ponentes?|expositora?|oradora?|entrevistad[oa]s?|invitad[oa]s?|meet|zoom)\b/
+  /\b(?:clases?(?! (?:medias?|altas?|bajas?|sociales?|obreras?|trabajadoras?|dominantes?|politicas?|privilegiadas?)\b)|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|catedras?|audiencias?|juntas?|seminarios?|talleres|taller|episodios?|profesora?|profe|docentes?|ponentes?|expositora?|oradora?|entrevistad[oa]s?|invitad[oa]s?|meet|zoom)\b/
 // «qué dijo sobre X», «cuándo habló de…», «qué acordaron»: past-tense speech
-// points at what was said, i.e. the recording.
-const SAID_QUESTION_RE = new RegExp([
-  `^${FOLLOWUP_LEAD_IN.source}(?:que|de que|sobre que|cuando|como|donde|por que|cual|cuales|quien|quienes|a quien) (?:\\w+ ){0,3}`
-    + /(?:dijo|dijeron|se dijo|hablo|hablaron|se hablo|menciono|mencionaron|se menciono|explico|explicaron|comento|comentaron|conto|contaron|respondio|respondieron|pregunto|preguntaron|recomendo|propuso|concluyo|concluyeron|acordaron|se acordo|decidieron|se decidio)\b/.source,
+// points at what was said, i.e. the recording. Only while nobody else is the
+// speaker: «qué dijo Einstein», «qué propuso Keynes» or «quién dijo 'pienso,
+// luego existo'» are general questions unless the prompt names the recording.
+const SAID_WHAT_HEAD = `^${FOLLOWUP_LEAD_IN.source}(?:que|de que|sobre que|cuando|como|donde|por que|cual|cuales) `
+const SAID_WHO_HEAD = `^${FOLLOWUP_LEAD_IN.source}(?:quien|quienes|a quien) `
+const SAID_PAST_VERB =
+  /(?:dijo|dijeron|se dijo|hablaron|se hablo|mencionaron|se menciono|explicaron|comentaron|conto|contaron|respondio|respondieron|preguntaron|recomendo|propuso|concluyeron|acordaron|se acordo|decidieron|se decidio)/
+// Without its accent each of these is also a first-person present («cómo le
+// explico a mi hijo…»): it is past tense only when typed «habló», «explicó»…
+const SAID_ACCENT_VERB = /(?:hablo|menciono|explico|comento|pregunto|concluyo)/
+const SAID_ACCENTED_RE = /(?:^|[^\p{L}])(?:habló|mencionó|explicó|comentó|preguntó|concluyó)(?!\p{L})/u
+// Between the question word and the verb: «qué más dijo», «qué fue lo que dijo».
+const SAID_GAP = `(?:${/(?:mas|se|le|les|lo|nos|me|te|fue|es|era|que|exactamente|entonces|ahi|alli|aqui|tambien|ademas|al|final|principio|inicio|el|ella|ellos|ellas|ya|realmente)/.source} ){0,3}`
+// After the verb: nothing, a topic or a pointer, never a new speaker
+// («qué dijo Einstein»). «él»/«ella» only before a topic or at the end.
+const SAID_TAIL_WORD =
+  /(?:sobre|de|del|acerca|respecto|en|al|a|con|entre|para|por|antes|despues|luego|durante|cuando|que|y|eso|esto|aquello|exactamente|entonces|ahi|alli|aqui|mas|tambien|ademas|primero|finalmente|hoy|ayer)/
+const SAID_TAIL = `(?:$| ${SAID_TAIL_WORD.source}\\b| (?:el|ella|ellos|ellas)(?:$| ${SAID_TAIL_WORD.source}\\b))`
+// «quién dijo que la tierra era redonda» asks about a quote: a who-question
+// points at the recording only bare or with a pointer («¿quién dijo eso?»).
+const SAID_WHO_TAIL = "(?:$| (?:eso|esto|aquello|ahi|alli)$)"
+const saidStrict = (verb: RegExp) => anyOf([
+  new RegExp(`${SAID_WHAT_HEAD}${SAID_GAP}${verb.source}${SAID_TAIL}`),
+  new RegExp(`${SAID_WHO_HEAD}${SAID_GAP}${verb.source}${SAID_WHO_TAIL}`),
+])
+const SAID_STRICT_RE = saidStrict(SAID_PAST_VERB)
+const SAID_STRICT_ACCENT_RE = saidStrict(SAID_ACCENT_VERB)
+// Any speaker, but only next to a recording word: «qué explicó el profesor».
+const SAID_LOOSE_RE = new RegExp(
+  `^${FOLLOWUP_LEAD_IN.source}(?:que|de que|sobre que|cuando|como|donde|por que|cual|cuales|quien|quienes|a quien) (?:\\w+ ){0,3}(?:${SAID_PAST_VERB.source}|${SAID_ACCENT_VERB.source})\\b`,
+)
+// «qué dice el profesor», «de qué trata el audio»: names the recording itself.
+const SAID_ABOUT_RECORDING_RE = new RegExp(
   `^${FOLLOWUP_LEAD_IN.source}`
     + /(?:que|de que|sobre que) (?:dice|habla|menciona|explica|cuenta|trata) (?:el|la|este|esta|ese|esa) (?:profesora?|profe|docente|ponente|expositora?|oradora?|entrevistad[oa]|invitad[oa]|audio|video|grabacion|clase|reunion|charla|conferencia|entrevista|podcast)\b/.source,
-  /^what (?:did|does) (?:he|she|they|the \w+) (?:say|mention|talk about)\b/.source,
-].join("|"))
+)
+const SAID_ENGLISH_RE =
+  /^what (?:did|does) (?:he|she|they|the (?:speaker|teacher|professor|lecturer|presenter|host|guest|interviewee|instructor)) (?:say|mention|talk about)\b/
+// Accent-folded, case kept: finds the verb in the prompt as typed.
+const SAID_VERB_ANY_RE = new RegExp(`(?<![\\p{L}\\d])(?:${SAID_PAST_VERB.source}|${SAID_ACCENT_VERB.source})(?![\\p{L}\\d])`, "iu")
+// A capitalized word that does not open a sentence: a name or an acronym.
+const PROPER_NOUN_RE = /(?<![.?!¿¡]\s*)(?<![\p{L}\d])\p{Lu}/u
+
+// «qué dijo a su esposa Napoleón», «qué se acordó en el Tratado de Versalles»,
+// «qué dijo sobre la inflación el presidente del BCR»: someone or something
+// named after the verb is a new speaker or a historic event. An all-caps
+// prompt names nobody.
+function namesSomeoneAfterSaidVerb(prompt: string): boolean {
+  const typed = String(prompt || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ")
+  const verb = SAID_VERB_ANY_RE.exec(typed)
+  if (!verb) return false
+  const after = typed.slice(verb.index + verb[0].length)
+  return /\p{Ll}/u.test(after) && PROPER_NOUN_RE.test(after)
+}
+
+// `instruction` is the request without the user's own material, so a
+// recording word quoted or pasted after a colon never names the recording.
+function isSaidQuestion(text: string, prompt: string, instruction: string): boolean {
+  if (SAID_ABOUT_RECORDING_RE.test(text) || SAID_ENGLISH_RE.test(text)) return true
+  if (RECORDING_CONTEXT_RE.test(instruction) || MEDIA_NOUN_RE.test(instruction)) return SAID_LOOSE_RE.test(text)
+  const strict = SAID_STRICT_RE.test(text)
+    || (SAID_STRICT_ACCENT_RE.test(text) && SAID_ACCENTED_RE.test(String(prompt || "").normalize("NFC").toLowerCase()))
+  return strict && !namesSomeoneAfterSaidVerb(prompt)
+}
+
+// Another object named before the recording word: «resume este artículo sobre
+// la clase» is about the article, «resume la clase en un documento» is not.
+const OTHER_OBJECT_RE =
+  /\b(?:documentos?|pdfs?|articulos?|libros?|papers?|tesis|informes?|reportes?|imagen(?:es)?|fotos?|capturas?|excel|presentacion(?:es)?|diapositivas?|codigo|paginas?|webs?|correos?|emails?|noticias?|cartas?|ensayos?|novelas?|cuentos?|poemas?|contratos?|textos?|mensajes?|frases?|parrafos?|oracion(?:es)?|agendas?|horarios?|dias?|turnos?|calendarios?)\b/
+
+function namesRecordingFirst(text: string): boolean {
+  const recording = text.search(RECORDING_CONTEXT_RE)
+  if (recording < 0) return false
+  const other = text.search(OTHER_OBJECT_RE)
+  return other < 0 || recording < other
+}
+
+// The user's own material starts at the first colon that is not part of a
+// timecode, a line break or an opening quote: «traduce al inglés: mañana no
+// habrá clase», «traduce "hola profe" al inglés». An apostrophe opens a quote
+// only after a space («what's» is a word).
+const MATERIAL_START_RE = /(?<!\d):(?!\d)|[\r\n]|["«»“”„‘]|(?<![\p{L}\d])['’]/u
+
+function splitInstruction(prompt: string): { instruction: string; material: string } {
+  const raw = String(prompt || "")
+  const cut = raw.search(MATERIAL_START_RE)
+  return cut < 0 ? { instruction: raw, material: "" } : { instruction: raw.slice(0, cut), material: raw.slice(cut + 1) }
+}
+
+// «del 1:30 al 10:00», «y solo de 5:00 a 6:00»: the range and nothing else.
+const BARE_RANGE_WORDS = new Set([
+  "y", "e", "ok", "ahora", "ya", "luego", "tambien", "solo", "solamente", "porfa", "por", "favor",
+  "del", "de", "al", "a", "desde", "hasta", "entre", "el", "la", "los", "las", "parte", "tramo", "fragmento", "segmento",
+  "minuto", "minutos", "min", "segundo", "segundos", "hora", "horas",
+])
+
+function isBareTimeRange(text: string): boolean {
+  return text.split(" ").every((word) => /^[\d\-–]+$/.test(word) || BARE_RANGE_WORDS.has(word))
+}
+
 // «resúmelo», «tradúcelo», «ponle subtítulos»: the pronoun is the answer just given.
 const PRONOUN_FOLLOWUP_RE = new RegExp(
   `^${FOLLOWUP_LEAD_IN.source}(?:(?:resum|traduc|transcrib|analiz|sintetiz|subtitul|explic)\\w*(?:lo|la|los|las)|ponle subtitulos)\\b`,
@@ -285,18 +380,33 @@ export function classifyMediaFollowupPrompt(prompt: string): MediaFollowupKind |
   const text = normalizeRoutingPrompt(prompt)
   if (!text || text.length > 240) return null
   if (LINK_RE.test(text)) return null
+  // Recording words and ranges count only in the request itself, never in the
+  // text the user pasted or quoted after it.
+  const parts = splitInstruction(prompt)
+  const instruction = normalizeRoutingPrompt(parts.instruction)
   const action = /^(?:(?:por favor|ahora|puedes|podrias|quiero que|necesito que|vuelve a) )?(?:transcrib\w*|transcripci\w*|analiz\w*|analisis|resum\w*|reintent\w*|compar\w*)\b/
-  if (action.test(text) && MEDIA_NOUN_RE.test(text)) return "explicit"
+  if (action.test(text) && MEDIA_NOUN_RE.test(instruction)) return "explicit"
   // "analiza los50" / "reintenta los fallidos" refer to the most recent batch.
   // Keep the vocabulary closed so "analiza el codigo" remains a new task.
   if (/^(?:por favor )?(?:analiza|analizar|resume|resumir|transcribe|transcribir|reintenta|reintentar|compara|comparar)(?: (?:los|las|estos|estas|esos|esas|todos|todas|restantes|fallidos|fallidas|pendientes|nuevamente|otra|vez|de|nuevo|por|favor|\d+))*$/.test(text)) {
     return "explicit"
   }
   const head = UNDERSTANDING_HEAD_RE.test(text) && !FOREIGN_SOURCE_RE.test(text)
-  if (head && (MEDIA_NOUN_RE.test(text) || RECORDING_OUTPUT_RE.test(text))) return "explicit"
-  if (head && RECORDING_CONTEXT_RE.test(text)) return "contextual"
-  if (SAID_QUESTION_RE.test(text)) return "contextual"
-  if (text.length <= 120 && MEDIA_TIME_RANGE_RE.test(foldRoutingPrompt(prompt))) return "contextual"
+  if (head && (MEDIA_NOUN_RE.test(instruction) || RECORDING_OUTPUT_RE.test(instruction))) return "explicit"
+  if (head && namesRecordingFirst(instruction)) return "contextual"
+  if (isSaidQuestion(text, prompt, instruction)) return "contextual"
+  if (text.length <= 120) {
+    // The range is in the request, or it is all the material («transcribe:
+    // del 1:30 al 10:00»); «traduce: en el minuto 90 metió gol» is the text.
+    const scope = foldRoutingPrompt(isBareTimeRange(normalizeRoutingPrompt(parts.material)) ? prompt : parts.instruction)
+    if (MEDIA_UNIT_RANGE_RE.test(scope)) return "contextual"
+    // A clock range belongs to the recording only with a request about it or
+    // on its own; «agenda una reunión de 10:00 a 11:00» and «resume mi día de
+    // 9:00 a 17:00» are schedules.
+    const range = scope.search(MEDIA_CLOCK_RANGE_RE)
+    if (range >= 0 && ((head && !OTHER_OBJECT_RE.test(scope.slice(0, range)))
+      || MEDIA_NOUN_RE.test(instruction) || RECORDING_OUTPUT_RE.test(instruction) || isBareTimeRange(text))) return "contextual"
+  }
   if ((head && IMMEDIATE_CLOSED_RE.test(text)) || PRONOUN_FOLLOWUP_RE.test(text)) return "immediate"
   if (MEDIA_EXPORT_RE.test(text) && text.split(" ").length <= 8 && !FOREIGN_SOURCE_RE.test(text)) return "immediate"
   return null

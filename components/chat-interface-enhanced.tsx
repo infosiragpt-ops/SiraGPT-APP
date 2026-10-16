@@ -6256,6 +6256,9 @@ function ChatInterfaceContent() {
   }, [isCurrentChatStreaming]);
 
   const [isUploading, setIsUploading] = React.useState(false);
+  // Drops, pastes and retries upload concurrently; isUploading stays true
+  // until the last one in flight ends, not the first.
+  const activeUploadsRef = React.useRef(0);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
   // Leaving the page mid-upload (a multi-GB recording) asks first: the
@@ -9528,6 +9531,7 @@ But first, you need to connect your Spotify account securely using the button be
       return next;
     });
 
+    activeUploadsRef.current += 1;
     setIsUploading(true);
 
     try {
@@ -9719,7 +9723,8 @@ But first, you need to connect your Spotify account securely using the button be
       // Previews are intentionally KEPT alive on failure so the chip
       // can render its thumbnail next to the retry button.
     } finally {
-      setIsUploading(false);
+      activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+      setIsUploading(activeUploadsRef.current > 0);
       setUploadProgress(prev => {
         const next = { ...prev };
         tempFiles.forEach(tf => { delete next[tf.tempId]; });
@@ -10761,9 +10766,13 @@ But first, you need to connect your Spotify account securely using the button be
     // latest media batch («quiero la transcripción de este video», «resume la
     // clase», «ponlo en word») — is decided here, before any tool mode or
     // classifyIntent: it runs on the durable agent-task media branch, never on
-    // video generation, Voz/Música or the image-only toast.
+    // video generation, Voz/Música or the image-only toast. Gmail, Calendar,
+    // Drive, Spotify and Computer own their turn: with one of them active a
+    // message never borrows the last recording.
+    const connectorOwnsTurn = isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
+      || isSpotifyActive || isComputerUseActive;
     const mediaFollowupFiles = !codingWorkspace && composerFiles.length === 0
-      ? resolveMediaFollowupFiles(msg, currentChat?.messages || [])
+      ? resolveMediaFollowupFiles(msg, currentChat?.messages || []).filter(() => !connectorOwnsTurn)
       : [];
     const mediaUnderstandingTurn = !codingWorkspace
       && (mediaFollowupFiles.length > 0 || isMediaUnderstandingTurn(msg, composerFiles));

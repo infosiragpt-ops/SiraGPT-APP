@@ -2805,8 +2805,30 @@ Pedido de Jorge: «la transcripción debe ser profesional y muy avanzada… vide
 - **Seguimiento**: el historial recarga transcripciones de medios anteriores (`loadHistoryMediaTranscripts`, owner-scoped); `resolveChatMediaFileIds` también encuentra grabaciones entregadas por enlace.
 - **Compositor** (`lib/chat/composer-files.ts`, `composer-auto-mode.ts`, `chat-interface-enhanced.tsx`, solo lógica): `isMediaUnderstandingTurn` manda transcribir/resumir/subtítulos/rangos/«qué dijo» con audio o video a `handleAgentTask` antes de `classifyIntent`; nunca a generar video, Voz o el aviso «Solo se permiten archivos de imagen». Confirmación del navegador al salir con una subida en curso.
 - **Subidas** (`chunked-upload-store.js`, `routes/files.js`, `lib/composer/resumable-upload.ts`): estado `GET /api/files/upload/chunked/:id`, complete idempotente, 507 por espacio, 3 partes en paralelo, pausa/reanudación ante cortes (~45 min), reanudación tras recargar por huella del archivo, medios ≥ 32 MB por partes; el estado de un medio nunca se da por «listo» a los 30 min. Multer: medios hasta 10 GB, documentos con su tope; GPT (conocimiento/íconos) usa `upload.documentsOnly`.
+- **Revisión adversarial (29 hallazgos, todos corregidos con prueba)**:
+  - **Entrega e idioma:**
+    - El aviso «te aviso aquí» guarda el id en `metadata.mediaDeliveryHandoff`, y `findDeliveredMessage` solo cuenta mensajes con `metadata.source = 'media-delivery'`. Antes, el aviso se tomaba por la entrega ya hecha y la transcripción nunca llegaba.
+    - Un fallo puntual de whisper.cpp solo degrada ESE tramo; el motor local solo se descarta si falta el binario o el modelo.
+    - Un idioma detectado que contradice `WHISPER_LANGUAGE` necesita un segundo tramo que coincida para fijarse.
+    - En tramos segmentados, el vacío de xAI cuenta como silencio, no como fallo.
+  - **Traducción:**
+    - Cada trozo usa el presupuesto grande del runtime (6000 tokens) y se divide si llega cortado. Antes había un tope de 1000 tokens.
+    - CJK va en trozos de 4000.
+    - `detectTranslationTarget` ignora negaciones y el sustantivo como tema («curso de traducción»).
+  - **Traducir y transcribir a la vez:** el registro guarda `output.includeTranscript` / `output.alsoAnalysis`, así que «transcribe y tradúcelo» entrega ambos, y si la traducción falla igual se adjunta la transcripción.
+  - **Enlaces:**
+    - El offset de un clip va al reloj de la grabación en la cola: `recordMediaClipOffset` → `<UPLOAD_DIR>/.transcripts/<id>.clip.json`. Vista previa, huecos, seguimientos y archivos usan el mismo reloj.
+    - Un stream sin duración ni fin no se toma por 12 h.
+    - Una entrega fallida no deja un archivo en cola.
+  - **Limpieza:**
+    - `purgeMediaTranscript` borra el sidecar al eliminar el archivo y en el barrido de cuentas borradas.
+    - La fila `DocumentAnalysis` de medios nace `pending`, así document-intelligence sí la indexa.
+  - **Cola:**
+    - `forced` se deriva de la fila, no del job.
+    - El aparcado por despliegue conserva la marca de reintento.
+    - La recuperación de 60 s no espera al barrido de entregas (`createRecoveryTick`), y el barrido salta las entregas en curso.
 - **Pendiente (decisión de Luis)**: financiar un STT de nube de formato largo (ElevenLabs Scribe v2 —clave ya en prod— / Groq / xAI) y aprobar el envío de audio; presupuesto de CPU/RAM y egress a HuggingFace para el modelo turbo local; confirmar que el compose vivo usa `env_file`; mostrar velocidad/ETA de subida en el chip (UI lock).
-- Tests (registrados): `media-transcription-partial`, `media-followup-context`, `transcribe-url-durable`, `media-delivery-store`, `media-delivery`, `media-delivery-integration`, `media-transcript-format`, `media-transcript-store`, `media-transcript-artifacts`, `local-whisper-args`, `audio-transcriber-{language,segmentation,segment-ladder,rate-limit}`, `xai-audio-multipart`, más casos en `media-batch`, `chunked-upload-store`, `files-chunked-upload-route`, `upload-static-access`; frontend `tests/lib/composer-media-understanding.test.ts`, `chunked-upload-resumable`, `file-processing-status-media`, `chat-media-understanding-routing-source`, `chat-upload-leave-guard-source`. Envs en `docs/ENV_VARIABLES.md`.
+- Tests (registrados): `media-transcription-partial`, `media-followup-context`, `transcribe-url-durable`, `media-delivery-store`, `media-delivery`, `media-delivery-integration`, `media-transcript-format`, `media-transcript-store`, `media-transcript-cleanup`, `media-transcript-artifacts`, `local-whisper-args`, `audio-transcriber-{language,segmentation,segment-ladder,rate-limit}`, `xai-audio-multipart`, más casos en `media-batch`, `chunked-upload-store`, `files-chunked-upload-route`, `upload-static-access`; frontend `tests/lib/composer-media-understanding.test.ts`, `chunked-upload-resumable`, `file-processing-status-media`, `chat-media-understanding-routing-source`, `chat-upload-leave-guard-source`. Envs en `docs/ENV_VARIABLES.md`.
 
 ## Conexiones externas
 - Repo: https://github.com/infosiragpt-ops/SiraGPT-APP

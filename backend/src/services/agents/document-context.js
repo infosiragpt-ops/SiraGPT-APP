@@ -651,7 +651,9 @@ async function diagnoseFile(prisma, opts = {}) {
       analysisRecord = null;
     }
 
-    const status = determineHealthStatus(stage, hasUsefulText, !!analysisRecord, chunkCount);
+    // A `pending` row (a media transcript's pointer) holds no analysis yet.
+    const hasAnalysis = !!analysisRecord && analysisRecord.status !== 'pending';
+    const status = determineHealthStatus(stage, hasUsefulText, hasAnalysis, chunkCount);
 
     const diagnostics = {
       fileId: file.id,

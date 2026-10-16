@@ -101,7 +101,12 @@ function normalizeModel(model) {
   return { id, provider: clipString(model.provider, 80) };
 }
 
-/** What the user asked the deliverables to look like (document, subtitles, clip clock). */
+/**
+ * What the user asked the deliverables to look like (document, subtitles,
+ * clip clock). In mode 'translation', `includeTranscript` keeps the
+ * transcript files next to the translation («transcribe y tradúcelo») and
+ * `alsoAnalysis` adds the requested summary («resume y tradúcelo»).
+ */
 function normalizeOutput(output) {
   const value = output && typeof output === 'object' ? output : {};
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
@@ -110,6 +115,8 @@ function normalizeOutput(output) {
     documentFormat,
     wantsSubtitles: value.wantsSubtitles === true,
     timeOffsetSec: Number.isFinite(offset) && offset > 0 ? Math.min(offset, 7 * 24 * 3600) : 0,
+    includeTranscript: value.includeTranscript === true,
+    alsoAnalysis: value.alsoAnalysis === true,
   };
 }
 
@@ -240,8 +247,10 @@ function createMediaDeliveryStore({
 
   /**
    * Remove a lock only when it is older than the stale window. The rename is
-   * atomic, and the renamed file is checked against the lock we judged
-   * stale: if a fresh lock replaced it in between, it is put back.
+   * atomic, and the renamed file must be the very file that was judged stale
+   * (same inode and mtime, plus the same token when it has one): if another
+   * process reaped it and took a fresh lock in between — even before our
+   * token read — or the holder refreshed it, the lock is put back.
    */
   async function reapStaleLock(id) {
     const file = lockPath(id);
@@ -258,9 +267,10 @@ function createMediaDeliveryStore({
     }
     const reaped = await readJson(reapPath).catch(() => null);
     const reapedStat = await fsp.stat(reapPath).catch(() => null);
-    const sameLock = judged?.token
-      ? reaped?.token === judged.token
-      : Boolean(reapedStat && Math.abs(reapedStat.mtimeMs - stat.mtimeMs) < 1);
+    // mtime as well as ino: a replacement lock may reuse the inode number.
+    const sameFile = Boolean(reapedStat && reapedStat.ino === stat.ino && reapedStat.dev === stat.dev
+      && Math.abs(reapedStat.mtimeMs - stat.mtimeMs) < 1);
+    const sameLock = sameFile && (!judged?.token || reaped?.token === judged.token);
     if (!sameLock) {
       // Never clobber: link fails if someone already holds the lock again.
       await fsp.link(reapPath, file).catch(() => {});

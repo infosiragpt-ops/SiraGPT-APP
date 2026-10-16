@@ -278,10 +278,12 @@ test('upsertMediaTranscriptAnalysis creates the row with schema columns and a sm
     gaps: [{ start: 1200, end: 1800, reason: 'timeout' }],
     engine: 'mixed',
   };
+  // `pending`, never `ready`: the row has no chunks or summary, so
+  // document-intelligence must still build the real analysis.
   assert.deepEqual(create, {
-    userId: 'u1', fileId: 'f1', status: 'ready', language: 'es', mimeType: 'video/mp4', charCount: 52, metadata,
+    userId: 'u1', fileId: 'f1', status: 'pending', language: 'es', mimeType: 'video/mp4', charCount: 52, metadata,
   });
-  assert.deepEqual(update, { status: 'ready', language: 'es', charCount: 52, metadata });
+  assert.deepEqual(update, { status: 'pending', language: 'es', charCount: 52, metadata });
   assert.equal(row.metadata.kind, 'media_transcript');
   // The database never holds the segments or an absolute server path.
   const serialized = JSON.stringify(create);
@@ -338,4 +340,102 @@ test('mediaTranscriptMetadata derives coverage and stats from older results', ()
   assert.equal(meta.coverage, 0.75);
   assert.equal(meta.partial, true);
   assert.equal(meta.segmentCount, 1);
+});
+
+// ── review fixes ────────────────────────────────────────────────────────────
+
+test('the media pointer row never short-circuits document-intelligence: the real analysis is still built', async () => {
+  const { prisma, analysisRows } = fakePrisma({ files: [{ id: 'f1', userId: 'u1', originalName: 'clase.mp4', mimeType: 'video/mp4' }] });
+  await store.upsertMediaTranscriptAnalysis(prisma, { fileId: 'f1', userId: 'u1', result: RESULT, sidecarPath: 'x/f1.json.gz' });
+  const stub = analysisRows.get('f1');
+  const transcript = '[00:00:00] Hola a todos. Hoy vemos la célula y la mitocondria, que produce energía para la célula.';
+  const fileRecord = { id: 'f1', userId: 'u1', originalName: 'clase.mp4', filename: 'clase.mp4', mimeType: 'video/mp4', size: 10,
+    path: null, extractedText: transcript, createdAt: new Date(Date.now() - 60_000) };
+  const docintel = require('../src/services/document-intelligence');
+  const analysis = await docintel.analyzeFile({
+    file: { async findFirst() { return fileRecord; } },
+    // The analysis row as stored, as fresh as the transcript (not stale).
+    documentAnalysis: { async findUnique() { return { ...stub, updatedAt: new Date(), chunks: [], tables: [] }; } },
+  }, { userId: 'u1', fileRecord });
+  assert.ok(analysis.chunkCount > 0, 'chunks are built from the transcript');
+  assert.ok(analysis.summary, 'and a summary');
+  assert.equal(analysis.status, 'ready');
+});
+
+test('purgeMediaTranscript removes the sidecar and the clip record, and never throws', async (t) => {
+  const root = tmpRoot(t);
+  await store.writeSidecar({ fileId: 'f1', userId: 'u1', result: RESULT }, { root });
+  await store.recordMediaClipOffset({ fileId: 'f1', userId: 'u1', timeOffsetSec: 3600, root });
+  assert.deepEqual(fs.readdirSync(root).sort(), ['f1.clip.json', 'f1.json.gz']);
+  assert.deepEqual(await store.purgeMediaTranscript('f1', { root }), { sidecar: true, clip: true });
+  assert.deepEqual(fs.readdirSync(root), []);
+  assert.deepEqual(await store.purgeMediaTranscript('f1', { root }), { sidecar: false, clip: false });
+  assert.deepEqual(await store.purgeMediaTranscript('../etc', { root }), { sidecar: false, clip: false });
+});
+
+test('purgeMediaTranscript reports a failed unlink instead of passing it off as absent', async (t) => {
+  const root = tmpRoot(t);
+  // A directory where the sidecar should be: unlink fails (EISDIR/EPERM), not ENOENT.
+  fs.mkdirSync(path.join(root, 'f2.json.gz'), { recursive: true });
+  await store.recordMediaClipOffset({ fileId: 'f2', userId: 'u1', timeOffsetSec: 60, root });
+  const out = await store.purgeMediaTranscript('f2', { root });
+  assert.equal(out.sidecar, false);
+  assert.equal(typeof out.error, 'string');
+  assert.notEqual(out.error, 'ENOENT');
+  assert.equal(out.clip, true, 'the rest is still removed');
+
+  // Same for the clip record.
+  fs.mkdirSync(path.join(root, 'f3.clip.json'));
+  const clipOut = await store.purgeMediaTranscript('f3', { root });
+  assert.equal(clipOut.clip, false);
+  assert.equal(typeof clipOut.error, 'string');
+  // Absence is never an error.
+  assert.equal('error' in await store.purgeMediaTranscript('f4', { root }), false);
+});
+
+test('a clip offset is recorded durably, owner-scoped, and read back by the queue', async (t) => {
+  const root = tmpRoot(t);
+  const { prisma } = fakePrisma({ files: [
+    { id: 'clip1', userId: 'u1', originalName: 'tramo.m4a', mimeType: 'audio/mp4' },
+    { id: 'gone', userId: 'u1', originalName: 'b.m4a', mimeType: 'audio/mp4', deletedAt: new Date() },
+  ] });
+  assert.deepEqual(await store.recordMediaClipOffset({ fileId: 'clip1', userId: 'u1', timeOffsetSec: 3600.12345, prisma, root }),
+    { ok: true, timeOffsetSec: 3600.123 });
+  assert.equal(await store.readMediaClipOffset({ fileId: 'clip1', userId: 'u1', root }), 3600.123);
+  assert.equal(await store.readMediaClipOffset({ fileId: 'clip1', userId: 'u2', root }), 0, 'another user sees nothing');
+  assert.equal(await store.readMediaClipOffset({ fileId: 'other', userId: 'u1', root }), 0);
+  // Refusals write nothing.
+  assert.deepEqual(await store.recordMediaClipOffset({ fileId: 'clip1', userId: 'u2', timeOffsetSec: 60, prisma, root }), { ok: false, reason: 'not_found' });
+  assert.deepEqual(await store.recordMediaClipOffset({ fileId: 'gone', userId: 'u1', timeOffsetSec: 60, prisma, root }), { ok: false, reason: 'not_found' });
+  assert.deepEqual(await store.recordMediaClipOffset({ fileId: '../x', userId: 'u1', timeOffsetSec: 60, root }), { ok: false, reason: 'invalid' });
+  assert.equal(await store.readMediaClipOffset({ fileId: 'clip1', userId: 'u1', root }), 3600.123);
+  // An offset of 0 removes the record; a corrupt record reads as 0.
+  assert.deepEqual(await store.recordMediaClipOffset({ fileId: 'clip1', userId: 'u1', timeOffsetSec: 0, root }), { ok: true, timeOffsetSec: 0 });
+  assert.equal(fs.existsSync(path.join(root, 'clip1.clip.json')), false);
+  fs.writeFileSync(path.join(root, 'clip1.clip.json'), '{not json');
+  assert.equal(await store.readMediaClipOffset({ fileId: 'clip1', userId: 'u1', root }), 0);
+  // A write failure is reported, never thrown.
+  const blocked = path.join(root, 'blocked');
+  fs.writeFileSync(blocked, 'a file where the directory should be');
+  assert.deepEqual(await store.recordMediaClipOffset({ fileId: 'clip1', userId: 'u1', timeOffsetSec: 60, root: path.join(blocked, 'sub') }),
+    { ok: false, reason: 'write_failed' });
+});
+
+test('a gap retry of a clip finds its offset in the last sidecar when the record is gone', async (t) => {
+  const root = tmpRoot(t);
+  const shifted = { ...RESULT, timeOffsetSec: 3600, segments: RESULT.segments.map((s) => ({ ...s, start: s.start + 3600, end: s.end + 3600 })) };
+  const written = await store.writeSidecar({ fileId: 'clip2', userId: 'u1', result: shifted }, { root, now: NOW });
+  assert.equal(written.sidecar.timeOffsetSec, 3600);
+  assert.equal(written.sidecar.durationSec, 3725.457, 'the clip keeps its own length');
+  assert.equal(await store.readMediaClipOffset({ fileId: 'clip2', userId: 'u1', root }), 3600);
+  assert.equal(await store.readMediaClipOffset({ fileId: 'clip2', userId: 'u9', root }), 0);
+  // The loaded transcript and the pointer carry the offset for the formatter.
+  const { prisma } = fakePrisma({ files: [{ id: 'clip2', userId: 'u1', originalName: 'tramo.mp4', mimeType: 'video/mp4' }] });
+  const loaded = await store.loadMediaTranscript(prisma, { userId: 'u1', fileId: 'clip2' }, { root });
+  assert.equal(loaded.timeOffsetSec, 3600);
+  assert.equal(store.mediaTranscriptMetadata(shifted, { fileId: 'clip2' }).timeOffsetSec, 3600);
+  assert.equal('timeOffsetSec' in store.mediaTranscriptMetadata(RESULT, { fileId: 'f1' }), false);
+  // A recording that is not a clip carries no offset at all.
+  const plain = await store.writeSidecar({ fileId: 'whole', userId: 'u1', result: RESULT }, { root, now: NOW });
+  assert.equal('timeOffsetSec' in plain.sidecar, false);
 });

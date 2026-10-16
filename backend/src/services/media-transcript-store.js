@@ -9,17 +9,27 @@
  *
  *   <UPLOAD_DIR>/.transcripts/<fileId>.json.gz
  *   { version: 1, fileId, userId, language, durationSec, providers, engine,
- *     coverage, gaps, partial, segments: [{ s, e, t, spk?, conf? }], createdAt }
+ *     coverage, gaps, partial, segments: [{ s, e, t, spk?, conf? }], createdAt,
+ *     timeOffsetSec? }
  *
  * plus a small pointer + stats in DocumentAnalysis.metadata
  * ({ kind: 'media_transcript', sidecar, durationSec, providers, coverage,
- *    speakers, segmentCount, language, partial, gaps, engine }).
+ *    speakers, segmentCount, language, partial, gaps, engine }). That row is
+ * written as `pending`: it holds no chunks, so document-intelligence still
+ * builds the real analysis (chunks, summary) from File.extractedText the
+ * first time someone asks for it.
+ *
+ * A clip cut from a longer recording (a link section «del minuto 60 al 90»)
+ * has its offset on the recording's clock recorded next to the sidecar
+ * (<fileId>.clip.json) before its job is queued, so a job lost and re-queued
+ * with only { fileId, userId } still stores the transcript on that clock.
  *
  * The sidecar path is derived from the fileId (never read from the database),
  * so a later document-intelligence pass that rewrites `metadata` cannot point
  * a reader at another file. Reads are owner-scoped: the File row must belong to
  * the user and not be deleted. `/uploads` never serves this directory: its
- * first path segment starts with a dot (see upload-static-access).
+ * first path segment starts with a dot (see upload-static-access). Deleting
+ * the file (route, account scrub) removes both files (`purgeMediaTranscript`).
  */
 
 const crypto = require('node:crypto');
@@ -38,6 +48,9 @@ const FILE_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 // A 5-hour transcript is ~1 MB of JSON; anything far beyond is not ours.
 const MAX_SIDECAR_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_GAPS_IN_METADATA = 200;
+const CLIP_RECORD_VERSION = 1;
+// Same ceiling as a delivery's offset: a week of recording clock.
+const MAX_CLIP_OFFSET_SEC = 7 * 24 * 3600;
 
 function transcriptsRoot(env = process.env) {
   return path.join(path.resolve(env.UPLOAD_DIR || 'uploads'), SIDECAR_DIRNAME);
@@ -59,6 +72,19 @@ function sidecarPathFor(fileId, opts = {}) {
     throw err;
   }
   return path.join(rootOf(opts), `${fileId}.json.gz`);
+}
+
+/** Absolute path of a clip's offset record; throws like `sidecarPathFor`. */
+function clipRecordPathFor(fileId, opts = {}) {
+  sidecarPathFor(fileId, opts);
+  return path.join(rootOf(opts), `${fileId}.clip.json`);
+}
+
+/** A finite offset in [0, a week], rounded to milliseconds; anything else is 0. */
+function normalizeOffset(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return round3(Math.min(n, MAX_CLIP_OFFSET_SEC));
 }
 
 function round3(n) {
@@ -109,6 +135,7 @@ function buildSidecar({ fileId, userId, result }, { now = new Date() } = {}) {
     createdAt: (now instanceof Date ? now : new Date(now)).toISOString(),
   };
   if (synthetic) sidecar.synthetic = true;
+  if (meta.timeOffsetSec > 0) sidecar.timeOffsetSec = round3(meta.timeOffsetSec);
   return sidecar;
 }
 
@@ -186,9 +213,91 @@ async function deleteSidecar(fileId, opts = {}) {
   }
 }
 
+/**
+ * Remove everything stored for a file's transcript: the sidecar and a clip's
+ * offset record. Never throws (a delete route or the account scrub must not
+ * fail on it); reports what existed and, when an unlink failed for any reason
+ * but absence (EACCES, EBUSY, EIO…), `error` with its code, so the caller can
+ * log it and retry instead of taking the transcript for gone.
+ */
+async function purgeMediaTranscript(fileId, opts = {}) {
+  const out = { sidecar: false, clip: false };
+  if (!isValidFileId(fileId)) return out;
+  try {
+    out.sidecar = await deleteSidecar(fileId, opts);
+  } catch (err) {
+    out.error = (err && err.code) || 'unlink_failed';
+  }
+  try {
+    await fs.promises.unlink(clipRecordPathFor(fileId, opts));
+    out.clip = true;
+  } catch (err) {
+    if (!(err && err.code === 'ENOENT') && !out.error) out.error = (err && err.code) || 'unlink_failed';
+  }
+  return out;
+}
+
+/**
+ * Durably record where a clip starts on its recording's clock (seconds).
+ * Written before the clip's job is queued; the media queue reads it back when
+ * a job arrives without `timeOffsetSec`. An offset of 0 removes the record.
+ * With `prisma`, the File row must be the user's and not deleted. Never
+ * throws: { ok, timeOffsetSec } or { ok: false, reason }.
+ */
+async function recordMediaClipOffset({ fileId, userId, timeOffsetSec, prisma = null, ...opts } = {}) {
+  if (!userId || !isValidFileId(fileId)) return { ok: false, reason: 'invalid' };
+  const owner = String(userId);
+  if (prisma && prisma.file && typeof prisma.file.findFirst === 'function') {
+    let file = null;
+    try {
+      file = await prisma.file.findFirst({ where: { id: fileId, userId: owner, deletedAt: null }, select: { id: true } });
+    } catch (_) {
+      return { ok: false, reason: 'lookup_failed' };
+    }
+    if (!file) return { ok: false, reason: 'not_found' };
+  }
+  const offset = normalizeOffset(timeOffsetSec);
+  const target = clipRecordPathFor(fileId, opts);
+  if (!offset) {
+    await fs.promises.unlink(target).catch(() => {});
+    return { ok: true, timeOffsetSec: 0 };
+  }
+  const body = JSON.stringify({ version: CLIP_RECORD_VERSION, fileId, userId: owner, timeOffsetSec: offset, recordedAt: new Date().toISOString() });
+  const tmp = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    await fs.promises.writeFile(tmp, body);
+    await fs.promises.rename(tmp, target);
+  } catch (_) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    return { ok: false, reason: 'write_failed' };
+  }
+  return { ok: true, timeOffsetSec: offset };
+}
+
+/**
+ * The clip offset (seconds) for a file of `userId`: its offset record, else
+ * the offset its last sidecar was written with (a gap retry of a clip), else
+ * 0. Records of another user or file count as absent. Never throws.
+ */
+async function readMediaClipOffset({ fileId, userId, ...opts } = {}) {
+  if (!userId || !isValidFileId(fileId)) return 0;
+  const owner = String(userId);
+  try {
+    const raw = await fs.promises.readFile(clipRecordPathFor(fileId, opts), 'utf8');
+    const record = JSON.parse(raw);
+    if (record && record.version === CLIP_RECORD_VERSION && record.fileId === fileId && record.userId === owner) {
+      return normalizeOffset(record.timeOffsetSec);
+    }
+  } catch (_) { /* no record: fall back to the sidecar */ }
+  const sidecar = await readSidecar(fileId, opts);
+  return sidecar && sidecar.userId === owner ? normalizeOffset(sidecar.timeOffsetSec) : 0;
+}
+
 /** Sidecar → engine-shaped result the formatter accepts directly. */
 function normalizeSidecar(sidecar, extra = {}) {
   if (!sidecar) return null;
+  const timeOffsetSec = normalizeOffset(sidecar.timeOffsetSec);
   return {
     ok: true,
     version: sidecar.version,
@@ -204,6 +313,7 @@ function normalizeSidecar(sidecar, extra = {}) {
     synthetic: sidecar.synthetic === true,
     segments: sidecar.segments.map(expandSegment),
     createdAt: sidecar.createdAt || null,
+    ...(timeOffsetSec ? { timeOffsetSec } : {}),
     ...extra,
   };
 }
@@ -245,6 +355,7 @@ function sidecarPointer(sidecarPath, fileId) {
 function mediaTranscriptMetadata(result, { sidecarPath, fileId } = {}) {
   const meta = normalizeTranscriptResult(result);
   const speakers = speakerLabels(meta.segments).count;
+  const offset = meta.timeOffsetSec > 0 ? { timeOffsetSec: round3(meta.timeOffsetSec) } : {};
   return {
     kind: 'media_transcript',
     sidecar: sidecarPointer(sidecarPath, fileId),
@@ -257,6 +368,7 @@ function mediaTranscriptMetadata(result, { sidecarPath, fileId } = {}) {
     partial: meta.partial,
     gaps: meta.gaps.slice(0, MAX_GAPS_IN_METADATA).map((g) => ({ start: round3(g.start), end: round3(g.end), reason: g.reason })),
     engine: meta.engine,
+    ...offset,
   };
 }
 
@@ -277,6 +389,11 @@ function transcriptCharCount(result) {
  * keys from document-intelligence are preserved and the media keys win. The big
  * segments array is NEVER stored here. Returns the row, or null when the file
  * is not the user's / is deleted, or a row for this file belongs to someone else.
+ *
+ * The row is `pending`, never `ready`: it has no chunks or summary, and
+ * document-intelligence serves any `ready` row as a finished analysis (0
+ * chunks, no summary — «the file is empty»). `pending` also invalidates an
+ * analysis of the previous text when a gap retry replaces the transcript.
  */
 async function upsertMediaTranscriptAnalysis(prisma, { fileId, userId, result, sidecarPath, mimeType } = {}) {
   if (!prisma || !prisma.documentAnalysis || typeof prisma.documentAnalysis.upsert !== 'function') return null;
@@ -308,14 +425,14 @@ async function upsertMediaTranscriptAnalysis(prisma, { fileId, userId, result, s
     create: {
       userId: owner,
       fileId,
-      status: 'ready',
+      status: 'pending',
       language,
       mimeType: fileMime,
       charCount,
       metadata,
     },
     update: {
-      status: 'ready',
+      status: 'pending',
       language,
       charCount,
       metadata,
@@ -327,13 +444,17 @@ module.exports = {
   writeSidecar,
   readSidecar,
   deleteSidecar,
+  purgeMediaTranscript,
   loadMediaTranscript,
   upsertMediaTranscriptAnalysis,
+  recordMediaClipOffset,
+  readMediaClipOffset,
   // helpers (pure) for callers and tests
   buildSidecar,
   normalizeSidecar,
   mediaTranscriptMetadata,
   sidecarPathFor,
+  clipRecordPathFor,
   transcriptsRoot,
   SIDECAR_VERSION,
   SIDECAR_DIRNAME,

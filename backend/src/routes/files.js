@@ -7,6 +7,7 @@ const { requireScope } = require('../middleware/require-scope');
 const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const mediaTranscription = require('../services/media-transcription-queue');
+const mediaTranscriptStore = require('../services/media-transcript-store');
 const fileProcessor = require('../services/fileProcessor');
 const extractionSingleflight = require('../services/file-extraction-singleflight');
 const documentRenderer = require('../services/documentRenderer');
@@ -1567,7 +1568,8 @@ router.get('/:id/analysis', authenticateToken, async (req, res) => {
       userId: req.user.id,
       fileId: file.id,
     });
-    if (!analysis) {
+    // A `pending` row (a media transcript's pointer) has no chunks yet.
+    if (!analysis || analysis.status === 'pending') {
       analysis = await documentIntelligence.analyzeFile(prisma, {
         userId: req.user.id,
         fileId: file.id,
@@ -1848,6 +1850,10 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     await prisma.file.delete({
       where: { id: req.params.id }
     });
+    // The timed transcript of a recording lives beside the uploads, not in
+    // the row: it goes with the file. Best-effort; never fails the delete.
+    const purged = await mediaTranscriptStore.purgeMediaTranscript(file.id).catch(() => null);
+    if (purged?.error) console.warn(`[files] file=${file.id} transcript purge failed code=${purged.error}`);
 
     res.json({ message: 'File deleted successfully' });
   } catch (error) {

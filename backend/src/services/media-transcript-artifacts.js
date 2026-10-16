@@ -19,6 +19,7 @@
  */
 
 const fs = require('node:fs/promises');
+const { randomUUID } = require('node:crypto');
 
 const MIME = Object.freeze({
   txt: 'text/plain',
@@ -85,10 +86,30 @@ function isVideoRow(row) {
   return /^video\//i.test(String(row?.mimeType || '')) || /\.(mp4|mov|mkv|webm|avi|m4v|mpe?g|ts)$/i.test(rowName(row));
 }
 
+/** Offset a stored sidecar already carries: its segments are on the recording's clock. */
+function storedOffsetOf(transcript) {
+  const offset = Number(transcript?.timeOffsetSec);
+  return Number.isFinite(offset) && offset > 0 ? offset : 0;
+}
+
+/**
+ * Seconds to add to a file's times to put them on the recording's clock: the
+ * requested clip offset, unless the stored transcript is already shifted
+ * (the media queue shifts link clips before storing them) — never twice.
+ */
+function clockOffsetFor(transcript, output = {}) {
+  if (storedOffsetOf(transcript)) return 0;
+  const offset = Number(output?.timeOffsetSec);
+  return Number.isFinite(offset) && offset > 0 ? offset : 0;
+}
+
 /** The formatter input for one file: its sidecar when present, else its text. */
 function transcriptResultFor(row, transcript) {
   const segments = normalizeSegments(transcript?.segments);
-  const durationSec = Number(transcript?.durationSec) || (segments.length ? Math.max(...segments.map((seg) => seg.end)) : null);
+  const storedOffset = storedOffsetOf(transcript);
+  // durationSec is the clip's own length; a shifted clip spans [offset, offset + duration].
+  const spoken = segments.length ? Math.max(...segments.map((seg) => seg.end)) - storedOffset : 0;
+  const durationSec = Number(transcript?.durationSec) || (spoken > 0 ? spoken : null);
   return {
     text: String(row?.extractedText || '').trim(),
     transcript: String(row?.extractedText || '').trim(),
@@ -101,12 +122,16 @@ function transcriptResultFor(row, transcript) {
     providers: transcript?.providers || null,
     engine: transcript?.engine || null,
     segmentCount: Number(transcript?.segmentCount) || segments.length,
+    ...(storedOffset ? { timeOffsetSec: storedOffset } : {}),
   };
 }
 
 /**
  * A clip cut from a longer recording (a link section «del minuto 60 al 90»)
  * is transcribed from 0; its deliverables follow the recording's own clock.
+ * Same shape as a transcript the media queue stored already shifted:
+ * segments and gaps move, durationSec stays the clip's length and
+ * timeOffsetSec marks the shift (the window is [offset, offset + duration]).
  */
 function shiftResult(result, offsetSec) {
   const offset = Number(offsetSec) || 0;
@@ -115,13 +140,12 @@ function shiftResult(result, offsetSec) {
     ...result,
     segments: result.segments.map((seg) => ({ ...seg, start: seg.start + offset, end: seg.end + offset })),
     gaps: result.gaps.map((gap) => ({ ...gap, start: Number(gap.start) + offset, end: Number(gap.end) + offset })),
-    durationSec: result.durationSec ? result.durationSec + offset : result.durationSec,
     timeOffsetSec: offset,
   };
 }
 
 function resultFor(row, transcript, output) {
-  return shiftResult(transcriptResultFor(row, transcript), output?.timeOffsetSec);
+  return shiftResult(transcriptResultFor(row, transcript), clockOffsetFor(transcript, output));
 }
 
 function applyRange(result, range, formatter) {
@@ -168,15 +192,22 @@ function toArtifact(filename, content, format) {
   return { filename, base64: buffer.toString('base64'), mime: MIME[format], format, sizeBytes: buffer.length };
 }
 
+/**
+ * Render under a unique working name: the document service writes to
+ * uploads/documents/<userId>/<name>, and the friendly deliverable names
+ * repeat for one user («Transcripciones (2 archivos).docx», two «Nueva
+ * grabación.m4a»), so two overlapping renders would read or delete each
+ * other's file. The friendly name stays on the artifact only.
+ */
 async function renderDocument({ userId, filename, markdown, format, createDocument }) {
   const build = createDocument || require('./document-service').createDocument;
-  const { filePath } = await build(userId, filename, markdown);
+  const ext = format || String(filename || '').split('.').pop() || 'docx';
+  const { filePath } = await build(userId, `transcript-${randomUUID()}.${ext}`, markdown);
   try {
     return await fs.readFile(filePath);
   } finally {
-    // The document service writes a working copy under uploads/documents;
-    // the artifact store keeps the delivered one.
-    if (filePath && !createDocument) await fs.rm(filePath, { force: true }).catch(() => {});
+    // A working copy only: the artifact store keeps the delivered one.
+    if (filePath) await fs.rm(filePath, { force: true }).catch(() => {});
   }
 }
 
@@ -315,6 +346,32 @@ function summaryLine(result, words) {
   ].filter(Boolean).join(' · ');
 }
 
+/**
+ * The stretch of the recording a file holds, on the recording's clock:
+ * [offset, offset + duration], widened to its last segment or gap. `end` is
+ * null when neither the duration nor any timestamp is known.
+ */
+function audioSpanOf(result) {
+  const start = Number(result?.timeOffsetSec) > 0 ? Number(result.timeOffsetSec) : 0;
+  let end = Number(result?.durationSec) > 0 ? start + Number(result.durationSec) : 0;
+  for (const seg of result?.segments || []) end = Math.max(end, Number(seg?.end) || 0);
+  for (const gap of result?.gaps || []) end = Math.max(end, Number(gap?.end) || 0);
+  return { start, end: end > start ? end : null };
+}
+
+/**
+ * One file as the user asked to see it: on the recording's clock and cut to
+ * the requested window (`output.range`), exactly like the deliverables.
+ * `sliced` is false when there was no range or the file has no timestamps;
+ * `shifted` when a clip offset moved its times; `span` is the audio the
+ * file holds before the cut (a window outside it has nothing to show).
+ */
+function transcriptView(row, transcript, output = {}, formatter = null) {
+  const base = resultFor(row, transcript, output);
+  const { result, sliced } = applyRange(base, output?.range || null, formatter || defaultFormatter());
+  return { result, sliced, shifted: clockOffsetFor(transcript, output) > 0 && base.segments.length > 0, span: audioSpanOf(base) };
+}
+
 /** Chat message body: a summary card per file and a bounded preview. */
 function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output = {}, formatter = null } = {}) {
   const fmt = formatter || defaultFormatter();
@@ -375,6 +432,9 @@ module.exports = {
   escapeChatMarkdown,
   loadTranscripts,
   transcriptResultFor,
+  transcriptView,
+  audioSpanOf,
+  clockOffsetFor,
   normalizeSegments,
   deliverableName,
   rangeLabel,

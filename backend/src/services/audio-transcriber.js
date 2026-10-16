@@ -186,9 +186,11 @@ const TRANSIENT_BACKOFF_BASE_MS = 2_000;
 // After this many consecutive segments failed on a rung, the rest of the job
 // stops trying it (a provider that is down must not cost 3 calls per segment).
 const RUNG_MAX_CONSECUTIVE_FAILURES = 3;
-// Language detection runs on the first segments, one at a time, until one
-// returns speech with a language; the rest of the job uses that language.
+// Language detection runs on the first segments, one at a time, until the
+// detections decide a language (decideLanguage); the rest of the job uses it.
 const LANGUAGE_DETECT_MAX_SEGMENTS = 3;
+// Whisper detects the language on the first 30 s of what it is given.
+const LANGUAGE_DETECT_WINDOW_SECONDS = 30;
 const MAX_PROMPT_CHARS = 1000;
 const MAX_KEYTERMS = 50;
 const MAX_KEYTERM_CHARS = 80;
@@ -417,11 +419,36 @@ function resolveLanguage(options = {}) {
   if (hasExplicitLanguage(options)) return normalizeLanguage(options.language);
   const duration = Number(options.durationSeconds) || 0;
   if (duration > autoLanguageMinSeconds(options)) return undefined;
+  return languageHint(options);
+}
+
+/** The configured hint: WHISPER_LANGUAGE (an empty value means none), default es. */
+function languageHint(options = {}) {
   const env = envOf(options);
   if (Object.prototype.hasOwnProperty.call(env, 'WHISPER_LANGUAGE')) {
     return normalizeLanguage(env.WHISPER_LANGUAGE);
   }
   return DEFAULT_LANGUAGE;
+}
+
+/**
+ * Lock a job's language from the languages detected on its pieces, in order.
+ * Whisper detects ONCE, on the first 30 s of a piece, which in a class or
+ * Zoom recording is often silence, room noise or music: a single detection
+ * that disagrees with the hint is not trusted on its own. One that agrees
+ * with the hint locks at once; one that disagrees needs a second detection
+ * that agrees with it; two that disagree fall back to the hint.
+ * Returns { language, candidate } (language undefined: not decided yet).
+ */
+function decideLanguage(detections, hint) {
+  let candidate;
+  for (const detected of detections) {
+    if (!detected) continue;
+    if (detected === hint || detected === candidate) return { language: detected, candidate };
+    if (!candidate) candidate = detected;
+    else return { language: hint || detected, candidate };
+  }
+  return { language: undefined, candidate };
 }
 
 // ── Prompt / vocabulary ─────────────────────────────────────────────────────
@@ -1564,11 +1591,40 @@ function abortableSleep(ms, signal) {
   });
 }
 
+/**
+ * transcribeLocal reports LOCAL_WHISPER_UNAVAILABLE whenever whisper.cpp AND
+ * the Python fallback failed (production has no faster-whisper, so that
+ * fallback always fails). Only a missing engine (ffmpeg, binary, model,
+ * spawn) is unavailable for the whole job; a whisper.cpp run that started and
+ * failed on THIS segment (timeout, crash, invalid or empty output) is a
+ * per-segment failure, carried in `err.cppError`. A spawn failure counts as
+ * missing only when the OS says the program cannot run (no cause: binary or
+ * model missing); EAGAIN, EMFILE, ENFILE or ENOMEM is load, not a missing
+ * engine, and fails only that segment.
+ */
+const PERMANENT_SPAWN_ERRORS = new Set(['ENOENT', 'EACCES', 'EPERM', 'ENOEXEC']);
+
+function localEngineMissing(err) {
+  if (err?.code !== 'LOCAL_WHISPER_UNAVAILABLE') return false;
+  const cpp = err.cppError;
+  if (!cpp) return true;
+  if (cpp.code !== 'LOCAL_WHISPER_UNAVAILABLE' && cpp.code !== 'LOCAL_WHISPER_SPAWN') return false;
+  const cause = cpp.cause?.code;
+  return !cause || PERMANENT_SPAWN_ERRORS.has(cause);
+}
+
+/** The whisper.cpp failure behind a local error, when whisper.cpp actually ran. */
+function localRunError(err) {
+  return err?.code === 'LOCAL_WHISPER_UNAVAILABLE' && !localEngineMissing(err) ? err.cppError : err;
+}
+
 /** 'dead' (drop the rung for this job), 'rate_limit', 'transient' or 'segment'. */
 function classifyRungError(rung, err) {
   if (rung.name === 'local') {
-    if (err?.code === 'LOCAL_WHISPER_UNAVAILABLE') return 'dead';
+    if (localEngineMissing(err)) return 'dead';
     if (err?.code === 'AUDIO_DECODE_FAILED') return 'segment';
+    // Timeout, crash, invalid/empty output: retried (TRANSCRIBE_LOCAL_RETRIES),
+    // then only this segment is demoted and the 3-in-a-row streak guard applies.
     return 'transient';
   }
   if (isInvalidKeyError(err) || isBillingError(err)) return 'dead';
@@ -1583,8 +1639,9 @@ function describeRungError(rung, err) {
   return describeProviderError(err);
 }
 
-function gapReasonFor(err) {
-  if (!err) return 'no_provider';
+function gapReasonFor(error) {
+  if (!error) return 'no_provider';
+  const err = localRunError(error) || error;
   if (err.code === 'AUDIO_DECODE_FAILED') return 'audio_decode_failed';
   if (err.code === 'LOCAL_WHISPER_UNAVAILABLE') return 'local_unavailable';
   if (isRateLimitError(err)) return 'rate_limited';
@@ -1640,13 +1697,22 @@ async function callRung(rung, segment, jc, language) {
       jc.localPermits.release();
     }
   }
-  const out = await transcribeCloudFile(rung, segment.path, segment.mime, segment.name, options, language, jc.prompt, {
-    signal,
-    timeoutMs: cloudSegmentTimeoutMs(rung, seconds, options),
-    maxRetries: 0,
-    dispatch: jc.dispatch,
-    durationSeconds: seconds,
-  });
+  let out;
+  try {
+    out = await transcribeCloudFile(rung, segment.path, segment.mime, segment.name, options, language, jc.prompt, {
+      signal,
+      timeoutMs: cloudSegmentTimeoutMs(rung, seconds, options),
+      maxRetries: 0,
+      dispatch: jc.dispatch,
+      durationSeconds: seconds,
+    });
+  } catch (err) {
+    // xAI answers 200 with no text for a silent piece (waiting room, break)
+    // and its client throws. That is a no-speech result, as on every other
+    // rung, not a failure that demotes the segment and counts toward the streak.
+    if (err?.code !== 'xai_stt_empty_transcript') throw err;
+    out = { text: '', segments: [], model: rung.model };
+  }
   return partFromOutput(out, rung, language);
 }
 
@@ -1835,11 +1901,21 @@ async function runSegmentedJob(filePath, job) {
 
     const loaded = [];
     for (const segment of segments) loaded.push(await loadSegmentCheckpoint(options, segment.index, meta));
+    // Explicit «auto» asks for detection without the configured hint.
+    const hint = job.languageSource === 'explicit' ? undefined : languageHint(options);
+    const detections = [];
+    let detecting = false;
     if (!language) {
       language = normalizeLanguage(prepared.manifest?.language);
       if (!language) {
-        const first = loaded.find((part) => partUsable(part, prepared.plan, undefined) && normalizeLanguage(part.language) && hasSpeechText(part.text));
-        language = normalizeLanguage(first?.language);
+        detecting = true;
+        // A restart before the language was decided: checkpointed pieces with
+        // speech count as detections, under the same rule as the probes below.
+        for (const part of loaded) {
+          const detected = partUsable(part, prepared.plan, undefined) && hasSpeechText(part.text) ? normalizeLanguage(part.language) : undefined;
+          if (detected) detections.push(detected);
+        }
+        language = decideLanguage(detections, hint).language;
       }
     }
     const results = new Array(total).fill(null);
@@ -1878,6 +1954,8 @@ async function runSegmentedJob(filePath, job) {
     let processed = 0;
     let firstError = null;
     const startedAt = now();
+    // Pieces already counted as completed that are read again in the locked language.
+    const redo = new Set();
     const runIndex = async (i, lang) => {
       const outcome = await transcribeSegmentWithLadder(segments[i], jc, lang);
       if (outcome.part) {
@@ -1888,7 +1966,7 @@ async function runSegmentedJob(filePath, job) {
         results[i] = { gap: { reason: outcome.reason }, error: outcome.error };
         gapCount++;
       }
-      completed++;
+      if (!redo.delete(i)) completed++;
       processed++;
       const remaining = total - completed;
       const elapsed = now() - startedAt;
@@ -1905,9 +1983,40 @@ async function runSegmentedJob(filePath, job) {
         const i = pending.shift();
         probes++;
         const outcome = await runIndex(i, undefined);
-        if (outcome.part && hasSpeechText(outcome.part.text)) language = normalizeLanguage(outcome.part.language);
+        const detected = outcome.part && hasSpeechText(outcome.part.text) ? normalizeLanguage(outcome.part.language) : undefined;
+        if (detected) {
+          detections.push(detected);
+          language = decideLanguage(detections, hint).language;
+        }
       }
-      if (language) await rememberManifestLanguage(prepared, language);
+    }
+    // One unconfirmed detection. Out of probes with pieces left: the hint wins.
+    // Every piece already read (a one-piece video over the size cap): nothing
+    // can confirm it, so it is trusted like the whole-file path trusts its one
+    // detection, unless that piece's speech starts after Whisper's 30 s
+    // detection window (it detected on silence or music).
+    if (!language && detections.length) {
+      const { candidate } = decideLanguage(detections, hint);
+      const probed = results.find((r) => normalizeLanguage(r?.part?.language) === candidate && hasSpeechText(r.part.text))?.part;
+      const firstSpeech = normalizeSegments(probed?.segments).find((s) => hasSpeechText(s.text));
+      const silentOpening = Boolean(firstSpeech && firstSpeech.start >= LANGUAGE_DETECT_WINDOW_SECONDS);
+      language = !pending.length && !silentOpening ? candidate : (hint || candidate);
+    }
+    if (detecting && language) {
+      await rememberManifestLanguage(prepared, language);
+      // A piece read (or resumed) under another detected language is read
+      // again in the locked one: Whisper forced to the wrong language
+      // translates the speech instead of transcribing it.
+      for (let i = 0; i < total; i++) {
+        const part = results[i]?.part;
+        const partLanguage = normalizeLanguage(part?.language);
+        if (part && partLanguage && partLanguage !== language && hasSpeechText(part.text)) {
+          results[i] = null;
+          redo.add(i);
+          pending.push(i);
+        }
+      }
+      if (redo.size) pending.sort((a, b) => a - b);
     }
     if (pending.length) {
       const cloudLive = jc.rungs.some((rung) => rung.kind === 'cloud' && !jc.state.get(rung.name).dead && !providerInCooldown(rung));

@@ -274,3 +274,65 @@ test('sweepOld removes terminal records past 30 days and crash leftovers', async
   assert.equal((await store.get(active.id)).status, 'pending');
   await assert.rejects(fs.stat(tmp), { code: 'ENOENT' });
 });
+
+test('two processes reaping the same stale lock: the one that read the token late never deletes the new lock', async (t) => {
+  const root = await tempRoot(t);
+  const c = clock(Date.now());
+  const crashed = createMediaDeliveryStore({ root, now: c.now });
+  const record = await crashed.create(input());
+  assert.ok(await crashed.claim(record.id), 'the holder crashes holding the lock');
+  const lock = path.join(root, `${record.id}.lock`);
+  const old = (Date.now() - 60 * MIN) / 1000;
+  await fs.utimes(lock, old, old);
+  // B stalls between judging the lock stale and reading its token; C reaps it
+  // and takes a fresh lock in that window.
+  let resume;
+  const gate = new Promise(resolve => { resume = resolve; });
+  let paused = false;
+  let reachedRead;
+  const atRead = new Promise(resolve => { reachedRead = resolve; });
+  const realFsp = require('node:fs').promises;
+  const fspB = Object.create(realFsp);
+  fspB.readFile = async (file, ...rest) => {
+    if (!paused && String(file).endsWith('.lock')) {
+      paused = true;
+      reachedRead();
+      await gate;
+    }
+    return realFsp.readFile(file, ...rest);
+  };
+  const b = createMediaDeliveryStore({ root, now: c.now, fsp: fspB });
+  const cStore = createMediaDeliveryStore({ root, now: c.now });
+  const bClaim = b.claim(record.id);
+  await atRead;
+  const cClaimed = await cStore.claim(record.id);
+  assert.ok(cClaimed, 'C reclaims the stale lock');
+  resume();
+  const bClaimed = await bClaim;
+  assert.equal(bClaimed, null, 'B must not also claim the delivery');
+  assert.equal(await cStore.holds(record.id, cClaimed.token), true, 'C keeps its lock');
+  assert.deepEqual((await fs.readdir(root)).filter(name => name.includes('.reap-')), []);
+});
+
+test('a lock refreshed by its live holder after being judged stale is put back', async (t) => {
+  const root = await tempRoot(t);
+  const c = clock(Date.now());
+  const holder = createMediaDeliveryStore({ root, now: c.now });
+  const record = await holder.create(input());
+  const claim = await holder.claim(record.id);
+  c.advance(16 * MIN);
+  // The holder refreshes between the reaper's stat and its token read: same
+  // token, but no longer the file that was judged stale.
+  const realFsp = require('node:fs').promises;
+  let refreshed = false;
+  const fspR = Object.create(realFsp);
+  fspR.readFile = async (file, ...rest) => {
+    if (!refreshed && String(file).endsWith('.lock')) {
+      refreshed = true;
+      await holder.refresh(record.id, claim.token);
+    }
+    return realFsp.readFile(file, ...rest);
+  };
+  assert.equal(await createMediaDeliveryStore({ root, now: c.now, fsp: fspR }).claim(record.id), null);
+  assert.equal(await holder.holds(record.id, claim.token), true);
+});

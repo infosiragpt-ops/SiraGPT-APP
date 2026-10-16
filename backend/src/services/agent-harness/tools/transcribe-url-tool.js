@@ -362,15 +362,41 @@ function durableConfig(env = process.env, ctx = {}, deps = {}) {
 }
 
 /**
- * Default hand-off: copy the clip into the user's uploads, register it as a
- * media File, enqueue the durable transcription and record a chat delivery.
- * Returns { ok, fileId, deliveryId, message } or { ok:false, reason }.
+ * Best-effort cancel of a delivery record whose job could not be queued:
+ * terminal 'failed' without posting anything into the chat.
  */
-async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned, subtitles, ctx, env }) {
+async function cancelDeliveryRecord(delivery, id) {
+  const store = typeof delivery?.getMediaDeliveryService === 'function' ? delivery.getMediaDeliveryService()?.store : null;
+  if (!id || !store || typeof store.claim !== 'function' || typeof store.markFailed !== 'function') return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Held only while a sweep is looking at it (it sees the file pending
+    // and releases it at once).
+    const held = await Promise.resolve(store.claim(id)).catch(() => null);
+    if (held?.token) {
+      const error = Object.assign(new Error('queue_unavailable'), { code: 'queue_unavailable' });
+      return Boolean(await Promise.resolve(store.markFailed(id, held.token, error, { maxAttempts: 1 })).catch(() => null));
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+/**
+ * Default hand-off: copy the clip into the user's uploads, register it as a
+ * media File, record where the clip sits on the recording's clock, record
+ * the chat delivery and only then enqueue the durable transcription.
+ * Returns { ok, fileId, deliveryId, message } or { ok:false, reason }; an
+ * ok:false means no job was queued and nothing was left behind, so the
+ * caller may transcribe inline without a twin job.
+ * `services` (prisma, enqueueMediaTranscription, delivery, transcriptStore)
+ * is for tests.
+ */
+async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned, subtitles, ctx, env, services = {} }) {
   const crypto = require('node:crypto');
-  const prisma = require('../../../config/database');
-  const { enqueueMediaTranscription } = require('../../media-transcription-queue');
-  const delivery = require('../../media-delivery');
+  const prisma = services.prisma || require('../../../config/database');
+  const enqueueMediaTranscription = services.enqueueMediaTranscription || require('../../media-transcription-queue').enqueueMediaTranscription;
+  const delivery = services.delivery || require('../../media-delivery');
+  const transcriptStore = services.transcriptStore || require('../../media-transcript-store');
   if (!delivery.isMediaDeliveryEnabled(env)) return { ok: false, reason: 'delivery_disabled' };
   const uploadRoot = path.resolve(env.UPLOAD_DIR || 'uploads');
   const userDir = path.join(uploadRoot, String(ctx.userId).replace(/[^a-zA-Z0-9_-]/g, '_'));
@@ -379,8 +405,14 @@ async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEn
   const originalName = `${safeTitle(title)}${label}.m4a`.replace(/:/g, '.');
   const filename = `link-${crypto.randomBytes(8).toString('hex')}.m4a`;
   const target = path.join(userDir, filename);
-  await fs.promises.copyFile(clipPath, target);
-  const { size } = await fs.promises.stat(target);
+  let size;
+  try {
+    await fs.promises.copyFile(clipPath, target);
+    ({ size } = await fs.promises.stat(target));
+  } catch (err) {
+    await fs.promises.rm(target, { force: true }).catch(() => {});
+    throw err;
+  }
   let row;
   try {
     row = await prisma.file.create({ data: { userId: ctx.userId, filename, originalName, mimeType: 'audio/mp4', size,
@@ -389,21 +421,61 @@ async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEn
     await fs.promises.rm(target, { force: true }).catch(() => {});
     throw err;
   }
-  await enqueueMediaTranscription({ fileId: row.id, userId: ctx.userId });
-  const record = await delivery.createDelivery({
-    userId: ctx.userId, chatId: ctx.chatId, taskId: ctx.taskId || null,
-    fileIds: [row.id], fileNames: [originalName], goal: `Transcripción de ${url.href}`,
-    mode: subtitles ? 'subtitles' : 'transcript', formats: ['txt', ...(subtitles ? ['srt', 'vtt'] : [])],
-    range: null,
-    // The clip starts at rangeStart: delivered timestamps follow the
-    // recording's own clock, like the inline path.
-    output: { documentFormat: null, wantsSubtitles: Boolean(subtitles), timeOffsetSec: sectioned ? rangeStart : 0 },
-    source: { url: url.href, host: url.hostname, title },
-  });
-  if (!record) return { ok: false, reason: 'delivery_unavailable', fileId: row.id };
-  const etaSeconds = typeof delivery.estimateTranscriptionSeconds === 'function'
-    ? delivery.estimateTranscriptionSeconds({ durationSec: spanSec }) : null;
-  const message = delivery.handOffMessage({ fileNames: [`${title}${label}`], durationSec: spanSec, etaSeconds });
+  // Where the clip starts on the recording's clock. The queue shifts the
+  // transcript onto that clock before storing it (File text, sidecar), so
+  // the preview, follow-ups and files all read the recording's own times.
+  const offset = sectioned && rangeStart > 0 ? rangeStart : 0;
+  // No job exists yet: remove the File, the copy and the offset record.
+  const discard = async (reason) => {
+    try { await prisma.file.delete({ where: { id: row.id } }); } catch (_) {
+      try { await prisma.file.update({ where: { id: row.id }, data: { deletedAt: new Date() } }); } catch (__) { /* best-effort */ }
+    }
+    await fs.promises.rm(target, { force: true }).catch(() => {});
+    if (offset) await Promise.resolve(transcriptStore.recordMediaClipOffset({ fileId: row.id, userId: ctx.userId, timeOffsetSec: 0, env })).catch(() => {});
+    return { ok: false, reason, fileId: row.id };
+  };
+  if (offset) {
+    // Durable copy for a lost job that reconcile re-queues with only
+    // { fileId, userId }; the job itself also carries the offset.
+    const recorded = await Promise.resolve(transcriptStore.recordMediaClipOffset({ fileId: row.id, userId: ctx.userId, timeOffsetSec: offset, prisma, env }))
+      .catch(() => null);
+    if (!recorded?.ok) console.warn('[transcribe_url] clip offset not recorded; the queued job still carries it', recorded?.reason || 'record_error');
+  }
+  // The delivery exists before the job, so a job that finishes at once
+  // always finds it.
+  let record = null;
+  try {
+    record = await delivery.createDelivery({
+      userId: ctx.userId, chatId: ctx.chatId, taskId: ctx.taskId || null,
+      fileIds: [row.id], fileNames: [originalName], goal: `Transcripción de ${url.href}`,
+      mode: subtitles ? 'subtitles' : 'transcript', formats: ['txt', ...(subtitles ? ['srt', 'vtt'] : [])],
+      range: null,
+      // The stored transcript is already on the recording's clock.
+      output: { documentFormat: null, wantsSubtitles: Boolean(subtitles), timeOffsetSec: 0 },
+      source: { url: url.href, host: url.hostname, title },
+    });
+  } catch (err) {
+    return discard((err && err.code) || 'delivery_error');
+  }
+  if (!record) return discard('delivery_unavailable');
+  try {
+    await enqueueMediaTranscription({ fileId: row.id, userId: ctx.userId, timeOffsetSec: offset });
+  } catch (err) {
+    // Without a job the delivery would wait for nothing: cancel it, then
+    // drop the File so the caller can transcribe inline. If the record
+    // cannot be taken, keep the hand-off: reconcile re-queues the
+    // uploaded File and the delivery posts it.
+    if (await cancelDeliveryRecord(delivery, record.id)) return discard((err && err.code) || 'queue_unavailable');
+    console.warn('[transcribe_url] media job not queued; delivery kept for reconcile', (err && err.code) || 'queue_error');
+  }
+  let etaSeconds = null;
+  let message = '';
+  try {
+    etaSeconds = typeof delivery.estimateTranscriptionSeconds === 'function'
+      ? delivery.estimateTranscriptionSeconds({ durationSec: spanSec }) : null;
+    message = delivery.handOffMessage({ fileNames: [`${title}${label}`], durationSec: spanSec, etaSeconds });
+  } catch (_) { message = ''; }
+  if (!message) message = `Recibí «${title}${label}». Te aviso aquí cuando la transcripción esté lista.`;
   return { ok: true, fileId: row.id, deliveryId: record.id, message };
 }
 
@@ -426,6 +498,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const inlineMaxSeconds = Number(env.TRANSCRIBE_URL_MAX_SECONDS) > 0 ? Number(env.TRANSCRIBE_URL_MAX_SECONDS) : DEFAULT_MAX_SECONDS;
   const durable = durableConfig(env, ctx, deps);
   const durableImpl = deps.durableHandoff || defaultDurableHandoff;
+  const probeDuration = deps.probeDuration || ((filePath, opts) => require('../../audio-transcriber').probeAudioDuration(filePath, opts));
   // With the durable path a 5-hour class fits in one call; without it the
   // inline ceiling applies (the turn would hold the transcription).
   const maxSeconds = durable.enabled ? Math.max(inlineMaxSeconds, durable.maxSeconds) : inlineMaxSeconds;
@@ -513,9 +586,21 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     let discovery = null;
 
     // 4–5. Transcribe the clip and deliver it (shared by every acquisition path).
-    const finish = async ({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via, partial = null }) => {
+    const finish = async ({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via, partial = null, cappedEnd = false }) => {
+      // A stream of unknown length was cut at the per-call cap, not at its
+      // real end: measure the clip before deciding (a 5-minute clip is not
+      // a 12-hour recording). Unmeasured, it is never handed off.
+      let measured = null;
+      if (cappedEnd && durable.enabled) {
+        try { measured = Number(await probeDuration(clipPath, { signal })) || null; } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          measured = null;
+        }
+        if (measured > 0) rangeEnd = rangeStart + measured;
+      }
       const clipName = `${safeTitle(title)}${sectioned ? ` ${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart)}` : ''}.m4a`;
-      const spanSec = rangeEnd != null ? rangeEnd - rangeStart : (duration != null ? duration - rangeStart : null);
+      const spanSec = cappedEnd && !(measured > 0) ? null
+        : rangeEnd != null ? rangeEnd - rangeStart : (duration != null ? duration - rangeStart : null);
       if (durable.enabled && !partial && spanSec != null && spanSec >= durable.minSeconds) {
         try {
           const handed = await durableImpl({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned,
@@ -793,9 +878,11 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     if (span != null && span > maxSeconds) {
       return errorResult('media_too_long', `requested ${fmtClock(span)} > max ${fmtClock(maxSeconds)}`, { durationSeconds: duration, maxSeconds, title });
     }
+    let cappedEnd = false;
     if (span == null && duration == null && end == null) {
       // Unknown duration and no end: cap at maxSeconds from start.
       rangeEnd = rangeStart + maxSeconds;
+      cappedEnd = true;
     }
 
     // 3. Download the section as audio, then trim precisely.
@@ -873,7 +960,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       }
     }
 
-    return finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via });
+    return finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via, cappedEnd });
   } finally {
     await cleanup();
   }

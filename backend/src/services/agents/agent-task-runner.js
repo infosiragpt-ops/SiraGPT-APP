@@ -2696,9 +2696,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const ids = mediaBatchRows.map(row => row.id);
       const mediaGoal = String(displayGoal || goal || '');
       const retryRequested = /reintent|retry/i.test(mediaGoal);
-      // «tradúcelo al inglés» is a full translation, never a summary.
+      // «tradúcelo al inglés» is a full translation, never a summary: next
+      // to it only an explicit deliverable («resúmelo», «el acta») or a
+      // question about the recording runs the analysis too.
       const translationTarget = mediaBatch.detectTranslationTarget(mediaGoal);
-      const wantsAnalysis = translationTarget ? mediaBatch.wantsMediaAnalysis(mediaGoal)
+      const wantsAnalysis = translationTarget ? mediaBatch.wantsSummaryWithTranslation(mediaGoal)
         : (!plainTranscriptionRequest && !retryRequested) || mediaBatch.wantsMediaAnalysis(mediaGoal);
       // A follow-up translation does not re-deliver the transcript files.
       const wantsTranscriptPack = !translationTarget || /transcri|subt[ií]tul|\bsrt\b|\bvtt\b/i.test(mediaGoal);
@@ -2737,7 +2739,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
             language: null,
             range: mediaOutput.range,
-            output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles },
+            // «transcribe y tradúcelo» / «resume y tradúcelo»: the translation
+            // mode also delivers the transcript files and the summary asked for.
+            output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
+              includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis) },
             model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
           });
         } catch (error) {
@@ -2756,7 +2761,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             finalMarkdown: [handOff, readyNote].filter(Boolean).join('\n\n'),
             stoppedReason: 'media_delivery_handoff',
             steps: 1, artifactsList: artifacts,
-            metadata: { transcriptionFileIds: ids, mediaDelivery: deliveryRecord.id,
+            // Not `mediaDelivery`: that key marks the message the delivery
+            // itself posts, and a hand-off must never count as delivered.
+            metadata: { transcriptionFileIds: ids, mediaDeliveryHandoff: deliveryRecord.id,
               mediaBatch: { total: batch.total, ready: batch.ready, failed: batch.failed, pending: batch.pending } },
           });
         }
@@ -2768,7 +2775,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const readyRows = batch.rows.filter(row => mediaBatch.stateOf(row) === 'ready');
       const transcripts = batch.ready ? await mediaArtifacts.loadTranscripts(prisma, { userId: user.id, rows: readyRows }) : new Map();
       let packNotes = [];
-      if (batch.ready > 0 && wantsTranscriptPack) {
+      const transcriptArtifacts = [];
+      const saveTranscriptPack = async () => {
         let built = null;
         try {
           built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, transcripts, output: mediaOutput, userId: user.id });
@@ -2778,15 +2786,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         }
         const packArtifacts = built?.artifacts?.length ? built.artifacts : [{ filename: 'transcripciones-completas.txt',
           base64: Buffer.from(mediaBatch.transcriptBundle(batch.rows), 'utf8').toString('base64'), mime: 'text/plain' }];
-        packNotes = built?.notes || [];
+        packNotes = [...packNotes, ...(built?.notes || [])];
         for (const item of packArtifacts) {
           const artifact = saveArtifact({ filename: item.filename, base64: item.base64, mime: item.mime,
             ownerUserId: user.id, chatId });
           artifacts.push(artifact);
+          transcriptArtifacts.push(artifact);
           emit({ type: 'file_artifact', artifact });
           await persistence.persistGeneratedArtifact({ artifact, task });
         }
-      }
+      };
+      if (batch.ready > 0 && wantsTranscriptPack) await saveTranscriptPack();
       let analysis = null;
       let analysisUnavailable = false;
       let mediaAnalysisUsage = null;
@@ -2822,6 +2832,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           translationUnavailable = true;
         }
         emit({ type: 'step_done', id: 'media_translation', ok: Boolean(translation?.files?.length) });
+        // A translation that produced nothing still leaves the user the
+        // transcript files the message and its preview point to.
+        if (!wantsTranscriptPack && !translation?.files?.length) await saveTranscriptPack();
       }
       if (batch.ready && wantsAnalysis) {
         emit({ type: 'step_start', id: 'media_analysis', label: 'Analizando cada transcripción', icon: 'braces' });
@@ -2850,7 +2863,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const fileWord = (count) => (count === 1 ? 'archivo' : 'archivos');
       const notices = [
         `**${batch.ready} de ${batch.total} ${fileWord(batch.total)} ${batch.total === 1 ? 'transcrito' : 'transcritos'}.**`,
-        batch.ready ? describeTranscriptDownloads(artifacts) : '',
+        // Only the transcript files saved in this turn (never a translation).
+        transcriptArtifacts.length ? describeTranscriptDownloads(transcriptArtifacts) : '',
         batch.partial ? `${batch.partial === 1 ? 'Una transcripción quedó parcial' : `${batch.partial} transcripciones quedaron parciales`}: los tramos sin transcribir están marcados con su hora. Escribe «reintenta» para recuperar solo esos tramos.` : '',
         ...packNotes,
         batch.failed ? `${batch.failed} ${fileWord(batch.failed)} no se ${batch.failed === 1 ? 'pudo' : 'pudieron'} transcribir. Escribe «reintenta los audios fallidos» para recuperar solo esos archivos; los demás siguen guardados.` : '',

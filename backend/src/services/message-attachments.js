@@ -477,7 +477,9 @@ async function loadFileRows(prisma, userId, fileIds = []) {
 async function ensureDocumentAnalysis(prisma, row, userId) {
   if (!row || !prisma?.documentAnalysis) return row;
   const forceReanalysis = isSpreadsheetFile(row) && looksLikeUnsupportedExtractionPlaceholder(row.extractedText);
-  if (row.documentAnalysis && !forceReanalysis) return row;
+  // A `pending` row (a media transcript's pointer) is not an analysis yet: its
+  // chunks are absent or belong to the text a gap retry replaced.
+  if (row.documentAnalysis && row.documentAnalysis.status !== 'pending' && !forceReanalysis) return row;
   try {
     const documentIntelligence = require('./document-intelligence');
     const analysis = await documentIntelligence.analyzeFile(prisma, {

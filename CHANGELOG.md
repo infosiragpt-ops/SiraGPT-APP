@@ -22,6 +22,15 @@ and improvement cycles follow a sequential number with the date the work landed.
   - **Links.** Video/audio links of 20 minutes to 12 hours go through the same durable queue; they used to be refused above 3 hours.
   - **Uploads.** Multi-GB uploads resume after a network drop or a deploy without resending received parts, upload in parallel, report speed and ETA, and ask before the page is closed. The file chip no longer reports «Listo» for a recording that is still being transcribed.
   - **Composer routing.** «quiero la transcripción de este video», «hazme subtítulos», «resume la clase» and «qué dijo sobre X» now reach the transcription agent. They used to end in video generation, voice mode or «Solo se permiten archivos de imagen».
+  - **Hardening from an adversarial review (29 findings fixed):**
+    - Handed-off recordings are actually delivered: the hand-off message could be mistaken for the delivered one.
+    - Translations use the large output budget and re-split cut parts, instead of stopping at 1000 tokens.
+    - «transcribe y tradúcelo» delivers both the transcript and the translation.
+    - One whisper.cpp failure degrades only that segment.
+    - A language detected on a silent opening is confirmed before it locks the recording.
+    - Link clips show recording-clock times everywhere.
+    - Transcripts are deleted with their file and with deleted accounts.
+    - Ordinary questions or time ranges no longer pull an old recording into the turn.
 
 ### Fixed
 

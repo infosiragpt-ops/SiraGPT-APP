@@ -140,3 +140,65 @@ test('translation deliverables: TXT always, Word for long texts, named after the
   const small = await artifacts.buildTranslationArtifacts({ files: [{ id: 'n', name: 'nota.ogg', text: 'Hello.' }], target: { code: 'en', name: 'inglés' }, userId: 'u1' });
   assert.deepEqual(small.artifacts.map(a => a.format), ['txt']);
 });
+
+test('two overlapping Word renders with the same deliverable name never read or delete each other\'s file', async (t) => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mta-shared-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const names = [];
+  // Like document-service: one folder per user, the (sanitized) name is the path.
+  const sharedFolder = async (userId, filename, markdown) => {
+    names.push(filename);
+    const filePath = path.join(dir, filename.replace(/[^a-zA-Z0-9_.-]/g, '_'));
+    await fs.promises.writeFile(filePath, markdown);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    return { filePath };
+  };
+  const recording = (id, words) => ({ row: row(id, { originalName: 'Nueva grabación.m4a', mimeType: 'audio/mp4' }),
+    transcript: { language: 'es', durationSec: 900, segments: [{ start: 0, end: 900, text: words }] } });
+  const one = recording('r1', 'Primera grabación sobre mitocondrias.');
+  const two = recording('r2', 'Segunda grabación sobre fotosíntesis.');
+  const build = ({ row: r, transcript }) => artifacts.buildMediaTranscriptArtifacts({ rows: [r], transcripts: new Map([[r.id, transcript]]),
+    output: { documentFormat: 'docx' }, userId: 'u1', createDocument: sharedFolder, logger: { warn() {} } });
+  const [first, second] = await Promise.all([build(one), build(two)]);
+  const docOf = built => decode(built.artifacts.find(a => a.format === 'docx'));
+  assert.equal(first.artifacts.find(a => a.format === 'docx').filename, 'Nueva grabación (transcripción).docx', 'friendly name on the artifact');
+  assert.match(docOf(first), /mitocondrias/);
+  assert.doesNotMatch(docOf(first), /fotosíntesis/);
+  assert.match(docOf(second), /fotosíntesis/);
+  assert.equal(new Set(names).size, 2, 'unique working names');
+  assert.deepEqual(fs.readdirSync(dir), [], 'working copies removed');
+});
+
+test('a transcript stored already on the recording clock is not shifted again by the clip offset', async () => {
+  const stored = { language: 'es', durationSec: 1200, timeOffsetSec: 3600,
+    segments: [{ start: 3600, end: 3610, text: 'Empieza el tramo.' }, { start: 4200, end: 4210, text: 'Mitad del tramo.' }] };
+  const clip = row('tramo', { mimeType: 'audio/mp4', originalName: 'tramo.m4a' });
+  for (const output of [{ timeOffsetSec: 3600, wantsSubtitles: true }, { wantsSubtitles: true }]) {
+    const built = await artifacts.buildMediaTranscriptArtifacts({ rows: [clip], transcripts: new Map([['tramo', stored]]),
+      output, userId: 'u1', createDocument: fakeDocument([]) });
+    const txt = decode(built.artifacts.find(a => a.format === 'txt'));
+    assert.match(txt, /\[01:00:00\][^\n]*Empieza el tramo/, JSON.stringify(output));
+    assert.match(txt, /\[01:10:00\][^\n]*Mitad del tramo/);
+    assert.doesNotMatch(txt, /02:00:00|02:10:00/);
+  }
+  assert.equal(artifacts.clockOffsetFor(stored, { timeOffsetSec: 3600 }), 0);
+  assert.equal(artifacts.clockOffsetFor({ durationSec: 1200 }, { timeOffsetSec: 3600 }), 3600);
+  // Same shape either way: durationSec is the clip's length, timeOffsetSec marks the shift.
+  const fresh = artifacts.transcriptView(clip, { language: 'es', durationSec: 1200, segments: stored.segments.map(s => ({ ...s, start: s.start - 3600, end: s.end - 3600 })) },
+    { timeOffsetSec: 3600 });
+  const kept = artifacts.transcriptView(clip, stored, { timeOffsetSec: 3600 });
+  for (const view of [fresh, kept]) {
+    assert.equal(view.result.durationSec, 1200);
+    assert.equal(view.result.timeOffsetSec, 3600);
+    assert.equal(view.result.segments[0].start, 3600);
+    // The audio the clip holds, on the recording clock (a window outside it has nothing to show).
+    assert.deepEqual(view.span, { start: 3600, end: 4800 });
+  }
+  assert.deepEqual(artifacts.audioSpanOf({ segments: [], gaps: [] }), { start: 0, end: null });
+  assert.deepEqual(artifacts.audioSpanOf({ durationSec: 100, segments: [{ start: 0, end: 130 }], gaps: [{ start: 130, end: 160 }] }), { start: 0, end: 160 });
+  assert.equal(fresh.shifted, true);
+  assert.equal(kept.shifted, false);
+});

@@ -225,4 +225,93 @@ describe("follow-ups reuse this chat's latest media batch", () => {
       expect(route(phrase, [], mediaTurn), phrase).not.toBe("media_task")
     }
   })
+
+  it("never borrows the recording for general questions, schedules or another source", () => {
+    // Within the contextual window, so only the prompt decides.
+    const history = [...mediaTurn, ...later(1)]
+    for (const phrase of [
+      // Another speaker after the verb.
+      "¿Qué dijo Einstein sobre la relatividad?",
+      "qué propuso Keynes",
+      "¿Quién dijo 'pienso luego existo'?",
+      "¿Qué dijo Jesús en el sermón del monte?",
+      "¿qué dijo el papa sobre la paz?",
+      "what did the president say about taxes",
+      // First-person present once the accent is dropped.
+      "¿Cómo le explico a mi hijo la fotosíntesis?",
+      "¿cómo hablo en público sin nervios?",
+      "¿de qué hablo en mi discurso?",
+      // A clock range is a schedule.
+      "agenda una reunión mañana de 10:00 a 11:00",
+      "hazme un horario de estudio de 8:00 a 12:00",
+      "mi turno es de 9:00 a 17:00, ¿cuántas horas trabajo?",
+      // A social class, or another object named first.
+      "resume este artículo sobre la clase media",
+      "resume la clase media en el Perú",
+      "¿Qué dijo Marx sobre la clase obrera?",
+      // The user's own text, pasted after a colon or quoted: a recording word
+      // or a range in it is the material, not a pointer at the recording.
+      "traduce al inglés: mañana no habrá clase",
+      "traduce: nos vemos en la clase",
+      "traduce este mensaje para mi profesora: no podré ir",
+      "traduce \"hola profe\" al inglés",
+      "traduce «hola profe» al inglés",
+      "resume este texto: en la reunión de ayer acordamos subir precios",
+      "resume este texto: el video de ayer se cortó",
+      "traduce al inglés: me gustó el audio que mandaste",
+      "traduce al inglés:\nen el minuto 90 metió gol",
+      "¿Quién dijo \"nos vemos en clase\"?",
+      // A clock range over the user's own day, not the recording.
+      "resume mi día de 9:00 a 17:00",
+      "resume mi agenda de 9:00 a 17:00",
+      // A quote or a named speaker/event after the verb.
+      "¿Quién dijo que la tierra era redonda?",
+      "quien dijo que pienso luego existo",
+      "¿Quién dijo que Dios había muerto?",
+      "¿Quién dijo ‘pienso luego existo’?",
+      "¿Qué se acordó en el Tratado de Versalles?",
+      "¿Qué se decidió en la cumbre de Yalta?",
+      "¿qué dijo a su esposa Napoleón antes de morir?",
+      "¿qué dijo sobre la inflación el presidente del BCR?",
+    ]) {
+      expect(classifyMediaFollowupPrompt(phrase), phrase).toBeNull()
+      expect(resolveMediaFollowupFiles(phrase, history), phrase).toEqual([])
+      expect(route(phrase, [], history), phrase).not.toBe("media_task")
+    }
+  })
+
+  it("keeps questions about what the recording said, with or without the speaker named", () => {
+    const history = [...mediaTurn, ...later(1)]
+    for (const phrase of [
+      "¿cuándo habló de la mitocondria?",
+      "¿de qué habló?",
+      "¿qué explicó la profesora sobre las células?",
+      "¿qué explico el profesor sobre las células?",
+      "¿qué fue lo que dijo al final?",
+      "¿qué le dijo a los alumnos?",
+      "¿qué dijo él sobre el examen?",
+      "¿quién dijo eso?",
+      "¿qué acordaron?",
+      "¿qué se habló en la reunión?",
+      "what did he say about the exam",
+      "resume la clase en un documento",
+      "del 1:30 al 10:00",
+      "y del 12:00 al 15:30?",
+      "transcribe del 1:30 al 10:00",
+      // The material after the colon is only the range.
+      "transcribe: del 1:30 al 10:00",
+      "resume la clase: del minuto 30 al 45",
+      "¿quién habló?",
+      // A capital that opens a sentence, an all-caps prompt or a recording
+      // word next to the name is still about the recording.
+      "¿Qué dijo sobre la mitocondria? Explícalo simple",
+      "QUE DIJO SOBRE LA MITOCONDRIA",
+      "¿qué explicó el Profe sobre Newton?",
+    ]) {
+      expect(classifyMediaFollowupPrompt(phrase), phrase).toBe("contextual")
+      expect(resolveMediaFollowupFiles(phrase, history), phrase).toEqual(batch)
+    }
+    // Without the accent «hablo» is first person: no recording, no media turn.
+    expect(classifyMediaFollowupPrompt("¿cuándo hablo de la mitocondria?")).toBeNull()
+  })
 })

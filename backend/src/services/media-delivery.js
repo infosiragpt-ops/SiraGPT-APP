@@ -14,6 +14,7 @@
 // require the real modules so this file can be required from the media queue
 // and the agent-task runner without load-order cycles.
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { setTimeout: delay } = require('node:timers/promises');
 const {
@@ -24,6 +25,10 @@ const {
 } = require('./media-delivery-store');
 
 const PARTIAL_RE = /^\s*parcial\b/i;
+// metadata.source of every message this service posts. The duplicate check
+// matches only these: the turn's «te aviso aquí» message also names the
+// delivery and must never count as the delivered transcript.
+const DELIVERY_SOURCE = 'media-delivery';
 const DEFAULT_INLINE_WAIT_MS = 240000;
 // Files still pending after this long are reported as pending instead of
 // holding the delivery forever (a media job may take 3 attempts × 12 h).
@@ -331,24 +336,110 @@ function cutAtParagraph(text, max) {
   return { text: value.slice(0, cut).trim(), truncated: true };
 }
 
-function fileDetails(row, transcript, delivery) {
+function rangeOf(delivery) {
+  const range = delivery?.range;
+  if (!range || !Number.isFinite(Number(range.start))) return null;
+  const end = range.end == null ? null : Number(range.end);
+  return { start: Number(range.start), end: Number.isFinite(end) ? end : null };
+}
+
+/** The window and clock the attachments use (media-transcript-artifacts output). */
+function viewOutput(delivery) {
+  const offset = Number(delivery?.output?.timeOffsetSec);
+  return { range: rangeOf(delivery), timeOffsetSec: Number.isFinite(offset) && offset > 0 ? offset : 0 };
+}
+
+/**
+ * One file as its attachments show it: on the recording's clock and cut to
+ * the requested range, so the chat never contradicts the downloads. null
+ * when the delivery has neither (the stored text is shown as is).
+ */
+function viewOf(row, transcript, delivery) {
+  const output = viewOutput(delivery);
+  if (!output.range && !output.timeOffsetSec) return null;
+  try {
+    return require('./media-transcript-artifacts').transcriptView(row, transcript, output);
+  } catch (_) { return null; }
+}
+
+/** Gaps on the recording's clock, clipped to the requested range. */
+function visibleGaps(transcript, delivery) {
+  const output = viewOutput(delivery);
+  let shift = 0;
+  try { shift = require('./media-transcript-artifacts').clockOffsetFor(transcript, output); } catch (_) { shift = 0; }
+  const { range } = output;
+  return gapsOf(transcript)
+    .map(gap => ({ start: gap.start + shift, end: gap.end + shift }))
+    .map(gap => (range ? { start: Math.max(gap.start, range.start), end: range.end == null ? gap.end : Math.min(gap.end, range.end) } : gap))
+    .filter(gap => gap.end > gap.start);
+}
+
+/** The text a preview cuts: the window or shifted clock when the delivery has one. */
+function previewSource(row, view) {
+  if (!view || !(view.sliced || view.shifted)) return row?.extractedText;
+  try {
+    const text = require('./media-transcript-format').renderText(view.result, { fileName: displayName(row), header: false });
+    if (String(text || '').trim()) return text;
+  } catch (_) { return row?.extractedText; }
+  return view.sliced ? '(Sin voz transcrita en este tramo.)' : row?.extractedText;
+}
+
+function fileDetails(row, transcript, delivery, view = null) {
   const parts = [];
   const duration = formatDuration(transcript?.durationSec);
   if (duration) parts.push(duration);
   const language = languageLabel(transcript?.language || delivery?.language);
   if (language) parts.push(language);
-  const words = wordCount(row?.extractedText);
+  // A requested range counts its own words and coverage.
+  const words = wordCount(view?.sliced ? view.result.text : row?.extractedText);
   if (words) parts.push(`${formatCount(words)} palabras`);
-  const coverage = Number(transcript?.coverage);
-  if (stateOf(row) === 'partial' && Number.isFinite(coverage) && coverage > 0 && coverage < 1) {
+  const coverage = Number(view?.sliced ? view.result.coverage : transcript?.coverage);
+  // A window with neither speech nor gaps has no coverage of its own (the
+  // formatter keeps the whole recording's figure); none is shown.
+  const emptyWindow = Boolean(view?.sliced) && !view.result.segments.length && !view.result.gaps.length;
+  if (stateOf(row) === 'partial' && !emptyWindow && Number.isFinite(coverage) && coverage > 0 && coverage < 1) {
     parts.push(`cobertura ${Math.floor(coverage * 100)} %`);
   }
   return parts;
 }
 
-function missingPartsSentence(row, transcript) {
-  const gaps = gapsOf(transcript);
+/**
+ * The audio the file holds when the requested window misses it entirely
+ * («del minuto 333 al 350» of a 5 h recording, or a window before a clip's
+ * offset); null when the window overlaps it or the span is unknown.
+ */
+function spanOutsideRange(delivery, view) {
+  const range = rangeOf(delivery);
+  const span = view?.span;
+  if (!range || !span || span.end == null) return null;
+  const overlaps = range.start < span.end && (range.end == null || range.end > span.start);
+  return overlaps ? null : span;
+}
+
+/** «05:33:20–05:50:00» and «queda fuera de la grabación, que dura 5 h». */
+function outsideRecordingDetail(delivery, span) {
+  const range = rangeOf(delivery);
+  const withHours = Math.max(range.end ?? range.start, span.end) >= 3600;
+  const asked = range.end != null
+    ? `${formatClock(range.start, withHours)}–${formatClock(range.end, withHours)}`
+    : `desde ${formatClock(range.start, withHours)}`;
+  const where = span.start > 0
+    ? `queda fuera del tramo transcrito de la grabación (${formatClock(span.start, withHours)}–${formatClock(span.end, withHours)})`
+    : `queda fuera de la grabación, que dura ${formatDuration(span.end)}`;
+  return { asked, where };
+}
+
+function outsideRecordingSentence(delivery, span) {
+  const { asked, where } = outsideRecordingDetail(delivery, span);
+  return `El tramo que pediste (${asked}) ${where}.`;
+}
+
+function missingPartsSentence(row, transcript, delivery, view = null) {
+  const gaps = visibleGaps(transcript, delivery);
   if (gaps.length) return `Faltan ${gaps.length === 1 ? 'este tramo' : 'estos tramos'}: ${formatGaps(gaps)}.`;
+  const outside = spanOutsideRange(delivery, view);
+  if (outside) return outsideRecordingSentence(delivery, outside);
+  if (rangeOf(delivery) && gapsOf(transcript).length) return 'El tramo que pediste está completo; faltan otros tramos de la grabación.';
   const detail = partialDetail(row);
   return detail ? `No se pudieron transcribir algunos tramos (${detail}).` : 'No se pudieron transcribir algunos tramos.';
 }
@@ -358,12 +449,18 @@ function missingPartsSentence(row, transcript) {
  * (gaps for partial files, reasons for failures), the analysis or a
  * preview, the downloads and the retry hint.
  */
-function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false } = {}) {
+function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false,
+  analysisNotes = [], translationFailed = [], summaryText = '', summaryFailed = false } = {}) {
   const list = Array.isArray(rows) ? rows : [];
   const counts = summarizeStates(list);
   const single = list.length === 1;
   const blocks = [];
   const transcriptOf = row => transcripts?.[row?.id] || null;
+  const views = new Map();
+  const viewFor = row => {
+    if (!views.has(row)) views.set(row, isUsableRow(row) ? viewOf(row, transcriptOf(row), delivery) : null);
+    return views.get(row);
+  };
 
   if (single) {
     const row = list[0];
@@ -375,9 +472,11 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
       failed: `**No pude transcribir ${name}.**`,
       pending: `**${name} sigue en la cola de transcripción.**`,
     }[state]);
-    const details = fileDetails(row, transcriptOf(row), delivery);
+    const details = fileDetails(row, transcriptOf(row), delivery, viewFor(row));
     if (details.length && (state === 'ready' || state === 'partial')) blocks.push(details.join(' · '));
-    if (state === 'partial') blocks.push(missingPartsSentence(row, transcriptOf(row)));
+    const outside = spanOutsideRange(delivery, viewFor(row));
+    if (state === 'partial') blocks.push(missingPartsSentence(row, transcriptOf(row), delivery, viewFor(row)));
+    else if (state === 'ready' && outside) blocks.push(outsideRecordingSentence(delivery, outside));
     if (state === 'failed' && row?.processingError) blocks.push(`Motivo: ${cleanReason(row.processingError)}`);
   } else {
     const n = counts.total;
@@ -396,12 +495,18 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
       const name = quoteName(displayName(row, delivery, index));
       const state = stateOf(row);
       const transcript = transcriptOf(row);
+      const outside = spanOutsideRange(delivery, viewFor(row));
       if (state === 'ready') {
-        const details = fileDetails(row, transcript, delivery);
-        return `- ${name}: lista${details.length ? ` · ${details.join(' · ')}` : ''}`;
+        const details = fileDetails(row, transcript, delivery, viewFor(row));
+        const where = outside ? ` · el tramo pedido ${outsideRecordingDetail(delivery, outside).where}` : '';
+        return `- ${name}: lista${details.length ? ` · ${details.join(' · ')}` : ''}${where}`;
       }
       if (state === 'partial') {
-        const gaps = gapsOf(transcript);
+        const gaps = visibleGaps(transcript, delivery);
+        if (!gaps.length && outside) return `- ${name}: el tramo pedido ${outsideRecordingDetail(delivery, outside).where}`;
+        if (!gaps.length && rangeOf(delivery) && gapsOf(transcript).length) {
+          return `- ${name}: tramo pedido completo (faltan otros tramos de la grabación)`;
+        }
         const detail = gaps.length ? `faltan ${formatGaps(gaps, 4)}` : (partialDetail(row) || 'faltan algunos tramos');
         return `- ${name}: parcial (${detail})`;
       }
@@ -420,20 +525,33 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
 
   const usable = list.filter(isUsableRow);
   const translating = delivery?.mode === 'translation';
-  if (analysisText && String(analysisText).trim()) {
+  const hasAnalysis = Boolean(analysisText && String(analysisText).trim());
+  const analysisFailedCopy = 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.';
+  // «resume y tradúcelo»: the summary leads, the translation follows.
+  if (summaryText && String(summaryText).trim()) blocks.push(`### Análisis\n\n${String(summaryText).trim()}`);
+  else if (summaryFailed && usable.length) blocks.push(analysisFailedCopy);
+  if (hasAnalysis) {
     blocks.push(`### ${translating ? 'Traducción' : 'Análisis'}\n\n${String(analysisText).trim()}`);
   } else if (analysisFailed && usable.length) {
     blocks.push(translating
       ? 'No pude terminar la traducción que pediste. La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.'
-      : 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.');
+      : analysisFailedCopy);
+  }
+  const untranslated = (Array.isArray(translationFailed) ? translationFailed : [])
+    .map(file => (typeof file === 'string' ? file : file?.name || file?.id)).filter(Boolean);
+  if (translating && hasAnalysis && untranslated.length) {
+    blocks.push(`No pude traducir ${listNames(untranslated)}. ${untranslated.length === 1 ? 'Su transcripción sigue guardada' : 'Sus transcripciones siguen guardadas'}; vuelve a pedirme la traducción en este chat cuando quieras.`);
+  }
+  for (const note of Array.isArray(analysisNotes) ? analysisNotes : []) {
+    if (typeof note === 'string' && note.trim()) blocks.push(cleanReason(note, 300));
   }
 
-  if (usable.length && !(analysisText && String(analysisText).trim())) {
+  if (usable.length && !hasAnalysis) {
     const shown = usable.slice(0, PREVIEW_FILES);
     const budget = Math.floor(PREVIEW_CHARS / shown.length);
     let truncated = usable.length > shown.length;
     const pieces = shown.map(row => {
-      const cut = cutAtParagraph(row.extractedText, budget);
+      const cut = cutAtParagraph(previewSource(row, viewFor(row)), budget);
       truncated = truncated || cut.truncated;
       const body = escapeChatMarkdown(cut.text);
       return single ? body : `#### ${escapeChatMarkdown(quoteName(displayName(row, delivery, list.indexOf(row))))}\n\n${body}`;
@@ -547,7 +665,7 @@ function markdownBundle(rows, delivery) {
  * the segments sidecar when asked, and one Word document when asked. File
  * names are ASCII so the artifact store keeps them readable.
  */
-async function defaultBuildArtifacts({ rows = [], transcripts = {}, delivery = {} } = {}) {
+async function defaultBuildArtifacts({ rows = [], transcripts = {}, delivery = {}, createDocument = null } = {}) {
   if (!rows.some(isUsableRow)) return [];
   const out = [];
   const used = new Set();
@@ -580,13 +698,18 @@ async function defaultBuildArtifacts({ rows = [], transcripts = {}, delivery = {
     });
   }
   if (formats.has('docx')) {
+    let filePath = null;
     try {
-      const { createDocument } = require('./document-service');
+      const build = createDocument || require('./document-service').createDocument;
       const filename = unique(`${base}-transcripcion.docx`);
-      const { filePath } = await createDocument(delivery.userId, filename, markdownBundle(rows, delivery));
+      // A unique working copy under uploads/documents/<user>/ (removed below):
+      // the friendly name repeats and another render may be using it.
+      ({ filePath } = await build(delivery.userId, `transcript-${crypto.randomUUID()}.docx`, markdownBundle(rows, delivery)));
       const buffer = await fs.promises.readFile(filePath);
       out.push({ filename, base64: buffer.toString('base64'), mime: DOCX_MIME });
-    } catch (_) { /* reported to the user as a missing format */ }
+    } catch (_) { /* reported to the user as a missing format */ } finally {
+      if (filePath) await fs.promises.rm(filePath, { force: true }).catch(() => {});
+    }
   }
   return out;
 }
@@ -686,7 +809,7 @@ async function defaultPostMessage(prisma, { userId, chatId, content, metadata = 
   const message = await prisma.message.create({
     data: {
       chatId, role: 'ASSISTANT', content: body, tokens: Math.ceil(body.length / 4), timestamp: new Date(),
-      metadata: { source: 'media-delivery', ...metadata, artifacts: list, updatedAt: new Date().toISOString() },
+      metadata: { ...metadata, source: DELIVERY_SOURCE, artifacts: list, updatedAt: new Date().toISOString() },
     },
   });
   try {
@@ -735,13 +858,28 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
   const target = delivery?.mode === 'translation' ? mediaBatch.detectTranslationTarget(delivery.goal) : null;
   if (target) {
     const translation = await mediaBatch.translateMediaBatch({ rows: analysisRows, target, complete: completion.complete });
-    if (!translation.files.length) return '';
+    // «resume y tradúcelo»: the summary too, with the same model. Its failure
+    // never costs the translation.
+    let summary = '';
+    if (delivery.output?.alsoAnalysis === true) {
+      try {
+        summary = (await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete }))?.text || '';
+      } catch (_) { summary = ''; }
+    }
+    const failed = translation.failed || [];
+    if (!translation.files.length) return { text: '', artifacts: [], failed, summary };
     const pack = require('./media-transcript-artifacts');
     const built = await pack.buildTranslationArtifacts({ files: translation.files, target,
       output: { ...(delivery.output || {}), range }, userId: delivery.userId });
-    const first = translation.files[0].text;
-    const preview = first.length > 3000 ? `${first.slice(0, 3000)}…\n\n_Vista previa: el archivo adjunto tiene la traducción completa._` : first;
-    return { text: pack.escapeChatMarkdown(preview), artifacts: built.artifacts };
+    const firstFile = translation.files[0];
+    const first = firstFile.text;
+    const preview = first.length > 3000
+      ? `${pack.escapeChatMarkdown(`${first.slice(0, 3000)}…`)}\n\n_Vista previa: el archivo adjunto tiene la traducción completa._`
+      : pack.escapeChatMarkdown(first);
+    // In a batch the preview names the file it shows.
+    const label = analysisRows.length > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : '';
+    return { text: `${label}${preview}`, artifacts: built.artifacts,
+      notes: Array.isArray(built.notes) ? built.notes : [], failed, summary };
   }
   const result = await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete });
   return result?.text || '';
@@ -838,8 +976,12 @@ function createMediaDeliveryService(deps = {}) {
     const prisma = deps.prisma || getPrisma();
     if (typeof prisma?.message?.findFirst !== 'function') return null;
     // Idempotency: the message carries the delivery id; never post twice.
+    // Only a message this service wrote counts (see DELIVERY_SOURCE).
     return prisma.message.findFirst({
-      where: { chatId, metadata: { path: ['mediaDelivery'], equals: id } },
+      where: { chatId, AND: [
+        { metadata: { path: ['mediaDelivery'], equals: id } },
+        { metadata: { path: ['source'], equals: DELIVERY_SOURCE } },
+      ] },
       select: { id: true, chatId: true },
     });
   }
@@ -909,27 +1051,49 @@ function createMediaDeliveryService(deps = {}) {
     checkpoint();
 
     const usable = rows.filter(isUsableRow);
+    const translating = record.mode === 'translation';
+    // «resume y tradúcelo»: the summary comes with the translation.
+    const alsoAnalysis = translating && record.output?.alsoAnalysis === true;
     let analysisText = '';
     let analysisFailed = false;
     let analysisArtifacts = [];
-    if ((record.mode === 'analysis' || record.mode === 'translation') && usable.length) {
-      if (typeof analyze !== 'function') analysisFailed = true;
-      else {
+    let analysisNotes = [];
+    let translationFailed = [];
+    let summaryText = '';
+    let summaryFailed = false;
+    if ((record.mode === 'analysis' || translating) && usable.length) {
+      if (typeof analyze !== 'function') {
+        analysisFailed = true;
+        summaryFailed = alsoAnalysis;
+      } else {
         try {
           const result = await analyze({ rows: usable, transcripts, delivery: { ...record, deliveryChatId: targetChatId, transcripts } });
           analysisText = String(typeof result === 'string' ? result : result?.text || '').trim();
           // A translation returns its own files (TXT/Word) next to a preview.
           if (Array.isArray(result?.artifacts)) analysisArtifacts = result.artifacts;
+          if (Array.isArray(result?.notes)) analysisNotes = result.notes.filter(note => typeof note === 'string' && note.trim());
+          // Files whose translation failed while the others succeeded.
+          if (Array.isArray(result?.failed)) translationFailed = result.failed.filter(Boolean);
+          if (alsoAnalysis) {
+            summaryText = String(result?.summary || '').trim();
+            summaryFailed = !summaryText;
+          }
           if (!analysisText) analysisFailed = true;
         } catch (err) {
           analysisFailed = true;
+          summaryFailed = alsoAnalysis;
           logger.warn(`[media-delivery] analysis unavailable id=${id} code=${err?.code || 'analysis_error'}`);
         }
       }
       checkpoint();
     }
 
-    const transcriptSpecs = usable.length && record.mode !== 'translation' ? await buildArtifacts({ rows, transcripts, delivery: record }) : [];
+    // A translation alone does not re-send the transcript files, unless the
+    // user also asked for the transcription or the translation produced
+    // nothing (then the transcript is all there is to deliver).
+    const wantsTranscriptFiles = !translating || record.output?.includeTranscript === true
+      || analysisFailed || !analysisArtifacts.length;
+    const transcriptSpecs = usable.length && wantsTranscriptFiles ? await buildArtifacts({ rows, transcripts, delivery: record }) : [];
     const specs = [...(Array.isArray(transcriptSpecs) ? transcriptSpecs : []), ...analysisArtifacts];
     const saved = [];
     for (const spec of Array.isArray(specs) ? specs : []) {
@@ -940,8 +1104,17 @@ function createMediaDeliveryService(deps = {}) {
     checkpoint();
 
     const counts = summarizeStates(rows);
-    const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed });
+    const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed,
+      analysisNotes, translationFailed, summaryText, summaryFailed });
+    // Never post without the lock: if another process reclaimed it while this
+    // one stalled past the stale window, that holder may be posting too.
+    if (typeof store.holds === 'function' && !(await store.holds(id, token))) {
+      const err = new Error('lock_lost');
+      err.code = 'lock_lost';
+      throw err;
+    }
     const metadata = {
+      source: DELIVERY_SOURCE,
       mediaDelivery: id,
       transcriptionFileIds: ids,
       servedBy: 'media_batch',
@@ -1083,8 +1256,9 @@ function createMediaDeliveryService(deps = {}) {
   }
 
   /**
-   * Reconcile pass (call from the existing 60 s media timer): retries due
-   * records and recovers any whose terminal hook was missed (crash, deploy).
+   * Reconcile pass (started, not awaited, from the 60 s media timer): retries
+   * due records and recovers any whose terminal hook was missed (crash,
+   * deploy). Records already in flight in this process are skipped.
    */
   async function sweepPendingDeliveries({ now: at } = {}) {
     if (!enabled()) return { status: 'disabled' };
@@ -1095,6 +1269,9 @@ function createMediaDeliveryService(deps = {}) {
       const store = getStore();
       const records = await store.listActive();
       const ready = records.filter(record => {
+        // Already running here (terminal hook): awaiting it would hold this
+        // sweep for the whole delivery — a translation can take 30 min.
+        if (inflight.has(record.id)) return false;
         const nextAt = Date.parse(record.nextAttemptAt || '');
         return !Number.isFinite(nextAt) || nextAt <= asOf;
       });

@@ -219,7 +219,8 @@ function timedSegments(transcription) {
 function transcriptTextFor(transcription, fallback, { fileName, formatter } = {}) {
   const segments = timedSegments(transcription);
   if (!formatter || !segments.length) return fallback;
-  const duration = Number(transcription?.durationSec) || Math.max(...segments.map(seg => Number(seg.end)));
+  const duration = Number(transcription?.durationSec)
+    || Math.max(...segments.map(seg => Number(seg.end))) - (Number(transcription?.timeOffsetSec) || 0);
   if (!(duration >= TIMESTAMPED_TEXT_MIN_SECONDS)) return fallback;
   try {
     const text = formatter.renderText({ ...transcription, segments }, { fileName, header: false });
@@ -227,6 +228,25 @@ function transcriptTextFor(transcription, fallback, { fileName, formatter } = {}
   } catch (_) {
     return fallback;
   }
+}
+
+// A link clip («del minuto 60 al 90») is transcribed from 0; its stored text
+// and sidecar follow the recording's own clock. Segments and gaps move by the
+// offset, `durationSec` stays the clip's length and `timeOffsetSec` says where
+// the clip starts. A result that already carries an offset is never moved
+// twice.
+const MAX_CLIP_OFFSET_SEC = 7 * 24 * 3600;
+function clipOffset(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, MAX_CLIP_OFFSET_SEC) : 0;
+}
+function onRecordingClock(transcription, offsetSec) {
+  const offset = clipOffset(offsetSec);
+  if (!offset || !transcription || typeof transcription !== 'object' || clipOffset(transcription.timeOffsetSec)) return transcription;
+  const shift = list => (Array.isArray(list) ? list : []).map(item => (item && typeof item === 'object' && Number.isFinite(Number(item.start))
+    ? { ...item, start: Number(item.start) + offset, ...(Number.isFinite(Number(item.end)) ? { end: Number(item.end) + offset } : {}) }
+    : item));
+  return { ...transcription, segments: shift(transcription.segments), gaps: shift(transcription.gaps), timeOffsetSec: offset };
 }
 
 // Proper nouns and subject words from the file name («Clase 12 - Bioquímica
@@ -368,7 +388,18 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const previous = await queue.getJob(jobId);
     if (previous) {
       const state = await previous.getState();
-      if (state === 'active' || state === 'waiting' || state === 'delayed') return { id: row.id, queued: true, stage: row.processingStage };
+      if (state === 'active' || state === 'waiting' || state === 'delayed') {
+        // The job already wrote this partial result (an active one is only
+        // offloading the binary): a retry must not be swallowed. The marker
+        // makes the row the source of truth — a queued job runs the gap retry
+        // when it starts, and once an active one completes the recovery sweep
+        // re-adds the forced job.
+        if (isPartialTranscript(row)) {
+          await writeOwned(row.id, row.userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: RETRYING_PARTIAL });
+          return { id: row.id, queued: true, stage: 'uploaded' };
+        }
+        return { id: row.id, queued: true, stage: row.processingStage };
+      }
       await previous.remove();
     }
     const previousError = String(row.processingError || '').startsWith(PARTIAL_PREFIX) ? row.processingError : null;
@@ -379,7 +410,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     return { id: row.id, queued: true, stage: 'uploaded' };
   }
 
-  async function enqueueMediaTranscription({ fileId, userId, retry = false }) {
+  async function enqueueMediaTranscription({ fileId, userId, retry = false, timeOffsetSec = null }) {
     if (!fileId || !userId) throw failure('media_owner_required', 'Falta el archivo o su propietario.');
     const row = await loadOwned(fileId, userId);
     if (hasTranscript(row) && retry && isPartialTranscript(row)) return enqueuePartialRetry(row);
@@ -411,7 +442,8 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     }
     await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null,
       ...(row.processingStage === 'failed' ? { extractedText: null } : {}) });
-    await queue.add('transcribe', { fileId, userId }, { jobId, attempts: ATTEMPTS,
+    const offset = clipOffset(timeOffsetSec);
+    await queue.add('transcribe', { fileId, userId, ...(offset ? { timeOffsetSec: offset } : {}) }, { jobId, attempts: ATTEMPTS,
       backoff: { type: 'exponential', delay: 5000 },
       removeOnComplete: { age: 86400, count: 5000 }, removeOnFail: { age: 604800, count: 10000 } });
     return { id: fileId, queued: true, stage: 'uploaded' };
@@ -457,11 +489,31 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     }
   }
 
+  // The clip offset: the job's own (handed in at enqueue), else the durable
+  // record (a lost job is re-queued with only { fileId, userId }).
+  async function clipOffsetFor(job, row) {
+    if (job.data?.timeOffsetSec != null && Number.isFinite(Number(job.data.timeOffsetSec))) return clipOffset(job.data.timeOffsetSec);
+    if (typeof transcriptStore?.readMediaClipOffset !== 'function') return 0;
+    try { return clipOffset(await transcriptStore.readMediaClipOffset({ fileId: row.id, userId: row.userId })); }
+    catch (_) { return 0; }
+  }
+
+  async function purgeTranscript(fileId) {
+    try {
+      if (typeof transcriptStore?.purgeMediaTranscript === 'function') {
+        const purged = await transcriptStore.purgeMediaTranscript(fileId);
+        if (purged?.error) warn('[media-transcription-queue] transcript not purged', purged.error);
+      } else await transcriptStore?.deleteSidecar?.(fileId);
+    } catch (_) { /* best-effort: the file is gone either way */ }
+  }
+
   async function processMediaJob(job, token) {
     const { fileId, userId } = job.data || {};
     let local;
     let checkpoint = null;
     let forced = false;
+    let claimed = false;
+    let sidecarWritten = false;
     let previousRow = null;
     const controller = new AbortController();
     activeControllers.add(controller);
@@ -479,14 +531,20 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     }
     try {
       const row = await loadOwned(fileId, userId);
-      forced = Boolean(job.data?.force) && hasTranscript(row);
+      // The row, not the job, says whether gaps are being retried: a replayed
+      // gap retry of a file that is already ready is a cache hit, and any job
+      // that meets the retry marker runs the gap retry.
+      forced = hasTranscript(row) && isReprocessingPartial(row);
       if (hasTranscript(row) && !forced) {
-        await stage(fileId, userId, 'ready');
+        // A ready row keeps its note (a partial stays labelled partial).
+        if (row.processingStage !== 'ready') await stage(fileId, userId, 'ready');
         return { id: fileId, cached: true, stage: 'ready' };
       }
       previousRow = row;
       if (forced) await writeOwned(fileId, userId, { processingStage: 'extracting', processingStageAt: new Date(now()), processingError: RETRYING_PARTIAL });
       else await stage(fileId, userId, 'extracting');
+      claimed = true;
+      const offset = await clipOffsetFor(job, row);
       checkpoint = createCheckpoint(row);
       local = await materialize(row.path, { signal: controller.signal });
       controller.signal.throwIfAborted();
@@ -495,7 +553,9 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       const result = await processFile({ path: local.path, mimetype: mimeType, originalname: row.originalName, size: row.size },
         { signal: controller.signal, onProgress, checkpoint, keyterms: keytermsFromFileName(row.originalName) });
       controller.signal.throwIfAborted();
-      const transcription = result?.transcription || null;
+      // Shifted from the engine's fresh result every run (a gap retry
+      // re-transcribes on the clip's clock), so the offset is never applied twice.
+      const transcription = onRecordingClock(result?.transcription || null, offset);
       const plain = transcription?.transcript ?? result?.extractedText;
       if (!result?.success || !hasTranscript({ extractedText: plain })) {
         const err = failure(result?.code || 'transcription_failed', result?.error || 'No se detectó una transcripción legible en este archivo.');
@@ -510,6 +570,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       // build SRT/VTT/Word from it. A sidecar failure never fails the job:
       // the timestamped text above is still durable.
       const sidecar = await writeTranscriptSidecar(row, transcription);
+      sidecarWritten = Boolean(sidecar);
       // Text + terminal stage are one DB write. A crash before this write
       // leaves the job recoverable; after it, a replay is a cache hit.
       await writeOwned(fileId, userId, { extractedText: transcript, processingStage: 'ready',
@@ -540,7 +601,13 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
           parked = true;
         } catch (_) { /* connection already gone: the stalled checker recovers it */ }
         if (parked) {
-          await stage(fileId, userId, 'uploaded').catch(() => {});
+          // Only a row this run moved to `extracting` goes back; a gap retry
+          // keeps its marker, or recovery and delivery would take the old
+          // partial text for a complete transcript.
+          if (claimed) {
+            await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()),
+              processingError: forced ? RETRYING_PARTIAL : null }).catch(() => {});
+          }
           const { DelayedError } = require('bullmq');
           throw new DelayedError();
         }
@@ -549,10 +616,16 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       const willRetry = transient && Number(job.attemptsMade || 0) + 1 < Number(job.opts?.attempts || ATTEMPTS);
       logJobOutcome({ fileId, outcome: willRetry ? 'retry' : 'failed', code: err?.code || null, elapsedMs: now() - jobStartedAt });
       if (!transient) job.discard?.();
-      // A deleted file's partial work (segment audio + text) goes with it.
-      if (err?.code === 'media_not_found') await checkpoint?.clear?.().catch(() => {});
-      // A deleted/foreign file must never be resurrected or mutated.
-      if (err.code !== 'media_not_found' && err.code !== 'media_owner_required') {
+      // A deleted file's partial work (segment audio + text) goes with it,
+      // and so does a sidecar this run wrote just before the delete won.
+      if (err?.code === 'media_not_found') {
+        await checkpoint?.clear?.().catch(() => {});
+        if (sidecarWritten) await purgeTranscript(fileId);
+      }
+      // A deleted/foreign file must never be resurrected or mutated. A job
+      // that never claimed the row has nothing to undo before its next
+      // attempt (writing `uploaded` would wipe a gap retry's marker).
+      if (err.code !== 'media_not_found' && err.code !== 'media_owner_required' && (claimed || !willRetry)) {
         if (forced && previousRow) {
           // A failed retry of a partial transcript never loses the partial
           // text: it goes back to `ready` with its original note.
@@ -638,7 +711,27 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
   };
 }
 
-let queue, queueConnection, worker, workerConnection, service, recoveryTimer, recovering = false;
+/**
+ * One recovery tick: re-queue stuck media, then sweep the chat deliveries.
+ * The sweep is started detached (it has its own busy guard): a long analysis
+ * or translation delivery must never hold media recovery behind it.
+ */
+function createRecoveryTick({ reconcileMedia, sweepDeliveries, warn = (...args) => console.warn(...args) }) {
+  let recovering = false;
+  return async function reconcile() {
+    if (recovering) return;
+    recovering = true;
+    try { await reconcileMedia(); }
+    catch (err) { warn('[media-transcription-queue] reconciliation unavailable', err?.code || 'recovery_error'); }
+    finally { recovering = false; }
+    // Deliveries whose hook was missed (crash, deploy between the terminal
+    // write and the hook) are picked up here, once their files are terminal.
+    void Promise.resolve().then(() => sweepDeliveries())
+      .catch(err => warn('[media-transcription-queue] delivery sweep unavailable', err?.code || 'delivery_sweep_error'));
+  };
+}
+
+let queue, queueConnection, worker, workerConnection, service, recoveryTimer;
 function getMediaQueue() {
   if (queue) return queue;
   const { Queue } = require('bullmq');
@@ -720,17 +813,10 @@ function startMediaTranscriptionWorker() {
         .catch(() => console.warn('[media-transcription-worker] delivery hook pending recovery'));
     }).catch(() => console.warn('[media-transcription-worker] failed state persistence pending recovery'));
   });
-  const reconcile = async () => {
-    if (recovering) return;
-    recovering = true;
-    try { await getService().reconcilePendingMedia(); }
-    catch (err) { console.warn('[media-transcription-queue] reconciliation unavailable', err?.code || 'recovery_error'); }
-    // Deliveries whose hook was missed (crash, deploy between the terminal
-    // write and the hook) are picked up here, once their files are terminal.
-    try { await require('./media-delivery').sweepPendingDeliveries(); }
-    catch (err) { console.warn('[media-transcription-queue] delivery sweep unavailable', err?.code || 'delivery_sweep_error'); }
-    finally { recovering = false; }
-  };
+  const reconcile = createRecoveryTick({
+    reconcileMedia: () => getService().reconcilePendingMedia(),
+    sweepDeliveries: () => require('./media-delivery').sweepPendingDeliveries(),
+  });
   worker.on('ready', () => { void ensureRunning(); void reconcile(); void sweepStaleCheckpoints().catch(() => {}); });
   recoveryTimer = setInterval(() => { void ensureRunning(); void reconcile(); }, RECONCILE_INTERVAL_MS);
   recoveryTimer.unref?.();
@@ -758,7 +844,7 @@ async function closeMediaTranscriptionQueue() {
 }
 
 module.exports = {
-  isMediaFile, hasTranscript, isPartialTranscript, isReprocessingPartial, partialFailureMessage, transcriptTextFor,
+  isMediaFile, hasTranscript, isPartialTranscript, isReprocessingPartial, partialFailureMessage, transcriptTextFor, onRecordingClock, createRecoveryTick,
   keytermsFromFileName, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
   createDiskCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
   readMediaProgress: payload => getService().readMediaProgress(payload),

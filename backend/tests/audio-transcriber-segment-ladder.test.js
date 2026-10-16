@@ -8,6 +8,7 @@
  * and every chunk reports the engine that produced it.
  */
 
+const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -286,4 +287,161 @@ test('a dropped socket («Error: aborted», ECONNRESET) is a transient failure, 
   assert.equal(result.ok, true);
   assert.deepEqual(groq.requests.map((r) => r.index), [0, 0, 1]);
   assert.equal(result.transcript, 'groq 0\n\ngroq 1');
+});
+
+function fakeProcess(exitCode, write) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  queueMicrotask(() => {
+    try { write?.(); } catch (error) { child.emit('error', error); return; }
+    child.emit('close', exitCode);
+  });
+  return child;
+}
+
+test('one failed whisper.cpp run (python fallback without faster-whisper) demotes only that segment; local keeps the rest of the job', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-ladder-engine-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'whisper-cli');
+  fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  const model = path.join(dir, 'ggml-base.bin');
+  fs.writeFileSync(model, 'model');
+  const calls = { whisper: 0, python: 0 };
+  // The real engine (transcribeLocal) with fake processes: ffmpeg copies the
+  // segment into the WAV, whisper-cli exits 1 on segment 2 only, python3 exits
+  // 2 like production (no faster-whisper installed).
+  const spawnImpl = (command, args) => {
+    if (command === 'ffmpeg') return fakeProcess(0, () => fs.writeFileSync(args.at(-1), fs.readFileSync(args[args.indexOf('-i') + 1])));
+    if (command === bin) {
+      calls.whisper++;
+      const audioText = fs.readFileSync(args[args.indexOf('-f') + 1], 'utf8');
+      if (audioText === 'segment-2') return fakeProcess(1);
+      return fakeProcess(0, () => fs.writeFileSync(`${args[args.indexOf('-of') + 1]}.json`, JSON.stringify({
+        transcription: [{ offsets: { from: 0, to: 1000 }, text: `bloque ${audioText}` }],
+      })));
+    }
+    calls.python++;
+    return fakeProcess(2);
+  };
+  const result = await audio.transcribe(tempFile(t), 'video/mp4', 'clase.mp4', {
+    env: { TRANSCRIBE_PROVIDERS: 'local' }, language: 'es', durationSeconds: 6000,
+    segmentAudio: segmenter(t, 10), whisperBin: bin, modelPath: model, spawnImpl, logImpl() {}, ...noSleep,
+  });
+  assert.equal(calls.whisper, 10, 'every later segment still reaches whisper.cpp');
+  assert.equal(calls.python, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.partial, true);
+  assert.deepEqual(result.gaps, [{ start: 1200, end: 1800, reason: 'provider_error' }]);
+  assert.equal(result.coverage, 0.9);
+  assert.deepEqual(result.providers, { local: 9 });
+});
+
+test('a transient spawn failure (EAGAIN) on a late segment fails only that segment; EACCES still drops the rung', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-ladder-spawn-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'whisper-cli');
+  fs.writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+  const model = path.join(dir, 'ggml-base.bin');
+  fs.writeFileSync(model, 'model');
+  const spawnError = (code) => Object.assign(new Error(`spawn ${code}`), { code });
+  // The real engine with fake processes: whisper-cli fails to fork with
+  // `failCode` on the segments `failOn` picks; python3 exits 2 like production.
+  const engine = (failCode, failOn) => {
+    const calls = { whisper: 0, python: 0 };
+    const spawnImpl = (command, args) => {
+      if (command === 'ffmpeg') return fakeProcess(0, () => fs.writeFileSync(args.at(-1), fs.readFileSync(args[args.indexOf('-i') + 1])));
+      if (command === bin) {
+        calls.whisper++;
+        const audioText = fs.readFileSync(args[args.indexOf('-f') + 1], 'utf8');
+        if (failOn(audioText, calls.whisper)) return fakeProcess(0, () => { throw spawnError(failCode); });
+        return fakeProcess(0, () => fs.writeFileSync(`${args[args.indexOf('-of') + 1]}.json`, JSON.stringify({
+          transcription: [{ offsets: { from: 0, to: 1000 }, text: `bloque ${audioText}` }],
+        })));
+      }
+      calls.python++;
+      return fakeProcess(2);
+    };
+    return { calls, spawnImpl };
+  };
+  const run = (spawnImpl) => audio.transcribe(tempFile(t), 'video/mp4', 'clase.mp4', {
+    env: { TRANSCRIBE_PROVIDERS: 'local' }, language: 'es', durationSeconds: 6000,
+    segmentAudio: segmenter(t, 10), whisperBin: bin, modelPath: model, spawnImpl, logImpl() {}, ...noSleep,
+  });
+
+  const busy = engine('EAGAIN', (audioText) => audioText === 'segment-8');
+  const result = await run(busy.spawnImpl);
+  assert.equal(busy.calls.whisper, 10, 'segment 10 still reaches whisper.cpp after an EAGAIN on segment 9');
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.gaps, [{ start: 4800, end: 5400, reason: 'provider_error' }]);
+  assert.equal(result.coverage, 0.9);
+  assert.deepEqual(result.providers, { local: 9 });
+
+  const denied = engine('EACCES', () => true);
+  const dead = await run(denied.spawnImpl);
+  assert.equal(denied.calls.whisper, 1, 'a binary the OS refuses to run is unavailable for the whole job');
+  assert.equal(dead.ok, false);
+});
+
+test('a whisper.cpp timeout is retried with TRANSCRIBE_LOCAL_RETRIES, else a timeout gap; only a missing engine drops the rung', async (t) => {
+  const timeoutOnce = () => {
+    const seen = new Map();
+    const fn = async (p) => {
+      const i = Number(/seg-(\d+)\.flac$/.exec(p)[1]);
+      seen.set(i, (seen.get(i) || 0) + 1);
+      fn.calls++;
+      if (i === 1 && seen.get(i) === 1) {
+        throw Object.assign(new Error('local whisper unavailable: whisper.cpp LOCAL_WHISPER_TIMEOUT; python fallback LOCAL_WHISPER_FAILED'), {
+          code: 'LOCAL_WHISPER_UNAVAILABLE', cppError: { code: 'LOCAL_WHISPER_TIMEOUT' },
+        });
+      }
+      return { text: `bloque ${i}` };
+    };
+    fn.calls = 0;
+    return fn;
+  };
+  const run = (env, localTranscribe) => audio.transcribe(tempFile(t), 'video/mp4', 'clase.mp4', {
+    env: { TRANSCRIBE_PROVIDERS: 'local', TRANSCRIBE_MIN_COVERAGE: '0.5', ...env }, language: 'es', durationSeconds: 2400,
+    segmentAudio: segmenter(t, 4), localTranscribe, ...noSleep,
+  });
+  const once = timeoutOnce();
+  const gap = await run({}, once);
+  assert.equal(once.calls, 4, 'segments 2-4 still run locally');
+  assert.deepEqual(gap.gaps, [{ start: 600, end: 1200, reason: 'timeout' }]);
+  const retried = timeoutOnce();
+  const healed = await run({ TRANSCRIBE_LOCAL_RETRIES: '1' }, retried);
+  assert.equal(retried.calls, 5);
+  assert.equal(healed.partial, false);
+  assert.equal(healed.transcript, 'bloque 0\n\nbloque 1\n\nbloque 2\n\nbloque 3');
+
+  let missingCalls = 0;
+  const missing = await run({}, async () => {
+    missingCalls++;
+    throw Object.assign(new Error('local whisper unavailable: model missing'), {
+      code: 'LOCAL_WHISPER_UNAVAILABLE', reason: 'model missing', cppError: { code: 'LOCAL_WHISPER_UNAVAILABLE', reason: 'model missing' },
+    });
+  });
+  assert.equal(missingCalls, 1, 'a missing model is unavailable for the whole job');
+  assert.equal(missing.reasonCode, 'local_unavailable');
+});
+
+test('a silent piece on xAI (200 with no text) is no speech, not a failure: xAI keeps the rest of the job and no gap opens', async (t) => {
+  const calls = [];
+  const result = await audio.transcribe(tempFile(t), 'video/mp4', 'clase.mp4', {
+    env: { XAI_API_KEY: 'xai-silent-waiting-room', TRANSCRIBE_PROVIDERS: 'xai' }, language: 'es', durationSeconds: 3600, parallel: 1,
+    segmentAudio: segmenter(t, 6), ...noSleep,
+    async xaiTranscribe(_file, _mime, name) {
+      const i = indexOf(name);
+      calls.push(i);
+      if (i < 3) throw Object.assign(new Error('xAI STT response did not include transcript text.'), { code: 'xai_stt_empty_transcript' });
+      return { text: `parte ${i}`, model: 'grok-stt', segments: [] };
+    },
+  });
+  assert.deepEqual(calls, [0, 1, 2, 3, 4, 5], 'three silent pieces in a row do not drop xAI');
+  assert.equal(result.ok, true);
+  assert.equal(result.partial, false);
+  assert.deepEqual(result.gaps || [], []);
+  assert.equal(result.coverage, 1);
+  assert.deepEqual(result.providers, { xai: 6 });
+  assert.equal(result.transcript, 'parte 3\n\nparte 4\n\nparte 5');
 });

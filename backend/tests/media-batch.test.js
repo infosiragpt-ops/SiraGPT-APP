@@ -210,11 +210,16 @@ test('a long recording ends the turn with «te aviso aquí» and a durable deliv
   assert.equal(waits[0].timeoutMs, 240000, 'the inline wait is bounded by TRANSCRIBE_CHAT_INLINE_WAIT_MS');
   assert.equal(result.stoppedReason, 'media_delivery_handoff');
   assert.match(result.finalMarkdown, /Recibí «clase\.mp4» \(18000 s, ~2610 s\)\. Te aviso aquí\./);
-  assert.equal(result.metadata.mediaDelivery, 'md_1');
+  // The hand-off names its delivery under its own key: `mediaDelivery` marks
+  // only the message the delivery posts, so the hand-off never counts as it.
+  assert.equal(result.metadata.mediaDeliveryHandoff, 'md_1');
+  assert.equal(result.metadata.mediaDelivery, undefined);
   assert.equal(created.length, 1);
   assert.deepEqual(JSON.parse(JSON.stringify(created[0].fileIds)), ['clase']);
   assert.equal(created[0].chatId, 'chat');
   assert.equal(created[0].output.documentFormat, 'docx');
+  assert.equal(created[0].output.includeTranscript, true);
+  assert.equal(created[0].output.alsoAnalysis, false);
   assert.deepEqual(JSON.parse(JSON.stringify(created[0].model)), { id: 'deepseek-v4-flash', provider: 'DeepSeek' });
 });
 
@@ -465,4 +470,350 @@ test('«tradúcelo al inglés» after a transcription translates the full text i
   assert.equal(result.metadata.mediaBatch.translated, 1);
   assert.equal(result.metadata.mediaBatch.translationLanguage, 'en');
   assert.equal(result.stoppedReason, 'transcription_finalize');
+  // Only the translation is attached: no sentence may say the transcript is.
+  assert.doesNotMatch(result.finalMarkdown, /La transcripción completa está en los adjuntos|La descarga adjunta conserva/);
+});
+
+// ── review fixes: hand-off key, translation intents, budgets, follow-ups ──
+
+function mediaRuntime(complete) {
+  return (name) => (name === '../media-transcript-artifacts' ? require('../src/services/media-transcript-artifacts')
+    : { createMediaAnalysisCompletion: () => ({ usage: null, complete }) });
+}
+
+async function handOffTurn({ goal, delivery, rows = [{ id: 'clase', originalName: 'clase.mp3', processingStage: 'extracting', extractedText: null, size: 4e9 }],
+  plainTranscriptionRequest = false, finish = async (value) => value }) {
+  return runMediaBranch({
+    mediaBatchRows: rows,
+    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: rows.length, ready: 0, failed: 0, pending: rows.length, partial: 0, progress: {}, stoppedEarly: true }) },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: goal, goal,
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => { throw new Error('no artifacts before the transcript exists'); },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest, openai: {}, task: {}, documentPolicy: {},
+    require: mediaRuntime(async () => { throw new Error('no model call before the transcript exists'); }),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: finish,
+  });
+}
+
+function whereMatches(row, where = {}) {
+  return Object.entries(where).every(([key, cond]) => {
+    if (key === 'AND') return cond.every(item => whereMatches(row, item));
+    if (key === 'OR') return cond.some(item => whereMatches(row, item));
+    if (key === 'metadata' && cond && Array.isArray(cond.path)) return cond.path.reduce((value, part) => value?.[part], row.metadata) === cond.equals;
+    return row[key] === cond;
+  });
+}
+
+test('the hand-off message never counts as the delivered transcript: the delivery still posts it', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { createMediaDeliveryStore } = require('../src/services/media-delivery-store');
+  const mediaDelivery = require('../src/services/media-delivery');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mb-handoff-'));
+  const messages = [];
+  const posted = [];
+  const service = mediaDelivery.createMediaDeliveryService({
+    env: { SIRAGPT_MEDIA_DELIVERY: '1' }, logger: { info() {}, warn() {} },
+    store: createMediaDeliveryStore({ root }),
+    prisma: { message: { findFirst: async ({ where }) => messages.find(row => whereMatches(row, where)) || null } },
+    loadFiles: async () => [{ id: 'clase', userId: 'owner', originalName: 'clase.mp3', mimeType: 'audio/mpeg', processingStage: 'ready', extractedText: 'Hola a todos.' }],
+    loadTranscript: async () => null,
+    buildArtifacts: async () => [{ filename: 'clase.txt', base64: 'eA==', mime: 'text/plain' }],
+    saveArtifact: ({ filename, mime }) => ({ id: 'a1', filename, mime, format: 'txt' }),
+    persistArtifact: async () => {},
+    postMessage: async ({ chatId, content, metadata }) => {
+      posted.push(content);
+      messages.push({ id: 'delivered', chatId, role: 'ASSISTANT', deletedAt: null, metadata });
+      return { messageId: 'delivered', chatId };
+    },
+    ensureChat: async ({ chatId }) => ({ chatId, created: false }),
+    notify: async () => {},
+  });
+  const adapter = { isMediaDeliveryEnabled: () => true, createDelivery: record => service.createDelivery(record),
+    handOffMessage: mediaDelivery.handOffMessage, estimateTranscriptionSeconds: mediaDelivery.estimateTranscriptionSeconds };
+  const handOff = await handOffTurn({ goal: 'transcribe sin resumen', plainTranscriptionRequest: true, delivery: adapter,
+    // persistAssistantMessage writes the hand-off into the same chat.
+    finish: async (value) => { messages.push({ id: 'handoff', chatId: 'chat', role: 'ASSISTANT', deletedAt: null, metadata: value.metadata }); return value; } });
+  assert.equal(handOff.stoppedReason, 'media_delivery_handoff');
+  const id = handOff.metadata.mediaDeliveryHandoff;
+  assert.ok(id);
+  const outcome = await service.deliverOne(id);
+  assert.equal(outcome.status, 'delivered');
+  assert.equal(posted.length, 1, 'the transcript is posted even though the hand-off names the same delivery');
+  assert.match(posted[0], /Hola a todos/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a translation hand-off records whether the transcript files and the summary were also asked for', async () => {
+  const created = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    createDelivery: async (record) => { created.push(record); return { id: `md_${created.length}`, ...record }; },
+    handOffMessage: () => 'Te aviso aquí.',
+  };
+  await handOffTurn({ goal: 'transcribe este audio, resúmelo y tradúcelo al inglés', delivery });
+  await handOffTurn({ goal: 'tradúcelo al inglés', delivery });
+  assert.equal(created[0].mode, 'translation');
+  assert.equal(created[0].output.includeTranscript, true, '«transcribe … y tradúcelo» keeps the transcript files');
+  assert.equal(created[0].output.alsoAnalysis, true, '«resúmelo y tradúcelo» keeps the summary');
+  assert.equal(created[1].mode, 'translation');
+  assert.equal(created[1].output.includeTranscript, false);
+  assert.equal(created[1].output.alsoAnalysis, false);
+});
+
+test('ordinary words of a translation request never add a paid analysis of the recording', async () => {
+  const created = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    createDelivery: async (record) => { created.push(record); return { id: `md_${created.length}`, ...record }; },
+    handOffMessage: () => 'Te aviso aquí.',
+  };
+  const plain = [
+    'tradúcelo al inglés para que lo entienda mi jefe',
+    'traduce todo lo que dice al inglés',
+    'tradúcelo al inglés tal como está',
+    'tradúcelo al inglés, es para una tarea',
+    'Hola, ¿cómo estás? Tradúcelo al inglés porfa',
+    '¿Me lo traduces al inglés, que lo necesito para mi jefe?',
+    'tradúcelo al inglés completo, no lo resumas',
+    'traduce al inglés la clase de análisis matemático',
+  ];
+  for (const goal of plain) await handOffTurn({ goal, delivery });
+  for (const [index, goal] of plain.entries()) {
+    assert.equal(created[index].mode, 'translation', goal);
+    assert.equal(created[index].output.alsoAnalysis, false, goal);
+  }
+  for (const goal of ['resúmelo y tradúcelo al inglés', 'tradúcelo al inglés y saca las ideas principales',
+    'Tradúcelo al inglés. ¿De qué habla?', 'Translate it into English. What are the main topics?']) {
+    await handOffTurn({ goal, delivery });
+    assert.equal(created.at(-1).output.alsoAnalysis, true, goal);
+  }
+});
+
+test('an inline translation runs no analysis unless one was asked for', async () => {
+  const transcript = '[00:00:00] Hola a todos. Hoy vemos la mitocondria y cómo produce energía para la célula.';
+  const run = async (goal) => {
+    const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'ready', extractedText: transcript }];
+    const steps = [];
+    const prompts = [];
+    await runMediaBranch({
+      mediaBatchRows: rows, mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }) },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: goal, goal,
+      backfillUserMessageFilesForTranscription: async () => {}, emit: (event) => { if (event.type === 'step_start') steps.push(event.id); },
+      controller: new AbortController(), runtimeBudgetMs: 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => ({ id: artifact.filename, filename: artifact.filename }),
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+      require: mediaRuntime(async (messages) => {
+        prompts.push(messages[0].content);
+        return /^Traduce al/.test(messages[0].content) ? '[00:00:00] Hello everyone. Today we look at the mitochondria and how it makes energy for the cell.' : 'Resumen';
+      }),
+      ...mediaBranchHelpers(),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    return { steps, analysisCalls: prompts.filter(prompt => !/^Traduce al/.test(prompt)).length };
+  };
+  const plain = await run('tradúcelo al inglés para que lo entienda mi jefe');
+  assert.ok(plain.steps.includes('media_translation'), plain.steps.join(', '));
+  assert.ok(!plain.steps.includes('media_analysis'), plain.steps.join(', '));
+  assert.equal(plain.analysisCalls, 0);
+  const summary = await run('resúmelo y tradúcelo al inglés');
+  assert.ok(summary.steps.includes('media_analysis'), summary.steps.join(', '));
+  assert.ok(summary.analysisCalls > 0);
+});
+
+test('next to a translation only an explicit deliverable or a real question asks for an analysis', () => {
+  for (const goal of [
+    'tradúcelo al inglés para que lo entienda mi jefe',
+    'traduce todo lo que dice al inglés',
+    'tradúcelo al inglés tal como está',
+    'tradúcelo al inglés, es para una tarea',
+    '¿Qué tal? tradúcelo al inglés',
+    '¿Me das la traducción al inglés?',
+    'tradúcelo al inglés completo, no lo resumas',
+    "Translate it to English, don't summarize it",
+    'traduce al inglés la clase de análisis matemático',
+    'traduce el capítulo 3 del audiolibro al inglés',
+  ]) assert.equal(batch.wantsSummaryWithTranslation(goal), false, goal);
+  for (const goal of [
+    'resúmelo y tradúcelo al inglés',
+    'tradúcelo al inglés y hazme el acta',
+    'tradúcelo al inglés y saca las ideas principales',
+    'tradúcelo al inglés, ¿y quién toma la decisión final?',
+    'Tradúcelo al inglés. ¿De qué habla?',
+    'Translate into English and give me the key points',
+    'además de la traducción al inglés, dame el acta',
+  ]) assert.equal(batch.wantsSummaryWithTranslation(goal), true, goal);
+  // The shared negation strip also reads «no lo resumas».
+  assert.equal(batch.wantsMediaAnalysis('Transcribe el audio, no lo resumas.'), false);
+});
+
+test('a failed translation still attaches the transcript files the message points to', async () => {
+  const transcript = 'Hola a todos. Hoy vemos la mitocondria y cómo produce energía para la célula.';
+  const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'ready', extractedText: transcript }];
+  const saved = [];
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }) },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: 'tradúcelo al inglés', goal: 'tradúcelo al inglés',
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => { saved.push(artifact.filename); return { id: `a${saved.length}`, filename: artifact.filename }; },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: mediaRuntime(async () => { throw new Error('provider down'); }),
+    ...mediaBranchHelpers(),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.ok(saved.length >= 1, 'the transcript pack is attached');
+  assert.ok(saved.every(name => !/traducci/.test(name)), saved.join(', '));
+  assert.match(result.finalMarkdown, /La transcripción completa está en los adjuntos/);
+  assert.match(result.finalMarkdown, /No se pudo traducir: clase\.mp4/);
+  assert.doesNotMatch(result.finalMarkdown, /La descarga adjunta conserva/);
+  assert.match(result.finalMarkdown, /mitocondria/);
+});
+
+test('translation requests need a translation verb (or an asked-for translation), never a negation or a noun subject', () => {
+  for (const goal of [
+    'transcribe el audio en español sin traducir',
+    'Transcribe la grabación de mi curso de traducción en español',
+    'Resume la clase de traducción al inglés',
+    '¿Qué dijo el traductor en la reunión en inglés?',
+    'no lo traduzcas, solo transcríbelo en inglés',
+    'no quiero que lo traduzcas al inglés',
+    "don't translate it, just transcribe the english audio",
+    'el debate sobre la traducción al inglés',
+    'Resume la charla acerca de la traducción al portugués',
+    'Transcribe the lecture on English translation theory',
+  ]) assert.equal(batch.detectTranslationTarget(goal), null, goal);
+  const cases = [
+    ['tradúcelo al inglés', 'en'],
+    ['traduce del inglés al español', 'es'],
+    ['traduce la clase que está en alemán al inglés', 'en'],
+    ['quiero la transcripción traducida al francés', 'fr'],
+    ['transcríbelo con traducción al inglés', 'en'],
+    ['dame la traducción al portugués', 'pt'],
+    ['transcribe it and give me an English translation', 'en'],
+    ['sin resumir, tradúcelo al inglés', 'en'],
+    ['transcribe del minuto 1.5 al 10 y tradúcelo al inglés', 'en'],
+    // Any phrasing that asks for «la traducción al <idioma>» counts.
+    ['¿Me das la traducción al inglés?', 'en'],
+    ['Quisiera la traducción al inglés', 'en'],
+    ['¿Puedes hacer la traducción al inglés?', 'en'],
+    ['Envíame la traducción al inglés', 'en'],
+    ['Ahora la traducción al inglés', 'en'],
+    ['y ahora su traducción al portugués', 'pt'],
+    ['translation to English please', 'en'],
+    ['English translation please', 'en'],
+    ['además de la traducción al inglés, dame el acta', 'en'],
+  ];
+  for (const [goal, code] of cases) assert.equal(batch.detectTranslationTarget(goal)?.code, code, goal);
+});
+
+test('translations ask for the large output budget; a part cut by it is translated again in halves', async () => {
+  const lines = Array.from({ length: 30 }, (_, i) => `[00:${String(i).padStart(2, '0')}:00] Frase ${i} ${'palabra '.repeat(40)}`.trim());
+  const text = lines.join('\n');
+  const finals = [];
+  const result = await batch.translateMediaBatch({ rows: [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: text }],
+    target: { code: 'en', name: 'inglés' }, parallel: 1,
+    complete: async (messages, _signal, final) => {
+      finals.push(final);
+      const { transcript } = JSON.parse(messages[1].content);
+      // A reply budget of 3000 characters: anything longer comes back cut.
+      return transcript.length > 3000 ? transcript.slice(0, 3000) : transcript;
+    } });
+  assert.ok(finals.length > batch.splitTranscript(text, batch.TRANSLATION_CHUNK_CHARS).length, 'cut parts were split again');
+  assert.ok(finals.every(final => final === true), 'every translation call asks for the large budget');
+  assert.equal(result.failed.length, 0);
+  for (const line of lines) assert.ok(result.files[0].text.includes(line), `missing: ${line.slice(0, 20)}`);
+});
+
+test('a translation that cannot fit the budget fails its file instead of delivering a shortened text', async () => {
+  const text = Array.from({ length: 30 }, (_, i) => `[00:${String(i).padStart(2, '0')}:00] Frase ${i} ${'palabra '.repeat(40)}`).join('\n');
+  const result = await batch.translateMediaBatch({ rows: [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: text }],
+    target: { code: 'en', name: 'inglés' }, parallel: 2,
+    complete: async () => '[00:00:00] Only the beginning.' });
+  assert.equal(result.files.length, 0);
+  assert.deepEqual(result.failed, [{ id: 'a', name: 'a.mp4' }]);
+});
+
+test('CJK targets use smaller parts and are not judged by length', async () => {
+  const text = Array.from({ length: 30 }, (_, i) => `[00:${String(i).padStart(2, '0')}:00] Frase ${i} ${'palabra '.repeat(40)}`).join('\n');
+  let calls = 0;
+  const result = await batch.translateMediaBatch({ rows: [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: text }],
+    target: { code: 'ja', name: 'japonés' }, parallel: 1,
+    complete: async (messages) => {
+      calls++;
+      return JSON.parse(messages[1].content).transcript.replace(/[a-z]+/gi, '語').replace(/(語 )+/g, '語');
+    } });
+  assert.equal(calls, batch.splitTranscript(text, batch.TRANSLATION_CHUNK_CHARS_DENSE).length);
+  assert.ok(batch.TRANSLATION_CHUNK_CHARS_DENSE < batch.TRANSLATION_CHUNK_CHARS);
+  assert.equal(result.failed.length, 0);
+});
+
+test('one failed part stops its file: no new paid calls, in-flight ones aborted, nothing runs after the result', async () => {
+  const text = Array.from({ length: 10 }, (_, i) => `[00:${String(i).padStart(2, '0')}:00] ${'x'.repeat(900)}`).join('\n');
+  const parts = batch.splitTranscript(text, batch.TRANSLATION_CHUNK_CHARS);
+  let calls = 0;
+  let aborted = 0;
+  const complete = async (messages, signal) => {
+    calls++;
+    const { part, transcript } = JSON.parse(messages[1].content);
+    if (part === 2) throw new Error('provider down');
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 30);
+      signal?.addEventListener('abort', () => { clearTimeout(timer); aborted++; reject(signal.reason); }, { once: true });
+    });
+    return transcript;
+  };
+  const rows = [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: text.repeat(4) }];
+  const result = await batch.translateMediaBatch({ rows, target: { code: 'en', name: 'inglés' }, parallel: 3, complete });
+  assert.ok(parts.length >= 1);
+  assert.deepEqual(result.failed, [{ id: 'a', name: 'a.mp4' }]);
+  assert.equal(calls, 3, 'only the three parts already started');
+  assert.equal(aborted, 2, 'the two siblings in flight were cancelled');
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal(calls, 3, 'no zombie call after the file failed');
+});
+
+test('analysis stops claiming parts after one fails, too', async () => {
+  const text = Array.from({ length: 12 }, (_, i) => `[0${i}:00:00] ${'y'.repeat(17000)}`).join('\n');
+  let calls = 0;
+  const result = await batch.analyzeMediaBatch({ rows: [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: text }],
+    goal: 'resume', parallel: 2,
+    complete: async (messages, _signal, final) => {
+      if (final) return 'Resumen.';
+      calls++;
+      const { part } = JSON.parse(messages[1].content);
+      if (part === 1) throw new Error('provider down');
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return 'nota';
+    } });
+  assert.deepEqual(result.failed, [{ id: 'a', name: 'a.mp4' }]);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.ok(calls <= 2, `stopped after the failure (${calls} calls)`);
+});
+
+test('a follow-up picks the newest recording: a link delivery newer than an earlier attachment wins', async () => {
+  const { rows, prisma } = fixture(2);
+  rows.push({ id: 'shot', userId: 'u', originalName: 'captura.png', mimeType: 'image/png', deletedAt: null, processingStage: 'ready', extractedText: null });
+  const at = minute => new Date(Date.UTC(2026, 9, 10, 10, minute));
+  prisma.chat = { findFirst: async ({ where }) => (where.userId === 'u' && where.id === 'chat-u' ? { id: 'chat-u' } : null) };
+  let userMessages = [];
+  prisma.message = {
+    findMany: async ({ select }) => { assert.equal(select.timestamp, true); return userMessages; },
+    findFirst: async ({ select }) => { assert.equal(select.timestamp, true); return { metadata: { transcriptionFileIds: ['f1'] }, timestamp: at(5) }; },
+  };
+  const resolve = () => batch.resolveChatMediaFileIds(prisma, { userId: 'u', chatId: 'chat-u' });
+  userMessages = [{ files: null, timestamp: at(6) }, { files: [{ id: 'shot' }], timestamp: at(0) }];
+  assert.deepEqual(await resolve(), ['f1'], 'an older screenshot does not hide the delivered recording');
+  userMessages = [{ files: null, timestamp: at(6) }, { files: [{ id: 'f0' }], timestamp: at(0) }];
+  assert.deepEqual(await resolve(), ['f1'], 'an older audio does not win over the newer link recording');
+  userMessages = [{ files: [{ id: 'f0' }], timestamp: at(9) }];
+  assert.deepEqual(await resolve(), ['f0'], 'an audio attached after the delivery wins');
+  userMessages = [{ files: [{ id: 'shot' }], timestamp: at(9) }];
+  assert.deepEqual(await resolve(), [], 'a newer document still stops the lookup');
 });

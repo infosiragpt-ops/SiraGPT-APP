@@ -724,3 +724,56 @@ test('language names in Spanish and readable durations', () => {
   assert.equal(fmt.formatClock(3723.9, true), '01:02:03');
   assert.equal(fmt.formatClock(83, false), '01:23');
 });
+
+test('sliceResult coverage only counts audio that exists: a range past the end of the recording is not «transcribed»', () => {
+  const fiveHours = {
+    ok: true,
+    durationSec: 18000,
+    segments: [{ start: 16800, end: 17000, text: 'Última pregunta de la clase.' }],
+    gaps: [{ start: 17000, end: 18000, reason: 'provider_failed' }],
+  };
+  const range = fmt.parseTimeRange('transcribe del minuto 280 al 320');
+  assert.deepEqual(range, { start: 16800, end: 19200 });
+  const window = fmt.sliceResult(fiveHours, range);
+  // 1200 s of audio exist in the window and 1000 s of them are a gap.
+  assert.equal(Math.round(window.coverage * 1000) / 1000, 0.167);
+  assert.match(fmt.renderText(window, { now: NOW }), /\nCobertura: 16,6 % del audio\n/);
+  // An open range keeps using the recording's end.
+  assert.equal(Math.round(fmt.sliceResult(fiveHours, { start: 16800 }).coverage * 1000) / 1000, 0.167);
+});
+
+test('a link clip keeps its own length and covers [offset, offset + duration] on the recording clock', () => {
+  // «del minuto 60 al 90»: segments and gaps already on the recording clock.
+  const clip = {
+    ok: true,
+    timeOffsetSec: 3600,
+    durationSec: 1800,
+    segments: [
+      { start: 3600, end: 3700, text: 'Retomamos la clase en la hora uno.' },
+      { start: 4800, end: 4900, text: 'Segunda parte del tramo.' },
+    ],
+    gaps: [{ start: 4200, end: 4500, reason: 'timeout' }],
+  };
+  const meta = fmt.normalizeTranscriptResult(clip);
+  assert.equal(meta.timeOffsetSec, 3600);
+  assert.equal(meta.durationSec, 1800);
+  assert.equal(Math.round(meta.coverage * 1000) / 1000, 0.833, '300 s of 1800 s missing');
+  // Without a declared length, the clip lasts from its offset to its last moment.
+  assert.equal(fmt.normalizeTranscriptResult({ ...clip, durationSec: null }).durationSec, 1300);
+
+  // «hasta el minuto 80»: the window starts where the clip starts.
+  const head = fmt.sliceResult(clip, { start: 0, end: 4800 });
+  assert.equal(Math.round(head.coverage * 1000) / 1000, 0.75, '300 s of the 1200 s that exist');
+  assert.equal(head.timeOffsetSec, 3600);
+  // A whole-clip window ends at offset + duration, not at the clip's length.
+  assert.equal(Math.round(fmt.sliceResult(clip, { start: 0 }).coverage * 1000) / 1000, 0.833);
+  // A clip whose offset was not forwarded is never squeezed into [0, 1800].
+  const unforwarded = { ...clip, timeOffsetSec: undefined };
+  assert.equal(fmt.sliceResult(unforwarded, { start: 4200, end: 4800 }).coverage, 0.5);
+
+  const txt = fmt.renderText(clip, { fileName: 'tramo.mp4', now: NOW });
+  assert.match(txt, /\nDuración: 30 min 00 s\n/);
+  assert.match(txt, /\nTramo: 01:00:00–01:30:00\n/);
+  assert.match(txt, /\n\[01:00:00\] Retomamos la clase en la hora uno\.\n/);
+  assert.match(txt, /\n\[01:10:00–01:15:00 · tramo sin transcribir\]\n/);
+});

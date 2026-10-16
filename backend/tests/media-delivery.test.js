@@ -52,12 +52,16 @@ async function harness(t, { files = [], chats = ['chat1'], transcripts = {}, env
     findFirst: [],
     built: 0,
   };
+  // Honours the JSON path filters like PostgreSQL: `metadata` and every `AND` entry must match.
+  const metadataFilters = where => [where.metadata, ...(Array.isArray(where.AND) ? where.AND.map(clause => clause.metadata) : [])]
+    .filter(Boolean);
   const prisma = {
     message: {
       async findFirst({ where }) {
         state.findFirst.push(where);
-        const key = where.metadata?.path?.[0];
-        const found = state.messages.find(m => m.chatId === where.chatId && m.metadata?.[key] === where.metadata.equals);
+        const filters = metadataFilters(where);
+        const found = state.messages.find(m => m.chatId === where.chatId
+          && filters.every(filter => m.metadata?.[filter.path[0]] === filter.equals));
         return found ? { id: found.id, chatId: found.chatId } : null;
       },
     },
@@ -199,17 +203,45 @@ test('idempotency: an existing message with the delivery id is adopted, not dupl
   const { service, state, store } = await harness(t, { files: [ready('clase')] });
   const record = await service.createDelivery(newDelivery());
   // Simulate a crash after the post and before the record was marked.
-  state.messages.push({ id: 'msg_prev', chatId: 'chat1', content: 'x', metadata: { mediaDelivery: record.id } });
+  state.messages.push({ id: 'msg_prev', chatId: 'chat1', content: 'x', metadata: { source: 'media-delivery', mediaDelivery: record.id } });
   const result = await service.deliverOne(record.id);
   assert.equal(result.status, 'already_delivered');
   assert.equal(result.messageId, 'msg_prev');
   assert.equal(state.messages.length, 1);
   assert.equal(state.notifications.length, 0);
   assert.equal(state.built, 0, 'no artifacts rebuilt');
-  assert.deepEqual(state.findFirst[0], { chatId: 'chat1', metadata: { path: ['mediaDelivery'], equals: record.id } });
+  assert.deepEqual(state.findFirst[0], { chatId: 'chat1', AND: [
+    { metadata: { path: ['mediaDelivery'], equals: record.id } },
+    { metadata: { path: ['source'], equals: 'media-delivery' } },
+  ] });
   const final = await store.get(record.id);
   assert.equal(final.status, 'delivered');
   assert.equal(final.deliveredMessageId, 'msg_prev');
+});
+
+test('the turn\'s «te aviso aquí» message naming the delivery never counts as delivered', async (t) => {
+  const { service, state, store } = await harness(t, { files: [ready('clase')] });
+  const record = await service.createDelivery(newDelivery());
+  // The hand-off the agent-task runner persisted in the same chat: both the
+  // old key and the new one, written with the runner's own source.
+  state.messages.push(
+    { id: 'msg_handoff', chatId: 'chat1', content: 'Recibí «clase.mp4»… te aviso aquí',
+      metadata: { source: 'agent-task', mediaDelivery: record.id, stoppedReason: 'media_delivery_handoff' } },
+    { id: 'msg_handoff2', chatId: 'chat1', content: 'Recibí «clase.mp4»… te aviso aquí',
+      metadata: { source: 'agent-task', mediaDeliveryHandoff: record.id } },
+  );
+  const result = await service.deliverOne(record.id);
+  assert.equal(result.status, 'delivered');
+  assert.equal(state.messages.length, 3);
+  const posted = state.messages[2];
+  assert.equal(posted.metadata.source, 'media-delivery');
+  assert.equal(posted.metadata.mediaDelivery, record.id);
+  assert.match(posted.content, /Tu transcripción de «clase\.mp4» está lista/);
+  assert.equal(state.notifications.length, 1);
+  assert.equal((await store.get(record.id)).deliveredMessageId, posted.id);
+  // Its own message is then recognised: a later run adopts it.
+  assert.equal((await service.deliverOne(record.id)).status, 'delivered');
+  assert.equal(state.messages.length, 3);
 });
 
 test('deleted chat → a new «Transcripción: …» chat receives the result', async (t) => {
@@ -615,4 +647,208 @@ test('default artifact builder: TXT always, SRT/VTT from the segments sidecar', 
   const multi = await defaultBuildArtifacts({ rows: [ready('a'), ready('b', { processingError: 'Parcial: 1 de 3 tramos fallaron.' })], delivery: newDelivery() });
   assert.equal(multi[0].filename, 'transcripciones-completas.txt');
   assert.match(Buffer.from(multi[0].base64, 'base64').toString('utf8'), /2\. b\.mp4\n=+\n\[Transcripción parcial: 1 de 3 tramos fallaron\]/);
+});
+
+// ── ranges and the recording clock (the chat agrees with the downloads) ──
+
+/** A sidecar of `minutes` of speech starting at `from` s, one segment a minute. */
+function sidecar({ from = 0, minutes = 300, gaps = [], coverage = 0.97, extra = {} } = {}) {
+  const segments = [];
+  for (let m = 0; m < minutes; m++) {
+    const s = from + m * 60;
+    segments.push({ s, e: s + 50, t: `Minuto ${m}: explicamos el tema número ${m}.` });
+  }
+  return { durationSec: minutes * 60, language: 'es', coverage, gaps, segments, ...extra };
+}
+
+/** The stored File text: «[hh:mm:ss] …» paragraphs from 00:00:00 (or `from`). */
+function storedText({ from = 0, minutes = 300 } = {}) {
+  return Array.from({ length: minutes }, (_, m) => `[${formatClock(from + m * 60)}] Minuto ${m}: explicamos el tema número ${m}.`).join('\n\n');
+}
+
+const { formatClock } = delivery;
+const PARTIAL = 'Parcial: 3 de 30 tramos fallaron. Reintentar recupera solo esos tramos';
+
+test('a requested range: the preview, gaps and coverage are those of the window, not of the recording', () => {
+  const transcript = sidecar({ gaps: [{ start: 600, end: 900 }, { start: 2000, end: 2100 }, { start: 9000, end: 9600 }] });
+  const row = ready('clase', { extractedText: storedText(), processingError: PARTIAL });
+  const content = deliveryMessage({ delivery: newDelivery({ range: { start: 1800, end: 2700 } }), rows: [row], transcripts: { clase: transcript } });
+  assert.match(content, /Tramo pedido: 30:00–45:00\./);
+  assert.match(content, /Faltan este tramo: 33:20–35:00\./, 'only the gap inside the window');
+  assert.doesNotMatch(content, /10:00–15:00|02:30:00/, 'gaps outside the window are not listed');
+  assert.match(content, /cobertura 88 %/, 'coverage of the window (100 s missing of 900 s)');
+  assert.match(content, /Minuto 30: explicamos/);
+  assert.doesNotMatch(content, /Minuto 0: explicamos/, 'the preview starts at the window, not at 00:00:00');
+  assert.doesNotMatch(content, /Minuto 50: explicamos/);
+  // The window itself is complete although the recording is not.
+  const whole = deliveryMessage({ delivery: newDelivery({ range: { start: 3600, end: 4200 } }), rows: [row], transcripts: { clase: transcript } });
+  assert.match(whole, /El tramo que pediste está completo; faltan otros tramos de la grabación\./);
+  const batch = deliveryMessage({ delivery: newDelivery({ range: { start: 3600, end: 4200 } }),
+    rows: [row, ready('b')], transcripts: { clase: transcript } });
+  assert.match(batch, /«clase\.mp4»: tramo pedido completo \(faltan otros tramos de la grabación\)/);
+});
+
+test('a requested range outside the recording is never called complete nor given the recording coverage', () => {
+  // 5 h partial recording; «del minuto 333 al 350» lies past its end.
+  const transcript = sidecar({ gaps: [{ start: 600, end: 900 }, { start: 9000, end: 9600 }], coverage: 0.95 });
+  const row = ready('clase', { extractedText: storedText(), processingError: PARTIAL });
+  const past = newDelivery({ range: { start: 20000, end: 21000 } });
+  const content = deliveryMessage({ delivery: past, rows: [row], transcripts: { clase: transcript } });
+  assert.doesNotMatch(content, /está completo/);
+  assert.doesNotMatch(content, /cobertura/);
+  assert.match(content, /El tramo que pediste \(05:33:20–05:50:00\) queda fuera de la grabación, que dura 5 h\./);
+  const batch = deliveryMessage({ delivery: past, rows: [row, ready('b')], transcripts: { clase: transcript } });
+  assert.doesNotMatch(batch, /tramo pedido completo|cobertura/);
+  assert.match(batch, /«clase\.mp4»: el tramo pedido queda fuera de la grabación, que dura 5 h/);
+  // An open window past the end, too.
+  const open = deliveryMessage({ delivery: newDelivery({ range: { start: 19000, end: null } }), rows: [row], transcripts: { clase: transcript } });
+  assert.match(open, /El tramo que pediste \(desde 05:16:40\) queda fuera de la grabación/);
+  assert.doesNotMatch(open, /está completo|cobertura/);
+  // A clip stored on the recording clock: a window before its offset is outside it.
+  const clip = sidecar({ from: 3600, minutes: 30, gaps: [{ start: 4200, end: 4500 }], coverage: 0.83, extra: { timeOffsetSec: 3600 } });
+  clip.durationSec = 1800;
+  const clipRow = ready('tramo', { extractedText: storedText({ from: 3600, minutes: 30 }), processingError: PARTIAL });
+  const before = deliveryMessage({ delivery: newDelivery({ range: { start: 0, end: 600 } }), rows: [clipRow], transcripts: { tramo: clip } });
+  assert.doesNotMatch(before, /está completo|cobertura/);
+  assert.match(before, /El tramo que pediste \(00:00:00–00:10:00\) queda fuera del tramo transcrito de la grabación \(01:00:00–01:30:00\)\./);
+  // A ready file says it too instead of only «(Sin voz transcrita en este tramo.)».
+  const whole = ready('entera', { extractedText: storedText() });
+  const readyMsg = deliveryMessage({ delivery: past, rows: [whole], transcripts: { entera: sidecar({ coverage: 1 }) } });
+  assert.match(readyMsg, /queda fuera de la grabación, que dura 5 h\./);
+  // A window that overlaps the recording keeps the «complete window» copy.
+  const inside = deliveryMessage({ delivery: newDelivery({ range: { start: 3600, end: 4200 } }), rows: [row], transcripts: { clase: transcript } });
+  assert.match(inside, /El tramo que pediste está completo; faltan otros tramos de la grabación\./);
+});
+
+test('a clip offset: preview and gaps follow the recording clock like the attachments', () => {
+  const clip = sidecar({ minutes: 30, gaps: [{ start: 600, end: 900 }] });
+  const row = ready('tramo', { extractedText: storedText({ minutes: 30 }), processingError: PARTIAL });
+  const content = deliveryMessage({ delivery: newDelivery({ output: { timeOffsetSec: 3600 } }), rows: [row], transcripts: { tramo: clip } });
+  assert.match(content, /Faltan este tramo: 01:10:00–01:15:00\./);
+  assert.match(content, /\\\[01:00:00\\\] Minuto 0: explicamos/, 'escaped «[hh:mm:ss]» on the recording clock');
+  assert.doesNotMatch(content, /\[00:00(:00)?\\?\] Minuto 0/);
+});
+
+test('a transcript the queue already stored on the recording clock is never shifted twice', () => {
+  const stored = sidecar({ from: 3600, minutes: 30, gaps: [{ start: 4200, end: 4500 }], extra: { timeOffsetSec: 3600 } });
+  const row = ready('tramo', { extractedText: storedText({ from: 3600, minutes: 30 }), processingError: PARTIAL });
+  for (const output of [{ timeOffsetSec: 0 }, { timeOffsetSec: 3600 }]) {
+    const content = deliveryMessage({ delivery: newDelivery({ output }), rows: [row], transcripts: { tramo: stored } });
+    assert.match(content, /Faltan este tramo: 01:10:00–01:15:00\./, JSON.stringify(output));
+    assert.match(content, /\\\[01:00:00\\\] Minuto 0: explicamos/);
+    assert.doesNotMatch(content, /02:00:00|02:10:00/);
+  }
+});
+
+// ── translation mode: the transcript files and the analysis that were asked for ──
+
+test('«transcribe y tradúcelo»: the transcript files come with the translation; a failed translation still delivers them', async (t) => {
+  const translated = { text: 'Hello everyone.', artifacts: [{ filename: 'clase (traducción al inglés).txt', base64: 'eA==', mime: 'text/plain' }] };
+  const both = await harness(t, { files: [ready('clase')], overrides: { analyze: async () => translated } });
+  const record = await both.service.createDelivery(newDelivery({ mode: 'translation', goal: 'transcribe este video y tradúcelo al inglés',
+    output: { includeTranscript: true } }));
+  assert.equal((await both.service.deliverOne(record.id)).status, 'delivered');
+  assert.equal(both.state.built, 1, 'the transcript pack is built');
+  assert.deepEqual(both.state.saved.map(a => a.filename), ['clase-transcripcion.txt', 'clase (traducción al inglés).txt']);
+  assert.match(both.state.messages[0].content, /### Traducción\n\nHello everyone\./);
+
+  const alone = await harness(t, { files: [ready('clase')], overrides: { analyze: async () => translated } });
+  const only = await alone.service.createDelivery(newDelivery({ mode: 'translation', goal: 'tradúcelo al inglés' }));
+  await alone.service.deliverOne(only.id);
+  assert.equal(alone.state.built, 0, 'a translation follow-up does not re-send the transcript');
+
+  const failing = await harness(t, { files: [ready('clase')], overrides: { analyze: async () => { throw new Error('provider down'); } } });
+  const failed = await failing.service.createDelivery(newDelivery({ mode: 'translation', goal: 'tradúcelo al inglés' }));
+  assert.equal((await failing.service.deliverOne(failed.id)).status, 'delivered');
+  assert.equal(failing.state.built, 1, 'the transcript is all there is to deliver');
+  const content = failing.state.messages[0].content;
+  assert.match(content, /No pude terminar la traducción que pediste/);
+  assert.match(content, /\*\*Descargas:\*\* clase-transcripcion\.txt/);
+});
+
+test('«resume y tradúcelo» delivers the summary with the translation; a failed file is named', async (t) => {
+  const h = await harness(t, { files: [ready('a'), ready('b')], overrides: {
+    analyze: async () => ({ text: '#### «a.mp4»\n\nHello everyone.', summary: 'Resumen: la clase trató la mitocondria.',
+      failed: [{ id: 'b', name: 'b.mp4' }], notes: ['No pude generar el Word de la traducción; el TXT la tiene completa.'],
+      artifacts: [{ filename: 'a (traducción al inglés).txt', base64: 'eA==', mime: 'text/plain' }] }),
+  } });
+  const record = await h.service.createDelivery(newDelivery({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'], mode: 'translation',
+    goal: 'resume y tradúcelo al inglés', output: { alsoAnalysis: true } }));
+  await h.service.deliverOne(record.id);
+  const content = h.state.messages[0].content;
+  assert.match(content, /### Análisis\n\nResumen: la clase trató la mitocondria\.\n\n### Traducción\n\n#### «a\.mp4»\n\nHello everyone\./);
+  assert.match(content, /No pude traducir «b\.mp4»\. Su transcripción sigue guardada; vuelve a pedirme la traducción/);
+  assert.match(content, /No pude generar el Word de la traducción/);
+
+  const noSummary = await harness(t, { files: [ready('clase')], overrides: { analyze: async () => ({ text: 'Hello.', artifacts: [] }) } });
+  const second = await noSummary.service.createDelivery(newDelivery({ mode: 'translation', goal: 'resume y tradúcelo al inglés', output: { alsoAnalysis: true } }));
+  await noSummary.service.deliverOne(second.id);
+  assert.match(noSummary.state.messages[0].content, /No pude terminar el análisis que pediste/);
+  assert.match(noSummary.state.messages[0].content, /### Traducción\n\nHello\./);
+});
+
+// ── concurrency ────────────────────────────────────────────────────────
+
+test('the sweep skips a delivery already running in this process instead of waiting for it', async (t) => {
+  let release;
+  let entered;
+  const enteredBuild = new Promise(resolve => { entered = resolve; });
+  const h = await harness(t, { files: [ready('clase')], overrides: {
+    buildArtifacts: async () => {
+      entered();
+      await new Promise(resolve => { release = resolve; });
+      return [{ filename: 'clase-transcripcion.txt', base64: 'eA==', mime: 'text/plain' }];
+    },
+  } });
+  const record = await h.service.createDelivery(newDelivery());
+  const running = h.service.deliverOne(record.id);
+  await enteredBuild;
+  let timer;
+  const blocked = new Promise(resolve => { timer = setTimeout(() => resolve('blocked'), 1000); });
+  const sweep = await Promise.race([h.service.sweepPendingDeliveries(), blocked]);
+  clearTimeout(timer);
+  assert.notEqual(sweep, 'blocked', 'the sweep must not wait for the running delivery');
+  assert.equal(sweep.attempted, 0);
+  release();
+  assert.equal((await running).status, 'delivered');
+  assert.equal(h.state.messages.length, 1);
+});
+
+test('a delivery whose lock was reclaimed meanwhile does not post', async (t) => {
+  let stolen = null;
+  const h = await harness(t, { files: [ready('clase')], overrides: {
+    buildArtifacts: async () => {
+      // This process stalled past the stale window; another one took over.
+      h.clock.t += 16 * MIN;
+      stolen = await createMediaDeliveryStore({ root: h.store.root, now: h.deps.now }).claim(record.id);
+      return [{ filename: 'clase-transcripcion.txt', base64: 'eA==', mime: 'text/plain' }];
+    },
+  } });
+  const record = await h.service.createDelivery(newDelivery());
+  const result = await h.service.deliverOne(record.id);
+  assert.ok(stolen, 'the other process holds the lock');
+  assert.equal(result.status, 'lock_lost');
+  assert.equal(h.state.messages.length, 0);
+  assert.equal(h.state.notifications.length, 0);
+});
+
+test('fallback Word render: a unique working copy that is removed afterwards', async (t) => {
+  const dir = await tempRoot(t);
+  const names = [];
+  const createDocument = async (userId, filename, markdown) => {
+    names.push(filename);
+    const filePath = path.join(dir, filename);
+    await fs.writeFile(filePath, markdown);
+    return { filePath };
+  };
+  const rows = [Object.assign(ready('clase'), { deliveryState: 'ready' })];
+  const [first, second] = await Promise.all([1, 2].map(() => defaultBuildArtifacts({ rows, transcripts: {},
+    delivery: newDelivery({ formats: ['txt', 'docx'] }), createDocument })));
+  for (const built of [first, second]) {
+    assert.deepEqual(built.map(a => a.filename), ['clase-transcripcion.txt', 'clase-transcripcion.docx']);
+    assert.match(Buffer.from(built[1].base64, 'base64').toString('utf8'), /mitocondria/);
+  }
+  assert.equal(new Set(names).size, 2, 'each render gets its own working name');
+  assert.ok(names.every(name => /^transcript-[0-9a-f-]{36}\.docx$/.test(name)));
+  assert.deepEqual(await fs.readdir(dir), [], 'no working copy left behind');
 });

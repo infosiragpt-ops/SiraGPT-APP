@@ -87,10 +87,26 @@ test('a 2-minute clip is no longer forced to Spanish; a 30 s note still is', asy
   assert.equal(groq.requests[1].language, 'es');
 });
 
-test('long media: the first segment detects the language, the rest of the job is locked to it', async (t) => {
+test('long media: a detection that agrees with the hint locks the rest of the job at once', async (t) => {
+  const groq = client((request, n) => ({
+    text: `Parte ${n + 1} de la clase.`,
+    language: request.language ? 'spanish' : 'spanish',
+    segments: [{ start: 1, end: 3, text: `Parte ${n + 1}` }],
+  }));
+  const result = await audio.transcribe(tempFile(t), 'audio/mp4', 'clase.m4a', {
+    env: { GROQ_API_KEY: 'gsk_lock_hint', WHISPER_LANGUAGE: 'es' }, durationSeconds: 2400,
+    groqClient: groq, createFile, segmentAudio: fakeSegments(t, 4),
+    async localTranscribe() { throw new Error('no local'); },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(groq.requests.map((r) => r.language), [undefined, 'es', 'es', 'es']);
+  assert.equal(result.language, 'es');
+});
+
+test('long media: a language other than the hint locks once two pieces agree on it', async (t) => {
   const groq = client((request, n) => ({
     text: `Part ${n + 1} of the lecture.`,
-    language: n === 0 ? 'english' : (request.language === 'en' ? 'english' : 'welsh'),
+    language: !request.language || request.language === 'en' ? 'english' : 'welsh',
     segments: [{ start: 1, end: 3, text: `Part ${n + 1}` }],
   }));
   const result = await audio.transcribe(tempFile(t), 'audio/mp4', 'clase.m4a', {
@@ -99,9 +115,104 @@ test('long media: the first segment detects the language, the rest of the job is
     async localTranscribe() { throw new Error('no local'); },
   });
   assert.equal(result.ok, true);
-  assert.deepEqual(groq.requests.map((r) => r.language), [undefined, 'en', 'en', 'en']);
+  assert.deepEqual(groq.requests.map((r) => r.language), [undefined, undefined, 'en', 'en']);
   assert.equal(result.language, 'en');
   assert.deepEqual(result.segments.map((s) => s.start), [1, 601, 1201, 1801]);
+});
+
+test('a misdetection on a silent opening does not lock the job: the hint wins and that piece is read again', async (t) => {
+  // Whisper detects on the first 30 s of piece 0 (waiting-room music), picks
+  // English and translates the Spanish class that follows.
+  const store = new Map();
+  const checkpoint = { async load(index) { return store.get(index) || null; }, async save(index, _meta, part) { store.set(index, part); } };
+  const groq = client((request) => {
+    const index = Number(/segment-(\d+)/.exec(request.file.name)[1]) - 1;
+    if (index === 0 && !request.language) return { text: 'Good morning, today we will talk about elasticity.', language: 'english', segments: [] };
+    return { text: `Buenos días, parte ${index + 1} sobre elasticidad.`, language: 'spanish', segments: [] };
+  });
+  const result = await audio.transcribe(tempFile(t), 'audio/mp4', 'clase.m4a', {
+    env: { GROQ_API_KEY: 'gsk_misdetect' }, durationSeconds: 2400,
+    groqClient: groq, createFile, segmentAudio: fakeSegments(t, 4), checkpoint,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(groq.requests.map((r) => [r.file, r.language]), [
+    ['segment-1.flac', undefined], ['segment-2.flac', undefined],
+    ['segment-1.flac', 'es'], ['segment-3.flac', 'es'], ['segment-4.flac', 'es'],
+  ]);
+  assert.equal(result.language, 'es');
+  assert.doesNotMatch(result.transcript, /Good morning/);
+  assert.match(result.transcript, /^Buenos días, parte 1/);
+  assert.equal(store.get(0).language, 'es', 'the checkpoint holds the reading in the locked language');
+  assert.equal(result.partial, false);
+});
+
+test('without a hint, two pieces that disagree lock the later one; one unconfirmed detection falls back to the hint', async (t) => {
+  const noHint = client((request, n) => (n === 0
+    ? { text: 'Good morning.', language: 'english', segments: [] }
+    : { text: `Hola ${n}.`, language: 'spanish', segments: [] }));
+  const disagree = await audio.transcribe(tempFile(t), 'audio/mp4', 'clase.m4a', {
+    env: { GROQ_API_KEY: 'gsk_nohint', WHISPER_LANGUAGE: '' }, durationSeconds: 1800,
+    groqClient: noHint, createFile, segmentAudio: fakeSegments(t, 3),
+  });
+  assert.deepEqual(noHint.requests.map((r) => [r.file, r.language]), [
+    ['segment-1.flac', undefined], ['segment-2.flac', undefined], ['segment-1.flac', 'es'], ['segment-3.flac', 'es'],
+  ]);
+  assert.equal(disagree.language, 'es');
+
+  // Two pieces, the second silent: the lone «en» on piece 0 is never confirmed,
+  // and piece 0's speech starts at 45 s, after the 30 s Whisper detected on.
+  const lone = client((request, n) => (n === 1
+    ? { text: '[Música]', language: 'english', segments: [] }
+    : request.language === 'es'
+      ? { text: 'Hola a todos.', language: 'spanish', segments: [] }
+      : { text: 'Hello everyone.', language: 'english', segments: [{ start: 45, end: 50, text: 'Hello everyone.' }] }));
+  const unconfirmed = await audio.transcribe(tempFile(t), 'audio/mp4', 'clase.m4a', {
+    env: { GROQ_API_KEY: 'gsk_lone' }, durationSeconds: 1200,
+    groqClient: lone, createFile, segmentAudio: fakeSegments(t, 2),
+  });
+  assert.deepEqual(lone.requests.map((r) => [r.file, r.language]), [
+    ['segment-1.flac', undefined], ['segment-2.flac', undefined], ['segment-1.flac', 'es'],
+  ]);
+  assert.equal(unconfirmed.language, 'es');
+  assert.match(unconfirmed.transcript, /^Hola a todos\./);
+});
+
+test('a one-piece video over the size cap keeps its detected language: no forced hint, no second reading', async (t) => {
+  // A 3-minute English phone video over AUDIO_MAX_FILE_BYTES takes the
+  // segmented path with ONE piece: its detection cannot be confirmed by
+  // another piece, and speech starts inside the 30 s detection window.
+  const groq = client((request) => (request.language === 'es'
+    ? { text: 'Buenos días a todos, bienvenidos.', language: 'spanish', segments: [] }
+    : { text: 'Good morning everyone, welcome back.', language: 'english', segments: [{ start: 0.5, end: 4, text: 'Good morning everyone, welcome back.' }] }));
+  const result = await audio.transcribe(tempFile(t), 'video/mp4', 'video.mp4', {
+    env: { GROQ_API_KEY: 'gsk_one_piece', WHISPER_LANGUAGE: 'es' }, durationSeconds: 180, maxFileBytes: 5,
+    groqClient: groq, createFile, segmentAudio: fakeSegments(t, 1),
+    async localTranscribe() { throw new Error('no local'); },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(groq.requests.map((r) => [r.file, r.language]), [['segment-1.flac', undefined]]);
+  assert.equal(result.language, 'en');
+  assert.match(result.transcript, /^Good morning everyone/);
+});
+
+test('a restart mid-detection does not lock the job from one checkpointed misdetection', async (t) => {
+  // The previous attempt read piece 0 under «en» (a misdetection) and stopped
+  // before the language was decided.
+  const store = new Map([[0, { text: 'Good morning, today we will talk about elasticity.', segments: [], model: 'whisper-large-v3-turbo', language: 'en' }]]);
+  const checkpoint = { async load(index) { return store.get(index) || null; }, async save(index, _meta, part) { store.set(index, part); } };
+  const groq = client((request) => {
+    const index = Number(/segment-(\d+)/.exec(request.file.name)[1]) - 1;
+    return { text: `Buenos días, parte ${index + 1}.`, language: 'spanish', segments: [] };
+  });
+  const result = await audio.transcribe(tempFile(t), 'audio/mp4', 'clase.m4a', {
+    env: { GROQ_API_KEY: 'gsk_restart' }, durationSeconds: 1800,
+    groqClient: groq, createFile, segmentAudio: fakeSegments(t, 3), checkpoint,
+  });
+  assert.deepEqual(groq.requests.map((r) => [r.file, r.language]), [
+    ['segment-2.flac', undefined], ['segment-1.flac', 'es'], ['segment-3.flac', 'es'],
+  ]);
+  assert.equal(result.language, 'es');
+  assert.doesNotMatch(result.transcript, /Good morning/);
 });
 
 test('a silent opening does not lock the language; the first segment with speech does', async (t) => {

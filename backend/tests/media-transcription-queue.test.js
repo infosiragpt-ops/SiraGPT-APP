@@ -406,3 +406,40 @@ test('a deploy parks the running job without spending a retry (DelayedError) so 
   assert.equal(f.rows.get('clase').processingStage, 'uploaded', 'chip keeps showing the pending transcription');
   assert.ok(release);
 });
+
+test('a long chat delivery never holds media recovery: the delivery sweep runs detached from the recovery tick', async () => {
+  const { createRecoveryTick } = require('../src/services/media-transcription-queue');
+  let reconciles = 0;
+  let sweeps = 0;
+  let releaseSweep;
+  const warnings = [];
+  const tick = createRecoveryTick({
+    reconcileMedia: async () => { reconciles++; },
+    // A translation delivery of a 5-hour transcript: tens of minutes.
+    sweepDeliveries: () => { sweeps++; return new Promise(resolve => { releaseSweep = resolve; }); },
+    warn: (...args) => warnings.push(args),
+  });
+  await tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(sweeps, 1, 'the sweep still runs after the media pass');
+  // The next minute's tick re-queues stuck media while that delivery runs.
+  await tick();
+  await tick();
+  assert.equal(reconciles, 3);
+  releaseSweep();
+
+  // Errors on either side are logged, never thrown, and never block a tick.
+  const failing = createRecoveryTick({
+    reconcileMedia: async () => { throw Object.assign(new Error('db'), { code: 'P1001' }); },
+    sweepDeliveries: async () => { throw Object.assign(new Error('disk'), { code: 'EIO' }); },
+    warn: (...args) => warnings.push(args),
+  });
+  await failing();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(warnings.map(w => w[1]), ['P1001', 'EIO']);
+  await failing();
+
+  const src = await fs.readFile(require.resolve('../src/services/media-transcription-queue'), 'utf8');
+  assert.match(src, /const reconcile = createRecoveryTick\(\{/, 'the worker uses the decoupled tick');
+  assert.doesNotMatch(src, /await require\('\.\/media-delivery'\)\.sweepPendingDeliveries\(\)/);
+});

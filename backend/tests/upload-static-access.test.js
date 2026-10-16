@@ -78,6 +78,7 @@ describe('static upload access guard', () => {
 
   test('never serves dot-directories (transcript sidecars, checkpoints)', async () => {
     assert.deepEqual(classifyUploadPath('.transcripts/f1.json.gz'), { kind: 'blocked' });
+    assert.deepEqual(classifyUploadPath('.transcripts/f1.clip.json'), { kind: 'blocked' }, 'a link clip\'s offset record');
     assert.deepEqual(classifyUploadPath('.transcription-checkpoints/media-abc-1/seg-00000.json'), { kind: 'blocked' });
     assert.deepEqual(classifyUploadPath('user-a/.cache/x.txt'), { kind: 'blocked' });
     assert.deepEqual(classifyUploadPath('user-a/.env'), { kind: 'blocked' });

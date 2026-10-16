@@ -16,6 +16,10 @@
  * Times are ABSOLUTE seconds in the recording. An older result may carry only
  * `text`/`transcript`: it renders as plain paragraphs without timestamps (and,
  * when the duration is known, subtitles with proportionally spread timing).
+ * A clip cut from a longer recording (a link section «del minuto 60 al 90»)
+ * carries `timeOffsetSec`: its segments and gaps are already on the
+ * recording's clock, `durationSec` stays the clip's own length, and the clip
+ * covers [timeOffsetSec, timeOffsetSec + durationSec].
  *
  * Output conventions (Spanish, user-facing):
  *   - Timestamps are [hh:mm:ss] when the recording lasts ≥ 1 h, else [mm:ss].
@@ -357,6 +361,8 @@ function sumGapSeconds(gaps, from = 0, to = Infinity) {
 function normalizeTranscriptResult(result) {
   const r = typeof result === 'string' ? { text: result } : (isPlainObject(result) ? result : {});
   const failed = r.ok === false;
+  const offset = num(r.timeOffsetSec);
+  const timeOffsetSec = offset && offset > 0 ? offset : 0;
   const segments = failed ? [] : normalizeSegmentList(r.segments);
   const gaps = normalizeGaps(r.gaps);
   const synthetic = r.synthetic === true;
@@ -372,7 +378,8 @@ function normalizeTranscriptResult(result) {
   for (const s of segments) lastEnd = Math.max(lastEnd, s.end, s.start);
   for (const g of gaps) lastEnd = Math.max(lastEnd, g.end);
   const declared = num(r.durationSec);
-  const durationSec = declared && declared > 0 ? declared : (lastEnd > 0 ? lastEnd : null);
+  // Without a declared length, a clip lasts from its offset to its last moment.
+  const durationSec = declared && declared > 0 ? declared : (lastEnd - timeOffsetSec > 0 ? lastEnd - timeOffsetSec : null);
   const providers = normalizeProviders(r.providers);
   let engine = ['cloud', 'local', 'mixed'].includes(r.engine) ? r.engine : null;
   if (!engine && r.method) engine = String(r.method) === 'local-whisper' ? 'local' : (String(r.method) === 'placeholder' ? null : 'cloud');
@@ -395,6 +402,7 @@ function normalizeTranscriptResult(result) {
     createdAt: r.createdAt || null,
     fileName: r.fileName || null,
     range,
+    timeOffsetSec,
     failed,
   };
 }
@@ -697,7 +705,8 @@ function plainTextParagraphs(text) {
 function prepare(result, opts = {}) {
   const meta = normalizeTranscriptResult(result);
   const { segments: cleaned, cleanup } = meta.legacy ? { segments: [], cleanup: emptyCleanupStats() } : cleanSegmentsDetailed(meta.segments);
-  let effectiveDuration = meta.durationSec || 0;
+  // Clock width follows the recording: a clip's times run past its own length.
+  let effectiveDuration = meta.timeOffsetSec + (meta.durationSec || 0);
   for (const s of cleaned) effectiveDuration = Math.max(effectiveDuration, s.end);
   const longForm = effectiveDuration >= HOUR;
   const speakers = speakerLabels(cleaned);
@@ -747,6 +756,9 @@ function headerFields(prep, { fileName, now, timeZone } = {}) {
   if (meta.range && meta.range.start != null) {
     const rangeEnd = meta.range.end != null ? formatClock(meta.range.end, longForm, 'ceil') : 'final';
     fields.push(['Tramo', `${formatClock(meta.range.start, longForm)}–${rangeEnd}`]);
+  } else if (meta.timeOffsetSec > 0 && meta.durationSec) {
+    // A clip of a longer recording says which stretch of it this is.
+    fields.push(['Tramo', `${formatClock(meta.timeOffsetSec, longForm)}–${formatClock(meta.timeOffsetSec + meta.durationSec, longForm, 'ceil')}`]);
   }
   fields.push(['Idioma', languageNameEs(meta.language)]);
   fields.push(['Motor', engineLabel(meta.engine, meta.providers)]);
@@ -1247,6 +1259,8 @@ function sliceSegments(segments, { start = 0, end = null } = {}) {
  * coverage recomputed for it, `range` set (renderers print it as «Tramo»).
  * Times stay absolute so citations match the full recording. Returns null for
  * a result without timestamps (legacy text-only): it cannot be cut by time.
+ * Coverage only counts audio that exists: a requested end past the end of the
+ * recording (or a start before a clip's offset) is not «transcribed» time.
  */
 function sliceResult(result, { start = 0, end = null } = {}) {
   const meta = normalizeTranscriptResult(result);
@@ -1257,10 +1271,18 @@ function sliceResult(result, { start = 0, end = null } = {}) {
   const gaps = meta.gaps
     .filter((g) => g.end > from && g.start < limit)
     .map((g) => ({ start: Math.max(g.start, from), end: Math.min(g.end, limit), reason: g.reason }));
-  const windowEnd = to == null ? (meta.durationSec || null) : to;
+  // The audio that exists: [offset, offset + duration]. The last segment or
+  // gap also bounds it, so a shifted clip whose offset was not forwarded is
+  // never squeezed into [0, duration].
+  let lastEnd = 0;
+  for (const s of meta.segments) lastEnd = Math.max(lastEnd, s.end);
+  for (const g of meta.gaps) lastEnd = Math.max(lastEnd, g.end);
+  const audioEnd = meta.durationSec ? Math.max(meta.timeOffsetSec + meta.durationSec, lastEnd) : null;
+  const windowStart = Math.max(from, meta.timeOffsetSec);
+  const windowEnd = audioEnd == null ? to : (to == null ? audioEnd : Math.min(to, audioEnd));
   let coverage = meta.coverage;
-  if (windowEnd && windowEnd > from) {
-    coverage = Math.max(0, Math.min(1, 1 - sumGapSeconds(gaps, from, windowEnd) / (windowEnd - from)));
+  if (windowEnd && windowEnd > windowStart) {
+    coverage = Math.max(0, Math.min(1, 1 - sumGapSeconds(gaps, windowStart, windowEnd) / (windowEnd - windowStart)));
   }
   return {
     ok: true,
@@ -1275,6 +1297,7 @@ function sliceResult(result, { start = 0, end = null } = {}) {
     createdAt: meta.createdAt,
     fileName: meta.fileName,
     range: { start: from, end: to },
+    ...(meta.timeOffsetSec > 0 ? { timeOffsetSec: meta.timeOffsetSec } : {}),
   };
 }
 
