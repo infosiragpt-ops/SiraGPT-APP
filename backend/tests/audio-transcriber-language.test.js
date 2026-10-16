@@ -65,26 +65,28 @@ test('normalizeLanguage maps names, regional tags and ISO-639-2 to ISO-639-1; au
   }
 });
 
-test('resolveLanguage: explicit wins, long media detects, short clips keep the WHISPER_LANGUAGE hint', () => {
-  assert.equal(audio.resolveLanguage({ env: {}, durationSeconds: 30 }), 'es', 'voice notes keep the es default');
-  assert.equal(audio.resolveLanguage({ env: {}, durationSeconds: 0 }), 'es', 'unknown length keeps the hint');
+test('resolveLanguage: only an explicit, supported language is forced; everything else is detected', () => {
+  assert.equal(audio.resolveLanguage({ env: {}, durationSeconds: 30 }), undefined, 'a voice note is detected (a forced «es» translated English notes)');
+  assert.equal(audio.resolveLanguage({ env: {}, durationSeconds: 0 }), undefined, 'an unknown length is detected');
   assert.equal(audio.resolveLanguage({ env: {}, durationSeconds: 18000 }), undefined, 'a 5 h lecture is detected');
-  assert.equal(audio.resolveLanguage({ env: { WHISPER_LANGUAGE: 'es' }, durationSeconds: 61 }), undefined);
-  assert.equal(audio.resolveLanguage({ env: { WHISPER_LANGUAGE: 'spanish' }, durationSeconds: 10 }), 'es');
-  assert.equal(audio.resolveLanguage({ env: { WHISPER_LANGUAGE: '' }, durationSeconds: 10 }), undefined);
+  assert.equal(audio.resolveLanguage({ env: { WHISPER_LANGUAGE: 'spanish' }, durationSeconds: 10 }), undefined, 'the hint only locks long jobs');
   assert.equal(audio.resolveLanguage({ env: {}, language: 'es-PE', durationSeconds: 18000 }), 'es', 'explicit beats detection');
-  assert.equal(audio.resolveLanguage({ env: { WHISPER_LANGUAGE: 'es' }, language: 'auto', durationSeconds: 5 }), undefined, 'explicit auto beats the hint');
-  assert.equal(audio.resolveLanguage({ env: { TRANSCRIBE_AUTO_LANGUAGE_MIN_SECONDS: '7200' }, durationSeconds: 3600 }), 'es');
+  assert.equal(audio.resolveLanguage({ env: { WHISPER_LANGUAGE: 'es' }, language: 'auto', durationSeconds: 5 }), undefined, 'explicit auto');
+  assert.equal(audio.resolveLanguage({ env: {}, language: 'quechua' }), undefined, 'Whisper has no Quechua: detected, never a 400 on every rung');
+  assert.equal(audio.resolveLanguage({ env: {}, language: 'nb-NO' }), 'no', 'regional codes Whisper knows under another one');
 });
 
-test('a 2-minute clip is no longer forced to Spanish; a 30 s note still is', async (t) => {
+test('neither a 2-minute clip nor a 30 s note is forced to Spanish; an explicit language still is', async (t) => {
   const groq = client(() => ({ text: 'Good morning everyone, welcome back.', language: 'english', segments: [] }));
   const options = { env: { GROQ_API_KEY: 'gsk_lang', WHISPER_LANGUAGE: 'es' }, groqClient: groq, createFile, async localTranscribe() { throw new Error('no local'); } };
-  const long = await audio.transcribe(tempFile(t, 'a.m4a'), 'audio/mp4', 'a.m4a', { ...options, durationSeconds: 120 });
+  const long = await audio.transcribe(tempFile(t, 'a.ogg'), 'audio/ogg', 'a.ogg', { ...options, durationSeconds: 120 });
   assert.equal(groq.requests[0].language, undefined);
   assert.equal(long.language, 'en', 'verbose_json «english» is reported as ISO-639-1');
-  await audio.transcribe(tempFile(t, 'b.ogg'), 'audio/ogg', 'b.ogg', { ...options, durationSeconds: 30 });
-  assert.equal(groq.requests[1].language, 'es');
+  const note = await audio.transcribe(tempFile(t, 'b.ogg'), 'audio/ogg', 'b.ogg', { ...options, durationSeconds: 30 });
+  assert.equal(groq.requests[1].language, undefined);
+  assert.equal(note.language, 'en');
+  await audio.transcribe(tempFile(t, 'c.ogg'), 'audio/ogg', 'c.ogg', { ...options, durationSeconds: 30, language: 'español' });
+  assert.equal(groq.requests[2].language, 'es');
 });
 
 test('long media: a detection that agrees with the hint locks the rest of the job at once', async (t) => {

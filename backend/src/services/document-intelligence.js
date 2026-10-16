@@ -727,6 +727,30 @@ async function reprocessIfNeeded(prisma, file) {
   }
 }
 
+// Keys this module writes on every analysis. Everything else in
+// DocumentAnalysis.metadata belongs to other pipelines (the media transcript
+// pointer and stats, mediaHints, linkCaptions, archiveParent /
+// archiveExpansion…) and survives a re-analysis.
+const ANALYSIS_METADATA_KEYS = new Set([
+  'originalName', 'filename', 'size', 'analyzedAt', 'extractionSource', 'hierarchical',
+]);
+
+async function readForeignMetadata(prisma, fileId) {
+  if (typeof prisma?.documentAnalysis?.findUnique !== 'function') return {};
+  try {
+    const row = await prisma.documentAnalysis.findUnique({ where: { fileId }, select: { metadata: true } });
+    const previous = safeJson(row && row.metadata, null);
+    if (!previous || typeof previous !== 'object' || Array.isArray(previous)) return {};
+    const kept = {};
+    for (const [key, value] of Object.entries(previous)) {
+      if (!ANALYSIS_METADATA_KEYS.has(key)) kept[key] = value;
+    }
+    return kept;
+  } catch {
+    return {};
+  }
+}
+
 function serializeAnalysis(analysis, chunks = [], tables = []) {
   if (!analysis) return null;
   return {
@@ -818,6 +842,7 @@ async function analyzeFile(prisma, {
     };
   }
 
+  const foreignMetadata = await readForeignMetadata(prisma, file.id);
   const analysis = await prisma.documentAnalysis.upsert({
     where: { fileId: file.id },
     create: {
@@ -848,7 +873,7 @@ async function analyzeFile(prisma, {
       textCoverage,
       ocr: ocr || null,
       warnings,
-      metadata,
+      metadata: { ...foreignMetadata, ...metadata },
     },
   });
 

@@ -777,3 +777,167 @@ test('a link clip keeps its own length and covers [offset, offset + duration] on
   assert.match(txt, /\n\[01:00:00\] Retomamos la clase en la hora uno\.\n/);
   assert.match(txt, /\n\[01:10:00–01:15:00 · tramo sin transcribir\]\n/);
 });
+
+// ── contract C5: prompt echo, hints, quality, source, on-screen text ───────
+
+test('prompt echo: segments that only repeat the priming terms are removed, real speech with a name stays', () => {
+  const segments = [
+    { start: 0, end: 2, text: 'Bioquímica, Pérez.' },
+    { start: 2, end: 9, text: 'Hoy el doctor Pérez explica la bioquímica de la célula.' },
+    { start: 9, end: 10, text: 'Pérez.' },
+    { start: 10, end: 16, text: 'Pérez.' },
+  ];
+  const { segments: kept, cleanup } = fmt.cleanSegmentsDetailed(segments, { promptTerms: ['Bioquímica', 'Pérez'] });
+  assert.deepEqual(kept.map((s) => s.text), ['Hoy el doctor Pérez explica la bioquímica de la célula.', 'Pérez.']);
+  assert.equal(cleanup.echoes, 2, 'the full prompt, and one word stretched over 6 s');
+  assert.equal(cleanup.hallucinations, 2);
+  // Without terms the stats keep their pinned shape.
+  assert.equal('echoes' in fmt.cleanSegmentsDetailed(segments).cleanup, false);
+  assert.equal(fmt.isPromptEcho({ start: 0, end: 1, text: 'de San Marcos' }, fmt.promptEchoIndex(['Universidad de San Marcos'])), true);
+  assert.equal(fmt.isPromptEcho({ start: 0, end: 1, text: 'San Marcos' }, fmt.promptEchoIndex(['Universidad de San Marcos'])), false, '2 of 4 words');
+  assert.equal(fmt.promptEchoIndex([]), null);
+});
+
+test('device identifiers, dates, clock times and resolutions are never terms; hints are normalized and bounded', () => {
+  for (const token of ['WA0012', 'GMT20261003', 'REC0042', 'DSCN0012', 'PTT', 'IMG_2023', '1920x1080', '10:30', '15h30', '2026-10-03', '20261003', '']) {
+    assert.equal(fmt.isDeviceIdentifierToken(token), true, token);
+  }
+  for (const token of ['Huamán', 'Ayacucho', 'COVID19', 'Walter', 'Recursos', 'Dra. Rojas', 'Bioquímica']) {
+    assert.equal(fmt.isDeviceIdentifierToken(token), false, token);
+  }
+  assert.deepEqual(fmt.normalizeMediaHints({ terms: ['Huamán', 'huaman', 'WA0012', ' «Quispe» ', 'a', ...Array.from({ length: 40 }, (_, i) => `Nombre${String.fromCharCode(65 + (i % 26))}${i}`)], speakers: '3', verbatim: true }).terms.slice(0, 2),
+    ['Huamán', 'Quispe']);
+  assert.equal(fmt.normalizeMediaHints({ terms: Array.from({ length: 50 }, (_, i) => `Termino ${i}`) }).terms.length, 30);
+  assert.deepEqual(fmt.normalizeMediaHints({ speakers: 99, verbatim: 'yes' }), { speakers: 20 });
+  assert.equal(fmt.normalizeMediaHints({}), null);
+  assert.equal(fmt.normalizeMediaHints('x'), null);
+  assert.equal(fmt.normalizeHintLanguage('inglés'), 'en');
+  assert.equal(fmt.normalizeHintLanguage('spa'), 'es');
+  assert.equal(fmt.normalizeHintLanguage('auto'), null);
+  assert.equal(fmt.normalizeHintLanguage({}), null);
+});
+
+test('the engine quality report renders honestly: grade, doubtful stretches with Spanish reasons, the engine\'s notes', () => {
+  const result = { ...SMALL, gaps: [], quality: { score: 0.71, level: 'media', escalations: 2, enginesUsed: ['local', 'groq'],
+    lowConfidence: [{ start: 10, end: 12.6, reason: 'noise' }, { start: 30, end: 33, reason: 'xq_internal' }, { start: 40, end: 41, reason: 'voces superpuestas' }],
+    notes: ['Usé el motor local básico en 3 tramos.'] } };
+  const txt = fmt.renderText(result, { fileName: 'clase.m4a', now: NOW });
+  assert.match(txt, /\nMotor: mixto/);
+  assert.match(txt, /\nCalidad: media\n/);
+  assert.match(txt, /\nTramos dudosos: 00:10–00:13 \(ruido\); 00:30–00:33; 00:40–00:41 \(voces superpuestas\)\n/);
+  assert.match(txt, /\nNota: Usé el motor local básico en 3 tramos\.\n/);
+  const md = fmt.renderMarkdown(result, { fileName: 'clase.m4a', now: NOW });
+  assert.match(md, /\| Calidad \| media \|/);
+  assert.match(md, /- Usé el motor local básico en 3 tramos\./);
+  // More than ten doubtful stretches are summarised.
+  const many = { ...result, quality: { ...result.quality, lowConfidence: Array.from({ length: 14 }, (_, i) => ({ start: i * 4, end: i * 4 + 2, reason: 'low_confidence' })) } };
+  assert.match(fmt.renderText(many, { now: NOW }), /; y 4 más\n/);
+  // No report, no fields: the golden header of an older result is unchanged.
+  assert.doesNotMatch(fmt.renderText(SMALL, { now: NOW }), /Calidad|Tramos dudosos|Fuente/);
+});
+
+test('normalizeQuality bounds every list and rejects nonsense', () => {
+  const q = fmt.normalizeQuality({ score: 7, level: 'ALTA', escalations: -3, enginesUsed: ['a', 'a', 'b'],
+    lowConfidence: [...Array.from({ length: 600 }, (_, i) => ({ start: i, end: i + 1, reason: 'x'.repeat(200) })), { start: -1, end: 2 }, 'bad'],
+    notes: Array.from({ length: 30 }, (_, i) => `nota ${i} ${'y'.repeat(400)}`) });
+  assert.equal(q.score, 1);
+  assert.equal(q.level, 'alta');
+  assert.equal(q.escalations, 0);
+  assert.deepEqual(q.enginesUsed, ['a', 'b']);
+  assert.equal(q.lowConfidence.length, fmt.QUALITY_LIMITS.lowConfidence);
+  assert.equal(q.lowConfidence[0].reason.length, 60);
+  assert.equal(q.notes.length, 12);
+  assert.ok(q.notes.every((n) => n.length <= 300));
+  assert.equal(fmt.normalizeQuality({ level: 'excelente' }), null);
+  assert.equal(fmt.normalizeQuality(null), null);
+});
+
+test('subtitles as the source: «Fuente» instead of «Motor», no audio coverage, authored text is never «cleaned»', () => {
+  const result = { ok: true, source: 'subtitles', language: 'es', durationSec: 300, segments: [
+    { start: 0, end: 4, text: 'Gracias por ver el video.' }, { start: 4, end: 9, text: '¡Gracias!' }], gaps: [] };
+  const txt = fmt.renderText(result, { fileName: 'peli.mkv', now: NOW });
+  assert.match(txt, /\nFuente: subtítulos incrustados del video \(español\)\n/);
+  assert.doesNotMatch(txt, /Motor:|Cobertura|Tramos sin transcribir/);
+  assert.match(txt, /Nota: Usé los subtítulos incrustados del video \(español\)\./);
+  assert.match(txt, /Gracias por ver el video\. ¡Gracias!/, 'a subtitle is what the author wrote');
+  assert.equal(fmt.normalizeTranscriptResult(result).coverage, null);
+  assert.equal(fmt.normalizeTranscriptResult(result).engine, null);
+});
+
+test('«Texto en pantalla» is its own section in TXT and Word when the body is the voice', () => {
+  const result = { ...SMALL, gaps: [], onScreenText: [{ start: 3, end: 30, text: 'Tema 3: La mitocondria', confidence: 0.9 }, { start: 30, end: 60, text: 'ATP *y* [enlaces]' }] };
+  const txt = fmt.renderText(result, { fileName: 'clase.mp4', now: NOW });
+  assert.match(txt, /\n\nTEXTO EN PANTALLA\n═+\n\n\[00:03\] Tema 3: La mitocondria\n\n\[00:30\] ATP \*y\* \[enlaces\]\n$/);
+  const md = fmt.renderMarkdown(result, { fileName: 'clase.mp4', now: NOW });
+  assert.match(md, /## Texto en pantalla\n\n\*\*\[00:03\]\*\* Tema 3: La mitocondria\n\n\*\*\[00:30\]\*\* ATP \\\*y\\\* \\\[enlaces\\\]\n/);
+  // When the screen IS the transcript, there is no second copy of it.
+  const onscreen = { ok: true, source: 'onscreen', durationSec: 60, segments: [{ start: 3, end: 30, text: 'Tema 3' }], onScreenText: [{ start: 3, end: 30, text: 'Tema 3' }], gaps: [] };
+  assert.doesNotMatch(fmt.renderText(onscreen, { now: NOW }), /TEXTO EN PANTALLA/);
+  // A time window keeps only the on-screen text and doubtful stretches inside it.
+  const window = fmt.sliceResult({ ...result, quality: { level: 'alta', lowConfidence: [{ start: 1, end: 2 }, { start: 45, end: 46 }] } }, { start: 25, end: 64 });
+  assert.deepEqual(window.onScreenText.map((i) => i.start), [3, 30]);
+  assert.deepEqual(window.quality.lowConfidence.map((i) => i.start), [45]);
+});
+
+test('what the queue already removed before storing still shows in the header note', () => {
+  const stored = { ...SMALL, gaps: [], segments: SMALL.segments.slice(0, 5), cleanup: { input: 9, kept: 5, removed: 4, hallucinations: 3, echoes: 1, repeats: 1, loops: 0, empty: 0 } };
+  const pack = fmt.buildTranscriptPack(stored, { formats: ['txt'], now: NOW });
+  assert.equal(pack.stats.cleanup.hallucinations, 3, 'the stored cleanup (nothing left to remove at render time)');
+  assert.equal(pack.stats.cleanup.echoes, 1);
+  assert.match(pack.txt, /Nota: Se omitieron 4 fragmentos repetidos o inventados/);
+  // Render-time removals add up with the stored ones.
+  const withThanks = fmt.buildTranscriptPack({ ...stored, segments: SMALL.segments }, { formats: ['txt'], now: NOW });
+  assert.equal(withThanks.stats.cleanup.hallucinations, 3 + 2, 'plus the lone «¡Gracias!» and the Amara credit found at render time');
+  assert.equal(fmt.normalizeCleanupStats({ input: 3, kept: 3, removed: 0 }), null, 'nothing removed, nothing stored');
+});
+
+// ── the length rules are a guess (contract C4: no «no speech» on a guess) ──
+
+test('cleanup evidence: the length rules are soft, sign-offs, credits, silence tokens and doubted words are hard', () => {
+  const soft = fmt.cleanSegmentsDetailed([{ start: 0, end: 3.4, text: 'Muchas gracias.' }]);
+  assert.deepEqual(soft.segments, [], 'without keepSuspect the length rule still removes (renders stay as before)');
+  assert.deepEqual(soft.evidence, { hard: 0, soft: 1 });
+  assert.deepEqual(soft.cleanup, { input: 1, kept: 0, empty: 0, hallucinations: 1, repeats: 0, loops: 0, removed: 1 });
+
+  const kept = fmt.cleanSegmentsDetailed([{ start: 0, end: 3.4, text: 'Muchas gracias.' }, { start: 4, end: 9, text: 'Pérez.' }],
+    { promptTerms: ['Pérez'], keepSuspect: true });
+  assert.deepEqual(kept.segments.map((s) => s.text), ['Muchas gracias.', 'Pérez.']);
+  assert.deepEqual(kept.suspects, [{ start: 0, end: 3.4, reason: 'hallucination' }, { start: 4, end: 9, reason: 'hallucination' }]);
+  assert.equal(kept.cleanup.removed, 0);
+  assert.equal(kept.cleanup.echoes, 0);
+
+  const hard = fmt.cleanSegmentsDetailed([
+    { start: 0, end: 3, text: 'Gracias por ver el video.' },
+    { start: 3, end: 5, text: '[BLANK_AUDIO]' },
+    { start: 5, end: 9, text: 'Gracias.', confidence: 0.2 },
+    { start: 9, end: 12, text: 'Subtítulos realizados por la comunidad de Amara.org' },
+    { start: 12, end: 14, text: 'Bioquímica, Pérez.' },
+  ], { promptTerms: ['Bioquímica', 'Pérez'], keepSuspect: true });
+  assert.deepEqual(hard.segments, [], 'hard evidence is removed even with keepSuspect');
+  assert.equal(hard.evidence.soft, 0);
+  assert.equal(hard.evidence.hard, 5);
+  assert.deepEqual(hard.suspects, []);
+
+  assert.equal(fmt.hallucinationKind({ start: 0, end: 1, text: '¡Gracias!' }), null, 'a short real «Gracias» is speech');
+  assert.equal(fmt.hallucinationKind({ start: 0, end: 4, text: '¡Gracias!' }), 'duration');
+  assert.equal(fmt.hallucinationKind({ start: 0, end: 4, text: '¡Gracias!', confidence: 0.3 }), 'low_confidence');
+  assert.equal(fmt.promptEchoKind({ start: 0, end: 4, text: 'Pérez.' }, fmt.promptEchoIndex(['Pérez'])), 'duration');
+  assert.equal(fmt.cleanupRecordingSeconds({ durationSec: 64 }, []), 64);
+  assert.equal(fmt.cleanupRecordingSeconds({ timeOffsetSec: 3600 }, [{ start: 3600, end: 3660 }]), 60);
+});
+
+test('render keeps a stretch the queue flagged as a possible hallucination, and says it is doubtful', () => {
+  const note = { ok: true, durationSec: 40, language: 'es', engine: 'local', providers: { local: 1 }, gaps: [], coverage: 1,
+    segments: [{ start: 0, end: 30, text: 'Le mando la tarea, profe.' }, { start: 34, end: 38, text: 'Gracias.' }] };
+  // An older sidecar without the flag renders as before (the length rule removes it).
+  assert.doesNotMatch(fmt.renderText(note, { now: NOW }), /\bGracias\./);
+  const flagged = { ...note, quality: { lowConfidence: [{ start: 34, end: 38, reason: 'hallucination' }] } };
+  const txt = fmt.renderText(flagged, { now: NOW });
+  assert.match(txt, /\n\[00:34\] Gracias\.\n/, 'its own paragraph after the pause');
+  assert.match(txt, /\nTramos dudosos: 00:34–00:38 \(posible texto inventado\)\n/);
+  assert.doesNotMatch(txt, /omiti/);
+  // A flag never protects hard evidence in the same stretch.
+  const credit = { ...flagged, segments: [...note.segments.slice(0, 1), { start: 34, end: 38, text: 'Subtítulos realizados por la comunidad de Amara.org' }] };
+  assert.doesNotMatch(fmt.renderText(credit, { now: NOW }), /Amara/);
+  assert.match(fmt.renderSrt(flagged), /Gracias\./);
+});

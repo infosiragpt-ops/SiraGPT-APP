@@ -177,7 +177,10 @@ const LANGUAGE_BY_NAME = Object.freeze({
   korean: 'ko', swedish: 'sv', norwegian: 'no', danish: 'da', finnish: 'fi', greek: 'el',
   czech: 'cs', romanian: 'ro', hungarian: 'hu', vietnamese: 'vi', thai: 'th', indonesian: 'id',
   malay: 'ms', persian: 'fa', latin: 'la', tagalog: 'tl', swahili: 'sw',
-  espanol: 'es', ingles: 'en', portugues: 'pt', frances: 'fr', aleman: 'de',
+  espanol: 'es', ingles: 'en', portugues: 'pt', frances: 'fr', aleman: 'de', italiano: 'it',
+  // ISO 639-2 tags (container streams, users typing «spa»).
+  spa: 'es', eng: 'en', por: 'pt', fra: 'fr', fre: 'fr', deu: 'de', ger: 'de', ita: 'it',
+  cat: 'ca', que: 'qu', aym: 'ay', grn: 'gn',
 });
 
 /** "es" / "es-PE" / "spanish" / "Español" → "es"; unknown → null. */
@@ -354,6 +357,121 @@ function sumGapSeconds(gaps, from = 0, to = Infinity) {
   return total;
 }
 
+// ── quality, source and side texts ──────────────────────────────────────────
+//
+// Optional fields of a result (contracts C4/C5): where the text came from
+// (`source`), the engine's honest quality report (`quality`), the text read
+// on screen (`onScreenText`), a text subtitle track kept as a cross-check
+// (`embeddedSubtitles`) and what the queue's cleanup already removed
+// (`cleanup`). Every list is bounded here, so a reader never trusts sizes.
+
+const SOURCES = Object.freeze(['asr', 'subtitles', 'onscreen']);
+const QUALITY_LEVELS = Object.freeze(['alta', 'media', 'baja']);
+const QUALITY_LIMITS = Object.freeze({ lowConfidence: 500, enginesUsed: 12, notes: 12, noteChars: 300, reasonChars: 60 });
+const SIDE_TEXT_LIMITS = Object.freeze({ items: 2000, itemChars: 2000, totalChars: 400_000 });
+const EMBEDDED_SUBTITLE_LIMITS = Object.freeze({ items: 6000, itemChars: 500, totalChars: 600_000 });
+
+function normalizeSource(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return SOURCES.includes(key) ? key : null;
+}
+
+function cleanLine(value, max) {
+  return String(value == null ? '' : value).normalize('NFC').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function round3(n) {
+  return Math.round(Number(n) * 1000) / 1000;
+}
+
+/** Engine quality report → bounded { score, level, lowConfidence, escalations, enginesUsed, notes } or null. */
+function normalizeQuality(raw) {
+  if (!isPlainObject(raw)) return null;
+  const score = num(raw.score);
+  const level = String(raw.level || '').trim().toLowerCase();
+  const lowConfidence = [];
+  for (const item of Array.isArray(raw.lowConfidence) ? raw.lowConfidence : []) {
+    if (lowConfidence.length >= QUALITY_LIMITS.lowConfidence) break;
+    if (!isPlainObject(item)) continue;
+    const start = num(item.start != null ? item.start : item.s);
+    const end = num(item.end != null ? item.end : item.e);
+    if (start == null || start < 0 || end == null || end < start) continue;
+    lowConfidence.push({ start: round3(start), end: round3(end), reason: cleanLine(item.reason, QUALITY_LIMITS.reasonChars) });
+  }
+  lowConfidence.sort((a, b) => a.start - b.start);
+  const enginesUsed = [];
+  for (const name of Array.isArray(raw.enginesUsed) ? raw.enginesUsed : []) {
+    const value = cleanLine(name, 40);
+    if (value && !enginesUsed.includes(value)) enginesUsed.push(value);
+    if (enginesUsed.length >= QUALITY_LIMITS.enginesUsed) break;
+  }
+  const notes = [];
+  for (const note of Array.isArray(raw.notes) ? raw.notes : []) {
+    const value = cleanLine(note, QUALITY_LIMITS.noteChars);
+    if (value && !notes.includes(value)) notes.push(value);
+    if (notes.length >= QUALITY_LIMITS.notes) break;
+  }
+  const escalations = num(raw.escalations);
+  const hasLevel = QUALITY_LEVELS.includes(level);
+  if (score == null && !hasLevel && !lowConfidence.length && !notes.length && !enginesUsed.length) return null;
+  return {
+    score: score == null ? null : round3(Math.max(0, Math.min(1, score))),
+    level: hasLevel ? level : null,
+    lowConfidence,
+    escalations: escalations == null || escalations < 0 ? 0 : Math.min(1e6, Math.round(escalations)),
+    enginesUsed,
+    notes,
+  };
+}
+
+/** [{start,end,text,confidence?}] (engine or compact shape) → bounded, sorted, non-empty items. */
+function normalizeTimedTextList(list, limits = SIDE_TEXT_LIMITS) {
+  const out = [];
+  let total = 0;
+  for (const raw of Array.isArray(list) ? list : []) {
+    if (out.length >= limits.items || total >= limits.totalChars) break;
+    if (!isPlainObject(raw)) continue;
+    const start = num(raw.start != null ? raw.start : raw.s);
+    let end = num(raw.end != null ? raw.end : raw.e);
+    if (start == null || start < 0) continue;
+    if (end == null || end < start) end = start;
+    const text = cleanLine(raw.text != null ? raw.text : raw.t, Math.min(limits.itemChars, limits.totalChars - total));
+    if (!text) continue;
+    const item = { start: round3(start), end: round3(end), text };
+    const confidence = normalizeConfidence(raw.confidence != null ? raw.confidence : raw.c);
+    if (confidence != null) item.confidence = round3(confidence);
+    total += text.length;
+    out.push(item);
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+function normalizeEmbeddedSubtitles(raw) {
+  if (!isPlainObject(raw)) return null;
+  const segments = normalizeTimedTextList(raw.segments, EMBEDDED_SUBTITLE_LIMITS).map((seg) => ({ start: seg.start, end: seg.end, text: seg.text }));
+  if (!segments.length) return null;
+  return {
+    language: languageCode(raw.language) || null,
+    codec: raw.codec ? cleanLine(raw.codec, 24) || null : null,
+    segments,
+  };
+}
+
+const CLEANUP_KEYS = ['input', 'kept', 'empty', 'hallucinations', 'repeats', 'loops', 'removed', 'echoes'];
+
+function normalizeCleanupStats(raw) {
+  if (!isPlainObject(raw)) return null;
+  const out = {};
+  let any = false;
+  for (const key of CLEANUP_KEYS) {
+    const n = num(raw[key]);
+    if (n == null || n < 0) continue;
+    out[key] = Math.min(1e9, Math.round(n));
+    if (key !== 'input' && key !== 'kept' && out[key] > 0) any = true;
+  }
+  return any ? out : null;
+}
+
 /**
  * Engine result | sidecar | string → one canonical shape the renderers share.
  * Never throws; a failed result (ok:false) normalizes to an empty transcript.
@@ -381,10 +499,14 @@ function normalizeTranscriptResult(result) {
   // Without a declared length, a clip lasts from its offset to its last moment.
   const durationSec = declared && declared > 0 ? declared : (lastEnd - timeOffsetSec > 0 ? lastEnd - timeOffsetSec : null);
   const providers = normalizeProviders(r.providers);
+  const source = normalizeSource(r.source);
+  // Subtitles or on-screen text are not a transcription of the audio: no
+  // engine, and no «cobertura del audio» unless one was declared.
+  const nonAsr = source === 'subtitles' || source === 'onscreen';
   let engine = ['cloud', 'local', 'mixed'].includes(r.engine) ? r.engine : null;
-  if (!engine && r.method) engine = String(r.method) === 'local-whisper' ? 'local' : (String(r.method) === 'placeholder' ? null : 'cloud');
+  if (!engine && r.method && !nonAsr) engine = String(r.method) === 'local-whisper' ? 'local' : (String(r.method) === 'placeholder' ? null : 'cloud');
   let coverage = normalizeCoverage(r.coverage);
-  if (coverage == null && !legacy && durationSec) {
+  if (coverage == null && !legacy && durationSec && !nonAsr) {
     coverage = Math.max(0, Math.min(1, 1 - sumGapSeconds(gaps) / durationSec));
   }
   return {
@@ -404,6 +526,14 @@ function normalizeTranscriptResult(result) {
     range,
     timeOffsetSec,
     failed,
+    source,
+    // Subtitles that came from the platform (a link's captions), not from a
+    // track inside the file: the copy must not call them «incrustados».
+    subtitleOrigin: source === 'subtitles' && r.subtitleOrigin === 'platform' ? 'platform' : null,
+    quality: normalizeQuality(r.quality),
+    onScreenText: normalizeTimedTextList(r.onScreenText),
+    embeddedSubtitles: normalizeEmbeddedSubtitles(r.embeddedSubtitles),
+    storedCleanup: normalizeCleanupStats(r.cleanup),
   };
 }
 
@@ -434,16 +564,27 @@ function stripCredits(text) {
   return { text: next, removed: next !== text };
 }
 
-function isIsolatedHallucination(seg) {
+/**
+ * Why a whole segment reads as an invented sign-off, or null:
+ *   - 'lexicon': a sign-off only engines write («Gracias por ver el video»);
+ *   - 'low_confidence': a lone «Gracias» the engine itself doubted (< 0.5);
+ *   - 'duration': a lone «Gracias» stretched over ≥ 3 s. This one is only a
+ *     length heuristic: a real voice note can be «Muchas gracias.» alone
+ *     (see SUSPECT_KINDS and cleanSegmentsDetailed's `keepSuspect`).
+ */
+function hallucinationKind(seg) {
   const key = foldKey(seg.text);
-  if (!key) return false;
-  if (ISOLATED_HALLUCINATIONS.some((re) => re.test(key))) return true;
+  if (!key) return null;
+  if (ISOLATED_HALLUCINATIONS.some((re) => re.test(key))) return 'lexicon';
   if (LONE_THANKS_RE.test(key)) {
-    const duration = seg.end - seg.start;
-    if (duration >= LONE_THANKS_SILENT_SEC) return true;
-    if (seg.confidence != null && seg.confidence < 0.5) return true;
+    if (seg.confidence != null && seg.confidence < 0.5) return 'low_confidence';
+    if (seg.end - seg.start >= LONE_THANKS_SILENT_SEC) return 'duration';
   }
-  return false;
+  return null;
+}
+
+function isIsolatedHallucination(seg) {
+  return hallucinationKind(seg) != null;
 }
 
 function loopThreshold(n) {
@@ -545,24 +686,111 @@ function emptyCleanupStats() {
   return { input: 0, kept: 0, empty: 0, hallucinations: 0, repeats: 0, loops: 0, removed: 0 };
 }
 
+// ── prompt echo ─────────────────────────────────────────────────────────────
+//
+// The recogniser is primed with terms (file-name words, the names the user
+// gave). Over silence it repeats them: a piece that reads «Bioquímica, Pérez.»
+// where nobody spoke. A segment is an echo when its words are a contiguous run
+// of the prompt (≥ 2 words, and at least 3 or the whole prompt), or a single
+// prompt word stretched over ≥ 3 s or read with low confidence. Real speech
+// that uses a name inside a sentence always carries other words and stays.
+
+/** Prompt terms → { tokens:Set, text:' a b c ' } (folded), or null when empty. */
+function promptEchoIndex(terms) {
+  const list = (Array.isArray(terms) ? terms : [terms]).map((t) => foldKey(t)).filter(Boolean);
+  if (!list.length) return null;
+  const tokens = new Set();
+  for (const term of list) for (const token of term.split(' ')) if (token) tokens.add(token);
+  return { tokens, text: ` ${list.join(' ')} `, size: tokens.size };
+}
+
+/**
+ * Why a segment reads as an echo of the prompt, or null: 'pattern' (a run of
+ * prompt words), 'low_confidence' (one prompt word the engine doubted) or
+ * 'duration' (one prompt word stretched over ≥ 3 s — a length heuristic only).
+ */
+function promptEchoKind(seg, index) {
+  if (!index || !index.size) return null;
+  const key = foldKey(seg.text);
+  if (!key) return null;
+  const words = key.split(' ');
+  if (!words.every((w) => index.tokens.has(w))) return null;
+  if (words.length === 1) {
+    if (seg.confidence != null && seg.confidence < 0.5) return 'low_confidence';
+    return seg.end - seg.start >= LONE_THANKS_SILENT_SEC ? 'duration' : null;
+  }
+  if (words.length < Math.min(3, index.size)) return null;
+  // A contiguous run of the prompt, or most of its words in another order.
+  if (index.text.includes(` ${key} `)) return 'pattern';
+  return words.length >= 3 && new Set(words).size >= Math.ceil(index.size * 0.6) ? 'pattern' : null;
+}
+
+function isPromptEcho(seg, index) {
+  return promptEchoKind(seg, index) != null;
+}
+
+/** Recording length for the cleanup: durationSec, else the last segment end on the file's clock. */
+function cleanupRecordingSeconds({ durationSec = null, timeOffsetSec = 0 } = {}, segments = []) {
+  const declared = Number(durationSec);
+  if (Number.isFinite(declared) && declared > 0) return declared;
+  let last = 0;
+  for (const seg of Array.isArray(segments) ? segments : []) {
+    const end = Number(seg && (seg.end != null ? seg.end : seg.e));
+    if (Number.isFinite(end) && end > last) last = end;
+  }
+  const offset = Number(timeOffsetSec);
+  return Math.max(0, last - (Number.isFinite(offset) && offset > 0 ? offset : 0));
+}
+
+/** Whether a segment's midpoint falls inside one of the [start, end] ranges. */
+function insideRanges(seg, ranges) {
+  if (!ranges || !ranges.length) return false;
+  const mid = seg.end > seg.start ? (seg.start + seg.end) / 2 : seg.start;
+  return ranges.some((r) => mid >= r.start && mid <= r.end);
+}
+
 /**
  * Clean segments and report what was removed.
- * @returns {{ segments: Array<{start,end,text,speaker?,confidence?}>, cleanup: {input,kept,empty,hallucinations,repeats,loops,removed} }}
+ * @returns {{ segments: Array<{start,end,text,speaker?,confidence?}>, cleanup: {input,kept,empty,hallucinations,repeats,loops,removed},
+ *   suspects: Array<{start,end,reason:'hallucination'}>, evidence: { hard, soft } }}
  * Counters: `empty` = blank/silence-only segments dropped; `hallucinations` =
  * invented fragments removed (a whole segment, or an engine credit inside a
  * kept one); `repeats` = repeated segments collapsed away; `loops` = in-segment
  * loops collapsed (the segment itself is kept); `removed` = input − kept.
+ * With `promptTerms` (the words the recogniser was primed with), segments that
+ * only echo them are removed too: they count as hallucinations and in `echoes`.
+ *
+ * Two kinds of evidence (`evidence`, not part of the stored stats):
+ *   - hard: an engine sign-off from the lexicon, a credit, a silence token, a
+ *     run of prompt words, or a lone «Gracias»/prompt word the engine itself
+ *     scored below 0.5;
+ *   - soft: only the LENGTH rules (a lone «Gracias» or one prompt word
+ *     stretched over ≥ 3 s with no low confidence).
+ * With `keepSuspect`, soft matches are kept and listed in `suspects` (reason
+ * 'hallucination') instead of being removed; `protect` ([{start,end}]) does
+ * the same for soft matches whose midpoint falls inside one of its ranges
+ * (stretches a caller already decided to keep). Hard matches are always removed.
  */
-function cleanSegmentsDetailed(segments) {
+function cleanSegmentsDetailed(segments, { promptTerms = null, keepSuspect = false, protect = null } = {}) {
   const stats = emptyCleanupStats();
+  const echoIndex = promptTerms ? promptEchoIndex(promptTerms) : null;
+  if (promptTerms) stats.echoes = 0;
+  const evidence = { hard: 0, soft: 0 };
+  const suspects = [];
+  const protectRanges = Array.isArray(protect)
+    ? protect.map((r) => ({ start: num(r && r.start), end: num(r && r.end) })).filter((r) => r.start != null && r.end != null && r.end >= r.start)
+    : [];
   const normalized = normalizeSegmentList(segments);
   stats.input = normalized.length;
   const stage = [];
   for (const seg of normalized) {
     let text = seg.text;
-    text = text.replace(SILENCE_TOKEN_RE, ' ').replace(/\s+/g, ' ').trim();
+    const unsilenced = text.replace(SILENCE_TOKEN_RE, ' ');
+    if (unsilenced !== text) evidence.hard++;
+    text = unsilenced.replace(/\s+/g, ' ').trim();
     const credits = stripCredits(text);
     text = credits.text;
+    if (credits.removed) evidence.hard++;
     if (!text) {
       if (credits.removed) stats.hallucinations++;
       else stats.empty++;
@@ -571,7 +799,18 @@ function cleanSegmentsDetailed(segments) {
     if (!/[\p{L}\p{N}]/u.test(text)) { stats.empty++; continue; }
     if (credits.removed) stats.hallucinations++;
     const candidate = { ...seg, text };
-    if (isIsolatedHallucination(candidate)) { stats.hallucinations++; continue; }
+    const signOff = hallucinationKind(candidate);
+    const echo = signOff || !echoIndex ? null : promptEchoKind(candidate, echoIndex);
+    const kind = signOff || echo;
+    if (kind === 'duration' && (keepSuspect || insideRanges(candidate, protectRanges))) {
+      suspects.push({ start: candidate.start, end: candidate.end, reason: 'hallucination' });
+    } else if (kind) {
+      stats.hallucinations++;
+      if (echo) stats.echoes++;
+      if (kind === 'duration') evidence.soft++;
+      else evidence.hard++;
+      continue;
+    }
     const looped = collapseNgramLoops(text);
     if (looped.loops) stats.loops += looped.loops;
     candidate.text = looped.text;
@@ -581,12 +820,26 @@ function cleanSegmentsDetailed(segments) {
   stats.repeats = collapsed.removed;
   stats.kept = collapsed.list.length;
   stats.removed = stats.input - stats.kept;
-  return { segments: collapsed.list, cleanup: stats };
+  // A suspect collapsed away as a repeat is no longer in the text.
+  const survivors = suspects.length ? new Set(collapsed.list.map((s) => `${s.start}:${s.end}`)) : null;
+  const kept = survivors ? suspects.filter((s) => survivors.has(`${s.start}:${s.end}`)) : suspects;
+  return { segments: collapsed.list, cleanup: stats, suspects: kept, evidence };
 }
 
 /** Cleaned segments (see cleanSegmentsDetailed for the counters). */
-function cleanSegments(segments) {
-  return cleanSegmentsDetailed(segments).segments;
+function cleanSegments(segments, opts) {
+  return cleanSegmentsDetailed(segments, opts).segments;
+}
+
+/** Render-time stats plus what the queue removed before storing (`result.cleanup`). */
+function mergeCleanupStats(render, stored) {
+  if (!stored) return render;
+  const out = { ...render };
+  for (const key of ['empty', 'hallucinations', 'repeats', 'loops']) out[key] = (out[key] || 0) + (stored[key] || 0);
+  if (stored.echoes) out.echoes = (out.echoes || 0) + stored.echoes;
+  out.removed = (out.removed || 0) + (stored.removed || 0);
+  if (stored.input) out.input = Math.max(out.input || 0, stored.input);
+  return out;
 }
 
 // ── speakers ────────────────────────────────────────────────────────────────
@@ -704,7 +957,14 @@ function plainTextParagraphs(text) {
 
 function prepare(result, opts = {}) {
   const meta = normalizeTranscriptResult(result);
-  const { segments: cleaned, cleanup } = meta.legacy ? { segments: [], cleanup: emptyCleanupStats() } : cleanSegmentsDetailed(meta.segments);
+  // Hallucination cleanup is for speech recognition. Subtitles and on-screen
+  // text were authored: a closing slide «¡Gracias!» or a subtitle «Gracias
+  // por ver el video» is real content and stays.
+  const authored = meta.source === 'subtitles' || meta.source === 'onscreen';
+  const { segments: cleaned, cleanup: renderCleanup } = meta.legacy ? { segments: [], cleanup: emptyCleanupStats() }
+    : authored ? { segments: meta.segments.filter((s) => s.text), cleanup: emptyCleanupStats() }
+      : cleanSegmentsDetailed(meta.segments, renderCleanupOptions(meta));
+  const cleanup = mergeCleanupStats(renderCleanup, meta.storedCleanup);
   // Clock width follows the recording: a clip's times run past its own length.
   let effectiveDuration = meta.timeOffsetSec + (meta.durationSec || 0);
   for (const s of cleaned) effectiveDuration = Math.max(effectiveDuration, s.end);
@@ -712,7 +972,8 @@ function prepare(result, opts = {}) {
   const speakers = speakerLabels(cleaned);
   const chapters = normalizeChapters(opts.chapters);
   const paragraphs = meta.legacy ? [] : buildParagraphs(cleaned, {
-    pauseSec: opts.pauseSec != null ? opts.pauseSec : DEFAULT_PAUSE_SEC,
+    // Each screen of text (a slide) is its own paragraph.
+    pauseSec: opts.pauseSec != null ? opts.pauseSec : (meta.source === 'onscreen' ? 0 : DEFAULT_PAUSE_SEC),
     maxSec: opts.maxSec != null ? opts.maxSec : DEFAULT_PARAGRAPH_SEC,
     breakAt: chapters.map((c) => c.start),
     gaps: meta.gaps,
@@ -722,6 +983,18 @@ function prepare(result, opts = {}) {
     : cleaned.reduce((acc, s) => acc + countWords(s.text), 0);
   const lowConfidence = cleaned.filter((s) => s.confidence != null && s.confidence < LOW_CONFIDENCE_THRESHOLD).length;
   return { meta, cleaned, cleanup, longForm, speakers, chapters, paragraphs, words, lowConfidence, opts };
+}
+
+/**
+ * The render-time cleanup keeps what the queue decided to keep: a stretch
+ * the queue flagged as a possible hallucination (it kept the engine's text
+ * on the length rules alone) is not deleted here either. Without flags the
+ * renderer cleans exactly as before.
+ */
+function renderCleanupOptions(meta) {
+  const protect = meta.quality && Array.isArray(meta.quality.lowConfidence)
+    ? meta.quality.lowConfidence.filter((item) => item.reason === 'hallucination') : [];
+  return protect.length ? { protect } : {};
 }
 
 function normalizeChapters(chapters) {
@@ -761,13 +1034,18 @@ function headerFields(prep, { fileName, now, timeZone } = {}) {
     fields.push(['Tramo', `${formatClock(meta.timeOffsetSec, longForm)}–${formatClock(meta.timeOffsetSec + meta.durationSec, longForm, 'ceil')}`]);
   }
   fields.push(['Idioma', languageNameEs(meta.language)]);
-  fields.push(['Motor', engineLabel(meta.engine, meta.providers)]);
+  if (meta.source === 'subtitles' || meta.source === 'onscreen') fields.push(['Fuente', sourceLabelEs(meta)]);
+  else fields.push(['Motor', engineLabel(meta.engine, meta.providers)]);
+  if (meta.quality && meta.quality.level) fields.push(['Calidad', meta.quality.level]);
+  const doubtful = doubtfulStretches(meta.quality, longForm);
+  if (doubtful) fields.push(['Tramos dudosos', doubtful]);
   const dateSource = now || meta.createdAt || new Date();
   const date = formatDateEs(dateSource, timeZone || DEFAULT_TIME_ZONE);
   if (date) fields.push(['Fecha', date]);
   fields.push(['Palabras', groupThousands(prep.words)]);
   if (meta.coverage != null) fields.push(['Cobertura', meta.legacy ? formatPercent(meta.coverage) : `${formatPercent(meta.coverage)} del audio`]);
-  if (!meta.legacy || meta.gaps.length) {
+  const authored = meta.source === 'subtitles' || meta.source === 'onscreen';
+  if ((!meta.legacy && !authored) || meta.gaps.length) {
     const gaps = meta.gaps.map((g) => {
       const reason = gapReasonEs(g.reason);
       return `${formatClock(g.start, longForm)}–${formatClock(g.end, longForm, 'ceil')}${reason ? ` (${reason})` : ''}`;
@@ -778,8 +1056,72 @@ function headerFields(prep, { fileName, now, timeZone } = {}) {
   return fields;
 }
 
+const DOUBTFUL_REASONS_ES = Object.freeze({
+  low_confidence: 'baja confianza', baja_confianza: 'baja confianza', confidence: 'baja confianza',
+  noise: 'ruido', noisy: 'ruido', ruido: 'ruido', music: 'música', musica: 'música',
+  overlap: 'voces superpuestas', overlapping_speech: 'voces superpuestas',
+  language_mismatch: 'idioma mezclado', mixed_language: 'idioma mezclado', code_switch: 'idioma mezclado',
+  hallucination: 'posible texto inventado', loop: 'repetición del motor', repetition: 'repetición del motor',
+  under_transcribed: 'posible voz omitida', dropped_speech: 'posible voz omitida',
+  quiet: 'poco audible', low_volume: 'poco audible', inaudible: 'poco audible',
+  illegible: 'texto ilegible', ilegible: 'texto ilegible', engine_disagreement: 'los motores no coinciden',
+  disagreement: 'los motores no coinciden', timestamps: 'tiempos aproximados',
+});
+const MAX_DOUBTFUL_IN_HEADER = 10;
+
+/** A reason code («noise») or a Spanish phrase from the engine → Spanish text, or ''. */
+function doubtfulReasonEs(reason) {
+  const raw = String(reason || '').trim();
+  if (!raw) return '';
+  const key = foldKey(raw).replace(/\s+/g, '_');
+  if (DOUBTFUL_REASONS_ES[key]) return DOUBTFUL_REASONS_ES[key];
+  if (gapReasonEs(raw)) return gapReasonEs(raw);
+  // A short phrase that is already prose (has a space or an accent) is shown;
+  // a bare internal code is not.
+  return /\s/.test(raw) || /[áéíóúñ]/i.test(raw) ? raw.slice(0, 60) : '';
+}
+
+/** «00:12:30–00:13:10 (ruido); …» for the header, or '' when nothing is doubtful. */
+function doubtfulStretches(quality, longForm) {
+  const list = quality && Array.isArray(quality.lowConfidence) ? quality.lowConfidence : [];
+  if (!list.length) return '';
+  const shown = list.slice(0, MAX_DOUBTFUL_IN_HEADER).map((item) => {
+    const reason = doubtfulReasonEs(item.reason);
+    return `${formatClock(item.start, longForm)}–${formatClock(item.end, longForm, 'ceil')}${reason ? ` (${reason})` : ''}`;
+  });
+  const more = list.length - shown.length;
+  return `${shown.join('; ')}${more > 0 ? `; y ${more} más` : ''}`;
+}
+
+/** «subtítulos incrustados del video (español)» / «texto que aparece en pantalla». */
+function sourceLabelEs(meta) {
+  if (meta.source === 'subtitles') {
+    const code = languageCode(meta.language);
+    const what = meta.subtitleOrigin === 'platform' ? 'subtítulos de la plataforma del video' : 'subtítulos incrustados del video';
+    return `${what}${code ? ` (${languageNameEs(code)})` : ''}`;
+  }
+  if (meta.source === 'onscreen') return 'texto que aparece en pantalla';
+  return '';
+}
+
+/** The default sentence for a transcript that does not come from the voice (when the result carries none). */
+function sourceNoteEs(meta) {
+  if (meta.source === 'subtitles') {
+    const code = languageCode(meta.language);
+    const what = meta.subtitleOrigin === 'platform' ? 'los subtítulos de la plataforma del video' : 'los subtítulos incrustados del video';
+    return `Usé ${what}${code ? ` (${languageNameEs(code)})` : ''}.`;
+  }
+  if (meta.source === 'onscreen') return 'Transcribí el texto que aparece en pantalla.';
+  return '';
+}
+
 function headerNotes(prep) {
   const notes = [];
+  // Where the text comes from and the engine's own honest notes come first.
+  const qualityNotes = prep.meta.quality ? prep.meta.quality.notes.slice(0, 6) : [];
+  const sourceNote = sourceNoteEs(prep.meta);
+  if (sourceNote && !qualityNotes.some((note) => /subt[ií]tulos|pantalla/i.test(note))) notes.push(sourceNote);
+  notes.push(...qualityNotes);
   if (prep.lowConfidence > 0) {
     notes.push(`${LOW_CONFIDENCE_MARK} marca fragmentos de baja confianza; conviene verificarlos con el audio.`);
   }
@@ -842,9 +1184,23 @@ function renderTextFromPrep(prep, { fileName, header = true, now, timeZone } = {
     }
   }
   if (header && !body.length && !prep.meta.failed && !prep.meta.legacy) body.push(emptyBodyNote(prep));
+  const screen = onScreenItems(prep);
+  if (screen.length) {
+    body.push(`${ON_SCREEN_TITLE.toUpperCase()}\n${RULE}`);
+    for (const item of screen) body.push(`[${formatClock(item.start, prep.longForm)}] ${item.text}`);
+  }
   const head = lines.length ? `${lines.join('\n')}\n` : '';
   if (!body.length) return head;
   return `${head}${head ? '\n' : ''}${body.join('\n\n')}\n`;
+}
+
+const ON_SCREEN_TITLE = 'Texto en pantalla';
+const MAX_ON_SCREEN_RENDERED = 500;
+
+/** On-screen text shown as its own section (when the body is the voice, not the screen). */
+function onScreenItems(prep) {
+  if (prep.meta.source === 'onscreen' || prep.meta.failed) return [];
+  return prep.meta.onScreenText.slice(0, MAX_ON_SCREEN_RENDERED);
 }
 
 /**
@@ -1180,6 +1536,11 @@ function renderMarkdownFromPrep(prep, { fileName, now, timeZone } = {}) {
       out.push(`**${lead}** ${escapeBody(p.text)}`, '');
     }
   }
+  const screen = onScreenItems(prep);
+  if (screen.length) {
+    out.push(`## ${ON_SCREEN_TITLE}`, '');
+    for (const item of screen) out.push(`**[${formatClock(item.start, prep.longForm)}]** ${escapeBody(item.text)}`, '');
+  }
   const notes = headerNotes(prep);
   if (notes.length) {
     out.push('## Notas', '');
@@ -1281,10 +1642,17 @@ function sliceResult(result, { start = 0, end = null } = {}) {
   const windowStart = Math.max(from, meta.timeOffsetSec);
   const windowEnd = audioEnd == null ? to : (to == null ? audioEnd : Math.min(to, audioEnd));
   let coverage = meta.coverage;
-  if (windowEnd && windowEnd > windowStart) {
+  const nonAsr = meta.source === 'subtitles' || meta.source === 'onscreen';
+  if (!nonAsr && windowEnd && windowEnd > windowStart) {
     coverage = Math.max(0, Math.min(1, 1 - sumGapSeconds(gaps, windowStart, windowEnd) / (windowEnd - windowStart)));
   }
+  const inWindow = (item) => (item.end > item.start ? item.end : item.start + 1e-6) > from && item.start < limit;
+  const extras = {};
+  if (meta.source) extras.source = meta.source;
+  if (meta.quality) extras.quality = { ...meta.quality, lowConfidence: meta.quality.lowConfidence.filter(inWindow) };
+  if (meta.onScreenText.length) extras.onScreenText = meta.onScreenText.filter(inWindow);
   return {
+    ...extras,
     ok: true,
     segments: sliceSegments(meta.segments, { start: from, end: to }),
     gaps,
@@ -1544,10 +1912,75 @@ function parseTimeRange(text, { durationSec } = {}) {
   return null;
 }
 
+// ── transcription hints (contract C5) ───────────────────────────────────────
+//
+// What the user told the chat about a recording («está en inglés», «los
+// nombres son Huamán, Ayacucho», «son 3 hablantes», «transcripción literal»)
+// travels with the job as { language, hints: { terms, speakers, verbatim } }.
+// Device identifiers from file names («PTT-20261003-WA0012.opus», a Zoom
+// «GMT20261003-150000_Recording_1920x1080.mp4») are never terms: on silent
+// pieces Whisper echoes its prompt, and «WA0012.» would land in the text.
+
+const DEVICE_ID_RE = /^[A-Z]{1,4}\d{3,}$/;
+const DEVICE_PREFIX_RE = /^(?:PTT|AUD|VID|IMG|REC|GMT|DSCN?|MVI|WA)(?:[-_ ]?\d|$)/;
+const DATE_SHAPE_RE = /^(?:\d{1,4}[-/._]\d{1,2}(?:[-/._]\d{1,4})?|\d{6,}|\d{8}[-_ T]?\d{2,6}|\d{4}[-_]\d{2}[-_]\d{2}[-_ T]\d{1,2}(?:[-_.:]\d{2}){1,2})$/i;
+const CLOCK_SHAPE_RE = /^\d{1,2}(?:\s*[:.h]\s*\d{2}){1,2}\s*(?:hs?|m|min|s|am|pm)?$/i;
+const RESOLUTION_RE = /^\d{2,5}\s*[x×]\s*\d{2,5}p?$/i;
+const MAX_HINT_TERMS = 30;
+const MAX_HINT_TERM_CHARS = 60;
+const MAX_HINT_SPEAKERS = 20;
+
+/** True for camera / phone / recorder ids, dates, clock times and resolutions (never a useful term). */
+function isDeviceIdentifierToken(token) {
+  const t = String(token == null ? '' : token).trim();
+  if (!t) return true;
+  return DEVICE_ID_RE.test(t) || DEVICE_PREFIX_RE.test(t) || DATE_SHAPE_RE.test(t)
+    || CLOCK_SHAPE_RE.test(t) || RESOLUTION_RE.test(t) || !/\p{L}/u.test(t);
+}
+
+/** Terms: trimmed, ≤ 60 chars, ≥ 2 letters, no device ids, deduped by folded key, ≤ 30. */
+function normalizeHintTerms(list) {
+  const raw = Array.isArray(list) ? list : (typeof list === 'string' ? list.split(/[,;\n]/) : []);
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    if (typeof item !== 'string' && typeof item !== 'number') continue;
+    const term = cleanLine(item, MAX_HINT_TERM_CHARS).replace(/^["'«“]+|["'»”.,;:]+$/g, '').trim();
+    if (!term || (term.match(/\p{L}/gu) || []).length < 2 || isDeviceIdentifierToken(term)) continue;
+    const key = foldKey(term);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(term);
+    if (out.length >= MAX_HINT_TERMS) break;
+  }
+  return out;
+}
+
+/** A requested language («inglés», «en», «spa») → ISO 639-1-ish code, or null («auto», unknown). */
+function normalizeHintLanguage(value) {
+  if (value == null || value === '' || typeof value === 'object') return null;
+  return languageCode(String(value).slice(0, 40));
+}
+
+/** Raw hints → { terms?, speakers?, verbatim? } or null when nothing usable is left. */
+function normalizeMediaHints(raw) {
+  if (!isPlainObject(raw)) return null;
+  const out = {};
+  const terms = normalizeHintTerms(raw.terms);
+  if (terms.length) out.terms = terms;
+  const speakers = num(raw.speakers);
+  if (speakers != null && speakers >= 1) out.speakers = Math.min(MAX_HINT_SPEAKERS, Math.round(speakers));
+  if (typeof raw.verbatim === 'boolean') out.verbatim = raw.verbatim;
+  return Object.keys(out).length ? out : null;
+}
+
 module.exports = {
   // main API
   cleanSegments,
   cleanSegmentsDetailed,
+  cleanupRecordingSeconds,
+  hallucinationKind,
+  promptEchoKind,
   buildParagraphs,
   renderText,
   renderSrt,
@@ -1568,9 +2001,32 @@ module.exports = {
   languageNameEs,
   stripEngineHeader,
   wrapCue,
+  // quality, source and side texts (contracts C4/C5)
+  normalizeSource,
+  normalizeQuality,
+  normalizeTimedTextList,
+  normalizeEmbeddedSubtitles,
+  normalizeCleanupStats,
+  doubtfulStretches,
+  doubtfulReasonEs,
+  sourceLabelEs,
+  sourceNoteEs,
+  // prompt echo and hints
+  promptEchoIndex,
+  isPromptEcho,
+  isDeviceIdentifierToken,
+  normalizeHintTerms,
+  normalizeHintLanguage,
+  normalizeMediaHints,
   // constants
   SUBTITLE,
   LOW_CONFIDENCE_THRESHOLD,
   LOW_CONFIDENCE_MARK,
   PACK_FORMATS,
+  SOURCES,
+  QUALITY_LEVELS,
+  QUALITY_LIMITS,
+  SIDE_TEXT_LIMITS,
+  EMBEDDED_SUBTITLE_LIMITS,
+  ON_SCREEN_TITLE,
 };

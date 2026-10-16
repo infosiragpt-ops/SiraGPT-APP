@@ -18,8 +18,6 @@ const {
   officeSoundDefinition,
 } = require('../services/ai/elevenlabs-office-soundscape');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
-const localWhisper = require('../services/local-whisper-engine');
-const voiceStudio = require('../services/ai/voicestudio-client');
 const {
   DEFAULT_PAID_PLANS,
   normalizePlan,
@@ -71,16 +69,19 @@ const upload = multer({
     fileSize: 25 * 1024 * 1024, // 25MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/m4a', 'audio/webm', 'audio/ogg', 'audio/mp4'];
-    console.log('Uploaded file details:', {
-      originalname: file.originalname,
-      mimetype: file.mimetype,
-      size: file.size
-    });
-    if (allowedTypes.includes(file.mimetype)) {
+    // Recorders label the same audio many ways (`audio/webm;codecs=opus`,
+    // Safari `audio/mp4`, `audio/x-m4a`, video/webm for an audio-only
+    // MediaRecorder): the ladder decodes any of them through ffmpeg.
+    const allowedTypes = [
+      'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/mp3', 'audio/m4a', 'audio/x-m4a',
+      'audio/webm', 'audio/ogg', 'audio/opus', 'audio/mp4', 'audio/aac', 'audio/flac', 'audio/x-flac',
+      'video/webm', 'video/mp4',
+    ];
+    const mimetype = String(file.mimetype || '').split(';')[0].trim().toLowerCase();
+    if (allowedTypes.includes(mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error(`Invalid audio file type: ${file.mimetype}. Allowed types: ${allowedTypes.join(', ')}`), false);
+      cb(new Error(`Invalid audio file type: ${mimetype || 'unknown'}. Allowed types: ${allowedTypes.join(', ')}`), false);
     }
   }
 });
@@ -280,10 +281,45 @@ router.post('/text-to-speech', [
   }
 });
 
-// Dictation is free for every plan: paid accounts keep ElevenLabs Scribe,
-// everyone else (and any deployment without an ElevenLabs key) transcribes
-// locally — whisper.cpp bundled in the backend image first (fast), then
-// Sira Voz / VoiceStudio (WhisperX) when configured. Nothing leaves the host.
+// ── Dictation (POST /speech-to-text) ───────────────────────────────────────
+// Every plan goes through the SAME transcription ladder as uploads
+// (audio-transcriber.transcribe, short-clip path, short lane) with automatic
+// language detection — no more forced «es» on a 20 s English note.
+//   - FREE plans stay on-host by default (whisper.cpp, then Sira Voz), as
+//     before: free dictation never spends paid STT credit nor sends audio
+//     off the host unless an operator opts in (SIRAGPT_DICTATION_FREE_CLOUD=1
+//     or SIRAGPT_DICTATION_PROVIDERS). Policy: transcription-capabilities
+//     dictationLadderOptions (the admin report shows the same answer).
+//   - PAID plans with an ElevenLabs key try Scribe first, inside its own
+//     sub-budget, and fall back to the shared ladder on ANY Scribe failure
+//     (quota, plan, key, rate limit, a slow or hung upstream), so a paid user
+//     is never worse off than a free one.
+// The whole request is bounded BELOW the browser's 30 s ApiClient timeout and
+// a reached bound answers 408 (ApiClient never retries a 4xx), so the user
+// gets the Spanish copy instead of «Request timed out» after three uploads.
+// Nothing here ever invents text: a quota or plan failure that the ladder
+// cannot cover is a typed error, never a «success» sentence inserted into the
+// chat. The transcript is never logged (one summary line: tier, provider,
+// outcome, duration, character count).
+//
+// Env:
+//   SIRAGPT_DICTATION_TIMEOUT_MS         whole request bound (default 25000,
+//                                        max 28000: under the client's 30 s)
+//   SIRAGPT_DICTATION_SCRIBE_TIMEOUT_MS  Scribe sub-budget (default 10000,
+//                                        never more than 40 % of the bound)
+//   SIRAGPT_DICTATION_PROVIDERS          ladder for every plan, e.g.
+//                                        «local,voicestudio» or «groq,local»
+//   SIRAGPT_DICTATION_FREE_CLOUD=1       free plans use the shared
+//                                        TRANSCRIBE_PROVIDERS order (paid
+//                                        cloud rungs included; opt-in)
+//   SIRAGPT_DICTATION_SCRIBE_COOLDOWN_MS skip Scribe this long after a quota /
+//                                        plan / key rejection (default 600000)
+//   ELEVENLABS_STT_MODEL                 Scribe model (default scribe_v1)
+//
+// Admission: the ladder call uses the short lane of the transcriber's gate.
+// A dedicated interactive slot that queue jobs never take is the
+// audio-transcriber owner's call; until then the request bound keeps a
+// saturated gate from hanging the composer (408 after the bound).
 function userHasPaidVoicePlan(user) {
   if (!user) return false;
   if (user.isSuperAdmin) return true;
@@ -295,197 +331,423 @@ function markVoiceTranscriptionTier(req, _res, next) {
   next();
 }
 
-async function freeSpeechToText(req, res) {
-  const filePath = req.file.path;
-  const language = typeof req.body?.language === 'string' && req.body.language.trim()
-    ? req.body.language.trim().slice(0, 2).toLowerCase()
-    : (process.env.WHISPER_LANGUAGE || 'es');
-  const attempts = [];
+const DICTATION_NO_SPEECH_NOTE = 'No se detectó voz en la grabación.';
+const DICTATION_UNAVAILABLE_ERROR = 'La transcripción no está disponible en este momento. Intenta de nuevo en unos segundos.';
+const DICTATION_UNREADABLE_ERROR = 'No pude leer el audio de la grabación. Vuelve a grabar e inténtalo de nuevo.';
+const DICTATION_TIMEOUT_ERROR = 'La transcripción tardó más de lo esperado. Intenta de nuevo en unos segundos.';
+// Placeholder codes that say the recording itself could not be decoded.
+const DICTATION_UNREADABLE_CODES = new Set([
+  'no_audio_track', 'file_empty', 'file_unavailable', 'audio_decode_failed',
+  'truncated_container', 'drm_protected', 'file_too_large',
+]);
+const SCRIBE_REJECTIONS = new Set(['quota', 'plan', 'auth']);
+const SCRIBE_MODEL_RE = /^scribe_v\d+(?:_[a-z0-9]+)?$/i;
+// Every dictation caller goes through lib/api.ts ApiClient (DEFAULT_TIMEOUT_MS
+// 30 s, retries on a timeout abort and on 503). The bound must answer first.
+const DICTATION_CLIENT_TIMEOUT_MS = 30_000;
+const DICTATION_DEFAULT_TIMEOUT_MS = 25_000;
+const DICTATION_MAX_TIMEOUT_MS = 28_000;
+const SCRIBE_DEFAULT_TIMEOUT_MS = 10_000;
+const SCRIBE_MAX_SHARE = 0.4;
+const SCRIBE_MIN_TIMEOUT_MS = 200;
+
+function boundedIntEnv(env, name, fallback, min, max) {
+  const n = Number.parseInt(String(env[name] ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function dictationTimeoutMs(env = process.env) {
+  return boundedIntEnv(env, 'SIRAGPT_DICTATION_TIMEOUT_MS', DICTATION_DEFAULT_TIMEOUT_MS, 1_000, DICTATION_MAX_TIMEOUT_MS);
+}
+
+/** Scribe's own budget: the env value, never more than 40 % of the request bound. */
+function scribeTimeoutMs(env = process.env, requestMs = dictationTimeoutMs(env)) {
+  const wanted = boundedIntEnv(env, 'SIRAGPT_DICTATION_SCRIBE_TIMEOUT_MS', SCRIBE_DEFAULT_TIMEOUT_MS, SCRIBE_MIN_TIMEOUT_MS, 60_000);
+  const cap = Math.max(SCRIBE_MIN_TIMEOUT_MS, Math.floor(requestMs * SCRIBE_MAX_SHARE));
+  return Math.min(wanted, cap);
+}
+
+function scribeCooldownMs(env = process.env) {
+  return boundedIntEnv(env, 'SIRAGPT_DICTATION_SCRIBE_COOLDOWN_MS', 10 * 60_000, 0, 24 * 60 * 60_000);
+}
+
+/** Ladder options for one dictation (see transcription-capabilities). */
+function dictationLadderOptions(env = process.env, { paid = false } = {}) {
   try {
-    try {
-      const local = await localWhisper.transcribeLocal(filePath, { language });
-      const text = String(local?.text || local?.transcript || '').trim();
-      if (text) {
-        return res.json({ success: true, text, provider: 'local-whisper', model: local?.model || 'whisper-base', free: true });
-      }
-      attempts.push('local-whisper:no_speech');
-    } catch (err) {
-      attempts.push(`local-whisper:${err?.code || 'error'}`);
-    }
-    if (voiceStudio.isConfigured()) {
-      try {
-        const vs = await voiceStudio.transcribe({ filePath, filename: req.file.originalname || 'dictation.webm', mime: req.file.mimetype, language });
-        if (vs.text) {
-          return res.json({ success: true, text: vs.text, provider: 'sira-voz', model: 'voicestudio-whisperx', free: true });
-        }
-        attempts.push('voicestudio:no_speech');
-      } catch (err) {
-        attempts.push(`voicestudio:${err?.code || 'error'}`);
-      }
-    }
-    if (attempts.every((a) => a.endsWith(':no_speech'))) {
-      return res.json({ success: true, text: '', provider: 'local', free: true, note: 'No se detectó voz en la grabación.' });
-    }
-    console.warn('[elevenlabs/speech-to-text] free transcription unavailable:', attempts.join(', '));
-    return res.status(503).json({ error: 'La transcripción no está disponible en este momento. Intenta de nuevo en unos segundos.', code: 'transcription_unavailable' });
-  } finally {
-    await fs.promises.unlink(filePath).catch(() => {});
+    const { providers, escalationProviders } = require('../services/transcription-capabilities')
+      .dictationLadderOptions(env, { paid });
+    return {
+      ...(providers ? { providers } : {}),
+      ...(escalationProviders ? { escalationProviders } : {}),
+    };
+  } catch {
+    // Policy unreadable: fail closed to the on-host ladder (never paid by accident).
+    return { providers: ['local', 'voicestudio'], escalationProviders: [] };
   }
 }
 
-// Speech-to-Text (ElevenLabs Scribe for paid plans; local engines for everyone else)
-router.post('/speech-to-text', authenticateToken, markVoiceTranscriptionTier, upload.single('audio'), async (req, res) => {
+/** Back-compat seam: the providers list a dictation would use, or undefined (shared order). */
+function dictationProviders(env = process.env, { paid = false } = {}) {
+  return dictationLadderOptions(env, { paid }).providers;
+}
+
+/** A language the client asked for («es», «es-PE», «spa»), or undefined (detect). */
+function dictationLanguage(raw) {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim().toLowerCase();
+  if (!value || value === 'auto' || value === 'detect') return undefined;
+  const base = value.split(/[-_]/)[0];
+  return /^[a-z]{2,3}$/.test(base) ? base : undefined;
+}
+
+function scribeModel(body = {}, env = process.env) {
+  const fromEnv = String(env.ELEVENLABS_STT_MODEL || '').trim();
+  if (SCRIBE_MODEL_RE.test(fromEnv)) return fromEnv;
+  const requested = String(body.model_id || body.model || '').trim();
+  return SCRIBE_MODEL_RE.test(requested) ? requested : 'scribe_v1';
+}
+
+// Text patterns, used ONLY when the error carries no HTTP status (the status
+// decides otherwise: ElevenLabs' transient 429 bodies talk about
+// «subscription» and «tiers», and a 500 may say «explanation»).
+const SCRIBE_CREDITS_RE = /quota_exceeded|exceeds your quota|\bquota\b|\bcredits?\b|insufficient[_ ](?:credits|balance|funds)/;
+const SCRIBE_QUOTA_TEXT_RE = /quota_exceeded|exceeds your quota|\bquota\b|\bcredits?\b|insufficient[_ ](?:credits|balance|funds)|character_limit_exceeded|payment[_ ]required/;
+const SCRIBE_AUTH_TEXT_RE = /unauthori[sz]ed|invalid[_ ]?api[_ ]?key|api key is invalid|missing_api_key/;
+const SCRIBE_PLAN_TEXT_RE = /subscription (?:plan )?(?:does not|doesn't) include|upgrade your (?:plan|subscription)|not available (?:on|for) your/;
+const SCRIBE_RATE_TEXT_RE = /rate[ _-]?limit|too many (?:concurrent )?requests|concurrent requests|heavy traffic/;
+const SCRIBE_TIMEOUT_TEXT_RE = /timed? ?out|timeout/;
+
+function scribeErrorStatus(err) {
+  const status = Number(err?.statusCode || err?.status || err?.response?.status || 0);
+  return Number.isInteger(status) && status >= 100 && status <= 599 ? status : 0;
+}
+
+function scribeErrorDetail(err) {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Audio file is required' });
+    return `${err?.message || ''} ${typeof err?.body === 'string' ? err.body : JSON.stringify(err?.body || '')}`.slice(0, 2000).toLowerCase();
+  } catch {
+    return String(err?.message || '').slice(0, 2000).toLowerCase();
+  }
+}
+
+/**
+ * Why Scribe failed, as a stable category (never the provider's text):
+ * quota | plan | auth | rate | timeout | error. Only quota / plan / auth
+ * cool Scribe down for every paid user, so the HTTP status decides first and
+ * the text is a tiebreaker for 401 / 403 (credits) or the only signal when
+ * there is no status.
+ */
+function classifyScribeError(err) {
+  const status = scribeErrorStatus(err);
+  const detail = scribeErrorDetail(err);
+  if (status) {
+    if (status === 429) return 'rate';
+    if (status === 408) return 'timeout';
+    if (status >= 500) return 'error';
+    if (status === 402) return 'quota';
+    if (status === 401) return SCRIBE_CREDITS_RE.test(detail) ? 'quota' : 'auth';
+    if (status === 403) return SCRIBE_CREDITS_RE.test(detail) ? 'quota' : 'plan';
+    return 'error';
+  }
+  const name = String(err?.name || '');
+  if (/timeout/i.test(name) || SCRIBE_TIMEOUT_TEXT_RE.test(detail)) return 'timeout';
+  if (SCRIBE_RATE_TEXT_RE.test(detail)) return 'rate';
+  if (SCRIBE_QUOTA_TEXT_RE.test(detail)) return 'quota';
+  if (SCRIBE_AUTH_TEXT_RE.test(detail)) return 'auth';
+  if (SCRIBE_PLAN_TEXT_RE.test(detail)) return 'plan';
+  return 'error';
+}
+
+// Scribe rejections (no credits / plan / key) are remembered per key so the
+// next dictations go straight to the ladder instead of paying a round trip.
+const scribeCooldown = { fingerprint: null, until: 0, reason: null };
+
+function keyFingerprint(key) {
+  return require('crypto').createHash('sha256').update(String(key || '')).digest('hex').slice(0, 16);
+}
+
+function scribeCoolingDown(key, now = Date.now()) {
+  if (!scribeCooldown.until || scribeCooldown.fingerprint !== keyFingerprint(key)) return null;
+  if (now >= scribeCooldown.until) return null;
+  return scribeCooldown.reason;
+}
+
+function rememberScribeRejection(key, reason, env = process.env, now = Date.now()) {
+  const ms = scribeCooldownMs(env);
+  if (!ms) return;
+  scribeCooldown.fingerprint = keyFingerprint(key);
+  scribeCooldown.until = now + ms;
+  scribeCooldown.reason = reason;
+}
+
+function resetScribeCooldown() {
+  scribeCooldown.fingerprint = null;
+  scribeCooldown.until = 0;
+  scribeCooldown.reason = null;
+}
+
+function scribeText(body) {
+  if (typeof body === 'string') return body.trim();
+  if (!body || typeof body !== 'object') return '';
+  if (typeof body.text === 'string') return body.text.trim();
+  if (typeof body.transcript === 'string') return body.transcript.trim();
+  if (Array.isArray(body.transcripts)) {
+    return body.transcripts.map((t) => (t && typeof t.text === 'string' ? t.text.trim() : '')).filter(Boolean).join(' ');
+  }
+  if (Array.isArray(body.segments)) {
+    return body.segments.map((s) => String(s?.text || s?.transcript || '').trim()).filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+function abortErrorFrom(signal) {
+  const reason = signal && signal.reason;
+  if (reason instanceof Error) return reason;
+  return Object.assign(new Error('aborted'), { name: 'AbortError', code: 'ABORT_ERR' });
+}
+
+/**
+ * Settle with `promise`, or reject as soon as `signal` aborts — even when
+ * the work underneath ignores the signal (a hung provider SDK, a call stuck
+ * in an admission gate). The abandoned promise stays handled.
+ */
+function untilAborted(promise, signal) {
+  if (!signal) return Promise.resolve(promise);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortErrorFrom(signal));
+    if (signal.aborted) {
+      Promise.resolve(promise).catch(() => {});
+      onAbort();
+      return;
     }
-    if (!elevenLabsApiKey() || req.freeVoiceTranscription) {
-      return freeSpeechToText(req, res);
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (err) => { signal.removeEventListener('abort', onAbort); reject(err); },
+    );
+  });
+}
+
+/** `request` aborts OR `ms` elapse; `budget` says which one fired. */
+function scribeBudgetSignal(request, ms) {
+  const budget = new AbortController();
+  const timer = setTimeout(() => {
+    budget.abort(Object.assign(new Error('scribe budget exceeded'), { name: 'TimeoutError', code: 'SCRIBE_TIMEOUT' }));
+  }, ms);
+  if (typeof timer.unref === 'function') timer.unref();
+  const forward = () => budget.abort(abortErrorFrom(request));
+  if (request.aborted) forward(); else request.addEventListener('abort', forward, { once: true });
+  return {
+    signal: budget.signal,
+    expired: () => budget.signal.aborted && !request.aborted,
+    dispose: () => {
+      clearTimeout(timer);
+      request.removeEventListener('abort', forward);
+    },
+  };
+}
+
+/** One Scribe request. Resolves { text, language } — never a placeholder sentence. */
+async function scribeDictation({ client, filePath, mimeType, model, language, signal, timeoutMs }) {
+  const audioBuffer = await fs.promises.readFile(filePath);
+  const file = new Blob([audioBuffer], { type: mimeType || 'audio/webm' });
+  const body = await untilAborted(client.speechToText.convert({
+    file,
+    modelId: model,
+    // Dictation goes into the composer: «(risas)» / «(aplausos)» are noise.
+    tagAudioEvents: false,
+    diarize: false,
+    ...(language ? { languageCode: language } : {}),
+  }, {
+    ...(signal ? { abortSignal: signal } : {}),
+    timeoutInSeconds: Math.max(1, Math.ceil(timeoutMs / 1000)),
+    maxRetries: 0,
+  }), signal);
+  const lang = typeof body?.languageCode === 'string' ? body.languageCode
+    : (typeof body?.language_code === 'string' ? body.language_code : null);
+  return { text: scribeText(body), language: lang ? lang.slice(0, 8) : null };
+}
+
+function ladderProviderLabel(result) {
+  const names = Object.keys(result?.providers || {});
+  const first = names[0] || (result?.engine === 'local' ? 'local' : null);
+  if (!first) return result?.method === 'local-whisper' ? 'local-whisper' : 'transcriber';
+  if (first === 'local') return 'local-whisper';
+  if (first === 'voicestudio') return 'sira-voz';
+  return String(first).slice(0, 40);
+}
+
+function logDictation(fields) {
+  try {
+    const parts = Object.entries(fields)
+      .filter(([, v]) => v !== undefined && v !== null && v !== '')
+      .map(([k, v]) => `${k}=${String(v).replace(/\s+/g, '_').slice(0, 60)}`);
+    console.log(`[dictation] ${parts.join(' ')}`);
+  } catch { /* the summary line never fails a dictation */ }
+}
+
+router.post('/speech-to-text', authenticateToken, markVoiceTranscriptionTier, upload.single('audio'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Audio file is required' });
+  }
+  const env = process.env;
+  const started = Date.now();
+  const filePath = req.file.path;
+  const mimeType = req.file.mimetype;
+  const originalName = req.file.originalname || 'dictation.webm';
+  const paid = !req.freeVoiceTranscription;
+  const tier = paid ? 'paid' : 'free';
+  const language = dictationLanguage(req.body?.language);
+  const timeoutMs = dictationTimeoutMs(env);
+
+  // One controller for the whole request: the client hanging up (the
+  // browser's own timeout, a closed tab) or our bound cancels whisper / the
+  // provider call instead of burning CPU for a response nobody reads.
+  const controller = new AbortController();
+  let clientGone = false;
+  let timedOut = false;
+  const onClose = () => {
+    if (!res.writableFinished) {
+      clientGone = true;
+      controller.abort();
     }
+  };
+  res.on('close', onClose);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  if (typeof timer.unref === 'function') timer.unref();
+  const signal = controller.signal;
 
-    if (!req.file) {
-      return res.status(400).json({ error: 'Audio file is required' });
-    }
-
-    console.log('Processing speech-to-text with ElevenLabs:', {
-      filename: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size,
-      path: req.file.path
-    });
-
-    // Check if ElevenLabs STT is actually available
-    console.log('File size in MB:', (req.file.size / 1024 / 1024).toFixed(2));
-
-    // Use the official ElevenLabs client method
-    try {
-      console.log('Using ElevenLabs client speechToText.convert method...');
-
-      // Read the audio file and create a Blob (async — don't block the event
-      // loop on disk I/O for the upload duration).
-      const audioBuffer = await fs.promises.readFile(req.file.path);
-      const audioBlob = new Blob([audioBuffer], {
-        type: req.file.mimetype || 'audio/webm'
-      });
-
-      // Get parameters from request body
-      const {
-        model = 'scribe_v1',
-        language = null,
-        tagAudioEvents = true,
-        diarize = false
-      } = req.body;
-
-      console.log('ElevenLabs STT parameters:', {
-        modelId: model,
-        languageCode: language,
-        tagAudioEvents,
-        diarize,
-        fileType: req.file.mimetype
-      });
-
-      // Use the official ElevenLabs client method
-      const transcription = await elevenlabs().speechToText.convert({
-        file: audioBlob,
-        modelId: model, // Only "scribe_v1" is supported currently
-        tagAudioEvents: tagAudioEvents, // Tag audio events like laughter, applause, etc.
-        languageCode: language, // Language code (e.g., "eng", "spa", etc.) or null for auto-detect
-        diarize: diarize // Whether to annotate who is speaking
-      });
-
-      console.log('ElevenLabs STT transcription result:', transcription);
-
-      // Clean up uploaded file
-      fs.unlinkSync(req.file.path);
-
-      // Extract text from transcription result
-      let transcribedText = '';
-      if (typeof transcription === 'string') {
-        transcribedText = transcription;
-      } else if (transcription && transcription.text) {
-        transcribedText = transcription.text;
-      } else if (transcription && transcription.transcript) {
-        transcribedText = transcription.transcript;
-      } else if (transcription && Array.isArray(transcription.segments)) {
-        // If it returns segments, combine them
-        transcribedText = transcription.segments.map(segment => segment.text || segment.transcript).join(' ');
+  let scribeFailure = null;
+  let outcome = 'error';
+  let provider = null;
+  let chars = 0;
+  try {
+    const apiKey = elevenLabsApiKey();
+    if (paid && apiKey) {
+      const cooling = scribeCoolingDown(apiKey);
+      if (cooling) {
+        scribeFailure = cooling;
       } else {
-        transcribedText = 'Transcription completed successfully';
-      }
-
-      // Track usage
-      await prisma.apiUsage.create({
-        data: {
-          userId: req.user.id,
-          model: 'elevenlabs-scribe-v1',
-          tokens: transcribedText.length,
-          cost: 0.003 // Approximate cost
+        const model = scribeModel(req.body, env);
+        const scribeMs = scribeTimeoutMs(env, timeoutMs);
+        const budget = scribeBudgetSignal(signal, scribeMs);
+        try {
+          const scribe = await scribeDictation({
+            client: elevenlabs(), filePath, mimeType, model, language, signal: budget.signal, timeoutMs: scribeMs,
+          });
+          if (scribe.text) {
+            try {
+              await prisma.apiUsage.create({
+                data: { userId: req.user.id, model: `elevenlabs-${model.replace(/_/g, '-')}`, tokens: scribe.text.length, cost: 0.003 },
+              });
+            } catch { /* usage tracking never fails a dictation */ }
+            outcome = 'ok';
+            provider = 'elevenlabs';
+            chars = scribe.text.length;
+            return res.json({
+              success: true,
+              text: scribe.text,
+              provider: 'elevenlabs',
+              model,
+              ...(scribe.language ? { language: scribe.language } : {}),
+            });
+          }
+          // Scribe heard nothing: the ladder gives the second opinion before
+          // the user is told there was no speech.
+          scribeFailure = 'empty';
+        } catch (err) {
+          // Only the REQUEST's cancellation (client gone / bound reached)
+          // stops here. Scribe's own sub-budget expiring is a slow or hung
+          // upstream: classified 'timeout' and the ladder gets the time left.
+          if (signal.aborted) throw err;
+          scribeFailure = budget.expired() ? 'timeout' : classifyScribeError(err);
+          if (SCRIBE_REJECTIONS.has(scribeFailure)) rememberScribeRejection(apiKey, scribeFailure, env);
+          const status = scribeErrorStatus(err);
+          console.warn(`[dictation] scribe failed (${scribeFailure}${status ? ` ${status}` : ''}); using the transcription ladder`);
+        } finally {
+          budget.dispose();
         }
-      });
+      }
+    }
 
+    const audioTranscriber = require('../services/audio-transcriber');
+    const ladder = dictationLadderOptions(env, { paid });
+    const result = await untilAborted(audioTranscriber.transcribe(filePath, mimeType, originalName, {
+      signal,
+      lane: 'interactive',
+      ...(language ? { language } : {}),
+      ...ladder,
+    }), signal);
+    const transcript = result && result.ok
+      ? String(result.transcript ?? '').trim()
+      : '';
+    provider = ladderProviderLabel(result);
+    if (transcript) {
+      outcome = 'ok';
+      chars = transcript.length;
       return res.json({
         success: true,
-        text: transcribedText,
-        provider: 'elevenlabs',
-        model: model,
-        fullResult: transcription // Include full result for debugging
-      });
-
-    } catch (clientError) {
-      console.error('ElevenLabs client STT error:', clientError);
-
-      // Clean up uploaded file
-      if (fs.existsSync(req.file.path)) {
-        fs.unlinkSync(req.file.path);
-      }
-
-      // Check if it's a plan/availability issue
-      if (clientError.message && (
-        clientError.message.includes('not available') ||
-        clientError.message.includes('plan') ||
-        clientError.message.includes('subscription') ||
-        clientError.message.includes('quota') ||
-        clientError.message.includes('unauthorized') ||
-        clientError.message.includes('forbidden')
-      )) {
-        // Provide helpful fallback message
-        const fallbackText = 'Audio received successfully. ElevenLabs Speech-to-Text requires a compatible subscription plan.';
-
-        // Track usage
-        await prisma.apiUsage.create({
-          data: {
-            userId: req.user.id,
-            model: 'elevenlabs-stt-unavailable',
-            tokens: fallbackText.length,
-            cost: 0.001
-          }
-        });
-
-        return res.json({
-          success: true,
-          text: fallbackText,
-          fallback: true,
-          note: 'ElevenLabs Speech-to-Text may require a higher subscription plan.',
-          error: clientError.message
-        });
-      }
-
-      // For other errors, return error response
-      res.status(500).json({
-        error: `ElevenLabs STT error: ${clientError.message}`,
-        details: clientError.toString()
+        text: transcript,
+        provider,
+        model: result.model || null,
+        ...(result.language ? { language: result.language } : {}),
+        ...(paid ? {} : { free: true }),
+        ...(scribeFailure && scribeFailure !== 'empty' ? { scribeFallback: scribeFailure } : {}),
       });
     }
-
-  } catch (error) {
-    console.error('Speech-to-Text error:', error);
-
-    // Clean up file on error
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+    const reasonCode = result?.reasonCode || (result?.ok ? 'no_speech' : null);
+    if (result?.status === 'no_speech' || reasonCode === 'no_speech') {
+      outcome = 'no_speech';
+      return res.json({
+        success: true,
+        text: '',
+        provider,
+        ...(paid ? {} : { free: true }),
+        note: DICTATION_NO_SPEECH_NOTE,
+      });
     }
-
-    res.status(500).json({ error: error.message });
+    if (DICTATION_UNREADABLE_CODES.has(reasonCode)) {
+      outcome = `unreadable:${reasonCode}`;
+      return res.status(422).json({ error: DICTATION_UNREADABLE_ERROR, code: 'audio_unreadable', reason: reasonCode });
+    }
+    outcome = `unavailable:${reasonCode || 'unknown'}`;
+    return res.status(503).json({
+      error: DICTATION_UNAVAILABLE_ERROR,
+      code: 'transcription_unavailable',
+      ...(scribeFailure && scribeFailure !== 'empty' ? { scribe: scribeFailure } : {}),
+    });
+  } catch (err) {
+    if (clientGone) {
+      outcome = 'client_gone';
+      return undefined;
+    }
+    if (timedOut) {
+      // 408, not 503: ApiClient retries 503 and timeouts, and every retry
+      // re-uploads the audio and restarts the whole ladder.
+      outcome = 'timeout';
+      return res.status(408).json({ error: DICTATION_TIMEOUT_ERROR, code: 'transcription_timeout' });
+    }
+    outcome = `failed:${String(err?.code || err?.name || 'error').slice(0, 40)}`;
+    return res.status(503).json({
+      error: DICTATION_UNAVAILABLE_ERROR,
+      code: 'transcription_unavailable',
+      ...(scribeFailure && scribeFailure !== 'empty' ? { scribe: scribeFailure } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+    res.removeListener('close', onClose);
+    // Summary line first (synchronously, in the same tick as the response),
+    // then the async cleanup of the upload.
+    logDictation({
+      tier,
+      outcome,
+      provider,
+      scribe: scribeFailure,
+      chars,
+      ms: Date.now() - started,
+    });
+    await fs.promises.unlink(filePath).catch(() => {});
   }
 });
 
@@ -984,3 +1246,19 @@ router.get('/music-styles', authenticateToken, async (req, res) => {
 
 
 module.exports = router;
+// Test seams for the dictation contract (not part of the HTTP API).
+module.exports._dictation = {
+  classifyScribeError,
+  dictationLanguage,
+  dictationLadderOptions,
+  dictationProviders,
+  dictationTimeoutMs,
+  scribeTimeoutMs,
+  scribeModel,
+  scribeText,
+  ladderProviderLabel,
+  resetScribeCooldown,
+  untilAborted,
+  DICTATION_CLIENT_TIMEOUT_MS,
+  DICTATION_MAX_TIMEOUT_MS,
+};

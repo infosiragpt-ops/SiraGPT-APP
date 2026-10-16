@@ -364,3 +364,43 @@ test('document comparison keeps unmatched representative text out of evidence', 
   assert.ok(result.documents.every((doc) => doc.summary && doc.chunkCount > 0));
   assert.ok(result.documents.every((doc) => doc.evidence.length === 0));
 });
+
+test('DocumentIntelligence re-analysis keeps metadata owned by other pipelines', async () => {
+  const prisma = createPrismaMock([
+    {
+      id: 'file-media',
+      userId: 'user-1',
+      originalName: 'clase.mp4',
+      mimeType: 'video/mp4',
+      extractedText: '[00:00:00] Buenos días a todos, hoy veremos la fotosíntesis y sus dos fases principales.',
+    },
+  ]);
+  await prisma.documentAnalysis.upsert({
+    where: { fileId: 'file-media' },
+    create: {
+      userId: 'user-1',
+      fileId: 'file-media',
+      status: 'pending',
+      metadata: {
+        kind: 'media_transcript',
+        sidecar: '.transcripts/file-media.json.gz',
+        mediaHints: { terms: ['Huamán'], language: 'es' },
+        archiveParent: { fileId: 'zip-1', member: 'PTT-0001.opus' },
+        linkCaptions: { language: 'es' },
+        analyzedAt: '2020-01-01T00:00:00.000Z',
+      },
+    },
+    update: {},
+  });
+
+  await documentIntelligence.analyzeFile(prisma, { userId: 'user-1', fileId: 'file-media' });
+
+  const row = await prisma.documentAnalysis.findUnique({ where: { fileId: 'file-media' } });
+  assert.equal(row.metadata.kind, 'media_transcript');
+  assert.equal(row.metadata.sidecar, '.transcripts/file-media.json.gz');
+  assert.deepEqual(row.metadata.mediaHints, { terms: ['Huamán'], language: 'es' });
+  assert.deepEqual(row.metadata.archiveParent, { fileId: 'zip-1', member: 'PTT-0001.opus' });
+  assert.deepEqual(row.metadata.linkCaptions, { language: 'es' });
+  assert.notEqual(row.metadata.analyzedAt, '2020-01-01T00:00:00.000Z', 'the analysis keys are refreshed');
+  assert.equal(row.metadata.originalName, 'clase.mp4');
+});

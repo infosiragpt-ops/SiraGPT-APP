@@ -10,7 +10,15 @@
  *   <UPLOAD_DIR>/.transcripts/<fileId>.json.gz
  *   { version: 1, fileId, userId, language, durationSec, providers, engine,
  *     coverage, gaps, partial, segments: [{ s, e, t, spk?, conf? }], createdAt,
- *     timeOffsetSec? }
+ *     timeOffsetSec?,
+ *     // optional, written only when the result carries them (contract C5):
+ *     source?: 'asr' | 'subtitles' | 'onscreen', quality?, audioStream?,
+ *     hints?, embeddedSubtitles?: { language, codec, segments: [{ s, e, t }] },
+ *     onScreenText?: [{ s, e, t, c? }], cleanup? }
+ *
+ * The version stays 1: every new field is optional and a reader that does not
+ * know it ignores it (an older process during a deploy reads the sidecar as
+ * before). `normalizeSidecar` bounds every list again on read.
  *
  * plus a small pointer + stats in DocumentAnalysis.metadata
  * ({ kind: 'media_transcript', sidecar, durationSec, providers, coverage,
@@ -37,7 +45,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { promisify } = require('node:util');
-const { normalizeTranscriptResult, speakerLabels } = require('./media-transcript-format');
+const {
+  normalizeTranscriptResult, speakerLabels, normalizeQuality, normalizeTimedTextList, normalizeEmbeddedSubtitles,
+  normalizeCleanupStats, normalizeSource, normalizeMediaHints, normalizeHintLanguage,
+} = require('./media-transcript-format');
 
 const gzip = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -136,7 +147,58 @@ function buildSidecar({ fileId, userId, result }, { now = new Date() } = {}) {
   };
   if (synthetic) sidecar.synthetic = true;
   if (meta.timeOffsetSec > 0) sidecar.timeOffsetSec = round3(meta.timeOffsetSec);
+  Object.assign(sidecar, sidecarExtras(result, meta));
   return sidecar;
+}
+
+/** Engine `audioStream` → { streamOrdinal, reason, index?, language? } or null. */
+function normalizeAudioStream(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const ordinal = Number(raw.streamOrdinal);
+  if (!Number.isInteger(ordinal) || ordinal < 0 || ordinal > 1000) return null;
+  const out = { streamOrdinal: ordinal, reason: String(raw.reason || '').replace(/[^\w.-]+/g, '_').slice(0, 40) || null };
+  const index = Number(raw.index);
+  if (Number.isInteger(index) && index >= 0 && index <= 10000) out.index = index;
+  const language = normalizeHintLanguage(raw.language);
+  if (language) out.language = language;
+  return out;
+}
+
+/** Hints stored with a transcript: { language?, terms?, speakers?, verbatim? } or null. */
+function normalizeStoredHints(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const hints = normalizeMediaHints(raw) || {};
+  const language = normalizeHintLanguage(raw.language);
+  const out = { ...(language ? { language } : {}), ...hints };
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Optional C5 fields of a result, bounded and compacted for the sidecar.
+ * Written only when present, so a plain ASR result keeps the exact v1 shape.
+ */
+function sidecarExtras(result, meta = normalizeTranscriptResult(result)) {
+  const r = result && typeof result === 'object' && !Array.isArray(result) ? result : {};
+  const out = {};
+  if (meta.source) out.source = meta.source;
+  if (meta.subtitleOrigin) out.subtitleOrigin = meta.subtitleOrigin;
+  if (meta.quality) out.quality = meta.quality;
+  const audioStream = normalizeAudioStream(r.audioStream);
+  if (audioStream) out.audioStream = audioStream;
+  const hints = normalizeStoredHints(r.hints);
+  if (hints) out.hints = hints;
+  if (meta.embeddedSubtitles) {
+    out.embeddedSubtitles = {
+      language: meta.embeddedSubtitles.language,
+      codec: meta.embeddedSubtitles.codec,
+      segments: meta.embeddedSubtitles.segments.map((s) => ({ s: s.start, e: s.end, t: s.text })),
+    };
+  }
+  if (meta.onScreenText.length) {
+    out.onScreenText = meta.onScreenText.map((item) => ({ s: item.start, e: item.end, t: item.text, ...(item.confidence != null ? { c: item.confidence } : {}) }));
+  }
+  if (meta.storedCleanup) out.cleanup = meta.storedCleanup;
+  return out;
 }
 
 /**
@@ -234,6 +296,12 @@ async function purgeMediaTranscript(fileId, opts = {}) {
   } catch (err) {
     if (!(err && err.code === 'ENOENT') && !out.error) out.error = (err && err.code) || 'unlink_failed';
   }
+  // Segment texts the queue kept for a refine or a gap retry.
+  try {
+    if (await purgeCheckpointPointer(fileId, opts)) out.checkpoint = true;
+  } catch (err) {
+    if (!out.error) out.error = (err && err.code) || 'unlink_failed';
+  }
   return out;
 }
 
@@ -314,8 +382,32 @@ function normalizeSidecar(sidecar, extra = {}) {
     segments: sidecar.segments.map(expandSegment),
     createdAt: sidecar.createdAt || null,
     ...(timeOffsetSec ? { timeOffsetSec } : {}),
+    ...normalizedSidecarExtras(sidecar),
     ...extra,
   };
+}
+
+/**
+ * The optional C5 fields of a stored sidecar, bounded again on read (a
+ * sidecar is never trusted for sizes). An older sidecar has none of them: it
+ * reads as `source: 'asr'` with no quality report.
+ */
+function normalizedSidecarExtras(sidecar) {
+  const out = { source: normalizeSource(sidecar.source) || 'asr' };
+  if (out.source === 'subtitles' && sidecar.subtitleOrigin === 'platform') out.subtitleOrigin = 'platform';
+  const quality = normalizeQuality(sidecar.quality);
+  if (quality) out.quality = quality;
+  const audioStream = normalizeAudioStream(sidecar.audioStream);
+  if (audioStream) out.audioStream = audioStream;
+  const hints = normalizeStoredHints(sidecar.hints);
+  if (hints) out.hints = hints;
+  const embedded = normalizeEmbeddedSubtitles(sidecar.embeddedSubtitles);
+  if (embedded) out.embeddedSubtitles = embedded;
+  const onScreenText = normalizeTimedTextList(sidecar.onScreenText);
+  if (onScreenText.length) out.onScreenText = onScreenText;
+  const cleanup = normalizeCleanupStats(sidecar.cleanup);
+  if (cleanup) out.cleanup = cleanup;
+  return out;
 }
 
 /**
@@ -369,6 +461,15 @@ function mediaTranscriptMetadata(result, { sidecarPath, fileId } = {}) {
     gaps: meta.gaps.slice(0, MAX_GAPS_IN_METADATA).map((g) => ({ start: round3(g.start), end: round3(g.end), reason: g.reason })),
     engine: meta.engine,
     ...offset,
+    // Optional C5 stats (numbers and labels only, never text).
+    ...(meta.source && meta.source !== 'asr' ? { source: meta.source } : {}),
+    ...(meta.quality ? { quality: {
+      score: meta.quality.score,
+      level: meta.quality.level,
+      lowConfidence: meta.quality.lowConfidence.length,
+      enginesUsed: meta.quality.enginesUsed,
+    } } : {}),
+    ...(normalizeAudioStream(result && result.audioStream) ? { audioStream: normalizeAudioStream(result.audioStream) } : {}),
   };
 }
 
@@ -440,6 +541,181 @@ async function upsertMediaTranscriptAnalysis(prisma, { fileId, userId, result, s
   });
 }
 
+// ── transcription hints (durable copy, contract C5) ─────────────────────────
+//
+// What the user said about a recording («está en inglés», names, number of
+// speakers, «literal») travels in the job data AND in
+// DocumentAnalysis.metadata.mediaHints, so a job lost from Redis and re-queued
+// by the recovery sweep with only { fileId, userId } still gets them. A later
+// document-intelligence pass that rewrites `metadata` may drop the copy; the
+// job data and the sidecar (`hints`) keep it for the run in flight.
+
+const MAX_MEDIA_HINT_TERMS = 30;
+
+function isoOrNow(at) {
+  const date = at == null ? new Date() : new Date(at);
+  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+}
+
+/** Stored mediaHints (any shape) → { language?, terms?, speakers?, verbatim?, updatedAt? } or null. */
+function normalizeMediaHintsRecord(raw) {
+  const hints = normalizeStoredHints(raw);
+  if (!hints) return null;
+  const updatedAt = raw && raw.updatedAt && !Number.isNaN(Date.parse(raw.updatedAt)) ? new Date(raw.updatedAt).toISOString() : null;
+  return { ...hints, ...(updatedAt ? { updatedAt } : {}) };
+}
+
+/**
+ * Merge new hints into the stored ones: a new language, speaker count or
+ * verbatim flag replaces the old one; terms accumulate (newest first, ≤ 30).
+ */
+function mergeMediaHints(previous, next) {
+  const out = { ...(previous || {}) };
+  delete out.updatedAt;
+  if (next.language) out.language = next.language;
+  if (next.speakers != null) out.speakers = next.speakers;
+  if (typeof next.verbatim === 'boolean') out.verbatim = next.verbatim;
+  if (next.terms && next.terms.length) {
+    const seen = new Set();
+    const terms = [];
+    for (const term of [...next.terms, ...(out.terms || [])]) {
+      const key = String(term).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      terms.push(term);
+      if (terms.length >= MAX_MEDIA_HINT_TERMS) break;
+    }
+    out.terms = terms;
+  }
+  return out;
+}
+
+/**
+ * Durably record hints for a file of `userId` (DocumentAnalysis.metadata.mediaHints).
+ * Never throws: { ok, mediaHints } or { ok: false, reason }.
+ */
+async function recordMediaHints(prisma, { fileId, userId, language = null, hints = null, at = null } = {}) {
+  if (!userId || !isValidFileId(fileId)) return { ok: false, reason: 'invalid' };
+  if (!prisma || !prisma.documentAnalysis || typeof prisma.documentAnalysis.upsert !== 'function'
+    || typeof prisma.documentAnalysis.findUnique !== 'function') return { ok: false, reason: 'unavailable' };
+  const next = normalizeStoredHints({ ...(normalizeMediaHints(hints) || {}), language });
+  if (!next) return { ok: false, reason: 'empty' };
+  const owner = String(userId);
+  try {
+    let fileMime = null;
+    if (prisma.file && typeof prisma.file.findFirst === 'function') {
+      const file = await prisma.file.findFirst({ where: { id: fileId, userId: owner, deletedAt: null }, select: { id: true, mimeType: true } });
+      if (!file) return { ok: false, reason: 'not_found' };
+      fileMime = file.mimeType || null;
+    }
+    const existing = await prisma.documentAnalysis.findUnique({ where: { fileId }, select: { userId: true, metadata: true } });
+    if (existing && existing.userId !== owner) return { ok: false, reason: 'foreign' };
+    const metadata = plainObject(existing && existing.metadata);
+    const mediaHints = { ...mergeMediaHints(normalizeMediaHintsRecord(metadata.mediaHints), next), updatedAt: isoOrNow(at) };
+    await prisma.documentAnalysis.upsert({
+      where: { fileId },
+      // `pending`: this row holds no analysis yet; document-intelligence
+      // builds it from the transcript when someone asks.
+      create: { userId: owner, fileId, status: 'pending', mimeType: fileMime, metadata: { mediaHints } },
+      update: { metadata: { ...metadata, mediaHints } },
+    });
+    return { ok: true, mediaHints };
+  } catch (_) {
+    return { ok: false, reason: 'write_failed' };
+  }
+}
+
+/**
+ * Owner-scoped read of what the media pointer row knows: the durable hints and
+ * the recording's duration. Never throws: { mediaHints, durationSec }.
+ */
+async function readMediaAnalysisInfo(prisma, { fileId, userId } = {}) {
+  const empty = { mediaHints: null, durationSec: null };
+  if (!userId || !isValidFileId(fileId) || !prisma || !prisma.documentAnalysis
+    || typeof prisma.documentAnalysis.findUnique !== 'function') return empty;
+  try {
+    const row = await prisma.documentAnalysis.findUnique({ where: { fileId }, select: { userId: true, metadata: true } });
+    if (!row || row.userId !== String(userId)) return empty;
+    const metadata = plainObject(row.metadata);
+    const duration = Number(metadata.durationSec);
+    return {
+      mediaHints: normalizeMediaHintsRecord(metadata.mediaHints),
+      durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+    };
+  } catch (_) {
+    return empty;
+  }
+}
+
+/** The durable hints of a file (see recordMediaHints), or null. Never throws. */
+async function readMediaHints(prisma, ref = {}) {
+  return (await readMediaAnalysisInfo(prisma, ref)).mediaHints;
+}
+
+// ── kept checkpoints (refine) ───────────────────────────────────────────────
+//
+// The media queue keeps a file's checkpointed segment texts after it
+// finishes (so «revisa el minuto 12» re-transcribes one piece, not five
+// hours) and after a partial result (the gap retry needs them). Their
+// directory is named after a hash of the owner and the size, which a delete
+// route does not know, so the queue leaves a pointer here; deleting the file
+// removes the directory through it.
+
+const CHECKPOINT_DIR_RE = /^media-[a-f0-9]{64}-\d+$/;
+const CHECKPOINT_POINTER_VERSION = 1;
+
+function checkpointRootOf(opts = {}) {
+  if (opts.checkpointRoot) return path.resolve(opts.checkpointRoot);
+  const env = opts.env || process.env;
+  return env.MEDIA_TRANSCRIPTION_CHECKPOINT_DIR
+    ? path.resolve(env.MEDIA_TRANSCRIPTION_CHECKPOINT_DIR)
+    : path.join(path.resolve(env.UPLOAD_DIR || 'uploads'), '.transcription-checkpoints');
+}
+
+/** Absolute path of a file's checkpoint pointer; throws like `sidecarPathFor`. */
+function checkpointPointerPathFor(fileId, opts = {}) {
+  sidecarPathFor(fileId, opts);
+  return path.join(rootOf(opts), `${fileId}.ckpt.json`);
+}
+
+/** Remember which checkpoint directory belongs to a file. Never throws. */
+async function recordCheckpointPointer({ fileId, userId, dir, ...opts } = {}) {
+  if (!userId || !isValidFileId(fileId) || !dir) return { ok: false, reason: 'invalid' };
+  const name = path.basename(String(dir));
+  if (!CHECKPOINT_DIR_RE.test(name)) return { ok: false, reason: 'invalid' };
+  const target = checkpointPointerPathFor(fileId, opts);
+  const tmp = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fs.promises.mkdir(path.dirname(target), { recursive: true });
+    await fs.promises.writeFile(tmp, JSON.stringify({ version: CHECKPOINT_POINTER_VERSION, fileId, userId: String(userId), dir: name }));
+    await fs.promises.rename(tmp, target);
+    return { ok: true };
+  } catch (_) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    return { ok: false, reason: 'write_failed' };
+  }
+}
+
+/**
+ * Remove the checkpoint directory a pointer names (and the pointer). Returns
+ * true when a directory was removed; never throws on a missing one.
+ */
+async function purgeCheckpointPointer(fileId, opts = {}) {
+  let pointerPath;
+  try { pointerPath = checkpointPointerPathFor(fileId, opts); } catch (_) { return false; }
+  let record = null;
+  try { record = JSON.parse(await fs.promises.readFile(pointerPath, 'utf8')); } catch (_) { return false; }
+  let removed = false;
+  if (record && record.fileId === fileId && CHECKPOINT_DIR_RE.test(String(record.dir || ''))) {
+    const dir = path.join(checkpointRootOf(opts), record.dir);
+    const existed = await fs.promises.stat(dir).then(() => true, () => false);
+    await fs.promises.rm(dir, { recursive: true, force: true });
+    removed = existed;
+  }
+  await fs.promises.unlink(pointerPath).catch(() => {});
+  return removed;
+}
+
 module.exports = {
   writeSidecar,
   readSidecar,
@@ -449,12 +725,23 @@ module.exports = {
   upsertMediaTranscriptAnalysis,
   recordMediaClipOffset,
   readMediaClipOffset,
+  recordMediaHints,
+  readMediaHints,
+  readMediaAnalysisInfo,
+  recordCheckpointPointer,
+  purgeCheckpointPointer,
   // helpers (pure) for callers and tests
   buildSidecar,
   normalizeSidecar,
   mediaTranscriptMetadata,
+  sidecarExtras,
+  normalizeAudioStream,
+  normalizeStoredHints,
+  mergeMediaHints,
   sidecarPathFor,
   clipRecordPathFor,
+  checkpointPointerPathFor,
+  checkpointRootOf,
   transcriptsRoot,
   SIDECAR_VERSION,
   SIDECAR_DIRNAME,

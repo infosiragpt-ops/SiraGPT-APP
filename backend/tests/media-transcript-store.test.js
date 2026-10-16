@@ -439,3 +439,91 @@ test('a gap retry of a clip finds its offset in the last sidecar when the record
   const plain = await store.writeSidecar({ fileId: 'whole', userId: 'u1', result: RESULT }, { root, now: NOW });
   assert.equal('timeOffsetSec' in plain.sidecar, false);
 });
+
+// ── contract C5: optional sidecar fields ────────────────────────────────────
+
+test('the C5 fields round-trip through the sidecar, which stays version 1', async (t) => {
+  const root = tmpRoot(t);
+  const result = {
+    ...RESULT,
+    source: 'asr',
+    quality: { score: 0.8, level: 'media', lowConfidence: [{ start: 10, end: 20, reason: 'noise' }], escalations: 1, enginesUsed: ['local'], notes: ['Hubo ruido.'] },
+    audioStream: { streamOrdinal: 1, index: 2, reason: 'language_match', language: 'spa' },
+    hints: { language: 'es', terms: ['Huamán', 'WA0012'], speakers: 2, verbatim: false },
+    embeddedSubtitles: { language: 'eng', codec: 'subrip', segments: [{ start: 1, end: 2, text: 'Hello.' }] },
+    onScreenText: [{ start: 3, end: 30, text: 'Tema 3', confidence: 0.91 }],
+    cleanup: { input: 5, kept: 4, removed: 1, hallucinations: 1, echoes: 1 },
+  };
+  const { sidecar } = await store.writeSidecar({ fileId: 'f1', userId: 'u1', result }, { root, now: NOW });
+  assert.equal(sidecar.version, 1);
+  assert.deepEqual(sidecar.embeddedSubtitles, { language: 'en', codec: 'subrip', segments: [{ s: 1, e: 2, t: 'Hello.' }] });
+  assert.deepEqual(sidecar.onScreenText, [{ s: 3, e: 30, t: 'Tema 3', c: 0.91 }]);
+  const raw = await store.readSidecar('f1', { root });
+  const back = store.normalizeSidecar(raw);
+  assert.equal(back.source, 'asr');
+  assert.equal(back.quality.level, 'media');
+  assert.deepEqual(back.quality.lowConfidence, [{ start: 10, end: 20, reason: 'noise' }]);
+  assert.deepEqual(back.audioStream, { streamOrdinal: 1, reason: 'language_match', index: 2, language: 'es' });
+  assert.deepEqual(back.hints, { language: 'es', terms: ['Huamán'], speakers: 2, verbatim: false }, 'device ids never stored as terms');
+  assert.deepEqual(back.embeddedSubtitles.segments, [{ start: 1, end: 2, text: 'Hello.' }]);
+  assert.deepEqual(back.onScreenText, [{ start: 3, end: 30, text: 'Tema 3', confidence: 0.91 }]);
+  assert.equal(back.cleanup.echoes, 1);
+  // The formatter accepts the loaded shape directly.
+  assert.match(fmt.renderText(back, { now: NOW }), /\nCalidad: media\n/);
+});
+
+test('a sidecar written before C5 reads as speech recognition with no quality report; a plain result keeps the exact v1 shape', async (t) => {
+  const root = tmpRoot(t);
+  const { sidecar } = await store.writeSidecar({ fileId: 'f2', userId: 'u1', result: RESULT }, { root, now: NOW });
+  for (const key of ['source', 'quality', 'audioStream', 'hints', 'embeddedSubtitles', 'onScreenText', 'cleanup']) {
+    assert.equal(key in sidecar, false, `${key} is only written when present`);
+  }
+  const back = store.normalizeSidecar(await store.readSidecar('f2', { root }));
+  assert.equal(back.source, 'asr');
+  assert.equal(back.quality, undefined);
+});
+
+test('normalizeSidecar bounds hand-edited or oversized lists on read', () => {
+  const huge = {
+    version: 1, fileId: 'f3', userId: 'u1', segments: [], gaps: [],
+    source: 'telepathy',
+    onScreenText: Array.from({ length: fmt.SIDE_TEXT_LIMITS.items + 50 }, (_, i) => ({ s: i, e: i + 1, t: `slide ${i}` })),
+    embeddedSubtitles: { language: 'es', segments: Array.from({ length: fmt.EMBEDDED_SUBTITLE_LIMITS.items + 10 }, (_, i) => ({ s: i, e: i + 1, t: 'x'.repeat(900) })) },
+    quality: { level: 'baja', lowConfidence: Array.from({ length: 900 }, (_, i) => ({ start: i, end: i + 1 })) },
+    audioStream: { streamOrdinal: -4 },
+  };
+  const out = store.normalizeSidecar(huge);
+  assert.equal(out.source, 'asr', 'an unknown source is not trusted');
+  assert.equal(out.onScreenText.length, fmt.SIDE_TEXT_LIMITS.items);
+  assert.ok(out.embeddedSubtitles.segments.length <= fmt.EMBEDDED_SUBTITLE_LIMITS.items);
+  assert.ok(out.embeddedSubtitles.segments.every((s) => s.text.length <= fmt.EMBEDDED_SUBTITLE_LIMITS.itemChars));
+  assert.ok(out.embeddedSubtitles.segments.reduce((sum, s) => sum + s.text.length, 0) <= fmt.EMBEDDED_SUBTITLE_LIMITS.totalChars);
+  assert.equal(out.quality.lowConfidence.length, fmt.QUALITY_LIMITS.lowConfidence);
+  assert.equal(out.audioStream, undefined);
+});
+
+test('the analysis pointer carries the source, a compact quality and the audio stream (numbers and labels only)', () => {
+  const meta = store.mediaTranscriptMetadata({ ...RESULT, source: 'onscreen',
+    quality: { score: 0.6, level: 'media', lowConfidence: [{ start: 1, end: 2, reason: 'illegible' }], enginesUsed: ['ocr'], notes: ['texto privado'] },
+    audioStream: { streamOrdinal: 0, reason: 'only_stream' } }, { fileId: 'f1' });
+  assert.equal(meta.source, 'onscreen');
+  assert.deepEqual(meta.quality, { score: 0.6, level: 'media', lowConfidence: 1, enginesUsed: ['ocr'] });
+  assert.deepEqual(meta.audioStream, { streamOrdinal: 0, reason: 'only_stream' });
+  assert.ok(!JSON.stringify(meta).includes('texto privado'), 'notes stay in the sidecar');
+});
+
+test('purgeMediaTranscript also removes the checkpoint directory its pointer names (and nothing outside the root)', async (t) => {
+  const root = tmpRoot(t);
+  const ckptRoot = path.join(path.dirname(root), 'ckpt');
+  const dir = path.join(ckptRoot, `media-${'b'.repeat(64)}-42`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'seg-00000.json'), '{"part":{"text":"privado"}}');
+  await store.writeSidecar({ fileId: 'f5', userId: 'u1', result: RESULT }, { root });
+  assert.deepEqual(await store.recordCheckpointPointer({ fileId: 'f5', userId: 'u1', dir, root }), { ok: true });
+  assert.deepEqual(await store.purgeMediaTranscript('f5', { root, checkpointRoot: ckptRoot }), { sidecar: true, clip: false, checkpoint: true });
+  assert.equal(fs.existsSync(dir), false);
+  // A forged pointer naming another directory is ignored.
+  fs.writeFileSync(path.join(root, 'f6.ckpt.json'), JSON.stringify({ version: 1, fileId: 'f6', userId: 'u1', dir: '../../etc' }));
+  assert.deepEqual(await store.purgeMediaTranscript('f6', { root, checkpointRoot: ckptRoot }), { sidecar: false, clip: false });
+  assert.equal(fs.existsSync(path.join(root, 'f6.ckpt.json')), false, 'the bad pointer itself is removed');
+});

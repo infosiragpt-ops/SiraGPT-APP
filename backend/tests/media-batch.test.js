@@ -817,3 +817,224 @@ test('a follow-up picks the newest recording: a link delivery newer than an earl
   userMessages = [{ files: [{ id: 'shot' }], timestamp: at(9) }];
   assert.deepEqual(await resolve(), [], 'a newer document still stops the lookup');
 });
+
+// ── contract C7: follow-ups that act («revisa el minuto 12», «¿qué dijo en el minuto 95?») ──
+
+test('follow-up intents: refine a heard-wrong stretch, look up a moment, ignore everything else', () => {
+  const intent = goal => batch.detectMediaFollowupIntent(goal);
+  assert.deepEqual(intent('revisa el minuto 12, se escuchó mal'), { kind: 'refine', range: { start: 690, end: 810 }, at: 720 });
+  assert.deepEqual(intent('vuelve a transcribir de 1:10:00 a 1:15:00'), { kind: 'refine', range: { start: 4200, end: 4500 } });
+  assert.deepEqual(intent('del minuto 12 al 15 está mal'), { kind: 'refine', range: { start: 720, end: 900 } });
+  assert.deepEqual(intent('revisa la transcripción, se escuchó mal'), { kind: 'refine', range: null, whole: false });
+  assert.deepEqual(intent('vuelve a transcribir el audio'), { kind: 'refine', range: null, whole: true });
+  assert.deepEqual(intent('¿Qué dijo el profesor en el minuto 95?'), { kind: 'lookup', range: { start: 5640, end: 5940 }, at: 5700 });
+  assert.deepEqual(intent('qué dice en el minuto 1:35:00'), { kind: 'lookup', range: { start: 5640, end: 5940 }, at: 5700 });
+  assert.deepEqual(intent('¿de qué hablan del minuto 30 al 45?'), { kind: 'lookup', range: { start: 1800, end: 2700 } });
+  assert.equal(intent('¿qué pasó a los 30 minutos?').at, 1800);
+  for (const goal of ['agenda una reunión de 10:00 a 11:00', 'revisa la reunión de las 10:30', 'corrige los nombres', 'qué hora es',
+    'analiza el código', 'resume del minuto 30 al 45', 'transcribe del minuto 30 al 45', '']) {
+    assert.equal(intent(goal), null, goal);
+  }
+  assert.equal(batch.isMediaFollowup('¿qué dijo en el minuto 95?'), true, 'a moment of the recording resolves the chat batch');
+  assert.equal(batch.isMediaFollowup('revisa el minuto 12, se escuchó mal'), true);
+  assert.equal(batch.isMediaFollowup('analiza el código de mi proyecto'), false);
+});
+
+test('a time point is a moment of the recording, never a time of day', () => {
+  assert.equal(batch.parseTimePoint('el minuto 95'), 5700);
+  assert.equal(batch.parseTimePoint('minuto 95:10'), 5710);
+  assert.equal(batch.parseTimePoint('minuto 1,5'), 90);
+  assert.equal(batch.parseTimePoint('a los 12 minutos'), 720);
+  assert.equal(batch.parseTimePoint('la hora 1:20'), 4800);
+  assert.equal(batch.parseTimePoint('1h20'), 4800);
+  assert.equal(batch.parseTimePoint('en el 45:10'), 2710);
+  assert.equal(batch.parseTimePoint('en 01:02:03'), 3723);
+  assert.equal(batch.parseTimePoint('a las 10:30'), null);
+  assert.equal(batch.parseTimePoint('la reunión de las 10:30:00'), null);
+  assert.equal(batch.parseTimePoint('hola'), null);
+});
+
+function refineFakes({ enqueue, createDelivery } = {}) {
+  const log = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    createDelivery: createDelivery || (async (record) => { log.push(['delivery', record]); return { id: 'md_r', ...record }; }),
+    refineHandOffMessage: ({ fileName, range }) => `Voy a volver a transcribir ${range.start}–${range.end} de «${fileName}».`,
+    getMediaDeliveryService: () => ({ store: { claim: async () => ({ token: 't' }), markFailed: async (id) => { log.push(['cancel', id]); return {}; } } }),
+  };
+  const enqueueRefine = enqueue || (async (payload) => { log.push(['enqueue', payload]); return { queued: true, jobId: 'j' }; });
+  const transcriptStore = { loadMediaTranscript: async () => ({ durationSec: 3600, timeOffsetSec: 0 }) };
+  return { log, deps: { delivery, enqueueRefine, transcriptStore } };
+}
+
+const readyRow = (id, name, extra = {}) => ({ id, originalName: name, processingStage: 'ready', extractedText: 'texto listo', ...extra });
+
+test('requestMediaRefine: delivery first, then the refine job with its id; bounded to the recording', async () => {
+  const f = refineFakes();
+  const out = await batch.requestMediaRefine({ prisma: {}, userId: 'u', chatId: 'c', taskId: 't', rows: [readyRow('a', 'clase.mp4')],
+    goal: 'revisa del minuto 50 al 70', intent: { kind: 'refine', range: { start: 3000, end: 4200 } }, language: 'en', hints: { terms: ['Huamán'] }, deps: f.deps });
+  assert.equal(out.ok, true);
+  assert.deepEqual(f.log.map(([kind]) => kind), ['delivery', 'enqueue']);
+  assert.deepEqual(f.log[0][1].range, { start: 3000, end: 3600 }, 'clamped to the end of the recording');
+  assert.equal(f.log[0][1].kind, 'refine');
+  assert.deepEqual(f.log[1][1], { fileId: 'a', userId: 'u', range: { start: 3000, end: 3600 }, language: 'en', hints: { terms: ['Huamán'] }, deliveryId: 'md_r' });
+  assert.match(out.message, /de «clase\.mp4»/);
+  assert.equal(out.deliveryId, 'md_r');
+});
+
+test('requestMediaRefine asks instead of guessing, and never leaves a delivery without a job', async () => {
+  const two = [readyRow('a', 'Clase de anatomía.mp4'), readyRow('b', 'Reunión directorio.m4a')];
+  const ambiguous = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: two, goal: 'revisa el minuto 12, se escuchó mal',
+    intent: { kind: 'refine', range: { start: 690, end: 810 } }, deps: refineFakes().deps });
+  assert.equal(ambiguous.reason, 'file_ambiguous');
+  assert.match(ambiguous.message, /«Clase de anatomía\.mp4», «Reunión directorio\.m4a»/);
+  const named = refineFakes();
+  const picked = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: two, goal: 'revisa el minuto 12 de la reunión directorio, se escuchó mal',
+    intent: { kind: 'refine', range: { start: 690, end: 810 } }, deps: named.deps });
+  assert.equal(picked.fileId, 'b');
+  const noRange = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: [two[0]], goal: 'se escuchó mal',
+    intent: { kind: 'refine', range: null, whole: false }, deps: refineFakes().deps });
+  assert.equal(noRange.reason, 'range_required');
+  assert.match(noRange.message, /de qué minuto a qué minuto/);
+  const longWhole = refineFakes();
+  longWhole.deps.transcriptStore = { loadMediaTranscript: async () => ({ durationSec: 5 * 3600 }) };
+  const whole = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: [two[0]], goal: 'vuelve a transcribir el audio',
+    intent: { kind: 'refine', range: null, whole: true }, deps: longWhole.deps });
+  assert.equal(whole.reason, 'range_required', 'a 5-hour recording is never re-done whole by accident');
+  const pending = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: [{ id: 'p', processingStage: 'extracting', extractedText: null }],
+    intent: { kind: 'refine', range: { start: 0, end: 60 } }, deps: refineFakes().deps });
+  assert.equal(pending.handled, false, 'not ready: the turn keeps its normal flow');
+  const refused = refineFakes({ enqueue: async () => ({ queued: false, reason: 'not_ready' }) });
+  const notQueued = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: [two[0]], goal: 'x',
+    intent: { kind: 'refine', range: { start: 0, end: 60 } }, deps: refined(refused) });
+  assert.equal(notQueued.ok, false);
+  assert.deepEqual(refused.log.map(([kind]) => kind), ['delivery', 'cancel']);
+  function refined(f) { return f.deps; }
+});
+
+test('the runner re-transcribes a heard-wrong stretch without waiting or re-sending the transcript', async () => {
+  const rows = [readyRow('clase', 'clase.mp4')];
+  const calls = [];
+  const delivery = { isMediaDeliveryEnabled: () => true };
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, displayGoal: 'revisa el minuto 12, se escuchó mal; el profe se llama Ccori, no Kori', goal: 'x',
+    mediaBatch: { ...batch,
+      waitForMediaBatch: async () => assert.fail('a refine never waits for the batch'),
+      requestMediaRefine: async (args) => { calls.push(args); return { handled: true, ok: true, fileId: 'clase', range: args.intent.range, deliveryId: 'md_9', message: 'Voy a volver a transcribir el tramo.' }; } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => assert.fail('no files for a refine request'), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].intent)), { kind: 'refine', range: { start: 690, end: 810 }, at: 720 });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].hints)), { terms: ['Ccori'] });
+  assert.equal(calls[0].deps.delivery, delivery);
+  assert.equal(result.finalMarkdown, 'Voy a volver a transcribir el tramo.');
+  assert.equal(result.stoppedReason, 'media_delivery_handoff', 'no generic «task finished» notification: the refine delivery notifies');
+  assert.equal(result.metadata.mediaDeliveryHandoff, 'md_9');
+  assert.equal(result.metadata.mediaDelivery, undefined, 'the hand-off never counts as the delivered transcript');
+});
+
+test('the runner answers «¿qué dijo en el minuto 95?» from that window, without re-sending the transcript files', async () => {
+  const rows = [readyRow('clase', 'clase.mp4', { extractedText: 'x'.repeat(50) })];
+  const ranges = [];
+  const analysed = [];
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, displayGoal: '¿qué dijo el profesor en el minuto 95?', goal: 'x',
+    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+      analyzeMediaBatch: async ({ rows: analysedRows, goal }) => { analysed.push({ analysedRows, goal }); return { text: 'En el minuto 95 explicó la mitocondria.', summaries: [{}], failed: [] }; } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => assert.fail('a question about a moment does not re-send the transcript files'),
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+    require: (name) => {
+      if (name === '../media-transcript-artifacts') return require('../src/services/media-transcript-artifacts');
+      if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+      return require(name);
+    },
+    ...mediaBranchHelpers({ mediaRowsForAnalysis: (r, transcripts, range) => { ranges.push(range); return r; } }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(ranges)), [{ start: 5640, end: 5940 }], 'the analysis reads the window around minute 95');
+  assert.equal(analysed.length, 1);
+  assert.match(result.finalMarkdown, /explicó la mitocondria/);
+  assert.equal(result.stoppedReason, 'transcription_finalize');
+});
+
+// ── verifier fixes: content questions and deliverables are never a refine ──
+
+test('a question or a deliverable about a stretch is never turned into «transcribe it again»', () => {
+  const intent = goal => batch.detectMediaFollowupIntent(goal);
+  for (const goal of [
+    'Revisa del minuto 30 al 40 y hazme un resumen',
+    'Resume este audio, del minuto 1 al 3 casi no se escucha',
+    '¿Del minuto 10 al 15 lo que explica el profesor está mal?',
+    'En el minuto 20 el ponente dice algo que no tiene sentido, explícame por qué',
+    'Revisa el minuto 12 y dime si el profesor tiene razón',
+    'Analiza la grabación: del minuto 5 al 10 hay errores en la exposición',
+    'corrige la hora 1:20 en el documento',
+  ]) {
+    assert.notEqual(intent(goal)?.kind, 'refine', goal);
+  }
+  // Questions about what is said at that moment read its window instead.
+  assert.equal(intent('Revisa el minuto 12 y dime si el profesor tiene razón').kind, 'lookup');
+  assert.equal(intent('En el minuto 20 el ponente dice algo que no tiene sentido, explícame por qué').kind, 'lookup');
+  // What really points at the transcript still re-transcribes.
+  assert.equal(intent('la transcripción del minuto 30 está mal').kind, 'refine');
+  assert.equal(intent('el texto del minuto 5 tiene errores').kind, 'refine');
+  assert.equal(intent('revisa el minuto 12 porque se escuchó mal').kind, 'refine');
+  assert.equal(intent('los nombres son Huamán y Quispe, corrígelo en el minuto 30').kind, 'refine');
+  // An explicit «vuelve a transcribir» next to another request is kept, flagged.
+  assert.deepEqual(intent('vuelve a transcribir del minuto 10 al 15 y dime qué dice'), { kind: 'refine', range: { start: 600, end: 900 }, alsoAsks: true });
+});
+
+test('a refine before a link clip\'s start answers with the covered span, never an invalid range', async () => {
+  const f = refineFakes();
+  f.deps.transcriptStore = { loadMediaTranscript: async () => ({ durationSec: 1800, timeOffsetSec: 3600 }) };
+  const before = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: [readyRow('a', 'clip.m4a')], goal: 'revisa el minuto 10, se escuchó mal',
+    intent: { kind: 'refine', range: { start: 570, end: 690 }, at: 600 }, deps: f.deps });
+  assert.equal(before.reason, 'out_of_range');
+  assert.match(before.message, /cubre 01:00:00–01:30:00 de la grabación; el tramo que pides queda fuera/);
+  assert.deepEqual(f.log, [], 'nothing queued');
+  const overlap = await batch.requestMediaRefine({ userId: 'u', chatId: 'c', rows: [readyRow('a', 'clip.m4a')], goal: 'x',
+    intent: { kind: 'refine', range: { start: 3500, end: 3700 } }, deps: f.deps });
+  assert.equal(overlap.ok, true);
+  assert.deepEqual(overlap.range, { start: 3600, end: 3700 }, 'a stretch that overlaps the clip is clamped to it');
+});
+
+test('the runner queues an explicit refine and still answers the rest of the request', async () => {
+  const rows = [readyRow('clase', 'clase.mp4', { extractedText: 'x'.repeat(50) })];
+  const calls = [];
+  const analysed = [];
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, displayGoal: 'vuelve a transcribir del minuto 10 al 15 y resúmelo', goal: 'x',
+    mediaBatch: { ...batch,
+      waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+      requestMediaRefine: async (args) => { calls.push(args); return { handled: true, ok: true, fileId: 'clase', range: args.intent.range, deliveryId: 'md_7', message: 'Voy a volver a transcribir el tramo 00:10:00–00:15:00.' }; },
+      analyzeMediaBatch: async ({ goal }) => { analysed.push(goal); return { text: 'Resumen de la clase.', summaries: [{}], failed: [] }; } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+    require: (name) => {
+      if (name === '../media-transcript-artifacts') return require('../src/services/media-transcript-artifacts');
+      if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+      return require(name);
+    },
+    ...mediaBranchHelpers(),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(calls.length, 1, 'the refine is queued');
+  assert.equal(analysed.length, 1, 'and the summary still runs');
+  assert.match(result.finalMarkdown, /^Voy a volver a transcribir el tramo 00:10:00–00:15:00\./);
+  assert.match(result.finalMarkdown, /Resumen de la clase\./);
+  assert.notEqual(result.stoppedReason, 'media_delivery_handoff', 'the turn answered: its own notification applies');
+});

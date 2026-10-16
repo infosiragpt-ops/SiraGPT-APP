@@ -15,9 +15,27 @@
  * JSON output are real and decoding seeks on segment ends instead of hard
  * 30 s windows. An unknown language is passed as `-l auto` — whisper-cli
  * otherwise assumes English.
+ *
+ * Flags are never trusted, they are feature-detected: `whisper-cli -h` is
+ * read once per binary (memoized) and only what it lists is used.
+ *   -ojf (full JSON with token probabilities) → every segment gets a
+ *     `confidence` (geometric mean of its text tokens' p), so local output
+ *     finally carries the quality signal cloud verbose_json already has;
+ *   --vad + --vad-model (whisper.cpp ≥ 1.7.6, Silero) → only with
+ *     WHISPER_CPP_VAD=1 and a readable model (WHISPER_CPP_VAD_MODEL, else
+ *     /usr/local/share/whisper/ggml-silero-v5.1.2.bin);
+ *   -mc N (max text context) → only when the transcriber asks for it
+ *     (options.maxContext, a re-decode after a repetition loop).
+ * A binary whose help cannot be read keeps today's exact arguments (one WARN).
+ * options.audioFilter (an ffmpeg -af chain the transcriber builds for an
+ * alternative hypothesis: loudness / dynamic normalisation, high-pass) is
+ * applied to the WAV decode only when given.
+ * The Python fallback (not installed in production) is remembered as missing
+ * for an hour after an import error or a missing interpreter, so a failed
+ * whisper.cpp run stops spawning a doomed python process every time.
  */
 
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const os = require('os');
@@ -30,6 +48,24 @@ const LONG_MEDIA_BEAM_SIZE = 2;
 const LONG_MEDIA_SECONDS = 600;
 const MAX_PROMPT_CHARS = 1000;
 const PYTHON_SCRIPT = path.join(__dirname, '../../scripts/local-whisper.py');
+const HELP_TIMEOUT_MS = 10_000;
+const HELP_MAX_BUFFER = 512 * 1024;
+// A `whisper-cli -h` that failed for any reason but a binary that cannot run
+// is read again after this (a timeout under load must not disable -ojf/-mc
+// for the life of the process).
+const HELP_RETRY_MS = 5 * 60_000;
+const PERMANENT_HELP_ERRORS = new Set(['ENOENT', 'EACCES', 'ENOEXEC']);
+const VAD_MODEL_CANDIDATES = Object.freeze([
+  '/usr/local/share/whisper/ggml-silero-v5.1.2.bin',
+  '/usr/local/share/whisper/ggml-silero-v6.2.0.bin',
+]);
+const PYTHON_MISSING_MEMO_MS = 60 * 60 * 1000;
+// An ffmpeg -af chain the transcriber builds itself (filter names, numbers,
+// = : , . _ -): anything else is ignored, never passed to ffmpeg.
+const SAFE_AUDIO_FILTER_RE = /^[a-z][a-z0-9=:,._-]{0,300}$/i;
+const EMPTY_CAPABILITIES = Object.freeze({
+  outputJsonFull: false, vad: false, maxContext: false, suppressNst: false, detectLanguage: false, carryInitialPrompt: false,
+});
 
 function envOf(options) {
   return options.env || process.env;
@@ -105,12 +141,20 @@ function cleanPrompt(prompt) {
   return text ? text.slice(0, MAX_PROMPT_CHARS) : '';
 }
 
-function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads, prompt, beamSize }) {
+/**
+ * whisper-cli argv. `capabilities` (from whisperCliCapabilities) gates every
+ * optional flag: without it the arguments are exactly today's.
+ *   -ojf only when listed; --vad --vad-model only when listed AND a model is
+ *   given; -mc only when listed AND maxContext is a non-negative integer.
+ */
+function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads, prompt, beamSize, capabilities = null, vadModel = null, maxContext = null }) {
+  const caps = capabilities || EMPTY_CAPABILITIES;
   const args = [
     '-m', modelPath,
     '-f', wavPath,
     '-otxt',
     '-oj',
+    ...(caps.outputJsonFull ? ['-ojf'] : []),
     '-of', outBase,
     '--no-prints',
     '-ng',
@@ -119,9 +163,113 @@ function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads, p
   ];
   const beam = Number(beamSize);
   if (Number.isFinite(beam) && beam >= 1) args.push('-bs', String(Math.floor(beam)));
+  if (caps.maxContext && Number.isInteger(maxContext) && maxContext >= 0) args.push('-mc', String(maxContext));
+  if (caps.vad && typeof vadModel === 'string' && vadModel) args.push('--vad', '--vad-model', vadModel);
   const initialPrompt = cleanPrompt(prompt);
   if (initialPrompt) args.push('--prompt', initialPrompt);
   return args;
+}
+
+/** What a `whisper-cli -h` text lists (flags this build accepts). Pure. */
+function parseWhisperHelp(text) {
+  const help = String(text || '');
+  if (!/-m\b|--model|usage/i.test(help)) return { ...EMPTY_CAPABILITIES };
+  const has = (re) => re.test(help);
+  return {
+    outputJsonFull: has(/(?:^|\s)(?:-ojf|--output-json-full)(?=[\s,]|$)/m),
+    vad: has(/(?:^|\s)--vad(?=[\s,]|$)/m) && has(/(?:^|\s)--vad-model(?=[\s,]|$)/m),
+    maxContext: has(/(?:^|\s)(?:-mc|--max-context)(?=[\s,]|$)/m),
+    suppressNst: has(/(?:^|\s)(?:-sns|--suppress-nst)(?=[\s,]|$)/m),
+    detectLanguage: has(/(?:^|\s)(?:-dl|--detect-language)(?=[\s,]|$)/m),
+    carryInitialPrompt: has(/(?:^|\s)--carry-initial-prompt(?=[\s,]|$)/m),
+  };
+}
+
+function normalizeCapabilities(value) {
+  const out = { ...EMPTY_CAPABILITIES };
+  for (const key of Object.keys(EMPTY_CAPABILITIES)) out[key] = value?.[key] === true;
+  return out;
+}
+
+const capabilityMemo = new Map();
+const injectedCapabilityMemo = new WeakMap();
+let capabilityWarned = false;
+
+function warnCapabilitiesOnce(reason, logImpl) {
+  if (capabilityWarned) return;
+  capabilityWarned = true;
+  try { (logImpl || console.warn)(`[local-whisper] could not read whisper-cli -h (${reason}); using the base arguments only`); } catch { /* best-effort */ }
+}
+
+/**
+ * The flags a whisper-cli binary accepts, read from `-h` ONCE per binary
+ * (memoized; injectable: options.whisperCapabilities = { outputJsonFull, vad,
+ * maxContext, … } or options.whisperHelp = '<help text>', or
+ * options.whisperHelpImpl(bin, args) → { stdout, stderr }). Never throws: a
+ * help that cannot be read is «no optional flag» (today's arguments). Only a
+ * help that was read, or a binary that cannot run (ENOENT / EACCES), is
+ * remembered for the process; any other failure (timeout, EAGAIN under load)
+ * is read again after HELP_RETRY_MS (options.now injects the clock).
+ */
+async function whisperCliCapabilities(bin, options = {}) {
+  if (options.whisperCapabilities && typeof options.whisperCapabilities === 'object') return normalizeCapabilities(options.whisperCapabilities);
+  if (typeof options.whisperHelp === 'string') return parseWhisperHelp(options.whisperHelp);
+  if (!bin) return { ...EMPTY_CAPABILITIES };
+  const injected = typeof options.whisperHelpImpl === 'function' ? options.whisperHelpImpl : null;
+  const memo = injected ? (injectedCapabilityMemo.get(injected) || new Map()) : capabilityMemo;
+  if (injected && !injectedCapabilityMemo.has(injected)) injectedCapabilityMemo.set(injected, memo);
+  const clock = typeof options.now === 'function' ? options.now : Date.now;
+  const known = memo.get(bin);
+  if (known && !(known.retryAt != null && clock() >= known.retryAt)) return known.pending;
+  const entry = { pending: null, retryAt: null };
+  entry.pending = (async () => {
+    const run = injected || ((command, args) => new Promise((resolve, reject) => {
+      execFile(command, args, {
+        timeout: HELP_TIMEOUT_MS, maxBuffer: HELP_MAX_BUFFER, windowsHide: true,
+        env: buildUntrustedChildEnv({ PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG }),
+      }, (err, stdout, stderr) => (err ? reject(Object.assign(err, { stdout, stderr })) : resolve({ stdout, stderr })));
+    }));
+    try {
+      const out = await run(bin, ['-h']);
+      return parseWhisperHelp(`${out?.stdout || ''}\n${out?.stderr || ''}`);
+    } catch (err) {
+      // Some builds print the usage and exit non-zero: the text still counts.
+      const text = `${err?.stdout || ''}\n${err?.stderr || ''}`;
+      if (/usage|options:/i.test(text)) return parseWhisperHelp(text);
+      warnCapabilitiesOnce(err?.code || 'failed', options.logImpl);
+      if (!PERMANENT_HELP_ERRORS.has(err?.code)) entry.retryAt = clock() + HELP_RETRY_MS;
+      return { ...EMPTY_CAPABILITIES };
+    }
+  })();
+  memo.set(bin, entry);
+  return entry.pending;
+}
+
+function resetCapabilityMemo() {
+  capabilityMemo.clear();
+  capabilityWarned = false;
+}
+
+function vadRequested(options = {}) {
+  return /^(?:1|true|on|yes)$/i.test(String(envOf(options).WHISPER_CPP_VAD || '').trim());
+}
+
+/** A readable Silero model: options.vadModelPath, WHISPER_CPP_VAD_MODEL, then the bundled paths. */
+function vadModelPath(options = {}) {
+  const env = envOf(options);
+  const candidates = [options.vadModelPath, env.WHISPER_CPP_VAD_MODEL, ...VAD_MODEL_CANDIDATES]
+    .filter((p) => typeof p === 'string' && p.includes('/'));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && accessible(candidate, fs.constants.R_OK, options.accessImpl)) return candidate;
+  }
+  return null;
+}
+
+let vadWarned = false;
+function warnVadOnce(reason, logImpl) {
+  if (vadWarned) return;
+  vadWarned = true;
+  try { (logImpl || console.warn)(`[local-whisper] WHISPER_CPP_VAD=1 ignored: ${reason}`); } catch { /* best-effort */ }
 }
 
 function candidateBins(options) {
@@ -293,12 +441,15 @@ function runProcess(command, args, options = {}) {
       err.cause = error;
       finish(reject, err);
     });
-    child.once('close', (code) => {
+    child.once('close', (code, signal) => {
       const stderrText = Buffer.concat(stderr).toString('utf8').slice(-2000);
       if (code !== 0) {
         const err = new Error('local whisper process failed');
         err.code = 'LOCAL_WHISPER_FAILED';
         err.exitCode = code;
+        // A SIGKILL we did not send (our timeout and abort settle first) is the
+        // kernel's OOM killer: the transcriber treats repeats as deterministic.
+        err.signal = signal || null;
         err.diagnostics = stderrText;
         finish(reject, err);
         return;
@@ -321,13 +472,42 @@ function conversionTimeoutMs(options = {}) {
   return Math.max(timeoutMs(options), Math.ceil(seconds * 100));
 }
 
+/**
+ * `-map 0:a:N` for the audio track the transcriber chose (media-probe's
+ * chooseAudioStream, or the caller's options.audioStreamOrdinal); nothing
+ * when none was given, so ffmpeg keeps its default stream as before.
+ */
+function audioStreamMapArgs(ordinal) {
+  const n = typeof ordinal === 'number' ? ordinal : (typeof ordinal === 'string' && /^\d+$/.test(ordinal.trim()) ? Number(ordinal) : NaN);
+  return Number.isInteger(n) && n >= 0 && n < 64 ? ['-map', `0:a:${n}`] : [];
+}
+
+/**
+ * Input options that go with a mapped track: media-probe's stream-discovery
+ * window. An ordinal only names the same track under the same window — in an
+ * MPEG-PS/VOB whose audio starts late, ffmpeg's default 5 MB / 5 s window
+ * lists the tracks in another order (`0:a:1` silently decodes the other one)
+ * or not at all. Nothing when no track is mapped (today's decode).
+ */
+function audioStreamProbeArgs(ordinal) {
+  return audioStreamMapArgs(ordinal).length ? ['-probesize', '100M', '-analyzeduration', '100M'] : [];
+}
+
+/** `-af <chain>` for an alternative-hypothesis decode; nothing for anything else. */
+function audioFilterArgs(filter) {
+  return typeof filter === 'string' && SAFE_AUDIO_FILTER_RE.test(filter) ? ['-af', filter] : [];
+}
+
 async function convertToWav(inputPath, wavPath, options = {}) {
   await runProcess(ffmpegPath(options), [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+    ...audioStreamProbeArgs(options.audioStreamOrdinal),
     '-i', inputPath,
+    ...audioStreamMapArgs(options.audioStreamOrdinal),
     // Video containers: keep the audio track only (a WAV muxer cannot hold
     // video/subtitle/data streams and ffmpeg would fail instead).
     '-vn', '-sn', '-dn',
+    ...audioFilterArgs(options.audioFilter),
     '-ar', '16000',
     '-ac', '1',
     '-c:a', 'pcm_s16le',
@@ -339,6 +519,27 @@ async function convertToWav(inputPath, wavPath, options = {}) {
     err.code = 'LOCAL_WHISPER_FFMPEG';
     throw err;
   }
+}
+
+const SPECIAL_TOKEN_RE = /^(?:\[_[A-Z]+_?\d*\]|\[_[A-Z_]+\d*\]|<\|[^|]*\|>)$/;
+
+/** { confidence, minP } from -ojf tokens (geometric mean of p), or null without usable tokens. */
+function tokenConfidence(tokens) {
+  if (!Array.isArray(tokens) || !tokens.length) return null;
+  let count = 0;
+  let logSum = 0;
+  let minP = 1;
+  for (const token of tokens) {
+    const text = String(token?.text ?? '').trim();
+    const p = Number(token?.p);
+    if (!text || SPECIAL_TOKEN_RE.test(text) || !Number.isFinite(p) || p <= 0) continue;
+    const bounded = Math.min(1, p);
+    count++;
+    logSum += Math.log(bounded);
+    if (bounded < minP) minP = bounded;
+  }
+  if (!count) return null;
+  return { confidence: Math.round(Math.exp(logSum / count) * 1000) / 1000, minP: Math.round(minP * 1000) / 1000 };
 }
 
 function parseWhisperCppJson(raw) {
@@ -361,11 +562,21 @@ function parseWhisperCppJson(raw) {
     const match = /^(\d+):(\d+):(\d+)[,.](\d+)$/.exec(String(stamp || ''));
     return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(`0.${match[4]}`) : 0;
   };
-  const segments = rows.map((row) => ({
-    start: seconds(row.offsets?.from, row.timestamps?.from),
-    end: seconds(row.offsets?.to, row.timestamps?.to),
-    text: String(row.text || '').trim(),
-  })).filter((row) => row.text);
+  const segments = rows.map((row) => {
+    const segment = {
+      start: seconds(row.offsets?.from, row.timestamps?.from),
+      end: seconds(row.offsets?.to, row.timestamps?.to),
+      text: String(row.text || '').trim(),
+    };
+    // -ojf: token probabilities → the segment's confidence (geometric mean of
+    // its text tokens' p, special tokens such as [_BEG_] / [_TT_42] ignored).
+    const tokens = tokenConfidence(row.tokens);
+    if (tokens) {
+      segment.confidence = tokens.confidence;
+      segment.minP = tokens.minP;
+    }
+    return segment;
+  }).filter((row) => row.text);
   const text = String(parsed.text || segments.map((s) => s.text).join(' ')).trim();
   return { text, segments, language: parsed.result?.language || parsed.language || null, valid: true };
 }
@@ -395,6 +606,16 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
   }
 
   const outBase = path.join(path.dirname(wavPath), 'transcript');
+  const capabilities = await whisperCliCapabilities(bin, options);
+  let vadModel = null;
+  if (vadRequested(options)) {
+    if (!capabilities.vad) warnVadOnce('this whisper-cli has no --vad (whisper.cpp ≥ 1.7.6)', options.logImpl);
+    else {
+      vadModel = vadModelPath(options);
+      if (!vadModel) warnVadOnce('no readable Silero model (WHISPER_CPP_VAD_MODEL)', options.logImpl);
+    }
+  }
+  const maxContext = Number.isInteger(options.maxContext) && options.maxContext >= 0 ? options.maxContext : null;
   const args = buildWhisperCppArgs({
     modelPath,
     wavPath,
@@ -403,9 +624,12 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
     threads: resolveThreadCount(options),
     prompt: options.prompt,
     beamSize: resolveBeamSize(options),
+    capabilities,
+    vadModel,
+    maxContext,
   });
 
-  await runProcess(bin, args, scopedOptions);
+  const run = await runProcess(bin, args, scopedOptions);
   const txt = (await readIfExists(`${outBase}.txt`) || '').trim();
   const rawJson = await readIfExists(`${outBase}.json`);
   const json = parseWhisperCppJson(rawJson);
@@ -420,6 +644,8 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
   if (!text && !json.valid) {
     const err = new Error('whisper.cpp returned no output');
     err.code = 'LOCAL_WHISPER_EMPTY';
+    // whisper-cli exits 0 without output on an unknown `-l`: its words say so.
+    err.diagnostics = String(run?.stderr || '').slice(-2000);
     throw err;
   }
   const forced = whisperLanguageArg(language);
@@ -429,6 +655,7 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
     language: (forced !== 'auto' ? forced : null) || json.language || null,
     model: path.basename(modelPath),
     engine: 'whisper.cpp',
+    ...(vadModel ? { vad: true } : {}),
   };
 }
 
@@ -470,6 +697,37 @@ async function transcribeWithPython(wavPath, language, options = {}) {
   };
 }
 
+// The Python fallback is not installed in production (no faster-whisper on
+// musl): remember an import error or a missing interpreter for an hour, per
+// interpreter (and per injected spawn implementation, so tests stay apart).
+const pythonMissing = new Map();
+const injectedPythonMissing = new WeakMap();
+
+function pythonMemoFor(options = {}) {
+  const spawnImpl = typeof options.spawnImpl === 'function' ? options.spawnImpl : null;
+  if (!spawnImpl) return pythonMissing;
+  if (!injectedPythonMissing.has(spawnImpl)) injectedPythonMissing.set(spawnImpl, new Map());
+  return injectedPythonMissing.get(spawnImpl);
+}
+
+function pythonFallbackKnownMissing(options = {}) {
+  const entry = pythonMemoFor(options).get(pythonPath(options));
+  return Boolean(entry && Date.now() - entry.at < PYTHON_MISSING_MEMO_MS);
+}
+
+function rememberPythonFailure(err, options = {}) {
+  const diagnostics = String(err?.diagnostics || '');
+  // scripts/local-whisper.py exits 2 exactly when no engine can be imported.
+  const missingModule = err?.code === 'LOCAL_WHISPER_FAILED'
+    && (err.exitCode === 2 || /No module named|ModuleNotFoundError|ImportError|local-whisper unavailable/i.test(diagnostics));
+  const missingInterpreter = err?.code === 'LOCAL_WHISPER_UNAVAILABLE' && (!err?.cause?.code || err.cause.code === 'ENOENT');
+  if (missingModule || missingInterpreter) pythonMemoFor(options).set(pythonPath(options), { at: Date.now() });
+}
+
+function resetPythonFallbackMemo() {
+  pythonMissing.clear();
+}
+
 async function transcribeLocal(filePath, options = {}) {
   if (typeof options.transcribeLocal === 'function') {
     return options.transcribeLocal(filePath, options);
@@ -494,7 +752,15 @@ async function transcribeLocal(filePath, options = {}) {
     } catch (cppErr) {
       if (cppErr?.code === 'LOCAL_WHISPER_ABORTED') throw cppErr;
       try {
-        return await transcribeWithPython(wavPath, options.language, options);
+        if (pythonFallbackKnownMissing(options)) {
+          throw Object.assign(new Error('python whisper fallback unavailable'), { code: 'LOCAL_WHISPER_UNAVAILABLE', remembered: true });
+        }
+        try {
+          return await transcribeWithPython(wavPath, options.language, options);
+        } catch (pyErr) {
+          rememberPythonFailure(pyErr, options);
+          throw pyErr;
+        }
       } catch (pyErr) {
         if (pyErr?.code === 'LOCAL_WHISPER_ABORTED') throw pyErr;
         // Name the real cause (binary / model / permissions) instead of the
@@ -519,6 +785,15 @@ async function transcribeLocal(filePath, options = {}) {
 
 module.exports = {
   parseWhisperCppJson,
+  tokenConfidence,
+  parseWhisperHelp,
+  whisperCliCapabilities,
+  resetCapabilityMemo,
+  vadModelPath,
+  vadRequested,
+  audioFilterArgs,
+  resetPythonFallbackMemo,
+  pythonFallbackKnownMissing,
   describeLocalWhisperAvailability,
   logAvailabilityOnce,
   resetAvailabilityLog,
@@ -526,6 +801,8 @@ module.exports = {
   whisperTimeoutForWav,
   transcribeLocal,
   convertToWav,
+  audioStreamMapArgs,
+  audioStreamProbeArgs,
   transcribeWithWhisperCpp,
   transcribeWithPython,
   candidateBins,

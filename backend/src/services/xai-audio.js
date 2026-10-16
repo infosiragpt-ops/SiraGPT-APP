@@ -102,37 +102,75 @@ function transcriptionTextFromPayload(payload) {
 }
 
 /**
+ * A word's probability in (0, 1], from `logprob` (ElevenLabs, OpenAI-style)
+ * or `confidence` / `probability` / `p`; null when the payload has none.
+ */
+function wordProbability(word) {
+  const logprob = Number(word?.logprob ?? word?.log_prob);
+  if ((word?.logprob != null || word?.log_prob != null) && Number.isFinite(logprob)) return Math.min(1, Math.max(1e-6, Math.exp(Math.min(0, logprob))));
+  for (const key of ['confidence', 'probability', 'p']) {
+    const value = Number(word?.[key]);
+    if (word?.[key] != null && Number.isFinite(value)) return Math.min(1, Math.max(1e-6, value));
+  }
+  return null;
+}
+
+/** Geometric mean of the collected word probabilities (same scale as exp(avg_logprob)). */
+function closeConfidence(segment) {
+  if (!segment) return segment;
+  const { logSum, logCount, ...rest } = segment;
+  if (logCount > 0) rest.confidence = Math.round(Math.exp(logSum / logCount) * 1000) / 1000;
+  return rest;
+}
+
+/**
  * Timed segments from an STT payload: `segments[{start,end,text}]` as is, or
  * `words[{start,end,text|word}]` grouped on pauses (≥ 1 s), sentence ends and
- * a 12 s ceiling. [] when the payload carries no timing.
+ * a 12 s ceiling. [] when the payload carries no timing. Word types other
+ * than spoken words (`spacing`, `audio_event` such as «(risas)») are not
+ * text. A segment carries `confidence` when its words or the segment itself
+ * report a probability (only ever compared with the same engine's output).
  */
 function segmentsFromPayload(payload) {
   const timed = (item) => Number.isFinite(Number(item?.start)) && Number.isFinite(Number(item?.end));
   if (Array.isArray(payload?.segments) && payload.segments.some(timed)) {
-    return payload.segments.filter(timed).map((segment) => ({
-      start: Number(segment.start),
-      end: Number(segment.end),
-      text: String(segment.text || segment.transcript || '').trim(),
-      ...(segment.speaker != null ? { speaker: String(segment.speaker) } : {}),
-    })).filter((segment) => segment.text);
+    return payload.segments.filter(timed).map((segment) => {
+      const out = {
+        start: Number(segment.start),
+        end: Number(segment.end),
+        text: String(segment.text || segment.transcript || '').trim(),
+        ...(segment.speaker != null ? { speaker: String(segment.speaker) } : {}),
+      };
+      if (segment.avg_logprob != null && Number.isFinite(Number(segment.avg_logprob))) out.avg_logprob = Number(segment.avg_logprob);
+      else {
+        const p = wordProbability(segment);
+        if (p != null) out.confidence = Math.round(p * 1000) / 1000;
+      }
+      return out;
+    }).filter((segment) => segment.text);
   }
   if (!Array.isArray(payload?.words)) return [];
   const out = [];
   let current = null;
   for (const word of payload.words.filter(timed)) {
+    const type = String(word.type || 'word').toLowerCase();
+    if (type !== 'word') continue;
     const text = String(word.text ?? word.word ?? '').trim();
     if (!text) continue;
     const start = Number(word.start);
     const end = Number(word.end);
-    const speaker = word.speaker != null ? String(word.speaker) : undefined;
+    const rawSpeaker = word.speaker ?? word.speakerId ?? word.speaker_id;
+    const speaker = rawSpeaker != null ? String(rawSpeaker) : undefined;
     if (current && (start - current.end >= 1 || end - current.start > 12 || speaker !== current.speaker || /[.!?…]$/.test(current.text))) {
-      out.push(current);
+      out.push(closeConfidence(current));
       current = null;
     }
-    if (!current) current = { start, end, text, ...(speaker !== undefined ? { speaker } : {}) };
+    if (!current) current = { start, end, text, ...(speaker !== undefined ? { speaker } : {}), logSum: 0, logCount: 0 };
     else { current.end = end; current.text = `${current.text} ${text}`; }
+    const p = wordProbability(word);
+    if (p != null) { current.logSum += Math.log(p); current.logCount++; }
   }
-  if (current) out.push(current);
+  if (current) out.push(closeConfidence(current));
   return out;
 }
 
@@ -253,6 +291,7 @@ module.exports = {
   DEFAULT_XAI_TTS_FORMAT,
   resolveXaiAudioConfig,
   segmentsFromPayload,
+  wordProbability,
   transcribeXaiAudioFile,
   synthesizeXaiSpeech,
   serializeAudioForJson,

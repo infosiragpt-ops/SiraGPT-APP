@@ -8,6 +8,7 @@ const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const mediaTranscription = require('../services/media-transcription-queue');
 const mediaTranscriptStore = require('../services/media-transcript-store');
+const archiveMediaExpander = require('../services/archive-media-expander');
 const fileProcessor = require('../services/fileProcessor');
 const extractionSingleflight = require('../services/file-extraction-singleflight');
 const documentRenderer = require('../services/documentRenderer');
@@ -496,6 +497,15 @@ function schedulePostExtractEnrichment({
       } catch (analysisError) {
         console.warn('[files] document analysis failed:', analysisError.message || analysisError);
       }
+      if (file.archiveParent) {
+        // The analysis above rewrites DocumentAnalysis.metadata: keep the
+        // link of a photo extracted from a ZIP to its archive.
+        await archiveMediaExpander.stampArchiveParent(prismaClient, {
+          fileId: fileRecord.id, userId, archiveParent: file.archiveParent, mimeType: file.mimetype,
+        });
+      }
+      // Before the archive leaves the local disk for R2.
+      await expandArchiveMembers({ file, userId, prismaClient, fileRecord });
       try {
         const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
         if (storedRef && storedRef !== file.path) {
@@ -508,6 +518,28 @@ function schedulePostExtractEnrichment({
       console.warn('[files] post-extract enrichment failed:', err?.message || err);
     }
   });
+}
+
+// ZIP uploads (WhatsApp «Exportar chat», a folder of class recordings): their
+// audio, video and photos become child files of the same user, queued like
+// any upload (media → durable transcription queue, images → this async
+// pipeline with OCR) and linked through DocumentAnalysis.metadata.archiveParent.
+// Bounded and best-effort: a failure never touches the archive itself.
+async function expandArchiveMembers({ file, userId, prismaClient, fileRecord }) {
+  if (!archiveMediaExpander.isArchiveCandidate({ originalName: file.originalname, mimeType: file.mimetype })) return null;
+  try {
+    return await archiveMediaExpander.expandArchiveMedia({
+      prisma: prismaClient,
+      userId,
+      parent: { id: fileRecord.id, originalName: file.originalname, mimeType: file.mimetype, path: file.path },
+      userDir: upload.resolveUserUploadDir(userId),
+      detectMime: (childPath, fallbackMime) => detectMime(childPath, fallbackMime),
+      schedule: (child, row) => scheduleFileAfterFastUpload(child, userId, prismaClient, row),
+    });
+  } catch (err) {
+    console.warn('[files] archive media expansion failed:', err?.code || err?.message || 'error');
+    return null;
+  }
 }
 
 async function appendDeferredOfficeImageOcr(filePath, fileRecord, prismaClient) {

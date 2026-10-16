@@ -328,7 +328,11 @@ test('one failed whisper.cpp run (python fallback without faster-whisper) demote
     env: { TRANSCRIBE_PROVIDERS: 'local' }, language: 'es', durationSeconds: 6000,
     segmentAudio: segmenter(t, 10), whisperBin: bin, modelPath: model, spawnImpl, logImpl() {}, ...noSleep,
   });
-  assert.equal(calls.whisper, 10, 'every later segment still reaches whisper.cpp');
+  // Local is the last engine: the failing piece is backed off and retried
+  // (30 s, 2 min, 10 min) instead of becoming a gap at once; python is
+  // remembered as missing after its first import failure.
+  assert.equal(calls.whisper, 13, 'every later segment still reaches whisper.cpp; segment 3 gets 3 backoff retries');
+  assert.deepEqual(noSleep.sleeps, [30_000, 120_000, 600_000]);
   assert.equal(calls.python, 1);
   assert.equal(result.ok, true);
   assert.equal(result.partial, true);
@@ -371,7 +375,7 @@ test('a transient spawn failure (EAGAIN) on a late segment fails only that segme
 
   const busy = engine('EAGAIN', (audioText) => audioText === 'segment-8');
   const result = await run(busy.spawnImpl);
-  assert.equal(busy.calls.whisper, 10, 'segment 10 still reaches whisper.cpp after an EAGAIN on segment 9');
+  assert.equal(busy.calls.whisper, 13, 'segment 10 still reaches whisper.cpp after an EAGAIN on segment 9 (retried 3 times)');
   assert.equal(result.ok, true);
   assert.deepEqual(result.gaps, [{ start: 4800, end: 5400, reason: 'provider_error' }]);
   assert.equal(result.coverage, 0.9);
@@ -404,8 +408,15 @@ test('a whisper.cpp timeout is retried with TRANSCRIBE_LOCAL_RETRIES, else a tim
     env: { TRANSCRIBE_PROVIDERS: 'local', TRANSCRIBE_MIN_COVERAGE: '0.5', ...env }, language: 'es', durationSeconds: 2400,
     segmentAudio: segmenter(t, 4), localTranscribe, ...noSleep,
   });
+  // Local is the last engine left: a timeout backs off 30 s and retries.
+  const backedOff = timeoutOnce();
+  const recovered = await run({}, backedOff);
+  assert.equal(backedOff.calls, 5);
+  assert.deepEqual(noSleep.sleeps, [30_000]);
+  assert.equal(recovered.partial, false);
+  // Without a wait budget, a timeout is a timeout gap (the old behaviour).
   const once = timeoutOnce();
-  const gap = await run({}, once);
+  const gap = await run({ TRANSCRIBE_LAST_RUNG_WAIT_BUDGET_MS: '0' }, once);
   assert.equal(once.calls, 4, 'segments 2-4 still run locally');
   assert.deepEqual(gap.gaps, [{ start: 600, end: 1200, reason: 'timeout' }]);
   const retried = timeoutOnce();

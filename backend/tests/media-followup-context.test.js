@@ -67,3 +67,44 @@ test('the fallback copy for media without a transcript never says it could not b
   assert.doesNotMatch(text, /no se obtuvo/);
   assert.match(text, /No inventes su contenido/);
 });
+
+// Contract C7: «¿qué dijo en el minuto 95?» about a 5-hour class reads THAT
+// window from the segments sidecar, never the transcript's first minutes.
+test('a question about a moment brings that window of a long transcript, marked so it is not cut again', async () => {
+  const head = Array.from({ length: 400 }, (_, i) => `[00:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:00] Párrafo inicial ${i}.`).join('\n\n');
+  const prisma = prismaWith([{ id: 'clase', userId: 'u1', mimeType: 'video/mp4', originalName: 'clase.mp4', processingStage: 'ready', extractedText: head }]);
+  const reads = [];
+  const readWindow = async (args, opts) => {
+    reads.push({ args, opts });
+    return { ok: true, window: { start: opts.start, end: opts.end, label: '01:34:00–01:39:00' }, durationSec: 18000,
+      text: '[01:35:00] Aquí explica la mitocondria.' };
+  };
+  const messages = [{ files: [media('clase')] }];
+  const map = await loadHistoryMediaTranscripts(prisma, { userId: 'u1', messages, query: '¿qué dijo el profesor en el minuto 95?', readWindow });
+  assert.equal(reads.length, 1);
+  assert.deepEqual(reads[0].args, { userId: 'u1', fileId: 'clase', fileName: 'clase.mp4' });
+  assert.equal(reads[0].opts.start, 5640);
+  assert.equal(reads[0].opts.end, 5940);
+  assert.match(map.get('clase'), /^\[Tramo 01:34:00–01:39:00 de una grabación de 05:00:00: solo esta parte/);
+  assert.match(map.get('clase'), /mitocondria/);
+  assert.doesNotMatch(map.get('clase'), /Párrafo inicial/);
+  assert.ok(map.windows.has('clase'));
+});
+
+test('without a moment, with a short transcript or when the window cannot be read, the stored text stays', async () => {
+  const long = 'x'.repeat(9000);
+  const prisma = prismaWith([
+    { id: 'larga', userId: 'u1', mimeType: 'audio/mpeg', originalName: 'larga.mp3', processingStage: 'ready', extractedText: long },
+    { id: 'corta', userId: 'u1', mimeType: 'audio/mpeg', originalName: 'corta.mp3', processingStage: 'ready', extractedText: 'Hola, nota corta.' },
+  ]);
+  const messages = [{ files: [media('larga'), media('corta')] }];
+  const never = async () => assert.fail('no window without a moment in the question');
+  const plain = await loadHistoryMediaTranscripts(prisma, { userId: 'u1', messages, query: 'resúmelo', readWindow: never });
+  assert.equal(plain.get('larga'), long);
+  assert.equal(plain.windows.size, 0);
+  const failing = await loadHistoryMediaTranscripts(prisma, { userId: 'u1', messages, query: '¿qué dijo en el minuto 95?',
+    readWindow: async ({ fileId }) => { assert.equal(fileId, 'larga', 'a short transcript is already whole'); return { ok: false, code: 'out_of_range' }; } });
+  assert.equal(failing.get('larga'), long);
+  assert.equal(failing.get('corta'), 'Hola, nota corta.');
+  assert.equal(failing.windows.size, 0);
+});

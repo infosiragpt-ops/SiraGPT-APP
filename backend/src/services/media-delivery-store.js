@@ -13,6 +13,13 @@
 // Every write is tmp + rename, so a crash never leaves half a record. The
 // pending scan reads only the active directory, which holds the few
 // deliveries still waiting, never the 30-day history.
+//
+// Two kinds of delivery (contract C6). 'transcript' (the default, and what
+// every record written before kinds existed reads as) posts a file's
+// transcript once the file is terminal. 'refine' («revisa el minuto 12, se
+// escuchó mal») posts ONE file's corrected window: the file is already
+// ready, so it waits for the refine job's outcome (`refine`, written by
+// noteRefineOutcome when the media worker reports it), not for the file.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -22,6 +29,10 @@ const path = require('node:path');
 const DELIVERY_ID_RE = /^md_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const RECORD_FILE_RE = /^(md_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
 const MODES = Object.freeze(['transcript', 'analysis', 'subtitles', 'document', 'translation']);
+const KINDS = Object.freeze(['transcript', 'refine']);
+const REFINE_STATUSES = Object.freeze(['ok', 'failed']);
+// A refine window is at most a week of recording clock, like a clip offset.
+const MAX_REFINE_END_SEC = 7 * 24 * 3600;
 const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
 const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
 const MAX_FILES = 50;
@@ -134,6 +145,40 @@ function normalizeLanguage(value) {
 }
 
 /**
+ * What the user said about the recording («los nombres son Huamán,
+ * Ayacucho», «son 3 hablantes», «literal») → { terms?, speakers?, verbatim? }
+ * bounded by the formatter's normalizer, or null.
+ */
+function normalizeHints(hints) {
+  if (!hints || typeof hints !== 'object' || Array.isArray(hints)) return null;
+  try {
+    return require('./media-transcript-format').normalizeMediaHints(hints) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** A refine window on the recording clock: a finite start and a finite end after it. */
+function normalizeRefineRange(range) {
+  const value = normalizeRange(range);
+  if (!value || value.end == null || value.end > MAX_REFINE_END_SEC) return null;
+  return value;
+}
+
+/**
+ * The refine job's outcome as the media worker reported it:
+ * { status: 'ok' | 'failed', unchanged, code, at } or null.
+ */
+function normalizeRefineOutcome(outcome, nowMs = Date.now()) {
+  if (!outcome || typeof outcome !== 'object') return null;
+  let status = REFINE_STATUSES.includes(outcome.status) ? outcome.status : null;
+  if (!status && typeof outcome.ok === 'boolean') status = outcome.ok ? 'ok' : 'failed';
+  if (!status) return null;
+  const code = typeof outcome.code === 'string' ? outcome.code.replace(/[^\w.-]+/g, '_').slice(0, 40) || null : null;
+  return { status, unchanged: status === 'ok' && outcome.unchanged === true, code: status === 'failed' ? code : null, at: isoAt(nowMs) };
+}
+
+/**
  * Validated, bounded record for a new delivery. Unknown modes/formats fall
  * back to the plain transcript; TXT is always delivered.
  */
@@ -148,6 +193,11 @@ function normalizeNewRecord(input = {}, nowMs = Date.now()) {
   const formats = [...new Set(['txt', ...(Array.isArray(input.formats) ? input.formats : [])
     .map(format => String(format || '').trim().toLowerCase()).filter(format => FORMATS.includes(format))])];
   const at = isoAt(nowMs);
+  const kind = KINDS.includes(input.kind) ? input.kind : 'transcript';
+  // A refine corrects one window of one file: both are required.
+  const refineRange = kind === 'refine' ? normalizeRefineRange(input.range) : null;
+  if (kind === 'refine' && fileIds.length !== 1) throw new MediaDeliveryError('invalid_record', 'Una corrección es de un solo archivo.');
+  if (kind === 'refine' && !refineRange) throw new MediaDeliveryError('invalid_record', 'Una corrección necesita un tramo con inicio y fin.');
   return {
     id: newDeliveryId(),
     userId,
@@ -157,10 +207,14 @@ function normalizeNewRecord(input = {}, nowMs = Date.now()) {
     fileIds,
     fileNames: fileIds.map((_, index) => clipString(names[index], 255)),
     goal: typeof input.goal === 'string' ? input.goal.slice(0, 4000) : '',
-    mode: MODES.includes(input.mode) ? input.mode : 'transcript',
+    kind,
+    // A refine posts the corrected window, never an analysis or a translation.
+    mode: kind === 'refine' ? 'transcript' : (MODES.includes(input.mode) ? input.mode : 'transcript'),
     formats,
-    range: normalizeRange(input.range),
+    range: kind === 'refine' ? refineRange : normalizeRange(input.range),
     language: normalizeLanguage(input.language),
+    hints: normalizeHints(input.hints),
+    refine: null,
     model: normalizeModel(input.model),
     output: normalizeOutput(input.output),
     source: normalizeSource(input.source),
@@ -391,6 +445,45 @@ function createMediaDeliveryStore({
     return next;
   }
 
+  /**
+   * Record a refine job's outcome on an active refine record (the media
+   * worker reported it). Taken under the claim lock so it never races a
+   * holder's read-modify-write; a busy lock is retried briefly, then given
+   * up (the delivery's own fallbacks still close the record). The first
+   * terminal outcome is kept: a failure never replaces an outcome already
+   * recorded — not an «ok» (a duplicate hook), not an earlier failure (a
+   * refine that fails reports its real reason, then the worker's generic
+   * «refine_failed»). Only a failure followed by an «ok» is upgraded.
+   * Returns the updated record, or null when there is nothing to record
+   * (not a refine, terminal, gone, busy).
+   */
+  async function noteRefineOutcome(id, outcome, { tries = 5, waitMs = 150 } = {}) {
+    assertDeliveryId(id);
+    const value = normalizeRefineOutcome(outcome, now());
+    if (!value) return null;
+    const keeps = record => value.status === 'failed' && REFINE_STATUSES.includes(record.refine?.status);
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const before = await readActive(id);
+      if (!before || before.kind !== 'refine' || (before.status !== 'pending' && before.status !== 'delivering')) return null;
+      if (keeps(before)) return before;
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        try {
+          const fresh = await readActive(id);
+          if (!fresh || fresh.kind !== 'refine' || (fresh.status !== 'pending' && fresh.status !== 'delivering')) return null;
+          if (keeps(fresh)) return fresh;
+          const next = { ...fresh, refine: value, updatedAt: isoAt(now()) };
+          await writeAtomic(activePath(id), next);
+          return next;
+        } finally {
+          await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (attempt < tries - 1) await new Promise((resolve) => { setTimeout(resolve, Math.max(0, waitMs)); });
+    }
+    return null;
+  }
+
   /** Hand the delivery back (files still pending, or shutdown). */
   async function release(id, token) {
     assertDeliveryId(id);
@@ -515,6 +608,7 @@ function createMediaDeliveryStore({
     refresh,
     patch,
     release,
+    noteRefineOutcome,
     markDelivered,
     markFailed,
     sweepOld,
@@ -524,6 +618,8 @@ function createMediaDeliveryStore({
 module.exports = {
   createMediaDeliveryStore,
   normalizeNewRecord,
+  normalizeRefineOutcome,
+  normalizeRefineRange,
   isValidDeliveryId,
   assertDeliveryId,
   newDeliveryId,
@@ -532,6 +628,7 @@ module.exports = {
   MediaDeliveryError,
   DELIVERY_ID_RE,
   MODES,
+  KINDS,
   FORMATS,
   STATUSES,
   MAX_FILES,

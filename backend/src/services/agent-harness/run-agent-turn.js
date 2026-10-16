@@ -57,6 +57,18 @@ function buildHarnessTools(existingNames, opts = {}) {
     }
   }
 
+  // Transcript tools (contract C7): read a moment of a recording of this chat,
+  // re-transcribe a stretch that was heard wrong, rename a speaker. Each one
+  // resolves the file owner-scoped at execution time.
+  try {
+    const { buildTranscriptTools } = require('./tools/transcript-tools');
+    for (const def of buildTranscriptTools()) {
+      if (!existingNames.has(def.name)) defs.push(def);
+    }
+  } catch (err) {
+    try { console.warn('[agent-harness] transcript tools registration failed:', err && err.message); } catch (_) { /* noop */ }
+  }
+
   // Sandbox document-editing tools — only when a session is active.
   if (opts.sandboxSessionId) {
     try {

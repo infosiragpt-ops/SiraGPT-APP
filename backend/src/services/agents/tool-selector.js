@@ -30,6 +30,8 @@
 let defaultSkillAdapter = null;
 try { defaultSkillAdapter = require('../skill-tool-adapter'); } catch (_) { defaultSkillAdapter = null; }
 const { mentionsAutomation } = require('../automations/cues');
+// A turn about a moment / stretch / speaker of a recording (transcript tools).
+const TRANSCRIPT_FOLLOWUP_RE = /\b(?:minutos?|min\.?\s*\d|hora\s+\d|transcri\w*|trascri\w*|hablantes?|speakers?|grabaci[oó]n|audios?|v[ií]deos?|se\s+(?:escuch|oy|entend)\w*\s+mal|no\s+se\s+(?:entiende|escucha|oye))\b|\b\d{1,2}:\d{2}\b/i;
 
 const DEFAULT_MAX_TOOLS = Number(process.env.SIRAGPT_TOOL_SELECTION_MAX) || 16;
 const MIN_KEPT = Number(process.env.SIRAGPT_TOOL_SELECTION_MIN) || 8;
@@ -177,6 +179,15 @@ function selectTools(rawInput, deps = {}) {
     // A link + «transcribe / subtítulos / qué dicen en el minuto…»: the
     // transcription tool must survive the cap whatever the intent label.
     if (n === 'transcribe_url' && (signals.transcribeUrl || /transcri|subtit|minuto|timestamp/.test(String(input.userQuery || '').toLowerCase()))) coreSet.add(toName(t));
+    // «¿qué dijo en el minuto 95?», «revisa el minuto 12, se escuchó mal», «el
+    // hablante 2 es la Dra. Rojas»: the transcript tools (contract C7) must
+    // survive the cap whatever the intent label.
+    // Pinned only when the turn or its history carries a recording
+    // (signals.mediaTranscript, set by the route) AND the turn talks about a
+    // moment / stretch / speaker: «recuérdame a las 10:30» in a chat without
+    // recordings never spends three slots on them.
+    if (/^(transcript_lookup|retranscribe_range|rename_speaker)$/.test(n)
+      && signals.mediaTranscript && TRANSCRIPT_FOLLOWUP_RE.test(String(input.userQuery || ''))) coreSet.add(toName(t));
     // «recuérdame…», «cada lunes…», «todos los días a las 8…»: the automations
     // tool must survive the cap whatever the intent label (automations/cues).
     if (n === 'automations' && (signals.automations || mentionsAutomation(input.userQuery))) coreSet.add(toName(t));

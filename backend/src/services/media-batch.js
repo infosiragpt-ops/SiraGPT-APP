@@ -93,17 +93,20 @@ function batchCounts(rows) {
 async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = () => {},
   enqueue = enqueueMediaTranscription, wait = delay, now = Date.now,
   timeoutMs = 90 * 60_000, stallMs = MEDIA_WAIT_STALL_MS, pollMs = 4000, retryFailed = false,
-  readProgress = defaultReadProgress, shouldStop = null }) {
+  readProgress = defaultReadProgress, shouldStop = null, language = null, hints = null }) {
   const ids = rows.map(row => row.id);
   let current = rows;
   const enqueueErrors = new Map();
+  // What the user said about the recordings («está en inglés», «los nombres
+  // son…») travels with every job this turn queues or touches (contract C7).
+  const media = { ...(language ? { language } : {}), ...(hints && typeof hints === 'object' && Object.keys(hints).length ? { hints } : {}) };
   for (const row of rows) {
     throwIfAborted(signal);
     // «reintenta» also re-runs the missing segments of a partial transcript.
     const retryThis = retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row));
     if (stateOf(row) !== 'pending' && !retryThis) continue;
     try {
-      const result = await enqueue({ fileId: row.id, userId, retry: retryThis });
+      const result = await enqueue({ fileId: row.id, userId, retry: retryThis, ...media });
       if (result?.queued && retryThis && isPartialTranscript(row)) {
         current = current.map(item => item.id === row.id ? { ...item, processingStage: 'uploaded', processingError: 'Reintentando los tramos sin transcribir…' } : item);
       }
@@ -420,8 +423,11 @@ async function translateMediaBatch({ rows, target, complete, signal, onProgress 
 }
 
 function isMediaFollowup(goal) {
-  return /\b(audio|audios|grabacion|grabaciones|grabación|transcripci[oó]n|transcripciones)\b/i.test(String(goal))
-    && /reintent|anal[ií]z|an[aá]lisis|res[uú]m|compar|transcrib|traduc|trad[uú]c/i.test(String(goal));
+  if (/\b(audio|audios|grabacion|grabaciones|grabación|transcripci[oó]n|transcripciones)\b/i.test(String(goal))
+    && /reintent|anal[ií]z|an[aá]lisis|res[uú]m|compar|transcrib|traduc|trad[uú]c/i.test(String(goal))) return true;
+  // «revisa el minuto 12, se escuchó mal», «vuelve a transcribir del minuto 10
+  // al 15», «¿qué dijo en el minuto 95?» point at the chat's recording too.
+  return detectMediaFollowupIntent(goal) !== null;
 }
 
 function shouldResolveMediaBatchFromHistory(goal, { plainTranscriptionRequest = false } = {}) {
@@ -546,6 +552,666 @@ async function analyzeMediaBatch({ rows, goal, complete, signal, onProgress = ()
   return { text: String(text || ''), summaries, failed };
 }
 
+// ── what the user says about a recording (contract C7) ──────────────────────
+//
+// «está en inglés», «los nombres son Huamán, Ayacucho», «son 3 hablantes»,
+// «transcripción literal»: the transcriber's language, glossary, speaker
+// count and verbatim switch. The queue (C5) and the delivery store bound and
+// re-validate whatever comes out of here; device ids («WA0012») are dropped
+// by the shared term normalizer.
+
+const SOURCE_LANGUAGES = Object.freeze([
+  ...TRANSLATION_LANGUAGES,
+  { code: 'ay', name: 'aimara', re: /^(?:aimara|aymara)$/ },
+  { code: 'gl', name: 'gallego', re: /^(?:gallego|galician)$/ },
+  { code: 'eu', name: 'euskera', re: /^(?:euskera|vasco|basque)$/ },
+]);
+
+function foldGoal(text) {
+  return String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+}
+
+function sourceLanguageIn(word) {
+  const w = String(word || '').trim();
+  if (!w || w.length < 4) return null;
+  const hit = SOURCE_LANGUAGES.find(language => language.re.test(w));
+  return hit ? hit.code : null;
+}
+
+const NEGATION_BEFORE_RE = /\b(?:no|nunca|ni|not|isn't|isnt)\s+(?:\w+\s+){0,1}$/;
+// The recording's own language, never a target: «está en inglés», «el audio es
+// en portugués», «hablan en quechua», «idioma: francés», «la clase está en
+// alemán», «it's in English». A language that only follows a noun («resume la
+// reunión en inglés», «el acta de la reunión en inglés», «quiero el video en
+// inglés con subtítulos») is the OUTPUT's language, never the recording's: a
+// forced wrong language makes Whisper translate or garble. So every pattern
+// needs a copula or a participle between the subject and «en».
+const SOURCE_COPULA = '(?:esta|es|viene|vienen|va|estan|son|era|eran|estaba|estaban|hablan|habla|hablaban|hablaba|hablado|hablada|hablados|habladas|grabad[oa]s?|narrad[oa]s?|dictad[oa]s?|dicho|dicha)';
+// `label: true` patterns («idioma: inglés», «language: English») have no
+// subject: any output verb or deliverable in the same SENTENCE claims them
+// («quiero el acta, idioma: inglés»).
+const SOURCE_LANGUAGE_RES = Object.freeze([
+  { re: new RegExp(`\\b${SOURCE_COPULA}\\s+(?:todo\\s+|toda\\s+|completamente\\s+|totalmente\\s+|enteramente\\s+|solo\\s+)?en\\s+(?:idioma\\s+)?([a-z]+)`, 'g') },
+  { re: /\b(?:idioma|lengua)(?:\s+original)?(?:\s+(?:del?|de\s+la)\s+(?:audio|video|archivo|grabacion|clase|reunion))?(?:\s+es\s+(?:el\s+)?|\s*[:=]\s*|\s+)([a-z]+)/g, label: true },
+  { re: new RegExp(`\\b(?:audios?|videos?|grabacion(?:es)?|clases?|reunion(?:es)?|entrevistas?|podcasts?|notas?\\s+de\\s+voz|conferencias?|charlas?|ponencias?|llamadas?)\\s+(?:que\\s+)?${SOURCE_COPULA}\\s+en\\s+(?:idioma\\s+)?([a-z]+)`, 'g') },
+  { re: /\b(?:is|it's|its|spoken|recorded|they\s+speak|speaks|speaking|audio\s+is|video\s+is)\s+in\s+([a-z]+)/g },
+  { re: /\b(?:language|lang)\s*(?:is|:|=)\s*([a-z]+)/g, label: true },
+]);
+// An output verb or deliverable noun earlier in the same clause makes the
+// language the output's («dame el resumen en idioma inglés», «the summary is
+// in English»). A relative «que» in between re-attaches the copula to the
+// recording («resume la clase que está en inglés» → the class IS in English).
+const OUTPUT_GOVERNOR_RE = /\b(?:res[uú]m\w*|resumen\w*|actas?|minutas?|puntos?\s+clave|ideas?\s+(?:principales|clave)|dame|damelo|damela|pasame|pasamelo|pasamela|hazme|escrib\w*|redact\w*|traduc\w*|tradu\w*|subtitul\w*|srt|vtt|apuntes?|esquema|informe|reporte|summar\w*|translat\w*|subtitles?|captions?|notes|minutes|write|give\s+me)\b/;
+const CLAUSE_BREAK_RE = /[,;:.!?¿¡\n()]/;
+const SENTENCE_BREAK_RE = /[;.!?¿¡\n]/;
+
+function languageIsOutputs(f, index, { sentence = false } = {}) {
+  const breakRe = sentence ? SENTENCE_BREAK_RE : CLAUSE_BREAK_RE;
+  let from = index;
+  while (from > 0 && !breakRe.test(f[from - 1])) from -= 1;
+  let to = index;
+  if (sentence) while (to < f.length && !SENTENCE_BREAK_RE.test(f[to])) to += 1;
+  const before = f.slice(from, index);
+  if (sentence && OUTPUT_GOVERNOR_RE.test(f.slice(index, to))) return true;
+  const governor = OUTPUT_GOVERNOR_RE.exec(before);
+  if (!governor) return false;
+  // «resume la clase que está en inglés»: the relative clause describes the recording.
+  return !/\b(?:que|which|that)\b/.test(before.slice(governor.index + governor[0].length));
+}
+
+function clauseBefore(f, index) {
+  let from = index;
+  while (from > 0 && !CLAUSE_BREAK_RE.test(f[from - 1])) from -= 1;
+  return f.slice(from, index + 1);
+}
+
+/** `rejectSubject`: a regex; a statement whose clause names that subject («el documento está en inglés») is ignored. */
+function languageFrom(text, { rejectSubject = null } = {}) {
+  const f = foldGoal(text);
+  let best = null;
+  for (const { re, label } of SOURCE_LANGUAGE_RES) {
+    for (const match of f.matchAll(re)) {
+      if (NEGATION_BEFORE_RE.test(f.slice(Math.max(0, match.index - 14), match.index))) continue;
+      if (languageIsOutputs(f, match.index, { sentence: Boolean(label) })) continue;
+      if (rejectSubject && rejectSubject.test(clauseBefore(f, match.index))) continue;
+      const code = sourceLanguageIn(match[1]);
+      if (code && (best == null || match.index < best.index)) best = { code, index: match.index };
+    }
+  }
+  if (!best) return null;
+  // «traduce el audio que está en inglés» names one language for both sides:
+  // it is the requested output, never a forced source language.
+  let target = null;
+  try { target = detectTranslationTarget(text); } catch (_) { target = null; }
+  return target && target.code === best.code ? null : best.code;
+}
+
+const NUMBER_WORDS = Object.freeze({ un: 1, uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6, siete: 7,
+  ocho: 8, nueve: 9, diez: 10, once: 11, doce: 12, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 });
+const NUMBER_TOKEN = '(\\d{1,2}|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|one|two|three|four|five|six)';
+const SPEAKER_NOUNS = '(?:hablantes|personas|participantes|voces|interlocutores|locutores|integrantes|ponentes|panelistas|oradores|expositores|speakers|people|voices|participants)';
+const SPEAKER_RES = Object.freeze([
+  { re: new RegExp(`\\b(?:un\\s+solo|una\\s+sola|solo\\s+(?:un|una)|unicamente\\s+(?:un|una))\\s+(?:hablante|persona|voz|locutor[a]?|speaker)\\b`), plus: 0, fixed: 1 },
+  { re: new RegExp(`\\bhabla\\s+(?:solo|solamente|unicamente)\\s+una\\s+persona\\b`), plus: 0, fixed: 1 },
+  { re: new RegExp(`\\b(?:el|la|un|una)\\s+(?:profesor\\w*|docente|entrevistador\\w*|moderador\\w*|doctor\\w*|jefe|jefa|presentador\\w*|conductor\\w*|ponente)\\s+(?:y|con)\\s+${NUMBER_TOKEN}\\s+(?:alumn\\w*|estudiantes|invitad\\w*|participantes|personas|entrevistad\\w*|panelistas|colegas|companer\\w*)\\b`), plus: 1 },
+  { re: new RegExp(`\\b${NUMBER_TOKEN}\\s+${SPEAKER_NOUNS}\\b`), plus: 0 },
+  { re: new RegExp(`\\bsomos\\s+${NUMBER_TOKEN}\\b`), plus: 0 },
+]);
+
+function speakersFrom(text) {
+  const f = foldGoal(text);
+  for (const { re, plus, fixed } of SPEAKER_RES) {
+    const match = re.exec(f);
+    if (!match) continue;
+    if (fixed) return fixed;
+    const raw = match[1];
+    const n = /^\d+$/.test(raw) ? Number(raw) : NUMBER_WORDS[raw];
+    if (Number.isFinite(n) && n >= 1) return Math.min(20, n + plus);
+  }
+  return null;
+}
+
+const CLEAN_TRANSCRIPT_RE = /\b(?:sin\s+(?:las\s+)?muletillas|quita\w*\s+(?:las\s+)?muletillas|limpia\w*\s+(?:las\s+)?muletillas|no\s+(?:tan\s+)?literal|(?:transcripcion|version|texto)\s+(?:mas\s+)?limpi[ao]|clean\s+(?:verbatim|transcript)|non-?verbatim)\b/;
+const VERBATIM_RE = /\b(?:literal(?:mente)?|palabra\s+por\s+palabra|textual(?:mente)?|verbatim|con\s+(?:las\s+|sus\s+)?muletillas|tal\s+(?:y\s+)?(?:como|cual)\s+(?:lo\s+)?(?:dice|dijo|dicen|dijeron|habla|hablan|suena)|sin\s+corregir|sin\s+editar|exactamente\s+lo\s+que\s+(?:dice|dijo|dicen))\b/g;
+
+function verbatimFrom(text) {
+  const f = foldGoal(text);
+  if (CLEAN_TRANSCRIPT_RE.test(f)) return false;
+  for (const match of f.matchAll(VERBATIM_RE)) {
+    // «traducción literal» describes the translation, not the transcript.
+    if (/traduc\w*\s+(?:\w+\s+){0,2}$/.test(f.slice(Math.max(0, match.index - 30), match.index))) continue;
+    return true;
+  }
+  return null;
+}
+
+const LIST_CUE_RE = /(?:^|[^\p{L}])(?:(?:los|las|sus|mis|the)\s+)?(?:nombres?|apellidos?|t[eé]rminos?|palabras\s+(?:clave|t[eé]cnicas)|glosario|vocabulario|siglas|keywords?|names?|terms?)(?:\s+(?:propios|correctos|t[eé]cnicos|importantes|que\s+(?:aparecen|se\s+mencionan|salen|se\s+dicen|dicen)))?\s*(?:son|ser[ií]an|es|are|is|:|=)\s*([^.!?\n]+)/giu;
+const NAMED_RE = /(?:^|[^\p{L}])se\s+(?:llama|llaman|escribe|escriben|apellida|apellidan)\s+([^.!?\n;]+)/giu;
+const TITLE_NAME_RE = /(?:^|[^\p{L}])(?:[Pp]rofesora?|[Pp]rofe|[Dd]ocente|[Dd]octora?|[Dd]ra?\.|[Ii]ngenier[oa]|[Ii]ng\.|[Ll]icenciad[oa]|[Ll]ic\.|[Mm]ag[ií]ster|[Ss]eñora?|[Ss]ra?\.|[Pp]onente|[Ii]nvitad[oa]|[Ee]ntrevistad[oa])\s+(\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+){0,2})/gu;
+const CORRECTION_RE = /(\p{Lu}[\p{L}'’-]{2,})\s*,?\s+(?:y\s+)?no\s+(?:como\s+)?["«“]?\p{L}[\p{L}'’-]{1,}/gu;
+const QUOTED_RE = /[«"“]([^«»"“”\n]{2,40})[»"”]/gu;
+const LIST_STOP_RE = /\b(?:transcrib\w*|transcri\w*|res[uú]m\w*|traduc\w*|haz\w*|hazme|dame|pon\w*|p[aá]s\w*|por\s+favor|porfa|gracias|please|thanks|literal|hablantes|personas|idioma|en\s+(?:ingl|espa|portu|franc|quech))/i;
+const LEADING_ARTICLE_RE = /^(?:el|la|los|las|the|a|al|del)\s+/i;
+const TERM_WORD_LIMIT = 4;
+
+function splitTermList(tail) {
+  const out = [];
+  const items = String(tail || '').split(/\s*(?:,|;|\/|\s+y\s+|\s+e\s+|\s+and\s+)\s*/u);
+  for (let index = 0; index < items.length; index++) {
+    let item = items[index].trim().replace(/^[«"“'(]+|[»"”')]+$/g, '').replace(LEADING_ARTICLE_RE, '').trim();
+    if (!item) continue;
+    // The list ends where the instruction resumes («…, y transcribe literal»).
+    if (LIST_STOP_RE.test(item) && index > 0) break;
+    if (LIST_STOP_RE.test(item)) continue;
+    const words = item.split(/\s+/);
+    if (words.length > TERM_WORD_LIMIT) break;
+    if (index > 0 && words.length > 1 && !/^\p{Lu}/u.test(item)) break;
+    out.push(item);
+  }
+  return out;
+}
+
+/** `explicitOnly`: only «los nombres son…» / «se llama…» lists — never a title, a correction or a quoted fragment. */
+function termsFrom(text, { explicitOnly = false } = {}) {
+  const source = String(text || '');
+  const terms = [];
+  for (const match of source.matchAll(LIST_CUE_RE)) terms.push(...splitTermList(match[1]));
+  for (const match of source.matchAll(NAMED_RE)) terms.push(...splitTermList(match[1]).slice(0, 3));
+  if (explicitOnly) return terms;
+  for (const match of source.matchAll(TITLE_NAME_RE)) terms.push(match[1]);
+  for (const match of source.matchAll(CORRECTION_RE)) terms.push(match[1]);
+  for (const match of source.matchAll(QUOTED_RE)) {
+    const item = match[1].trim();
+    if (item.split(/\s+/).length <= TERM_WORD_LIMIT && !LIST_STOP_RE.test(item)) terms.push(item);
+  }
+  return terms;
+}
+
+function turnText(turn) {
+  if (typeof turn === 'string') return turn;
+  if (turn && typeof turn === 'object' && typeof turn.content === 'string') return turn.content;
+  return '';
+}
+
+/**
+ * The transcription hints in the user's request and its recent turns:
+ * `{ language?, terms: [], speakers?, verbatim? }`. The current request wins
+ * over earlier turns (newest first); terms from every turn are merged,
+ * current ones first, normalized and capped by the shared term rules.
+ * Earlier turns may be about ANOTHER recording: the caller passes only the
+ * turns sent since the recordings arrived (loadRecentUserTurns `since`), or
+ * `{ historyTermsOnly: true }` when it cannot tell — then language, speaker
+ * count and «literal» come from the current request alone (a stale «está en
+ * inglés» forced on a Spanish class makes Whisper translate it).
+ * Pure; never throws.
+ */
+function extractTranscriptionHints(goal, recentTurns = [], { historyTermsOnly = false } = {}) {
+  const out = { terms: [] };
+  try {
+    const turns = [{ text: String(goal || '').slice(0, 4000), current: true },
+      ...(Array.isArray(recentTurns) ? recentTurns : []).slice(0, 8).map(turn => ({ text: turnText(turn).slice(0, 4000), current: false }))]
+      .filter(turn => turn.text.trim());
+    const rawTerms = [];
+    turns.forEach(({ text, current }) => {
+      const decides = current || !historyTermsOnly;
+      if (decides && out.language == null) { const language = languageFrom(text); if (language) out.language = language; }
+      if (decides && out.speakers == null) { const speakers = speakersFrom(text); if (speakers) out.speakers = speakers; }
+      if (decides && out.verbatim == null) { const verbatim = verbatimFrom(text); if (verbatim != null) out.verbatim = verbatim; }
+      rawTerms.push(...termsFrom(text));
+    });
+    let normalize = null;
+    try { normalize = require('./media-transcript-format').normalizeHintTerms; } catch (_) { normalize = null; }
+    out.terms = typeof normalize === 'function' ? normalize(rawTerms)
+      : [...new Set(rawTerms.map(term => String(term).trim()).filter(Boolean))].slice(0, 30);
+  } catch (_) {
+    return { terms: [] };
+  }
+  return out;
+}
+
+// A plain chat turn (not the media runner) talks about a recording.
+const RECORDING_TALK_RE = /\b(?:audios?|grabaci\w*|transcri\w*|trascri\w*|videos?|notas?\s+de\s+voz|podcasts?|entrevistas?|reunion(?:es)?|clases?|conferencias?|charlas?|ponencias?|llamadas?|subtitul\w*|hablantes?|minutos?)\b/;
+// «el documento está en inglés» describes something else, not a recording.
+const NON_MEDIA_SUBJECT_RE = /\b(?:documento|pdf|word|libro|articulo|texto|pagina|correo|email|mensaje|codigo|presentacion|diapositivas?|excel|tabla|web|sitio|app|aplicacion|interfaz|teclado|telefono|celular|menu|pelicula|serie|cancion)\b/;
+const SPEAKER_WORD_RE = /\b(?:hablantes?|voces|interlocutor\w*|locutor\w*|speakers?)\b/;
+
+/**
+ * Hints a PLAIN chat turn may forward to recordings still in the queue: the
+ * full set when the turn is about a recording («el audio está en inglés»,
+ * «¿qué dijo en el minuto 5?», «los hablantes son 3»); otherwise only
+ * explicit cues — a subject-less or recording-subject language statement
+ * («está en inglés»), «los nombres son…» / «se llama…», a speaker count
+ * with its noun, «literal». A quoted fragment of an unrelated turn («escribe
+ * un poema sobre "la luna"») is never a term. Pure; never throws.
+ */
+function extractChatTranscriptionHints(prompt) {
+  try {
+    const text = String(prompt || '').slice(0, 4000);
+    if (!text.trim()) return { terms: [] };
+    const f = foldGoal(text);
+    if (isMediaFollowup(text) || RECORDING_TALK_RE.test(f)) return extractTranscriptionHints(text);
+    const out = { terms: [] };
+    const language = languageFrom(text, { rejectSubject: NON_MEDIA_SUBJECT_RE });
+    if (language) out.language = language;
+    if (SPEAKER_WORD_RE.test(f)) { const speakers = speakersFrom(text); if (speakers) out.speakers = speakers; }
+    const verbatim = verbatimFrom(text);
+    if (verbatim === true) out.verbatim = true;
+    const raw = termsFrom(text, { explicitOnly: true });
+    let normalize = null;
+    try { normalize = require('./media-transcript-format').normalizeHintTerms; } catch (_) { normalize = null; }
+    out.terms = typeof normalize === 'function' ? normalize(raw) : [...new Set(raw.map(term => String(term).trim()).filter(Boolean))].slice(0, 30);
+    return out;
+  } catch (_) {
+    return { terms: [] };
+  }
+}
+
+/** extractTranscriptionHints output → `{ language, hints }` for the queue / delivery (nulls when empty). */
+function hintsForJob(extracted) {
+  if (!extracted || typeof extracted !== 'object') return { language: null, hints: null };
+  const hints = {};
+  if (Array.isArray(extracted.terms) && extracted.terms.length) hints.terms = extracted.terms;
+  if (Number.isFinite(Number(extracted.speakers)) && Number(extracted.speakers) >= 1) hints.speakers = Number(extracted.speakers);
+  if (typeof extracted.verbatim === 'boolean') hints.verbatim = extracted.verbatim;
+  return { language: extracted.language || null, hints: Object.keys(hints).length ? hints : null };
+}
+
+// A message sent this long before a file was stored may still be about it
+// (clock granularity between the upload row and the message row).
+const RECENT_TURN_TOLERANCE_MS = 5000;
+
+/** The earliest `createdAt` of the batch rows (a Date), or null when unknown. */
+function earliestRowTime(rows = []) {
+  let min = null;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const at = row?.createdAt ? new Date(row.createdAt).getTime() : NaN;
+    if (Number.isFinite(at) && (min == null || at < min)) min = at;
+  }
+  return min == null ? null : new Date(min);
+}
+
+/**
+ * The last user turns of an owned chat, newest first (strings). With `since`
+ * (the recordings' arrival), only the turns sent from then on: earlier turns
+ * talk about other recordings. Never throws.
+ */
+async function loadRecentUserTurns(prisma, { userId, chatId, limit = 4, since = null } = {}) {
+  if (!userId || !chatId || typeof prisma?.message?.findMany !== 'function') return [];
+  try {
+    if (typeof prisma?.chat?.findFirst === 'function') {
+      const chat = await prisma.chat.findFirst({ where: { id: chatId, userId, deletedAt: null }, select: { id: true } });
+      if (!chat) return [];
+    }
+    const sinceMs = since != null ? new Date(since).getTime() : NaN;
+    const rows = await prisma.message.findMany({ where: { chatId, role: 'USER', deletedAt: null,
+      ...(Number.isFinite(sinceMs) ? { timestamp: { gte: new Date(sinceMs - RECENT_TURN_TOLERANCE_MS) } } : {}) },
+      orderBy: { timestamp: 'desc' }, take: Math.max(1, Math.min(10, Number(limit) || 4)), select: { content: true } });
+    return (Array.isArray(rows) ? rows : []).map(row => String(row?.content || '').slice(0, 4000)).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+// ── time points and follow-up intents («revisa el minuto 12», «¿qué dijo en el minuto 95?») ──
+
+// «95:10» after «minuto» is minutes:seconds; «1:35:00» is hours:minutes:seconds.
+function clockPartsToSeconds(value) {
+  const parts = String(value).split(':').map(Number);
+  if (parts.some(n => !Number.isFinite(n))) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts.length === 1 ? parts[0] * 60 : null;
+}
+
+const MAX_POINT_SEC = 48 * 3600;
+
+/**
+ * A single moment of the recording named in the text, in seconds, or null:
+ * «el minuto 95» → 5700 · «minuto 1:35:00» → 5700 · «a los 12 minutos» → 720
+ * · «la hora 1:20» → 4800 · «1h20» → 4800 · «en el 45:10» → 2710 ·
+ * «01:02:03» → 3723. «a las 10:30» is a time of day, never a moment.
+ */
+function parseTimePoint(text) {
+  const f = foldGoal(text).replace(/(\d),(\d)/g, '$1.$2');
+  const valid = seconds => (Number.isFinite(seconds) && seconds >= 0 && seconds <= MAX_POINT_SEC ? Math.round(seconds * 1000) / 1000 : null);
+  let m = /\b(?:minuto|minutos|min)\.?\s+(?:numero\s+)?(\d{1,3}(?::\d{1,2}){0,2}(?:\.\d+)?)(?![\d:])/.exec(f);
+  if (m) {
+    const raw = m[1];
+    return valid(raw.includes(':') ? clockPartsToSeconds(raw) : Number(raw) * 60);
+  }
+  m = /\b(?:a|en|al|hacia|cerca\s+de|alrededor\s+de|por)\s+(?:los\s+|el\s+)?(\d{1,3}(?:\.\d+)?)\s*(?:minutos|minuto|mins|min)\b/.exec(f);
+  if (m) return valid(Number(m[1]) * 60);
+  m = /\bhoras?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?![\d:])/.exec(f);
+  if (m) return valid(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3] || 0));
+  m = /\b(\d{1,2})\s*h(?:oras?|rs?)?\s*(\d{1,2})\s*(?:m|min|minutos?)?\b/.exec(f);
+  if (m && Number(m[2]) < 60) return valid(Number(m[1]) * 3600 + Number(m[2]) * 60);
+  m = /(?<![\d:])(\d{1,2}):(\d{2}):(\d{2})(?![\d:])/.exec(f);
+  if (m && !/\blas?\s+$/.test(f.slice(Math.max(0, m.index - 5), m.index))) return valid(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]));
+  m = /\b(?:en|al|el|del|desde|hacia|cerca\s+del?)\s+(?:el\s+)?(?:segundo\s+)?(\d{1,3}):(\d{2})(?![\d:])/.exec(f);
+  if (m) return valid(Number(m[1]) * 60 + Number(m[2]));
+  return null;
+}
+
+const LOOKUP_CUE_RE = /\b(?:que\s+(?:es\s+lo\s+que\s+)?(?:dij\w*|dice[ns]?|decia[ns]?|se\s+(?:dij\w*|dice|habl\w*|menciona\w*|explica\w*|ve\b|escucha\w*)|habl\w*|explic\w*|mencion\w*|pas\w*|ocurr\w*|suced\w*|coment\w*|respond\w*|pregunt\w*|cont\w*|plante\w*|propus\w*|propon\w*|decid\w*|acord\w*|sale|aparece|muestra|hay|se\s+oye)|de\s+que\s+(?:habla\w*|trata\w*|se\s+habl\w*)|quien\s+(?:habla\w*|dij\w*|dice|pregunt\w*|interv\w*)|dime\s+(?:que|lo\s+que)|leeme|lee\s+(?:lo\s+que|el\s+minuto|ese)|cita\w*\s+(?:lo\s+que|textual)|what\s+(?:did|does|do|is|was|were)\b|who\s+(?:is|was)\s+(?:speaking|talking))/;
+// A hearing problem named on its own: «se escuchó mal», «no se oye», «mal
+// transcrito», «inaudible», «se cortó», «faltan palabras».
+const HEARING_CUE_RE = /\b(?:se\s+(?:escuch|oy|oi|entend)\w*\s+mal|no\s+se\s+(?:escuch|oy|oi|distingu|capt)\w*|mal\s+(?:transcrit|reconocid)\w*|inaudible|se\s+(?:corto|comio|salto)\b|falt(?:a|an)\s+(?:texto|palabras|partes?|frases?)|heard\s+wrong|mistranscri\w*)/;
+// Generic «is wrong» cues: about the transcript only next to a transcript
+// noun or a hearing verb in the same clause («la transcripción del minuto 12
+// está mal»). «lo que explica el profesor está mal», «hay errores en la
+// exposición», «dice algo que no tiene sentido» are about the CONTENT.
+const GENERIC_WRONG_RE = /\b(?:esta\s+mal|estan\s+mal|quedo\s+mal|quedaron\s+mal|salio\s+mal|salieron\s+mal|(?:hay|tiene|tienen|con)\s+(?:muchos\s+|varios\s+|algunos\s+)?errores|no\s+tiene\s+sentido|incomprensible|no\s+se\s+entiende\w*|mal\s+(?:escrit|entendid)\w*)/g;
+const TRANSCRIPT_NOUN_RE = /\b(?:transcripci\w*|transcrit\w*|transcript\w*|subtitul\w*|subtitles?|captions?|texto|srt|vtt)\b/;
+const HEARING_VERB_RE = /\b(?:escuch\w*|se\s+oy\w*|se\s+oi\w*|oye|oir|sonid\w*|audio\s+(?:se\s+)?(?:corta|entrecorta))\b/;
+// «del minuto 12 al 15 está mal»: the stretch itself is the subject.
+const TIME_THEN_WRONG_RE = /\b(?:minutos?|min|hora|segundo)\s+[\d:.,]+(?:\s+(?:al?|hasta(?:\s+el)?|y)\s+(?:(?:el\s+)?(?:minuto|min|hora)\s+)?[\d:.,]+)?\s*,?\s*(?:(?:todo|eso|esa\s+parte|ese\s+tramo)\s+)?(?:esta|estan|quedo|quedaron|salio|salieron)\s+mal\b/;
+// The review verb takes the stretch as its object: «revisa el minuto 12»,
+// «corrígelo en el minuto 30», «corrige del minuto 30 al 35».
+const REVIEW_TIME_DIRECT_RE = /\b(?:revis|corrig|corrij|correg|arregl|repas|verific)\w*\s+(?:en\s+|desde\s+|a\s+partir\s+del?\s+)?(?:(?:el|la|los|las|del|de)\s+)?(?:minutos?|min|hora|tramo|segundo)\b/;
+// Another object for the review («corrige la hora 1:20 en el documento»).
+const OTHER_OBJECT_RE = /\b(?:documento|word|pdf|excel|presentaci\w*|diapositiva\w*|informe|reporte|codigo|tabla|acta|minuta|resumen|traduccion|ensayo|tesis|correo|email)\b/;
+const RETRANSCRIBE_RE = /\b(?:vuelv\w*\s+a\s+transcrib\w*|volver\s+a\s+transcrib\w*|re-?transcrib\w*|transcrib\w*\s+(?:lo\s+|la\s+|los\s+|las\s+|eso\s+|esa\s+parte\s+|ese\s+tramo\s+)?(?:de\s+nuevo|otra\s+vez|nuevamente|mejor)\b|transcribe\s+(?:it\s+)?again\b|redo\s+the\s+transcri)/;
+const REVIEW_RE = /\b(?:revis\w*|corrig\w*|corrij\w*|correg\w*|arregl\w*|mejor[ae]\w*|repas\w*|verific\w*|check|fix)\b/;
+// The turn asks for something about the CONTENT (an answer, an opinion, a
+// document): it is never only «transcribe that stretch again».
+// A question about what is said at that moment: answered from its window.
+const CONTENT_QUESTION_RE = /\b(?:dime|dinos|cuentame|explica\w*|explicame|tiene\s+razon|razon\s+tiene|opina\w*|opinion|por\s+que|lo\s+que\s+(?:dice|dijo|decia|explica\w*|menciona\w*|plantea\w*|afirma\w*|cuenta|expone|propone))\b/;
+const CONTENT_CUE_RE = new RegExp(`${CONTENT_QUESTION_RE.source}|\\b(?:exposicion|argument\\w*|afirmacion\\w*|hazme|dame|generar?(?:me|lo|la)?|crear?(?:me|lo|la)?|redacta\\w*|escribe\\w*|documento|informe|word|pdf)\\b`);
+
+function clauseOf(f, index) {
+  let from = index;
+  while (from > 0 && !/[,;:.!?¿¡\n]/.test(f[from - 1])) from -= 1;
+  let to = index;
+  while (to < f.length && !/[,;:.!?¿¡\n]/.test(f[to])) to += 1;
+  return f.slice(from, to);
+}
+
+/** «la transcripción está mal», «el audio se entrecorta y quedó mal»: a generic cue about the transcript. */
+function genericWrongAboutTranscript(f) {
+  for (const match of f.matchAll(GENERIC_WRONG_RE)) {
+    const clause = clauseOf(f, match.index);
+    if (TRANSCRIPT_NOUN_RE.test(clause) || HEARING_VERB_RE.test(clause)) return true;
+  }
+  return false;
+}
+
+/**
+ * The turn also asks for a deliverable, a translation, an answer about a
+ * moment or about the content: «revisa del minuto 30 al 40 y hazme un
+ * resumen», «¿del minuto 10 al 15 lo que explica el profesor está mal?».
+ */
+function asksBeyondRefine(text, f = foldGoal(text)) {
+  if (CONTENT_CUE_RE.test(f) || LOOKUP_CUE_RE.test(f)) return true;
+  try {
+    if (wantsSummaryWithTranslation(text) || detectTranslationTarget(text)) return true;
+  } catch (_) { /* a cue check never fails the turn */ }
+  return false;
+}
+
+// A point lookup reads a minute before and four after; an open range five.
+const LOOKUP_BEFORE_SEC = 60;
+const LOOKUP_AFTER_SEC = 240;
+const OPEN_LOOKUP_SEC = 300;
+// A point refine re-transcribes the minute it names (plus margins).
+const REFINE_BEFORE_SEC = 30;
+const REFINE_AFTER_SEC = 90;
+
+/**
+ * What a follow-up about a recording asks for, or null:
+ * - `{ kind: 'refine', range|null, at?, whole? }`: «revisa el minuto 12, se
+ *   escuchó mal», «vuelve a transcribir de 1:10:00 a 1:15:00», «del minuto 12
+ *   al 15 está mal». `range: null` with `whole: false` means the user said it
+ *   was heard wrong without saying where (ask for the window); `whole: true`
+ *   is an explicit «vuélvela a transcribir» of the whole recording.
+ * - `{ kind: 'lookup', range, at? }`: «¿qué dijo en el minuto 95?», «¿de qué
+ *   hablan del minuto 30 al 45?» — a window on the recording clock.
+ */
+function detectMediaFollowupIntent(goal) {
+  const text = String(goal || '').slice(0, 2000);
+  if (!text.trim()) return null;
+  const f = foldGoal(text);
+  let range = null;
+  try {
+    const parsed = require('./media-transcript-format').parseTimeRange(text);
+    if (parsed && Number.isFinite(parsed.start)) range = { start: parsed.start, end: Number.isFinite(parsed.end) ? parsed.end : null };
+  } catch (_) { range = null; }
+  const at = range ? null : parseTimePoint(text);
+  const hasTime = Boolean(range) || at != null;
+  const lookupCue = LOOKUP_CUE_RE.test(f);
+  const retranscribe = RETRANSCRIBE_RE.test(f);
+  // A turn that also asks for a summary, a translation, an answer or a
+  // document is never turned into «transcribe that stretch again» unless the
+  // user said so explicitly («vuelve a transcribir…»): «Resume este audio,
+  // del minuto 1 al 3 casi no se escucha» is a summary request.
+  const beyond = asksBeyondRefine(text, f);
+  const heardWrong = !beyond && (HEARING_CUE_RE.test(f) || genericWrongAboutTranscript(f)
+    || (hasTime && TIME_THEN_WRONG_RE.test(f)));
+  const review = REVIEW_RE.test(f);
+  // A review counts only when it targets the transcript: a transcript noun,
+  // or the stretch as its direct object — never «corrige la hora 1:20 en el
+  // documento».
+  const reviewsTranscript = !beyond && review && hasTime && !OTHER_OBJECT_RE.test(f)
+    && (TRANSCRIPT_NOUN_RE.test(f) || REVIEW_TIME_DIRECT_RE.test(f));
+  if (retranscribe || (heardWrong && (hasTime || review)) || reviewsTranscript) {
+    // `alsoAsks`: an explicit «vuelve a transcribir…» next to another request
+    // («…y resúmelo»): the refine is queued and the turn still answers.
+    const also = beyond ? { alsoAsks: true } : {};
+    if (range) return { kind: 'refine', range: { start: range.start, end: range.end }, ...also };
+    if (at != null) return { kind: 'refine', range: { start: Math.max(0, at - REFINE_BEFORE_SEC), end: at + REFINE_AFTER_SEC }, at, ...also };
+    return { kind: 'refine', range: null, whole: retranscribe, ...also };
+  }
+  // «Revisa el minuto 12 y dime si el profesor tiene razón», «en el minuto 20
+  // dice algo que no tiene sentido, explícame por qué»: read that window.
+  if (hasTime && (lookupCue || CONTENT_QUESTION_RE.test(f))) {
+    if (range) return { kind: 'lookup', range: { start: range.start, end: range.end != null ? range.end : range.start + OPEN_LOOKUP_SEC } };
+    return { kind: 'lookup', range: { start: Math.max(0, at - LOOKUP_BEFORE_SEC), end: at + LOOKUP_AFTER_SEC }, at };
+  }
+  return null;
+}
+
+// ── refine: re-transcribe a window of a READY transcript ─────────────────────
+
+// An open window («revisa desde el minuto 30») stops at most this far after its start.
+const MAX_OPEN_REFINE_SEC = 30 * 60;
+// «vuelve a transcribir el audio» re-does the whole recording only up to this
+// length; a longer one asks for the stretch (a 5-hour re-run is hours of CPU).
+const MAX_WHOLE_REFINE_SEC = 2 * 3600;
+
+function rowName(row) {
+  return String(row?.originalName || row?.filename || row?.id || 'el archivo');
+}
+
+const NAME_STOPWORDS = new Set(['audio', 'audios', 'video', 'videos', 'clase', 'clases', 'grabacion', 'archivo', 'reunion',
+  'parte', 'final', 'nota', 'notas', 'voz', 'whatsapp', 'record', 'recording', 'meeting', 'sesion', 'copia']);
+
+/** The one row the text names (by id, full name or a distinctive word of it), or null. */
+function pickRowByName(rows = [], text = '') {
+  const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
+  if (list.length === 1) return list[0];
+  const f = foldGoal(text);
+  const byId = list.filter(row => String(row.id || '').length >= 8 && String(text).includes(String(row.id)));
+  if (byId.length === 1) return byId[0];
+  const byFull = list.filter((row) => {
+    const stem = foldGoal(rowName(row)).replace(/\.[a-z0-9]{1,6}$/, '').trim();
+    return stem.length >= 3 && f.includes(stem);
+  });
+  if (byFull.length === 1) return byFull[0];
+  const byWord = list.filter((row) => {
+    const words = foldGoal(rowName(row)).replace(/\.[a-z0-9]{1,6}$/, '').split(/[^a-z0-9]+/)
+      .filter(word => word.length >= 4 && !NAME_STOPWORDS.has(word) && !/^\d+$/.test(word));
+    return words.some(word => new RegExp(`\\b${word}\\b`).test(f));
+  });
+  return byWord.length === 1 ? byWord[0] : null;
+}
+
+function clockLabel(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  const two = n => String(n).padStart(2, '0');
+  return `${two(Math.floor(s / 3600))}:${two(Math.floor((s % 3600) / 60))}:${two(s % 60)}`;
+}
+
+/** Terminal, silent cancel of a delivery record whose job was never queued. */
+async function cancelDeliveryRecord(delivery, id) {
+  const store = typeof delivery?.getMediaDeliveryService === 'function' ? delivery.getMediaDeliveryService()?.store : null;
+  if (!id || !store || typeof store.claim !== 'function' || typeof store.markFailed !== 'function') return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const held = await Promise.resolve(store.claim(id)).catch(() => null);
+    if (held?.token) {
+      const error = Object.assign(new Error('queue_unavailable'), { code: 'queue_unavailable' });
+      return Boolean(await Promise.resolve(store.markFailed(id, held.token, error, { maxAttempts: 1 })).catch(() => null));
+    }
+    await delay(100);
+  }
+  return false;
+}
+
+function loadDeliveryModule() {
+  try { return require('./media-delivery'); } catch (_) { return null; }
+}
+
+/**
+ * Re-transcribe a window of one READY recording («revisa el minuto 12, se
+ * escuchó mal»). The refine delivery is created first (so a job that ends at
+ * once finds it), then the refine job is queued with the delivery id; a job
+ * that cannot be queued cancels the delivery silently. Returns
+ * `{ handled, ok, message, fileId?, range?, deliveryId?, reason? }`:
+ * `handled: false` means nothing is ready to refine yet (the caller keeps its
+ * normal flow, the first transcription takes the hints). Never throws.
+ */
+async function requestMediaRefine({ prisma, userId, chatId = null, taskId = null, rows = [], goal = '', intent = null,
+  language = null, hints = null, env = process.env, deps = {} } = {}) {
+  const delivery = deps.delivery === undefined ? loadDeliveryModule() : deps.delivery;
+  const enqueueRefine = deps.enqueueRefine || ((payload) => require('./media-transcription-queue').enqueueRefine(payload));
+  const transcriptStore = deps.transcriptStore || require('./media-transcript-store');
+  try {
+    // A row loaded without its text (a narrow select) is judged by its stage;
+    // the queue re-checks the stored transcript before it queues anything.
+    const ready = (Array.isArray(rows) ? rows : []).filter(row => row && (row.extractedText === undefined
+      ? row.processingStage === 'ready' : stateOf(row) === 'ready'));
+    if (!ready.length) return { handled: false, ok: false, reason: 'not_ready' };
+    const row = pickRowByName(ready, goal);
+    if (!row) {
+      const names = ready.slice(0, 6).map(r => `«${rowName(r)}»`).join(', ');
+      return { handled: true, ok: false, reason: 'file_ambiguous',
+        message: `¿Cuál de estas grabaciones reviso: ${names}? Dime el nombre y el tramo (por ejemplo «del minuto 12 al 15»).` };
+    }
+    const name = rowName(row);
+    if (!intent || (!intent.range && !intent.whole)) {
+      return { handled: true, ok: false, reason: 'range_required', fileId: row.id,
+        message: `Dime de qué minuto a qué minuto se escuchó mal en «${name}» (por ejemplo «del minuto 12 al 15») y vuelvo a transcribir ese tramo.` };
+    }
+    let info = null;
+    if (typeof transcriptStore?.loadMediaTranscript === 'function') {
+      try { info = await transcriptStore.loadMediaTranscript(prisma, { userId, fileId: row.id }); } catch (_) { info = null; }
+    }
+    const offset = Number(info?.timeOffsetSec) > 0 ? Number(info.timeOffsetSec) : 0;
+    const duration = Number(info?.durationSec) > 0 ? Number(info.durationSec) : null;
+    const audioEnd = duration ? offset + duration : null;
+    let start;
+    let end;
+    if (intent.whole && !intent.range) {
+      if (!audioEnd) {
+        return { handled: true, ok: false, reason: 'duration_unknown', fileId: row.id,
+          message: `No sé cuánto dura «${name}». Dime el tramo que vuelvo a transcribir (por ejemplo «del minuto 0 al 30»).` };
+      }
+      if (duration > MAX_WHOLE_REFINE_SEC) {
+        return { handled: true, ok: false, reason: 'range_required', fileId: row.id,
+          message: `«${name}» dura ${clockLabel(duration)}. Dime qué tramo se escuchó mal (por ejemplo «del minuto 30 al 45») y vuelvo a transcribir solo ese tramo.` };
+      }
+      start = offset;
+      end = audioEnd;
+    } else {
+      const askedStart = Number(intent.range.start) || 0;
+      const askedEnd = intent.range.end != null ? Number(intent.range.end) : null;
+      // A clip of a longer recording (a link stretch) starts at `offset`: a
+      // moment or an open stretch before it, or a stretch that ends before
+      // it, is simply not in this transcript.
+      if (offset > 0 && ((intent.at != null && Number(intent.at) < offset) || (askedEnd == null && askedStart < offset)
+        || (askedEnd != null && askedEnd <= offset))) {
+        return { handled: true, ok: false, reason: 'out_of_range', fileId: row.id,
+          message: `«${name}» cubre ${clockLabel(offset)}–${audioEnd ? clockLabel(audioEnd) : '…'} de la grabación; el tramo que pides queda fuera.` };
+      }
+      start = Math.max(offset, askedStart);
+      end = askedEnd != null ? askedEnd : start + MAX_OPEN_REFINE_SEC;
+      if (audioEnd) end = Math.min(end, audioEnd);
+    }
+    if (audioEnd && start >= audioEnd) {
+      return { handled: true, ok: false, reason: 'out_of_range', fileId: row.id,
+        message: `«${name}» dura ${clockLabel(duration)}; el tramo que pides queda fuera de la grabación.` };
+    }
+    if (!(end > start)) {
+      return { handled: true, ok: false, reason: 'invalid_range', fileId: row.id,
+        message: 'El tramo no es válido: el inicio debe ser anterior al fin.' };
+    }
+    const range = { start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000 };
+    let record = null;
+    const deliveryOn = Boolean(chatId && delivery && typeof delivery.createDelivery === 'function'
+      && (typeof delivery.isMediaDeliveryEnabled !== 'function' || delivery.isMediaDeliveryEnabled(env)));
+    if (deliveryOn) {
+      try {
+        record = await delivery.createDelivery({
+          kind: 'refine', userId, chatId, taskId: taskId || null, fileIds: [row.id], fileNames: [name],
+          goal: String(goal || '').slice(0, 4000), range, language: language || null, hints: hints || null,
+          mode: 'transcript', formats: ['txt'], output: { documentFormat: null, wantsSubtitles: false },
+        });
+      } catch (err) {
+        console.warn('[media-batch] refine delivery not created', err?.code || 'delivery_error');
+        record = null;
+      }
+    }
+    let queued = null;
+    try {
+      queued = await enqueueRefine({ fileId: row.id, userId, range, language: language || null, hints: hints || null, deliveryId: record?.id || null });
+    } catch (err) {
+      if (record) await cancelDeliveryRecord(delivery, record.id);
+      return { handled: true, ok: false, reason: err?.code || 'queue_unavailable', fileId: row.id,
+        message: 'No pude programar la corrección ahora: la cola de transcripción no está disponible. La transcripción sigue como estaba; pídemelo de nuevo en unos minutos.' };
+    }
+    if (!queued?.queued) {
+      if (record) await cancelDeliveryRecord(delivery, record.id);
+      return { handled: true, ok: false, reason: queued?.reason || 'not_queued', fileId: row.id,
+        message: `La transcripción de «${name}» todavía no está lista; cuando termine podré volver a transcribir ese tramo.` };
+    }
+    let message = '';
+    if (record && typeof delivery.refineHandOffMessage === 'function') {
+      try { message = delivery.refineHandOffMessage({ fileName: name, range }); } catch (_) { message = ''; }
+    }
+    if (!message) {
+      message = record
+        ? `Voy a volver a transcribir el tramo ${clockLabel(range.start)}–${clockLabel(range.end)} de «${name}». Te aviso aquí cuando esté listo.`
+        : `Voy a volver a transcribir el tramo ${clockLabel(range.start)}–${clockLabel(range.end)} de «${name}». La transcripción se actualizará cuando termine.`;
+    }
+    return { handled: true, ok: true, fileId: row.id, fileName: name, range, deliveryId: record?.id || null,
+      jobId: queued.jobId || null, message };
+  } catch (err) {
+    console.warn('[media-batch] refine request failed', err?.code || 'refine_error');
+    return { handled: true, ok: false, reason: err?.code || 'refine_error',
+      message: 'No pude programar la corrección de ese tramo. La transcripción sigue como estaba.' };
+  }
+}
+
+/**
+ * Hints said while recordings are still in the queue reach their jobs: a
+ * waiting job reads the durable copy when it starts. Ready or failed rows are
+ * untouched (a ready transcript is corrected with a refine). Returns the
+ * number of rows updated. Never throws.
+ */
+async function forwardHintsToPendingMedia({ userId, rows = [], language = null, hints = null, enqueue = enqueueMediaTranscription } = {}) {
+  if (!userId || (!language && !hints)) return 0;
+  let forwarded = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row?.id || stateOf(row) !== 'pending') continue;
+    try {
+      await enqueue({ fileId: row.id, userId, ...(language ? { language } : {}), ...(hints ? { hints } : {}) });
+      forwarded++;
+    } catch (_) { /* best-effort: the job keeps the hints it had */ }
+  }
+  return forwarded;
+}
+
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE };
+  wantsSummaryWithTranslation, detectTranslationTarget, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  // contract C7: hints, follow-up intents (refine / lookup) and refine requests
+  extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
+  requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };

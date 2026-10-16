@@ -154,6 +154,53 @@ RUN sh /tmp/install-local-whisper.sh \
         -ng -t 1 -nt --no-prints -otxt -of /tmp/whisper-smoke \
     && rm -f /tmp/whisper-smoke.wav /tmp/whisper-smoke.txt /tmp/whisper-smoke.json
 
+# Transcription / OCR extras. Their own layer AFTER the whisper build, so a
+# change here never re-clones or re-compiles whisper.cpp on the Lenovo.
+# - libheif-tools: heif-dec (libheif + libde265) decodes iPhone HEIC/HEIF
+#   photos; sharp's prebuilt libvips only decodes AVIF. ocr-input
+#   feature-detects heif-dec / heif-convert and falls back without them.
+# - tesseract-ocr-data-por/fra/ita/deu: offline tessdata beside eng/spa/osd,
+#   so tesseract.js and the native CLI never fetch these from the CDN.
+# - Silero VAD (ggml-silero-v5.1.2.bin, sha256-pinned, downloaded from a
+#   pinned HuggingFace revision, never `main`, so a re-upload upstream cannot
+#   break a publish) next to the whisper model. whisper.cpp is NOT bumped (v1.7.5 has no --vad):
+#   local-whisper-engine feature-detects `--vad` from `whisper-cli -h` and only
+#   uses the file with a build that supports it and WHISPER_CPP_VAD=1. A
+#   network failure skips this optional model (WARN in the build log; set
+#   --build-arg WHISPER_VAD_REQUIRED=1 to fail instead); a checksum mismatch
+#   always fails the build. WHISPER_VAD_MODEL_URL also accepts file:// or an
+#   absolute path (a copy cached on the Lenovo, like BUNDLE_WHISPER_MODEL).
+# Smoke checks: heif-dec (or heif-convert) loads (exit 126/127 = cannot run;
+# an unknown --version flag on an old libheif is fine), and
+# `tesseract --list-langs` lists every pack the OCR ladder expects.
+ARG WHISPER_VAD_MODEL_URL=https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v5.1.2.bin
+ARG WHISPER_VAD_MODEL_SHA256=29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf
+ARG WHISPER_VAD_REQUIRED=0
+COPY scripts/install-whisper-vad.sh /tmp/install-whisper-vad.sh
+RUN apk add --no-cache \
+      libheif-tools \
+      tesseract-ocr-data-deu \
+      tesseract-ocr-data-fra \
+      tesseract-ocr-data-ita \
+      tesseract-ocr-data-por \
+    && { command -v heif-dec >/dev/null 2>&1 || command -v heif-convert >/dev/null 2>&1; } \
+    && { heif_bin="$(command -v heif-dec || command -v heif-convert)"; "${heif_bin}" --version >/dev/null 2>&1; heif_rc=$?; \
+         [ "${heif_rc}" -ne 126 ] && [ "${heif_rc}" -ne 127 ] \
+           || { echo "${heif_bin} cannot run (exit ${heif_rc})" >&2; exit 1; }; } \
+    && tesseract --list-langs > /tmp/tesseract-langs.txt 2>&1 \
+    && for lang in eng spa osd por fra ita deu; do \
+         grep -qx "${lang}" /tmp/tesseract-langs.txt \
+           || { echo "tesseract language pack missing: ${lang}" >&2; cat /tmp/tesseract-langs.txt >&2; exit 1; }; \
+       done \
+    && rm -f /tmp/tesseract-langs.txt \
+    && WHISPER_VAD_MODEL_URL="${WHISPER_VAD_MODEL_URL}" \
+       WHISPER_VAD_MODEL_SHA256="${WHISPER_VAD_MODEL_SHA256}" \
+       WHISPER_VAD_REQUIRED="${WHISPER_VAD_REQUIRED}" \
+       sh /tmp/install-whisper-vad.sh \
+    && rm -f /tmp/install-whisper-vad.sh \
+    && { [ ! -e /usr/local/share/whisper/ggml-silero-v5.1.2.bin ] \
+         || [ "$(stat -c '%a' /usr/local/share/whisper/ggml-silero-v5.1.2.bin)" = "644" ]; }
+
 # SPSS system files need the native ReadStat writer/reader in the very Python
 # interpreter used by the agent sandbox. Install after the expensive Whisper
 # layer so a dependency change does not rebuild the speech model.

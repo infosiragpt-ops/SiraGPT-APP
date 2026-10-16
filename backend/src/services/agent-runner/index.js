@@ -1765,6 +1765,9 @@ async function runAgentRunner({
         openaiClient,
         synthesize,
         computerDriver,
+        // transcribe_audio hands a long workspace recording to the durable
+        // media queue, delivered in this chat (contract C7).
+        owner: userId && chatId ? { userId, chatId } : null,
       });
       f7.applyToMessages(messages);
     } catch (_) { f7 = null; }

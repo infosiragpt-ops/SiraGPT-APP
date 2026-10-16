@@ -38,14 +38,83 @@
  *   - every finished segment is checkpointed with its provider, model,
  *     language and cut plan, and the result reports chunks per engine.
  *
+ * Intake (every job, before any rung):
+ *   - ONE ffprobe (media-probe.probeMediaStreams) lists the streams. A file
+ *     with no audio stream ends at once as `no_audio_track` (non-transient);
+ *     the audio track comes from media-probe.chooseAudioStream (language,
+ *     disposition, never commentary/music/description titles; never loudness)
+ *     unless options.audioStreamOrdinal names one, and every decode maps it
+ *     (`-map 0:a:N`: segment cut, short-clip master, local whisper.cpp)
+ *     under media-probe's own 100M discovery window — an ordinal only names
+ *     the same track under the same window (a late-audio VOB lists its tracks
+ *     in another order, or not at all, in ffmpeg's default 5 MB / 5 s one).
+ *   - Protected MP4 audio (FairPlay `drms`, CENC `enca`, Audible `aavd`
+ *     sample entries; ffmpeg decodes them to noise) is `drm_protected` before
+ *     any decode.
+ *   - A short clip is transcoded ONCE to a mono 16 kHz FLAC master with a
+ *     clean name (`audio.flac`) and THAT is what every rung receives: no more
+ *     400s for .opus/.amr/.3gp/.mov/.mkv, no video container ever uploaded.
+ *     A decode ffmpeg rejects goes down one ladder (decodeLadder): tolerant
+ *     (`-err_detect ignore_err -fflags +discardcorrupt+genpts`, wide window)
+ *     with the track, then without it. A missing moov atom is
+ *     `truncated_container`; «no audio stream» is conclusive only once a
+ *     tolerant pass agrees. Without ffmpeg the clip goes as uploaded
+ *     (degraded); a host-side failure uploads the containers providers accept.
+ *   - New cut plans snap to silences under an ADAPTIVE threshold: the noise
+ *     floor is estimated from a few short `-ss/-t` windows (never a second
+ *     full decode) and only ever raises the -35 dB default for noisy rooms.
+ *     Existing manifests and their plans are reused untouched.
+ *   - Language: auto-detected unless options.language names one; a language
+ *     Whisper does not support (quechua, aimara…) is detected automatically
+ *     with a note instead of failing every rung.
+ *   - options.hints.terms join options.keyterms in the prompt (deduped,
+ *     capped, device identifiers such as «WA0012» or «GMT20261003» dropped).
+ *   The result carries `audioStream` ({ streamOrdinal, reason } | null; null
+ *   too when the text did not come from the chosen track), `notes` (Spanish,
+ *   for the delivery; the track and tolerant-read notes only on success) and
+ *   `intake` (machine-readable: track, decode, decodeCause…).
+ *
+ * Quality loop (C4 quality half, audio-quality.js). The first answer no longer
+ * wins by default:
+ *   - every answer is scored with engine-agnostic signals (compression ratio,
+ *     characters per voiced second, the hallucination lexicon and prompt
+ *     echo, empty text over measured speech energy). A flagged piece gets up
+ *     to TRANSCRIBE_ESCALATION_MAX_PER_PIECE (2) alternative hypotheses — the
+ *     next live rung, an opt-in escalation rung, or the SAME rung on an
+ *     enhanced copy (high-pass + dynaudnorm / loudnorm; never the default
+ *     decode) — and the keeper is chosen by agreement between hypotheses,
+ *     never by comparing logprobs of different engines. Bounded by a per-job
+ *     budget (TRANSCRIBE_ESCALATION_BUDGET_RATIO of the media, ≥ one piece).
+ *   - `no_speech` needs a SECOND opinion (another rung, or the enhanced copy
+ *     on the same rung) that agrees. A segmented piece answered empty over
+ *     measured speech energy is re-asked; if every second opinion fails it is
+ *     a gap, never «covered».
+ *   - a dead rung revives: a cooldown or a 3-in-a-row streak pauses it
+ *     (deadUntil: the cooldown, else 5 / 15 / 30 min), it is never latched
+ *     for the rest of a 5-hour job. Only a missing local engine is permanent.
+ *   - the last live rung is never killed by the streak: a transient local
+ *     failure (timeout, crash, EAGAIN) backs off 30 s / 2 min / 10 min within
+ *     the job's wait budget; a decode failure or a repeated OOM kill is
+ *     deterministic and only fails that piece.
+ *   - opt-in escalation rungs (TRANSCRIBE_ESCALATION_PROVIDERS: voicestudio,
+ *     elevenlabs) are used only for flagged pieces, never for the first pass.
+ *   - options.range + options.forceRetranscribe (refine): the pieces that
+ *     overlap the range ignore their checkpoints and are reviewed (one more
+ *     hypothesis at least); every other piece is reused; the full result
+ *     comes back.
+ *   The result carries `quality` ({ score, level, lowConfidence, escalations,
+ *   enginesUsed, notes }); checkpointed parts carry an optional `review`.
+ *
  * Config:
  *   WHISPER_MODEL = whisper-1 (OpenAI only; gpt-4o*-transcribe models get
  *     json / diarized_json and 300 s segments)
- *   WHISPER_LANGUAGE = hint for SHORT clips (≤ TRANSCRIBE_AUTO_LANGUAGE_MIN_SECONDS,
- *     60 s, or unknown length); longer media is auto-detected. Defaults to es.
+ *   WHISPER_LANGUAGE = prior used to LOCK the language of long, segmented
+ *     jobs (decideLanguage). It is no longer forced on short clips: they are
+ *     auto-detected unless options.language is given. Defaults to es.
  *   WHISPER_PROMPT = optional guiding prompt; options.keyterms are appended
  *   AUDIO_MAX_FILE_BYTES = 25 MB
  *   WHISPER_CPP_BIN / WHISPER_CPP_MODEL / LOCAL_WHISPER_MODEL
+ *   TRANSCRIBE_ADAPTIVE_SILENCE (on; 0 keeps the fixed -35 dB threshold)
  * Segmented jobs:
  *   TRANSCRIBE_CLOUD_PARALLEL (3) / TRANSCRIBE_LOCAL_PARALLEL (1)
  *   TRANSCRIBE_MIN_COVERAGE (0.8) — below it a partial job is a failure
@@ -53,6 +122,12 @@
  *   TRANSCRIBE_SEGMENT_RETRIES (2, cloud 5xx/timeouts) / TRANSCRIBE_LOCAL_RETRIES (0)
  *   TRANSCRIBE_CLOUD_TIMEOUT_MS (max(120 s, 0.4 s per audio second))
  *   TRANSCRIBE_SILENCE_SNAP (on; 0 cuts on fixed times)
+ * Quality loop:
+ *   TRANSCRIBE_QUALITY_LOOP (on; 0 restores first-answer-wins)
+ *   TRANSCRIBE_ESCALATION_PROVIDERS (none; «voicestudio,elevenlabs» opt-in, paid)
+ *   TRANSCRIBE_ESCALATION_BUDGET_RATIO (0.3) / TRANSCRIBE_ESCALATION_MAX_PER_PIECE (2)
+ *   TRANSCRIBE_LAST_RUNG_WAIT_BUDGET_MS (1200000)
+ *   ELEVENLABS_API_KEY + ELEVENLABS_STT_MODEL (scribe_v1) for the elevenlabs rung
  */
 
 const fsPromises = require('fs').promises;
@@ -65,6 +140,7 @@ const { promisify } = require('util');
 const { buildUntrustedChildEnv } = require('../utils/untrusted-child-env');
 const execFileAsync = promisify(execFile);
 const localWhisper = require('./local-whisper-engine');
+const quality = require('./audio-quality');
 const keyHealth = require('../utils/provider-key-health');
 const voiceStudioClient = (options = {}) => options.voiceStudio || require('./ai/voicestudio-client');
 
@@ -98,6 +174,17 @@ const AUDIO_MIME_MAP = {
   'video/mpeg': { ext: 'mpeg', label: 'Video MPEG' },
   'video/quicktime': { ext: 'mov', label: 'Video QuickTime' },
   'video/webm': { ext: 'webm', label: 'Video WebM' },
+  // Labels only: these containers never travel to a cloud rung as uploaded
+  // (the short-clip master is FLAC), but the placeholder names them honestly.
+  'video/x-matroska': { ext: 'mkv', label: 'Video MKV' },
+  'video/x-msvideo': { ext: 'avi', label: 'Video AVI' },
+  'video/x-ms-wmv': { ext: 'wmv', label: 'Video WMV' },
+  'video/x-flv': { ext: 'flv', label: 'Video FLV' },
+  'video/3gpp': { ext: '3gp', label: 'Video 3GP' },
+  'video/3gpp2': { ext: '3g2', label: 'Video 3G2' },
+  'video/mp2t': { ext: 'ts', label: 'Video MPEG-TS' },
+  'video/ogg': { ext: 'ogv', label: 'Video OGG' },
+  'audio/amr-wb': { ext: 'awb', label: 'Audio AMR-WB' },
 };
 
 const EXT_MIME_FALLBACK = {
@@ -132,7 +219,21 @@ const EXT_MIME_FALLBACK = {
   '.mpg': 'video/mpeg',
   '.mov': 'video/quicktime',
   '.webm': 'audio/webm',
+  '.wmv': 'video/x-ms-wmv',
+  '.flv': 'video/x-flv',
+  '.mts': 'video/mp2t',
+  '.m2ts': 'video/mp2t',
+  '.ogv': 'video/ogg',
 };
+
+// What OpenAI / Groq accept as an upload (their documented list). Only used
+// when ffmpeg could not produce the FLAC master: an audio file in one of these
+// containers still goes as uploaded (today's behaviour); anything else (and
+// any video container) would only collect 400s, so the cloud rungs are skipped.
+const CLOUD_SAFE_EXTENSIONS = new Set(['.flac', '.mp3', '.mp4', '.mpeg', '.mpga', '.m4a', '.ogg', '.oga', '.wav', '.webm']);
+// Audio formats that hold exactly one audio stream: when the caller already
+// measured the length, there is no track to choose and nothing to probe.
+const SINGLE_TRACK_AUDIO_EXTENSIONS = new Set(['.wav', '.wave', '.mp3', '.mpga', '.mp2', '.flac', '.aac', '.amr', '.awb', '.opus', '.ogg', '.oga', '.aif', '.aiff', '.aifc', '.au', '.caf']);
 
 // Upload-friendly MIME for a segment file sent to a cloud rung.
 const SEGMENT_MIME_BY_EXT = {
@@ -160,7 +261,7 @@ const DEFAULT_META_BASE_URL = 'https://api.meta.ai/v1';
 // A rejected key / empty balance is remembered this long (provider-key-health).
 const DEFAULT_PROVIDER_COOLDOWN_MS = 30 * 60 * 1000;
 const COOLDOWN_NAMESPACE = 'transcribe:';
-const COOLDOWN_PROVIDERS = ['openai', 'groq', 'xai', 'meta'];
+const COOLDOWN_PROVIDERS = ['openai', 'groq', 'xai', 'meta', 'elevenlabs'];
 // Cloud providers cap request bodies (25 MB on Whisper). Longer recordings
 // are cut into ≤ 10-minute FLAC 16 kHz mono segments (≈ 10 MB each).
 const DEFAULT_SEGMENT_SECONDS = 600;
@@ -171,7 +272,61 @@ const MIN_TAIL_SECONDS = 2;
 // Cuts snap to the latest silence within this window BEFORE each target, so
 // no segment ever exceeds the segment length a provider accepts.
 const MAX_SNAP_WINDOW_SECONDS = 45;
-const SILENCE_FILTER = 'silencedetect=noise=-35dB:d=0.4';
+// silencedetect compares EVERY sample with the threshold (one sample above it
+// ends a pause), so the adaptive threshold is built from per-frame PEAKS: the
+// quiet frames' peak (noise floor) + 8 dB, never closer than 6 dB to the loud
+// frames' peak (speech), and only ever RAISED from the -35 dB default — a
+// clean recording keeps exactly today's cut plan.
+const DEFAULT_SILENCE_THRESHOLD_DB = -35;
+const MAX_SILENCE_THRESHOLD_DB = -20;
+const SILENCE_FLOOR_MARGIN_DB = 8;
+const SILENCE_SPEECH_MARGIN_DB = 6;
+const SILENCE_MIN_SECONDS = 0.4;
+// Noise-floor sampling: a few short windows decoded with input seeking, so a
+// 5-hour file costs seconds, never a second full decode.
+const NOISE_SAMPLE_WINDOWS = 5;
+const NOISE_SAMPLE_SECONDS = 12;
+const NOISE_SAMPLE_TIMEOUT_MS = 20_000;
+const NOISE_SAMPLE_BUDGET_MS = 60_000;
+const NOISE_FRAME_SAMPLES = 800; // 50 ms at 16 kHz
+const NOISE_MIN_FRAMES = 40; // 2 s of audio before the estimate is trusted
+// The stream-discovery window media-probe uses. A track ordinal (`0:a:N`)
+// only means the same track under the SAME window: in an MPEG-PS/VOB whose
+// audio starts late, ffmpeg's default 5 MB / 5 s window lists the tracks in
+// another order (`-map 0:a:1` silently decodes the other language) or not at
+// all («matches no streams»). Every decode that maps an ordinal uses it.
+const PROBE_WINDOW_ARGS = Object.freeze(['-probesize', '100M', '-analyzeduration', '100M']);
+// Retried once when a strict decode fails: drop corrupt packets, keep going on
+// decoder errors, regenerate timestamps, and look further for a late audio PID.
+const TOLERANT_INPUT_ARGS = Object.freeze([
+  '-err_detect', 'ignore_err', '-fflags', '+discardcorrupt+genpts', ...PROBE_WINDOW_ARGS,
+]);
+// Short-clip master: what every rung receives instead of the uploaded bytes.
+const CLIP_MASTER_NAME = 'audio.flac';
+const CLIP_MASTER_MIME = 'audio/flac';
+// Intake outcomes that end the job at once (nothing a retry or a rung changes).
+const INTAKE_FATAL_CODES = new Set(['no_audio_track', 'truncated_container', 'drm_protected']);
+const DRM_EXTENSION_RE = /\.(?:m4p|aax|aaxc|aa)$/i;
+// Protected MP4 audio sample entries: FairPlay (drms), CENC/CBCS (enca),
+// Audible (aavd). ffmpeg decodes them to noise or decode errors (often exit
+// 0), and ffprobe reports the ORIGINAL format (mp4a) from the frma box, so
+// only the sample description itself tells. Also accepted as a probe tag.
+const PROTECTED_AUDIO_ENTRIES = new Set(['drms', 'enca', 'aavd']);
+const MP4_FAMILY_EXT_RE = /\.(?:mp4|m4a|m4b|m4p|m4v|mov|3gp|3g2|aax|aaxc|f4a|f4v|ismv|isma)$/i;
+const MP4_CONTAINER_BOXES = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
+const MP4_MAX_BOXES = 512;
+const MP4_MAX_STSD_BYTES = 64 * 1024;
+const DRM_TEXT_RE = /activation[_ ]?bytes|\bdrm\b|\bfairplay\b|decrypt(?:ion)? key|encrypted (?:stream|track|content|file)/i;
+const TRUNCATED_TEXT_RE = /moov atom not found/i;
+const NO_STREAM_TEXT_RE = /does not contain any stream/i;
+const STREAM_NOT_FOUND_TEXT_RE = /matches no streams/i;
+const RESOURCE_TEXT_RE = /no space left on device|cannot allocate memory|resource temporarily unavailable|too many open files|input\/output error/i;
+// ffprobe's text-art demuxers (a .txt is «ANSI video»): never evidence of «no audio».
+const TEXT_ART_CODECS = new Set(['ansi', 'bintext', 'xbin', 'idf', 'tty']);
+const MAX_INTAKE_NOTES = 8;
+// Prompt vocabulary: user terms (options.hints.terms) + file-name key terms.
+const MAX_HINT_TERMS = 30;
+const MAX_PROMPT_TERMS = 40;
 // Parallelism, retries and coverage (env-tunable).
 const DEFAULT_CLOUD_PARALLEL = 3;
 const DEFAULT_LOCAL_PARALLEL = 1;
@@ -180,12 +335,42 @@ const DEFAULT_RATE_LIMIT_MAX_WAIT_MS = 5 * 60 * 1000;
 const DEFAULT_RATE_LIMIT_RETRIES = 5;
 const DEFAULT_SEGMENT_RETRIES = 2;
 const DEFAULT_LOCAL_RETRIES = 0;
-const DEFAULT_AUTO_LANGUAGE_MIN_SECONDS = 60;
 const RATE_LIMIT_BASE_WAIT_MS = 15_000;
 const TRANSIENT_BACKOFF_BASE_MS = 2_000;
-// After this many consecutive segments failed on a rung, the rest of the job
-// stops trying it (a provider that is down must not cost 3 calls per segment).
+// After this many consecutive segments failed on a rung, the job pauses it (a
+// provider that is down must not cost 3 calls per segment). The pause ends:
+// REVIVAL_DELAYS_MS (5, 15, 30 min, then every 30 min) — never for good.
 const RUNG_MAX_CONSECUTIVE_FAILURES = 3;
+const REVIVAL_DELAYS_MS = Object.freeze([5 * 60_000, 15 * 60_000, 30 * 60_000]);
+// The last live rung for a piece is never paused by the streak: a transient
+// failure backs off and retries, within the job's wait budget.
+const LAST_RUNG_BACKOFF_MS = Object.freeze([30_000, 120_000, 600_000]);
+const DEFAULT_WAIT_BUDGET_MS = 20 * 60_000;
+// A SIGKILL we did not send (OOM) twice on the same piece: deterministic.
+const OOM_REPEAT_LIMIT = 2;
+// Quality loop (audio-quality.js): alternative hypotheses for flagged pieces.
+const DEFAULT_ESCALATION_BUDGET_RATIO = 0.3;
+const ESCALATION_MIN_BUDGET_SEC = 600;
+const DEFAULT_ESCALATIONS_PER_PIECE = 2;
+// Second opinions on empty pieces: this many agreeing «no speech» pieces in a
+// job (and none where the second opinion found speech) and the job trusts the
+// remaining empty answers (a 5-hour concert is not re-read piece by piece).
+const SECOND_OPINION_TRUST_AFTER = 3;
+// A cloud alternative hypothesis that fails transiently is tried once more
+// (bounded by TRANSCRIBE_SEGMENT_RETRIES).
+const REVIEW_TRANSIENT_RETRIES = 1;
+const ENERGY_MEASURE_TIMEOUT_MS = 60_000;
+const FILTER_LIST_TIMEOUT_MS = 10_000;
+// A failed `ffmpeg -filters` (other than a missing binary) is read again after this.
+const FILTER_LIST_RETRY_MS = 5 * 60_000;
+// Enhanced copies, used ONLY as alternative hypotheses (never the default
+// decode): enhancement can raise Whisper's WER on moderately noisy speech.
+const VARIANT_FILTERS = Object.freeze({
+  dynaudnorm: Object.freeze({ filter: 'highpass=f=80,dynaudnorm=f=150:g=15:p=0.9:m=20', needs: Object.freeze(['highpass', 'dynaudnorm']) }),
+  loudnorm: Object.freeze({ filter: 'highpass=f=70,loudnorm=I=-20:TP=-2:LRA=11', needs: Object.freeze(['highpass', 'loudnorm']) }),
+});
+const ESCALATION_PROVIDER_NAMES = new Set(['voicestudio', 'elevenlabs']);
+const DEFAULT_ELEVENLABS_STT_MODEL = 'scribe_v1';
 // Language detection runs on the first segments, one at a time, until the
 // detections decide a language (decideLanguage); the rest of the job uses it.
 const LANGUAGE_DETECT_MAX_SEGMENTS = 3;
@@ -241,13 +426,15 @@ function cleanSegmentText(value) {
 }
 
 // Whisper can successfully decode silence/music while emitting only a
-// non-speech annotation. It is not a spoken transcript and must not become
-// evidence for a subsequent analysis. Keep annotations when speech ALSO
-// exists; never discard a short real utterance such as "Sí" or "No".
+// non-speech annotation («[Música]», «[Música de fondo]», «(upbeat music)»,
+// «[♪]»). It is not a spoken transcript and must not become evidence for a
+// subsequent analysis. Keep annotations when speech ALSO exists; never
+// discard a short real utterance such as "Sí" or "No". Same rule as the
+// quality loop (audio-quality.isNonSpeechText).
 function hasSpeechText(value) {
   const text = String(value || '').trim();
   if (!text) return false;
-  return !/^(?:(?:\[|\()\s*(?:blank[_ ]audio|no[_ ]speech|silence|silent|silencio|m[uú]sica|music|inaudible|aplausos|applause|ruido|noise|sonido)\s*(?:\]|\))\s*[.,!]?\s*|<\|nospeech\|>\s*)+$/i.test(text);
+  return !quality.isNonSpeechText(text);
 }
 
 /** Per-segment confidence in 0..1: explicit, or exp(avg_logprob) from verbose_json. */
@@ -360,14 +547,49 @@ const EXTRA_LANGUAGE_NAMES = Object.freeze({
   euskera: 'eu', vasco: 'eu', galician: 'gl', basque: 'eu', tagalog: 'tl', malay: 'ms', persian: 'fa',
   urdu: 'ur', tamil: 'ta', welsh: 'cy', slovak: 'sk', slovenian: 'sl', croatian: 'hr', serbian: 'sr',
   bulgarian: 'bg', lithuanian: 'lt', latvian: 'lv', estonian: 'et', icelandic: 'is', swahili: 'sw', latin: 'la',
+  // Peruvian / Andean languages users ask for by name (Whisper has none of
+  // them: they are mapped so the request is recognised and noted, see below).
+  quechua: 'qu', runasimi: 'qu', aimara: 'ay', aymara: 'ay', guaraní: 'gn', guarani: 'gn',
 });
 const ISO639_2_TO_1 = Object.freeze({
   spa: 'es', eng: 'en', por: 'pt', fra: 'fr', fre: 'fr', deu: 'de', ger: 'de', ita: 'it', cat: 'ca',
   jpn: 'ja', zho: 'zh', chi: 'zh', kor: 'ko', rus: 'ru', ara: 'ar', que: 'qu', nld: 'nl', dut: 'nl',
   pol: 'pl', tur: 'tr', hin: 'hi', ukr: 'uk', ron: 'ro', rum: 'ro', swe: 'sv', nor: 'no', dan: 'da',
   fin: 'fi', ell: 'el', gre: 'el', heb: 'he', ces: 'cs', cze: 'cs', hun: 'hu', ind: 'id', tha: 'th',
-  vie: 'vi', glg: 'gl', eus: 'eu', baq: 'eu',
+  vie: 'vi', glg: 'gl', eus: 'eu', baq: 'eu', aym: 'ay', grn: 'gn', quz: 'qu', quy: 'qu',
 });
+
+// The languages Whisper (whisper-1, large-v3, whisper.cpp) can be told to
+// transcribe. Anything else makes OpenAI/Groq answer 400 and `whisper-cli -l`
+// exit non-zero on EVERY segment, so it is detected automatically instead.
+const WHISPER_LANGUAGES = new Set((
+  'en zh de es ru ko fr ja pt tr pl ca nl ar sv it id hi fi vi he uk el ms cs ro da hu ta no th ur hr bg lt la '
+  + 'mi ml cy sk te fa lv bn sr az sl kn et mk br eu is hy ne mn bs kk sq sw gl mr pa si km sn yo so af oc ka be '
+  + 'tg sd gu am yi lo uz fo ht ps tk nn mt sa lb my bo tl mg as tt haw ln ha ba jw su yue'
+).split(' '));
+// Retired or regional ISO codes Whisper knows under another one.
+const WHISPER_LANGUAGE_ALIASES = Object.freeze({ nb: 'no', iw: 'he', in: 'id', ji: 'yi' });
+// Spanish names for the notes the delivery shows («El quechua…»).
+const LANGUAGE_NAMES_ES = Object.freeze({
+  es: 'español', en: 'inglés', pt: 'portugués', fr: 'francés', it: 'italiano', de: 'alemán', ca: 'catalán',
+  gl: 'gallego', eu: 'euskera', ja: 'japonés', zh: 'chino', ko: 'coreano', ru: 'ruso', ar: 'árabe', nl: 'neerlandés',
+  qu: 'quechua', ay: 'aimara', gn: 'guaraní',
+});
+
+function languageNameEs(code) {
+  return LANGUAGE_NAMES_ES[code] || `«${code}»`;
+}
+
+/** The code Whisper accepts for an ISO-639-1 code, or null when it has none. */
+function whisperLanguageCode(code) {
+  if (!code) return null;
+  const mapped = WHISPER_LANGUAGE_ALIASES[code] || code;
+  return WHISPER_LANGUAGES.has(mapped) ? mapped : null;
+}
+
+function isSupportedLanguage(value) {
+  return Boolean(whisperLanguageCode(normalizeLanguage(value)));
+}
 
 let cachedLanguageCodes = null;
 function languageCodesFromVoiceStudio() {
@@ -401,25 +623,21 @@ function normalizeLanguage(value) {
   return ISO639_2_TO_1[base];
 }
 
-function autoLanguageMinSeconds(options = {}) {
-  return envNumber(options, 'TRANSCRIBE_AUTO_LANGUAGE_MIN_SECONDS', DEFAULT_AUTO_LANGUAGE_MIN_SECONDS, { min: 0 });
-}
-
 function hasExplicitLanguage(options = {}) {
   return typeof options.language === 'string' && Boolean(options.language.trim());
 }
 
 /**
- * The language to REQUEST. An explicit option wins ('auto' → detect). Without
- * one, media longer than TRANSCRIBE_AUTO_LANGUAGE_MIN_SECONDS (60 s) is
- * auto-detected; short clips and unknown lengths keep the WHISPER_LANGUAGE
- * hint (default es — Peruvian WhatsApp notes). Undefined means «detect».
+ * The language to REQUEST, or undefined («detect»). Only an explicit
+ * options.language forces one, and only a language Whisper supports ('auto'
+ * and unsupported languages such as quechua → detect). Short clips and
+ * unknown lengths are no longer forced to the WHISPER_LANGUAGE hint: a 30 s
+ * English note forced to «es» came out translated, silently. The hint stays
+ * the prior that LOCKS long, segmented jobs (decideLanguage).
  */
 function resolveLanguage(options = {}) {
-  if (hasExplicitLanguage(options)) return normalizeLanguage(options.language);
-  const duration = Number(options.durationSeconds) || 0;
-  if (duration > autoLanguageMinSeconds(options)) return undefined;
-  return languageHint(options);
+  if (!hasExplicitLanguage(options)) return undefined;
+  return whisperLanguageCode(normalizeLanguage(options.language)) || undefined;
 }
 
 /** The configured hint: WHISPER_LANGUAGE (an empty value means none), default es. */
@@ -472,6 +690,44 @@ function normalizeKeyterms(value) {
   return out;
 }
 
+// Device and app identifiers in file names are not vocabulary: on a silent or
+// short clip Whisper echoes its prompt, so «WA0012» used to land in the text.
+const DEVICE_ID_RE = /^[A-Z]{1,4}\d{3,}$/;
+const DEVICE_PREFIX_RE = /^(?:PTT|AUD|VID|IMG|REC|GMT|DSC|MVI|WA)(?=$|[\d_\-\s.])/i;
+const RESOLUTION_RE = /^\d{2,5}\s*[x×]\s*\d{2,5}$|^\d{3,4}[pi]$/i;
+const NUMERIC_SHAPE_RE = /^[\d\s\-_.:/,]+$/; // dates, clocks, counters
+const CLOCK_RE = /^\d{1,2}\s*h\s*\d{2}$/i;
+
+/** True for «WA0012», «PTT-20261003», «GMT20261003», «1920x1080», «2026-10-03», «15:00»… */
+function isDeviceIdentifier(term) {
+  const value = oneLine(term);
+  if (!value) return true;
+  if (DEVICE_ID_RE.test(value) || DEVICE_PREFIX_RE.test(value) || RESOLUTION_RE.test(value) || CLOCK_RE.test(value)) return true;
+  if (NUMERIC_SHAPE_RE.test(value) && (value.match(/\d/g) || []).length >= 3) return true;
+  return false;
+}
+
+function hintTermsOf(options = {}) {
+  const raw = options.hints && typeof options.hints === 'object' ? options.hints.terms : null;
+  const list = Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : []);
+  // A user can type «Huamán, Ayacucho» as one item: split it like keyterms.
+  return normalizeKeyterms(list.flatMap((item) => String(item ?? '').split(/[,;\n]/)));
+}
+
+/**
+ * The vocabulary the prompt carries: file-name key terms and the user's hint
+ * terms (C4 `hints.terms`), device identifiers dropped, deduplicated case-
+ * insensitively (the user's spelling wins) and capped. The user's terms go
+ * LAST: Whisper reads the end of a prompt, and the start is what gets trimmed.
+ */
+function promptTerms(options = {}) {
+  const user = hintTermsOf(options).filter((term) => !isDeviceIdentifier(term)).slice(0, MAX_HINT_TERMS);
+  const taken = new Set(user.map((term) => term.toLowerCase()));
+  const fromFile = normalizeKeyterms(options.keyterms)
+    .filter((term) => !isDeviceIdentifier(term) && !taken.has(term.toLowerCase()));
+  return [...fromFile.slice(0, Math.max(0, MAX_PROMPT_TERMS - user.length)), ...user];
+}
+
 /**
  * Prompt sent to every rung: options.prompt (or WHISPER_PROMPT) followed by
  * the key terms as a plain comma list. Whisper reads the END of a prompt, so
@@ -480,7 +736,7 @@ function normalizeKeyterms(value) {
 function resolvePrompt(options = {}) {
   const env = envOf(options);
   let text = oneLine(typeof options.prompt === 'string' && options.prompt.trim() ? options.prompt : env.WHISPER_PROMPT);
-  const terms = normalizeKeyterms(options.keyterms);
+  const terms = promptTerms(options);
   if (terms.length) {
     let list = `${terms.join(', ')}.`;
     if (list.length > MAX_PROMPT_CHARS) list = list.slice(list.length - MAX_PROMPT_CHARS).replace(/^[^,]*,\s*/, '');
@@ -668,12 +924,18 @@ function sanitizeProviderError(err) {
   return redacted.slice(0, 180);
 }
 
+// The intake codes keep the «Transcripción no disponible» marker the RAG
+// placeholder filter and the queue's hasTranscript already recognise.
+const PLACEHOLDER_REASONS = Object.freeze({
+  file_too_large: 'El archivo supera el tamaño máximo.',
+  no_speech: 'No se detectó voz.',
+  no_audio_track: 'Transcripción no disponible: el archivo no tiene pista de audio.',
+  truncated_container: 'Transcripción no disponible: la grabación está incompleta (el archivo se cortó antes de terminar de guardarse).',
+  drm_protected: 'Transcripción no disponible: el archivo está protegido (DRM) y su audio no se puede leer.',
+});
+
 function generatePlaceholder(fileName, label, mimeType, reasonCode) {
-  const publicReason = reasonCode === 'file_too_large'
-    ? 'El archivo supera el tamaño máximo.'
-    : reasonCode === 'no_speech'
-      ? 'No se detectó voz.'
-      : 'Transcripción no disponible.';
+  const publicReason = PLACEHOLDER_REASONS[reasonCode] || 'Transcripción no disponible.';
   return [
     `${label} — ${fileName}`,
     `Tipo: ${mimeType || 'desconocido'}`,
@@ -704,6 +966,7 @@ function placeholderResult(fileName, label, mimeType, reasonCode) {
 function formatSuccess({
   text, method, model, language, segments,
   durationSec = null, segmentCount = 1, partial = false, gaps = [], coverage = 1, providers = {}, engine = null,
+  quality: report = null,
 }) {
   const transcript = String(text || '').trim();
   const lang = normalizeLanguage(language) || null;
@@ -728,6 +991,7 @@ function formatSuccess({
     coverage,
     providers: providers || {},
     engine,
+    ...(report ? { quality: report } : {}),
   };
 }
 
@@ -870,7 +1134,12 @@ function cloudProviders(options = {}) {
 /** Opt-in VoiceStudio rung for segmented jobs (on-host WhisperX). */
 function voiceStudioRung(options = {}) {
   if (!providerOrder(options).includes('voicestudio')) return null;
-  const vsClient = voiceStudioClient(options);
+  return buildVoiceStudioRung(options);
+}
+
+function buildVoiceStudioRung(options = {}) {
+  let vsClient;
+  try { vsClient = voiceStudioClient(options); } catch { return null; }
   if (!vsClient || typeof vsClient.isConfigured !== 'function' || !vsClient.isConfigured(options)) return null;
   return {
     name: 'voicestudio',
@@ -885,6 +1154,97 @@ function voiceStudioRung(options = {}) {
 }
 
 const LOCAL_RUNG = Object.freeze({ name: 'local', kind: 'local', method: 'local-whisper', model: null, key: null });
+
+function elevenLabsApiKey(options = {}) {
+  return String(envOf(options).ELEVENLABS_API_KEY || '').trim();
+}
+
+/**
+ * One request to ElevenLabs Scribe (@elevenlabs/elevenlabs-js): word timings
+ * grouped into segments (xai-audio.segmentsFromPayload, audio events and
+ * spacing dropped), word logprobs → segment confidence. Injectable through
+ * options.elevenlabsClient ({ speechToText: { convert } }).
+ */
+async function transcribeWithElevenLabs({ filePath, mimeType, language, signal, timeoutMs, model, options = {} }) {
+  const client = options.elevenlabsClient || (() => {
+    const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
+    return new ElevenLabsClient({ apiKey: elevenLabsApiKey(options) });
+  })();
+  const buffer = await fsPromises.readFile(filePath);
+  const file = new Blob([buffer], { type: mimeType || CLIP_MASTER_MIME });
+  const request = {
+    file,
+    modelId: model,
+    tagAudioEvents: true,
+    timestampsGranularity: 'word',
+    diarize: false,
+    ...(language ? { languageCode: language } : {}),
+  };
+  const body = await client.speechToText.convert(request, {
+    ...(signal ? { abortSignal: signal } : {}),
+    timeoutInSeconds: Math.max(30, Math.ceil((Number(timeoutMs) || 120_000) / 1000)),
+    maxRetries: 0,
+  });
+  const words = Array.isArray(body?.words) ? body.words : [];
+  const segments = require('./xai-audio').segmentsFromPayload({ words });
+  let text = segments.map((s) => s.text).join(' ').trim();
+  if (!text && !words.length && typeof body?.text === 'string') text = body.text.trim();
+  return {
+    text,
+    segments,
+    model,
+    language: normalizeLanguage(body?.languageCode ?? body?.language_code) || null,
+  };
+}
+
+/** Opt-in ElevenLabs Scribe rung (paid): never in the first-pass ladder. */
+function elevenLabsRung(options = {}) {
+  const env = envOf(options);
+  if (String(env.TRANSCRIBE_ELEVENLABS_DISABLED || '') === '1') return null;
+  const key = elevenLabsApiKey(options);
+  if (!key && !options.elevenlabsClient) return null;
+  const model = String(env.ELEVENLABS_STT_MODEL || '').trim() || DEFAULT_ELEVENLABS_STT_MODEL;
+  return {
+    name: 'elevenlabs',
+    kind: 'cloud',
+    method: 'whisper',
+    model,
+    caps: PLAIN_JSON_CAPS,
+    verbose: false,
+    key: key || 'injected',
+    escalation: true,
+    transcribeFile: (filePath, mimeType, _fileName, language, _prompt, extra = {}) => transcribeWithElevenLabs({
+      filePath, mimeType, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs, model, options,
+    }),
+  };
+}
+
+/** TRANSCRIBE_ESCALATION_PROVIDERS (or options.escalationProviders): only the known opt-in names. */
+function escalationProviderNames(options = {}) {
+  const raw = options.escalationProviders ?? envOf(options).TRANSCRIBE_ESCALATION_PROVIDERS;
+  const list = Array.isArray(raw) ? raw : (typeof raw === 'string' ? raw.split(',') : []);
+  const out = [];
+  for (const item of list) {
+    const name = String(item || '').trim().toLowerCase();
+    if (ESCALATION_PROVIDER_NAMES.has(name) && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/**
+ * Rungs used ONLY for flagged pieces (alternative hypotheses), in the order
+ * listed. A rung already in the first-pass ladder is not repeated here.
+ */
+function escalationRungs(options = {}, ladder = []) {
+  const taken = new Set((ladder || []).map((rung) => rung.name));
+  const out = [];
+  for (const name of escalationProviderNames(options)) {
+    if (taken.has(name)) continue;
+    const rung = name === 'voicestudio' ? buildVoiceStudioRung(options) : elevenLabsRung(options);
+    if (rung) out.push({ ...rung, escalation: true });
+  }
+  return out;
+}
 
 function localEnabled(options = {}) {
   return providerOrder(options).includes('local');
@@ -1072,8 +1432,44 @@ async function saveSegmentCheckpoint(options, index, meta, part) {
       provider: part?.provider || null,
       method: part?.method || null,
       cutPlan: part?.cutPlan || meta?.cutPlan || null,
+      // Optional (parts written before the quality loop have neither): the
+      // enhanced copy that produced the text, and the review record.
+      ...(part?.variant ? { variant: String(part.variant).slice(0, 20) } : {}),
+      ...(part?.review ? { review: compactReview(part.review) } : {}),
     });
   } catch { /* a missing checkpoint only costs a re-run of this segment */ }
+}
+
+/**
+ * A bounded review record for the checkpoint. `done: false` (saved before
+ * the review ran) makes a resumed job review that piece again instead of
+ * re-transcribing it; a part without `review` predates the loop and is only
+ * assessed for the report.
+ */
+function compactReview(review) {
+  if (!review || typeof review !== 'object') return null;
+  if (review.done !== true) return { v: 1, done: false };
+  const spans = (Array.isArray(review.lowConfidence) ? review.lowConfidence : []).slice(0, 50).map((s) => ({
+    start: round3(s.start), end: round3(s.end), reason: String(s.reason || 'low_confidence').slice(0, 40),
+  }));
+  return {
+    v: 1,
+    done: true,
+    score: Number.isFinite(Number(review.score)) ? round3(review.score) : null,
+    flags: (Array.isArray(review.flags) ? review.flags : []).slice(0, 8).map((f) => String(f).slice(0, 30)),
+    escalations: Math.max(0, Math.min(20, Math.round(Number(review.escalations) || 0))),
+    // Optional (records written before it have none): alternatives that answered.
+    ...(review.alternatives != null && Number.isFinite(Number(review.alternatives))
+      ? { alternatives: Math.max(0, Math.min(20, Math.round(Number(review.alternatives)))) }
+      : {}),
+    empty: review.empty === true,
+    confirmedEmpty: review.confirmedEmpty === true,
+    unconfirmedEmpty: review.unconfirmedEmpty === true,
+    disagreement: review.disagreement === true,
+    engine: review.engine ? String(review.engine).slice(0, 60) : null,
+    engines: (Array.isArray(review.engines) ? review.engines : []).slice(0, 6).map((e) => String(e).slice(0, 60)),
+    lowConfidence: spans,
+  };
 }
 
 function progressEvent(options, stage, extra = {}) {
@@ -1109,7 +1505,9 @@ function runFfmpeg(args, options = {}) {
     }
     child.stderr?.on('data', (d) => { if (stderr.length < 4000) stderr += String(d); });
     child.once('error', finish);
-    child.once('close', (code) => finish(code === 0 ? null : Object.assign(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(0, 300)}`), { code: 'SEGMENT_FAILED' })));
+    // `stderr` (≤ 4 KB of ffmpeg diagnostics, never audio) lets the intake
+    // tell a missing moov atom, DRM or a stream-less file from a generic failure.
+    child.once('close', (code) => finish(code === 0 ? null : Object.assign(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(0, 300)}`), { code: 'SEGMENT_FAILED', exitCode: code, stderr })));
     timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch (_) { /* already exited */ }
       finish(Object.assign(new Error('ffmpeg segmentation timed out'), { code: 'SEGMENT_TIMEOUT' }));
@@ -1144,19 +1542,149 @@ function parseSilences(text) {
   return out;
 }
 
-/** One decode pass listing pauses; [] on any failure (cuts fall back to fixed times). */
+/** `silencedetect` filter for a threshold in dBFS (-35 → today's exact string). */
+function silenceFilter(thresholdDb) {
+  // Only a real number counts (null must never become «0 dB: everything is
+  // silence»), and nothing above the adaptive ceiling.
+  const db = typeof thresholdDb === 'number' && Number.isFinite(thresholdDb)
+    ? Math.min(MAX_SILENCE_THRESHOLD_DB, Math.max(-90, Math.round(thresholdDb)))
+    : DEFAULT_SILENCE_THRESHOLD_DB;
+  return `silencedetect=noise=${db}dB:d=${SILENCE_MIN_SECONDS}`;
+}
+
+/** A valid stream ordinal (`-map 0:a:N`), or null. */
+function streamOrdinalOf(value) {
+  const n = typeof value === 'number' ? value : (typeof value === 'string' && /^\d+$/.test(value.trim()) ? Number(value) : NaN);
+  return Number.isInteger(n) && n >= 0 && n < 64 ? n : null;
+}
+
+function mapArgs(ordinal) {
+  const n = streamOrdinalOf(ordinal);
+  return n == null ? [] : ['-map', `0:a:${n}`];
+}
+
+/** Input options that go with mapArgs: media-probe's discovery window (see PROBE_WINDOW_ARGS). */
+function mapWindowArgs(ordinal) {
+  return streamOrdinalOf(ordinal) == null ? [] : [...PROBE_WINDOW_ARGS];
+}
+
+/**
+ * One decode pass listing pauses; [] on any failure (cuts fall back to fixed
+ * times). `options.silenceThresholdDb` (adaptive, see estimateSilenceThreshold)
+ * and `options.silenceStreamOrdinal` (the chosen audio track) shape it.
+ */
 async function detectSilences(filePath, options = {}) {
   if (typeof options.detectSilences === 'function') return options.detectSilences(filePath, options);
   try {
     const { stderr } = await execImpl(options)(ffmpegBin(options), [
-      '-hide_banner', '-nostats', '-nostdin', '-i', filePath, '-vn', '-sn', '-dn', '-ac', '1',
-      '-af', SILENCE_FILTER, '-f', 'null', '-',
+      '-hide_banner', '-nostats', '-nostdin', ...mapWindowArgs(options.silenceStreamOrdinal), '-i', filePath,
+      ...mapArgs(options.silenceStreamOrdinal), '-vn', '-sn', '-dn', '-ac', '1',
+      '-af', silenceFilter(options.silenceThresholdDb), '-f', 'null', '-',
     ], { timeout: segmentationTimeoutMs(options), maxBuffer: 32 * 1024 * 1024, signal: options.signal, env: mediaChildEnv() });
     return parseSilences(stderr);
   } catch (err) {
     if (isAbortError(err, options.signal)) throw err;
     return [];
   }
+}
+
+function adaptiveSilenceEnabled(options = {}) {
+  return !/^(?:0|false|off|no)$/i.test(String(envOf(options).TRANSCRIBE_ADAPTIVE_SILENCE || '').trim());
+}
+
+/** Peak |sample| of each 50 ms frame of mono s16le PCM. Pure. */
+function framePeaks(pcm, frameSamples = NOISE_FRAME_SAMPLES) {
+  const buf = Buffer.isBuffer(pcm) ? pcm : (pcm instanceof Uint8Array ? Buffer.from(pcm) : null);
+  if (!buf) return [];
+  const samples = Math.floor(buf.length / 2);
+  const out = [];
+  for (let start = 0; start + frameSamples <= samples; start += frameSamples) {
+    let peak = 0;
+    for (let i = start; i < start + frameSamples; i++) {
+      const v = Math.abs(buf.readInt16LE(i * 2));
+      if (v > peak) peak = v;
+    }
+    out.push(peak);
+  }
+  return out;
+}
+
+function peakToDb(peak) {
+  return 20 * Math.log10(Math.max(1, Number(peak) || 0) / 32768);
+}
+
+function percentileOf(sorted, q) {
+  if (!sorted.length) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(q * (sorted.length - 1))))];
+}
+
+/**
+ * Pure: frame peaks → silence threshold. The quiet frames' peak (10th
+ * percentile) is the room; the loud frames' (90th) is the speech. The
+ * threshold sits 8 dB over the room but never within 6 dB of the speech, and
+ * is only ever RAISED from -35 dB (capped at -20 dB): a clean recording keeps
+ * today's threshold, a café or a class with air conditioning gets pauses.
+ */
+function silenceThresholdFromPeaks(peaks) {
+  const fallback = { thresholdDb: DEFAULT_SILENCE_THRESHOLD_DB, adaptive: false, noiseFloorDb: null, speechPeakDb: null };
+  const list = (Array.isArray(peaks) ? peaks : []).filter((p) => Number.isFinite(p) && p >= 0);
+  if (list.length < NOISE_MIN_FRAMES) return fallback;
+  const sorted = list.slice().sort((a, b) => a - b);
+  const floorDb = peakToDb(percentileOf(sorted, 0.1));
+  const speechDb = peakToDb(percentileOf(sorted, 0.9));
+  const raw = Math.min(floorDb + SILENCE_FLOOR_MARGIN_DB, speechDb - SILENCE_SPEECH_MARGIN_DB);
+  const thresholdDb = Math.round(Math.min(MAX_SILENCE_THRESHOLD_DB, Math.max(DEFAULT_SILENCE_THRESHOLD_DB, raw)));
+  return {
+    thresholdDb,
+    adaptive: thresholdDb !== DEFAULT_SILENCE_THRESHOLD_DB,
+    noiseFloorDb: Math.round(floorDb * 10) / 10,
+    speechPeakDb: Math.round(speechDb * 10) / 10,
+  };
+}
+
+/**
+ * Noise floor of a NEW cut plan, from a few short windows decoded with input
+ * seeking (`-ss/-t`): five 12 s windows of a 5-hour file are seconds of work,
+ * never a second full decode. Any failure keeps the -35 dB default. Never
+ * throws except on abort. Injectable through options.estimateSilenceThreshold.
+ */
+async function estimateSilenceThreshold(filePath, ctx = {}, options = {}) {
+  if (typeof options.estimateSilenceThreshold === 'function') return options.estimateSilenceThreshold(filePath, ctx, options);
+  const fallback = { thresholdDb: DEFAULT_SILENCE_THRESHOLD_DB, adaptive: false, noiseFloorDb: null, speechPeakDb: null, windows: 0 };
+  const duration = Number(ctx.durationSeconds) || 0;
+  if (!adaptiveSilenceEnabled(options) || !(duration > 0)) return fallback;
+  const count = Math.min(NOISE_SAMPLE_WINDOWS, Math.max(3, Math.floor(duration / 60)));
+  const length = Math.max(1, Math.min(NOISE_SAMPLE_SECONDS, duration / count));
+  const now = typeof options.now === 'function' ? options.now : Date.now;
+  const deadline = now() + NOISE_SAMPLE_BUDGET_MS;
+  const peaks = [];
+  let windows = 0;
+  for (let i = 0; i < count; i++) {
+    throwIfAborted(options.signal);
+    if (now() > deadline) break;
+    const center = (duration * (i + 0.5)) / count;
+    const start = Math.max(0, Math.min(duration - length, center - length / 2));
+    try {
+      const { stdout } = await execImpl(options)(ffmpegBin(options), [
+        '-hide_banner', '-nostdin', '-loglevel', 'error',
+        ...mapWindowArgs(ctx.audioStreamOrdinal), '-ss', start.toFixed(3), '-t', length.toFixed(3), '-i', filePath,
+        ...mapArgs(ctx.audioStreamOrdinal), '-vn', '-sn', '-dn',
+        '-ac', '1', '-ar', SEGMENT_SAMPLE_RATE, '-f', 's16le', '-acodec', 'pcm_s16le', 'pipe:1',
+      ], {
+        timeout: NOISE_SAMPLE_TIMEOUT_MS,
+        maxBuffer: Math.ceil(length * Number(SEGMENT_SAMPLE_RATE) * 2) + 64 * 1024,
+        encoding: 'buffer',
+        signal: options.signal,
+        env: mediaChildEnv(),
+      });
+      const framed = framePeaks(stdout);
+      if (framed.length) { windows++; peaks.push(...framed); }
+    } catch (err) {
+      if (isAbortError(err, options.signal)) throw err;
+      // A window that cannot be decoded only costs precision.
+    }
+  }
+  return { ...silenceThresholdFromPeaks(peaks), windows };
 }
 
 /**
@@ -1270,29 +1798,174 @@ function assignOffsets(segments, cutTimes, segmentSeconds) {
 }
 
 /**
+ * What a failed ffmpeg/ffprobe run says about the MEDIA (not the host):
+ *   'truncated_container' — no moov atom (phone died mid-recording);
+ *   'drm_protected'       — FairPlay/Audible (by extension or diagnostics);
+ *   'no_audio_track'      — nothing to map: the file has no audio stream;
+ *   'stream_not_found'    — the requested `0:a:N` does not exist;
+ *   'resource'            — disk full, out of memory, fork/file limits;
+ *   'ffmpeg_missing'      — the binary is not installed;
+ *   'timeout'             — the run hit its time budget;
+ *   'spawn'               — ffmpeg could not start (not an ffmpeg verdict);
+ *   'decode'              — anything else ffmpeg rejected.
+ * Only reads ffmpeg diagnostics; never file contents.
+ */
+function classifyMediaFailure(err, fileName = '') {
+  const code = String(err?.code || '');
+  if (code === 'ENOENT') return 'ffmpeg_missing';
+  if (code === 'SEGMENT_TIMEOUT') return 'timeout';
+  const text = `${err?.stderr || ''}\n${err?.message || ''}`;
+  if (TRUNCATED_TEXT_RE.test(text)) return 'truncated_container';
+  if (DRM_TEXT_RE.test(text)) return 'drm_protected';
+  if (NO_STREAM_TEXT_RE.test(text)) return 'no_audio_track';
+  if (STREAM_NOT_FOUND_TEXT_RE.test(text)) return 'stream_not_found';
+  if (RESOURCE_TEXT_RE.test(text) || /^(?:ENOSPC|ENOMEM|EAGAIN|EMFILE|ENFILE)$/.test(code)) return 'resource';
+  if (code !== 'SEGMENT_FAILED') return 'spawn';
+  if (DRM_EXTENSION_RE.test(String(fileName || ''))) return 'drm_protected';
+  return 'decode';
+}
+
+/** Error for an intake verdict that ends the job (placeholder with `intakeCode`). */
+function intakeError(intakeCode, cause) {
+  const err = new Error(`media intake: ${intakeCode}`);
+  err.code = 'MEDIA_INTAKE';
+  err.intakeCode = intakeCode;
+  if (cause) err.cause = cause;
+  return err;
+}
+
+async function clearSegmentFiles(dir) {
+  const names = await fsPromises.readdir(dir).catch(() => []);
+  await Promise.all(names
+    .filter((n) => /^seg-\d+\.flac(?:\.(?:fix|merged)\.flac)?$/.test(n))
+    .map((n) => fsPromises.rm(path.join(dir, n), { force: true }).catch(() => {})));
+}
+
+// What a STRICT pass may get wrong about the media and a tolerant pass (error
+// tolerant, media-probe's wider window) can fix.
+const RETRYABLE_DECODE_VERDICTS = new Set(['decode', 'stream_not_found', 'no_audio_track']);
+
+/**
+ * The decode ladder shared by the segment cut and the clip master. `run(mode)`
+ * runs ONE ffmpeg pass, mode = { tolerant, map }:
+ *   1. strict, mapping the chosen track (under media-probe's window);
+ *   2. tolerant, STILL mapping the track — only when ffmpeg rejected the
+ *      media: a decode error, a track it did not see («matches no streams»),
+ *      or no stream at all («does not contain any stream»: audio that starts
+ *      after the default window);
+ *   3. tolerant WITHOUT the map — only when pass 2 still did not see the
+ *      track; ffmpeg's default stream is used and `streamDropped` says so.
+ * A missing moov atom or DRM is conclusive at once; «no audio stream» only
+ * once a tolerant pass agrees. Resolves { decode, decodeCause, streamDropped }
+ * (decodeCause: null | 'damaged' | 'stream_window'). Rejects with an abort
+ * error, a MEDIA_INTAKE error (`intakeCode`), or the last ffmpeg error with
+ * `strictVerdict` (pass 1's media verdict) attached. opts.strictVerdict skips
+ * pass 1: a strict decode of this file already failed elsewhere that way.
+ */
+async function decodeLadder(run, { ordinal = null, fileName = '', signal, cleanup = async () => {}, strictVerdict = null } = {}) {
+  const map = streamOrdinalOf(ordinal);
+  const outcome = { decode: 'strict', decodeCause: null, streamDropped: false };
+  let verdict = strictVerdict ? (RETRYABLE_DECODE_VERDICTS.has(strictVerdict) ? strictVerdict : 'decode') : null;
+  if (!verdict) {
+    let strictErr;
+    try {
+      await run({ tolerant: false, map });
+      return outcome;
+    } catch (err) {
+      if (isAbortError(err, signal)) throw err;
+      strictErr = err;
+    }
+    verdict = classifyMediaFailure(strictErr, fileName);
+    if (verdict === 'truncated_container' || verdict === 'drm_protected') throw intakeError(verdict, strictErr);
+    // A timeout, a full disk or a binary that cannot start would only repeat.
+    if (strictErr?.code !== 'SEGMENT_FAILED' || !RETRYABLE_DECODE_VERDICTS.has(verdict)) throw strictErr;
+  }
+  const failWith = (err) => {
+    if (err && typeof err === 'object') err.strictVerdict = verdict;
+    return err;
+  };
+  outcome.decode = 'tolerant';
+  outcome.decodeCause = verdict === 'decode' ? 'damaged' : 'stream_window';
+  await cleanup();
+  try {
+    await run({ tolerant: true, map });
+    return outcome;
+  } catch (err) {
+    if (isAbortError(err, signal)) throw err;
+    const second = classifyMediaFailure(err, fileName);
+    if (INTAKE_FATAL_CODES.has(second)) throw intakeError(second, err);
+    if (second !== 'stream_not_found' || map == null) throw failWith(err);
+  }
+  await cleanup();
+  outcome.streamDropped = true;
+  try {
+    await run({ tolerant: true, map: null });
+    return outcome;
+  } catch (err) {
+    if (isAbortError(err, signal)) throw err;
+    const third = classifyMediaFailure(err, fileName);
+    if (INTAKE_FATAL_CODES.has(third)) throw intakeError(third, err);
+    throw failWith(err);
+  }
+}
+
+/**
+ * Input options of one decode pass: tolerant flags (they carry the probe
+ * window), or media-probe's window alone when a track is mapped.
+ */
+function decodeInputArgs({ tolerant, map }) {
+  return tolerant ? [...TOLERANT_INPUT_ARGS] : mapWindowArgs(map);
+}
+
+/**
  * Cut `filePath` into FLAC 16 kHz mono pieces inside `dir` and measure them.
  * Returns [{ path, index, offsetSeconds, durationSeconds }].
+ *
+ * ctx.audioStreamOrdinal maps the chosen audio track (`-map 0:a:N`, under
+ * media-probe's discovery window); without it ffmpeg picks its default stream
+ * (today's behaviour). Silence snapping uses an adaptive threshold
+ * (estimateSilenceThreshold). A cut ffmpeg rejects goes down decodeLadder
+ * (tolerant with the track, then without it); a missing moov atom, DRM or a
+ * file with no audio stream even in the wide window ends with an intake error.
+ * When given, ctx.report receives { decode, decodeCause, silence, streamDropped }.
  */
 async function cutAndMeasure(filePath, dir, ctx = {}, options = {}) {
   const S = ctx.segmentSeconds || segmentDuration(options);
   const duration = Number(ctx.durationSeconds) > 0 ? Number(ctx.durationSeconds) : 0;
   const scoped = { ...options, durationSeconds: duration };
+  const ordinal = streamOrdinalOf(ctx.audioStreamOrdinal);
+  const report = { decode: 'strict', decodeCause: null, silence: null, streamDropped: false };
   let cutTimes = null;
   if (duration > S) {
-    const silences = silenceSnapEnabled(options) && duration > S * 1.2 ? await detectSilences(filePath, scoped) : [];
+    let silences = [];
+    if (silenceSnapEnabled(options) && duration > S * 1.2) {
+      report.silence = await estimateSilenceThreshold(filePath, { durationSeconds: duration, audioStreamOrdinal: ordinal }, scoped);
+      silences = await detectSilences(filePath, {
+        ...scoped,
+        silenceThresholdDb: report.silence?.thresholdDb,
+        silenceStreamOrdinal: ordinal,
+      });
+    }
     cutTimes = planCutTimes(duration, S, silences);
   }
   const pattern = path.join(dir, 'seg-%04d.flac');
-  await runFfmpeg([
+  const cutArgs = (mode) => [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+    ...decodeInputArgs(mode),
     '-i', filePath,
+    ...mapArgs(mode.map),
     '-vn', '-sn', '-dn',
     '-ac', '1', '-ar', SEGMENT_SAMPLE_RATE, '-c:a', 'flac',
     '-f', 'segment',
     ...(cutTimes && cutTimes.length ? ['-segment_times', cutTimes.join(',')] : ['-segment_time', String(S)]),
     '-reset_timestamps', '1',
     pattern,
-  ], scoped);
+  ];
+  const ladder = await decodeLadder((mode) => runFfmpeg(cutArgs(mode), scoped), {
+    ordinal, fileName: ctx.fileName, signal: options.signal, cleanup: () => clearSegmentFiles(dir),
+  });
+  Object.assign(report, ladder);
+  if (ctx.report && typeof ctx.report === 'object') Object.assign(ctx.report, report);
   const names = (await fsPromises.readdir(dir)).filter((n) => /^seg-\d+\.flac$/.test(n)).sort();
   if (!names.length) throw Object.assign(new Error('ffmpeg produced no segments'), { code: 'SEGMENT_EMPTY' });
   let segments = names.map((name, index) => ({ path: path.join(dir, name), index, offsetSeconds: 0, durationSeconds: null }));
@@ -1333,12 +2006,64 @@ async function segmentForCloud(filePath, options = {}) {
   }
 }
 
-/** Identity of a cut: offsets + segment length. Parts are reused only within one plan. */
-function planOf(segments, segmentSeconds) {
+/**
+ * The audio track a plan's hash must name, or null. Only a file with several
+ * audio streams (or an explicitly requested track) adds it: a single-stream
+ * file — every plan cut before the track was chosen included — keeps the
+ * original formula, so checkpoints of jobs in flight still match.
+ */
+function planStreamOf(audioStream) {
+  if (!audioStream || typeof audioStream !== 'object') return null;
+  const ordinal = streamOrdinalOf(audioStream.streamOrdinal);
+  if (ordinal == null) return null;
+  return audioStream.explicit === true || Number(audioStream.streams) > 1 ? ordinal : null;
+}
+
+/**
+ * Identity of a cut: offsets + segment length (+ the audio track of a
+ * multi-stream file). Parts are reused only within one plan. The formula for
+ * a plan without a track is unchanged: `{ v, s, o }`.
+ */
+function planOf(segments, segmentSeconds, audioStream = null) {
   const offsets = segments.map((s) => Math.round((Number(s.offsetSeconds) || 0) * 1000));
   const fixed = segments.every((s, i) => Math.abs((Number(s.offsetSeconds) || 0) - i * segmentSeconds) <= 0.5);
-  const hash = crypto.createHash('sha1').update(JSON.stringify({ v: MANIFEST_VERSION, s: segmentSeconds, o: offsets })).digest('hex').slice(0, 16);
+  const track = planStreamOf(audioStream);
+  const identity = track == null
+    ? { v: MANIFEST_VERSION, s: segmentSeconds, o: offsets }
+    : { v: MANIFEST_VERSION, s: segmentSeconds, o: offsets, a: track };
+  const hash = crypto.createHash('sha1').update(JSON.stringify(identity)).digest('hex').slice(0, 16);
   return { kind: fixed ? 'fixed' : 'snapped', hash };
+}
+
+/**
+ * Optional manifest field (added after v1 shipped): { streamOrdinal, reason,
+ * streams, explicit, dropped? } | null. `dropped: true` — ffmpeg never saw
+ * that track, so the pieces hold its default stream.
+ */
+function manifestAudioStream(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    streamOrdinal: streamOrdinalOf(value.streamOrdinal),
+    reason: typeof value.reason === 'string' ? value.reason.slice(0, 40) : null,
+    streams: Number.isInteger(value.streams) && value.streams >= 0 ? value.streams : null,
+    explicit: value.explicit === true,
+    ...(value.dropped === true ? { dropped: true } : {}),
+  };
+}
+
+const DECODE_CAUSES = new Set(['damaged', 'stream_window']);
+
+/** What a manifest (old ones: all null) tells about how its pieces were cut. */
+function cutInfoOfManifest(manifest) {
+  const audioStream = manifestAudioStream(manifest?.audioStream);
+  const decode = manifest?.decode === 'tolerant' ? 'tolerant' : (manifest?.decode === 'strict' ? 'strict' : null);
+  return {
+    audioStream,
+    decode,
+    decodeCause: decode === 'tolerant' && DECODE_CAUSES.has(manifest?.decodeCause) ? manifest.decodeCause : null,
+    silence: manifest?.silence && typeof manifest.silence === 'object' ? manifest.silence : null,
+    streamDropped: audioStream?.dropped === true,
+  };
 }
 
 function checkpointDirOf(options = {}) {
@@ -1351,7 +2076,7 @@ function isInside(child, parent) {
   return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-async function loadManifest(manifestPath, { segmentSeconds, sourceSize }) {
+async function loadManifest(manifestPath, { segmentSeconds, sourceSize, audioStream = null }) {
   let manifest;
   try {
     manifest = JSON.parse(await fsPromises.readFile(manifestPath, 'utf8'));
@@ -1360,6 +2085,13 @@ async function loadManifest(manifestPath, { segmentSeconds, sourceSize }) {
   }
   if (!manifest || manifest.version !== MANIFEST_VERSION || manifest.format !== 'flac') return null;
   if (manifest.segmentSeconds !== segmentSeconds || manifest.sourceSize !== sourceSize) return null;
+  // A manifest that records its audio track is reused only for that track.
+  // One written before tracks were recorded (no field) is reused untouched:
+  // a job in flight across the deploy resumes, it never re-cuts.
+  const recorded = manifestAudioStream(manifest.audioStream);
+  const wanted = streamOrdinalOf(audioStream?.streamOrdinal);
+  if (recorded && wanted != null && recorded.streamOrdinal !== wanted) return null;
+  if (!recorded && wanted != null && audioStream?.explicit === true) return null;
   const files = Array.isArray(manifest.files) ? manifest.files : [];
   const offsets = Array.isArray(manifest.offsets) ? manifest.offsets : [];
   if (!files.length || files.length !== offsets.length || manifest.total !== files.length) return null;
@@ -1374,7 +2106,7 @@ async function loadManifest(manifestPath, { segmentSeconds, sourceSize }) {
     const durationSeconds = Number(manifest.durations?.[i]);
     segments.push({ path: full, index: i, offsetSeconds: Number(offsets[i]) || 0, durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null });
   }
-  const plan = planOf(segments, segmentSeconds);
+  const plan = planOf(segments, segmentSeconds, recorded);
   if (manifest.plan?.hash && manifest.plan.hash !== plan.hash) return null;
   return { manifest, segments, plan };
 }
@@ -1394,6 +2126,13 @@ async function writeManifest(manifestPath, manifest) {
 async function prepareSegments(filePath, options = {}, ctx = {}) {
   const S = ctx.segmentSeconds || segmentDuration(options);
   const checkpointDir = checkpointDirOf(options);
+  // The track this job transcribes (identity, recorded in the manifest and in
+  // a multi-stream plan's hash) and what to map on THIS source (null when the
+  // source is the short-clip master, which only holds that track).
+  const audioStream = manifestAudioStream(ctx.audioStream);
+  const mapOrdinal = Object.prototype.hasOwnProperty.call(ctx, 'mapOrdinal')
+    ? streamOrdinalOf(ctx.mapOrdinal)
+    : (audioStream ? audioStream.streamOrdinal : null);
   if (typeof options.segmentAudio === 'function') {
     const out = await options.segmentAudio(filePath, options);
     const segments = (Array.isArray(out?.segments) ? out.segments : []).map((s, i) => ({
@@ -1404,18 +2143,31 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
     }));
     if (!segments.length) throw Object.assign(new Error('no segments'), { code: 'SEGMENT_EMPTY' });
     const dir = out?.dir || null;
-    return { dir, persistent: Boolean(dir && checkpointDir && isInside(dir, checkpointDir)), segments, plan: planOf(segments, S), manifest: null, manifestPath: null };
+    return {
+      dir, persistent: Boolean(dir && checkpointDir && isInside(dir, checkpointDir)), segments, plan: planOf(segments, S),
+      manifest: null, manifestPath: null,
+      cutInfo: { audioStream: null, decode: null, decodeCause: null, silence: null, streamDropped: false, reused: false },
+    };
   }
+  const cutCtx = (report) => ({
+    segmentSeconds: S, durationSeconds: ctx.durationSeconds, audioStreamOrdinal: mapOrdinal, fileName: ctx.fileName, report,
+  });
   if (checkpointDir) {
     const dir = path.join(checkpointDir, 'audio');
     const manifestPath = path.join(dir, 'manifest.json');
-    const reused = await loadManifest(manifestPath, { segmentSeconds: S, sourceSize: ctx.fileSize });
-    if (reused) return { dir, persistent: true, segments: reused.segments, plan: reused.plan, manifest: reused.manifest, manifestPath, reused: true };
+    const reused = await loadManifest(manifestPath, { segmentSeconds: S, sourceSize: ctx.fileSize, audioStream });
+    if (reused) {
+      return {
+        dir, persistent: true, segments: reused.segments, plan: reused.plan, manifest: reused.manifest, manifestPath,
+        reused: true, cutInfo: { ...cutInfoOfManifest(reused.manifest), reused: true },
+      };
+    }
     await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
     await fsPromises.mkdir(dir, { recursive: true });
     try {
-      const segments = await cutAndMeasure(filePath, dir, { segmentSeconds: S, durationSeconds: ctx.durationSeconds }, options);
-      const plan = planOf(segments, S);
+      const report = {};
+      const segments = await cutAndMeasure(filePath, dir, cutCtx(report), options);
+      const plan = planOf(segments, S, audioStream);
       const stat = await fsPromises.stat(filePath).catch(() => null);
       const manifest = {
         version: MANIFEST_VERSION,
@@ -1434,9 +2186,15 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
         plan,
         language: null,
         createdAt: new Date().toISOString(),
+        // Optional fields (absent from manifests written before them; their
+        // absence means «ffmpeg's default track, strict decode, -35 dB»).
+        audioStream: audioStream ? { ...audioStream, ...(report.streamDropped ? { dropped: true } : {}) } : null,
+        decode: report.decode || 'strict',
+        ...(report.decodeCause ? { decodeCause: report.decodeCause } : {}),
+        silence: report.silence ? compactSilence(report.silence) : null,
       };
       await writeManifest(manifestPath, manifest);
-      return { dir, persistent: true, segments, plan, manifest, manifestPath };
+      return { dir, persistent: true, segments, plan, manifest, manifestPath, cutInfo: { ...cutInfoOfManifest(manifest), reused: false } };
     } catch (err) {
       await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
       throw err;
@@ -1444,12 +2202,33 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
   }
   const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'sira-transcribe-seg-'));
   try {
-    const segments = await cutAndMeasure(filePath, dir, { segmentSeconds: S, durationSeconds: ctx.durationSeconds }, options);
-    return { dir, persistent: false, segments, plan: planOf(segments, S), manifest: null, manifestPath: null };
+    const report = {};
+    const segments = await cutAndMeasure(filePath, dir, cutCtx(report), options);
+    return {
+      dir, persistent: false, segments, plan: planOf(segments, S, audioStream), manifest: null, manifestPath: null,
+      cutInfo: {
+        audioStream,
+        decode: report.decode || 'strict',
+        decodeCause: report.decodeCause || null,
+        silence: report.silence ? compactSilence(report.silence) : null,
+        streamDropped: report.streamDropped === true || audioStream?.dropped === true,
+        reused: false,
+      },
+    };
   } catch (err) {
     await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
+}
+
+function compactSilence(silence) {
+  return {
+    thresholdDb: Number.isFinite(silence?.thresholdDb) ? silence.thresholdDb : DEFAULT_SILENCE_THRESHOLD_DB,
+    noiseFloorDb: Number.isFinite(silence?.noiseFloorDb) ? silence.noiseFloorDb : null,
+    speechPeakDb: Number.isFinite(silence?.speechPeakDb) ? silence.speechPeakDb : null,
+    adaptive: silence?.adaptive === true,
+    windows: Number.isInteger(silence?.windows) ? silence.windows : 0,
+  };
 }
 
 async function rememberManifestLanguage(prepared, language) {
@@ -1511,6 +2290,10 @@ async function transcribeCloudFile(provider, filePath, mimeType, fileName, optio
       text: s.text,
       ...(s.speaker != null ? { speaker: s.speaker } : {}),
       ...(s.avg_logprob != null ? { avg_logprob: s.avg_logprob } : {}),
+      // Whisper's own hallucination signals (reviewed with the same engine only;
+      // the stored segment keeps text, times and confidence).
+      ...(s.no_speech_prob != null ? { no_speech_prob: s.no_speech_prob } : {}),
+      ...(s.compression_ratio != null ? { compression_ratio: s.compression_ratio } : {}),
     })),
     model: provider.model,
     language: normalizeLanguage(language) || normalizeLanguage(transcription && transcription.language) || null,
@@ -1618,13 +2401,20 @@ function localRunError(err) {
   return err?.code === 'LOCAL_WHISPER_UNAVAILABLE' && !localEngineMissing(err) ? err.cppError : err;
 }
 
-/** 'dead' (drop the rung for this job), 'rate_limit', 'transient' or 'segment'. */
+/**
+ * 'dead' (pause the rung), 'rate_limit', 'transient', 'oom' (a SIGKILL we
+ * did not send), 'language' (whisper-cli refused the `-l` value: retried once
+ * with detection) or 'segment' (deterministic for THIS piece: no retry).
+ */
 function classifyRungError(rung, err) {
   if (rung.name === 'local') {
     if (localEngineMissing(err)) return 'dead';
     if (err?.code === 'AUDIO_DECODE_FAILED') return 'segment';
-    // Timeout, crash, invalid/empty output: retried (TRANSCRIBE_LOCAL_RETRIES),
-    // then only this segment is demoted and the 3-in-a-row streak guard applies.
+    const run = localRunError(err) || err;
+    if (/unknown language|invalid language|unsupported language/i.test(String(run?.diagnostics || ''))) return 'language';
+    if (run?.code === 'LOCAL_WHISPER_FAILED' && run?.signal === 'SIGKILL') return 'oom';
+    // Timeout, crash, EAGAIN/ENOMEM, invalid/empty output: retried
+    // (TRANSCRIBE_LOCAL_RETRIES), then backed off when it is the last rung.
     return 'transient';
   }
   if (isInvalidKeyError(err) || isBillingError(err)) return 'dead';
@@ -1635,7 +2425,11 @@ function classifyRungError(rung, err) {
 }
 
 function describeRungError(rung, err) {
-  if (rung.name === 'local') return String(err?.reason || err?.code || err?.message || 'failed').replace(/\s+/g, ' ').slice(0, 120);
+  if (rung.name === 'local') {
+    const run = localRunError(err) || err;
+    if (run?.code === 'LOCAL_WHISPER_FAILED' && run?.signal === 'SIGKILL') return 'oom';
+    return String(err?.reason || err?.code || err?.message || 'failed').replace(/\s+/g, ' ').slice(0, 120);
+  }
   return describeProviderError(err);
 }
 
@@ -1644,6 +2438,7 @@ function gapReasonFor(error) {
   const err = localRunError(error) || error;
   if (err.code === 'AUDIO_DECODE_FAILED') return 'audio_decode_failed';
   if (err.code === 'LOCAL_WHISPER_UNAVAILABLE') return 'local_unavailable';
+  if (err.code === 'LOCAL_WHISPER_FAILED' && err.signal === 'SIGKILL') return 'local_unavailable';
   if (isRateLimitError(err)) return 'rate_limited';
   if (isInvalidKeyError(err) || isBillingError(err)) return 'provider_unavailable';
   if (err.code === 'LOCAL_WHISPER_TIMEOUT' || /timed? ?out|timeout/i.test(String(err.message || ''))) return 'timeout';
@@ -1671,9 +2466,16 @@ function partFromOutput(out, rung, language) {
   };
 }
 
-async function callRung(rung, segment, jc, language) {
+/**
+ * One request to one rung for one piece. `strategy` (alternative hypotheses
+ * only): { noPrompt, audioFilter (local), maxContext (local), beamSize
+ * (local) }. `segment.streamOrdinal` maps a track of an ORIGINAL file (short
+ * clips without a master); FLAC pieces hold one stream and carry none.
+ */
+async function callRung(rung, segment, jc, language, strategy = null) {
   const { options, signal } = jc;
   const seconds = Number(segment.durationSeconds) || jc.segmentSeconds;
+  const prompt = strategy?.noPrompt ? undefined : jc.prompt;
   if (rung.kind === 'local') {
     await jc.localPermits.acquire(signal);
     try {
@@ -1684,14 +2486,19 @@ async function callRung(rung, segment, jc, language) {
           ...options,
           signal,
           language,
-          prompt: jc.prompt,
+          prompt,
           durationSeconds: jc.mediaDurationSeconds,
           mediaDurationSeconds: jc.mediaDurationSeconds,
           segmentDurationSeconds: segment.durationSeconds || null,
+          // A FLAC piece holds ONE stream: never map the source's track there.
+          audioStreamOrdinal: streamOrdinalOf(segment.streamOrdinal) ?? undefined,
+          ...(strategy?.audioFilter ? { audioFilter: strategy.audioFilter } : {}),
+          ...(Number.isInteger(strategy?.maxContext) ? { maxContext: strategy.maxContext } : {}),
+          ...(strategy?.beamSize ? { beamSize: strategy.beamSize } : {}),
         });
         return partFromOutput(out, rung, language);
       }
-      const out = await rung.transcribeFile(segment.path, segment.mime, segment.name, language, jc.prompt, { signal, durationSeconds: seconds });
+      const out = await rung.transcribeFile(segment.path, segment.mime, segment.name, language, prompt, { signal, durationSeconds: seconds });
       return partFromOutput(out, rung, language);
     } finally {
       jc.localPermits.release();
@@ -1699,7 +2506,7 @@ async function callRung(rung, segment, jc, language) {
   }
   let out;
   try {
-    out = await transcribeCloudFile(rung, segment.path, segment.mime, segment.name, options, language, jc.prompt, {
+    out = await transcribeCloudFile(rung, segment.path, segment.mime, segment.name, options, language, prompt, {
       signal,
       timeoutMs: cloudSegmentTimeoutMs(rung, seconds, options),
       maxRetries: 0,
@@ -1708,38 +2515,95 @@ async function callRung(rung, segment, jc, language) {
     });
   } catch (err) {
     // xAI answers 200 with no text for a silent piece (waiting room, break)
-    // and its client throws. That is a no-speech result, as on every other
-    // rung, not a failure that demotes the segment and counts toward the streak.
+    // and its client throws. That is a no-speech answer, as on every other
+    // rung (then reviewed like one), not a failure that counts toward the streak.
     if (err?.code !== 'xai_stt_empty_transcript') throw err;
     out = { text: '', segments: [], model: rung.model };
   }
   return partFromOutput(out, rung, language);
 }
 
+// ── Rung state: pauses that end (no permanent latch) ────────────────────────
+
+function newRungState() {
+  return { deadUntil: 0, deadReason: null, revivals: 0, pausedUntil: 0, consecutiveFailures: 0, cooldownNoted: false };
+}
+
+function rungState(jc, rung) {
+  if (!jc.state.has(rung.name)) jc.state.set(rung.name, newRungState());
+  return jc.state.get(rung.name);
+}
+
 /**
- * One segment, every rung in order until one succeeds. Returns
- * { part } or { part: null, reason, error } (a gap).
+ * Whether a rung can take a piece NOW. A cloud key in its cooldown is skipped
+ * while the cooldown lasts (provider-key-health); a paused rung is revived
+ * once its deadUntil has passed (the next piece probes it). `peek` reads
+ * without side effects (no outcome token, no revival log).
+ */
+function rungAvailable(rung, jc, { peek = false } = {}) {
+  const state = rungState(jc, rung);
+  if (rung.kind === 'cloud' && providerInCooldown(rung)) {
+    if (!peek && !state.cooldownNoted) {
+      state.cooldownNoted = true;
+      noteOutcome(jc, rung, 'cooldown');
+    }
+    return false;
+  }
+  if (state.deadUntil > jc.now()) return false;
+  if (state.deadReason && !peek) {
+    logOncePerJob(jc, `revive:${rung.name}:${state.revivals}`, `${rung.name} transcription: trying again after a pause (${state.deadReason})`);
+    state.deadReason = null;
+    state.deadUntil = 0;
+    state.consecutiveFailures = 0;
+  }
+  return true;
+}
+
+function pauseRung(jc, rung, reason, untilMs) {
+  const state = rungState(jc, rung);
+  state.deadReason = String(reason || 'paused').slice(0, 80);
+  state.deadUntil = untilMs;
+}
+
+function revivalDelayMs(state) {
+  const delay = REVIVAL_DELAYS_MS[Math.min(state.revivals, REVIVAL_DELAYS_MS.length - 1)];
+  state.revivals++;
+  return delay;
+}
+
+/** No rung after `index` can take this piece: `index` is the last one left. */
+function isLastLiveRung(jc, index) {
+  for (let i = index + 1; i < jc.rungs.length; i++) {
+    if (rungAvailable(jc.rungs[i], jc, { peek: true })) return false;
+  }
+  return true;
+}
+
+/**
+ * One segment, every rung in order until one answers. Returns
+ * { part, rungIndex } or { part: null, reason, error } (a gap).
  */
 async function transcribeSegmentWithLadder(segment, jc, language) {
   let lastError = null;
-  for (const rung of jc.rungs) {
-    const state = jc.state.get(rung.name);
-    if (state.dead) continue;
-    if (rung.kind === 'cloud' && providerInCooldown(rung)) {
-      state.dead = 'cooldown';
-      noteOutcome(jc, rung, 'cooldown');
-      continue;
-    }
+  for (let index = 0; index < jc.rungs.length; index++) {
+    const rung = jc.rungs[index];
+    if (!rungAvailable(rung, jc)) continue;
+    const state = rungState(jc, rung);
     let transientRetries = 0;
     let rateLimitWaits = 0;
+    let backoffs = 0;
+    let oomKills = 0;
+    let lang = language;
+    let languageRetried = false;
     for (;;) {
       throwIfAborted(jc.signal);
       const pause = state.pausedUntil - jc.now();
       if (pause > 0) await jc.sleep(pause, jc.signal);
       try {
-        const part = await callRung(rung, segment, jc, language);
+        const part = await callRung(rung, segment, jc, lang);
         state.consecutiveFailures = 0;
-        return { part: { ...part, provider: rung.name, method: rung.method, kind: rung.kind } };
+        state.revivals = 0;
+        return { part: { ...part, provider: rung.name, method: rung.method, kind: rung.kind }, rungIndex: index };
       } catch (err) {
         // Only the job's own signal cancels the job: a dropped socket reports
         // «Error: aborted» (ECONNRESET) and must stay a transient failure.
@@ -1748,25 +2612,34 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
         const verdict = classifyRungError(rung, err);
         const token = describeRungError(rung, err);
         if (verdict === 'dead') {
-          state.dead = token;
           noteOutcome(jc, rung, token);
           if (rung.kind === 'cloud') {
             rememberProviderRejection(rung, err, jc.options);
+            pauseRung(jc, rung, token, jc.now() + providerCooldownMs(jc.options));
             const what = isBillingError(err) ? 'has no credits' : 'rejected the key';
             logOncePerJob(jc, `dead:${rung.name}`, `${rung.name} transcription ${what} (${sanitizeProviderError(err)}); skipping it for ${Math.round(providerCooldownMs(jc.options) / 60000)} min; trying the next provider`);
           } else {
+            // A missing engine (binary, model) does not come back by waiting.
+            pauseRung(jc, rung, token, Infinity);
             logOncePerJob(jc, `dead:${rung.name}`, `${rung.name} transcription unavailable (${token}); the rest of this job skips it`);
           }
           break;
         }
+        if (verdict === 'language' && lang && !languageRetried) {
+          // whisper-cli refused the language code: detect it on this piece.
+          languageRetried = true;
+          lang = undefined;
+          noteOutcome(jc, rung, 'language');
+          continue;
+        }
         if (verdict === 'rate_limit') {
           const hinted = parseRetryAfterMs(err, jc.now());
           if (hinted != null && hinted > jc.limits.rateLimitMaxWaitMs) {
-            // «try again in 5h»: a quota for the day, not a throttle. Stop
-            // using the rung in this job, never start the «no credits» cooldown.
-            state.dead = `${token} ${Math.round(hinted / 60000)}min`;
+            // «try again in 5h»: a quota for the day, not a throttle. Pause the
+            // rung until then; never start the «no credits» cooldown.
+            pauseRung(jc, rung, `${token} ${Math.round(hinted / 60000)}min`, jc.now() + hinted);
             noteOutcome(jc, rung, token);
-            logOncePerJob(jc, `rate-dead:${rung.name}`, `${rung.name} transcription rate-limited for ${Math.round(hinted / 60000)} min; the rest of this job uses the next provider`);
+            logOncePerJob(jc, `rate-dead:${rung.name}`, `${rung.name} transcription rate-limited for ${Math.round(hinted / 60000)} min; the next pieces use the next provider until then`);
             break;
           }
           if (rateLimitWaits < jc.limits.rateLimitRetries) {
@@ -1777,26 +2650,608 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
             logOncePerJob(jc, `rate:${rung.name}`, `${rung.name} transcription rate-limited; waiting ${Math.round(wait / 1000)} s and retrying the same provider`);
             continue;
           }
-        } else if (verdict === 'transient') {
+        } else if (verdict === 'transient' || verdict === 'oom') {
+          if (verdict === 'oom') oomKills++;
           const allowed = rung.kind === 'cloud' ? jc.limits.segmentRetries : jc.limits.localRetries;
-          if (transientRetries < allowed) {
+          if (verdict === 'transient' && transientRetries < allowed) {
             transientRetries++;
             await jc.sleep(TRANSIENT_BACKOFF_BASE_MS * 3 ** (transientRetries - 1), jc.signal);
+            continue;
+          }
+          // The last engine left for this piece backs off and retries (a
+          // loaded host, a provider blip) within the job's wait budget. A
+          // repeated OOM kill on the same piece is deterministic: no more.
+          const wait = LAST_RUNG_BACKOFF_MS[backoffs];
+          if (wait != null && (verdict !== 'oom' || oomKills < OOM_REPEAT_LIMIT)
+            && isLastLiveRung(jc, index) && jc.waitBudget.remainingMs >= wait) {
+            backoffs++;
+            jc.waitBudget.remainingMs -= wait;
+            noteOutcome(jc, rung, `${token} backoff`);
+            logOncePerJob(jc, `backoff:${rung.name}`, `${rung.name} transcription failed (${sanitizeProviderError(err)}); it is the last engine left, waiting ${Math.round(wait / 1000)} s and retrying`);
+            await jc.sleep(wait, jc.signal);
             continue;
           }
         }
         // Demote THIS segment to the next rung; the rung stays for the others.
         noteOutcome(jc, rung, token);
         state.consecutiveFailures++;
-        if (state.consecutiveFailures >= RUNG_MAX_CONSECUTIVE_FAILURES) {
-          state.dead = `${token}×${state.consecutiveFailures}`;
-          logOncePerJob(jc, `streak:${rung.name}`, `${rung.name} transcription failed on ${state.consecutiveFailures} segments in a row (${sanitizeProviderError(err)}); the rest of this job skips it`);
+        // The streak pauses a rung — never the last one left (it would turn
+        // every remaining piece of a 5-hour job into a gap).
+        if (state.consecutiveFailures >= RUNG_MAX_CONSECUTIVE_FAILURES && !isLastLiveRung(jc, index)) {
+          const delay = revivalDelayMs(state);
+          pauseRung(jc, rung, `${token}×${state.consecutiveFailures}`, jc.now() + delay);
+          logOncePerJob(jc, `streak:${rung.name}:${state.revivals}`, `${rung.name} transcription failed on ${state.consecutiveFailures} segments in a row (${sanitizeProviderError(err)}); pausing it for ${Math.round(delay / 60000)} min`);
         }
         break;
       }
     }
   }
   return { part: null, reason: gapReasonFor(lastError), error: lastError };
+}
+
+// ── Quality loop: evidence, alternative hypotheses, review ─────────────────
+
+const filterMemo = new Map();
+const injectedFilterMemo = new WeakMap();
+
+/** Filter names from `ffmpeg -filters`. Pure. */
+function parseFfmpegFilters(text) {
+  const out = new Set();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const match = /^\s*[A-Z.|]{2,4}\s+([a-z0-9_]+)\s+\S*->\S*/.exec(line);
+    if (match) out.add(match[1]);
+  }
+  return out;
+}
+
+/**
+ * The filters this ffmpeg has (`ffmpeg -filters`, read once per binary and
+ * memoized; options.ffmpegFilters injects the list). Never throws: an
+ * unreadable list is an empty set (no enhanced copies), with one WARN. Only a
+ * listing that parsed, or a binary that is missing (ENOENT), is remembered
+ * for the process; any other failure (timeout, EAGAIN under load) is probed
+ * again after FILTER_LIST_RETRY_MS.
+ */
+async function ffmpegFilterSet(options = {}) {
+  if (options.ffmpegFilters) return new Set(Array.from(options.ffmpegFilters, (name) => String(name)));
+  const bin = ffmpegBin(options);
+  const injected = typeof options.execFileImpl === 'function' ? options.execFileImpl : null;
+  const memo = injected ? (injectedFilterMemo.get(injected) || new Map()) : filterMemo;
+  if (injected && !injectedFilterMemo.has(injected)) injectedFilterMemo.set(injected, memo);
+  const clock = typeof options.now === 'function' ? options.now : Date.now;
+  const known = memo.get(bin);
+  if (known && !(known.retryAt != null && clock() >= known.retryAt)) return known.pending;
+  const entry = { pending: null, retryAt: null };
+  entry.pending = (async () => {
+    try {
+      const { stdout } = await execImpl(options)(bin, ['-hide_banner', '-filters'], {
+        timeout: FILTER_LIST_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024, env: mediaChildEnv(),
+      });
+      const filters = parseFfmpegFilters(stdout);
+      if (!filters.size) entry.retryAt = clock() + FILTER_LIST_RETRY_MS;
+      return filters;
+    } catch (err) {
+      warnOnce(`ffmpeg-filters:${bin}`, 'could not list ffmpeg filters; enhanced-audio second opinions are off');
+      if (err?.code !== 'ENOENT') entry.retryAt = clock() + FILTER_LIST_RETRY_MS;
+      return new Set();
+    }
+  })();
+  memo.set(bin, entry);
+  return entry.pending;
+}
+
+/** Variant names this job can build (their filters exist), memoized per job. */
+async function availableVariants(jc) {
+  if (jc.variants) return jc.variants;
+  if (!jc.variantsPending) {
+    jc.variantsPending = ffmpegFilterSet(jc.options).then((filters) => {
+      jc.variants = Object.entries(VARIANT_FILTERS).filter(([, spec]) => spec.needs.every((f) => filters.has(f))).map(([name]) => name);
+      return jc.variants;
+    }, () => { jc.variants = []; return jc.variants; });
+  }
+  return jc.variantsPending;
+}
+
+/**
+ * An enhanced FLAC copy of a piece (or of a short clip) for a rung that
+ * takes a file: `<tmp>/<piece name>` decoded with the variant's filter.
+ * Returns { ok, path, dir } (the caller removes `dir`) or { ok: false }.
+ * Never throws except on abort. Injectable: options.buildVariant.
+ */
+async function buildVariantFile(sourcePath, variant, ctx = {}, options = {}) {
+  if (typeof options.buildVariant === 'function') return options.buildVariant(sourcePath, variant, ctx);
+  const spec = VARIANT_FILTERS[variant];
+  if (!spec) return { ok: false };
+  let dir = null;
+  try {
+    dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'sira-transcribe-variant-'));
+  } catch {
+    return { ok: false };
+  }
+  const name = /\.flac$/i.test(String(ctx.name || '')) ? path.basename(String(ctx.name)) : CLIP_MASTER_NAME;
+  const out = path.join(dir, name);
+  const ordinal = streamOrdinalOf(ctx.streamOrdinal);
+  try {
+    await runFfmpeg([
+      '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+      ...mapWindowArgs(ordinal), '-i', sourcePath, ...mapArgs(ordinal),
+      '-vn', '-sn', '-dn', '-af', spec.filter,
+      '-ac', '1', '-ar', SEGMENT_SAMPLE_RATE, '-c:a', 'flac', out,
+    ], { ...options, segmentTimeoutMs: Math.max(60_000, Math.ceil((Number(ctx.durationSeconds) || 600) * 300)) });
+    const stat = await fsPromises.stat(out).catch(() => null);
+    if (!stat || !stat.size) {
+      await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
+      return { ok: false };
+    }
+    return { ok: true, path: out, dir };
+  } catch (err) {
+    await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    if (isAbortError(err, options.signal)) throw err;
+    return { ok: false };
+  }
+}
+
+/**
+ * Voiced seconds of one piece above `thresholdDb`: ONE decode of that piece
+ * only (≤ a segment), and only for a suspicious answer — never a second full
+ * decode of the recording. Two thresholds: an empty answer is checked for ANY
+ * sound (quality.ENERGY_THRESHOLD_DB, -50 dB: a quiet far-field voice
+ * counts); a sparse answer or a hole is checked against the job's speech
+ * threshold (the cut plan's adaptive one, else -35 dB), so a classroom's air
+ * conditioning is not taken for skipped speech. Returns { voicedSec,
+ * silences } (null voicedSec: unknown). Injectable: options.measureVoiced(path,
+ * ctx) → { voicedSec, silences? } (ctx.thresholdDb says which).
+ */
+async function measurePieceEnergy(segment, jc, { thresholdDb = quality.ENERGY_THRESHOLD_DB } = {}) {
+  const threshold = Math.round(Number(thresholdDb) || quality.ENERGY_THRESHOLD_DB);
+  const key = `${segment.index}:${segment.path}:${threshold}`;
+  if (jc.energy.has(key)) return jc.energy.get(key);
+  const duration = Number(segment.durationSeconds) || Number(segment.spanSeconds) || 0;
+  let measured = { voicedSec: null, silences: null };
+  try {
+    let out;
+    if (typeof jc.options.measureVoiced === 'function') {
+      out = await jc.options.measureVoiced(segment.path, {
+        durationSeconds: duration, index: segment.index, streamOrdinal: segment.streamOrdinal ?? null, thresholdDb: threshold, signal: jc.signal,
+      });
+    } else if (duration > 0) {
+      const ordinal = streamOrdinalOf(segment.streamOrdinal);
+      const { stderr } = await execImpl(jc.options)(ffmpegBin(jc.options), [
+        '-hide_banner', '-nostats', '-nostdin', ...mapWindowArgs(ordinal), '-i', segment.path, ...mapArgs(ordinal),
+        '-vn', '-sn', '-dn', '-ac', '1', '-af', `silencedetect=noise=${threshold}dB:d=${SILENCE_MIN_SECONDS}`,
+        '-f', 'null', '-',
+      ], {
+        timeout: Math.max(ENERGY_MEASURE_TIMEOUT_MS, Math.ceil(duration * 100)),
+        maxBuffer: 4 * 1024 * 1024, signal: jc.signal, env: mediaChildEnv(),
+      });
+      out = quality.voicedFromSilencedetect(stderr, duration);
+    }
+    const voiced = Number(out?.voicedSec);
+    if (out && out.voicedSec != null && Number.isFinite(voiced) && voiced >= 0) {
+      measured = { voicedSec: voiced, silences: Array.isArray(out.silences) ? out.silences : null };
+    }
+  } catch (err) {
+    if (isAbortError(err, jc.signal)) throw err;
+  }
+  jc.energy.set(key, measured);
+  return measured;
+}
+
+function engineLabelOf(part) {
+  const provider = part?.provider || inferProvider(part);
+  const model = part?.model ? `:${String(part.model).slice(0, 40)}` : '';
+  return `${provider}${model}${part?.variant ? `+${part.variant}` : ''}`.slice(0, 60);
+}
+
+function engineKeyOf(part) {
+  return `${part?.provider || inferProvider(part)}:${part?.model || ''}`;
+}
+
+function qualityLoopEnabled(options = {}) {
+  if (options.qualityLoop === false) return false;
+  return !/^(?:0|false|off|no)$/i.test(String(envOf(options).TRANSCRIBE_QUALITY_LOOP || '').trim());
+}
+
+/**
+ * The job-wide quality state shared by every piece: budgets, the escalation
+ * rungs, the prompt-echo index and the per-piece energy cache.
+ */
+function qualityState(options, { mediaSeconds = 0, pieces = 1 } = {}) {
+  const ratio = envNumber(options, 'TRANSCRIBE_ESCALATION_BUDGET_RATIO', DEFAULT_ESCALATION_BUDGET_RATIO, { min: 0, max: 2, integer: false });
+  return {
+    enabled: qualityLoopEnabled(options),
+    perPiece: envNumber(options, 'TRANSCRIBE_ESCALATION_MAX_PER_PIECE', DEFAULT_ESCALATIONS_PER_PIECE, { min: 0, max: 4 }),
+    budgetSec: Math.max(ESCALATION_MIN_BUDGET_SEC, ratio * (Number(mediaSeconds) || 0)),
+    usedSec: 0,
+    attempts: 0,
+    secondOpinions: { allowance: Math.max(4, Math.ceil(pieces * 0.25)), used: 0, possible: 0, agreedEmpty: 0, foundSpeech: 0 },
+    // What the recogniser is primed with: the terms and the free-text prompt.
+    promptIndex: quality.buildPromptIndex([
+      ...promptTerms(options),
+      oneLine(typeof options.prompt === 'string' && options.prompt.trim() ? options.prompt : envOf(options).WHISPER_PROMPT),
+    ].filter(Boolean)),
+  };
+}
+
+/**
+ * Alternative hypotheses for a flagged piece, in the order to try them.
+ *   second opinion (nothing said): the next live rungs (another engine),
+ *     then the SAME rung on the enhanced copy, then the escalation rungs;
+ *   echo (the text only repeats the prompt): the same rung WITHOUT the
+ *     prompt, then the others;
+ *   loop: whisper.cpp again with no text context (-mc 0, beam 5), then the
+ *     escalation rungs, then the next rungs;
+ *   quality / refine: the escalation rungs, the next rungs, a wider beam on
+ *     local, then the enhanced copy.
+ */
+async function reviewPlan(jc, producerIndex, mode) {
+  const producer = producerIndex >= 0 ? jc.rungs[producerIndex] : null;
+  const others = jc.rungs.slice(Math.max(0, producerIndex + 1)).filter((rung) => !producer || rung.name !== producer.name);
+  const escalation = (jc.escalationRungs || []).filter((rung) => !producer || rung.name !== producer.name);
+  const variants = producer ? await availableVariants(jc) : [];
+  const enhanced = producer ? variants.map((variant) => ({ rung: producer, variant, noPrompt: mode === 'echo' })) : [];
+  const steps = [];
+  const add = (step) => { if (step && step.rung) steps.push(step); };
+  if (mode === 'second_opinion' || mode === 'echo') {
+    if (mode === 'echo' && producer && jc.prompt) add({ rung: producer, noPrompt: true });
+    others.forEach((rung) => add({ rung, noPrompt: mode === 'echo' }));
+    add(enhanced[0]);
+    escalation.forEach((rung) => add({ rung, noPrompt: mode === 'echo' }));
+  } else if (mode === 'loop') {
+    if (producer?.name === 'local') add({ rung: producer, maxContext: 0, beamSize: 5, noPrompt: true });
+    escalation.forEach((rung) => add({ rung }));
+    others.forEach((rung) => add({ rung }));
+    add(enhanced[0]);
+  } else {
+    escalation.forEach((rung) => add({ rung }));
+    others.forEach((rung) => add({ rung }));
+    if (producer?.name === 'local' && mode === 'refine') add({ rung: producer, beamSize: 5 });
+    enhanced.forEach(add);
+  }
+  return steps;
+}
+
+/**
+ * One alternative hypothesis: one attempt, no waiting on rate limits. A dead
+ * key / empty balance updates the rung like the ladder does. Returns
+ * { part } | { error } | { skipped: true }.
+ */
+async function obtainHypothesis(step, segment, jc, language) {
+  const { rung } = step;
+  if (!rungAvailable(rung, jc)) return { skipped: true };
+  let target = segment;
+  let tempDir = null;
+  const strategy = { noPrompt: step.noPrompt === true, maxContext: step.maxContext, beamSize: step.beamSize };
+  if (step.variant) {
+    const spec = VARIANT_FILTERS[step.variant];
+    if (!spec) return { skipped: true };
+    if (rung.name === 'local') {
+      strategy.audioFilter = spec.filter;
+    } else {
+      const built = await buildVariantFile(segment.path, step.variant, {
+        name: segment.name, durationSeconds: segment.durationSeconds, streamOrdinal: segment.streamOrdinal,
+      }, { ...jc.options, signal: jc.signal });
+      if (!built?.ok) return { skipped: true };
+      tempDir = built.dir || null;
+      target = { ...segment, path: built.path, mime: CLIP_MASTER_MIME, streamOrdinal: null };
+    }
+  }
+  // A cloud blip (5xx, dropped socket, timeout) gets ONE more try: a second
+  // opinion that fails once must not decide a «nothing heard» verdict.
+  const transientRetries = rung.kind === 'cloud' ? Math.min(REVIEW_TRANSIENT_RETRIES, jc.limits.segmentRetries) : 0;
+  let retried = 0;
+  try {
+    for (;;) {
+      try {
+        const part = await callRung(rung, target, jc, language, strategy);
+        rungState(jc, rung).consecutiveFailures = 0;
+        return { part: { ...part, provider: rung.name, method: rung.method, kind: rung.kind, ...(step.variant ? { variant: step.variant } : {}) } };
+      } catch (err) {
+        if (jc.signal.aborted) throw err;
+        const verdict = classifyRungError(rung, err);
+        const token = describeRungError(rung, err);
+        if (verdict === 'transient' && retried < transientRetries) {
+          retried++;
+          noteOutcome(jc, rung, `review ${token} retry`);
+          await jc.sleep(TRANSIENT_BACKOFF_BASE_MS, jc.signal);
+          continue;
+        }
+        noteOutcome(jc, rung, `review ${token}`);
+        if (verdict === 'dead') {
+          if (rung.kind === 'cloud') {
+            rememberProviderRejection(rung, err, jc.options);
+            pauseRung(jc, rung, token, jc.now() + providerCooldownMs(jc.options));
+          } else {
+            pauseRung(jc, rung, token, Infinity);
+          }
+        } else if (verdict === 'rate_limit') {
+          const hinted = parseRetryAfterMs(err, jc.now());
+          if (hinted != null) rungState(jc, rung).pausedUntil = Math.max(rungState(jc, rung).pausedUntil, jc.now() + Math.min(hinted, jc.limits.rateLimitMaxWaitMs));
+        }
+        return { error: err };
+      }
+    }
+  } finally {
+    if (tempDir) await fsPromises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function stopReview(mode, candidates) {
+  const latest = candidates[candidates.length - 1];
+  if (mode === 'second_opinion') return true;
+  if (!latest || quality.isHard(latest.assessment)) return false;
+  if (mode === 'echo' || mode === 'loop') return true;
+  const original = candidates[0];
+  if (quality.isHard(original.assessment)) return true;
+  const agree = candidates.slice(0, -1).some((c) => !quality.isHard(c.assessment)
+    && quality.wordAgreement(c.assessment.speechText, latest.assessment.speechText) >= quality.AGREEMENT_OK);
+  // Engine-agnostic scores only (no logprob across engines).
+  return agree || latest.assessment.agnosticScore - original.assessment.agnosticScore >= 0.25;
+}
+
+function wholeSpan(duration, reason) {
+  const end = Number(duration) > 0 ? Number(duration) : 0;
+  return { start: 0, end, reason };
+}
+
+/**
+ * A kept answer the review judged to say nothing (confirmed by a second
+ * opinion, trusted, or over measured silence): the words an engine invents
+ * over silence (sign-offs, prompt echo) are dropped so the transcript never
+ * carries text the engine itself judged to be no speech. Non-speech
+ * annotations («[Música]») stay: they describe the piece honestly.
+ */
+function withoutInventedText(part, promptIndex) {
+  const segments = Array.isArray(part?.segments) ? part.segments : [];
+  if (segments.length) {
+    const kept = segments.filter((seg) => quality.classifySegment(seg, promptIndex) === 'annotation');
+    return { ...part, text: kept.map((seg) => String(seg.text || '').trim()).filter(Boolean).join(' '), segments: kept };
+  }
+  const text = String(part?.text || '').trim();
+  return { ...part, text: quality.isNonSpeechText(text) ? text : '', segments: [] };
+}
+
+/**
+ * Review one piece's first answer (contract C4). Returns { part } — the kept
+ * hypothesis with `part.review` (piece-relative lowConfidence spans) — or
+ * { gap: { reason }, error } when a «nothing heard» answer could not be
+ * checked: second opinions were asked and none answered (a piece with speech
+ * energy, or a check C4 requires), or the job's second-opinion allowance is
+ * spent on a piece with speech energy. A gap leaves the piece's `review: {
+ * done: false }` checkpoint, so the partial retry reviews only that piece.
+ *   opts: { producerIndex, forced (refine), alwaysSecondOpinion (short clip:
+ *   no_speech needs a second opinion whatever the energy), forceSecondOpinion
+ *   (the whole recording's «no voice anywhere» check) }
+ */
+async function reviewPiece(segment, part, jc, language, opts = {}) {
+  const q = jc.quality;
+  const duration = Number(segment.durationSeconds) || Number(segment.spanSeconds) || null;
+  const timedFirst = normalizeSegments(part.segments).length > 0;
+  const assessOf = (p, evidence) => quality.assessHypothesis({
+    text: p.text, segments: p.segments, durationSec: duration, voicedSec: evidence.voicedSec, silences: evidence.silences,
+    promptIndex: q.promptIndex,
+  });
+  let evidence = { voicedSec: null, silences: null };
+  let assessment = assessOf(part, evidence);
+  if (q.enabled && assessment.needsEnergy && !opts.alwaysSecondOpinion) {
+    const nothing = quality.saysNothing(assessment) || assessment.suspectOnly;
+    evidence = await measurePieceEnergy(segment, jc, { thresholdDb: nothing ? quality.ENERGY_THRESHOLD_DB : jc.speechThresholdDb });
+    assessment = assessOf(part, evidence);
+  }
+  const label = engineLabelOf(part);
+  const record = {
+    done: true, score: assessment.score, flags: assessment.flags.slice(), escalations: 0, alternatives: 0, empty: quality.saysNothing(assessment),
+    confirmedEmpty: false, unconfirmedEmpty: false, disagreement: false, engine: label, engines: [label],
+    lowConfidence: assessment.spans.slice(),
+  };
+  const finish = (chosenPart, rec) => ({ part: { ...chosenPart, review: rec } });
+  if (!q.enabled) return finish(part, record);
+
+  const silent = assessment.voicedSec != null && assessment.voicedSec < quality.SILENT_VOICED_SEC;
+  const energetic = assessment.voicedSec != null && assessment.voicedSec >= quality.ENERGY_VOICED_SEC;
+  const opinions = q.secondOpinions;
+  const insisted = Boolean(opts.forceSecondOpinion || opts.alwaysSecondOpinion || opts.forced);
+  // C4: this «nothing heard» may only stand once a second opinion agrees
+  // (the short clip; the whole recording's last check).
+  const opinionRequired = Boolean(opts.forceSecondOpinion || opts.alwaysSecondOpinion);
+  // Several second opinions already agreed that this job's empty answers are
+  // music / noise, and none found speech: the rest are trusted as such.
+  const trustEmpty = !insisted && opinions.agreedEmpty >= SECOND_OPINION_TRUST_AFTER && opinions.foundSpeech === 0;
+  const dropEnergyFlags = (rec) => {
+    rec.flags = rec.flags.filter((f) => f !== 'empty_with_energy' && f !== 'hallucination');
+    rec.score = quality.scoreFromFlags(rec.flags);
+  };
+  // Past the allowance, second opinions in this job keep finding speech under
+  // empty answers: an empty piece with sound is still asked about (bounded by
+  // the escalation budget), never covered unread.
+  let overAllowance = false;
+  let mode = null;
+  if (record.empty) {
+    if (silent && !insisted) {
+      // Measured silence: nothing to ask about.
+      return finish(withoutInventedText(part, q.promptIndex), record);
+    } else if (trustEmpty) {
+      dropEnergyFlags(record);
+      return finish(withoutInventedText(part, q.promptIndex), record);
+    } else if (insisted || opinions.used < opinions.allowance) {
+      mode = assessment.hardOnly && assessment.kinds.echo > 0 ? 'echo' : 'second_opinion';
+    } else if (energetic && opinions.foundSpeech > 0) {
+      mode = assessment.hardOnly && assessment.kinds.echo > 0 ? 'echo' : 'second_opinion';
+      overAllowance = true;
+    } else if (energetic && opinions.possible > 0) {
+      // Sound, no recognised voice, and the job's second-opinion allowance is
+      // spent without trust (C4: empty text over speech energy is retried,
+      // never counted as covered). A gap the partial retry reviews again.
+      logOncePerJob(jc, 'second-opinion-allowance', 'second-opinion allowance spent; empty pieces with sound are left for the retry');
+      return { gap: { reason: 'provider_error' }, error: null };
+    } else if (energetic) {
+      // No second opinion exists in this job (one engine, no enhanced copy):
+      // a retry would not change it. Sound with no recognised voice.
+      record.unconfirmedEmpty = true;
+      record.lowConfidence.push(wholeSpan(duration, 'quiet'));
+      record.flags.push('quiet');
+      record.score = quality.scoreFromFlags(record.flags);
+    }
+  } else if (assessment.flags.includes('loop')) {
+    mode = 'loop';
+  } else if (opts.forced) {
+    mode = 'refine';
+  } else if (assessment.flags.includes('suspect')) {
+    if (opinions.used < opinions.allowance) mode = 'second_opinion';
+  } else if (quality.needsReview(assessment)) {
+    mode = 'quality';
+  }
+  if (!mode) return finish(part, record);
+  const budgeted = overAllowance || !(mode === 'second_opinion' || mode === 'echo' || opts.forced);
+  // TRANSCRIBE_ESCALATION_MAX_PER_PIECE=0: quality escalations off (second
+  // opinions on «nothing heard» and a requested refine still get one).
+  const maxAttempts = budgeted && !overAllowance ? q.perPiece : Math.max(1, q.perPiece);
+  if (maxAttempts <= 0) return finish(part, record);
+  const seconds = Number(duration) || jc.segmentSeconds || 0;
+  if (budgeted && q.usedSec + seconds > q.budgetSec) {
+    // Out of escalation budget. An empty piece with sound that second
+    // opinions elsewhere showed to hide speech is left for the retry.
+    if (overAllowance) return { gap: { reason: 'provider_error' }, error: null };
+    return finish(part, record);
+  }
+  if (mode === 'second_opinion' || mode === 'echo') opinions.used++;
+
+  const steps = await reviewPlan(jc, Number.isInteger(opts.producerIndex) ? opts.producerIndex : jc.rungs.findIndex((r) => r.name === part.provider), mode);
+  // A second opinion exists in this job (another rung or an enhanced copy).
+  if ((mode === 'second_opinion' || mode === 'echo') && steps.length) opinions.possible++;
+  const candidates = [{ part, assessment, order: 0, engineKey: engineKeyOf(part) }];
+  let attempts = 0;
+  let lastError = null;
+  for (const step of steps) {
+    if (attempts >= maxAttempts) break;
+    if (budgeted && q.usedSec + seconds > q.budgetSec) break;
+    throwIfAborted(jc.signal);
+    const hypothesis = await obtainHypothesis(step, segment, jc, language);
+    if (hypothesis.skipped) continue;
+    attempts++;
+    q.attempts++;
+    q.usedSec += seconds;
+    if (hypothesis.error) { lastError = hypothesis.error; continue; }
+    candidates.push({ part: hypothesis.part, assessment: assessOf(hypothesis.part, evidence), order: candidates.length, engineKey: engineKeyOf(hypothesis.part) });
+    if (stopReview(mode, candidates)) break;
+  }
+  record.escalations = attempts;
+  // Alternative hypotheses that ANSWERED (escalations also counts failed attempts).
+  record.alternatives = candidates.length - 1;
+  record.engines = [...new Set(candidates.map((c) => engineLabelOf(c.part)))].slice(0, 6);
+  if (candidates.length === 1) {
+    // No other opinion could be had.
+    if (record.empty) {
+      if ((attempts > 0 && (energetic || opinionRequired)) || overAllowance) {
+        // An empty answer, second opinions were asked and none answered (on
+        // a piece with sound, or where C4 requires one): not «covered» and
+        // not «no speech» — a gap the retry can fill later.
+        return { gap: { reason: lastError ? gapReasonFor(lastError) : 'provider_error' }, error: lastError };
+      }
+      if (!steps.length) logOncePerJob(jc, 'no-second-opinion', 'no second opinion available for an empty answer (single engine, no enhanced copy); keeping it');
+      if (energetic) {
+        record.unconfirmedEmpty = true;
+        record.lowConfidence.push(wholeSpan(duration, 'quiet'));
+        if (!record.flags.includes('quiet')) record.flags.push('quiet');
+        record.score = quality.scoreFromFlags(record.flags);
+      }
+    }
+    return finish(part, record);
+  }
+  const choice = quality.chooseHypothesis(candidates);
+  const chosen = choice.chosen || candidates[0];
+  const chosenAssessment = chosen.assessment;
+  const out = {
+    ...record,
+    score: chosenAssessment.score,
+    flags: chosenAssessment.flags.slice(),
+    empty: quality.saysNothing(chosenAssessment),
+    engine: engineLabelOf(chosen.part),
+    lowConfidence: chosenAssessment.spans.slice(),
+  };
+  if (out.empty) {
+    if (choice.confirmedEmpty) {
+      // Two engines agree there is no voice: music / noise, not a doubt.
+      out.confirmedEmpty = true;
+      opinions.agreedEmpty++;
+      dropEnergyFlags(out);
+    } else if (energetic) {
+      out.unconfirmedEmpty = true;
+      out.lowConfidence.push(wholeSpan(duration, 'quiet'));
+    }
+  } else if (record.empty) {
+    // The first engine heard nothing, another one heard speech.
+    opinions.foundSpeech++;
+  }
+  if (choice.agreement != null && choice.agreement >= quality.AGREEMENT_OK) {
+    // Two engines read the same words: a lone suspect phrase or an engine's
+    // own low confidence is confirmed, not doubtful.
+    out.flags = out.flags.filter((f) => f !== 'suspect' && f !== 'low_confidence');
+    out.lowConfidence = out.lowConfidence.filter((span) => span.flag !== 'suspect');
+  }
+  if (choice.disagreement) {
+    out.disagreement = true;
+    if (!out.flags.includes('engine_disagreement')) out.flags.push('engine_disagreement');
+    out.lowConfidence.push(wholeSpan(duration, 'engine_disagreement'));
+  }
+  // A keeper without timestamps (json-only engine) replacing a timed answer:
+  // its times are one coarse block, said so instead of passed as exact.
+  if (!out.empty && timedFirst && !normalizeSegments(chosen.part.segments).length && Number(duration) > 30) {
+    out.lowConfidence.push(wholeSpan(duration, 'timestamps'));
+    if (!out.flags.includes('timestamps')) out.flags.push('timestamps');
+  }
+  if (out.unconfirmedEmpty && !out.flags.includes('quiet')) out.flags.push('quiet');
+  out.score = quality.scoreFromFlags(out.flags);
+  // Confirmed «no voice»: whatever the kept hypothesis invented is dropped.
+  return finish(out.confirmedEmpty ? withoutInventedText(chosen.part, q.promptIndex) : chosen.part, out);
+}
+
+/**
+ * Whether a review got at least one alternative hypothesis that answered.
+ * Records saved before `alternatives` existed fall back to the attempts.
+ */
+function reviewAnswered(review) {
+  if (!review) return false;
+  const answered = Number(review.alternatives);
+  if (review.alternatives != null && Number.isFinite(answered)) return answered > 0;
+  return Number(review.escalations) > 0;
+}
+
+/**
+ * Quality numbers of a finished piece for the report: its review record, or
+ * (a part checkpointed before the loop existed) a pure assessment.
+ */
+function pieceQuality(part, length, promptIndex) {
+  const review = part?.review && part.review.done === true ? part.review : null;
+  if (review) {
+    return {
+      score: Number.isFinite(Number(review.score)) ? Number(review.score) : 1,
+      spans: Array.isArray(review.lowConfidence) ? review.lowConfidence : [],
+      empty: review.empty === true,
+      reviewed: reviewAnswered(review),
+      disagreement: review.disagreement === true,
+      confirmedEmpty: review.confirmedEmpty === true,
+      unconfirmedEmpty: review.unconfirmedEmpty === true,
+      engine: review.engine || engineLabelOf(part),
+      escalations: Math.max(0, Number(review.escalations) || 0),
+    };
+  }
+  const assessment = quality.assessHypothesis({ text: part?.text, segments: part?.segments, durationSec: length, promptIndex });
+  return {
+    score: assessment.score,
+    spans: assessment.spans,
+    empty: quality.saysNothing(assessment),
+    reviewed: false,
+    disagreement: false,
+    confirmedEmpty: false,
+    unconfirmedEmpty: false,
+    engine: engineLabelOf(part),
+    escalations: 0,
+  };
+}
+
+function isBasicLocalModel(model) {
+  return /(?:^|[-_/])base(?:[-_.]|$)|ggml-base/i.test(String(model || '')) || !model;
 }
 
 function inferProvider(part) {
@@ -1856,6 +3311,57 @@ function formatOutcomes(outcomes) {
   return tokens.join(' ');
 }
 
+function withoutReview(part) {
+  const copy = { ...part };
+  delete copy.review;
+  return copy;
+}
+
+/** options.range + options.forceRetranscribe === true → { start, end } (seconds, file clock), else null. */
+function refineWindow(options = {}) {
+  if (options.forceRetranscribe !== true || !options.range || typeof options.range !== 'object') return null;
+  const start = Number(options.range.start);
+  const end = Number(options.range.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) return null;
+  return { start, end };
+}
+
+function hasConfidence(segments) {
+  return (Array.isArray(segments) ? segments : []).some((s) => s && s.confidence != null && Number.isFinite(Number(s.confidence)));
+}
+
+/**
+ * The per-job ladder context shared by the segmented job and the short clip:
+ * rung states (pauses that end), budgets, the quality state, the energy cache.
+ */
+function createJobContext({ options, signal, rungs, prompt, mediaDurationSeconds = null, segmentSeconds, sleep, now, pieces = 1, escalationRungs: extra = [] }) {
+  const jc = {
+    options,
+    signal,
+    rungs,
+    escalationRungs: extra,
+    state: new Map([...rungs, ...extra].map((rung) => [rung.name, newRungState()])),
+    prompt,
+    mediaDurationSeconds,
+    segmentSeconds,
+    sleep: sleep || abortableSleep,
+    now: now || Date.now,
+    limits: ladderLimits(options),
+    localPermits: createSemaphore(localParallel(options)),
+    dispatch: createDispatchLock(),
+    outcomes: new Map(),
+    logged: new Set(),
+    energy: new Map(),
+    waitBudget: { remainingMs: envNumber(options, 'TRANSCRIBE_LAST_RUNG_WAIT_BUDGET_MS', DEFAULT_WAIT_BUDGET_MS, { min: 0, max: 6 * 3600 * 1000 }) },
+    variants: null,
+    variantsPending: null,
+    // Speech vs room tone for sparse answers and holes (the cut plan's adaptive threshold when known).
+    speechThresholdDb: DEFAULT_SILENCE_THRESHOLD_DB,
+  };
+  jc.quality = qualityState(options, { mediaSeconds: mediaDurationSeconds || 0, pieces });
+  return jc;
+}
+
 /**
  * Run a segmented job and return the stitched (unformatted) outcome:
  * { transcript, coveredText, segments, gaps, coverage, providers, engine,
@@ -1870,7 +3376,10 @@ async function runSegmentedJob(filePath, job) {
   progressEvent(options, 'preparing');
   let prepared;
   try {
-    prepared = await prepareSegments(filePath, options, { durationSeconds: job.durationSeconds, segmentSeconds: job.segmentSeconds, fileSize: job.fileSize });
+    const cut = { durationSeconds: job.durationSeconds, segmentSeconds: job.segmentSeconds, fileSize: job.fileSize, fileName: job.fileName };
+    if (job.audioStreamInfo) cut.audioStream = job.audioStreamInfo;
+    if (Object.prototype.hasOwnProperty.call(job, 'mapOrdinal')) cut.mapOrdinal = job.mapOrdinal;
+    prepared = await prepareSegments(filePath, options, cut);
   } catch (err) {
     if (isAbortError(err, outer)) throw err;
     const wrapped = err instanceof Error ? err : new Error(String(err));
@@ -1893,8 +3402,6 @@ async function runSegmentedJob(filePath, job) {
     const eventDuration = mediaDuration || Number(options.durationSeconds) || 0;
     const emit = (stage, extra = {}) => emitProgress(options, { stage, durationSeconds: eventDuration, ...extra });
     let language = job.language;
-    // An unknown length kept the short-clip hint; a long measured length detects.
-    if (job.languageSource === 'hint' && !(job.durationSeconds > 0) && measured > autoLanguageMinSeconds(options)) language = undefined;
     const spans = segmentSpans(segments, mediaDuration, job.segmentSeconds);
     const meta = { segmentSeconds: job.segmentSeconds, total, cutPlan: prepared.plan.hash };
     emit('segments', { completed: 0, total, gaps: 0 });
@@ -1919,31 +3426,31 @@ async function runSegmentedJob(filePath, job) {
       }
     }
     const results = new Array(total).fill(null);
+    // Refine (options.range + forceRetranscribe): the pieces that overlap the
+    // range are transcribed again (their checkpoints ignored) and reviewed.
+    const refine = refineWindow(options);
+    const refineSet = new Set();
+    if (refine) spans.forEach((span, i) => { if (span.start < refine.end && span.end > refine.start) refineSet.add(i); });
+    // Saved before their review finished (a restart mid-review): reviewed again, not re-transcribed.
+    const reviewPending = new Set();
     let resumed = 0;
     loaded.forEach((part, i) => {
+      if (refineSet.has(i)) return;
       if (partUsable(part, prepared.plan, language)) {
         results[i] = { part, resumed: true };
+        if (part.review && part.review.done === false) reviewPending.add(i);
         resumed++;
       }
     });
     if (resumed) emit('resuming', { completed: resumed, total, gaps: 0 });
 
-    const jc = {
-      options,
-      signal: inner.signal,
-      rungs: job.rungs,
-      state: new Map(job.rungs.map((rung) => [rung.name, { dead: null, pausedUntil: 0, consecutiveFailures: 0 }])),
-      prompt: job.prompt,
-      mediaDurationSeconds: mediaDuration || null,
-      segmentSeconds: job.segmentSeconds,
-      sleep,
-      now,
-      limits: ladderLimits(options),
-      localPermits: createSemaphore(localParallel(options)),
-      dispatch: createDispatchLock(),
-      outcomes: new Map(),
-      logged: new Set(),
-    };
+    const jc = createJobContext({
+      options, signal: inner.signal, rungs: job.rungs, prompt: job.prompt, mediaDurationSeconds: mediaDuration || null,
+      segmentSeconds: job.segmentSeconds, sleep, now, pieces: total,
+      escalationRungs: job.escalationRungs || escalationRungs(options, job.rungs),
+    });
+    const cutThreshold = Number(prepared.cutInfo?.silence?.thresholdDb);
+    if (Number.isFinite(cutThreshold)) jc.speechThresholdDb = Math.max(DEFAULT_SILENCE_THRESHOLD_DB, cutThreshold);
     for (const token of job.tried || []) {
       const match = /^([^(]+)\((.*)\)$/.exec(token);
       if (match) noteOutcome(jc, { name: match[1] }, match[2]);
@@ -1956,12 +3463,29 @@ async function runSegmentedJob(filePath, job) {
     const startedAt = now();
     // Pieces already counted as completed that are read again in the locked language.
     const redo = new Set();
+    const pieceOf = (i) => ({ ...segments[i], spanSeconds: Math.max(0, spans[i].end - spans[i].start) });
+    /** Review a piece's answer and record the outcome (part or gap), durable first. */
+    const settlePiece = async (i, part, lang, reviewOpts = {}) => {
+      let finalPart = { ...part, cutPlan: prepared.plan.hash };
+      if (jc.quality.enabled) {
+        // The first answer is durable before any escalation: a restart reviews it again.
+        await saveSegmentCheckpoint(options, segments[i].index, meta, { ...finalPart, review: { done: false } });
+        const reviewed = await reviewPiece(pieceOf(i), finalPart, jc, lang, { forced: refineSet.has(i), ...reviewOpts });
+        if (reviewed.gap) {
+          results[i] = { gap: { reason: reviewed.gap.reason }, error: reviewed.error };
+          return false;
+        }
+        finalPart = { ...reviewed.part, cutPlan: prepared.plan.hash };
+      }
+      results[i] = { part: finalPart };
+      await saveSegmentCheckpoint(options, segments[i].index, meta, finalPart);
+      return true;
+    };
     const runIndex = async (i, lang) => {
       const outcome = await transcribeSegmentWithLadder(segments[i], jc, lang);
       if (outcome.part) {
-        const part = { ...outcome.part, cutPlan: prepared.plan.hash };
-        results[i] = { part };
-        await saveSegmentCheckpoint(options, segments[i].index, meta, part);
+        const kept = await settlePiece(i, outcome.part, lang, { producerIndex: outcome.rungIndex });
+        if (!kept) gapCount++;
       } else {
         results[i] = { gap: { reason: outcome.reason }, error: outcome.error };
         gapCount++;
@@ -1972,7 +3496,9 @@ async function runSegmentedJob(filePath, job) {
       const elapsed = now() - startedAt;
       const etaSeconds = remaining > 0 && elapsed > 0 ? Math.round(((elapsed / processed) * remaining) / 1000) : null;
       emit('transcribe', { completed, total, gaps: gapCount, ...(etaSeconds != null ? { etaSeconds } : {}) });
-      return outcome;
+      // The kept hypothesis (after review), not only the first answer: the
+      // language detection reads what a second opinion heard.
+      return { ...outcome, part: results[i]?.part || null };
     };
 
     const pending = [];
@@ -2019,7 +3545,7 @@ async function runSegmentedJob(filePath, job) {
       if (redo.size) pending.sort((a, b) => a - b);
     }
     if (pending.length) {
-      const cloudLive = jc.rungs.some((rung) => rung.kind === 'cloud' && !jc.state.get(rung.name).dead && !providerInCooldown(rung));
+      const cloudLive = jc.rungs.some((rung) => rung.kind === 'cloud' && rungAvailable(rung, jc, { peek: true }));
       const width = Math.max(1, Math.min(pending.length, cloudLive ? cloudParallel(options) : localParallel(options)));
       let cursor = 0;
       await Promise.all(Array.from({ length: width }, async () => {
@@ -2034,6 +3560,26 @@ async function runSegmentedJob(filePath, job) {
         }
       }));
       if (firstError) throw (outer?.aborted ? abortError() : firstError);
+    }
+    // A restart in the middle of a review: finish those reviews (no re-transcription).
+    for (const i of [...reviewPending].sort((a, b) => a - b)) {
+      const part = results[i]?.part;
+      // Re-read in the locked language meanwhile: already reviewed.
+      if (!part || !jc.quality.enabled || part.review?.done !== false) continue;
+      if (!(await settlePiece(i, withoutReview(part), language))) gapCount++;
+    }
+    // «No voice anywhere» needs a second opinion that agrees (C4): when every
+    // piece came back empty and none was confirmed, ask about the most voiced one.
+    if (jc.quality.enabled) {
+      const covered = results.map((r, i) => (r?.part ? i : -1)).filter((i) => i >= 0);
+      const saysNothing = (part) => (part.review && part.review.done === true ? part.review.empty === true : !hasSpeechText(part.text));
+      const confirmed = covered.some((i) => results[i].part.review?.confirmedEmpty === true);
+      if (covered.length && covered.every((i) => saysNothing(results[i].part)) && !confirmed) {
+        const energyOf = (i) => Number(jc.energy.get(`${segments[i].index}:${segments[i].path}:${quality.ENERGY_THRESHOLD_DB}`)?.voicedSec) || 0;
+        const target = covered.reduce((best, i) => (energyOf(i) > energyOf(best) ? i : best), covered[0]);
+        const answer = withoutReview(results[target].part);
+        if (!(await settlePiece(target, answer, language, { forceSecondOpinion: true, producerIndex: jc.rungs.findIndex((r) => r.name === answer.provider) }))) gapCount++;
+      }
     }
     emit('done', { completed: total, total, gaps: gapCount });
 
@@ -2050,6 +3596,10 @@ async function runSegmentedJob(filePath, job) {
     let totalSeconds = 0;
     let coveredCount = 0;
     let lastError = null;
+    let speechPieces = 0;
+    let escalations = 0;
+    let allBasicLocal = true;
+    const pieceReports = [];
     for (let i = 0; i < total; i++) {
       const span = spans[i];
       const length = Math.max(0, span.end - span.start);
@@ -2059,6 +3609,15 @@ async function runSegmentedJob(filePath, job) {
         const part = entry.part;
         coveredCount++;
         coveredSeconds += length;
+        const pq = pieceQuality(part, length, jc.quality.promptIndex);
+        if (!pq.empty) speechPieces++;
+        escalations += pq.escalations;
+        if (!pq.empty && !(inferProvider(part) === 'local' && isBasicLocalModel(part.model))) allBasicLocal = false;
+        pieceReports.push({
+          start: span.start, end: span.end, covered: true, score: pq.score, engine: pq.engine,
+          lowConfidence: pq.spans.map((s) => ({ start: span.start + (Number(s.start) || 0), end: span.start + Math.min(length, Number(s.end) || length), reason: s.reason })),
+          disagreement: pq.disagreement, confirmedEmpty: pq.confirmedEmpty, unconfirmedEmpty: pq.unconfirmedEmpty, reviewed: pq.reviewed,
+        });
         const name = inferProvider(part);
         providers[name] = (providers[name] || 0) + 1;
         kinds.add(part.kind || kindOfProvider(name));
@@ -2078,15 +3637,27 @@ async function runSegmentedJob(filePath, job) {
         lastError = entry?.error || lastError;
         gaps.push({ start: span.start, end: span.end, reason: entry?.gap?.reason || 'provider_error' });
         texts.push(gapMarker(span.start, span.end));
+        pieceReports.push({ start: span.start, end: span.end, covered: false, score: 0, lowConfidence: [] });
       }
     }
     const top = (map) => [...map].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
     const engine = kinds.size > 1 ? 'mixed' : (kinds.has('local') ? 'local' : (kinds.has('cloud') ? 'cloud' : null));
     const coverage = totalSeconds > 0 ? Math.round((coveredSeconds / totalSeconds) * 10000) / 10000 : Math.round((coveredCount / total) * 10000) / 10000;
+    const stitchedSorted = sortSegments(stitched);
+    const report = quality.summarizeQuality({
+      pieces: pieceReports,
+      segments: stitchedSorted,
+      escalations,
+      basicLocalOnly: speechPieces > 0 && allBasicLocal,
+      // Without any confidence signal the basic model cannot vouch for «alta».
+      capBasicLevel: !hasConfidence(stitchedSorted),
+    });
     return {
       transcript: texts.join('\n\n'),
       coveredText: covered.join('\n\n'),
-      segments: sortSegments(stitched),
+      segments: stitchedSorted,
+      speechPieces,
+      quality: report,
       gaps,
       coverage,
       providers,
@@ -2100,6 +3671,7 @@ async function runSegmentedJob(filePath, job) {
       resumed,
       lastError,
       ladder: formatOutcomes(jc.outcomes),
+      cutInfo: prepared.cutInfo || null,
     };
   } finally {
     if (outer) outer.removeEventListener('abort', onOuterAbort);
@@ -2119,11 +3691,14 @@ function finalizeSegmentedResult(assembled, job) {
     providers: assembled.providers,
     engine: assembled.engine,
   };
-  const speech = hasSpeechText(assembled.coveredText);
+  // Text that only says nothing (annotations, sign-offs, prompt echo) is no speech.
+  const speech = hasSpeechText(assembled.coveredText) && !(Number.isInteger(assembled.speechPieces) && assembled.speechPieces === 0);
   const covered = `${assembled.coveredCount}/${assembled.segmentCount} segments (coverage ${Math.round(assembled.coverage * 1000) / 10}%)`;
+  const report = assembled.quality || null;
+  const qualityLog = report ? `; quality ${report.level || '?'} ${report.score ?? '?'} (escalations ${report.escalations}, doubtful ${report.lowConfidence.length})` : '';
   if (!assembled.gaps.length) {
     if (!speech) return { ...placeholderResult(fileName, label, normalizedMime, 'no_speech'), ...extra, language: assembled.language, segments: [] };
-    logInfo(`segmented transcription of ${fileName}: ${covered}; providers: ${formatProviders(assembled.providers)}`);
+    logInfo(`segmented transcription of ${fileName}: ${covered}; providers: ${formatProviders(assembled.providers)}${qualityLog}`);
     return formatSuccess({
       text: assembled.transcript,
       method: assembled.method,
@@ -2131,6 +3706,7 @@ function finalizeSegmentedResult(assembled, job) {
       language: assembled.language,
       segments: assembled.segments,
       ...extra,
+      quality: report,
     });
   }
   if (!assembled.coveredCount || assembled.coverage < minCoverage(options) || !speech) {
@@ -2144,7 +3720,7 @@ function finalizeSegmentedResult(assembled, job) {
       segments: assembled.segments,
     };
   }
-  logSafe(`partial transcription of ${fileName}: ${covered}; providers tried: ${assembled.ladder || 'none'}`);
+  logSafe(`partial transcription of ${fileName}: ${covered}; providers tried: ${assembled.ladder || 'none'}${qualityLog}`);
   return formatSuccess({
     text: assembled.transcript,
     method: assembled.method,
@@ -2152,6 +3728,7 @@ function finalizeSegmentedResult(assembled, job) {
     language: assembled.language,
     segments: assembled.segments,
     ...extra,
+    quality: report,
   });
 }
 
@@ -2172,47 +3749,542 @@ function singleRequestFields(durationSeconds, provider, engine) {
   };
 }
 
-async function transcribeLocalWholeFile(filePath, job, tried) {
+/**
+ * whisper.cpp on the whole clip. Resolves { part } for ANY answer the engine
+ * gave (speech or not: the review decides what silence means), or
+ * { placeholder } when it could not run.
+ */
+async function localWholeFileAnswer(filePath, job, tried) {
   const { options, fileName, label, normalizedMime, language, prompt } = job;
   const impl = options.localTranscribe || localWhisper.transcribeLocal;
   try {
-    const local = await impl(filePath, { ...options, language, prompt, mediaDurationSeconds: job.durationSeconds || null });
-    const text = String(local?.text || local?.transcript || '').trim();
-    if (!hasSpeechText(text)) {
-      return placeholderResult(fileName, label, normalizedMime, 'no_speech');
-    }
-    return formatSuccess({
-      text,
-      method: 'local-whisper',
-      model: local.model || 'base',
-      language: local.language || language || null,
-      segments: local.segments,
-      ...singleRequestFields(job.durationSeconds, 'local', 'local'),
+    const local = await impl(filePath, {
+      ...options,
+      language,
+      prompt,
+      mediaDurationSeconds: job.durationSeconds || null,
+      // The original file: decode the chosen track. The FLAC master (or no
+      // probe): leave ffmpeg's default, the only track there is.
+      audioStreamOrdinal: streamOrdinalOf(job.localStreamOrdinal) ?? undefined,
     });
+    return {
+      part: {
+        text: String(local?.text || local?.transcript || '').trim(),
+        segments: Array.isArray(local?.segments) ? local.segments : [],
+        model: local?.model || 'base',
+        language: normalizeLanguage(local?.language) || normalizeLanguage(language) || null,
+        provider: 'local',
+        method: 'local-whisper',
+        kind: 'local',
+      },
+    };
   } catch (err) {
     if (isAbortError(err, options.signal)) throw err;
     const localReason = String(err?.reason || err?.code || err?.message || 'failed').replace(/\s+/g, ' ').slice(0, 120);
     tried.push(`local(${localReason})`);
     logSafe(`Local Whisper failed: ${sanitizeProviderError(err)}`);
     logSafe(`transcription unavailable for ${fileName}; providers tried: ${tried.join(' ')}`);
-    return placeholderResult(fileName, label, normalizedMime, err?.code === 'AUDIO_DECODE_FAILED' ? 'audio_decode_failed' : 'local_unavailable');
+    if (err?.code === 'AUDIO_DECODE_FAILED') {
+      // ffmpeg's own words say WHY. A missing moov atom or DRM is conclusive;
+      // «no stream» from this strict, default-window decode is NOT (audio that
+      // starts late): it stays a decode failure, so the tolerant repair runs
+      // and ITS verdict decides. The verdict is kept for that repair.
+      const verdict = classifyMediaFailure({ code: 'SEGMENT_FAILED', stderr: String(err.cause?.diagnostics || '') }, fileName);
+      job.localDecodeVerdict = verdict;
+      if (verdict === 'truncated_container' || verdict === 'drm_protected') return { placeholder: placeholderResult(fileName, label, normalizedMime, verdict) };
+    }
+    return { placeholder: placeholderResult(fileName, label, normalizedMime, err?.code === 'AUDIO_DECODE_FAILED' ? 'audio_decode_failed' : 'local_unavailable') };
+  }
+}
+
+/** The whole clip on whisper.cpp, formatted (no review: the cut-failure fallback). */
+async function transcribeLocalWholeFile(filePath, job, tried) {
+  const answer = await localWholeFileAnswer(filePath, job, tried);
+  if (answer.placeholder) return answer.placeholder;
+  const { part } = answer;
+  if (!hasSpeechText(part.text)) return placeholderResult(job.fileName, job.label, job.normalizedMime, 'no_speech');
+  // No second engine on this path (ffmpeg could not even cut the file): the
+  // report says what the text itself shows.
+  const seconds = Number(job.durationSeconds) > 0 ? Number(job.durationSeconds) : 0;
+  const pq = pieceQuality(part, seconds || null, null);
+  const segments = normalizeSegments(part.segments);
+  return formatSuccess({
+    text: part.text,
+    method: 'local-whisper',
+    model: part.model,
+    language: part.language,
+    segments: part.segments,
+    ...singleRequestFields(job.durationSeconds, 'local', 'local'),
+    quality: quality.summarizeQuality({
+      pieces: [{ start: 0, end: seconds, covered: true, score: pq.score, engine: pq.engine, lowConfidence: pq.spans }],
+      segments,
+      basicLocalOnly: isBasicLocalModel(part.model),
+      capBasicLevel: !hasConfidence(segments),
+    }),
+  });
+}
+
+// ── Intake: streams, track, language, short-clip master ─────────────────────
+
+const warnedOnce = new Set();
+function warnOnce(key, message) {
+  if (warnedOnce.has(key)) return;
+  warnedOnce.add(key);
+  logSafe(message);
+}
+
+// Only on a successful result whose decode needed the tolerant pass because
+// ffmpeg rejected the media (not merely a wider stream-discovery window).
+const TOLERANT_NOTE = 'Parte del archivo no se pudo leer con normalidad; usé una lectura tolerante a errores y transcribí lo que se pudo leer.';
+
+/** media-probe's exec, run through this module's (injectable) execFile with the untrusted child env. */
+function probeExec(options) {
+  const run = execImpl(options);
+  return (bin, args, { signal, timeoutMs, maxBuffer } = {}) => run(bin, args, {
+    timeout: timeoutMs, maxBuffer, signal, env: mediaChildEnv(),
+  });
+}
+
+/**
+ * The C1 stream probe: `options.mediaProbe` (already probed by the caller),
+ * `options.probeMediaStreams` (injected) or ONE ffprobe call. Never throws
+ * except on abort; a failed probe is `{ ok: false }` and the job continues
+ * exactly as before (ffmpeg's default track).
+ */
+async function probeStreamsForIntake(filePath, options = {}) {
+  if (options.mediaProbe && typeof options.mediaProbe === 'object') return options.mediaProbe;
+  try {
+    const probe = typeof options.probeMediaStreams === 'function'
+      ? await options.probeMediaStreams(filePath, { signal: options.signal })
+      : await require('./media-probe').probeMediaStreams(filePath, {
+        signal: options.signal, ffprobe: ffprobeBin(options), exec: probeExec(options),
+      });
+    return probe && typeof probe === 'object' ? probe : { ok: false, error: 'probe_failed', reason: 'no_answer' };
+  } catch (err) {
+    if (isAbortError(err, options.signal)) throw err;
+    return { ok: false, error: 'probe_failed', reason: 'probe_threw' };
+  }
+}
+
+/**
+ * A conclusive «no audio stream»: the probe worked and recognised streams,
+ * none of them audio (a screen recording, a muted export). A probe that
+ * recognised nothing, or only ffprobe's text-art «video», proves nothing.
+ */
+function probeShowsNoAudio(probe) {
+  if (!probe || probe.ok !== true) return false;
+  if (Array.isArray(probe.audio) && probe.audio.length) return false;
+  const video = Array.isArray(probe.video) ? probe.video : [];
+  const subtitles = Array.isArray(probe.subtitles) ? probe.subtitles : [];
+  if (!video.length && !subtitles.length) return false;
+  const textArtOnly = video.length > 0 && video.every((v) => TEXT_ART_CODECS.has(String(v?.codec || '').toLowerCase()));
+  return !(textArtOnly && !subtitles.length);
+}
+
+/**
+ * MP4-family sample descriptions: are ALL audio tracks protected (FairPlay
+ * `drms`, CENC/CBCS `enca`, Audible `aavd`)? Walks box HEADERS only (moov →
+ * trak → mdia → hdlr / minf → stbl → stsd), reading at most a few hundred
+ * small ranges, never the media data and never logged. Resolves
+ * { checked, protected, audioTracks }; never throws except on abort.
+ */
+async function mp4AudioProtection(filePath, { signal } = {}) {
+  const none = { checked: false, protected: false, audioTracks: 0 };
+  let fh = null;
+  try {
+    fh = await fsPromises.open(filePath, 'r');
+    const { size } = await fh.stat();
+    const head = Buffer.alloc(16);
+    const tracks = [];
+    let boxes = 0;
+    const readBox = async (pos, end) => {
+      if (end - pos < 8) return null;
+      const { bytesRead } = await fh.read(head, 0, 16, pos);
+      if (bytesRead < 8) return null;
+      let boxSize = head.readUInt32BE(0);
+      let headerSize = 8;
+      if (boxSize === 1) {
+        if (bytesRead < 16) return null;
+        boxSize = Number(head.readBigUInt64BE(8));
+        headerSize = 16;
+      } else if (boxSize === 0) {
+        boxSize = end - pos;
+      }
+      if (!Number.isSafeInteger(boxSize) || boxSize < headerSize || pos + boxSize > end) return null;
+      return { type: head.toString('latin1', 4, 8), body: pos + headerSize, end: pos + boxSize };
+    };
+    const readBody = async (box, limit) => {
+      const length = Math.min(limit, box.end - box.body);
+      const buf = Buffer.alloc(Math.max(0, length));
+      const { bytesRead } = length > 0 ? await fh.read(buf, 0, length, box.body) : { bytesRead: 0 };
+      return buf.subarray(0, bytesRead);
+    };
+    const walk = async (pos, end, depth, track) => {
+      while (pos < end && boxes < MP4_MAX_BOXES) {
+        boxes++;
+        throwIfAborted(signal);
+        const box = await readBox(pos, end);
+        if (!box) return;
+        if (depth === 0 && box.type !== 'moov') {
+          pos = box.end;
+          continue;
+        }
+        if (box.type === 'trak') {
+          const next = { handler: null, entries: [] };
+          tracks.push(next);
+          await walk(box.body, box.end, depth + 1, next);
+        } else if (MP4_CONTAINER_BOXES.has(box.type)) {
+          await walk(box.body, box.end, depth + 1, track);
+        } else if (box.type === 'hdlr' && track) {
+          const body = await readBody(box, 12);
+          if (body.length >= 12) track.handler = body.toString('latin1', 8, 12);
+        } else if (box.type === 'stsd' && track) {
+          const body = await readBody(box, MP4_MAX_STSD_BYTES);
+          const count = body.length >= 8 ? body.readUInt32BE(4) : 0;
+          for (let at = 8, i = 0; i < count && at + 8 <= body.length; i++) {
+            const entrySize = body.readUInt32BE(at);
+            track.entries.push(body.toString('latin1', at + 4, at + 8));
+            if (entrySize < 8) break;
+            at += entrySize;
+          }
+        }
+        // One moov per file: a fragmented MP4's thousands of moof boxes after
+        // it are never walked.
+        if (depth === 0) return;
+        pos = box.end;
+      }
+    };
+    await walk(0, size, 0, null);
+    const audio = tracks.filter((t) => t.handler === 'soun' && t.entries.length);
+    return {
+      checked: true,
+      audioTracks: audio.length,
+      protected: audio.length > 0 && audio.every((t) => t.entries.every((type) => PROTECTED_AUDIO_ENTRIES.has(type))),
+    };
+  } catch (err) {
+    if (isAbortError(err, signal)) throw err;
+    return none;
+  } finally {
+    if (fh) await fh.close().catch(() => {});
+  }
+}
+
+/** A probe tag (codecTag / codec_tag_string, when media-probe reports it) of a protected sample entry. */
+function probeTagProtected(stream) {
+  const tag = String(stream?.codecTag ?? stream?.codecTagString ?? stream?.codec_tag_string ?? '').trim().toLowerCase();
+  return PROTECTED_AUDIO_ENTRIES.has(tag);
+}
+
+/**
+ * Whether every audio track is DRM-protected, decided BEFORE any decode (a
+ * protected track decodes to noise or decode errors, often with exit 0):
+ * the probe's codec tags when it reports them, else the MP4 sample
+ * descriptions of an MP4-family file.
+ */
+async function detectProtectedAudio(filePath, probe, options = {}, { fileName } = {}) {
+  if (typeof options.detectProtectedAudio === 'function') return Boolean(await options.detectProtectedAudio(filePath, probe, options));
+  const audio = probe && probe.ok === true && Array.isArray(probe.audio) ? probe.audio : [];
+  if (audio.length && audio.every(probeTagProtected)) return true;
+  const mp4 = MP4_FAMILY_EXT_RE.test(String(fileName || '')) || /\b(?:mov|mp4|m4a|3gp)\b/.test(String(probe?.formatName || ''));
+  if (!mp4) return false;
+  return (await mp4AudioProtection(filePath, { signal: options.signal })).protected;
+}
+
+function unsupportedLanguageNote(code) {
+  const subject = LANGUAGE_NAMES_ES[code] ? `El ${LANGUAGE_NAMES_ES[code]}` : `El idioma ${languageNameEs(code)}`;
+  return `${subject} no está disponible en los motores de transcripción; detecté el idioma automáticamente, así que la transcripción puede ser aproximada.`;
+}
+
+/**
+ * Whether the stream probe is worth its ffprobe. It also measures the length,
+ * so it always runs when the caller did not; with a measured length it is
+ * skipped only for single-track audio formats (WAV, MP3, FLAC, Opus…), where
+ * there is no track to choose and a missing stream shows up in the decode.
+ */
+function streamProbeWanted(options = {}, { normalizedMime, fileName } = {}) {
+  if (options.mediaProbe || typeof options.probeMediaStreams === 'function') return true;
+  if (streamOrdinalOf(options.audioStreamOrdinal) != null) return true;
+  if (!(Number.isFinite(options.durationSeconds) && options.durationSeconds >= 0)) return true;
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  return !(/^audio\//.test(String(normalizedMime || '')) && SINGLE_TRACK_AUDIO_EXTENSIONS.has(ext));
+}
+
+/**
+ * Everything decided before a rung runs: the language to request (C4:
+ * explicit and supported, else detection), the audio track (C1 choice or
+ * options.audioStreamOrdinal), whether the file has any audio at all and
+ * whether it is DRM-protected. Returns a mutable record the job completes
+ * (master, decode, silence, trackUsed). `notes` holds only what stays true
+ * whatever happens next (an unsupported language, a missing requested
+ * track); the track and tolerant-read notes are written by decorateResult,
+ * on a successful result only.
+ */
+async function analyzeIntake(filePath, options = {}, meta = {}) {
+  const notes = [];
+  const addNote = (note) => {
+    if (note && !notes.includes(note) && notes.length < MAX_INTAKE_NOTES) notes.push(note);
+  };
+  const explicit = hasExplicitLanguage(options);
+  const requested = explicit ? normalizeLanguage(options.language) : undefined;
+  const supported = whisperLanguageCode(requested);
+  let language;
+  let languageSource;
+  if (supported) {
+    language = supported;
+    languageSource = 'explicit';
+  } else if (requested) {
+    // Quechua, aimara…: every rung would reject `language=qu`. Detect, prior
+    // included (Andean recordings code-switch with Spanish), and say so.
+    language = undefined;
+    languageSource = 'auto';
+    addNote(unsupportedLanguageNote(requested));
+  } else {
+    language = undefined;
+    languageSource = explicit ? 'explicit' : 'auto';
+  }
+
+  const probed = streamProbeWanted(options, meta);
+  const probe = probed ? await probeStreamsForIntake(filePath, options) : { ok: false, error: 'probe_failed', reason: 'skipped' };
+  throwIfAborted(options.signal);
+  const probeOk = Boolean(probe && probe.ok === true);
+  const audio = probeOk && Array.isArray(probe.audio) ? probe.audio : [];
+  const requestedTrack = streamOrdinalOf(options.audioStreamOrdinal);
+  let choice = null;
+  let explicitTrack = false;
+  if (requestedTrack != null) {
+    if (!probeOk || requestedTrack < audio.length) {
+      choice = { streamOrdinal: requestedTrack, reason: 'requested', language: audio[requestedTrack]?.language || null };
+      explicitTrack = true;
+    } else if (audio.length) {
+      addNote(`La pista de audio pedida (${requestedTrack + 1}) no existe: el archivo tiene ${audio.length}.`);
+    }
+  }
+  if (!choice && audio.length) {
+    let auto = null;
+    try {
+      auto = require('./media-probe').chooseAudioStream(probe, { language: requested || undefined });
+    } catch { auto = null; }
+    if (auto && streamOrdinalOf(auto.streamOrdinal) != null) {
+      choice = { streamOrdinal: auto.streamOrdinal, reason: String(auto.reason || 'auto').slice(0, 40), language: auto.language || null };
+    }
+  }
+  const noAudioTrack = probeShowsNoAudio(probe);
+  const drmProtected = !noAudioTrack && await detectProtectedAudio(filePath, probe, options, meta);
+  throwIfAborted(options.signal);
+  return {
+    probe,
+    probed,
+    probeOk,
+    noAudioTrack,
+    drmProtected,
+    language,
+    languageSource,
+    requestedLanguage: requested || null,
+    languageSupported: requested ? Boolean(supported) : null,
+    audioStream: choice ? { streamOrdinal: choice.streamOrdinal, reason: choice.reason } : null,
+    audioStreamLanguage: choice ? choice.language || null : null,
+    audioStreamInfo: choice
+      ? { streamOrdinal: choice.streamOrdinal, reason: choice.reason, streams: probeOk ? audio.length : null, explicit: explicitTrack }
+      : null,
+    streamCount: probeOk ? audio.length : null,
+    // null: the chosen track (when there is one) is what was transcribed;
+    // 'default_stream': ffmpeg (or a provider given the uploaded file) used its
+    // default stream instead; 'unrecorded': pieces cut before tracks were
+    // recorded were reused, so which track they hold is unknown.
+    trackUsed: null,
+    master: 'none',
+    decode: null,
+    decodeCause: null,
+    silence: null,
+    notes,
+    addNote,
+  };
+}
+
+/** The decode a pass needed, never downgrading a tolerant read to strict. */
+function noteDecode(intake, decode, decodeCause) {
+  if (decode === 'tolerant') {
+    if (intake.decode !== 'tolerant' || intake.decodeCause !== 'damaged') {
+      intake.decode = 'tolerant';
+      intake.decodeCause = DECODE_CAUSES.has(decodeCause) ? decodeCause : 'damaged';
+    }
+  } else if (decode && !intake.decode) {
+    intake.decode = decode;
+  }
+}
+
+/** The chosen track did not make it into what was transcribed. */
+function noteTrackLost(intake, why) {
+  if (intake.audioStream && !intake.trackUsed) intake.trackUsed = why;
+}
+
+function applyCutInfo(intake, cutInfo) {
+  if (!intake || !cutInfo) return;
+  noteDecode(intake, cutInfo.decode, cutInfo.decodeCause);
+  if (cutInfo.silence) intake.silence = cutInfo.silence;
+  if (cutInfo.streamDropped) noteTrackLost(intake, 'default_stream');
+  // Pieces cut before the track was recorded (a job in flight across the
+  // deploy) hold ffmpeg's default stream: certain only for a one-track file.
+  else if (cutInfo.reused && !cutInfo.audioStream && intake.streamCount !== 1) noteTrackLost(intake, 'unrecorded');
+}
+
+/**
+ * C4 result fields: `audioStream`, Spanish `notes` and a bounded machine-
+ * readable `intake`. The notes only state what happened: the track and the
+ * tolerant read are claimed on a SUCCESSFUL result only (a failure keeps the
+ * notes that stay true: an unsupported language, a missing requested track),
+ * and a track that did not make it into the text (`trackUsed`) is reported
+ * as `audioStream: null`, never as the one «transcribed».
+ */
+function decorateResult(result, intake) {
+  if (!result || typeof result !== 'object' || !intake) return result;
+  const audioStream = intake.audioStream && !intake.trackUsed ? { ...intake.audioStream } : null;
+  const notes = intake.notes.slice();
+  if (result.ok === true) {
+    if (audioStream && intake.streamCount > 1) {
+      const language = intake.audioStreamLanguage ? ` (${languageNameEs(intake.audioStreamLanguage)})` : '';
+      notes.push(`El archivo tiene ${intake.streamCount} pistas de audio; transcribí la pista ${audioStream.streamOrdinal + 1}${language}.`);
+    }
+    if (intake.decode === 'tolerant' && intake.decodeCause !== 'stream_window') notes.push(TOLERANT_NOTE);
+  }
+  return {
+    ...result,
+    audioStream,
+    notes: notes.slice(0, MAX_INTAKE_NOTES),
+    intake: {
+      probe: intake.probeOk ? 'ok' : (intake.probed ? 'failed' : 'skipped'),
+      audioStreams: intake.streamCount,
+      requestedLanguage: intake.requestedLanguage,
+      languageSupported: intake.languageSupported,
+      // 'chosen' | 'default_stream' | 'unrecorded' | null (no track chosen).
+      track: intake.audioStream ? (intake.trackUsed || 'chosen') : null,
+      master: intake.master,
+      decode: intake.decode,
+      decodeCause: intake.decodeCause,
+      silence: intake.silence,
+    },
+  };
+}
+
+/** Containers OpenAI / Groq accept as an upload (by extension, their documented list). */
+function providerAcceptsContainer(fileName) {
+  return CLOUD_SAFE_EXTENSIONS.has(path.extname(String(fileName || '')).toLowerCase());
+}
+
+/**
+ * Without the FLAC master because ffmpeg REJECTED the media (both reads):
+ * only audio in an accepted container still goes as uploaded — a video the
+ * decoder cannot read would only collect 400s.
+ */
+function rawUploadSafe(mime, fileName) {
+  if (!providerAcceptsContainer(fileName)) return false;
+  return /^audio\//.test(String(mime || '')) || mime === 'application/ogg';
+}
+
+/**
+ * Why a clip master could not be built, from the ladder's last error: 'decode'
+ * when ffmpeg rejected the media itself (pass 1 said so, or the last pass
+ * did), else the host-side reason ('timeout' / 'resource' / 'spawn' /
+ * 'ffmpeg_missing') — those say nothing about the file.
+ */
+function masterFailureCode(err, fileName) {
+  if (err?.strictVerdict === 'decode') return 'decode';
+  const verdict = classifyMediaFailure(err, fileName);
+  return verdict === 'stream_not_found' || verdict === 'no_audio_track' ? 'decode' : verdict;
+}
+
+/**
+ * Short clip → ONE mono 16 kHz FLAC master (`audio.flac`) in its own temp
+ * dir, mapping the chosen track (under media-probe's window). A decode ffmpeg
+ * rejects goes down decodeLadder (tolerant with the track, then without it).
+ * Returns { ok: true, path, dir, size, durationSeconds, tolerant, decodeCause,
+ * streamDropped } or { ok: false, code, dir? } (code: an intake verdict such
+ * as 'truncated_container', or 'ffmpeg_missing' / 'decode' / 'timeout' /
+ * 'resource' / 'spawn' / 'empty'). Never throws except on abort, and then
+ * removes its dir; otherwise the caller removes `dir`. ctx.tolerantOnly skips
+ * the strict pass (ctx.strictVerdict: how a strict decode already failed).
+ * Injectable through options.transcodeClip.
+ */
+async function buildClipMaster(filePath, ctx = {}, options = {}) {
+  if (typeof options.transcodeClip === 'function') return options.transcodeClip(filePath, ctx, options);
+  let dir = null;
+  try {
+    dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'sira-transcribe-clip-'));
+  } catch (err) {
+    return { ok: false, code: classifyMediaFailure(err), dir: null };
+  }
+  const out = path.join(dir, CLIP_MASTER_NAME);
+  const scoped = { ...options, durationSeconds: Number(ctx.durationSeconds) || 0 };
+  const ordinal = streamOrdinalOf(ctx.audioStreamOrdinal);
+  const args = (mode) => [
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+    ...decodeInputArgs(mode),
+    '-i', filePath,
+    ...mapArgs(mode.map),
+    '-vn', '-sn', '-dn',
+    '-ac', '1', '-ar', SEGMENT_SAMPLE_RATE, '-c:a', 'flac',
+    out,
+  ];
+  try {
+    let ladder;
+    try {
+      ladder = await decodeLadder((mode) => runFfmpeg(args(mode), scoped), {
+        ordinal,
+        fileName: ctx.fileName,
+        signal: options.signal,
+        cleanup: () => fsPromises.rm(out, { force: true }).catch(() => {}),
+        strictVerdict: ctx.tolerantOnly ? (ctx.strictVerdict || 'decode') : null,
+      });
+    } catch (err) {
+      if (isAbortError(err, options.signal)) throw err;
+      if (err?.code === 'MEDIA_INTAKE' && err.intakeCode) return { ok: false, code: err.intakeCode, dir };
+      return { ok: false, code: masterFailureCode(err, ctx.fileName), dir };
+    }
+    const stat = await fsPromises.stat(out).catch(() => null);
+    if (!stat || !stat.size) return { ok: false, code: 'empty', dir };
+    const durationSeconds = await probeFileDuration(out, scoped);
+    return {
+      ok: true, path: out, dir, size: stat.size, durationSeconds,
+      tolerant: ladder.decode === 'tolerant', decodeCause: ladder.decodeCause, streamDropped: ladder.streamDropped,
+    };
+  } catch (err) {
+    await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw err;
   }
 }
 
 /**
  * Transcribe an audio or video file.
  * Returns { ok, status, text, transcript, method, model, language, segments,
- * durationSec, segmentCount, partial, gaps, coverage, providers, engine }.
+ * durationSec, segmentCount, partial, gaps, coverage, providers, engine,
+ * audioStream, notes, intake }.
  */
 async function transcribeUnqueued(filePath, mimeType, originalName, options = {}) {
   throwIfAborted(options.signal);
-  options = { ...options, durationSeconds: await probeAudioDuration(filePath, options) };
   const fileName = originalName || path.basename(filePath);
   const normalizedMime = normalizeAudioMime(mimeType, fileName);
-  const info = mimeInfo(normalizedMime, fileName);
-  const label = info.label;
-  const language = resolveLanguage(options);
-  const languageSource = hasExplicitLanguage(options) ? 'explicit' : (language ? 'hint' : 'auto');
+  const label = mimeInfo(normalizedMime, fileName).label;
+  const intake = await analyzeIntake(filePath, options, { normalizedMime, fileName });
+  // The probe already read the container's length: no second ffprobe unless
+  // the caller injected its own duration probe (or the header had none).
+  let durationSeconds;
+  if (Number.isFinite(options.durationSeconds) && options.durationSeconds >= 0) durationSeconds = options.durationSeconds;
+  else if (typeof options.probeAudioDuration !== 'function' && intake.probeOk && Number(intake.probe.durationSec) > 0) durationSeconds = Number(intake.probe.durationSec);
+  else if (intake.noAudioTrack) durationSeconds = 0;
+  else durationSeconds = await probeAudioDuration(filePath, options);
+  const clip = { dirs: [] };
+  try {
+    const result = await transcribeWithIntake(filePath, { fileName, normalizedMime, label }, { ...options, durationSeconds }, intake, clip);
+    return decorateResult(result, intake);
+  } finally {
+    for (const dir of clip.dirs) await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip) {
+  const { fileName, normalizedMime, label } = meta;
+  let options = initialOptions;
+  const { language, languageSource } = intake;
   const prompt = resolvePrompt(options);
   const maxBytes = audioMaxFileBytes(options);
 
@@ -2223,61 +4295,168 @@ async function transcribeUnqueued(filePath, mimeType, originalName, options = {}
     return placeholderResult(fileName, label, normalizedMime, 'file_unavailable');
   }
   if (!fileSize) return placeholderResult(fileName, label, normalizedMime, 'file_empty');
+  if (intake.noAudioTrack) {
+    logInfo(`no audio stream in ${fileName}${intake.probe?.hasVideo ? ' (video only)' : ''}; nothing to transcribe`);
+    const seconds = Number(intake.probe?.durationSec);
+    return { ...placeholderResult(fileName, label, normalizedMime, 'no_audio_track'), durationSec: seconds > 0 ? round3(seconds) : null };
+  }
+  if (intake.drmProtected) {
+    // Decoding would only produce noise (often with exit 0) or decode errors.
+    logSafe(`transcription unavailable for ${fileName} (drm_protected: protected audio sample entries)`);
+    const seconds = Number(intake.probe?.durationSec);
+    return { ...placeholderResult(fileName, label, normalizedMime, 'drm_protected'), durationSec: seconds > 0 ? round3(seconds) : null };
+  }
 
   const cloud = cloudProviders(options);
   const segmentSeconds = effectiveSegmentSeconds(options, cloud);
-  const duration = Number(options.durationSeconds) || 0;
-  const job = { options, fileName, normalizedMime, label, language, languageSource, prompt, durationSeconds: duration, fileSize, segmentSeconds };
+  let duration = Number(options.durationSeconds) || 0;
+  const trackOrdinal = intake.audioStream ? intake.audioStream.streamOrdinal : null;
+  const job = {
+    options, fileName, normalizedMime, label, language, languageSource, prompt, durationSeconds: duration, fileSize, segmentSeconds,
+    // Track identity (manifest + multi-stream plan hash), what to map on the
+    // cut source, and what the local whole-file decode maps.
+    audioStreamInfo: intake.audioStreamInfo, mapOrdinal: trackOrdinal, localStreamOrdinal: trackOrdinal,
+  };
   const tried = [];
+  if (intake.audioStreamInfo && intake.streamCount > 1) {
+    logInfo(`${fileName}: ${intake.streamCount} audio streams; transcribing #${trackOrdinal} (${intake.audioStream.reason})`);
+  }
+  const intakePlaceholder = (code) => {
+    logSafe(`transcription unavailable for ${fileName} (${code})`);
+    return placeholderResult(fileName, label, normalizedMime, code);
+  };
 
   // Long media (or a file above the provider cap): one cut, a per-segment
   // ladder, partial results instead of all-or-nothing.
-  if (fileSize > maxBytes || duration > segmentSeconds) {
-    const vs = voiceStudioRung(options);
-    const rungs = [...cloud, ...(vs ? [vs] : []), ...(localEnabled(options) ? [LOCAL_RUNG] : [])];
+  const segmentedRun = async (sourcePath) => {
+    const vs = voiceStudioRung(job.options);
+    const rungs = [...cloud, ...(vs ? [vs] : []), ...(localEnabled(job.options) ? [LOCAL_RUNG] : [])];
     if (!rungs.length) {
       logSafe(`transcription unavailable for ${fileName}; providers tried: none local(disabled)`);
       return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
     }
     try {
-      return finalizeSegmentedResult(await runSegmentedJob(filePath, { ...job, rungs, tried }), job);
+      const assembled = await runSegmentedJob(sourcePath, { ...job, rungs, tried });
+      applyCutInfo(intake, assembled.cutInfo);
+      return finalizeSegmentedResult(assembled, job);
     } catch (err) {
-      if (isAbortError(err, options.signal) || !err?.segmentationFailed) throw err;
+      if (isAbortError(err, job.options.signal) || !err?.segmentationFailed) throw err;
+      if (INTAKE_FATAL_CODES.has(err.intakeCode)) return intakePlaceholder(err.intakeCode);
       logSafe(`could not cut ${fileName} into segments (${sanitizeProviderError(err)})`);
       // Unknown length and ffmpeg cannot cut it: let the local decoder decide
       // (it reports a decode failure honestly). A known long file is retried.
-      if (duration > 0 || !localEnabled(options)) {
+      if (job.durationSeconds > 0 || !localEnabled(job.options)) {
         logSafe(`transcription unavailable for ${fileName}; providers tried: segmentation(${err?.code || 'failed'})`);
         return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
       }
-      return transcribeLocalWholeFile(filePath, job, tried);
+      return transcribeLocalWholeFile(sourcePath, job, tried);
+    }
+  };
+  if (fileSize > maxBytes || duration > segmentSeconds) return segmentedRun(filePath);
+
+  // Short clip: the FLAC master every OTHER-PROCESS rung receives (never the
+  // uploaded container: .opus/.amr/.mov 400s, whole videos uploaded for their
+  // audio). A local-only clip needs none: whisper.cpp's own decode maps the
+  // track, and the master (tolerant) is built only to repair a failed decode.
+  let source = { path: filePath, mime: normalizedMime, name: fileName };
+  let cloudAllowed = true;
+  let masterTried = false;
+  const vsWanted = providerOrder(options).includes('voicestudio') && (() => {
+    try { const vs = voiceStudioClient(options); return Boolean(vs && typeof vs.isConfigured === 'function' && vs.isConfigured(options)); } catch { return false; }
+  })();
+  const adoptMaster = (master) => {
+    intake.master = 'flac';
+    noteDecode(intake, master.tolerant ? 'tolerant' : 'strict', master.decodeCause);
+    if (master.streamDropped) {
+      // ffmpeg never saw the chosen track: the master holds its default one,
+      // and so does every piece a later cut makes of it (the manifest says so).
+      noteTrackLost(intake, 'default_stream');
+      if (job.audioStreamInfo) job.audioStreamInfo = { ...job.audioStreamInfo, dropped: true };
+    }
+    if (Number(master.durationSeconds) > 0) {
+      // The master's FLAC header is exact: it settles an unknown or wrong length.
+      duration = Number(master.durationSeconds);
+      options = { ...options, durationSeconds: duration };
+      Object.assign(job, { options, durationSeconds: duration });
+    }
+    // The master holds only the chosen track: nothing to map from here on.
+    Object.assign(job, { mapOrdinal: null, localStreamOrdinal: null });
+    source = { path: master.path, mime: CLIP_MASTER_MIME, name: CLIP_MASTER_NAME };
+  };
+  if (cloud.some((provider) => !providerInCooldown(provider)) || vsWanted) {
+    masterTried = true;
+    const master = await buildClipMaster(filePath, { audioStreamOrdinal: trackOrdinal, fileName, durationSeconds: duration }, options);
+    if (master?.dir) clip.dirs.push(master.dir);
+    if (!master?.ok && INTAKE_FATAL_CODES.has(master?.code)) return intakePlaceholder(master.code);
+    if (master?.ok) {
+      adoptMaster(master);
+      if (master.size > maxBytes || duration > segmentSeconds) return segmentedRun(master.path);
+    } else {
+      intake.master = 'raw';
+      if (master?.code === 'ffmpeg_missing') {
+        warnOnce('clip-ffmpeg-missing', 'ffmpeg is not available; short clips go to the providers as uploaded (degraded)');
+      } else if (master?.code === 'decode') {
+        // ffmpeg rejected the media itself: only audio in an accepted
+        // container is still worth an upload.
+        cloudAllowed = rawUploadSafe(normalizedMime, fileName);
+      } else {
+        // A host-side failure (timeout under load, full disk, spawn limits,
+        // empty output) says nothing about the file: as before the master,
+        // every container the providers accept (video/mp4 included) goes up.
+        cloudAllowed = providerAcceptsContainer(fileName);
+      }
     }
   }
 
-  // Short clip: ONE request per rung, exactly as before. Cloud ladder
-  // (OpenAI → Groq → xAI → Meta); `tried` feeds the final summary line
-  // («providers tried: …»).
-  for (const provider of cloud) {
+  // The last rung on the whole clip. A decode of the ORIGINAL that ffmpeg
+  // rejected is repaired once: a tolerant FLAC master, then local again.
+  // Resolves { part } | { placeholder } | { result } (a repaired master that
+  // turned out long went the segmented way).
+  const localWholeFile = async () => {
+    const answer = await localWholeFileAnswer(source.path, job, tried);
+    if (answer.placeholder?.reasonCode !== 'audio_decode_failed' || masterTried || source.path !== filePath) return answer;
+    masterTried = true;
+    const repaired = await buildClipMaster(filePath, {
+      audioStreamOrdinal: trackOrdinal, fileName, durationSeconds: duration, tolerantOnly: true,
+      strictVerdict: job.localDecodeVerdict || 'decode',
+    }, options);
+    if (repaired?.dir) clip.dirs.push(repaired.dir);
+    if (!repaired?.ok) return INTAKE_FATAL_CODES.has(repaired?.code) ? { placeholder: intakePlaceholder(repaired.code) } : answer;
+    adoptMaster(repaired);
+    // The repaired master's FLAC length is often the first right one (a
+    // damaged header lies): a long recording is cut and checkpointed, never
+    // handed to ONE whisper.cpp process.
+    if (repaired.size > maxBytes || duration > segmentSeconds) return { result: await segmentedRun(repaired.path) };
+    return localWholeFileAnswer(source.path, job, tried);
+  };
+
+  // ONE request per rung until one ANSWERS (speech or not): that first answer
+  // is then reviewed — «nothing heard» needs a second opinion that agrees,
+  // a flagged answer gets an alternative hypothesis. `tried` feeds the final
+  // summary line («providers tried: …»).
+  let first = null;
+  if (!cloudAllowed && cloud.length) tried.push('cloud(container)');
+  for (const provider of cloudAllowed ? cloud : []) {
     if (providerInCooldown(provider)) {
       tried.push(`${provider.name}(cooldown)`);
       continue;
     }
     try {
-      const result = await transcribeCloudFile(provider, filePath, normalizedMime, fileName, options, language, prompt);
-      const text = String(result.text || '').trim();
-      if (!hasSpeechText(text)) {
-        return placeholderResult(fileName, label, normalizedMime, 'no_speech');
-      }
-      return formatSuccess({
-        text,
-        method: 'whisper',
-        model: result.model,
-        language: result.language,
-        segments: result.segments,
-        ...singleRequestFields(duration, provider.name, 'cloud'),
-      });
+      const result = await transcribeCloudFile(provider, source.path, source.mime, source.name, options, language, prompt);
+      // The uploaded file (no master): the provider decoded ITS default stream.
+      if (source.path === filePath && intake.streamCount !== 1) noteTrackLost(intake, 'default_stream');
+      first = {
+        text: String(result.text || '').trim(), segments: result.segments, model: result.model, language: result.language,
+        provider: provider.name, method: 'whisper', kind: 'cloud',
+      };
+      break;
     } catch (err) {
       if (isAbortError(err, options.signal)) throw err;
+      if (err?.code === 'xai_stt_empty_transcript') {
+        // A 200 with no text: an answer («nothing heard»), reviewed like one.
+        first = { text: '', segments: [], model: provider.model, language: normalizeLanguage(language) || null, provider: provider.name, method: 'whisper', kind: 'cloud' };
+        break;
+      }
       const safe = sanitizeProviderError(err);
       tried.push(`${provider.name}(${describeProviderError(err)})`);
       if (isInvalidKeyError(err)) {
@@ -2295,48 +4474,124 @@ async function transcribeUnqueued(filePath, mimeType, originalName, options = {}
   // Opt-in: Sira Voz / VoiceStudio (WhisperX large-v3, on this host). List
   // 'voicestudio' in TRANSCRIBE_PROVIDERS to use it before the bundled
   // whisper.cpp base model — better accuracy, slower on CPU, still free.
-  if (providerOrder(options).includes('voicestudio')) {
-    const vsClient = voiceStudioClient(options);
-    if (vsClient.isConfigured(options)) {
+  const vsShort = providerOrder(options).includes('voicestudio') ? buildVoiceStudioRung(options) : null;
+  if (!first && vsShort) {
+    try {
+      const vs = await voiceStudioClient(options).transcribe({ filePath: source.path, filename: source.name, mime: source.mime, language, prompt, signal: options.signal }, options);
+      if (source.path === filePath && intake.streamCount !== 1) noteTrackLost(intake, 'default_stream');
+      first = {
+        text: String(vs?.text || '').trim(), segments: Array.isArray(vs?.segments) ? vs.segments : [], model: 'voicestudio-whisperx',
+        language: vs?.language || language || null, provider: 'voicestudio', method: 'local-whisper', kind: 'local',
+      };
+    } catch (err) {
+      if (isAbortError(err, options.signal)) throw err;
+      tried.push(`voicestudio(${describeProviderError(err)})`);
+      logSafe(`VoiceStudio transcription failed (${sanitizeProviderError(err)}); trying the next provider`);
+    }
+  }
+
+  if (!first) {
+    if (!localEnabled(options)) {
+      logSafe(`transcription unavailable for ${fileName}; providers tried: ${tried.join(' ') || 'none'} local(disabled)`);
+      return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
+    }
+
+    // Unknown length: never hand a possibly multi-hour file to ONE whisper
+    // process (no checkpoints, ~2 GB of RAM). Cut it; if ffmpeg cannot, the
+    // local decoder gets the whole file as before.
+    if (!(duration > 0)) {
       try {
-        const vs = await vsClient.transcribe({ filePath, filename: fileName, mime: normalizedMime, language, prompt, signal: options.signal }, options);
-        const text = String(vs?.text || '').trim();
-        if (hasSpeechText(text)) {
-          return formatSuccess({
-            text,
-            method: 'local-whisper',
-            model: 'voicestudio-whisperx',
-            language: vs.language || language || null,
-            segments: vs.segments,
-            ...singleRequestFields(duration, 'voicestudio', 'local'),
-          });
-        }
-        tried.push('voicestudio(no_speech)');
-        logSafe('VoiceStudio transcription returned no speech; trying the next provider');
+        const assembled = await runSegmentedJob(source.path, { ...job, rungs: [LOCAL_RUNG], tried });
+        applyCutInfo(intake, assembled.cutInfo);
+        return finalizeSegmentedResult(assembled, job);
       } catch (err) {
-        if (isAbortError(err, options.signal)) throw err;
-        tried.push(`voicestudio(${describeProviderError(err)})`);
-        logSafe(`VoiceStudio transcription failed (${sanitizeProviderError(err)}); trying the next provider`);
+        if (isAbortError(err, options.signal) || !err?.segmentationFailed) throw err;
+        if (INTAKE_FATAL_CODES.has(err.intakeCode)) return intakePlaceholder(err.intakeCode);
+        // The cut already tried a tolerant decode: the repair would only repeat it.
+        if (err.code === 'SEGMENT_FAILED') masterTried = true;
       }
     }
+    const local = await localWholeFile();
+    if (local.result) return local.result;
+    if (local.placeholder) return local.placeholder;
+    first = local.part;
   }
 
-  if (!localEnabled(options)) {
-    logSafe(`transcription unavailable for ${fileName}; providers tried: ${tried.join(' ') || 'none'} local(disabled)`);
+  return reviewShortClip(first, {
+    options, fileName, label, normalizedMime, language, prompt, duration, segmentSeconds,
+    source, sourceIsOriginal: source.path === filePath, localStreamOrdinal: job.localStreamOrdinal,
+    rungs: [...(cloudAllowed ? cloud : []), ...(vsShort ? [vsShort] : []), ...(localEnabled(options) ? [LOCAL_RUNG] : [])],
+  });
+}
+
+/**
+ * The short clip's review (C4): the first answer is ONE piece of the quality
+ * loop. «Nothing heard» always gets a second opinion (the next rungs, then
+ * the same rung on an enhanced copy) and is `no_speech` only when it agrees
+ * (or when no second opinion exists at all: today's behaviour, logged).
+ * Second opinions that were asked and all failed are not agreement: the clip
+ * ends `local_unavailable` (transient), so the queue tries again.
+ */
+async function reviewShortClip(firstPart, ctx) {
+  const { options, fileName, label, normalizedMime, language, prompt, duration, rungs } = ctx;
+  const jc = createJobContext({
+    options,
+    signal: options.signal || new AbortController().signal,
+    rungs,
+    prompt,
+    mediaDurationSeconds: duration > 0 ? duration : null,
+    segmentSeconds: ctx.segmentSeconds,
+    sleep: typeof options.sleep === 'function' ? options.sleep : undefined,
+    now: typeof options.now === 'function' ? options.now : undefined,
+    pieces: 1,
+    escalationRungs: escalationRungs(options, rungs),
+  });
+  const piece = {
+    path: ctx.source.path, mime: ctx.source.mime, name: ctx.source.name, index: 0, offsetSeconds: 0,
+    durationSeconds: duration > 0 ? duration : null, spanSeconds: duration > 0 ? duration : null,
+    // The original file (no master): every decode maps the chosen track.
+    streamOrdinal: ctx.sourceIsOriginal ? streamOrdinalOf(ctx.localStreamOrdinal) : null,
+  };
+  const reviewed = await reviewPiece(piece, firstPart, jc, language, {
+    producerIndex: rungs.findIndex((rung) => rung.name === firstPart.provider),
+    alwaysSecondOpinion: true,
+    forced: Boolean(refineWindow(options)),
+  });
+  if (!reviewed.part) {
+    logSafe(`no second opinion answered for the empty first answer on ${fileName} (${reviewed.gap?.reason || 'provider_error'}); not concluding «no speech», retry later`);
     return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
   }
-
-  // Unknown length: never hand a possibly multi-hour file to ONE whisper
-  // process (no checkpoints, ~2 GB of RAM). Cut it; if ffmpeg cannot, the
-  // local decoder gets the whole file as before.
-  if (!(duration > 0)) {
-    try {
-      return finalizeSegmentedResult(await runSegmentedJob(filePath, { ...job, rungs: [LOCAL_RUNG], tried }), job);
-    } catch (err) {
-      if (isAbortError(err, options.signal) || !err?.segmentationFailed) throw err;
-    }
+  const chosen = reviewed.part;
+  const review = chosen.review || {};
+  const text = String(chosen.text || '').trim();
+  if (review.empty === true || !hasSpeechText(text)) {
+    if (review.confirmedEmpty) logInfo(`no speech in ${fileName}: confirmed by a second opinion (${(review.engines || []).length} engines)`);
+    return placeholderResult(fileName, label, normalizedMime, 'no_speech');
   }
-  return transcribeLocalWholeFile(filePath, job, tried);
+  const segments = normalizeSegments(chosen.segments);
+  const report = quality.summarizeQuality({
+    pieces: [{
+      start: 0, end: duration > 0 ? duration : 0, covered: true, score: review.score, engine: review.engine || engineLabelOf(chosen),
+      lowConfidence: Array.isArray(review.lowConfidence) ? review.lowConfidence : [],
+      disagreement: review.disagreement === true, confirmedEmpty: false, unconfirmedEmpty: review.unconfirmedEmpty === true,
+      reviewed: reviewAnswered(review),
+    }],
+    segments,
+    escalations: review.escalations,
+    basicLocalOnly: chosen.provider === 'local' && isBasicLocalModel(chosen.model),
+    capBasicLevel: !hasConfidence(segments),
+  });
+  if (report.escalations) logInfo(`short clip ${fileName}: quality ${report.level || '?'} ${report.score ?? '?'} after ${report.escalations} alternative hypotheses`);
+  const kind = chosen.kind || kindOfProvider(chosen.provider);
+  return formatSuccess({
+    text,
+    method: chosen.method || (kind === 'local' ? 'local-whisper' : 'whisper'),
+    model: chosen.model || (chosen.provider === 'local' ? 'base' : null),
+    language: chosen.language || language || null,
+    segments: chosen.segments,
+    ...singleRequestFields(duration, chosen.provider || inferProvider(chosen), kind),
+    quality: report,
+  });
 }
 
 // Shared admission control also covers uploads and agent-task recovery calls.
@@ -2353,22 +4608,68 @@ function identity(value) {
   return identityIds.get(value);
 }
 
+// The media queue's short lane (options.lane === 'short': ≤ 15-min jobs) has
+// its own slot, so a voice note never waits behind two 5-hour lectures that
+// hold both shared slots. It also takes a shared slot when one is free.
+let activeShortLane = 0;
+function shortLaneConcurrency() {
+  const n = Number.parseInt(process.env.TRANSCRIBE_SHORT_LANE_CONCURRENCY || '', 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(4, n) : 1;
+}
+
+// Interactive callers (dictation, transcribe_url inline clips, the runner's
+// transcribe_audio) wait on a person in a chat turn. They pass
+// options.lane === 'interactive' and get a slot that queue jobs never take,
+// so two long lectures can never hold a dictation for hours.
+let activeInteractiveLane = 0;
+function interactiveLaneConcurrency() {
+  const n = Number.parseInt(process.env.TRANSCRIBE_INTERACTIVE_LANE_CONCURRENCY || '', 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(4, n) : 1;
+}
+
+function normalizeLane(lane) {
+  return lane === 'short' || lane === 'interactive' ? lane : null;
+}
+
+function startTranscription(job, pool) {
+  if (pool === 'short') activeShortLane++;
+  else if (pool === 'interactive') activeInteractiveLane++;
+  else activeTranscriptions++;
+  Promise.resolve().then(job.run).then(job.resolve, job.reject).finally(() => {
+    if (pool === 'short') activeShortLane--;
+    else if (pool === 'interactive') activeInteractiveLane--;
+    else activeTranscriptions--;
+    drainTranscriptions();
+  });
+}
+
 function drainTranscriptions() {
-  while (activeTranscriptions < TRANSCRIPTION_CONCURRENCY && transcriptionQueue.length) {
-    const job = transcriptionQueue.shift();
+  for (let i = 0; i < transcriptionQueue.length;) {
+    const job = transcriptionQueue[i];
+    if (job.signal.aborted) {
+      transcriptionQueue.splice(i, 1);
+      job.signal.removeEventListener('abort', job.onAbort);
+      job.reject(abortError());
+      continue;
+    }
+    let pool = null;
+    if (activeTranscriptions < TRANSCRIPTION_CONCURRENCY) pool = 'shared';
+    else if (job.lane === 'short' && activeShortLane < shortLaneConcurrency()) pool = 'short';
+    else if (job.lane === 'interactive' && activeInteractiveLane < interactiveLaneConcurrency()) pool = 'interactive';
+    if (!pool) {
+      // FIFO among long work; a short-lane job further back may still have its slot.
+      i++;
+      continue;
+    }
+    transcriptionQueue.splice(i, 1);
     job.signal.removeEventListener('abort', job.onAbort);
-    if (job.signal.aborted) { job.reject(abortError()); continue; }
-    activeTranscriptions++;
-    Promise.resolve().then(job.run).then(job.resolve, job.reject).finally(() => {
-      activeTranscriptions--;
-      drainTranscriptions();
-    });
+    startTranscription(job, pool);
   }
 }
 
-function enqueueTranscription(run, signal) {
+function enqueueTranscription(run, signal, lane = null) {
   return new Promise((resolve, reject) => {
-    const job = { run, signal, resolve, reject };
+    const job = { run, signal, resolve, reject, lane: normalizeLane(lane) };
     job.onAbort = () => {
       const index = transcriptionQueue.indexOf(job);
       if (index >= 0) transcriptionQueue.splice(index, 1);
@@ -2386,19 +4687,24 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
   // Explicitly cancellable jobs own their signal and durable claim. Do not
   // couple independently cancelled jobs through single-flight; unsignalled
   // legacy upload calls still share work below.
-  if (options.signal) return enqueueTranscription(() => transcribeUnqueued(filePath, mimeType, originalName, options), options.signal);
+  if (options.signal) return enqueueTranscription(() => transcribeUnqueued(filePath, mimeType, originalName, options), options.signal, options.lane);
   const stat = await fsPromises.stat(filePath).catch(() => null);
   throwIfAborted(options.signal);
   // Include configuration identity as well as file revision. Never share a
   // result across explicitly different injected clients/settings. No permanent
   // cache: persistence and access checks are owned by the File/job layer.
   const key = JSON.stringify([path.resolve(filePath), stat?.size, stat?.mtimeMs,
-    normalizeAudioMime(mimeType, originalName), originalName, resolveLanguage(options), options.prompt || envOf(options).WHISPER_PROMPT,
-    normalizeKeyterms(options.keyterms), options.parallel, options.minCoverage,
+    normalizeAudioMime(mimeType, originalName), originalName, options.language, resolveLanguage(options), options.prompt || envOf(options).WHISPER_PROMPT,
+    promptTerms(options), streamOrdinalOf(options.audioStreamOrdinal), options.parallel, options.minCoverage,
     providerOrder(options), options.model, options.maxFileBytes, options.durationSeconds, options.segmentSeconds,
     options.ffmpegPath, options.ffprobePath, options.whisperBin, options.modelPath, options.pythonPath, options.threads, options.timeoutMs,
+    // Quality loop (G1b): a refine window, hints, budgets and its injectables.
+    refineWindow(options), options.hints?.speakers ?? null, options.hints?.verbatim ?? null, options.qualityLoop,
+    escalationProviderNames(options), options.ffmpegFilters ? Array.from(options.ffmpegFilters) : null,
     ...['env', 'openai', 'groqClient', 'metaClient', 'localTranscribe', 'xaiTranscribe', 'voiceStudio', 'segmentAudio', 'probeAudioDuration', 'spawnImpl', 'createFile',
-      'execFileImpl', 'detectSilences', 'concatAudio', 'sleep', 'checkpoint'].map((k) => identity(options[k])),
+      'execFileImpl', 'detectSilences', 'concatAudio', 'sleep', 'checkpoint', 'mediaProbe', 'probeMediaStreams', 'transcodeClip',
+      'estimateSilenceThreshold', 'detectProtectedAudio', 'measureVoiced', 'buildVariant', 'elevenlabsClient', 'now',
+      'whisperCapabilities', 'whisperHelpImpl'].map((k) => identity(options[k])),
   ]);
   let entry = inFlight.get(key);
   if (entry?.controller.signal.aborted) entry = null;
@@ -2409,7 +4715,7 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
     entry.promise = enqueueTranscription(() => transcribeUnqueued(filePath, mimeType, originalName, {
       ...options, signal: current.controller.signal,
       onProgress: (event) => { for (const subscriber of current.subscribers) emitProgress(subscriber.options, event); },
-    }), entry.controller.signal);
+    }), entry.controller.signal, options.lane);
     const cleanup = () => { if (inFlight.get(key) === current) inFlight.delete(key); };
     entry.promise.then(cleanup, cleanup);
   }
@@ -2424,6 +4730,8 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
 
 module.exports = {
   isAudioMedia,
+  // Admission gate, exported for tests of the lanes (shared / short / interactive).
+  _enqueueTranscription: enqueueTranscription,
   probeAudioDuration,
   parseProgressDuration,
   TRANSCRIPTION_CONCURRENCY,
@@ -2462,6 +4770,35 @@ module.exports = {
   normalizeLanguage,
   resolveLanguage,
   resolvePrompt,
+  // Quality loop (C4, G1b).
+  reviewPiece,
+  createJobContext,
+  refineWindow,
+  escalationRungs,
+  escalationProviderNames,
+  elevenLabsRung,
+  transcribeWithElevenLabs,
+  ffmpegFilterSet,
+  parseFfmpegFilters,
+  buildVariantFile,
+  measurePieceEnergy,
+  classifyRungError,
+  VARIANT_FILTERS,
+  REVIVAL_DELAYS_MS,
+  LAST_RUNG_BACKOFF_MS,
+  // Intake (C4, G1a): helpers shared with the queue and covered by tests.
+  isSupportedLanguage,
+  isDeviceIdentifier,
+  promptTerms,
+  classifyMediaFailure,
+  estimateSilenceThreshold,
+  silenceThresholdFromPeaks,
+  framePeaks,
+  planOf,
+  buildClipMaster,
+  cutAndMeasure,
+  mp4AudioProtection,
+  WHISPER_LANGUAGES,
   isAbortError,
   isInvalidKeyError,
   hasOpenAiKey,

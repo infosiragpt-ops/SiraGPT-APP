@@ -355,4 +355,13 @@ function renderTreeNode(node, prefix, lines) {
 
 // ── Public API ──────────────────────────────────────────────────
 
-module.exports = { parseZip };
+// The guards are shared with archive-media-expander, which extracts the
+// audio, video and image members of the same upload as child files.
+module.exports = {
+  parseZip,
+  listZipEntries,
+  isUnsafeEntryName,
+  escapeUnzipPattern,
+  MAX_TOTAL_UNCOMPRESSED_BYTES,
+  MAX_COMPRESSION_RATIO,
+};

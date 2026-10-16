@@ -106,3 +106,23 @@ test('the engine gives an xAI segment a timeout scaled to its length and keeps i
   assert.deepEqual(result.segments.map((s) => s.start), [2, 602]);
   assert.deepEqual(result.providers, { xai: 2 });
 });
+
+test('word probabilities become a segment confidence; spacing and audio events are not words', () => {
+  const segments = xai.segmentsFromPayload({
+    words: [
+      { text: 'Hola', start: 0, end: 0.4, type: 'word', logprob: -0.1 },
+      { text: ' ', start: 0.4, end: 0.5, type: 'spacing', logprob: 0 },
+      { text: '(risas)', start: 0.5, end: 1.2, type: 'audio_event', logprob: -0.01 },
+      { text: 'clase.', start: 1.2, end: 1.6, type: 'word', logprob: -0.5 },
+      { text: 'Bien', start: 3, end: 3.3, confidence: 0.8, speakerId: 'speaker_1' },
+    ],
+  });
+  assert.deepEqual(segments, [
+    { start: 0, end: 1.6, text: 'Hola clase.', confidence: Math.round(Math.exp((-0.1 - 0.5) / 2) * 1000) / 1000 },
+    { start: 3, end: 3.3, text: 'Bien', speaker: 'speaker_1', confidence: 0.8 },
+  ]);
+  assert.equal(xai.wordProbability({ logprob: 2 }), 1, 'a positive logprob is capped at p = 1');
+  assert.equal(xai.wordProbability({}), null);
+  const timed = xai.segmentsFromPayload({ segments: [{ start: 0, end: 2, text: 'hola', avg_logprob: -0.2 }, { start: 2, end: 3, text: 'sí', confidence: 0.4 }] });
+  assert.deepEqual(timed, [{ start: 0, end: 2, text: 'hola', avg_logprob: -0.2 }, { start: 2, end: 3, text: 'sí', confidence: 0.4 }]);
+});

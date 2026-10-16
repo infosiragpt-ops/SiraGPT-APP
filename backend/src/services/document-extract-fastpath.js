@@ -261,7 +261,15 @@ async function tryPdftotext(filePath, opts = {}) {
       .filter((p) => p.text.trim())
       .map((p) => `\n[page ${p.page}]\n${p.text}`)
       .join('');
-    return { used: true, reason: 'pdftotext', text, ...split };
+    // Text-layer quality: «has ≥ 20 characters» is not «has text». A layer of
+    // stamps / page numbers only, or a broken one ((cid:NN), U+FFFD,
+    // mojibake), still needs OCR — the caller reads `textLayer.kind`
+    // ('text' | 'mixed' | 'scanned') and `textLayer.ocrPages`.
+    let textLayer = null;
+    try {
+      textLayer = require('./document/mixed-pdf').planTextLayerOcr(split.pages);
+    } catch { textLayer = null; }
+    return { used: true, reason: 'pdftotext', text, ...split, textLayer };
   } catch (err) {
     const reason = err && err.code === 'ENOENT' ? 'unavailable' : (err?.message || 'failed');
     return { used: false, reason, pages: [], text: '', totalChars: 0 };

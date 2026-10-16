@@ -25,10 +25,12 @@ test('ogg / opus / application-ogg mimes are accepted', () => {
   assert.ok(audioTranscriber.AUDIO_MIME_MAP['application/ogg']);
 });
 
-test('default language hint is es when WHISPER_LANGUAGE is unset', () => {
+test('no language is forced without an explicit one (WHISPER_LANGUAGE only locks long jobs)', () => {
   const env = { ...process.env };
   delete env.WHISPER_LANGUAGE;
-  assert.equal(audioTranscriber.resolveLanguage({ env }), 'es');
+  assert.equal(audioTranscriber.resolveLanguage({ env }), undefined);
+  assert.equal(audioTranscriber.resolveLanguage({ env: { WHISPER_LANGUAGE: 'es' }, durationSeconds: 20 }), undefined);
+  assert.equal(audioTranscriber.resolveLanguage({ env, language: 'es-PE' }), 'es');
 });
 
 test('no OPENAI_API_KEY uses the local path, not a missing-key placeholder', async (t) => {
@@ -184,7 +186,7 @@ test('a recording above the cloud cap is segmented, transcribed on Meta and stit
   assert.equal(requests[0].file.name, 'segment-1.mp3');
   assert.equal(requests[0].file.mime, 'audio/mpeg');
   assert.equal(requests[0].response_format, 'json', 'Meta gets the plain json shape');
-  assert.equal(requests[0].language, 'es');
+  assert.equal(requests[0].language, undefined, 'an unknown length is auto-detected, not forced to the hint');
   assert.match(result.text, /parte 1[\s\S]*parte 2[\s\S]*parte 3/);
   assert.deepEqual(result.segments.map((s) => s.start), [0, 600, 1200]);
 });

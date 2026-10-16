@@ -10,6 +10,19 @@
 // transcript, its downloads and any requested analysis into the origin chat,
 // and sends an in-app + web-push notification.
 //
+// The message carries the honest report of each file (contract C6): its
+// quality level, coverage and engines, the doubtful stretches, where the
+// text came from (voice, the video's subtitles, the text on screen) and the
+// notes the engine left, on the recording's clock and cut to the requested
+// window like the downloads.
+//
+// A record of kind 'refine' («revisa del minuto 12 al 15, se escuchó mal»)
+// posts one file's corrected window, «Corregí el tramo 00:12:00–00:15:00»,
+// with the updated files. Its file is already ready, so it waits for the
+// refine job's outcome (onMediaTerminal with `refine: true`), not for the
+// file; a missed report is covered by the file's own state after a grace
+// period, and the 24 h ceiling answers honestly.
+//
 // Every side effect is injected (tests use fakes only); the defaults lazily
 // require the real modules so this file can be required from the media queue
 // and the agent-task runner without load-order cycles.
@@ -34,6 +47,12 @@ const DEFAULT_INLINE_WAIT_MS = 240000;
 // holding the delivery forever (a media job may take 3 attempts × 12 h).
 const PENDING_CEILING_MS = 24 * 60 * 60 * 1000;
 const SWEEP_OLD_INTERVAL_MS = 60 * 60 * 1000;
+// A refine whose outcome report never arrived (a crash between the sidecar
+// write and the hook) is posted from the file's state once the file was
+// rewritten after the request and this long has passed.
+const REFINE_HOOK_GRACE_MS = 30 * 60 * 1000;
+// Two windows within half a second are the same window (the queue rounds to ms).
+const RANGE_MATCH_TOLERANCE_SEC = 0.5;
 const MAX_PER_SWEEP = 20;
 const PREVIEW_CHARS = 4000;
 const PREVIEW_FILES = 3;
@@ -384,6 +403,20 @@ function previewSource(row, view) {
   return view.sliced ? '(Sin voz transcrita en este tramo.)' : row?.extractedText;
 }
 
+/**
+ * The stored text of a transcript that does not come from the voice opens
+ * with its source note in parentheses («(El video no tiene audio; …)»);
+ * the report above the preview already says it, so the preview drops it.
+ */
+function stripLeadingSourceNote(text, transcript) {
+  const value = String(text || '');
+  for (const note of Array.isArray(transcript?.quality?.notes) ? transcript.quality.notes : []) {
+    const prefix = `(${note})`;
+    if (note && value.startsWith(prefix)) return value.slice(prefix.length).replace(/^\s+/, '');
+  }
+  return value;
+}
+
 function fileDetails(row, transcript, delivery, view = null) {
   const parts = [];
   const duration = formatDuration(transcript?.durationSec);
@@ -444,14 +477,145 @@ function missingPartsSentence(row, transcript, delivery, view = null) {
   return detail ? `No se pudieron transcribir algunos tramos (${detail}).` : 'No se pudieron transcribir algunos tramos.';
 }
 
+// ── honest quality report (contract C6) ──────────────────────────────
+
+function artifactsModule() {
+  try { return require('./media-transcript-artifacts'); } catch (_) { return null; }
+}
+
+/**
+ * The file as the delivery shows it (recording clock, requested window),
+ * whether or not the delivery has a range or an offset: the report needs
+ * the transcript's quality, source and side texts in every case.
+ */
+function reportViewOf(row, transcript, delivery) {
+  if (!transcript) return null;
+  const pack = artifactsModule();
+  if (!pack?.transcriptView) return null;
+  try { return pack.transcriptView(row, transcript, viewOutput(delivery)); } catch (_) { return null; }
+}
+
+// ── what the downloads are (roles survive the artifact store's renaming) ──
+
+const TRANSCRIPT_FILE_FORMATS = new Set(['txt', 'docx', 'pdf']);
+const SUBTITLE_FILE_FORMATS = new Set(['srt', 'vtt']);
+
+function artifactFormatOf(artifact) {
+  const name = String(artifact?.filename || '');
+  return String(artifact?.format || (name.includes('.') ? name.split('.').pop() : '') || '').toLowerCase();
+}
+
+/**
+ * The role of a file the transcript builder produced: its own tag
+ * (media-transcript-artifacts tags every deliverable), else read from its
+ * format (a builder that tags nothing): TXT/Word/PDF are the transcript.
+ */
+function transcriptSpecRole(spec) {
+  if (typeof spec?.role === 'string' && spec.role) return spec.role;
+  const format = artifactFormatOf(spec);
+  if (TRANSCRIPT_FILE_FORMATS.has(format)) return 'transcript';
+  if (SUBTITLE_FILE_FORMATS.has(format)) return 'subtitles';
+  return null;
+}
+
+function withRole(spec, role) {
+  return role && spec && typeof spec === 'object' && spec.role !== role ? { ...spec, role } : spec;
+}
+
+/**
+ * Whether the message carries the transcript TXT/Word/PDF (not only a
+ * translation or nothing). Untagged lists (direct callers) are read by format.
+ */
+function transcriptFilesIn(artifacts) {
+  const list = (Array.isArray(artifacts) ? artifacts : []).filter(artifact => artifact?.filename);
+  if (list.some(artifact => typeof artifact.role === 'string')) return list.some(artifact => artifact.role === 'transcript');
+  return list.some(artifact => TRANSCRIPT_FILE_FORMATS.has(artifactFormatOf(artifact)));
+}
+
+/** «clase (subtítulos).srt» as the artifact store saves it (task-tools.sanitizeArtifactFilename). */
+function storedArtifactName(name) {
+  return String(name || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+/** Whether the downloads carry the file's embedded subtitle track as its own SRT. */
+function embeddedTrackAttached(row, delivery, artifacts) {
+  const list = (Array.isArray(artifacts) ? artifacts : []).filter(artifact => artifact?.filename);
+  if (list.some(artifact => artifact.role === 'embedded_subtitles' && (!artifact.sourceFileId || artifact.sourceFileId === row?.id))) return true;
+  const pack = artifactsModule();
+  if (!pack?.embeddedSubtitlesName) return false;
+  let name;
+  try { name = pack.embeddedSubtitlesName(row, rangeOf(delivery)); } catch (_) { return false; }
+  const stored = storedArtifactName(name);
+  return list.some(artifact => artifact.filename === name || artifact.filename === stored);
+}
+
+/**
+ * The quality report of one usable file, or null for a transcript without
+ * one (an older sidecar keeps today's message exactly). `coverageShown`:
+ * the details line already printed the coverage (partial files).
+ * `transcriptFilesAttached`: the message carries the transcript files
+ * (default: read from `artifacts`).
+ */
+function qualityReportFor(row, transcript, delivery, { artifacts = [], coverageShown = false, transcriptFilesAttached = null } = {}) {
+  const view = reportViewOf(row, transcript, delivery);
+  if (!view?.result) return null;
+  const outside = spanOutsideRange(delivery, view);
+  const emptyWindow = Boolean(view.sliced) && !view.result.segments.length && !view.result.gaps.length;
+  const pack = artifactsModule();
+  let report = null;
+  try {
+    report = pack.transcriptQualityReport(view.result, { includeCoverage: !coverageShown && !outside && !emptyWindow,
+      embeddedAttached: embeddedTrackAttached(row, delivery, artifacts),
+      transcriptFilesAttached: typeof transcriptFilesAttached === 'boolean' ? transcriptFilesAttached : transcriptFilesIn(artifacts) });
+  } catch (_) { report = null; }
+  if (!report?.hasReport) return null;
+  return { ...report, view };
+}
+
+/** «revisa del minuto 12 al 14»: an example built from the first doubtful stretch. */
+function refineExample(report) {
+  const first = report?.view?.result?.quality?.lowConfidence?.[0];
+  const start = Number(first?.start);
+  const end = Number(first?.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 'revisa del minuto 12 al 15';
+  const from = Math.floor(start / 60);
+  const to = Math.max(from + 1, Math.ceil(end / 60));
+  return `revisa del minuto ${from} al ${to}`;
+}
+
+/** The report as chat blocks: the line, the doubtful stretches, the notes and the repair hint. */
+function qualityBlocks(report) {
+  if (!report) return [];
+  const blocks = [];
+  if (report.line) blocks.push(escapeChatMarkdown(report.line));
+  if (report.doubtful) blocks.push(`Tramos dudosos: ${escapeChatMarkdown(report.doubtful)}`);
+  if (report.notes.length) blocks.push(report.notes.map(note => escapeChatMarkdown(cleanReason(note, 300))).join(' '));
+  if (report.doubtfulCount && !report.authored) {
+    blocks.push(`Si algún tramo se escuchó mal, dime «${refineExample(report)}» (y los nombres que esperas) y lo vuelvo a transcribir.`);
+  }
+  return blocks;
+}
+
+/** « · calidad media · 2 tramos dudosos · desde el texto en pantalla» for a batch line, or ''. */
+function qualitySuffix(report) {
+  if (!report) return '';
+  const parts = [];
+  if (report.level) parts.push(`calidad ${report.level}`);
+  if (report.doubtfulCount) parts.push(`${report.doubtfulCount} ${report.doubtfulCount === 1 ? 'tramo dudoso' : 'tramos dudosos'}`);
+  if (report.sourceShort) parts.push(report.sourceShort);
+  return parts.length ? ` · ${parts.join(' · ')}` : '';
+}
+
 /**
  * Spanish chat message for a finished delivery: headline, per-file status
- * (gaps for partial files, reasons for failures), the analysis or a
- * preview, the downloads and the retry hint.
+ * (gaps for partial files, reasons for failures), the quality report, the
+ * analysis or a preview, the downloads and the retry hint.
  */
 function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false,
-  analysisNotes = [], translationFailed = [], summaryText = '', summaryFailed = false } = {}) {
+  analysisNotes = [], translationFailed = [], summaryText = '', summaryFailed = false, transcriptFilesAttached = null } = {}) {
   const list = Array.isArray(rows) ? rows : [];
+  // The report may point at a section of the transcript files only when they are attached.
+  const filesAttached = typeof transcriptFilesAttached === 'boolean' ? transcriptFilesAttached : transcriptFilesIn(artifacts);
   const counts = summarizeStates(list);
   const single = list.length === 1;
   const blocks = [];
@@ -474,6 +638,11 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
     }[state]);
     const details = fileDetails(row, transcriptOf(row), delivery, viewFor(row));
     if (details.length && (state === 'ready' || state === 'partial')) blocks.push(details.join(' · '));
+    if (state === 'ready' || state === 'partial') {
+      const coverageShown = details.some(part => part.startsWith('cobertura '));
+      blocks.push(...qualityBlocks(qualityReportFor(row, transcriptOf(row), delivery, { artifacts, coverageShown,
+        transcriptFilesAttached: filesAttached })));
+    }
     const outside = spanOutsideRange(delivery, viewFor(row));
     if (state === 'partial') blocks.push(missingPartsSentence(row, transcriptOf(row), delivery, viewFor(row)));
     else if (state === 'ready' && outside) blocks.push(outsideRecordingSentence(delivery, outside));
@@ -499,7 +668,9 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
       if (state === 'ready') {
         const details = fileDetails(row, transcript, delivery, viewFor(row));
         const where = outside ? ` · el tramo pedido ${outsideRecordingDetail(delivery, outside).where}` : '';
-        return `- ${name}: lista${details.length ? ` · ${details.join(' · ')}` : ''}${where}`;
+        const quality = qualitySuffix(qualityReportFor(row, transcript, delivery, { artifacts, coverageShown: true,
+          transcriptFilesAttached: filesAttached }));
+        return `- ${name}: lista${details.length ? ` · ${details.join(' · ')}` : ''}${quality}${where}`;
       }
       if (state === 'partial') {
         const gaps = visibleGaps(transcript, delivery);
@@ -508,7 +679,9 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
           return `- ${name}: tramo pedido completo (faltan otros tramos de la grabación)`;
         }
         const detail = gaps.length ? `faltan ${formatGaps(gaps, 4)}` : (partialDetail(row) || 'faltan algunos tramos');
-        return `- ${name}: parcial (${detail})`;
+        const quality = qualitySuffix(qualityReportFor(row, transcript, delivery, { artifacts, coverageShown: true,
+          transcriptFilesAttached: filesAttached }));
+        return `- ${name}: parcial (${detail})${quality}`;
       }
       if (state === 'failed') return `- ${name}: no se pudo transcribir${row?.processingError ? ` (${cleanReason(row.processingError, 120)})` : ''}`;
       return `- ${name}: sigue en la cola`;
@@ -551,7 +724,7 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
     const budget = Math.floor(PREVIEW_CHARS / shown.length);
     let truncated = usable.length > shown.length;
     const pieces = shown.map(row => {
-      const cut = cutAtParagraph(previewSource(row, viewFor(row)), budget);
+      const cut = cutAtParagraph(stripLeadingSourceNote(previewSource(row, viewFor(row)), transcriptOf(row)), budget);
       truncated = truncated || cut.truncated;
       const body = escapeChatMarkdown(cut.text);
       return single ? body : `#### ${escapeChatMarkdown(quoteName(displayName(row, delivery, list.indexOf(row))))}\n\n${body}`;
@@ -580,8 +753,201 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
   return blocks.filter(Boolean).join('\n\n');
 }
 
+// ── refine (contract C6) ───────────────────────────────────────────────
+
+function isRefineRecord(record) {
+  return record?.kind === 'refine';
+}
+
+/** «00:12:00–00:15:00»: a refined window always prints hh:mm:ss. */
+function refineRangeLabel(range) {
+  if (!range || !Number.isFinite(Number(range.start))) return '';
+  const end = range.end == null ? null : Number(range.end);
+  return end == null ? `desde ${formatClock(range.start, true)}` : `${formatClock(range.start, true)}–${formatClock(end, true)}`;
+}
+
+function sameRange(a, b) {
+  if (!a || !b) return false;
+  const end = value => (value == null ? null : Number(value));
+  const close = (x, y) => (x == null || y == null ? x === y : Math.abs(x - y) <= RANGE_MATCH_TOLERANCE_SEC);
+  return close(Number(a.start), Number(b.start)) && close(end(a.end), end(b.end));
+}
+
+/**
+ * The media queue's dedup key of a refine request (refineJobIdFor): the
+ * window to the millisecond, the language and the normalized hints. Two
+ * records with the same key were served by the same job.
+ */
+function refineJobKeyOf(record) {
+  const ms = value => (value == null || !Number.isFinite(Number(value)) ? null : Math.round(Number(value) * 1000) / 1000);
+  const hints = record?.hints && typeof record.hints === 'object' && !Array.isArray(record.hints) ? record.hints : null;
+  let language = null;
+  let normalized = null;
+  try {
+    const fmt = require('./media-transcript-format');
+    language = fmt.normalizeHintLanguage(record?.language) || (hints ? fmt.normalizeHintLanguage(hints.language) : null) || null;
+    normalized = fmt.normalizeMediaHints(hints) || null;
+  } catch (_) {
+    language = typeof record?.language === 'string' ? record.language.toLowerCase() : null;
+    normalized = hints;
+  }
+  return JSON.stringify([ms(record?.range?.start), ms(record?.range?.end), language, normalized]);
+}
+
+function rangesOverlap(a, b) {
+  if (!a || !b) return false;
+  const aEnd = a.end == null ? Infinity : Number(a.end);
+  const bEnd = b.end == null ? Infinity : Number(b.end);
+  return Number(a.start) < bEnd && Number(b.start) < aEnd;
+}
+
+function toMs(value) {
+  if (value == null || value === '') return NaN;
+  const ms = value instanceof Date ? value.getTime() : Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+/** The file row was rewritten (a job finished) after the refine was requested. */
+function rewrittenSince(row, record) {
+  const stageAt = toMs(row?.processingStageAt);
+  const createdAt = toMs(record?.createdAt);
+  return Number.isFinite(stageAt) && Number.isFinite(createdAt) && stageAt > createdAt;
+}
+
+/**
+ * A refine record still waiting for its job's outcome. It stops waiting
+ * when the worker reported one, when its file is gone or failed (nothing
+ * to wait for), or when the outcome report was evidently missed: the file
+ * was rewritten after the request and REFINE_HOOK_GRACE_MS have passed.
+ */
+function awaitingRefineOutcome(record, row, nowMs, graceMs = REFINE_HOOK_GRACE_MS) {
+  if (!isRefineRecord(record)) return false;
+  if (record.refine?.status === 'ok' || record.refine?.status === 'failed') return false;
+  if (!row || row.missing || row.deletedAt || row.processingStage === 'failed') return false;
+  const createdAt = toMs(record.createdAt);
+  if (Number.isFinite(createdAt) && nowMs - createdAt >= graceMs && rewrittenSince(row, record)) return false;
+  return true;
+}
+
+/**
+ * What to post for a refine: the reported outcome, else one inferred from
+ * the file (`inferred: true` — the copy then claims no correction).
+ */
+function resolveRefineOutcome(record, row) {
+  const stored = record?.refine;
+  if (stored?.status === 'ok' || stored?.status === 'failed') {
+    return { status: stored.status, unchanged: stored.unchanged === true, code: stored.code || null, inferred: false };
+  }
+  if (row && !row.missing && !row.deletedAt && row.processingStage !== 'failed' && rewrittenSince(row, record)) {
+    return { status: 'ok', unchanged: false, code: null, inferred: true };
+  }
+  return { status: 'failed', unchanged: false, code: 'refine_timeout', inferred: true };
+}
+
+const REFINE_FAILURE_ES = Object.freeze({
+  refine_not_ready: 'la transcripción de este archivo todavía no estaba lista',
+  refine_untimed: 'el motor no devolvió marcas de tiempo para ese tramo',
+  invalid_range: 'el tramo queda fuera de la grabación',
+  no_speech: 'no se detectó voz en ese tramo',
+  refine_timeout: 'la corrección no terminó a tiempo',
+  media_timeout: 'la corrección superó el tiempo permitido',
+  media_not_found: 'el archivo ya no está disponible',
+});
+
+function refineFailureReason(code) {
+  return REFINE_FAILURE_ES[String(code || '')] || 'no se pudo volver a transcribir ese tramo';
+}
+
+/** The refined window as text on the recording's clock, escaped and bounded. */
+function refineWindowPreview(row, transcript, delivery) {
+  const view = reportViewOf(row, transcript, delivery);
+  let text = '';
+  if (view?.sliced) {
+    try {
+      text = require('./media-transcript-format').renderText(view.result, { fileName: displayName(row), header: false });
+    } catch (_) { text = ''; }
+  }
+  if (!String(text || '').trim()) return { body: '', truncated: false, view };
+  const cut = cutAtParagraph(text, PREVIEW_CHARS);
+  return { body: escapeChatMarkdown(cut.text), truncated: cut.truncated, view };
+}
+
+/**
+ * Spanish chat message for a refine: «Corregí el tramo 00:12:00–00:15:00 de
+ * «clase.mp4».» with the corrected window, what is still doubtful in it and
+ * the updated downloads; or an honest «no pude» / «no cambió».
+ */
+function refineMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], outcome = null } = {}) {
+  const row = (Array.isArray(rows) ? rows : [])[0] || null;
+  const name = quoteName(displayName(row, delivery, 0));
+  const label = refineRangeLabel(rangeOf(delivery));
+  const result = outcome || resolveRefineOutcome(delivery, row);
+  const blocks = [];
+  if (!row || !isUsableRow(row)) {
+    blocks.push(`**No pude corregir el tramo ${label} de ${name}.**`);
+    if (!row || row.missing || row.deletedAt) {
+      blocks.push(row?.processingError ? `Motivo: ${cleanReason(row.processingError)}` : 'Motivo: el archivo ya no está disponible.');
+    } else if (stateOf(row) === 'pending') {
+      // The file exists and is still being transcribed (the 24 h ceiling came first).
+      blocks.push(`Motivo: ${REFINE_FAILURE_ES.refine_not_ready}.`);
+      blocks.push('La transcripción sigue en curso. Cuando esté lista, pídeme de nuevo en este chat que revise ese tramo.');
+    } else {
+      blocks.push(row.processingError ? `Motivo: ${cleanReason(row.processingError)}` : 'Motivo: este archivo no tiene una transcripción que corregir.');
+    }
+    return blocks.join('\n\n');
+  }
+  const transcript = transcripts?.[row.id] || null;
+  if (result.status === 'failed') {
+    blocks.push(`**No pude corregir el tramo ${label} de ${name}.**`);
+    blocks.push(`Motivo: ${refineFailureReason(result.code)}.`);
+    blocks.push('La transcripción sigue como estaba. Puedes pedírmelo de nuevo en este chat, por ejemplo con los nombres o el idioma que esperas.');
+    return blocks.join('\n\n');
+  }
+  if (result.inferred) blocks.push(`**Aquí tienes el tramo ${label} de ${name} con la transcripción más reciente.**`);
+  else if (result.unchanged) blocks.push(`**Volví a transcribir el tramo ${label} de ${name}.**`);
+  else blocks.push(`**Corregí el tramo ${label} de ${name}.**`);
+  if (result.unchanged) blocks.push('El resultado coincide con la transcripción anterior, así que no cambié nada.');
+  if (result.inferred) blocks.push('No recibí la confirmación de la corrección; si todavía se escucha mal, pídemelo de nuevo.');
+  const preview = refineWindowPreview(row, transcript, delivery);
+  const report = preview.view?.result ? qualityReportFor(row, transcript, delivery, { artifacts, coverageShown: true }) : null;
+  if (report?.doubtful) blocks.push(`Todavía hay dudas en este tramo: ${escapeChatMarkdown(report.doubtful)}.`);
+  blocks.push(`### ${result.unchanged ? 'Lo que se escucha en ese tramo' : 'Tramo corregido'}\n\n${preview.body || '(Sin voz transcrita en este tramo.)'}`);
+  if (preview.truncated) blocks.push('_Vista previa del tramo. Los archivos adjuntos tienen la transcripción completa._');
+  const files = (Array.isArray(artifacts) ? artifacts : []).filter(artifact => artifact?.filename);
+  if (files.length) {
+    blocks.push(`**Descargas:** ${files.map(artifact => escapeChatMarkdown(artifact.filename)).join(' · ')}`);
+    blocks.push('Los archivos tienen la transcripción completa con el tramo actualizado.');
+  }
+  if (stateOf(row) === 'partial') blocks.push('La grabación todavía tiene tramos sin transcribir; escribe «reintenta» en este chat para recuperarlos.');
+  if (result.unchanged) blocks.push('Si sigue sin entenderse, dime qué palabras o nombres esperas y lo intento con esas indicaciones.');
+  else blocks.push('Puedes seguir preguntándome sobre esta grabación en este chat.');
+  return blocks.join('\n\n');
+}
+
+/** Chat copy when a turn asks for a refine: the job runs in the media queue. */
+function refineHandOffMessage({ fileName = null, range = null } = {}) {
+  const label = refineRangeLabel(range && Number.isFinite(Number(range.start)) ? range : null);
+  const what = label ? `el tramo ${label}` : 'ese tramo';
+  const of = fileName ? ` de ${quoteName(fileName)}` : '';
+  return `Voy a volver a transcribir ${what}${of}. Te aviso aquí y en notificaciones cuando esté listo; puedes seguir usando el chat.`;
+}
+
+function refineNotificationCopy({ delivery = {}, rows = [], outcome = null } = {}) {
+  const row = rows[0] || null;
+  const name = quoteName(displayName(row, delivery, 0));
+  const label = refineRangeLabel(rangeOf(delivery));
+  const result = outcome || resolveRefineOutcome(delivery, row);
+  if (!row || !isUsableRow(row) || result.status === 'failed') {
+    return { kind: 'refine_failed', title: `No pude corregir el tramo ${label} de ${name}`, body: 'La transcripción sigue como estaba; abre el chat para ver el motivo.' };
+  }
+  if (result.unchanged) return { kind: 'refine', title: `Revisé el tramo ${label} de ${name}`, body: 'El resultado no cambió; ábrelo en el chat para verlo.' };
+  if (result.inferred) return { kind: 'refine', title: `El tramo ${label} de ${name} está listo`, body: 'Ábrelo en el chat para verlo.' };
+  return { kind: 'refine', title: `Corregí el tramo ${label} de ${name}`, body: 'Ábrelo en el chat para ver el tramo y los archivos actualizados.' };
+}
+
 /** Inbox / push copy for a delivered transcription. */
-function notificationCopy({ delivery = {}, rows = [] } = {}) {
+function notificationCopy({ delivery = {}, rows = [], outcome = null } = {}) {
+  if (isRefineRecord(delivery)) return refineNotificationCopy({ delivery, rows, outcome });
   const counts = summarizeStates(rows);
   if (rows.length === 1) {
     const name = quoteName(displayName(rows[0], delivery, 0));
@@ -603,6 +969,13 @@ function deliveryFailureCopy({ delivery = {}, rows = [] } = {}) {
   const names = (rows.length ? rows.map((row, index) => displayName(row, delivery, index)) : (delivery.fileNames || []))
     .filter(Boolean);
   const subject = names.length ? listNames(names, 1) : 'tus archivos';
+  if (isRefineRecord(delivery)) {
+    return {
+      kind: 'delivery_failed',
+      title: 'No pude entregar la corrección',
+      body: `No pude entregar la corrección del tramo ${refineRangeLabel(rangeOf(delivery))} de ${subject}. La transcripción sigue guardada; pídemelo de nuevo en el chat.`,
+    };
+  }
   return {
     kind: 'delivery_failed',
     title: 'No pude entregar la transcripción',
@@ -613,7 +986,8 @@ function deliveryFailureCopy({ delivery = {}, rows = [] } = {}) {
 function chatTitleFor(delivery = {}, rows = []) {
   const names = (rows.length ? rows.map((row, index) => displayName(row, delivery, index)) : (delivery.fileNames || [])).filter(Boolean);
   const first = String(names[0] || 'archivo').slice(0, 60);
-  return `Transcripción: ${first}${names.length > 1 ? ` y ${names.length - 1} más` : ''}`.slice(0, 120);
+  const lead = isRefineRecord(delivery) ? 'Corrección' : 'Transcripción';
+  return `${lead}: ${first}${names.length > 1 ? ` y ${names.length - 1} más` : ''}`.slice(0, 120);
 }
 
 function actionUrlFor(chatId) {
@@ -730,7 +1104,8 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
       output: {
         documentFormat: output.documentFormat || (formats.has('pdf') ? 'pdf' : formats.has('docx') ? 'docx' : null),
         wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
-        range: delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
+        // A refine re-sends the whole updated transcript, not just its window.
+        range: !isRefineRecord(delivery) && delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
         timeOffsetSec: Number(output.timeOffsetSec) || 0,
       },
       userId: delivery.userId,
@@ -925,6 +1300,8 @@ function createGate(limit) {
  * @param {({userId, chatId, title, model}) => Promise<{chatId, created}|string>} [deps.ensureChat]
  * @param {({userId, title, body, actionUrl, type, metadata}) => Promise} [deps.notify]
  * @param {(({rows, transcripts, delivery}) => Promise<string|{text}>)|null} [deps.analyze]  null disables analysis.
+ * @param {({fileId, userId, language, hints}) => Promise<{ok}>} [deps.recordHints]  durable per-file hints (media-transcript-store.recordMediaHints).
+ * @param {number} [deps.refineGraceMs]  how long a refine waits for a missed outcome report (default 30 min).
  * @param {() => number} [deps.now]
  * @param {{info, warn}} [deps.logger]
  */
@@ -936,6 +1313,7 @@ function createMediaDeliveryService(deps = {}) {
   const backoffMs = Array.isArray(deps.backoffMs) && deps.backoffMs.length ? deps.backoffMs : RETRY_BACKOFF_MS;
   const pendingCeilingMs = Math.max(1, Number(deps.pendingCeilingMs) || PENDING_CEILING_MS);
   const maxPerSweep = Math.max(1, Number(deps.maxPerSweep) || MAX_PER_SWEEP);
+  const refineGraceMs = Math.max(0, Number(deps.refineGraceMs ?? REFINE_HOOK_GRACE_MS) || 0);
   const gate = createGate(Math.max(1, Math.min(4, Number(deps.concurrency) || 1)));
 
   let prismaRef = deps.prisma || null;
@@ -953,6 +1331,7 @@ function createMediaDeliveryService(deps = {}) {
   const ensureChat = deps.ensureChat || (args => defaultEnsureChat(getPrisma(), args));
   const notify = deps.notify || (args => defaultNotify(getPrisma(), args));
   const analyze = deps.analyze === undefined ? (args => defaultAnalyze({ ...args, prisma: getPrisma() })) : deps.analyze;
+  const recordHints = deps.recordHints || (args => require('./media-transcript-store').recordMediaHints(deps.prisma || getPrisma(), args));
 
   const inflight = new Map();
   const held = new Map();
@@ -967,8 +1346,27 @@ function createMediaDeliveryService(deps = {}) {
   async function createDelivery(record) {
     if (!enabled()) return null;
     const created = await getStore().create(record);
-    logger.info(`[media-delivery] created id=${created.id} files=${created.fileIds.length} mode=${created.mode}`);
+    logger.info(`[media-delivery] created id=${created.id} files=${created.fileIds.length} mode=${created.mode} kind=${created.kind || 'transcript'}`);
+    await rememberHints(created);
     return created;
+  }
+
+  /**
+   * What the user said about the recordings (language, names, speakers,
+   * «literal») is kept durably per file, so a job that has not started yet
+   * — or a recovery re-queue that only knows { fileId, userId } — still gets
+   * it. Best-effort: a failure never costs the delivery.
+   */
+  async function rememberHints(created) {
+    if (!created?.language && !created?.hints) return;
+    let failed = 0;
+    for (const fileId of created.fileIds) {
+      try {
+        const out = await recordHints({ fileId, userId: created.userId, language: created.language || null, hints: created.hints || null });
+        if (out && out.ok === false && out.reason !== 'unavailable') failed++;
+      } catch (_) { failed++; }
+    }
+    if (failed) logger.warn(`[media-delivery] hints not recorded id=${created.id} files=${failed}`);
   }
 
   async function findDeliveredMessage(chatId, id) {
@@ -994,15 +1392,21 @@ function createMediaDeliveryService(deps = {}) {
     });
   }
 
-  /** Status-only probe (no transcripts loaded): files still pending, and whether the ceiling passed. */
+  /**
+   * Status-only probe (no transcripts loaded): files still pending, a refine
+   * still waiting for its job's outcome, and whether the ceiling passed.
+   */
   async function probePending(record) {
     const light = alignRows(record.fileIds, await loadFiles(record.userId, record.fileIds, { includeText: false }), record);
     const createdAt = Date.parse(record.createdAt || '');
     return {
       pending: light.filter(row => !isTerminalRow(row)).length,
+      awaitingRefine: awaitingRefineOutcome(record, light[0], now(), refineGraceMs),
       overdue: Number.isFinite(createdAt) && now() - createdAt >= pendingCeilingMs,
     };
   }
+
+  const isWaiting = probe => (probe.pending > 0 || probe.awaitingRefine) && !probe.overdue;
 
   async function attempt(record, token) {
     const store = getStore();
@@ -1012,9 +1416,9 @@ function createMediaDeliveryService(deps = {}) {
     // Checked again under the lock: a file may have been re-queued since.
     const probe = await probePending(record);
     checkpoint();
-    if (probe.pending && !probe.overdue) {
+    if (isWaiting(probe)) {
       await store.release(id, token);
-      return { id, status: 'waiting', pending: probe.pending };
+      return { id, status: 'waiting', pending: probe.pending, ...(probe.awaitingRefine ? { awaitingRefine: true } : {}) };
     }
 
     const candidates = [...new Set([record.deliveryChatId, record.chatId].filter(Boolean))];
@@ -1051,6 +1455,7 @@ function createMediaDeliveryService(deps = {}) {
     checkpoint();
 
     const usable = rows.filter(isUsableRow);
+    if (isRefineRecord(record)) return deliverRefine({ record, token, rows, transcripts, usable, targetChatId });
     const translating = record.mode === 'translation';
     // «resume y tradúcelo»: the summary comes with the translation.
     const alsoAnalysis = translating && record.output?.alsoAnalysis === true;
@@ -1094,18 +1499,68 @@ function createMediaDeliveryService(deps = {}) {
     const wantsTranscriptFiles = !translating || record.output?.includeTranscript === true
       || analysisFailed || !analysisArtifacts.length;
     const transcriptSpecs = usable.length && wantsTranscriptFiles ? await buildArtifacts({ rows, transcripts, delivery: record }) : [];
-    const specs = [...(Array.isArray(transcriptSpecs) ? transcriptSpecs : []), ...analysisArtifacts];
-    const saved = [];
-    for (const spec of Array.isArray(specs) ? specs : []) {
-      if (!spec?.filename || typeof spec.base64 !== 'string') continue;
-      saved.push(await saveArtifact({ filename: spec.filename, base64: spec.base64, mime: spec.mime,
-        ownerUserId: userId, chatId: targetChatId }));
-    }
+    // Every file keeps what it is through the artifact store (which renames
+    // it): the report names the transcript's sections and the embedded
+    // track only when those files are really attached.
+    const specs = [
+      ...(Array.isArray(transcriptSpecs) ? transcriptSpecs : []).map(spec => withRole(spec, transcriptSpecRole(spec))),
+      ...analysisArtifacts.map(spec => withRole(spec, typeof spec?.role === 'string' && spec.role ? spec.role : 'analysis')),
+    ];
+    const saved = await saveSpecs(specs, { userId, targetChatId });
     checkpoint();
 
     const counts = summarizeStates(rows);
     const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed,
-      analysisNotes, translationFailed, summaryText, summaryFailed });
+      analysisNotes, translationFailed, summaryText, summaryFailed,
+      transcriptFilesAttached: saved.some(artifact => artifact?.role === 'transcript') });
+    return postAndFinish({ record, token, rows, counts, content, saved, targetChatId,
+      extraMetadata: { deliveryKind: 'transcript', stoppedReason: stoppedReasonFor(counts) } });
+  }
+
+  async function saveSpecs(specs, { userId, targetChatId }) {
+    const saved = [];
+    for (const spec of Array.isArray(specs) ? specs : []) {
+      if (!spec?.filename || typeof spec.base64 !== 'string') continue;
+      const out = await saveArtifact({ filename: spec.filename, base64: spec.base64, mime: spec.mime,
+        ownerUserId: userId, chatId: targetChatId });
+      // The store sanitizes the name: the role (and the file a track belongs to) travels apart.
+      const tags = {
+        ...(typeof spec.role === 'string' && spec.role ? { role: spec.role } : {}),
+        ...(typeof spec.sourceFileId === 'string' && spec.sourceFileId ? { sourceFileId: spec.sourceFileId } : {}),
+      };
+      saved.push(out && typeof out === 'object' && Object.keys(tags).length ? { ...out, ...tags } : out);
+    }
+    return saved;
+  }
+
+  /**
+   * A refine: the corrected window of one file. Its outcome comes from the
+   * refine job (or is inferred when its report was missed); the updated
+   * files (the whole transcript, never only the window) go out when the
+   * window actually changed.
+   */
+  async function deliverRefine({ record, token, rows, transcripts, usable, targetChatId }) {
+    const { userId } = record;
+    const outcome = resolveRefineOutcome(record, rows[0]);
+    const sendFiles = usable.length > 0 && outcome.status === 'ok' && !outcome.unchanged;
+    const built = sendFiles ? await buildArtifacts({ rows, transcripts, delivery: { ...record, range: null } }) : [];
+    const specs = (Array.isArray(built) ? built : []).map(spec => withRole(spec, transcriptSpecRole(spec)));
+    const saved = await saveSpecs(specs, { userId, targetChatId });
+    checkpoint();
+    const counts = summarizeStates(rows);
+    const content = refineMessage({ delivery: record, rows, transcripts, artifacts: saved, outcome });
+    const ok = usable.length > 0 && outcome.status === 'ok';
+    return postAndFinish({ record, token, rows, counts, content, saved, targetChatId, outcome,
+      extraMetadata: { deliveryKind: 'refine', refineRange: record.range || null,
+        refineOutcome: ok ? (outcome.unchanged ? 'unchanged' : (outcome.inferred ? 'inferred' : 'ok')) : 'failed',
+        stoppedReason: ok ? 'transcription_refine' : 'transcription_refine_failed' } });
+  }
+
+  /** Post the message (under the lock), mark the record delivered, then the optional steps. */
+  async function postAndFinish({ record, token, rows, counts, content, saved, targetChatId, outcome = null, extraMetadata = {} }) {
+    const store = getStore();
+    const { id, userId } = record;
+    const ids = record.fileIds;
     // Never post without the lock: if another process reclaimed it while this
     // one stalled past the stale window, that holder may be posting too.
     if (typeof store.holds === 'function' && !(await store.holds(id, token))) {
@@ -1120,8 +1575,8 @@ function createMediaDeliveryService(deps = {}) {
       servedBy: 'media_batch',
       taskId: record.taskId || null,
       deliveryMode: record.mode,
-      stoppedReason: stoppedReasonFor(counts),
       mediaBatch: counts,
+      ...extraMetadata,
     };
     const posted = await postMessage({ userId, chatId: targetChatId, content, metadata, artifacts: saved });
     const messageId = posted?.messageId || posted?.id || null;
@@ -1135,14 +1590,14 @@ function createMediaDeliveryService(deps = {}) {
         await persistArtifact({ artifact, userId, chatId: deliveredChatId, taskId: record.taskId || null, messageId });
       } catch (_) { /* the chat message already links the download */ }
     }
-    const copy = notificationCopy({ delivery: record, rows });
+    const copy = notificationCopy({ delivery: record, rows, outcome });
     try {
       await notify({ userId, title: copy.title, body: copy.body, actionUrl: actionUrlFor(deliveredChatId),
         type: `media_transcription_${copy.kind}`, metadata: { mediaDelivery: id, chatId: deliveredChatId, fileIds: ids } });
     } catch (err) {
       logger.warn(`[media-delivery] notification failed id=${id} code=${err?.code || 'notify_error'}`);
     }
-    logger.info(`[media-delivery] delivered id=${id} files=${counts.total} ready=${counts.ready} partial=${counts.partial} failed=${counts.failed} pending=${counts.pending} attempt=${(Number(record.attempts) || 0) + 1}`);
+    logger.info(`[media-delivery] delivered id=${id} kind=${isRefineRecord(record) ? 'refine' : 'transcript'} files=${counts.total} ready=${counts.ready} partial=${counts.partial} failed=${counts.failed} pending=${counts.pending} attempt=${(Number(record.attempts) || 0) + 1}`);
     return { id, status: 'delivered', messageId, chatId: deliveredChatId, artifacts: saved.length, counts };
   }
 
@@ -1196,7 +1651,7 @@ function createMediaDeliveryService(deps = {}) {
     // or rewritten on every sweep.
     try {
       const probe = await probePending(record);
-      if (probe.pending && !probe.overdue) return { id, status: 'waiting', pending: probe.pending };
+      if (isWaiting(probe)) return { id, status: 'waiting', pending: probe.pending, ...(probe.awaitingRefine ? { awaitingRefine: true } : {}) };
     } catch (err) {
       logger.warn(`[media-delivery] status probe failed id=${id} code=${err?.code || 'probe_error'}`);
       return { id, status: 'error' };
@@ -1241,11 +1696,71 @@ function createMediaDeliveryService(deps = {}) {
     return run;
   }
 
-  /** Media worker hook: a file reached ready / partial / failed. Never throws. */
-  async function onMediaTerminal({ fileId, userId } = {}) {
+  /** A delivery record by id (active or done), or null; never throws. */
+  async function readRecordQuietly(id) {
+    const store = getStore();
+    if (typeof store.get !== 'function' || !isValidDeliveryId(String(id || ''))) return null;
+    try { return await store.get(String(id)); } catch (_) { return null; }
+  }
+
+  /**
+   * A refine job reported its outcome: record it on the refine deliveries it
+   * answers. The queue runs one job per (file, window, language, hints) and
+   * an identical request reuses the running job, which carries only the
+   * first request's `deliveryId`: with that record open, the job answers it
+   * and the open records with the same job key (refineJobKeyOf), never a
+   * same-window request with other hints, which has its own job and its own
+   * report. Without a usable id: the open records with the same window
+   * (narrowed to the named record's job key when that record is readable),
+   * and only without any id, the oldest open refine whose window overlaps.
+   */
+  async function noteRefineOutcomes(records, payload) {
+    const store = getStore();
+    if (typeof store.noteRefineOutcome !== 'function') return;
+    const open = records.filter(record => isRefineRecord(record) && record.refine?.status !== 'ok');
+    if (!open.length) return;
+    const range = payload.range && Number.isFinite(Number(payload.range.start)) ? payload.range : null;
+    const named = payload.deliveryId ? open.find(record => record.id === payload.deliveryId) || null : null;
+    let targets;
+    if (named) {
+      const key = refineJobKeyOf(named);
+      targets = [named, ...open.filter(record => record !== named && refineJobKeyOf(record) === key)];
+    } else {
+      targets = range ? open.filter(record => sameRange(record.range, range)) : [];
+      if (payload.deliveryId && targets.length) {
+        // The named record is no longer open: its job key still tells which requests share this job.
+        const asked = await readRecordQuietly(payload.deliveryId);
+        if (isRefineRecord(asked)) {
+          const key = refineJobKeyOf(asked);
+          targets = targets.filter(record => refineJobKeyOf(record) === key);
+        }
+      }
+      if (!targets.length && range && !payload.deliveryId) {
+        const overlapping = open.filter(record => !record.refine && rangesOverlap(record.range, range))
+          .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+        targets = overlapping.slice(0, 1);
+      }
+    }
+    const ok = payload.ok === false ? false : payload.ok === true ? true : payload.stage !== 'failed';
+    for (const record of targets) {
+      try {
+        await store.noteRefineOutcome(record.id, { ok, unchanged: payload.unchanged === true, code: payload.code || null });
+      } catch (err) {
+        logger.warn(`[media-delivery] refine outcome not recorded id=${record.id} code=${err?.code || 'store_error'}`);
+      }
+    }
+  }
+
+  /** Media worker hook: a file reached ready / partial / failed, or a refine finished. Never throws. */
+  async function onMediaTerminal(payload = {}) {
+    const { fileId, userId } = payload || {};
     if (!enabled()) return { status: 'disabled', matched: 0, results: [] };
     try {
-      const records = await getStore().findPendingByFile(String(fileId || ''), { userId: userId || null });
+      let records = await getStore().findPendingByFile(String(fileId || ''), { userId: userId || null });
+      if (payload?.refine === true) {
+        await noteRefineOutcomes(records, payload);
+        records = await getStore().findPendingByFile(String(fileId || ''), { userId: userId || null });
+      }
       const results = [];
       for (const record of records) results.push(await deliverOne(record.id));
       return { status: 'ok', matched: records.length, results };
@@ -1359,6 +1874,12 @@ module.exports = {
   shouldHandOff,
   handOffMessage,
   deliveryMessage,
+  refineMessage,
+  refineHandOffMessage,
+  resolveRefineOutcome,
+  awaitingRefineOutcome,
+  refineJobKeyOf,
+  transcriptFilesIn,
   notificationCopy,
   deliveryFailureCopy,
   classifyFileRow,
@@ -1373,4 +1894,5 @@ module.exports = {
   TRANSCRIPTION_RTF,
   DEFAULT_INLINE_WAIT_MS,
   PENDING_CEILING_MS,
+  REFINE_HOOK_GRACE_MS,
 };

@@ -106,9 +106,14 @@ function mediaRowsForAnalysis(rows = [], transcripts = new Map(), range = null, 
     const result = transcriptResultFor(row, transcripts.get(row.id));
     if (!result.segments.length) return row;
     try {
-      const segments = fmt.sliceSegments(result.segments, { start: range.start, end: range.end ?? null });
+      const window = { start: range.start, end: range.end ?? null };
+      const segments = fmt.sliceSegments(result.segments, window);
       if (!segments?.length) return row;
-      const text = fmt.renderText({ ...result, segments }, { fileName: row.originalName || row.filename, header: false });
+      // The whole window, not just its speech: the text read on screen in
+      // those minutes («Texto en pantalla») comes with it, never the rest.
+      const sliced = typeof fmt.sliceResult === 'function' ? fmt.sliceResult(result, window) : null;
+      const text = fmt.renderText(sliced ? { ...sliced, segments } : { ...result, segments, onScreenText: [] },
+        { fileName: row.originalName || row.filename, header: false });
       return String(text || '').trim() ? { ...row, extractedText: text } : row;
     } catch (_) {
       return row;
