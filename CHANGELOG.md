@@ -8,6 +8,23 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Transcription that does not give up: any audio, any video, blurry text.
+  - **Quality loop instead of «first answer wins».** Every segment is scored with signals that compare across engines (hallucination lexicon, prompt echo, repetition loops, characters per voiced second, voiced holes). A doubtful segment gets a second reading and keeps the better one. «Sin voz» needs a second opinion first. Engines only take over a segment when their own reading is clean; confidence scores never decide between two different engines.
+  - **Delivered quality report.** Each delivery says «Calidad: alta · cobertura 99 % · motor(es): …», lists the doubtful time windows and offers «dime «revisa del minuto 12 al 14»». The agent can then re-read only that window (`retranscribe_range`), look something up in the transcript (`transcript_lookup`) or name a speaker everywhere (`rename_speaker`).
+  - **Video without usable speech still gets text.** Embedded subtitles are read when the audio is silent or undecodable. The text shown on screen (slides, captions burned into the video) is read frame by frame. For links, the platform's subtitles are used, but only after their language, ≥ 90 % coverage and spot checks match. The delivery always says where the text came from.
+  - **The right audio track.** Recordings with several tracks use the one in the requested language or the default one, never commentary or audio description. Tracks are never chosen by loudness.
+  - **Names and languages from the conversation.** «el profesor se llama Ñahui», «está en inglés» and names in the file name reach the engine as spelling hints and the language, even for recordings already in the queue.
+  - **WhatsApp chat exports.** A ZIP's voice notes, videos and images become their own files, each one transcribed or read. ZIP-bomb limits apply.
+  - **Short recordings no longer wait behind long ones.** Recordings of 15 minutes or less use their own queue. Dictation, link clips and `transcribe_audio` use an engine slot that queued jobs never take.
+  - **Blurry text and photos.**
+    - Input normalization: HEIC from iPhone, BMP/ICO/JP2/JXL, every TIFF page, SVG, truncated JPEG/PNG. EXIF and Tesseract OSD fix the orientation.
+    - Blurry photos are detected, and large dense pages are read in strips.
+    - Tesseract, the local GLM-OCR and the vision models (Gemini → Meta → xAI → OpenRouter → OpenAI, only those with a key) are reconciled: a word the engines disagree on is marked `[¿palabra?]`, an unreadable one `[ilegible]`. Confidence is calibrated instead of a fixed 95.
+    - Scanned PDFs get the same ladder per weak page. A bad text layer (stamps, `(cid:`, mojibake) no longer blocks OCR.
+    - Tesseract languages load from the image (no CDN) and add Portuguese, French, Italian and German.
+  - **Dictation.** Every plan uses the shared ladder with automatic language detection. A plan or quota error is a clear message, never fake success text. Free plans stay on the server unless an operator opts in. The transcript is never logged.
+  - **Operations.** `GET /api/admin/transcription-capabilities` (superadmin) and one boot line report what each server can really do. Paid rungs stay opt-in (see `docs/ENV_VARIABLES.md`).
+
 - Professional transcription that copes with 5-hour recordings.
   - **Long recordings no longer hold the chat.** The turn waits at most 4 minutes, then answers «Recibí «clase.mp4» (≈5 h)… te aviso aquí». The durable media job (resumable across deploys) posts the transcript, its files and any requested analysis into the same chat with an in-app and push notification.
   - **Partial results are kept.** A segment no engine can read leaves a marked gap with its times instead of failing the whole file. «reintenta» re-runs only the missing segments without erasing the partial text.

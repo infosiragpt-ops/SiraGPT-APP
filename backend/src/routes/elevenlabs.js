@@ -283,7 +283,7 @@ router.post('/text-to-speech', [
 
 // ── Dictation (POST /speech-to-text) ───────────────────────────────────────
 // Every plan goes through the SAME transcription ladder as uploads
-// (audio-transcriber.transcribe, short-clip path, short lane) with automatic
+// (audio-transcriber.transcribe, short-clip path, interactive lane) with automatic
 // language detection — no more forced «es» on a 20 s English note.
 //   - FREE plans stay on-host by default (whisper.cpp, then Sira Voz), as
 //     before: free dictation never spends paid STT credit nor sends audio
@@ -316,10 +316,10 @@ router.post('/text-to-speech', [
 //                                        plan / key rejection (default 600000)
 //   ELEVENLABS_STT_MODEL                 Scribe model (default scribe_v1)
 //
-// Admission: the ladder call uses the short lane of the transcriber's gate.
-// A dedicated interactive slot that queue jobs never take is the
-// audio-transcriber owner's call; until then the request bound keeps a
-// saturated gate from hanging the composer (408 after the bound).
+// Admission: the ladder call uses the interactive lane of the transcriber's
+// gate (TRANSCRIBE_INTERACTIVE_LANE_CONCURRENCY, a slot queue jobs never
+// take), so a backlog of long uploads never makes a dictation wait; the
+// request bound still answers 408 if the gate is somehow saturated.
 function userHasPaidVoicePlan(user) {
   if (!user) return false;
   if (user.isSuperAdmin) return true;
