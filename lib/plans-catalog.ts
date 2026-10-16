@@ -47,6 +47,7 @@ export const CONTACT_PLAN = {
   periodLabel: "Plan personalizado",
   billingNote: "Te respondemos el mismo día",
   cta: "Escríbenos por WhatsApp",
+  whatsappNumber: "51918714054",
   reassurance: "Sin compromiso · Cotización en minutos",
   featuresIntro: "Todo lo incluido en Pro, más:",
   features: [
