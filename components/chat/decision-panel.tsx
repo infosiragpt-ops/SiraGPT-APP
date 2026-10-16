@@ -112,10 +112,45 @@ export function ChatDecisionPanel({ request, onReply, onResolved }: ChatDecision
     })
   }
 
+  const handlePanelKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (busy || !question || customOpen) return
+    const target = event.target as HTMLElement | null
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+      return
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+
+    if (/^[1-9]$/.test(event.key)) {
+      const idx = Number(event.key) - 1
+      const opt = question.options[idx]
+      if (opt) {
+        event.preventDefault()
+        recordAndAdvance(opt)
+      }
+      return
+    }
+
+    if ((event.key === "ArrowDown" || event.key === "ArrowUp") && question.options.length > 1) {
+      event.preventDefault()
+      const currentIdx = Math.max(
+        0,
+        question.options.findIndex((opt) => opt.id === selected?.id),
+      )
+      const delta = event.key === "ArrowDown" ? 1 : -1
+      const nextIdx = (currentIdx + delta + question.options.length) % question.options.length
+      const nextOpt = question.options[nextIdx]
+      if (nextOpt) {
+        setAnswers((prev) => ({ ...prev, [question.id]: nextOpt }))
+      }
+    }
+  }
+
   return (
     <section
       data-testid="chat-decision-panel"
+      data-decision-kind={request.kind}
       aria-label="El agente necesita tu decisión"
+      onKeyDown={handlePanelKeyDown}
       className="rounded-2xl border border-border/80 bg-background px-3.5 py-3 shadow-[0_8px_24px_-20px_hsl(220_24%_14%_/_0.28)]"
     >
       <p className="sr-only" role="status" aria-live="polite">
@@ -173,6 +208,7 @@ export function ChatDecisionPanel({ request, onReply, onResolved }: ChatDecision
               type="button"
               disabled={busy}
               aria-pressed={isSelected}
+              aria-keyshortcuts={optionIndex < 9 ? String(optionIndex + 1) : undefined}
               onClick={() => recordAndAdvance(option)}
               className={cn(
                 "flex w-full items-start gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -221,6 +257,9 @@ export function ChatDecisionPanel({ request, onReply, onResolved }: ChatDecision
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
                 sendCustom()
+              } else if (event.key === "Escape") {
+                event.preventDefault()
+                setCustomOpen(false)
               }
             }}
             placeholder="Escribe tu respuesta…"

@@ -1020,6 +1020,8 @@ export type RequestBriefPayload = {
   summary: string
   confidence: number
   trivial: boolean
+  plane?: string
+  ruleId?: string
   deliverable: { kind: string | null; format: string | null }
   target: { kind: string; name: string | null; format: string | null }
   constraints: Array<{ kind: string; value: string }>
@@ -1050,6 +1052,8 @@ export function parseRequestBriefPayload(raw: unknown): RequestBriefPayload | nu
     summary: record.summary,
     confidence: typeof record.confidence === 'number' ? record.confidence : 0,
     trivial: record.trivial === true,
+    ...(typeof record.plane === 'string' && record.plane.trim() ? { plane: record.plane.trim() } : {}),
+    ...(typeof record.ruleId === 'string' && record.ruleId.trim() ? { ruleId: record.ruleId.trim() } : {}),
     deliverable: {
       kind: typeof deliverable.kind === 'string' ? deliverable.kind : null,
       format: typeof deliverable.format === 'string' ? deliverable.format : null,

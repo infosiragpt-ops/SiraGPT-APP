@@ -41,6 +41,7 @@ export function RequestBriefLine({
       data-testid="request-brief-line"
       data-brief-action={brief.action}
       data-brief-target={brief.target?.kind || "none"}
+      data-brief-plane={brief.plane || undefined}
       className={cn(
         "request-brief-line mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12px] leading-5 text-muted-foreground",
         className,

@@ -1730,22 +1730,176 @@ async function findExistingGenerateTurn({
   return { ...pair, idempotencyConflict };
 }
 
+const CHAT_TITLE_ACTION_TYPOS = {
+  transcirbir: 'transcribir',
+  transcibrir: 'transcribir',
+  trascribir: 'transcribir',
+  trancribir: 'transcribir',
+  transcribri: 'transcribir',
+  transcribr: 'transcribir',
+  transcrbir: 'transcribir',
+  transcripcion: 'transcripción',
+  resumri: 'resumir',
+  resmuir: 'resumir',
+  reusmir: 'resumir',
+  traducri: 'traducir',
+  tradcir: 'traducir',
+  tradusir: 'traducir',
+  analisrar: 'analizar',
+  analisar: 'analizar',
+  anlizar: 'analizar',
+  explicra: 'explicar',
+  expicar: 'explicar',
+  correjir: 'corregir',
+  coregir: 'corregir',
+  redcatar: 'redactar',
+  redactra: 'redactar',
+  sintetisar: 'sintetizar',
+  parafraser: 'parafrasear',
+};
+
+const CHAT_TITLE_BARE_VERBS = {
+  transcribir: 'Transcribir',
+  transcribe: 'Transcribir',
+  'transcripción': 'Transcripción',
+  resumir: 'Resumir',
+  resume: 'Resumir',
+  resumen: 'Resumen',
+  traducir: 'Traducir',
+  traduce: 'Traducir',
+  analizar: 'Analizar',
+  analiza: 'Analizar',
+  explicar: 'Explicar',
+  explica: 'Explicar',
+  corregir: 'Corregir',
+  corrige: 'Corregir',
+  redactar: 'Redactar',
+  redacta: 'Redactar',
+  sintetizar: 'Sintetizar',
+  sintetiza: 'Sintetizar',
+  parafrasear: 'Parafrasear',
+  parafrasea: 'Parafrasear',
+  mejorar: 'Mejorar',
+  mejora: 'Mejorar',
+  revisar: 'Revisar',
+  revisa: 'Revisar',
+  extraer: 'Extraer',
+  extrae: 'Extraer',
+  convertir: 'Convertir',
+  convierte: 'Convertir',
+  comparar: 'Comparar',
+  compara: 'Comparar',
+  organizar: 'Organizar',
+  organiza: 'Organizar',
+  planificar: 'Planificar',
+  planifica: 'Planificar',
+  construir: 'Construir',
+  construye: 'Construir',
+  generar: 'Generar',
+  genera: 'Generar',
+  crear: 'Crear',
+  crea: 'Crear',
+};
+
+function extractTitleFileSubject(attachedFiles) {
+  if (!Array.isArray(attachedFiles) || attachedFiles.length === 0) return null;
+  for (const item of attachedFiles) {
+    if (!item) continue;
+    const rawName = typeof item === 'string'
+      ? item
+      : String(item.originalName || item.name || item.filename || item.fileName || '');
+    const clean = rawName
+      .trim()
+      .replace(/^.*[\\/]/, '')
+      .replace(/^\d{10,14}[-_]+/, '')
+      .trim();
+    if (!clean) continue;
+    const base = (clean.replace(/\.[a-z0-9]{1,5}$/i, '').trim() || clean)
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!base) continue;
+    const shortBase = base.length > 32 ? `${base.slice(0, 32).trimEnd()}…` : base;
+    return attachedFiles.length > 1 ? `${shortBase} (+${attachedFiles.length - 1})` : shortBase;
+  }
+  return null;
+}
+
+function extractTitleUrlSubject(rawText) {
+  const match = String(rawText || '').match(/https?:\/\/[^\s<>)"']+/i);
+  if (!match || !match[0]) return null;
+  try {
+    const parsed = new URL(match[0]);
+    const host = parsed.hostname.replace(/^www\./i, '');
+    if (host === 'youtu.be') {
+      const id = parsed.pathname.replace(/^\/+/, '').split('/')[0];
+      return id ? `youtu.be/${id.slice(0, 14)}` : 'YouTube';
+    }
+    if (host.endsWith('youtube.com')) {
+      const v = parsed.searchParams.get('v');
+      if (v) return `YouTube · ${v.slice(0, 11)}`;
+      return 'YouTube';
+    }
+    return host;
+  } catch {
+    return null;
+  }
+}
+
 // Título estilo Claude a partir del primer mensaje: primera línea con
-// contenido, sin URLs ni ruido de markdown, cortado en límite de palabra.
-function deriveChatTitleFromPrompt(prompt) {
+// contenido, sin URLs ni ruido de markdown, normalizado y cortado en límite de palabra.
+function deriveChatTitleFromPrompt(prompt, attachedFiles) {
   const raw = String(prompt || '').trim();
-  if (!raw) return 'New Chat';
+  const fileSubject = extractTitleFileSubject(attachedFiles);
+  if (!raw) return fileSubject || 'New Chat';
   const firstLine = raw.split(/\r?\n/).find((l) => l.trim().length > 0) || raw;
+  const urlSubject = extractTitleUrlSubject(firstLine) || extractTitleUrlSubject(raw);
   const cleaned = firstLine
     .replace(/https?:\/\/\S+/g, '')
     .replace(/[#*`>_~]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!cleaned) return raw.slice(0, 50);
-  if (cleaned.length <= 60) return cleaned;
-  const cut = cleaned.slice(0, 60);
+  if (!cleaned) {
+    if (fileSubject) return fileSubject;
+    if (urlSubject) return `Enlace · ${urlSubject}`;
+    return raw.slice(0, 50);
+  }
+  const typoFixed = cleaned.replace(/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+/g, (word) => {
+    const rep = CHAT_TITLE_ACTION_TYPOS[word.toLowerCase()];
+    if (!rep) return word;
+    return word[0] === word[0].toUpperCase() && word[0] !== word[0].toLowerCase()
+      ? rep.charAt(0).toUpperCase() + rep.slice(1)
+      : rep;
+  });
+  const strippedFiller = typoFixed
+    .replace(/(?:[,.;:!¡¿?\s]+(?:por\s*favor|porfa(?:vor)?|pf|please|plz|gracias|thanks|urgente))+[!?.…\s]*$/i, '')
+    .trim() || typoFixed;
+  const bareKey = strippedFiller.replace(/^[¡¿"«'(\s]+|[!?"»')\s.…:;]+$/g, '').toLowerCase();
+  if (CHAT_TITLE_BARE_VERBS[bareKey]) {
+    const canonicalVerb = CHAT_TITLE_BARE_VERBS[bareKey];
+    const subject = fileSubject || urlSubject;
+    const enriched = subject ? `${canonicalVerb} · ${subject}` : canonicalVerb;
+    return enriched.length <= 60 ? enriched : `${enriched.slice(0, 59).trimEnd()}…`;
+  }
+  const normalized = (!/^[/\\@]/.test(strippedFiller) && strippedFiller.charAt(0) === strippedFiller.charAt(0).toLowerCase() && strippedFiller.charAt(0) !== strippedFiller.charAt(0).toUpperCase())
+    ? strippedFiller.charAt(0).toUpperCase() + strippedFiller.slice(1)
+    : strippedFiller;
+  if (normalized.length <= 60) return normalized;
+  const cut = normalized.slice(0, 60);
   const lastSpace = cut.lastIndexOf(' ');
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+}
+
+function shouldUpgradePersistedChatTitle(currentTitle) {
+  const raw = String(currentTitle || '').trim();
+  if (!raw) return true;
+  const lower = raw.toLowerCase();
+  if (lower === 'new chat' || lower === 'nuevo chat') return true;
+  const fixed = lower
+    .replace(/(?:[,.;:!¡¿?\s]+(?:por\s*favor|porfa(?:vor)?|pf|please|plz|gracias|thanks|urgente))+[!?.…\s]*$/i, '')
+    .trim();
+  const mapped = CHAT_TITLE_ACTION_TYPOS[fixed] || fixed;
+  return Boolean(CHAT_TITLE_BARE_VERBS[mapped]);
 }
 
 async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog, skipUsageMetering = false, rlhfFeedback = null, activityTrace = null } = {}) {
@@ -1902,8 +2056,8 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           where: { id: chatId },
           data: {
             updatedAt: new Date(),
-            title: chat.title === 'New Chat'
-              ? deriveChatTitleFromPrompt(prompt)
+            title: shouldUpgradePersistedChatTitle(chat.title)
+              ? deriveChatTitleFromPrompt(prompt, userAttachedOnly(processedFiles))
               : chat.title
           }
         });

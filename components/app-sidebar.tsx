@@ -139,6 +139,8 @@ import {
   lastMessageRole,
   resolveChatWorkStatus,
 } from "@/lib/chat-work-status"
+import { normalizeDisplayChatTitle } from "@/lib/chat/smart-chat-title"
+import { brandModelLabel } from "@/lib/chat/brand-label"
 import { CreditsBadge } from "@/components/CreditsBadge"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
@@ -221,7 +223,7 @@ const CHAT_EMOJI_RULES: Array<[RegExp, string]> = [
   [/\b(hola|saludo|greeting|bienvenida|hello)\b/i, "👋"],
   [/\b(codex|c[oó]digo|api|deploy|producci[oó]n|software|bug|error|admin|panel)\b/i, "💻"],
   [/\b(imagen|foto|dise[ñn]o|logo|visual|mockup|ui|ux)\b/i, "🎨"],
-  [/\b(video|audio|voz|m[uú]sica|transcripci[oó]n)\b/i, "🎬"],
+  [/\b(video|audio|voz|m[uú]sica|transcripci[oó]n|transcribir)\b/i, "🎬"],
   [/\b(pago|factura|cr[eé]dito|billing|stripe|mercado ?pago)\b/i, "💳"],
   [/\b(calendario|agenda|reuni[oó]n|evento|fecha)\b/i, "🗓️"],
   [/\b(pdf|documento|docx|excel|archivo|informe|reporte)\b/i, "📄"],
@@ -231,11 +233,7 @@ const CHAT_EMOJI_RULES: Array<[RegExp, string]> = [
 const CHAT_EMOJI_FALLBACKS = ["💬", "✨", "🧠", "📌", "📝", "🔹"]
 
 const normalizeSidebarChatTitle = (value: unknown) => {
-  return String(value || "")
-    .replace(/^🤖\s*Tarea:\s*/i, "")
-    .replace(/^🤖\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim() || "Nuevo chat"
+  return normalizeDisplayChatTitle(value, "Nuevo chat")
 }
 
 const inferSidebarChatEmoji = (title: string) => {
@@ -502,7 +500,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/', '/gpts', '/parafraseo', '/projects', '/library',
+      '/', '/agentes', '/conexiones', '/gpts', '/parafraseo', '/projects', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -1007,11 +1005,13 @@ export function AppSidebar() {
         source = (await apiClient.getChat(chat.id)).chat
       }
       const messages = Array.isArray(source.messages) ? source.messages : []
+      const cleanExportTitle = normalizeSidebarChatTitle(source.title || chat.title || "Chat")
+      const cleanModelLabel = brandModelLabel(source.model || chat.model || "") || "SiraGPT"
       const body = [
-        `# ${source.title || "Chat"}`,
+        `# ${cleanExportTitle}`,
         "",
         `- ID: ${source.id}`,
-        `- Modelo: ${source.model || "N/A"}`,
+        `- Modelo: ${cleanModelLabel}`,
         `- Actualizado: ${source.updatedAt || chat.updatedAt || ""}`,
         "",
         ...messages.flatMap((message: any) => [
@@ -1021,7 +1021,7 @@ export function AppSidebar() {
           "",
         ]),
       ].join("\n")
-      const filename = `${String(source.title || "chat").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "chat"}.md`
+      const filename = `${String(cleanExportTitle || "chat").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "chat"}.md`
       downloadBlob(new Blob([body], { type: "text/markdown;charset=utf-8" }), filename)
       toast.success("Descarga iniciada")
     } catch (error) {

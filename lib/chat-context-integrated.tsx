@@ -19,6 +19,7 @@ import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversation
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
+import { deriveSmartChatTitle } from "./chat/smart-chat-title"
 import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
 import { emitGithubConnectionRequired, GITHUB_CONNECTION_TURN_SETTLED_EVENT } from "./chat/github-connect-handoff"
@@ -2869,7 +2870,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setChatType(type);
     try {
       const response = await apiClient.createChat({
-        title: initialContent ? initialContent.substring(0, 30) : "Nuevo chat",
+        title: deriveSmartChatTitle(initialContent, initialFiles, "Nuevo chat"),
         model: chatModel,
         isWordConnectorChat: options?.isWordConnectorChat || false,
         isExcelConnectorChat: options?.isExcelConnectorChat || false,

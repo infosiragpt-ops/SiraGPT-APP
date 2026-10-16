@@ -10200,3 +10200,50 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
     display: none !important;
   }
 }
+
+/* 6 · Agentes decision surface & brief rhythm ----------------------- */
+[data-testid="chat-decision-panel"] {
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 hsl(0 0% 100% / 0.65);
+  transition:
+    border-color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    box-shadow var(--duration-normal, 220ms) var(--ease-out-smooth, ease-out);
+}
+.dark [data-testid="chat-decision-panel"] {
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 hsl(0 0% 100% / 0.06);
+}
+[data-testid="chat-decision-panel"] button[aria-pressed] {
+  transition:
+    background-color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    box-shadow var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    transform var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out);
+}
+[data-testid="chat-decision-panel"] button[aria-pressed]:active:not(:disabled) {
+  transform: scale(0.996);
+}
+.request-brief-line {
+  letter-spacing: -0.005em;
+}
+.request-brief-line__fix {
+  box-shadow: var(--shadow-2xs);
+  transition:
+    background-color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    border-color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    color var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out),
+    box-shadow var(--duration-fast, 150ms) var(--ease-out-smooth, ease-out);
+}
+.request-brief-line__fix:hover {
+  border-color: hsl(var(--foreground) / 0.28);
+  box-shadow: var(--shadow-xs);
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-testid="chat-decision-panel"],
+  [data-testid="chat-decision-panel"] button[aria-pressed],
+  .request-brief-line__fix {
+    transition: none;
+  }
+}
+
