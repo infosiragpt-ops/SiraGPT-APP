@@ -62,6 +62,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Installing a sandbox package that is not approved, not found, or blocked by
+  the network now reports that reason. On a loaded host it could be reported
+  as «extract_failed» instead. A failed install sends no archive and `tar`
+  fails on the empty input. If `tar` closed before the installer, the installer
+  was killed as if extraction had failed. Now it is only killed while it is
+  still streaming.
 - Cancelled responses distinguish a user Stop from a provider abort or an
   expired deadline, preserve partial text, and retain HTTP errors already
   received without issuing another request after cancellation.
