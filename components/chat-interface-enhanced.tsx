@@ -1,6 +1,7 @@
 "use client"
 
 import { collectLatestVideoReferenceUrls } from "@/lib/chat/video-references"
+import { deriveSmartChatTitle } from "@/lib/chat/smart-chat-title"
 import { detectCodingIntent } from "@/lib/software-build-intent"
 import { useChatGithubConnect } from "@/hooks/use-chat-github-connect"
 import { GITHUB_CONNECTION_CANCEL_EVENT, GITHUB_RESUME_TEXT, isExplicitGithubConnectRequest } from "@/lib/chat/github-connect-handoff"
@@ -11491,7 +11492,7 @@ REWRITTEN TEXT:`;
     if (isNewChat) {
       const tempChat = {
         id: userMessage.chatId,
-        title: msg.substring(0, 30),
+        title: deriveSmartChatTitle(msg, filesToSend, "Nuevo chat"),
         messages: [userMessage, assistantPlaceholder],
         customGptId: null,
         customGpt: null,
@@ -12544,7 +12545,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       let aiMessagePlaceholder: any;
       if (!currentChat) {
         const response = await apiClient.createChat({
-          title: prompt ? prompt.substring(0, 30) : "New Web Dev Chat",
+          title: deriveSmartChatTitle(prompt, filesToSend, "Nuevo chat"),
           model: selectedModel,
         });
         newChat = response.chat;
@@ -12645,7 +12646,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       let newChat = currentChat;
       if (!currentChat) {
         const response = await apiClient.createChat({
-          title: prompt ? prompt.substring(0, 30) : "Nuevo chat",
+          title: deriveSmartChatTitle(prompt, files, "Nuevo chat"),
           model: selectedModel,
         });
         newChat = response.chat;
@@ -12711,7 +12712,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       let newChat = currentChat;
       if (!currentChat) {
         const response = await apiClient.createChat({
-          title: prompt ? prompt.substring(0, 30) : "New Vector PPT",
+          title: deriveSmartChatTitle(prompt, files, "Nuevo chat"),
           model: selectedModel,
         });
         newChat = response.chat;
@@ -14089,7 +14090,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: narration.substring(0, 30),
+          title: deriveSmartChatTitle(narration, filesToSend, "Nuevo chat"),
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -14352,7 +14353,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (!activeChat) {
       try {
         const response = await apiClient.createChat({
-          title: description.substring(0, 30),
+          title: deriveSmartChatTitle(description, filesToSend, "Nuevo chat"),
           model: selectedModel,
         });
         activeChat = response.chat;
@@ -14504,7 +14505,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (needsRealChat) {
       try {
         const response = await apiClient.createChat({
-          title: displayGoal.substring(0, 30),
+          title: deriveSmartChatTitle(displayGoal, filesToSend, "Nuevo chat"),
           model: selectedModel,
         });
         activeChat = response.chat;

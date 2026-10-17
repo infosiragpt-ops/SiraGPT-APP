@@ -17,6 +17,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { useRouter } from "next/navigation"
 import { ArrowLeft, Check, MessageCircle, ShieldCheck, Sprout, Users } from "lucide-react"
 import { toast } from "sonner"
@@ -75,7 +76,7 @@ export default function PlanesPage() {
   }, [])
 
   const whatsappNumber = resolveWhatsAppNumber(runtimeNumber)
-  const salesHref = buildWhatsAppHref(whatsappNumber, SALES_WHATSAPP_MESSAGE)
+  const salesHref = buildWhatsAppHref(whatsappNumber || CONTACT_PLAN.whatsappNumber, SALES_WHATSAPP_MESSAGE)
   const proWhatsAppHref = buildWhatsAppHref(whatsappNumber, PRO_WHATSAPP_MESSAGE)
   const canCheckout = checkoutAvailable !== false
   const currentPlan = user?.plan
@@ -235,7 +236,7 @@ export default function PlanesPage() {
             cta={
               salesHref ? (
                 <a href={salesHref} target="_blank" rel="noopener noreferrer" className={CTA_PRIMARY}>
-                  <MessageCircle className="h-4 w-4" />
+                  <Image src="/conexiones-logos/whatsapp.svg" alt="" width={20} height={20} aria-hidden="true" />
                   {CONTACT_PLAN.cta}
                 </a>
               ) : (

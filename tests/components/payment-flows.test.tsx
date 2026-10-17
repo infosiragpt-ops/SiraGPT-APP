@@ -150,6 +150,9 @@ describe('two-plan checkout availability', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Elegir Pro' }))
     await waitFor(() => expect(mocks.checkout).toHaveBeenCalledWith({ plan: 'PRO_MAX' }))
     expect(screen.getByRole('heading', { name: 'Hablemos' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Escríbenos por WhatsApp' })).toHaveAttribute(
+      'href', expect.stringMatching(/^https:\/\/wa\.me\/51918714054\?text=/),
+    )
     expect(screen.getByText('10 $')).toBeInTheDocument()
     expect(mocks.toastError).toHaveBeenCalledWith(expect.stringMatching(/Facturación/))
   })
