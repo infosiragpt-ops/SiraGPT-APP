@@ -20,7 +20,7 @@ interface TableControlsProps {
     messageId: string;
     title?: string;
     tableData?: TableData | null;
-    onExpand: () => void;
+    onExpand: (trigger: HTMLButtonElement) => void;
 }
 
 
@@ -100,11 +100,11 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
                     break;
 
                 default:
-                    toast.error('Unsupported format');
+                    toast.error('Formato no compatible');
             }
         } catch (error) {
             console.error('Download error:', error);
-            toast.error('Failed to download file. Please try again.');
+            toast.error('No se pudo descargar la tabla. Inténtalo de nuevo.');
         } finally {
             setIsDownloading(false);
         }
@@ -112,56 +112,65 @@ const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title
     return (
         <div
             data-copy-exclude=""
-            className="absolute top-2 right-2 z-10 flex items-center gap-0.5 rounded-full border border-border/50 bg-background/90 p-1 shadow-sm backdrop-blur-sm opacity-0 invisible group-hover:opacity-100 group-hover:visible focus-within:opacity-100 focus-within:visible transition-all duration-200 ease-out"
+            className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-border/70 bg-muted/25 px-3 py-1"
         >
-            <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleCopy}
-                className="h-7 w-7 rounded-full hover:bg-accent/80 transition-colors duration-200"
-                title="Copiar tabla"
-                aria-label="Copiar tabla"
-            >
-                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
-            <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-7 w-7 rounded-full hover:bg-accent/80 transition-colors duration-200"
-                        disabled={isDownloading}
-                        title="Descargar tabla"
-                        aria-label="Descargar tabla"
-                    >
-                        <Download className="h-4 w-4" />
-                    </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-[160px]">
-                    <DropdownMenuItem 
-                        onClick={() => handleDownload('csv')}
-                        disabled={isDownloading}
-                    >
-                        Descargar CSV
-                    </DropdownMenuItem>
-                    <DropdownMenuItem 
-                        onClick={() => handleDownload('excel')}
-                        disabled={isDownloading}
-                    >
-                        Descargar Excel
-                    </DropdownMenuItem>
-                </DropdownMenuContent>
-            </DropdownMenu>
-            <Button 
-                variant="ghost" 
-                size="icon" 
-                onClick={onExpand} 
-                className="h-7 w-7 rounded-full hover:bg-accent/80 transition-colors duration-200"
-                title="Expandir tabla"
-                aria-label="Expandir tabla"
-            >
-                <Expand className="h-4 w-4" />
-            </Button>
+            <span className="text-xs leading-5 text-muted-foreground" role="status" aria-live="polite">
+                {isDownloading ? 'Preparando descarga…' : tableData
+                    ? `${tableData.rows.length} ${tableData.rows.length === 1 ? 'fila' : 'filas'} · ${tableData.headers.length} ${tableData.headers.length === 1 ? 'columna' : 'columnas'}`
+                    : 'Tabla'}
+            </span>
+            <div role="group" aria-label="Acciones de la tabla" className="ml-auto flex shrink-0 items-center gap-1">
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleCopy}
+                    className="h-11 w-11 rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground sm:h-9 sm:w-9"
+                    title="Copiar tabla"
+                    aria-label="Copiar tabla"
+                >
+                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                </Button>
+                <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-11 w-11 rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground sm:h-9 sm:w-9"
+                            disabled={isDownloading}
+                            title="Descargar tabla"
+                            aria-label={isDownloading ? "Preparando descarga" : "Descargar tabla"}
+                            aria-busy={isDownloading}
+                        >
+                            <Download className="h-4 w-4" />
+                        </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-[160px]">
+                        <DropdownMenuItem
+                            onClick={() => handleDownload('csv')}
+                            disabled={isDownloading}
+                        >
+                            Descargar CSV
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                            onClick={() => handleDownload('excel')}
+                            disabled={isDownloading}
+                        >
+                            Descargar Excel
+                        </DropdownMenuItem>
+                    </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={(event) => onExpand(event.currentTarget)}
+                    className="h-11 w-11 rounded-lg text-muted-foreground hover:bg-accent/80 hover:text-foreground sm:h-9 sm:w-9"
+                    title="Expandir tabla"
+                    aria-label="Expandir tabla"
+                >
+                    <Expand className="h-4 w-4" />
+                </Button>
+            </div>
         </div>
     );
 };
@@ -194,7 +203,7 @@ export default TableControls;
 //     content: string;
 //     messageId: string;
 //     title?: string;
-//     onExpand: () => void;
+//     onExpand: (trigger: HTMLButtonElement) => void;
 // }
 // const TableControls: React.FC<TableControlsProps> = ({ content, messageId, title, onExpand }) => {
 //     const [isDownloading, setIsDownloading] = useState(false);
@@ -270,7 +279,7 @@ export default TableControls;
 //                         </DropdownMenuItem>
 //                     </DropdownMenuContent>
 //                 </DropdownMenu>
-//                 <Button variant="ghost" size="icon" onClick={onExpand}>
+//                 <Button variant="ghost" size="icon" onClick={(event) => onExpand(event.currentTarget)}>
 //                     <Expand className="h-5 w-5" />
 //                 </Button>
 //             </div>
