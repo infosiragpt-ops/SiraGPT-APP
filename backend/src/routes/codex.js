@@ -2730,6 +2730,7 @@ const execValidators = [
     return true;
   }),
   body('run').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 64 }),
+  body('sessionId').optional({ nullable: true }).isString().trim().isLength({ min: 20, max: 128 }),
   body('timeoutMs').optional({ nullable: true }).isInt({ min: 1_000, max: EXEC_MAX_TIMEOUT_MS }),
 ];
 
@@ -2748,19 +2749,25 @@ router.post(
       const cmd = req.body.cmd.map((a) => String(a));
       const run = typeof req.body.run === 'string' && req.body.run.trim() ? req.body.run.trim() : null;
       const timeoutMs = Number(req.body.timeoutMs) || undefined;
+      const sessionId = typeof req.body.sessionId === 'string' && req.body.sessionId.trim() ? req.body.sessionId.trim() : null;
+      if (sessionId && !run) return res.status(400).json({ error: 'session_requires_run' });
       const runner = createSandboxClient();
       const scoped = run && typeof runner.forRun === 'function' ? runner.forRun(run, project.id) : runner;
       return await checkpointService.withProjectMutationLock(codexDb, project.id, async (lockedDb) => {
         if (await runService.hasActiveRun({ projectId: project.id, db: lockedDb })) {
           return res.status(409).json({ error: 'run_in_progress', message: 'El agente está trabajando en este proyecto. Espera antes de ejecutar otro comando.' });
         }
-        const out = await scoped.exec(project.id, cmd, { timeoutMs });
+        const execOptions = { timeoutMs };
+        if (sessionId) execOptions.sessionId = sessionId;
+        const out = await scoped.exec(project.id, cmd, execOptions);
         return res.json({
           ok: Boolean(out?.ok),
           exitCode: Number.isFinite(out?.exitCode) ? out.exitCode : null,
           timedOut: Boolean(out?.timedOut),
           stdout: String(out?.stdout || ''),
           stderr: String(out?.stderr || ''),
+          sessionId: typeof out?.sessionId === 'string' ? out.sessionId : undefined,
+          cwd: typeof out?.cwd === 'string' ? out.cwd : undefined,
         });
       });
     } catch (err) {

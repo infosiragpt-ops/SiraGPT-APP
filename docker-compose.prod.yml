@@ -143,6 +143,7 @@ services:
     volumes:
       - opencode_workspace:/workspace
       - ./scripts/code-runner.js:/scripts/code-runner.js:ro
+      - ./scripts/code-runner-session.js:/scripts/code-runner-session.js:ro
       - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
       - runner_bun_cache:/runner-cache
       - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/export
