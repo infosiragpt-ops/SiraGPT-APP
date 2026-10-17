@@ -182,6 +182,8 @@ async function fixture(testContext, options = {}) {
       wantsBibliographyAnswer: () => false,
     },
     isImageFileRecord: imageVision.isImageAttachment,
+    // OCR text labels + the photo-transcription protocol (C8).
+    imageAttachmentVision: imageVision,
     isImageMime: (mime) => typeof mime === 'string' && mime.startsWith('image/'),
     documentAnalysisQuality: { buildPromptBlock: () => '' },
     operationalRag: { isPureGreetingPrompt: () => false, buildRuntimeContext: async () => null, shouldCompactFilePrompt: () => false },

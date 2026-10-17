@@ -107,8 +107,11 @@ test('extractFromImage source: a timed-out local pass skips tiling and reports l
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'ocr-engine.js'), 'utf8');
   assert.match(src, /!localResult\.timedOut && imageAnalyzer\.shouldTileOcr/);
   assert.match(src, /localResult\.timedOut \? 'local_ocr_timeout'/);
-  // Every worker gets the noise filter (image, tiled, PDF pages, streaming).
-  const created = (src.match(/await createWorker\(/g) || []).length;
-  const filtered = (src.match(/await createWorker\([^\n]*tesseractWorkerOptions\(\)\)/g) || []).length;
-  assert.equal(created, filtered, 'every createWorker call passes tesseractWorkerOptions()');
+  // Every worker (image, tiled, PDF pages, streaming, subset) comes from the
+  // one bounded factory, which always passes the noise filter + tessdata
+  // options; nothing calls tesseract.js' createWorker directly.
+  assert.equal((src.match(/await createWorker\(/g) || []).length, 0, 'no direct createWorker call');
+  assert.ok((src.match(/await this\.createOcrWorker\(/g) || []).length >= 5, 'all paths use createOcrWorker');
+  assert.match(src, /const options = tesseractWorkerOptions\(language, \{/);
+  assert.match(src, /createWorkerImpl\(language, undefined, options\)/);
 });

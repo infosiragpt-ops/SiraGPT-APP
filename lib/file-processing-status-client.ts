@@ -5,15 +5,68 @@
  */
 
 import { getNormalizedApiBaseUrl } from "./api-base-url"
+import { isMediaUpload } from "./attachment-ingest"
 import {
   TERMINAL_STAGES,
   type FileProcessingStage,
 } from "./file-processing-vocab"
 
 export const STATUS_POLL_UNAVAILABLE = "No se pudo comprobar el estado del documento"
+export const STATUS_FILE_GONE = "El archivo ya no está disponible."
 
 /** 404 retries before we treat the file as missing (covers brief replica lag). */
 export const MISSING_STATUS_RETRY_LIMIT = 3
+
+/** Poll cadence while a file is young. */
+export const STATUS_POLL_INTERVAL_MS = 2_000
+/** Long jobs (audio/video transcription) back off to this cadence… */
+export const LONG_JOB_POLL_INTERVAL_MS = 15_000
+/** …after keeping the fast cadence this long. */
+export const LONG_JOB_FAST_WINDOW_MS = 2 * 60_000
+/** Documents give up after 30 min (900 polls at 2 s) — OCR-heavy batches included. */
+export const DOCUMENT_MAX_POLLS = 900
+/**
+ * Long media jobs have NO 30-min ceiling: a 5 h lecture transcribes for hours
+ * (the job budget is 12 h). The loop only stops after a day, and even then
+ * without inventing a verdict.
+ */
+export const LONG_JOB_MAX_POLL_MS = 24 * 60 * 60_000
+
+export type ProcessingStatusPayloadLike = {
+  mimeType?: string | null
+  name?: string | null
+  size?: number | null
+  processingProgress?: unknown
+} | null | undefined
+
+/**
+ * Audio/video (by MIME, or by file name when the MIME is missing/generic) or
+ * any file whose status carries a `processingProgress` (the durable media
+ * job's segments / % / ETA) is a long job: slower polling, no ceiling, never
+ * "ready" until the server says so.
+ */
+export function isLongProcessingJob(payload: ProcessingStatusPayloadLike): boolean {
+  if (!payload) return false
+  if (payload.processingProgress) return true
+  const mime = String(payload.mimeType || "").split(";")[0].trim().toLowerCase()
+  if (/^(audio|video)\//.test(mime)) return true
+  if (mime && mime !== "application/octet-stream") return false
+  const name = String(payload.name || "")
+  const size = Number(payload.size)
+  return Boolean(name) && isMediaUpload({ type: "", name, size: Number.isFinite(size) ? size : undefined })
+}
+
+/** Delay before the next status read. */
+export function processingPollDelayMs(input: { longJob: boolean; elapsedMs: number }): number {
+  if (input.longJob && input.elapsedMs >= LONG_JOB_FAST_WINDOW_MS) return LONG_JOB_POLL_INTERVAL_MS
+  return STATUS_POLL_INTERVAL_MS
+}
+
+/** Whether the poll loop has run long enough to stop. */
+export function processingPollCeilingReached(input: { longJob: boolean; polls: number; elapsedMs: number }): boolean {
+  if (input.longJob) return input.elapsedMs >= LONG_JOB_MAX_POLL_MS
+  return input.polls >= DOCUMENT_MAX_POLLS
+}
 
 export function buildFileProcessingStatusUrl(
   fileId: string,
@@ -44,10 +97,18 @@ export function decideProcessingStatusPoll(
  * A mid-pipeline stage that never finished is treated as ready: the
  * binary is already stored and chat can use extracted text. A poll that
  * never learned any stage is a status-check failure, not a successful index.
+ *
+ * Long media jobs are the exception: a transcription still running is NOT
+ * "ready" (the chip used to claim «Listo para analizar» after 30 min while a
+ * 5 h lecture was mid-way). Their last stage is kept, with `terminal: false`.
  */
-export function resolveProcessingPollGiveUp(prevStage: FileProcessingStage | null | undefined): {
+export function resolveProcessingPollGiveUp(
+  prevStage: FileProcessingStage | null | undefined,
+  opts: { longJob?: boolean; httpStatus?: number } = {},
+): {
   stage: FileProcessingStage
   error: string | null
+  terminal?: false
 } {
   if (prevStage === "failed") {
     return { stage: "failed", error: null }
@@ -55,7 +116,12 @@ export function resolveProcessingPollGiveUp(prevStage: FileProcessingStage | nul
   if (prevStage === "ready") {
     return { stage: "ready", error: null }
   }
+  if (opts.longJob && (opts.httpStatus === 404 || opts.httpStatus === 410)) {
+    // The row is gone (deleted, purged): not a transcription still running.
+    return { stage: "failed", error: STATUS_FILE_GONE }
+  }
   if (prevStage && !TERMINAL_STAGES.has(prevStage)) {
+    if (opts.longJob) return { stage: prevStage, error: null, terminal: false }
     return { stage: "ready", error: null }
   }
   return { stage: "failed", error: STATUS_POLL_UNAVAILABLE }

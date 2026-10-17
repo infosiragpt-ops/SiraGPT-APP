@@ -31,12 +31,18 @@ function fixLatin1Filename(name) {
     return s;
   }
 }
+const { PassThrough } = require('stream');
 const {
   ALLOWED_EXTENSIONS,
   ALLOWED_MIMES,
   isDeclaredUploadAllowed,
+  isMediaExtension,
+  isMediaMime,
   resolveUploadLimits,
 } = require('../services/upload-security-policy');
+
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
 
 // Ensure upload directory exists
 const uploadDir = path.resolve(process.env.UPLOAD_DIR || 'uploads');
@@ -111,24 +117,189 @@ const fileFilter = (req, file, cb) => {
 //   - Default is a commercial safety ceiling (100 MB/file) to avoid
 //     disk/memory exhaustion. Set ALLOW_UNBOUNDED_UPLOADS=true only in
 //     isolated/internal deployments with separate storage quotas.
+//   - Audio/video get their own, larger cap (mediaFileSize, 10 GB by
+//     default): a 5 h lecture at 24-32 kbps weighs 54-72 MB, so a deploy with
+//     MAX_FILE_SIZE=50 used to reject it here while the composer only
+//     switched to chunked uploads from 80 MB.
 const uploadLimits = resolveUploadLimits(process.env);
 
+function finiteOrInfinity(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+}
+
+/** The busboy ceiling: the largest per-kind cap (media ≥ documents). */
+function multerFileSizeLimit(limits = uploadLimits) {
+  return Math.max(finiteOrInfinity(limits.fileSize), finiteOrInfinity(limits.mediaFileSize));
+}
+
+/** Audio/video by declared mime or extension (bytes are re-checked after the write). */
+function isMediaUploadCandidate(file) {
+  const ext = path.extname(String((file && file.originalname) || '')).replace(/^\./, '').toLowerCase();
+  return isMediaMime(file && file.mimetype) || Boolean(ext && isMediaExtension(ext));
+}
+
+function perFileLimitFor(file, limits = uploadLimits) {
+  return isMediaUploadCandidate(file) ? finiteOrInfinity(limits.mediaFileSize) : finiteOrInfinity(limits.fileSize);
+}
+
+function formatLimit(bytes) {
+  if (!Number.isFinite(bytes)) return 'el máximo permitido';
+  if (bytes >= GB) {
+    const gb = bytes / GB;
+    return `${Number.isInteger(gb) ? gb : gb.toFixed(1).replace('.', ',')} GB`;
+  }
+  return `${Math.max(1, Math.round(bytes / MB))} MB`;
+}
+
+const UPLOAD_LIMIT_TRIP = Symbol('siragpt.uploadLimitTrip');
+
+function recordLimitTrip(req, file, media) {
+  if (!req || req[UPLOAD_LIMIT_TRIP]) return;
+  Object.defineProperty(req, UPLOAD_LIMIT_TRIP, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: { name: String((file && file.originalname) || '').slice(0, 120), media: Boolean(media) },
+  });
+}
+
+/** Spanish LIMIT_FILE_SIZE copy naming the cap that applied to that file. */
+function fileTooLargeMessage(trip, limits = uploadLimits) {
+  const docCap = finiteOrInfinity(limits.fileSize);
+  const mediaCap = finiteOrInfinity(limits.mediaFileSize);
+  const named = trip && trip.name ? `El archivo «${trip.name}»` : 'El archivo';
+  if (trip && trip.media) return `${named} supera el máximo de ${formatLimit(mediaCap)} para audio y video.`;
+  if (trip) {
+    const mediaHint = mediaCap > docCap ? ` Los audios y videos admiten hasta ${formatLimit(mediaCap)}.` : '';
+    return `${named} supera el máximo de ${formatLimit(docCap)} por documento.${mediaHint}`;
+  }
+  return `${named} supera el tamaño máximo permitido (${formatLimit(multerFileSizeLimit(limits))}).`;
+}
+
+/**
+ * Wraps the disk storage so each file is held to ITS kind's cap: busboy only
+ * knows one limit per request (the media ceiling), so documents are counted
+ * here and stopped at `fileSize` exactly like busboy would — the partial file
+ * is closed, multer aborts with LIMIT_FILE_SIZE and removes it.
+ */
+function createKindAwareStorage(inner, limits = uploadLimits) {
+  const ceiling = multerFileSizeLimit(limits);
+  return {
+    _handleFile(req, file, cb) {
+      const source = file.stream;
+      const media = isMediaUploadCandidate(file);
+      const limit = perFileLimitFor(file, limits);
+      if (!source || typeof source.on !== 'function') return inner._handleFile(req, file, cb);
+      // busboy's own limit (the ceiling) fires 'limit' on the source too.
+      source.on('limit', () => recordLimitTrip(req, file, media));
+      if (!Number.isFinite(limit) || !(limit < ceiling)) return inner._handleFile(req, file, cb);
+
+      const gate = new PassThrough();
+      let seen = 0;
+      let tripped = false;
+      let sourceError = null;
+      source.on('data', (chunk) => {
+        if (tripped) return;
+        seen += chunk.length;
+        if (seen > limit) {
+          tripped = true;
+          gate.end();
+          source.resume();
+          source.emit('limit');
+          return;
+        }
+        if (!gate.write(chunk)) {
+          source.pause();
+          gate.once('drain', () => { if (!tripped) source.resume(); });
+        }
+      });
+      source.once('end', () => { if (!tripped) gate.end(); });
+      source.once('error', (err) => {
+        sourceError = err;
+        if (!tripped) gate.end();
+      });
+      Object.defineProperty(file, 'stream', { configurable: true, enumerable: false, value: gate });
+      inner._handleFile(req, file, (err, info) => {
+        if (sourceError && !err && info && info.path) {
+          fs.unlink(info.path, () => cb(sourceError));
+          return;
+        }
+        cb(err, info);
+      });
+    },
+    _removeFile(req, file, cb) {
+      inner._removeFile(req, file, cb);
+    },
+  };
+}
+
+function localizeUploadError(err, req) {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    err.message = fileTooLargeMessage(req && req[UPLOAD_LIMIT_TRIP]);
+    err.expose = true;
+  }
+  return err;
+}
+
 const upload = multer({
-  storage,
+  storage: createKindAwareStorage(storage, uploadLimits),
   fileFilter,
   limits: {
-    fileSize: uploadLimits.fileSize,
+    fileSize: multerFileSizeLimit(uploadLimits),
     files: uploadLimits.files, // multimodal ingestion can batch
   },
 });
 
+// Every middleware this instance builds reports LIMIT_FILE_SIZE in Spanish,
+// naming the cap that applied (documents vs audio/video).
+function localizeInstance(instance, localize = localizeUploadError) {
+  for (const method of ['single', 'array', 'fields', 'any', 'none']) {
+    if (typeof instance[method] !== 'function') continue;
+    const build = instance[method].bind(instance);
+    instance[method] = (...args) => {
+      const middleware = build(...args);
+      return function localizedUploadMiddleware(req, res, next) {
+        return middleware(req, res, (err) => next(localize(err, req)));
+      };
+    };
+  }
+  return instance;
+}
+localizeInstance(upload);
+
+// Routes that never take recordings (GPT knowledge files, GPT icons) keep
+// the document cap for every file: the 10 GB audio/video ceiling exists for
+// the chat's media pipeline, not for knowledge bases.
+const documentsOnlyUpload = localizeInstance(multer({
+  storage,
+  fileFilter,
+  limits: {
+    ...(Number.isFinite(finiteOrInfinity(uploadLimits.fileSize)) ? { fileSize: uploadLimits.fileSize } : {}),
+    files: uploadLimits.files,
+  },
+}), (err) => {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    err.message = `El archivo supera el máximo de ${formatLimit(finiteOrInfinity(uploadLimits.fileSize))} permitido aquí.`;
+    err.expose = true;
+  }
+  return err;
+});
+
 module.exports = upload;
 module.exports.uploadDir = uploadDir;
+module.exports.documentsOnly = documentsOnlyUpload;
 // The effective per-request file-count ceiling multer actually enforces. Routes
 // derive their `.array(field, maxCount)` from this so the advertised batch size
 // never exceeds what the instance accepts (otherwise large batches were silently
 // rejected with LIMIT_FILE_COUNT before the route's higher maxCount applied).
 module.exports.filesLimit = uploadLimits.files;
+// Per-kind size gate (documents vs audio/video) and its Spanish copy.
+module.exports.uploadLimits = uploadLimits;
+module.exports.multerFileSizeLimit = multerFileSizeLimit;
+module.exports.perFileLimitFor = perFileLimitFor;
+module.exports.fileTooLargeMessage = fileTooLargeMessage;
+module.exports.createKindAwareStorage = createKindAwareStorage;
 module.exports.resolveUserUploadDir = resolveUserUploadDir;
 module.exports.safeStorageSegment = safeStorageSegment;
 module.exports.fixLatin1Filename = fixLatin1Filename;

@@ -491,6 +491,8 @@ const linkPreviewRoutes = require('./src/routes/link-preview');
 const adminSecurityRoutes = require('./src/routes/admin/security');
 const adminSettingsRoutes = require('./src/routes/admin/settings');
 const adminReportsRoutes = require('./src/routes/admin/reports');
+// Transcription/OCR capability report (super-admin). Mounted before /api/admin.
+const adminTranscriptionCapabilitiesRoutes = require('./src/routes/admin-transcription-capabilities');
 const docAgentRoutes = require('./src/routes/doc-agent');
 const opencodeRoutes = require('./src/routes/opencode');
 const codeRunnerRoutes = require('./src/routes/code-runner');
@@ -1335,6 +1337,10 @@ app.use('/api/video/provider', videoProviderStatusRoutes);
 app.use('/api/admin/security', adminSecurityRoutes);
 app.use('/api/admin/settings', adminSettingsRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
+// Own auth (authenticateToken + requireSuperAdmin): it must come BEFORE the
+// generic /api/admin router, whose route-policy map fails closed (403) for
+// any path it does not list.
+app.use('/api/admin/transcription-capabilities', adminTranscriptionCapabilitiesRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/legal', legalRoutes);
@@ -1754,6 +1760,21 @@ async function startServer() {
       .catch((err) => logger.warn({ err: err.message }, 'codex_swarm_recovery_failed'));
     startDocumentCollectionWorker();
     startMediaTranscriptionWorker();
+    // Transcription / OCR capability self-report: ONE line after boot (STT
+    // rungs, whisper.cpp model + flags, VAD, ffmpeg filters, tessdata, heif,
+    // GLM-OCR state, vision runtimes) so silent degradation shows up in
+    // Admin → Logs after every publish. Local probes only (no network);
+    // delayed and unref'd so it never competes with boot. Never throws.
+    if (process.env.NODE_ENV !== 'test' && process.env.SIRAGPT_TRANSCRIPTION_CAPABILITIES_LOG !== '0') {
+      const capabilitiesTimer = setTimeout(() => {
+        try {
+          require('./src/services/transcription-capabilities')
+            .logBootSummary({ logger })
+            .catch(() => {});
+        } catch (_) { /* never blocks boot */ }
+      }, 8000);
+      if (typeof capabilitiesTimer.unref === 'function') capabilitiesTimer.unref();
+    }
     // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
     // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
     // producción; CODEX_PROACTIVE_ENABLED=0/1 fuerza). unref'd — nunca retiene

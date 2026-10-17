@@ -54,12 +54,19 @@ const { spawn } = require('node:child_process');
 const { z } = require('zod');
 const { assertSafeUrl } = require('./web-fetch-tool');
 const { buildUntrustedChildEnv } = require('../../../utils/untrusted-child-env');
+const { composeAbortSignals } = require('../../../utils/abort-signals');
 const mediaDiscovery = require('./media-discovery');
 const cookieJar = require('./cookie-jar-store');
 const mediaCapture = require('./media-capture');
 
 const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_MAX_SECONDS = 3 * 60 * 60;
+// Long sections leave the chat turn: the downloaded audio becomes the
+// user's own media file, the durable media queue transcribes it (resumable
+// across deploys, partial results, professional pack) and the result is
+// posted into this chat with a notification.
+const DEFAULT_DURABLE_MIN_SECONDS = 20 * 60;
+const DEFAULT_DURABLE_MAX_SECONDS = 12 * 60 * 60;
 const MAX_TEXT_CHARS = 60_000;
 const MAX_COMMAND_OUTPUT = 2 * 1024 * 1024;
 const PROBE_TIMEOUT_MS = 60_000;
@@ -247,6 +254,279 @@ function buildSrt(segments, { offset = 0 } = {}) {
   return segments.map((seg, i) => `${i + 1}\n${fmtSrtTime(Number(seg.start) + offset)} --> ${fmtSrtTime(Number(seg.end) + offset)}\n${String(seg.text || '').trim()}\n`).join('\n');
 }
 
+/**
+ * The recording's title for the user's own file name: accents and case kept
+ * (the media queue primes the recogniser with its proper nouns), path and
+ * control characters removed. safeTitle stays for temp clip names.
+ */
+function displayTitle(title) {
+  const base = String(title || '').normalize('NFC').replace(/[\u0000-\u001f\u007f\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return base || 'transcripcion';
+}
+
+// ─── Glossary and platform captions (contract C7) ─────────────────────────
+
+const GENERIC_TITLE_WORDS = new Set(['audio', 'video', 'vídeo', 'clase', 'clases', 'grabacion', 'grabación', 'reunion', 'reunión',
+  'sesion', 'sesión', 'parte', 'capitulo', 'capítulo', 'episodio', 'completo', 'completa', 'oficial', 'official', 'video',
+  'full', 'live', 'directo', 'stream', 'podcast', 'entrevista', 'interview', 'conferencia', 'charla', 'tutorial', 'curso']);
+const SENTENCE_STARTERS = new Set(['el', 'la', 'los', 'las', 'un', 'una', 'y', 'pero', 'hoy', 'bueno', 'entonces', 'ahora', 'esto',
+  'este', 'esta', 'eso', 'en', 'de', 'que', 'si', 'no', 'yo', 'nosotros', 'vamos', 'muy', 'the', 'and', 'so', 'now', 'this', 'it', 'we', 'i']);
+const MAX_GLOSSARY_TERMS = 20;
+
+function formatModule() {
+  try { return require('../../media-transcript-format'); } catch (_) { return null; }
+}
+
+/** Proper nouns / subject words of a title («Clase 12 · Bioquímica (Dr. Pérez)» → Bioquímica, Pérez). */
+function titleTerms(title) {
+  const fmt = formatModule();
+  const words = String(title || '').normalize('NFC').split(/[^\p{L}\p{N}'’-]+/u)
+    .filter(word => word.length >= 4 && /\p{L}/u.test(word) && !/^\d+$/.test(word)
+      && !GENERIC_TITLE_WORDS.has(word.toLowerCase())
+      && (/^\p{Lu}/u.test(word) || /[áéíóúñü]/i.test(word))
+      && !(fmt && fmt.isDeviceIdentifierToken(word)));
+  return [...new Set(words)].slice(0, 10);
+}
+
+/** Capitalised words used mid-sentence in captions (names, places), most frequent first. */
+function captionTerms(cues = []) {
+  const counts = new Map();
+  for (const cue of cues) {
+    const words = String(cue.text || '').split(/\s+/);
+    words.forEach((raw, index) => {
+      const word = raw.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, '');
+      if (word.length < 4 || !/^\p{Lu}\p{Ll}/u.test(word)) return;
+      const prev = index > 0 ? words[index - 1] : '';
+      if (index === 0 || /[.!?¿¡:]$/.test(prev) || SENTENCE_STARTERS.has(word.toLowerCase())) return;
+      counts.set(word, (counts.get(word) || 0) + 1);
+    });
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([word]) => word).slice(0, MAX_GLOSSARY_TERMS);
+}
+
+function glossaryFor(title, captions) {
+  const fmt = formatModule();
+  const raw = [...titleTerms(title), ...((captions && captions.tracks) || []).flatMap(track => captionTerms(track.cues))];
+  const terms = fmt ? fmt.normalizeHintTerms(raw) : [...new Set(raw)];
+  return terms.slice(0, MAX_GLOSSARY_TERMS);
+}
+
+const CAPTION_TIMEOUT_MS = 60_000;
+const CAPTION_MAX_BYTES = 4 * 1024 * 1024;
+const CAPTION_MIN_COVERAGE = 0.9;
+const CAPTION_FALLBACK_MIN_COVERAGE = 0.3;
+const CAPTION_COVERAGE_TOLERANCE_SEC = 2.5;
+const CAPTION_SPOT_SECONDS = 60;
+const CAPTION_SPOT_MIN_WORDS = 6;
+const CAPTION_SPOT_MIN_AGREEMENT = 0.5;
+// The whole spot check (its ≤ 2 samples) has its own deadline and the short
+// admission lane: two long lectures holding the shared transcription slots
+// for hours must never park a link here until the tool times out.
+const CAPTION_SPOT_TIMEOUT_MS = 90_000;
+const CAPTION_TIMING_RE = /((?:\d{1,3}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?)\s*-->\s*((?:\d{1,3}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?)/;
+
+function baseLanguage(code) {
+  const base = String(code || '').toLowerCase().split(/[-_]/)[0];
+  return /^[a-z]{2,3}$/.test(base) ? base : null;
+}
+
+function captionClock(value) {
+  const parts = String(value).replace(',', '.').split(':').map(Number);
+  if (parts.some(n => !Number.isFinite(n))) return NaN;
+  return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
+}
+
+function cleanCaptionLine(line) {
+  const stripped = String(line || '').replace(/<\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?>/g, '');
+  let cleaned = stripped;
+  try { cleaned = require('../../media-probe').cleanSubtitleText(stripped); } catch (_) {
+    cleaned = stripped.replace(/<\/?[a-zA-Z][^<>]*>/g, '').replace(/\s+/g, ' ').trim();
+  }
+  return cleaned;
+}
+
+/**
+ * WebVTT / SRT text → cues [{ start, end, text }] on the recording clock.
+ * Rolling captions (YouTube's automatic ones repeat the previous line in
+ * every cue) keep only each cue's new lines. Pure; never throws.
+ */
+function parseCaptionText(text) {
+  const cues = [];
+  let previous = [];
+  for (const block of String(text || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split(/\n{2,}/)) {
+    const lines = block.split('\n');
+    const at = lines.findIndex(line => CAPTION_TIMING_RE.test(line));
+    if (at < 0) continue;
+    const m = CAPTION_TIMING_RE.exec(lines[at]);
+    const start = captionClock(m[1]);
+    const end = captionClock(m[2]);
+    const textLines = lines.slice(at + 1).map(cleanCaptionLine).filter(Boolean);
+    const fresh = textLines.filter(line => !previous.includes(line));
+    if (textLines.length) previous = textLines;
+    const value = fresh.join(' ').replace(/\s+/g, ' ').trim();
+    if (!value || !Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
+    const last = cues[cues.length - 1];
+    if (last && last.text === value && start - last.end <= 1) { last.end = Math.max(last.end, end); continue; }
+    cues.push({ start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, text: value });
+  }
+  return cues.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+/** Share of [from, to] the cues cover (pauses up to ±2.5 s count as covered). */
+function captionCoverage(cues, from, to) {
+  if (!(to > from)) return 0;
+  const spans = cues.map(cue => [Math.max(from, cue.start - CAPTION_COVERAGE_TOLERANCE_SEC), Math.min(to, cue.end + CAPTION_COVERAGE_TOLERANCE_SEC)])
+    .filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  let covered = 0;
+  let cursor = from;
+  for (const [a, b] of spans) {
+    const start = Math.max(a, cursor);
+    if (b > start) { covered += b - start; cursor = b; }
+  }
+  return Math.max(0, Math.min(1, covered / (to - from)));
+}
+
+function cuesInRange(cues, from, to) {
+  return cues.filter(cue => cue.end > from && (to == null || cue.start < to))
+    .map(cue => ({ start: Math.max(from, cue.start), end: to == null ? cue.end : Math.min(to, cue.end), text: cue.text }));
+}
+
+function wordSet(text) {
+  return new Set(String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9ñ]+/).filter(word => word.length >= 3));
+}
+
+/**
+ * The platform's caption tracks listed by the probe: { manual: Map(base→key),
+ * auto: Map(base→key), manualKeys: Set(key), language }. `manualKeys` holds
+ * the EXACT keys of the human tracks: a fetched file is human only when its
+ * own key is one of them (manual «es-419» next to automatic «es», manual
+ * «en» next to automatic «en-orig» share a base but not a kind).
+ */
+function listCaptionTracks(info) {
+  const out = { manual: new Map(), auto: new Map(), manualKeys: new Set(), language: baseLanguage(info && info.language) };
+  const add = (map, dict, keys = null) => {
+    if (!dict || typeof dict !== 'object') return;
+    for (const key of Object.keys(dict).slice(0, 200)) {
+      if (/live_chat|rechat/i.test(key)) continue;
+      const base = baseLanguage(key);
+      if (!base) continue;
+      if (keys) keys.add(key);
+      // «es-orig» is the original-language automatic track: preferred.
+      if (!map.has(base) || /-orig$/i.test(key)) map.set(base, key);
+    }
+  };
+  add(out.manual, info && info.subtitles, out.manualKeys);
+  add(out.auto, info && info.automatic_captions);
+  return out;
+}
+
+/** The kind of one fetched caption file, by its own key («es-419», «en-orig»). */
+function captionKindFor(tracks, key) {
+  return tracks && tracks.manualKeys && tracks.manualKeys.has(key) ? 'manual' : 'auto';
+}
+
+/**
+ * The caption track to fall back on when no voice is recognised: the
+ * audio's language first, human before automatic, then coverage. Only tracks
+ * covering ≥ 30 % of the range count. → { track, end, coverage } | null.
+ */
+function pickFallbackCaptions(captions, { known = null, rangeStart = 0, rangeEnd = null } = {}) {
+  if (!captions || !Array.isArray(captions.tracks) || !captions.tracks.length) return null;
+  const ranked = captions.tracks.filter(track => Array.isArray(track.cues) && track.cues.length).map((track) => {
+    const end = rangeEnd != null ? rangeEnd : track.cues[track.cues.length - 1].end;
+    return { track, end, coverage: captionCoverage(track.cues, rangeStart, end) };
+  }).filter(item => item.coverage >= CAPTION_FALLBACK_MIN_COVERAGE)
+    .sort((a, b) => (Number(b.track.language === known) - Number(a.track.language === known))
+      || (Number(b.track.kind === 'manual') - Number(a.track.kind === 'manual')) || (b.coverage - a.coverage));
+  return ranked[0] || null;
+}
+
+// What a hand-off keeps of the platform captions for the durable job.
+const LINK_CAPTIONS_MAX_CUES = 6000;
+const LINK_CAPTIONS_MAX_CHARS = 256 * 1024;
+
+/**
+ * The stored form of a fallback caption track (bounded): cues in the range,
+ * on the RECORDING's clock, with language, kind and coverage. Pure.
+ */
+function linkCaptionsRecord(pick, { rangeStart = 0, rangeEnd = null } = {}) {
+  if (!pick || !pick.track) return null;
+  const segments = [];
+  let chars = 0;
+  let truncated = false;
+  for (const cue of cuesInRange(pick.track.cues, rangeStart, rangeEnd != null ? rangeEnd : pick.end)) {
+    const text = String(cue.text || '').slice(0, 500);
+    if (!text) continue;
+    if (segments.length >= LINK_CAPTIONS_MAX_CUES || chars + text.length > LINK_CAPTIONS_MAX_CHARS) { truncated = true; break; }
+    chars += text.length;
+    segments.push({ start: Math.round(cue.start * 1000) / 1000, end: Math.round(cue.end * 1000) / 1000, text });
+  }
+  if (!segments.length) return null;
+  return { version: 1, source: 'platform_captions', clock: 'recording', language: pick.track.language,
+    kind: pick.track.kind === 'manual' ? 'manual' : 'auto', coverage: Math.round(pick.coverage * 1000) / 1000,
+    ...(truncated ? { truncated: true } : {}), segments };
+}
+
+/**
+ * Durable, owner-scoped copy of a link's fallback captions in
+ * DocumentAnalysis.metadata.linkCaptions (deleted with the File). The media
+ * queue reads it back (readLinkCaptions) when the durable ASR fails or finds
+ * no voice. Never throws: { ok } | { ok: false, reason }.
+ */
+async function recordLinkCaptions(prisma, { fileId, userId, mimeType = null, captions } = {}) {
+  if (!captions || !Array.isArray(captions.segments) || !captions.segments.length) return { ok: false, reason: 'empty' };
+  if (!fileId || !userId || !prisma || !prisma.documentAnalysis || typeof prisma.documentAnalysis.upsert !== 'function') {
+    return { ok: false, reason: 'unavailable' };
+  }
+  try {
+    let metadata = {};
+    if (typeof prisma.documentAnalysis.findUnique === 'function') {
+      const existing = await prisma.documentAnalysis.findUnique({ where: { fileId }, select: { userId: true, metadata: true } });
+      if (existing && existing.userId !== String(userId)) return { ok: false, reason: 'foreign' };
+      if (existing && existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)) metadata = existing.metadata;
+    }
+    const linkCaptions = { ...captions, recordedAt: new Date().toISOString() };
+    await prisma.documentAnalysis.upsert({
+      where: { fileId },
+      create: { userId: String(userId), fileId, status: 'pending', mimeType, metadata: { linkCaptions } },
+      update: { metadata: { ...metadata, linkCaptions } },
+    });
+    return { ok: true };
+  } catch (_) {
+    return { ok: false, reason: 'write_failed' };
+  }
+}
+
+/** The stored fallback captions of a file of `userId`, or null (owner-scoped). Never throws. */
+async function readLinkCaptions(prisma, { fileId, userId } = {}) {
+  if (!fileId || !userId || !prisma || !prisma.documentAnalysis || typeof prisma.documentAnalysis.findUnique !== 'function') return null;
+  try {
+    const row = await prisma.documentAnalysis.findUnique({ where: { fileId }, select: { userId: true, metadata: true } });
+    const record = row && row.userId === String(userId) && row.metadata && row.metadata.linkCaptions;
+    if (!record || record.version !== 1 || !Array.isArray(record.segments) || !record.segments.length) return null;
+    const segments = record.segments.slice(0, LINK_CAPTIONS_MAX_CUES)
+      .map(seg => ({ start: Number(seg.start), end: Number(seg.end), text: String(seg.text || '').slice(0, 500) }))
+      .filter(seg => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end >= seg.start && seg.text);
+    if (!segments.length) return null;
+    return { source: 'platform_captions', clock: 'recording', language: baseLanguage(record.language),
+      kind: record.kind === 'manual' ? 'manual' : 'auto', coverage: Number(record.coverage) || null,
+      ...(record.truncated ? { truncated: true } : {}), segments };
+  } catch (_) {
+    return null;
+  }
+}
+
+/** The language bases worth fetching (the asked/audio language first, then manual tracks), ≤ 3. */
+function captionBasesToFetch(tracks, wanted) {
+  const bases = [];
+  for (const base of [baseLanguage(wanted), tracks.language, ...tracks.manual.keys()]) {
+    if (base && !bases.includes(base) && (tracks.manual.has(base) || tracks.auto.has(base))) bases.push(base);
+    if (bases.length >= 3) break;
+  }
+  return bases;
+}
+
 /** Netscape cookie jar of THIS turn's attachments (ownership re-checked), or null. */
 async function loadAttachedCookies(ctx = {}, deps = {}) {
   const prisma = ctx.prisma || null;
@@ -343,6 +623,177 @@ async function safeAvailable(computer, ctx) {
   try { return Boolean(await computer.available(ctx)); } catch (_) { return false; }
 }
 
+function durableConfig(env = process.env, ctx = {}, deps = {}) {
+  const minRaw = Number(env.TRANSCRIBE_URL_DURABLE_MIN_SECONDS);
+  const maxRaw = Number(env.TRANSCRIBE_URL_DURABLE_MAX_SECONDS);
+  const enabled = String(env.TRANSCRIBE_URL_DURABLE || '1') !== '0' && Boolean(ctx.userId) && Boolean(ctx.chatId)
+    && (deps.durableHandoff !== null);
+  return {
+    enabled,
+    minSeconds: Number.isFinite(minRaw) && minRaw >= 0 ? minRaw : DEFAULT_DURABLE_MIN_SECONDS,
+    maxSeconds: Number.isFinite(maxRaw) && maxRaw > 0 ? maxRaw : DEFAULT_DURABLE_MAX_SECONDS,
+  };
+}
+
+/**
+ * Best-effort cancel of a delivery record whose job could not be queued:
+ * terminal 'failed' without posting anything into the chat.
+ */
+async function cancelDeliveryRecord(delivery, id) {
+  const store = typeof delivery?.getMediaDeliveryService === 'function' ? delivery.getMediaDeliveryService()?.store : null;
+  if (!id || !store || typeof store.claim !== 'function' || typeof store.markFailed !== 'function') return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // Held only while a sweep is looking at it (it sees the file pending
+    // and releases it at once).
+    const held = await Promise.resolve(store.claim(id)).catch(() => null);
+    if (held?.token) {
+      const error = Object.assign(new Error('queue_unavailable'), { code: 'queue_unavailable' });
+      return Boolean(await Promise.resolve(store.markFailed(id, held.token, error, { maxAttempts: 1 })).catch(() => null));
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+/**
+ * Default hand-off: copy the clip into the user's uploads, register it as a
+ * media File, record where the clip sits on the recording's clock, record
+ * the chat delivery and only then enqueue the durable transcription.
+ * Returns { ok, fileId, deliveryId, message } or { ok:false, reason }; an
+ * ok:false means no job was queued and nothing was left behind, so the
+ * caller may transcribe inline without a twin job.
+ * `services` (prisma, enqueueMediaTranscription, delivery, transcriptStore)
+ * is for tests.
+ */
+/**
+ * Generic durable hand-off of a local media file (a link clip, a runner
+ * workspace recording): copy it into the user's uploads, register it as a
+ * media File, record where it sits on the recording's clock, record the chat
+ * delivery and only then enqueue the durable transcription. Returns
+ * { ok, fileId, deliveryId, message } or { ok:false, reason } — an ok:false
+ * means no job was queued and nothing was left behind.
+ */
+async function handOffMediaFile({ sourcePath, originalName, mimeType = 'audio/mp4', extension = '.m4a', filePrefix = 'link',
+  displayName = null, goal = '', sourceInfo = null, offset = 0, subtitles = false, spanSec = null,
+  language = null, hints = null, captions = null, ctx, env = process.env, logTag = '[transcribe_url]', services = {} }) {
+  const crypto = require('node:crypto');
+  const prisma = services.prisma || require('../../../config/database');
+  const enqueueMediaTranscription = services.enqueueMediaTranscription || require('../../media-transcription-queue').enqueueMediaTranscription;
+  const delivery = services.delivery || require('../../media-delivery');
+  const transcriptStore = services.transcriptStore || require('../../media-transcript-store');
+  if (!delivery.isMediaDeliveryEnabled(env)) return { ok: false, reason: 'delivery_disabled' };
+  const uploadRoot = path.resolve(env.UPLOAD_DIR || 'uploads');
+  const userDir = path.join(uploadRoot, String(ctx.userId).replace(/[^a-zA-Z0-9_-]/g, '_'));
+  await fs.promises.mkdir(userDir, { recursive: true });
+  // What the request said about the recording (contract C7): the language
+  // and the glossary reach the delivery and the job.
+  const normalizedHints = hints && typeof hints === 'object' && Object.keys(hints).length ? hints : null;
+  let languageCode = null;
+  try { languageCode = language ? require('../../media-transcript-format').normalizeHintLanguage(language) : null; } catch (_) { languageCode = null; }
+  const media = { ...(languageCode ? { language: languageCode } : {}), ...(normalizedHints ? { hints: normalizedHints } : {}) };
+  const safeExt = /^\.[a-z0-9]{1,6}$/i.test(String(extension)) ? String(extension).toLowerCase() : '.m4a';
+  const filename = `${String(filePrefix).replace(/[^a-z0-9-]/gi, '') || 'media'}-${crypto.randomBytes(8).toString('hex')}${safeExt}`;
+  const target = path.join(userDir, filename);
+  let size;
+  try {
+    await fs.promises.copyFile(sourcePath, target);
+    ({ size } = await fs.promises.stat(target));
+  } catch (err) {
+    await fs.promises.rm(target, { force: true }).catch(() => {});
+    throw err;
+  }
+  let row;
+  try {
+    row = await prisma.file.create({ data: { userId: ctx.userId, filename, originalName, mimeType, size,
+      path: target, processingStage: 'uploaded', processingStageAt: new Date() } });
+  } catch (err) {
+    await fs.promises.rm(target, { force: true }).catch(() => {});
+    throw err;
+  }
+  // No job exists yet: remove the File, the copy and the offset record.
+  const discard = async (reason) => {
+    try { await prisma.file.delete({ where: { id: row.id } }); } catch (_) {
+      try { await prisma.file.update({ where: { id: row.id }, data: { deletedAt: new Date() } }); } catch (__) { /* best-effort */ }
+    }
+    await fs.promises.rm(target, { force: true }).catch(() => {});
+    if (offset) await Promise.resolve(transcriptStore.recordMediaClipOffset({ fileId: row.id, userId: ctx.userId, timeOffsetSec: 0, env })).catch(() => {});
+    return { ok: false, reason, fileId: row.id };
+  };
+  if (offset) {
+    // Durable copy for a lost job that reconcile re-queues with only
+    // { fileId, userId }; the job itself also carries the offset.
+    const recorded = await Promise.resolve(transcriptStore.recordMediaClipOffset({ fileId: row.id, userId: ctx.userId, timeOffsetSec: offset, prisma, env }))
+      .catch(() => null);
+    if (!recorded?.ok) console.warn(`${logTag} clip offset not recorded; the queued job still carries it`, recorded?.reason || 'record_error');
+  }
+  // The platform's captions (a link): kept with the File for the queue's
+  // fallback when the durable ASR fails or finds no voice. Best-effort.
+  if (captions) {
+    const kept = await Promise.resolve(recordLinkCaptions(prisma, { fileId: row.id, userId: ctx.userId, mimeType, captions }))
+      .catch(() => ({ ok: false, reason: 'write_failed' }));
+    if (!kept.ok && kept.reason !== 'unavailable') console.warn(`${logTag} platform captions not kept for the fallback`, kept.reason);
+  }
+  // The delivery exists before the job, so a job that finishes at once
+  // always finds it.
+  let record = null;
+  try {
+    record = await delivery.createDelivery({
+      userId: ctx.userId, chatId: ctx.chatId, taskId: ctx.taskId || null,
+      fileIds: [row.id], fileNames: [originalName], goal,
+      mode: subtitles ? 'subtitles' : 'transcript', formats: ['txt', ...(subtitles ? ['srt', 'vtt'] : [])],
+      range: null,
+      // The stored transcript is already on the recording's clock.
+      output: { documentFormat: null, wantsSubtitles: Boolean(subtitles), timeOffsetSec: 0 },
+      ...(sourceInfo ? { source: sourceInfo } : {}),
+      ...media,
+    });
+  } catch (err) {
+    return discard((err && err.code) || 'delivery_error');
+  }
+  if (!record) return discard('delivery_unavailable');
+  try {
+    await enqueueMediaTranscription({ fileId: row.id, userId: ctx.userId, timeOffsetSec: offset, ...media });
+  } catch (err) {
+    // Without a job the delivery would wait for nothing: cancel it, then
+    // drop the File so the caller can transcribe inline. If the record
+    // cannot be taken, keep the hand-off: reconcile re-queues the
+    // uploaded File and the delivery posts it.
+    if (await cancelDeliveryRecord(delivery, record.id)) return discard((err && err.code) || 'queue_unavailable');
+    console.warn(`${logTag} media job not queued; delivery kept for reconcile`, (err && err.code) || 'queue_error');
+  }
+  const shownName = displayName || originalName;
+  let etaSeconds = null;
+  let message = '';
+  try {
+    etaSeconds = typeof delivery.estimateTranscriptionSeconds === 'function' && spanSec != null
+      ? delivery.estimateTranscriptionSeconds({ durationSec: spanSec }) : null;
+    message = delivery.handOffMessage({ fileNames: [shownName], durationSec: spanSec, etaSeconds });
+  } catch (_) { message = ''; }
+  if (!message) message = `Recibí «${shownName}». Te aviso aquí cuando la transcripción esté lista.`;
+  return { ok: true, fileId: row.id, deliveryId: record.id, message };
+}
+
+/**
+ * Default link hand-off: the clip becomes the user's media File (the title's
+ * accents kept), on the recording's clock, with its delivery and job.
+ * `services` (prisma, enqueueMediaTranscription, delivery, transcriptStore)
+ * is for tests.
+ */
+async function defaultDurableHandoff({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned, subtitles, ctx, env,
+  language = null, hints = null, captions = null, services = {} }) {
+  const label = sectioned ? ` (${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + spanSec)})` : '';
+  // The user's own file keeps the title's accents and case: the media queue
+  // primes the recogniser with its proper nouns (keytermsFromFileName).
+  const originalName = `${displayTitle(title)}${label}.m4a`.replace(/:/g, '.');
+  // Where the clip starts on the recording's clock. The queue shifts the
+  // transcript onto that clock before storing it (File text, sidecar), so
+  // the preview, follow-ups and files all read the recording's own times.
+  const offset = sectioned && rangeStart > 0 ? rangeStart : 0;
+  return handOffMediaFile({ sourcePath: clipPath, originalName, mimeType: 'audio/mp4', extension: '.m4a', filePrefix: 'link',
+    displayName: `${title}${label}`, goal: `Transcripción de ${url.href}`, sourceInfo: { url: url.href, host: url.hostname, title },
+    offset, subtitles, spanSec, language, hints, captions, ctx, env, services });
+}
+
 async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const env = deps.env || process.env;
   const run = deps.runCommand || runCommand;
@@ -359,8 +810,15 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   const ytdlp = env.TRANSCRIBE_URL_YTDLP || 'yt-dlp';
   const ffmpeg = env.FFMPEG_PATH || 'ffmpeg';
   const timeoutMs = Number(env.TRANSCRIBE_URL_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS;
-  const maxSeconds = Number(env.TRANSCRIBE_URL_MAX_SECONDS) > 0 ? Number(env.TRANSCRIBE_URL_MAX_SECONDS) : DEFAULT_MAX_SECONDS;
+  const inlineMaxSeconds = Number(env.TRANSCRIBE_URL_MAX_SECONDS) > 0 ? Number(env.TRANSCRIBE_URL_MAX_SECONDS) : DEFAULT_MAX_SECONDS;
+  const durable = durableConfig(env, ctx, deps);
+  const durableImpl = deps.durableHandoff || defaultDurableHandoff;
+  const probeDuration = deps.probeDuration || ((filePath, opts) => require('../../audio-transcriber').probeAudioDuration(filePath, opts));
+  // With the durable path a 5-hour class fits in one call; without it the
+  // inline ceiling applies (the turn would hold the transcription).
+  const maxSeconds = durable.enabled ? Math.max(inlineMaxSeconds, durable.maxSeconds) : inlineMaxSeconds;
   const discoveryEnabled = String(env.TRANSCRIBE_URL_BROWSER_DISCOVERY || '1') !== '0';
+  const captionsEnabled = String(env.TRANSCRIBE_URL_PLATFORM_CAPTIONS || '1') !== '0';
   const discoveryTimeoutMs = Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) > 0 ? Number(env.TRANSCRIBE_URL_DISCOVERY_TIMEOUT_MS) : DISCOVERY_TIMEOUT_MS;
   const signal = ctx.signal || null;
   const startedAt = Date.now();
@@ -419,6 +877,9 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       if (jsRuntime === 'node') base.push('--no-js-runtimes', '--js-runtimes', `node:${process.execPath}`);
       else if (jsRuntime !== 'none' && jsRuntime !== 'deno') base.push('--js-runtimes', jsRuntime);
       if (env.TRANSCRIBE_URL_REMOTE_COMPONENTS) base.push('--remote-components', String(env.TRANSCRIBE_URL_REMOTE_COMPONENTS));
+      // YouTube lists ~150 machine-translated caption tracks: without this the
+      // probe JSON can pass the 2 MB output cap and lose title and duration.
+      base.push('--extractor-args', 'youtube:skip=translated_subs');
       // yt-dlp needs ffmpeg for --download-sections and HLS; point it at the
       // same binary we use (it only honours a binary actually named ffmpeg).
       if (path.isAbsolute(ffmpeg) && /^ffmpeg(\.exe)?$/i.test(path.basename(ffmpeg))) base.push('--ffmpeg-location', path.dirname(ffmpeg));
@@ -442,33 +903,61 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
 
     let target = { href: url.href, referer: null, userAgent: null, via: 'yt-dlp', direct: false, titleHint: null };
     let discovery = null;
+    // The platform's caption tracks (contract C7): a glossary for the
+    // recogniser, the fallback when no voice is recognised, and the
+    // transcript itself only when they pass every check (verifyCaptions).
+    let captions = null;
+    const requestedLanguage = args.language ? String(args.language) : null;
 
-    // 4–5. Transcribe the clip and deliver it (shared by every acquisition path).
-    const finish = async ({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via, partial = null }) => {
-      const clipName = `${safeTitle(title)}${sectioned ? ` ${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart)}` : ''}.m4a`;
-      let result;
+    const fetchCaptions = async (t, info) => {
+      if (!captionsEnabled || t.direct || !info) return null;
+      const tracks = listCaptionTracks(info);
+      if (!tracks.manual.size && !tracks.auto.size) return null;
+      const bases = captionBasesToFetch(tracks, requestedLanguage);
+      if (!bases.length) return null;
+      const langs = bases.flatMap(base => [base, `${base}-.*`]).join(',');
       try {
-        result = await transcribeImpl(clipPath, 'audio/mp4', clipName, {
-          signal,
-          ...(args.language ? { language: String(args.language) } : {}),
-          onProgress: ctx.onProgress,
-        });
+        await run(ytdlp, [...ytBase(), ...headerArgs(t), '--skip-download', '--write-subs', '--write-auto-subs',
+          '--sub-langs', langs, '--sub-format', 'vtt/srt/best', '-o', path.join(workDir, 'captions.%(ext)s'), '--', t.href],
+        { signal, timeoutMs: Math.min(timeoutMs, CAPTION_TIMEOUT_MS), cwd: workDir });
+        // A non-zero exit may still have written the tracks that matter.
       } catch (err) {
         if (err && err.name === 'AbortError') throw err;
-        return errorResult('transcription_failed', err && err.message, { title });
+        return null;
       }
-      if (!result || result.ok === false) {
-        return errorResult(result && result.status === 'no_speech' ? 'transcription_failed' : 'transcription_failed', result && (result.reasonCode || result.status), { title, noSpeech: Boolean(result && result.status === 'no_speech') });
+      const found = [];
+      let names = [];
+      try { names = (await fsImpl.promises.readdir(workDir)).filter(name => /^captions\..+\.(vtt|srt)$/i.test(name)); } catch (_) { names = []; }
+      for (const name of names.slice(0, 6)) {
+        const key = name.replace(/^captions\./, '').replace(/\.(vtt|srt)$/i, '');
+        const base = baseLanguage(key);
+        if (!base) continue;
+        let text = '';
+        try {
+          const stat = await fsImpl.promises.stat(path.join(workDir, name));
+          if (stat.size > CAPTION_MAX_BYTES) continue;
+          text = await fsImpl.promises.readFile(path.join(workDir, name), 'utf8');
+        } catch (_) { continue; }
+        const cues = parseCaptionText(text);
+        if (!cues.length) continue;
+        // Human only when THIS key is a listed human track: yt-dlp writes the
+        // manual file when both kinds share a key, and fetches the automatic
+        // one too when its key differs («es-419» manual, «es» automatic).
+        found.push({ language: base, key, kind: captionKindFor(tracks, key), cues });
       }
-      const segments = Array.isArray(result.segments) ? result.segments : [];
-      const offset = rangeStart;
-      const transcript = String(result.transcript || result.text || '').trim();
-      const body = segments.length >= 2 ? buildTimestampedText(segments, { offset }) : transcript;
-      const rangeLabel = `${fmtClock(rangeStart)} → ${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + (duration || 0))}`;
-      const header = `Transcripción de «${title}» (${url.hostname.replace(/^www\./, '')}) · ${rangeLabel}${result.language ? ` · idioma: ${result.language}` : ''}\n\n`;
-      const fullText = header + body;
+      if (!found.length) return null;
+      found.sort((a, b) => (a.kind === b.kind ? a.key.localeCompare(b.key) : a.kind === 'manual' ? -1 : 1));
+      return { tracks: found, audioLanguage: tracks.language };
+    };
 
-      // 5. Deliver
+    // 5. Deliver timed text: a .txt (and an .srt on request) as file cards plus
+    // the capped text for the model. Shared by ASR and platform captions.
+    const deliverText = ({ title, rangeStart, rangeEnd, duration, segments, offset, plain = '', language = null, via,
+      partial = null, extra = {}, sourceLabel = null, note = null }) => {
+      const body = segments.length >= 2 ? buildTimestampedText(segments, { offset }) : (plain || segments.map(seg => seg.text).join(' '));
+      const rangeLabel = `${fmtClock(rangeStart)} → ${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + (duration || 0))}`;
+      const header = `Transcripción de «${title}» (${url.hostname.replace(/^www\./, '')}) · ${rangeLabel}${language ? ` · idioma: ${language}` : ''}${sourceLabel ? ` · fuente: ${sourceLabel}` : ''}\n\n${note ? `${note}\n\n` : ''}`;
+      const fullText = header + body;
       let artifact = null; let srtArtifact = null;
       try {
         const saved = saveArtifactImpl({
@@ -499,8 +988,8 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
           }
         }
       } catch (_) { artifact = artifact || null; }
-
-      const truncated = body.length > MAX_TEXT_CHARS;
+      const shown = note ? `${note}\n\n${body}` : body;
+      const truncated = shown.length > MAX_TEXT_CHARS;
       return {
         ok: true,
         title,
@@ -508,11 +997,10 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
         host: url.hostname.replace(/^www\./, ''),
         range: { start: rangeStart, end: rangeEnd, label: rangeLabel },
         durationSeconds: duration,
-        method: result.method || null,
-        model: result.model || null,
-        language: result.language || null,
+        ...extra,
+        language: language || null,
         segments: segments.length,
-        text: truncated ? `${body.slice(0, MAX_TEXT_CHARS)}\n… [transcripción recortada en la respuesta; el archivo adjunto tiene el texto completo]` : body,
+        text: truncated ? `${shown.slice(0, MAX_TEXT_CHARS)}\n… [transcripción recortada en la respuesta; el archivo adjunto tiene el texto completo]` : shown,
         truncated,
         artifact,
         ...(srtArtifact ? { srtArtifact } : {}),
@@ -522,6 +1010,236 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
         ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
         elapsedMs: Date.now() - startedAt,
       };
+    };
+
+    const languageName = (code) => {
+      const fmt = formatModule();
+      try { return fmt ? fmt.languageNameEs(code) : code; } catch (_) { return code; }
+    };
+
+    // A quick ASR of ~60 s of the clip: the audio's language and words, to
+    // check the captions against what is really said. ≤ 2 samples, on the
+    // short admission lane and under its own deadline: a spot check that
+    // cannot get a transcription slot in time answers `spot_timeout` and the
+    // link goes on (hand-off or inline ASR), never waits for the tool cut.
+    const spotTimeoutMs = Number(env.TRANSCRIBE_URL_CAPTION_SPOT_TIMEOUT_MS) > 0
+      ? Number(env.TRANSCRIBE_URL_CAPTION_SPOT_TIMEOUT_MS) : CAPTION_SPOT_TIMEOUT_MS;
+    const spotCheck = async (clipPath, rangeStart, end) => {
+      const span = Math.max(0, end - rangeStart);
+      const positions = [Math.max(0, span / 2 - CAPTION_SPOT_SECONDS / 2), Math.max(0, span / 4 - CAPTION_SPOT_SECONDS / 2)];
+      const bounded = composeAbortSignals([signal], { timeoutMs: spotTimeoutMs, timeoutReason: 'caption_spot_timeout' });
+      const outerAborted = () => Boolean(signal && signal.aborted);
+      // Never trust a step to honour the signal: the deadline settles the wait
+      // even when an engine (or a stuck admission) ignores it.
+      const raceDeadline = (promise) => new Promise((resolve, reject) => {
+        if (bounded.signal.aborted) { reject(Object.assign(new Error('caption_spot_timeout'), { name: 'AbortError' })); return; }
+        const onAbort = () => reject(Object.assign(new Error('caption_spot_timeout'), { name: 'AbortError' }));
+        bounded.signal.addEventListener('abort', onAbort, { once: true });
+        Promise.resolve(promise).then(resolve, reject).finally(() => bounded.signal.removeEventListener('abort', onAbort));
+      });
+      let last = { ok: false, reason: 'spot_failed' };
+      try {
+        for (const [index, at] of positions.entries()) {
+          if (index > 0 && Math.abs(at - positions[0]) < 1) break;
+          if (bounded.signal.aborted) {
+            if (outerAborted()) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+            return { ok: false, reason: 'spot_timeout' };
+          }
+          const samplePath = path.join(workDir, `spot-${index}.m4a`);
+          try {
+            const ff = await raceDeadline(run(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-ss', String(Math.round(at * 1000) / 1000),
+              '-t', String(CAPTION_SPOT_SECONDS), '-i', clipPath, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', samplePath],
+            { signal: bounded.signal, timeoutMs: 60_000, cwd: workDir }));
+            if (ff.code !== 0) { last = { ok: false, reason: 'spot_cut_failed' }; continue; }
+            const res = await raceDeadline(transcribeImpl(samplePath, 'audio/mp4', 'muestra.m4a', { signal: bounded.signal, lane: 'interactive',
+              ...(requestedLanguage ? { language: requestedLanguage } : {}) }));
+            if (!res || res.ok === false) { last = { ok: false, reason: 'spot_no_speech' }; continue; }
+            const words = wordSet(Array.isArray(res.segments) && res.segments.length ? res.segments.map(seg => seg.text).join(' ') : (res.transcript || res.text));
+            if (words.size < CAPTION_SPOT_MIN_WORDS) { last = { ok: false, reason: 'spot_too_short' }; continue; }
+            return { ok: true, language: baseLanguage(res.language), words, from: rangeStart + at, to: rangeStart + at + CAPTION_SPOT_SECONDS };
+          } catch (err) {
+            // The caller's cancel stops the whole tool; our own deadline only
+            // ends the check.
+            if (outerAborted()) throw err;
+            if (bounded.signal.aborted) return { ok: false, reason: 'spot_timeout' };
+            if (err && err.name === 'AbortError') throw err;
+            last = { ok: false, reason: 'spot_failed' };
+          } finally {
+            await Promise.resolve().then(() => fsImpl.promises.rm(samplePath, { force: true })).catch(() => {});
+          }
+        }
+        return last;
+      } finally {
+        bounded.cleanup();
+      }
+    };
+
+    /**
+     * Human captions replace ASR only when they pass every check: same
+     * language as the audio, ≥ 90 % of the requested range covered, and a
+     * sample of the audio agrees with them (translated, partial or shifted
+     * tracks fail one of the three). Automatic captions never replace ASR.
+     */
+    const verifyCaptions = async ({ clipPath, rangeStart, rangeEnd }) => {
+      const manual = (captions && captions.tracks || []).filter(track => track.kind === 'manual');
+      if (!manual.length) return { ok: false, reason: 'no_human_captions' };
+      const lastCue = Math.max(...manual.map(track => track.cues[track.cues.length - 1].end));
+      const end = rangeEnd != null ? rangeEnd : lastCue;
+      if (!(end > rangeStart)) return { ok: false, reason: 'range_unknown' };
+      const known = baseLanguage(requestedLanguage) || captions.audioLanguage || null;
+      if (known && !manual.some(track => track.language === known)) return { ok: false, reason: 'language_mismatch' };
+      const spot = await spotCheck(clipPath, rangeStart, end);
+      if (!spot.ok) return { ok: false, reason: spot.reason };
+      const language = known || spot.language;
+      if (!language || (spot.language && spot.language !== language)) return { ok: false, reason: 'language_mismatch' };
+      const track = manual.find(item => item.language === language);
+      if (!track) return { ok: false, reason: 'language_mismatch' };
+      const coverage = captionCoverage(track.cues, rangeStart, end);
+      if (coverage < CAPTION_MIN_COVERAGE) return { ok: false, reason: 'low_coverage', coverage };
+      const captionWords = wordSet(cuesInRange(track.cues, spot.from - 5, spot.to + 5).map(cue => cue.text).join(' '));
+      let shared = 0;
+      for (const word of spot.words) if (captionWords.has(word)) shared++;
+      const agreement = shared / spot.words.size;
+      if (agreement < CAPTION_SPOT_MIN_AGREEMENT) return { ok: false, reason: 'spot_disagrees', coverage, agreement };
+      return { ok: true, track, language, coverage, agreement, end, cues: cuesInRange(track.cues, rangeStart, end) };
+    };
+
+    /** No voice recognised: the platform's own captions, labelled honestly, when they cover enough. */
+    const captionFallback = ({ title, rangeStart, rangeEnd, duration, via, partial, reason }) => {
+      if (!captions || !captions.tracks.length) return null;
+      const known = baseLanguage(requestedLanguage) || captions.audioLanguage || null;
+      const pick = pickFallbackCaptions(captions, { known, rangeStart, rangeEnd });
+      if (!pick) return null;
+      const name = languageName(pick.track.language);
+      const what = pick.track.kind === 'manual' ? `los subtítulos que publicó la plataforma (${name})` : `los subtítulos automáticos de la plataforma (${name}), que pueden tener errores`;
+      const cover = pick.coverage < CAPTION_MIN_COVERAGE ? ` Cubren cerca del ${Math.round(pick.coverage * 100)} % del tramo.` : '';
+      const note = `Nota: no pude reconocer la voz del audio; esto son ${what}.${cover}`;
+      return deliverText({ title, rangeStart, rangeEnd: rangeEnd != null ? rangeEnd : pick.end, duration, via, partial,
+        segments: cuesInRange(pick.track.cues, rangeStart, rangeEnd != null ? rangeEnd : pick.end), offset: 0,
+        language: pick.track.language, sourceLabel: pick.track.kind === 'manual' ? 'subtítulos de la plataforma' : 'subtítulos automáticos de la plataforma',
+        note, extra: { method: 'platform_captions', model: null, transcriptSource: 'platform_captions', fallback: true, asrFailure: reason || null,
+          captions: { language: pick.track.language, kind: pick.track.kind, coverage: Math.round(pick.coverage * 1000) / 1000 } } });
+    };
+
+    // 4–5. Transcribe the clip and deliver it (shared by every acquisition path).
+    const finish = async ({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via, partial = null, cappedEnd = false }) => {
+      // A stream of unknown length was cut at the per-call cap, not at its
+      // real end: measure the clip before deciding (a 5-minute clip is not
+      // a 12-hour recording). Unmeasured, it is never handed off.
+      let measured = null;
+      if (cappedEnd && durable.enabled) {
+        try { measured = Number(await probeDuration(clipPath, { signal })) || null; } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          measured = null;
+        }
+        if (measured > 0) rangeEnd = rangeStart + measured;
+      }
+      const clipName = `${safeTitle(title)}${sectioned ? ` ${fmtClock(rangeStart)}-${fmtClock(rangeEnd != null ? rangeEnd : rangeStart)}` : ''}.m4a`;
+      const spanSec = cappedEnd && !(measured > 0) ? null
+        : rangeEnd != null ? rangeEnd - rangeStart : (duration != null ? duration - rangeStart : null);
+      // The recogniser's glossary: the title's proper nouns (accents kept)
+      // and the names the captions spell.
+      const glossary = glossaryFor(title, captions);
+      const hints = glossary.length ? { terms: glossary } : null;
+      let captionCheck = null;
+      if (captions && !partial) {
+        const knownEnd = rangeEnd != null ? rangeEnd : (spanSec != null ? rangeStart + spanSec : null);
+        try { captionCheck = await verifyCaptions({ clipPath, rangeStart, rangeEnd: knownEnd }); } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          captionCheck = { ok: false, reason: 'check_failed' };
+        }
+        if (captionCheck.ok) {
+          return deliverText({ title, rangeStart, rangeEnd: captionCheck.end, duration, via, segments: captionCheck.cues, offset: 0,
+            language: captionCheck.language, sourceLabel: 'subtítulos de la plataforma',
+            note: `Nota: usé los subtítulos que publicó la plataforma (${languageName(captionCheck.language)}); cubren el ${Math.round(captionCheck.coverage * 100)} % del tramo y coinciden con una muestra del audio.`,
+            extra: { method: 'platform_captions', model: null, transcriptSource: 'platform_captions',
+              captions: { language: captionCheck.language, kind: 'manual', coverage: Math.round(captionCheck.coverage * 1000) / 1000,
+                agreement: Math.round(captionCheck.agreement * 1000) / 1000 } } });
+        }
+      }
+      const captionReport = captionCheck ? { captionCheck: { reason: captionCheck.reason || null,
+        ...(captionCheck.coverage != null ? { coverage: Math.round(captionCheck.coverage * 1000) / 1000 } : {}) } } : {};
+      if (durable.enabled && !partial && spanSec != null && spanSec >= durable.minSeconds) {
+        try {
+          // The best platform track travels with the job: if the durable ASR
+          // fails or finds no voice, the queue falls back on it (labelled).
+          const fallbackPick = captions ? pickFallbackCaptions(captions, {
+            known: baseLanguage(requestedLanguage) || captions.audioLanguage || null, rangeStart,
+            rangeEnd: rangeEnd != null ? rangeEnd : rangeStart + spanSec }) : null;
+          const linkCaptions = linkCaptionsRecord(fallbackPick, { rangeStart, rangeEnd: rangeEnd != null ? rangeEnd : rangeStart + spanSec });
+          const handed = await durableImpl({ clipPath, title, url, rangeStart, rangeEnd, spanSec, sectioned,
+            subtitles: Boolean(args.subtitles), language: args.language || null, hints, ctx, env,
+            ...(linkCaptions ? { captions: linkCaptions } : {}) });
+          if (handed && handed.ok) {
+            const rangeLabel = `${fmtClock(rangeStart)} → ${fmtClock(rangeEnd != null ? rangeEnd : rangeStart + spanSec)}`;
+            return {
+              ok: true,
+              deferred: true,
+              title,
+              source: url.href,
+              host: url.hostname.replace(/^www\./, ''),
+              range: { start: rangeStart, end: rangeEnd, label: rangeLabel },
+              durationSeconds: duration,
+              fileId: handed.fileId,
+              delivery: handed.deliveryId,
+              userMessage: handed.message,
+              text: handed.message,
+              via,
+              ...captionReport,
+              ...(discovery ? { discovery } : {}),
+              ...(cookiesInfo ? { cookies: cookiesInfo } : {}),
+              elapsedMs: Date.now() - startedAt,
+            };
+          }
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          // Fall through to the inline transcription below.
+        }
+        if (spanSec > inlineMaxSeconds) {
+          return errorResult('media_too_long', `durable hand-off unavailable; ${fmtClock(spanSec)} > inline max ${fmtClock(inlineMaxSeconds)}`, { durationSeconds: duration, maxSeconds: inlineMaxSeconds, title });
+        }
+      }
+      let result;
+      try {
+        result = await transcribeImpl(clipPath, 'audio/mp4', clipName, {
+          signal,
+          lane: 'interactive',
+          ...(args.language ? { language: String(args.language) } : {}),
+          ...(hints ? { hints } : {}),
+          onProgress: ctx.onProgress,
+        });
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        return captionFallback({ title, rangeStart, rangeEnd, duration, via, partial, reason: 'transcription_failed' })
+          || errorResult('transcription_failed', err && err.message, { title });
+      }
+      if (!result || result.ok === false) {
+        const noSpeech = Boolean(result && result.status === 'no_speech');
+        return captionFallback({ title, rangeStart, rangeEnd, duration, via, partial, reason: noSpeech ? 'no_speech' : 'transcription_failed' })
+          || errorResult('transcription_failed', result && (result.reasonCode || result.status), { title, noSpeech });
+      }
+      let segments = Array.isArray(result.segments) ? result.segments : [];
+      // The same cleanup as every stored transcript (contract C5): engine
+      // credits, sign-offs, loops and prompt echoes never reach the answer.
+      let cleanup = null;
+      const fmt = formatModule();
+      if (fmt && segments.length) {
+        try {
+          const cleaned = fmt.cleanSegmentsDetailed(segments, { promptTerms: glossary.length ? glossary : null, keepSuspect: true });
+          cleanup = cleaned.cleanup;
+          if (cleaned.segments.length) segments = cleaned.segments;
+          else {
+            return captionFallback({ title, rangeStart, rangeEnd, duration, via, partial, reason: 'no_speech' })
+              || errorResult('transcription_failed', 'no_speech', { title, noSpeech: true });
+          }
+        } catch (_) { cleanup = null; }
+      }
+      return deliverText({ title, rangeStart, rangeEnd, duration, via, partial, segments, offset: rangeStart,
+        plain: cleanup && cleanup.removed ? segments.map(seg => String(seg.text || '').trim()).join(' ') : String(result.transcript || result.text || '').trim(),
+        language: result.language || null,
+        extra: { method: result.method || null, model: result.model || null, ...captionReport,
+          ...(cleanup && cleanup.removed ? { cleaned: cleanup.removed } : {}),
+          ...(result.quality && typeof result.quality === 'object' && result.quality.level ? { quality: { level: result.quality.level, score: result.quality.score ?? null } } : {}) } });
     };
 
     // Last rung («rastrear el audio»): play the recording in a browser and
@@ -680,6 +1398,10 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     }
 
     const info = probe.info;
+    try { captions = await fetchCaptions(target, info); } catch (err) {
+      if (err && err.name === 'AbortError') throw err;
+      captions = null;
+    }
     // null/undefined duration = unknown (a discovered live stream); 0 is unknown too.
     const duration = info && info.duration != null && Number.isFinite(Number(info.duration)) && Number(info.duration) > 0 ? Number(info.duration) : null;
     const title = (info && (info.title || info.fulltitle)) || target.titleHint || url.hostname;
@@ -691,9 +1413,11 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     if (span != null && span > maxSeconds) {
       return errorResult('media_too_long', `requested ${fmtClock(span)} > max ${fmtClock(maxSeconds)}`, { durationSeconds: duration, maxSeconds, title });
     }
+    let cappedEnd = false;
     if (span == null && duration == null && end == null) {
       // Unknown duration and no end: cap at maxSeconds from start.
       rangeEnd = rangeStart + maxSeconds;
+      cappedEnd = true;
     }
 
     // 3. Download the section as audio, then trim precisely.
@@ -771,7 +1495,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       }
     }
 
-    return finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via });
+    return finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via, cappedEnd });
   } finally {
     await cleanup();
   }
@@ -796,6 +1520,7 @@ function buildTranscribeUrlTool(deps = {}) {
       'If the page is behind a login it is also opened INSIDE the chat computer\'s browser, which keeps the user\'s own sign-ins.',
       'When no stream can be downloaded (MediaSource/blob players, tokenised segments, iframes), it PLAYS the recording in that browser and records the audio it plays (via ends in "+capture"); this can take as long as the requested range. `partial` (time_budget / stalled) means it stopped early: tell the user which part (range) was transcribed and offer the rest.',
       'Ranges: "del minuto 60 al 1:20" means 1:00:00 → 1:20:00 — pass hh:mm:ss when past the hour.',
+      'Long recordings (20 min or more, up to 12 h) are queued: the result is ok:true with deferred:true — relay userMessage as is (the transcript, TXT/Word/SRT files and a notification arrive in this chat when it finishes); never call the tool again for it and never say the transcription failed.',
       'Results are structured: ok:false with code "media_login_in_computer" means the recording is now open in the chat computer waiting for the user to sign in — relay userMessage and, when the user says they are signed in («listo»), call transcribe_url AGAIN with the same url and range (that retry is expected). "media_login_required" means the link needs the user\'s own session — relay userMessage: attach the video/audio file, or attach a cookies.txt of that site once; "media_too_long" means ask for a range. `cookies.saved:true` means the session was stored: say so. Otherwise never retry the same URL more than once per failure.',
     ].join(' '),
     inputSchema,
@@ -832,4 +1557,25 @@ module.exports = {
   USER_MESSAGES,
   MAX_TEXT_CHARS,
   DEFAULT_MAX_SECONDS,
+  DEFAULT_DURABLE_MIN_SECONDS,
+  DEFAULT_DURABLE_MAX_SECONDS,
+  durableConfig,
+  defaultDurableHandoff,
+  handOffMediaFile,
+  // contract C7: platform captions and glossary
+  displayTitle,
+  titleTerms,
+  captionTerms,
+  glossaryFor,
+  parseCaptionText,
+  captionCoverage,
+  cuesInRange,
+  listCaptionTracks,
+  captionKindFor,
+  pickFallbackCaptions,
+  linkCaptionsRecord,
+  recordLinkCaptions,
+  readLinkCaptions,
+  captionBasesToFetch,
+  CAPTION_MIN_COVERAGE,
 };

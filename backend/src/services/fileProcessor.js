@@ -1,10 +1,13 @@
 const mammoth = require('mammoth');
 const pdf = require('pdf-parse');
+const { toPdfJsData } = require('../utils/pdf-js-input');
 const MEMORY_SAFE_MAX_BYTES = Number.parseInt(process.env.SIRAGPT_MEMORY_SAFE_MAX_BYTES || String(150 * 1024 * 1024), 10); // 150 MB
 const sharp = require('sharp');
 const fs = require('fs').promises;
 const path = require('path');
 const ocrEngine = require('./ocr-engine');
+const ocrEnsemble = require('./ocr-ensemble');
+const ocrQuality = require('./ocr-quality');
 // Memo: when the vision runtime rejects our key (401/403) skip the fallback
 // for a while instead of paying a doomed round-trip on every upload.
 let visionAuthFailedUntil = 0;
@@ -33,6 +36,55 @@ function getStreamingPdf() {
   _streamingPdfTried = true;
   try { _streamingPdf = require('./document/streaming-pdf'); } catch { _streamingPdf = null; }
   return _streamingPdf;
+}
+
+/**
+ * pdf-parse's default page render (render_page in pdf-parse 1.1.4, so the
+ * joined text stays byte-identical) that also records each page's text by
+ * its index.
+ */
+function renderPdfParsePage(pageData, perPage) {
+  return pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false })
+    .then((textContent) => {
+      let lastY;
+      let text = '';
+      for (const item of textContent.items) {
+        if (lastY === item.transform[5] || !lastY) text += item.str;
+        else text += `\n${item.str}`;
+        lastY = item.transform[5];
+      }
+      if (Number.isInteger(pageData.pageIndex)) perPage[pageData.pageIndex] = text;
+      return text;
+    });
+}
+
+/**
+ * pdf-parse plus the text of each page: { data, pages }. A blank line inside
+ * a page (pdf.js turns an empty text item into one) looks exactly like a page
+ * boundary in pdf-parse's joined text, so the stamp check reads the pages
+ * themselves. `pages` is null unless they join into exactly pdf-parse's text
+ * («\n\n» before every page, an unreadable page as «»): a stubbed or
+ * different pdf-parse falls back to the joined text. The bytes go through
+ * toPdfJsData: a small Buffer otherwise fails in pdf.js 1.10 («bad XRef
+ * entry») depending on the shared Buffer pool.
+ */
+async function parsePdfWithPages(dataBuffer, parse = pdf) {
+  const perPage = [];
+  const data = await parse(toPdfJsData(dataBuffer), { pagerender: (pageData) => renderPdfParsePage(pageData, perPage) });
+  const count = Number(data && data.numpages) || 0;
+  let pages = null;
+  if (count > 0 && perPage.length <= count && typeof data.text === 'string') {
+    const list = Array.from({ length: count }, (_, i) => (typeof perPage[i] === 'string' ? perPage[i] : ''));
+    // Compared in place (no second copy of a long text).
+    let pos = 0;
+    const matches = list.every((page) => {
+      if (!data.text.startsWith('\n\n', pos) || !data.text.startsWith(page, pos + 2)) return false;
+      pos += 2 + page.length;
+      return true;
+    });
+    if (matches && pos === data.text.length) pages = list;
+  }
+  return { data, pages };
 }
 
 const STREAMING_PDF_THRESHOLD = Number.parseInt(
@@ -519,23 +571,23 @@ class FileProcessor {
     try {
       const pdftotext = await extractFastpath.tryPdftotext(filePath, options);
       if (pdftotext.used && pdftotext.pageCount > 0) {
+        const plan = await this._textLayerPlan(pdftotext.pages, pdftotext.textLayer);
+        if (plan.kind === 'scanned') {
+          // «Has ≥ 20 characters» is not «has text»: stamps / page numbers
+          // only, or a broken layer on every page → read the pages.
+          console.log(`[fileProcessor] pdftotext: text layer of ${pdftotext.pageCount} page(s) needs OCR (${this._planSummary(plan)}) — full-page OCR`);
+          return this._ocrScannedPdf(filePath, options, {
+            textLayerText: pdftotext.text, pageCount: pdftotext.pageCount, layerPages: pdftotext.pages, plan,
+          });
+        }
         let mergedText = pdftotext.text;
         let mixedOcr = null;
         try {
-          if (mixedPdf.mixedOcrEnabled() && mixedPdf.isMixedPdf(pdftotext.pages)) {
-            const lowTextPages = mixedPdf.findLowTextPages(pdftotext.pages);
-            const cap = mixedPdf.mixedOcrMaxPages();
-            console.log(`[fileProcessor] pdftotext mixed PDF: ${lowTextPages.length}/${pdftotext.pages.length} page(s) without text — OCR cap ${cap}`);
-            const subset = await ocrEngine.extractPdfPagesSubset(filePath, lowTextPages, { maxPages: cap });
-            const merged = mixedPdf.mergeMixedPdfText(pdftotext.pages, subset.pages);
-            if (merged.ocrPagesUsed > 0) {
+          if (plan.kind === 'mixed' && mixedPdf.mixedOcrEnabled()) {
+            const merged = await this._mixedPdfOcr(filePath, pdftotext.pages, plan, options, 'pdftotext');
+            if (merged) {
               mergedText = merged.text;
-              mixedOcr = {
-                scannedPages: lowTextPages.length,
-                ocrPagesProcessed: subset.ocr?.pagesProcessed || 0,
-                ocrPagesWithText: merged.ocrPagesUsed,
-                capped: Boolean(subset.ocr?.capped),
-              };
+              mixedOcr = merged.mixedOcr;
             }
           }
         } catch (mixedErr) {
@@ -599,28 +651,26 @@ class FileProcessor {
           // through to the pdf-parse + hybrid-OCR path below, which detects the
           // missing text layer and runs OCR. Only return early when we actually
           // captured text.
+          const streamPlan = fullText.trim().length > 0 ? await this._textLayerPlan(pages) : null;
+          if (streamPlan && streamPlan.kind === 'scanned') {
+            console.log(`[fileProcessor] streaming PDF: text layer of ${streamingResult.pageCount} page(s) needs OCR (${this._planSummary(streamPlan)}) — full-page OCR`);
+            return this._ocrScannedPdf(filePath, options, {
+              textLayerText: fullText, pageCount: streamingResult.pageCount, layerPages: pages, plan: streamPlan,
+            });
+          }
           if (fullText.trim().length > 0) {
             // MIXED PDF: some pages have a text layer, others are scans/photos
-            // with none. The old early-return silently dropped the scanned
-            // pages. Detect them and OCR ONLY those pages, merging both
-            // sources back in page order.
+            // (or carry a broken / stamp-only layer). OCR ONLY those pages and
+            // merge both sources back in page order; pages nobody could read
+            // are marked, never dropped.
             let mergedText = fullText;
             let mixedOcr = null;
             try {
-              if (mixedPdf.mixedOcrEnabled() && mixedPdf.isMixedPdf(pages)) {
-                const lowTextPages = mixedPdf.findLowTextPages(pages);
-                const cap = mixedPdf.mixedOcrMaxPages();
-                console.log(`[fileProcessor] mixed PDF: ${lowTextPages.length}/${pages.length} page(s) without text layer — running per-page OCR (cap ${cap})`);
-                const subset = await ocrEngine.extractPdfPagesSubset(filePath, lowTextPages, { maxPages: cap });
-                const merged = mixedPdf.mergeMixedPdfText(pages, subset.pages);
-                if (merged.ocrPagesUsed > 0) {
+              if (streamPlan.kind === 'mixed' && mixedPdf.mixedOcrEnabled()) {
+                const merged = await this._mixedPdfOcr(filePath, pages, streamPlan, options, 'streaming');
+                if (merged) {
                   mergedText = merged.text;
-                  mixedOcr = {
-                    scannedPages: lowTextPages.length,
-                    ocrPagesProcessed: subset.ocr?.pagesProcessed || 0,
-                    ocrPagesWithText: merged.ocrPagesUsed,
-                    capped: Boolean(subset.ocr?.capped),
-                  };
+                  mixedOcr = merged.mixedOcr;
                 }
               }
             } catch (mixedErr) {
@@ -666,12 +716,16 @@ class FileProcessor {
     try {
       if (skipLegacyPdfParse) throw new Error('skip_legacy_pdf_parse_large_pdf');
       const dataBuffer = await fs.readFile(filePath);
-      const data = await pdf(dataBuffer);
+      const { data, pages: parsedPages } = await parsePdfWithPages(dataBuffer);
 
       console.log(`PDF processed (legacy): ${filePath}, extracted text length: ${data.text.length}, pages: ${data.numpages}`);
 
-      // If real text exists (not just images), prepend a header
-      if (data.text.trim().length > 100) {
+      // If real text exists (not just images), prepend a header. Stamps or
+      // page numbers repeated on every page are not real text.
+      const stampOnly = mixedPdf.textLayerCheckEnabled() &&
+        mixedPdf.isStampOnlyText(data.text, data.numpages, { pages: parsedPages });
+      if (stampOnly) console.log(`[fileProcessor] pdf-parse: text layer is only stamps/page numbers — running OCR`);
+      if (data.text.trim().length > 100 && !stampOnly) {
         const header = `PDF document — ${data.numpages} page(s), ${data.text.length} characters extracted\n---\n`;
         const extractedText = header + data.text;
         const ocr = {
@@ -691,22 +745,148 @@ class FileProcessor {
       }
     }
 
+    return this._ocrScannedPdf(filePath, options);
+  }
+
+  /**
+   * Text-layer OCR plan for a page list ({ page, text }): which pages need
+   * OCR (short, garbled, stamp-only) and whether the document is really a
+   * scan. SIRAGPT_PDF_TEXT_LAYER_CHECK=0 keeps the old length-only test.
+   * Async: the plan yields to the event loop (a streamed 2000-page book
+   * must not freeze the web process while it is scored).
+   */
+  async _textLayerPlan(pages, precomputed = null) {
+    if (!mixedPdf.textLayerCheckEnabled()) {
+      const low = mixedPdf.findLowTextPages(pages);
+      return { kind: mixedPdf.isMixedPdf(pages) ? 'mixed' : 'text', ocrPages: low, reasons: {}, counts: {}, legacy: true };
+    }
+    if (precomputed && Array.isArray(precomputed.ocrPages)) return precomputed;
+    return mixedPdf.planTextLayerOcrAsync(pages);
+  }
+
+  _planSummary(plan) {
+    const c = plan.counts || {};
+    return [`short=${c.short || 0}`, `garbled=${c.garbled || 0}`, `stamp_only=${c.stampOnly || 0}`].join(' ');
+  }
+
+  /**
+   * OCR the planned pages of a mixed PDF (bounded by the mixed budget and
+   * page cap) and merge them with the text layer. Returns { text, mixedOcr }.
+   */
+  async _mixedPdfOcr(filePath, pages, plan, options = {}, label = 'pdf') {
+    const cap = mixedPdf.mixedOcrMaxPages();
+    console.log(`[fileProcessor] ${label} mixed PDF: ${plan.ocrPages.length}/${pages.length} page(s) need OCR (${this._planSummary(plan)}) — cap ${cap}`);
+    const subset = await ocrEngine.extractPdfPagesSubset(filePath, plan.ocrPages, {
+      maxPages: cap,
+      budgetMs: mixedPdf.mixedOcrBudgetMs(),
+      signal: options.signal,
+    });
+    const merged = plan.legacy
+      ? mixedPdf.mergeMixedPdfText(pages, subset.pages)
+      : mixedPdf.mergeMixedPdfText(pages, subset.pages, undefined, {
+        ocrTargets: plan.ocrPages,
+        reasons: plan.reasons,
+        markUnread: true,
+      });
+    if (plan.legacy && merged.ocrPagesUsed === 0) return null;
+    return {
+      text: merged.text,
+      mixedOcr: {
+        scannedPages: plan.ocrPages.length,
+        ocrPagesProcessed: subset.ocr?.pagesProcessed || 0,
+        ocrPagesWithText: merged.ocrPagesUsed,
+        capped: Boolean(subset.ocr?.capped),
+        budgetHit: Boolean(subset.ocr?.budgetHit),
+        unreadPages: (merged.unreadPages || []).slice(0, 200),
+        ...(plan.counts ? { garbledPages: plan.counts.garbled || 0, stampOnlyPages: plan.counts.stampOnly || 0 } : {}),
+      },
+    };
+  }
+
+  /**
+   * Full-page OCR of a scanned PDF (every page through the OCR ladder with
+   * per-page budgets). When OCR reads nothing but the PDF had a (stamp-only
+   * or broken) text layer, that layer is returned instead of losing it; when
+   * OCR stops early or leaves pages unread, the layer of every page it did
+   * not read is spliced back in page order (`layerPages`: [{ page, text }],
+   * `plan`: the text-layer plan — its per-page reasons and the pages whose
+   * layer is only stamps, which are not spliced).
+   */
+  async _ocrScannedPdf(filePath, options = {}, { textLayerText = '', pageCount = 0, layerPages = null, plan = null } = {}) {
     try {
       const result = await ocrEngine.extractFromPdfImages(filePath, {
         streaming: true,
+        ...(options.signal ? { signal: options.signal } : {}),
       });
-      const header = `PDF OCR document — ${result.ocr?.pages || 0} page(s) processed, ` +
-        `${result.ocr?.pagesWithText || 0} page(s) with readable text, ` +
-        `${String(result.text || '').length} characters` +
-        (result.ocr?.partial ? ` (partial — ${result.ocr.partialReason || 'limit reached'})` : '') +
+      if (!result.text && textLayerText && String(textLayerText).trim()) {
+        const extractedText = `PDF document — ${pageCount || result.ocr?.pages || 0} page(s); OCR read no text, keeping the embedded text layer (it may be only stamps or page numbers)\n---\n${textLayerText}`;
+        const ocr = { ...(result.ocr || {}), status: 'failed', provider: result.ocr?.provider || null, textLayerKept: true };
+        return options.detailed ? { extractedText, ocr } : extractedText;
+      }
+      let text = result.text;
+      let ocr = result.ocr;
+      const spliced = result.text ? this._spliceUnreadLayerPages(result, layerPages, pageCount, plan) : null;
+      if (spliced) {
+        text = spliced.text;
+        ocr = { ...(result.ocr || {}), textLayerPages: spliced.splicedPages.length, textLayerPageList: spliced.splicedPages.slice(0, 200) };
+        console.log(`[fileProcessor] scanned PDF: OCR did not read ${spliced.splicedPages.length} page(s) — keeping their embedded text layer`);
+      }
+      const provenance = text ? this._ocrProvenanceSuffix(ocr) : '';
+      const header = `PDF OCR document — ${ocr?.pages || 0} page(s) processed, ` +
+        `${ocr?.pagesWithText || 0} page(s) with readable text, ` +
+        `${String(text || '').length} characters` +
+        (ocr?.partial ? ` (partial — ${ocr.partialReason || 'limit reached'})` : '') +
+        (spliced ? ` (+${spliced.splicedPages.length} page(s) from the embedded text layer where OCR did not read)` : '') +
+        provenance +
         `\n---\n`;
-      const extractedText = result.text ? header + result.text : 'No text detected in image PDF';
+      const extractedText = text ? header + text : 'No text detected in image PDF';
       console.log(`OCR complete: ${extractedText.length} chars extracted`);
-      return options.detailed ? { extractedText, ocr: result.ocr } : extractedText;
+      return options.detailed ? { extractedText, ocr } : extractedText;
     } catch (error) {
       console.error(`❌ PDF processing error for ${filePath}:`, error);
       throw new Error(`PDF processing failed: ${error.message}`);
     }
+  }
+
+  /**
+   * OCR stopped early (budget, page/char cap, cancel) or left pages unread:
+   * splice the embedded text layer of every page it did not read instead of
+   * replacing it with «sin OCR» markers. Null when there is nothing to
+   * splice (no per-page results, no layer with content for those pages).
+   */
+  _spliceUnreadLayerPages(result, layerPages, pageCount = 0, plan = null) {
+    const ocr = (result && result.ocr) || {};
+    const unread = Array.isArray(ocr.unreadPages) ? ocr.unreadPages : [];
+    if (!ocr.partial && unread.length === 0) return null;
+    if (!Array.isArray(layerPages) || !Array.isArray(result.pages)) return null;
+    if (!layerPages.some((p) => p && String(p.text || '').trim())) return null;
+    const pageBlock = typeof ocrEngine._pdfPageBlock === 'function'
+      ? (read) => ocrEngine._pdfPageBlock(read.page, read)
+      : undefined;
+    const spliced = mixedPdf.spliceTextLayerIntoOcr(layerPages, result.pages, {
+      totalPages: ocr.totalPages || pageCount || 0,
+      stopReason: ocr.partialReason,
+      reasons: (plan && plan.reasons) || {},
+      emptyLayerPages: plan && Array.isArray(plan.emptyLayerPages) ? plan.emptyLayerPages : undefined,
+      pageBlock,
+    });
+    return spliced.splicedPages.length > 0 ? spliced : null;
+  }
+
+  /**
+   * « · OCR: GLM-OCR (local) + Gemini · confianza media (72 %)» — the engines
+   * that produced the text and how sure they are, so the chat can label the
+   * text honestly. Empty when the result carries no confidence.
+   */
+  _ocrProvenanceSuffix(ocr = {}) {
+    if (!ocr || typeof ocr !== 'object') return '';
+    // Only engine results that rated themselves (confidenceLevel); legacy
+    // results and stubs keep their text untouched.
+    const confidence = Number(ocr.confidence);
+    const level = ocr.confidenceLevel;
+    if (!level || !Number.isFinite(confidence)) return '';
+    const engines = Array.isArray(ocr.engines) && ocr.engines.length ? ocr.engines.join('+') : (ocr.provider || '');
+    return ` · OCR: ${ocrEnsemble.describeEngines(engines)} · confianza ${level} (${Math.round(confidence)} %)`;
   }
 
   /**
@@ -1069,25 +1249,35 @@ class FileProcessor {
     try {
       let result = await ocrEngine.extractFromImage(filePath, {
         mimeType: options.mimeType || 'image/png',
+        ...(options.signal ? { signal: options.signal } : {}),
       });
 
-      // GPT-4o-vision fallback. ON by default when an OpenAI key exists;
-      // opt out via SIRAGPT_VISION_FALLBACK_ENABLED=0. Triggers ONLY when
-      // Tesseract produced little text OR low-confidence output —
-      // those are the cases where a vision LLM that understands
-      // layout, tables, equations beats a pure OCR engine. Failures
-      // are swallowed so a flaky vision call never tears down upload.
+      // Layout-aware vision fallback (vision-doc-parser over the vision
+      // runtimes). The engine now runs its own multi-runtime ladder with
+      // reconciliation, so this second pass only runs when the engine did
+      // NOT attempt one (or when forced). Opt out with
+      // SIRAGPT_VISION_FALLBACK_ENABLED=0. Failures are swallowed so a flaky
+      // vision call never tears down the upload.
       if (this._shouldApplyVisionFallback(result, options)) {
         try {
-          const visionText = await this._extractWithVision(filePath, options.mimeType, options.openai);
-          if (visionText && visionText.length > (result.text?.length || 0)) {
+          const vision = await this._extractWithVisionDetailed(filePath, options.mimeType, options.openai);
+          if (vision && this._preferVisionText(result, vision.text)) {
+            // One unverified vision read: calibrated, never a fixed «95».
+            const visionConfidence = ocrEnsemble.calibrateConfidence({
+              kind: 'vlm',
+              garbage: ocrQuality.assessText(String(vision.text).slice(0, 50_000)).garbageLikely,
+              illegibleRatio: ocrQuality.illegibleRatio(vision.text),
+            });
             result = {
-              text: visionText,
+              text: vision.text,
               ocr: {
                 ...(result.ocr || {}),
                 visionFallback: true,
                 originalProvider: result.ocr?.provider || null,
-                provider: 'gpt-4o-vision',
+                // The runtime that really answered (never a fixed label).
+                provider: vision.provider,
+                confidence: visionConfidence,
+                confidenceLevel: ocrEnsemble.confidenceLevel(visionConfidence),
               },
             };
           }
@@ -1101,14 +1291,18 @@ class FileProcessor {
       }
 
       // Professional header when the engine classified the image (type +
-      // dimensions + tiling). Absent metadata (stubs, skipped analysis)
-      // leaves the raw text untouched.
+      // dimensions + tiling) or rated its read: which engines produced the
+      // text and how confident they are, so the chat labels OCR text
+      // honestly. Absent metadata (stubs, skipped analysis) leaves the raw
+      // text untouched.
       let finalText = result.text || '';
       const imageMeta = result.ocr?.image;
-      if (finalText && imageMeta?.type) {
-        const dims = imageMeta.width && imageMeta.height ? ` (${imageMeta.width}×${imageMeta.height} px)` : '';
-        const tiledNote = imageMeta.tiledOcr ? `, OCR por teselas ×${imageMeta.tiledOcr}` : '';
-        finalText = `Imagen — ${imageMeta.typeLabelEs}${dims}${tiledNote} — ${finalText.length} caracteres extraídos\n---\n${finalText}`;
+      const provenance = finalText ? this._ocrProvenanceSuffix(result.ocr) : '';
+      if (finalText && (imageMeta?.type || provenance)) {
+        const typeLabel = imageMeta?.type ? imageMeta.typeLabelEs : 'imagen';
+        const dims = imageMeta?.width && imageMeta?.height ? ` (${imageMeta.width}×${imageMeta.height} px)` : '';
+        const tiledNote = imageMeta?.tiledOcr ? `, OCR por teselas ×${imageMeta.tiledOcr}` : '';
+        finalText = `Imagen — ${typeLabel}${dims}${tiledNote} — ${finalText.length} caracteres extraídos${provenance}\n---\n${finalText}`;
       }
 
       if (options.detailed) {
@@ -1121,6 +1315,28 @@ class FileProcessor {
     } catch (error) {
       throw new Error(`Image OCR processing failed: ${error.message}`);
     }
+  }
+
+  /**
+   * Should the layout-parser text replace the engine's? Never on «longer
+   * wins» alone: a garbage-looking vision answer never beats a clean local
+   * read; a weak or garbage local read (confidence < 60 %, or implausible
+   * words) yields to a clean vision read; a strong local read only yields to
+   * a clean vision read that found clearly more (≥ 1.2×).
+   */
+  _preferVisionText(result, visionText) {
+    const vision = String(visionText || '').trim();
+    if (!vision) return false;
+    const local = String(result?.text || '').trim();
+    if (!local) return true;
+    const visionAssess = ocrQuality.assessText(vision.slice(0, 50_000));
+    const localAssess = ocrQuality.assessText(local.slice(0, 50_000));
+    if (visionAssess.garbageLikely && !localAssess.garbageLikely) return false;
+    const raw = Number(result?.ocr?.confidence);
+    const confidence01 = Number.isFinite(raw) ? (raw > 1 ? raw / 100 : raw) : 1;
+    const localWeak = confidence01 < 0.6 || localAssess.garbageLikely;
+    if (localWeak) return true;
+    return vision.length > local.length * 1.2;
   }
 
   /**
@@ -1161,22 +1377,32 @@ class FileProcessor {
   _shouldApplyVisionFallback(result, options = {}) {
     if (typeof options.forceVisionFallback === 'boolean') return options.forceVisionFallback;
     // Default ON (parity with how ChatGPT/Claude read attachments): any
-    // weak local OCR falls through to the vision model whenever an OpenAI
-    // key is available. Opt out explicitly with SIRAGPT_VISION_FALLBACK_ENABLED=0.
+    // weak local OCR falls through to the vision model whenever a vision
+    // runtime is available. Opt out explicitly with SIRAGPT_VISION_FALLBACK_ENABLED=0.
     if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED === '0') return false;
     if (visionAuthFailedUntil > Date.now()) return false;
+    // The engine already ran its own vision ladder (GLM-OCR + every cloud
+    // runtime, reconciled): a second pass over the same runtimes is a
+    // duplicate paid call, not a second opinion.
+    const ocr = result?.ocr || {};
+    if (ocr.status === 'vision_fallback' || (ocr.visionLadder && ocr.visionLadder.attempted)) return false;
     // Any configured vision runtime qualifies (Gemini / Meta / xAI / OpenRouter /
     // OpenAI) — see ai/vision-runtime.js. The OpenAI key alone is no longer the gate.
     if (!options.openai && require('./ai/vision-runtime').visionRuntimeCandidates().length === 0) return false;
     const text = String(result?.text || '');
-    const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
+    // ocr-engine reports confidence on a 0–100 scale; older callers and tests
+    // pass 0–1. Normalise before comparing with the 0–1 threshold (the
+    // 0–100 value against 0.5 disabled this branch for every weak read).
+    const rawConfidence = typeof ocr.confidence === 'number' ? ocr.confidence : 1;
+    const confidence = rawConfidence > 1 ? rawConfidence / 100 : rawConfidence;
     // NaN-only fallbacks: a configured 0 is meaningful (minChars=0 → never fall
     // back on char count; minConf=0 → never on confidence). `|| default` skipped
     // a legitimate 0.
     const rawMinChars = Number.parseInt(process.env.SIRAGPT_VISION_FALLBACK_MIN_CHARS, 10);
     const minChars = Number.isFinite(rawMinChars) ? rawMinChars : 100;
     const rawMinConf = Number.parseFloat(process.env.SIRAGPT_VISION_FALLBACK_MIN_CONFIDENCE);
-    const minConf = Number.isFinite(rawMinConf) ? rawMinConf : 0.5;
+    const minConfRaw = Number.isFinite(rawMinConf) ? rawMinConf : 0.5;
+    const minConf = minConfRaw > 1 ? minConfRaw / 100 : minConfRaw;
     return text.length < minChars || confidence < minConf;
   }
 
@@ -1230,6 +1456,15 @@ class FileProcessor {
   }
 
   async _extractWithVision(filePath, mimeType, openaiClient) {
+    const vision = await this._extractWithVisionDetailed(filePath, mimeType, openaiClient);
+    return vision ? vision.text : '';
+  }
+
+  /**
+   * Same as _extractWithVision, plus WHO answered:
+   * { text, provider: 'vision-doc:<provider>:<model>' }.
+   */
+  async _extractWithVisionDetailed(filePath, mimeType, openaiClient) {
     const fs = require('fs');
     const visionParser = require('./rag/vision-doc-parser');
     const buf = await fs.promises.readFile(filePath);
@@ -1237,7 +1472,8 @@ class FileProcessor {
 
     if (openaiClient) {
       const layout = await visionParser.parseDocumentPage({ openai: openaiClient, image, options: {} });
-      return this._flattenLayoutToText(layout);
+      // Injected client (tests / legacy callers): the model is unknown.
+      return { text: this._flattenLayoutToText(layout), provider: 'gpt-4o-vision' };
     }
 
     // Ladder over the configured vision runtimes. Prod 2026-09-27: the first
@@ -1260,7 +1496,10 @@ class FileProcessor {
           image,
           options: { model: candidate.model, useStrictSchema: config.strictJsonSchema },
         });
-        return this._flattenLayoutToText(layout);
+        return {
+          text: this._flattenLayoutToText(layout),
+          provider: `vision-doc:${String(candidate.provider).toLowerCase()}:${candidate.model}`,
+        };
       } catch (err) {
         lastError = err;
         const cause = err && err.cause ? err.cause : err;
@@ -1402,7 +1641,8 @@ class FileProcessor {
         : reason === 'file_empty' ? 'El archivo está vacío.'
           : reason === 'file_unavailable' ? 'No se pudo leer el archivo de audio.'
             : reason === 'audio_decode_failed' ? 'No se pudo decodificar el audio; comprueba que el archivo no esté dañado.'
-              : 'La transcripción no está disponible temporalmente. Puedes reintentarlo.';
+              : reason === 'low_coverage' ? 'Demasiados tramos no se pudieron transcribir esta vez. Reintentar recupera solo los tramos que faltan.'
+                : 'La transcripción no está disponible temporalmente. Puedes reintentarlo.';
       throw Object.assign(new Error(message), { code: reason });
     }
     return options.detailed ? result : result.text;
@@ -1443,3 +1683,4 @@ module.exports = new FileProcessor();
 module.exports.resolveProcessMimeType = resolveProcessMimeType;
 module.exports.isTextLikeMime = isTextLikeMime;
 module.exports.sniffTextLike = sniffTextLike;
+module.exports.parsePdfWithPages = parsePdfWithPages;

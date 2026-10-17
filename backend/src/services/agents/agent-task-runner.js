@@ -44,6 +44,15 @@ const { loadTaskConversationHistory } = require('./task-conversation-history');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const transcriptionFastPath = require('./transcription-document-fast-path');
 const {
+  loadMediaDeliveryService,
+  mediaInlineWaitMs,
+  shouldHandOffMediaWait,
+  estimateMediaBatchEta,
+  totalProgressDuration,
+  mediaRowsForAnalysis,
+  describeTranscriptDownloads,
+} = require('../media-handoff');
+const {
   isSourcePreservingEditRequest,
   tryGenerateSourcePreservingDocumentEdit,
 } = require('../source-preserving-document-edit');
@@ -2685,32 +2694,240 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // Do not send an empty transcript or the first few seconds to the LLM
       // while the remaining recordings are still being transcribed.
       const ids = mediaBatchRows.map(row => row.id);
+      const mediaGoal = String(displayGoal || goal || '');
+      const retryRequested = /reintent|retry/i.test(mediaGoal);
+      // «tradúcelo al inglés» is a full translation, never a summary: next
+      // to it only an explicit deliverable («resúmelo», «el acta») or a
+      // question about the recording runs the analysis too.
+      const translationTarget = mediaBatch.detectTranslationTarget(mediaGoal);
+      let wantsAnalysis = translationTarget ? mediaBatch.wantsSummaryWithTranslation(mediaGoal)
+        : (!plainTranscriptionRequest && !retryRequested) || mediaBatch.wantsMediaAnalysis(mediaGoal);
+      // A follow-up translation does not re-deliver the transcript files.
+      let wantsTranscriptPack = !translationTarget || /transcri|subt[ií]tul|\bsrt\b|\bvtt\b/i.test(mediaGoal);
+      // The transcript itself is asked for («transcribe…», «dame la
+      // transcripción», «¿me puedes pasar la transcripción…?», «la
+      // transcripción completa y…», «con subtítulos»), not just named as what
+      // a question reads from («¿qué dice la transcripción en el minuto 30?»,
+      // «según la transcripción…», «… de la transcripción»): one mention
+      // outside such a reading cue is enough.
+      const asksTranscript = /\btran?scr[ií]b|subt[ií]t[uú]l(?:a|ar|al[oa]s?|ame|e|en)\b|\bsrt\b|\bvtt\b/i.test(mediaGoal)
+        || /\b(?:dame|d[eé]jame|quiero|quisiera|necesito|p[aá]same\w*|p[aá]sal[oa]|p[aá]ses|env[ií]a\w*|env[ií]es|manda\w*|mandes|hazme|genera\w*|saca\w*|exporta\w*|descarga\w*|adjunta\w*|incluye\w*|con|give|send)\s+(?:\S+\s+){0,3}?(?:tran?scri(?:pci|t)|transcript|subt[ií]t[uú]l)/i.test(mediaGoal)
+        || /(?<!\b(?:dice|dicen|dec[ií]a|dijo|sale|salen|aparece|pone|seg[uú]n|en|de|del|in|from|does|says)\s+(?:(?:la|el|los|las|mi|tu|su|esa|ese|esta|este|esas|esos|estas|estos|the|my|your|this)\s+)?(?:texto\s+)?)(?:tran?scri(?:pci|t)|transcript|subt[ií]t[uú]l)(?!\S*\s+(?:qu[eé]\s+)?(?:dice|dicen|dec[ií]a|dijo|pone|says?)\b)/i.test(mediaGoal);
+      const mediaArtifacts = require('../media-transcript-artifacts');
+      const mediaOutput = mediaArtifacts.resolveTranscriptOutput(mediaGoal, { documentPolicy });
+      // What the user said about the recordings (contract C7): «está en
+      // inglés», «los nombres son…», «son 3 hablantes», «literal». They reach
+      // every job this turn queues and its delivery. Only the turns sent
+      // since these recordings arrived count: an older «está en inglés» was
+      // about another recording. Without their arrival time, earlier turns
+      // only lend names and terms.
+      const mediaSince = typeof mediaBatch.earliestRowTime === 'function' ? mediaBatch.earliestRowTime(mediaBatchRows) : null;
+      const recentUserTurns = typeof mediaBatch.loadRecentUserTurns === 'function'
+        ? await mediaBatch.loadRecentUserTurns(prisma, { userId: user.id, chatId, since: mediaSince }) : [];
+      const jobHints = typeof mediaBatch.extractTranscriptionHints === 'function'
+        ? mediaBatch.hintsForJob(mediaBatch.extractTranscriptionHints(mediaGoal, recentUserTurns, { historyTermsOnly: !mediaSince }))
+        : { language: null, hints: null };
+      // «revisa el minuto 12, se escuchó mal» re-transcribes that window of a
+      // READY transcript (durable refine job + delivery); «¿qué dijo en el
+      // minuto 95?» reads the window around that minute, never the head.
+      const followupIntent = !retryRequested && typeof mediaBatch.detectMediaFollowupIntent === 'function'
+        ? mediaBatch.detectMediaFollowupIntent(mediaGoal) : null;
+      const lookupWindow = followupIntent?.kind === 'lookup' && !mediaOutput.range ? followupIntent.range : null;
+      const analysisRange = mediaOutput.range || lookupWindow;
+      // «traduce al inglés lo que dice en el minuto 30»: the moment IS what
+      // to translate, so the translation (and its hand-off) covers its window.
+      const translatesMoment = Boolean(lookupWindow && translationTarget
+        && typeof mediaBatch.translatesTheMoment === 'function' && mediaBatch.translatesTheMoment(mediaGoal));
+      // What the delivered files cover: the range the user asked for (else
+      // the whole recording), or the moment a translation is of.
+      const outputRange = translatesMoment ? lookupWindow : mediaOutput.range;
+      if (lookupWindow) {
+        // A question about a moment is answered from its window; the whole
+        // transcript files are not sent again. The window is for the answer
+        // only: «transcribe este audio y dime qué dice en el minuto 30» still
+        // gets the whole transcript it asked for, and «tradúcela y dime qué
+        // dice en el minuto 30» the whole translation. A translation of the
+        // moment itself is the answer: no analysis unless one was asked for.
+        if (!translatesMoment) wantsAnalysis = true;
+        if (!translationTarget && !asksTranscript) wantsTranscriptPack = false;
+      }
       await backfillUserMessageFilesForTranscription(prisma, {
         chatId, userId: user.id, taskId, fileIds: ids, clientMetadata: fileMetadata, content: displayGoal,
       });
-      emit({ type: 'step_start', id: 'media_transcription', label: `Transcribiendo ${ids.length} archivos`, icon: 'file-text' });
-      const batch = await mediaBatch.waitForMediaBatch({
-        prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
-        retryFailed: /reintent|retry/i.test(String(displayGoal || goal)),
-        timeoutMs: Math.max(0, Math.min(mediaBatch.MEDIA_WAIT_MAX_MS, runtimeBudgetMs - (Date.now() - startedAt) - 20 * 60_000)),
+      // A refine that comes with another request («vuelve a transcribir del
+      // minuto 10 al 15 y resúmelo», a translation, a question) is queued as
+      // a side effect and the turn still answers; only a bare refine request
+      // ends the turn with the hand-off message.
+      let refineNotice = '';
+      // The recording's language for the jobs and the delivery this turn
+      // queues. A language given with a refine is about its window: it
+      // travels with that refine job only, never to the other recordings'
+      // jobs or the file-level hints a later «reintenta» would reuse.
+      let batchLanguage = jobHints.language;
+      const refineAlongside = followupIntent?.kind === 'refine' && Boolean(followupIntent.alsoAsks || translationTarget
+        || (typeof mediaBatch.wantsSummaryWithTranslation === 'function' && mediaBatch.wantsSummaryWithTranslation(mediaGoal)));
+      if (followupIntent?.kind === 'refine' && typeof mediaBatch.requestMediaRefine === 'function') {
+        const refineDelivery = loadMediaDeliveryService();
+        const refined = await mediaBatch.requestMediaRefine({
+          prisma, userId: user.id, chatId, taskId, rows: mediaBatchRows, goal: mediaGoal, intent: followupIntent,
+          language: jobHints.language, hints: jobHints.hints, deps: { delivery: refineDelivery },
+        });
+        if (refined?.handled && refineAlongside) {
+          refineNotice = String(refined.message || '');
+          batchLanguage = null;
+        } else if (refined?.handled) {
+          return await finishDeterministicTask({
+            finalMarkdown: refined.message,
+            // A queued refine with a delivery record is a hand-off: its own
+            // notification arrives with the corrected window.
+            stoppedReason: refined.ok && refined.deliveryId ? 'media_delivery_handoff' : refined.ok ? 'transcription_refine_queued' : 'transcription_refine_unavailable',
+            steps: 1, artifactsList: artifacts,
+            // Never `mediaDelivery`: that key marks the message the delivery posts.
+            metadata: { transcriptionFileIds: ids, ...(refined.deliveryId ? { mediaDeliveryHandoff: refined.deliveryId } : {}),
+              mediaRefine: { fileId: refined.fileId || null, range: refined.range || null, queued: Boolean(refined.ok), reason: refined.reason || null } },
+          });
+        }
+      }
+      emit({ type: 'step_start', id: 'media_transcription',
+        label: ids.length === 1 ? `Transcribiendo «${mediaBatchRows[0].originalName || mediaBatchRows[0].filename || 'el archivo'}»` : `Transcribiendo ${ids.length} archivos`,
+        icon: 'file-text' });
+      const mediaWaitBudgetMs = Math.max(0, Math.min(mediaBatch.MEDIA_WAIT_MAX_MS, runtimeBudgetMs - (Date.now() - startedAt) - 20 * 60_000));
+      // Long recordings are handed to the durable delivery: the turn ends
+      // with «te aviso aquí» and the worker posts the result into this chat
+      // when the media job finishes, surviving any number of deploys. Short
+      // ones are still answered inline.
+      const mediaDeliveryService = loadMediaDeliveryService();
+      const deliveryEnabled = Boolean(mediaDeliveryService?.isMediaDeliveryEnabled?.(process.env));
+      const inlineWaitMs = deliveryEnabled ? Math.min(mediaWaitBudgetMs, mediaInlineWaitMs(process.env)) : mediaWaitBudgetMs;
+      const waitOptions = {
+        prisma, userId: user.id, signal: controller.signal, retryFailed: retryRequested,
+        language: batchLanguage, hints: jobHints.hints,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),
           status: 'saved', payload: { mediaBatch: progress } }),
-      });
-      emit({ type: 'step_done', id: 'media_transcription', ok: batch.ready > 0 });
-      const fullTranscript = mediaBatch.transcriptBundle(batch.rows);
-      if (batch.ready > 0) {
-        const artifact = saveArtifact({ filename: 'transcripciones-completas.txt',
-          base64: Buffer.from(fullTranscript, 'utf8').toString('base64'), mime: 'text/plain',
-          ownerUserId: user.id, chatId });
-        artifacts.push(artifact);
-        emit({ type: 'file_artifact', artifact });
-        await persistence.persistGeneratedArtifact({ artifact, task });
+      };
+      let batch = await mediaBatch.waitForMediaBatch({ ...waitOptions, rows: mediaBatchRows, timeoutMs: inlineWaitMs,
+        shouldStop: deliveryEnabled ? progress => shouldHandOffMediaWait(progress, { inlineWaitMs, delivery: mediaDeliveryService }) : null });
+      if (deliveryEnabled && batch.pending > 0) {
+        let deliveryRecord = null;
+        try {
+          deliveryRecord = await mediaDeliveryService.createDelivery({
+            userId: user.id, chatId, taskId, assistantMessageId: assistantMessageId || null,
+            fileIds: ids, fileNames: batch.rows.map(row => row.originalName || row.filename || row.id),
+            goal: mediaGoal,
+            mode: translationTarget ? 'translation' : wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
+            formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
+            // The recording's language and the names / speakers / «literal»
+            // the user gave travel with the delivery and reach every job.
+            language: batchLanguage,
+            hints: jobHints.hints,
+            // The transcript files follow the range the user asked for; the
+            // moment a question is about («¿qué dice en el minuto 30?») only
+            // narrows the analysis (`output.analysisRange`), unless that
+            // moment is what to translate.
+            range: outputRange,
+            // «transcribe y tradúcelo» / «resume y tradúcelo»: the translation
+            // mode also delivers the transcript files and the summary asked for.
+            output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
+              includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
+              analysisRange: lookupWindow || null },
+            model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
+          });
+        } catch (error) {
+          console.warn('[agent-task-runner] media delivery not created; waiting inline', error?.code || error?.message || 'delivery_error');
+        }
+        if (deliveryRecord) {
+          emit({ type: 'step_done', id: 'media_transcription', ok: true });
+          const etaSeconds = estimateMediaBatchEta(batch, mediaDeliveryService);
+          const durationSec = totalProgressDuration(batch);
+          const handOff = mediaDeliveryService.handOffMessage({
+            fileNames: batch.rows.map(row => row.originalName || row.filename || row.id),
+            durationSec: durationSec || null, etaSeconds,
+          });
+          const readyNote = batch.ready ? `${batch.ready} de ${batch.total} ya están transcritos; los entrego todos juntos cuando terminen los demás.` : '';
+          return await finishDeterministicTask({
+            finalMarkdown: [refineNotice, handOff, readyNote].filter(Boolean).join('\n\n'),
+            stoppedReason: 'media_delivery_handoff',
+            steps: 1, artifactsList: artifacts,
+            // Not `mediaDelivery`: that key marks the message the delivery
+            // itself posts, and a hand-off must never count as delivered.
+            metadata: { transcriptionFileIds: ids, mediaDeliveryHandoff: deliveryRecord.id,
+              mediaBatch: { total: batch.total, ready: batch.ready, failed: batch.failed, pending: batch.pending } },
+          });
+        }
+        // Delivery unavailable: keep the previous behaviour and wait inline.
+        batch = await mediaBatch.waitForMediaBatch({ ...waitOptions, rows: batch.rows,
+          timeoutMs: Math.max(0, mediaWaitBudgetMs - inlineWaitMs) });
       }
+      emit({ type: 'step_done', id: 'media_transcription', ok: batch.ready > 0 });
+      const readyRows = batch.rows.filter(row => mediaBatch.stateOf(row) === 'ready');
+      const transcripts = batch.ready ? await mediaArtifacts.loadTranscripts(prisma, { userId: user.id, rows: readyRows }) : new Map();
+      let packNotes = [];
+      const transcriptArtifacts = [];
+      const saveTranscriptPack = async () => {
+        let built = null;
+        try {
+          built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, transcripts, output: mediaOutput, userId: user.id });
+        } catch (error) {
+          throwIfAborted(controller.signal);
+          console.warn('[agent-task-runner] professional transcript pack failed; plain TXT fallback', error?.message || error);
+        }
+        const packArtifacts = built?.artifacts?.length ? built.artifacts : [{ filename: 'transcripciones-completas.txt',
+          base64: Buffer.from(mediaBatch.transcriptBundle(batch.rows), 'utf8').toString('base64'), mime: 'text/plain' }];
+        packNotes = [...packNotes, ...(built?.notes || [])];
+        for (const item of packArtifacts) {
+          const artifact = saveArtifact({ filename: item.filename, base64: item.base64, mime: item.mime,
+            ownerUserId: user.id, chatId });
+          artifacts.push(artifact);
+          transcriptArtifacts.push(artifact);
+          emit({ type: 'file_artifact', artifact });
+          await persistence.persistGeneratedArtifact({ artifact, task });
+        }
+      };
+      if (batch.ready > 0 && wantsTranscriptPack) await saveTranscriptPack();
       let analysis = null;
       let analysisUnavailable = false;
       let mediaAnalysisUsage = null;
-      if (batch.ready && ((!plainTranscriptionRequest && !/reintent|retry/i.test(String(displayGoal || goal))) || mediaBatch.wantsMediaAnalysis(displayGoal || goal))) {
+      let translation = null;
+      let translationUnavailable = false;
+      if (batch.ready && translationTarget) {
+        emit({ type: 'step_start', id: 'media_translation', label: `Traduciendo al ${translationTarget.name}`, icon: 'languages' });
+        try {
+          if (!openai) throw new Error('selected_model_unavailable');
+          const completion = require('../media-analysis-runtime').createMediaAnalysisCompletion({
+            client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.runtimeProvider,
+            userId: user.id, chatId, prisma,
+          });
+          mediaAnalysisUsage = completion.usage;
+          // The translation covers what the user asked for (their range, else
+          // the whole recording, or the moment to translate); a moment only
+          // asked about narrows the answer.
+          translation = await mediaBatch.translateMediaBatch({
+            rows: mediaRowsForAnalysis(batch.rows, transcripts, outputRange), target: translationTarget,
+            signal: controller.signal, complete: completion.complete,
+            onProgress: progress => emit({ type: 'checkpoint',
+              label: `Traduciendo ${progress.name} · parte ${progress.part}/${progress.parts}`,
+              status: 'saved', payload: { mediaTranslation: progress } }),
+          });
+          const built = await mediaArtifacts.buildTranslationArtifacts({ files: translation.files, target: translationTarget,
+            output: mediaOutput, userId: user.id });
+          packNotes = [...packNotes, ...built.notes];
+          for (const item of built.artifacts) {
+            const artifact = saveArtifact({ filename: item.filename, base64: item.base64, mime: item.mime, ownerUserId: user.id, chatId });
+            artifacts.push(artifact);
+            emit({ type: 'file_artifact', artifact });
+            await persistence.persistGeneratedArtifact({ artifact, task });
+          }
+        } catch (error) {
+          throwIfAborted(controller.signal);
+          translationUnavailable = true;
+        }
+        emit({ type: 'step_done', id: 'media_translation', ok: Boolean(translation?.files?.length) });
+        // A translation that produced nothing still leaves the user the
+        // transcript files the message and its preview point to.
+        if (!wantsTranscriptPack && !translation?.files?.length) await saveTranscriptPack();
+      }
+      if (batch.ready && wantsAnalysis) {
         emit({ type: 'step_start', id: 'media_analysis', label: 'Analizando cada transcripción', icon: 'braces' });
         try {
           if (!openai) throw new Error('selected_model_unavailable');
@@ -2720,7 +2937,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           });
           mediaAnalysisUsage = completion.usage;
           analysis = await mediaBatch.analyzeMediaBatch({
-            rows: batch.rows, goal: displayGoal || goal, signal: controller.signal,
+            rows: mediaRowsForAnalysis(batch.rows, transcripts, analysisRange), goal: mediaGoal, signal: controller.signal,
             onProgress: progress => emit({ type: 'checkpoint',
               label: `Analizando ${progress.name} · parte ${progress.part}/${progress.parts}`,
               status: 'saved', payload: { mediaAnalysis: progress } }),
@@ -2734,30 +2951,51 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         }
         emit({ type: 'step_done', id: 'media_analysis', ok: Boolean(analysis?.text) });
       }
+      const fileWord = (count) => (count === 1 ? 'archivo' : 'archivos');
       const notices = [
-        `**${batch.ready} de ${batch.total} archivos transcritos.**`,
-        batch.ready ? 'La descarga adjunta conserva las transcripciones completas, separadas por archivo.' : '',
-        batch.failed ? `${batch.failed} archivos no se pudieron transcribir. Escribe «reintenta los audios fallidos» para recuperar solo esos archivos; los demás siguen guardados.` : '',
-        batch.pending ? `${batch.pending} archivos siguen pendientes en la cola. Puedes consultar su progreso y volver a pedir el análisis cuando terminen, sin subirlos de nuevo.` : '',
-        analysis?.summaries?.length ? `Análisis realizado sobre ${analysis.summaries.length} archivos, incluyendo todos sus fragmentos.` : '',
+        refineNotice,
+        `**${batch.ready} de ${batch.total} ${fileWord(batch.total)} ${batch.total === 1 ? 'transcrito' : 'transcritos'}.**`,
+        // Only the transcript files saved in this turn (never a translation).
+        transcriptArtifacts.length ? describeTranscriptDownloads(transcriptArtifacts) : '',
+        batch.partial ? `${batch.partial === 1 ? 'Una transcripción quedó parcial' : `${batch.partial} transcripciones quedaron parciales`}: los tramos sin transcribir están marcados con su hora. Escribe «reintenta» para recuperar solo esos tramos.` : '',
+        ...packNotes,
+        batch.failed ? `${batch.failed} ${fileWord(batch.failed)} no se ${batch.failed === 1 ? 'pudo' : 'pudieron'} transcribir. Escribe «reintenta los audios fallidos» para recuperar solo esos archivos; los demás siguen guardados.` : '',
+        batch.pending ? `${batch.pending} ${fileWord(batch.pending)} ${batch.pending === 1 ? 'sigue' : 'siguen'} pendientes en la cola. Puedes consultar su progreso y volver a pedir el análisis cuando terminen, sin subirlos de nuevo.` : '',
+        analysis?.summaries?.length ? `Análisis realizado sobre ${analysis.summaries.length} ${fileWord(analysis.summaries.length)}, incluyendo todos sus fragmentos.` : '',
         analysis?.failed?.length ? `No se pudo analizar: ${analysis.failed.map(row => row.name).join(', ')}. Sus transcripciones siguen disponibles.` : '',
         analysisUnavailable ? 'El modelo seleccionado no pudo terminar el análisis. Las transcripciones están guardadas; puedes volver a solicitarlo.' : '',
+        translation?.files?.length ? `Traducción ${outputRange ? `al ${translationTarget.name} del tramo que pediste` : `completa al ${translationTarget.name}`} (sin resumir), con las mismas marcas de tiempo: está en los adjuntos.` : '',
+        translation?.failed?.length ? `No se pudo traducir: ${translation.failed.map(row => row.name).join(', ')}.` : '',
+        translationUnavailable ? `El modelo seleccionado no pudo terminar la traducción al ${translationTarget.name}. La transcripción original está guardada; puedes volver a pedirla.` : '',
       ].filter(Boolean);
       if (analysis?.text) notices.push(analysis.text);
-      else if (batch.ready) {
-        const chatTranscript = mediaBatch.transcriptMarkdown(batch.rows);
-        notices.push(chatTranscript.length <= 20000 ? chatTranscript
-          : `${chatTranscript.slice(0, 16000)}\n\n_Vista previa. Descarga el TXT adjunto para leer las transcripciones completas._`);
+      else if (translation?.files?.length) {
+        const first = translation.files[0];
+        const head = String(first.text || '').slice(0, 3000);
+        const cut = head.length < String(first.text || '').length;
+        notices.push(`${translation.files.length > 1 ? `#### ${mediaArtifacts.escapeChatMarkdown(first.name)}\n\n` : ''}${mediaArtifacts.escapeChatMarkdown(cut ? head.slice(0, Math.max(head.lastIndexOf('\n'), 1500)) : head)}${cut ? '\n\n_Vista previa de la traducción. El archivo adjunto la tiene completa._' : ''}`);
+      } else if (batch.ready) {
+        let preview = '';
+        try { preview = mediaArtifacts.buildTranscriptChatPreview({ rows: readyRows, transcripts, output: lookupWindow && !asksTranscript ? { ...mediaOutput, range: lookupWindow } : mediaOutput, transcriptFilesAttached: transcriptArtifacts.length > 0 }); }
+        catch (_) { preview = ''; }
+        if (!preview) {
+          const chatTranscript = mediaBatch.transcriptMarkdown(batch.rows);
+          preview = chatTranscript.length <= 20000 ? chatTranscript
+            : `${chatTranscript.slice(0, 16000)}\n\n_Vista previa. Descarga el TXT adjunto para leer las transcripciones completas._`;
+        }
+        notices.push(preview);
       }
       documentPolicy = { ...(documentPolicy || {}), mode: 'chat_only', autoGenerate: false,
         reason: 'Transcripción persistida por archivo y análisis de todos sus fragmentos.' };
       task.documentPolicy = documentPolicy;
       return await finishDeterministicTask({ finalMarkdown: notices.join('\n\n'),
         stoppedReason: batch.failed === batch.total ? 'media_batch_failed'
-          : batch.failed || batch.pending || analysisUnavailable || analysis?.failed?.length ? 'media_batch_partial' : 'transcription_finalize',
+          : batch.failed || batch.pending || batch.partial || analysisUnavailable || analysis?.failed?.length
+            || translationUnavailable || translation?.failed?.length ? 'media_batch_partial' : 'transcription_finalize',
         steps: analysis ? 2 : 1, artifactsList: artifacts,
         metadata: { transcriptionFileIds: ids, mediaBatch: { total: batch.total, ready: batch.ready,
-          failed: batch.failed, pending: batch.pending, analyzed: analysis?.summaries?.length || 0 },
+          failed: batch.failed, pending: batch.pending, partial: batch.partial || 0, analyzed: analysis?.summaries?.length || 0,
+          translated: translation?.files?.length || 0, translationLanguage: translationTarget?.code || null },
         mediaAnalysis: analysis?.summaries || [], mediaAnalysisUsage },
       });
     }

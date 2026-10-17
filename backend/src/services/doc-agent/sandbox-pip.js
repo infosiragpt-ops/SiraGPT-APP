@@ -208,6 +208,7 @@ function pipeProcesses({ producer, consumer, maxBytes, timeoutMs, signal, spawnI
     let producerCode = null;
     let consumerCode = null;
     let producerDone = false;
+    let producerStdoutEnded = false;
     let consumerDone = false;
     let consumerFailedFirst = false;
     let settled = false;
@@ -246,6 +247,8 @@ function pipeProcesses({ producer, consumer, maxBytes, timeoutMs, signal, spawnI
       bytes += d.length;
       if (bytes > maxBytes && !tooLarge) { tooLarge = true; killAll(); }
     });
+    // Registered before pipe(): set before the consumer can see the EOF.
+    p.stdout.on('end', () => { producerStdoutEnded = true; });
     p.stdout.pipe(c.stdin);
     c.stdin.on('error', () => { /* EPIPE when the consumer died first */ });
     p.stdout.on('error', () => { /* producer killed mid-stream */ });
@@ -277,7 +280,11 @@ function pipeProcesses({ producer, consumer, maxBytes, timeoutMs, signal, spawnI
       consumerDone = true;
       // The extractor died while the installer still streams: stop it now
       // (its container has a network) instead of waiting for the timeout.
-      if (consumerCode !== 0 && !producerDone && !tooLarge && !timedOut && !aborted) {
+      // Once the installer's output has ended it streams nothing more: a
+      // failed install writes no archive, tar fails on the empty input, and
+      // the installer's own exit (not_allowed, not_found…) must still be read
+      // even when tar's close arrives before the installer's.
+      if (consumerCode !== 0 && !producerDone && !producerStdoutEnded && !tooLarge && !timedOut && !aborted) {
         consumerFailedFirst = true;
         killTree(p);
       }

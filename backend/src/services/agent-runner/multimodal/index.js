@@ -58,6 +58,9 @@ function extraExecutors({
   openaiClient = null,
   synthesize = null,
   computerDriver = null,
+  // { userId, chatId } of the turn: a long workspace recording goes to the
+  // durable media queue and is delivered in that chat (voice.js).
+  owner = null,
 } = {}) {
   const executors = {};
   let computerCleanup = null;
@@ -65,7 +68,7 @@ function extraExecutors({
     executors.describe_image = vision.makeDescribeImageExecutor({ sandbox, client, model, format });
   }
   if (flags.voiceEnabled(env)) {
-    executors.transcribe_audio = voice.makeTranscribeAudioExecutor({ sandbox, openaiClient, env });
+    executors.transcribe_audio = voice.makeTranscribeAudioExecutor({ sandbox, openaiClient, env, owner });
     executors.speak = voice.makeSpeakExecutor({ sandbox, synthesize, env });
   }
   if (flags.computerEnabled(env)) {
@@ -98,10 +101,11 @@ function prepareF7Extras({
   openaiClient = null,
   synthesize = null,
   computerDriver = null,
+  owner = null,
 } = {}) {
   const toolDefinitions = extraToolDefinitions({ env, vision: hasVisionClient(client) });
   const { executors, cleanup } = extraExecutors({
-    env, sandbox, client, model, format, openaiClient, synthesize, computerDriver,
+    env, sandbox, client, model, format, openaiClient, synthesize, computerDriver, owner,
   });
   const imageParts = flags.visionEnabled(env)
     ? vision.collectImageAttachments(files, { env })

@@ -146,7 +146,8 @@ test('local long files use bounded segments and discard incomplete results on a 
   t.after(() => fs.rmSync(segDir, { recursive: true, force: true }));
   let calls = 0;
   const result = await audio.transcribe(file, 'audio/wav', 'nota.wav', {
-    env: {}, durationSeconds: 1200,
+    // No wait budget: the failed part is not backed off and retried.
+    env: { TRANSCRIBE_LAST_RUNG_WAIT_BUDGET_MS: '0' }, durationSeconds: 1200,
     segmentAudio: async () => ({ dir: segDir, segments: [{ path: file, index: 0, offsetSeconds: 0 }, { path: file, index: 1, offsetSeconds: 600 }] }),
     async localTranscribe() {
       if (++calls === 2) throw new Error('worker unavailable');

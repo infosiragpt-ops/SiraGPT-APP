@@ -285,6 +285,51 @@ test('an extractor that dies first stops the installer at once and reports extra
   assert.equal(r.code, 'extract_failed');
 });
 
+test('a failed install keeps its own verdict when tar closes before the installer (the CI race)', async () => {
+  // The installer's output ends with no archive, tar fails on the empty
+  // input, and only then does the installer exit: its code must be read,
+  // and it must not be killed as an «extractor died first».
+  const lingering = await pip.pipeProcesses({
+    producer: { cmd: 'bash', args: ['-c', 'echo SIRA_PIP_NOT_ALLOWED torch 1>&2; exec 1>&-; sleep 0.4; exit 3'] },
+    consumer: { cmd: 'bash', args: ['-c', 'cat >/dev/null; exit 2'] },
+    maxBytes: 1024,
+    timeoutMs: 10_000,
+  });
+  assert.deepEqual([lingering.consumerFailedFirst, lingering.exitCode, lingering.consumerExitCode], [false, 3, 2]);
+  assert.match(lingering.stderr, /SIRA_PIP_NOT_ALLOWED torch/);
+  // End to end: hold back the installer's 'close' event so tar's arrives
+  // first, the order a loaded runner produces.
+  const bin = tmpDir('sira-fakebin-');
+  writeFakePython3(bin);
+  const root = tmpDir('sira-ws-');
+  const lateProducerClose = (extra) => {
+    const inner = fakeSpawn(bin, extra);
+    return (cmd, args, opts = {}) => {
+      const child = inner(cmd, args, opts);
+      if (opts.stdio && opts.stdio[0] === 'ignore') {
+        const emit = child.emit.bind(child);
+        child.emit = (event, ...rest) => {
+          if (event !== 'close') return emit(event, ...rest);
+          setTimeout(() => emit(event, ...rest), 300);
+          return true;
+        };
+      }
+      return child;
+    };
+  };
+  const run = (requirements, allow, extra) => pip.runSandboxInstall({
+    kind: 'local', root, requirements, allowJson: JSON.stringify(allow), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
+    spawnImpl: lateProducerClose(extra),
+  });
+  const notAllowed = await run(['numpy'], ['numpy'], { FAKE_PIP_DEP: 'torch' });
+  assert.equal(notAllowed.code, 'not_allowed');
+  assert.deepEqual(notAllowed.notAllowed, ['torch']);
+  assert.equal((await run(['foo==9'], ['foo'], { FAKE_PIP_FAIL: 'notfound' })).code, 'not_found');
+  assert.equal((await run(['foo'], ['foo'], { FAKE_PIP_FAIL: 'network' })).code, 'network');
+  assert.equal((await run(['seaborn'], ['seaborn'], {})).code, 'ok', 'a successful install is unaffected by the late close');
+  assert.deepEqual(fs.readdirSync(root).filter((n) => n.includes('staging')), [], 'no staging dir survives');
+});
+
 test('the sandbox microservice ships a byte-identical copy of sandbox-pip.js', () => {
   const backend = fs.readFileSync(path.join(REPO, 'backend/src/services/doc-agent/sandbox-pip.js'), 'utf8');
   const service = fs.readFileSync(path.join(REPO, 'services/sandbox/lib/sandbox-pip.js'), 'utf8');

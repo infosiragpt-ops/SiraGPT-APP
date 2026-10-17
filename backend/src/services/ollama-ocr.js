@@ -33,9 +33,19 @@
  *   `OLLAMA_OCR_PULL_RETRY_MS`.
  * - Default ON everywhere except `NODE_ENV=test` (unit tests never touch
  *   the network; they inject `fetchImpl`). Kill switch `SIRAGPT_OLLAMA_OCR=0`.
+ * - Output is GATED, never trusted blindly: the answer is streamed so a
+ *   timeout keeps the text read so far, a repetition loop is cut as soon as
+ *   it appears (the text before it is kept), and `done_reason: 'length'` is
+ *   reported as truncation. The engine then cross-checks the read against
+ *   Tesseract and the cloud ladder (`ocr-engine` + `ocr-ensemble`).
+ * - Small crops are upscaled (≤ 4×, short side to `OLLAMA_OCR_MIN_SHORT_SIDE`)
+ *   before they reach the 0.9B model; requests run one at a time
+ *   (`OLLAMA_OCR_CONCURRENCY`) on the CPU Ollama shared with SiraGPT Mini, and
+ *   two consecutive timeouts park the rung for `OLLAMA_OCR_TIMEOUT_COOLDOWN_MS`.
  */
 
 const fs = require('fs').promises;
+const ocrQuality = require('./ocr-quality');
 
 const DEFAULT_BASE_URL = 'http://siragpt-ollama:11434';
 const DEFAULT_MODEL = 'glm-ocr';
@@ -47,10 +57,22 @@ const DEFAULT_NUM_PREDICT = 8192;
 const DEFAULT_KEEP_ALIVE = '30m';
 const DEFAULT_PULL_TIMEOUT_MS = 45 * 60 * 1000;
 const DEFAULT_PULL_RETRY_MS = 30 * 60 * 1000;
+// Small crops (URL strips, stamps, 360-px captures) are upscaled for the
+// 0.9B model until their short side reaches this, never past maxSide and
+// never more than MAX_UPSCALE× (Tesseract variants already did the same).
+const DEFAULT_MIN_SHORT_SIDE = 1024;
+const MAX_UPSCALE = 4;
+// Two consecutive timeouts park the rung for this long: on the shared CPU
+// Ollama every later page would otherwise wait the full timeout again.
+const DEFAULT_TIMEOUT_STREAK = 2;
+const DEFAULT_TIMEOUT_COOLDOWN_MS = 10 * 60 * 1000;
+// Streamed output is checked for a repetition loop every this many chars.
+const LOOP_CHECK_EVERY_CHARS = 1500;
 
 const TASK_PROMPTS = Object.freeze({
   text: 'Text Recognition:',
   table: 'Table Recognition:',
+  formula: 'Formula Recognition:',
   figure: 'Figure Recognition:',
 });
 
@@ -100,7 +122,31 @@ function getOllamaOcrConfig(env = process.env) {
     autoPull: !FALSY.has(String(env.OLLAMA_OCR_AUTO_PULL ?? '').trim().toLowerCase()),
     pullTimeoutMs: intFromEnv(env, 'OLLAMA_OCR_PULL_TIMEOUT_MS', DEFAULT_PULL_TIMEOUT_MS, { min: 10_000 }),
     pullRetryMs: intFromEnv(env, 'OLLAMA_OCR_PULL_RETRY_MS', DEFAULT_PULL_RETRY_MS, { min: 1000 }),
+    minShortSide: intFromEnv(env, 'OLLAMA_OCR_MIN_SHORT_SIDE', DEFAULT_MIN_SHORT_SIDE, { min: 0, max: 4096 }),
+    // Streamed /api/chat keeps the text read before a timeout and lets a
+    // repetition loop be cut early. OLLAMA_OCR_STREAM=0 restores one JSON body.
+    stream: !FALSY.has(String(env.OLLAMA_OCR_STREAM ?? '').trim().toLowerCase()),
+    // One OCR request at a time on the shared CPU Ollama (SiraGPT Mini runs
+    // there too); queued reads wait on their own budget (queueTimeoutMs).
+    concurrency: intFromEnv(env, 'OLLAMA_OCR_CONCURRENCY', 1, { min: 1, max: 8 }),
+    timeoutStreak: intFromEnv(env, 'OLLAMA_OCR_TIMEOUT_STREAK', DEFAULT_TIMEOUT_STREAK, { min: 1, max: 20 }),
+    timeoutCooldownMs: intFromEnv(env, 'OLLAMA_OCR_TIMEOUT_COOLDOWN_MS', DEFAULT_TIMEOUT_COOLDOWN_MS, { min: 1000 }),
+    // How long a read may wait for the gate before it gives up
+    // (`queue_timeout`, never counted as an Ollama timeout). Default: the
+    // inference timeout. A caller's `timeoutMs` bounds wait + inference.
+    queueTimeoutMs: intFromEnv(env, 'OLLAMA_OCR_QUEUE_TIMEOUT_MS', intFromEnv(env, 'OLLAMA_OCR_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, { min: 1000 }), { min: 1000 }),
+    // Optional sampling knobs (unset = Ollama defaults). Loops are handled by
+    // the detector, so these stay opt-in.
+    repeatPenalty: optionalNumber(env.OLLAMA_OCR_REPEAT_PENALTY, { min: 0.5, max: 2 }),
+    repeatLastN: optionalNumber(env.OLLAMA_OCR_REPEAT_LAST_N, { min: -1, max: 4096, integer: true }),
   };
+}
+
+function optionalNumber(raw, { min, max, integer = false } = {}) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+  const value = integer ? Number.parseInt(String(raw), 10) : Number(raw);
+  if (!Number.isFinite(value)) return null;
+  return Math.max(min, Math.min(value, max));
 }
 
 /**
@@ -137,11 +183,106 @@ function timeoutSignal(ms, outer) {
   }
   return {
     signal: controller.signal,
+    abort(reason) {
+      if (!controller.signal.aborted) controller.abort(reason || new Error('ollama_ocr_stopped'));
+    },
     clear() {
       clearTimeout(timer);
       if (outer) outer.removeEventListener('abort', onOuterAbort);
     },
   };
+}
+
+/**
+ * Read an Ollama /api/chat body: NDJSON stream (one JSON object per line) or
+ * a single JSON object (stream:false, or a server that ignored `stream`).
+ * `onMessage(obj)` returning true stops reading (the caller aborts the
+ * request). Never throws on a malformed line; an aborted read rethrows.
+ */
+async function readChatBody(response, onMessage) {
+  const handleLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    let obj = null;
+    try { obj = JSON.parse(trimmed); } catch { return false; }
+    return obj && typeof obj === 'object' ? onMessage(obj) === true : false;
+  };
+  const body = response && response.body;
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        let nl = buffered.indexOf('\n');
+        while (nl >= 0) {
+          const line = buffered.slice(0, nl);
+          buffered = buffered.slice(nl + 1);
+          if (handleLine(line)) {
+            try { await reader.cancel(); } catch { /* already closed */ }
+            return { stopped: true };
+          }
+          nl = buffered.indexOf('\n');
+        }
+      }
+      buffered += decoder.decode();
+      if (buffered.trim()) handleLine(buffered);
+      return { stopped: false };
+    } finally {
+      try { reader.releaseLock(); } catch { /* released */ }
+    }
+  }
+  if (response && typeof response.text === 'function') {
+    const text = await readBodyText(response);
+    for (const line of String(text || '').split('\n')) {
+      if (handleLine(line)) return { stopped: true };
+    }
+    return { stopped: false };
+  }
+  const json = response && typeof response.json === 'function' ? await response.json().catch(() => null) : null;
+  if (json) onMessage(json);
+  return { stopped: false };
+}
+
+/** Small FIFO semaphore: `run(fn)` waits for a slot; `signal` cancels the wait. */
+function createGate(limitFn) {
+  let active = 0;
+  const waiting = [];
+  const pump = () => {
+    while (waiting.length && active < Math.max(1, limitFn())) {
+      const next = waiting.shift();
+      if (next.cancelled) continue;
+      active += 1;
+      next.resolve();
+    }
+  };
+  async function acquire(signal) {
+    if (active < Math.max(1, limitFn()) && waiting.length === 0) { active += 1; return; }
+    await new Promise((resolve, reject) => {
+      const entry = { resolve, cancelled: false };
+      const onAbort = () => {
+        entry.cancelled = true;
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      };
+      entry.resolve = () => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      if (signal) {
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+      waiting.push(entry);
+    });
+  }
+  function release() {
+    active = Math.max(0, active - 1);
+    pump();
+  }
+  return { acquire, release, stats: () => ({ active, waiting: waiting.filter((e) => !e.cancelled).length }) };
 }
 
 function isAbortError(error) {
@@ -164,13 +305,55 @@ function classifyHttpFailure(status, bodyText) {
 }
 
 /**
- * Downscale + PNG-encode so a 12 MP phone photo does not travel as a 6 MB
- * JPEG base64 to a 0.9B model that works at ~2k px anyway. Best-effort: an
- * undecodable buffer goes through untouched and Ollama reports it.
+ * Scale factor for the GLM input: down to fit `maxSide`, or UP (≤ 4×) until
+ * the short side reaches `minShortSide` — 5–8 px glyphs of a small crop are
+ * unreadable for the 0.9B model at native size. Never past `maxSide`.
  */
-async function prepareImage(buffer, { maxSide, sharpImpl } = {}) {
+function planGlmScale(width, height, { maxSide = DEFAULT_MAX_SIDE, minShortSide = DEFAULT_MIN_SHORT_SIDE } = {}) {
+  const w = Number(width) || 0;
+  const h = Number(height) || 0;
+  if (w <= 0 || h <= 0) return 1;
+  const longSide = Math.max(w, h);
+  const shortSide = Math.min(w, h);
+  const fit = maxSide > 0 ? maxSide / longSide : 1;
+  if (fit < 1) return fit;
+  const want = minShortSide > 0 ? minShortSide / shortSide : 1;
+  if (want <= 1) return 1;
+  return Math.max(1, Math.min(want, MAX_UPSCALE, fit));
+}
+
+/**
+ * Downscale (or upscale a small crop) + PNG-encode so a 12 MP phone photo
+ * does not travel as a 6 MB JPEG base64 to a 0.9B model that works at ~2k px
+ * anyway. Best-effort: an undecodable buffer goes through untouched and
+ * Ollama reports it.
+ */
+async function prepareImage(buffer, { maxSide, minShortSide = DEFAULT_MIN_SHORT_SIDE, sharpImpl } = {}) {
   const sharp = sharpImpl || require('sharp');
   try {
+    let scale = null;
+    try {
+      const meta = typeof sharp(buffer).metadata === 'function' ? await sharp(buffer).metadata() : null;
+      if (meta && meta.width && meta.height) {
+        // EXIF orientations 5-8 swap the sides after .rotate().
+        const swap = Number(meta.orientation) >= 5;
+        const w = swap ? meta.height : meta.width;
+        const h = swap ? meta.width : meta.height;
+        scale = { w, h, factor: planGlmScale(w, h, { maxSide, minShortSide }) };
+      }
+    } catch { scale = null; }
+    if (scale && scale.factor > 1) {
+      return await sharp(buffer)
+        .rotate()
+        .resize({
+          width: Math.round(scale.w * scale.factor),
+          height: Math.round(scale.h * scale.factor),
+          fit: 'inside',
+          kernel: 'lanczos3',
+        })
+        .png()
+        .toBuffer();
+    }
     return await sharp(buffer)
       .rotate()
       .resize({ width: maxSide, height: maxSide, fit: 'inside', withoutEnlargement: true })
@@ -187,7 +370,9 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
   // after a failed pull so a permanently missing model is retried on a slow cadence.
   const pulls = new Map();
   const pullFailures = new Map();
+  const timeoutStreaks = new Map();
   const getFetch = () => fetchImpl || globalThis.fetch;
+  const gate = createGate(() => getOllamaOcrConfig(env).concurrency);
 
   function config() {
     return getOllamaOcrConfig(env);
@@ -202,8 +387,8 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
     return `${cfg.baseUrl}|${cfg.model}`;
   }
 
-  function remember(cfg, state) {
-    availability.set(cacheKey(cfg), { ...state, checkedAt: now() });
+  function remember(cfg, state, ttlMs = null) {
+    availability.set(cacheKey(cfg), { ...state, checkedAt: now(), ...(ttlMs ? { ttlMs } : {}) });
     return state;
   }
 
@@ -267,7 +452,7 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
     if (!cfg.enabled) return { available: false, reason: 'ollama_ocr_disabled' };
     if (!cfg.baseUrl) return { available: false, reason: 'ollama_ocr_no_base_url' };
     const cached = availability.get(cacheKey(cfg));
-    if (!force && cached && now() - cached.checkedAt < cfg.probeTtlMs) {
+    if (!force && cached && now() - cached.checkedAt < (cached.ttlMs || cfg.probeTtlMs)) {
       return { available: cached.available, reason: cached.reason, cached: true };
     }
     const fetchFn = getFetch();
@@ -303,16 +488,33 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
   }
 
   /**
-   * One OCR read. `{ ok:true, text, provider, model, durationMs }` or
-   * `{ ok:false, reason, status? }`. Never throws.
+   * One OCR read. `{ ok:true, text, provider, model, durationMs, task,
+   * doneReason, truncated, loop, partial }` or `{ ok:false, reason, status? }`.
+   * Never throws.
+   *
+   * The answer is streamed (NDJSON) so a timeout keeps the text read so far
+   * (`partial`, `truncated`), and a repetition loop — the typical failure of
+   * a small VLM at temperature 0 on long tables — is cut as soon as it shows:
+   * the request is aborted (freeing the shared CPU) and the text before the
+   * loop is kept (`loop`, `truncated`). `done_reason: 'length'` (num_predict
+   * reached) is reported as `truncated` too. `task`: text | table | formula.
+   * `timeoutMs` can only shorten the configured timeout (ladder deadlines);
+   * it bounds the gate wait AND the inference together.
+   *
+   * Timers: the wait for the shared gate has its own budget (`queue_timeout`
+   * when it runs out); the inference timer starts only once the gate is
+   * held. Only a timeout that had the FULL configured inference time counts
+   * toward the streak that parks the rung: a read queued behind other reads
+   * or shortened by a ladder deadline says nothing about Ollama's health.
    */
-  async function recognize({ buffer, filePath, task, signal } = {}) {
+  async function recognize({ buffer, filePath, task, signal, timeoutMs } = {}) {
     const cfg = config();
     const started = now();
     if (!cfg.enabled) return { ok: false, reason: 'ollama_ocr_disabled' };
     if (!cfg.baseUrl) return { ok: false, reason: 'ollama_ocr_no_base_url' };
     const fetchFn = getFetch();
     if (typeof fetchFn !== 'function') return { ok: false, reason: 'fetch_unavailable' };
+    if (signal && signal.aborted) return { ok: false, reason: 'aborted' };
 
     let imageBuffer = buffer;
     try {
@@ -322,18 +524,75 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
     }
     if (!imageBuffer || !imageBuffer.length) return { ok: false, reason: 'empty_image' };
 
-    const prepared = await prepareImage(imageBuffer, { maxSide: cfg.maxSide, sharpImpl });
-    const prompt = TASK_PROMPTS[task] || TASK_PROMPTS[cfg.task] || TASK_PROMPTS.text;
+    const prepared = await prepareImage(imageBuffer, { maxSide: cfg.maxSide, minShortSide: cfg.minShortSide, sharpImpl });
+    const taskKey = TASK_PROMPTS[task] ? task : (TASK_PROMPTS[cfg.task] ? cfg.task : 'text');
+    const options = { temperature: 0, num_predict: cfg.numPredict };
+    if (cfg.repeatPenalty !== null) options.repeat_penalty = cfg.repeatPenalty;
+    if (cfg.repeatLastN !== null) options.repeat_last_n = cfg.repeatLastN;
     const body = {
       model: cfg.model,
-      messages: [{ role: 'user', content: prompt, images: [prepared.toString('base64')] }],
-      stream: false,
+      messages: [{ role: 'user', content: TASK_PROMPTS[taskKey], images: [prepared.toString('base64')] }],
+      stream: cfg.stream,
       keep_alive: cfg.keepAlive,
-      options: { temperature: 0, num_predict: cfg.numPredict },
+      options,
     };
 
-    const t = timeoutSignal(cfg.timeoutMs, signal);
+    const requested = Number(timeoutMs);
+    const callerBudgetMs = Number.isFinite(requested) && requested > 0 ? requested : null;
+    const state = { text: '', done: false, doneReason: null, evalCount: null, evalDurationNs: null, loop: null, streamError: null, nextCheck: LOOP_CHECK_EVERY_CHARS };
+    let acquired = false;
+    let t = null;
+    let fullBudget = false;
+
+    const finish = (kind) => {
+      let text = cleanModelOutput(state.text);
+      const loop = state.loop || (text ? ocrQuality.detectRepetitionLoop(text) : null);
+      const looping = Boolean(loop && loop.looping);
+      if (looping) text = cleanModelOutput(loop.kept);
+      const loopAtEnd = looping && loop.position === 'end';
+      const truncated = kind === 'timeout' || state.doneReason === 'length' || loopAtEnd || (kind === 'stream_error');
+      if (!text) {
+        return { ok: false, reason: looping ? 'loop' : kind === 'timeout' ? 'timeout' : kind === 'stream_error' ? 'ollama_stream_error' : 'empty_output' };
+      }
+      const durationMs = Math.max(0, now() - started);
+      const evalSeconds = state.evalDurationNs ? state.evalDurationNs / 1e9 : 0;
+      return {
+        ok: true,
+        text,
+        model: cfg.model,
+        provider: `ollama:${cfg.model}`,
+        durationMs,
+        evalCount: state.evalCount,
+        tokensPerSec: state.evalCount && evalSeconds > 0 ? Math.round((state.evalCount / evalSeconds) * 10) / 10 : null,
+        task: taskKey,
+        doneReason: looping && loopAtEnd ? 'loop' : kind === 'timeout' ? 'timeout' : state.doneReason,
+        truncated,
+        partial: kind === 'timeout' || kind === 'stream_error',
+        loop: looping ? { kind: loop.kind, repeats: loop.repeats, position: loop.position } : null,
+      };
+    };
+
     try {
+      // 1) Wait for the gate, on its own budget (never counted as a timeout).
+      const queueBudgetMs = Math.max(1000, Math.min(cfg.queueTimeoutMs, callerBudgetMs !== null ? callerBudgetMs - Math.max(0, now() - started) : Infinity));
+      const q = timeoutSignal(queueBudgetMs, signal);
+      try {
+        await gate.acquire(q.signal);
+        acquired = true;
+      } catch {
+        if (signal && signal.aborted) return { ok: false, reason: 'aborted' };
+        return { ok: false, reason: 'queue_timeout' };
+      } finally {
+        q.clear();
+      }
+      if (signal && signal.aborted) return { ok: false, reason: 'aborted' };
+      // 2) Inference: the configured timeout, shortened by what is left of
+      // the caller's budget. A wait that ate that budget is a queue timeout.
+      const callerLeftMs = callerBudgetMs !== null ? callerBudgetMs - Math.max(0, now() - started) : Infinity;
+      if (callerLeftMs <= 0) return { ok: false, reason: 'queue_timeout' };
+      const limitMs = Math.max(1000, Math.min(cfg.timeoutMs, callerLeftMs));
+      fullBudget = limitMs >= cfg.timeoutMs;
+      t = timeoutSignal(limitMs, signal);
       const response = await fetchFn(`${cfg.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -347,34 +606,76 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
         if (reason === 'model_not_found') remember(cfg, { available: false, reason });
         return { ok: false, reason, status };
       }
-      const json = await response.json().catch(() => null);
-      const content = json && json.message && typeof json.message.content === 'string' ? json.message.content : '';
-      const text = cleanModelOutput(content);
-      if (!text) return { ok: false, reason: 'empty_output' };
-      return {
-        ok: true,
-        text,
-        model: cfg.model,
-        provider: `ollama:${cfg.model}`,
-        durationMs: Math.max(0, now() - started),
-        evalCount: json && Number.isFinite(json.eval_count) ? json.eval_count : null,
-      };
+      await readChatBody(response, (obj) => {
+        if (obj.error) {
+          state.streamError = String(obj.error).slice(0, 160);
+          return true;
+        }
+        const piece = obj.message && typeof obj.message.content === 'string'
+          ? obj.message.content
+          : (typeof obj.response === 'string' ? obj.response : '');
+        if (piece) state.text += piece;
+        if (obj.done) {
+          state.done = true;
+          state.doneReason = typeof obj.done_reason === 'string' ? obj.done_reason : null;
+          if (Number.isFinite(obj.eval_count)) state.evalCount = obj.eval_count;
+          if (Number.isFinite(obj.eval_duration)) state.evalDurationNs = obj.eval_duration;
+        } else if (Number.isFinite(obj.eval_count) && state.evalCount === null) {
+          state.evalCount = obj.eval_count;
+        }
+        if (cfg.stream && state.text.length >= state.nextCheck) {
+          state.nextCheck = state.text.length + LOOP_CHECK_EVERY_CHARS;
+          const loop = ocrQuality.detectRepetitionLoop(cleanModelOutput(state.text));
+          if (loop.looping && loop.position === 'end') {
+            state.loop = loop;
+            return true;
+          }
+        }
+        return false;
+      });
+      if (state.loop) t.abort(new Error('ollama_ocr_loop'));
+      timeoutStreaks.delete(cacheKey(cfg));
+      if (state.streamError) return finish('stream_error');
+      return finish('complete');
     } catch (error) {
       if (isAbortError(error)) {
-        return { ok: false, reason: signal && signal.aborted ? 'aborted' : 'timeout' };
+        if (signal && signal.aborted) return { ok: false, reason: 'aborted' };
+        // Only a read that had the full configured inference time says
+        // something about Ollama's health.
+        if (fullBudget) noteTimeout(cfg);
+        return finish('timeout');
       }
       // A connection refused mid-session means Ollama went away: memoise so
       // the next pages do not each wait for the TCP failure.
       remember(cfg, { available: false, reason: 'ollama_unreachable' });
       return { ok: false, reason: 'ollama_unreachable', detail: String((error && error.message) || error).slice(0, 160) };
     } finally {
-      t.clear();
+      if (t) t.clear();
+      if (acquired) gate.release();
+    }
+  }
+
+  /**
+   * Consecutive timeouts on the shared CPU Ollama: after `timeoutStreak` of
+   * them the rung is parked for `timeoutCooldownMs` (ensureAvailable answers
+   * `timeout_cooldown`), so a long scanned PDF does not wait the full timeout
+   * on every page.
+   */
+  function noteTimeout(cfg) {
+    const key = cacheKey(cfg);
+    const streak = (timeoutStreaks.get(key) || 0) + 1;
+    timeoutStreaks.set(key, streak);
+    if (streak >= cfg.timeoutStreak) {
+      timeoutStreaks.delete(key);
+      remember(cfg, { available: false, reason: 'timeout_cooldown' }, cfg.timeoutCooldownMs);
+      logger.warn(`[ollama-ocr] ${streak} consecutive timeouts on ${cfg.baseUrl} — local OCR parked for ${Math.round(cfg.timeoutCooldownMs / 60000)} min; cloud vision OCR stays in charge`);
     }
   }
 
   function resetCache() {
     availability.clear();
     pullFailures.clear();
+    timeoutStreaks.clear();
   }
 
   /** Resolves when the in-flight pull (if any) settles. Tests + graceful shutdown. */
@@ -398,6 +699,9 @@ function createOllamaOcrClient({ env = process.env, fetchImpl, now = () => Date.
       autoPull: cfg.autoPull,
       pulling: pulls.has(cacheKey(cfg)),
       lastPullFailure: pullFailures.get(cacheKey(cfg)) || null,
+      stream: cfg.stream,
+      queue: gate.stats(),
+      timeoutStreak: timeoutStreaks.get(cacheKey(cfg)) || 0,
     };
   }
 
@@ -415,6 +719,8 @@ module.exports = {
   normalizeBaseUrl,
   classifyHttpFailure,
   prepareImage,
+  planGlmScale,
+  readChatBody,
   TASK_PROMPTS,
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,

@@ -369,8 +369,19 @@ function buildTerminalNotification(task, status) {
   };
 }
 
+// Turns that ended by handing their work to a durable delivery (a 5-hour
+// transcription) notify when the RESULT is posted, not when the turn ends:
+// «Tarea terminada» would arrive hours before anything is ready.
+const DEFERRED_NOTIFICATION_STOP_REASONS = new Set(['media_delivery_handoff']);
+
+function deferredNotification(task) {
+  const reason = String(task?.stats?.stoppedReason || task?.streamState?.stoppedReason || '').split(':', 1)[0].trim();
+  return DEFERRED_NOTIFICATION_STOP_REASONS.has(reason);
+}
+
 function defaultTerminalNotifier({ task, status, env = process.env }) {
   if (!terminalNotifyEnabled(env)) return;
+  if (status === 'completed' && deferredNotification(task)) return;
   const built = buildTerminalNotification(task, status);
   if (!built) return;
   // Lazy require: the registry pulls Prisma/webhook modules the store must
@@ -1365,6 +1376,7 @@ module.exports = {
   TERMINAL_STATUS_TO_EVENT,
   __setTerminalNotifier,
   buildTerminalNotification,
+  deferredNotification,
   terminalNotifyEnabled,
   DEFAULT_RETENTION_MS,
   DEFAULT_STALE_RUNNING_MS,

@@ -89,7 +89,7 @@ test('OpenAI without credits → Groq transcribes; the next job skips OpenAI (30
   assert.match(first.transcript, /Hola Luis/);
   assert.equal(groqRequests[0].response_format, 'verbose_json');
   assert.deepEqual(groqRequests[0].timestamp_granularities, ['segment']);
-  assert.equal(groqRequests[0].language, 'es');
+  assert.equal(groqRequests[0].language, undefined, 'a short clip is auto-detected, never forced to WHISPER_LANGUAGE');
   assert.equal(openaiCalls, 1);
   assert.equal(audioTranscriber.providerInCooldown({ name: 'openai', key: 'sk-proj-TESTKEY_l2' }), true);
 

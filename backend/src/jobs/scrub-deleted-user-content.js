@@ -49,12 +49,14 @@ function _bumpScrubCounter(kind, delta) {
  *   now?: Date,
  *   logger?: { info: Function, warn: Function, error: Function },
  *   piiMask?: { mask: Function },
+ *   transcriptStore?: { purgeMediaTranscript: Function },
  * }} [opts]
  */
 async function run(opts = {}) {
   const logger = opts.logger || console;
   const prisma = opts.prisma || require('../config/database');
   const piiMask = opts.piiMask || require('../utils/pii-mask');
+  const transcriptStore = opts.transcriptStore || require('../services/media-transcript-store');
   const scrubAfterDays = Number.isFinite(opts.scrubAfterDays)
     ? Number(opts.scrubAfterDays)
     : DEFAULT_SCRUB_DAYS;
@@ -163,6 +165,21 @@ async function run(opts = {}) {
       if (dryRun) {
         totalFiles++; userFiles++;
         continue;
+      }
+      // A recording's timed transcript is an unmasked copy of extractedText
+      // kept beside the uploads (.transcripts/<fileId>.json.gz): drop it
+      // first. When that fails, the file is masked but left without the
+      // marker, so the next run retries the purge instead of skipping it.
+      let purgeError = null;
+      try {
+        const purged = await transcriptStore.purgeMediaTranscript(f.id);
+        if (purged && purged.error) purgeError = purged.error;
+      } catch (err) {
+        purgeError = err?.code || 'purge_failed';
+      }
+      if (purgeError) {
+        logger.warn(`[scrub-pii] file=${f.id} transcript purge failed code=${purgeError}`);
+        delete data.processingError;
       }
       try {
         await prisma.file.update({ where: { id: f.id }, data });

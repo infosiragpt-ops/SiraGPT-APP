@@ -201,7 +201,10 @@ test('recognize: posts the GLM-OCR task prompt + base64 image to /api/chat and r
   assert.equal(result.text, '# Factura 001\n\n| Item | Total |\n|---|---|\n| Café | $12 |');
   assert.equal(result.evalCount, 42);
   assert.equal(seenBody.model, 'glm-ocr');
-  assert.equal(seenBody.stream, false);
+  // Streamed: a timeout keeps the text read so far and a loop is cut early.
+  assert.equal(seenBody.stream, true);
+  assert.equal(result.truncated, false);
+  assert.equal(result.loop, null);
   assert.equal(seenBody.messages[0].content, 'Text Recognition:');
   assert.equal(seenBody.messages[0].images[0], Buffer.from('prepared').toString('base64'));
   assert.equal(seenBody.options.temperature, 0);
@@ -267,17 +270,23 @@ function fakeEngineClient({ available = true, text = '', reason = null, enabled 
   };
 }
 
+// Every cloud vision key the OCR ladder could use: removed so these tests
+// stay offline whatever the developer's environment holds.
+const CLOUD_VISION_KEYS = ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'OPENROUTER_API_KEY', 'MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY'];
+
 async function withEngineClient(client, fn) {
   const saved = ocrEngine.ollamaOcr;
-  const savedKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  const savedKeys = Object.fromEntries(CLOUD_VISION_KEYS.map((k) => [k, process.env[k]]));
+  for (const k of CLOUD_VISION_KEYS) delete process.env[k];
   ocrEngine.ollamaOcr = client;
   try {
     return await fn();
   } finally {
     ocrEngine.ollamaOcr = saved;
-    if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
-    else process.env.OPENAI_API_KEY = savedKey;
+    for (const [k, v] of Object.entries(savedKeys)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   }
 }
 
@@ -288,8 +297,13 @@ test('engine: runVisionFallback returns the GLM-OCR read as vision_fallback with
     assert.equal(result.ocr.status, 'vision_fallback');
     assert.equal(result.ocr.provider, 'ollama:glm-ocr');
     assert.match(result.text, /FACULTAD DE NEGOCIOS/);
-    assert.equal(result.ocr.confidence, 95);
-    assert.equal(result.ocr.elapsedMs, 120);
+    // No fixed 95: a single unverified GLM read (no Tesseract, no cloud to
+    // cross-check) is «media».
+    assert.ok(result.ocr.confidence < 85, `confidence ${result.ocr.confidence}`);
+    assert.equal(result.ocr.confidenceLevel, 'media');
+    assert.equal(result.ocr.gate.trusted, true);
+    assert.equal(result.ocr.gate.verified, false);
+    assert.ok(Number.isFinite(result.ocr.elapsedMs), "ladder time is reported");
     assert.equal(client.calls.recognize, 1);
   });
 });

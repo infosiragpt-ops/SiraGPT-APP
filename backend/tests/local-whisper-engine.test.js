@@ -104,14 +104,21 @@ function decoderChild(writeOutput, exitCode = 0) {
   return child;
 }
 
+const VARIANT_FILTERS = ['highpass', 'dynaudnorm', 'loudnorm'];
+
 test('successful empty whisper.cpp JSON is no_speech without Python fallback and cleans temporary output', async (t) => {
   const { wavPath, options } = decoderFixture(t);
   const commands = [];
+  const decodes = [];
   let tempDir;
   const result = await audio.transcribe(wavPath, 'audio/wav', 'silent.wav', {
     ...options,
+    // no_speech needs a second opinion (C4): with one engine, the same engine
+    // on a loudness-normalised copy of the clip.
+    ffmpegFilters: VARIANT_FILTERS,
     spawnImpl(command, args) {
       commands.push(command);
+      if (command === 'ffmpeg') decodes.push(args);
       return decoderChild((child) => {
         if (command === 'ffmpeg') {
           tempDir = path.dirname(args.at(-1));
@@ -129,8 +136,28 @@ test('successful empty whisper.cpp JSON is no_speech without Python fallback and
   });
   assert.equal(result.reasonCode, 'no_speech');
   assert.equal(result.ok, false);
-  assert.deepEqual(commands, ['ffmpeg', 'fixture-whisper']);
+  assert.deepEqual(commands, ['ffmpeg', 'fixture-whisper', 'ffmpeg', 'fixture-whisper'], 'a second, enhanced decode agreed');
+  assert.ok(!decodes[0].includes('-af'), 'the first decode is the clean one');
+  assert.match(decodes[1][decodes[1].indexOf('-af') + 1], /dynaudnorm/);
   assert.equal(fs.existsSync(tempDir), false);
+});
+
+test('without any second opinion (one engine, no enhanced copy) silence stays no_speech, as before', async (t) => {
+  const { wavPath, options } = decoderFixture(t);
+  const commands = [];
+  const result = await audio.transcribe(wavPath, 'audio/wav', 'silent.wav', {
+    ...options,
+    ffmpegFilters: [],
+    spawnImpl(command, args) {
+      commands.push(command);
+      return decoderChild(() => {
+        if (command === 'ffmpeg') fs.copyFileSync(wavPath, args.at(-1));
+        else fs.writeFileSync(`${args[args.indexOf('-of') + 1]}.json`, JSON.stringify({ transcription: [] }));
+      });
+    },
+  });
+  assert.equal(result.reasonCode, 'no_speech');
+  assert.deepEqual(commands, ['ffmpeg', 'fixture-whisper']);
 });
 
 test('successful empty Python fallback output is no_speech and cleans temporary output', async (t) => {
@@ -139,6 +166,7 @@ test('successful empty Python fallback output is no_speech and cleans temporary 
   let tempDir;
   const result = await audio.transcribe(wavPath, 'audio/wav', 'silent.wav', {
     ...options,
+    ffmpegFilters: VARIANT_FILTERS,
     spawnImpl(command, args) {
       commands.push(command);
       return decoderChild(() => {
@@ -152,7 +180,7 @@ test('successful empty Python fallback output is no_speech and cleans temporary 
     },
   });
   assert.equal(result.reasonCode, 'no_speech');
-  assert.deepEqual(commands, ['ffmpeg', 'fixture-whisper', 'python3']);
+  assert.deepEqual(commands, ['ffmpeg', 'fixture-whisper', 'python3', 'ffmpeg', 'fixture-whisper', 'python3'], 'the second opinion agreed');
   assert.equal(fs.existsSync(tempDir), false);
 });
 
@@ -222,6 +250,8 @@ test('a successful silent local segment preserves neighboring speech and timesta
   const result = await audio.transcribe(wavPath, 'audio/wav', 'long.wav', {
     ...options, durationSeconds: 1800,
     segmentAudio: async () => ({ dir: segmentDir, segments }),
+    // The empty piece measures as silence: nothing to re-ask about.
+    measureVoiced: async () => ({ voicedSec: 0.2, silences: [] }),
     spawnImpl(command, args) {
       return decoderChild(() => {
         if (command === 'ffmpeg') {

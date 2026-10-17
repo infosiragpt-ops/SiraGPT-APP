@@ -2253,6 +2253,22 @@ function capHistoryAttachmentText(text) {
   if (!HISTORY_ATTACHMENT_TEXT_MAX_CHARS || value.length <= HISTORY_ATTACHMENT_TEXT_MAX_CHARS) return value;
   return `${value.slice(0, HISTORY_ATTACHMENT_TEXT_MAX_CHARS)}\n[… texto recortado en el historial: ${value.length - HISTORY_ATTACHMENT_TEXT_MAX_CHARS} caracteres más. El documento completo sigue disponible como adjunto.]`;
 }
+// A recording's transcript in the history (contract C7): the window a
+// question names is already bounded by the loader and stays whole; the head
+// of a longer transcript says how to read any other moment.
+function capHistoryFileText(file, text) {
+  if (file && file.__mediaWindow) {
+    const value = String(text || '');
+    const max = Number(messageAttachments.MEDIA_WINDOW_MAX_CHARS) || 16000;
+    return value.length <= max + 400 ? value : `${value.slice(0, max)}\n[… tramo recortado]`;
+  }
+  if (file && file.__mediaTranscript) {
+    const value = String(text || '');
+    if (!HISTORY_ATTACHMENT_TEXT_MAX_CHARS || value.length <= HISTORY_ATTACHMENT_TEXT_MAX_CHARS) return value;
+    return `${value.slice(0, HISTORY_ATTACHMENT_TEXT_MAX_CHARS)}\n[… transcripción recortada en el historial: ${value.length - HISTORY_ATTACHMENT_TEXT_MAX_CHARS} caracteres más. Para saber qué se dice en otro momento de la grabación usa transcript_lookup (por minuto o por palabras); no lo deduzcas de este fragmento.]`;
+  }
+  return capHistoryAttachmentText(text);
+}
 // Indexes of the history rows whose images stay inline this turn.
 function historyRowsWithInlineImages(rows, isImageAttachment) {
   const keep = new Set();
@@ -7413,8 +7429,27 @@ router.post(
         && (nativeVisionForTurn
           || (!currentTurnHasNonImageFiles && routeCanReachVision(actualProvider, actualModel)));
       let messages = [systemInstruction];
+      // «está en inglés», «los nombres son…» said while recordings of this
+      // turn or of earlier turns are still in the queue reach their jobs
+      // (contract C7). Fire-and-forget, never blocks the turn.
+      void Promise.resolve(messageAttachments.forwardTranscriptionHints?.(prisma, {
+        userId: req.user?.id, messages: historyMessages, prompt, currentFiles: processedFiles,
+      })).catch(() => {});
+      // A recording in this turn or in the history: the transcript tools
+      // (transcript_lookup / retranscribe_range / rename_speaker) may serve
+      // the turn — the tool selector pins them only then.
+      const __mediaTranscriptTurn = messageAttachments.mediaInTurnOrHistory?.({ files: processedFiles, messages: historyMessages }) === true;
       if (historyMessages.length) {
         const isHistoryImageAttachment = (f) => Boolean(f) && (isImageMime(f.mimeType) || isImageMime(f.type) || f?.type === 'image');
+        // Media transcripts are not stored in attachment snapshots; re-load
+        // the newest ones so a follow-up about an earlier recording reads
+        // its transcript instead of «no disponible».
+        // A question about a moment of a long recording («¿qué dijo en el
+        // minuto 95?») reads THAT window from the segments sidecar instead of
+        // the transcript's head (contract C7).
+        const historyMediaTranscripts = await messageAttachments.loadHistoryMediaTranscripts(prisma, {
+          userId: req.user?.id, messages: historyMessages, query: prompt,
+        }).catch(() => new Map());
         const inlineImageRows = historyRowsWithInlineImages(historyMessages, isHistoryImageAttachment);
         for (const [historyIndex, m] of historyMessages.entries()) {
           const messageRole = m.role === 'USER' ? 'user' : 'assistant';
@@ -7431,6 +7466,11 @@ router.post(
               generateLog.warnError('history.files_parse_failed', e);
               parsedFiles = [];
             }
+          }
+          if (historyMediaTranscripts.size) {
+            parsedFiles = parsedFiles.map((f) => (f && f.id && !f.extractedText && historyMediaTranscripts.has(f.id)
+              ? { ...f, extractedText: historyMediaTranscripts.get(f.id), __mediaTranscript: true,
+                ...(historyMediaTranscripts.windows && historyMediaTranscripts.windows.has(f.id) ? { __mediaWindow: true } : {}) } : f));
           }
 
           // ✅ Check if message contains images. When the current turn
@@ -7493,7 +7533,12 @@ router.post(
                 const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
                   ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
                   : '';
-                const content = capHistoryAttachmentText(preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f));
+                // A recording's transcript keeps its window / transcript_lookup
+                // pointer (capHistoryFileText); every other attachment the
+                // shared history cap.
+                const content = f && (f.__mediaWindow || f.__mediaTranscript)
+                  ? capHistoryFileText(f, preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f))
+                  : capHistoryAttachmentText(preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f));
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
 
@@ -7522,7 +7567,12 @@ router.post(
                 const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
                   ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
                   : '';
-                const content = capHistoryAttachmentText(preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f));
+                // A recording's transcript keeps its window / transcript_lookup
+                // pointer (capHistoryFileText); every other attachment the
+                // shared history cap.
+                const content = f && (f.__mediaWindow || f.__mediaTranscript)
+                  ? capHistoryFileText(f, preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f))
+                  : capHistoryAttachmentText(preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f));
                 return `\n\nAttached file: ${f.name}\nContent: ${content}`;
               }).join('');
               messageContent += fileContext;
@@ -7549,6 +7599,16 @@ router.post(
             ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
             : '';
           const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
+          // OCR text is labelled with its engine(s) and confidence so it is
+          // never taken as exact: a low-confidence read can contradict the
+          // pixels, and on a text-only turn it is the only input.
+          const ocrProvenance = typeof f.extractedText === 'string' && f.extractedText.trim()
+            ? imageAttachmentVision.parseOcrProvenance(f.extractedText)
+            : null;
+          if (ocrProvenance && (ocrProvenance.header || isImageFileRecord(f))) {
+            const pixelsNote = isImageFileRecord(f) && keepImagesForVision ? '; la imagen adjunta manda' : '';
+            return `File: ${f.name}\nContent (${imageAttachmentVision.describeOcrProvenance(ocrProvenance)}${pixelsNote}): ${content}`;
+          }
           return `File: ${f.name}\nContent: ${content}`;
         };
 
@@ -7572,8 +7632,16 @@ router.post(
         } else if (processedFiles.length > 1) {
           fileContext = rawFileContext;
         } else {
+          // Single attachment: the uploaded-file context carries the OCR
+          // provenance label too (a low-confidence read on a text-only turn
+          // is never presented as exact).
+          const singleFile = processedFiles[0];
           fileContext = uploadedFileContextForTurn
-            || rawFileContext;
+            ? imageAttachmentVision.labelUploadedOcrContext(uploadedFileContextForTurn, singleFile, {
+              isImage: isImageFileRecord(singleFile),
+              imageAttached: keepImagesForVision,
+            })
+            : rawFileContext;
         }
 
         // ✅ Check if there are any image files that might contain math
@@ -7614,7 +7682,15 @@ router.post(
 
         // ✅ Add LaTeX instruction for images
         let mathInstructions = '';
-        if (hasImageFiles) {
+        const imageTranscriptionTurn = hasImageFiles && imageAttachmentVision.isTranscriptionRequest(prompt);
+        if (imageTranscriptionTurn) {
+          // «transcribe esta foto» / «qué dice»: a verbatim copy with the
+          // [ilegible] convention, at temperature 0 — a transcription is a
+          // copy, not a composition (the default 0.55 invented words on
+          // blurry photos).
+          mathInstructions = `\n\n${imageAttachmentVision.buildImageTranscriptionProtocol()}`;
+          actualTemperature = 0;
+        } else if (hasImageFiles) {
           // Task-first protocol. The previous wording ("please transcribe and
           // format them using proper LaTeX") OVERRODE terse user instructions:
           // an attached exercise + "resolver" came back as a bare LaTeX
@@ -8646,6 +8722,8 @@ router.post(
                       // A pasted link + «transcribe…»: keep transcribe_url in the
                       // per-turn tool subset (tool-selector core rule).
                       transcribeUrl: Boolean(__requestBrief && __requestBrief.deliverable && __requestBrief.deliverable.kind === 'transcription' && __requestBrief.target && __requestBrief.target.kind === 'url'),
+                      // A recording in this turn or the history (contract C7).
+                      mediaTranscript: __mediaTranscriptTurn,
                     },
                   },
                   toolContext: {

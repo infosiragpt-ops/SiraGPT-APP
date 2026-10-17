@@ -232,7 +232,9 @@ function splitPdftotextPages(stdout) {
   const rawPages = String(stdout || '').split('\f');
   const pages = rawPages.map((text, i) => ({
     page: i + 1,
-    text: String(text || '').replace(/\s+$/g, ''),
+    // trimEnd, not /\s+$/: the regex backtracks over every whitespace run of
+    // a giant page (same character set, linear time).
+    text: String(text || '').trimEnd(),
   }));
   while (pages.length > 1 && !pages[pages.length - 1].text.trim()) pages.pop();
   const totalChars = pages.reduce((n, p) => n + p.text.trim().length, 0);
@@ -261,7 +263,18 @@ async function tryPdftotext(filePath, opts = {}) {
       .filter((p) => p.text.trim())
       .map((p) => `\n[page ${p.page}]\n${p.text}`)
       .join('');
-    return { used: true, reason: 'pdftotext', text, ...split };
+    // Text-layer quality: «has ≥ 20 characters» is not «has text». A layer of
+    // stamps / page numbers only, or a broken one ((cid:NN), U+FFFD,
+    // mojibake), still needs OCR — the caller reads `textLayer.kind`
+    // ('text' | 'mixed' | 'scanned') and `textLayer.ocrPages`. Off with
+    // SIRAGPT_PDF_TEXT_LAYER_CHECK=0; bounded and yielding to the event loop
+    // (a 2000-page book is extracted inside the web process).
+    let textLayer = null;
+    try {
+      const mixedPdf = require('./document/mixed-pdf');
+      if (mixedPdf.textLayerCheckEnabled()) textLayer = await mixedPdf.planTextLayerOcrAsync(split.pages);
+    } catch { textLayer = null; }
+    return { used: true, reason: 'pdftotext', text, ...split, textLayer };
   } catch (err) {
     const reason = err && err.code === 'ENOENT' ? 'unavailable' : (err?.message || 'failed');
     return { used: false, reason, pages: [], text: '', totalChars: 0 };

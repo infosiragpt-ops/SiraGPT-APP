@@ -11,6 +11,7 @@ const apiSource = read("lib", "api.ts")
 const aiRoute = read("backend", "src", "routes", "ai.js")
 const voiceStudioRoute = read("backend", "src", "routes", "voice-studio.js")
 const elevenRoute = read("backend", "src", "routes", "elevenlabs.js")
+const capabilities = read("backend", "src", "services", "transcription-capabilities.js")
 const manifest = read("backend", "src", "services", "model-catalog-manifest.js")
 
 describe("Sira Voz (VoiceStudio) — free local voice studio in /agentes", () => {
@@ -27,9 +28,17 @@ describe("Sira Voz (VoiceStudio) — free local voice studio in /agentes", () =>
 
   it("makes dictation free: local whisper first, VoiceStudio second, ElevenLabs only for paid plans", () => {
     assert.match(elevenRoute, /router\.post\('\/speech-to-text', authenticateToken, markVoiceTranscriptionTier, upload\.single\('audio'\)/)
-    // The key is read per request (the admin-connections bridge applies it at runtime).
-    assert.match(elevenRoute, /if \(!elevenLabsApiKey\(\) \|\| req\.freeVoiceTranscription\) \{\s*\n\s*return freeSpeechToText\(req, res\);/)
-    assert.match(elevenRoute, /localWhisper\.transcribeLocal\(filePath, \{ language \}\)/)
+    // Only a paid plan WITH a key (read per request: the admin-connections
+    // bridge applies it at runtime) ever reaches ElevenLabs Scribe.
+    assert.match(elevenRoute, /const paid = !req\.freeVoiceTranscription;/)
+    assert.match(elevenRoute, /const apiKey = elevenLabsApiKey\(\);\s*\n\s*if \(paid && apiKey\) \{/)
+    // Every plan then uses the shared ladder on the interactive lane; free plans
+    // stay on-host (local whisper first, VoiceStudio second) unless opted in.
+    assert.match(elevenRoute, /const ladder = dictationLadderOptions\(env, \{ paid \}\);/)
+    assert.match(elevenRoute, /audioTranscriber\.transcribe\(filePath, mimeType, originalName, \{[\s\S]{0,120}lane: 'interactive'/)
+    assert.match(capabilities, /const DICTATION_FREE_PROVIDERS = Object\.freeze\(\['local', 'voicestudio'\]\);/)
+    assert.match(capabilities, /if \(paid\) return \{ policy: 'shared' \};/)
+    assert.match(capabilities, /return \{ providers: DICTATION_FREE_PROVIDERS\.slice\(\), escalationProviders: \[\], policy: 'on_host' \};/)
     assert.match(elevenRoute, /'\.m4b'/, "audiobooks (.m4b) must be servable by the audio route")
   })
 

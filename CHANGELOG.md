@@ -6,8 +6,68 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Added
+
+- Transcription that does not give up: any audio, any video, blurry text.
+  - **Quality loop instead of «first answer wins».** Every segment is scored with signals that compare across engines (hallucination lexicon, prompt echo, repetition loops, characters per voiced second, voiced holes). A doubtful segment gets a second reading and keeps the better one. «Sin voz» needs a second opinion first. Engines only take over a segment when their own reading is clean; confidence scores never decide between two different engines.
+  - **Delivered quality report.** Each delivery says «Calidad: alta · cobertura 99 % · motor(es): …», lists the doubtful time windows and offers «dime «revisa del minuto 12 al 14»». The agent can then re-read only that window (`retranscribe_range`), look something up in the transcript (`transcript_lookup`) or name a speaker everywhere (`rename_speaker`).
+  - **Video without usable speech still gets text.** Embedded subtitles are read when the audio is silent or undecodable. The text shown on screen (slides, captions burned into the video) is read frame by frame. For links, the platform's subtitles are used, but only after their language, ≥ 90 % coverage and spot checks match. The delivery always says where the text came from.
+  - **The right audio track.** Recordings with several tracks use the one in the requested language or the default one, never commentary or audio description. Tracks are never chosen by loudness.
+  - **Names and languages from the conversation.** «el profesor se llama Ñahui», «está en inglés» and names in the file name reach the engine as spelling hints and the language, even for recordings already in the queue.
+  - **WhatsApp chat exports.** A ZIP's voice notes, videos and images become their own files, each one transcribed or read. ZIP-bomb limits apply.
+  - **Short recordings no longer wait behind long ones.** Recordings of 15 minutes or less use their own queue. Dictation, link clips and `transcribe_audio` use an engine slot that queued jobs never take.
+  - **Blurry text and photos.**
+    - Input normalization: HEIC from iPhone, BMP/ICO/JP2/JXL, every TIFF page, SVG, truncated JPEG/PNG. EXIF and Tesseract OSD fix the orientation.
+    - Blurry photos are detected, and large dense pages are read in strips.
+    - Tesseract, the local GLM-OCR and the vision models (Gemini → Meta → xAI → OpenRouter → OpenAI, only those with a key) are reconciled: a word the engines disagree on is marked `[¿palabra?]`, an unreadable one `[ilegible]`. Confidence is calibrated instead of a fixed 95.
+    - Scanned PDFs get the same ladder per weak page. A bad text layer (stamps, `(cid:`, mojibake) no longer blocks OCR.
+    - Tesseract languages load from the image (no CDN) and add Portuguese, French, Italian and German.
+  - **Dictation.** Every plan uses the shared ladder with automatic language detection. A plan or quota error is a clear message, never fake success text. Free plans stay on the server unless an operator opts in. The transcript is never logged.
+  - **Operations.** `GET /api/admin/transcription-capabilities` (superadmin) and one boot line report what each server can really do. Paid rungs stay opt-in (see `docs/ENV_VARIABLES.md`).
+  - **Hardening from a second adversarial review (21 findings and their follow-ups fixed):**
+    - Silence is never filled with invented text: an empty first reading over measured silence needs two agreeing alternatives.
+    - «revisa el minuto 12» re-reads only that stretch, even for transcripts made before this change. Its result is spliced where neither transcript has a segment crossing the cut, so no word is lost or repeated. A silent or failed stretch leaves the transcript, and the parts later retries reuse, exactly as they were. The stretch's language never becomes the whole file's.
+    - «transcribe y dime qué dice en el minuto 30» delivers the full transcript and answers the moment. A translation is never cut to the minute the user asked about.
+    - The recording's language is no longer read from «el examen es en inglés», «la transcripción está en inglés…», «speak in English please», a place («Alemania») or how an event went («la reunión de ayer fue en…»).
+    - Free dictation tries whisper.cpp before Sira Voz again, with Sira Voz limited to 60 % of the request time.
+    - Cloud OCR skips runtimes with no key or no credit before choosing three, keeps OpenAI reachable, and leaves room after GLM-OCR for the cloud.
+    - HEIC/BMP/JP2 files are size-checked before an external decoder runs. Text-layer scoring yields to the event loop and is bounded.
+    - Mail-merge PDFs keep their exact text; a partial OCR keeps the text layer of every page it did not read.
+    - Small PDFs no longer fail in the pdf-parse fallback with «bad XRef entry». pdf.js 1.10 copied a small Buffer into the shared pool and then read it from the wrong offset (under 4 KB on Node 22, under 32 KB on Node 24). The bytes now reach it as a plain `Uint8Array` that starts at offset 0 (`utils/pdf-js-input.js`).
+    - A ZIP expansion cut by a restart leaves no orphan files and resumes after boot.
+
+- Professional transcription that copes with 5-hour recordings.
+  - **Long recordings no longer hold the chat.** The turn waits at most 4 minutes, then answers «Recibí «clase.mp4» (≈5 h)… te aviso aquí». The durable media job (resumable across deploys) posts the transcript, its files and any requested analysis into the same chat with an in-app and push notification.
+  - **Partial results are kept.** A segment no engine can read leaves a marked gap with its times instead of failing the whole file. «reintenta» re-runs only the missing segments without erasing the partial text.
+  - **Deliverables:**
+    - TXT with a header and `[hh:mm:ss]` paragraphs (speaker labels when the engine provides them);
+    - Word for recordings of 10 minutes or more, or on request; PDF on request;
+    - SRT/VTT subtitles for videos and long recordings, or on request;
+    - time ranges («del minuto 30 al 45», «desde el minuto 30»);
+    - full translations («tradúcelo al inglés») that keep the time marks;
+    - minutes, chapters and key points analysed over every chunk with time citations.
+  - **Engine.** whisper.cpp now decodes with real timestamps; it used to hard-cut every 30 s. Language is detected and locked, file-name terms bias spelling, and audio is cut once per job at silences. A 429 rate limit waits and retries instead of disabling the provider for 30 minutes. Cloud segments run in parallel.
+  - **Links.** Video/audio links of 20 minutes to 12 hours go through the same durable queue; they used to be refused above 3 hours.
+  - **Uploads.** Multi-GB uploads resume after a network drop or a deploy without resending received parts, upload in parallel, report speed and ETA, and ask before the page is closed. The file chip no longer reports «Listo» for a recording that is still being transcribed.
+  - **Composer routing.** «quiero la transcripción de este video», «hazme subtítulos», «resume la clase» and «qué dijo sobre X» now reach the transcription agent. They used to end in video generation, voice mode or «Solo se permiten archivos de imagen».
+  - **Hardening from an adversarial review (29 findings fixed):**
+    - Handed-off recordings are actually delivered: the hand-off message could be mistaken for the delivered one.
+    - Translations use the large output budget and re-split cut parts, instead of stopping at 1000 tokens.
+    - «transcribe y tradúcelo» delivers both the transcript and the translation.
+    - One whisper.cpp failure degrades only that segment.
+    - A language detected on a silent opening is confirmed before it locks the recording.
+    - Link clips show recording-clock times everywhere.
+    - Transcripts are deleted with their file and with deleted accounts.
+    - Ordinary questions or time ranges no longer pull an old recording into the turn.
+
 ### Fixed
 
+- Installing a sandbox package that is not approved, not found, or blocked by
+  the network now reports that reason. On a loaded host it could be reported
+  as «extract_failed» instead. A failed install sends no archive and `tar`
+  fails on the empty input. If `tar` closed before the installer, the installer
+  was killed as if extraction had failed. Now it is only killed while it is
+  still streaming.
 - Cancelled responses distinguish a user Stop from a provider abort or an
   expired deadline, preserve partial text, and retain HTTP errors already
   received without issuing another request after cancellation.
@@ -77,6 +137,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Security
 
+- `/uploads` refuses every path inside a dot-directory (transcript sidecars, delivery records, checkpoints). Static serving would otherwise return them, and only the owner check kept them private.
+- GPT knowledge and icon uploads keep the document size cap; the 10 GB ceiling applies to chat recordings only.
 - `host_bash` no longer offers `npx`, `npm exec|x|create`, `npm init
   <initializer>`, registry/config mutations or global installs; `npm install`
   and `pip3 install` accept registry package names only (no URLs, git/file

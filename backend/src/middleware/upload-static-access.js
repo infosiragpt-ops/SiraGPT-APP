@@ -171,6 +171,14 @@ function classifyUploadPath(relativePath) {
     return { kind: 'blocked' };
   }
 
+  // Internal stores live in dot-directories of the uploads volume
+  // (.transcripts, .transcription-checkpoints). express.static, as mounted
+  // without a `dotfiles` option, still serves files INSIDE a dot-directory,
+  // so never let any dot segment through, whoever asks.
+  if (parts.some((part) => part.startsWith('.'))) {
+    return { kind: 'blocked' };
+  }
+
   if (PUBLIC_UPLOAD_PREFIXES.has(first)) {
     return { kind: 'public' };
   }

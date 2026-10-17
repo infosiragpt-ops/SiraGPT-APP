@@ -405,6 +405,7 @@ import {
 } from "@/lib/chat/message-rendering"
 import {
   attachmentHasPreviewSource,
+  attachmentsBesideImagesAreMedia,
   buildAgentFileMetadata,
   collectUploadFileIds,
   describeMediaTranscriptionProgress,
@@ -417,6 +418,7 @@ import {
   isComposerFileUploadPending,
   isVideoComposerFile,
   isMediaFollowupPrompt,
+  isMediaUnderstandingTurn,
   previewAttachmentKey,
   resolveComposerMediaSrc,
   resolveMediaFollowupFiles,
@@ -6255,8 +6257,24 @@ function ChatInterfaceContent() {
   }, [isCurrentChatStreaming]);
 
   const [isUploading, setIsUploading] = React.useState(false);
+  // Drops, pastes and retries upload concurrently; isUploading stays true
+  // until the last one in flight ends, not the first.
+  const activeUploadsRef = React.useRef(0);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
+  // Leaving the page mid-upload (a multi-GB recording) asks first: the
+  // browser's own confirmation, no in-app UI. A resumable upload can be
+  // picked up again by re-selecting the same file, but closing the tab
+  // stops it.
+  React.useEffect(() => {
+    if (!isUploading || typeof window === 'undefined') return undefined;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isUploading]);
 
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
@@ -7426,9 +7444,24 @@ But first, you need to connect your Spotify account securely using the button be
   const activeSearchActivity = activeSearchActivityId ? searchActivities[activeSearchActivityId] : null;
   const searchActivityPanelOpen = Boolean(activeSearchActivity);
   const autoVideoActivationRef = React.useRef(false);
+  // An attached recording is never input for Video or Voz, and a draft about
+  // a recording («quiero la transcripción de este video», «resume la clase»
+  // after a transcribed batch) is agent-task work: neither may auto-flip.
+  const composerHasMediaAttachment = React.useMemo(
+    () => uploadedFiles.some((file: any) => isAudioComposerFile(file) || isVideoComposerFile(file)),
+    [uploadedFiles],
+  );
+  const draftIsMediaUnderstanding = React.useMemo(() => {
+    const draft = (input || "").trim();
+    if (!draft) return false;
+    if (uploadedFiles.length > 0) return isMediaUnderstandingTurn(draft, uploadedFiles);
+    return resolveMediaFollowupFiles(draft, currentChat?.messages || []).length > 0;
+  }, [input, uploadedFiles, currentChat?.messages]);
 
   React.useEffect(() => {
-    const wantsVideo = shouldAutoActivateVideoGeneration(input);
+    const wantsVideo = shouldAutoActivateVideoGeneration(input)
+      && !composerHasMediaAttachment
+      && !draftIsMediaUnderstanding;
     const hasOtherActiveTool =
       isWebSearchActive ||
       isImageGenerationActive ||
@@ -7476,6 +7509,8 @@ But first, you need to connect your Spotify account securely using the button be
   }, [
     chatType,
     closeAllToolsAndConnectors,
+    composerHasMediaAttachment,
+    draftIsMediaUnderstanding,
     input,
     isComputerUseActive,
     isExcelConnectorActive,
@@ -7509,6 +7544,7 @@ But first, you need to connect your Spotify account securely using the button be
     const draft = (input || "").trim();
     if (draft.length < 6) return;
     if (shouldAutoActivateVideoGeneration(draft)) return; // owned by the video effect
+    if (draftIsMediaUnderstanding) return; // a recording to transcribe/summarize, not a tool to switch on
     const decision = detectComposerAutoMode(draft, { attachments: uploadedFiles as any });
     if (!decision) return;
     const anyToolActive =
@@ -7568,6 +7604,7 @@ But first, you need to connect your Spotify account securely using the button be
   }, [
     chatType,
     closeAllToolsAndConnectors,
+    draftIsMediaUnderstanding,
     input,
     isComputerUseActive,
     isExcelConnectorActive,
@@ -9495,6 +9532,7 @@ But first, you need to connect your Spotify account securely using the button be
       return next;
     });
 
+    activeUploadsRef.current += 1;
     setIsUploading(true);
 
     try {
@@ -9686,7 +9724,8 @@ But first, you need to connect your Spotify account securely using the button be
       // Previews are intentionally KEPT alive on failure so the chip
       // can render its thumbnail next to the retry button.
     } finally {
-      setIsUploading(false);
+      activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+      setIsUploading(activeUploadsRef.current > 0);
       setUploadProgress(prev => {
         const next = { ...prev };
         tempFiles.forEach(tf => { delete next[tf.tempId]; });
@@ -10724,6 +10763,20 @@ But first, you need to connect your Spotify account securely using the button be
       && isExplicitGithubConnectRequest(msg);
     const codingWorkspace = !githubConnectionRequest && codingIntent.active && !isWordConnectorActive && !isExcelConnectorActive
       && !isGmailActive && !isGoogleCalendarActive && !isGoogleDriveActive && !isSpotifyActive && !isComputerUseActive;
+    // A turn about a recording — the attached audio/video, or this chat's
+    // latest media batch («quiero la transcripción de este video», «resume la
+    // clase», «ponlo en word») — is decided here, before any tool mode or
+    // classifyIntent: it runs on the durable agent-task media branch, never on
+    // video generation, Voz/Música or the image-only toast. Gmail, Calendar,
+    // Drive, Spotify and Computer own their turn: with one of them active a
+    // message never borrows the last recording.
+    const connectorOwnsTurn = isGmailActive || isGoogleCalendarActive || isGoogleDriveActive
+      || isSpotifyActive || isComputerUseActive;
+    const mediaFollowupFiles = !codingWorkspace && composerFiles.length === 0
+      ? resolveMediaFollowupFiles(msg, currentChat?.messages || []).filter(() => !connectorOwnsTurn)
+      : [];
+    const mediaUnderstandingTurn = !codingWorkspace
+      && (mediaFollowupFiles.length > 0 || isMediaUnderstandingTurn(msg, composerFiles));
     // Capture the visible document before a busy chat queues this turn. New
     // attachments win; Word/Excel connectors keep their own open document.
     const sandboxDecision = codingWorkspace || isWordConnectorActive || isExcelConnectorActive
@@ -10752,7 +10805,8 @@ But first, you need to connect your Spotify account securely using the button be
       githubChatConnect.reserve(rawMsg);
     }
 
-    const activeFreePreviewTool = isFreePlan
+    // A media turn never uses the active premium tool, so it is never blocked by it.
+    const activeFreePreviewTool = isFreePlan && !mediaUnderstandingTurn
       ? (isImageGenerationActive || chatType === 'image')
         ? 'Imágenes'
         : (isVideoGenerationActive || chatType === 'video')
@@ -10780,7 +10834,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     let imageModelForSendOverride: string | undefined;
-    if (isImageGenerationActive || chatType === 'image') {
+    if ((isImageGenerationActive || chatType === 'image') && !mediaUnderstandingTurn) {
       const selectedImageModelForSend = selectedImageModel?.trim();
       let activeImageModel: any = null;
       try {
@@ -10982,9 +11036,6 @@ REWRITTEN TEXT:`;
       }
       return; // Stop further execution
     }
-    const mediaFollowupFiles = !codingWorkspace && composerFiles.length === 0
-      ? resolveMediaFollowupFiles(msg, currentChat?.messages || [])
-      : [];
     let filesToSend = composerFiles.length ? [...composerFiles] : mediaFollowupFiles;
     const imageAttachments = filesToSend.filter((file: any) =>
       String(file?.type || file?.mimeType || "").startsWith("image/"),
@@ -11274,14 +11325,16 @@ REWRITTEN TEXT:`;
       }
     }
 
-    if (isVideoGenerationActive || chatType === 'video') {
+    // A sticky Video / Voz / Música chip never claims a media turn: it goes
+    // to handleAgentTask below (shouldStartAgenticLoopImmediately).
+    if ((isVideoGenerationActive || chatType === 'video') && !mediaUnderstandingTurn) {
       isGeneratingVideoRef.current = true;
       isVideoGenerationActiveRef.current = true;
       setIsVideoGenerationActive(true);
       setChatType('video');
     }
 
-    if (isVoiceGenerationActive) {
+    if (isVoiceGenerationActive && !mediaUnderstandingTurn) {
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
       setIsVoiceGenerationActive(true);
@@ -11297,7 +11350,7 @@ REWRITTEN TEXT:`;
       return;
     }
 
-    if (isMusicGenerationActive) {
+    if (isMusicGenerationActive && !mediaUnderstandingTurn) {
       isGeneratingMusicRef.current = true;
       setIsGeneratingMusic(true);
       setIsMusicGenerationActive(true);
@@ -11388,7 +11441,7 @@ REWRITTEN TEXT:`;
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
-      || mediaFollowupFiles.length > 0
+      || mediaUnderstandingTurn
       || (deterministicAgenticIntent
         && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
         && !imageOnlyTurn
@@ -11649,6 +11702,17 @@ REWRITTEN TEXT:`;
           (file) => !file.type?.startsWith('image/')
         );
         if (hasNonImageFiles) {
+          // «haz un video más corto con este clip»: the generators only take
+          // images, so a recording goes to the agent-task media branch
+          // instead of being dropped. Only documents still get the toast.
+          if (attachmentsBesideImagesAreMedia(filesToSend)) {
+            await handleAgentTask(msg, filesToSend, {
+              userMessageAlreadyAdded: true,
+              assistantMessageId: assistantPlaceholder.id,
+            });
+            markQueuedSendSucceeded();
+            return;
+          }
           toast.error("Solo se permiten archivos de imagen para esta tarea.");
           // Note: The optimistic message is already shown. This is a trade-off.
           // A more complex implementation could remove the optimistic message on validation failure.
@@ -12792,6 +12856,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // Media follow-ups need the opened chat's full attachment history and
       // durable agent-task path, not the background inline generate shortcut.
       if (!(item.files || []).length && isMediaFollowupPrompt(item.msg)) return false;
+      if (isMediaUnderstandingTurn(item.msg, item.files || [])) return false;
       return true;
     });
     if (bgIndex < 0) return;

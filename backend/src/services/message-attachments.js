@@ -94,8 +94,13 @@ function describeUnextractedAttachment(row = {}) {
       + 'Sugiere al usuario subir una versión con texto seleccionable.]';
   }
   if (type.startsWith('audio/') || type.startsWith('video/')) {
-    return `[Archivo multimedia "${name}": no se obtuvo transcripción. `
-      + 'Indica al usuario que reintente o suba un formato compatible.]';
+    // History snapshots never carry media transcripts (they live once on the
+    // File row and are re-loaded for the turn). Reaching this line means the
+    // transcript is not available NOW — still processing or failed — never
+    // that the recording cannot be transcribed.
+    return `[Archivo multimedia "${name}": su transcripción no está disponible en este turno `
+      + '(puede seguir procesándose o haber fallado). No inventes su contenido: si el usuario pregunta por él, '
+      + 'pídele que escriba «transcribe el audio» o «reintenta» para recuperarla.]';
   }
   const size = Number(r.size || r.fileSize || 0);
   const sizeLabel = size > 0 ? `, ${formatAttachmentBytes(size)}` : '';
@@ -472,7 +477,9 @@ async function loadFileRows(prisma, userId, fileIds = []) {
 async function ensureDocumentAnalysis(prisma, row, userId) {
   if (!row || !prisma?.documentAnalysis) return row;
   const forceReanalysis = isSpreadsheetFile(row) && looksLikeUnsupportedExtractionPlaceholder(row.extractedText);
-  if (row.documentAnalysis && !forceReanalysis) return row;
+  // A `pending` row (a media transcript's pointer) is not an analysis yet: its
+  // chunks are absent or belong to the text a gap retry replaced.
+  if (row.documentAnalysis && row.documentAnalysis.status !== 'pending' && !forceReanalysis) return row;
   try {
     const documentIntelligence = require('./document-intelligence');
     const analysis = await documentIntelligence.analyzeFile(prisma, {
@@ -954,6 +961,143 @@ function serializeAttachmentRows({ ids, rowsById, clientMetadata = [], userId })
   });
 }
 
+/**
+ * Transcripts of media attached in earlier turns. Attachment snapshots keep
+ * media text out of every message (a 5-hour lecture is ~270k chars), so a
+ * follow-up turn («¿qué dijo sobre la mitocondria?») re-loads it here: one
+ * owner-scoped query for the newest `maxFiles` media attachments of the
+ * history. The caller caps what it puts in the prompt.
+ * @returns {Promise<Map<string, string>>} fileId → transcript
+ */
+// A transcript longer than this is cut by the history cap; a question about a
+// moment («¿qué dijo en el minuto 95?») then reads that moment's window.
+const MEDIA_WINDOW_MIN_CHARS = 8000;
+const MEDIA_WINDOW_MAX_CHARS = 16000;
+
+function mediaFileIdsFromHistory(messages, maxFiles, isMediaFile, { includeWithText = false } = {}) {
+  const ids = [];
+  for (let index = messages.length - 1; index >= 0 && ids.length < maxFiles; index -= 1) {
+    const files = parseMessageFilesValue(messages[index]?.files);
+    for (const file of files) {
+      const id = typeof file === 'string' ? file : file?.id;
+      if (!id || ids.includes(id) || ids.length >= maxFiles) continue;
+      if (!includeWithText && typeof file === 'object' && String(file.extractedText || '').trim()) continue;
+      if (typeof file === 'object' && !isMediaFile({ mimeType: file.mimeType || file.type, originalName: file.originalName || file.name || file.filename })) continue;
+      ids.push(String(id));
+    }
+  }
+  return ids;
+}
+
+/**
+ * The window of the recording a question names («¿qué dijo en el minuto 95?»,
+ * «¿de qué hablan del minuto 30 al 45?»), on the recording clock, or null.
+ */
+function mediaQuestionWindow(query) {
+  if (!query || !String(query).trim()) return null;
+  try {
+    const intent = require('./media-batch').detectMediaFollowupIntent(query);
+    return intent && intent.kind === 'lookup' && intent.range ? intent.range : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Transcripts of the media attached earlier in the conversation (owner-
+ * scoped, newest first, bounded). With a `query` that names a moment of the
+ * recording, a long transcript comes back as THAT window («[hh:mm:ss]» lines
+ * from the segments sidecar), not its head; the ids of those entries are in
+ * the returned map's `windows` set so the caller does not cut them again.
+ */
+async function loadHistoryMediaTranscripts(prisma, { userId, messages = [], maxFiles = 6, query = null, readWindow = null } = {}) {
+  const out = new Map();
+  out.windows = new Set();
+  if (!prisma?.file?.findMany || !userId || !Array.isArray(messages) || !messages.length) return out;
+  const { isMediaFile, hasTranscript } = require('./media-transcription-queue');
+  const ids = mediaFileIdsFromHistory(messages, maxFiles, isMediaFile);
+  if (!ids.length) return out;
+  let rows = [];
+  try {
+    rows = await prisma.file.findMany({ where: { id: { in: ids }, userId, deletedAt: null },
+      select: { id: true, extractedText: true, processingStage: true, processingError: true, mimeType: true, originalName: true } });
+    for (const row of rows) {
+      if (isMediaFile(row) && hasTranscript(row)) out.set(row.id, String(row.extractedText));
+    }
+  } catch (_) { /* history context is best-effort */ }
+  const window = mediaQuestionWindow(query);
+  if (!window || !out.size) return out;
+  const read = readWindow || ((args, opts) => require('./agent-harness/tools/transcript-tools').readTranscriptWindow(prisma, args, opts));
+  for (const row of rows) {
+    const text = out.get(row.id);
+    if (!text || text.length <= MEDIA_WINDOW_MIN_CHARS) continue;
+    try {
+      const result = await read({ userId, fileId: row.id, fileName: row.originalName || null },
+        { start: window.start, end: window.end, maxChars: MEDIA_WINDOW_MAX_CHARS });
+      if (!result?.ok || result.untimed || !result.window || !String(result.text || '').trim()) continue;
+      const total = Number(result.durationSec) > 0 ? ` de una grabación de ${formatHistoryClock(result.durationSec)}` : '';
+      out.set(row.id, [
+        `[Tramo ${result.window.label}${total}: solo esta parte de la transcripción se incluye aquí, la que pide el usuario. Para leer otro tramo usa transcript_lookup.]`,
+        result.text,
+      ].join('\n'));
+      out.windows.add(row.id);
+    } catch (_) { /* the head stays */ }
+  }
+  return out;
+}
+
+/**
+ * True when this turn's attachments or the chat history carry an audio or
+ * video file (ready or still in the queue): the transcript tools may serve
+ * the turn. Never throws.
+ */
+function mediaInTurnOrHistory({ files = [], messages = [] } = {}) {
+  try {
+    const { isMediaFile } = require('./media-transcription-queue');
+    const all = [...(Array.isArray(messages) ? messages : []), { files: Array.isArray(files) ? files : [] }];
+    return mediaFileIdsFromHistory(all, 1, isMediaFile, { includeWithText: true }).length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function formatHistoryClock(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  const two = n => String(n).padStart(2, '0');
+  return `${two(Math.floor(s / 3600))}:${two(Math.floor((s % 3600) / 60))}:${two(s % 60)}`;
+}
+
+/**
+ * «está en inglés», «los nombres son…» said in a chat turn while recordings
+ * are still in the queue — attached in this turn (`currentFiles`, the turn's
+ * processed attachments) or earlier — forward the hints to their jobs (a
+ * waiting job reads them when it starts). Only a turn about a recording, or
+ * an explicit cue, counts (extractChatTranscriptionHints): a quoted fragment
+ * of an unrelated turn never reaches a job. Ready transcripts are untouched.
+ * Returns the number of jobs updated. Never throws.
+ */
+async function forwardTranscriptionHints(prisma, { userId, messages = [], prompt = '', currentFiles = [], maxFiles = 6, enqueue = null } = {}) {
+  try {
+    if (!prisma?.file?.findMany || !userId || !String(prompt || '').trim()) return 0;
+    const current = Array.isArray(currentFiles) ? currentFiles : [];
+    const history = Array.isArray(messages) ? messages : [];
+    if (!current.length && !history.length) return 0;
+    const mediaBatch = require('./media-batch');
+    const { language, hints } = mediaBatch.hintsForJob(mediaBatch.extractChatTranscriptionHints(prompt));
+    if (!language && !hints) return 0;
+    const { isMediaFile } = require('./media-transcription-queue');
+    // This turn's own recordings first: they are the ones the user is talking about.
+    const ids = mediaFileIdsFromHistory([...history, { files: current }], maxFiles, isMediaFile, { includeWithText: true });
+    if (!ids.length) return 0;
+    const rows = await prisma.file.findMany({ where: { id: { in: ids }, userId, deletedAt: null },
+      select: { id: true, extractedText: true, processingStage: true, processingError: true, mimeType: true, originalName: true } });
+    return await mediaBatch.forwardHintsToPendingMedia({ userId, rows: (rows || []).filter(isMediaFile), language, hints,
+      ...(enqueue ? { enqueue } : {}) });
+  } catch (_) {
+    return 0;
+  }
+}
+
 async function buildUploadedFileContext(prisma, {
   userId,
   fileIds = [],
@@ -1341,6 +1485,11 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 module.exports = {
   backfillUserMessageFilesForTranscription,
   hydrateChatMessageAttachments,
+  loadHistoryMediaTranscripts,
+  forwardTranscriptionHints,
+  mediaInTurnOrHistory,
+  mediaQuestionWindow,
+  MEDIA_WINDOW_MAX_CHARS,
   messageFilesNeedHydration,
   buildFormatDirectiveLines: outputFormat.buildFormatDirectiveLines,
   parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,
