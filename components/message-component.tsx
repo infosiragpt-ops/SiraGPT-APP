@@ -48,6 +48,7 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
+    DialogDescription,
     DialogFooter,
     DialogClose,
     DialogTrigger,
@@ -67,6 +68,7 @@ import { splitStableHead } from '@/lib/markdown-block-split'
 import { repairStreamingTail } from '@/lib/markdown/repair-streaming-tail'
 import { DownloadButtons } from './download-buttons';
 import TableControls from './TableControls';
+import { ChatTable } from './markdown/chat-table';
 import ImageGenerationEffect from './ImageGenerationEffect';
 // import CodePreview from './code-preview';
 import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
@@ -1045,7 +1047,7 @@ const getNodeText = (node: any): string => {
     return '';
 };
 
-type ExpandedTablePayload = { headers: string[]; rows: string[][]; title: string };
+type ExpandedTablePayload = { headers: string[]; rows: string[][]; title: string; trigger: HTMLButtonElement };
 
 type MessageMarkdownProps = {
     content: string;
@@ -1183,8 +1185,8 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
         h4: ({ children }: any) => <h4 className="mb-2 font-serif text-base font-semibold leading-7">{children}</h4>,
         hr: () => <hr className="my-4 border-muted" />,
         blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-        th: ({ node, children, style, ...rest }: any) => <th {...rest} style={style} className="border border-muted px-3 py-2 bg-muted/50 text-left font-sans font-medium text-sm whitespace-nowrap">{children}</th>,
-        td: ({ node, children, style, ...rest }: any) => <td {...rest} className="border border-muted px-3 py-2 font-sans text-sm align-top" style={{ ...style, overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
+        th: ({ node, children, style, ...rest }: any) => <th {...rest} style={style} scope="col" className="min-w-[8rem] border-b border-r border-border/60 px-3 py-2.5 bg-muted/40 text-left font-sans font-medium text-sm whitespace-nowrap last:border-r-0">{children}</th>,
+        td: ({ node, children, style, ...rest }: any) => <td {...rest} className="min-w-[8rem] border-b border-r border-border/60 px-3 py-2.5 font-sans text-sm align-top last:border-r-0" style={{ ...style, overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
         strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
         em: ({ children }: any) => <em className="italic">{children}</em>,
         a: ({ href, children, ...props }: any) => {
@@ -1216,12 +1218,7 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
     const streamingComponents = useMemo(() => ({
         ...baseComponents,
         table: ({ children }: any) => (
-            <div className="group relative mt-3">
-                <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                    <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                </div>
-                <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
-            </div>
+            <ChatTable>{children}</ChatTable>
         ),
         code: ({ node, inline, className, children, ...props }: any) => {
             const match = /language-([\w-]+)/.exec(className || '');
@@ -1310,12 +1307,12 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
                 }
             }
 
-            const handleExpand = () => {
+            const handleExpand = (trigger: HTMLButtonElement) => {
                 const tHead = node.children.find((child: any) => child.tagName === 'thead');
                 const tBody = node.children.find((child: any) => child.tagName === 'tbody');
                 const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
                 const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-                onExpandTable({ headers, rows: data, title });
+                onExpandTable({ headers, rows: data, title, trigger });
             };
             const tHead = node.children.find((child: any) => child.tagName === 'thead');
             const tBody = node.children.find((child: any) => child.tagName === 'tbody');
@@ -1326,7 +1323,7 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
                 : null;
 
             return (
-                <div className="group relative mt-3">
+                <ChatTable label={title || undefined} controls={
                     <TableControls
                         content={fullContent}
                         messageId={messageId}
@@ -1334,11 +1331,7 @@ const MessageMarkdown = React.memo(function MessageMarkdown({
                         onExpand={handleExpand}
                         title={title}
                     />
-                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                        <table className="font-sans border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                    </div>
-                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
-                </div>
+                }>{children}</ChatTable>
             );
         },
         code: CodeBlock,
@@ -1490,6 +1483,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const [fileContent, setFileContent] = useState<string>("");
     const [isContentLoading, setIsContentLoading] = useState(false);
     const [isTableExpanded, setIsTableExpanded] = useState(false);
+    const tableTriggerRef = useRef<HTMLElement | null>(null);
     const [tableData, setTableData] = useState<string[][]>([]);
     const [tableHeaders, setTableHeaders] = useState<string[]>([]);
 
@@ -2005,7 +1999,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     }, [parsedFiles])
 
     // Stable callbacks for the hoisted MessageMarkdown so its memo holds.
-    const handleExpandTable = useCallback(({ headers, rows, title }: ExpandedTablePayload) => {
+    const handleExpandTable = useCallback(({ headers, rows, title, trigger }: ExpandedTablePayload) => {
+        tableTriggerRef.current = trigger;
         setTableHeaders(headers);
         setTableData(rows);
         setTableTitle(title);
@@ -3605,36 +3600,51 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-            {isTableExpanded && (
-                <div className="fixed inset-0 bg-background z-50 p-4 flex flex-col">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold">{tableTitle || 'Expanded Table View'}</h2>
-                        <Button variant="outline" onClick={() => setIsTableExpanded(false)}>Close</Button>
+            <Dialog open={isTableExpanded} onOpenChange={setIsTableExpanded}>
+                <DialogContent
+                    showCloseButton={false}
+                    className="flex h-[90dvh] max-h-[900px] w-[calc(100%-1.5rem)] max-w-6xl flex-col gap-4 rounded-xl p-4 sm:p-6 motion-reduce:animate-none"
+                    overlayClassName="motion-reduce:animate-none"
+                    onCloseAutoFocus={(event) => {
+                        event.preventDefault();
+                        tableTriggerRef.current?.focus();
+                    }}
+                >
+                    <div className="flex shrink-0 items-start justify-between gap-4">
+                        <DialogHeader className="min-w-0 text-left">
+                            <DialogTitle className="break-words leading-6">{tableTitle || 'Tabla completa'}</DialogTitle>
+                            <DialogDescription>
+                                {tableData.length} {tableData.length === 1 ? 'fila' : 'filas'} · {tableHeaders.length} {tableHeaders.length === 1 ? 'columna' : 'columnas'}
+                            </DialogDescription>
+                        </DialogHeader>
+                        <DialogClose asChild>
+                            <Button type="button" variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-lg" aria-label="Cerrar tabla" title="Cerrar tabla">
+                                <X className="h-5 w-5" aria-hidden="true" />
+                            </Button>
+                        </DialogClose>
                     </div>
-                    <div className="flex-grow overflow-auto border rounded-md">
-                        <div className="overflow-x-auto overflow-y-auto h-full">
-                            <table className="w-full border-collapse border border-muted" style={{ minWidth: 'max-content' }}>
-                                <thead className="sticky top-0 bg-background">
-                                    <tr>
-                                        {tableHeaders.map((header, index) => (
-                                            <th key={index} className="border border-muted px-4 py-3 bg-muted/50 text-left font-medium text-sm whitespace-nowrap min-w-[120px]">{header}</th>
+                    <div role="region" aria-label="Datos de la tabla completa" tabIndex={0} className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-lg border border-border/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        <table className="w-full min-w-max border-collapse font-sans">
+                            <thead className="sticky top-0 z-10 bg-background">
+                                <tr>
+                                    {tableHeaders.map((header, index) => (
+                                        <th key={index} scope="col" className="min-w-[120px] whitespace-nowrap border-b border-r border-border/60 bg-muted/40 px-4 py-3 text-left text-sm font-medium last:border-r-0">{header}</th>
+                                    ))}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {tableData.map((row, rowIndex) => (
+                                    <tr key={rowIndex} className="hover:bg-muted/20 last:[&_td]:border-b-0">
+                                        {row.map((cell, cellIndex) => (
+                                            <td key={cellIndex} className="min-w-[120px] max-w-[28rem] whitespace-normal border-b border-r border-border/60 px-4 py-3 text-sm align-top [overflow-wrap:anywhere] last:border-r-0">{cell}</td>
                                         ))}
                                     </tr>
-                                </thead>
-                                <tbody>
-                                    {tableData.map((row, rowIndex) => (
-                                        <tr key={rowIndex} className="hover:bg-muted/20">
-                                            {row.map((cell, cellIndex) => (
-                                                <td key={cellIndex} className="border border-muted px-4 py-3 text-sm whitespace-nowrap min-w-[120px]">{cell}</td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
-                </div>
-            )}
+                </DialogContent>
+            </Dialog>
 
             {/* Fallback for message surfaces outside the canonical chat host. */}
             {selectedImage && (
