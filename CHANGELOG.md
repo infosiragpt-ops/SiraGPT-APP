@@ -33,6 +33,7 @@ and improvement cycles follow a sequential number with the date the work landed.
     - Cloud OCR skips runtimes with no key or no credit before choosing three, keeps OpenAI reachable, and leaves room after GLM-OCR for the cloud.
     - HEIC/BMP/JP2 files are size-checked before an external decoder runs. Text-layer scoring yields to the event loop and is bounded.
     - Mail-merge PDFs keep their exact text; a partial OCR keeps the text layer of every page it did not read.
+    - Small PDFs no longer fail in the pdf-parse fallback with «bad XRef entry». pdf.js 1.10 copied a small Buffer into the shared pool and then read it from the wrong offset (under 4 KB on Node 22, under 32 KB on Node 24). The bytes now reach it as a plain `Uint8Array` that starts at offset 0 (`utils/pdf-js-input.js`).
     - A ZIP expansion cut by a restart leaves no orphan files and resumes after boot.
 
 - Professional transcription that copes with 5-hour recordings.

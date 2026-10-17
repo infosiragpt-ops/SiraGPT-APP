@@ -18,6 +18,7 @@ const engine = require('../src/services/ocr-engine');
 const realOcrInput = require('../src/services/ocr-input');
 const mixedPdf = require('../src/services/document/mixed-pdf');
 const extractFastpath = require('../src/services/document-extract-fastpath');
+const { toPdfJsData } = require('../src/utils/pdf-js-input');
 
 function override(t, target, props) {
   const saved = {};
@@ -328,9 +329,9 @@ function tmpPdf(t) {
 
 // A real PDF with one text item per entry (Helvetica, Latin-1; '' is an
 // empty text item, which pdf.js turns into a blank line inside the page).
-// The comment pads it past ~4 KB: pdf.js 1.10 (pdf-parse) misses the xref
-// of a smaller file.
-function textItemsPdf(pages) {
+// `pad` lengthens the header comment. Without it the file is small, which
+// is the case that needs toPdfJsData (see the Buffer-pool test below).
+function textItemsPdf(pages, pad = 0) {
   const esc = (s) => s.replace(/[\\()]/g, (c) => `\\${c}`);
   const objects = ['<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>'];
   const pageIds = [];
@@ -346,7 +347,7 @@ function textItemsPdf(pages) {
     objects[id - 1] = `<< /Type /Page /Parent ${treeId} 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents ${id - 1} 0 R >>`;
   }
   objects.push(`<< /Type /Catalog /Pages ${treeId} 0 R >>`);
-  let out = `%PDF-1.4\n%${'0'.repeat(4096)}\n`;
+  let out = `%PDF-1.4\n%${'0'.repeat(pad)}\n`;
   const offsets = objects.map((body, i) => {
     const offset = Buffer.byteLength(out, 'latin1');
     out += `${i + 1} 0 obj\n${body}\nendobj\n`;
@@ -389,7 +390,7 @@ test('processPDF (pdf-parse fallback): a blank line inside a scan page is no pag
   ];
   const scan = textItemsPdf([1, 2, 3, 4].map((i) => scanPage(i === 2)));
   const parsed = await fileProcessor.parsePdfWithPages(scan);
-  assert.equal(parsed.data.text, (await require('pdf-parse')(scan)).text, 'the joined text is pdf-parse\'s own');
+  assert.equal(parsed.data.text, (await require('pdf-parse')(toPdfJsData(scan))).text, 'the joined text is pdf-parse\'s own');
   assert.deepEqual(parsed.pages, [
     'Escaneado con CamScanner\nwww.camscanner.com',
     'Escaneado con CamScanner\nFirma Juan Pérez\n\nSello notarial\nwww.camscanner.com',
@@ -429,6 +430,39 @@ test('processPDF (pdf-parse fallback): a blank line inside a scan page is no pag
     return { text: `\n\n\n\n${text}`, numpages: 2 };
   };
   assert.deepEqual((await fileProcessor.parsePdfWithPages(Buffer.alloc(0), holes)).pages, ['', 'Hoja']);
+});
+
+test('pdf-parse reads a small PDF wherever the Buffer pool is (toPdfJsData)', async () => {
+  const fileProcessor = require('../src/services/fileProcessor');
+  // pdf.js 1.10 copies a Buffer with `new Buffer(buf)`: under half of
+  // Buffer.poolSize that copy comes from the shared pool at a non-zero
+  // offset, which its sub-streams ignore («bad XRef entry»). Each round moves
+  // the pool first; parsePdfWithPages must read every one.
+  for (let i = 0; i < 24; i += 1) {
+    Buffer.from('x'.repeat((i * 97) % 1500 + 1), 'latin1');
+    const small = textItemsPdf([[{ y: 700, text: `Hoja ${i}` }], [{ y: 700, text: 'Fin' }]]);
+    assert.ok(small.length < 4096, 'stays under the pooled size on every Node');
+    const { data, pages } = await fileProcessor.parsePdfWithPages(small);
+    assert.equal(data.numpages, 2);
+    assert.deepEqual(pages, [`Hoja ${i}`, 'Fin']);
+  }
+  // An exact Buffer becomes a plain view (no copy); a pooled or sliced one a
+  // fresh copy at offset 0; anything else passes through.
+  const exact = Buffer.alloc(16, 7);
+  const view = toPdfJsData(exact);
+  assert.equal(Object.getPrototypeOf(view), Uint8Array.prototype);
+  assert.equal(view.buffer, exact.buffer);
+  const big = Buffer.alloc(64, 1);
+  const slice = big.subarray(8, 40);
+  const copy = toPdfJsData(slice);
+  assert.equal(Object.getPrototypeOf(copy), Uint8Array.prototype);
+  assert.equal(copy.byteOffset, 0);
+  assert.equal(copy.buffer.byteLength, 32);
+  assert.notEqual(copy.buffer, big.buffer);
+  assert.deepEqual([...copy], [...slice]);
+  const ab = new ArrayBuffer(4);
+  assert.equal(toPdfJsData(ab), ab);
+  assert.equal(toPdfJsData(null), null);
 });
 
 test('processPDF: a stamp-only text layer goes to full OCR (with provenance) instead of being returned as text', async (t) => {

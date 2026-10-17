@@ -1,5 +1,6 @@
 const mammoth = require('mammoth');
 const pdf = require('pdf-parse');
+const { toPdfJsData } = require('../utils/pdf-js-input');
 const MEMORY_SAFE_MAX_BYTES = Number.parseInt(process.env.SIRAGPT_MEMORY_SAFE_MAX_BYTES || String(150 * 1024 * 1024), 10); // 150 MB
 const sharp = require('sharp');
 const fs = require('fs').promises;
@@ -63,11 +64,13 @@ function renderPdfParsePage(pageData, perPage) {
  * boundary in pdf-parse's joined text, so the stamp check reads the pages
  * themselves. `pages` is null unless they join into exactly pdf-parse's text
  * («\n\n» before every page, an unreadable page as «»): a stubbed or
- * different pdf-parse falls back to the joined text.
+ * different pdf-parse falls back to the joined text. The bytes go through
+ * toPdfJsData: a small Buffer otherwise fails in pdf.js 1.10 («bad XRef
+ * entry») depending on the shared Buffer pool.
  */
 async function parsePdfWithPages(dataBuffer, parse = pdf) {
   const perPage = [];
-  const data = await parse(dataBuffer, { pagerender: (pageData) => renderPdfParsePage(pageData, perPage) });
+  const data = await parse(toPdfJsData(dataBuffer), { pagerender: (pageData) => renderPdfParsePage(pageData, perPage) });
   const count = Number(data && data.numpages) || 0;
   let pages = null;
   if (count > 0 && perPage.length <= count && typeof data.text === 'string') {
