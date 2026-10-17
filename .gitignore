@@ -72,8 +72,15 @@ next-env.d.ts
 *.swp
 *.swo
 
-# Claude Code agent workspace (local worktrees, personal settings)
-.claude/
+# Claude Code agent workspace (local worktrees, personal settings).
+# Excepto las skills de OpenSpec y el hook de inicio compartido, que van en el repo
+# para que /openspec-* aparezca en cada sesión.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/openspec-*/
 
 # Tesseract trained-data (downloaded at install time, see scripts/download-tesseract-data.sh)
 *.traineddata
