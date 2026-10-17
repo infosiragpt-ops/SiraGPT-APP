@@ -226,6 +226,85 @@ test('short clip: second opinions that all fail are not agreement — retried la
   assert.equal(single.reasonCode, 'no_speech');
 });
 
+test('short clip without the master: the enhanced copy a cloud rung reads is uploaded under the FLAC name it was built with', async (t) => {
+  // The master failed host-side (a timeout under load): the original «nota.ogg» goes up.
+  const groq = sdk((_i, request) => (request.file.body === 'enhanced'
+    ? { text: 'Profe, mañana no podré ir a la clase.', segments: [] }
+    : { text: '', segments: [] }));
+  const spawnImpl = (_bin, args) => {
+    const child = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    queueMicrotask(() => { fs.writeFileSync(args.at(-1), 'enhanced'); child.emit('close', 0); });
+    return child;
+  };
+  const result = await audio.transcribe(tempFile(t, 'nota.ogg'), 'audio/ogg', 'nota.ogg', {
+    env: { GROQ_API_KEY: 'gsk_q30', TRANSCRIBE_PROVIDERS: 'groq' }, groqClient: groq, ...clip(t),
+    transcodeClip: async () => ({ ok: false, code: 'timeout', dir: null }),
+    ffmpegFilters: ['highpass', 'dynaudnorm'], spawnImpl,
+  });
+  assert.deepEqual(groq.requests.map((r) => r.name), ['nota.ogg', 'audio.flac'],
+    'FLAC bytes never travel under the .ogg name (OpenAI / Groq read the format from it)');
+  assert.equal(result.ok, true);
+  assert.equal(result.transcript, 'Profe, mañana no podré ir a la clase.');
+});
+
+test('dictation ladder «local,voicestudio»: whisper.cpp reads first; Sira Voz only as its fallback or second opinion, within its own budget', async (t) => {
+  const run = async ({ providers = ['local', 'voicestudio'], local, vs }) => {
+    const order = [];
+    const vsCalls = [];
+    let masters = 0;
+    const master = fakeMaster(t);
+    const voiceStudio = {
+      isConfigured: () => true,
+      async transcribe(args, opts) {
+        order.push('voicestudio');
+        vsCalls.push({ filename: args.filename, timeoutMs: opts.timeoutMs });
+        if (vs instanceof Error) throw vs;
+        return vs;
+      },
+    };
+    const result = await audio.transcribe(tempFile(t, 'dictation.webm'), 'audio/webm', 'dictation.webm', {
+      env: {}, providers, voiceStudio, voiceStudioTimeoutMs: 15000, ...clip(t),
+      transcodeClip: async (...args) => { masters++; return master(...args); },
+      async localTranscribe(_p, options) {
+        order.push('local');
+        assert.equal(options.timeoutMs, undefined, 'Sira Voz\'s budget is not whisper.cpp\'s');
+        if (local instanceof Error) throw local;
+        return local;
+      },
+    });
+    return { result, order, vsCalls, masters };
+  };
+  const spoken = { text: 'Hola, te escribo desde el celular.', model: 'ggml-base.bin' };
+  const heard = { text: 'Necesito el informe para mañana temprano.', segments: [] };
+
+  // whisper.cpp answers: Sira Voz is never asked, and no master is built for it.
+  const fast = await run({ local: spoken, vs: heard });
+  assert.deepEqual(fast.order, ['local']);
+  assert.equal(fast.masters, 0);
+  assert.equal(fast.result.transcript, 'Hola, te escribo desde el celular.');
+
+  // whisper.cpp heard nothing: Sira Voz is the second opinion, within its own budget.
+  const empty = await run({ local: { text: '', model: 'ggml-base.bin' }, vs: heard });
+  assert.deepEqual(empty.order, ['local', 'voicestudio']);
+  assert.deepEqual(empty.vsCalls, [{ filename: 'dictation.webm', timeoutMs: 15000 }]);
+  assert.equal(empty.result.transcript, 'Necesito el informe para mañana temprano.');
+  assert.deepEqual(empty.result.providers, { voicestudio: 1 });
+
+  // whisper.cpp could not run: Sira Voz is the next rung.
+  const crashed = await run({ local: Object.assign(new Error('crash'), { code: 'LOCAL_WHISPER_FAILED' }), vs: heard });
+  assert.deepEqual(crashed.order, ['local', 'voicestudio']);
+  assert.equal(crashed.result.ok, true);
+  assert.equal(crashed.result.transcript, 'Necesito el informe para mañana temprano.');
+
+  // Listed first, Sira Voz still goes first (on the FLAC master).
+  const vsFirst = await run({ providers: ['voicestudio', 'local'], local: spoken, vs: heard });
+  assert.deepEqual(vsFirst.order, ['voicestudio']);
+  assert.equal(vsFirst.masters, 1);
+  assert.equal(vsFirst.vsCalls[0].filename, 'audio.flac');
+});
+
 test('short clip: a multi-word music annotation («[Música de fondo]») is not a transcript — it gets a second opinion', async (t) => {
   for (const annotation of ['[Música de fondo]', '(música suave)', '[Music playing]', '(upbeat music)', '[♪]']) {
     const silent = sdk(() => ({ text: '', segments: [] }));
@@ -348,6 +427,23 @@ test('a silent recording whose «no voice anywhere» second opinion fails is not
   const second = await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, groqClient: up });
   assert.equal(second.reasonCode, 'no_speech', 'now a second opinion agrees');
   assert.deepEqual(up.requests.map((r) => r.body), ['enhanced'], 'only the check is redone; the pieces are not re-transcribed');
+});
+
+test('a silent recording: text one enhanced copy invents over measured silence is not adopted — no_speech stands', async (t) => {
+  const calls = [];
+  const result = await audio.transcribe(tempFile(t, 'clase.wav'), 'audio/wav', 'clase.wav', {
+    env: { TRANSCRIBE_PROVIDERS: 'local' }, ...long(t, 2), language: 'es',
+    ffmpegFilters: ['highpass', 'dynaudnorm'],
+    measureVoiced: async () => ({ voicedSec: 0, silences: [] }),
+    async localTranscribe(_p, options) {
+      calls.push(options.audioFilter ? 'enhanced' : 'plain');
+      // The amplified room tone (up to +26 dB) is where Whisper invents a phrase.
+      return options.audioFilter ? { text: 'Hola, ¿qué tal?', model: 'ggml-base.bin' } : { text: '', model: 'ggml-base.bin' };
+    },
+  });
+  assert.deepEqual(calls, ['plain', 'plain', 'enhanced'], 'the «no voice anywhere» check is still asked once');
+  assert.equal(result.ok, false);
+  assert.equal(result.reasonCode, 'no_speech', 'the base heard nothing and the energy agrees: a video can still fall back to its subtitles');
 });
 
 test('past the second-opinion allowance, an empty piece with sound is never «covered» while second opinions keep finding speech', async (t) => {
@@ -644,6 +740,184 @@ test('refine: range + forceRetranscribe redo only the overlapping piece (with a 
   const plain = await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, groqClient: untouched, range: { start: 700, end: 900 }, localTranscribe: noLocal });
   assert.equal(untouched.requests.length, 0, 'a range without forceRetranscribe changes nothing');
   assert.equal(plain.ok, true);
+});
+
+test('refine without kept parts (none saved, or saved in another language) transcribes only the window; the rest is skipped, not re-read', async (t) => {
+  const file = tempFile(t, 'clase.wav');
+  const timed = (i, extra = '') => ({ text: `${prose(i)}${extra}`, segments: [{ start: 1, end: 500, text: `${prose(i)}${extra}` }] });
+  // Nothing kept: a transcript finished before parts were kept, or swept after 14 days.
+  const empty = memoryCheckpoint();
+  const groq = sdk((i) => timed(i, ' Corregido.'));
+  const refined = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    env: { GROQ_API_KEY: 'gsk_q31', TRANSCRIBE_PROVIDERS: 'groq' }, ...long(t, 3), checkpoint: empty, language: 'es',
+    groqClient: groq, range: { start: 700, end: 900 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(groq.requests.map((r) => r.index), [1], 'only the piece overlapping 700–900 s');
+  assert.equal(refined.ok, true);
+  assert.equal(refined.refineSkipped, 2);
+  assert.equal(refined.partial, false, 'a skipped piece is not a gap');
+  assert.deepEqual(refined.gaps, []);
+  assert.equal(refined.coverage, 1, 'nor a hole in the coverage');
+  assert.match(refined.transcript, /\[1\.0\][^]*Corregido\./);
+  assert.doesNotMatch(refined.transcript, /\[0\.0\]|\[2\.0\]/);
+  assert.ok(refined.segments.length && refined.segments.every((s) => s.start >= 600 && s.start < 1200), 'only the window\'s times');
+  assert.deepEqual(refined.refineSpans, [[600, 1200]], 'the stretch read again, on the file clock: the caller cuts by it');
+  assert.deepEqual([...empty.store.keys()], [1], 'nothing saved for the pieces that were not read');
+
+  // A window across a cut: one span per piece read again, in order.
+  const across = sdk((i) => timed(i, ' Corregido.'));
+  const twoPieces = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    env: { GROQ_API_KEY: 'gsk_q34', TRANSCRIBE_PROVIDERS: 'groq' }, ...long(t, 3), checkpoint: memoryCheckpoint(), language: 'es',
+    groqClient: across, range: { start: 500, end: 700 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(across.requests.map((r) => r.index).sort(), [0, 1]);
+  assert.equal(twoPieces.refineSkipped, 1);
+  assert.deepEqual(twoPieces.refineSpans, [[0, 600], [600, 1200]]);
+
+  // Parts kept in Spanish, refine in English: the other pieces are not re-read in English.
+  const kept = memoryCheckpoint();
+  const base = { env: { GROQ_API_KEY: 'gsk_q32', TRANSCRIBE_PROVIDERS: 'groq' }, ...long(t, 3), checkpoint: kept };
+  await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, language: 'es', groqClient: sdk((i) => timed(i)) });
+  const english = sdk((i) => timed(i, ' Corrected.'));
+  const inEnglish = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    ...base, language: 'en', groqClient: english, range: { start: 1300, end: 1400 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(english.requests.map((r) => r.index), [2]);
+  assert.equal(inEnglish.refineSkipped, 2);
+  assert.deepEqual(inEnglish.refineSpans, [[1200, 1800]]);
+  assert.match(inEnglish.transcript, /Corrected\./);
+
+  // Without a refine window nothing is skipped (and no refineSkipped field).
+  const plain = await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, language: 'en', groqClient: sdk((i) => timed(i)) });
+  assert.equal(plain.ok, true);
+  assert.equal('refineSkipped' in plain, false);
+  assert.equal('refineSpans' in plain, false, 'no refine, no spans');
+  assert.equal(plain.coverage, 1);
+});
+
+test('refine with refineSkipUnusable: false (a transcript the caller cannot splice) transcribes every piece without a usable part; the window is still forced', async (t) => {
+  const file = tempFile(t, 'clase.wav');
+  const timed = (i, extra = '') => ({ text: `${prose(i)}${extra}`, segments: [{ start: 1, end: 500, text: `${prose(i)}${extra}` }] });
+  const env = { GROQ_API_KEY: 'gsk_q33', TRANSCRIBE_PROVIDERS: 'groq' };
+  // Nothing kept: the whole recording is read, nothing skipped.
+  const empty = memoryCheckpoint();
+  const groq = sdk((i) => timed(i, ' Corregido.'));
+  const whole = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    env, ...long(t, 3), checkpoint: empty, language: 'es',
+    groqClient: groq, range: { start: 700, end: 900 }, forceRetranscribe: true, refineSkipUnusable: false,
+  });
+  assert.deepEqual(groq.requests.map((r) => r.index).sort(), [0, 1, 2], 'every piece is read');
+  assert.equal(whole.ok, true);
+  assert.equal('refineSkipped' in whole, false);
+  assert.equal(whole.segmentCount, 3);
+  assert.match(whole.transcript, /\[0\.0\][^]*\[1\.0\][^]*\[2\.0\]/, 'the whole result comes back');
+
+  // Parts kept: only the window is read again (forced), the rest is reused as before.
+  const kept = memoryCheckpoint();
+  const base = { env, ...long(t, 3), checkpoint: kept, language: 'es' };
+  await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, groqClient: sdk((i) => timed(i)) });
+  const again = sdk((i) => timed(i, ' Corregido.'));
+  const refined = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    ...base, groqClient: again, range: { start: 700, end: 900 }, forceRetranscribe: true, refineSkipUnusable: false,
+  });
+  assert.deepEqual(again.requests.map((r) => r.index), [1]);
+  assert.match(refined.transcript, /\[0\.0\][^]*\[1\.0\][^]*Corregido\.[^]*\[2\.0\]/);
+  assert.deepEqual(refined.refineSpans, [[600, 1200]], 'the window piece is still the one read again');
+  assert.deepEqual(whole.refineSpans, [[600, 1200]]);
+});
+
+/** options.segmentAudio fake with given piece offsets (a snapped cut plan when they are not multiples of 600 s). */
+function offsetSegmenter(t, offsets, total) {
+  return async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-qloop-seg-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    return {
+      dir,
+      segments: offsets.map((offset, i) => {
+        const p = path.join(dir, `seg-${String(i).padStart(4, '0')}.flac`);
+        fs.writeFileSync(p, `segment-${i}`);
+        return { path: p, index: i, offsetSeconds: offset, durationSeconds: (offsets[i + 1] ?? total) - offset };
+      }),
+    };
+  };
+}
+
+test('refine over parts kept from another cut plan reads every piece: the stored segments do not line up with the new pieces', async (t) => {
+  const file = tempFile(t, 'clase.wav');
+  const timed = (i, extra = '') => ({ text: `${prose(i)}${extra}`, segments: [{ start: 1, end: 500, text: `${prose(i)}${extra}` }] });
+  const env = { GROQ_API_KEY: 'gsk_q41', TRANSCRIBE_PROVIDERS: 'groq' };
+  const base = { env, durationSeconds: 1800, createFile, ffmpegFilters: [], parallel: 1, language: 'es' };
+  // The stored transcript was cut at 610 s and 1210 s (its parts say so).
+  const kept = memoryCheckpoint();
+  await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, checkpoint: kept, segmentAudio: offsetSegmenter(t, [0, 610, 1210], 1800), groqClient: sdk((i) => timed(i)) });
+  assert.ok(kept.store.get(0).part.cutPlan, 'each part records its cut plan');
+  // The refine cuts at 600 s and 1200 s: nothing is skipped, every piece is read.
+  const groq = sdk((i) => timed(i, ' Corregido.'));
+  const refined = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    ...base, checkpoint: kept, segmentAudio: segmenter(t, 3), groqClient: groq, range: { start: 700, end: 900 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(groq.requests.map((r) => r.index).sort(), [0, 1, 2], 'a whole reading for the caller to cut into');
+  assert.equal(refined.ok, true);
+  assert.equal('refineSkipped' in refined, false);
+  assert.deepEqual(refined.refineSpans, [[600, 1200]], 'the window piece is still the one read again');
+  assert.match(refined.transcript, /\[0\.0\][^]*\[1\.0\][^]*\[2\.0\]/);
+
+  // A part saved before parts recorded their plan cannot fill a snapped cut either.
+  const legacy = memoryCheckpoint();
+  await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, checkpoint: legacy, segmentAudio: segmenter(t, 3), groqClient: sdk((i) => timed(i)) });
+  for (const saved of legacy.store.values()) delete saved.part.cutPlan;
+  const again = sdk((i) => timed(i, ' Corregido.'));
+  const overLegacy = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    ...base, checkpoint: legacy, segmentAudio: offsetSegmenter(t, [0, 610, 1210], 1800), groqClient: again, range: { start: 700, end: 900 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(again.requests.map((r) => r.index).sort(), [0, 1, 2]);
+  assert.equal('refineSkipped' in overLegacy, false);
+});
+
+test('refine over entries the checkpoint will not load (another number of pieces) still sees their cut plan and reads every piece', async (t) => {
+  const file = tempFile(t, 'clase.wav');
+  const timed = (i, extra = '') => ({ text: `${prose(i)}${extra}`, segments: [{ start: 1, end: 400, text: `${prose(i)}${extra}` }] });
+  const env = { GROQ_API_KEY: 'gsk_q43', TRANSCRIBE_PROVIDERS: 'groq' };
+  const base = { env, durationSeconds: 1800, createFile, ffmpegFilters: [], parallel: 1, language: 'es' };
+  // A checkpoint like the queue's disk one: load ignores entries of another
+  // piece count; savedCutPlan reads their plan anyway.
+  const kept = memoryCheckpoint();
+  kept.savedCutPlan = async (index) => kept.store.get(index)?.meta?.cutPlan || null;
+  await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, checkpoint: kept, segmentAudio: offsetSegmenter(t, [0, 450, 900, 1350], 1800), groqClient: sdk((i) => timed(i)) });
+  assert.equal(kept.store.get(0).meta.total, 4);
+  const groq = sdk((i) => timed(i, ' Corregido.'));
+  const refined = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    ...base, checkpoint: kept, segmentAudio: segmenter(t, 3), groqClient: groq, range: { start: 700, end: 900 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(groq.requests.map((r) => r.index).sort(), [0, 1, 2]);
+  assert.equal('refineSkipped' in refined, false);
+
+  // The same plan saved before (a gap piece without a part): only the window is read.
+  const same = memoryCheckpoint();
+  same.savedCutPlan = async (index) => same.store.get(index)?.meta?.cutPlan || null;
+  await audio.transcribe(file, 'audio/wav', 'clase.wav', { ...base, checkpoint: same, segmentAudio: segmenter(t, 3), groqClient: sdk((i) => timed(i)) });
+  same.store.delete(2);
+  const window = sdk((i) => timed(i, ' Corregido.'));
+  const sameCut = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    ...base, checkpoint: same, segmentAudio: segmenter(t, 3), groqClient: window, range: { start: 700, end: 900 }, forceRetranscribe: true,
+  });
+  assert.deepEqual(window.requests.map((r) => r.index), [1]);
+  assert.equal(sameCut.refineSkipped, 1);
+});
+
+test('a segment timed at its piece\'s very end starts inside that piece: a refine\'s caller attributes it to the piece it re-read', async (t) => {
+  const file = tempFile(t, 'clase.wav');
+  // Whisper times the last word at the piece's end (600 s of a 600 s piece).
+  const atEnd = (i) => ({ text: `${prose(i)} fin`, segments: [{ start: 1, end: 590, text: prose(i) }, { start: 600, end: 600.4, text: 'fin' }] });
+  const refined = await audio.transcribe(file, 'audio/wav', 'clase.wav', {
+    env: { GROQ_API_KEY: 'gsk_q42', TRANSCRIBE_PROVIDERS: 'groq' }, ...long(t, 3), checkpoint: memoryCheckpoint(), language: 'es',
+    groqClient: sdk(atEnd), range: { start: 700, end: 900 }, forceRetranscribe: true,
+  });
+  assert.equal(refined.refineSkipped, 2);
+  assert.deepEqual(refined.refineSpans, [[600, 1200]]);
+  const fin = refined.segments.find((s) => s.text === 'fin');
+  assert.ok(fin && fin.start >= 600 && fin.start < 1200, `«fin» starts inside the piece it was read in (${fin && fin.start})`);
+  assert.equal(fin.end, 1200.4, 'its end is untouched');
 });
 
 test('a restart in the middle of a review reviews that piece again — it is not re-transcribed', async (t) => {

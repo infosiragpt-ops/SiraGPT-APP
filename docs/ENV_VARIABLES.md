@@ -838,7 +838,7 @@ WARN `[local-whisper] unavailable: <motivo>` si el motor local no puede correr
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TRANSCRIBE_PROVIDERS` | `openai,groq,xai,meta,local` | Orden de la escalera (`voicestudio` opcional; listar `meta` aquí también la habilita) |
+| `TRANSCRIBE_PROVIDERS` | `openai,groq,xai,meta,local` | Orden de la escalera (`voicestudio` opcional; listar `meta` aquí también la habilita). En clips cortos se respeta el orden entre `local` y `voicestudio`: listado después de `local`, Sira Voz solo es el respaldo y la segunda opinión de whisper.cpp (el reporte de capacidades muestra `voicestudio_short=after_local`) |
 | `GROQ_API_KEY` | — | Activa el peldaño Groq (`/openai/v1/audio/transcriptions`) |
 | `GROQ_TRANSCRIBE_MODEL` | `whisper-large-v3-turbo` | Modelo STT de Groq |
 | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Base OpenAI-compatible de Groq |
@@ -953,6 +953,7 @@ Todas son opcionales. Ningún proveedor pagado se enciende por defecto: los rung
 | `SIRAGPT_VIDEO_OCR_ESCALATE` | on | GLM-OCR local para cuadros débiles (≤ `SIRAGPT_VIDEO_OCR_MAX_ESCALATIONS`, 6) |
 | `SIRAGPT_VIDEO_OCR_CLOUD` | off | `1` deja escalar a la visión en la nube (PAGADA) |
 | `SIRAGPT_ARCHIVE_MEDIA` | on | Expande los audios, videos e imágenes de un ZIP (p. ej. «Exportar chat» de WhatsApp) en archivos hijos que se transcriben y se leen |
+| `SIRAGPT_ARCHIVE_MEDIA_RESUME` | on (off en `NODE_ENV=test`) | Retoma la expansión de un ZIP que un reinicio cortó: una pasada poco después del arranque y otra cuando la marca `running` ya es vieja. Cada ZIP se reclama de forma atómica (nunca se expande dos veces) y se abandona tras 3 intentos. Los miembros se escriben bajo `<carpeta del usuario>/.parts` hasta tener su fila, así que el barrido de subidas por partes recoge los que un reinicio deja a medias. Se apaga también con `SIRAGPT_ARCHIVE_MEDIA=0` |
 | `SIRAGPT_ARCHIVE_MEDIA_MAX_MEMBERS` / `_MAX_IMAGES` / `_MAX_MB` / `_MAX_RATIO` / `_TIMEOUT_MS` | `60` / `30` / `1024` / `100` / `600000` | Topes contra bombas ZIP |
 | `TRANSCRIBE_URL_PLATFORM_CAPTIONS` | on | Subtítulos de la plataforma (yt-dlp) como respaldo y glosario; solo reemplazan la transcripción si coinciden idioma, cobertura ≥ 90 % y muestras. Si el audio de un enlace largo no tiene voz o no se puede leer, la cola los usa como texto |
 | `TRANSCRIBE_URL_CAPTION_SPOT_TIMEOUT_MS` | `90000` | Tope de la verificación por muestras |
@@ -977,7 +978,9 @@ Todas son opcionales. Ningún proveedor pagado se enciende por defecto: los rung
 | `SIRAGPT_OCR_PDF_VISION` | on | Escalera de visión (GLM-OCR local) para páginas débiles de PDF escaneados; `0` vuelve a solo Tesseract |
 | `SIRAGPT_OCR_PDF_VISION_CLOUD` | off | `1` deja usar la visión en la nube (PAGADA) en páginas de PDF escaneados, ≤ `SIRAGPT_OCR_PDF_VISION_MAX_PAGES` (40) |
 | `SIRAGPT_OCR_PDF_BUDGET_MS` / `_PAGE_BUDGET_MS` | `720000` / `15000` | Presupuesto del OCR de un PDF escaneado y de cada página |
-| `SIRAGPT_PDF_TEXT_LAYER_CHECK` | on | Mide la calidad de la capa de texto (sellos, `(cid:`, mojibake); una capa mala no impide el OCR |
+| `SIRAGPT_PDF_TEXT_LAYER_CHECK` | on | Mide la calidad de la capa de texto (sellos, `(cid:`, mojibake); una capa mala no impide el OCR. `0` apaga también la medición |
+| `SIRAGPT_PDF_TEXT_LAYER_SCORE_MAX_CHARS` | `2000000` (mín. 4000) | Caracteres por PDF a los que se aplican las pruebas caras (palabras plausibles, símbolos). Cada página se puntúa por sus primeros 4000; pasado el tope se muestrea y el resto solo recibe las pruebas baratas de glifos. La medición cede el event loop cada pocas páginas |
+| `SIRAGPT_OCR_INPUT_MAX_PIXELS` | `150000000` | Píxeles máximos de una imagen. Antes de decodificar HEIC/BMP/ICO/JP2/JXL con una herramienta externa se leen sus dimensiones (`ffprobe` con `FFPROBE_PATH`, o la caja `ispe` del HEIF) y `ffmpeg` corre con `-max_pixels`; una imagen mayor es `image_too_large` |
 | `OLLAMA_OCR_CONCURRENCY` / `OLLAMA_OCR_TIMEOUT_STREAK` / `OLLAMA_OCR_TIMEOUT_COOLDOWN_MS` | `1` / `2` / `600000` | GLM-OCR: lecturas simultáneas, y pausa tras timeouts seguidos |
 | `OLLAMA_OCR_MIN_SHORT_SIDE` | `1024` | Lado corto al que se amplían recortes pequeños antes de GLM |
 
@@ -985,10 +988,10 @@ Todas son opcionales. Ningún proveedor pagado se enciende por defecto: los rung
 
 | Variable | Default | Qué hace |
 |---|---|---|
-| `SIRAGPT_DICTATION_TIMEOUT_MS` | `25000` | Tope de la petición (bajo los 30 s del cliente). Al vencer: 408 `transcription_timeout` |
+| `SIRAGPT_DICTATION_TIMEOUT_MS` | `25000` | Tope de la petición (bajo los 30 s del cliente). Al vencer: 408 `transcription_timeout`. Sira Voz recibe como mucho el 60 % de este tope, para que whisper.cpp siempre tenga tiempo |
 | `SIRAGPT_DICTATION_SCRIBE_TIMEOUT_MS` | `10000` | Sub-presupuesto de ElevenLabs Scribe (planes pagos); al vencer, sigue la escalera |
 | `SIRAGPT_DICTATION_FREE_CLOUD` | off | `1` deja que el dictado gratis use los rungs de nube; por defecto queda en el servidor (local / VoiceStudio) |
-| `SIRAGPT_DICTATION_PROVIDERS` | (vacío) | Lista que restringe la escalera del dictado |
+| `SIRAGPT_DICTATION_PROVIDERS` | (vacío) | Lista que restringe la escalera del dictado. Con una lista explícita, los planes gratis no heredan `TRANSCRIBE_ESCALATION_PROVIDERS` |
 
 Un error de plan o cuota ya no devuelve un texto de «éxito» falso, y el dictado nunca escribe la transcripción en los logs.
 

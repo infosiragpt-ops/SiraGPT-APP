@@ -117,17 +117,22 @@ function normalizeModel(model) {
  * clip clock). In mode 'translation', `includeTranscript` keeps the
  * transcript files next to the translation («transcribe y tradúcelo») and
  * `alsoAnalysis` adds the requested summary («resume y tradúcelo»).
+ * `analysisRange` is the moment the user asked about («qué dice en el
+ * minuto 30»), on the recording clock: only the analysis reads it; the
+ * transcript files follow `range`. Kept only when valid (closed, start < end).
  */
 function normalizeOutput(output) {
   const value = output && typeof output === 'object' ? output : {};
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
   const offset = Number(value.timeOffsetSec);
+  const analysisRange = normalizeRefineRange(value.analysisRange);
   return {
     documentFormat,
     wantsSubtitles: value.wantsSubtitles === true,
     timeOffsetSec: Number.isFinite(offset) && offset > 0 ? Math.min(offset, 7 * 24 * 3600) : 0,
     includeTranscript: value.includeTranscript === true,
     alsoAnalysis: value.alsoAnalysis === true,
+    ...(analysisRange ? { analysisRange } : {}),
   };
 }
 

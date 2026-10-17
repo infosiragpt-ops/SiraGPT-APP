@@ -412,6 +412,14 @@ test('an unchanged window says so and sends no files; a failed refine says why a
   assert.equal(bad.state.saved.length, 0);
   assert.equal(bad.state.messages[0].metadata.stoppedReason, 'transcription_refine_failed');
   assert.equal(bad.state.notifications[0].type, 'media_transcription_refine_failed');
+
+  // A refine never falls back to the subtitle track or the screen: a video
+  // without an audio track says so instead of a generic failure.
+  const mute = await harness(t, { files: [row('clase')], transcripts: { clase: stored(asrResult()) } });
+  await mute.service.createDelivery(refineRecord());
+  await mute.service.onMediaTerminal({ fileId: 'clase', userId: 'u1', stage: 'failed', refine: true, range: { start: 720, end: 900 }, ok: false, code: 'no_audio_track' });
+  assert.match(mute.state.messages[0].content, /Motivo: el archivo no tiene pista de audio que volver a transcribir\./);
+  assert.match(mute.state.messages[0].content, /La transcripción sigue como estaba/);
 });
 
 test('one refine job answers the identical requests it served; an overlapping one is matched only without an id', async (t) => {
@@ -565,6 +573,30 @@ test('a delivery that carries hints keeps them durably per file, best-effort', a
   calls.length = 0;
   await service.createDelivery({ userId: 'u1', chatId: 'chat1', fileIds: ['clase'] });
   assert.equal(calls.length, 0, 'nothing to remember, nothing written');
+});
+
+test('a refine record never stores its window\'s language for the whole file; its names are kept', async (t) => {
+  const calls = [];
+  const { service } = await harness(t, { files: [row('clase')], overrides: { recordHints: async (args) => { calls.push(args); return { ok: true }; } } });
+  const record = await service.createDelivery(refineRecord({ language: 'en', hints: { terms: ['Ccori'] } }));
+  assert.equal(record.language, 'en', 'the record keeps what the user said');
+  assert.deepEqual(calls.map((c) => [c.fileId, c.language, c.hints]), [['clase', null, { terms: ['Ccori'] }]]);
+  calls.length = 0;
+  await service.createDelivery(refineRecord({ language: 'en', range: { start: 0, end: 60 } }));
+  assert.equal(calls.length, 0, 'a refine with only a language writes nothing for the file');
+});
+
+test('a refine whose window could not be read again says so and keeps the transcript', async (t) => {
+  const { service, state } = await harness(t, { files: [row('clase')], transcripts: { clase: stored(asrResult()) } });
+  const record = await service.createDelivery(refineRecord());
+  await service.onMediaTerminal({ fileId: 'clase', userId: 'u1', stage: 'failed', refine: true, range: { start: 720, end: 900 },
+    deliveryId: record.id, ok: false, code: 'refine_incomplete' });
+  const content = state.messages[0].content;
+  assert.match(content, /\*\*No pude corregir el tramo 00:12:00–00:15:00 de «clase\.mp4»\.\*\*/);
+  assert.match(content, /Motivo: no se pudo volver a transcribir todo el tramo\./);
+  assert.match(content, /La transcripción sigue como estaba/);
+  assert.doesNotMatch(content, /Corregí/);
+  assert.equal(state.saved.length, 0);
 });
 
 test('the inline preview of a screen-text transcript names its source and never claims audio coverage', () => {

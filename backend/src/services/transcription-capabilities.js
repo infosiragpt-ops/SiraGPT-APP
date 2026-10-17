@@ -133,7 +133,8 @@ function basename(p) {
 // POST /api/elevenlabs/speech-to-text asks this which rungs a dictation may
 // use, and the report shows the same answer.
 //   - SIRAGPT_DICTATION_PROVIDERS (e.g. «local,voicestudio» or «groq,local»)
-//     sets the ladder for every plan.
+//     sets the ladder for every plan; for free plans it also keeps the paid
+//     escalation rungs off (a provider the list does not name is never used).
 //   - Otherwise FREE plans stay on-host (whisper.cpp, then Sira Voz): free
 //     dictation never spends paid STT credit or sends audio off the host,
 //     unless an operator opts in with SIRAGPT_DICTATION_FREE_CLOUD=1 (then the
@@ -166,7 +167,9 @@ function parseDictationProviders(raw) {
 function dictationLadderOptions(env = process.env, { paid = false } = {}) {
   const e = env || {};
   const explicit = parseDictationProviders(e.SIRAGPT_DICTATION_PROVIDERS);
-  if (explicit) return { providers: explicit, policy: 'env' };
+  // The operator's list bounds the free ladder: TRANSCRIBE_ESCALATION_PROVIDERS
+  // (enabled for media) must not send a free dictation to a paid rung.
+  if (explicit) return { providers: explicit, ...(paid ? {} : { escalationProviders: [] }), policy: 'env' };
   if (paid) return { policy: 'shared' };
   if (envFlag(e.SIRAGPT_DICTATION_FREE_CLOUD)) return { policy: 'shared' };
   return { providers: DICTATION_FREE_PROVIDERS.slice(), escalationProviders: [], policy: 'on_host' };
@@ -195,6 +198,13 @@ function probeStt(resolve, env) {
     ladder.push({ name: 'voicestudio', kind: 'local', model: 'voicestudio-whisperx', cooldown: false });
   }
   if (order.includes('local')) ladder.push({ name: 'local', kind: 'local', model: null, cooldown: false });
+  // The ladder above is a long recording's order (Sira Voz before whisper.cpp
+  // for every piece). A short clip runs the two on-host engines in the LISTED
+  // order: listed after 'local', Sira Voz is only whisper.cpp's fallback and
+  // second opinion there ('after_local'), not the preferred engine.
+  const vsAt = order.indexOf('voicestudio');
+  const localAt = order.indexOf('local');
+  const shortClips = vsAt < 0 ? null : (localAt >= 0 && localAt < vsAt ? 'after_local' : 'first');
 
   let escalation = [];
   if (fnOf(at, 'escalationRungs')) {
@@ -216,7 +226,7 @@ function probeStt(resolve, env) {
     ladder,
     escalation,
     escalationRequested: requestedEscalation.map((name) => oneLine(name, 40)),
-    voiceStudio: { configured: voiceStudioConfigured, inLadder: order.includes('voicestudio') },
+    voiceStudio: { configured: voiceStudioConfigured, inLadder: order.includes('voicestudio'), shortClips },
     dictation: {
       scribeForPaidPlans: elevenlabsKey,
       // 'ladder' = the shared TRANSCRIBE_PROVIDERS order above.
@@ -540,7 +550,10 @@ function sttToken(stt) {
   const rungs = (stt.ladder || []).map((r) => `${r.name}${r.cooldown ? '(cooldown)' : ''}`);
   const esc = (stt.escalation || []).map((r) => r.name);
   const freeDictation = stt.dictation && stt.dictation.free ? stt.dictation.free.providers : null;
-  return `stt=${rungs.join(',') || 'none'}${esc.length ? ` escalation=${esc.join(',')}` : ''}`
+  // Sira Voz listed after whisper.cpp: short clips read whisper.cpp first.
+  const vs = stt.voiceStudio || {};
+  const vsShort = vs.configured && vs.inLadder && vs.shortClips === 'after_local' ? ' voicestudio_short=after_local' : '';
+  return `stt=${rungs.join(',') || 'none'}${vsShort}${esc.length ? ` escalation=${esc.join(',')}` : ''}`
     + `${freeDictation ? ` dictation_free=${freeDictation}` : ''}`;
 }
 

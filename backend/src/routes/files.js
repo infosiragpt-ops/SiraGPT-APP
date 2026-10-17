@@ -1001,6 +1001,32 @@ if (process.env.NODE_ENV !== 'test') {
   chunkedUploads.startChunkedUploadSweeper({ rootDir: upload.uploadDir });
 }
 
+// ZIP expansions a restart interrupted (archiveExpansion.state 'running'):
+// a pass a little after boot (and one more once the run this restart cut is
+// past the module's default minAgeMs, which leaves a live run of another
+// process alone), with the same detector and scheduler as an upload.
+// Unref'd, fire-and-forget, one summary line per pass; each parent is
+// claimed atomically, so several processes never expand it twice.
+// SIRAGPT_ARCHIVE_MEDIA_RESUME=0 turns it off; off under NODE_ENV=test.
+archiveMediaExpander.startArchiveExpansionResume({
+  prisma,
+  resolveUserDir: (userId) => upload.resolveUserUploadDir(userId),
+  detectMime: (childPath, fallbackMime) => detectMime(childPath, fallbackMime),
+  schedule: (child, row) => scheduleResumedArchiveChild(child, row),
+});
+
+// A repaired media child (its row existed, its file did not) may still have
+// the failed job the media reconciler made while the file was missing: only
+// a retry queues that row again. Everything else is scheduled like an upload.
+function scheduleResumedArchiveChild(child, row) {
+  if (child && child.repaired && mediaTranscription.isMediaFile(row)) {
+    void mediaTranscription.enqueueMediaTranscription({ fileId: row.id, userId: row.userId, retry: true })
+      .catch(() => console.warn('[files] media queued for reconciliation', row.id));
+    return;
+  }
+  scheduleFileAfterFastUpload(child, row.userId, prisma, row);
+}
+
 function chunkedUploadCap(mimeType, originalName) {
   const limits = resolveUploadLimits();
   const ext = String(originalName || '').split('.').pop();

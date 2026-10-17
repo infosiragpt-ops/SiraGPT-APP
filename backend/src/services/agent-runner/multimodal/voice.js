@@ -148,6 +148,72 @@ function defaultDurableHandoff(payload) {
   return require('../../agent-harness/tools/transcribe-url-tool').handOffMediaFile(payload);
 }
 
+/** Workspace path → `uploads/x.mp3` (drops `/workspace/` and `./`). */
+function workspaceRel(rel) {
+  return String(rel || '').trim().replace(/^\/?workspace\//, '').replace(/^(?:\.\/)+/, '');
+}
+
+/** The staged attachment (`owner.staged`: [{ rel, fileId }]) a workspace path points at, or null. */
+function stagedUploadFor(owner, rel) {
+  const staged = owner && Array.isArray(owner.staged) ? owner.staged : [];
+  const wanted = workspaceRel(rel);
+  const hit = staged.find(entry => entry && entry.fileId && workspaceRel(entry.rel) === wanted);
+  return hit ? { rel: wanted, fileId: String(hit.fileId) } : null;
+}
+
+/**
+ * A staged attachment already is the user's media File, transcribed by the
+ * queue since its upload: the chat delivery is recorded for THAT File and its
+ * job is (re)queued — idempotent, the job id is per (user, file); a failed
+ * one is retried — instead of copying the recording into a second File and a
+ * second full transcription.
+ * Returns { ok, fileId, deliveryId, message } or { ok:false, reason }.
+ * `services` (delivery, enqueueMediaTranscription) is for tests.
+ */
+async function defaultStagedHandoff({ fileId, originalName, goal = '', spanSec = null, language = null, hints = null,
+  ctx, env = process.env, logTag = '[transcribe_audio]', services = {} }) {
+  const delivery = services.delivery || require('../../media-delivery');
+  const enqueueMediaTranscription = services.enqueueMediaTranscription || require('../../media-transcription-queue').enqueueMediaTranscription;
+  if (!delivery.isMediaDeliveryEnabled(env)) return { ok: false, reason: 'delivery_disabled', fileId };
+  let languageCode = null;
+  try { languageCode = language ? require('../../media-transcript-format').normalizeHintLanguage(language) : null; } catch (_) { languageCode = null; }
+  const normalizedHints = hints && typeof hints === 'object' && Object.keys(hints).length ? hints : null;
+  const media = { ...(languageCode ? { language: languageCode } : {}), ...(normalizedHints ? { hints: normalizedHints } : {}) };
+  let record = null;
+  try {
+    record = await delivery.createDelivery({
+      userId: ctx.userId, chatId: ctx.chatId, taskId: ctx.taskId || null,
+      fileIds: [fileId], fileNames: [originalName], goal,
+      mode: 'transcript', formats: ['txt'], range: null,
+      output: { documentFormat: null, wantsSubtitles: false, timeOffsetSec: 0 },
+      ...media,
+    });
+  } catch (err) {
+    return { ok: false, reason: (err && err.code) || 'delivery_error', fileId };
+  }
+  if (!record) return { ok: false, reason: 'delivery_unavailable', fileId };
+  try {
+    const queued = await enqueueMediaTranscription({ fileId, userId: ctx.userId, ...media });
+    // Its upload-time job failed: this new request is the retry (without it
+    // nothing is queued and the delivery would only post that failure).
+    if (queued && queued.queued === false && queued.stage === 'failed') {
+      await enqueueMediaTranscription({ fileId, userId: ctx.userId, retry: true, ...media });
+    }
+  } catch (err) {
+    // The upload already queued this File; reconcile re-queues it if that
+    // job was lost, and the delivery posts it when it finishes.
+    console.warn(`${logTag} staged media job not re-queued; delivery kept for reconcile`, (err && err.code) || 'queue_error');
+  }
+  let message = '';
+  try {
+    const etaSeconds = typeof delivery.estimateTranscriptionSeconds === 'function' && spanSec != null
+      ? delivery.estimateTranscriptionSeconds({ durationSec: spanSec }) : null;
+    message = delivery.handOffMessage({ fileNames: [originalName], durationSec: spanSec, etaSeconds });
+  } catch (_) { message = ''; }
+  if (!message) message = `Recibí «${originalName}». Te aviso aquí cuando la transcripción esté lista.`;
+  return { ok: true, fileId, deliveryId: record.id, message };
+}
+
 /**
  * transcribe_audio executor. `openaiClient` is the injectable seam (tests /
  * provider router); production falls back to OPENAI_API_KEY exactly like the
@@ -157,15 +223,18 @@ function defaultDurableHandoff(payload) {
  * workspace recording of ≥ 20 min (SIRAGPT_RUNNER_TRANSCRIBE_DURABLE_MIN_SECONDS)
  * is copied into the user's uploads and handed to the media queue + chat
  * delivery (resumable, survives deploys) instead of being transcribed inside
- * the runner's turn. Without an owner a recording above the inline ceiling
+ * the runner's turn. A staged attachment (`owner.staged`: [{ rel, fileId }])
+ * is never copied: its own File gets the delivery and its queued job is
+ * reused. Without an owner a recording above the inline ceiling
  * (SIRAGPT_RUNNER_TRANSCRIBE_MAX_SECONDS, 30 min) gets an honest error that
  * says how to have it transcribed.
  */
 function makeTranscribeAudioExecutor({ sandbox, openaiClient = null, env = process.env, transcribeImpl = null,
-  owner = null, durableHandoff = null, probeDuration = null } = {}) {
+  owner = null, durableHandoff = null, stagedHandoff = null, probeDuration = null } = {}) {
   const limits = voiceLimits(env);
   const probe = probeDuration || defaultProbeDuration;
   const handOff = durableHandoff || defaultDurableHandoff;
+  const handOffStaged = stagedHandoff || defaultStagedHandoff;
   const durableReady = Boolean(owner && owner.userId && owner.chatId)
     && String(env.SIRAGPT_RUNNER_TRANSCRIBE_DURABLE || '1') !== '0';
   return async function transcribeAudio(args = {}, { signal } = {}) {
@@ -206,15 +275,23 @@ function makeTranscribeAudioExecutor({ sandbox, openaiClient = null, env = proce
       throwIfAborted(signal);
       const durationSec = await probe(tmpPath, { signal });
       throwIfAborted(signal);
+      // An attachment staged for this turn already is the user's File, queued
+      // since its upload: never copied into a second File and job.
+      const staged = durableReady ? stagedUploadFor(owner, rel) : null;
       if (durationSec != null && durationSec >= limits.durableMinSeconds && durableReady) {
         let handed = null;
+        const ctx = { userId: owner.userId, chatId: owner.chatId, taskId: owner.taskId || null };
         try {
-          handed = await handOff({
-            sourcePath: tmpPath, originalName: path.basename(rel), mimeType: mime, extension: ext, filePrefix: 'workspace',
-            displayName: path.basename(rel), goal: `Transcripción de ${path.basename(rel)}`, spanSec: durationSec,
-            language: language || null, hints, ctx: { userId: owner.userId, chatId: owner.chatId, taskId: owner.taskId || null },
-            env, logTag: '[transcribe_audio]',
-          });
+          handed = staged
+            ? await handOffStaged({
+              fileId: staged.fileId, originalName: path.basename(rel), goal: `Transcripción de ${path.basename(rel)}`,
+              spanSec: durationSec, language: language || null, hints, ctx, env, logTag: '[transcribe_audio]',
+            })
+            : await handOff({
+              sourcePath: tmpPath, originalName: path.basename(rel), mimeType: mime, extension: ext, filePrefix: 'workspace',
+              displayName: path.basename(rel), goal: `Transcripción de ${path.basename(rel)}`, spanSec: durationSec,
+              language: language || null, hints, ctx, env, logTag: '[transcribe_audio]',
+            });
         } catch (err) {
           if (signal?.aborted) throw err;
           handed = null;
@@ -233,6 +310,9 @@ function makeTranscribeAudioExecutor({ sandbox, openaiClient = null, env = proce
         }
       }
       if (durationSec != null && durationSec > limits.inlineMaxSeconds) {
+        if (staged) {
+          return `ERROR: "${rel}" dura ${formatMinutes(durationSec)}, demasiado para transcribirlo dentro de este paso. La grabación ya está adjunta y se transcribe en la cola de la plataforma; dile al usuario que, cuando termine, puede pedir la transcripción en este chat, o transcribe solo un tramo.`;
+        }
         return `ERROR: "${rel}" dura ${formatMinutes(durationSec)}, demasiado para transcribirlo dentro de este paso. Pide al usuario que adjunte la grabación en el chat (se transcribe en la cola durable y se entrega ahí) o transcribe solo un tramo.`;
       }
       const { transcribe } = require('../../audio-transcriber');
@@ -383,6 +463,8 @@ module.exports = {
   audioMimeFor,
   wrapTranscript,
   makeTranscribeAudioExecutor,
+  defaultStagedHandoff,
+  stagedUploadFor,
   makeSpeakExecutor,
   defaultSynthesize,
 };

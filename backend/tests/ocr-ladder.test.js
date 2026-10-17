@@ -546,6 +546,143 @@ test('a cancelled read never calls a vision rung', async (t) => {
   });
 });
 
+test('cloud ladder cap counts only callable runtimes: dead or unfunded keys never spend a slot and OpenAI stays reachable', async (t) => {
+  quiet(t);
+  keyHealth.clear();
+  t.after(() => keyHealth.clear());
+  const cloud = cloudFactory((candidate) => {
+    if (candidate.provider === 'Gemini') return httpError(429, 'rate limited');
+    if (candidate.provider === 'OpenRouter') return httpError(503, 'unavailable');
+    return 'TIPO: documento escaneado\nConstancia de estudios de Rosa Quispe Huamán, ciclo 2026-II.';
+  });
+  override(t, engine, { ollamaOcr: null, createVisionRuntimeClient: cloud.factory });
+  await withEnv({ GEMINI_API_KEY: 'g', META_API_KEY: 'm', XAI_API_KEY: 'x', OPENROUTER_API_KEY: 'r', OPENAI_API_KEY: 'o' }, async () => {
+    // Five usable runtimes, default cap 3: OpenAI (the engine's old rung) keeps the last slot.
+    assert.deepEqual(engine._cloudVisionCandidates(engine.config).map((c) => c.provider), ['Gemini', 'Meta', 'OpenAI']);
+    // Meta and xAI out of credits (memoised): they are dropped before the cap.
+    keyHealth.markRejected('Meta', 'm', httpError(402, 'payment required'), process.env, { reason: 'billing' });
+    keyHealth.markRejected('xAI', 'x', httpError(403, 'used all available credits'), process.env, { reason: 'billing' });
+    assert.deepEqual(engine._cloudVisionCandidates(engine.config).map((c) => c.provider), ['Gemini', 'OpenRouter', 'OpenAI']);
+    const res = await engine.runVisionFallback({ buffer: Buffer.from('img') });
+    assert.equal(res.ocr.status, 'vision_fallback');
+    assert.equal(res.ocr.provider, 'openai:gpt-4o');
+    assert.deepEqual(cloud.calls.map((c) => c.provider), ['Gemini', 'OpenRouter', 'OpenAI']);
+    assert.equal(res.ocr.visionLadder.attempted, true);
+  });
+});
+
+test('a ladder that never sent a cloud request is not «attempted»: fileProcessor keeps its own vision fallback', async (t) => {
+  quiet(t);
+  keyHealth.clear();
+  t.after(() => keyHealth.clear());
+  const fileProcessor = require('../src/services/fileProcessor');
+  const glm = fakeGlm({ ok: false, reason: 'timeout' });
+  const cloud = cloudFactory(() => 'no debería llamarse');
+  override(t, engine, { ollamaOcr: glm, createVisionRuntimeClient: cloud.factory });
+  await withEnv({ XAI_API_KEY: 'x-dead', SIRAGPT_VISION_FALLBACK_ENABLED: '1' }, async () => {
+    // GLM failed and the only cloud key is memoised as dead: nothing was sent.
+    keyHealth.markRejected('xAI', 'x-dead', httpError(401, 'invalid api key'));
+    const res = await engine.runVisionFallback({ buffer: Buffer.from('img') });
+    assert.equal(res.ocr.status, 'failed');
+    assert.equal(cloud.calls.length, 0);
+    assert.equal(res.ocr.visionLadder.attempted, false);
+    // A key another page marked dead after the runtimes were chosen is
+    // skipped inside the ladder: still no request, still not attempted.
+    override(t, engine, { _cloudVisionCandidates: () => [{ provider: 'xAI', model: 'grok-4.5' }] });
+    const raced = await engine.runVisionFallback({ buffer: Buffer.from('img') });
+    assert.equal(cloud.calls.length, 0);
+    assert.deepEqual(raced.ocr.visionLadder.attempts.map((a) => a.reason), ['key_rejected']);
+    assert.equal(raced.ocr.visionLadder.attempted, false);
+    assert.equal(fileProcessor._shouldApplyVisionFallback({ text: '', ocr: { confidence: 10, status: 'failed', visionLadder: raced.ocr.visionLadder } }), true);
+  });
+});
+
+test('band reads that ran out of ladder time still count as cloud requests: no duplicate paid fallback', async (t) => {
+  quiet(t);
+  keyHealth.clear();
+  t.after(() => keyHealth.clear());
+  const fileProcessor = require('../src/services/fileProcessor');
+  // A slow provider: each band read uses a third of the ladder budget
+  // (clock skew instead of real sleeps), so the 4th band and the whole-page
+  // read find no time left.
+  const realNow = Date.now;
+  let skew = 0;
+  Date.now = () => realNow() + skew;
+  t.after(() => { Date.now = realNow; });
+  const page = await png(1200, 3000);
+  const cloud = cloudFactory((_c, _payload, n) => {
+    skew += Math.floor(engine.config.visionLadderBudgetMs / 3);
+    return `TIPO: texto denso\nlínea ${n}`;
+  });
+  override(t, engine, { ollamaOcr: null, createVisionRuntimeClient: cloud.factory });
+  await withEnv({ GEMINI_API_KEY: 'g', SIRAGPT_VISION_FALLBACK_ENABLED: '1' }, async () => {
+    const res = await engine.runVisionFallback({
+      buffer: page,
+      sourceBuffer: page,
+      localQuality: { ...localQuality('', 0), lineCount: 60, usefulChars: 2500 },
+    });
+    assert.equal(cloud.calls.length, 3);
+    assert.equal(res.ocr.status, 'failed');
+    const attempts = res.ocr.visionLadder.attempts;
+    assert.deepEqual(attempts.filter((a) => a.ok).length, 3);
+    assert.equal(attempts[attempts.length - 1].reason, 'no_time');
+    assert.equal(res.ocr.visionLadder.attempted, true);
+    assert.equal(fileProcessor._shouldApplyVisionFallback({ text: '', ocr: { ...res.ocr, confidence: 10 } }), false);
+  });
+});
+
+test('a GLM read stuck behind the shared Ollama slot leaves the cloud its share of the ladder budget', async (t) => {
+  quiet(t);
+  // Queue wait + CPU inference use every millisecond GLM is given (clock
+  // skew instead of real sleeps).
+  const realNow = Date.now;
+  let skew = 0;
+  Date.now = () => realNow() + skew;
+  t.after(() => { Date.now = realNow; });
+  const glm = fakeGlm({ onRecognize: (args) => { skew += Number(args.timeoutMs) || 0; return { ok: false, reason: 'timeout' }; } });
+  const cloud = cloudFactory(() => 'Constancia de matrícula 2026-II de la alumna Rosa Quispe Huamán, Facultad de Derecho.');
+  override(t, engine, { ollamaOcr: glm, createVisionRuntimeClient: cloud.factory });
+  await withEnv({ GEMINI_API_KEY: 'g-key' }, async () => {
+    const { visionLadderBudgetMs, visionTimeoutMs } = engine.config;
+    const res = await engine.runVisionFallback({ buffer: Buffer.from('img') });
+    assert.ok(glm.calls[0].timeoutMs <= visionLadderBudgetMs - visionTimeoutMs - 2000, `GLM got ${glm.calls[0].timeoutMs} ms`);
+    assert.equal(cloud.calls.length, 1);
+    assert.equal(res.ocr.status, 'vision_fallback');
+    assert.equal(res.ocr.provider, 'gemini:gemini-3.5-flash');
+  });
+  // No cloud runtime: GLM keeps the whole budget, and a failed GLM-only
+  // ladder is not «attempted».
+  skew = 0;
+  glm.calls.length = 0;
+  await withEnv({}, async () => {
+    const res = await engine.runVisionFallback({ buffer: Buffer.from('img') });
+    assert.ok(glm.calls[0].timeoutMs > engine.config.visionLadderBudgetMs - 1000);
+    assert.equal(res.ocr.status, 'failed');
+    assert.equal(res.ocr.visionLadder.attempted, false);
+  });
+});
+
+test('mixed-PDF subset: pages the budget or a cancel left unread say «sin OCR», never «no legible»', async (t) => {
+  quiet(t);
+  override(t, engine, {
+    _openPdf: async () => ({ length: 3, getPage: async () => ({}) }),
+    _readPdfPage: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      return { text: 'Anexo leído por completo en la primera página.', confidence: 92, provider: 'tesseract' };
+    },
+  });
+  const res = await engine.extractPdfPagesSubset('/fake.pdf', [1, 2, 3], { budgetMs: 10 });
+  const byPage = Object.fromEntries(res.pages.map((p) => [p.page, p]));
+  assert.match(byPage[1].text, /Anexo leído/);
+  assert.equal(byPage[3].reason, 'budget');
+  assert.equal(byPage[3].marker, '[página 3 sin OCR: tiempo agotado]');
+  const controller = new AbortController();
+  controller.abort();
+  const cancelled = await engine.extractPdfPagesSubset('/fake.pdf', [2], { signal: controller.signal });
+  assert.equal(cancelled.pages[0].reason, 'aborted');
+  assert.equal(cancelled.pages[0].marker, '[página 2 sin OCR: lectura cancelada]');
+});
+
 test('GLM task by image class reaches Ollama (table read → Table Recognition)', async (t) => {
   quiet(t);
   const glm = fakeGlm({ text: 'Producto | Cant\nPan | 2' });

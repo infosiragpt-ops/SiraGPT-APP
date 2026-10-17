@@ -2704,6 +2704,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         : (!plainTranscriptionRequest && !retryRequested) || mediaBatch.wantsMediaAnalysis(mediaGoal);
       // A follow-up translation does not re-deliver the transcript files.
       let wantsTranscriptPack = !translationTarget || /transcri|subt[ií]tul|\bsrt\b|\bvtt\b/i.test(mediaGoal);
+      // The transcript itself is asked for («transcribe…», «dame la
+      // transcripción», «¿me puedes pasar la transcripción…?», «la
+      // transcripción completa y…», «con subtítulos»), not just named as what
+      // a question reads from («¿qué dice la transcripción en el minuto 30?»,
+      // «según la transcripción…», «… de la transcripción»): one mention
+      // outside such a reading cue is enough.
+      const asksTranscript = /\btran?scr[ií]b|subt[ií]t[uú]l(?:a|ar|al[oa]s?|ame|e|en)\b|\bsrt\b|\bvtt\b/i.test(mediaGoal)
+        || /\b(?:dame|d[eé]jame|quiero|quisiera|necesito|p[aá]same\w*|p[aá]sal[oa]|p[aá]ses|env[ií]a\w*|env[ií]es|manda\w*|mandes|hazme|genera\w*|saca\w*|exporta\w*|descarga\w*|adjunta\w*|incluye\w*|con|give|send)\s+(?:\S+\s+){0,3}?(?:tran?scri(?:pci|t)|transcript|subt[ií]t[uú]l)/i.test(mediaGoal)
+        || /(?<!\b(?:dice|dicen|dec[ií]a|dijo|sale|salen|aparece|pone|seg[uú]n|en|de|del|in|from|does|says)\s+(?:(?:la|el|los|las|mi|tu|su|esa|ese|esta|este|esas|esos|estas|estos|the|my|your|this)\s+)?(?:texto\s+)?)(?:tran?scri(?:pci|t)|transcript|subt[ií]t[uú]l)(?!\S*\s+(?:qu[eé]\s+)?(?:dice|dicen|dec[ií]a|dijo|pone|says?)\b)/i.test(mediaGoal);
       const mediaArtifacts = require('../media-transcript-artifacts');
       const mediaOutput = mediaArtifacts.resolveTranscriptOutput(mediaGoal, { documentPolicy });
       // What the user said about the recordings (contract C7): «está en
@@ -2725,11 +2734,22 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         ? mediaBatch.detectMediaFollowupIntent(mediaGoal) : null;
       const lookupWindow = followupIntent?.kind === 'lookup' && !mediaOutput.range ? followupIntent.range : null;
       const analysisRange = mediaOutput.range || lookupWindow;
-      if (lookupWindow && !translationTarget) {
+      // «traduce al inglés lo que dice en el minuto 30»: the moment IS what
+      // to translate, so the translation (and its hand-off) covers its window.
+      const translatesMoment = Boolean(lookupWindow && translationTarget
+        && typeof mediaBatch.translatesTheMoment === 'function' && mediaBatch.translatesTheMoment(mediaGoal));
+      // What the delivered files cover: the range the user asked for (else
+      // the whole recording), or the moment a translation is of.
+      const outputRange = translatesMoment ? lookupWindow : mediaOutput.range;
+      if (lookupWindow) {
         // A question about a moment is answered from its window; the whole
-        // transcript files are not sent again.
-        wantsAnalysis = true;
-        wantsTranscriptPack = false;
+        // transcript files are not sent again. The window is for the answer
+        // only: «transcribe este audio y dime qué dice en el minuto 30» still
+        // gets the whole transcript it asked for, and «tradúcela y dime qué
+        // dice en el minuto 30» the whole translation. A translation of the
+        // moment itself is the answer: no analysis unless one was asked for.
+        if (!translatesMoment) wantsAnalysis = true;
+        if (!translationTarget && !asksTranscript) wantsTranscriptPack = false;
       }
       await backfillUserMessageFilesForTranscription(prisma, {
         chatId, userId: user.id, taskId, fileIds: ids, clientMetadata: fileMetadata, content: displayGoal,
@@ -2739,6 +2759,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // a side effect and the turn still answers; only a bare refine request
       // ends the turn with the hand-off message.
       let refineNotice = '';
+      // The recording's language for the jobs and the delivery this turn
+      // queues. A language given with a refine is about its window: it
+      // travels with that refine job only, never to the other recordings'
+      // jobs or the file-level hints a later «reintenta» would reuse.
+      let batchLanguage = jobHints.language;
       const refineAlongside = followupIntent?.kind === 'refine' && Boolean(followupIntent.alsoAsks || translationTarget
         || (typeof mediaBatch.wantsSummaryWithTranslation === 'function' && mediaBatch.wantsSummaryWithTranslation(mediaGoal)));
       if (followupIntent?.kind === 'refine' && typeof mediaBatch.requestMediaRefine === 'function') {
@@ -2749,6 +2774,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         });
         if (refined?.handled && refineAlongside) {
           refineNotice = String(refined.message || '');
+          batchLanguage = null;
         } else if (refined?.handled) {
           return await finishDeterministicTask({
             finalMarkdown: refined.message,
@@ -2775,7 +2801,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const inlineWaitMs = deliveryEnabled ? Math.min(mediaWaitBudgetMs, mediaInlineWaitMs(process.env)) : mediaWaitBudgetMs;
       const waitOptions = {
         prisma, userId: user.id, signal: controller.signal, retryFailed: retryRequested,
-        language: jobHints.language, hints: jobHints.hints,
+        language: batchLanguage, hints: jobHints.hints,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),
           status: 'saved', payload: { mediaBatch: progress } }),
@@ -2793,13 +2819,18 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
             // The recording's language and the names / speakers / «literal»
             // the user gave travel with the delivery and reach every job.
-            language: jobHints.language,
+            language: batchLanguage,
             hints: jobHints.hints,
-            range: analysisRange,
+            // The transcript files follow the range the user asked for; the
+            // moment a question is about («¿qué dice en el minuto 30?») only
+            // narrows the analysis (`output.analysisRange`), unless that
+            // moment is what to translate.
+            range: outputRange,
             // «transcribe y tradúcelo» / «resume y tradúcelo»: the translation
             // mode also delivers the transcript files and the summary asked for.
             output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
-              includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis) },
+              includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
+              analysisRange: lookupWindow || null },
             model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
           });
         } catch (error) {
@@ -2868,8 +2899,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             userId: user.id, chatId, prisma,
           });
           mediaAnalysisUsage = completion.usage;
+          // The translation covers what the user asked for (their range, else
+          // the whole recording, or the moment to translate); a moment only
+          // asked about narrows the answer.
           translation = await mediaBatch.translateMediaBatch({
-            rows: mediaRowsForAnalysis(batch.rows, transcripts, analysisRange), target: translationTarget,
+            rows: mediaRowsForAnalysis(batch.rows, transcripts, outputRange), target: translationTarget,
             signal: controller.signal, complete: completion.complete,
             onProgress: progress => emit({ type: 'checkpoint',
               label: `Traduciendo ${progress.name} · parte ${progress.part}/${progress.parts}`,
@@ -2930,7 +2964,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         analysis?.summaries?.length ? `Análisis realizado sobre ${analysis.summaries.length} ${fileWord(analysis.summaries.length)}, incluyendo todos sus fragmentos.` : '',
         analysis?.failed?.length ? `No se pudo analizar: ${analysis.failed.map(row => row.name).join(', ')}. Sus transcripciones siguen disponibles.` : '',
         analysisUnavailable ? 'El modelo seleccionado no pudo terminar el análisis. Las transcripciones están guardadas; puedes volver a solicitarlo.' : '',
-        translation?.files?.length ? `Traducción completa al ${translationTarget.name} (sin resumir), con las mismas marcas de tiempo: está en los adjuntos.` : '',
+        translation?.files?.length ? `Traducción ${outputRange ? `al ${translationTarget.name} del tramo que pediste` : `completa al ${translationTarget.name}`} (sin resumir), con las mismas marcas de tiempo: está en los adjuntos.` : '',
         translation?.failed?.length ? `No se pudo traducir: ${translation.failed.map(row => row.name).join(', ')}.` : '',
         translationUnavailable ? `El modelo seleccionado no pudo terminar la traducción al ${translationTarget.name}. La transcripción original está guardada; puedes volver a pedirla.` : '',
       ].filter(Boolean);
@@ -2942,7 +2976,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         notices.push(`${translation.files.length > 1 ? `#### ${mediaArtifacts.escapeChatMarkdown(first.name)}\n\n` : ''}${mediaArtifacts.escapeChatMarkdown(cut ? head.slice(0, Math.max(head.lastIndexOf('\n'), 1500)) : head)}${cut ? '\n\n_Vista previa de la traducción. El archivo adjunto la tiene completa._' : ''}`);
       } else if (batch.ready) {
         let preview = '';
-        try { preview = mediaArtifacts.buildTranscriptChatPreview({ rows: readyRows, transcripts, output: lookupWindow ? { ...mediaOutput, range: lookupWindow } : mediaOutput, transcriptFilesAttached: transcriptArtifacts.length > 0 }); }
+        try { preview = mediaArtifacts.buildTranscriptChatPreview({ rows: readyRows, transcripts, output: lookupWindow && !asksTranscript ? { ...mediaOutput, range: lookupWindow } : mediaOutput, transcriptFilesAttached: transcriptArtifacts.length > 0 }); }
         catch (_) { preview = ''; }
         if (!preview) {
           const chatTranscript = mediaBatch.transcriptMarkdown(batch.rows);

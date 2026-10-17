@@ -123,11 +123,34 @@ function makeBmp(width, height, value = 0) {
   return buf;
 }
 
-function heicBytes(brand = 'heic') {
-  return Buffer.concat([
+function isoBox(type, ...payloads) {
+  const body = Buffer.concat(payloads);
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(8 + body.length, 0);
+  head.write(type, 4, 'latin1');
+  return Buffer.concat([head, body]);
+}
+
+function ispeBox(width, height) {
+  const body = Buffer.alloc(12);
+  body.writeUInt32BE(width, 4);
+  body.writeUInt32BE(height, 8);
+  return isoBox('ispe', body);
+}
+
+// ftyp + meta (iprp/ipco with one `ispe` per image item) + mdat. `sizes:
+// null` leaves the meta box out (sizes unknown).
+function heicBytes(brand = 'heic', { sizes = [[2000, 1000]] } = {}) {
+  const ftyp = Buffer.concat([
     Buffer.from([0, 0, 0, 0x18]), Buffer.from(`ftyp${brand}`, 'latin1'), Buffer.from([0, 0, 0, 0]),
-    Buffer.from(`mif1${brand}`, 'latin1'), Buffer.alloc(64),
+    Buffer.from(`mif1${brand}`, 'latin1'),
   ]);
+  const meta = sizes
+    ? isoBox('meta', Buffer.alloc(4),
+      isoBox('hdlr', Buffer.alloc(8), Buffer.from('pict', 'latin1'), Buffer.alloc(13)),
+      isoBox('iprp', isoBox('ipco', ...sizes.map(([w, h]) => ispeBox(w, h)))))
+    : Buffer.alloc(0);
+  return Buffer.concat([ftyp, meta, isoBox('mdat', Buffer.alloc(64))]);
 }
 
 function baseEnv(t, extra = {}) {
@@ -334,6 +357,92 @@ test('BMP goes through ffmpeg (no sharp loader); input path is passed as file: t
   const call = exec.calls.find((c) => c.bin === 'ffmpeg' && c.args.includes('-i'));
   assert.equal(call.args[call.args.indexOf('-i') + 1], `file:${bmpPath}`);
   assert.ok(call.args.includes('-frames:v'));
+});
+
+test('decompression bomb: an ffmpeg-only image over the pixel cap is refused before ffmpeg decodes it', async (t) => {
+  const { env } = baseEnv(t);
+  const ffmpeg = ffmpegWriting(await solidPng(400, 200));
+  // ffprobe reads the declared size (a few-KB RLE file can declare 16000×16000).
+  const huge = fakeExec({ ffmpeg, ffprobe: async () => ({ stdout: '16000,16000\n' }) });
+  const r = await ocrInput.normalizeImageInput(makeBmp(40, 20), { env, exec: huge, logger: silentLogger(), osd: false });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'image_too_large');
+  assert.equal(huge.calls.filter((c) => c.bin === 'ffmpeg' && c.args.includes('-i')).length, 0, 'never decoded');
+  const probeCall = huge.calls.find((c) => c.bin === 'ffprobe');
+  assert.equal(probeCall.args[probeCall.args.indexOf('-max_pixels') + 1], '150000000', 'ffprobe itself is bounded');
+  assert.ok(probeCall.opts.timeoutMs > 0);
+
+  // ffprobe refused the frame itself (it decodes to learn some sizes).
+  ocrInput.resetProbeCache();
+  const refused = fakeExec({ ffmpeg, ffprobe: async () => ({ stdout: '0,0\n', stderr: '[IMGUTILS @ 0x1] Picture size 16000x16000 exceeds specified max pixel count 150000000' }) });
+  const r2 = await ocrInput.normalizeImageInput(makeBmp(40, 20), { env, exec: refused, logger: silentLogger(), osd: false });
+  assert.equal(r2.error, 'image_too_large');
+  assert.equal(refused.calls.filter((c) => c.bin === 'ffmpeg' && c.args.includes('-i')).length, 0);
+
+  // No ffprobe: ffmpeg still decodes under -max_pixels (an INPUT option,
+  // before -i) and its refusal maps to image_too_large.
+  ocrInput.resetProbeCache();
+  const noProbe = fakeExec({
+    ffmpeg: async (args) => (args.includes('-version')
+      ? { stdout: 'ffmpeg version 8.1.2' }
+      : { code: 69, stderr: 'Picture size 16000x16000 exceeds specified max pixel count 150000000' }),
+  });
+  const r3 = await ocrInput.normalizeImageInput(makeBmp(40, 20), { env, exec: noProbe, logger: silentLogger(), osd: false });
+  assert.equal(r3.error, 'image_too_large');
+  const decode = noProbe.calls.find((c) => c.bin === 'ffmpeg' && c.args.includes('-i'));
+  assert.ok(decode.args.indexOf('-max_pixels') > -1 && decode.args.indexOf('-max_pixels') < decode.args.indexOf('-i'));
+  assert.equal(decode.args[decode.args.indexOf('-max_pixels') + 1], '150000000');
+
+  // Within the cap the decode runs as before.
+  ocrInput.resetProbeCache();
+  const fine = fakeExec({ ffmpeg, ffprobe: async () => ({ stdout: '400,200\n' }) });
+  const r4 = await ocrInput.normalizeImageInput(makeBmp(40, 20), { env, exec: fine, logger: silentLogger(), osd: false });
+  assert.equal(r4.ok, true);
+  assert.equal(r4.pages[0].source, 'ffmpeg');
+});
+
+test('decompression bomb: HEIC sizes come from ispe before heif-dec; unknown sizes go to ffmpeg under -max_pixels', async (t) => {
+  const { env } = baseEnv(t);
+  const decodedPng = await solidPng(400, 300);
+  const decoders = () => fakeExec({ 'heif-dec': heifDecWriting([decodedPng]), ffmpeg: ffmpegWriting(decodedPng) });
+  // A grid whose full image (its own ispe) is 16000×16000, tiles 512×512.
+  const bomb = decoders();
+  const r = await ocrInput.normalizeImageInput(heicBytes('heic', { sizes: [[512, 512], [512, 512], [16000, 16000]] }), { env, exec: bomb, logger: silentLogger(), osd: false });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'image_too_large');
+  assert.deepEqual(bomb.calls.filter((c) => c.args[0] !== '--version' && !c.args.includes('-version')), [], 'no decoder ran');
+
+  // Sizes unreadable: heif-dec (no pixel limit) is skipped, ffmpeg decodes.
+  ocrInput.resetProbeCache();
+  const unknown = decoders();
+  const r2 = await ocrInput.normalizeImageInput(heicBytes('heic', { sizes: null }), { env, exec: unknown, logger: silentLogger(), osd: false });
+  assert.equal(r2.ok, true);
+  assert.equal(r2.pages[0].source, 'ffmpeg');
+  assert.ok(r2.warnings.includes('heif_size_unknown'));
+  assert.equal(unknown.calls.filter((c) => c.bin === 'heif-dec' && c.args[0] !== '--version').length, 0);
+  assert.ok(unknown.calls.find((c) => c.bin === 'ffmpeg' && c.args.includes('-i')).args.includes('-max_pixels'));
+
+  // A normal iPhone photo (12 MP grid) still goes through heif-dec.
+  ocrInput.resetProbeCache();
+  const photo = decoders();
+  const r3 = await ocrInput.normalizeImageInput(heicBytes('heic', { sizes: [[512, 512], [4032, 3024]] }), { env, exec: photo, logger: silentLogger(), osd: false });
+  assert.equal(r3.ok, true);
+  assert.equal(r3.pages[0].source, 'heif-dec');
+  assert.deepEqual(await ocrInput._internals.readHeifImageSize(path.join(tmpDir(t), 'missing.heic')), null);
+});
+
+test('decompression bomb with the real ffprobe/ffmpeg: refused before the decode (skipped when not installed)', async (t) => {
+  const probe = spawnSync('ffprobe', ['-hide_banner', '-version']);
+  const ff = spawnSync('ffmpeg', ['-hide_banner', '-version']);
+  if (probe.error || probe.status !== 0 || ff.error || ff.status !== 0) { t.skip('ffmpeg/ffprobe not installed'); return; }
+  const { env } = baseEnv(t, { SIRAGPT_OCR_INPUT_MAX_PIXELS: '1000000' });
+  const calls = [];
+  const exec = (bin, args, opts) => { calls.push({ bin, args }); return ocrInput.runCommand(bin, args, opts); };
+  const r = await ocrInput.normalizeImageInput(makeBmp(1200, 1000, 90), { env, exec, logger: silentLogger(), osd: false });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'image_too_large');
+  assert.equal(calls.filter((c) => c.bin === 'ffmpeg' && c.args.includes('-i')).length, 0, 'ffmpeg never decoded it');
+  ocrInput.resetProbeCache();
 });
 
 test('BMP with the real ffmpeg (skipped when ffmpeg is not installed)', async (t) => {

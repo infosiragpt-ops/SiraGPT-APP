@@ -920,6 +920,43 @@ test('a master that fell back to ffmpeg\'s default stream never reports the chos
   assert.ok(!result.notes.some((n) => /transcribí la pista/.test(n)));
 });
 
+test('«local,voicestudio» on a multi-track clip: Sira Voz reads the chosen track from the master, never the container\'s default stream', async (t) => {
+  // Track 1 is the commentary; the default Spanish track 2 is the one chosen.
+  const tracks = () => probe([{ isComment: true, title: 'Commentary', language: 'en' }, { isDefault: true, language: 'es' }], { video: [{ codec: 'h264' }] });
+  const run = async (master) => {
+    const vsCalls = [];
+    const localSeen = [];
+    const original = tempFile(t, 'clase.mkv');
+    const result = await audio.transcribe(original, 'video/x-matroska', 'clase.mkv', {
+      env: {}, providers: ['local', 'voicestudio'], durationSeconds: 20, transcodeClip: master, mediaProbe: tracks(),
+      voiceStudio: { isConfigured: () => true, async transcribe(args) { vsCalls.push(args.filename); return { text: 'Hola, ¿qué tal? Hoy vemos la segunda unidad.', segments: [] }; } },
+      // whisper.cpp hears nothing: Sira Voz's second opinion decides.
+      async localTranscribe(file, options) { localSeen.push([path.basename(file), options.audioStreamOrdinal]); return { text: '' }; },
+    });
+    return { result, vsCalls, localSeen };
+  };
+
+  const master = fakeMaster(t);
+  const built = await run(master);
+  assert.equal(master.calls.length, 1, 'several tracks: the master is built even with whisper.cpp listed first');
+  assert.equal(master.calls[0].audioStreamOrdinal, 1);
+  assert.ok(built.localSeen.length >= 1 && built.localSeen.every(([name, ordinal]) => name === 'audio.flac' && ordinal === undefined));
+  assert.deepEqual(built.vsCalls, ['audio.flac'], 'Sira Voz reads the chosen track only');
+  assert.equal(built.result.ok, true);
+  assert.equal(built.result.intake.track, 'chosen');
+  assert.ok(built.result.notes.some((n) => /transcribí la pista 2 \(español\)/.test(n)));
+
+  // The master could not be built (host-side failure): Sira Voz gets the
+  // uploaded container and decodes ITS default stream — never claimed as the chosen track.
+  const failed = await run(fakeMaster(t, { code: 'timeout' }));
+  assert.deepEqual(failed.localSeen[0], ['clase.mkv', 1], 'whisper.cpp maps the chosen track of the original');
+  assert.deepEqual(failed.vsCalls, ['clase.mkv']);
+  assert.equal(failed.result.ok, true);
+  assert.equal(failed.result.audioStream, null);
+  assert.equal(failed.result.intake.track, 'default_stream');
+  assert.ok(!failed.result.notes.some((n) => /transcribí la pista/.test(n)));
+});
+
 test('a host-side master failure still uploads accepted containers (video/mp4 too); a decode rejection does not', async (t) => {
   for (const code of ['timeout', 'resource', 'spawn', 'empty']) {
     const groq = sdk();

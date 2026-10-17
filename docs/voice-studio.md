@@ -34,11 +34,18 @@ browser ──/api/voice-studio/*──▶ iliagpt-backend ──http://siragpt-
   (`components/voice/voice-studio-modal.tsx`) hosts clone / dub /
   transcribe / audiobook / jobs.
 - **Dictation** (`POST /api/elevenlabs/speech-to-text`): free for every plan —
-  local whisper.cpp first, VoiceStudio WhisperX second; ElevenLabs Scribe only
-  for paid plans with a key.
-- **Upload transcription ladder** (`audio-transcriber.js`): add `voicestudio`
-  to `TRANSCRIBE_PROVIDERS` to prefer WhisperX large-v3 over the bundled
-  whisper.cpp base model (opt-in; slower on CPU).
+  local whisper.cpp first, VoiceStudio WhisperX second (its fallback, and the
+  second opinion when whisper.cpp hears nothing; each VoiceStudio request gets
+  60 % of the dictation's time bound); ElevenLabs Scribe only for paid plans
+  with a key.
+- **Upload transcription ladder** (`audio-transcriber.js`): list `voicestudio`
+  BEFORE `local` in `TRANSCRIBE_PROVIDERS` to prefer WhisperX large-v3 over the
+  bundled whisper.cpp base model (opt-in; slower on CPU). Listed after `local`,
+  a short clip reads whisper.cpp first and uses VoiceStudio as its fallback
+  (the pieces of a long recording try VoiceStudio first either way); the
+  capability report (`GET /api/admin/transcription-capabilities`,
+  `stt.voiceStudio.shortClips`, boot line `voicestudio_short=after_local`)
+  shows which one applies.
 
 ## Backend env (names only — values live in the deploy `.env`)
 

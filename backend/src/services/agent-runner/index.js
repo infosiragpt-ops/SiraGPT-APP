@@ -1391,6 +1391,9 @@ async function runAgentRunner({
 
     const names = [];
     const priorNames = [];
+    // Each staged upload with its File: transcribe_audio reuses that File
+    // (and its queued job) instead of copying the recording into a new one.
+    const stagedUploads = [];
     for (let i = 0; i < files.length; i += 1) {
       const f = files[i];
       if (!f || !Buffer.isBuffer(f.buffer)) continue;
@@ -1403,6 +1406,7 @@ async function runAgentRunner({
       await sandbox.putFile(`uploads/${name}`, f.buffer);
       names.push(name);
       if (f.isPriorArtifact) priorNames.push(name);
+      else if (f.fileId) stagedUploads.push({ rel: `uploads/${name}`, fileId: String(f.fileId) });
     }
     let previousOutputs = new Map();
     let sandboxPrepared = false;
@@ -1766,8 +1770,9 @@ async function runAgentRunner({
         synthesize,
         computerDriver,
         // transcribe_audio hands a long workspace recording to the durable
-        // media queue, delivered in this chat (contract C7).
-        owner: userId && chatId ? { userId, chatId } : null,
+        // media queue, delivered in this chat (contract C7); a staged
+        // attachment keeps its own File and job.
+        owner: userId && chatId ? { userId, chatId, staged: stagedUploads } : null,
       });
       f7.applyToMessages(messages);
     } catch (_) { f7 = null; }

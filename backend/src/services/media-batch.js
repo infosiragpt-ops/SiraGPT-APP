@@ -352,6 +352,32 @@ function detectTranslationTarget(goal) {
   return nounTranslationTarget(text);
 }
 
+// «traduce al inglés lo que dice en el minuto 30», «¿me traduces qué dijo en
+// el minuto 12?», «tradúceme todo lo que dice en el minuto 5»: the moment
+// asked about IS what to translate (the verb's direct object). Never
+// «tradúcela y dime qué dice en el minuto 30» or «traduce la clase y…»,
+// which translate the recording and ask about a moment.
+const MOMENT_TRANSLATION_RE = /\b(?:tradu[cz](?!cion|tor)\w*|translat(?!ion|or)\w*)\s+(?:(?:me|nos|le|les)\s+)?(?:(?:al|a|en|into|to|in)\s+(?:el\s+)?(?:idioma\s+)?[a-z]+\s*:?\s+)?(?:(?:me|nos)\s+)?(?:todo\s+)?(?:lo\s+que|que|what|everything\s+(?:that\s+)?)(?![a-z])/;
+// The moment must belong to that object: its time cue comes before any
+// other clause («traduce al inglés todo lo que dicen en la clase y dime qué
+// pasa en el minuto 30» translates the whole speech and asks about a moment).
+const MOMENT_TIME_CUE_RE = /\b(?:minutos?|min|hora|horas|segundos?|minutes?|hours?|seconds?)\b|\b\d{1,2}:\d{2}\b/;
+// A new request after a comma («…, dime qué pasa en el minuto 30») or an
+// opening «¿» / «¡» ends the object too.
+const MOMENT_CLAUSE_BREAK_RE = /[;.?!¿¡]|,\s*(?:dime|dinos|decime|cuentame|explica\w*|resume\w*|quiero|necesito|me\s+(?:dices|explicas|cuentas)|que|como|tell|explain|what)\b|\b(?:y|e|and|pero|but|tambien|ademas|luego|despues|then|also)\b/;
+
+/** The translation asked for is of the moment the turn asks about. Pure; never throws. */
+function translatesTheMoment(goal) {
+  try {
+    const f = foldGoal(goal).replace(NEGATED_TRANSLATE_RE, ' ');
+    const match = MOMENT_TRANSLATION_RE.exec(f);
+    if (!match) return false;
+    const rest = f.slice(match.index + match[0].length);
+    const cue = MOMENT_TIME_CUE_RE.exec(rest);
+    return Boolean(cue) && !MOMENT_CLAUSE_BREAK_RE.test(rest.slice(0, cue.index));
+  } catch (_) { return false; }
+}
+
 function markerSeconds(text) {
   let last = -1;
   for (const match of String(text || '').matchAll(/\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]/g)) {
@@ -571,10 +597,14 @@ function foldGoal(text) {
   return String(text || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
 }
 
+// The whole captured word must be the language: «Alemania» and «Germany» are
+// places, never «alemán».
+const SOURCE_LANGUAGE_WORDS = SOURCE_LANGUAGES.map(language => ({ code: language.code, whole: new RegExp(`^(?:${language.re.source})$`) }));
+
 function sourceLanguageIn(word) {
   const w = String(word || '').trim();
   if (!w || w.length < 4) return null;
-  const hit = SOURCE_LANGUAGES.find(language => language.re.test(w));
+  const hit = SOURCE_LANGUAGE_WORDS.find(language => language.whole.test(w));
   return hit ? hit.code : null;
 }
 
@@ -591,54 +621,255 @@ const SOURCE_COPULA = '(?:esta|es|viene|vienen|va|estan|son|era|eran|estaba|esta
 // subject: any output verb or deliverable in the same SENTENCE claims them
 // («quiero el acta, idioma: inglés»).
 const SOURCE_LANGUAGE_RES = Object.freeze([
-  { re: new RegExp(`\\b${SOURCE_COPULA}\\s+(?:todo\\s+|toda\\s+|completamente\\s+|totalmente\\s+|enteramente\\s+|solo\\s+)?en\\s+(?:idioma\\s+)?([a-z]+)`, 'g') },
+  { re: new RegExp(`\\b${SOURCE_COPULA}\\s+(?:todo\\s+|toda\\s+|todos\\s+|todas\\s+|completamente\\s+|totalmente\\s+|enteramente\\s+|solo\\s+)?en\\s+(?:idioma\\s+)?([a-z]+)`, 'g') },
   { re: /\b(?:idioma|lengua)(?:\s+original)?(?:\s+(?:del?|de\s+la)\s+(?:audio|video|archivo|grabacion|clase|reunion))?(?:\s+es\s+(?:el\s+)?|\s*[:=]\s*|\s+)([a-z]+)/g, label: true },
   { re: new RegExp(`\\b(?:audios?|videos?|grabacion(?:es)?|clases?|reunion(?:es)?|entrevistas?|podcasts?|notas?\\s+de\\s+voz|conferencias?|charlas?|ponencias?|llamadas?)\\s+(?:que\\s+)?${SOURCE_COPULA}\\s+en\\s+(?:idioma\\s+)?([a-z]+)`, 'g') },
-  { re: /\b(?:is|it's|its|spoken|recorded|they\s+speak|speaks|speaking|audio\s+is|video\s+is)\s+in\s+([a-z]+)/g },
+  // «el audio fue en inglés»: «fue» only after the recording itself; after an
+  // event («la reunión de ayer fue en…») it says where or how it went.
+  { re: /\b(?:audios?|videos?|grabacion(?:es)?|podcasts?|notas?\s+de\s+voz)\s+(?:que\s+)?(?:fue|fueron)\s+en\s+(?:idioma\s+)?([a-z]+)/g },
+  // «speak» needs a word before it that is no imperative lead: «the people in
+  // the video speak in English», never «speak in English please», «ok, speak
+  // in…» or «…and speak in Spanish to me» (the reply's language). «are / was /
+  // were» only after a recording: «the video was in Germany» is a place.
+  { re: /\b(?:is|it's|its|spoken|recorded|they\s+speak|(?<=[a-z]\s)(?<!\b(?:to|i|you|we|will|can|could|should|must|cannot|want|need|going|please|ok|okay|then|and|just|now|always|also|pls)\s)speak|speaks|speaking|audio\s+is|video\s+is|(?:recordings?|audios?|videos?|clips?|files?)\s+(?:are|were|was))\s+(?:all\s+|entirely\s+|mostly\s+|actually\s+|really\s+)?in\s+([a-z]+)/g },
   { re: /\b(?:language|lang)\s*(?:is|:|=)\s*([a-z]+)/g, label: true },
 ]);
 // An output verb or deliverable noun earlier in the same clause makes the
 // language the output's («dame el resumen en idioma inglés», «the summary is
-// in English»). A relative «que» in between re-attaches the copula to the
-// recording («resume la clase que está en inglés» → the class IS in English).
+// in English»). A relative «que» / «donde» in between re-attaches the copula
+// to the recording («resume la clase que está en inglés» → the class IS in
+// English; «dame la transcripción del video donde hablan en inglés»).
 const OUTPUT_GOVERNOR_RE = /\b(?:res[uú]m\w*|resumen\w*|actas?|minutas?|puntos?\s+clave|ideas?\s+(?:principales|clave)|dame|damelo|damela|pasame|pasamelo|pasamela|hazme|escrib\w*|redact\w*|traduc\w*|tradu\w*|subtitul\w*|srt|vtt|apuntes?|esquema|informe|reporte|summar\w*|translat\w*|subtitles?|captions?|notes|minutes|write|give\s+me)\b/;
-const CLAUSE_BREAK_RE = /[,;:.!?¿¡\n()]/;
-const SENTENCE_BREAK_RE = /[;.!?¿¡\n]/;
+
+// Where each clause and sentence of a text starts and ends, computed once
+// per text: a long pasted turn with many statements is scanned once, not
+// once per statement.
+const CLAUSE_BREAK_CHARS = new Set([...',;:.!?¿¡\n()']);
+const SENTENCE_BREAK_CHARS = new Set([...';.!?¿¡\n']);
+let breaksMemo = { text: null };
+function breaksOf(f) {
+  if (breaksMemo.text === f) return breaksMemo;
+  const clauseStart = new Int32Array(f.length + 1);
+  const sentenceStart = new Int32Array(f.length + 1);
+  const sentenceEnd = new Int32Array(f.length + 1);
+  let clause = 0;
+  let sentence = 0;
+  for (let i = 0; i <= f.length; i++) {
+    clauseStart[i] = clause;
+    sentenceStart[i] = sentence;
+    if (i < f.length && CLAUSE_BREAK_CHARS.has(f[i])) clause = i + 1;
+    if (i < f.length && SENTENCE_BREAK_CHARS.has(f[i])) sentence = i + 1;
+  }
+  let end = f.length;
+  for (let i = f.length; i >= 0; i--) {
+    if (i < f.length && SENTENCE_BREAK_CHARS.has(f[i])) end = i;
+    sentenceEnd[i] = end;
+  }
+  breaksMemo = { text: f, clauseStart, sentenceStart, sentenceEnd };
+  return breaksMemo;
+}
 
 function languageIsOutputs(f, index, { sentence = false } = {}) {
-  const breakRe = sentence ? SENTENCE_BREAK_RE : CLAUSE_BREAK_RE;
-  let from = index;
-  while (from > 0 && !breakRe.test(f[from - 1])) from -= 1;
-  let to = index;
-  if (sentence) while (to < f.length && !SENTENCE_BREAK_RE.test(f[to])) to += 1;
+  const breaks = breaksOf(f);
+  const from = sentence ? breaks.sentenceStart[index] : breaks.clauseStart[index];
   const before = f.slice(from, index);
-  if (sentence && OUTPUT_GOVERNOR_RE.test(f.slice(index, to))) return true;
+  if (sentence && OUTPUT_GOVERNOR_RE.test(f.slice(index, breaks.sentenceEnd[index]))) return true;
   const governor = OUTPUT_GOVERNOR_RE.exec(before);
   if (!governor) return false;
-  // «resume la clase que está en inglés»: the relative clause describes the recording.
-  return !/\b(?:que|which|that)\b/.test(before.slice(governor.index + governor[0].length));
+  // «resume la clase que / donde está en inglés»: the relative clause describes the recording.
+  return !/\b(?:que|donde|which|that|where)\b/.test(before.slice(governor.index + governor[0].length));
 }
 
 function clauseBefore(f, index) {
-  let from = index;
-  while (from > 0 && !CLAUSE_BREAK_RE.test(f[from - 1])) from -= 1;
-  return f.slice(from, index + 1);
+  return f.slice(breaksOf(f).clauseStart[index], index + 1);
 }
 
-/** `rejectSubject`: a regex; a statement whose clause names that subject («el documento está en inglés») is ignored. */
-function languageFrom(text, { rejectSubject = null } = {}) {
+// The clause before the one at `index` («te mandé el audio, y está en inglés»).
+function previousClause(f, index) {
+  const { clauseStart } = breaksOf(f);
+  const start = clauseStart[index];
+  return start > 0 ? f.slice(clauseStart[start - 1], start - 1) : '';
+}
+
+// The statement's own subject starts after the last conjunction of its
+// clause: «la transcripción está en inglés pero el audio es en español»,
+// «quiero la transcripción porque / ya que el audio está en inglés».
+const SUBJECT_CONJUNCTION_RE = /\b(?:pero|y|aunque|mientras|sino|porque|pues|ya\s+que|cuando|siendo\s+que|but|and|while|whereas|because|since|when)\b/g;
+// «te mandé el audio y está en inglés»: the statement continues the subject before it.
+const COORDINATING_RE = /^(?:y|pero|and|but)$/;
+// «la transcripción está en inglés pero es en español»: a contrast.
+const CONTRAST_RE = /^(?:pero|aunque|mientras|sino|but|while|whereas)$/;
+// «la transcripción del video porque está en inglés»: a reason.
+const CAUSAL_RE = /^(?:porque|pues|ya que|because|since)$/;
+// Its head noun: the output (what we gave back) or the recording itself.
+const SUBJECT_NOUN_RE = /\b(?:(transcripci\w*|transcrit\w*|transcript\w*|subtitul\w*|subtitles?|captions?|texto|srt|vtt|resultados?|output)|audios?|videos?|grabacion\w*|clases?|reunion\w*|entrevistas?|podcasts?|notas?\s+de\s+voz|conferencias?|charlas?|ponencias?|llamadas?|archivos?|recordings?|meetings?|lectures?)\b/g;
+const OUTPUT_REFERENCE_RE = /\blo\s+que\s+(?:me\s+|nos\s+)?(?:diste|pasaste|mandaste|enviaste|entregaste|devolviste|transcribiste|trascribiste|sacaste|generaste|hiciste|escribiste|salio)\b/;
+// A statement whose match itself starts with the recording («el audio es en…», «audio is in…»).
+const RECORDING_MATCH_RE = /^(?:audios?|videos?|grabacion\w*|clases?|reunion\w*|entrevistas?|podcasts?|notas?\s+de\s+voz|conferencias?|charlas?|ponencias?|llamadas?)\b/;
+// A clause that starts with what we gave back and says something about it
+// («la transcripción no sirve…», «the transcript is wrong…», «lo que me
+// diste está mal…»); never one that only asks for it («la transcripción la
+// necesito hoy porque…», «transcript please because…», «subtitula el video
+// ya que…»).
+const OUTPUT_CLAUSE_LEAD = '^\\s*(?:(?:y|pero|ademas|and|but|also)\\s+)?(?:(?:creo|veo|noto|parece|me\\s+parece|i\\s+think|i\\s+see)\\s+(?:que|that)\\s+)?';
+const OUTPUT_PREDICATE = '.*?\\b(?:sirv\\w*|funciona\\w*|(?<!\\b(?:de|del|en|a|al|para|con|por|sobre)\\s)esta\\w*|es|son|era|eran|fue|fueron|sali\\w*|qued\\w*|tiene\\w*|vino|vinieron|viene\\w*|parece\\w*|contiene\\w*|trae\\w*|suena\\w*|se\\s+(?:ve|ven|lee|leen|entiende\\w*)'
+  + '|is|isn\\S*|are|aren\\S*|was|wasn\\S*|were|weren\\S*|came|comes|looks?|seems?|has|have|does|doesn\\S*|did|didn\\S*)\\b';
+const OUTPUT_CLAUSE_START_RE = new RegExp(`${OUTPUT_CLAUSE_LEAD}(?:(?:la|el|los|las|esta|este|esa|ese|tu|mi|the|this|that|your|my)\\s+)?`
+  + `(?:transcripci\\w*|transcrit\\w*|transcript\\w*|subtitul(?:os?|ad[oa]s?|acion\\w*)|subtitles?|captions?|texto|resultados?|output)\\b${OUTPUT_PREDICATE}`);
+const OUTPUT_REFERENCE_START_RE = new RegExp(`${OUTPUT_CLAUSE_LEAD}${OUTPUT_REFERENCE_RE.source.replace(/^\\b/, '')}${OUTPUT_PREDICATE}`);
+// A language named in the output's statement before a contrast («la
+// transcripción salió en inglés pero es en español»).
+const NAMED_LANGUAGE_RE = /\b(?:en|in)\s+(?:idioma\s+)?([a-z]+)/g;
+// A second language right after the first: a bilingual recording.
+const PAIRED_LANGUAGE_RE = /^\s*(?:,\s*|\/\s*)?(?:(?:y|e|o|u|and|or|con|with|mas|plus)\s+)?(?:(?:en|in|un\s+poco\s+(?:de|en)|algo\s+(?:de|en)|partes?\s+en)\s+)?([a-z]+)/;
+// Words that are no subject of their own after the conjunction («porque
+// todo / ya / eso está en inglés»).
+const SUBJECTLESS_FILLER_RE = /\b(?:it|eso|esto|todo|toda|everything|ya|ahora|now|tambien|also|igual|todavia|aun|still|solo|only)\b/g;
+// Only people speak: «… porque hablan en inglés» is about the recording.
+const SPEECH_STATEMENT_RE = /^(?:habl\w*|grabad\w*|narrad\w*|dictad\w*|dicho|dicha|spoken|recorded|they\s+speak|speak|speaks|speaking)\b/;
+// A statement whose verb is speaking («hablan en inglés», «speaks in English»).
+const SPEECH_PREDICATE_RE = /\b(?:habl\w*|speak\w*|spoken)\b/;
+// …or recording: only a recording is recorded («mi clase fue grabada en inglés»).
+const RECORDED_PREDICATE_RE = /\b(?:grabad\w*|recorded)\b/;
+
+/**
+ * What a language statement describes (`head`) and its own subject (after
+ * the last conjunction). The head is 'output' when the statement is about
+ * what we gave back («la transcripción está en inglés», «los subtítulos que
+ * me diste están en inglés», «lo que transcribiste está en inglés»),
+ * 'recording' when it names the recording, else null. It is the first noun of
+ * the subject; before a relative «que» / «donde», its antecedent («la
+ * transcripción del audio que está en inglés», «la transcripción del video
+ * donde hablan en inglés» → the recording). A «que» with no noun before it
+ * introduces the statement («creo que / me parece que la transcripción está
+ * en inglés»): the head is the first noun after it. A statement with no
+ * subject of its own after the conjunction keeps the clause's subject when
+ * the clause says something about the output («la transcripción no sirve
+ * porque está en inglés»; never «necesito la transcripción pues está en
+ * inglés», «la transcripción la necesito hoy porque está en inglés», nor
+ * «… porque hablan en inglés»: only people speak); then `inherited` is set.
+ * `before` is the clause before that conjunction (the previous clause when
+ * the conjunction starts this one: `continues`), `conjunction` the word.
+ */
+function subjectOf(f, index) {
+  let subject = clauseBefore(f, index).slice(0, -1);
+  let cut = 0;
+  let conjunction = '';
+  for (const match of subject.matchAll(SUBJECT_CONJUNCTION_RE)) { cut = match.index + match[0].length; conjunction = match[0]; }
+  let before = subject.slice(0, cut - conjunction.length);
+  // «la transcripción no sirve, porque está en inglés»: a clause that starts
+  // with the conjunction continues the clause before it.
+  const continues = Boolean(conjunction) && !before.trim() && Boolean(previousClause(f, index).trim());
+  if (continues) before = `${previousClause(f, index)} `;
+  subject = subject.slice(cut);
+  const base = { subject, before, continues, conjunction: conjunction.replace(/\s+/g, ' ') };
+  if (OUTPUT_REFERENCE_RE.test(subject)) return { ...base, head: 'output' };
+  if (cut && !/\S/.test(subject.replace(SUBJECTLESS_FILLER_RE, '')) && !SPEECH_STATEMENT_RE.test(f.slice(index))
+    && (OUTPUT_CLAUSE_START_RE.test(before) || OUTPUT_REFERENCE_START_RE.test(before))) return { ...base, head: 'output', inherited: true };
+  const relative = [...subject.matchAll(/\b(?:que|donde|which|that|where)\b/g)].pop() || null;
+  let nouns = [...(relative ? subject.slice(0, relative.index) : subject).matchAll(SUBJECT_NOUN_RE)];
+  let head = relative ? nouns[nouns.length - 1] : nouns[0];
+  if (relative && !nouns.length) {
+    nouns = [...subject.slice(relative.index + relative[0].length).matchAll(SUBJECT_NOUN_RE)];
+    head = nouns[0];
+  }
+  return { ...base, head: !head ? null : head[1] ? 'output' : 'recording' };
+}
+
+// «no sé, pero está en inglés», «ya lo subí y está en inglés»: a short
+// clause that names nothing («el examen es mañana, y…» does) leaves the
+// statement with no subject of its own.
+function namesNothing(text) {
+  const value = String(text || '').trim();
+  return Boolean(value) && value.split(/\s+/).length <= 6 && !NOUN_PHRASE_RE.test(value);
+}
+
+// The subject grammars below are bounded; a clause far longer than any of
+// them is never tested (no pathological backtracking on pasted text).
+function fitsSubject(re, text) {
+  const value = String(text || '');
+  if (!re || value.length > 1000) return false;
+  return value.trim().split(/\s+/).length <= 64 && re.test(value);
+}
+
+/**
+ * `acceptSubject`: a regex the text before the statement must match («está en
+ * inglés», «todo está en inglés»); any other subject («el examen es en
+ * inglés») is ignored. `acceptSpeechSubject` replaces it before «habla(n) en
+ * …» (only people speak: «en el video mi jefe habla en inglés»),
+ * `acceptRecordedSubject` before «grabado en…» (only a recording is
+ * recorded: «mi clase fue grabada en inglés»), and
+ * `acceptClause` judges the clause a subjectless statement continues after
+ * «y / pero» («te mandé el audio y está en inglés»); both default to
+ * `acceptSubject`. `acceptCause` judges the clause a subjectless reason
+ * follows («la transcripción del video porque está en inglés») and
+ * `acceptFrame` (`{ frame, subject, speaker }`) a clause before a comma that
+ * only names the recording, with the statement's own subject after it («en
+ * el audio, el profesor habla en inglés»); none by default. A language
+ * paired with another («está en inglés y español») is no single language:
+ * none is forced. Statements that disagree («está en inglés pero el audio
+ * es en español») resolve to the one about the recording; with no single
+ * such language, none is forced (the transcriber detects it).
+ */
+function languageFrom(text, { acceptSubject = null, acceptSpeechSubject = null, acceptRecordedSubject = null, acceptClause = null, acceptCause = null,
+  acceptFrame = null } = {}) {
   const f = foldGoal(text);
-  let best = null;
+  const found = [];
   for (const { re, label } of SOURCE_LANGUAGE_RES) {
     for (const match of f.matchAll(re)) {
       if (NEGATION_BEFORE_RE.test(f.slice(Math.max(0, match.index - 14), match.index))) continue;
       if (languageIsOutputs(f, match.index, { sentence: Boolean(label) })) continue;
-      if (rejectSubject && rejectSubject.test(clauseBefore(f, match.index))) continue;
+      const { head, subject, before, conjunction, inherited, continues } = subjectOf(f, match.index);
       const code = sourceLanguageIn(match[1]);
-      if (code && (best == null || match.index < best.index)) best = { code, index: match.index };
+      // «la transcripción salió en inglés pero es en español»: the contrast
+      // is the recording's own language, not the output's.
+      const contrast = head === 'output' && inherited && CONTRAST_RE.test(conjunction) && code
+        && [...before.matchAll(NAMED_LANGUAGE_RE)].some(named => { const other = sourceLanguageIn(named[1]); return other && other !== code; });
+      if (head === 'output' && !contrast) continue;
+      const lead = RECORDING_MATCH_RE.exec(match[0]);
+      const recording = head === 'recording' || Boolean(lead) || Boolean(contrast);
+      // «… pero el audio es en español»: a statement about the recording is
+      // judged by its own subject, after the conjunction. When the statement
+      // itself starts with the recording («the second audio is in English»),
+      // its subject runs through that noun. A statement with no subject of
+      // its own after «y / pero» continues the clause before it («te mandé
+      // el audio y está en inglés», «el audio 1 y el 2 están en inglés»).
+      // The noun the statement starts with is part of its subject («la otra
+      // llamada es en inglés» is judged as a whole, never as «la otra»).
+      const tail = lead ? `${lead[0]} ` : '';
+      const clause = `${clauseBefore(f, match.index).slice(0, -1)}${tail}`;
+      const own = `${subject}${tail}`;
+      const accept = (acceptRecordedSubject && RECORDED_PREDICATE_RE.test(match[0]) && acceptRecordedSubject)
+        || (acceptSpeechSubject && SPEECH_PREDICATE_RE.test(match[0]) && acceptSpeechSubject) || acceptSubject;
+      // «…, pero está en inglés» is judged with the clause it continues,
+      // never as a bare «pero» («la música es buena, pero está en inglés»).
+      // Only a comma frames the statement: «el audio nuevo. Mi profesor habla
+      // en inglés» is two sentences, and the second one is about the person.
+      const clauseStartAt = breaksOf(f).clauseStart[match.index];
+      const frame = acceptFrame && !conjunction && f[clauseStartAt - 1] === ',' ? previousClause(f, match.index) : '';
+      const speaking = SPEECH_PREDICATE_RE.test(match[0]) || RECORDED_PREDICATE_RE.test(match[0]);
+      if (acceptSubject && !(!continues && fitsSubject(accept, clause))
+        && !(frame && fitsSubject(acceptFrame.frame, `${frame} `) && fitsSubject(speaking ? acceptFrame.speaker : acceptFrame.subject, clause))
+        && !(recording && fitsSubject(accept, own))
+        && !(COORDINATING_RE.test(conjunction) && fitsSubject(accept, own)
+          && (fitsSubject(acceptClause || acceptSubject, before) || namesNothing(before)))
+        && !(CAUSAL_RE.test(conjunction) && fitsSubject(accept, own) && fitsSubject(acceptCause, before))) continue;
+      if (code) {
+        // «está en inglés y (en) español», «in English and Spanish».
+        const pair = PAIRED_LANGUAGE_RE.exec(f.slice(match.index + match[0].length));
+        const other = pair ? sourceLanguageIn(pair[1]) : null;
+        if (other && other !== code) return null;
+        found.push({ code, index: match.index, recording });
+      }
     }
   }
-  if (!best) return null;
+  if (!found.length) return null;
+  let candidates = found;
+  if (new Set(found.map(item => item.code)).size > 1) {
+    candidates = found.filter(item => item.recording);
+    if (new Set(candidates.map(item => item.code)).size !== 1) return null;
+  }
+  const best = candidates.reduce((first, item) => (item.index < first.index ? item : first));
   // «traduce el audio que está en inglés» names one language for both sides:
   // it is the requested output, never a forced source language.
   let target = null;
@@ -698,7 +929,8 @@ function splitTermList(tail) {
   const out = [];
   const items = String(tail || '').split(/\s*(?:,|;|\/|\s+y\s+|\s+e\s+|\s+and\s+)\s*/u);
   for (let index = 0; index < items.length; index++) {
-    let item = items[index].trim().replace(/^[«"“'(]+|[»"”')]+$/g, '').replace(LEADING_ARTICLE_RE, '').trim();
+    // «los nombres son: Pérez y Quispe»: the separator after the verb is not part of the term.
+    let item = items[index].trim().replace(/^[\s:;=,\-–—«"“'(]+|[»"”')]+$/g, '').replace(LEADING_ARTICLE_RE, '').trim();
     if (!item) continue;
     // The list ends where the instruction resumes («…, y transcribe literal»).
     if (LIST_STOP_RE.test(item) && index > 0) break;
@@ -727,6 +959,11 @@ function termsFrom(text, { explicitOnly = false } = {}) {
   return terms;
 }
 
+/** A turn that asks to re-transcribe a stretch (or the whole) of a ready transcript. Never throws. */
+function isRefineTurn(text) {
+  try { return detectMediaFollowupIntent(text)?.kind === 'refine'; } catch (_) { return false; }
+}
+
 function turnText(turn) {
   if (typeof turn === 'string') return turn;
   if (turn && typeof turn === 'object' && typeof turn.content === 'string') return turn.content;
@@ -742,7 +979,9 @@ function turnText(turn) {
  * turns sent since the recordings arrived (loadRecentUserTurns `since`), or
  * `{ historyTermsOnly: true }` when it cannot tell — then language, speaker
  * count and «literal» come from the current request alone (a stale «está en
- * inglés» forced on a Spanish class makes Whisper translate it).
+ * inglés» forced on a Spanish class makes Whisper translate it). An earlier
+ * turn lends its language only under the chat rule
+ * (extractChatTranscriptionHints): never «el examen es en inglés».
  * Pure; never throws.
  */
 function extractTranscriptionHints(goal, recentTurns = [], { historyTermsOnly = false } = {}) {
@@ -754,7 +993,15 @@ function extractTranscriptionHints(goal, recentTurns = [], { historyTermsOnly = 
     const rawTerms = [];
     turns.forEach(({ text, current }) => {
       const decides = current || !historyTermsOnly;
-      if (decides && out.language == null) { const language = languageFrom(text); if (language) out.language = language; }
+      // An earlier turn is held to the chat rule: «el examen es en inglés»
+      // or «mi jefe habla en inglés» said before is not about the recording.
+      // An earlier refine's language («revisa del 12 al 15, está en inglés»)
+      // was about its window: a later «reintenta» never inherits it.
+      if (decides && out.language == null) {
+        const language = current ? languageFrom(text)
+          : (isRefineTurn(text) ? null : (extractChatTranscriptionHints(text).language || null));
+        if (language) out.language = language;
+      }
       if (decides && out.speakers == null) { const speakers = speakersFrom(text); if (speakers) out.speakers = speakers; }
       if (decides && out.verbatim == null) { const verbatim = verbatimFrom(text); if (verbatim != null) out.verbatim = verbatim; }
       rawTerms.push(...termsFrom(text));
@@ -770,17 +1017,180 @@ function extractTranscriptionHints(goal, recentTurns = [], { historyTermsOnly = 
 }
 
 // A plain chat turn (not the media runner) talks about a recording.
-const RECORDING_TALK_RE = /\b(?:audios?|grabaci\w*|transcri\w*|trascri\w*|videos?|notas?\s+de\s+voz|podcasts?|entrevistas?|reunion(?:es)?|clases?|conferencias?|charlas?|ponencias?|llamadas?|subtitul\w*|hablantes?|minutos?)\b/;
-// «el documento está en inglés» describes something else, not a recording.
-const NON_MEDIA_SUBJECT_RE = /\b(?:documento|pdf|word|libro|articulo|texto|pagina|correo|email|mensaje|codigo|presentacion|diapositivas?|excel|tabla|web|sitio|app|aplicacion|interfaz|teclado|telefono|celular|menu|pelicula|serie|cancion)\b/;
+const RECORDING_TALK_RE = /\b(?:audios?|grabaci\w*|transcri\w*|trascri\w*|videos?|notas?\s+de\s+voz|podcasts?|entrevistas?|reunion(?:es)?|clases?|conferencias?|charlas?|ponencias?|llamadas?|subtitul\w*|hablantes?|minutos?|recordings?)\b/;
+// What may come before a language statement a plain chat turn forwards: a
+// connective or lead-in, then nothing of its own («está en inglés», «ojo que
+// todo está en inglés») or, in a turn about a recording, the recording itself
+// («la clase de hoy está en inglés», «el audio fue grabado en inglés», «los
+// dos audios / el segundo audio / el audio nuevo / casi todo el audio / la
+// mayor parte del audio están en inglés», «el audio que te acabo de mandar /
+// de la reunión del lunes / en sí está en inglés», «tengo un audio que está
+// en inglés», «olvidé decirte que el audio está en inglés», «the audio of the
+// meeting is in English»), someone or something heard in it («la voz / la
+// conversación / la profesora del audio…», «en todos los audios hablan…»,
+// «el que habla en el audio…», «lo que dicen en el video…») or, before
+// «habla(n) en…», anyone placed in it («en el video mi jefe habla en
+// inglés»: only people speak).
+// «el documento / el examen está en inglés», «mi profesor habla en inglés»,
+// «el examen de la clase es en inglés», «la música / el título del video
+// está en inglés», «el audio dice que el examen es en inglés» describe
+// something else, never the queued recording.
+const STATEMENT_LEAD = '(?:(?:y|pero|ojo|ah|bueno|por\\s+cierto|igual|oh|oye|mira|ok|okay|vale|ademas|tambien|perdon|disculpa|hola|gracias|and|but|btw|fyi|also|sorry|hi|hey|thanks)\\s+)?'
+  + '(?:(?:creo|veo|parece|me\\s+parece|es|ojo|ya\\s+te\\s+dije|te\\s+aviso)\\s+que\\s+)?(?:(?:todo|toda|it|everything)\\s+)?';
+const SUBJECTLESS_STATEMENT_RE = new RegExp(`^\\s*${STATEMENT_LEAD}$`);
+// Always the recording itself, never an event («la clase», «las reuniones»).
+const MEDIA_NOUN = '(?:audios?|videos?|grabacion\\w*|podcasts?|notas?\\s+de\\s+voz|recordings?|archivos?\\s+de\\s+(?:audio|video)s?)';
+// An event that may have been recorded; also a class, a meeting or a call
+// still to come, so it never takes the long modifiers a media noun does.
+const EVENT_NOUN = '(?:clases?|reunion\\w*|entrevistas?|conferencias?|charlas?|ponencias?|llamadas?)';
+const DETERMINER = '(?:el|la|los|las|un|una|unos|unas|este|esta|estos|estas|ese|esa|esos|esas|aquel|aquella|aquellos|aquellas|mi|mis|tu|tus|su|sus|nuestr[oa]s?|the|a|an|this|these|those|my|your|our)';
+// Someone heard in the recording («el profesor», «la chica», «the speaker»).
+const SPEAKER_NOUN = '(?:profesor\\w*|profes?|maestr[oa]s?|docentes?|ponentes?|expositor\\w*|conferencista\\w*|entrevistad\\w*|locutor\\w*|narrador\\w*|hablantes?|personas?|gente|senor\\w*|chic[oa]s?|hombres?|mujer\\w*|alumn[oa]s?|estudiantes?|participantes?|invitad[oa]s?|doctor\\w*|speakers?|teachers?|people|guys?|man|men|woman|women)';
+// What is heard in it: its speech, the event it recorded, or most of it.
+// Never a part that is not speech («la música / el título / las diapositivas
+// del video») nor a part only («la primera parte / el resto del audio»: a
+// whole-file language would make the transcriber translate the other part).
+const HEARD_NOUN = `(?:${SPEAKER_NOUN}|${EVENT_NOUN}|voz|voces|voices?|conversaci\\w*|dialog\\w*|narraci\\w*|discursos?|sermon\\w*|platicas?|locuci\\w*|contenido|idioma|lengua`
+  + '|mayoria|mayor\\s+parte|gran\\s+parte|speech|conversations?|dialogues?)';
+// One word of the subject phrase; a conjunction starts another statement
+// («el audio que te mandé está bien pero mi jefe habla en inglés»).
+const PHRASE_WORD = '(?!(?:pero|y|e|o|u|aunque|sino|porque|pues|mientras|cuando|but|and|or|because|since|while|whereas|when)\\b)\\S+\\s+';
+// One word of a complement or a relative clause: a second «que» starts what
+// someone says («el audio de mi jefe dice que todos hablan en inglés»).
+const COMPLEMENT_WORD = '(?!(?:pero|y|e|o|u|aunque|sino|porque|pues|mientras|cuando|que|donde|but|and|or|because|since|while|whereas|when|which|that|where)\\b)\\S+\\s+';
+// «el audio dice que…», «el video explica que…»: what the recording or
+// someone says, never the recording's language.
+const REPORTING_VERB = '(?:dice|dicen|decia|decian|dijo|dijeron|menciona\\w*|explica\\w*|comenta\\w*|cuenta|cuentan|conto|contaron|afirma\\w*|senala\\w*|indica\\w*|aclara\\w*|says|said|mentions?|mentioned|explains?|explained|tells?|told)';
+// A lead-in clause («se me olvidó decirte que», «lo que pasa es que»).
+const STATEMENT_LEAD_IN = '(?:(?:\\S+\\s+){1,4}que\\s+|(?:\\S+\\s+){0,5}es\\s+que\\s+)';
+// «tengo un audio que…», «te acabo de mandar el video y…», «es una grabación
+// de 2 horas y…», «here is the audio and…»: the recording introduced.
+const LEAD_VERB = '(?:(?:ahi|aqui|ya)\\s+)?(?:(?:te|les|le|os)\\s+)?(?:(?:acabo|acabamos)\\s+de\\s+)?'
+  + '(?:tengo|tenemos|tienes|hay|mande|mandamos|mando|mandar|paso|pase|pasamos|pasar|envio|envie|enviamos|enviar|subi|subo|subimos|subir|adjunto|adjunte|comparto|comparti|compartir|dejo|deje|grabe|grabamos'
+  + '|es|son|va|van|esta|estan|here\\s+(?:is|are)|here\'?s|i\\s+(?:sent|uploaded|have|recorded|shared)|this\\s+is|these\\s+are)\\s+';
+// «todos los / ambos / casi todo el / todo lo del / la mayor parte del / all
+// the…»: the whole recording, or most of it.
+const QUANT_PREFIX = '(?:(?:casi\\s+)?(?:todo|toda|todos|todas)\\s+(?:lo\\s+(?:del?\\s+)?)?|(?:la\\s+)?(?:mayor\\s+parte|mayoria)\\s+(?:del?\\s+)?|gran\\s+parte\\s+(?:del?\\s+)?'
+  + '|ambos\\s+|ambas\\s+|both\\s+|all\\s+(?:of\\s+)?|most\\s+of\\s+)?';
+// «subtitula / todos los / el segundo / el audio nuevo / número dos / de mi
+// clase de biología del lunes / of the meeting / que te mandé por whatsapp
+// hace un rato / donde hablan… / en el que… / I sent you / en sí / está…»: a
+// media noun takes a modifier on either side, a «de…» complement, a relative
+// clause and an adverb; an event keeps short ones («la clase de hoy», «la
+// reunión que grabé»), never «mi próxima clase» or «la reunión que tengo con
+// mi jefe», and none at all after a lead-in («te comento que la clase…»,
+// never «te comento que mi clase de mañana…» or «el audio menciona que la
+// clase…»). A bare determiner is enough when the statement itself starts
+// with the recording («pero el audio es en español»).
+const RECORDING_HEAD = `(?:(?:tran?scrib\\w*|subtitul\\w*|resum\\w*|resume|analiz\\w*|revis\\w*)\\s+)?${QUANT_PREFIX}(?:${DETERMINER}\\s+)?`;
+const NUMBER_WORD = '(?:\\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|one|two|three|four|five)';
+const RELATIVE = '(?:que|which|that|donde|where|en\\s+(?:el|la|los|las)\\s+que|in\\s+which)';
+const MEDIA_ADVERB = '(?:(?:en\\s+realidad|en\\s+si|por\\s+cierto|la\\s+verdad|de\\s+hecho|tambien|igual|mismo|completo|entero|ya\\s+te\\s+dije\\s+que|te\\s+aviso\\s+que|actually|also|too|itself)\\s+)?';
+const MEDIA_CORE = `(?:${PHRASE_WORD})?${MEDIA_NOUN}\\s+(?:${PHRASE_WORD})?(?:${NUMBER_WORD}\\s+)?`
+  + `(?:(?:i|we|you|they|he|she)\\s+(?:${COMPLEMENT_WORD}){0,3})?`
+  + `(?:(?:del?|of|from)\\s+(?:${COMPLEMENT_WORD}){1,8})?(?:(?<!\\b${REPORTING_VERB}\\s)${RELATIVE}\\s+(?:${COMPLEMENT_WORD}){0,10})?${MEDIA_ADVERB}`;
+// An event is the recording only with an article or a demonstrative («la
+// clase de hoy», «esa reunión»), never «mi clase del jueves», «todas mis
+// clases» or «en mi clase» (the user's courses), nor one still to come («la
+// clase de mañana», «la reunión que tengo con mi jefe»).
+const EVENT_DETERMINER = '(?:el|la|los|las|este|esta|estos|estas|ese|esa|esos|esas|aquel|aquella|aquellos|aquellas|the|this|these|that|those)';
+const EVENT_HEAD = `(?:(?:tran?scrib\\w*|subtitul\\w*|resum\\w*|resume|analiz\\w*|revis\\w*)\\s+)?(?:(?:en\\s+)?${EVENT_DETERMINER}\\s+)?`;
+const UPCOMING_EVENT = '(?!(?:\\S+\\s+){0,4}?(?:manana|proxim\\w*|siguiente\\w*|venider\\w*|que\\s+viene|que\\s+sigue|que\\s+tengo|que\\s+tendre\\w*|que\\s+habra|next|upcoming|tomorrow)\\b)';
+const EVENT_CORE = `${UPCOMING_EVENT}${EVENT_NOUN}\\s+(?:del?\\s+(?:${COMPLEMENT_WORD}){1,3})?(?:que\\s+(?:${COMPLEMENT_WORD}){0,3})?`;
+const RECORDING_COPULA = '(?:(?:esta|estan|es|son|fue|fueron|estaba|estaban)\\s+)?';
+// «en el audio / en todos los audios / en cada video / en el video que te
+// mandé / in the video…»; the relative clause ends before a determiner (the
+// subject that follows: «en el video que te mandé mi jefe habla…»).
+const IN_RECORDING = `(?:en|in)\\s+(?:${DETERMINER}|(?:todos|todas)\\s+(?:los|las)|ambos|ambas|cada|both|all(?:\\s+the)?|each)\\s+(?:${PHRASE_WORD})?${MEDIA_NOUN}\\s+`
+  + `(?:(?:del?|of|from)\\s+(?:${COMPLEMENT_WORD}){1,3})?(?:(?:que|that|which|i|we|you)\\s+(?:(?!${DETERMINER}\\s)${COMPLEMENT_WORD}){1,4})?`;
+// «… del audio», «… de / en el video», «… in the recording».
+const OF_RECORDING = `(?:del|(?:de|en|in|of|from)\\s+${DETERMINER})\\s+(?:${PHRASE_WORD})?${MEDIA_NOUN}\\s+(?:(?:del?|of|from)\\s+(?:${COMPLEMENT_WORD}){1,3})?`;
+// Someone or something heard in the recording («en el audio el profesor /
+// todo», «la voz / la conversación / las dos personas del audio», «el que
+// habla / lo que dicen / lo que se dice en el video»).
+const HEARD_SUBJECT = `(?:${IN_RECORDING}(?:(?:${DETERMINER}\\s+)?(?:${NUMBER_WORD}\\s+)?${HEARD_NOUN}\\s+|(?:casi\\s+)?(?:todo|toda|todos|todas|everything|everyone)\\s+)?`
+  + `|(?:${DETERMINER}\\s+)?(?:${NUMBER_WORD}\\s+)?${HEARD_NOUN}\\s+${OF_RECORDING}`
+  + `|(?:(?:${DETERMINER}\\s+)?(?:${SPEAKER_NOUN}\\s+)?|lo\\s+|quien(?:es)?\\s+)que\\s+(?:se\\s+)?(?:habl\\w*|dic\\w*|dij\\w*|escuch\\w*|oye\\w*|oi\\w*)\\s+(?:${COMPLEMENT_WORD}){0,3}${IN_RECORDING})`;
+// What is in a recording but never speaks nor is its speech («la música /
+// la canción / el título / la tarea del video»).
+const NOT_HEARD_NOUN = '(?:musica|cancion\\w*|letras?|titulos?|nombres?|tareas?|textos?|diapositivas?|carteles?|letreros?|subtitul\\w*|transcripci\\w*|resumen\\w*'
+  + '|examen\\w*|ensayos?|preguntas?|cuestionarios?|paginas?|links?|enlaces?|portadas?|descripci\\w*|comentarios?|imagen\\w*|fotos?|graficos?|sonidos?|ruidos?'
+  + '|music|songs?|lyrics|titles?|slides?|captions?|subtitles?|questions?|pictures?|images?)';
+const NOT_HEARD_AHEAD = `(?!(?:${DETERMINER}\\s+)?(?:\\S+\\s+)?${NOT_HEARD_NOUN}\\b)`;
+// Anyone placed in the recording, before «habla(n) en…» only.
+const SPEAKING_SUBJECT = `(?:${IN_RECORDING}${NOT_HEARD_AHEAD}(?:${PHRASE_WORD}){0,3}|${NOT_HEARD_AHEAD}(?:${PHRASE_WORD}){1,3}${OF_RECORDING})`;
+// «el segundo / los dos / este también / el de la clase», only in a turn that
+// names the recordings themselves («el audio 1 y el 2 están en inglés»;
+// never «tengo dos clases, la primera es en inglés»).
+const ORDINAL = '(?:primer[oa]?s?|segund[oa]s?|tercer[oa]?s?|cuart[oa]s?|quint[oa]s?|ultim[oa]s?|otr[oa]s?|first|second|third|last|other)';
+const ELLIPTIC_SUBJECT = `(?:(?:${DETERMINER}\\s+)?(?:${NUMBER_WORD}|${ORDINAL})\\s+|(?:este|esta|estos|estas|ese|esa|esos|esas|aquel|aquella|aquellos|aquellas)\\s+`
+  + `|(?:el|la|los|las)\\s+del?\\s+(?:${COMPLEMENT_WORD}){1,3}|(?:the\\s+${ORDINAL}|this|that)\\s+one\\s+)(?:(?:tambien|igual|too|also)\\s+)?`;
+const MEDIA_MENTION_RE = new RegExp(`\\b${MEDIA_NOUN}\\b`);
+// A determiner and a word: a clause that names something.
+const NOUN_PHRASE_RE = new RegExp(`\\b${DETERMINER}\\s+\\S`);
+// A grammar is a few anchored regexes tried in turn (each compiled on first
+// use), never one large alternation.
+const anchored = (body) => new RegExp(`^\\s*${STATEMENT_LEAD}${body}$`);
+const anyOf = (...grammars) => Object.freeze({ test: (text) => grammars.some(grammar => grammar.test(text)) });
+const RECORDING_SUBJECT_RE = anyOf(
+  // the recording itself, after a lead-in or a verb that introduces it or not
+  anchored(`(?:${STATEMENT_LEAD_IN}|${LEAD_VERB})?${RECORDING_HEAD}${MEDIA_CORE}${RECORDING_COPULA}`),
+  // someone or something heard in it
+  anchored(`(?:${STATEMENT_LEAD_IN})?(?:${HEARD_SUBJECT})${RECORDING_COPULA}`),
+  // an event: short after a lead-in, never after what someone says
+  anchored(`${STATEMENT_LEAD_IN}(?<!\\b${REPORTING_VERB}\\s+que\\s)${EVENT_HEAD}${UPCOMING_EVENT}${EVENT_NOUN}\\s+${RECORDING_COPULA}`),
+  anchored(`${EVENT_HEAD}${EVENT_CORE}${RECORDING_COPULA}`),
+  // nothing of its own, or a bare determiner before the recording the statement starts with
+  anchored(RECORDING_HEAD),
+);
+const ELLIPTIC_SUBJECT_RE = anchored(`${ELLIPTIC_SUBJECT}${RECORDING_COPULA}`);
+const SPEAKING_SUBJECT_RE = anchored(`(?:${STATEMENT_LEAD_IN})?(?:${SPEAKING_SUBJECT})${RECORDING_COPULA}`);
+const RECORDED_SUBJECT_RE = anchored(`(?:${STATEMENT_LEAD_IN})?${NOT_HEARD_AHEAD}(?:${PHRASE_WORD}){0,6}${RECORDING_COPULA}`);
+const RECORDING_CLAUSE_EXTRA_RE = anchored(`${RECORDING_HEAD}${MEDIA_CORE}(?:${PHRASE_WORD}){1,3}`);
+// «en el audio, el profesor habla en inglés», «el video que te mandé, la
+// profesora habla en inglés»: a clause that only names the recording frames
+// the statement after it.
+const RECORDING_FRAME_RE = new RegExp(`^\\s*${STATEMENT_LEAD}(?:${IN_RECORDING}|${RECORDING_HEAD}${MEDIA_CORE})$`);
+// …and what that statement's own subject may then be: someone or something
+// heard («el profesor», «la mayoría», «todo»), or anyone before «habla(n)
+// en…»; never «el examen» («el video del curso: el examen es en inglés»).
+const FRAMED_SUBJECT_RE = new RegExp(`^\\s*${STATEMENT_LEAD}(?:(?:${DETERMINER}\\s+)?(?:${NUMBER_WORD}\\s+)?${HEARD_NOUN}\\s+|(?:casi\\s+)?(?:todos|todas|everyone)\\s+)?${RECORDING_COPULA}$`);
+const FRAMED_SPEAKER_RE = new RegExp(`^\\s*${STATEMENT_LEAD}${NOT_HEARD_AHEAD}(?:${PHRASE_WORD}){0,3}${RECORDING_COPULA}$`);
+// «(necesito) la transcripción (del audio / la necesito hoy / en word) porque
+// está en inglés», «transcript please because…»: a transcript asked for, so
+// the reason that follows is about what is transcribed.
+const TRANSCRIPT_REQUEST_RE = new RegExp(`^\\s*${STATEMENT_LEAD}(?:(?:necesito|necesitamos|quiero|queremos|quisiera|dame|pasame|hazme|haz|mandame|enviame|i\\s+need|i\\s+want|give\\s+me|send\\s+me)\\s+(?:${PHRASE_WORD}){0,2})?`
+  + `(?:${DETERMINER}\\s+)?(?:transcripci\\w*|transcrit\\w*|transcript\\w*|subtitul(?:os?|ad[oa]s?|acion\\w*)|subtitles?|captions?)\\s+(?:${PHRASE_WORD}){0,4}$`);
+// The subject grammars for a turn about a recording: before «está / es en…»,
+// before «habla(n) en…», before «grabado en…» (any short subject: «mi clase
+// fue grabada en inglés»), for the clause a subjectless «y / pero …»
+// statement continues (the recording, or a media noun with a short
+// predicate: «el audio está bien pero…», «es un audio de mi clase y…»), and
+// for the transcript request a subjectless reason follows.
+const recordingGrammar = (elliptic) => {
+  const subject = elliptic ? anyOf(RECORDING_SUBJECT_RE, ELLIPTIC_SUBJECT_RE) : RECORDING_SUBJECT_RE;
+  return Object.freeze({
+    acceptSubject: subject,
+    acceptSpeechSubject: anyOf(subject, SPEAKING_SUBJECT_RE),
+    acceptRecordedSubject: anyOf(subject, RECORDED_SUBJECT_RE),
+    acceptClause: anyOf(subject, RECORDING_CLAUSE_EXTRA_RE),
+    acceptCause: TRANSCRIPT_REQUEST_RE,
+    acceptFrame: { frame: RECORDING_FRAME_RE, subject: FRAMED_SUBJECT_RE, speaker: FRAMED_SPEAKER_RE },
+  });
+};
+const RECORDING_GRAMMAR = recordingGrammar(false);
+const RECORDING_GRAMMAR_ELLIPTIC = recordingGrammar(true);
 const SPEAKER_WORD_RE = /\b(?:hablantes?|voces|interlocutor\w*|locutor\w*|speakers?)\b/;
 
 /**
  * Hints a PLAIN chat turn may forward to recordings still in the queue: the
- * full set when the turn is about a recording («el audio está en inglés»,
- * «¿qué dijo en el minuto 5?», «los hablantes son 3»); otherwise only
- * explicit cues — a subject-less or recording-subject language statement
- * («está en inglés»), «los nombres son…» / «se llama…», a speaker count
+ * full set when the turn is a follow-up on a recording; when it only talks
+ * about one («los hablantes son 3», «la clase de hoy está en inglés»), the
+ * same set but a language only from a statement about the recording itself
+ * (never «el examen de la clase es en inglés»); otherwise only
+ * explicit cues — a language statement with no subject of its own («está
+ * en inglés», «todo está en inglés»; never «el examen es en inglés» or «mi
+ * profesor habla en inglés»), «los nombres son…» / «se llama…», a speaker count
  * with its noun, «literal». A quoted fragment of an unrelated turn («escribe
  * un poema sobre "la luna"») is never a term. Pure; never throws.
  */
@@ -789,9 +1199,26 @@ function extractChatTranscriptionHints(prompt) {
     const text = String(prompt || '').slice(0, 4000);
     if (!text.trim()) return { terms: [] };
     const f = foldGoal(text);
-    if (isMediaFollowup(text) || RECORDING_TALK_RE.test(f)) return extractTranscriptionHints(text);
+    if (isMediaFollowup(text)) {
+      // A refine's language («revisa del minuto 12 al 15, está en inglés») is
+      // about its window of a ready transcript: it never reaches the other
+      // recordings still in the queue. Names, speakers and «literal» do.
+      const full = extractTranscriptionHints(text);
+      if (isRefineTurn(text)) delete full.language;
+      return full;
+    }
+    if (RECORDING_TALK_RE.test(f)) {
+      // Names, speakers and «literal» as in a media turn; the language only
+      // from a statement about the recording itself, never from «el examen
+      // de la clase es en inglés» or «mi jefe habla en inglés en las reuniones».
+      const full = extractTranscriptionHints(text);
+      delete full.language;
+      const language = languageFrom(text, MEDIA_MENTION_RE.test(f) ? RECORDING_GRAMMAR_ELLIPTIC : RECORDING_GRAMMAR);
+      if (language) full.language = language;
+      return full;
+    }
     const out = { terms: [] };
-    const language = languageFrom(text, { rejectSubject: NON_MEDIA_SUBJECT_RE });
+    const language = languageFrom(text, { acceptSubject: SUBJECTLESS_STATEMENT_RE });
     if (language) out.language = language;
     if (SPEAKER_WORD_RE.test(f)) { const speakers = speakersFrom(text); if (speakers) out.speakers = speakers; }
     const verbatim = verbatimFrom(text);
@@ -1211,7 +1638,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };

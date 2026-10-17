@@ -734,6 +734,10 @@ async function reprocessIfNeeded(prisma, file) {
 const ANALYSIS_METADATA_KEYS = new Set([
   'originalName', 'filename', 'size', 'analyzedAt', 'extractionSource', 'hierarchical',
 ]);
+// Caches built from the extracted text (document-summarizer's `llmSummary`):
+// a re-analysis means the text may have changed (a refine, a gap retry, an
+// OCR re-run), so they are never carried over; the next request rebuilds them.
+const TEXT_DERIVED_METADATA_KEYS = new Set(['llmSummary']);
 
 async function readForeignMetadata(prisma, fileId) {
   if (typeof prisma?.documentAnalysis?.findUnique !== 'function') return {};
@@ -743,7 +747,7 @@ async function readForeignMetadata(prisma, fileId) {
     if (!previous || typeof previous !== 'object' || Array.isArray(previous)) return {};
     const kept = {};
     for (const [key, value] of Object.entries(previous)) {
-      if (!ANALYSIS_METADATA_KEYS.has(key)) kept[key] = value;
+      if (!ANALYSIS_METADATA_KEYS.has(key) && !TEXT_DERIVED_METADATA_KEYS.has(key)) kept[key] = value;
     }
     return kept;
   } catch {

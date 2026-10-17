@@ -518,7 +518,10 @@ async function upsertMediaTranscriptAnalysis(prisma, { fileId, userId, result, s
     if (existing && existing.userId !== owner) return null;
   }
   const media = mediaTranscriptMetadata(result, { sidecarPath, fileId });
-  const metadata = { ...plainObject(existing && existing.metadata), ...media };
+  // The transcript text was just rewritten: a summary cached from the old
+  // text (document-summarizer's `llmSummary`) would contradict it.
+  const { llmSummary: _staleSummary, ...kept } = plainObject(existing && existing.metadata);
+  const metadata = { ...kept, ...media };
   const language = media.language ? String(media.language).slice(0, 32) : null;
   const charCount = transcriptCharCount(result);
   return prisma.documentAnalysis.upsert({

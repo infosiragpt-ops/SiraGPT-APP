@@ -37,6 +37,53 @@ function getStreamingPdf() {
   return _streamingPdf;
 }
 
+/**
+ * pdf-parse's default page render (render_page in pdf-parse 1.1.4, so the
+ * joined text stays byte-identical) that also records each page's text by
+ * its index.
+ */
+function renderPdfParsePage(pageData, perPage) {
+  return pageData.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false })
+    .then((textContent) => {
+      let lastY;
+      let text = '';
+      for (const item of textContent.items) {
+        if (lastY === item.transform[5] || !lastY) text += item.str;
+        else text += `\n${item.str}`;
+        lastY = item.transform[5];
+      }
+      if (Number.isInteger(pageData.pageIndex)) perPage[pageData.pageIndex] = text;
+      return text;
+    });
+}
+
+/**
+ * pdf-parse plus the text of each page: { data, pages }. A blank line inside
+ * a page (pdf.js turns an empty text item into one) looks exactly like a page
+ * boundary in pdf-parse's joined text, so the stamp check reads the pages
+ * themselves. `pages` is null unless they join into exactly pdf-parse's text
+ * («\n\n» before every page, an unreadable page as «»): a stubbed or
+ * different pdf-parse falls back to the joined text.
+ */
+async function parsePdfWithPages(dataBuffer, parse = pdf) {
+  const perPage = [];
+  const data = await parse(dataBuffer, { pagerender: (pageData) => renderPdfParsePage(pageData, perPage) });
+  const count = Number(data && data.numpages) || 0;
+  let pages = null;
+  if (count > 0 && perPage.length <= count && typeof data.text === 'string') {
+    const list = Array.from({ length: count }, (_, i) => (typeof perPage[i] === 'string' ? perPage[i] : ''));
+    // Compared in place (no second copy of a long text).
+    let pos = 0;
+    const matches = list.every((page) => {
+      if (!data.text.startsWith('\n\n', pos) || !data.text.startsWith(page, pos + 2)) return false;
+      pos += 2 + page.length;
+      return true;
+    });
+    if (matches && pos === data.text.length) pages = list;
+  }
+  return { data, pages };
+}
+
 const STREAMING_PDF_THRESHOLD = Number.parseInt(
   process.env.SIRAGPT_STREAMING_PDF_THRESHOLD || String(MEMORY_SAFE_MAX_BYTES),
   10
@@ -521,12 +568,14 @@ class FileProcessor {
     try {
       const pdftotext = await extractFastpath.tryPdftotext(filePath, options);
       if (pdftotext.used && pdftotext.pageCount > 0) {
-        const plan = this._textLayerPlan(pdftotext.pages, pdftotext.textLayer);
+        const plan = await this._textLayerPlan(pdftotext.pages, pdftotext.textLayer);
         if (plan.kind === 'scanned') {
           // «Has ≥ 20 characters» is not «has text»: stamps / page numbers
           // only, or a broken layer on every page → read the pages.
           console.log(`[fileProcessor] pdftotext: text layer of ${pdftotext.pageCount} page(s) needs OCR (${this._planSummary(plan)}) — full-page OCR`);
-          return this._ocrScannedPdf(filePath, options, { textLayerText: pdftotext.text, pageCount: pdftotext.pageCount });
+          return this._ocrScannedPdf(filePath, options, {
+            textLayerText: pdftotext.text, pageCount: pdftotext.pageCount, layerPages: pdftotext.pages, plan,
+          });
         }
         let mergedText = pdftotext.text;
         let mixedOcr = null;
@@ -599,10 +648,12 @@ class FileProcessor {
           // through to the pdf-parse + hybrid-OCR path below, which detects the
           // missing text layer and runs OCR. Only return early when we actually
           // captured text.
-          const streamPlan = fullText.trim().length > 0 ? this._textLayerPlan(pages) : null;
+          const streamPlan = fullText.trim().length > 0 ? await this._textLayerPlan(pages) : null;
           if (streamPlan && streamPlan.kind === 'scanned') {
             console.log(`[fileProcessor] streaming PDF: text layer of ${streamingResult.pageCount} page(s) needs OCR (${this._planSummary(streamPlan)}) — full-page OCR`);
-            return this._ocrScannedPdf(filePath, options, { textLayerText: fullText, pageCount: streamingResult.pageCount });
+            return this._ocrScannedPdf(filePath, options, {
+              textLayerText: fullText, pageCount: streamingResult.pageCount, layerPages: pages, plan: streamPlan,
+            });
           }
           if (fullText.trim().length > 0) {
             // MIXED PDF: some pages have a text layer, others are scans/photos
@@ -662,13 +713,14 @@ class FileProcessor {
     try {
       if (skipLegacyPdfParse) throw new Error('skip_legacy_pdf_parse_large_pdf');
       const dataBuffer = await fs.readFile(filePath);
-      const data = await pdf(dataBuffer);
+      const { data, pages: parsedPages } = await parsePdfWithPages(dataBuffer);
 
       console.log(`PDF processed (legacy): ${filePath}, extracted text length: ${data.text.length}, pages: ${data.numpages}`);
 
       // If real text exists (not just images), prepend a header. Stamps or
       // page numbers repeated on every page are not real text.
-      const stampOnly = mixedPdf.textLayerCheckEnabled() && mixedPdf.isStampOnlyText(data.text, data.numpages);
+      const stampOnly = mixedPdf.textLayerCheckEnabled() &&
+        mixedPdf.isStampOnlyText(data.text, data.numpages, { pages: parsedPages });
       if (stampOnly) console.log(`[fileProcessor] pdf-parse: text layer is only stamps/page numbers — running OCR`);
       if (data.text.trim().length > 100 && !stampOnly) {
         const header = `PDF document — ${data.numpages} page(s), ${data.text.length} characters extracted\n---\n`;
@@ -697,14 +749,16 @@ class FileProcessor {
    * Text-layer OCR plan for a page list ({ page, text }): which pages need
    * OCR (short, garbled, stamp-only) and whether the document is really a
    * scan. SIRAGPT_PDF_TEXT_LAYER_CHECK=0 keeps the old length-only test.
+   * Async: the plan yields to the event loop (a streamed 2000-page book
+   * must not freeze the web process while it is scored).
    */
-  _textLayerPlan(pages, precomputed = null) {
+  async _textLayerPlan(pages, precomputed = null) {
     if (!mixedPdf.textLayerCheckEnabled()) {
       const low = mixedPdf.findLowTextPages(pages);
       return { kind: mixedPdf.isMixedPdf(pages) ? 'mixed' : 'text', ocrPages: low, reasons: {}, counts: {}, legacy: true };
     }
     if (precomputed && Array.isArray(precomputed.ocrPages)) return precomputed;
-    return mixedPdf.planTextLayerOcr(pages);
+    return mixedPdf.planTextLayerOcrAsync(pages);
   }
 
   _planSummary(plan) {
@@ -749,9 +803,13 @@ class FileProcessor {
   /**
    * Full-page OCR of a scanned PDF (every page through the OCR ladder with
    * per-page budgets). When OCR reads nothing but the PDF had a (stamp-only
-   * or broken) text layer, that layer is returned instead of losing it.
+   * or broken) text layer, that layer is returned instead of losing it; when
+   * OCR stops early or leaves pages unread, the layer of every page it did
+   * not read is spliced back in page order (`layerPages`: [{ page, text }],
+   * `plan`: the text-layer plan — its per-page reasons and the pages whose
+   * layer is only stamps, which are not spliced).
    */
-  async _ocrScannedPdf(filePath, options = {}, { textLayerText = '', pageCount = 0 } = {}) {
+  async _ocrScannedPdf(filePath, options = {}, { textLayerText = '', pageCount = 0, layerPages = null, plan = null } = {}) {
     try {
       const result = await ocrEngine.extractFromPdfImages(filePath, {
         streaming: true,
@@ -762,20 +820,54 @@ class FileProcessor {
         const ocr = { ...(result.ocr || {}), status: 'failed', provider: result.ocr?.provider || null, textLayerKept: true };
         return options.detailed ? { extractedText, ocr } : extractedText;
       }
-      const provenance = result.text ? this._ocrProvenanceSuffix(result.ocr) : '';
-      const header = `PDF OCR document — ${result.ocr?.pages || 0} page(s) processed, ` +
-        `${result.ocr?.pagesWithText || 0} page(s) with readable text, ` +
-        `${String(result.text || '').length} characters` +
-        (result.ocr?.partial ? ` (partial — ${result.ocr.partialReason || 'limit reached'})` : '') +
+      let text = result.text;
+      let ocr = result.ocr;
+      const spliced = result.text ? this._spliceUnreadLayerPages(result, layerPages, pageCount, plan) : null;
+      if (spliced) {
+        text = spliced.text;
+        ocr = { ...(result.ocr || {}), textLayerPages: spliced.splicedPages.length, textLayerPageList: spliced.splicedPages.slice(0, 200) };
+        console.log(`[fileProcessor] scanned PDF: OCR did not read ${spliced.splicedPages.length} page(s) — keeping their embedded text layer`);
+      }
+      const provenance = text ? this._ocrProvenanceSuffix(ocr) : '';
+      const header = `PDF OCR document — ${ocr?.pages || 0} page(s) processed, ` +
+        `${ocr?.pagesWithText || 0} page(s) with readable text, ` +
+        `${String(text || '').length} characters` +
+        (ocr?.partial ? ` (partial — ${ocr.partialReason || 'limit reached'})` : '') +
+        (spliced ? ` (+${spliced.splicedPages.length} page(s) from the embedded text layer where OCR did not read)` : '') +
         provenance +
         `\n---\n`;
-      const extractedText = result.text ? header + result.text : 'No text detected in image PDF';
+      const extractedText = text ? header + text : 'No text detected in image PDF';
       console.log(`OCR complete: ${extractedText.length} chars extracted`);
-      return options.detailed ? { extractedText, ocr: result.ocr } : extractedText;
+      return options.detailed ? { extractedText, ocr } : extractedText;
     } catch (error) {
       console.error(`❌ PDF processing error for ${filePath}:`, error);
       throw new Error(`PDF processing failed: ${error.message}`);
     }
+  }
+
+  /**
+   * OCR stopped early (budget, page/char cap, cancel) or left pages unread:
+   * splice the embedded text layer of every page it did not read instead of
+   * replacing it with «sin OCR» markers. Null when there is nothing to
+   * splice (no per-page results, no layer with content for those pages).
+   */
+  _spliceUnreadLayerPages(result, layerPages, pageCount = 0, plan = null) {
+    const ocr = (result && result.ocr) || {};
+    const unread = Array.isArray(ocr.unreadPages) ? ocr.unreadPages : [];
+    if (!ocr.partial && unread.length === 0) return null;
+    if (!Array.isArray(layerPages) || !Array.isArray(result.pages)) return null;
+    if (!layerPages.some((p) => p && String(p.text || '').trim())) return null;
+    const pageBlock = typeof ocrEngine._pdfPageBlock === 'function'
+      ? (read) => ocrEngine._pdfPageBlock(read.page, read)
+      : undefined;
+    const spliced = mixedPdf.spliceTextLayerIntoOcr(layerPages, result.pages, {
+      totalPages: ocr.totalPages || pageCount || 0,
+      stopReason: ocr.partialReason,
+      reasons: (plan && plan.reasons) || {},
+      emptyLayerPages: plan && Array.isArray(plan.emptyLayerPages) ? plan.emptyLayerPages : undefined,
+      pageBlock,
+    });
+    return spliced.splicedPages.length > 0 ? spliced : null;
   }
 
   /**
@@ -1588,3 +1680,4 @@ module.exports = new FileProcessor();
 module.exports.resolveProcessMimeType = resolveProcessMimeType;
 module.exports.isTextLikeMime = isTextLikeMime;
 module.exports.sniffTextLike = sniffTextLike;
+module.exports.parsePdfWithPages = parsePdfWithPages;

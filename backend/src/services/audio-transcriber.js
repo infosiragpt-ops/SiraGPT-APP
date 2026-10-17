@@ -100,8 +100,21 @@
  *     elevenlabs) are used only for flagged pieces, never for the first pass.
  *   - options.range + options.forceRetranscribe (refine): the pieces that
  *     overlap the range ignore their checkpoints and are reviewed (one more
- *     hypothesis at least); every other piece is reused; the full result
- *     comes back.
+ *     hypothesis at least); every other piece is reused from its checkpoint,
+ *     and one without a usable part (none kept, another language) is skipped,
+ *     never transcribed: it adds no text and no gap, stays out of the
+ *     coverage, and the result says how many with `refineSkipped`.
+ *     `refineSpans` ([[start, end], …], seconds on the file clock, one per
+ *     piece re-read for the window, omitted when none) says exactly which
+ *     stretches were read again: a caller splicing the window back cuts by
+ *     them, never by guessing from the segments.
+ *     options.refineSkipUnusable === false (a caller that cannot splice a
+ *     window back into its transcript) transcribes those pieces instead: the
+ *     window is still forced and the whole result comes back. So does a
+ *     checkpoint whose entries were cut by another plan (the stored
+ *     transcript's segments would not line up with the new pieces); an
+ *     optional checkpoint.savedCutPlan(index) tells it for entries load
+ *     ignores. Stitched segment starts stay inside their piece.
  *   The result carries `quality` ({ score, level, lowConfidence, escalations,
  *   enginesUsed, notes }); checkpointed parts carry an optional `review`.
  *
@@ -966,7 +979,7 @@ function placeholderResult(fileName, label, mimeType, reasonCode) {
 function formatSuccess({
   text, method, model, language, segments,
   durationSec = null, segmentCount = 1, partial = false, gaps = [], coverage = 1, providers = {}, engine = null,
-  quality: report = null,
+  quality: report = null, refineSkipped = 0, refineSpans = null,
 }) {
   const transcript = String(text || '').trim();
   const lang = normalizeLanguage(language) || null;
@@ -992,6 +1005,8 @@ function formatSuccess({
     providers: providers || {},
     engine,
     ...(report ? { quality: report } : {}),
+    ...(refineSkipped > 0 ? { refineSkipped } : {}),
+    ...(Array.isArray(refineSpans) && refineSpans.length ? { refineSpans } : {}),
   };
 }
 
@@ -1137,6 +1152,16 @@ function voiceStudioRung(options = {}) {
   return buildVoiceStudioRung(options);
 }
 
+/**
+ * The options a Sira Voz request gets: options.voiceStudioTimeoutMs (the
+ * dictation's sub-budget) bounds THAT request only — never whisper.cpp or a
+ * cloud rung — so a busy or hung Sira Voz cannot eat a short request's bound.
+ */
+function voiceStudioCallOptions(options = {}) {
+  const ms = Number(options.voiceStudioTimeoutMs);
+  return Number.isFinite(ms) && ms > 0 ? { ...options, timeoutMs: Math.round(ms) } : options;
+}
+
 function buildVoiceStudioRung(options = {}) {
   let vsClient;
   try { vsClient = voiceStudioClient(options); } catch { return null; }
@@ -1149,7 +1174,7 @@ function buildVoiceStudioRung(options = {}) {
     key: null,
     transcribeFile: (filePath, mimeType, fileName, language, prompt, extra = {}) => vsClient.transcribe({
       filePath, filename: fileName, mime: mimeType, language, prompt, signal: extra.signal || options.signal,
-    }, options),
+    }, voiceStudioCallOptions(options)),
   };
 }
 
@@ -1408,7 +1433,7 @@ function segmentationTimeoutMs(options = {}) {
 }
 
 /**
- * Durable per-segment results. `options.checkpoint` ({ load, save, dir? })
+ * Durable per-segment results. `options.checkpoint` ({ load, save, dir?, savedCutPlan? })
  * lets the caller persist each finished segment so a restart (deploy, crash,
  * retry) resumes a 10-hour transcription where it stopped instead of from
  * zero. Failures to read or write a checkpoint never fail the transcription.
@@ -1418,6 +1443,15 @@ async function loadSegmentCheckpoint(options, index, meta) {
   try {
     const saved = await options.checkpoint.load(index, meta);
     return saved && typeof saved === 'object' ? saved : null;
+  } catch { return null; }
+}
+
+/** The cut plan a checkpoint entry was saved under, even one load ignores (optional checkpoint method), or null. */
+async function savedCutPlanOf(options, index) {
+  if (!options.checkpoint || typeof options.checkpoint.savedCutPlan !== 'function') return null;
+  try {
+    const hash = await options.checkpoint.savedCutPlan(index);
+    return typeof hash === 'string' && hash ? hash : null;
   } catch { return null; }
 }
 
@@ -2933,7 +2967,9 @@ async function obtainHypothesis(step, segment, jc, language) {
       }, { ...jc.options, signal: jc.signal });
       if (!built?.ok) return { skipped: true };
       tempDir = built.dir || null;
-      target = { ...segment, path: built.path, mime: CLIP_MASTER_MIME, streamOrdinal: null };
+      // Named after the FLAC that was built («audio.flac» / «segment-N.flac»),
+      // never the uploaded container's name: providers read the format from it.
+      target = { ...segment, path: built.path, name: path.basename(built.path), mime: CLIP_MASTER_MIME, streamOrdinal: null };
     }
   }
   // A cloud blip (5xx, dropped socket, timeout) gets ONE more try: a second
@@ -3159,6 +3195,14 @@ async function reviewPiece(segment, part, jc, language, opts = {}) {
     return finish(part, record);
   }
   const choice = quality.chooseHypothesis(candidates);
+  if (record.empty && silent && !quality.saysNothing(choice.chosen?.assessment) && !(choice.agreement >= quality.AGREEMENT_OK)) {
+    // The first answer heard nothing and the piece is measured silent: ONE
+    // alternative's text there (an amplified copy of the room tone is where
+    // Whisper invents phrases) is not adopted unless another one reads the
+    // same words. The energy and the empty answer agree: no voice.
+    logOncePerJob(jc, 'silent-uncorroborated', 'an alternative read text over a measured-silent piece with no agreement; kept «no speech»');
+    return finish(withoutInventedText(part, q.promptIndex), { ...record, confirmedEmpty: true });
+  }
   const chosen = choice.chosen || candidates[0];
   const chosenAssessment = chosen.assessment;
   const out = {
@@ -3269,6 +3313,12 @@ function inferProvider(part) {
 
 function kindOfProvider(name) {
   return name === 'local' || name === 'voicestudio' ? 'local' : 'cloud';
+}
+
+/** A checkpointed part cut by another plan (or a legacy fixed-cut part on a snapped plan). */
+function cutByOtherPlan(part, plan) {
+  if (!part || typeof part !== 'object') return false;
+  return part.cutPlan ? part.cutPlan !== plan.hash : plan.kind !== 'fixed';
 }
 
 /** A checkpointed part is reused only within the same cut plan and language. */
@@ -3431,6 +3481,28 @@ async function runSegmentedJob(filePath, job) {
     const refine = refineWindow(options);
     const refineSet = new Set();
     if (refine) spans.forEach((span, i) => { if (span.start < refine.end && span.end > refine.start) refineSet.add(i); });
+    // A refine reads only its window: a piece outside it whose checkpoint part
+    // cannot be reused (none kept, swept, or kept in another language) is
+    // skipped — not transcribed, no text, no gap, left out of the coverage.
+    // The caller takes only the window's text from this result. (A window
+    // that overlaps no piece skips nothing: never an empty result.) A caller
+    // that needs the whole result (refineSkipUnusable: false) gets every piece.
+    // So does a recording whose kept parts were cut by another plan: the
+    // stored transcript's segments then do not line up with these pieces (one
+    // may run from a re-read piece into a skipped one, and its words there
+    // would be lost), so the caller needs a whole reading to cut into.
+    let planChanged = loaded.some((part) => cutByOtherPlan(part, prepared.plan));
+    if (!planChanged && refineSet.size > 0 && options.refineSkipUnusable !== false) {
+      // An entry the checkpoint would not load (cut into another number of
+      // pieces, or another piece length) still says which plan cut it.
+      for (let i = 0; i < total && !planChanged; i++) {
+        if (loaded[i]) continue;
+        const hash = await savedCutPlanOf(options, segments[i].index);
+        if (hash && hash !== prepared.plan.hash) planChanged = true;
+      }
+    }
+    const refining = refineSet.size > 0 && options.refineSkipUnusable !== false && !planChanged;
+    const refineSkipped = new Set();
     // Saved before their review finished (a restart mid-review): reviewed again, not re-transcribed.
     const reviewPending = new Set();
     let resumed = 0;
@@ -3440,6 +3512,8 @@ async function runSegmentedJob(filePath, job) {
         results[i] = { part, resumed: true };
         if (part.review && part.review.done === false) reviewPending.add(i);
         resumed++;
+      } else if (refining) {
+        refineSkipped.add(i);
       }
     });
     if (resumed) emit('resuming', { completed: resumed, total, gaps: 0 });
@@ -3456,7 +3530,8 @@ async function runSegmentedJob(filePath, job) {
       if (match) noteOutcome(jc, { name: match[1] }, match[2]);
     }
 
-    let completed = resumed;
+    // Skipped pieces count as done for the progress and its ETA.
+    let completed = resumed + refineSkipped.size;
     let gapCount = 0;
     let processed = 0;
     let firstError = null;
@@ -3502,7 +3577,7 @@ async function runSegmentedJob(filePath, job) {
     };
 
     const pending = [];
-    for (let i = 0; i < total; i++) if (!results[i]) pending.push(i);
+    for (let i = 0; i < total; i++) if (!results[i] && !refineSkipped.has(i)) pending.push(i);
     if (!language && pending.length) {
       let probes = 0;
       while (pending.length && !language && probes < LANGUAGE_DETECT_MAX_SEGMENTS) {
@@ -3534,6 +3609,8 @@ async function runSegmentedJob(filePath, job) {
       // again in the locked one: Whisper forced to the wrong language
       // translates the speech instead of transcribing it.
       for (let i = 0; i < total; i++) {
+        // A refine never re-reads a piece outside its window.
+        if (refining && !refineSet.has(i)) continue;
         const part = results[i]?.part;
         const partLanguage = normalizeLanguage(part?.language);
         if (part && partLanguage && partLanguage !== language && hasSpeechText(part.text)) {
@@ -3570,7 +3647,9 @@ async function runSegmentedJob(filePath, job) {
     }
     // «No voice anywhere» needs a second opinion that agrees (C4): when every
     // piece came back empty and none was confirmed, ask about the most voiced one.
-    if (jc.quality.enabled) {
+    // A refine that skipped pieces read only its window (each piece there was
+    // already reviewed as forced): it says nothing about the whole recording.
+    if (jc.quality.enabled && !refineSkipped.size) {
       const covered = results.map((r, i) => (r?.part ? i : -1)).filter((i) => i >= 0);
       const saysNothing = (part) => (part.review && part.review.done === true ? part.review.empty === true : !hasSpeechText(part.text));
       const confirmed = covered.some((i) => results[i].part.review?.confirmedEmpty === true);
@@ -3601,6 +3680,8 @@ async function runSegmentedJob(filePath, job) {
     let allBasicLocal = true;
     const pieceReports = [];
     for (let i = 0; i < total; i++) {
+      // Outside a refine's window and never read: neither covered nor a gap.
+      if (refineSkipped.has(i)) continue;
       const span = spans[i];
       const length = Math.max(0, span.end - span.start);
       totalSeconds += length;
@@ -3628,7 +3709,13 @@ async function runSegmentedJob(filePath, job) {
         if (text) { texts.push(text); covered.push(text); }
         const local = normalizeSegments(part.segments);
         if (local.length) {
-          for (const s of local) stitched.push({ ...s, start: round3(s.start + span.start), end: round3(s.end + span.start) });
+          // A start is kept inside its piece (whisper may time the last words
+          // at the piece's very end): a segment belongs to the piece it starts
+          // in, which is how a refine's caller tells re-read text from the rest.
+          const lastStart = Math.max(span.start, round3(span.end - 0.001));
+          for (const s of local) {
+            stitched.push({ ...s, start: Math.min(round3(s.start + span.start), lastStart), end: round3(s.end + span.start) });
+          }
         } else if (text) {
           // No timestamps from this rung: one coarse segment keeps the text on the timeline.
           stitched.push({ start: span.start, end: Math.max(span.end, span.start + 0.5), text });
@@ -3642,7 +3729,8 @@ async function runSegmentedJob(filePath, job) {
     }
     const top = (map) => [...map].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
     const engine = kinds.size > 1 ? 'mixed' : (kinds.has('local') ? 'local' : (kinds.has('cloud') ? 'cloud' : null));
-    const coverage = totalSeconds > 0 ? Math.round((coveredSeconds / totalSeconds) * 10000) / 10000 : Math.round((coveredCount / total) * 10000) / 10000;
+    const counted = Math.max(1, total - refineSkipped.size);
+    const coverage = totalSeconds > 0 ? Math.round((coveredSeconds / totalSeconds) * 10000) / 10000 : Math.round((coveredCount / counted) * 10000) / 10000;
     const stitchedSorted = sortSegments(stitched);
     const report = quality.summarizeQuality({
       pieces: pieceReports,
@@ -3672,6 +3760,9 @@ async function runSegmentedJob(filePath, job) {
       lastError,
       ladder: formatOutcomes(jc.outcomes),
       cutInfo: prepared.cutInfo || null,
+      ...(refineSkipped.size ? { refineSkipped: refineSkipped.size } : {}),
+      // The stretches read again for the window (file clock, one per piece).
+      ...(refineSet.size ? { refineSpans: [...refineSet].sort((a, b) => a - b).map((i) => [spans[i].start, spans[i].end]) } : {}),
     };
   } finally {
     if (outer) outer.removeEventListener('abort', onOuterAbort);
@@ -3690,10 +3781,15 @@ function finalizeSegmentedResult(assembled, job) {
     coverage: assembled.coverage,
     providers: assembled.providers,
     engine: assembled.engine,
+    // A refine that read only its window: how many pieces it left out.
+    ...(assembled.refineSkipped > 0 ? { refineSkipped: assembled.refineSkipped } : {}),
+    // Which stretches the refine read again (one [start, end] per piece).
+    ...(Array.isArray(assembled.refineSpans) && assembled.refineSpans.length ? { refineSpans: assembled.refineSpans } : {}),
   };
   // Text that only says nothing (annotations, sign-offs, prompt echo) is no speech.
   const speech = hasSpeechText(assembled.coveredText) && !(Number.isInteger(assembled.speechPieces) && assembled.speechPieces === 0);
-  const covered = `${assembled.coveredCount}/${assembled.segmentCount} segments (coverage ${Math.round(assembled.coverage * 1000) / 10}%)`;
+  const covered = `${assembled.coveredCount}/${assembled.segmentCount} segments (coverage ${Math.round(assembled.coverage * 1000) / 10}%)`
+    + (assembled.refineSkipped > 0 ? `, ${assembled.refineSkipped} outside the refine window skipped` : '');
   const report = assembled.quality || null;
   const qualityLog = report ? `; quality ${report.level || '?'} ${report.score ?? '?'} (escalations ${report.escalations}, doubtful ${report.lowConfidence.length})` : '';
   if (!assembled.gaps.length) {
@@ -4361,7 +4457,19 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
   let source = { path: filePath, mime: normalizedMime, name: fileName };
   let cloudAllowed = true;
   let masterTried = false;
-  const vsWanted = providerOrder(options).includes('voicestudio') && (() => {
+  // The two on-host engines run in the LISTED order: «local,voicestudio» (the
+  // free dictation) reads the clip with whisper.cpp first (seconds on CPU) and
+  // asks Sira Voz (WhisperX large-v3, much slower) only when whisper.cpp
+  // could not answer, or as the review's second opinion.
+  const order = providerOrder(options);
+  const localFirst = localEnabled(options)
+    && (!order.includes('voicestudio') || order.indexOf('local') < order.indexOf('voicestudio'));
+  // Whisper.cpp maps the track itself: no master just for a Sira Voz that
+  // comes later, unless the chosen track may not be the default one (several
+  // tracks, or a requested one in an unprobed file): Sira Voz uploads the
+  // file, and only the master holds the chosen track alone.
+  const trackNeedsMaster = Boolean(intake.audioStream) && intake.streamCount !== 1;
+  const vsWanted = (!localFirst || trackNeedsMaster) && order.includes('voicestudio') && (() => {
     try { const vs = voiceStudioClient(options); return Boolean(vs && typeof vs.isConfigured === 'function' && vs.isConfigured(options)); } catch { return false; }
   })();
   const adoptMaster = (master) => {
@@ -4472,14 +4580,18 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
   }
 
   // Opt-in: Sira Voz / VoiceStudio (WhisperX large-v3, on this host). List
-  // 'voicestudio' in TRANSCRIBE_PROVIDERS to use it before the bundled
-  // whisper.cpp base model — better accuracy, slower on CPU, still free.
-  const vsShort = providerOrder(options).includes('voicestudio') ? buildVoiceStudioRung(options) : null;
-  if (!first && vsShort) {
+  // 'voicestudio' BEFORE 'local' in TRANSCRIBE_PROVIDERS to use it before the
+  // bundled whisper.cpp base model — better accuracy, slower on CPU, still
+  // free. Listed after it, it is whisper.cpp's fallback and second opinion.
+  const vsShort = order.includes('voicestudio') ? buildVoiceStudioRung(options) : null;
+  // One request to Sira Voz on the whole clip: its part, or null (`tried` says why).
+  const askVoiceStudio = async () => {
     try {
-      const vs = await voiceStudioClient(options).transcribe({ filePath: source.path, filename: source.name, mime: source.mime, language, prompt, signal: options.signal }, options);
+      const vs = await voiceStudioClient(options).transcribe({
+        filePath: source.path, filename: source.name, mime: source.mime, language, prompt, signal: options.signal,
+      }, voiceStudioCallOptions(options));
       if (source.path === filePath && intake.streamCount !== 1) noteTrackLost(intake, 'default_stream');
-      first = {
+      return {
         text: String(vs?.text || '').trim(), segments: Array.isArray(vs?.segments) ? vs.segments : [], model: 'voicestudio-whisperx',
         language: vs?.language || language || null, provider: 'voicestudio', method: 'local-whisper', kind: 'local',
       };
@@ -4487,8 +4599,10 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
       if (isAbortError(err, options.signal)) throw err;
       tried.push(`voicestudio(${describeProviderError(err)})`);
       logSafe(`VoiceStudio transcription failed (${sanitizeProviderError(err)}); trying the next provider`);
+      return null;
     }
-  }
+  };
+  if (!first && vsShort && !localFirst) first = await askVoiceStudio();
 
   if (!first) {
     if (!localEnabled(options)) {
@@ -4501,7 +4615,9 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
     // local decoder gets the whole file as before.
     if (!(duration > 0)) {
       try {
-        const assembled = await runSegmentedJob(source.path, { ...job, rungs: [LOCAL_RUNG], tried });
+        // Sira Voz not asked yet (listed after local): whisper.cpp's fallback per piece.
+        const rungs = [LOCAL_RUNG, ...(localFirst && vsShort ? [vsShort] : [])];
+        const assembled = await runSegmentedJob(source.path, { ...job, rungs, tried });
         applyCutInfo(intake, assembled.cutInfo);
         return finalizeSegmentedResult(assembled, job);
       } catch (err) {
@@ -4513,14 +4629,25 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
     }
     const local = await localWholeFile();
     if (local.result) return local.result;
-    if (local.placeholder) return local.placeholder;
-    first = local.part;
+    if (local.placeholder) {
+      // whisper.cpp could not run or decode it: Sira Voz, listed after it, is
+      // the next rung (never for a verdict about the file itself).
+      const fallback = localFirst && vsShort && !INTAKE_FATAL_CODES.has(local.placeholder.reasonCode) ? await askVoiceStudio() : null;
+      if (!fallback) return local.placeholder;
+      first = fallback;
+    } else {
+      first = local.part;
+    }
   }
 
+  const onHost = [...(vsShort ? [vsShort] : []), ...(localEnabled(options) ? [LOCAL_RUNG] : [])];
   return reviewShortClip(first, {
     options, fileName, label, normalizedMime, language, prompt, duration, segmentSeconds,
     source, sourceIsOriginal: source.path === filePath, localStreamOrdinal: job.localStreamOrdinal,
-    rungs: [...(cloudAllowed ? cloud : []), ...(vsShort ? [vsShort] : []), ...(localEnabled(options) ? [LOCAL_RUNG] : [])],
+    // Sira Voz after whisper.cpp when listed after it: the second opinion of a «nothing heard».
+    rungs: [...(cloudAllowed ? cloud : []), ...(localFirst ? onHost.reverse() : onHost)],
+    // A review answer read from the uploaded file (no master): ITS default stream.
+    onDefaultStreamRead: () => { if (intake.streamCount !== 1) noteTrackLost(intake, 'default_stream'); },
   });
 }
 
@@ -4568,6 +4695,9 @@ async function reviewShortClip(firstPart, ctx) {
     if (review.confirmedEmpty) logInfo(`no speech in ${fileName}: confirmed by a second opinion (${(review.engines || []).length} engines)`);
     return placeholderResult(fileName, label, normalizedMime, 'no_speech');
   }
+  // Sira Voz or a cloud rung given the uploaded file decoded its default
+  // stream; whisper.cpp and an enhanced copy map the chosen track.
+  if (ctx.sourceIsOriginal && chosen.provider !== 'local' && !chosen.variant) ctx.onDefaultStreamRead?.();
   const segments = normalizeSegments(chosen.segments);
   const report = quality.summarizeQuality({
     pieces: [{
@@ -4697,9 +4827,9 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
     normalizeAudioMime(mimeType, originalName), originalName, options.language, resolveLanguage(options), options.prompt || envOf(options).WHISPER_PROMPT,
     promptTerms(options), streamOrdinalOf(options.audioStreamOrdinal), options.parallel, options.minCoverage,
     providerOrder(options), options.model, options.maxFileBytes, options.durationSeconds, options.segmentSeconds,
-    options.ffmpegPath, options.ffprobePath, options.whisperBin, options.modelPath, options.pythonPath, options.threads, options.timeoutMs,
+    options.ffmpegPath, options.ffprobePath, options.whisperBin, options.modelPath, options.pythonPath, options.threads, options.timeoutMs, options.voiceStudioTimeoutMs,
     // Quality loop (G1b): a refine window, hints, budgets and its injectables.
-    refineWindow(options), options.hints?.speakers ?? null, options.hints?.verbatim ?? null, options.qualityLoop,
+    refineWindow(options), options.refineSkipUnusable === false, options.hints?.speakers ?? null, options.hints?.verbatim ?? null, options.qualityLoop,
     escalationProviderNames(options), options.ffmpegFilters ? Array.from(options.ffmpegFilters) : null,
     ...['env', 'openai', 'groqClient', 'metaClient', 'localTranscribe', 'xaiTranscribe', 'voiceStudio', 'segmentAudio', 'probeAudioDuration', 'spawnImpl', 'createFile',
       'execFileImpl', 'detectSilences', 'concatAudio', 'sleep', 'checkpoint', 'mediaProbe', 'probeMediaStreams', 'transcodeClip',

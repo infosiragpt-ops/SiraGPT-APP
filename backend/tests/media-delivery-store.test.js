@@ -65,6 +65,20 @@ test('invalid records are rejected', () => {
   assert.deepEqual(record.formats, ['txt']);
 });
 
+test('output.analysisRange (the moment asked about) is kept only when valid, and survives the round trip', async (t) => {
+  const root = await tempRoot(t);
+  const store = createMediaDeliveryStore({ root, now: clock().now });
+  const record = await store.create(input({ mode: 'analysis', range: null, output: { analysisRange: { start: '1740', end: 1860, extra: 'x' } } }));
+  assert.equal(record.range, null, 'the transcript range stays the user\'s explicit one');
+  assert.deepEqual(record.output.analysisRange, { start: 1740, end: 1860 });
+  assert.deepEqual((await store.get(record.id)).output, record.output);
+  for (const bad of [{ start: 1860, end: 1740 }, { start: 60, end: 60 }, { start: -5, end: 30 }, { start: 30 }, { start: 'x', end: 90 },
+    { start: 0, end: Infinity }, { start: 0, end: 8 * 24 * 3600 }, 'minuto 30', null]) {
+    const output = normalizeNewRecord(input({ output: { analysisRange: bad } })).output;
+    assert.equal('analysisRange' in output, false, JSON.stringify(bad));
+  }
+});
+
 test('path traversal: every entry point rejects ids that are not md_<uuid>', async (t) => {
   const root = await tempRoot(t);
   const outside = path.join(path.dirname(root), `${path.basename(root)}-outside.json`);

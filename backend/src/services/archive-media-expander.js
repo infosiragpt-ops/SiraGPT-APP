@@ -32,6 +32,14 @@
  * Idempotent: child names are derived from (parent, member), so a second
  * pass over the same archive reuses the rows instead of duplicating them.
  * Never throws; logs carry ids and counts only.
+ *
+ * Restarts: a member is inflated into `<userDir>/.parts/<filename>.part`
+ * (the folder the chunked-upload sweeper reclaims), checked there, given its
+ * File row and only then renamed into the upload folder, so a deploy never
+ * leaves an extracted member without a row. The parent carries
+ * `archiveExpansion.state = 'running'` (with the `processed` member
+ * indices) until the final record; `resumeArchiveExpansions()` finishes
+ * what a restart interrupted, without recreating a child the user deleted.
  */
 
 const fs = require('node:fs');
@@ -45,6 +53,7 @@ const { pipeline } = require('node:stream/promises');
 const uploadPolicy = require('./upload-security-policy');
 const { isUnsafeEntryName, escapeUnzipPattern } = require('./zip-parser');
 const { runMediaCommand } = require('./media-probe');
+const { PARTS_DIR } = require('./chunked-upload-store');
 
 const MB = 1024 * 1024;
 const DB_FILE_SIZE_MAX = 2147483647;
@@ -414,11 +423,34 @@ async function freeBytes(dir) {
   }
 }
 
-/** See the module header. Never throws. */
+// Parents being expanded in this process: a resume never races a live run
+// (both would write the same partials).
+const activeExpansions = new Set();
+
+/** Only ENOENT counts as missing (a permission error is not a lost file). */
+function fileMissing(p) {
+  return fsp.stat(p).then(() => false, (err) => Boolean(err && err.code === 'ENOENT'));
+}
+
+/** Undo a row whose file could not be moved in. Never throws. */
+async function dropChildRow(prisma, id, logger) {
+  try {
+    if (typeof prisma.file.delete === 'function') {
+      await prisma.file.delete({ where: { id } });
+      return;
+    }
+  } catch (_) { /* reported below */ }
+  try { logger.warn(`[archive-media] could not remove child row ${id} after a failed rename`); } catch (_) { /* best-effort */ }
+}
+
+/**
+ * See the module header. Never throws. `attempt` is set by
+ * resumeArchiveExpansions() and kept in the running marker.
+ */
 async function expandArchiveMedia({
   prisma, userId, parent, userDir, schedule = null, detectMime = defaultDetectMime,
   signal = null, env = process.env, limits = {}, logger = console, now = Date.now,
-  unzipBin = 'unzip', spawnImpl = spawn, run = runMediaCommand, readerFactory = null,
+  unzipBin = 'unzip', spawnImpl = spawn, run = runMediaCommand, readerFactory = null, attempt = 0,
 } = {}) {
   const startedAt = now();
   const children = [];
@@ -426,6 +458,7 @@ async function expandArchiveMedia({
   const out = { ok: false, children, skipped, truncated: false, whatsapp: false };
   let bytesWritten = 0;
   let reader = null;
+  let claimed = null;
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (signal) {
@@ -441,6 +474,7 @@ async function expandArchiveMedia({
     clearTimeout(timer);
     if (signal) signal.removeEventListener('abort', onAbort);
     try { if (reader) reader.close(); } catch (_) { /* best-effort */ }
+    if (claimed) activeExpansions.delete(claimed);
     if (out.reason === 'disabled') return out; // kill switch: silent
     try {
       const media = children.filter((c) => c.kind === 'media').length;
@@ -460,7 +494,11 @@ async function expandArchiveMedia({
     if (!prisma || !prisma.file || typeof prisma.file.create !== 'function') return finish({ reason: 'no_database' });
     if (!userId || !parent || !parent.id || !parent.path || !userDir) return finish({ reason: 'invalid_input' });
     if (!isArchiveCandidate(parent)) return finish({ reason: 'not_archive' });
+    if (activeExpansions.has(parent.id)) return finish({ reason: 'already_running' });
+    claimed = parent.id;
+    activeExpansions.add(claimed);
     const resolvedDir = path.resolve(String(userDir));
+    const partsDir = path.join(resolvedDir, PARTS_DIR);
     const stat = await fsp.stat(parent.path).catch(() => null);
     if (!stat || !stat.isFile()) return finish({ reason: 'archive_missing' });
     if (typeof prisma.file.findFirst === 'function') {
@@ -525,13 +563,74 @@ async function expandArchiveMedia({
     take(images, caps.maxImages);
     if (selected.length === 0) return finish({ ok: true, reason: 'no_media' });
 
+    // Member → its deterministic names: same parent + member ⇒ same row.
+    const namesFor = ({ entry, cls }) => {
+      const memberPath = String(entry.name).replace(/\\/g, '/');
+      const filename = childFilenameFor(parent.id, entry.index, memberPath, cls.ext);
+      // Inflated where the chunked-upload sweeper reclaims what a restart
+      // abandons (`<userDir>/.parts/*.part`; its own parts are <32 hex>.part).
+      return { memberPath, filename, target: path.join(resolvedDir, filename), partial: path.join(partsDir, `${filename}.part`) };
+    };
+    const sizeOnDisk = (p) => fsp.stat(p).then((s) => (s.isFile() ? s.size : 0), () => 0);
+
+    // Members an interrupted run already turned into children (the running
+    // marker's `processed`): one without a row now was deleted by the user,
+    // and a resume does not bring it back.
+    const previous = await readExpansionMarker(prisma, parent.id);
+    // A resume has just claimed this marker: not reading it back means the
+    // database did not answer, and without `processed` a deleted child
+    // would come back.
+    if (attempt > 0 && !previous) return finish({ reason: 'lookup_failed' });
+    const processed = new Set(previous && previous.state === 'running' && Array.isArray(previous.processed)
+      ? previous.processed.filter(Number.isInteger) : []);
+    // What a member needs: its row is reused (also when the file was moved
+    // to R2), the child was deleted, a row whose file never arrived (a
+    // restart between the row and the rename) is filled again, or it is
+    // extracted. The disk budget and the loop decide the same way.
+    const memberState = async ({ entry }, names) => {
+      if (path.dirname(path.resolve(names.target)) !== resolvedDir) return { action: 'unsafe' };
+      // A repaired row goes to the caller's schedule(file, row): it carries
+      // what a freshly created one does (owner, names, type, stage).
+      let existing = null;
+      if (typeof prisma.file.findFirst === 'function') {
+        try {
+          existing = await prisma.file.findFirst({
+            where: { userId, filename: names.filename },
+            select: {
+              id: true, userId: true, filename: true, originalName: true, mimeType: true, size: true, path: true,
+              deletedAt: true, processingStage: true,
+            },
+          });
+        } catch (_) {
+          // A lookup that fails (pool timeout, reset) is not «no row»: a
+          // resume may already have one, and a second row would mean a
+          // second transcription. A first run has none.
+          if (attempt > 0) return { action: 'lookup_failed' };
+        }
+      }
+      if (!existing) return { action: processed.has(entry.index) ? 'deleted' : 'extract' };
+      if (existing.deletedAt || existing.path !== names.target || !(await fileMissing(names.target))) return { action: 'reuse', existing };
+      return { action: 'repair', existing };
+    };
+
     // Disk: never fill the uploads volume; keep a reserve for everyone else.
-    await fsp.mkdir(resolvedDir, { recursive: true });
+    // Only the bytes a member will still write are charged: nothing for a
+    // reused or deleted child, less for one a restart half wrote, or a
+    // resume would skip what fits.
+    await fsp.mkdir(partsDir, { recursive: true });
     const free = await freeBytes(resolvedDir);
     if (Number.isFinite(free)) {
       let budget = free - caps.freeSpaceReserveBytes;
       for (let i = 0; i < selected.length; i += 1) {
-        budget -= selected[i].entry.size;
+        const names = namesFor(selected[i]);
+        const { action } = await memberState(selected[i], names);
+        // The database cannot say what is done: the marker stays running
+        // (as the claim wrote it) and a later resume tries again.
+        if (action === 'lookup_failed') return finish({ reason: 'lookup_failed' });
+        if (action === 'extract' || action === 'repair') {
+          const onDisk = Math.max(await sizeOnDisk(names.target), await sizeOnDisk(names.partial));
+          budget -= Math.max(0, selected[i].entry.size - onDisk);
+        }
         if (budget < 0) {
           bump(skipped, 'disk_space', selected.length - i);
           selected.length = i;
@@ -555,7 +654,22 @@ async function expandArchiveMedia({
       }
     }
 
+    // Until the final record below, a restart leaves this marker behind and
+    // resumeArchiveExpansions() finishes the job. Each child made (or found)
+    // is added to `processed` as soon as it exists.
+    const runningAt = new Date(now()).toISOString();
+    const runningMarker = () => ({
+      state: 'running', at: runningAt, ...(attempt > 0 ? { attempt } : {}), processed: [...processed].sort((a, b) => a - b),
+    });
+    const recordProcessed = async (index) => {
+      if (processed.has(index)) return;
+      processed.add(index);
+      await mergeAnalysisMetadata(prisma, { fileId: parent.id, userId, patch: { archiveExpansion: runningMarker() } });
+    };
+    await mergeAnalysisMetadata(prisma, { fileId: parent.id, userId, patch: { archiveExpansion: runningMarker() } });
+
     const parentName = String(parent.originalName || parent.originalname || 'archivo.zip').slice(0, 200);
+    let retryLater = false;
     for (let n = 0; n < selected.length; n += 1) {
       const { entry, cls } = selected[n];
       if (controller.signal.aborted) {
@@ -563,20 +677,28 @@ async function expandArchiveMedia({
         out.truncated = true;
         break;
       }
-      const memberPath = String(entry.name).replace(/\\/g, '/');
-      const filename = childFilenameFor(parent.id, entry.index, memberPath, cls.ext);
-      const target = path.join(resolvedDir, filename);
-      if (path.dirname(path.resolve(target)) !== resolvedDir) { bump(skipped, 'unsafe_path'); continue; }
-
-      if (typeof prisma.file.findFirst === 'function') {
-        const existing = await prisma.file.findFirst({ where: { userId, filename }, select: { id: true, mimeType: true, size: true } }).catch(() => null);
-        if (existing) {
-          children.push({ fileId: existing.id, kind: cls.kind, member: memberPath.slice(0, 300), mimeType: existing.mimeType || null, size: existing.size || 0, reused: true });
-          continue;
-        }
+      const names = namesFor(selected[n]);
+      const { memberPath, filename, target, partial } = names;
+      // Asked again here: the budget's answer may be minutes old.
+      const state = await memberState(selected[n], names);
+      if (state.action === 'lookup_failed') {
+        // Stop here; the final record keeps the marker running.
+        bump(skipped, 'lookup_failed', selected.length - n);
+        out.truncated = true;
+        retryLater = true;
+        break;
       }
+      if (state.action === 'unsafe') { bump(skipped, 'unsafe_path'); continue; }
+      if (state.action === 'deleted') { bump(skipped, 'deleted_by_user'); continue; }
+      if (state.action === 'reuse') {
+        const { existing } = state;
+        children.push({ fileId: existing.id, kind: cls.kind, member: memberPath.slice(0, 300), mimeType: existing.mimeType || null, size: existing.size || 0, reused: true });
+        await recordProcessed(entry.index);
+        continue;
+      }
+      let row = state.action === 'repair' ? state.existing : null;
+      const repaired = Boolean(row);
 
-      const partial = `${target}.part`;
       let written = 0;
       try {
         written = await reader.extract(entry, partial, { signal: controller.signal });
@@ -597,19 +719,11 @@ async function expandArchiveMedia({
         }
         continue;
       }
-      try {
-        await fsp.rename(partial, target);
-      } catch (_) {
-        await fsp.rm(partial, { force: true }).catch(() => {});
-        bump(skipped, 'extract_failed');
-        continue;
-      }
-      bytesWritten += written;
 
-      // Same byte-level check as a direct upload.
+      // Same byte-level check as a direct upload, on the partial.
       const displayName = displayNameFor(memberPath, n, cls.ext);
       let detected = { mime: null, source: 'fallback' };
-      try { detected = (await detectMime(target, cls.canonicalMime)) || detected; } catch (_) { /* fallback */ }
+      try { detected = (await detectMime(partial, cls.canonicalMime)) || detected; } catch (_) { /* fallback */ }
       const verdict = uploadPolicy.validateUploadPolicy({
         originalName: displayName,
         declaredMime: cls.canonicalMime,
@@ -626,8 +740,7 @@ async function expandArchiveMedia({
         ? /^(audio|video)\//.test(finalMime)
         : magic && /^image\//.test(finalMime) && finalMime !== 'image/svg+xml';
       if (!verdict || !verdict.ok || !kindOk || verdict.executable || verdict.activeContent) {
-        await fsp.rm(target, { force: true }).catch(() => {});
-        bytesWritten -= written;
+        await fsp.rm(partial, { force: true }).catch(() => {});
         bump(skipped, verdict && verdict.ok ? 'type_mismatch' : 'rejected_by_policy');
         continue;
       }
@@ -642,30 +755,62 @@ async function expandArchiveMedia({
         kind: cls.kind,
         ...(wa ? { whatsapp: wa } : {}),
       };
-      let row;
+      const initialStage = cls.kind === 'media' ? 'uploaded' : 'extracting';
+      // Row first, then the rename: no extracted member ever sits in the
+      // upload folder without its File row.
+      if (!row) {
+        try {
+          row = await prisma.file.create({
+            data: {
+              userId,
+              filename,
+              originalName: displayName,
+              mimeType: finalMime,
+              size: Math.min(written, DB_FILE_SIZE_MAX),
+              path: target,
+              extractedText: null,
+              openaiFileId: null,
+              processingStage: initialStage,
+              processingStageAt: new Date(now()),
+            },
+          });
+        } catch (_) {
+          await fsp.rm(partial, { force: true }).catch(() => {});
+          bump(skipped, 'db_create_failed');
+          continue;
+        }
+      }
       try {
-        row = await prisma.file.create({
-          data: {
-            userId,
-            filename,
-            originalName: displayName,
-            mimeType: finalMime,
-            size: Math.min(written, DB_FILE_SIZE_MAX),
-            path: target,
-            extractedText: null,
-            openaiFileId: null,
-            processingStage: cls.kind === 'media' ? 'uploaded' : 'extracting',
-            processingStageAt: new Date(now()),
-          },
-        });
+        await fsp.rename(partial, target);
       } catch (_) {
-        await fsp.rm(target, { force: true }).catch(() => {});
-        bytesWritten -= written;
-        bump(skipped, 'db_create_failed');
+        await fsp.rm(partial, { force: true }).catch(() => {});
+        if (!repaired) await dropChildRow(prisma, row.id, logger);
+        bump(skipped, 'extract_failed');
         continue;
       }
+      bytesWritten += written;
+      if (repaired) {
+        // While its file was missing, the media worker may have marked the
+        // row failed (and a failed row is not queued again): the file is
+        // here now, so it starts over like a new child. Owner-scoped.
+        const restart = { processingStage: initialStage, processingStageAt: new Date(now()), processingError: null };
+        if (typeof prisma.file.updateMany === 'function') {
+          await prisma.file.updateMany({ where: { id: row.id, userId }, data: restart }).catch(() => {
+            try { logger.warn(`[archive-media] could not reset the stage of repaired child ${row.id}`); } catch (_) { /* best-effort */ }
+          });
+        }
+        row = {
+          ...row,
+          ...restart,
+          userId,
+          filename,
+          originalName: row.originalName || displayName,
+          mimeType: row.mimeType || finalMime,
+        };
+      }
       await mergeAnalysisMetadata(prisma, { fileId: row.id, userId, patch: { archiveParent }, mimeType: finalMime });
-      children.push({ fileId: row.id, kind: cls.kind, member: memberPath.slice(0, 300), mimeType: finalMime, size: written });
+      children.push({ fileId: row.id, kind: cls.kind, member: memberPath.slice(0, 300), mimeType: finalMime, size: written, ...(repaired ? { repaired: true } : {}) });
+      await recordProcessed(entry.index);
       if (typeof schedule === 'function') {
         try {
           await schedule({
@@ -676,6 +821,9 @@ async function expandArchiveMedia({
             size: written,
             fieldname: 'files',
             archiveParent,
+            // While its file was missing, the media queue may have kept a
+            // failed job for this row: the caller queues it as a retry.
+            ...(repaired ? { repaired: true } : {}),
           }, row);
         } catch (err) {
           try { logger.warn(`[archive-media] schedule failed for child ${row.id} (${(err && err.code) || 'error'})`); } catch (_) { /* best-effort */ }
@@ -683,11 +831,18 @@ async function expandArchiveMedia({
       }
     }
 
+    const aborted = Boolean(signal && signal.aborted);
+    // A caller's abort (a shutdown) or a lookup that failed stays
+    // resumable; a timeout is final.
+    const resumable = aborted || retryLater;
     await mergeAnalysisMetadata(prisma, {
       fileId: parent.id,
       userId,
       patch: {
         archiveExpansion: {
+          state: resumable ? 'running' : 'done',
+          ...(attempt > 0 ? { attempt } : {}),
+          ...(resumable ? { processed: runningMarker().processed } : {}),
           at: new Date(now()).toISOString(),
           children: children.slice(0, 200).map((c) => ({ fileId: c.fileId, kind: c.kind })),
           media: children.filter((c) => c.kind === 'media').length,
@@ -698,16 +853,242 @@ async function expandArchiveMedia({
         },
       },
     });
-    const aborted = Boolean(signal && signal.aborted);
-    return finish({ ok: !aborted, ...(aborted ? { reason: 'aborted' } : controller.signal.aborted ? { reason: 'timeout' } : {}) });
+    return finish({
+      ok: !resumable,
+      ...(aborted ? { reason: 'aborted' } : retryLater ? { reason: 'lookup_failed' } : controller.signal.aborted ? { reason: 'timeout' } : {}),
+    });
   } catch (err) {
     try { logger.warn(`[archive-media] internal error (${(err && (err.code || err.name)) || 'error'})`); } catch (_) { /* best-effort */ }
     return finish({ ok: false, reason: 'internal_error' });
   }
 }
 
+// A resumed run that stops on one of these will never get further.
+const PERMANENT_RESUME_FAILURES = new Set([
+  'invalid_input', 'not_archive', 'archive_missing', 'parent_not_found', 'archive_unreadable', 'code_archive', 'no_media',
+]);
+
+async function readExpansionMarker(prisma, fileId) {
+  try {
+    const row = await prisma.documentAnalysis.findUnique({ where: { fileId }, select: { metadata: true } });
+    const marker = row && row.metadata && row.metadata.archiveExpansion;
+    return marker && typeof marker === 'object' ? marker : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Claim an interrupted parent: one owner-scoped compare-and-set on the
+ * marker's `at` (unchanged since `seen` was read) writes `fields` (the
+ * attempt and a fresh `at`). True only for the process whose write landed.
+ * Never throws.
+ */
+async function claimExpansion(prisma, row, seen, fields) {
+  try {
+    const fresh = await prisma.documentAnalysis.findUnique({ where: { fileId: row.fileId }, select: { userId: true, metadata: true } });
+    const base = fresh && fresh.userId === row.userId && fresh.metadata && typeof fresh.metadata === 'object' && !Array.isArray(fresh.metadata)
+      ? fresh.metadata : null;
+    const current = base && base.archiveExpansion;
+    if (!current || current.state !== 'running' || current.at !== seen.at) return false;
+    const result = await prisma.documentAnalysis.updateMany({
+      where: { fileId: row.fileId, userId: row.userId, metadata: { path: ['archiveExpansion', 'at'], equals: seen.at } },
+      data: { metadata: { ...base, archiveExpansion: { ...current, ...fields } } },
+    });
+    return Boolean(result && result.count === 1);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * A `running` marker younger than this may belong to a live run of another
+ * process: a run ends within the expansion timeout of its start (`at`), so
+ * the default is that timeout + 5 min.
+ */
+function resumeMinAgeMs(env = process.env, limits = {}, minAgeMs = null) {
+  return minAgeMs != null && Number.isFinite(Number(minAgeMs))
+    ? Math.max(0, Number(minAgeMs))
+    : resolveLimits(env, limits).timeoutMs + 5 * 60 * 1000;
+}
+
+/**
+ * Finish the expansions a restart interrupted: parents whose
+ * `archiveExpansion.state` is still `running` are expanded again (rows
+ * already made are reused, a row whose file never arrived is filled, a
+ * `processed` member whose row is gone was deleted by the user and is
+ * skipped as `deleted_by_user`). routes/files.js runs it after boot
+ * through startArchiveExpansionResume(), with the same `resolveUserDir`,
+ * `detectMime` and `schedule` as an upload. `minAgeMs` (default:
+ * resumeMinAgeMs()) keeps a live run of another process out; those skipped
+ * for age are counted in `recent` (and in `skipped`). Before running, a
+ * parent is claimed with a compare-and-set on the marker's `at`, which the
+ * claim refreshes: when several processes resume at once only one runs it,
+ * and the others see a recent marker. Each claim counts an attempt, so a
+ * run that kills the process counts too; past `maxAttempts`, or on a
+ * failure that cannot heal (archive gone, parent deleted), the marker
+ * becomes `abandoned`. A lookup the database does not answer (the parent,
+ * the marker, a member) is not a lost parent: the marker stays running for
+ * a later pass (`retry`). A repaired child reaches `schedule(file, row)`
+ * with `file.repaired = true`. The parent is not offloaded to R2 here.
+ * Never throws; logs counts only.
+ */
+async function resumeArchiveExpansions({
+  prisma, resolveUserDir, schedule = null, detectMime = defaultDetectMime, env = process.env, limits = {},
+  logger = console, now = Date.now, minAgeMs = null, maxAttempts = 3, limit = 20,
+  unzipBin = 'unzip', spawnImpl = spawn, run = runMediaCommand, readerFactory = null,
+} = {}) {
+  const summary = { ok: false, found: 0, resumed: 0, retry: 0, abandoned: 0, skipped: 0, recent: 0 };
+  if (!isEnabled(env)) return { ...summary, reason: 'disabled' };
+  if (!prisma || !prisma.documentAnalysis || typeof prisma.documentAnalysis.findMany !== 'function'
+    || typeof prisma.documentAnalysis.updateMany !== 'function'
+    || !prisma.file || typeof prisma.file.findFirst !== 'function' || typeof resolveUserDir !== 'function') {
+    return { ...summary, reason: 'invalid_input' };
+  }
+  const minAge = resumeMinAgeMs(env, limits, minAgeMs);
+  let rows = [];
+  try {
+    rows = await prisma.documentAnalysis.findMany({
+      where: { metadata: { path: ['archiveExpansion', 'state'], equals: 'running' } },
+      select: { fileId: true, userId: true, metadata: true },
+      take: Math.max(1, Math.min(200, Number(limit) || 20)),
+    });
+  } catch (_) {
+    return { ...summary, reason: 'query_failed' };
+  }
+  summary.found = rows.length;
+  for (const row of rows) {
+    const marker = row && row.metadata && row.metadata.archiveExpansion;
+    if (!marker || marker.state !== 'running' || !row.userId || activeExpansions.has(row.fileId)) { summary.skipped += 1; continue; }
+    const mark = (fields) => mergeAnalysisMetadata(prisma, {
+      fileId: row.fileId, userId: row.userId, patch: { archiveExpansion: { ...marker, ...fields } },
+    });
+    // Every running marker this module writes has its start time; without
+    // one it cannot be claimed safely, nor can it be a live run.
+    const at = typeof marker.at === 'string' ? Date.parse(marker.at) : NaN;
+    if (!Number.isFinite(at)) {
+      await mark({ state: 'abandoned', reason: 'invalid_marker', at: new Date(now()).toISOString() });
+      summary.abandoned += 1;
+      continue;
+    }
+    if (now() - at < minAge) { summary.skipped += 1; summary.recent += 1; continue; }
+    const attempt = (Number(marker.attempt) || 0) + 1;
+    if (attempt > maxAttempts) {
+      await mark({ state: 'abandoned', reason: 'max_attempts', at: new Date(now()).toISOString() });
+      summary.abandoned += 1;
+      continue;
+    }
+    if (!(await claimExpansion(prisma, row, marker, { attempt, at: new Date(now()).toISOString() }))) {
+      summary.skipped += 1; // another process claimed it first
+      continue;
+    }
+    // A lookup that fails (pool timeout, reset) is not «parent gone»: the
+    // parent stays running and is retried (the attempt counter bounds it).
+    let lookupFailed = false;
+    const parent = await prisma.file.findFirst({
+      where: { id: row.fileId, userId: row.userId, deletedAt: null },
+      select: { id: true, originalName: true, mimeType: true, path: true },
+    }).catch(() => { lookupFailed = true; return null; });
+    let userDir = null;
+    try { userDir = resolveUserDir(row.userId); } catch (_) { userDir = null; }
+    const result = parent && userDir
+      ? await expandArchiveMedia({
+        prisma, userId: row.userId, parent, userDir, schedule, detectMime, env, limits, logger, now, attempt,
+        unzipBin, spawnImpl, run, readerFactory,
+      })
+      : { reason: lookupFailed ? 'lookup_failed' : parent ? 'invalid_input' : 'parent_not_found' };
+    const after = await readExpansionMarker(prisma, row.fileId);
+    if (after && after.state === 'running') {
+      if (PERMANENT_RESUME_FAILURES.has(result.reason)) {
+        await mark({ state: 'abandoned', reason: result.reason, attempt, at: new Date(now()).toISOString() });
+        summary.abandoned += 1;
+      } else {
+        summary.retry += 1;
+      }
+    } else {
+      summary.resumed += 1;
+    }
+  }
+  summary.ok = true;
+  if (summary.found > 0) logResumeSummary(logger, summary);
+  return summary;
+}
+
+/** One line of counts (never names): `[archive-media] resume found=… …`. */
+function logResumeSummary(logger, summary) {
+  try {
+    const line = `[archive-media] resume found=${summary.found || 0} resumed=${summary.resumed || 0} retry=${summary.retry || 0} `
+      + `abandoned=${summary.abandoned || 0} skipped=${summary.skipped || 0} recent=${summary.recent || 0}${summary.reason ? ` reason=${summary.reason}` : ''}`;
+    if (summary.ok) (logger.info || logger.log).call(logger, line);
+    else logger.warn(line);
+  } catch (_) { /* best-effort */ }
+}
+
+/**
+ * SIRAGPT_ARCHIVE_MEDIA_RESUME: the pass after boot. Default ON; OFF under
+ * NODE_ENV=test unless set to '1', and off whenever SIRAGPT_ARCHIVE_MEDIA
+ * switches the expansion itself off.
+ */
+function isResumeEnabled(env = process.env) {
+  const raw = String((env && env.SIRAGPT_ARCHIVE_MEDIA_RESUME) ?? '').trim();
+  if (/^(0|false|off|no)$/i.test(raw) || !isEnabled(env || {})) return false;
+  if (/^(1|true|on|yes)$/i.test(raw)) return true;
+  return String((env && env.NODE_ENV) || '') !== 'test';
+}
+
+const BOOT_RESUME_DELAY_MS = 90 * 1000;
+// After the minimum age: the second pass sees every pre-boot marker as old.
+const BOOT_RESUME_SETTLE_MS = 30 * 1000;
+
+/**
+ * resumeArchiveExpansions() after boot: unref'd timers, fire-and-forget,
+ * never throws, one summary line of counts per pass. A first pass a little
+ * after boot (after the chunked-upload sweeper's first run) finishes what
+ * earlier restarts left. The run this restart interrupted started less than
+ * the minimum age ago, so when a pass skipped `recent` markers, exactly one
+ * more pass runs at boot + minimum age + 30 s: every run interrupted by
+ * this restart started before boot and is old enough then, while a live run
+ * of another process is still younger than the minimum age. `options` go
+ * to the resume as they are; leave `minAgeMs` out. Returns the first timer,
+ * or null when switched off.
+ */
+function startArchiveExpansionResume({
+  env = process.env, logger = console, delayMs = BOOT_RESUME_DELAY_MS, setTimer = setTimeout, now = Date.now, ...options
+} = {}) {
+  if (!isResumeEnabled(env)) return null;
+  const arm = (fn, ms) => {
+    const timer = setTimer(() => { fn().catch(() => {}); }, Math.max(0, Number(ms) || 0));
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return timer || null;
+  };
+  let settledAt = NaN;
+  const runPass = async (last) => {
+    let summary;
+    try {
+      summary = await resumeArchiveExpansions({ ...options, env, logger, now });
+    } catch (_) {
+      summary = { ok: false, found: 0, reason: 'internal_error' };
+    }
+    // The resume already logged when it found something.
+    if (!summary || !summary.ok || !(summary.found > 0)) logResumeSummary(logger, summary || { ok: false, reason: 'internal_error' });
+    if (last || !summary || !(summary.recent > 0) || !Number.isFinite(settledAt)) return;
+    try { arm(() => runPass(true), settledAt - now()); } catch (_) { /* best-effort */ }
+  };
+  try {
+    settledAt = now() + resumeMinAgeMs(env, options.limits || {}, options.minAgeMs) + BOOT_RESUME_SETTLE_MS;
+  } catch (_) { settledAt = NaN; /* no second pass */ }
+  try {
+    return arm(() => runPass(false), delayMs);
+  } catch (_) {
+    return null;
+  }
+}
+
 module.exports = {
   expandArchiveMedia,
+  resumeArchiveExpansions,
+  startArchiveExpansionResume,
+  isResumeEnabled,
   stampArchiveParent,
   mergeAnalysisMetadata,
   isArchiveCandidate,

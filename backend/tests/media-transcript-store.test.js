@@ -320,6 +320,19 @@ test('upsertMediaTranscriptAnalysis preserves existing analysis metadata and ref
   assert.equal(calls.upserts.length, before, 'no write on refusal');
 });
 
+test('upsertMediaTranscriptAnalysis drops a summary cached from the old transcript text (llmSummary)', async () => {
+  const { prisma, analysisRows } = fakePrisma({
+    files: [{ id: 'f1', userId: 'u1', originalName: 'clase.mp4', mimeType: 'video/mp4' }],
+    analyses: [{ fileId: 'f1', userId: 'u1', metadata: { originalName: 'clase.mp4', mediaHints: { terms: ['Ccori'] },
+      llmSummary: { tldr: 'El profesor Kori explica.', cachedAt: '2026-10-01T00:00:00.000Z' } } }],
+  });
+  await store.upsertMediaTranscriptAnalysis(prisma, { fileId: 'f1', userId: 'u1', result: RESULT, sidecarPath: 'x/f1.json.gz' });
+  const merged = analysisRows.get('f1').metadata;
+  assert.equal('llmSummary' in merged, false, 'the rewritten text gets a fresh summary on the next request');
+  assert.deepEqual(merged.mediaHints, { terms: ['Ccori'] });
+  assert.equal(merged.originalName, 'clase.mp4');
+});
+
 test('mediaTranscriptMetadata derives coverage and stats from older results', () => {
   const legacy = { ok: true, method: 'whisper', text: 'Hola.', language: 'es' };
   assert.deepEqual(store.mediaTranscriptMetadata(legacy, { fileId: 'f9' }), {

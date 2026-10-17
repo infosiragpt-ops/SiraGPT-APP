@@ -24,6 +24,10 @@
  *   clockwise rotation applied in total (EXIF + OSD).
  * - HEIC/HEIF through `heif-dec` (libheif-tools; `heif-convert` on older
  *   libheif), ffmpeg as second decoder. BMP/ICO/JP2/JXL through ffmpeg.
+ *   The pixel cap holds BEFORE any external decode (decompression bombs):
+ *   HEIF sizes come from the file's `ispe` boxes (unknown → heif-dec is
+ *   skipped), ffmpeg gets an ffprobe size check plus `-max_pixels`; over the
+ *   cap the result is `image_too_large`, never a multi-GB frame.
  * - Every TIFF page, capped (`SIRAGPT_OCR_TIFF_MAX_PAGES`) with the overflow
  *   reported in `truncatedPages` instead of silently dropped; a page that
  *   cannot be decoded is listed in `unreadablePages` under its own number.
@@ -115,6 +119,9 @@ function inputConfig(env = process.env) {
     tmpDir: env.SIRAGPT_OCR_TMP_DIR || os.tmpdir(),
     heifDecBin: env.SIRAGPT_HEIF_DEC_BIN || '',
     ffmpegBin: env.FFMPEG_PATH || 'ffmpeg',
+    // ffprobe next to an absolute ffmpeg, like audio-transcriber.
+    ffprobeBin: env.FFPROBE_PATH
+      || (env.FFMPEG_PATH && path.isAbsolute(env.FFMPEG_PATH) ? path.join(path.dirname(env.FFMPEG_PATH), 'ffprobe') : 'ffprobe'),
     tesseractBin: env.SIRAGPT_TESSERACT_BIN || 'tesseract',
     tessdataDir: env.SIRAGPT_TESSDATA_DIR || '',
     tessdataCacheDir: env.SIRAGPT_TESSDATA_CACHE_DIR || path.join(os.tmpdir(), 'siragpt-tessdata-cache'),
@@ -726,9 +733,137 @@ async function collectDecodedPngs(dir) {
   return names.map((name) => path.join(dir, name));
 }
 
-async function decodeWithHeifDec(srcPath, dir, { exec, env, signal, cfg }) {
+// ffmpeg/ffprobe refuse a frame over `-max_pixels` with this line.
+const MAX_PIXELS_EXCEEDED_RE = /exceeds specified max pixel count/i;
+
+/** `-max_pixels` is a C int in ffmpeg. */
+function maxPixelsArg(cfg) {
+  return String(Math.min(cfg.maxPixels, 2_147_483_647));
+}
+
+// HEIF `meta` boxes are small (item info, locations, properties): a larger
+// one is not read, and its size counts as unknown.
+const HEIF_META_MAX_BYTES = 4 * 1024 * 1024;
+const HEIF_MAX_TOP_LEVEL_BOXES = 64;
+
+/** ISO-BMFF box header at `offset` of `buf` (within `end`), or null. */
+function boxAt(buf, offset, end) {
+  if (offset + 8 > end) return null;
+  let size = buf.readUInt32BE(offset);
+  const type = buf.toString('latin1', offset + 4, offset + 8);
+  let header = 8;
+  if (size === 1) {
+    if (offset + 16 > end) return null;
+    size = Number(buf.readBigUInt64BE(offset + 8));
+    header = 16;
+  } else if (size === 0) {
+    size = end - offset;
+  }
+  if (size < header || offset + size > end) return null;
+  return { type, start: offset + header, end: offset + size };
+}
+
+function childBoxes(buf, start, end) {
+  const out = [];
+  for (let offset = start, n = 0; offset < end && n < 4096; n += 1) {
+    const box = boxAt(buf, offset, end);
+    if (!box) break;
+    out.push(box);
+    offset = box.end;
+  }
+  return out;
+}
+
+/**
+ * Largest image size declared by a HEIF file's `ispe` properties (every
+ * image item has one: primary, grid, tiles, thumbnails — heif-dec decodes
+ * every top-level image, so the largest bounds the work). Reads only box
+ * headers and the `meta` box. Returns { width, height, pixels } or null
+ * when the sizes cannot be read. Never throws.
+ */
+async function readHeifImageSize(filePath) {
+  let handle;
+  try {
+    handle = await fsp.open(filePath, 'r');
+    const { size: fileSize } = await handle.stat();
+    const read = async (position, length) => {
+      const buf = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buf, 0, length, position);
+      return buf.subarray(0, bytesRead);
+    };
+    let offset = 0;
+    for (let n = 0; n < HEIF_MAX_TOP_LEVEL_BOXES && offset + 8 <= fileSize; n += 1) {
+      const head = await read(offset, 16);
+      if (head.length < 8) return null;
+      let size = head.readUInt32BE(0);
+      const type = head.toString('latin1', 4, 8);
+      if (size === 1) {
+        if (head.length < 16) return null;
+        size = Number(head.readBigUInt64BE(8));
+      } else if (size === 0) {
+        size = fileSize - offset;
+      }
+      if (size < 8 || offset + size > fileSize) return null;
+      if (type === 'meta') {
+        if (size > HEIF_META_MAX_BYTES) return null;
+        const meta = await read(offset, size);
+        const top = boxAt(meta, 0, meta.length);
+        if (!top) return null;
+        // `meta` is a FullBox: 4 bytes of version/flags before its children.
+        const iprp = childBoxes(meta, top.start + 4, top.end).find((b) => b.type === 'iprp');
+        const ipco = iprp && childBoxes(meta, iprp.start, iprp.end).find((b) => b.type === 'ipco');
+        if (!ipco) return null;
+        let best = null;
+        for (const box of childBoxes(meta, ipco.start, ipco.end)) {
+          if (box.type !== 'ispe' || box.end - box.start < 12) continue;
+          const width = meta.readUInt32BE(box.start + 4);
+          const height = meta.readUInt32BE(box.start + 8);
+          const pixels = width * height;
+          if (!best || pixels > best.pixels) best = { width, height, pixels };
+        }
+        return best;
+      }
+      offset += size;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+/**
+ * Pixel size of the largest video stream ffprobe sees, checked against the
+ * cap before ffmpeg decodes anything. ffprobe may decode a frame to learn
+ * the size, so it runs under `-max_pixels` too. Returns { tooLarge } |
+ * { pixels } | { pixels: null } (unknown: ffprobe missing or silent — the
+ * decode still runs under `-max_pixels`) | { aborted }.
+ */
+async function ffprobeImageSize(srcPath, { exec, signal, cfg }) {
+  const res = await exec(cfg.ffprobeBin, [
+    '-v', 'error', '-max_pixels', maxPixelsArg(cfg),
+    '-select_streams', 'v', '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+    `file:${srcPath}`,
+  ], { timeoutMs: cfg.decodeTimeoutMs, signal, maxBuffer: 64 * 1024 });
+  if (res.aborted) return { aborted: true };
+  if (MAX_PIXELS_EXCEEDED_RE.test(String(res.stderr || ''))) return { tooLarge: true };
+  let pixels = null;
+  for (const line of String(res.stdout || '').split('\n')) {
+    const m = /^\s*(\d+)\s*,\s*(\d+)/.exec(line);
+    if (m) pixels = Math.max(pixels || 0, Number(m[1]) * Number(m[2]));
+  }
+  if (pixels !== null && pixels > cfg.maxPixels) return { tooLarge: true };
+  return { pixels };
+}
+
+async function decodeWithHeifDec(srcPath, dir, { exec, env, signal, cfg, heifSize }) {
   const probe = await probeHeifDecoder({ exec, env });
   if (!probe.available) return { ok: false, reason: 'heif_decoder_missing' };
+  // heif-dec has no pixel limit of its own: without the declared sizes the
+  // file goes to ffmpeg, which decodes under `-max_pixels`.
+  if (!heifSize) return { ok: false, reason: 'heif_size_unknown' };
+  if (heifSize.pixels > cfg.maxPixels) return { ok: false, reason: 'image_too_large' };
   const res = await exec(probe.bin, [srcPath, path.join(dir, 'out.png')], {
     timeoutMs: cfg.decodeTimeoutMs, signal, maxBuffer: 64 * 1024,
   });
@@ -742,14 +877,21 @@ async function decodeWithHeifDec(srcPath, dir, { exec, env, signal, cfg }) {
 async function decodeWithFfmpeg(srcPath, dir, { exec, env, signal, cfg }) {
   const probe = await probeFfmpeg({ exec, env });
   if (!probe.available) return { ok: false, reason: 'ffmpeg_missing' };
+  const size = await ffprobeImageSize(srcPath, { exec, signal, cfg });
+  if (size.aborted) return { ok: false, reason: 'aborted' };
+  if (size.tooLarge) return { ok: false, reason: 'image_too_large' };
+  // `-max_pixels` is an INPUT option (before -i): the decoder refuses an
+  // oversized frame before allocating it.
   const res = await exec(probe.bin, [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-threads', '2',
+    '-max_pixels', maxPixelsArg(cfg),
     '-i', `file:${srcPath}`, '-frames:v', '1', '-an', '-sn', '-dn', '-update', '1',
     path.join(dir, 'out.png'),
   ], { timeoutMs: cfg.decodeTimeoutMs, signal, maxBuffer: 64 * 1024 });
   if (res.aborted) return { ok: false, reason: 'aborted' };
   if (res.timedOut) return { ok: false, reason: 'ffmpeg_decode_timeout' };
   const files = await collectDecodedPngs(dir);
+  if (res.code !== 0 && MAX_PIXELS_EXCEEDED_RE.test(String(res.stderr || ''))) return { ok: false, reason: 'image_too_large' };
   if (res.code !== 0 || files.length === 0) return { ok: false, reason: 'ffmpeg_decode_failed' };
   return { ok: true, files, source: 'ffmpeg' };
 }
@@ -868,14 +1010,19 @@ async function normalizeImageInput(input, opts = {}) {
     }
     let decoded = null;
     const reasons = [];
+    // HEIF declares its sizes (`ispe`): over the cap, nothing is decoded.
+    const heifSize = state.format === 'heic' ? await readHeifImageSize(srcPath) : null;
+    if (heifSize && heifSize.pixels > cfg.maxPixels) return 'image_too_large';
     for (const decoder of decoders) {
       throwIfAborted(signal);
       const outDir = await fsp.mkdtemp(path.join(dir, 'd-'));
-      const res = await decoder(srcPath, outDir, { exec, env, signal, cfg });
+      const res = await decoder(srcPath, outDir, { exec, env, signal, cfg, heifSize });
       if (res.ok) { decoded = res; break; }
       if (res.reason === 'aborted') throwIfAborted({ aborted: true });
+      if (res.reason === 'image_too_large') return 'image_too_large';
       reasons.push(res.reason);
     }
+    if (reasons.includes('heif_size_unknown')) warnings.push('heif_size_unknown');
     if (reasons.includes('heif_decoder_missing')) {
       warnings.push('heif_decoder_missing');
       warnOnce('heif', 'heif-dec/heif-convert not found; HEIC/HEIF photos are decoded with ffmpeg when it can (install libheif-tools)', logger);
@@ -1299,5 +1446,5 @@ module.exports = {
   getOcrInputCapabilities,
   runCommand,
   resetProbeCache,
-  _internals: { looksTruncated, jpegCompleteness, pngCompleteness, fitScale, encodePage, EXIF_ROTATION, warnOnce },
+  _internals: { looksTruncated, jpegCompleteness, pngCompleteness, fitScale, encodePage, EXIF_ROTATION, warnOnce, readHeifImageSize },
 };

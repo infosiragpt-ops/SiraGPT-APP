@@ -316,7 +316,9 @@ test('dictation ladder policy: free on-host by default, opt-in cloud, operator l
   assert.deepEqual(caps.dictationLadderOptions({}, { paid: true }), { policy: 'shared' });
   assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_FREE_CLOUD: '1' }), { policy: 'shared' });
   assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_FREE_CLOUD: '0' }).providers, ['local', 'voicestudio']);
-  assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_PROVIDERS: 'GROQ, local,groq' }), { providers: ['groq', 'local'], policy: 'env' });
+  // The operator's list bounds a free dictation: no inherited paid escalation rung.
+  assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_PROVIDERS: 'GROQ, local,groq' }), { providers: ['groq', 'local'], escalationProviders: [], policy: 'env' });
+  assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_PROVIDERS: 'local,voicestudio', TRANSCRIBE_ESCALATION_PROVIDERS: 'elevenlabs' }).escalationProviders, []);
   assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_PROVIDERS: 'groq' }, { paid: true }), { providers: ['groq'], policy: 'env' });
   assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_PROVIDERS: ' , !!' }).providers, ['local', 'voicestudio']);
   // The returned list is a copy: a caller cannot mutate the policy.
@@ -327,6 +329,24 @@ test('dictation ladder policy: free on-host by default, opt-in cloud, operator l
   const report = await caps.collectTranscriptionCapabilities({ env: { SIRAGPT_DICTATION_FREE_CLOUD: '1' }, modules });
   assert.deepEqual(report.stt.dictation.free, { providers: 'ladder', policy: 'shared' });
   assert.match(caps.summarizeCapabilities(report), / dictation_free=ladder /);
+});
+
+test('Sira Voz listed after whisper.cpp: the report says short clips read whisper.cpp first', async () => {
+  const withOrder = (order) => fakeModules({
+    audioTranscriber: { ...fakeModules().modules.audioTranscriber, providerOrder: () => order },
+    voiceStudio: { isConfigured: () => true },
+  }).modules;
+  // Appended after 'local': a long recording still asks Sira Voz first, a short clip does not.
+  const after = await caps.collectTranscriptionCapabilities({ env: {}, modules: withOrder(['openai', 'local', 'voicestudio']) });
+  assert.deepEqual(after.stt.ladder.map((r) => r.name), ['openai', 'groq', 'voicestudio', 'local']);
+  assert.deepEqual(after.stt.voiceStudio, { configured: true, inLadder: true, shortClips: 'after_local' });
+  assert.match(caps.summarizeCapabilities(after), /stt=openai\(cooldown\),groq,voicestudio,local voicestudio_short=after_local /);
+  // Listed before it (or without it): Sira Voz is the preferred engine everywhere.
+  const before = await caps.collectTranscriptionCapabilities({ env: {}, modules: withOrder(['voicestudio', 'local']) });
+  assert.equal(before.stt.voiceStudio.shortClips, 'first');
+  assert.doesNotMatch(caps.summarizeCapabilities(before), /voicestudio_short/);
+  const none = await caps.collectTranscriptionCapabilities({ env: {}, modules: withOrder(['openai', 'local']) });
+  assert.equal(none.stt.voiceStudio.shortClips, null);
 });
 
 test('memo: one entry per key — a boot pass that resolves late never overwrites or un-dedupes the admin pass', async () => {

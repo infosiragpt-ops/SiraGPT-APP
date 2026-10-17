@@ -462,6 +462,127 @@ test('analysis mode: the requested analysis replaces the preview; a failed analy
   assert.match(bad.state.messages[0].content, /### Transcripción/);
 });
 
+test('analysisRangeOf: the moment asked about, else the transcript range, else the whole recording', () => {
+  const { analysisRangeOf } = delivery;
+  assert.deepEqual(analysisRangeOf({ range: null, output: { analysisRange: { start: 1740, end: 1860 } } }), { start: 1740, end: 1860 });
+  assert.deepEqual(analysisRangeOf({ range: { start: 60, end: 120 }, output: { analysisRange: { start: 1740, end: 1860 } } }), { start: 1740, end: 1860 });
+  assert.deepEqual(analysisRangeOf({ range: { start: 60, end: 120 }, output: { analysisRange: { start: 90, end: 30 } } }), { start: 60, end: 120 });
+  assert.deepEqual(analysisRangeOf({ range: { start: 60, end: null }, output: {} }), { start: 60, end: null });
+  assert.equal(analysisRangeOf({ range: null, output: { analysisRange: { start: 'x', end: 9 } } }), null);
+  assert.equal(analysisRangeOf({}), null);
+});
+
+test('the default analysis reads only the moment asked about; the transcript files keep the whole recording', async (t) => {
+  const Module = require('node:module');
+  const stubs = new Map([
+    [require.resolve('../src/services/agents/agent-task-runner'), {
+      normalizeAgentRuntimeModel: id => ({ id }),
+      resolveAgentRuntimeClient: () => ({ client: {}, model: 'deepseek-v4-flash', provider: 'DeepSeek' }),
+    }],
+    [require.resolve('../src/services/media-analysis-runtime'), { createMediaAnalysisCompletion: () => ({ complete: async () => 'x' }) }],
+  ]);
+  for (const [file, exports] of stubs) {
+    const previous = require.cache[file];
+    const fake = new Module(file);
+    Object.assign(fake, { filename: file, loaded: true, exports });
+    require.cache[file] = fake;
+    t.after(() => { if (previous) require.cache[file] = previous; else delete require.cache[file]; });
+  }
+  const mediaBatch = require('../src/services/media-batch');
+  const analysed = [];
+  const original = mediaBatch.analyzeMediaBatch;
+  mediaBatch.analyzeMediaBatch = async ({ rows }) => { analysed.push(rows.map(r => r.extractedText)); return { text: 'En el minuto 30 se habla de la mitocondria.' }; };
+  t.after(() => { mediaBatch.analyzeMediaBatch = original; });
+
+  const store = require('../src/services/media-transcript-store');
+  const segments = [];
+  for (let sec = 0; sec < 3600; sec += 60) segments.push({ start: sec, end: sec + 50, text: `Minuto ${sec / 60}: explicamos el tema.` });
+  const result = { ok: true, language: 'es', durationSec: 3600, coverage: 1, gaps: [], partial: false, providers: { local: 1 }, engine: 'local', segments };
+  const transcript = store.normalizeSidecar(store.buildSidecar({ fileId: 'clase', userId: 'u1', result }), { fileName: 'clase.mp4' });
+  const builtRanges = [];
+  const h = await harness(t, { files: [ready('clase')], transcripts: { clase: transcript }, overrides: {
+    analyze: undefined,
+    buildArtifacts: async ({ delivery: rec }) => { builtRanges.push(rec.range); return [{ filename: 'clase.txt', base64: 'eA==', mime: 'text/plain' }]; },
+  } });
+  const record = await h.service.createDelivery(newDelivery({ mode: 'analysis', goal: 'dime qué dice en el minuto 30',
+    output: { analysisRange: { start: 1800, end: 1860 } } }));
+  assert.equal(record.range, null);
+  assert.equal((await h.service.deliverOne(record.id)).status, 'delivered');
+  assert.equal(analysed.length, 1);
+  assert.match(analysed[0][0], /Minuto 30: explicamos/);
+  assert.doesNotMatch(analysed[0][0], /Minuto (5|29|31):/, 'only the moment asked about is analysed');
+  assert.deepEqual(builtRanges, [null], 'the transcript files are not cut to the moment');
+  assert.match(h.state.messages[0].content, /### Análisis\n\nEn el minuto 30 se habla de la mitocondria\./);
+  assert.doesNotMatch(h.state.messages[0].content, /Tramo pedido/, 'the chat view follows the transcript range only');
+});
+
+test('a translation covers the transcript asked for, never only the moment asked about (that moment shapes the summary)', async (t) => {
+  const Module = require('node:module');
+  const stubs = new Map([
+    [require.resolve('../src/services/agents/agent-task-runner'), {
+      normalizeAgentRuntimeModel: id => ({ id }),
+      resolveAgentRuntimeClient: () => ({ client: {}, model: 'deepseek-v4-flash', provider: 'DeepSeek' }),
+    }],
+    [require.resolve('../src/services/media-analysis-runtime'), { createMediaAnalysisCompletion: () => ({ complete: async () => 'x' }) }],
+  ]);
+  for (const [file, exports] of stubs) {
+    const previous = require.cache[file];
+    const fake = new Module(file);
+    Object.assign(fake, { filename: file, loaded: true, exports });
+    require.cache[file] = fake;
+    t.after(() => { if (previous) require.cache[file] = previous; else delete require.cache[file]; });
+  }
+  const patch = (target, key, fn) => { const original = target[key]; target[key] = fn; t.after(() => { target[key] = original; }); };
+  const mediaBatch = require('../src/services/media-batch');
+  const pack = require('../src/services/media-transcript-artifacts');
+  const translated = [];
+  const analysed = [];
+  const labelled = [];
+  patch(mediaBatch, 'translateMediaBatch', async ({ rows, target }) => {
+    translated.push({ target: target.code, texts: rows.map(r => r.extractedText) });
+    return { files: [{ id: rows[0].id, name: 'clase.mp4', text: 'Minute 30: we explain the topic.' }], failed: [] };
+  });
+  patch(mediaBatch, 'analyzeMediaBatch', async ({ rows }) => { analysed.push(rows.map(r => r.extractedText)); return { text: 'En el minuto 30 se habla de la mitocondria.' }; });
+  patch(pack, 'buildTranslationArtifacts', async ({ output }) => {
+    labelled.push(output.range ?? null);
+    return { artifacts: [{ filename: 'clase-en.txt', base64: 'eA==', mime: 'text/plain' }], notes: [] };
+  });
+
+  const store = require('../src/services/media-transcript-store');
+  const segments = [];
+  for (let sec = 0; sec < 3600; sec += 60) segments.push({ start: sec, end: sec + 50, text: `Minuto ${sec / 60}: explicamos el tema.` });
+  const result = { ok: true, language: 'es', durationSec: 3600, coverage: 1, gaps: [], partial: false, providers: { local: 1 }, engine: 'local', segments };
+  const transcript = store.normalizeSidecar(store.buildSidecar({ fileId: 'clase', userId: 'u1', result }), { fileName: 'clase.mp4' });
+  const fullText = segments.map(seg => seg.text).join('\n\n');
+  const h = await harness(t, { files: [ready('clase', { extractedText: fullText })], transcripts: { clase: transcript }, overrides: {
+    analyze: undefined,
+    buildArtifacts: async () => [{ filename: 'clase.txt', base64: 'eA==', mime: 'text/plain' }],
+  } });
+
+  // «traduce la clase y dime qué dice en el minuto 30»: the whole class is translated.
+  const whole = await h.service.createDelivery(newDelivery({ mode: 'translation', goal: 'traduce la clase al inglés y dime qué dice en el minuto 30',
+    output: { analysisRange: { start: 1800, end: 1860 }, alsoAnalysis: true } }));
+  assert.equal((await h.service.deliverOne(whole.id)).status, 'delivered');
+  assert.equal(translated[0].target, 'en');
+  assert.match(translated[0].texts[0], /Minuto 5: explicamos/, 'the translation is not cut to the moment');
+  assert.match(translated[0].texts[0], /Minuto 50: explicamos/);
+  assert.match(analysed[0][0], /Minuto 30: explicamos/, 'the moment shapes the summary');
+  assert.doesNotMatch(analysed[0][0], /Minuto (5|29|31):/);
+  assert.deepEqual(labelled, [null], 'the translated files are of the whole recording');
+
+  // With a transcript range: the translation follows it, the summary the moment.
+  const ranged = await h.service.createDelivery(newDelivery({ mode: 'translation', range: { start: 600, end: 1200 },
+    goal: 'traduce del minuto 10 al 20 al inglés y dime qué explica en el minuto 15',
+    output: { analysisRange: { start: 900, end: 960 }, alsoAnalysis: true } }));
+  assert.equal((await h.service.deliverOne(ranged.id)).status, 'delivered');
+  assert.match(translated[1].texts[0], /Minuto 10: explicamos/);
+  assert.match(translated[1].texts[0], /Minuto 19: explicamos/);
+  assert.doesNotMatch(translated[1].texts[0], /Minuto (5|9|20|25):/, 'the transcript range the user asked for');
+  assert.match(analysed[1][0], /Minuto 15: explicamos/);
+  assert.doesNotMatch(analysed[1][0], /Minuto (10|14|16|19):/);
+  assert.deepEqual(labelled[1], { start: 600, end: 1200 });
+});
+
 test('files still pending past the ceiling are delivered as pending', async (t) => {
   const { service, state, clock } = await harness(t, { files: [ready('a'), fileRow('b')] });
   const record = await service.createDelivery(newDelivery({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));

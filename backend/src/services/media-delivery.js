@@ -847,8 +847,10 @@ function resolveRefineOutcome(record, row) {
 const REFINE_FAILURE_ES = Object.freeze({
   refine_not_ready: 'la transcripción de este archivo todavía no estaba lista',
   refine_untimed: 'el motor no devolvió marcas de tiempo para ese tramo',
+  refine_incomplete: 'no se pudo volver a transcribir todo el tramo',
   invalid_range: 'el tramo queda fuera de la grabación',
   no_speech: 'no se detectó voz en ese tramo',
+  no_audio_track: 'el archivo no tiene pista de audio que volver a transcribir',
   refine_timeout: 'la corrección no terminó a tiempo',
   media_timeout: 'la corrección superó el tiempo permitido',
   media_not_found: 'el archivo ya no está disponible',
@@ -1206,6 +1208,24 @@ function defaultNotify(prisma, { userId, title, body, actionUrl, type, metadata 
   });
 }
 
+/**
+ * The window the analysis (summary, minutes, answer) reads: the moment the
+ * user asked about («qué dice en el minuto 30», `output.analysisRange`), else
+ * the transcript range they asked for, else null (the whole recording). The
+ * transcript files, the chat view and a translation follow `delivery.range`
+ * only (rangeOf).
+ */
+function analysisRangeOf(delivery) {
+  const asked = delivery?.output?.analysisRange;
+  if (asked && typeof asked === 'object') {
+    const start = Number(asked.start);
+    const end = Number(asked.end);
+    if (Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start) return { start, end };
+  }
+  const range = delivery?.range;
+  return range && Number.isFinite(Number(range.start)) ? range : null;
+}
+
 /** Summary/minutes with the model the user picked (plan quota enforced). */
 async function defaultAnalyze({ rows, delivery, prisma }) {
   const runner = require('./agents/agent-task-runner');
@@ -1220,19 +1240,24 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
     client: resolution.client, model: resolution.model, provider: resolution.provider,
     userId: delivery.userId, chatId: delivery.deliveryChatId || delivery.chatId, prisma,
   });
-  // A requested range («del minuto 30 al 45») is analysed alone.
-  const range = delivery?.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null;
-  let analysisRows = rows;
-  if (range) {
+  const rowsIn = (range) => {
+    if (!range) return rows;
     try {
       const transcripts = new Map(Object.entries(delivery.transcripts || {}));
-      analysisRows = require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range);
-    } catch (_) { analysisRows = rows; }
-  }
+      return require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range);
+    } catch (_) { return rows; }
+  };
+  // A requested range («del minuto 30 al 45») or moment is analysed alone.
+  const analysisRows = rowsIn(analysisRangeOf(delivery));
   const mediaBatch = require('./media-batch');
   const target = delivery?.mode === 'translation' ? mediaBatch.detectTranslationTarget(delivery.goal) : null;
   if (target) {
-    const translation = await mediaBatch.translateMediaBatch({ rows: analysisRows, target, complete: completion.complete });
+    // The translation is of the transcript the user asked for (their range,
+    // or the whole recording), never cut to the moment they asked about: that
+    // moment only shapes the summary that comes with it.
+    const range = rangeOf(delivery);
+    const translationRows = rowsIn(range);
+    const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete });
     // «resume y tradúcelo»: the summary too, with the same model. Its failure
     // never costs the translation.
     let summary = '';
@@ -1252,7 +1277,7 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
       ? `${pack.escapeChatMarkdown(`${first.slice(0, 3000)}…`)}\n\n_Vista previa: el archivo adjunto tiene la traducción completa._`
       : pack.escapeChatMarkdown(first);
     // In a batch the preview names the file it shows.
-    const label = analysisRows.length > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : '';
+    const label = translationRows.length > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : '';
     return { text: `${label}${preview}`, artifacts: built.artifacts,
       notes: Array.isArray(built.notes) ? built.notes : [], failed, summary };
   }
@@ -1358,11 +1383,15 @@ function createMediaDeliveryService(deps = {}) {
    * it. Best-effort: a failure never costs the delivery.
    */
   async function rememberHints(created) {
-    if (!created?.language && !created?.hints) return;
+    // A refine's language is about its window only: the refine job carries
+    // it, the file never keeps it (a later gap retry would force it on the
+    // whole recording).
+    const language = isRefineRecord(created) ? null : (created?.language || null);
+    if (!language && !created?.hints) return;
     let failed = 0;
     for (const fileId of created.fileIds) {
       try {
-        const out = await recordHints({ fileId, userId: created.userId, language: created.language || null, hints: created.hints || null });
+        const out = await recordHints({ fileId, userId: created.userId, language, hints: created.hints || null });
         if (out && out.ok === false && out.reason !== 'unavailable') failed++;
       } catch (_) { failed++; }
     }
@@ -1876,6 +1905,7 @@ module.exports = {
   deliveryMessage,
   refineMessage,
   refineHandOffMessage,
+  analysisRangeOf,
   resolveRefineOutcome,
   awaitingRefineOutcome,
   refineJobKeyOf,

@@ -404,3 +404,36 @@ test('DocumentIntelligence re-analysis keeps metadata owned by other pipelines',
   assert.notEqual(row.metadata.analyzedAt, '2020-01-01T00:00:00.000Z', 'the analysis keys are refreshed');
   assert.equal(row.metadata.originalName, 'clase.mp4');
 });
+
+test('DocumentIntelligence re-analysis drops a summary cached from the previous text (llmSummary)', async () => {
+  const prisma = createPrismaMock([
+    {
+      id: 'file-refined',
+      userId: 'user-1',
+      originalName: 'clase.mp4',
+      mimeType: 'video/mp4',
+      extractedText: '[00:12:00] El profesor Ccori explica la fotosíntesis y sus dos fases principales en detalle.',
+    },
+  ]);
+  await prisma.documentAnalysis.upsert({
+    where: { fileId: 'file-refined' },
+    create: {
+      userId: 'user-1',
+      fileId: 'file-refined',
+      status: 'pending',
+      metadata: {
+        kind: 'media_transcript',
+        mediaHints: { terms: ['Ccori'] },
+        llmSummary: { tldr: 'El profesor Kori explica.', keyPoints: ['Kori'], cachedAt: '2026-10-01T00:00:00.000Z' },
+      },
+    },
+    update: {},
+  });
+
+  await documentIntelligence.analyzeFile(prisma, { userId: 'user-1', fileId: 'file-refined' });
+
+  const row = await prisma.documentAnalysis.findUnique({ where: { fileId: 'file-refined' } });
+  assert.equal('llmSummary' in row.metadata, false, 'a summary of the old text never survives a re-analysis');
+  assert.deepEqual(row.metadata.mediaHints, { terms: ['Ccori'] }, 'other pipelines\' keys still survive');
+  assert.equal(row.metadata.kind, 'media_transcript');
+});

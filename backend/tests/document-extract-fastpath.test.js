@@ -154,6 +154,83 @@ test('tryPdftotext falls through when binary is missing or output is empty', asy
   assert.equal(empty.reason, 'empty');
 });
 
+// Longest stretch the event loop went without running a setImmediate
+// callback while `fn` ran (a blocked upload freezes every other request).
+async function maxEventLoopGap(fn) {
+  let maxGap = 0;
+  let ticks = 0;
+  let last = performance.now();
+  let running = true;
+  const tick = () => {
+    const now = performance.now();
+    maxGap = Math.max(maxGap, now - last);
+    last = now;
+    ticks += 1;
+    if (running) setImmediate(tick);
+  };
+  setImmediate(tick);
+  try {
+    const value = await fn();
+    // A run that never let a callback through counts as one long slice.
+    maxGap = Math.max(maxGap, performance.now() - last);
+    return { value, maxGap, ticks };
+  } finally {
+    running = false;
+  }
+}
+
+const BOOK_PROSE = 'El contrato de arrendamiento celebrado entre las partes establece las condiciones del local comercial ubicado en la ciudad de Lima, con una renta mensual pactada y una garantía equivalente. ';
+
+test('tryPdftotext: a 2000-page text layer is planned in bounded slices that yield to the event loop', async () => {
+  const pages = Array.from({ length: 2000 }, (_, i) => (i === 1989
+    ? '(cid:12)(cid:13)(cid:14)(cid:15)(cid:16)(cid:17) (cid:18)(cid:19)(cid:20)'
+    : `Capítulo ${i + 1}\n${BOOK_PROSE.repeat(8)}`));
+  const { value: out, maxGap, ticks } = await withEnv({ SIRAGPT_PDF_TEXT_LAYER_SCORE_MAX_CHARS: '100000' }, () => maxEventLoopGap(
+    () => fastpath.tryPdftotext('/tmp/book.pdf', { execFile: async () => ({ stdout: pages.join('\f') }) }),
+  ));
+  assert.equal(out.used, true);
+  assert.equal(out.pageCount, 2000);
+  // Past the expensive-check budget the cheap glyph checks still run.
+  assert.equal(out.textLayer.kind, 'mixed');
+  assert.deepEqual(out.textLayer.ocrPages, [1990]);
+  assert.ok(maxGap < 250, `longest synchronous slice ${Math.round(maxGap)} ms`);
+  assert.ok(ticks >= 10, `the planner yielded (${ticks} ticks)`);
+});
+
+test('tryPdftotext: one 18 MB page (a book without form feeds) is split and planned in bounded slices', async () => {
+  const count = Math.floor(18e6 / (BOOK_PROSE.length + 1));
+  const giant = `${(BOOK_PROSE + '\n').repeat(count)}  \t\n`;
+  const { value: out, maxGap } = await maxEventLoopGap(
+    () => fastpath.tryPdftotext('/tmp/book.pdf', { execFile: async () => ({ stdout: `${giant}\fÚltimo capítulo del contrato, con texto suficiente.\n\f` }) }),
+  );
+  assert.equal(out.used, true);
+  assert.equal(out.pageCount, 2);
+  assert.equal(out.pages[0].text.endsWith('equivalente.'), true);
+  assert.equal(out.textLayer.kind, 'text');
+  assert.ok(maxGap < 250, `longest synchronous slice ${Math.round(maxGap)} ms`);
+});
+
+test('tryPdftotext: SIRAGPT_PDF_TEXT_LAYER_CHECK=0 skips the text-layer plan entirely', async () => {
+  const mixedPdf = require('../src/services/document/mixed-pdf');
+  const saved = { planTextLayerOcr: mixedPdf.planTextLayerOcr, planTextLayerOcrAsync: mixedPdf.planTextLayerOcrAsync };
+  let planned = 0;
+  mixedPdf.planTextLayerOcr = (...args) => { planned += 1; return saved.planTextLayerOcr(...args); };
+  mixedPdf.planTextLayerOcrAsync = async (...args) => { planned += 1; return saved.planTextLayerOcrAsync(...args); };
+  try {
+    const off = await withEnv({ SIRAGPT_PDF_TEXT_LAYER_CHECK: '0' }, () => fastpath.tryPdftotext('/tmp/doc.pdf', {
+      execFile: async () => ({ stdout: 'Página 1 de 2\fPágina 2 de 2' }),
+    }));
+    assert.equal(off.used, true);
+    assert.equal(off.textLayer, null);
+    assert.equal(planned, 0);
+    const on = await fastpath.tryPdftotext('/tmp/doc.pdf', { execFile: async () => ({ stdout: 'Página 1 de 2\fPágina 2 de 2' }) });
+    assert.equal(on.textLayer.kind, 'scanned');
+    assert.equal(planned, 1);
+  } finally {
+    Object.assign(mixedPdf, saved);
+  }
+});
+
 test('extractPptxSlides keeps every slide plus notes in order', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'siragpt-pptx-fast-'));
   const filePath = path.join(dir, 'deck.pptx');

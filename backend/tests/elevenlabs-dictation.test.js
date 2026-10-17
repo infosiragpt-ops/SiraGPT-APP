@@ -212,6 +212,7 @@ describe('dictation: shared ladder, Scribe for paid plans, typed errors', () => 
     assert.ok(!('language' in options), 'no forced language: the ladder detects it');
     assert.deepEqual(options.providers, ['local', 'voicestudio'], 'free dictation never reaches a paid cloud rung by default');
     assert.deepEqual(options.escalationProviders, [], 'nor an operator-enabled paid escalation rung');
+    assert.equal(options.voiceStudioTimeoutMs, 15_000, 'Sira Voz gets its own share of the 25 s bound');
     await assertLogged(/^\[dictation\] tier=free outcome=ok provider=local-whisper chars=\d+ ms=\d+/);
     assertNoTranscriptLogged();
     await assertUploadsCleaned();
@@ -235,11 +236,14 @@ describe('dictation: shared ladder, Scribe for paid plans, typed errors', () => 
     await post({ fields: { language: 'es-PE' } }).expect(200);
     assert.equal(state.transcribeCalls[0].options.language, 'es');
     assert.deepEqual(state.transcribeCalls[0].options.providers, ['groq', 'local']);
+    assert.deepEqual(state.transcribeCalls[0].options.escalationProviders, [],
+      'a free dictation never inherits TRANSCRIBE_ESCALATION_PROVIDERS through the operator\'s list');
     await post({ fields: { language: 'auto' } }).expect(200);
     assert.ok(!('language' in state.transcribeCalls[1].options));
     // The operator's list applies to paid plans too.
     await post({ plan: 'paid' }).expect(200);
     assert.deepEqual(state.transcribeCalls[2].options.providers, ['groq', 'local']);
+    assert.ok(!('escalationProviders' in state.transcribeCalls[2].options), 'paid plans keep the operator\'s escalation');
     await assertUploadsCleaned();
   });
 
@@ -499,6 +503,8 @@ describe('dictation: shared ladder, Scribe for paid plans, typed errors', () => 
     assert.equal(d.ladderProviderLabel({ providers: { groq: 1 } }), 'groq');
     assert.equal(d.ladderProviderLabel({ providers: { voicestudio: 1 } }), 'sira-voz');
     assert.equal(d.dictationTimeoutMs({ SIRAGPT_DICTATION_TIMEOUT_MS: '5' }), 1000);
+    assert.equal(d.voiceStudioTimeoutMs(25_000), 15_000);
+    assert.equal(d.voiceStudioTimeoutMs(1_000), 600);
     assert.deepEqual(d.dictationProviders({}), ['local', 'voicestudio']);
     assert.equal(d.dictationProviders({}, { paid: true }), undefined);
     assert.equal(d.dictationProviders({ SIRAGPT_DICTATION_FREE_CLOUD: '1' }), undefined);

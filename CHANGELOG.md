@@ -24,6 +24,16 @@ and improvement cycles follow a sequential number with the date the work landed.
     - Tesseract languages load from the image (no CDN) and add Portuguese, French, Italian and German.
   - **Dictation.** Every plan uses the shared ladder with automatic language detection. A plan or quota error is a clear message, never fake success text. Free plans stay on the server unless an operator opts in. The transcript is never logged.
   - **Operations.** `GET /api/admin/transcription-capabilities` (superadmin) and one boot line report what each server can really do. Paid rungs stay opt-in (see `docs/ENV_VARIABLES.md`).
+  - **Hardening from a second adversarial review (21 findings and their follow-ups fixed):**
+    - Silence is never filled with invented text: an empty first reading over measured silence needs two agreeing alternatives.
+    - «revisa el minuto 12» re-reads only that stretch, even for transcripts made before this change. Its result is spliced where neither transcript has a segment crossing the cut, so no word is lost or repeated. A silent or failed stretch leaves the transcript, and the parts later retries reuse, exactly as they were. The stretch's language never becomes the whole file's.
+    - «transcribe y dime qué dice en el minuto 30» delivers the full transcript and answers the moment. A translation is never cut to the minute the user asked about.
+    - The recording's language is no longer read from «el examen es en inglés», «la transcripción está en inglés…», «speak in English please», a place («Alemania») or how an event went («la reunión de ayer fue en…»).
+    - Free dictation tries whisper.cpp before Sira Voz again, with Sira Voz limited to 60 % of the request time.
+    - Cloud OCR skips runtimes with no key or no credit before choosing three, keeps OpenAI reachable, and leaves room after GLM-OCR for the cloud.
+    - HEIC/BMP/JP2 files are size-checked before an external decoder runs. Text-layer scoring yields to the event loop and is bounded.
+    - Mail-merge PDFs keep their exact text; a partial OCR keeps the text layer of every page it did not read.
+    - A ZIP expansion cut by a restart leaves no orphan files and resumes after boot.
 
 - Professional transcription that copes with 5-hour recordings.
   - **Long recordings no longer hold the chat.** The turn waits at most 4 minutes, then answers «Recibí «clase.mp4» (≈5 h)… te aviso aquí». The durable media job (resumable across deploys) posts the transcript, its files and any requested analysis into the same chat with an in-app and push notification.

@@ -163,6 +163,20 @@ function createDiskCheckpoint(dir) {
       if (saved?.meta?.segmentSeconds !== meta?.segmentSeconds || saved?.meta?.total !== meta?.total) return null;
       return saved.part || null;
     },
+    // The cut plan an entry was saved under, whatever its meta: a refine
+    // checks that the stored transcript was cut like its new pieces, even
+    // when the old cut had another number of pieces (load ignores those).
+    async savedCutPlan(index) {
+      const raw = await fs.promises.readFile(fileFor(index), 'utf8').catch(() => null);
+      if (!raw) return null;
+      try {
+        const saved = JSON.parse(raw);
+        const hash = saved?.meta?.cutPlan || saved?.part?.cutPlan;
+        return typeof hash === 'string' && hash ? hash : null;
+      } catch (_) {
+        return null;
+      }
+    },
     async save(index, meta, part) {
       await fs.promises.mkdir(dir, { recursive: true });
       const target = fileFor(index);
@@ -171,6 +185,45 @@ function createDiskCheckpoint(dir) {
       await fs.promises.rename(tmp, target);
     },
     clear: () => fs.promises.rm(dir, { recursive: true, force: true }),
+  };
+}
+
+/**
+ * A refine reads into a staging copy of the checkpoint. Its parts reach the
+ * real checkpoint only once the refined transcript is saved: a refine that
+ * fails (no speech, a lost window, untimed) never leaves readings behind for a
+ * later gap retry or refine to rebuild the transcript from. The audio cuts
+ * under `dir` are the file's own and stay shared.
+ */
+function createStagedCheckpoint(checkpoint) {
+  if (!checkpoint) return { checkpoint: null, commit: async () => {}, size: () => 0 };
+  const staged = new Map();
+  const view = {
+    dir: checkpoint.dir,
+    async load(index, meta) {
+      const entry = staged.get(index);
+      if (entry) return entry.meta?.segmentSeconds === meta?.segmentSeconds && entry.meta?.total === meta?.total ? entry.part : null;
+      return typeof checkpoint.load === 'function' ? checkpoint.load(index, meta) : null;
+    },
+    async save(index, meta, part) { staged.set(index, { meta, part }); },
+    clear: () => (typeof checkpoint.clear === 'function' ? checkpoint.clear() : undefined),
+  };
+  if (typeof checkpoint.savedCutPlan === 'function') {
+    view.savedCutPlan = async (index) => {
+      const entry = staged.get(index);
+      if (!entry) return checkpoint.savedCutPlan(index);
+      const hash = entry.meta?.cutPlan || entry.part?.cutPlan;
+      return typeof hash === 'string' && hash ? hash : null;
+    };
+  }
+  return {
+    checkpoint: view,
+    size: () => staged.size,
+    async commit() {
+      if (typeof checkpoint.save !== 'function') return;
+      for (const [index, entry] of staged) await checkpoint.save(index, entry.meta, entry.part);
+      staged.clear();
+    },
   };
 }
 
@@ -333,6 +386,10 @@ function onRecordingClock(transcription, offsetSec) {
   if (transcription.quality && Array.isArray(transcription.quality.lowConfidence)) {
     out.quality = { ...transcription.quality, lowConfidence: shift(transcription.quality.lowConfidence) };
   }
+  // The stretches a refine read again ([start, end] pairs).
+  if (Array.isArray(transcription.refineSpans)) {
+    out.refineSpans = transcription.refineSpans.map(span => (Array.isArray(span) ? span.map(t => Number(t) + offset) : span));
+  }
   return out;
 }
 
@@ -420,80 +477,324 @@ function windowText(result, range) {
   }).map(seg => String(seg?.text || '').replace(/\s+/g, ' ').trim()).filter(Boolean).join(' ');
 }
 
+const listOf = value => (Array.isArray(value) ? value : []);
+/** [start, end] of a segment or gap (a missing or inverted end is a point). */
+function spanOf(item) {
+  const s = Number(item?.start) || 0;
+  const e = Number(item?.end);
+  return [s, Number.isFinite(e) && e > s ? e : s];
+}
+
 /**
- * A refined window spliced into the transcript the user already has. A
- * segment (or gap, or doubtful stretch) belongs to the window when its
- * midpoint falls inside [start, end): those come from the refined result,
- * everything else stays exactly as it was. Both results are on the
- * recording's clock. A previous transcript without timestamps cannot be cut
- * by time: the refined result is taken whole.
+ * The stretches a refine read again: the engine's `refineSpans`, one
+ * [start, end] per piece it re-read for the window (moved to the recording's
+ * clock with the rest), sorted. null when the result names none.
+ */
+function refineReadSpans(refined) {
+  const spans = listOf(refined?.refineSpans)
+    .map(span => (Array.isArray(span) ? [Number(span[0]), Number(span[1])] : null))
+    .filter(span => span && Number.isFinite(span[0]) && Number.isFinite(span[1]) && span[1] > span[0])
+    .sort((a, b) => a[0] - b[0]);
+  return spans.length ? spans : null;
+}
+
+/** The refined result skipped pieces outside its window (it read only part of the file). */
+const skippedPieces = refined => Number(refined?.refineSkipped) > 0;
+
+/**
+ * Whether a segment STARTS inside one of the re-read spans, on the sidecar's
+ * millisecond grid. On a link clip the stored times are rounded to the
+ * millisecond after the shift to the recording's clock, while a refine's
+ * segments and spans are the plain float sums: 301.228 + 600 is
+ * 901.2280000000001, its stored copy 901.228. Compared exactly, a stored
+ * segment at a piece's start landed in the previous piece.
+ */
+const onMsGrid = n => Math.round(Number(n) * 1000);
+function startsInSpans(spans) {
+  const grid = spans.map(([rs, re]) => [onMsGrid(rs), onMsGrid(re)]);
+  return ([start]) => {
+    const at = onMsGrid(start);
+    return grid.some(([rs, re]) => at >= rs && at < re);
+  };
+}
+
+/**
+ * Which segments (of either transcript) belong to what the refine read
+ * again. With nothing skipped (the default: every piece outside the window
+ * is reused from its checkpoint) the refined result covers the whole file,
+ * so all of them: a stored segment the two readings time differently (the
+ * silence around the words) is still the same speech, and leaving it out of
+ * the cut repeated its words. With pieces skipped, a segment belongs to the
+ * piece its START falls in: the engine cuts its pieces at silences and every
+ * segment starts inside its own piece (only ends overrun a cut), so a segment
+ * starting in a re-read piece is that piece's speech in both transcripts, and
+ * one starting anywhere else was never read again. null when pieces were
+ * skipped and the result does not say which were read: nothing can be cut in.
+ */
+function refineReRead(refined) {
+  if (!skippedPieces(refined)) return () => true;
+  const spans = refineReadSpans(refined);
+  if (!spans) return null;
+  return startsInSpans(spans);
+}
+
+/** [s, e] ∩ the sorted disjoint intervals of `region` (a point: kept when an interval holds it). */
+function insideRegion([s, e], region) {
+  if (!(e > s)) return region.some(([rs, re]) => s >= rs && s <= re) ? [[s, s]] : [];
+  return region.map(([rs, re]) => [Math.max(s, rs), Math.min(e, re)]).filter(([a, b]) => b > a);
+}
+
+/** [s, e] minus the sorted disjoint intervals of `region`. */
+function outsideRegion([s, e], region) {
+  if (!(e > s)) return region.some(([rs, re]) => s > rs && s < re) ? [] : [[s, s]];
+  const pieces = [];
+  let cursor = s;
+  for (const [rs, re] of region) {
+    if (re <= cursor || rs >= e) continue;
+    if (rs > cursor) pieces.push([cursor, rs]);
+    cursor = Math.max(cursor, re);
+  }
+  if (cursor < e) pieces.push([cursor, e]);
+  return pieces;
+}
+
+/**
+ * What a splice replaces: the cut window, and with pieces skipped only the
+ * parts of it the refine read again (a widened cut may reach into a skipped
+ * piece; its gaps and doubtful stretches stay as they were).
+ */
+function replacedRegion(refined, window) {
+  if (!skippedPieces(refined)) return [[window.start, window.end]];
+  return (refineReadSpans(refined) || []).map(([rs, re]) => [Math.max(window.start, rs), Math.min(window.end, re)])
+    .filter(([a, b]) => b > a);
+}
+
+/** A stored transcript a refine can be cut into by time (C5). */
+function isSpliceable(previous) {
+  return Boolean(previous) && Array.isArray(previous.segments) && !previous.synthetic
+    && (!previous.source || previous.source === 'asr');
+}
+
+/**
+ * Where a refine is cut into the stored transcript. The refined pieces are
+ * re-read with other hypotheses, so their segment boundaries rarely match the
+ * stored ones, and the user's minutes fall inside speech: a cut by midpoint
+ * dropped or repeated the words of a segment straddling an edge. The window
+ * is widened until no segment of either transcript crosses its edges, so
+ * every second comes from exactly one of them. A segment the refine did not
+ * read again (one starting in a piece the engine skipped or reused, see
+ * refineReRead) never widens it: it stays as it was. Each pass only widens,
+ * so it ends. null for an invalid range, or when pieces were skipped and the
+ * result does not say which were read.
+ */
+function refineSpliceWindow(previous, refined, range) {
+  let s = Number(range?.start);
+  let e = Number(range?.end);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return null;
+  const touched = refineReRead(refined);
+  if (!touched) return null;
+  const candidates = [...listOf(refined?.segments), ...listOf(previous?.segments)].map(seg => ({ span: spanOf(seg), anchored: null }));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const candidate of candidates) {
+      const [gs, ge] = candidate.span;
+      const crossesStart = gs < s && ge > s;
+      const crossesEnd = gs < e && ge > e;
+      if (!crossesStart && !crossesEnd) continue;
+      if (candidate.anchored === null) candidate.anchored = touched(candidate.span);
+      if (!candidate.anchored) continue;
+      if (crossesStart) s = gs;
+      if (crossesEnd) e = ge;
+      changed = true;
+    }
+  }
+  return { start: s, end: e };
+}
+
+/**
+ * The cut points of a splice and which segments it swaps: inside them, the
+ * ones the refine read again (see refineReRead). Both spliceRefinedRange and
+ * refineHeardNothing use it, so they always agree. null when the result
+ * cannot be cut in (an invalid range, or pieces skipped without saying which
+ * were read).
+ */
+function refineCut(previous, refined, range) {
+  const reRead = refineReRead(refined);
+  if (!reRead) return null;
+  const window = refineSpliceWindow(previous, refined, range);
+  if (!window) return null;
+  const swapped = item => {
+    const span = spanOf(item);
+    return span[0] >= window.start && span[1] <= window.end && reRead(span);
+  };
+  return { window, swapped };
+}
+
+/**
+ * The refine read the stretch it would replace and heard no speech there:
+ * none of the segments it would swap in from the pieces it read again (its
+ * `refineSpans`, in both modes) carries text, and it left no gap of its own
+ * in that stretch (an unread stretch is refineLosesText's case, or a stored
+ * gap that stays one). A segment reused from a checkpoint that crosses into
+ * the window widens the cut but was not heard again. «No speech» is then the
+ * window's verdict whatever happened outside the window (pieces reused or
+ * skipped), and the stored text stays: the refine fails instead of splicing
+ * an empty window. A result that names no re-read stretch is judged by
+ * everything it swaps in.
+ */
+function refineHeardNothing(previous, refined, range) {
+  if (!isSpliceable(previous) || !refined || typeof refined !== 'object') return false;
+  const cut = refineCut(previous, refined, range);
+  if (!cut) return false;
+  const spans = refineReadSpans(refined);
+  const readAgain = spans ? startsInSpans(spans) : () => true;
+  if (listOf(refined.segments).some(seg => cut.swapped(seg) && readAgain(spanOf(seg)) && String(seg?.text || '').trim())) return false;
+  const region = replacedRegion(refined, cut.window);
+  return !listOf(refined.gaps).some(gap => insideRegion(spanOf(gap), region).some(([a, b]) => b - a > 0.05));
+}
+
+/**
+ * A refine never trades text for a gap (C5): a stretch of the window the new
+ * attempt could not read where the stored transcript had no gap means the
+ * refine failed, whatever the coverage of the rest of the file. A stored
+ * transcript that cannot be cut by time is replaced whole, so there any new
+ * gap counts, and so does a result that skipped pieces (`refineSkipped`):
+ * the text of those pieces would be lost. A result that skipped pieces
+ * without saying which it read (`refineSpans`) cannot be cut in either.
+ */
+function refineLosesText(previous, refined, range) {
+  const spliceable = isSpliceable(previous);
+  if (skippedPieces(refined) && (!spliceable || !refineReadSpans(refined))) return true;
+  const window = spliceable ? refineSpliceWindow(previous, refined, range) : { start: 0, end: Infinity };
+  if (!window) return false;
+  const known = listOf(previous?.gaps).map(spanOf).sort((a, b) => a[0] - b[0]);
+  const coveredByKnown = (s, e) => {
+    let cursor = s;
+    for (const [gs, ge] of known) {
+      if (gs > cursor + 0.05) break;
+      if (ge > cursor) cursor = ge;
+      if (cursor >= e - 0.05) return true;
+    }
+    return cursor >= e - 0.05;
+  };
+  return listOf(refined?.gaps).some(gap => {
+    const [gs, ge] = spanOf(gap);
+    const s = Math.max(gs, window.start);
+    const e = Math.min(ge, window.end);
+    return e - s > 0.05 && !coveredByKnown(s, e);
+  });
+}
+
+/** The refine-only fields (skipped pieces, re-read spans) never reach a stored transcript. */
+function withoutRefineFields(result) {
+  if (!result || typeof result !== 'object' || !('refineSpans' in result || 'refineSkipped' in result)) return result;
+  const { refineSpans: _spans, refineSkipped: _skipped, ...rest } = result;
+  return rest;
+}
+
+/**
+ * A refined window spliced into the transcript the user already has. The
+ * cut points come from refineSpliceWindow: inside them the refined result
+ * (what it read again, see refineReRead), everything else exactly as it was.
+ * Both results are on the recording's clock. What the refined result leaves
+ * out (pieces it skipped or did not re-read) is never a gap here. A previous
+ * transcript without timestamps cannot be cut by time: the refined result is
+ * taken whole. A result that skipped pieces without saying which it read
+ * changes nothing (refineLosesText refuses it first). A result that skipped
+ * pieces describes only what it read: the file-level summary (quality level
+ * and score, notes, providers, engine) stays the stored one.
  */
 function spliceRefinedRange(previous, refined, range) {
   const prevSegments = Array.isArray(previous?.segments) ? previous.segments : null;
-  if (!prevSegments || previous.synthetic || !refined || typeof refined !== 'object') return refined;
-  const start = Number(range?.start);
-  const end = Number(range?.end);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return refined;
-  const midpoint = item => {
-    const s = Number(item?.start) || 0;
-    const e = Number(item?.end);
-    return Number.isFinite(e) && e > s ? (s + e) / 2 : s;
-  };
-  const inside = item => { const m = midpoint(item); return m >= start && m < end; };
+  if (!prevSegments || previous.synthetic || !refined || typeof refined !== 'object') return withoutRefineFields(refined);
+  if (!refineReRead(refined)) return previous;
+  const cut = refineCut(previous, refined, range);
+  if (!cut) return withoutRefineFields(refined);
+  const { window, swapped } = cut;
+  const { start, end } = window;
+  // Inside the cut points, a segment of what the refine read again comes
+  // from the refined reading; every other one stays as it was.
   const byStart = (a, b) => (Number(a.start) || 0) - (Number(b.start) || 0);
-  const segments = [...prevSegments.filter(seg => !inside(seg)),
-    ...(Array.isArray(refined.segments) ? refined.segments : []).filter(inside)].sort(byStart);
-  // Gaps are clipped, not moved by midpoint: the window is re-done, so an old
-  // gap keeps only its stretches outside it, a new gap only those inside.
-  const outsidePieces = gap => {
-    const s = Number(gap.start); const e = Number(gap.end);
-    if (!(e > s)) return [];
-    const pieces = [];
-    if (s < start) pieces.push({ ...gap, start: s, end: Math.min(e, start) });
-    if (e > end) pieces.push({ ...gap, start: Math.max(s, end), end: e });
-    return pieces;
+  const segments = [...prevSegments.filter(seg => !swapped(seg)), ...listOf(refined.segments).filter(swapped)].sort(byStart);
+  // Gaps and doubtful stretches are clipped at what was replaced: the window
+  // is re-done, so an old one keeps only its stretches outside, a new one
+  // only those inside.
+  const region = replacedRegion(refined, window);
+  // A cut piece under a millisecond is the two clocks' rounding on a link
+  // clip (see startsInSpans), never a stretch of its own.
+  const asItems = (item, spans) => spans.filter(([s, e]) => e - s >= 0.0005).map(([s, e]) => ({ ...item, start: s, end: e }));
+  const outsidePieces = item => {
+    const span = spanOf(item);
+    return span[1] > span[0] ? asItems(item, outsideRegion(span, region)) : (outsideRegion(span, region).length ? [item] : []);
   };
-  const insidePiece = gap => {
-    const s = Math.max(Number(gap.start), start); const e = Math.min(Number(gap.end), end);
-    return e > s ? [{ ...gap, start: s, end: e }] : [];
+  const insidePiece = item => {
+    const span = spanOf(item);
+    return span[1] > span[0] ? asItems(item, insideRegion(span, region)) : (insideRegion(span, region).length ? [item] : []);
   };
-  const gaps = [...(Array.isArray(previous.gaps) ? previous.gaps : []).flatMap(outsidePieces),
-    ...(Array.isArray(refined.gaps) ? refined.gaps : []).flatMap(insidePiece)]
+  const gaps = [...listOf(previous.gaps).flatMap(outsidePieces), ...listOf(refined.gaps).flatMap(insidePiece)]
     .filter(gap => gap.end - gap.start > 0.05).sort(byStart);
   const durationSec = Number(previous.durationSec) > 0 ? Number(previous.durationSec)
     : (Number(refined.durationSec) > 0 ? Number(refined.durationSec) : null);
   const gapSeconds = gaps.reduce((sum, gap) => sum + (gap.end - gap.start), 0);
   const coverage = durationSec ? Math.max(0, Math.min(1, 1 - gapSeconds / durationSec)) : (refined.coverage ?? previous.coverage ?? null);
-  const baseQuality = refined.quality || previous.quality || null;
+  // With pieces skipped the refined result read only part of the file: its
+  // score, level, notes, providers and engine describe those minutes, not
+  // the recording. The stored transcript's file-level summary stays (its
+  // doubtful stretches are still spliced), and the engines that read the
+  // window are added to it, so a cloud reading is never hidden.
+  const skipped = skippedPieces(refined);
+  const [primary, secondary] = skipped ? [previous, refined] : [refined, previous];
+  const baseQuality = primary.quality || secondary.quality || null;
+  const enginesUsed = [...new Set([...listOf(primary.quality?.enginesUsed), ...listOf(secondary.quality?.enginesUsed)])].slice(0, 12);
   const quality = baseQuality ? {
     ...baseQuality,
-    lowConfidence: [...(previous.quality?.lowConfidence || []).filter(item => !inside(item)),
-      ...(refined.quality?.lowConfidence || []).filter(inside)].sort(byStart),
+    ...(skipped && enginesUsed.length ? { enginesUsed } : {}),
+    lowConfidence: [...listOf(previous.quality?.lowConfidence).flatMap(outsidePieces),
+      ...listOf(refined.quality?.lowConfidence).flatMap(insidePiece)].sort(byStart),
   } : null;
   const offset = clipOffset(previous.timeOffsetSec) || clipOffset(refined.timeOffsetSec);
+  // A cut that spans the whole recording leaves none of the old text: the
+  // refine's language is then the file's.
+  const wholeRecording = !skipped && durationSec > 0
+    && start <= (offset || 0) + 0.05 && end >= (offset || 0) + durationSec - 0.05;
   const pickObject = (a, b) => (a && typeof a === 'object' ? a : (b && typeof b === 'object' ? b : null));
-  const providers = refined.providers && Object.keys(refined.providers).length ? refined.providers : (previous.providers || {});
+  const providers = primary.providers && Object.keys(primary.providers).length ? primary.providers : (secondary.providers || {});
+  // A window read by another engine family than the rest makes the file mixed.
+  const engine = skipped && previous.engine && refined.engine && previous.engine !== refined.engine ? 'mixed'
+    : primary.engine || secondary.engine || null;
   const out = {
     ok: true,
-    method: refined.method || previous.method || null,
-    language: refined.language || previous.language || null,
+    method: primary.method || secondary.method || null,
+    // A refine's language is about its window («del 12 al 15, está en
+    // inglés»): the file keeps its own, unless the window is all of it.
+    language: (wholeRecording ? refined.language || previous.language : previous.language || refined.language) || null,
     durationSec,
     segments,
     gaps,
     coverage,
     partial: gaps.length > 0,
     providers,
-    engine: refined.engine || previous.engine || null,
+    engine,
     source: 'asr',
     transcript: segments.map(seg => String(seg.text || '')).filter(Boolean).join(' '),
   };
   if (Number.isFinite(Number(refined.segmentCount))) out.segmentCount = Number(refined.segmentCount);
   if (offset) out.timeOffsetSec = offset;
   if (quality) out.quality = quality;
-  for (const key of ['audioStream', 'hints', 'embeddedSubtitles']) {
+  for (const key of ['audioStream', 'embeddedSubtitles']) {
     const value = key === 'embeddedSubtitles' ? pickObject(previous[key], refined[key]) : pickObject(refined[key], previous[key]);
     if (value) out[key] = value;
   }
+  // The refine's names count for the whole file; its language does not (the
+  // stored one stays), unless the window is the whole recording.
+  const windowHints = pickObject(refined.hints, null);
+  let hints = pickObject(previous.hints, null);
+  if (windowHints) {
+    const { language: windowLanguage, ...rest } = windowHints;
+    const language = (wholeRecording && windowLanguage) || previous.hints?.language || null;
+    hints = { ...rest, ...(language ? { language } : {}) };
+  }
+  if (hints && Object.keys(hints).length) out.hints = hints;
   if (Array.isArray(previous.onScreenText) && previous.onScreenText.length) out.onScreenText = previous.onScreenText;
   return out;
 }
@@ -706,7 +1007,7 @@ function isTransientMediaError(err) {
   // A video whose text could not be read (OCR/ffmpeg down, no frame decoded)
   // is retried: the verdict about its voice stands, the reading did not happen.
   if (err?.textUnread && err?.retryable === true && /^(no_speech|no_audio_track)$/.test(String(err?.code || ''))) return true;
-  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|media_not_found|media_owner_required)$/i.test(String(err?.code || ''))) return false;
+  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required)$/i.test(String(err?.code || ''))) return false;
   if (typeof err?.retryable === 'boolean') return err.retryable;
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
   if (status === 429 || status === 408 || status >= 500 && status <= 599) return true;
@@ -935,7 +1236,9 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       } catch (_) { durable = null; }
     }
     const chosen = !durable ? fromJob : (!fromJob ? durable : (durable.at > fromJob.at ? durable : fromJob));
-    return { language: chosen?.language || null, hints: chosen?.hints || null };
+    // A refine's language lives only in its job (it is about its window):
+    // a newer durable write (names from another turn) never replaces it.
+    return { language: (data.refine && fromJob?.language) || chosen?.language || null, hints: chosen?.hints || null };
   }
   const storedHints = media => {
     const out = { ...(media.language ? { language: media.language } : {}), ...(media.hints || {}) };
@@ -1086,7 +1389,11 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       return { id: fileId, queued: false, refine: true, stage: row.processingStage || 'uploaded', reason: 'not_ready' };
     }
     const media = requestMedia({ language, hints }, now());
-    if (media) await persistHints(row, media);
+    // A refine's language is about its window («del 12 al 15 está en
+    // inglés»): it stays in this job. Stored for the file, a later gap retry
+    // or refine would force it on the whole recording (Whisper translating a
+    // Spanish class). Names, speakers and «literal» hold for the whole file.
+    if (media?.hints) await persistHints(row, { hints: media.hints, at: media.at });
     const lanes = laneQueues();
     const jobId = refineJobIdFor(fileId, userId, window, media);
     const found = await findJob(jobId, lanes);
@@ -1287,7 +1594,8 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
   /**
    * Engine (or a fallback) → { transcription, plain } on the FILE's clock,
    * cleaned, with `source` set. Throws the engine's error when nothing usable
-   * came back. `extra` carries refine options (range, forceRetranscribe).
+   * came back. `extra` carries refine options (range, forceRetranscribe,
+   * refineSkipUnusable); a refine never gets a whole-file fallback.
    */
   async function linkCaptionsFallback(engineError, { row, offsetSec, probe }) {
     if (typeof readLinkCaptions !== 'function') return null;
@@ -1335,8 +1643,13 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       }
     }
     if (engineError) {
-      const fallback = await videoFallback(engineError, { local, row, mimeType, probe, media, checkpoint, signal })
-        || (extra.range ? null : await linkCaptionsFallback(engineError, { row, offsetSec, probe }));
+      // A refine read only its window: the engine's verdict is about those
+      // minutes. The whole-file fallbacks (subtitle track, on-screen text,
+      // link captions) never run for it — hours of OCR on a long video, and
+      // text that is not the window's would be spliced into it.
+      const fallback = extra.range ? null
+        : (await videoFallback(engineError, { local, row, mimeType, probe, media, checkpoint, signal })
+          || await linkCaptionsFallback(engineError, { row, offsetSec, probe }));
       if (!fallback) throw engineError;
       return { transcription: fallback, plain: fallback.transcript };
     }
@@ -1554,18 +1867,40 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         try { previous = await transcriptStore.loadMediaTranscript(prisma, { userId, fileId }); } catch (_) { previous = null; }
       }
       checkpoint = createCheckpoint(row);
+      const staging = createStagedCheckpoint(checkpoint);
       local = await materialize(row.path, { signal: controller.signal });
       controller.signal.throwIfAborted();
       const mimeType = await validate(local, row);
-      const run = await runTranscription({ row, local, mimeType, media, checkpoint, signal: controller.signal, lane,
-        onProgress: createProgressTracker({ publish: progress => job.updateProgress?.(progress) }),
-        extra: { range: engineRange, forceRetranscribe: true } });
+      // A transcript that cannot be cut by time (no sidecar, untimed, from
+      // subtitles or the screen) is replaced whole: the engine must read the
+      // pieces it cannot reuse instead of skipping them.
+      const spliceable = isSpliceable(previous);
+      let run;
+      try {
+        run = await runTranscription({ row, local, mimeType, media, checkpoint: staging.checkpoint, signal: controller.signal, lane,
+          onProgress: createProgressTracker({ publish: progress => job.updateProgress?.(progress) }),
+          extra: { range: engineRange, forceRetranscribe: true, refineSkipUnusable: spliceable } });
+      } catch (engineErr) {
+        // «No speech» is the window's verdict: the refine fails, the stored
+        // transcript stays exactly as it was.
+        if (!controller.signal.aborted && engineErr?.code === 'no_speech') throw failure('no_speech', 'No se detectó voz en el tramo.');
+        throw engineErr;
+      }
       controller.signal.throwIfAborted();
       const refined = onRecordingClock(run.transcription, offset);
       if (!refined || typeof refined !== 'object' || !timedSegments(refined).length) {
         throw failure('refine_untimed', 'El motor no devolvió marcas de tiempo para corregir el tramo.');
       }
-      const merged = previous && (!previous.source || previous.source === 'asr') ? spliceRefinedRange(previous, refined, range) : refined;
+      // A refine never trades the user's text for a gap: it fails and the
+      // transcript stays exactly as it was.
+      if (refineLosesText(previous, refined, range)) {
+        throw failure('refine_incomplete', 'No se pudo volver a transcribir todo el tramo.');
+      }
+      // Read again and silent: the same verdict as an engine «no speech»,
+      // whether the pieces outside the window were reused or skipped.
+      if (refineHeardNothing(previous, refined, range)) throw failure('no_speech', 'No se detectó voz en el tramo.');
+      const spliced = spliceable;
+      const merged = spliced ? spliceRefinedRange(previous, refined, range) : withoutRefineFields(refined);
       const plain = merged.transcript || run.plain;
       if (!hasTranscript({ extractedText: plain })) throw failure('no_speech', 'No se detectó voz en el tramo.');
       const partial = merged.partial === true;
@@ -1580,9 +1915,15 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         : { extractedText: transcript, processingStage: 'ready', processingStageAt: new Date(now()),
           processingError: partial ? partialFailureMessage(merged) : null });
       if (sidecar) await upsertTranscriptAnalysis(row, merged, sidecar);
+      // The refined transcript is saved: its readings become the parts later
+      // refines and gap retries reuse.
+      try { await staging.commit(); } catch (_) { /* a later run re-reads the window */ }
       await settleCheckpoint(checkpoint, row, { partial });
-      // «unchanged»: the new attempt read the window exactly as before.
-      const unchanged = Boolean(previous) && windowText(previous, range) === windowText(merged, range);
+      // «unchanged»: the new attempt read the window exactly as before. The
+      // comparison uses the splice's cut points: a segment straddling the
+      // user's minutes is compared whole, never by its midpoint.
+      const compared = (spliced && refineSpliceWindow(previous, refined, range)) || range;
+      const unchanged = Boolean(previous) && windowText(previous, compared) === windowText(merged, compared);
       notifyTerminal(fileId, userId, partial ? 'partial' : 'ready', { ...extraTerminal, ok: true, ...(unchanged ? { unchanged: true } : {}) });
       logJobOutcome({ fileId, outcome: 'refined', transcription: merged, elapsedMs: now() - jobStartedAt, chars: transcript.length, lane, refine: true });
       return { id: fileId, stage: 'ready', refine: true, range, characters: transcript.length };
@@ -1891,14 +2232,14 @@ async function closeMediaTranscriptionQueue() {
 module.exports = {
   isMediaFile, hasTranscript, isPartialTranscript, isReprocessingPartial, partialFailureMessage, transcriptTextFor, onRecordingClock, createRecoveryTick,
   keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
-  createDiskCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
+  createDiskCheckpoint, createStagedCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
   readMediaProgress: payload => getService().readMediaProgress(payload),
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   enqueueRefine: payload => getService().enqueueRefine(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
   startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere,
   // lanes, hints, refine and video fallbacks (contract C5)
-  keytermsFor, cleanTranscription, spliceRefinedRange, normalizeRange, refineJobIdFor, requestMedia, pickSubtitleTrack,
+  keytermsFor, cleanTranscription, spliceRefinedRange, refineSpliceWindow, refineLosesText, refineHeardNothing, normalizeRange, refineJobIdFor, requestMedia, pickSubtitleTrack,
   subtitleTranscription, onScreenTranscription, estimateDurationFromSize, laneForDuration, shortLaneEnabled,
   createEnqueueDurationProbe, isVideoLike, getShortMediaQueue,
   QUEUE_NAME, SHORT_QUEUE_NAME, CONCURRENCY, SHORT_CONCURRENCY, SHORT_LANE_MAX_SEC, ATTEMPTS, PROCESS_TIMEOUT_MS, MAX_STALLED_COUNT, OWNERSHIP_CHECK_MS,

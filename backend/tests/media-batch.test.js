@@ -941,31 +941,40 @@ test('the runner re-transcribes a heard-wrong stretch without waiting or re-send
 });
 
 test('the runner answers «¿qué dijo en el minuto 95?» from that window, without re-sending the transcript files', async () => {
-  const rows = [readyRow('clase', 'clase.mp4', { extractedText: 'x'.repeat(50) })];
-  const ranges = [];
-  const analysed = [];
-  const result = await runMediaBranch({
-    mediaBatchRows: rows, displayGoal: '¿qué dijo el profesor en el minuto 95?', goal: 'x',
-    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
-      analyzeMediaBatch: async ({ rows: analysedRows, goal }) => { analysed.push({ analysedRows, goal }); return { text: 'En el minuto 95 explicó la mitocondria.', summaries: [{}], failed: [] }; } },
-    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
-    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
-    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
-    saveArtifact: () => assert.fail('a question about a moment does not re-send the transcript files'),
-    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
-    plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
-    require: (name) => {
-      if (name === '../media-transcript-artifacts') return require('../src/services/media-transcript-artifacts');
-      if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
-      return require(name);
-    },
-    ...mediaBranchHelpers({ mediaRowsForAnalysis: (r, transcripts, range) => { ranges.push(range); return r; } }),
-    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
-  });
-  assert.deepEqual(JSON.parse(JSON.stringify(ranges)), [{ start: 5640, end: 5940 }], 'the analysis reads the window around minute 95');
-  assert.equal(analysed.length, 1);
-  assert.match(result.finalMarkdown, /explicó la mitocondria/);
-  assert.equal(result.stoppedReason, 'transcription_finalize');
+  // «la transcripción» named as what the question reads from is not a request for it.
+  for (const displayGoal of ['¿qué dijo el profesor en el minuto 95?', '¿qué dice la transcripción en el minuto 95?',
+    'según la transcripción, ¿qué dijo en el minuto 95?']) {
+    const rows = [readyRow('clase', 'clase.mp4', { extractedText: 'x'.repeat(50) })];
+    const ranges = [];
+    const analysed = [];
+    const packs = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+        analyzeMediaBatch: async ({ rows: analysedRows, goal }) => { analysed.push({ analysedRows, goal }); return { text: 'En el minuto 95 explicó la mitocondria.', summaries: [{}], failed: [] }; } },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: () => assert.fail('a question about a moment does not re-send the transcript files'),
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+      require: (name) => {
+        if (name === '../media-transcript-artifacts') {
+          const realArtifacts = require('../src/services/media-transcript-artifacts');
+          return { ...realArtifacts, buildMediaTranscriptArtifacts: async (args) => { packs.push(args.output); return realArtifacts.buildMediaTranscriptArtifacts(args); } };
+        }
+        if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+        return require(name);
+      },
+      ...mediaBranchHelpers({ mediaRowsForAnalysis: (r, transcripts, range) => { ranges.push(range); return r; } }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    assert.equal(packs.length, 0, `no transcript pack for a question about a moment: ${displayGoal}`);
+    assert.deepEqual(JSON.parse(JSON.stringify(ranges)), [{ start: 5640, end: 5940 }], `the analysis reads the window around minute 95: ${displayGoal}`);
+    assert.equal(analysed.length, 1);
+    assert.match(result.finalMarkdown, /explicó la mitocondria/);
+    assert.equal(result.stoppedReason, 'transcription_finalize');
+  }
 });
 
 // ── verifier fixes: content questions and deliverables are never a refine ──
@@ -1037,4 +1046,308 @@ test('the runner queues an explicit refine and still answers the rest of the req
   assert.match(result.finalMarkdown, /^Voy a volver a transcribir el tramo 00:10:00–00:15:00\./);
   assert.match(result.finalMarkdown, /Resumen de la clase\./);
   assert.notEqual(result.stoppedReason, 'media_delivery_handoff', 'the turn answered: its own notification applies');
+});
+
+// ── a moment asked about in a FIRST transcription request ──────────────────
+
+test('«transcribe este audio y dime qué dice en el minuto 30» delivers the whole transcript; the moment only narrows the answer', async () => {
+  const { isPlainTranscriptionRequest } = require('../src/services/message-attachments');
+  const realArtifacts = require('../src/services/media-transcript-artifacts');
+  // Asking for the transcript in other words is still asking for it.
+  for (const displayGoal of ['transcribe este audio y dime qué dice en el minuto 30',
+    '¿me puedes pasar la transcripción y decirme qué dice en el minuto 30?', 'la transcripción completa y qué dice en el minuto 30, porfa',
+    'me haces la transcripción y me dices qué dice en el minuto 30']) {
+    const rows = [readyRow('clase', 'clase.mp3', { extractedText: 'x'.repeat(50) })];
+    const ranges = [];
+    const packs = [];
+    const saved = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+        analyzeMediaBatch: async () => ({ text: 'En el minuto 30 explicó la mitocondria.', summaries: [{}], failed: [] }) },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => { saved.push(artifact.filename); return { id: `a${saved.length}`, filename: artifact.filename }; },
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: isPlainTranscriptionRequest(displayGoal), openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+      require: (name) => {
+        if (name === '../media-transcript-artifacts') {
+          return { ...realArtifacts, buildMediaTranscriptArtifacts: async (args) => { packs.push(args.output); return realArtifacts.buildMediaTranscriptArtifacts(args); } };
+        }
+        if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+        return require(name);
+      },
+      ...mediaBranchHelpers({ mediaRowsForAnalysis: (r, transcripts, range) => { ranges.push(range); return r; } }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(ranges)), [{ start: 1740, end: 2040 }], `the answer reads the window around minute 30: ${displayGoal}`);
+    assert.equal(packs.length, 1, `the transcript asked for is still saved: ${displayGoal}`);
+    assert.equal(packs[0].range, null, `whole, never cut to the 5-minute window: ${displayGoal}`);
+    assert.ok(saved.length >= 1);
+    assert.match(result.finalMarkdown, /explicó la mitocondria/);
+  }
+});
+
+test('a long first request with a moment hands off the WHOLE transcript and passes the moment as the analysis range', async () => {
+  for (const displayGoal of ['transcribe la clase en Word y dime qué explicó el profesor en el minuto 40',
+    '¿me puedes pasar la transcripción en Word y decirme qué explicó el profesor en el minuto 40?']) {
+    const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+    const created = [];
+    const delivery = {
+      isMediaDeliveryEnabled: () => true,
+      estimateTranscriptionSeconds: ({ durationSec }) => Math.round(durationSec * 0.15),
+      createDelivery: async (record) => { created.push(record); return { id: 'md_w', ...record }; },
+      handOffMessage: () => 'Te aviso aquí.',
+    };
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 0, failed: 0, pending: 1, partial: 0,
+        progress: { clase: { durationSeconds: 18000, completed: 1, total: 30 } }, stoppedEarly: true }) },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: () => { throw new Error('no artifacts before the transcript exists'); },
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+      require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+      ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    assert.equal(result.stoppedReason, 'media_delivery_handoff');
+    assert.equal(created.length, 1);
+    assert.equal(created[0].range, null, 'the transcript files are never cut to the moment asked about');
+    assert.deepEqual(JSON.parse(JSON.stringify(created[0].output.analysisRange)), { start: 2340, end: 2640 });
+    assert.equal(created[0].output.includeTranscript, true, displayGoal);
+    assert.equal(created[0].output.documentFormat, 'docx');
+  }
+});
+
+// ── a moment asked about next to a translation; a refine's language ────────
+
+test('«tradúcela y dime qué dice en el minuto 30» translates the WHOLE recording and answers the moment from its window', async () => {
+  const realArtifacts = require('../src/services/media-transcript-artifacts');
+  for (const [displayGoal, window, transcriptPack] of [
+    ['traduce la clase al inglés y dime qué dice en el minuto 30', { start: 1740, end: 2040 }, false],
+    ['transcribe y traduce al inglés, y dime qué explicó en el minuto 40', { start: 2340, end: 2640 }, true]]) {
+    const rows = [readyRow('clase', 'clase.mp3', { extractedText: 'x'.repeat(50) })];
+    const ranges = [];
+    const translated = [];
+    const analysed = [];
+    const packs = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+        translateMediaBatch: async ({ rows: translatedRows }) => { translated.push(translatedRows); return { files: [{ name: 'clase.mp3', text: 'Good morning.' }], failed: [] }; },
+        analyzeMediaBatch: async ({ goal }) => { analysed.push(goal); return { text: 'En ese momento explicó la mitocondria.', summaries: [{}], failed: [] }; } },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }),
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+      require: (name) => {
+        if (name === '../media-transcript-artifacts') {
+          return { ...realArtifacts,
+            buildMediaTranscriptArtifacts: async (args) => { packs.push(args.output); return realArtifacts.buildMediaTranscriptArtifacts(args); },
+            buildTranslationArtifacts: async () => ({ artifacts: [{ filename: 'clase-en.txt', base64: '', mime: 'text/plain' }], notes: [] }) };
+        }
+        if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+        return require(name);
+      },
+      ...mediaBranchHelpers({ mediaRowsForAnalysis: (r, transcripts, range) => { ranges.push(range); return r; } }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    // The translation reads the user's range (none: the whole recording); the answer reads the moment.
+    assert.deepEqual(JSON.parse(JSON.stringify(ranges)), [null, window], displayGoal);
+    assert.equal(translated.length, 1, displayGoal);
+    assert.equal(analysed.length, 1, `the question about the moment is answered: ${displayGoal}`);
+    assert.match(result.finalMarkdown, /explicó la mitocondria/, displayGoal);
+    assert.match(result.finalMarkdown, /Traducción completa al inglés/, displayGoal);
+    assert.equal(packs.length, transcriptPack ? 1 : 0, displayGoal);
+    if (transcriptPack) assert.equal(packs[0].range, null, `the transcript asked for stays whole: ${displayGoal}`);
+  }
+});
+
+test('a long «tradúcela y dime qué dice en el minuto 30» hands off a whole translation plus the answer for that moment', async () => {
+  const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+  const created = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    estimateTranscriptionSeconds: ({ durationSec }) => Math.round(durationSec * 0.15),
+    createDelivery: async (record) => { created.push(record); return { id: 'md_t', ...record }; },
+    handOffMessage: () => 'Te aviso aquí.',
+  };
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, displayGoal: 'traduce la clase al inglés y dime qué dice en el minuto 30', goal: 'x',
+    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 0, failed: 0, pending: 1, partial: 0,
+      progress: { clase: { durationSeconds: 18000, completed: 1, total: 30 } }, stoppedEarly: true }) },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => { throw new Error('no artifacts before the transcript exists'); },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(result.stoppedReason, 'media_delivery_handoff');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].mode, 'translation');
+  assert.equal(created[0].range, null, 'the translation covers the whole recording');
+  assert.deepEqual(JSON.parse(JSON.stringify(created[0].output.analysisRange)), { start: 1740, end: 2040 });
+  assert.equal(created[0].output.alsoAnalysis, true, 'the moment asked about is answered too');
+});
+
+test('«traduce al inglés lo que dice en el minuto 30» translates exactly that moment, with no analysis', async () => {
+  const realArtifacts = require('../src/services/media-transcript-artifacts');
+  const inline = async (displayGoal) => {
+    const rows = [readyRow('clase', 'clase.mp3', { extractedText: 'x'.repeat(50) })];
+    const ranges = [];
+    const analysed = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+        translateMediaBatch: async () => ({ files: [{ name: 'clase.mp3', text: '[00:30:00] Good morning, class.' }], failed: [] }),
+        analyzeMediaBatch: async ({ goal }) => { analysed.push(goal); return { text: 'En ese momento explicó la mitocondria.', summaries: [{}], failed: [] }; } },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }),
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+      require: (name) => {
+        if (name === '../media-transcript-artifacts') {
+          return { ...realArtifacts, buildTranslationArtifacts: async () => ({ artifacts: [{ filename: 'clase-en.txt', base64: '', mime: 'text/plain' }], notes: [] }) };
+        }
+        if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+        return require(name);
+      },
+      ...mediaBranchHelpers({ mediaRowsForAnalysis: (r, transcripts, range) => { ranges.push(range); return r; } }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    return { result, ranges: JSON.parse(JSON.stringify(ranges)), analysed };
+  };
+  const handOff = async (displayGoal) => {
+    const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+    const created = [];
+    const delivery = {
+      isMediaDeliveryEnabled: () => true,
+      estimateTranscriptionSeconds: ({ durationSec }) => Math.round(durationSec * 0.15),
+      createDelivery: async (record) => { created.push(record); return { id: 'md_m', ...record }; },
+      handOffMessage: () => 'Te aviso aquí.',
+    };
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 0, failed: 0, pending: 1, partial: 0,
+        progress: { clase: { durationSeconds: 18000, completed: 1, total: 30 } }, stoppedEarly: true }) },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: () => { throw new Error('no artifacts before the transcript exists'); },
+      artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+      require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+      ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    });
+    assert.equal(result.stoppedReason, 'media_delivery_handoff', displayGoal);
+    return JSON.parse(JSON.stringify(created[0]));
+  };
+  for (const [displayGoal, window] of [['traduce al inglés lo que dice en el minuto 30', { start: 1740, end: 2040 }],
+    ['¿me traduces al inglés qué dice en el minuto 12?', { start: 660, end: 960 }],
+    ['traduce lo que dijo en el minuto 30 al portugués', { start: 1740, end: 2040 }]]) {
+    assert.equal(batch.translatesTheMoment(displayGoal), true, displayGoal);
+    const { result, ranges, analysed } = await inline(displayGoal);
+    // Only the moment is translated (never a whole 5-hour lecture), and the
+    // chat shows the translated passage, not a Spanish analysis.
+    assert.deepEqual(ranges, [window], displayGoal);
+    assert.equal(analysed.length, 0, displayGoal);
+    assert.match(result.finalMarkdown, /Good morning, class\./, displayGoal);
+    assert.match(result.finalMarkdown, /Traducción al (?:inglés|portugués) del tramo que pediste \(sin resumir\)/, displayGoal);
+    assert.doesNotMatch(result.finalMarkdown, /Traducción completa/, displayGoal);
+  }
+  // A long recording hands off the translation of that moment only.
+  const moment = await handOff('traduce al inglés lo que dice en el minuto 30');
+  assert.equal(moment.mode, 'translation');
+  assert.deepEqual(moment.range, { start: 1740, end: 2040 });
+  assert.equal(moment.output.alsoAnalysis, false);
+  // A comma before the moment alone keeps it the object.
+  assert.equal(batch.translatesTheMoment('traduce al inglés lo que dice, en el minuto 30'), true);
+  // «tradúcela y dime…» and «traduce la clase… y dime…» still translate the recording.
+  for (const goal of ['tradúcela al inglés y dime qué dice en el minuto 30', 'traduce la clase al inglés y dime qué dice en el minuto 30',
+    'transcribe y traduce al inglés, y dime qué explicó en el minuto 40', 'tradúcelo que lo necesito para mañana y dime qué dice en el minuto 30']) {
+    assert.equal(batch.translatesTheMoment(goal), false, goal);
+  }
+  // A whole speech to translate, and a moment asked about in its own clause:
+  // the translation covers the whole recording and the moment is answered
+  // from its window — never only those 5 minutes translated, unanswered.
+  for (const [displayGoal, window] of [['traduce al inglés todo lo que dicen en la clase y dime qué pasa en el minuto 30', { start: 1740, end: 2040 }],
+    ['traduce al inglés lo que dice el profesor; también dime qué dijo en el minuto 30', { start: 1740, end: 2040 }],
+    ['tradúceme al inglés lo que dicen y luego dime qué pasa en el minuto 12', { start: 660, end: 960 }],
+    // a new request after a comma, or an opening «¿», is its own clause too
+    ['traduce al inglés lo que dice el profesor, dime qué pasa en el minuto 30', { start: 1740, end: 2040 }],
+    ['traduce al inglés lo que dice toda la clase, quiero saber qué pasó en el minuto 30', { start: 1740, end: 2040 }],
+    ['traduce al inglés lo que dice el profesor, ¿qué pasa en el minuto 30?', { start: 1740, end: 2040 }],
+    ['traduce al inglés lo que dicen, explícame el minuto 30', { start: 1740, end: 2040 }],
+    ['traduce lo que dice todo el audio al inglés, dime qué dice en el minuto 30', { start: 1740, end: 2040 }]]) {
+    assert.equal(batch.translatesTheMoment(displayGoal), false, displayGoal);
+    const { result, ranges, analysed } = await inline(displayGoal);
+    assert.deepEqual(ranges, [null, window], displayGoal);
+    assert.equal(analysed.length, 1, displayGoal);
+    assert.match(result.finalMarkdown, /Traducción completa al inglés \(sin resumir\)/, displayGoal);
+    const record = await handOff(displayGoal);
+    assert.equal(record.mode, 'translation', displayGoal);
+    assert.equal(record.range, null, displayGoal);
+    assert.equal(record.output.alsoAnalysis, true, displayGoal);
+    assert.deepEqual(record.output.analysisRange, window, displayGoal);
+  }
+});
+
+test('a refine\'s language stays with the refine: never the batch jobs, the delivery or a later «reintenta»', async () => {
+  // «vuelve a transcribir del minuto 10 al 15, está en inglés, y resúmelo»
+  // while another recording of the batch is still queued.
+  const rows = [readyRow('clase', 'clase.mp4', { extractedText: 'x'.repeat(50) }),
+    { id: 'otra', originalName: 'otra.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+  const refines = [];
+  const waits = [];
+  const created = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    estimateTranscriptionSeconds: ({ durationSec }) => Math.round(durationSec * 0.15),
+    createDelivery: async (record) => { created.push(record); return { id: 'md_r', ...record }; },
+    handOffMessage: () => 'Te aviso aquí.',
+  };
+  const context = (displayGoal, mediaBatch) => ({
+    mediaBatchRows: rows, displayGoal, goal: 'x', mediaBatch,
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  const refineGoal = 'vuelve a transcribir del minuto 10 al 15, está en inglés, y resúmelo';
+  const result = await runMediaBranch(context(refineGoal, { ...batch,
+    requestMediaRefine: async (args) => { refines.push(args); return { handled: true, ok: true, fileId: 'clase', range: args.intent.range, deliveryId: 'md_7', message: 'Voy a volver a transcribir el tramo 00:10:00–00:15:00.' }; },
+    waitForMediaBatch: async (options) => { waits.push(options); return { rows, total: 2, ready: 1, failed: 0, pending: 1, partial: 0,
+      progress: { otra: { durationSeconds: 18000, completed: 1, total: 30 } }, stoppedEarly: true }; } }));
+  assert.equal(refines[0].language, 'en', 'the refine job carries the language of its window');
+  assert.equal(waits[0].language, null, 'the other recordings\' jobs never get it');
+  assert.equal(created[0].language, null, 'nor the delivery, which stores it for every file');
+  assert.match(result.finalMarkdown, /^Voy a volver a transcribir/);
+  // The next turn is a bare «reintenta»: the refine turn is among the turns
+  // sent since the recordings arrived, and its language stays out.
+  const since = new Date(Date.now() - 60_000);
+  const retryRows = rows.map(row => ({ ...row, createdAt: since }));
+  const retryWaits = [];
+  await runMediaBranch({ ...context('reintenta', { ...batch,
+    loadRecentUserTurns: async () => ['reintenta', refineGoal],
+    waitForMediaBatch: async (options) => { retryWaits.push(options); return { rows: retryRows, total: 2, ready: 2, failed: 0, pending: 0, partial: 0, progress: {} }; } }),
+  mediaBatchRows: retryRows });
+  assert.equal(retryWaits[0].retryFailed, true);
+  assert.equal(retryWaits[0].language, null, 'a bare «reintenta» never forces the refine\'s language on the whole recording');
 });

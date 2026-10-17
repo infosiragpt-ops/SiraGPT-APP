@@ -294,6 +294,16 @@ function tokenCoverage(reference, candidate) {
   return hit / ref.length;
 }
 
+/**
+ * Did the cloud ladder send at least one real request (an answer, an HTTP
+ * status, a timeout)? Runtimes skipped without a call (no key, a memoised
+ * dead key, no time left) do not count: `visionLadder.attempted` stays false
+ * so fileProcessor's own vision fallback still runs.
+ */
+function cloudRequestMade(attempts) {
+  return Array.isArray(attempts) && attempts.some((a) => a && !a.skipped);
+}
+
 function envFlagOn(name, fallback = true) {
   const raw = String(process.env[name] ?? '').trim().toLowerCase();
   if (!raw) return fallback;
@@ -1599,6 +1609,10 @@ class OcrEngine {
     if (reason === 'vision_page_cap') return `[página ${pageNumber} — sin OCR completo: límite de páginas con visión]`;
     if (reason === 'vision_no_time') return `[página ${pageNumber} — sin OCR completo: tiempo agotado]`;
     if (reason === 'tesseract_unavailable') return `[página ${pageNumber} — sin OCR: OCR local no disponible]`;
+    // Pages the budget or a cancel left unread were never looked at: «sin
+    // OCR», like the streaming path, never «no legible».
+    if (reason === 'budget') return ocrQuality.pageCapMarker(pageNumber, pageNumber, 'tiempo agotado');
+    if (reason === 'aborted') return ocrQuality.pageCapMarker(pageNumber, pageNumber, 'lectura cancelada');
     return ocrQuality.unreadablePageMarker(pageNumber, reason);
   }
 
@@ -2335,17 +2349,38 @@ class OcrEngine {
    * OCR_VISION_LADDER_MAX. The OpenAI rung keeps OCR_VISION_MODEL /
    * VISION_MODEL / gpt-4o (today's model). `exclude`: provider names already
    * used for this image (a second opinion must come from another runtime).
+   * Runtimes that cannot be called (no key, Anthropic protocol, a key
+   * memoised as rejected or unfunded) are dropped BEFORE the cap, so they
+   * never spend a slot; a usable OpenAI rung (the engine's only cloud rung
+   * before the ladder) always keeps the last slot.
    */
   _cloudVisionCandidates(config = this.config, { exclude = [], env = process.env } = {}) {
     let list = [];
+    let clientConfigFor = (provider) => (provider === 'OpenAI' ? { apiKey: env.OPENAI_API_KEY } : null);
     try {
-      const { visionRuntimeCandidates } = require('./ai/vision-runtime');
+      const { visionRuntimeCandidates, visionClientConfig } = require('./ai/vision-runtime');
       list = visionRuntimeCandidates(env).map((c) => (c.provider === 'OpenAI' ? { ...c, model: config.visionModel } : c));
+      clientConfigFor = (provider) => visionClientConfig(provider, env);
     } catch {
       list = env.OPENAI_API_KEY ? [{ provider: 'OpenAI', model: config.visionModel }] : [];
     }
+    let keyHealth = null;
+    try { keyHealth = require('../utils/provider-key-health'); } catch { keyHealth = null; }
     const skip = new Set((exclude || []).map((p) => String(p).toLowerCase()));
-    return list.filter((c) => !skip.has(String(c.provider).toLowerCase())).slice(0, config.visionLadderMax);
+    const usable = list.filter((c) => {
+      if (skip.has(String(c.provider).toLowerCase())) return false;
+      let clientConfig = null;
+      try { clientConfig = clientConfigFor(c.provider); } catch { clientConfig = null; }
+      if (!clientConfig || !clientConfig.apiKey || clientConfig.protocol === 'anthropic') return false;
+      try {
+        if (keyHealth && keyHealth.isRejected(c.provider, clientConfig.apiKey)) return false;
+      } catch { /* advisory */ }
+      return true;
+    });
+    const capped = usable.slice(0, config.visionLadderMax);
+    const openai = usable.find((c) => c.provider === 'OpenAI');
+    if (openai && capped.length && !capped.includes(openai)) capped[capped.length - 1] = openai;
+    return capped;
   }
 
   /** OpenAI-compatible client for one runtime. Overridable for offline tests. */
@@ -2375,6 +2410,8 @@ class OcrEngine {
    *
    * Returns { ok, text, empty, provider, model, providerName, visionType,
    * truncated, finishReason, attempts } or { ok:false, reason, attempts }.
+   * A runtime passed over without a request is an attempt with
+   * `skipped: true`.
    */
   async _cloudVisionRead({
     buffer, mimeType = 'image/png', promptPrefix = '', signal = null, deadlineAt = null,
@@ -2404,16 +2441,16 @@ class OcrEngine {
       if (signal && signal.aborted) return { ok: false, reason: 'aborted', attempts };
       const remaining = deadlineAt ? deadlineAt - Date.now() : config.visionTimeoutMs;
       if (remaining < 2000) {
-        attempts.push({ provider: candidate.provider, model: candidate.model, ok: false, reason: 'no_time' });
+        attempts.push({ provider: candidate.provider, model: candidate.model, ok: false, reason: 'no_time', skipped: true });
         break;
       }
       const clientConfig = visionClientConfig ? visionClientConfig(candidate.provider) : { apiKey: process.env.OPENAI_API_KEY };
       if (!clientConfig || !clientConfig.apiKey || clientConfig.protocol === 'anthropic') {
-        attempts.push({ provider: candidate.provider, model: candidate.model, ok: false, reason: 'not_configured' });
+        attempts.push({ provider: candidate.provider, model: candidate.model, ok: false, reason: 'not_configured', skipped: true });
         continue;
       }
       if (keyHealth && keyHealth.isRejected(candidate.provider, clientConfig.apiKey)) {
-        attempts.push({ provider: candidate.provider, model: candidate.model, ok: false, reason: 'key_rejected' });
+        attempts.push({ provider: candidate.provider, model: candidate.model, ok: false, reason: 'key_rejected', skipped: true });
         continue;
       }
       const timeoutMs = Math.max(1000, Math.min(config.visionTimeoutMs, remaining));
@@ -2543,8 +2580,10 @@ class OcrEngine {
   /**
    * Read an upright page band by band through the cloud ladder (the runtime
    * that answered the first band is tried first for the next ones) and merge
-   * the bands in reading order. Null when tiling is not possible or a band
-   * could not be read (the caller then reads the whole image).
+   * the bands in reading order. Null when tiling is not possible;
+   * `{ ok: false, attempts }` when a band could not be read (the caller then
+   * reads the whole image and keeps those attempts: a paid band request
+   * still counts as a cloud request made).
    */
   async _cloudReadBands(source, { width, height, promptPrefix = '', signal = null, deadlineAt = null, config = this.config, exclude = [] } = {}) {
     let bands = ocrEnsemble.planBands(width, height, { maxBands: config.visionTileMax });
@@ -2567,14 +2606,15 @@ class OcrEngine {
     let preferred = null;
     let first = null;
     let truncated = false;
+    const bandFailed = (reason) => ({ ok: false, reason, attempts });
     for (let i = 0; i < bands.length; i += 1) {
-      if (signal && signal.aborted) return null;
-      if (deadlineAt && deadlineAt - Date.now() < 3000) return null;
+      if (signal && signal.aborted) return bandFailed('aborted');
+      if (deadlineAt && deadlineAt - Date.now() < 3000) return bandFailed('vision_no_time');
       let crop;
       try {
         crop = await sharp(source).extract(bands[i]).png().toBuffer();
       } catch {
-        return null;
+        return bandFailed('band_crop_failed');
       }
       const prepared = typeof this.ocrInput.toVisionImage === 'function'
         ? await this.ocrInput.toVisionImage(crop, { mime: 'image/png' })
@@ -2590,7 +2630,7 @@ class OcrEngine {
         preferred,
       });
       attempts.push(...(read.attempts || []));
-      if (!read.ok) return null;
+      if (!read.ok) return bandFailed(read.reason || 'vision_fallback_failed');
       if (!first) first = read;
       preferred = read.providerName;
       truncated = truncated || read.truncated;
@@ -2642,14 +2682,16 @@ class OcrEngine {
     const attempts = [];
     if (dims && this._shouldTileForVision({ ...dims, localQuality, imageType }, config) && await ensureUpright()) {
       const banded = await this._cloudReadBands(upright, { ...dims, promptPrefix, signal, deadlineAt, config, exclude });
-      if (banded) return banded;
+      if (banded && banded.ok) return banded;
+      if (banded) attempts.push(...(banded.attempts || []));
     }
     if (signal && signal.aborted) return { ok: false, reason: 'aborted', attempts };
     const whole = await this._cloudVisionRead({ buffer, mimeType, promptPrefix, signal, deadlineAt, config, exclude });
     attempts.push(...(whole.attempts || []));
     if (whole.ok && whole.truncated && dims && Math.max(dims.width, dims.height) >= 1400 && await ensureUpright()) {
       const banded = await this._cloudReadBands(upright, { ...dims, promptPrefix, signal, deadlineAt, config, exclude });
-      if (banded && banded.text) return { ...banded, attempts: [...attempts, ...(banded.attempts || [])] };
+      if (banded && banded.ok && banded.text) return { ...banded, attempts: [...attempts, ...(banded.attempts || [])] };
+      if (banded) attempts.push(...(banded.attempts || []));
     }
     return { ...whole, attempts };
   }
@@ -2684,9 +2726,17 @@ class OcrEngine {
       try { imageBuffer = await fs.readFile(filePath); } catch { imageBuffer = null; }
     }
 
-    // Rung 1: local GLM-OCR (gated).
+    // Rung 1: local GLM-OCR (gated). When a cloud rung could follow, GLM
+    // gets its own deadline that leaves the cloud one call (+2 s), at most
+    // half of what is left: a read queued behind others on the single
+    // Ollama slot plus a slow CPU inference could otherwise spend the whole
+    // ladder budget and the cloud would never run.
+    const cloudPossible = allowCloud && Boolean(imageBuffer) && this._cloudVisionCandidates(config).length > 0;
+    const glmReserveMs = cloudPossible
+      ? Math.min(config.visionTimeoutMs + 2000, Math.floor(Math.max(0, deadline - Date.now()) / 2))
+      : 0;
     const glm = await this.runOllamaOcrFallback({
-      filePath, buffer: imageBuffer || buffer, mimeType, config, localQuality, signal, deadlineAt: deadline, imageType,
+      filePath, buffer: imageBuffer || buffer, mimeType, config, localQuality, signal, deadlineAt: deadline - glmReserveMs, imageType,
     });
     if (signal && signal.aborted) return this.abortedResult();
     const glmRead = glm && glm.ocr && glm.ocr.status === 'vision_fallback' && glm.text ? glm : null;
@@ -2758,7 +2808,7 @@ class OcrEngine {
         localConfidence: localQuality?.confidence ?? null,
         ...(glmReason ? { ollamaOcr: glmReason } : {}),
         ...(cloud && cloud.visionType ? { visionType: cloud.visionType } : {}),
-        visionLadder: { attempted: attempts.length > 0 || Boolean(glm), attempts: attempts.slice(0, 12), elapsedMs: Date.now() - started },
+        visionLadder: { attempted: cloudRequestMade(attempts), attempts: attempts.slice(0, 12), elapsedMs: Date.now() - started },
       });
       failed.ocr.confidence = 0;
       return failed;
@@ -2809,7 +2859,7 @@ class OcrEngine {
           gate: { ...(primary.gate || {}), trusted: false, verified: false, issues: gated.issues, agreement: gated.agreement, coverage: gated.coverage },
           ...(glmReason ? { ollamaOcr: glmReason } : {}),
           ...(visionType ? { visionType } : {}),
-          visionLadder: { attempted: true, attempts: attempts.slice(0, 12), tiled: tiled || 0, elapsedMs: Date.now() - started },
+          visionLadder: { attempted: cloudRequestMade(attempts), attempts: attempts.slice(0, 12), tiled: tiled || 0, elapsedMs: Date.now() - started },
         });
         failed.ocr.confidence = 0;
         console.log(`[ocr-engine] vision ladder: ${primary.engine} read rejected by the gate (${gated.issues.join(',')}, agreement=${gated.agreement}) — keeping the local read`);
@@ -2843,7 +2893,10 @@ class OcrEngine {
 
     const quality = this.evaluateQuality({ text, confidence }, config);
     if (!this.isUsableVisionQuality(quality, config)) {
-      const failed = this.asFailedResult(quality, 'vision_fallback_empty', { provider: primary.engine });
+      const failed = this.asFailedResult(quality, 'vision_fallback_empty', {
+        provider: primary.engine,
+        visionLadder: { attempted: cloudRequestMade(attempts), attempts: attempts.slice(0, 12), tiled: tiled || 0 },
+      });
       if (visionType) failed.ocr.visionType = visionType;
       return failed;
     }

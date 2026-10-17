@@ -368,6 +368,16 @@ function scribeTimeoutMs(env = process.env, requestMs = dictationTimeoutMs(env))
   return Math.min(wanted, cap);
 }
 
+// Sira Voz's share of the request bound. whisper.cpp reads a free dictation
+// first; Sira Voz (WhisperX large-v3 on CPU, cold or busy with other jobs) is
+// its fallback or second opinion, and a hung one must fail on its own before
+// the request bound turns the whole dictation into a timeout.
+const VOICESTUDIO_MAX_SHARE = 0.6;
+
+function voiceStudioTimeoutMs(requestMs = dictationTimeoutMs()) {
+  return Math.max(SCRIBE_MIN_TIMEOUT_MS, Math.floor(requestMs * VOICESTUDIO_MAX_SHARE));
+}
+
 function scribeCooldownMs(env = process.env) {
   return boundedIntEnv(env, 'SIRAGPT_DICTATION_SCRIBE_COOLDOWN_MS', 10 * 60_000, 0, 24 * 60 * 60_000);
 }
@@ -676,6 +686,8 @@ router.post('/speech-to-text', authenticateToken, markVoiceTranscriptionTier, up
     const result = await untilAborted(audioTranscriber.transcribe(filePath, mimeType, originalName, {
       signal,
       lane: 'interactive',
+      // Bounds only the Sira Voz request (never whisper.cpp or a cloud rung).
+      voiceStudioTimeoutMs: voiceStudioTimeoutMs(timeoutMs),
       ...(language ? { language } : {}),
       ...ladder,
     }), signal);
@@ -1254,6 +1266,7 @@ module.exports._dictation = {
   dictationProviders,
   dictationTimeoutMs,
   scribeTimeoutMs,
+  voiceStudioTimeoutMs,
   scribeModel,
   scribeText,
   ladderProviderLabel,
