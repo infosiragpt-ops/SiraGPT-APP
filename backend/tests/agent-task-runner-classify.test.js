@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const {
   classifyTaskError,
   normalizeAgentRuntimeModel,
+  buildOpenAICompatibleClient,
   buildAttachmentGroundedFallbackAnswer,
   shouldRunSourcePreservingEdit,
 } = require('../src/services/agents/agent-task-runner');
@@ -270,9 +271,28 @@ test('normalizeAgentRuntimeModel: Gemini models keep their provider', () => {
   assert.equal(result.remapped, false);
 });
 
+test('normalizeAgentRuntimeModel: bare Claude IDs route directly to Anthropic', () => {
+  const result = normalizeAgentRuntimeModel('claude-sonnet-4-5-20250929');
+  assert.equal(result.displayModel, 'claude-sonnet-4-5-20250929');
+  assert.equal(result.runtimeModel, 'claude-sonnet-4-5-20250929');
+  assert.equal(result.runtimeProvider, 'selected-anthropic');
+  assert.equal(result.remapped, false);
+  assert.equal(result.detected.provider, 'Anthropic');
+  assert.equal(result.detected.apiKeyEnv, 'ANTHROPIC_API_KEY');
+});
+
+test('buildOpenAICompatibleClient: direct Anthropic target uses the Anthropic adapter', () => {
+  const client = buildOpenAICompatibleClient(
+    { provider: 'Anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', baseURL: null },
+    { ANTHROPIC_API_KEY: 'test-key' }
+  );
+  assert.equal(client.__siraProvider, 'Anthropic');
+  assert.equal(typeof client.chat.completions.create, 'function');
+});
+
 test('normalizeAgentRuntimeModel: unknown bare names fall back to OpenAI default', () => {
-  const result = normalizeAgentRuntimeModel('claude-sonnet-4');
-  assert.equal(result.displayModel, 'claude-sonnet-4');
+  const result = normalizeAgentRuntimeModel('not-a-known-provider-model');
+  assert.equal(result.displayModel, 'not-a-known-provider-model');
   assert.ok(result.runtimeModel.includes('gpt-4o-mini'));
   assert.equal(result.runtimeProvider, 'openai-fallback');
   assert.equal(result.remapped, true);
@@ -280,7 +300,7 @@ test('normalizeAgentRuntimeModel: unknown bare names fall back to OpenAI default
 
 test('normalizeAgentRuntimeModel: respects AGENT_TASK_RUNTIME_MODEL env override for unknown names', () => {
   process.env.AGENT_TASK_RUNTIME_MODEL = 'gpt-4.1-nano';
-  const result = normalizeAgentRuntimeModel('claude-opus');
+  const result = normalizeAgentRuntimeModel('not-a-known-provider-model');
   assert.equal(result.runtimeModel, 'gpt-4.1-nano');
   delete process.env.AGENT_TASK_RUNTIME_MODEL;
 });

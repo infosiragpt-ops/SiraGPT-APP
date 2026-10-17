@@ -1381,6 +1381,10 @@ function detectAgentRuntimeProvider(modelId) {
   if (/^deepseek-(v\d|chat|reasoner)/i.test(id)) {
     return { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' };
   }
+  // Bare Claude IDs use Anthropic directly; `anthropic/claude-*` remains an OpenRouter slug.
+  if (!id.includes('/') && /^claude(-|_)/i.test(id)) {
+    return { provider: 'Anthropic', apiKeyEnv: 'ANTHROPIC_API_KEY', baseURL: null };
+  }
   // Google Gemini family (bare gemini-*/imagen-* ids, no slug).
   if (!id.includes('/') && (/^gemini-/i.test(id) || /^imagen-/i.test(id))) {
     return {
@@ -1433,6 +1437,10 @@ function buildOpenAICompatibleClient(target, env = process.env) {
   if (!target || !target.apiKeyEnv) return null;
   const apiKey = env[target.apiKeyEnv];
   if (!apiKey) return null;
+  if (target.provider === 'Anthropic') {
+    const { createAnthropicOpenAIAdapter } = require('../providers/anthropic-openai-adapter');
+    return createAnthropicOpenAIAdapter({ apiKey });
+  }
   const opts = { apiKey };
   if (target.baseURL) opts.baseURL = target.baseURL;
   if (target.defaultHeaders) opts.defaultHeaders = target.defaultHeaders;
