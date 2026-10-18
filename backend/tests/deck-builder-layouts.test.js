@@ -329,3 +329,75 @@ test('appendTextSlide (plain decks): the cloned «Gracias» slide drops the sour
   assert.equal(/notesSlide/.test(rels), false, 'the clone does not share the source notes part');
   assert.match(rels, /slideLayout/);
 });
+
+test('executive layouts: cover subtitle, kicker, takeaway bar, hero stat, 2x2 matrix, and 6-card Bento grid pass static design audit', async () => {
+  const { auditPptxDesign } = require('../src/services/document-pipeline/pptx-design-audit');
+  const { sandbox, result, zip } = await createDeck({
+    topic: 'Transformación Digital 2027',
+    title: 'Plan Estratégico de Transformación Digital',
+    subtitle: 'Hoja de ruta ejecutiva para eficiencia operativa y crecimiento rentable',
+    theme: 'boardroom',
+    filename: 'ejecutivo.pptx',
+    outline: [
+      {
+        title: 'La automatización generó un impacto financiero récord',
+        kicker: 'IMPACTO FINANCIERO',
+        stat: { value: '+42%', caption: 'Incremento interanual en margen operativo consolidado', source: 'Auditoría Q4' },
+        bullets: [
+          'Reducción del tiempo de ciclo en atención al cliente de 48h a 4h',
+          'Ahorro directo de costos operativos en 3 unidades regionales',
+          'Despliegue completado sin interrupciones del servicio core',
+        ],
+        takeaway: 'La inversión se recuperó en 5 meses y habilita la fase 2 de expansión.',
+        notes: 'Destacar el retorno de inversión validado por finanzas.',
+      },
+      {
+        title: 'Análisis FODA de la plataforma actual',
+        kicker: 'DIAGNÓSTICO ESTRATÉGICO',
+        matrix: [
+          { title: 'Fortalezas', bullets: ['Arquitectura modular en la nube', 'Equipo técnico certificado'] },
+          { title: 'Oportunidades', bullets: ['Expansión a mercados B2B regionales', 'Nuevos canales digitales'] },
+          { title: 'Debilidades', bullets: ['Integración legada en facturación', 'Procesos manuales de conciliación'] },
+          { title: 'Amenazas', bullets: ['Regulación de datos transfronterizos', 'Presión competitiva en tarifas'] },
+        ],
+        takeaway: 'Priorizar la modernización de facturación desbloquea el canal B2B.',
+        notes: 'Presentar los cuatro cuadrantes del diagnóstico.',
+      },
+      {
+        title: 'Seis pilares operativos sostienen la ejecución anual',
+        kicker: 'ARQUITECTURA OPERATIVA',
+        bullets: [
+          'Gobernanza de datos: catálogo único con trazabilidad',
+          'Ciberseguridad: monitoreo continuo Zero-Trust',
+          'Automatización: flujos RPA en finanzas y compras',
+          'Analítica predictiva: modelos de demanda en tiempo real',
+          'Talento digital: capacitación continua por rol',
+          'Experiencia cliente: autoservicio omnicanal 24/7',
+        ],
+        takeaway: 'Cada pilar cuenta con un líder responsable y KPIs trimestrales.',
+        notes: 'Explicar los 6 pilares en formato Bento grid.',
+      },
+      {
+        title: 'Próximos pasos para el comité directivo',
+        layout: 'closing',
+        bullets: ['Aprobar presupuesto Q1', 'Validar líderes de frente', 'Iniciar sprint 1 en noviembre'],
+        notes: 'Cierre y aprobación.',
+      },
+    ],
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.layouts, ['cover', 'bullets', 'matrix', 'bullets', 'closing']);
+  const slides = orderedSlideXml(zip);
+  assert.equal(slides.length, 5);
+  assert.ok(slides[0].includes('SiraCover subtitle') && slides[0].includes('Hoja de ruta ejecutiva'), 'cover subtitle rendered');
+  assert.ok(slides[1].includes('SiraKicker') && slides[1].includes('IMPACTO FINANCIERO'), 'kicker eyebrow rendered');
+  assert.ok(slides[1].includes('SiraKpi 1 value') && slides[1].includes('+42%'), 'hero stat rendered');
+  assert.ok(slides[1].includes('SiraCard takeaway') && slides[1].includes('SiraTakeaway text'), 'bottom takeaway bar rendered');
+  assert.ok(slides[2].includes('SiraCard column 1') && slides[2].includes('SiraCard column 4'), '2x2 matrix rendered');
+  assert.ok(slides[3].includes('SiraCard 1') && slides[3].includes('SiraCard 6'), '6-card Bento grid rendered');
+
+  const audit = auditPptxDesign(sandbox.files.get('outputs/ejecutivo.pptx'));
+  assert.equal(audit.passed, true, JSON.stringify(audit.errors));
+});
+

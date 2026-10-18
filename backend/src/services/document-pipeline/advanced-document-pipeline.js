@@ -1944,7 +1944,20 @@ async function buildDocx(plan, outputPath) {
   const referenceImages = await readReferenceImages(plan);
 
   const border = { style: BorderStyle.SINGLE, size: 6, color: 'CBD5E1' };
+  const headerBottomBorder = { style: BorderStyle.SINGLE, size: 12, color: '0284C7' };
   const borders = { top: border, bottom: border, left: border, right: border };
+  const headerBorders = { top: border, bottom: headerBottomBorder, left: border, right: border };
+  const makeBulletRuns = (rawText) => {
+    const text = String(rawText || '').trim();
+    const match = text.match(/^([^:–—]{2,48}[:–—])\s+(.+)$/);
+    if (match) {
+      return [
+        new TextRun({ text: `${match[1]} `, bold: true, color: '0F172A' }),
+        new TextRun({ text: match[2], color: '1E293B' }),
+      ];
+    }
+    return [new TextRun({ text, color: '1E293B' })];
+  };
   const makeTable = (headers, bodyRows, columnWidths) => new Table({
     width: { size: 9360, type: WidthType.DXA },
     columnWidths,
@@ -1952,12 +1965,16 @@ async function buildDocx(plan, outputPath) {
       tableHeader: rowIndex === 0,
       cantSplit: true,
       children: row.map((cell, cellIndex) => new TableCell({
-        borders,
+        borders: rowIndex === 0 ? headerBorders : borders,
         width: { size: columnWidths[cellIndex] || columnWidths[columnWidths.length - 1], type: WidthType.DXA },
-        shading: rowIndex === 0 ? { fill: 'E0F2FE', type: ShadingType.CLEAR } : undefined,
-        margins: { top: 80, bottom: 80, left: 120, right: 120 },
+        shading: rowIndex === 0
+          ? { fill: 'E0F2FE', type: ShadingType.CLEAR }
+          : rowIndex % 2 === 0
+            ? { fill: 'F8FAFC', type: ShadingType.CLEAR }
+            : undefined,
+        margins: { top: 90, bottom: 90, left: 130, right: 130 },
         children: [new Paragraph({
-          children: [new TextRun({ text: String(cell), bold: rowIndex === 0, color: rowIndex === 0 ? '0F172A' : '111827' })],
+          children: [new TextRun({ text: String(cell), bold: rowIndex === 0, color: rowIndex === 0 ? '0F172A' : '1E293B' })],
         })],
       })),
     })),
@@ -1979,7 +1996,7 @@ async function buildDocx(plan, outputPath) {
             return [new Paragraph({ text: block.text, heading: level })];
           }
           if (block.type === 'bullet') {
-            return [new Paragraph({ text: block.text, bullet: { level: 0 } })];
+            return [new Paragraph({ children: makeBulletRuns(block.text), bullet: { level: 0 } })];
           }
           if (block.type === 'table') {
             return [makeTable(block.headers, block.rows, widthsFor(block.headers.length))];
@@ -1995,7 +2012,7 @@ async function buildDocx(plan, outputPath) {
           ...(section.paragraphs || []).map((paragraph) => new Paragraph({ children: [new TextRun(String(paragraph))] })),
         ];
         for (const bullet of section.bullets || []) {
-          out.push(new Paragraph({ text: String(bullet), bullet: { level: 0 } }));
+          out.push(new Paragraph({ children: makeBulletRuns(bullet), bullet: { level: 0 } }));
         }
         for (const tableSpec of section.tables || []) {
           if (tableSpec.title) {
@@ -2121,7 +2138,7 @@ async function buildDocx(plan, outputPath) {
           for (const bullet of block.bullets) {
             const text = String(bullet || '').trim();
             if (text) {
-              out.push(new Paragraph({ text, bullet: { level: 0 } }));
+              out.push(new Paragraph({ children: makeBulletRuns(text), bullet: { level: 0 } }));
             }
           }
         }
@@ -2139,19 +2156,32 @@ async function buildDocx(plan, outputPath) {
     styles: {
       default: {
         document: {
-          run: { font: 'Arial', size: 24 },
+          run: { font: 'Arial', size: 24, color: '1E293B' },
           paragraph: { spacing: { line: 276, before: 80, after: 120 } },
         },
       },
       paragraphStyles: [
+        {
+          id: 'Title',
+          name: 'Title',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 44, bold: true, color: '0F172A' },
+          paragraph: { spacing: { before: 120, after: 160 } },
+        },
         {
           id: 'Heading1',
           name: 'Heading 1',
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 32, bold: true },
-          paragraph: { spacing: { before: 260, after: 180 }, outlineLevel: 0 },
+          run: { font: 'Arial', size: 32, bold: true, color: '0F172A' },
+          paragraph: {
+            spacing: { before: 280, after: 160 },
+            outlineLevel: 0,
+            border: { bottom: { color: '38BDF8', space: 4, style: BorderStyle.SINGLE, size: 6 } },
+          },
         },
         {
           id: 'Heading2',
@@ -2159,8 +2189,17 @@ async function buildDocx(plan, outputPath) {
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 28, bold: true },
+          run: { font: 'Arial', size: 28, bold: true, color: '1E293B' },
           paragraph: { spacing: { before: 220, after: 140 }, outlineLevel: 1 },
+        },
+        {
+          id: 'Heading3',
+          name: 'Heading 3',
+          basedOn: 'Normal',
+          next: 'Normal',
+          quickFormat: true,
+          run: { font: 'Arial', size: 25, bold: true, color: '334155' },
+          paragraph: { spacing: { before: 180, after: 100 }, outlineLevel: 2 },
         },
       ],
     },
@@ -2423,8 +2462,12 @@ async function buildPptx(plan, outputPath) {
     // Keep the semantic slide title first in OOXML for existing validators.
     text(target, value, { x: 0.72, y: 0.68, w: 11.9, h: 1.08, fontFace: theme.fonts.display, fontSize: 36, minFontSize: 28, bold: true, color: tokens.ink });
     text(target, kicker, { x: 0.72, y: 0.28, w: 11.9, h: 0.25, fontSize: 11, bold: true, color: tokens.accent });
+    shape(target, pptx.ShapeType.rect, { x: 0, y: 0, w: 0.1, h: 7.5, fill: { color: tokens.accent }, line: { color: tokens.accent } });
+    shape(target, pptx.ShapeType.rect, { x: 0.72, y: 1.82, w: 1.8, h: 0.05, fill: { color: tokens.accent }, line: { color: tokens.accent } });
+    shape(target, pptx.ShapeType.rect, { x: 2.58, y: 1.82, w: 10.02, h: 0.015, fill: { color: tokens.line }, line: { color: tokens.line } });
   };
   const footer = (target, citations = []) => {
+    shape(target, pptx.ShapeType.rect, { x: 0.72, y: 6.88, w: 11.88, h: 0.015, fill: { color: tokens.line }, line: { color: tokens.line } });
     const sources = citations.filter(Boolean);
     text(target, sources.length ? `Evidencia: ${sources.join(' · ')}` : '', {
       x: 0.72, y: 6.96, w: 10.9, h: 0.39, fontSize: 10.5, color: tokens.muted,
@@ -2450,6 +2493,9 @@ async function buildPptx(plan, outputPath) {
   text(slide, contentPlan.thesis, {
     x: 0.82, y: 3.64, w: 8.5, h: 1.4, fontSize: 22, minFontSize: 18, color: tokens.coverMuted,
   });
+  shape(slide, pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.09, fill: { color: tokens.accent }, line: { color: tokens.accent } });
+  shape(slide, pptx.ShapeType.rect, { x: 0.48, y: 1.18, w: 0.08, h: 3.8, fill: { color: tokens.accent }, line: { color: tokens.accent } });
+  shape(slide, pptx.ShapeType.rect, { x: 0.8, y: 6.85, w: 3.2, h: 0.06, fill: { color: tokens.accent2 }, line: { color: tokens.accent2 } });
   // Background art stays secondary; title, body and charts remain native.
   const coverAccent = await buildCoverAccentPng(tokens.accent, tokens.accent2);
   slide.addImage({ data: `data:image/png;base64,${coverAccent.toString('base64')}`, x: 10.3, y: 4.65, w: 1.9, h: 1.9 });
@@ -2467,6 +2513,7 @@ async function buildPptx(plan, outputPath) {
       const row = index % rows;
       const x = 0.72 + column * 6.12;
       const y = contentFrame.y + row * rowHeight;
+      panel(slide, { x: x - 0.06, y: Math.max(2.0, y - 0.04), w: columns === 1 ? 11.75 : 5.82, h: Math.max(0.42, rowHeight - 0.08) }, index % 2 === 0 ? tokens.surface : tokens.surfaceAlt);
       text(slide, String(index + 1).padStart(2, '0'), { x, y, w: 0.5, h: 0.3, fontSize: 12, bold: true, color: tokens.accent });
       text(slide, item, { x: x + 0.65, y, w: columns === 1 ? 10.9 : 5.05, h: rowHeight - 0.15, fontSize: 18, minFontSize: 14, color: tokens.ink });
     });
@@ -2482,6 +2529,8 @@ async function buildPptx(plan, outputPath) {
       text(slide, spec.kicker, { x: 0.78, y: 2.95, w: 11.6, h: 0.35, fontSize: 14, bold: true, color: tokens.sectionMuted });
       text(slide, spec.title, { x: 0.75, y: 3.52, w: 11.7, h: 1.55, fontFace: theme.fonts.display, fontSize: 42, minFontSize: 32, bold: true, color: tokens.sectionInk });
       text(slide, spec.summary, { x: 0.78, y: 5.38, w: 10.8, h: 1.02, fontSize: 20, minFontSize: 16, color: tokens.sectionMuted });
+      shape(slide, pptx.ShapeType.rect, { x: 0, y: 0, w: 0.12, h: 7.5, fill: { color: tokens.accent }, line: { color: tokens.accent } });
+      shape(slide, pptx.ShapeType.rect, { x: 0.75, y: 5.18, w: 2.4, h: 0.06, fill: { color: tokens.accent2 }, line: { color: tokens.accent2 } });
       notes(slide, spec.notes || spec.title);
       continue;
     }
@@ -2493,6 +2542,7 @@ async function buildPptx(plan, outputPath) {
       spec.columns.forEach((column, columnIndex) => {
         const x = 0.72 + columnIndex * 6.1;
         panel(slide, { x, y: contentFrame.y, w: 5.8, h: contentFrame.h }, columnIndex ? tokens.surfaceAlt : tokens.surface);
+        shape(slide, pptx.ShapeType.rect, { x, y: contentFrame.y, w: 5.8, h: 0.07, fill: { color: columnIndex === 0 ? tokens.accent : tokens.accent2 }, line: { color: columnIndex === 0 ? tokens.accent : tokens.accent2 } });
         text(slide, column.heading, { x: x + 0.28, y: 2.31, w: 5.24, h: 0.74, fontSize: 22, minFontSize: 18, bold: true, color: tokens.ink });
         const items = column.items || [];
         const rowHeight = 3.22 / Math.max(1, items.length);
@@ -2503,16 +2553,20 @@ async function buildPptx(plan, outputPath) {
     } else if (layout === 'stat' && spec.stat) {
       const support = (spec.support?.length ? spec.support : [spec.summary, spec.takeaway || spec.insight]).filter(Boolean);
       panel(slide, { x: 0.72, y: 2.02, w: support.length ? 6.0 : 11.9, h: 4.58 });
+      shape(slide, pptx.ShapeType.rect, { x: 0.72, y: 2.02, w: support.length ? 6.0 : 11.9, h: 0.08, fill: { color: tokens.accent }, line: { color: tokens.accent } });
       text(slide, spec.stat.value, { x: 1.02, y: 2.45, w: support.length ? 5.4 : 10.7, h: 1.75, fontFace: theme.fonts.display, fontSize: 76, minFontSize: 44, bold: true, color: tokens.accent });
       text(slide, spec.stat.caption, { x: 1.04, y: 4.58, w: support.length ? 5.36 : 10.6, h: 1.28, fontSize: 21, minFontSize: 17, color: tokens.ink });
       if (support.length) {
         const rowHeight = 3.88 / support.length;
         support.forEach((item, itemIndex) => {
+          panel(slide, { x: 7.02, y: 2.14 + itemIndex * rowHeight, w: 5.48, h: Math.max(0.55, rowHeight - 0.12) }, itemIndex % 2 === 0 ? tokens.surface : tokens.surfaceAlt);
           text(slide, item, { x: 7.19, y: 2.22 + itemIndex * rowHeight, w: 5.1, h: rowHeight - 0.18, fontSize: 19, minFontSize: 15 });
         });
       }
       text(slide, spec.stat.source ? `Fuente: ${spec.stat.source}` : '', { x: 1.04, y: 6.03, w: support.length ? 5.36 : 10.6, h: 0.4, fontSize: 11, color: tokens.muted });
     } else if (layout === 'quote' && spec.quote) {
+      panel(slide, { x: 0.72, y: 2.12, w: 11.88, h: 4.35 }, tokens.surfaceAlt);
+      shape(slide, pptx.ShapeType.rect, { x: 0.72, y: 2.12, w: 0.1, h: 4.35, fill: { color: tokens.accent }, line: { color: tokens.accent } });
       text(slide, `“${spec.quote}”`, { x: 1.12, y: 2.45, w: 11.0, h: 2.72, fontFace: theme.fonts.display, fontSize: 30, minFontSize: 24, italic: true, color: tokens.ink });
       text(slide, spec.attribution ? `— ${spec.attribution}` : '', { x: 1.15, y: 5.58, w: 10.8, h: 0.64, fontSize: 17, minFontSize: 15, bold: true, color: tokens.muted });
     } else if (layout === 'chart' && spec.chart) {
@@ -2526,6 +2580,7 @@ async function buildPptx(plan, outputPath) {
       });
       if (takeaway) {
         panel(slide, { x: 8.55, y: 2.12, w: 4.05, h: 3.94 });
+        shape(slide, pptx.ShapeType.rect, { x: 8.55, y: 2.12, w: 4.05, h: 0.07, fill: { color: tokens.accent }, line: { color: tokens.accent } });
         text(slide, takeaway, { x: 8.84, y: 2.52, w: 3.47, h: 3.1, fontSize: 21, minFontSize: 17, bold: true, color: tokens.ink });
       }
       const provenance = [spec.chart.source ? `Fuente: ${spec.chart.source}` : '', spec.chart.unit ? `Unidad: ${spec.chart.unit}` : '', spec.chart.asOf ? `Corte: ${spec.chart.asOf}` : ''].filter(Boolean).join(' · ');
@@ -2545,11 +2600,15 @@ async function buildPptx(plan, outputPath) {
       const rowHeight = (6.6 - startY) / Math.max(1, bullets.length);
       bullets.forEach((bullet, bulletIndex) => {
         const y = startY + bulletIndex * rowHeight;
+        if (bullets.length <= 5 && rowHeight >= 0.48) {
+          panel(slide, { x: 0.72, y: Math.max(2.0, y - 0.04), w: width, h: Math.max(0.36, rowHeight - 0.1) }, bulletIndex % 2 === 0 ? tokens.surface : tokens.surfaceAlt);
+        }
         text(slide, String(bulletIndex + 1).padStart(2, '0'), { x: 0.76, y: y + 0.03, w: 0.5, h: 0.3, fontSize: 12, bold: true, color: tokens.accent });
         text(slide, itemText(bullet), { x: 1.43, y, w: width - 0.67, h: rowHeight - 0.17, fontSize: 20, minFontSize: 16, color: tokens.ink });
       });
       if (takeaway) {
         panel(slide, { x: 8.65, y: 2.08, w: 3.95, h: 4.48 });
+        shape(slide, pptx.ShapeType.rect, { x: 8.65, y: 2.08, w: 3.95, h: 0.07, fill: { color: tokens.accent }, line: { color: tokens.accent } });
         text(slide, takeaway, { x: 8.95, y: 2.46, w: 3.35, h: 3.65, fontSize: 21, minFontSize: 17, bold: true, color: tokens.ink });
       }
     }
