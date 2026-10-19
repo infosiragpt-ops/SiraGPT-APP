@@ -300,8 +300,8 @@ const CREATE_DECK_PHRASE_RE = /\b(?:quiero|necesito|requiero|quisiera|me\s+gusta
 // plan in DXF, a 3D model, an e-book, a map, MIDI, an OpenDocument or RTF, a
 // QR/barcode, an .ics, a Parquet or SQLite file. No other path builds them —
 // the chat loop used to describe the file instead of delivering it.
-const SANDBOX_FILE_NOUN_RE = /(?<![\p{L}\d])(?:\.?(?:dxf|stl|epub|kmz|kml|gpx|midi|odt|ods|odp|rtf|ics|parquet|sqlite)|\.mid|autocad|plano(?:s)?\s+(?:en\s+)?(?:cad|dxf)|modelos?\s+3d|impresi[oó]n\s+3d|libros?\s+electr[oó]nicos?|e-?books?|c[oó]digos?\s+qr|qr\s+codes?|c[oó]digos?\s+de\s+barras|barcodes?)(?![\p{L}\d])/iu;
-const SANDBOX_FILE_VERB_RE = /\b(?:dame|exporta|exportalo|expórtalo|genera|generalo|genéralo|convierte|conviertelo|conviértelo|dibuja|dibujame|dibújame|modela|modelame|modélame|give\s+me|export|generate|draw)\b/i;
+const SANDBOX_FILE_NOUN_RE = /(?<![\p{L}\d])(?:\.?(?:dxf|stl|obj|glb|epub|kmz|kml|gpx|gpkg|geojson|shapefile|shp|geotiff|midi|musicxml|odt|ods|odp|rtf|ics|parquet|feather|avro|hdf5|h5|netcdf|sqlite|ipynb|latex|tex|bibtex|7z)|\.mid|autocad|plano(?:s)?\s+(?:en\s+)?(?:cad|dxf)|modelos?\s+3d|impresi[oó]n\s+3d|libros?\s+electr[oó]nicos?|e-?books?|c[oó]digos?\s+qr|qr\s+codes?|c[oó]digos?\s+de\s+barras|barcodes?|notebooks?\s+(?:de\s+)?jupyter|jupyter\s+notebooks?|cuadernos?\s+(?:de\s+)?jupyter|gifs?\s+animad[oa]s?|animated\s+gifs?|partituras?|sheet\s+music|pdfs?\s+firmad[oa]s?|firm\w*\s+digital\w*\s+(?:\w+\s+){0,2}pdf|signed\s+pdfs?)(?![\p{L}\d])/iu;
+const SANDBOX_FILE_VERB_RE = /\b(?:dame|exporta|exportalo|expórtalo|genera|generalo|genéralo|convierte|conviertelo|conviértelo|compila|compilalo|compílalo|firma|firmalo|fírmalo|dibuja|dibujame|dibújame|modela|modelame|modélame|give\s+me|export|generate|compile|sign|draw)\b/i;
 
 /**
  * Create-a-document request: verb + document noun, a presentation asked for

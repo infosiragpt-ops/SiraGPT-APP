@@ -46,8 +46,9 @@ test('runner image has the renderer, rasterizer and metric fonts the engine need
     assert.match(dockerfile, new RegExp(`\\b${pkg.replace(/[-]/g, '\\-')}\\b`), `${pkg} missing from the runner image`);
   }
   // Python packages are declared in capabilities.json, which the Dockerfile installs from.
-  assert.match(dockerfile, /COPY capabilities\.json verify_env\.py smoke_formats\.py \/opt\/sira\//);
-  assert.match(dockerfile, /json\.load\(open\('\/opt\/sira\/capabilities\.json'\)\)\['python'\]/);
+  assert.match(dockerfile, /COPY capabilities\.json verify_env\.py build_manifests\.py \/opt\/sira\//);
+  assert.match(dockerfile, /build_manifests\.py \/tmp\/sira-build/);
+  assert.match(dockerfile, /-r \/tmp\/sira-build\/requirements\.txt/);
   const catalog = JSON.parse(fs.readFileSync(path.join(REPO, 'services/sandbox/runner/capabilities.json'), 'utf8'));
   const pips = catalog.python.map((entry) => entry.pip.split(/[<>=!~;\s[]/)[0]);
   for (const pip of ['lxml', 'pillow', 'python-docx', 'openpyxl', 'python-pptx', 'pandas', 'pyreadstat']) {
