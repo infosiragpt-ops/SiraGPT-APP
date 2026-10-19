@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- The document sandbox grew from 50 to about 235 Python libraries across 20 professional fields, and every one of them is proven by a test before the image can ship.
+  - **Fields covered now:** maps and GIS (geopandas, rasterio, pyproj, folium, h3), statistics (pingouin, lifelines, statsmodels, factor analysis, GARCH, auto-ARIMA), machine learning (scikit-learn, LightGBM, XGBoost, UMAP, HDBSCAN), optimization (OR-Tools, PuLP, CVXPY, HiGHS, Pyomo), finance (QuantLib, XIRR, technical indicators), chemistry/biology/astronomy (RDKit, Biopython, Astropy), images and vision (OpenCV, scikit-image), audio/video/music (librosa, soundfile, music21, MIDI, offline text-to-speech with espeak-ng, ffmpeg), NLP (NLTK with bundled data, spaCy with Spanish and English models, gensim), cryptography and signed PDFs (cryptography, PyNaCl, pyHanko, GnuPG), Jupyter notebooks (create, execute and convert offline), databases (DuckDB, SQLAlchemy, Polars, Arrow, HDF5, NetCDF), validation (phone numbers, national IDs, IBAN, fake data), LaTeX (TeX Live with Spanish, XeTeX, latexmk) and more.
+  - **One test per library.** `services/sandbox/runner/tests/` holds a pytest suite organised by field; each test produces a real file and reopens it with an independent reader. A coverage test fails the build when any catalog entry (library, command-line tool, Node module) has no test, so the agent is never told about something that does not work.
+  - **The agent knows what it has.** The prompt lists the libraries by field, the bundled NLTK/spaCy data, recipes per deliverable (LaTeX to PDF, notebooks, GIS files, signed PDFs, speech, 3D, statistics reports…) and that the sandbox has no internet.
+  - **Routing.** Requests for LaTeX, Jupyter notebooks, GeoJSON/shapefiles/GeoPackage, MusicXML, animated GIFs, signed PDFs and 7z archives now reach the document agent; the new formats download with their real media type.
+  - **Trade-offs.** PyTorch/TensorFlow, Java tools, Chromium-based exporters, moviepy and svglib are left out (size or no Linux wheel); the image grows from 860 MB to about 2.4 GB and a cold build takes about 25 minutes, with rollback on failure.
+
 - The document sandbox is now a complete offline workstation, so the agent can deliver almost any file, not just Office documents.
   - **What's installed:**
     - Python: ezdxf (DXF plans), matplotlib/seaborn/plotly (charts), reportlab, fpdf2 and WeasyPrint (PDF), scipy/statsmodels/scikit-learn/sympy, trimesh/numpy-stl (3D), simplekml/gpxpy (maps), ebooklib (EPUB), odfpy (OpenDocument), qrcode/python-barcode, icalendar, fastparquet, pydub/mido (audio and MIDI) and more.

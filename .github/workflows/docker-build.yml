@@ -63,7 +63,9 @@ jobs:
   sandbox-runner:
     name: Docker · document sandbox SPSS
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The image installs ~230 Python libraries, TeX Live and LibreOffice and
+    # then runs its own functional suite; a cold build takes about 20 minutes.
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -113,14 +115,18 @@ jobs:
           print("SPSS_SANDBOX_IMAGE_OK")
           PY
 
-      - name: Every advertised library, tool and file format works offline
+      - name: Every advertised library, tool, data set and file format works offline
         shell: bash
         run: |
           set -euo pipefail
           # The build already ran both checks as the sandbox user; this repeats
-          # them in the isolation production uses (no network, no root) and
-          # keeps the per-format log in the job output.
+          # them in the isolation production uses (no network, no root, no
+          # capabilities, read-only root filesystem) and keeps the per-test
+          # log in the job output.
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp --tmpfs /workspace:uid=10001,gid=10001 \
             --entrypoint python3 siragpt-doc-sandbox:ci /opt/sira/verify_env.py
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
-            --entrypoint python3 siragpt-doc-sandbox:ci /opt/sira/smoke_formats.py /tmp/formats
+            --read-only --tmpfs /tmp --tmpfs /workspace:uid=10001,gid=10001 \
+            -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 siragpt-doc-sandbox:ci \
+            -m pytest -q -p no:cacheprovider --basetemp=/tmp/sira-tests --durations=25 /opt/sira/tests

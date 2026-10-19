@@ -1,89 +1,1697 @@
 {
-  "version": 2,
-  "about": "Single source of truth for what the document sandbox image ships. The Dockerfile installs every python[].pip from this file and fails the build when an import or a cli[] binary is missing (verify_env.py). backend/src/services/agent-runner/sandbox-capabilities.json is a byte-identical copy the agent prompt is built from (a test enforces it).",
+  "version": 3,
+  "about": "Single source of truth for what the document sandbox image ships. The Dockerfile installs every python[].pip from this file (binary wheels; sdist only for the pure-Python names in python_sdist_ok), downloads the data in python_data, and fails the build when an import or a cli[] binary is missing (verify_env.py) or when the pytest suite in tests/ (one functional test per entry, enforced by test_zz_catalog_coverage.py) fails. backend/src/services/agent-runner/sandbox-capabilities.json is a byte-identical copy the agent prompt is built from (a test enforces it). Compiled extensions must be regular cp312 wheels: abi3 wheels built with Cython's limited API (cftime>=1.6.6, netCDF4>=1.7.3, astropy>=7.2) register a Cython shared type of a different size and crash every later import ('Shared Cython type cython_function_or_method has the wrong size'); their pins stay below those releases. numpy stays below 2.4 (np.in1d and other 2.0-deprecated names were removed there) so astropy 7.1, the last release with regular cp312 wheels, keeps working.",
   "python": [
-    { "pip": "python-docx>=1.1,<2", "import": "docx", "area": "office", "use": "Word .docx read/write" },
-    { "pip": "docxtpl>=0.18,<1", "import": "docxtpl", "area": "office", "use": "fill a Word template with Jinja tags" },
-    { "pip": "openpyxl>=3.1,<4", "import": "openpyxl", "area": "office", "use": "Excel .xlsx read/write, formulas, styles, native charts" },
-    { "pip": "xlsxwriter>=3.2,<4", "import": "xlsxwriter", "area": "office", "use": "write rich .xlsx from scratch (charts, conditional formats)" },
-    { "pip": "xlrd>=2.0,<3", "import": "xlrd", "area": "office", "use": "read legacy .xls" },
-    { "pip": "python-pptx>=1.0,<2", "import": "pptx", "area": "office", "use": "PowerPoint .pptx read/write" },
-    { "pip": "odfpy>=1.4,<2", "import": "odf", "area": "office", "use": "OpenDocument .odt/.ods/.odp" },
-    { "pip": "mammoth>=1.8,<2", "import": "mammoth", "area": "office", "use": ".docx to clean HTML" },
-    { "pip": "lxml>=5.2,<7", "import": "lxml", "area": "office", "use": "surgical OOXML/XML edits" },
-    { "pip": "pypdf>=4.3,<7", "import": "pypdf", "area": "pdf", "use": "merge, split, rotate, fill forms" },
-    { "pip": "pymupdf>=1.24,<2", "import": "pymupdf", "area": "pdf", "use": "PDF render, redact, annotate, micro-edits" },
-    { "pip": "pdfplumber>=0.11,<1", "import": "pdfplumber", "area": "pdf", "use": "PDF text and table extraction" },
-    { "pip": "pikepdf>=9.0,<11", "import": "pikepdf", "area": "pdf", "use": "low-level PDF repair, encryption, metadata" },
-    { "pip": "reportlab>=4.2,<6", "import": "reportlab", "area": "pdf", "use": "programmatic PDF (invoices, reports, certificates)" },
-    { "pip": "fpdf2>=2.8,<3", "import": "fpdf", "area": "pdf", "use": "lightweight PDF with Unicode fonts" },
-    { "pip": "weasyprint>=62,<71", "import": "weasyprint", "area": "pdf", "use": "HTML + CSS to print-quality PDF" },
-    { "pip": "matplotlib>=3.9,<4", "import": "matplotlib", "area": "charts", "use": "PNG/SVG/PDF charts, LaTeX-style math (mathtext)" },
-    { "pip": "seaborn>=0.13,<1", "import": "seaborn", "area": "charts", "use": "statistical charts on top of matplotlib" },
-    { "pip": "plotly>=5.24,<7", "import": "plotly", "area": "charts", "use": "interactive charts as a self-contained .html (include_plotlyjs=True)" },
-    { "pip": "ezdxf>=1.3,<2", "import": "ezdxf", "area": "cad", "use": "AutoCAD .dxf plans: lines, layers, dimensions, blocks, hatches" },
-    { "pip": "shapely>=2.0,<3", "import": "shapely", "area": "cad", "use": "2D geometry: areas, offsets, unions, intersections" },
-    { "pip": "trimesh>=4.4,<5", "import": "trimesh", "area": "3d", "use": "3D meshes: .stl .obj .ply .glb" },
-    { "pip": "numpy-stl>=3.1,<4", "import": "stl", "area": "3d", "use": "write/read .stl directly from numpy" },
-    { "pip": "simplekml>=1.3,<2", "import": "simplekml", "area": "geo", "use": "Google Earth .kml" },
-    { "pip": "gpxpy>=1.6,<2", "import": "gpxpy", "area": "geo", "use": "GPS tracks .gpx" },
-    { "pip": "numpy>=1.26,<3", "import": "numpy", "area": "data", "use": "arrays and numerics" },
-    { "pip": "pandas>=2.2,<4", "import": "pandas", "area": "data", "use": "tables, CSV/Excel/JSON transforms" },
-    { "pip": "fastparquet>=2024.5", "import": "fastparquet", "area": "data", "use": "Parquet read/write (pandas engine='fastparquet')" },
-    { "pip": "pyreadstat==1.3.6", "import": "pyreadstat", "area": "data", "use": "SPSS .sav, Stata .dta, SAS read/write" },
-    { "pip": "tabulate>=0.9,<1", "import": "tabulate", "area": "data", "use": "plain/Markdown tables" },
-    { "pip": "scipy>=1.13,<2", "import": "scipy", "area": "science", "use": "statistics, optimization, signal, .wav I/O" },
-    { "pip": "statsmodels>=0.14,<1", "import": "statsmodels", "area": "science", "use": "regressions, ANOVA, time series" },
-    { "pip": "scikit-learn>=1.5,<2", "import": "sklearn", "area": "science", "use": "clustering, classification, PCA" },
-    { "pip": "sympy>=1.13,<2", "import": "sympy", "area": "science", "use": "symbolic math, exact solutions, LaTeX output" },
-    { "pip": "networkx>=3.3,<4", "import": "networkx", "area": "science", "use": "graphs, org charts, routes" },
-    { "pip": "pillow>=10.4,<13", "import": "PIL", "area": "image", "use": "image create/edit/convert (PNG, JPEG, WEBP, GIF, TIFF, ICO)" },
-    { "pip": "imageio>=2.34,<3", "import": "imageio", "area": "image", "use": "animated GIF and frame sequences" },
-    { "pip": "cairosvg>=2.7,<3", "import": "cairosvg", "area": "image", "use": "SVG to PNG/PDF" },
-    { "pip": "svgwrite>=1.4,<2", "import": "svgwrite", "area": "image", "use": "vector .svg drawings" },
-    { "pip": "qrcode>=7.4,<9", "import": "qrcode", "area": "image", "use": "QR codes" },
-    { "pip": "python-barcode>=0.15,<1", "import": "barcode", "area": "image", "use": "EAN/Code128 barcodes" },
-    { "pip": "ebooklib>=0.18,<1", "import": "ebooklib", "area": "text", "use": "e-books .epub" },
-    { "pip": "markdown>=3.6,<4", "import": "markdown", "area": "text", "use": "Markdown to HTML" },
-    { "pip": "jinja2>=3.1,<4", "import": "jinja2", "area": "text", "use": "HTML/text templates" },
-    { "pip": "beautifulsoup4>=4.12,<5", "import": "bs4", "area": "text", "use": "parse/clean HTML" },
-    { "pip": "pyyaml>=6.0,<7", "import": "yaml", "area": "text", "use": "YAML read/write" },
-    { "pip": "latex2mathml>=3.77,<4", "import": "latex2mathml", "area": "text", "use": "LaTeX math to MathML (editable Word equations)" },
-    { "pip": "icalendar>=5.0,<8", "import": "icalendar", "area": "text", "use": "calendar events .ics" },
-    { "pip": "pydub>=0.25,<1", "import": "pydub", "area": "media", "use": "cut/join/convert audio through ffmpeg" },
-    { "pip": "mido>=1.3,<2", "import": "mido", "area": "media", "use": "MIDI music files .mid" }
+    {
+      "pip": "python-docx>=1.1,<2",
+      "import": "docx",
+      "area": "office",
+      "use": "Word .docx read/write"
+    },
+    {
+      "pip": "docxtpl>=0.18,<1",
+      "import": "docxtpl",
+      "area": "office",
+      "use": "fill a Word template with Jinja tags"
+    },
+    {
+      "pip": "docxcompose>=1.4,<2",
+      "import": "docxcompose",
+      "area": "office",
+      "use": "merge several .docx into one"
+    },
+    {
+      "pip": "docx2txt>=0.8,<1",
+      "import": "docx2txt",
+      "area": "office",
+      "use": "plain text out of .docx"
+    },
+    {
+      "pip": "openpyxl>=3.1,<4",
+      "import": "openpyxl",
+      "area": "office",
+      "use": "Excel .xlsx read/write, formulas, styles, native charts"
+    },
+    {
+      "pip": "xlsxwriter>=3.2,<4",
+      "import": "xlsxwriter",
+      "area": "office",
+      "use": "write rich .xlsx from scratch (charts, conditional formats)"
+    },
+    {
+      "pip": "xlrd>=2.0,<3",
+      "import": "xlrd",
+      "area": "office",
+      "use": "read legacy .xls"
+    },
+    {
+      "pip": "pyxlsb>=1.0,<2",
+      "import": "pyxlsb",
+      "area": "office",
+      "use": "read binary .xlsb"
+    },
+    {
+      "pip": "formulas>=1.2,<2",
+      "import": "formulas",
+      "area": "office",
+      "use": "evaluate Excel formulas without Excel"
+    },
+    {
+      "pip": "python-pptx>=1.0,<2",
+      "import": "pptx",
+      "area": "office",
+      "use": "PowerPoint .pptx read/write"
+    },
+    {
+      "pip": "odfpy>=1.4,<2",
+      "import": "odf",
+      "area": "office",
+      "use": "OpenDocument .odt/.ods/.odp"
+    },
+    {
+      "pip": "mammoth>=1.8,<2",
+      "import": "mammoth",
+      "area": "office",
+      "use": ".docx to clean HTML"
+    },
+    {
+      "pip": "pdf2docx>=0.5,<1",
+      "import": "pdf2docx",
+      "area": "office",
+      "use": "PDF to editable .docx"
+    },
+    {
+      "pip": "lxml>=5.2,<7",
+      "import": "lxml",
+      "area": "office",
+      "use": "surgical OOXML/XML edits"
+    },
+    {
+      "pip": "pypandoc>=1.13,<2",
+      "import": "pypandoc",
+      "area": "office",
+      "use": "call pandoc from Python (md/html/docx/odt/epub/rtf)"
+    },
+    {
+      "pip": "pypdf>=4.3,<7",
+      "import": "pypdf",
+      "area": "pdf",
+      "use": "merge, split, rotate, fill forms"
+    },
+    {
+      "pip": "pymupdf>=1.24,<2",
+      "import": "pymupdf",
+      "area": "pdf",
+      "use": "PDF render, redact, annotate, micro-edits"
+    },
+    {
+      "pip": "pdfplumber>=0.11,<1",
+      "import": "pdfplumber",
+      "area": "pdf",
+      "use": "PDF text and table extraction"
+    },
+    {
+      "pip": "pdfminer.six>=20231228",
+      "import": "pdfminer",
+      "area": "pdf",
+      "use": "low-level PDF text layout"
+    },
+    {
+      "pip": "pikepdf>=9.0,<11",
+      "import": "pikepdf",
+      "area": "pdf",
+      "use": "low-level PDF repair, encryption, metadata"
+    },
+    {
+      "pip": "reportlab>=4.2,<6",
+      "import": "reportlab",
+      "area": "pdf",
+      "use": "programmatic PDF (invoices, reports, certificates)"
+    },
+    {
+      "pip": "fpdf2>=2.8,<3",
+      "import": "fpdf",
+      "area": "pdf",
+      "use": "lightweight PDF with Unicode fonts"
+    },
+    {
+      "pip": "weasyprint>=62,<71",
+      "import": "weasyprint",
+      "area": "pdf",
+      "use": "HTML + CSS to print-quality PDF"
+    },
+    {
+      "pip": "xhtml2pdf>=0.2.16,<1",
+      "import": "xhtml2pdf",
+      "area": "pdf",
+      "use": "simple HTML to PDF on reportlab"
+    },
+    {
+      "pip": "camelot-py>=1.0,<3",
+      "import": "camelot",
+      "area": "pdf",
+      "use": "tables out of PDFs (lattice/stream)"
+    },
+    {
+      "pip": "pdf2image>=1.17,<2",
+      "import": "pdf2image",
+      "area": "pdf",
+      "use": "PDF pages to PIL images (poppler)"
+    },
+    {
+      "pip": "img2pdf>=0.5,<1",
+      "import": "img2pdf",
+      "area": "pdf",
+      "use": "lossless images to PDF"
+    },
+    {
+      "pip": "ocrmypdf>=16,<18",
+      "import": "ocrmypdf",
+      "area": "pdf",
+      "use": "add an OCR text layer to scanned PDFs"
+    },
+    {
+      "pip": "pyHanko>=0.25,<1",
+      "import": "pyhanko",
+      "area": "pdf",
+      "use": "digitally sign and stamp PDFs"
+    },
+    {
+      "pip": "matplotlib>=3.9,<4",
+      "import": "matplotlib",
+      "area": "charts",
+      "use": "PNG/SVG/PDF charts, LaTeX-style math (mathtext)"
+    },
+    {
+      "pip": "seaborn>=0.13,<1",
+      "import": "seaborn",
+      "area": "charts",
+      "use": "statistical charts on top of matplotlib"
+    },
+    {
+      "pip": "plotly>=5.24,<7",
+      "import": "plotly",
+      "area": "charts",
+      "use": "interactive charts as a self-contained .html (include_plotlyjs=True)"
+    },
+    {
+      "pip": "bokeh>=3.4,<4",
+      "import": "bokeh",
+      "area": "charts",
+      "use": "interactive dashboards as .html (output_file, inline resources)"
+    },
+    {
+      "pip": "altair>=5.3,<6",
+      "import": "altair",
+      "area": "charts",
+      "use": "Vega-Lite grammar charts; PNG/SVG via vl-convert"
+    },
+    {
+      "pip": "vl-convert-python>=1.6,<2",
+      "import": "vl_convert",
+      "area": "charts",
+      "use": "render Vega-Lite/Altair to PNG, SVG, PDF offline"
+    },
+    {
+      "pip": "plotnine>=0.13,<1",
+      "import": "plotnine",
+      "area": "charts",
+      "use": "ggplot2 grammar of graphics"
+    },
+    {
+      "pip": "pygal>=3.0,<4",
+      "import": "pygal",
+      "area": "charts",
+      "use": "SVG charts with tooltips"
+    },
+    {
+      "pip": "mplfinance>=0.12.10b0",
+      "import": "mplfinance",
+      "area": "charts",
+      "use": "candlestick/OHLC financial charts"
+    },
+    {
+      "pip": "squarify>=0.4,<1",
+      "import": "squarify",
+      "area": "charts",
+      "use": "treemaps"
+    },
+    {
+      "pip": "matplotlib-venn>=0.11,<2",
+      "import": "matplotlib_venn",
+      "area": "charts",
+      "use": "Venn diagrams"
+    },
+    {
+      "pip": "adjustText>=1.1,<2",
+      "import": "adjustText",
+      "area": "charts",
+      "use": "non-overlapping chart labels"
+    },
+    {
+      "pip": "missingno>=0.5,<1",
+      "import": "missingno",
+      "area": "charts",
+      "use": "missing-data matrices"
+    },
+    {
+      "pip": "wordcloud>=1.9,<2",
+      "import": "wordcloud",
+      "area": "charts",
+      "use": "word clouds"
+    },
+    {
+      "pip": "graphviz>=0.20,<1",
+      "import": "graphviz",
+      "area": "charts",
+      "use": "Graphviz graphs from Python (dot binary)"
+    },
+    {
+      "pip": "pyvis>=0.3,<1",
+      "import": "pyvis",
+      "area": "charts",
+      "use": "interactive network graphs as .html"
+    },
+    {
+      "pip": "diagrams>=0.24,<1",
+      "import": "diagrams",
+      "area": "charts",
+      "use": "cloud/system architecture diagrams (AWS, GCP, Azure, k8s icons)"
+    },
+    {
+      "pip": "ezdxf>=1.3,<2",
+      "import": "ezdxf",
+      "area": "cad",
+      "use": "AutoCAD .dxf plans: lines, layers, dimensions, blocks, hatches"
+    },
+    {
+      "pip": "shapely>=2.0,<3",
+      "import": "shapely",
+      "area": "cad",
+      "use": "2D geometry: areas, offsets, unions, intersections"
+    },
+    {
+      "pip": "svgpathtools>=1.6,<2",
+      "import": "svgpathtools",
+      "area": "cad",
+      "use": "SVG path geometry (lengths, points, transforms)"
+    },
+    {
+      "pip": "trimesh>=4.4,<5",
+      "import": "trimesh",
+      "area": "3d",
+      "use": "3D meshes: .stl .obj .ply .glb, volumes, sections"
+    },
+    {
+      "pip": "manifold3d>=2.5,<4",
+      "import": "manifold3d",
+      "area": "3d",
+      "use": "boolean union/difference for trimesh meshes"
+    },
+    {
+      "pip": "mapbox-earcut>=1.0,<2",
+      "import": "mapbox_earcut",
+      "area": "3d",
+      "use": "polygon triangulation (trimesh extrusions)"
+    },
+    {
+      "pip": "numpy-stl>=3.1,<4",
+      "import": "stl",
+      "area": "3d",
+      "use": "write/read .stl directly from numpy"
+    },
+    {
+      "pip": "meshio>=5.3,<6",
+      "import": "meshio",
+      "area": "3d",
+      "use": "mesh conversion: .vtk .obj .ply .off .msh"
+    },
+    {
+      "pip": "pygltflib>=1.16,<2",
+      "import": "pygltflib",
+      "area": "3d",
+      "use": "glTF 2.0 / .glb read/write"
+    },
+    {
+      "pip": "geopandas>=1.0,<2",
+      "import": "geopandas",
+      "area": "geo",
+      "use": "GeoDataFrames: shapefile, GeoJSON, GeoPackage, joins, maps"
+    },
+    {
+      "pip": "pyproj>=3.6,<4",
+      "import": "pyproj",
+      "area": "geo",
+      "use": "CRS transforms (UTM, WGS84), geodesic distances"
+    },
+    {
+      "pip": "pyogrio>=0.9,<1",
+      "import": "pyogrio",
+      "area": "geo",
+      "use": "fast vector I/O for geopandas (.shp .gpkg .geojson)"
+    },
+    {
+      "pip": "rtree>=1.2,<2",
+      "import": "rtree",
+      "area": "geo",
+      "use": "spatial index"
+    },
+    {
+      "pip": "rasterio>=1.3,<2",
+      "import": "rasterio",
+      "area": "geo",
+      "use": "GeoTIFF rasters read/write"
+    },
+    {
+      "pip": "mapclassify>=2.6,<3",
+      "import": "mapclassify",
+      "area": "geo",
+      "use": "choropleth class breaks"
+    },
+    {
+      "pip": "folium>=0.17,<1",
+      "import": "folium",
+      "area": "geo",
+      "use": "Leaflet web maps as .html"
+    },
+    {
+      "pip": "simplekml>=1.3,<2",
+      "import": "simplekml",
+      "area": "geo",
+      "use": "Google Earth .kml"
+    },
+    {
+      "pip": "gpxpy>=1.6,<2",
+      "import": "gpxpy",
+      "area": "geo",
+      "use": "GPS tracks .gpx"
+    },
+    {
+      "pip": "geopy>=2.4,<3",
+      "import": "geopy",
+      "area": "geo",
+      "use": "geodesic distances between coordinates"
+    },
+    {
+      "pip": "h3>=4.0,<5",
+      "import": "h3",
+      "area": "geo",
+      "use": "H3 hexagonal spatial index"
+    },
+    {
+      "pip": "pyshp>=2.3,<3",
+      "import": "shapefile",
+      "area": "geo",
+      "use": "ESRI shapefile read/write without GDAL"
+    },
+    {
+      "pip": "geojson>=3.1,<4",
+      "import": "geojson",
+      "area": "geo",
+      "use": "GeoJSON objects"
+    },
+    {
+      "pip": "numpy>=1.26,<2.4",
+      "import": "numpy",
+      "area": "data",
+      "use": "arrays and numerics"
+    },
+    {
+      "pip": "pandas>=2.2,<4",
+      "import": "pandas",
+      "area": "data",
+      "use": "tables, CSV/Excel/JSON transforms"
+    },
+    {
+      "pip": "polars>=1.0,<2",
+      "import": "polars",
+      "area": "data",
+      "use": "fast DataFrames for large files (lazy, multi-core)"
+    },
+    {
+      "pip": "pyarrow>=16,<22",
+      "import": "pyarrow",
+      "area": "data",
+      "use": "Arrow/Parquet/Feather columnar I/O"
+    },
+    {
+      "pip": "fastparquet>=2024.5",
+      "import": "fastparquet",
+      "area": "data",
+      "use": "Parquet read/write (pandas engine='fastparquet')"
+    },
+    {
+      "pip": "duckdb>=1.0,<2",
+      "import": "duckdb",
+      "area": "data",
+      "use": "SQL over CSV/Parquet/DataFrames in-process"
+    },
+    {
+      "pip": "sqlalchemy>=2.0,<3",
+      "import": "sqlalchemy",
+      "area": "data",
+      "use": "SQL toolkit and ORM (SQLite built in)"
+    },
+    {
+      "pip": "sqlite-utils>=3.36,<4",
+      "import": "sqlite_utils",
+      "area": "data",
+      "use": "quick SQLite tables from dicts/CSV"
+    },
+    {
+      "pip": "sqlparse>=0.5,<1",
+      "import": "sqlparse",
+      "area": "data",
+      "use": "format and split SQL"
+    },
+    {
+      "pip": "sqlglot>=25,<30",
+      "import": "sqlglot",
+      "area": "data",
+      "use": "parse and transpile SQL between dialects"
+    },
+    {
+      "pip": "h5py>=3.11,<4",
+      "import": "h5py",
+      "area": "data",
+      "use": "HDF5 datasets"
+    },
+    {
+      "pip": "tables>=3.9,<4",
+      "import": "tables",
+      "area": "data",
+      "use": "PyTables HDF5 (pandas to_hdf)"
+    },
+    {
+      "pip": "xarray>=2024.6",
+      "import": "xarray",
+      "area": "data",
+      "use": "labelled N-D arrays"
+    },
+    {
+      "pip": "netCDF4>=1.7,<1.7.3",
+      "import": "netCDF4",
+      "area": "data",
+      "use": "NetCDF climate/science files"
+    },
+    {
+      "pip": "cftime>=1.6.4,<1.6.6",
+      "import": "cftime",
+      "area": "data",
+      "use": "calendar-aware dates for climate/NetCDF data (xarray/netCDF4 time axes)"
+    },
+    {
+      "pip": "dask>=2024.6",
+      "import": "dask",
+      "area": "data",
+      "use": "out-of-core DataFrames/arrays"
+    },
+    {
+      "pip": "pyreadstat==1.3.6",
+      "import": "pyreadstat",
+      "area": "data",
+      "use": "SPSS .sav, Stata .dta, SAS read/write"
+    },
+    {
+      "pip": "msgpack>=1.0,<2",
+      "import": "msgpack",
+      "area": "data",
+      "use": "MessagePack binary serialisation"
+    },
+    {
+      "pip": "orjson>=3.10,<4",
+      "import": "orjson",
+      "area": "data",
+      "use": "fast JSON"
+    },
+    {
+      "pip": "fastavro>=1.9,<2",
+      "import": "fastavro",
+      "area": "data",
+      "use": "Apache Avro files"
+    },
+    {
+      "pip": "xmltodict>=0.13,<1",
+      "import": "xmltodict",
+      "area": "data",
+      "use": "XML <-> dict"
+    },
+    {
+      "pip": "jsonschema>=4.22,<5",
+      "import": "jsonschema",
+      "area": "data",
+      "use": "validate JSON against a schema"
+    },
+    {
+      "pip": "pydantic>=2.7,<3",
+      "import": "pydantic",
+      "area": "data",
+      "use": "typed data models and validation"
+    },
+    {
+      "pip": "tabulate>=0.9,<1",
+      "import": "tabulate",
+      "area": "data",
+      "use": "plain/Markdown tables"
+    },
+    {
+      "pip": "csvkit>=2.0,<3",
+      "import": "csvkit",
+      "area": "data",
+      "use": "csvlook/csvstat/csvsql command-line CSV tools"
+    },
+    {
+      "pip": "yq>=3.4,<4",
+      "import": "yq",
+      "area": "data",
+      "use": "yq/xq/tomlq command-line queries over YAML/XML/TOML with jq syntax"
+    },
+    {
+      "pip": "scipy>=1.13,<2",
+      "import": "scipy",
+      "area": "science",
+      "use": "statistics, optimization, signal, .wav I/O"
+    },
+    {
+      "pip": "statsmodels>=0.14,<1",
+      "import": "statsmodels",
+      "area": "science",
+      "use": "regressions, ANOVA, time series"
+    },
+    {
+      "pip": "pingouin>=0.5.4,<1",
+      "import": "pingouin",
+      "area": "science",
+      "use": "APA-ready statistical tests (t-test, ANOVA, correlations, reliability)"
+    },
+    {
+      "pip": "scikit-posthocs>=0.9,<1",
+      "import": "scikit_posthocs",
+      "area": "science",
+      "use": "post-hoc tests (Dunn, Nemenyi, Tukey)"
+    },
+    {
+      "pip": "lifelines>=0.28,<1",
+      "import": "lifelines",
+      "area": "science",
+      "use": "survival analysis (Kaplan-Meier, Cox)"
+    },
+    {
+      "pip": "linearmodels>=6.0,<7",
+      "import": "linearmodels",
+      "area": "science",
+      "use": "panel data, IV/2SLS regressions"
+    },
+    {
+      "pip": "arch>=7.0,<8",
+      "import": "arch",
+      "area": "science",
+      "use": "ARCH/GARCH volatility models"
+    },
+    {
+      "pip": "pmdarima>=2.0,<3",
+      "import": "pmdarima",
+      "area": "science",
+      "use": "auto-ARIMA forecasting"
+    },
+    {
+      "pip": "sympy>=1.13,<2",
+      "import": "sympy",
+      "area": "science",
+      "use": "symbolic math, exact solutions, LaTeX output"
+    },
+    {
+      "pip": "uncertainties>=3.2,<4",
+      "import": "uncertainties",
+      "area": "science",
+      "use": "error propagation"
+    },
+    {
+      "pip": "pint>=0.24,<1",
+      "import": "pint",
+      "area": "science",
+      "use": "physical units and conversions"
+    },
+    {
+      "pip": "networkx>=3.3,<4",
+      "import": "networkx",
+      "area": "science",
+      "use": "graphs, org charts, routes"
+    },
+    {
+      "pip": "astropy>=6.1,<7.2",
+      "import": "astropy",
+      "area": "science",
+      "use": "astronomy: units, coordinates, FITS, time"
+    },
+    {
+      "pip": "biopython>=1.84,<2",
+      "import": "Bio",
+      "area": "science",
+      "use": "bioinformatics: sequences, FASTA/GenBank, alignments"
+    },
+    {
+      "pip": "rdkit>=2024.3",
+      "import": "rdkit",
+      "area": "science",
+      "use": "chemistry: molecules from SMILES, descriptors, 2D depictions"
+    },
+    {
+      "pip": "simpy>=4.1,<5",
+      "import": "simpy",
+      "area": "science",
+      "use": "discrete-event simulation (queues, processes)"
+    },
+    {
+      "pip": "scikit-learn>=1.5,<2",
+      "import": "sklearn",
+      "area": "ml",
+      "use": "clustering, classification, regression, PCA, factor analysis (decomposition.FactorAnalysis), pipelines"
+    },
+    {
+      "pip": "lightgbm>=4.4,<5",
+      "import": "lightgbm",
+      "area": "ml",
+      "use": "gradient boosting (fast, tabular)"
+    },
+    {
+      "pip": "xgboost-cpu>=2.1,<4",
+      "import": "xgboost",
+      "area": "ml",
+      "use": "XGBoost gradient boosting (CPU build)"
+    },
+    {
+      "pip": "imbalanced-learn>=0.12,<1",
+      "import": "imblearn",
+      "area": "ml",
+      "use": "SMOTE and resampling for imbalanced data"
+    },
+    {
+      "pip": "numba>=0.60,<1",
+      "import": "numba",
+      "area": "ml",
+      "use": "JIT-compiled numeric loops"
+    },
+    {
+      "pip": "umap-learn>=0.5.6,<1",
+      "import": "umap",
+      "area": "ml",
+      "use": "UMAP dimensionality reduction"
+    },
+    {
+      "pip": "hdbscan>=0.8.38,<1",
+      "import": "hdbscan",
+      "area": "ml",
+      "use": "density-based clustering"
+    },
+    {
+      "pip": "joblib>=1.4,<2",
+      "import": "joblib",
+      "area": "ml",
+      "use": "save/load models, parallel loops"
+    },
+    {
+      "pip": "ortools>=9.10,<10",
+      "import": "ortools",
+      "area": "optimization",
+      "use": "routing, scheduling, CP-SAT, linear solvers"
+    },
+    {
+      "pip": "pulp>=2.8,<4",
+      "import": "pulp",
+      "area": "optimization",
+      "use": "linear/integer programming with the bundled CBC solver"
+    },
+    {
+      "pip": "cvxpy>=1.5,<2",
+      "import": "cvxpy",
+      "area": "optimization",
+      "use": "convex optimization"
+    },
+    {
+      "pip": "highspy>=1.7,<2",
+      "import": "highspy",
+      "area": "optimization",
+      "use": "HiGHS LP/MIP solver"
+    },
+    {
+      "pip": "pyomo>=6.7,<7",
+      "import": "pyomo",
+      "area": "optimization",
+      "use": "algebraic optimization models (solve with HiGHS/CBC)"
+    },
+    {
+      "pip": "deap>=1.4,<2",
+      "import": "deap",
+      "area": "optimization",
+      "use": "genetic/evolutionary algorithms"
+    },
+    {
+      "pip": "numpy-financial>=1.0,<2",
+      "import": "numpy_financial",
+      "area": "finance",
+      "use": "NPV, IRR, PMT, amortization"
+    },
+    {
+      "pip": "pyxirr>=0.10,<1",
+      "import": "pyxirr",
+      "area": "finance",
+      "use": "XIRR/XNPV on irregular cash flows"
+    },
+    {
+      "pip": "QuantLib>=1.34,<2",
+      "import": "QuantLib",
+      "area": "finance",
+      "use": "bonds, options, yield curves, day counts"
+    },
+    {
+      "pip": "ta>=0.11,<1",
+      "import": "ta",
+      "area": "finance",
+      "use": "technical indicators (RSI, MACD, Bollinger) on DataFrames"
+    },
+    {
+      "pip": "pillow>=11,<14",
+      "import": "PIL",
+      "area": "image",
+      "use": "image create/edit/convert (PNG, JPEG, WEBP, GIF, TIFF, ICO)"
+    },
+    {
+      "pip": "opencv-python-headless>=4.10,<5",
+      "import": "cv2",
+      "area": "image",
+      "use": "computer vision: filters, contours, perspective, video frames"
+    },
+    {
+      "pip": "scikit-image>=0.24,<1",
+      "import": "skimage",
+      "area": "image",
+      "use": "image analysis: segmentation, measurements, filters"
+    },
+    {
+      "pip": "imageio>=2.34,<3",
+      "import": "imageio",
+      "area": "image",
+      "use": "animated GIF and frame sequences"
+    },
+    {
+      "pip": "imagehash>=4.3,<5",
+      "import": "imagehash",
+      "area": "image",
+      "use": "perceptual hashes (duplicate photos)"
+    },
+    {
+      "pip": "piexif>=1.1,<2",
+      "import": "piexif",
+      "area": "image",
+      "use": "read/write EXIF metadata"
+    },
+    {
+      "pip": "pytesseract>=0.3.10,<1",
+      "import": "pytesseract",
+      "area": "image",
+      "use": "OCR via tesseract"
+    },
+    {
+      "pip": "cairosvg>=2.7,<3",
+      "import": "cairosvg",
+      "area": "image",
+      "use": "SVG to PNG/PDF"
+    },
+    {
+      "pip": "svgwrite>=1.4,<2",
+      "import": "svgwrite",
+      "area": "image",
+      "use": "vector .svg drawings"
+    },
+    {
+      "pip": "drawsvg>=2.3,<3",
+      "import": "drawsvg",
+      "area": "image",
+      "use": "SVG drawings with gradients, text and animation"
+    },
+    {
+      "pip": "qrcode>=7.4,<9",
+      "import": "qrcode",
+      "area": "image",
+      "use": "QR codes"
+    },
+    {
+      "pip": "python-barcode>=0.15,<1",
+      "import": "barcode",
+      "area": "image",
+      "use": "EAN/Code128 barcodes"
+    },
+    {
+      "pip": "markdown>=3.6,<4",
+      "import": "markdown",
+      "area": "text",
+      "use": "Markdown to HTML"
+    },
+    {
+      "pip": "markdown-it-py>=3.0,<4",
+      "import": "markdown_it",
+      "area": "text",
+      "use": "CommonMark parser (tokens, plugins)"
+    },
+    {
+      "pip": "mistune>=3.0,<4",
+      "import": "mistune",
+      "area": "text",
+      "use": "fast Markdown renderer"
+    },
+    {
+      "pip": "docutils>=0.21,<1",
+      "import": "docutils",
+      "area": "text",
+      "use": "reStructuredText to HTML"
+    },
+    {
+      "pip": "jinja2>=3.1,<4",
+      "import": "jinja2",
+      "area": "text",
+      "use": "HTML/text templates"
+    },
+    {
+      "pip": "python-frontmatter>=1.1,<2",
+      "import": "frontmatter",
+      "area": "text",
+      "use": "YAML front matter in Markdown files"
+    },
+    {
+      "pip": "pyyaml>=6.0,<7",
+      "import": "yaml",
+      "area": "text",
+      "use": "YAML read/write"
+    },
+    {
+      "pip": "beautifulsoup4>=4.12,<5",
+      "import": "bs4",
+      "area": "text",
+      "use": "parse/clean HTML"
+    },
+    {
+      "pip": "html5lib>=1.1,<2",
+      "import": "html5lib",
+      "area": "text",
+      "use": "browser-grade HTML parsing"
+    },
+    {
+      "pip": "html2text>=2024.2",
+      "import": "html2text",
+      "area": "text",
+      "use": "HTML to Markdown"
+    },
+    {
+      "pip": "readability-lxml>=0.8,<1",
+      "import": "readability",
+      "area": "text",
+      "use": "main article text out of a web page"
+    },
+    {
+      "pip": "cssselect>=1.2,<2",
+      "import": "cssselect",
+      "area": "text",
+      "use": "CSS selectors for lxml"
+    },
+    {
+      "pip": "ebooklib>=0.18,<1",
+      "import": "ebooklib",
+      "area": "text",
+      "use": "e-books .epub"
+    },
+    {
+      "pip": "pylatex>=1.4,<2",
+      "import": "pylatex",
+      "area": "text",
+      "use": "build LaTeX documents from Python (compile with pdflatex)"
+    },
+    {
+      "pip": "pylatexenc>=2.10,<3",
+      "import": "pylatexenc",
+      "area": "text",
+      "use": "LaTeX <-> Unicode text"
+    },
+    {
+      "pip": "latex2mathml>=3.77,<4",
+      "import": "latex2mathml",
+      "area": "text",
+      "use": "LaTeX math to MathML (editable Word equations)"
+    },
+    {
+      "pip": "textstat>=0.7,<1",
+      "import": "textstat",
+      "area": "text",
+      "use": "readability scores (Flesch, Szigriszt)"
+    },
+    {
+      "pip": "pyspellchecker>=0.8,<1",
+      "import": "spellchecker",
+      "area": "text",
+      "use": "spell checking ES/EN/PT/FR/DE"
+    },
+    {
+      "pip": "Unidecode>=1.3,<2",
+      "import": "unidecode",
+      "area": "text",
+      "use": "strip accents / transliterate"
+    },
+    {
+      "pip": "python-slugify>=8.0,<9",
+      "import": "slugify",
+      "area": "text",
+      "use": "URL/file-name slugs"
+    },
+    {
+      "pip": "rapidfuzz>=3.9,<4",
+      "import": "rapidfuzz",
+      "area": "text",
+      "use": "fuzzy string matching and deduplication"
+    },
+    {
+      "pip": "regex>=2024.5",
+      "import": "regex",
+      "area": "text",
+      "use": "Unicode-aware regular expressions"
+    },
+    {
+      "pip": "chardet>=5.2,<6",
+      "import": "chardet",
+      "area": "text",
+      "use": "detect text encodings"
+    },
+    {
+      "pip": "ftfy>=6.2,<7",
+      "import": "ftfy",
+      "area": "text",
+      "use": "fix mojibake"
+    },
+    {
+      "pip": "emoji>=2.12,<3",
+      "import": "emoji",
+      "area": "text",
+      "use": "emoji names <-> characters"
+    },
+    {
+      "pip": "pyfiglet>=1.0,<2",
+      "import": "pyfiglet",
+      "area": "text",
+      "use": "ASCII-art banners"
+    },
+    {
+      "pip": "prettytable>=3.10,<4",
+      "import": "prettytable",
+      "area": "text",
+      "use": "console tables"
+    },
+    {
+      "pip": "num2words>=0.5.13,<1",
+      "import": "num2words",
+      "area": "text",
+      "use": "numbers to words (ES/EN/PT…), ordinals, currency"
+    },
+    {
+      "pip": "inflect>=7.3,<8",
+      "import": "inflect",
+      "area": "text",
+      "use": "English plurals and ordinals"
+    },
+    {
+      "pip": "nltk>=3.9,<4",
+      "import": "nltk",
+      "area": "nlp",
+      "use": "tokenizers, stopwords, stemming, WordNet (data bundled)"
+    },
+    {
+      "pip": "spacy>=3.8,<4",
+      "import": "spacy",
+      "area": "nlp",
+      "use": "NLP pipelines: es_core_news_sm and en_core_web_sm bundled"
+    },
+    {
+      "pip": "textblob>=0.18,<1",
+      "import": "textblob",
+      "area": "nlp",
+      "use": "quick sentiment and noun phrases"
+    },
+    {
+      "pip": "langdetect>=1.0.9,<2",
+      "import": "langdetect",
+      "area": "nlp",
+      "use": "language detection"
+    },
+    {
+      "pip": "gensim>=4.3,<5",
+      "import": "gensim",
+      "area": "nlp",
+      "use": "topic models (LDA), word2vec"
+    },
+    {
+      "pip": "pydub>=0.25,<1",
+      "import": "pydub",
+      "area": "media",
+      "use": "cut/join/convert audio through ffmpeg"
+    },
+    {
+      "pip": "soundfile>=0.12,<1",
+      "import": "soundfile",
+      "area": "media",
+      "use": "WAV/FLAC/OGG read/write"
+    },
+    {
+      "pip": "librosa>=0.10,<1",
+      "import": "librosa",
+      "area": "media",
+      "use": "audio analysis: tempo, pitch, spectrograms"
+    },
+    {
+      "pip": "ffmpeg-python>=0.2,<1",
+      "import": "ffmpeg",
+      "area": "media",
+      "use": "build ffmpeg pipelines from Python"
+    },
+    {
+      "pip": "imageio-ffmpeg>=0.5,<1",
+      "import": "imageio_ffmpeg",
+      "area": "media",
+      "use": "ffmpeg backend for imageio (video frames in/out, MP4 from frames)"
+    },
+    {
+      "pip": "mido>=1.3,<2",
+      "import": "mido",
+      "area": "media",
+      "use": "MIDI music files .mid"
+    },
+    {
+      "pip": "pretty_midi>=0.2.10,<1",
+      "import": "pretty_midi",
+      "area": "media",
+      "use": "MIDI notes, instruments, piano rolls"
+    },
+    {
+      "pip": "MIDIUtil>=1.2,<2",
+      "import": "midiutil",
+      "area": "media",
+      "use": "compose MIDI files note by note"
+    },
+    {
+      "pip": "music21>=9.1,<10",
+      "import": "music21",
+      "area": "media",
+      "use": "music notation: scores, MusicXML, analysis"
+    },
+    {
+      "pip": "pyttsx3>=2.90,<3",
+      "import": "pyttsx3",
+      "area": "media",
+      "use": "offline text-to-speech to .wav (espeak-ng)"
+    },
+    {
+      "pip": "pysubs2>=1.7,<2",
+      "import": "pysubs2",
+      "area": "media",
+      "use": "subtitles: SRT/ASS/VTT convert and shift"
+    },
+    {
+      "pip": "srt>=3.5,<4",
+      "import": "srt",
+      "area": "media",
+      "use": "SRT subtitle parsing/composition"
+    },
+    {
+      "pip": "webvtt-py>=0.5,<1",
+      "import": "webvtt",
+      "area": "media",
+      "use": "WebVTT subtitles"
+    },
+    {
+      "pip": "cryptography>=42,<47",
+      "import": "cryptography",
+      "area": "security",
+      "use": "AES/RSA, X.509 certificates, hashes"
+    },
+    {
+      "pip": "pycryptodome>=3.20,<4",
+      "import": "Crypto",
+      "area": "security",
+      "use": "classic ciphers and hashes"
+    },
+    {
+      "pip": "bcrypt>=4.1,<6",
+      "import": "bcrypt",
+      "area": "security",
+      "use": "password hashing"
+    },
+    {
+      "pip": "PyNaCl>=1.5,<2",
+      "import": "nacl",
+      "area": "security",
+      "use": "modern authenticated encryption and signatures"
+    },
+    {
+      "pip": "pyotp>=2.9,<3",
+      "import": "pyotp",
+      "area": "security",
+      "use": "TOTP/HOTP one-time codes"
+    },
+    {
+      "pip": "python-gnupg>=0.5,<1",
+      "import": "gnupg",
+      "area": "security",
+      "use": "GnuPG encrypt/sign files"
+    },
+    {
+      "pip": "python-dateutil>=2.9,<3",
+      "import": "dateutil",
+      "area": "dates",
+      "use": "parse dates, recurrence rules"
+    },
+    {
+      "pip": "pytz>=2024.1",
+      "import": "pytz",
+      "area": "dates",
+      "use": "time zones"
+    },
+    {
+      "pip": "tzdata>=2024.1",
+      "import": "tzdata",
+      "area": "dates",
+      "use": "IANA time zone database"
+    },
+    {
+      "pip": "arrow>=1.3,<2",
+      "import": "arrow",
+      "area": "dates",
+      "use": "human-friendly dates"
+    },
+    {
+      "pip": "pendulum>=3.0,<4",
+      "import": "pendulum",
+      "area": "dates",
+      "use": "time zones, periods, durations"
+    },
+    {
+      "pip": "holidays>=0.50",
+      "import": "holidays",
+      "area": "dates",
+      "use": "public holidays by country"
+    },
+    {
+      "pip": "icalendar>=5.0,<8",
+      "import": "icalendar",
+      "area": "dates",
+      "use": "calendar events .ics"
+    },
+    {
+      "pip": "Babel>=2.15,<3",
+      "import": "babel",
+      "area": "dates",
+      "use": "locale-aware number/date/currency formatting"
+    },
+    {
+      "pip": "phonenumbers>=8.13,<10",
+      "import": "phonenumbers",
+      "area": "validation",
+      "use": "parse/format/validate phone numbers"
+    },
+    {
+      "pip": "email-validator>=2.2,<3",
+      "import": "email_validator",
+      "area": "validation",
+      "use": "validate e-mail addresses"
+    },
+    {
+      "pip": "python-stdnum>=1.20,<3",
+      "import": "stdnum",
+      "area": "validation",
+      "use": "national IDs, tax numbers (RUC, DNI, NIF, CUIT…)"
+    },
+    {
+      "pip": "schwifty>=2024.5",
+      "import": "schwifty",
+      "area": "validation",
+      "use": "IBAN and BIC validation"
+    },
+    {
+      "pip": "validators>=0.28,<1",
+      "import": "validators",
+      "area": "validation",
+      "use": "URLs, IPs, cards, UUIDs"
+    },
+    {
+      "pip": "Faker>=25,<40",
+      "import": "faker",
+      "area": "validation",
+      "use": "realistic fake data (es_ES, es_MX, en_US…)"
+    },
+    {
+      "pip": "pytest>=8.2,<9",
+      "import": "pytest",
+      "area": "dev",
+      "use": "run unit tests for generated code"
+    },
+    {
+      "pip": "ruff>=0.5,<1",
+      "import": "ruff",
+      "area": "dev",
+      "use": "lint and format Python (ruff check / ruff format)"
+    },
+    {
+      "pip": "nbformat>=5.10,<6",
+      "import": "nbformat",
+      "area": "dev",
+      "use": "create Jupyter notebooks .ipynb"
+    },
+    {
+      "pip": "nbclient>=0.10,<1",
+      "import": "nbclient",
+      "area": "dev",
+      "use": "execute notebooks offline"
+    },
+    {
+      "pip": "nbconvert>=7.16,<8",
+      "import": "nbconvert",
+      "area": "dev",
+      "use": "notebooks to HTML/Markdown/PDF/script"
+    },
+    {
+      "pip": "ipykernel>=6.29,<7",
+      "import": "ipykernel",
+      "area": "dev",
+      "use": "Python kernel for notebook execution"
+    },
+    {
+      "pip": "jupytext>=1.16,<2",
+      "import": "jupytext",
+      "area": "dev",
+      "use": "Markdown/py <-> .ipynb"
+    },
+    {
+      "pip": "rich>=13.7,<15",
+      "import": "rich",
+      "area": "dev",
+      "use": "rich console output and tables"
+    },
+    {
+      "pip": "tqdm>=4.66,<5",
+      "import": "tqdm",
+      "area": "dev",
+      "use": "progress bars"
+    },
+    {
+      "pip": "click>=8.1,<9",
+      "import": "click",
+      "area": "dev",
+      "use": "command-line interfaces"
+    },
+    {
+      "pip": "typer>=0.12,<1",
+      "import": "typer",
+      "area": "dev",
+      "use": "typed CLIs"
+    },
+    {
+      "pip": "attrs>=23.2,<26",
+      "import": "attr",
+      "area": "dev",
+      "use": "classes without boilerplate"
+    },
+    {
+      "pip": "more-itertools>=10.3,<11",
+      "import": "more_itertools",
+      "area": "dev",
+      "use": "extra iteration tools"
+    },
+    {
+      "pip": "toolz>=0.12,<2",
+      "import": "toolz",
+      "area": "dev",
+      "use": "functional utilities"
+    },
+    {
+      "pip": "cloudpickle>=3.0,<4",
+      "import": "cloudpickle",
+      "area": "dev",
+      "use": "pickle lambdas and closures"
+    },
+    {
+      "pip": "dill>=0.3.8,<1",
+      "import": "dill",
+      "area": "dev",
+      "use": "extended pickling"
+    },
+    {
+      "pip": "psutil>=5.9,<8",
+      "import": "psutil",
+      "area": "dev",
+      "use": "process and system metrics"
+    },
+    {
+      "pip": "requests>=2.32,<3",
+      "import": "requests",
+      "area": "dev",
+      "use": "HTTP client (loopback only: the sandbox has no internet)"
+    },
+    {
+      "pip": "httpx>=0.27,<1",
+      "import": "httpx",
+      "area": "dev",
+      "use": "async HTTP client (loopback only)"
+    },
+    {
+      "pip": "flask>=3.0,<4",
+      "import": "flask",
+      "area": "dev",
+      "use": "build and test small web apps locally"
+    },
+    {
+      "pip": "fastapi>=0.111,<1",
+      "import": "fastapi",
+      "area": "dev",
+      "use": "typed web APIs (test with TestClient)"
+    },
+    {
+      "pip": "uvicorn>=0.30,<1",
+      "import": "uvicorn",
+      "area": "dev",
+      "use": "ASGI server for local checks"
+    },
+    {
+      "pip": "colorama>=0.4,<1",
+      "import": "colorama",
+      "area": "dev",
+      "use": "console colours"
+    },
+    {
+      "pip": "python-magic>=0.4.27,<1",
+      "import": "magic",
+      "area": "files",
+      "use": "detect file types by content (libmagic)"
+    },
+    {
+      "pip": "filetype>=1.2,<2",
+      "import": "filetype",
+      "area": "files",
+      "use": "detect file types by signature (no libmagic)"
+    },
+    {
+      "pip": "py7zr>=0.21,<1",
+      "import": "py7zr",
+      "area": "files",
+      "use": "7z archives from Python"
+    },
+    {
+      "pip": "zstandard>=0.22,<1",
+      "import": "zstandard",
+      "area": "files",
+      "use": "Zstandard compression"
+    },
+    {
+      "pip": "rarfile>=4.2,<5",
+      "import": "rarfile",
+      "area": "files",
+      "use": "read RAR archives (7z backend)"
+    }
   ],
+  "python_sdist_ok": [
+    "odfpy",
+    "ta",
+    "PyLaTeX",
+    "langdetect",
+    "MIDIUtil",
+    "srt"
+  ],
+  "python_sdist_ok_deps": {
+    "docopt": "dependency of num2words; pure Python, no wheel on PyPI"
+  },
+  "python_data": {
+    "nltk": [
+      "punkt",
+      "punkt_tab",
+      "stopwords",
+      "wordnet",
+      "omw-1.4",
+      "omw-2.0",
+      "cmudict",
+      "averaged_perceptron_tagger_eng",
+      "vader_lexicon",
+      "snowball_data"
+    ],
+    "spacy_models": [
+      "es_core_news_sm",
+      "en_core_web_sm"
+    ]
+  },
   "cli": [
-    { "bin": "soffice", "use": "LibreOffice headless: convert between docx/xlsx/pptx/odt/rtf/pdf/html (soffice --headless --convert-to pdf --outdir outputs file)" },
-    { "bin": "pandoc", "use": "Markdown/HTML/LaTeX ↔ docx/odt/epub/rtf" },
-    { "bin": "dot", "use": "Graphviz diagrams to SVG/PNG/PDF" },
-    { "bin": "rsvg-convert", "use": "SVG to PNG/PDF" },
-    { "bin": "gs", "use": "Ghostscript: compress/print-ready PDF, PS/EPS" },
-    { "bin": "qpdf", "use": "PDF linearize, decrypt, split" },
-    { "bin": "pdftoppm", "use": "rasterize PDF pages to PNG" },
-    { "bin": "pdftotext", "use": "PDF to text" },
-    { "bin": "tesseract", "use": "OCR of images" },
-    { "bin": "ffmpeg", "use": "audio/video convert, cut, GIF/MP4 from frames" },
-    { "bin": "ffprobe", "use": "media metadata" },
-    { "bin": "sqlite3", "use": ".sqlite databases" },
-    { "bin": "jq", "use": "JSON queries" },
-    { "bin": "zip", "use": "zip archives" },
-    { "bin": "7z", "use": "7z/rar/tar archives" },
-    { "bin": "node", "use": "Node.js with docx, exceljs, pptxgenjs (global modules)" }
+    {
+      "bin": "soffice",
+      "use": "LibreOffice headless: convert between docx/xlsx/pptx/odt/rtf/pdf/html (soffice --headless --convert-to pdf --outdir outputs file)"
+    },
+    {
+      "bin": "pandoc",
+      "use": "Markdown/HTML/LaTeX ↔ docx/odt/epub/rtf/pdf"
+    },
+    {
+      "bin": "pdflatex",
+      "use": "compile LaTeX to PDF (TeX Live: latex-recommended, Spanish babel, lmodern)"
+    },
+    {
+      "bin": "xelatex",
+      "use": "LaTeX with Unicode and system fonts"
+    },
+    {
+      "bin": "latexmk",
+      "use": "run pdflatex/bibtex as many times as needed"
+    },
+    {
+      "bin": "bibtex",
+      "use": "bibliographies for LaTeX"
+    },
+    {
+      "bin": "dot",
+      "use": "Graphviz diagrams to SVG/PNG/PDF"
+    },
+    {
+      "bin": "rsvg-convert",
+      "use": "SVG to PNG/PDF"
+    },
+    {
+      "bin": "convert",
+      "use": "ImageMagick: convert/resize/compose images, PDF pages to images"
+    },
+    {
+      "bin": "potrace",
+      "use": "bitmap to vector SVG"
+    },
+    {
+      "bin": "qrencode",
+      "use": "QR codes from the shell"
+    },
+    {
+      "bin": "exiftool",
+      "use": "read/write metadata of photos, PDFs and Office files"
+    },
+    {
+      "bin": "gs",
+      "use": "Ghostscript: compress/print-ready PDF, PS/EPS"
+    },
+    {
+      "bin": "qpdf",
+      "use": "PDF linearize, decrypt, split"
+    },
+    {
+      "bin": "mutool",
+      "use": "MuPDF: draw pages, extract text/images, clean PDFs"
+    },
+    {
+      "bin": "pdftoppm",
+      "use": "rasterize PDF pages to PNG"
+    },
+    {
+      "bin": "pdftotext",
+      "use": "PDF to text"
+    },
+    {
+      "bin": "pdfinfo",
+      "use": "PDF metadata and page count"
+    },
+    {
+      "bin": "tesseract",
+      "use": "OCR of images (eng, spa, por, fra, deu, ita)"
+    },
+    {
+      "bin": "ocrmypdf",
+      "use": "OCR text layer for scanned PDFs"
+    },
+    {
+      "bin": "img2pdf",
+      "use": "images to PDF losslessly"
+    },
+    {
+      "bin": "ffmpeg",
+      "use": "audio/video convert, cut, GIF/MP4 from frames"
+    },
+    {
+      "bin": "ffprobe",
+      "use": "media metadata"
+    },
+    {
+      "bin": "sox",
+      "use": "audio processing: trim, normalize, effects, spectrograms"
+    },
+    {
+      "bin": "mediainfo",
+      "use": "detailed media file information"
+    },
+    {
+      "bin": "espeak-ng",
+      "use": "offline text-to-speech (many languages) to .wav"
+    },
+    {
+      "bin": "sqlite3",
+      "use": ".sqlite databases"
+    },
+    {
+      "bin": "csvlook",
+      "use": "csvkit: csvlook/csvstat/csvsql/in2csv for CSV files"
+    },
+    {
+      "bin": "jq",
+      "use": "JSON queries"
+    },
+    {
+      "bin": "yq",
+      "use": "YAML/XML queries (jq syntax)"
+    },
+    {
+      "bin": "rg",
+      "use": "ripgrep fast search"
+    },
+    {
+      "bin": "tree",
+      "use": "directory trees"
+    },
+    {
+      "bin": "bc",
+      "use": "arbitrary-precision calculator"
+    },
+    {
+      "bin": "file",
+      "use": "identify file types"
+    },
+    {
+      "bin": "gpg",
+      "use": "GnuPG encryption and signatures"
+    },
+    {
+      "bin": "zip",
+      "use": "zip archives"
+    },
+    {
+      "bin": "7z",
+      "use": "7z/rar/tar archives"
+    },
+    {
+      "bin": "ruff",
+      "use": "lint/format Python code"
+    },
+    {
+      "bin": "jupyter",
+      "use": "jupyter nbconvert --execute / --to html|pdf|markdown"
+    },
+    {
+      "bin": "node",
+      "use": "Node.js with docx, exceljs, pptxgenjs, pdf-lib, jszip, markdown-it (global CommonJS modules)"
+    }
   ],
-  "node": ["docx", "exceljs", "pptxgenjs"],
+  "node": [
+    "docx",
+    "exceljs",
+    "pptxgenjs",
+    "pdf-lib",
+    "jszip",
+    "markdown-it"
+  ],
   "recipes": [
-    { "ext": "dxf", "how": "ezdxf: doc = ezdxf.new('R2018', setup=True); msp = doc.modelspace(); add_line/add_lwpolyline/add_text, layers with doc.layers.add, dimensions with msp.add_linear_dim(...).render(); doc.saveas('outputs/plano.dxf'). Preview: from ezdxf.addons.drawing import matplotlib as dm; dm.qsave(msp, 'previews/plano.png', bg='#FFFFFF') (white sheet; export the same to outputs/plano.pdf for a printable plan). Set doc.units = ezdxf.units.M (or CM/MM) to match the user's dimensions." },
-    { "ext": "png/svg/pdf chart", "how": "matplotlib (import matplotlib; matplotlib.use('Agg')): fig.savefig('outputs/x.png', dpi=200, bbox_inches='tight'); seaborn for statistics." },
-    { "ext": "html interactive chart", "how": "plotly: fig.write_html('outputs/x.html', include_plotlyjs=True) — the file works offline." },
-    { "ext": "pdf", "how": "reportlab (precise layout) or weasyprint (HTML + CSS: weasyprint.HTML(string=html).write_pdf('outputs/x.pdf')); an office file to PDF: soffice --headless --convert-to pdf --outdir outputs <file>." },
-    { "ext": "odt/ods/odp/rtf/epub", "how": "build the docx/xlsx/pptx, then soffice --headless --convert-to odt|ods|odp|rtf --outdir outputs <file>; epub: pandoc in.md -o outputs/x.epub or ebooklib." },
-    { "ext": "svg/diagram", "how": "Graphviz: write a .dot and run dot -Tsvg -o outputs/x.svg (or -Tpng); free drawings with svgwrite; SVG to PNG with cairosvg or rsvg-convert." },
-    { "ext": "stl/obj/glb", "how": "trimesh (trimesh.creation.box/cylinder, boolean-free unions with trimesh.util.concatenate); mesh.export('outputs/x.stl')." },
-    { "ext": "kml/gpx/geojson", "how": "simplekml, gpxpy; GeoJSON with json + shapely.geometry.mapping." },
-    { "ext": "gif/mp4", "how": "draw frames with matplotlib or Pillow, then imageio.mimsave('outputs/x.gif', frames) or ffmpeg -framerate 12 -i previews/f%03d.png outputs/x.mp4." },
-    { "ext": "mp3/wav/mid", "how": "pydub/ffmpeg for audio, scipy.io.wavfile for synthesized tones, mido for MIDI." },
-    { "ext": "qr/barcode", "how": "qrcode.make(data).save('outputs/qr.png'); barcode.get('code128', data, writer=ImageWriter()).save('outputs/code')." },
-    { "ext": "ics/csv/json/yaml/parquet/sqlite/sav", "how": "icalendar; pandas to_csv/to_json/to_parquet(engine='fastparquet')/to_sql (sqlite3); pyreadstat.write_sav." }
+    {
+      "ext": "dxf",
+      "how": "ezdxf: doc = ezdxf.new('R2018', setup=True); msp = doc.modelspace(); add_line/add_lwpolyline/add_text, layers with doc.layers.add, dimensions with msp.add_linear_dim(...).render(); doc.saveas('outputs/plano.dxf'). Preview: from ezdxf.addons.drawing import matplotlib as dm; dm.qsave(msp, 'previews/plano.png', bg='#FFFFFF') (white sheet; export the same to outputs/plano.pdf for a printable plan). Set doc.units = ezdxf.units.M (or CM/MM) to match the user's dimensions."
+    },
+    {
+      "ext": "png/svg/pdf chart",
+      "how": "matplotlib (import matplotlib; matplotlib.use('Agg')): fig.savefig('outputs/x.png', dpi=200, bbox_inches='tight'); seaborn for statistics; plotnine for ggplot grammar; mplfinance for candlesticks; altair + vl_convert for Vega-Lite PNG/SVG."
+    },
+    {
+      "ext": "html interactive chart/map/dashboard",
+      "how": "plotly: fig.write_html('outputs/x.html', include_plotlyjs=True); bokeh: output_file(..., mode='inline'); folium map: m.save('outputs/mapa.html'); pyvis network: net.write_html(..., notebook=False). All work offline."
+    },
+    {
+      "ext": "pdf",
+      "how": "reportlab (precise layout) or weasyprint (HTML + CSS: weasyprint.HTML(string=html).write_pdf('outputs/x.pdf')); LaTeX: write main.tex then pdflatex -interaction=nonstopmode -output-directory outputs main.tex (twice for references, or latexmk -pdf); an office file to PDF: soffice --headless --convert-to pdf --outdir outputs <file>; sign/stamp: pyhanko; OCR layer: ocrmypdf in.pdf outputs/out.pdf."
+    },
+    {
+      "ext": "docx/xlsx/pptx",
+      "how": "python-docx / openpyxl (xlsxwriter for charts) / python-pptx; PDF to Word: pdf2docx Converter(pdf).convert(docx); merge Word files: docxcompose; fill a template: docxtpl; Markdown to Word: pandoc in.md -o outputs/x.docx."
+    },
+    {
+      "ext": "odt/ods/odp/rtf/epub",
+      "how": "build the docx/xlsx/pptx, then soffice --headless --convert-to odt|ods|odp|rtf --outdir outputs <file>; epub: pandoc in.md -o outputs/x.epub or ebooklib."
+    },
+    {
+      "ext": "svg/diagram",
+      "how": "Graphviz: write a .dot and run dot -Tsvg -o outputs/x.svg (or -Tpng), or the graphviz Python package; architecture diagrams: diagrams (with Diagram(..., filename='outputs/arq', show=False)); free drawings with svgwrite/drawsvg; SVG to PNG with cairosvg or rsvg-convert; bitmap to SVG: potrace."
+    },
+    {
+      "ext": "stl/obj/glb/3mf",
+      "how": "trimesh (trimesh.creation.box/cylinder/extrude_polygon, boolean union/difference via manifold3d); mesh.export('outputs/x.stl'|'.obj'|'.glb'); meshio converts .vtk/.ply/.off."
+    },
+    {
+      "ext": "shp/gpkg/geojson/kml/gpx/geotiff",
+      "how": "geopandas.GeoDataFrame(...).to_file('outputs/x.gpkg'|'.shp'|'.geojson'); gdf.plot() for a static map; CRS with pyproj; simplekml, gpxpy; rasterio for GeoTIFF; h3 for hex grids."
+    },
+    {
+      "ext": "gif/mp4",
+      "how": "draw frames with matplotlib or Pillow, then imageio.mimsave('outputs/x.gif', frames) or ffmpeg -framerate 12 -i previews/f%03d.png outputs/x.mp4; cut/concatenate/overlay videos with ffmpeg (ffmpeg-python builds the command): ffmpeg -ss 0 -t 10 -i in.mp4 -c copy outputs/clip.mp4."
+    },
+    {
+      "ext": "mp3/wav/flac/mid/musicxml",
+      "how": "pydub/ffmpeg/sox for audio, scipy.io.wavfile or soundfile for synthesized tones, librosa for analysis, mido/midiutil/pretty_midi for MIDI, music21 for scores and MusicXML; speech: espeak-ng -v es -w outputs/voz.wav 'texto' (or pyttsx3), then ffmpeg to mp3."
+    },
+    {
+      "ext": "qr/barcode",
+      "how": "qrcode.make(data).save('outputs/qr.png'); barcode.get('code128', data, writer=ImageWriter()).save('outputs/code'); qrencode -o outputs/qr.png 'texto'."
+    },
+    {
+      "ext": "ics/csv/json/yaml/parquet/feather/avro/hdf5/sqlite/sav/dta",
+      "how": "icalendar; pandas to_csv/to_json/to_parquet/to_feather/to_hdf/to_sql (sqlite3 or sqlalchemy); fastavro; duckdb for SQL over files; pyreadstat.write_sav/write_dta; polars for big files."
+    },
+    {
+      "ext": "ipynb",
+      "how": "nbformat builds the notebook, nbclient executes it offline, jupyter nbconvert --to html|pdf|markdown outputs/x.ipynb; jupytext converts .md/.py <-> .ipynb."
+    },
+    {
+      "ext": "statistics/ml report",
+      "how": "pandas + pingouin/statsmodels/scipy for tests (report APA style), scikit-learn/lightgbm/xgboost for models, lifelines for survival, pmdarima/arch for time series; charts with seaborn; write the report with python-docx or reportlab and verify numbers against the tables."
+    },
+    {
+      "ext": "optimization",
+      "how": "pulp (LpProblem, solve with PULP_CBC_CMD(msg=0)), ortools (CP-SAT for scheduling/routing, GLOP for LP), cvxpy (solver=cp.CLARABEL), highspy/pyomo (SolverFactory('appsi_highs')); export solutions to xlsx. Never import ortools and highspy/pyomo in the SAME script (each bundles its own HiGHS library and the second import crashes): one solver per script."
+    },
+    {
+      "ext": "chemistry/biology/physics",
+      "how": "rdkit (Chem.MolFromSmiles, Descriptors, Draw.MolToFile png); biopython (SeqIO FASTA/GenBank, pairwise2); astropy units/coordinates; pint units; sympy for exact math and LaTeX output."
+    },
+    {
+      "ext": "text/nlp",
+      "how": "nltk (punkt, stopwords, wordnet bundled), spacy.load('es_core_news_sm'|'en_core_web_sm'), gensim LDA, rapidfuzz dedupe, textstat readability, num2words for amounts in words, phonenumbers/stdnum/schwifty to validate data."
+    },
+    {
+      "ext": "archives/encryption",
+      "how": "zipfile/py7zr/zstandard; 7z a outputs/x.7z files; cryptography/PyNaCl for AES/signatures; gpg --symmetric; pyhanko for signed PDFs; hashes with hashlib."
+    },
+    {
+      "ext": "web app prototype",
+      "how": "flask/fastapi app files in outputs/; verify with fastapi.testclient or a loopback uvicorn run (the sandbox has no internet, loopback works)."
+    }
   ]
 }

@@ -196,6 +196,11 @@ jobs:
             docker build --quiet -t "$candidate" -f "$REPO/services/sandbox/runner/Dockerfile" "$REPO/services/sandbox/runner" >/dev/null
             docker run --rm --network none --entrypoint python3 "$candidate" -c 'import pandas, pyreadstat, openpyxl; print("SPSS_IMAGE_OK")'
             docker run --rm --network none --entrypoint python3 "$candidate" /opt/sira/verify_env.py
+            # The build already ran the functional suite; repeat the coverage
+            # contract here so a candidate whose tests were skipped never ships.
+            docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /workspace:uid=10001,gid=10001 \
+              -e PYTHONDONTWRITEBYTECODE=1 --entrypoint python3 "$candidate" \
+              -m pytest -q -p no:cacheprovider --basetemp=/tmp/sira-tests /opt/sira/tests/test_zz_catalog_coverage.py
             docker image tag "$candidate" siragpt-doc-sandbox:latest >/dev/null
             runner_tagged=1
             mapfile -t backend_ids < <(docker ps --filter label=com.docker.compose.project=iliagpt --filter label=com.docker.compose.service=backend --format '{{.ID}}')

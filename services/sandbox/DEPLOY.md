@@ -120,13 +120,21 @@ needs from the image, and why:
 
 The automatic publish (`.github/workflows/publish-production.yml`) rebuilds
 this image whenever anything under `services/sandbox/runner/` changes
-(Dockerfile, `capabilities.json`, the checks): it builds a candidate, runs
-`/opt/sira/verify_env.py` in it, tags it `latest`, proves the live backend
-reaches it (`backend/scripts/verify-agent-sandbox-runtime.cjs`) and restores
-the previous image if any step fails. What the image ships is declared once in
-`runner/capabilities.json`; the build itself fails unless every package,
-binary and Node module imports/resolves (`verify_env.py`) and a real file of
-every advertised format is produced and reopened offline (`smoke_formats.py`).
+(Dockerfile, `capabilities.json`, the checks, the test suite): it builds a
+candidate, runs `/opt/sira/verify_env.py` and the catalog-coverage test in it,
+tags it `latest`, proves the live backend reaches it
+(`backend/scripts/verify-agent-sandbox-runtime.cjs`) and restores the previous
+image if any step fails. What the image ships is declared once in
+`runner/capabilities.json` (~230 Python libraries across 20 fields, 40
+command-line tools, 6 Node modules, NLTK data and spaCy models); the build
+itself fails unless every package, binary, data set and Node module
+imports/resolves (`verify_env.py`) and the pytest suite in `runner/tests/`
+passes: one functional test per entry that produces a real file and reopens it
+offline as the `sandbox` user, with `test_zz_catalog_coverage.py` failing when
+any catalog entry has no test. Expect a cold build of about 25 minutes and an
+image of roughly 2.4 GB of content (TeX Live, LibreOffice, spaCy/NLTK data,
+scientific wheels); the suite itself takes about 100 s. Keep the previous image
+until the new one is verified.
 
 Manual rebuild on the Lenovo, keeping the previous image for rollback:
 
@@ -137,7 +145,9 @@ docker build -t siragpt-doc-sandbox:latest -f services/sandbox/runner/Dockerfile
 # verify in a fresh container (expected: Carlito, Liberation Serif, Liberation Sans, pdftoppm version)
 docker run --rm siragpt-doc-sandbox:latest sh -c 'fc-match Calibri; fc-match "Times New Roman"; fc-match Arial; pdftoppm -v 2>&1 | head -1; python3 -c "import lxml, PIL; print(\"py ok\")"'
 docker run --rm --network none --read-only --tmpfs /tmp siragpt-doc-sandbox:latest python3 /opt/sira/verify_env.py      # → SIRA_ENV_OK
-docker run --rm --network none siragpt-doc-sandbox:latest python3 /opt/sira/smoke_formats.py /tmp/f   # → SIRA_FORMATS_OK
+docker run --rm --network none --read-only --tmpfs /tmp --tmpfs /workspace:uid=10001,gid=10001 -e PYTHONDONTWRITEBYTECODE=1 \
+  siragpt-doc-sandbox:latest python3 -m pytest -q -p no:cacheprovider --basetemp=/tmp/t /opt/sira/tests   # → SIRA_TESTS_OK
+# one area only, e.g. the PDF stack:  … /opt/sira/tests/test_pdf.py
 docker exec siragpt-sandbox node scripts/smoke.js      # → SMOKE PASS
 ```
 

@@ -14,15 +14,24 @@ const CAPABILITIES = require('./sandbox-capabilities.json');
 const AREA_LABELS = {
   office: 'Office',
   pdf: 'PDF',
-  charts: 'Charts',
+  charts: 'Charts/diagrams',
   cad: 'CAD/plans',
   '3d': '3D',
-  geo: 'Maps/GPS',
-  data: 'Data',
+  geo: 'Maps/GIS',
+  data: 'Data/databases',
   science: 'Science/statistics',
-  image: 'Images',
-  text: 'Text/web/e-books',
-  media: 'Audio/music',
+  ml: 'Machine learning',
+  optimization: 'Optimization',
+  finance: 'Finance',
+  image: 'Images/vision',
+  text: 'Text/web/e-books/LaTeX',
+  nlp: 'NLP',
+  media: 'Audio/video/music',
+  security: 'Cryptography/signatures',
+  dates: 'Dates/calendars/locales',
+  validation: 'Validation/fake data',
+  dev: 'Dev/notebooks/web apps',
+  files: 'Files/archives',
 };
 
 function distributionName(spec) {
@@ -43,6 +52,15 @@ function pythonLibraryLines(capabilities = CAPABILITIES) {
   return [...byArea].map(([area, names]) => `  ${AREA_LABELS[area] || area}: ${names.join(', ')}`);
 }
 
+/** Bundled data sets (NLTK corpora, spaCy models), so the model never tries to download them. */
+function dataLines(capabilities = CAPABILITIES) {
+  const data = capabilities.python_data || {};
+  const lines = [];
+  if (Array.isArray(data.nltk) && data.nltk.length) lines.push(`- NLTK data already installed (NLTK_DATA): ${data.nltk.join(', ')}.`);
+  if (Array.isArray(data.spacy_models) && data.spacy_models.length) lines.push(`- spaCy models already installed: ${data.spacy_models.join(', ')} (spacy.load('<name>')).`);
+  return lines;
+}
+
 function cliLine(capabilities = CAPABILITIES) {
   return capabilities.cli.map((entry) => entry.bin).join(', ');
 }
@@ -55,7 +73,8 @@ function buildSandboxEnvironmentBlock(capabilities = CAPABILITIES) {
     ...pythonLibraryLines(capabilities),
     `- Command-line tools: ${cliLine(capabilities)}. LibreOffice converts between office formats and PDF: soffice --headless --convert-to <ext> --outdir outputs <file>.`,
     `- Node.js modules: ${capabilities.node.join(', ')}.`,
-    '- If the user asks for a format this list covers (plans, CAD, charts, PDFs, e-books, 3D models, maps, audio, QR codes, calendars, databases…), BUILD the real file. Never answer that you cannot produce a format listed here, and never substitute a description or a different format for the file requested.',
+    ...dataLines(capabilities),
+    '- If the user asks for a format this list covers (plans, CAD, charts, PDFs, LaTeX, e-books, 3D models, maps/GIS, audio/video/speech, QR codes, calendars, databases, notebooks, statistics/ML reports, optimization models, signed/encrypted files…), BUILD the real file. Never answer that you cannot produce a format listed here, and never substitute a description or a different format for the file requested. The sandbox has NO internet: never download data, models or packages; everything above is already local.',
     '- Recipes:',
     ...capabilities.recipes.map((recipe) => `  ${recipe.ext}: ${recipe.how}`),
     '- Deliverables go to outputs/ (one file per requested deliverable, with a clear name and the right extension); scratch files and previews go to previews/ or tmp/.',
@@ -83,5 +102,6 @@ module.exports = {
   executePythonDescription,
   executeBashDescription,
   pythonLibraryLines,
+  dataLines,
   distributionName,
 };
