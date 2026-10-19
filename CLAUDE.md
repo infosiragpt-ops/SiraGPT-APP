@@ -2711,6 +2711,28 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   `long-operation-indicator` regenerado. El job «Visual regression» no bloquea (`|| warning`) y
   no tiene PNG en el repo.
 
+## Sandbox profesional: entorno completo para generar cualquier archivo (added 2026-10-19)
+
+Pedido de Jorge: ampliar la imagen del sandbox con más librerías y decirle al modelo que tiene un entorno Python completo y puede generar cualquier archivo.
+
+- **Catálogo único** (`services/sandbox/runner/capabilities.json`): `python[]` (`pip`, `import`, `area`, `use`), `cli[]`, `node[]` y `recipes[]` (cómo producir DXF, gráficos, PDF, ODT/EPUB, SVG/diagramas, STL, KML/GPX, GIF/MP4, MP3/MIDI, QR, ICS/Parquet/SQLite/SAV).
+  - El Dockerfile instala `python[].pip` desde ese archivo, solo wheels (`--only-binary=:all:`, excepto odfpy).
+  - `backend/src/services/agent-runner/sandbox-capabilities.json` es una copia byte a byte; un test lo exige. Cambiar el catálogo = editar ambos.
+  - pyarrow y OpenCV quedan fuera por tamaño (fastparquet; Pillow/imageio).
+- **Herramientas del sistema:** pandoc, graphviz, librsvg2-bin, ghostscript, sqlite3, jq, p7zip, Noto, tesseract-spa; Pango/Cairo para WeasyPrint/CairoSVG. `NODE_PATH` resuelve los módulos npm globales.
+- **La imagen se prueba sola:** `RUN` como usuario `sandbox`:
+  - `verify_env.py`: importa cada librería, encuentra cada binario y resuelve cada módulo Node.
+  - `smoke_formats.py`: produce y reabre un archivo real por formato, sin red.
+
+  CI (`docker-build.yml`, filtro `services/sandbox/runner/**`) repite ambos con `--network none --cap-drop ALL`. `publish-production.yml` reconstruye la imagen si cambia ese directorio (antes solo el Dockerfile), corre `verify_env.py` en la candidata y `verify-agent-sandbox-runtime.cjs` también lo ejecuta contra el sandbox vivo, con rollback.
+- **Caché de matplotlib:** el rootfs es de solo lectura en producción. La caché de fuentes queda en `/workspace/.cache` (la ubicación por defecto con `HOME=/workspace`); Docker la copia a cada volumen de conversación nuevo. No usar `MPLCONFIGDIR` fuera de `/workspace`: con rootfs de solo lectura matplotlib recalcularía la caché en cada proceso.
+- **Prompt** (`agent-runner/sandbox-environment.js`):
+  - El bloque SANDBOX ENVIRONMENT (librerías por área, CLI, Node, recetas, «BUILD the real file», verificar antes de anunciar) va antes de TOOLS.
+  - `execute_python` / `execute_bash` describen el entorno completo (antes, 6 librerías).
+- **Ruteo:** `isSandboxFileRequest` es un verbo de creación más un formato que solo produce el sandbox: DXF/AutoCAD/plano CAD, STL/modelo 3D, EPUB/e-book, KML/KMZ/GPX, MIDI, ODT/ODS/ODP/RTF, QR/código de barras, ICS, Parquet, SQLite. Entra en `isCreateDocumentRequest`, así el runner reclama el turno. Una petición de software («app que exporte a dxf») sigue en el modo código.
+- **MIME:** `EXTENSION_TO_MIME` (`agents/task-tools.js`) cubre los formatos nuevos.
+- Tests: `backend/tests/sandbox-capabilities.test.js` (10) y `sandbox-runner-image-contract.test.js` actualizado. Imagen construida y probada localmente (ver el PR).
+
 ## Auto-instalación de capacidades — nivel 1: librerías Python del sandbox (added 2026-10-11)
 
 Pedido de Luis: «que el software, si algo no puede hacer, se auto-instale cosas en sí mismo

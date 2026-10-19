@@ -118,9 +118,17 @@ needs from the image, and why:
 | `fonts-liberation` / `fonts-liberation2` | Metric twins of Arial / Times New Roman / Courier New |
 | `pillow`, `lxml` | Before/after composites with zoom; surgical XML edits |
 
-The auto-publish (`publish.sh`) does **not** rebuild this image. After a merge
-that changes `runner/Dockerfile`, rebuild it on the Lenovo, keeping the
-previous image for rollback:
+The automatic publish (`.github/workflows/publish-production.yml`) rebuilds
+this image whenever anything under `services/sandbox/runner/` changes
+(Dockerfile, `capabilities.json`, the checks): it builds a candidate, runs
+`/opt/sira/verify_env.py` in it, tags it `latest`, proves the live backend
+reaches it (`backend/scripts/verify-agent-sandbox-runtime.cjs`) and restores
+the previous image if any step fails. What the image ships is declared once in
+`runner/capabilities.json`; the build itself fails unless every package,
+binary and Node module imports/resolves (`verify_env.py`) and a real file of
+every advertised format is produced and reopened offline (`smoke_formats.py`).
+
+Manual rebuild on the Lenovo, keeping the previous image for rollback:
 
 ```bash
 cd /home/user/SiraGPT-APP            # at the merged commit
@@ -128,6 +136,8 @@ docker tag siragpt-doc-sandbox:latest siragpt-doc-sandbox:rollback-$(date +%Y%m%
 docker build -t siragpt-doc-sandbox:latest -f services/sandbox/runner/Dockerfile services/sandbox/runner
 # verify in a fresh container (expected: Carlito, Liberation Serif, Liberation Sans, pdftoppm version)
 docker run --rm siragpt-doc-sandbox:latest sh -c 'fc-match Calibri; fc-match "Times New Roman"; fc-match Arial; pdftoppm -v 2>&1 | head -1; python3 -c "import lxml, PIL; print(\"py ok\")"'
+docker run --rm --network none --read-only --tmpfs /tmp siragpt-doc-sandbox:latest python3 /opt/sira/verify_env.py      # → SIRA_ENV_OK
+docker run --rm --network none siragpt-doc-sandbox:latest python3 /opt/sira/smoke_formats.py /tmp/f   # → SIRA_FORMATS_OK
 docker exec siragpt-sandbox node scripts/smoke.js      # → SMOKE PASS
 ```
 

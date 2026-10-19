@@ -7,7 +7,7 @@ on:
       - Dockerfile
       - .dockerignore
       - backend/Dockerfile
-      - services/sandbox/runner/Dockerfile
+      - services/sandbox/runner/**
       - package.json
       - package-lock.json
       - backend/package.json
@@ -22,7 +22,7 @@ on:
       - backend/scripts/install-spss-runtime.sh
       - backend/scripts/verify-spss-runtime.cjs
       - backend/scripts/verify-spss-artifacts.cjs
-      - services/sandbox/runner/Dockerfile
+      - services/sandbox/runner/**
       - .github/workflows/docker-build.yml
   workflow_dispatch:
 
@@ -112,3 +112,15 @@ jobs:
               assert all(tuple(restored.iloc[index]) == tuple(rows[index + 1]) for index in range(20))
           print("SPSS_SANDBOX_IMAGE_OK")
           PY
+
+      - name: Every advertised library, tool and file format works offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The build already ran both checks as the sandbox user; this repeats
+          # them in the isolation production uses (no network, no root) and
+          # keeps the per-format log in the job output.
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint python3 siragpt-doc-sandbox:ci /opt/sira/verify_env.py
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint python3 siragpt-doc-sandbox:ci /opt/sira/smoke_formats.py /tmp/formats

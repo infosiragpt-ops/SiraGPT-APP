@@ -29,6 +29,7 @@ const { capabilityRecoveryGuidance, detectMissingDependency } = require('./capab
 const sandboxPackages = require('./sandbox-packages/policy');
 const { PACKAGES_DIR } = require('../doc-agent/sandbox-pip');
 const { CHART_SCHEMA, normalizeNativeChart } = require('../document-pipeline/pptx-native-chart');
+const { executePythonDescription, executeBashDescription } = require('./sandbox-environment');
 const {
   DESCRIPTION_PARAM,
   OFFICE_TOOL_DEFINITIONS,
@@ -330,8 +331,7 @@ const BASE_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'execute_python',
-      description:
-        'Run Python 3 inside the isolated /workspace sandbox. Libraries: python-pptx, python-docx, openpyxl, lxml, pypdf, Pillow. Uploaded files are in /workspace/uploads; write deliverables to /workspace/outputs. 120s timeout, no network. If an import fails and the recovery note names an APPROVED distribution, install it with install_sandbox_package and retry.',
+      description: executePythonDescription(),
       parameters: {
         type: 'object',
         properties: {
@@ -347,8 +347,7 @@ const BASE_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'execute_bash',
-      description:
-        'Run a bash command inside /workspace. zip/unzip, grep/sed/awk, libreoffice --headless. 120s timeout, no network. Prefer execute_python for document edits.',
+      description: executeBashDescription(),
       parameters: {
         type: 'object',
         properties: {
