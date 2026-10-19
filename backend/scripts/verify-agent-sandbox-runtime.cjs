@@ -36,9 +36,15 @@ function shellQuote(value) {
     if (run?.exitCode !== 0 || !String(run.stdout || '').trim().endsWith('SPSS_RUNTIME_OK')) {
       throw new Error('sandbox_spss_smoke_failed');
     }
-    process.stdout.write(`AgentRunner sandbox SPSS smoke passed (${sandbox.driver}).\n`);
+    // Every library, tool and Node module the agent prompt advertises
+    // (capabilities.json, verified by the image's own checker).
+    const env = await sandbox.exec('python3 /opt/sira/verify_env.py', { timeoutMs: 60000 });
+    if (env?.exitCode !== 0 || !/SIRA_ENV_OK/.test(String(env.stdout || ''))) {
+      throw new Error('sandbox_capabilities_failed');
+    }
+    process.stdout.write(`AgentRunner sandbox SPSS + capabilities smoke passed (${sandbox.driver}).\n`);
   } catch {
-    process.stderr.write('AgentRunner sandbox SPSS smoke failed; deployment withheld.\n');
+    process.stderr.write('AgentRunner sandbox SPSS/capabilities smoke failed; deployment withheld.\n');
     process.exitCode = 1;
   } finally {
     try { await sandbox?.destroy(); } catch { process.exitCode = 1; }

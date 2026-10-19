@@ -8,6 +8,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- The document sandbox is now a complete offline workstation, so the agent can deliver almost any file, not just Office documents.
+  - **What's installed:**
+    - Python: ezdxf (DXF plans), matplotlib/seaborn/plotly (charts), reportlab, fpdf2 and WeasyPrint (PDF), scipy/statsmodels/scikit-learn/sympy, trimesh/numpy-stl (3D), simplekml/gpxpy (maps), ebooklib (EPUB), odfpy (OpenDocument), qrcode/python-barcode, icalendar, fastparquet, pydub/mido (audio and MIDI) and more.
+    - Command-line tools: pandoc, Graphviz, librsvg, Ghostscript, sqlite3, jq and 7-Zip, next to LibreOffice, FFmpeg and Tesseract.
+  - **One catalog:** `services/sandbox/runner/capabilities.json` lists everything the image ships. The image installs from it, and the agent's prompt and tool descriptions are built from a copy of it, so the agent is never told about a library the image lacks.
+  - **The image proves itself:** the build fails unless every library, tool and Node module loads, and one real file of each advertised format is produced and reopened offline as the sandbox user. CI repeats both checks with no network or privileges, and the production publish rebuilds the image whenever that directory changes, with rollback.
+  - **Routing:** a request for a format only the sandbox produces («hazme un plano en DXF», «genera un STL», «crea un epub», a KML, QR code, MIDI, .ics or Parquet file) now reaches the document agent. Before, the chat described the file instead of delivering it.
+  - **Downloads:** the new file types (DXF, STL, EPUB, ODT/ODS/ODP, KML/GPX, ICS, MIDI, Parquet, SQLite and others) download with their real media type.
+
 - Transcription that does not give up: any audio, any video, blurry text.
   - **Quality loop instead of «first answer wins».** Every segment is scored with signals that compare across engines (hallucination lexicon, prompt echo, repetition loops, characters per voiced second, voiced holes). A doubtful segment gets a second reading and keeps the better one. «Sin voz» needs a second opinion first. Engines only take over a segment when their own reading is clean; confidence scores never decide between two different engines.
   - **Delivered quality report.** Each delivery says «Calidad: alta · cobertura 99 % · motor(es): …», lists the doubtful time windows and offers «dime «revisa del minuto 12 al 14»». The agent can then re-read only that window (`retranscribe_range`), look something up in the transcript (`transcript_lookup`) or name a speaker everywhere (`rename_speaker`).

@@ -296,12 +296,31 @@ const CREATE_DECK_VERB_RE = /\b(haz|hazlo|generame|genérame|elabora|elaborame|e
 // existing deck and keeps the follow-up paths.
 const CREATE_DECK_PHRASE_RE = /\b(?:quiero|necesito|requiero|quisiera|me\s+gustar[ií]a|podr[ií]as\s+(?:hacerme|crearme|armarme|prepararme))\s+(?:que\s+(?:me\s+)?(?:hagas|crees|generes|armes|prepares|elabores|dise[nñ]es)\s+)?(?:una?|otr[oa]|\d{1,2})\s+(?:nuev[oa]s?\s+)?(?:ppt|pptx|powerpoint|presentaci[oó]n(?:es)?|diapositivas?|l[aá]minas?|slides?|deck)\b/i;
 
-/** Create-a-document request: verb + document noun, or a presentation asked for in any of its usual phrasings. */
+// Files only the sandbox image can produce (sandbox-capabilities.json): a
+// plan in DXF, a 3D model, an e-book, a map, MIDI, an OpenDocument or RTF, a
+// QR/barcode, an .ics, a Parquet or SQLite file. No other path builds them —
+// the chat loop used to describe the file instead of delivering it.
+const SANDBOX_FILE_NOUN_RE = /(?<![\p{L}\d])(?:\.?(?:dxf|stl|epub|kmz|kml|gpx|midi|odt|ods|odp|rtf|ics|parquet|sqlite)|\.mid|autocad|plano(?:s)?\s+(?:en\s+)?(?:cad|dxf)|modelos?\s+3d|impresi[oó]n\s+3d|libros?\s+electr[oó]nicos?|e-?books?|c[oó]digos?\s+qr|qr\s+codes?|c[oó]digos?\s+de\s+barras|barcodes?)(?![\p{L}\d])/iu;
+const SANDBOX_FILE_VERB_RE = /\b(?:dame|exporta|exportalo|expórtalo|genera|generalo|genéralo|convierte|conviertelo|conviértelo|dibuja|dibujame|dibújame|modela|modelame|modélame|give\s+me|export|generate|draw)\b/i;
+
+/**
+ * Create-a-document request: verb + document noun, a presentation asked for
+ * in any of its usual phrasings, or a creation verb + a file format only the
+ * sandbox produces («hazme un plano en DXF», «genera un STL de la pieza»).
+ */
 function isCreateDocumentRequest(text) {
   const t = String(text || '');
   if (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) return true;
   if (CREATE_DECK_VERB_RE.test(t) && DECK_NOUN_RE.test(t)) return true;
+  if (isSandboxFileRequest(t)) return true;
   return CREATE_DECK_PHRASE_RE.test(t);
+}
+
+/** A creation verb + a file format only the sandbox image produces. */
+function isSandboxFileRequest(text) {
+  const t = String(text || '');
+  if (!SANDBOX_FILE_NOUN_RE.test(t)) return false;
+  return CREATE_DOC_RE.test(t) || CREATE_DECK_VERB_RE.test(t) || SANDBOX_FILE_VERB_RE.test(t);
 }
 const DIRECT_SAV_FILE_REQUEST_RE = /\bdame\s+(?:un|una|el|la)\s+(?:documentos?|archivos?|ficheros?|bases?(?:\s+de\s+datos)?)\s+(?:de\s+)?(?:spss|sav)\b/i;
 const SOURCE_COPY_RE = /\b(?:copia|versi[oó]n)(?:\s+(?:nueva|corregida|editada|actualizada|modificada)){0,2}\s+(?:de\s+)?(?:este|esta|mi|del|de\s+la|de\s+los|de\s+las)\b/i;
@@ -2495,6 +2514,8 @@ module.exports = {
   DECK_NOUN_RE,
   CREATE_DECK_VERB_RE,
   CREATE_DECK_PHRASE_RE,
+  SANDBOX_FILE_NOUN_RE,
+  isSandboxFileRequest,
   isCreateDocumentRequest,
   isDeckColorRestyleRequest,
   isSiraDesignedDeck,

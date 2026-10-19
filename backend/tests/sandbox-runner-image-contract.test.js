@@ -45,8 +45,13 @@ test('runner image has the renderer, rasterizer and metric fonts the engine need
   ]) {
     assert.match(dockerfile, new RegExp(`\\b${pkg.replace(/[-]/g, '\\-')}\\b`), `${pkg} missing from the runner image`);
   }
+  // Python packages are declared in capabilities.json, which the Dockerfile installs from.
+  assert.match(dockerfile, /COPY capabilities\.json verify_env\.py smoke_formats\.py \/opt\/sira\//);
+  assert.match(dockerfile, /json\.load\(open\('\/opt\/sira\/capabilities\.json'\)\)\['python'\]/);
+  const catalog = JSON.parse(fs.readFileSync(path.join(REPO, 'services/sandbox/runner/capabilities.json'), 'utf8'));
+  const pips = catalog.python.map((entry) => entry.pip.split(/[<>=!~;\s[]/)[0]);
   for (const pip of ['lxml', 'pillow', 'python-docx', 'openpyxl', 'python-pptx', 'pandas', 'pyreadstat']) {
-    assert.match(dockerfile, new RegExp(`^\\s+${pip}\\b`, 'm'), `pip ${pip} missing from the runner image`);
+    assert.ok(pips.includes(pip), `pip ${pip} missing from the runner image`);
   }
   assert.match(dockerfile, /USER sandbox/, 'the runner must stay non-root');
 });
