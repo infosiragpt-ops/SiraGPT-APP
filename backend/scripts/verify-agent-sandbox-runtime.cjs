@@ -122,7 +122,8 @@ async function main(args = process.argv.slice(2)) {
   try {
     if (args.length !== 1) fail('expected_catalog_argument_required');
     const result = await verifySandboxRelease(args[0]);
-    process.stdout.write(`SIRA_SANDBOX_RELEASE_OK ${JSON.stringify(result)}\n`);
+    const codeRunner = await verifyIsolatedCodeRunner();
+    process.stdout.write(`SIRA_SANDBOX_RELEASE_OK ${JSON.stringify({ ...result, codeRunner })}\n`);
   } catch (error) {
     // Never replay raw process output, endpoint, keys or session details.
     const code = error instanceof ReleaseVerificationError ? error.code : 'verification_failed';
@@ -131,5 +132,53 @@ async function main(args = process.argv.slice(2)) {
   }
 }
 
+// The chat's python_exec / bash_exec / create_document run model-authored
+// code through agents/isolated-code-runner.js in production. Prove that exact
+// path end to end (container, stdin, file read-back, isolated driver) in the
+// release's own backend. A backend that predates the runner (the pre-publish
+// probe runs in the previous release) or an operator rollback to host mode
+// reports its status instead of failing.
+const codeRunnerSource = [
+  'import os, sys, pandas as pd',
+  'frame = pd.DataFrame({"a": [1, 2], "b": [3, 4]})',
+  'os.makedirs("out", exist_ok=True)',
+  'frame.to_csv("out/proof.csv", index=False)',
+  'print("CODE_RUNNER_OK", sys.stdin.read().strip(), int(frame.values.sum()))',
+].join('\n');
+
+async function verifyIsolatedCodeRunner({ loadRunner, env = process.env } = {}) {
+  let runner;
+  try {
+    runner = loadRunner ? loadRunner() : require(path.join(process.cwd(), 'src/services/agents/isolated-code-runner'));
+  } catch (error) {
+    if (error && error.code === 'MODULE_NOT_FOUND') return { status: 'not_in_release' };
+    fail('code_runner_failed');
+  }
+  if (typeof runner?.runIsolated !== 'function' || typeof runner?.resolveCodeExecutionMode !== 'function') fail('code_runner_failed');
+  if (runner.resolveCodeExecutionMode(env) !== 'isolated') return { status: 'host_mode' };
+  let result;
+  try {
+    result = await runner.runIsolated({
+      language: 'python',
+      source: codeRunnerSource,
+      stdin: 'proof',
+      timeoutMs: 60000,
+      collect: ['out/proof.csv'],
+      persistKey: null, // probes never touch a user's files
+      env,
+    });
+  } catch {
+    fail('code_runner_failed');
+  }
+  const driver = result?.isolation?.driver;
+  if (!['remote', 'docker'].includes(driver)) fail('code_runner_not_isolated');
+  const csv = result?.collected?.['out/proof.csv'];
+  if (result.ok !== true || String(result.stdout || '').trim() !== 'CODE_RUNNER_OK proof 10'
+    || !Buffer.isBuffer(csv) || csv.toString('utf8').replace(/\r/g, '') !== 'a,b\n1,3\n2,4\n') fail('code_runner_failed');
+  return { status: 'ok', driver, gvisor: Boolean(result.isolation.gvisor) };
+}
+
 if (require.main === module || module.id === '[stdin]') main();
-module.exports = { verifySandboxRelease, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER };
+module.exports = {
+  verifySandboxRelease, verifyIsolatedCodeRunner, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
+};

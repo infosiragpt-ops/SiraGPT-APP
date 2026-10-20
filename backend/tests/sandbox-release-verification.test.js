@@ -8,7 +8,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const {
-  verifySandboxRelease, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
+  verifySandboxRelease, verifyIsolatedCodeRunner, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
 } = require('../scripts/verify-agent-sandbox-runtime.cjs');
 
 const SCRIPT = path.resolve(__dirname, '../scripts/verify-agent-sandbox-runtime.cjs');
@@ -229,6 +229,8 @@ exports.createSandbox = async () => {
     assert.ok(child.stdout.startsWith(marker));
     assert.deepEqual(JSON.parse(child.stdout.slice(marker.length)), {
       ok: true, driver: 'remote', catalog: HASH, python: 3, libraries: 2, proofs: 2, checks: 5,
+      // An old backend has no isolated code runner yet: reported, never fatal.
+      codeRunner: { status: 'not_in_release' },
     });
     assert.equal(fs.readFileSync(path.join(directory, 'destroyed'), 'utf8'), 'yes');
     assert.equal(fs.existsSync(path.join(directory, 'src/services/agent-runner')), false);
@@ -257,4 +259,63 @@ test('publication binds both origin probes to the target checkout and postpublis
   assert.match(before, /trap rollback_runner_image EXIT/);
   assert.doesNotMatch(after, /rollback|docker image tag|\n\s+if:/);
   assert.match(after, /set -euo pipefail/);
+});
+
+// The chat's model-authored code path (agents/isolated-code-runner.js) is
+// proven in the published backend: isolated driver, stdin, file read-back.
+function fakeRunner({ mode = 'isolated', result, throws } = {}) {
+  const calls = [];
+  return {
+    calls,
+    loadRunner: () => ({
+      resolveCodeExecutionMode: () => mode,
+      runIsolated: async (opts) => {
+        calls.push(opts);
+        if (throws) throw new Error(PRIVATE);
+        return result;
+      },
+    }),
+  };
+}
+const runnerOk = (extra = {}) => ({
+  ok: true,
+  stdout: 'CODE_RUNNER_OK proof 10\n',
+  isolation: { driver: 'docker', runtime: 'runsc', gvisor: true },
+  collected: { 'out/proof.csv': Buffer.from('a,b\n1,3\n2,4\n') },
+  ...extra,
+});
+
+test('isolated code runner: the exact chat path is proven with an isolated driver', async () => {
+  const runner = fakeRunner({ result: runnerOk() });
+  assert.deepEqual(await verifyIsolatedCodeRunner({ loadRunner: runner.loadRunner, env: {} }), {
+    status: 'ok', driver: 'docker', gvisor: true,
+  });
+  const [call] = runner.calls;
+  assert.equal(call.language, 'python');
+  assert.equal(call.stdin, 'proof');
+  assert.equal(call.persistKey, null, 'probes never touch a user workspace');
+  assert.deepEqual(call.collect, ['out/proof.csv']);
+  assert.match(call.source, /import os, sys, pandas as pd/);
+});
+
+test('isolated code runner: host mode and old releases are reported, not failed', async () => {
+  assert.deepEqual(await verifyIsolatedCodeRunner({ loadRunner: fakeRunner({ mode: 'host' }).loadRunner, env: {} }), { status: 'host_mode' });
+  const missing = () => { const error = new Error('missing'); error.code = 'MODULE_NOT_FOUND'; throw error; };
+  assert.deepEqual(await verifyIsolatedCodeRunner({ loadRunner: missing, env: {} }), { status: 'not_in_release' });
+});
+
+test('isolated code runner: local driver, wrong output, missing file or a crash fail closed', async () => {
+  const cases = [
+    [runnerOk({ isolation: { driver: 'local' } }), 'code_runner_not_isolated'],
+    [runnerOk({ ok: false }), 'code_runner_failed'],
+    [runnerOk({ stdout: PRIVATE }), 'code_runner_failed'],
+    [runnerOk({ collected: { 'out/proof.csv': null } }), 'code_runner_failed'],
+    [runnerOk({ collected: { 'out/proof.csv': Buffer.from('a,b\n9,9\n') } }), 'code_runner_failed'],
+  ];
+  for (const [result, code] of cases) {
+    await assert.rejects(verifyIsolatedCodeRunner({ loadRunner: fakeRunner({ result }).loadRunner, env: {} }), isCode(code));
+  }
+  await assert.rejects(verifyIsolatedCodeRunner({ loadRunner: fakeRunner({ throws: true }).loadRunner, env: {} }), isCode('code_runner_failed'));
+  const broken = () => { throw new SyntaxError(PRIVATE); };
+  await assert.rejects(verifyIsolatedCodeRunner({ loadRunner: broken, env: {} }), isCode('code_runner_failed'));
 });

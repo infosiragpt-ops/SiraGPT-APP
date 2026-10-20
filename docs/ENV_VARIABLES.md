@@ -825,6 +825,26 @@ aplica a `host_bash`, `clone_project`, `install_skill`, `save_skill` ni
 | `SIRAGPT_HOST_BASH_ENV_EXTRA` | — | Nombres de variables adicionales que el hijo puede ver (las que parecen secretos se rechazan igual) |
 | `SIRAGPT_ALLOW_SELF_MODIFY` | — | `1` permite operaciones git de escritura sobre el propio código de SiraGPT (nunca en producción) |
 
+## Código del modelo en el chat (`python_exec`, `bash_exec`, `create_document`) — sandbox aislado (added 2026-10-20)
+
+Estas herramientas ejecutan código que escribió el modelo. En producción corren en un
+contenedor NUEVO del sandbox de documentos (`services/agents/isolated-code-runner.js` →
+`doc-agent/sandbox.js`: gVisor `runsc`, `--network none`, raíz de solo lectura,
+`--cap-drop ALL`, usuario sin privilegios, límites de CPU/memoria/pids) con todo el
+catálogo de `services/sandbox/runner/capabilities.json`; el contenedor se destruye al
+terminar cada ejecución. Con chat, monta el volumen de la conversación (el mismo del agente
+de documentos) y borra su directorio de ejecución al terminar. Antes corrían en el contenedor del backend (misma red y mismo
+`/proc` que el proceso con las claves) y con un intérprete sin pandas/matplotlib/docx.
+Si el sandbox no está disponible la herramienta responde `E_SANDBOX_UNAVAILABLE`: nunca
+cae al host en silencio. `verify_artifact` (script propio, no del modelo) sigue en el host.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SIRAGPT_CODE_SANDBOX` | `auto` | `auto` = aislado en `NODE_ENV=production`, host en dev/CI; `isolated` siempre contenedor; `host` vuelve al runner del host (interruptor de reversión) |
+| `SIRAGPT_CODE_SANDBOX_DRIVER` | — (auto) | Driver de `createSandbox` para estas ejecuciones (`docker`, `remote`, `local`); vacío = misma resolución que el agente de documentos |
+| `SIRAGPT_CODE_SANDBOX_MAX_CONCURRENT` | `4` | Contenedores simultáneos para estas herramientas por proceso (máx. 32); el resto espera en cola FIFO |
+| `SIRAGPT_CODE_SANDBOX_MAX_OUTPUT_BYTES` | `65536` | Tope de stdout/stderr devuelto al modelo por ejecución |
+
 ## Transcripción de audio (escalera)
 
 `backend/src/services/audio-transcriber.js`. Orden por defecto: OpenAI → Groq →

@@ -2733,6 +2733,15 @@ Pedido de Jorge: ampliar la imagen del sandbox con más librerías y decirle al 
 - **MIME:** `EXTENSION_TO_MIME` (`agents/task-tools.js`) cubre los formatos nuevos.
 - Tests: `backend/tests/sandbox-capabilities.test.js` (10) y `sandbox-runner-image-contract.test.js` actualizado. Imagen construida y probada localmente (ver el PR).
 
+## Código del modelo en el chat corre en el sandbox aislado (added 2026-10-20)
+
+`python_exec`, `bash_exec` y `create_document` (herramientas del chat agéntico, `agents/task-tools.js`) ejecutaban el código del modelo en el contenedor del BACKEND (`agents/code-sandbox.js`): misma red, mismo `/proc` del proceso con las claves (el `stripEnv` no es una frontera) y un Python Alpine solo con openpyxl, aunque las descripciones prometían pandas/matplotlib/python-docx/pptx.
+
+- **`agents/isolated-code-runner.js`** (`runIsolated`): un contenedor nuevo por ejecución vía `doc-agent/sandbox.js` `createSandbox` (gVisor, `--network none`, rootfs de solo lectura, cap-drop ALL, no-root, límites) con el catálogo completo; escribe `main.py`/`main.js` + `.stdin` en `/workspace/tmp/run-<hex>/`, corre `timeout -k 2 <s>` dentro del contenedor (exit 124 → `timedOut`), coloca `inputs` y relee `collect`; `destroy()` siempre. Con `persistKey` = chatId monta el volumen de la conversación que ya usa el agente de documentos (cachés de fuentes/matplotlib sembradas por la imagen siguen calientes; en tmpfs se recalcularían en cada contenedor) y borra el directorio del run al terminar. Semáforo FIFO (`SIRAGPT_CODE_SANDBOX_MAX_CONCURRENT`, 4). Sandbox caído → `unavailable` + mensaje honesto, **nunca** cae al host.
+- **Modo** `SIRAGPT_CODE_SANDBOX` (`auto` = aislado en producción, host en dev/CI; `isolated`; `host` = reversión), leído en cada llamada.
+- **task-tools:** `python_exec` copia los artefactos del chat a `inputs/archivo_N.ext` y `ARTIFACT_FILES` apunta a esas copias (rutas absolutas dentro del contenedor); `create_document` fija `OUT_PATH` en `out/<nombre>` del run y relee el archivo a `tmpOut`, así validación/registro no cambian; el sondeo y la inspección SPSS (`pyreadstat`) también van al contenedor. Descripción de `python_exec` veraz por modo (en aislado lista librerías del catálogo). `verify_artifact` (script propio) sigue en el host. Error `E_SANDBOX_UNAVAILABLE`.
+- Tests: `backend/tests/isolated-code-runner.test.js` (14, incluye ejecución real con el driver local) y `task-tools-isolated-exec.test.js` (10, incluye E2E real con artefactos del chat). Variables en `docs/ENV_VARIABLES.md`.
+
 ## Auto-instalación de capacidades — nivel 1: librerías Python del sandbox (added 2026-10-11)
 
 Pedido de Luis: «que el software, si algo no puede hacer, se auto-instale cosas en sí mismo
