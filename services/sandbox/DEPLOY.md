@@ -172,3 +172,33 @@ regenerating `.env` on the host + updating the Replit Secret.
   sessions destroyed on TTL (10 min) or `DELETE`.
 - The host's own SSH hardening (key-only auth, fail2ban, unattended-upgrades)
   is documented in `scripts/server-setup.sh` and applied during deploy.
+
+### Precision editing toolkit
+
+The runner's `precision` catalog entries are pinned and each names a functional
+`proof` in `smoke_precision.py`. They add measured text shaping and glyph
+coverage, WOFF2 round trips, colour contrast, independent PDF geometry and Excel
+reads, encrypted Office round trips, and strict OOXML preservation. Licences and
+scope are recorded in `runner/PRECISION_LIBRARIES.md`. Several packages previously
+arrived only transitively; the new direct pins make their availability explicit.
+
+`/opt/sira/sira_layout.py` supplies measurements, not a layout certification.
+The agent still renders and inspects the final file. The `office_verify` tool
+accepts an optional `expect.preserve` contract specifying exact XML text or
+attributes that may change; it protects all remaining parts and values. This
+is opt-in for compatibility, and the agent is instructed to use it for narrow
+edits. It is deliberately conservative about XML structure and whitespace.
+
+Build validation executes both the existing format smoke and the precision
+smoke. The Docker workflow repeats precision proofs as uid 10001, offline, with
+a read-only root filesystem and bounded temporary workspace, then saves the
+machine-readable report and image identity. No image is published by the tests.
+
+```bash
+python3 /opt/sira/smoke_precision.py --list-proofs
+python3 /opt/sira/smoke_precision.py /workspace/tmp/precision-proof
+```
+
+Adding a library to this toolkit requires a functional proof, not just a
+successful import. Library count is not a multiplier of quality, and these
+checks do not guarantee every document or every Office feature is supported.

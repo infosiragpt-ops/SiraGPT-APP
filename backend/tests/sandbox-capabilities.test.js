@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { execFileSync } = require('node:child_process');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const RUNNER = path.join(REPO, 'services/sandbox/runner');
@@ -18,6 +19,32 @@ const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
 
 const catalog = JSON.parse(read(RUNNER, 'capabilities.json'));
 const environment = require('../src/services/agent-runner/sandbox-environment');
+
+// Existing capabilities retain the format-level smoke tests. This is an
+// exemption list, not a required catalog snapshot: removal is allowed, while
+// every new import needs an explicit functional proof. Listing a new package
+// must never silently count its import check as a successful operation.
+const LEGACY_IMPORTS = new Set([
+  'docx', 'docxtpl', 'openpyxl', 'xlsxwriter', 'xlrd', 'pptx', 'odf', 'mammoth', 'lxml',
+  'pypdf', 'pymupdf', 'pdfplumber', 'pikepdf', 'reportlab', 'fpdf', 'weasyprint',
+  'matplotlib', 'seaborn', 'plotly', 'ezdxf', 'shapely', 'trimesh', 'stl',
+  'simplekml', 'gpxpy', 'numpy', 'pandas', 'fastparquet', 'pyreadstat', 'tabulate',
+  'scipy', 'statsmodels', 'sklearn', 'sympy', 'networkx', 'PIL', 'imageio',
+  'cairosvg', 'svgwrite', 'qrcode', 'barcode', 'ebooklib', 'markdown', 'jinja2',
+  'bs4', 'yaml', 'latex2mathml', 'icalendar', 'pydub', 'mido',
+]);
+
+function assertPrecisionCoverage(entries, proofIds) {
+  assert.ok(Array.isArray(proofIds) && proofIds.length > 0, 'functional proof registry is empty');
+  assert.equal(new Set(proofIds).size, proofIds.length, 'functional proof ids must be unique');
+  for (const id of proofIds) assert.match(id, /^[a-z][a-z0-9-]+$/, `invalid proof id ${id}`);
+  const available = new Set(proofIds);
+  for (const entry of entries) {
+    if (LEGACY_IMPORTS.has(entry.import) && entry.proof == null) continue;
+    assert.equal(typeof entry.proof, 'string', `${entry.import} needs a functional proof`);
+    assert.ok(available.has(entry.proof), `${entry.import}: unregistered functional proof ${entry.proof}`);
+  }
+}
 
 // Which apt package provides each advertised command-line tool.
 const CLI_PACKAGE = {
@@ -53,7 +80,7 @@ test('the catalog is well formed and covers the professional formats', () => {
     assert.ok(entry.pip && entry.import && entry.area && entry.use, JSON.stringify(entry));
     assert.ok(!imports.has(entry.import), `duplicate import ${entry.import}`);
     imports.add(entry.import);
-    assert.match(entry.pip, /^[A-Za-z0-9._-]+(?:(?:==|>=|<=|~=|<|>)[0-9A-Za-z.*]+(?:,(?:==|>=|<=|~=|<|>)[0-9A-Za-z.*]+)*)?$/, `pip spec ${entry.pip}`);
+    assert.match(entry.pip, /^[A-Za-z0-9._-]+(?:\[[A-Za-z0-9._-]+(?:,[A-Za-z0-9._-]+)*\])?(?:(?:==|>=|<=|~=|<|>)[0-9A-Za-z.*]+(?:,(?:==|>=|<=|~=|<|>)[0-9A-Za-z.*]+)*)?$/, `pip spec ${entry.pip}`);
   }
   for (const needed of ['ezdxf', 'matplotlib', 'reportlab', 'weasyprint', 'docx', 'pptx', 'openpyxl', 'pandas', 'trimesh', 'ebooklib', 'scipy']) {
     assert.ok(imports.has(needed), `${needed} missing from the catalog`);
@@ -64,9 +91,41 @@ test('the catalog is well formed and covers the professional formats', () => {
   assert.ok(catalog.recipes.some((recipe) => /dxf/.test(recipe.ext) && /ezdxf/.test(recipe.how)));
 });
 
+test('every new library maps to a registered functional proof without importing optional packages', () => {
+  // Discovery must work with the plain CI Python too; the image job runs the
+  // discovered operations with the real libraries, under runtime isolation.
+  const output = execFileSync('python3', [path.join(RUNNER, 'smoke_precision.py'), '--list-proofs'], {
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+  assertPrecisionCoverage(catalog.python, JSON.parse(output));
+});
+
+test('functional coverage rejects missing, unknown and duplicate proof ids', () => {
+  assert.throws(
+    () => assertPrecisionCoverage([{ import: 'new_library' }], ['typography']),
+    /new_library needs a functional proof/,
+  );
+  assert.throws(
+    () => assertPrecisionCoverage([{ import: 'new_library', proof: 'just-import-it' }], ['typography']),
+    /unregistered functional proof/,
+  );
+  assert.throws(
+    () => assertPrecisionCoverage([{ import: 'new_library', proof: 'typography' }], ['typography', 'typography']),
+    /must be unique/,
+  );
+  assert.throws(() => assertPrecisionCoverage([], []), /registry is empty/);
+  assert.doesNotThrow(() => assertPrecisionCoverage([
+    { import: 'docx' },
+    { import: 'new_library', proof: 'typography' },
+  ], ['typography']));
+});
+
 test('the Dockerfile installs from the catalog and refuses an image that breaks it', () => {
   const dockerfile = read(RUNNER, 'Dockerfile');
-  assert.match(dockerfile, /COPY capabilities\.json verify_env\.py smoke_formats\.py \/opt\/sira\//);
+  for (const file of ['capabilities.json', 'verify_env.py', 'smoke_formats.py', 'smoke_precision.py']) {
+    assert.match(dockerfile, new RegExp(`^COPY[^\\n]*\\b${file.replace(/\./g, '\\.')}[^\\n]*/opt/sira/\\s*$`, 'm'), `${file} must ship in the real image`);
+  }
   assert.match(dockerfile, /pip3 install --no-cache-dir --only-binary=:all: --no-binary=odfpy -r \/tmp\/requirements\.txt/);
   assert.match(dockerfile, /npm install -g docx exceljs pptxgenjs/);
   assert.match(dockerfile, /NODE_PATH=\/usr\/local\/lib\/node_modules/, 'global Node modules must resolve from scripts');
@@ -75,6 +134,7 @@ test('the Dockerfile installs from the catalog and refuses an image that breaks 
   assert.ok(userAt > 0);
   assert.ok(dockerfile.indexOf('python3 /opt/sira/verify_env.py') > userAt);
   assert.ok(dockerfile.indexOf('python3 /opt/sira/smoke_formats.py') > userAt);
+  assert.ok(dockerfile.indexOf('python3 /opt/sira/smoke_precision.py') > userAt);
   for (const entry of catalog.cli) {
     const pkg = CLI_PACKAGE[entry.bin];
     assert.ok(pkg, `no apt package mapped for ${entry.bin}`);

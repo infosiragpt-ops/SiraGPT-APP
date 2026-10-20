@@ -3513,6 +3513,23 @@ def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expec
     for old in glob.glob(os.path.join(outdir, "compare-p*")) + glob.glob(os.path.join(outdir, "contact*")):
         os.remove(old)
     report: Dict[str, Any] = {"before": before, "after": after, "format": fmt}
+    if "preserve" in expect:
+        # Run the read-only guard before OfficePackage or LibreOffice touches
+        # the package. A missing helper never silently drops a requested check.
+        try:
+            from sira_preserve import verify_preservation
+            report["preserve"] = verify_preservation(before, after, expect["preserve"])
+        except ImportError:
+            report["preserve"] = {"ok": False, "complete": False, "code": "preserve_unavailable",
+                                  "summary": "No está disponible la verificación de preservación."}
+        guard = report["preserve"]
+        report["complete"] = guard["complete"]
+        if not guard["ok"] or not guard["complete"]:
+            report.update({"ok": False, "composites": [], "thumbs": [],
+                           "checks": [{"check": "solo cambian los valores autorizados", "ok": False,
+                                       "detail": guard["summary"]}],
+                           "summary": "✗ " + guard["summary"] + " No se ejecutó la revisión visual."})
+            return report
     if before and fmt != "pdf":
         report["parts"] = part_diff(before, after)
         report["changes"] = semantic_changes(before, after)
@@ -3585,6 +3602,9 @@ def verify(before: Optional[str], after: str, outdir: str, dpi: int = 110, expec
     report["thumbs"] = thumbs
     # checks: la checklist del modelo convertida en pruebas
     checks = []
+    if "preserve" in report:
+        checks.append({"check": "solo cambian los valores autorizados", "ok": True,
+                       "detail": report["preserve"]["summary"]})
 
     def page_text(page):
         if page:

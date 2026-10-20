@@ -25,7 +25,17 @@ const OFFICE_WORKFLOW = `OFFICE FILES (docx/xlsx/pptx) — MANDATORY WORKFLOW
    slides/sheets, formulas, charts and styles. Inspect and verify the saved result through the same Office workflow.
 4. Verify: call verify_visual with before=<source>, after=<output>, checklist=<your checklist> and \`expect\`
    (contains/not_contains with page, only_pages, cells for Excel). It renders ALL pages, diffs pixels and
-   shows the before/after image to a vision model.
+   shows the before/after image to a vision model when one is available.
+   For exact edits or "nothing else changes", strongly prefer expect.preserve with the immutable original:
+   {version:1,namespaces:{w:"http://schemas.openxmlformats.org/wordprocessingml/2006/main"},
+    allow:[{part:"word/document.xml",xpath:"/w:document/w:body/w:p[9]/w:r[2]/w:t",text:true}]}.
+   Inspect the original XML with execute_python before choosing selectors; the sample address is NOT a default.
+   Each selector must match one element in both files; text permits ONLY its direct text, attributes:["x"]
+   permits ONLY listed existing attributes. Child structure, runs, tails and all other values stay protected.
+   The same helper is available as from sira_preserve import verify_preservation in execute_python.
+   Never weaken the contract to hide collateral edits; fix the output. If the requested operation changes
+   structure beyond this value-only contract, report that limit and use explicit structural checks as well.
+   Preservation is not a visual review or a check that the requested new content is correct; keep both checks.
 5. If the verdict is not VERIFICADO, fix ONLY the failed items and verify again (max 3 attempts).
 6. Always fill \`description\` in every tool call: a short Spanish phrase of what you are doing
    ("Leyendo la portada de la tesis", "Cambiando el año en el párrafo 8", "Comparando antes y después").

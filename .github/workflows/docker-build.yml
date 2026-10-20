@@ -124,3 +124,31 @@ jobs:
             --entrypoint python3 siragpt-doc-sandbox:ci /opt/sira/verify_env.py
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
             --entrypoint python3 siragpt-doc-sandbox:ci /opt/sira/smoke_formats.py /tmp/formats
+
+      - name: Precision toolkit works in the isolated Linux image
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/sandbox-precision-proof"
+          mkdir -p "$proof_dir"
+          docker image inspect siragpt-doc-sandbox:ci \
+            --format 'image_id={{.Id}} os={{.Os}} arch={{.Architecture}}' \
+            | tee "$proof_dir/image.txt"
+          # Use the built image, not packages installed on the CI host. Both
+          # writable directories are bounded tmpfs owned by the runtime user.
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --user 10001:10001 --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 \
+            --tmpfs /tmp:rw,exec,size=256m,uid=10001,gid=10001,mode=1777 \
+            --tmpfs /workspace:rw,exec,size=512m,uid=10001,gid=10001,mode=700 \
+            --entrypoint python3 siragpt-doc-sandbox:ci \
+            /opt/sira/smoke_precision.py /workspace/precision \
+            | tee "$proof_dir/results.jsonl"
+
+      - name: Upload precision proof from the built image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-precision-proof
+          path: ${{ runner.temp }}/sandbox-precision-proof/
+          if-no-files-found: ignore
+          retention-days: 7
