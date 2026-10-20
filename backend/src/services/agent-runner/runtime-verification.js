@@ -50,13 +50,14 @@ function sandboxTransportError(error = {}) {
 /**
  * This program runs INSIDE the sandbox. The fixed interpreter and isolated
  * mode exclude workspace executables, PYTHONPATH and user-site .pth files.
- * Version checks inspect metadata, not imports with arbitrary side effects.
+ * Version checks inspect base and persisted user-site metadata without adding
+ * the latter to sys.path or importing it. This is not a check of module bytes.
  * The image build remains responsible for actual import/format smoke tests.
  */
 function buildRuntimeProbe(expected = EXPECTED, catalogPath = '/opt/sira/capabilities.json') {
   if (!/^[a-f0-9]{64}$/.test(expected.digest) || !Number.isInteger(expected.packages)
     || expected.packages < 1 || expected.packages > 512) throw new Error('invalid runtime expectation');
-  return `import hashlib, importlib.metadata, json, sys
+  return `import hashlib, importlib.metadata, json, site, sys
 EXPECTED = ${JSON.stringify(expected.digest)}
 EXPECTED_COUNT = ${expected.packages}
 CATALOG = ${JSON.stringify(catalogPath)}
@@ -79,6 +80,16 @@ def check():
             report["reason"] = "catalog_invalid"
             return
         from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+        from packaging.version import InvalidVersion, Version
+        # -I excludes the user site from imports, but the normal executor sees
+        # the persisted PYTHONUSERBASE set by the driver. Read its metadata
+        # directly; never use addsitedir (which would execute .pth files).
+        overlays = {}
+        for distribution in importlib.metadata.distributions(path=[site.getusersitepackages()]):
+            name = distribution.metadata.get("Name")
+            if name:
+                overlays.setdefault(canonicalize_name(name), []).append(distribution.version)
         for entry in entries:
             requirement = Requirement(entry["pip"])
             if requirement.url or requirement.marker or not requirement.specifier:
@@ -90,7 +101,18 @@ def check():
             except importlib.metadata.PackageNotFoundError:
                 report["missing"] += 1
                 continue
-            if not requirement.specifier.contains(version):
+            try:
+                base_version = Version(version)
+                mismatch = not requirement.specifier.contains(base_version)
+                # The installer preserves base-image versions. Even another
+                # in-range overlay can break the image's tested dependency set.
+                mismatch = mismatch or any(
+                    Version(overlay) != base_version
+                    for overlay in overlays.get(canonicalize_name(requirement.name), [])
+                )
+            except (InvalidVersion, TypeError):
+                mismatch = True
+            if mismatch:
                 report["mismatched"] += 1
         report["ok"] = not (report["missing"] or report["mismatched"])
         report["reason"] = "verified" if report["ok"] else "packages_mismatch"

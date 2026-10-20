@@ -24,6 +24,19 @@ function expectFailure(reason) {
     && error.code === 'sandbox_capabilities_mismatch' && error.reason === reason;
 }
 
+function userSiteFixture(root) {
+  const userbase = path.join(root, 'userbase');
+  const env = { ...process.env, PYTHONUSERBASE: userbase };
+  const child = spawnSync('python3', ['-I', '-s', '-c', 'import site; print(site.getusersitepackages())'], {
+    env, encoding: 'utf8', timeout: 10_000,
+  });
+  assert.equal(child.status, 0, child.stderr);
+  const directory = child.stdout.trim();
+  assert.ok(directory.startsWith(userbase + path.sep));
+  fs.mkdirSync(directory, { recursive: true });
+  return { directory, env };
+}
+
 function withFixture(fn) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-runtime-probe-'));
   const site = path.join(root, 'site');
@@ -141,6 +154,97 @@ test('base metadata follows effective sys.path precedence without executing user
   fs.writeFileSync(path.join(userSite, 'hostile.pth'), `import pathlib; pathlib.Path(${JSON.stringify(marker)}).touch()\n`);
   assert.equal(parseRuntimeReport(probe(config, { paths: [site, shadow], env }), config.expected).verified, true);
   assert.throws(() => parseRuntimeReport(probe(config, { paths: [shadow, site], env }), config.expected), expectFailure('packages_mismatch'));
+  assert.equal(fs.existsSync(marker), false);
+}));
+
+test('persisted user-site cannot replace a catalog package, even with another version inside its range', pythonOptions, () => {
+  for (const version of ['2.0', '1.6']) {
+    withFixture(({ root, distribution, catalog, probe }) => {
+      distribution('sira-fixture', '1.5');
+      const { directory, env } = userSiteFixture(root);
+      distribution('sira-fixture', version, directory);
+      const config = catalog(['sira-fixture>=1,<2']);
+      const result = probe(config, { env });
+      assert.equal(result.exitCode, 1);
+      assert.throws(() => parseRuntimeReport(result, config.expected), (error) => {
+        assert.ok(expectFailure('packages_mismatch')(error));
+        assert.equal(error.checked, 1);
+        assert.equal(error.missing, 0);
+        assert.equal(error.mismatched, 1);
+        return true;
+      });
+    });
+  }
+});
+
+test('identical normalized versions in user-site preserve the base contract', pythonOptions, () => withFixture(({ root, distribution, catalog, probe }) => {
+  distribution('sira-fixture', '1.5');
+  const { directory, env } = userSiteFixture(root);
+  distribution('sira-fixture', '1.5.0', directory);
+  const config = catalog(['sira-fixture>=1,<2']);
+  assert.equal(parseRuntimeReport(probe(config, { env }), config.expected).verified, true);
+}));
+
+test('unrelated user-site libraries do not invalidate a catalog package', pythonOptions, () => withFixture(({ root, distribution, catalog, probe }) => {
+  distribution('sira-fixture', '1.5');
+  const { directory, env } = userSiteFixture(root);
+  distribution('unrelated-library', '9.0', directory);
+  const config = catalog(['sira-fixture==1.5']);
+  assert.equal(parseRuntimeReport(probe(config, { env }), config.expected).verified, true);
+}));
+
+test('user-site names use canonical case, dash, underscore and dot matching', pythonOptions, () => withFixture(({ root, distribution, catalog, probe }) => {
+  distribution('sira-fixture-name', '1.5');
+  const { directory, env } = userSiteFixture(root);
+  distribution('SiRa_Fixture.Name', '2.0', directory);
+  const config = catalog(['sira-fixture-name==1.5']);
+  assert.throws(() => parseRuntimeReport(probe(config, { env }), config.expected), expectFailure('packages_mismatch'));
+}));
+
+test('contradictory or invalid user-site metadata counts a catalog mismatch only once', pythonOptions, () => {
+  for (const versions of [['1.5', '2.0', '3.0'], ['not-a-version']]) {
+    withFixture(({ root, distribution, catalog, probe }) => {
+      distribution('sira-fixture', '1.5');
+      const { directory, env } = userSiteFixture(root);
+      for (const version of versions) distribution('sira-fixture', version, directory);
+      const config = catalog(['sira-fixture>=1,<2']);
+      assert.throws(() => parseRuntimeReport(probe(config, { env }), config.expected), (error) => {
+        assert.ok(expectFailure('packages_mismatch')(error));
+        assert.equal(error.checked, 1);
+        assert.equal(error.missing, 0);
+        assert.equal(error.mismatched, 1);
+        return true;
+      });
+    });
+  }
+});
+
+test('user-site cannot satisfy a missing base-image package', pythonOptions, () => withFixture(({ root, distribution, catalog, probe }) => {
+  const { directory, env } = userSiteFixture(root);
+  distribution('sira-package-does-not-exist', '1.5', directory);
+  const config = catalog(['sira-package-does-not-exist==1.5']);
+  assert.throws(() => parseRuntimeReport(probe(config, { env }), config.expected), (error) => {
+    assert.ok(expectFailure('packages_mismatch')(error));
+    assert.equal(error.missing, 1);
+    assert.equal(error.mismatched, 0);
+    return true;
+  });
+}));
+
+test('direct user-site inspection executes neither modules nor .pth code or path additions', pythonOptions, () => withFixture(({ root, distribution, catalog, probe }) => {
+  distribution('sira-fixture', '1.5');
+  const { directory, env } = userSiteFixture(root);
+  distribution('sira-fixture', '1.5', directory);
+  const injected = path.join(root, 'injected');
+  distribution('sira-fixture', '2.0', injected);
+  const marker = path.join(root, 'user-code-executed');
+  const hostile = `import pathlib; pathlib.Path(${JSON.stringify(marker)}).touch(); raise RuntimeError("user code executed")\n`;
+  fs.writeFileSync(path.join(directory, 'hostile.pth'), hostile + injected + '\n');
+  for (const filename of ['packaging.py', 'sira_fixture.py', 'sitecustomize.py', 'usercustomize.py']) {
+    fs.writeFileSync(path.join(directory, filename), hostile);
+  }
+  const config = catalog(['sira-fixture==1.5']);
+  assert.equal(parseRuntimeReport(probe(config, { env }), config.expected).verified, true);
   assert.equal(fs.existsSync(marker), false);
 }));
 

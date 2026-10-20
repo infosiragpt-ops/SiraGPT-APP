@@ -224,10 +224,18 @@ file format or arbitrary document layout.
 
 Before preparing a remote/Docker document workspace, AgentRunner now compares
 `/opt/sira/capabilities.json` with the backend release and checks every declared
-Python distribution version. The probe runs once per workspace preparation,
-without importing document libraries or reading credentials. Pure text turns
+Python distribution version. It also reads distribution metadata from the
+persistent user-package directory selected by the existing `PYTHONUSERBASE`.
+An overlay of a catalogued distribution must match the verified base version;
+contradictory duplicate metadata fails the check. This never imports overlay
+code or executes its `.pth` files, and it never deletes user files or packages.
+The probe runs once per workspace preparation, without importing document
+libraries or reading credentials. Pure text turns
 that never allocate a sandbox do not run it. Local development is explicitly
-unverified, not treated as proof of the production image.
+unverified, not treated as proof of the production image. This is a distribution
+metadata check, not attestation of arbitrary imported code: loose modules,
+custom import paths or executables, uncatalogued transitive packages and changes
+made after preparation are outside that guarantee.
 
 Release the matching runner image and backend together using the existing
 publish workflow, which rebuilds the runner before publishing the app. Old
