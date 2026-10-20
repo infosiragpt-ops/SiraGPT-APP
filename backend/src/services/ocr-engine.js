@@ -191,7 +191,18 @@ async function recognizeWithin(worker, image, deadlineAt, signal) {
     races.push(new Promise((resolve) => {
       // Not unref'd on purpose: the deadline must fire even if the hung WASM
       // job is the only thing left on the loop.
-      timer = setTimeout(() => resolve({ result: null, timedOut: true }), remaining);
+      const onDeadline = () => {
+        // A timer can wake before Date.now reaches the absolute deadline.
+        // Keep the same deadline: an early timeout would let the PDF loop
+        // start another page while its document-budget check still passes.
+        const left = deadlineAt - Date.now();
+        if (left > 0) {
+          timer = setTimeout(onDeadline, left);
+          return;
+        }
+        resolve({ result: null, timedOut: true });
+      };
+      timer = setTimeout(onDeadline, remaining);
     }));
   }
   if (signal) {
