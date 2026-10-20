@@ -206,16 +206,18 @@ checks do not guarantee every document or every Office feature is supported.
 
 ### Document toolkit extension
 
-The runner catalog now advertises 77 explicit Python entries: the previous 60,
-sixteen additional document/data libraries and an explicit `packaging` pin that
+The runner catalog now advertises 84 explicit Python entries: the previous 60,
+twenty-three additional document/data libraries and an explicit `packaging` pin that
 was previously transitive. Exact releases, artifact license fingerprints and
 operating limits are documented in
 [`runner/DOCUMENT_TOOLKIT_LIBRARIES.md`](runner/DOCUMENT_TOOLKIT_LIBRARIES.md).
 
-Eight proof groups in `smoke_document_toolkit.py` are registered by the existing
-`smoke_precision.py` entrypoint. The same offline, non-root build/CI gate checks
+Thirteen additional proof groups in `smoke_document_toolkit.py`,
+`smoke_document_interop.py` and `smoke_document_publishing.py` are registered by
+the existing `smoke_precision.py` entrypoint. The same offline, non-root build/CI gate checks
 real Word composition, structured edits, candidate matching, units, SVG,
-SVG/PNG/PDF charts, Parquet and visual fingerprints. Run the precision command
+SVG/PNG/PDF charts, Parquet, visual fingerprints, Word merge fields,
+BibTeX/RIS metadata, native ODF edits, QR decoding and exact structured diffs. Run the precision command
 above in the candidate image and retain `precision-report.json` plus the image
 identity before claiming release validation. These checks do not certify every
 file format or arbitrary document layout.
@@ -234,3 +236,29 @@ longer matches. An image mismatch stops document execution with an actionable
 update error; capacity, timeout and process failures remain distinct errors.
 CI exercises this same startup probe against the built Linux image in addition
 to the functional artifact checks.
+
+
+### Exact toolkit release check
+
+The production workflow supplies the SHA-256 of the TARGET checkout's backend
+catalog as an explicit argument to `verify-agent-sandbox-runtime.cjs`. The
+standalone script runs through the actual backend sandbox driver and verifies
+that hash before importing document libraries, then checks installed versions,
+imports, SAV round trips and every functional proof required by that catalog.
+It prints only bounded summary counts, the digest and the driver. A fresh,
+non-persistent workspace is used and cleanup is requested in `finally`; the
+driver may rely on its session TTL if immediate cleanup fails. This check does not
+require an interactive Cloudflare login: the Lenovo runner uses the existing
+backend container and its configured internal sandbox connection.
+
+The same check runs after app publication, including an already-live target.
+Failure at that point stops release verification without independently restoring
+an old runner image underneath the new backend. Public version/readiness checks
+remain separate; a green origin check does not certify the public browser path.
+
+Operational limitation: the current workflow retags the document runner before
+the app build/activation finishes. On future catalog changes, an old backend
+that already enforces a catalog hash can temporarily reject new document tasks
+until the matching backend is active. Coordinate the release window and runner /
+backend activation; do not disable the integrity check to hide this mismatch.
+Existing sessions keep their original image and must be recreated when needed.

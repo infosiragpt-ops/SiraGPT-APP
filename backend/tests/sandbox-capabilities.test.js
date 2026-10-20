@@ -123,7 +123,7 @@ test('functional coverage rejects missing, unknown and duplicate proof ids', () 
 
 test('the Dockerfile installs from the catalog and refuses an image that breaks it', () => {
   const dockerfile = read(RUNNER, 'Dockerfile');
-  for (const file of ['capabilities.json', 'verify_env.py', 'smoke_formats.py', 'smoke_precision.py', 'smoke_document_toolkit.py']) {
+  for (const file of ['capabilities.json', 'verify_env.py', 'smoke_formats.py', 'smoke_precision.py', 'smoke_document_toolkit.py', 'smoke_document_interop.py', 'smoke_document_publishing.py']) {
     assert.match(dockerfile, new RegExp(`^COPY[^\\n]*\\b${file.replace(/\./g, '\\.')}[^\\n]*/opt/sira/\\s*$`, 'm'), `${file} must ship in the real image`);
   }
   assert.match(dockerfile, /pip3 install --no-cache-dir --only-binary=:all: --no-binary=odfpy -r \/tmp\/requirements\.txt/);
@@ -242,5 +242,5 @@ test('CI and production rebuild the image when anything in its directory changes
   const publish = read(REPO, '.github/workflows/publish-production.yml');
   assert.match(publish, /diff --name-only "\$LIVE" "\$TARGET" -- services\/sandbox\/runner\/\)/);
   assert.match(publish, /"\$candidate" \/opt\/sira\/verify_env\.py/);
-  assert.match(read(REPO, 'backend/scripts/verify-agent-sandbox-runtime.cjs'), /python3 \/opt\/sira\/verify_env\.py/);
+  assert.match(read(REPO, 'backend/scripts/verify-agent-sandbox-runtime.cjs'), /python3 -E -s \/opt\/sira\/verify_env\.py/);
 });

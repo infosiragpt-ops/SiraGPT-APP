@@ -201,10 +201,24 @@ jobs:
             mapfile -t backend_ids < <(docker ps --filter label=com.docker.compose.project=iliagpt --filter label=com.docker.compose.service=backend --format '{{.ID}}')
             [[ "${#backend_ids[@]}" -eq 1 ]] \
               || { echo '::error::Could not identify the single live backend container'; exit 1; }
-            docker exec -w /app -i "${backend_ids[0]}" node - < "$REPO/backend/scripts/verify-agent-sandbox-runtime.cjs"
+            expected_catalog=$(sha256sum "$REPO/backend/src/services/agent-runner/sandbox-capabilities.json" | cut -d ' ' -f 1)
+            docker exec -w /app -i "${backend_ids[0]}" node - "$expected_catalog" < "$REPO/backend/scripts/verify-agent-sandbox-runtime.cjs"
           fi
           "$PUBLISH" "$TARGET" "$LIVE"
           runner_tagged=0
+
+      - name: Verify the published backend reaches the exact document toolkit
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This also runs when the app was already live. A failed postpublish
+          # check fails the release; do not roll back only the runner image
+          # while the new backend is active.
+          expected_catalog=$(sha256sum "$REPO/backend/src/services/agent-runner/sandbox-capabilities.json" | cut -d ' ' -f 1)
+          mapfile -t backend_ids < <(docker ps --filter label=com.docker.compose.project=iliagpt --filter label=com.docker.compose.service=backend --format '{{.ID}}')
+          [[ "${#backend_ids[@]}" -eq 1 ]] \
+            || { echo '::error::Could not identify the single published backend container'; exit 1; }
+          docker exec -w /app -i "${backend_ids[0]}" node - "$expected_catalog" < "$REPO/backend/scripts/verify-agent-sandbox-runtime.cjs"
 
       - name: Publish and verify the existing computer orchestrator
         shell: bash

@@ -275,14 +275,26 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
 - **Document toolkit Python dependencies** — the document runner installs
   pinned releases of docxcompose, docx2python, striprtf, jsonschema, jsonpatch,
   jmespath, ijson, packaging, RapidFuzz, Pint, uncertainties, svgpathtools,
-  Altair, vl-convert-python, DuckDB, PyArrow and ImageHash. Original projects,
-  exact release links, licenses, installed license-file fingerprints and
+  Altair, vl-convert-python, DuckDB, PyArrow and ImageHash, followed by
+  docx-mailmerge2 1.0.3, bibtexparser 2.1.0, rispy 0.10.0, odfdo 3.27.2,
+  segno 1.6.6, zxing-cpp 3.1.1 and deepdiff 9.1.0. Original projects,
+  exact release links, licenses, artifact license-file fingerprints and
   bundled-notice requirements are recorded in
   [`services/sandbox/runner/DOCUMENT_TOOLKIT_LIBRARIES.md`](services/sandbox/runner/DOCUMENT_TOOLKIT_LIBRARIES.md).
   These are installed dependencies, not copied upstream source. Their original
   copyright, LICENSE/COPYING and NOTICE files remain in the distributions;
   PyArrow's bundled notices and packaging's two offered licenses are retained.
   SiraGPT's `smoke_document_toolkit.py` contains native integration fixtures,
-  registered by the existing precision smoke runner. The catalog has 77
-  explicit entries, including the formerly transitive packaging pin; this does
-  not assert universal document-format support.
+  registered by the existing precision smoke runner. The catalog has 84
+  explicit entries: the previous 60, twenty-three advertised additions and the
+  formerly transitive packaging pin. This does not assert universal
+  document-format support.
+  The seven subsequent libraries are installed under MIT (docx-mailmerge2,
+  bibtexparser, rispy, deepdiff), Apache-2.0 (odfdo, zxing-cpp), or BSD-3-Clause
+  (segno). Odfdo's original NOTICE identifies educational recipes under
+  CC-BY-3.0; that attribution remains intact, and SiraGPT does not copy those
+  recipes. Observed transitive packages pylatexenc 2.11, cachebox 5.2.3 and
+  orderly-set 5.5.0 retain their MIT licenses and are not counted as new catalog
+  entries. Exact artifact license-file hashes and the original API/release
+  links for these dependencies are in the document toolkit inventory above.
+  No CSL style collection or upstream document parser source is vendored.

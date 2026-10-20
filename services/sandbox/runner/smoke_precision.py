@@ -357,6 +357,10 @@ def encrypted_office(root):
 # Import only the registry; optional libraries load inside each proof.
 from smoke_document_toolkit import register_proofs
 register_proofs(proof)
+from smoke_document_interop import register_proofs as register_interop_proofs
+from smoke_document_publishing import register_proofs as register_publishing_proofs
+register_interop_proofs(proof)
+register_publishing_proofs(proof)
 
 
 def main():
