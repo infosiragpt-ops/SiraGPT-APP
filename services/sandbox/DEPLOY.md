@@ -202,3 +202,71 @@ python3 /opt/sira/smoke_precision.py /workspace/tmp/precision-proof
 Adding a library to this toolkit requires a functional proof, not just a
 successful import. Library count is not a multiplier of quality, and these
 checks do not guarantee every document or every Office feature is supported.
+
+
+### Document toolkit extension
+
+The runner catalog now advertises 84 explicit Python entries: the previous 60,
+twenty-three additional document/data libraries and an explicit `packaging` pin that
+was previously transitive. Exact releases, artifact license fingerprints and
+operating limits are documented in
+[`runner/DOCUMENT_TOOLKIT_LIBRARIES.md`](runner/DOCUMENT_TOOLKIT_LIBRARIES.md).
+
+Thirteen additional proof groups in `smoke_document_toolkit.py`,
+`smoke_document_interop.py` and `smoke_document_publishing.py` are registered by
+the existing `smoke_precision.py` entrypoint. The same offline, non-root build/CI gate checks
+real Word composition, structured edits, candidate matching, units, SVG,
+SVG/PNG/PDF charts, Parquet, visual fingerprints, Word merge fields,
+BibTeX/RIS metadata, native ODF edits, QR decoding and exact structured diffs. Run the precision command
+above in the candidate image and retain `precision-report.json` plus the image
+identity before claiming release validation. These checks do not certify every
+file format or arbitrary document layout.
+
+Before preparing a remote/Docker document workspace, AgentRunner now compares
+`/opt/sira/capabilities.json` with the backend release and checks every declared
+Python distribution version. It also reads distribution metadata from the
+persistent user-package directory selected by the existing `PYTHONUSERBASE`.
+An overlay of a catalogued distribution must match the verified base version;
+contradictory duplicate metadata fails the check. This never imports overlay
+code or executes its `.pth` files, and it never deletes user files or packages.
+The probe runs once per workspace preparation, without importing document
+libraries or reading credentials. Pure text turns
+that never allocate a sandbox do not run it. Local development is explicitly
+unverified, not treated as proof of the production image. This is a distribution
+metadata check, not attestation of arbitrary imported code: loose modules,
+custom import paths or executables, uncatalogued transitive packages and changes
+made after preparation are outside that guarantee.
+
+Release the matching runner image and backend together using the existing
+publish workflow, which rebuilds the runner before publishing the app. Old
+sessions must be recreated against that image when their release catalog no
+longer matches. An image mismatch stops document execution with an actionable
+update error; capacity, timeout and process failures remain distinct errors.
+CI exercises this same startup probe against the built Linux image in addition
+to the functional artifact checks.
+
+
+### Exact toolkit release check
+
+The production workflow supplies the SHA-256 of the TARGET checkout's backend
+catalog as an explicit argument to `verify-agent-sandbox-runtime.cjs`. The
+standalone script runs through the actual backend sandbox driver and verifies
+that hash before importing document libraries, then checks installed versions,
+imports, SAV round trips and every functional proof required by that catalog.
+It prints only bounded summary counts, the digest and the driver. A fresh,
+non-persistent workspace is used and cleanup is requested in `finally`; the
+driver may rely on its session TTL if immediate cleanup fails. This check does not
+require an interactive Cloudflare login: the Lenovo runner uses the existing
+backend container and its configured internal sandbox connection.
+
+The same check runs after app publication, including an already-live target.
+Failure at that point stops release verification without independently restoring
+an old runner image underneath the new backend. Public version/readiness checks
+remain separate; a green origin check does not certify the public browser path.
+
+Operational limitation: the current workflow retags the document runner before
+the app build/activation finishes. On future catalog changes, an old backend
+that already enforces a catalog hash can temporarily reject new document tasks
+until the matching backend is active. Coordinate the release window and runner /
+backend activation; do not disable the integrity check to hide this mismatch.
+Existing sessions keep their original image and must be recreated when needed.

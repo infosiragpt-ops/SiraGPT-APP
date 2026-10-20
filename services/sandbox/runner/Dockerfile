@@ -73,7 +73,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY capabilities.json verify_env.py smoke_formats.py /opt/sira/
-COPY smoke_precision.py sira_layout.py sira_preserve.py /opt/sira/
+COPY smoke_precision.py smoke_document_toolkit.py smoke_document_interop.py smoke_document_publishing.py sira_layout.py sira_preserve.py /opt/sira/
 
 # Every Python package comes from capabilities.json (python[].pip), binary
 # wheels only: nothing compiles inside this image, and a package that would
@@ -81,6 +81,7 @@ COPY smoke_precision.py sira_layout.py sira_preserve.py /opt/sira/
 # odfpy is the one pure-Python sdist without a wheel.
 RUN python3 -c "import json; print('\n'.join(p['pip'] for p in json.load(open('/opt/sira/capabilities.json'))['python']))" > /tmp/requirements.txt \
     && pip3 install --no-cache-dir --only-binary=:all: --no-binary=odfpy -r /tmp/requirements.txt \
+    && pip3 check \
     && rm -f /tmp/requirements.txt
 
 # Node writers for sheet/slide generation paths (exceljs, pptxgenjs, docx).
