@@ -829,9 +829,10 @@ aplica a `host_bash`, `clone_project`, `install_skill`, `save_skill` ni
 
 Estas herramientas ejecutan código que escribió el modelo. En producción corren en un
 contenedor NUEVO del sandbox de documentos (`services/agents/isolated-code-runner.js` →
-`doc-agent/sandbox.js`: gVisor `runsc`, `--network none`, raíz de solo lectura,
-`--cap-drop ALL`, usuario sin privilegios, límites de CPU/memoria/pids) con todo el
-catálogo de `services/sandbox/runner/capabilities.json`; el contenedor se destruye al
+`doc-agent/sandbox.js`: siempre `--network none`, usuario sin privilegios,
+`no-new-privileges` y límites de CPU/memoria/pids; el driver docker suma gVisor `runsc`,
+raíz de solo lectura y `--cap-drop ALL`, el driver remoto —el que usa producción hoy— no)
+con todo el catálogo de `services/sandbox/runner/capabilities.json`; el contenedor se destruye al
 terminar cada ejecución. Con chat, monta el volumen de la conversación (el mismo del agente
 de documentos) y borra su directorio de ejecución al terminar. Antes corrían en el contenedor del backend (misma red y mismo
 `/proc` que el proceso con las claves) y con un intérprete sin pandas/matplotlib/docx.

@@ -13,11 +13,15 @@
  * libraries the tool descriptions promise.
  *
  * Here every run gets a fresh container from doc-agent/sandbox.js — the same
- * gVisor (runsc) / --network none / read-only rootfs / cap-drop ALL /
- * non-root / cpu+memory+pids-limited sandbox the document agent uses, built
- * from services/sandbox/runner with the full catalog in
- * agent-runner/sandbox-capabilities.json — and the container is destroyed
- * when the run ends. With a `persistKey` (the chat id) the run mounts that
+ * sandbox the document agent uses, built from services/sandbox/runner with
+ * the full catalog in agent-runner/sandbox-capabilities.json — and the
+ * container is destroyed when the run ends. Isolation always includes a
+ * separate container with --network none, non-root, no-new-privileges and
+ * cpu/memory/pids limits; the docker driver adds gVisor (runsc), a read-only
+ * rootfs and cap-drop ALL. Production currently uses the remote driver (the
+ * sandbox microservice, services/sandbox/lib/docker-sandbox.js), which does
+ * not add those three; `isolation` reports the driver and gvisor flag.
+ * With a `persistKey` (the chat id) the run mounts that
  * conversation's workspace volume — the one the document agent already uses
  * — so the font/matplotlib caches the image seeds into it stay warm and
  * files written outside the run directory survive between calls of the same
