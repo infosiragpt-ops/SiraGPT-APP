@@ -262,6 +262,179 @@ class TestXlsx(Base):
         self.assertFalse(res["ok"])
         self.assertIn("Presupuesto", res["errors"][0]["error"])
 
+    def protected_book(self, *, merge_range="F2:H3", array_range="F5:G6"):
+        src = self.out("protected.xlsx")
+        pkg = so.OfficePackage(self.xlsx)
+        part = so._xl_sheet_part(pkg, "Presupuesto")
+        root = pkg.xml(part)
+        if merge_range:
+            merges = etree.Element(so.S("mergeCells"), count="1")
+            etree.SubElement(merges, so.S("mergeCell"), ref=merge_range)
+            root.find(so.S("sheetData")).addnext(merges)
+            anchor = so._xl_get_cell(root, "F2", create=True)
+            anchor.set("t", "inlineStr")
+            etree.SubElement(etree.SubElement(anchor, so.S("is")), so.S("t")).text = "Título original"
+        if array_range:
+            anchor = so._xl_get_cell(root, "F5", create=True)
+            etree.SubElement(anchor, so.S("f"), t="array", ref=array_range).text = "B2:C3*2"
+            etree.SubElement(anchor, so.S("v")).text = "8"
+            follower = so._xl_get_cell(root, "G5", create=True)
+            etree.SubElement(follower, so.S("v")).text = "360"
+        pkg.touch(part)
+        pkg.save(src)
+        return src
+
+    def test_merged_nonanchor_rejected_before_any_mutation(self):
+        src = self.protected_book()
+        for ref, payload in (("$g$2", {"value": "Nuevo título"}), ("H3", {"formula": "=1+2"})):
+            with self.subTest(ref=ref):
+                pkg = so.OfficePackage(src)
+                root = pkg.xml(so._xl_sheet_part(pkg, "Presupuesto"))
+                before = etree.tostring(root)
+                with self.assertRaises(so.EditError) as caught:
+                    so.xlsx_apply(pkg, {"op": "set_cell", "sheet": "Presupuesto", "ref": ref, **payload}, {})
+                for detail in ("Presupuesto", "F2:H3", "F2", "combinad"):
+                    self.assertIn(detail, str(caught.exception))
+                self.assertEqual(etree.tostring(root), before)
+                self.assertEqual(pkg.modified, set())
+
+    def test_array_members_rejected_before_any_mutation(self):
+        src = self.protected_book()
+        for ref, payload in (("F5", {"value": 1}), ("G5", {"formula": "=1+2"}), ("$G$6", {"value": 999})):
+            with self.subTest(ref=ref):
+                pkg = so.OfficePackage(src)
+                root = pkg.xml(so._xl_sheet_part(pkg, "Presupuesto"))
+                before = etree.tostring(root)
+                with self.assertRaises(so.EditError) as caught:
+                    so.xlsx_apply(pkg, {"op": "set_cell", "sheet": 1, "ref": ref, **payload}, {})
+                for detail in ("Presupuesto", "F5:G6", "F5", "matricial"):
+                    self.assertIn(detail, str(caught.exception))
+                self.assertEqual(etree.tostring(root), before)
+                self.assertEqual(pkg.modified, set())
+
+    def test_protected_cell_aborts_whole_batch_and_preserves_original(self):
+        src = self.protected_book()
+        with open(src, "rb") as fh:
+            before = fh.read()
+        for ref in ("H3", "G6"):
+            with self.subTest(ref=ref):
+                dst = self.out(ref + ".xlsx")
+                result = so.edit(src, dst, [
+                    {"op": "set_cell", "ref": "C3", "value": 99.5},
+                    {"op": "set_cell", "ref": ref, "value": 999},
+                ])
+                self.assertFalse(result["ok"], result)
+                self.assertFalse(result["written"], result)
+                self.assertEqual(result["errors"][0]["index"], 1)
+                self.assertFalse(os.path.exists(dst))
+                with open(src, "rb") as fh:
+                    self.assertEqual(fh.read(), before)
+
+    def test_protected_cell_preserves_existing_destination(self):
+        src = self.protected_book()
+        original_parts = parts(src)
+        for ref in ("H3", "G6"):
+            with self.subTest(ref=ref):
+                dst = self.out(ref + "-existing.xlsx")
+                shutil.copy(self.xlsx, dst)
+                with open(dst, "rb") as fh:
+                    previous = fh.read()
+                result = so.edit(src, dst, [
+                    {"op": "set_cell", "ref": "C3", "value": 99.5},
+                    {"op": "set_cell", "ref": ref, "value": 999},
+                ])
+                self.assertFalse(result["written"], result)
+                with open(dst, "rb") as fh:
+                    self.assertEqual(fh.read(), previous)
+                self.assertEqual(parts(src), original_parts)
+
+    def test_partial_batch_does_not_create_protected_cells(self):
+        src = self.protected_book()
+        dst = self.out("partial.xlsx")
+        result = so.edit(src, dst, [
+            {"op": "set_cell", "ref": "H3", "value": "Invisible"},
+            {"op": "set_cell", "ref": "C3", "value": 99.5},
+            {"op": "set_cell", "ref": "G6", "value": 999},
+            {"op": "set_cell", "ref": "C4", "value": 55},
+        ], partial=True)
+        self.assertFalse(result["ok"], result)
+        self.assertTrue(result["written"], result)
+        self.assertEqual([e["index"] for e in result["errors"]], [0, 2])
+        self.assertEqual([a["index"] for a in result["applied"]], [1, 3])
+        for ref in ("H3", "G6"):
+            self.assertIsNone(self.cell(dst, "Presupuesto", ref)[0])
+        for ref, value in (("C3", "99.5"), ("C4", "55")):
+            self.assertEqual(self.cell(dst, "Presupuesto", ref)[0].find(so.S("v")).text, value)
+
+    def test_allowed_batch_keeps_formulas_styles_and_other_sheet(self):
+        src = self.protected_book()
+        dst = self.out("allowed.xlsx")
+        c3_before, _ = self.cell(src, "Presupuesto", "C3")
+        formula_before, _ = self.cell(src, "Presupuesto", "F5")
+        result = so.edit(src, dst, [
+            {"op": "set_cell", "sheet": "Presupuesto", "ref": "F2", "value": "Título nuevo"},
+            {"op": "set_cell", "sheet": "Presupuesto", "ref": "C3", "value": 99.5},
+            {"op": "set_cell_style", "sheet": "Presupuesto", "ref": "G5", "bold": True},
+            {"op": "set_cell_style", "sheet": "Presupuesto", "ref": "G2", "fill": "FFF2CC"},
+            {"op": "set_cell", "sheet": "Resumen", "ref": "G6", "value": 42},
+        ])
+        self.assertTrue(result["ok"], result)
+        anchor, pkg = self.cell(dst, "Presupuesto", "F2")
+        self.assertEqual(so._xl_cell_value(anchor, so._xl_shared_strings(pkg))[0], "Título nuevo")
+        c3_after, _ = self.cell(dst, "Presupuesto", "C3")
+        self.assertEqual(c3_after.get("s"), c3_before.get("s"))
+        formula_after, _ = self.cell(dst, "Presupuesto", "F5")
+        self.assertEqual(etree.tostring(formula_before), etree.tostring(formula_after))
+        follower, pkg = self.cell(dst, "Presupuesto", "G5")
+        self.assertEqual(follower.find(so.S("v")).text, "360")
+        self.assertTrue(so.XlStyles(pkg).describe(int(follower.get("s"))).get("bold"))
+        merged_style, pkg = self.cell(dst, "Presupuesto", "G2")
+        self.assertEqual(so.XlStyles(pkg).describe(int(merged_style.get("s"))).get("fill"), "FFF2CC")
+        before_root = so.OfficePackage(src).xml(so._xl_sheet_part(pkg, "Presupuesto"))
+        after_root = pkg.xml(so._xl_sheet_part(pkg, "Presupuesto"))
+        self.assertEqual(etree.tostring(before_root.find(so.S("mergeCells"))),
+                         etree.tostring(after_root.find(so.S("mergeCells"))))
+        self.assertEqual(self.cell(dst, "Resumen", "G6")[0].find(so.S("v")).text, "42")
+        a, b = parts(src), parts(dst)
+        for name in a:
+            if name not in result["changed_parts"]:
+                self.assertEqual(a[name], b[name], name)
+        for ref in ("D2", "D3", "D6"):
+            self.assertEqual(etree.tostring(self.cell(src, "Presupuesto", ref)[0]),
+                             etree.tostring(self.cell(dst, "Presupuesto", ref)[0]))
+
+    def test_large_protected_ranges_use_bounds_not_cell_expansion(self):
+        for kind in ("merge", "array"):
+            with self.subTest(kind=kind):
+                src = self.protected_book(
+                    merge_range="$F$2:$XFD$1048576" if kind == "merge" else None,
+                    array_range="$F$5:$XFD$1048576" if kind == "array" else None)
+                result = so.edit(src, self.out(kind + ".xlsx"), [
+                    {"op": "set_cell", "ref": "XFD1048576", "value": 9},
+                ])
+                self.assertFalse(result["written"], result)
+                self.assertIn("1048576", result["errors"][0]["error"])
+                self.assertNotIn("error interno", result["errors"][0]["error"])
+                self.assertNotIn("rango demasiado grande", result["errors"][0]["error"])
+
+    def test_shared_formula_protection_is_unchanged(self):
+        src = self.protected_book()
+        pkg = so.OfficePackage(src)
+        part = so._xl_sheet_part(pkg, "Presupuesto")
+        root = pkg.xml(part)
+        master = so._xl_get_cell(root, "F9", create=True)
+        etree.SubElement(master, so.S("f"), t="shared", ref="F9:F10", si="0").text = "C3*2"
+        follower = so._xl_get_cell(root, "F10", create=True)
+        etree.SubElement(follower, so.S("f"), t="shared", si="0")
+        pkg.touch(part)
+        pkg.save(src)
+        blocked = so.edit(src, self.out("master.xlsx"), [{"op": "set_cell", "ref": "F9", "value": 1}])
+        self.assertFalse(blocked["written"], blocked)
+        self.assertIn("compartida", blocked["errors"][0]["error"])
+        allowed = so.edit(src, self.out("follower.xlsx"), [{"op": "set_cell", "ref": "F10", "value": 1}])
+        self.assertTrue(allowed["ok"], allowed)
+        self.assertIsNone(self.cell(self.out("follower.xlsx"), "Presupuesto", "F10")[0].find(so.S("f")))
+
     @unittest.skipUnless(HAS_LO, "LibreOffice/poppler no disponibles")
     def test_recalculated_values(self):
         dst = self.out("f.xlsx")
