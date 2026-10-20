@@ -15,6 +15,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const yaml = require('js-yaml');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const RUNNER_DOCKERFILE = path.join(REPO, 'services/sandbox/runner/Dockerfile');
@@ -46,7 +47,9 @@ test('runner image has the renderer, rasterizer and metric fonts the engine need
     assert.match(dockerfile, new RegExp(`\\b${pkg.replace(/[-]/g, '\\-')}\\b`), `${pkg} missing from the runner image`);
   }
   // Python packages are declared in capabilities.json, which the Dockerfile installs from.
-  assert.match(dockerfile, /COPY capabilities\.json verify_env\.py smoke_formats\.py \/opt\/sira\//);
+  for (const file of ['capabilities.json', 'verify_env.py', 'smoke_formats.py']) {
+    assert.match(dockerfile, new RegExp(`^COPY[^\\n]*\\b${file.replace(/\./g, '\\.')}[^\\n]*/opt/sira/\\s*$`, 'm'));
+  }
   assert.match(dockerfile, /json\.load\(open\('\/opt\/sira\/capabilities\.json'\)\)\['python'\]/);
   const catalog = JSON.parse(fs.readFileSync(path.join(REPO, 'services/sandbox/runner/capabilities.json'), 'utf8'));
   const pips = catalog.python.map((entry) => entry.pip.split(/[<>=!~;\s[]/)[0]);
@@ -54,6 +57,43 @@ test('runner image has the renderer, rasterizer and metric fonts the engine need
     assert.ok(pips.includes(pip), `pip ${pip} missing from the runner image`);
   }
   assert.match(dockerfile, /USER sandbox/, 'the runner must stay non-root');
+});
+
+test('the image and backend use the identical preservation verifier', () => {
+  const backend = fs.readFileSync(path.join(REPO, 'backend/src/services/agent-runner/sira_preserve.py'));
+  const image = fs.readFileSync(path.join(REPO, 'services/sandbox/runner/sira_preserve.py'));
+  assert.ok(backend.equals(image), 'preservation verification must not drift between the backend and image');
+  assert.match(runnerDockerfile(), /^COPY[^\n]*\bsira_preserve\.py[^\n]*\/opt\/sira\/\s*$/m);
+});
+
+test('Linux CI runs real precision proofs in a non-root, read-only, offline image', () => {
+  const workflow = yaml.load(fs.readFileSync(path.join(REPO, '.github/workflows/docker-build.yml'), 'utf8'));
+  const job = workflow.jobs['sandbox-runner'];
+  assert.equal(job['runs-on'], 'ubuntu-latest');
+  const build = job.steps.find((step) => step.uses?.startsWith('docker/build-push-action@'));
+  assert.equal(build.with.context, 'services/sandbox/runner');
+  assert.equal(build.with.file, 'services/sandbox/runner/Dockerfile');
+  assert.equal(build.with.load, true, 'CI must test the image it just built');
+  const proof = job.steps.find((step) => step.run?.includes('/opt/sira/smoke_precision.py'));
+  assert.ok(proof, 'missing real precision proof execution');
+  assert.equal(proof.if, undefined, 'precision checks cannot be optional');
+  assert.notEqual(proof['continue-on-error'], true);
+  assert.match(proof.run, /set -euo pipefail/);
+  for (const flag of [
+    '--network none', '--cap-drop ALL', '--security-opt no-new-privileges',
+    '--read-only', '--user 10001:10001', '--memory 1g', '--memory-swap 1g',
+    '--cpus 1', '--pids-limit 256',
+  ]) {
+    assert.ok(proof.run.includes(flag), `precision image execution lost ${flag}`);
+  }
+  assert.match(proof.run, /--tmpfs \/tmp:rw,[^\n]*size=256m[^\n]*uid=10001[^\n]*gid=10001/);
+  assert.match(proof.run, /--tmpfs \/workspace:rw,[^\n]*size=512m[^\n]*uid=10001[^\n]*gid=10001/);
+  assert.match(proof.run, /--entrypoint python3 siragpt-doc-sandbox:ci/);
+  assert.match(proof.run, /\/opt\/sira\/smoke_precision\.py \/workspace\/precision/);
+  const evidence = job.steps.find((step) => step.uses?.startsWith('actions/upload-artifact@')
+    && step.with?.name === 'sandbox-precision-proof');
+  assert.ok(evidence, 'keep proof output tied to the built image for review');
+  assert.equal(evidence.if, 'always()');
 });
 
 test('sira_office.py ships with the backend image next to office_helpers.py', () => {
@@ -73,12 +113,14 @@ test('every sandbox gets the engine at tmp/sira_office.py, fail-open', async () 
 
   const writes = [];
   const installed = await runner.installSiraOfficeEngine({
-    writeFile: async (rel, content) => { writes.push({ rel, bytes: Buffer.byteLength(content) }); },
+    writeFile: async (rel, content) => { writes.push({ rel, content: Buffer.from(content) }); },
   });
   assert.equal(installed, true);
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].rel, 'tmp/sira_office.py');
-  assert.ok(writes[0].bytes > 50_000, 'the whole engine must be written');
+  assert.deepEqual(writes.map(({ rel }) => rel), ['tmp/sira_preserve.py', 'tmp/sira_office.py']);
+  assert.ok(writes[0].content.equals(
+    fs.readFileSync(path.join(REPO, 'backend/src/services/agent-runner/sira_preserve.py')),
+  ), 'the staged verifier must be the one tested with the image');
+  assert.ok(writes[1].content.length > 50_000, 'the whole engine must be written');
 
   // A build without the file never breaks the runner.
   const missing = await runner.installSiraOfficeEngine(

@@ -277,6 +277,8 @@ function designThemeForTask(task) {
 // verification (docs/specs/edicion-milimetrica/SPEC.md). Installed by
 // tools.office.js with the same lazy/fail-open contract as office_helpers.py:
 // a missing file never breaks the runner, the agent keeps execute_python.
+// installOfficeEngine also stages tmp/sira_preserve.py; explicit preservation
+// requests fail closed if that guard cannot be loaded.
 const SIRA_OFFICE_ENGINE_REL = OFFICE_ENGINE_REL;
 const installSiraOfficeEngine = installOfficeEngine;
 

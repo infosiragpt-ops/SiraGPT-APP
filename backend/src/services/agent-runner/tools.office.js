@@ -90,6 +90,12 @@ function loadEnginePy({ dir } = {}) {
 async function installOfficeEngine(sandbox, { dir } = {}) {
   const py = loadEnginePy({ dir });
   if (!py || !sandbox || typeof sandbox.writeFile !== 'function') return false;
+  // Stage the guard first: callers must not see a new engine without its
+  // requested preservation checks. Legacy edits still work if the optional
+  // source is missing; expect.preserve then fails closed in Python.
+  let preservePy = null;
+  try { preservePy = fs.readFileSync(path.join(dir || __dirname, 'sira_preserve.py'), 'utf8'); } catch (_) { /* reported by the engine when requested */ }
+  if (preservePy) await sandbox.writeFile('tmp/sira_preserve.py', preservePy);
   await sandbox.writeFile(ENGINE_REL, py);
   return true;
 }
@@ -250,6 +256,7 @@ const OFFICE_TOOL_DEFINITIONS = [
       description:
         'OBLIGATORIO después de editar. Compara ANTES vs DESPUÉS: partes XML cambiadas, cambios por párrafo/celda/forma, render de páginas, '
         + 'zonas cambiadas en mm, imagen antes/después con recuadros y zoom, checks de texto/celdas y revisión con modelo de visión contra tu checklist. '
+        + 'Para ediciones exactas o «sin cambiar el resto», usa expect.preserve: verifica todos los valores XML protegidos y partes del original; no basta allowed_parts. '
         + 'Para gráficas XLSX/PPTX usa expect.charts: comprueba tipo, datos, colores explícitos y editabilidad en OOXML incluso sin visión. '
         + 'Sin `before` revisa un documento NUEVO. Devuelve "VEREDICTO: VERIFICADO" o un ERROR con lo que falló.',
       parameters: {
@@ -307,6 +314,28 @@ const OFFICE_TOOL_DEFINITIONS = [
                       },
                     },
                   },
+                },
+              },
+              preserve: {
+                type: 'object', additionalProperties: false, required: ['version', 'namespaces'],
+                description: 'Original requerido. Declara valores XML que pueden cambiar; todo lo demás se conserva. Un selector debe identificar exactamente un elemento en ambos archivos en la misma posición. Solo hijos absolutos con prefijos, [N] o [@atributo=\'valor\']; nunca //, comodines ni subárboles. No sustituye las comprobaciones de contenido/diseño.',
+                properties: {
+                  version: { type: 'integer', enum: [1] },
+                  namespaces: { type: 'object', maxProperties: 32, additionalProperties: { type: 'string', minLength: 1, maxLength: 1024 } },
+                  allow: {
+                    type: 'array', maxItems: 256,
+                    items: {
+                      type: 'object', additionalProperties: false, required: ['part', 'xpath'],
+                      properties: {
+                        part: { type: 'string', minLength: 1, maxLength: 1024 },
+                        xpath: { type: 'string', minLength: 1, maxLength: 2048 },
+                        text: { type: 'boolean', enum: [true], description: 'Solo texto directo del elemento, nunca hijos ni texto posterior.' },
+                        attributes: { type: 'array', minItems: 1, maxItems: 32, uniqueItems: true, items: { type: 'string' }, description: 'Valores de atributos ya presentes, con prefijos declarados si tienen namespace.' },
+                      },
+                    },
+                  },
+                  added_parts: { type: 'array', maxItems: 256, uniqueItems: true, items: { type: 'string' }, description: 'Nombres exactos de partes nuevas explícitamente permitidas.' },
+                  removed_parts: { type: 'array', maxItems: 256, uniqueItems: true, items: { type: 'string' }, description: 'Nombres exactos de partes eliminadas explícitamente permitidas.' },
                 },
               },
               allowed_parts: { type: 'array', items: { type: 'string' } },
@@ -480,6 +509,13 @@ function makeOfficeToolExecutors(sandbox, {
         return `ERROR: ${res?.error || 'verify falló'}`;
       }
       let text = res.summary;
+      if (res.preserve) {
+        const guard = res.preserve;
+        text += `\n• Preservación: ${guard.code}; completa: ${guard.complete === true ? 'sí' : 'no'}; incidencias: ${guard.violation_count || 0}.`;
+        for (const item of (guard.violations || []).slice(0, 8)) {
+          text += `\n  ${item.code}${item.part ? `: ${item.part}` : ''}${item.message ? ` — ${item.message}` : ''}`;
+        }
+      }
       let visionOk = null;
       let visionVeto = '';
       if (typeof visionVerifier === 'function' && Array.isArray(res.composites) && res.composites.length) {
@@ -505,14 +541,16 @@ function makeOfficeToolExecutors(sandbox, {
         text += '\n• Revisión visual: no configurada; solo verificación automática.';
       }
       text += `\n• Checklist del usuario: ${checklist.map((c, i) => `${i + 1}) ${c}`).join(' ')}`;
-      const passed = res.ok === true && visionOk !== false;
+      const preserveOk = !Object.prototype.hasOwnProperty.call(args.expect || {}, 'preserve')
+        || (res.preserve?.ok === true && res.preserve?.complete === true);
+      const passed = res.ok === true && visionOk !== false && preserveOk;
       if (typeof onVerify === 'function') {
         try {
           onVerify({
             after,
             passed,
             visionOk,
-            checksOk: res.ok === true,
+            checksOk: res.ok === true && preserveOk,
             paginationChanged: Boolean(res.visual && res.visual.pagination_changed),
           });
         } catch (_) { /* observer only */ }
@@ -520,6 +558,7 @@ function makeOfficeToolExecutors(sandbox, {
       text += `\nVEREDICTO: ${passed ? 'VERIFICADO' : 'NO VERIFICADO — corrige lo marcado con ✗ y vuelve a verificar'}`;
       const failureReasons = [
         ...(res.ok !== true ? ['controles automáticos fallidos'] : []),
+        ...(!preserveOk ? ['preservación no confirmada'] : []),
         ...(visionOk === false ? [`revisión visual: ${visionVeto || 'rechazada sin detalle'}`] : []),
       ];
       const body = passed ? text : `ERROR: verificación fallida\n• Motivo: ${failureReasons.join('; ') || 'verificación no concluyente'}\n${text}`;

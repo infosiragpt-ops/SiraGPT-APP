@@ -73,6 +73,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY capabilities.json verify_env.py smoke_formats.py /opt/sira/
+COPY smoke_precision.py sira_layout.py sira_preserve.py /opt/sira/
 
 # Every Python package comes from capabilities.json (python[].pip), binary
 # wheels only: nothing compiles inside this image, and a package that would
@@ -106,7 +107,8 @@ WORKDIR /workspace
 # conversation does not rescan every font.
 RUN python3 /opt/sira/verify_env.py \
     && python3 /opt/sira/smoke_formats.py /tmp/sira-smoke \
-    && rm -rf /tmp/sira-smoke /workspace/.config/libreoffice
+    && python3 /opt/sira/smoke_precision.py /tmp/sira-precision \
+    && rm -rf /tmp/sira-smoke /tmp/sira-precision /workspace/.config/libreoffice
 
 # Kept alive by the runner with `sleep infinity`; each tool call is a
 # `docker exec` with its own timeout. Nothing listens on any port and the

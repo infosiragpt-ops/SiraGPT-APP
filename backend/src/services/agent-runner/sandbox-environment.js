@@ -23,6 +23,7 @@ const AREA_LABELS = {
   image: 'Images',
   text: 'Text/web/e-books',
   media: 'Audio/music',
+  precision: 'Precision editing and validation',
 };
 
 function distributionName(spec) {
@@ -58,6 +59,12 @@ function buildSandboxEnvironmentBlock(capabilities = CAPABILITIES) {
     '- If the user asks for a format this list covers (plans, CAD, charts, PDFs, e-books, 3D models, maps, audio, QR codes, calendars, databases…), BUILD the real file. Never answer that you cannot produce a format listed here, and never substitute a description or a different format for the file requested.',
     '- Recipes:',
     ...capabilities.recipes.map((recipe) => `  ${recipe.ext}: ${recipe.how}`),
+    ...(capabilities.python.some((entry) => entry.area === 'precision') ? [
+      '- Measured layout: add /opt/sira to sys.path and import sira_layout. measure_text(font_path, text, size_pt) uses the explicit font and reports missing glyphs; fit_text(font_path, text, width_mm, height_mm, min_pt=8, max_pt=32) never truncates text and handles explicit newlines only. A fits:false result requires reflow or a user-approved size/font change. Always render the finished Office file: font metrics alone are not proof of final pagination.',
+      '- Precision: sira_layout.mm_to_emu converts millimetres without binary rounding drift; color_contrast checks opaque sRGB colours; pdf_text_geometry reports character boxes in unrotated PDF canvas coordinates, not screenshot pixels. It rejects unsupported units and incomplete scans; image-only PDFs still require OCR. Use separate processes for concurrent PDFium work, never unguarded threads.',
+      '- Preservation: for a change limited to specified text/cells/shape attributes, use verify_visual with expect.preserve version:1, explicit namespaces, and allow entries for the exact part and absolute XML selector (text:true or attributes:[name]). Protect the rest of the package; a whole allowed_parts entry alone cannot prove that other values in that part stayed unchanged. Require preserve.ok and preserve.complete together with the normal content and render checks. Never remove the preservation check merely to pass verification.',
+      '- Independent readers: use python_calamine to compare spreadsheet values after openpyxl edits; it does not prove styles or formulas are preserved. Inspect styles/formulas with the Office verifier too. msoffcrypto accepts only a password the user supplied through the protected input flow; never guess or log it. Write a separate decrypted copy, preserve the source, and validate the output before delivery.',
+    ] : []),
     '- Deliverables go to outputs/ (one file per requested deliverable, with a clear name and the right extension); scratch files and previews go to previews/ or tmp/.',
     '- Verify every deliverable before announcing it: reopen it with its own library (or ffprobe/pdfinfo), and for anything visual render a PNG preview (render_preview, matplotlib, ezdxf drawing, pdftoppm) and look at it.',
   ].join('\n');
