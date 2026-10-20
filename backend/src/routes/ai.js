@@ -4109,6 +4109,16 @@ router.post(
       // del usuario y resolver coreferencias del mensaje actual. Ambos son
       // best-effort: cualquier fallo cae al comportamiento actual.
       const __pr3ExtraBlocks = [];
+      // Learned preferences (services/learned-preferences): what this user
+      // taught us through repeated corrections («más corto», «más formal»,
+      // «en inglés») and explicit 👎 reasons. Small, inspectable, decaying.
+      try {
+        if (userId && !__publicWebReadonly && _userPrefetch) {
+          const __learned = require('../services/learned-preferences');
+          const __learnedBlock = __learned.buildLearnedPreferencesBlock(__learned.loadLearnedPreferences(_userPrefetch));
+          if (__learnedBlock) __pr3ExtraBlocks.push(__learnedBlock);
+        }
+      } catch (_learnedErr) { /* learning is best-effort */ }
       // Request brief (services/request-brief): ONE structured reading of
       // what this turn asks — action, deliverable, target (attachment /
       // generated file / previous answer), constraints, ambiguity — computed
@@ -4193,6 +4203,16 @@ router.post(
             prevUserPrompt: __prevUser ? __prevUser.text : null,
           });
           __pr6RepairDetection = __repairDet || null;
+          if (__repairDet && __repairDet.isRepair && userId && !__publicWebReadonly) {
+            // Teach the per-user preference store (fire-and-forget).
+            try {
+              const __learned = require('../services/learned-preferences');
+              const __traits = __learned.traitsFromRepair(__repairDet);
+              if (__traits.length) {
+                __learned.recordSignals({ prisma, userId, traits: __traits, source: 'repair' }).catch(() => {});
+              }
+            } catch (_learnErr) { /* best-effort */ }
+          }
           if (__repairDet && __repairDet.isRepair) {
             const __repairCtx = __cr.buildRepairContext(__repairDet);
             if (__repairCtx.systemAddendum) {
@@ -8678,6 +8698,17 @@ router.post(
                   requestBrief: __requestBriefPublic,
                   requestBriefBlock: __requestBriefBlock ? __requestBriefBlock.trim() : '',
                   preferenceBlock: feedbackBlock || '',
+                  // Who the user is and what they prefer: custom instructions,
+                  // inferred profile and the turn's understanding extras
+                  // (learned preferences, lexicon, coreference, repair).
+                  // Without it the loop only saw them inside the untrusted
+                  // history block, and lost them past 24k chars of history.
+                  userContextBlock: (Array.isArray(promptBundle?.systemBlocks) ? promptBundle.systemBlocks : [])
+                    .filter((b) => b && ['user-profile', 'inferred-profile', 'extra-block'].includes(b.kind))
+                    .map((b) => String(b.text || '').trim())
+                    .filter(Boolean)
+                    .join('\n\n')
+                    .slice(0, 8000),
                   selectedSkillsBlock,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
                   customGptSkillPlan: {

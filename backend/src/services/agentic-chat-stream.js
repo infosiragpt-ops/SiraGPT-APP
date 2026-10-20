@@ -1214,6 +1214,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // RLHF phase-2 few-shot block (already retrieved by /generate). Empty
       // string when steering missed or was skipped. Fail-open: never required.
       preferenceBlock = '',
+      // Who the user is and what they prefer (custom instructions, inferred
+      // profile, learned preferences, lexicon/coreference/repair), built by
+      // /generate from the master prompt's blocks. Optional.
+      userContextBlock = '',
       // Agent Skills the user activated in the composer («+ → Skills»),
       // already rendered by chat-skills.buildSelectedSkillsBlock. Optional.
       selectedSkillsBlock = '',
@@ -2600,10 +2604,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
       requestBriefBlock || '',
+      userContextBlock
+        ? `=== CONTEXTO DEL USUARIO (perfil, instrucciones personalizadas y preferencias aprendidas; tienen prioridad sobre las indicaciones genéricas de idioma, tono y formato) ===\n${userContextBlock}\n=== FIN CONTEXTO DEL USUARIO ===`
+        : '',
       pluginPromptBlock,
       buildSkillExecutionPrompt(customGptAgentPolicy),
       buildArtifactDeliveryPrompt(artifactDeliveryContract),
-      'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
+      'Responde en español con tono profesional y cercano, salvo que el contexto del usuario o su pedido indiquen otro idioma o tono. No uses emojis salvo que el usuario los pida.',
       'En tareas con 2 o más pasos llama `update_plan` PRIMERO con el plan completo (3-7 pasos cortos) y vuelve a llamarlo al completar cada paso o si el plan cambia — el usuario lo ve actualizarse en vivo. Para tareas de una sola acción no hace falta plan.',
       initialToolChoice ? buildMediaIntentsHint(mediaIntents) : '',
       documentMergeIntent
