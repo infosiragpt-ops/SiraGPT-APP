@@ -14,6 +14,202 @@ const { recognizeWithin, tesseractWorkerOptions, localImageBudgetMs, TESSERACT_N
 
 const factories = (names) => names.map((name) => ({ name, make: async () => Buffer.from(name) }));
 
+// Timers and Date.now do not necessarily cross an integer millisecond together.
+// Drive them independently, without real sleeps or replacing the OCR outcome.
+function controlledClock(t, initialNow = 1000) {
+  let now = initialNow;
+  let nextId = 0;
+  const timers = new Map();
+  t.mock.method(Date, 'now', () => now);
+  t.mock.method(global, 'setTimeout', (callback, delay) => {
+    const id = ++nextId;
+    timers.set(id, { callback, delay });
+    return id;
+  });
+  t.mock.method(global, 'clearTimeout', (id) => timers.delete(id));
+  return {
+    get pending() { return timers.size; },
+    nextDelay() {
+      assert.equal(timers.size, 1, 'exactly one recognition deadline is pending');
+      return timers.values().next().value.delay;
+    },
+    fireAt(value) {
+      assert.ok(value >= now, 'the controlled wall clock never moves backwards');
+      assert.equal(timers.size, 1, 'exactly one recognition deadline fires');
+      const [id, timer] = timers.entries().next().value;
+      timers.delete(id);
+      now = value;
+      timer.callback();
+    },
+  };
+}
+
+const flushPromises = () => new Promise((resolve) => setImmediate(resolve));
+
+test('an early timer wake keeps recognition pending until the original absolute deadline', async (t) => {
+  const clock = controlledClock(t);
+  let calls = 0;
+  let terminated = 0;
+  let settled = false;
+  const worker = {
+    recognize() { calls += 1; return new Promise(() => {}); },
+    async terminate() { terminated += 1; },
+  };
+  const pending = recognizeWithin(worker, Buffer.from('page'), 2200);
+  pending.then(() => { settled = true; });
+  await flushPromises();
+  assert.equal(clock.nextDelay(), 1200);
+  clock.fireAt(2199);
+  await flushPromises();
+  assert.equal(settled, false, 'a wake one millisecond early is not a timeout');
+  assert.equal(terminated, 0, 'the running worker remains alive before the deadline');
+  assert.equal(clock.nextDelay(), 1, 'only the original deadline remainder is scheduled');
+  clock.fireAt(2200);
+  const result = await pending;
+  assert.equal(result.timedOut, true);
+  assert.equal(result.terminated, true);
+  assert.equal(calls, 1, 'rearming a timer never repeats the OCR operation');
+  assert.equal(terminated, 1);
+  assert.equal(clock.pending, 0);
+});
+
+test('recognition can succeed after an early wake and clears the rearmed timer', async (t) => {
+  const clock = controlledClock(t);
+  let resolveRecognition;
+  let calls = 0;
+  let terminated = 0;
+  const worker = {
+    recognize() {
+      calls += 1;
+      return new Promise((resolve) => { resolveRecognition = resolve; });
+    },
+    async terminate() { terminated += 1; },
+  };
+  const pending = recognizeWithin(worker, Buffer.from('page'), 2200);
+  await flushPromises();
+  clock.fireAt(2199);
+  await flushPromises();
+  resolveRecognition({ data: { text: 'Lectura completada', confidence: 95 } });
+  const result = await pending;
+  assert.equal(result.timedOut, false);
+  assert.equal(result.result.data.text, 'Lectura completada');
+  assert.equal(calls, 1);
+  assert.equal(terminated, 0);
+  assert.equal(clock.pending, 0, 'the replacement timer is cleared on success');
+});
+
+test('cancellation after an early wake stops recognition and clears the rearmed timer', async (t) => {
+  const clock = controlledClock(t);
+  const controller = new AbortController();
+  let calls = 0;
+  let terminated = 0;
+  const worker = {
+    recognize() { calls += 1; return new Promise(() => {}); },
+    async terminate() { terminated += 1; },
+  };
+  const pending = recognizeWithin(worker, Buffer.from('page'), 2200, controller.signal);
+  await flushPromises();
+  clock.fireAt(2199);
+  await flushPromises();
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.aborted, true);
+  assert.equal(result.timedOut, false, 'an early wake cannot win against later cancellation');
+  assert.equal(result.terminated, true);
+  assert.equal(calls, 1);
+  assert.equal(terminated, 1);
+  assert.equal(clock.pending, 0, 'the replacement timer is cleared on cancellation');
+});
+
+// Prepared page buffers bypass rendering only. Recognition, variant selection,
+// per-page reads, worker disposal and both PDF traversals stay real.
+function controlledPdf(t, pageBudgetMs) {
+  const clock = controlledClock(t);
+  const calls = [];
+  const workers = [];
+  const rendered = [];
+  let pageTwoStarted;
+  const started = new Promise((resolve) => { pageTwoStarted = resolve; });
+  const config = { ...ocrEngine.config, pdfPageBudgetMs: pageBudgetMs, pdfMaxVariants: 1 };
+  t.mock.getter(ocrEngine, 'config', () => config);
+  t.mock.method(ocrEngine, 'createPdfPageVariants', (buffer) => [async () => buffer]);
+  t.mock.method(ocrEngine, '_openPdf', async () => ({
+    length: 3,
+    async getPage(page) { rendered.push(page); return Buffer.from([page]); },
+    async* [Symbol.asyncIterator]() {
+      for (let page = 1; page <= 3; page += 1) {
+        rendered.push(page);
+        yield Buffer.from([page]);
+      }
+    },
+  }));
+  t.mock.method(ocrEngine, 'createOcrWorker', async () => {
+    const worker = {
+      terminated: false,
+      async setParameters() {},
+      async terminate() { worker.terminated = true; },
+      recognize(buffer) {
+        const page = buffer[0];
+        calls.push(page);
+        if (page === 2) {
+          pageTwoStarted();
+          return new Promise(() => {});
+        }
+        return Promise.resolve({
+          data: {
+            text: 'Contrato de arrendamiento celebrado entre las partes para el local comercial ubicado en Lima.',
+            confidence: 94,
+          },
+        });
+      },
+    };
+    workers.push(worker);
+    return worker;
+  });
+  return { clock, calls, workers, rendered, started };
+}
+
+for (const mode of ['streaming', 'subset']) {
+  for (const pageBudgetMs of [5000, 1000]) {
+    const documentExpires = pageBudgetMs > 1200;
+    test(`${mode} PDF: an early ${documentExpires ? 'document' : 'page'} deadline wake preserves the correct traversal boundary`, async (t) => {
+      const { clock, calls, workers, rendered, started } = controlledPdf(t, pageBudgetMs);
+      const options = { budgetMs: 1200, allowVision: false };
+      const pending = mode === 'streaming'
+        ? ocrEngine.extractFromPdfImagesStreaming('/fake.pdf', options)
+        : ocrEngine.extractPdfPagesSubset('/fake.pdf', [1, 2, 3], options);
+      await started;
+      const deadline = documentExpires ? 2200 : 2000;
+      clock.fireAt(deadline - 1);
+      await flushPromises();
+      assert.deepEqual(calls, [1, 2], 'the still-running second page owns the worker');
+      assert.equal(workers[0].terminated, false);
+      assert.equal(clock.nextDelay(), 1);
+      clock.fireAt(deadline);
+      const result = await pending;
+      assert.equal(workers[0].terminated, true);
+      assert.deepEqual(calls, documentExpires ? [1, 2] : [1, 2, 3]);
+      assert.equal(workers.length, documentExpires ? 1 : 2, 'only a page timeout allows a fresh worker');
+      assert.equal(clock.pending, 0);
+      if (mode === 'streaming') {
+        assert.equal(result.ocr.partial, documentExpires);
+        assert.equal(result.ocr.partialReason, documentExpires ? 'budget' : null);
+        assert.match(result.text, /\[page 1\]\nContrato/);
+        assert.match(result.text, /\[página 2 — no legible: tiempo agotado\]/);
+        assert.match(result.text, documentExpires
+          ? /\[página 3 sin OCR: tiempo agotado\]/
+          : /\[page 3\]\nContrato/);
+      } else {
+        assert.equal(result.ocr.budgetHit, documentExpires);
+        assert.deepEqual(rendered, documentExpires ? [1, 2] : [1, 2, 3]);
+        assert.equal(result.pages[0].reason, 'ok');
+        assert.equal(result.pages[1].reason, 'timeout');
+        assert.equal(result.pages[2].reason, documentExpires ? 'budget' : 'ok');
+      }
+    });
+  }
+}
+
 test('recognizeBestVariant abandons a hung recognize() at the deadline and terminates the worker', async () => {
   let terminated = 0;
   let calls = 0;
