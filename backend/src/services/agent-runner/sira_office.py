@@ -1405,6 +1405,53 @@ def _xl_mark_recalc(pkg: OfficePackage) -> None:
         pkg.touch("xl/workbook.xml")
 
 
+def _xl_protected_ranges(root: etree._Element) -> List[Tuple[str, str, str, int, int, int, int]]:
+    """Indexa rectángulos, sin enumerar sus celdas (pueden cubrir toda la hoja)."""
+    ranges = []
+
+    def add(kind: str, ref: str, anchor: Optional[str] = None) -> None:
+        ends = ref.split(":")
+        if len(ends) > 2:
+            raise EditError(f"rango protegido inválido «{ref}»")
+        _, c1, r1 = parse_ref(ends[0])
+        _, c2, r2 = parse_ref(ends[-1])
+        c1, c2 = min(c1, c2), max(c1, c2)
+        r1, r2 = min(r1, r2), max(r1, r2)
+        anchor = parse_ref(anchor)[0] if anchor else f"{idx_to_col(c1)}{r1}"
+        ranges.append((kind, ref, anchor, c1, r1, c2, r2))
+
+    for merge in root.findall(f"{S('mergeCells')}/{S('mergeCell')}"):
+        add("merge", merge.get("ref", ""))
+    for cell in root.findall(f"{S('sheetData')}/{S('row')}/{S('c')}"):
+        formula = cell.find(S("f"))
+        if formula is not None and formula.get("t") == "array":
+            anchor = cell.get("r", "")
+            add("array", formula.get("ref") or anchor, anchor)
+    return ranges
+
+
+def _xl_guard_value_edit(pkg: OfficePackage, part: str, root: etree._Element,
+                         ref: str, state: Dict[str, Any]) -> str:
+    ref, col, row = parse_ref(ref)
+    # set_cell/set_cell_style no cambian las definiciones de estos rangos.
+    # El índice se reutiliza por hoja durante todo el lote, incluso en modo parcial.
+    index = state.setdefault("protected_ranges", {})
+    if part not in index:
+        index[part] = _xl_protected_ranges(root)
+    for kind, area, anchor, c1, r1, c2, r2 in index[part]:
+        if not (c1 <= col <= c2 and r1 <= row <= r2):
+            continue
+        if kind == "merge" and ref == anchor:
+            continue
+        sheet = next(s["name"] for s in xl_sheets(pkg) if s["part"] == part)
+        if kind == "merge":
+            raise EditError(f"{sheet}!{ref} pertenece al rango combinado {area}; "
+                            f"edita la celda ancla {anchor} para cambiar su contenido")
+        raise EditError(f"{sheet}!{ref} pertenece a la fórmula matricial del rango {area} "
+                        f"(ancla {anchor}); no se edita celda por celda")
+    return ref
+
+
 def xlsx_apply(pkg: OfficePackage, op: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
     kind = op.get("op")
     part = _xl_sheet_part(pkg, op.get("sheet"))
@@ -1413,7 +1460,8 @@ def xlsx_apply(pkg: OfficePackage, op: Dict[str, Any], state: Dict[str, Any]) ->
     if kind == "set_cell":
         if "value" not in op and "formula" not in op:
             raise EditError("set_cell necesita «value» o «formula»")
-        cell = _xl_get_cell(root, op.get("ref", ""), create=True)
+        ref = _xl_guard_value_edit(pkg, part, root, op.get("ref", ""), state)
+        cell = _xl_get_cell(root, ref, create=True)
         before = _xl_cell_value(cell, sst)
         f_old = cell.find(S("f"))
         if f_old is not None and f_old.get("t") == "shared" and f_old.get("ref"):
