@@ -137,6 +137,133 @@ test('aborted OpenAI calls do not fall back to local', async (t) => {
   assert.equal(localCalls, 0);
 });
 
+// Exercise the shared cloud boundary directly: no ffmpeg or live provider.
+// Deferred I/O makes cancellation timing deterministic instead of relying on
+// a machine completing disk reads before a short wall-clock timer fires.
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+test('cloud dispatch does not send an upload cancelled during its file read', async (t) => {
+  const filePath = tempAudio(t, 'cancel-during-read.mp3');
+  const reading = deferred();
+  const resume = deferred();
+  const controller = new AbortController();
+  let calls = 0;
+  const readFile = fs.promises.readFile.bind(fs.promises);
+  t.mock.method(fs.promises, 'readFile', async (target, ...args) => {
+    if (target === filePath) {
+      reading.resolve();
+      await resume.promise;
+    }
+    return readFile(target, ...args);
+  });
+  const provider = {
+    name: 'openai', model: 'whisper-1', verbose: true,
+    client: () => ({ audio: { transcriptions: { create: async () => {
+      calls++;
+      return { text: 'must not be requested', segments: [] };
+    } } } }),
+  };
+  const pending = audioTranscriber.transcribeCloud(provider, filePath, 'audio/mpeg', 'note.mp3', 1, 100, {
+    signal: controller.signal,
+    createFile: (bytes) => ({ bytes }),
+  });
+  try {
+    await reading.promise;
+    controller.abort();
+  } finally {
+    resume.resolve();
+  }
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(calls, 0, 'Stop prevents provider dispatch after asynchronous file preparation');
+});
+
+test('cloud dispatch does not send after upload construction cancels the request', async (t) => {
+  const filePath = tempAudio(t, 'cancel-at-construction.mp3');
+  const controller = new AbortController();
+  let calls = 0;
+  const provider = {
+    name: 'openai', model: 'whisper-1', verbose: true,
+    client: () => ({ audio: { transcriptions: { create: async () => {
+      calls++;
+      return { text: 'must not be requested' };
+    } } } }),
+  };
+  await assert.rejects(audioTranscriber.transcribeCloud(provider, filePath, 'audio/mpeg', 'note.mp3', 1, 100, {
+    signal: controller.signal,
+    createFile: (bytes) => { controller.abort(); return { bytes }; },
+  }), { name: 'AbortError' });
+  assert.equal(calls, 0);
+});
+
+test('cloud dispatch sends an uncancelled upload exactly once', async (t) => {
+  const filePath = tempAudio(t, 'uncancelled.mp3');
+  const controller = new AbortController();
+  const calls = [];
+  const provider = {
+    name: 'openai', model: 'whisper-1', verbose: true,
+    client: () => ({ audio: { transcriptions: { create: async (request, options) => {
+      calls.push({ request, options });
+      return { text: 'recognized speech', segments: [] };
+    } } } }),
+  };
+  const result = await audioTranscriber.transcribeCloud(provider, filePath, 'audio/mpeg', 'note.mp3', 1, 100, {
+    signal: controller.signal,
+    createFile: (bytes) => ({ bytes }),
+  });
+  assert.equal(result.text, 'recognized speech');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.deepEqual(calls[0].request.file.bytes, fs.readFileSync(filePath));
+});
+
+test('cloud dispatch rejects a pre-cancelled custom provider without calling it', async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  const provider = {
+    name: 'custom', model: 'test',
+    transcribeFile: async () => { calls++; return { text: 'must not be requested' }; },
+  };
+  await assert.rejects(audioTranscriber.transcribeCloud(provider, '/unused.mp3', 'audio/mpeg', 'note.mp3', 1, 100, {
+    signal: controller.signal,
+  }), { name: 'AbortError' });
+  assert.equal(calls, 0);
+});
+
+test('cloud dispatch rechecks cancellation when a queued custom request gets its turn', async () => {
+  const controller = new AbortController();
+  const waiting = deferred();
+  const resume = deferred();
+  let calls = 0;
+  const provider = {
+    name: 'custom', model: 'test', kind: 'cloud', method: 'whisper',
+    transcribeFile: async () => { calls++; return { text: 'must not be requested' }; },
+  };
+  const context = audioTranscriber.createJobContext({
+    options: { env: {} }, signal: controller.signal, rungs: [provider], segmentSeconds: 30,
+  });
+  context.dispatch = async (start) => {
+    waiting.resolve();
+    await resume.promise;
+    return start();
+  };
+  const pending = audioTranscriber.transcribeSegmentWithLadder({
+    path: '/unused.mp3', mime: 'audio/mpeg', name: 'note.mp3', index: 0, durationSeconds: 1,
+  }, context, 'es');
+  try {
+    await waiting.promise;
+    controller.abort();
+  } finally {
+    resume.resolve();
+  }
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(calls, 0, 'waiting for dispatch does not authorize a cancelled provider call');
+});
+
 test('sanitizeProviderError redacts key-shaped provider text', () => {
   const err = new Error('401 Incorrect API key provided: sk-proj-TESTKEY_z1');
   err.status = 401;
