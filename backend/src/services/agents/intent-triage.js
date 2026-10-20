@@ -68,15 +68,36 @@ function pickHeuristicQuestion(analysis) {
   return null;
 }
 
+function clampScore(s) {
+  if (typeof s !== "number" || !Number.isFinite(s)) return 0;
+  if (s < 0) return 0;
+  if (s > 1) return 1;
+  return s;
+}
+
+// Score that drives the low / gray-zone decision (and therefore whether the
+// LLM judge is consulted). The task contract's score is the calibrated one;
+// the token-level score sits at ~0.62 for almost every ordinary prompt, so
+// using it here would send nearly every turn to the judge (latency + cost).
 function readScore(analysis) {
   const contractScore = analysis?.contract?.ambiguity_score;
   const s = typeof contractScore === "number" && Number.isFinite(contractScore)
     ? contractScore
     : analysis?.request_intelligence?.ambiguity_score;
-  if (typeof s !== "number" || !Number.isFinite(s)) return 0;
-  if (s < 0) return 0;
-  if (s > 1) return 1;
-  return s;
+  return clampScore(s);
+}
+
+// Score that may ESCALATE straight to a clarifying question. The contract
+// score only takes the values {0.12, 0.15, 0.3, 0.45, 0.85, 1}, so it never
+// flags a vague one-liner ("excel", "hazme uno", "un plan", "dame ideas"),
+// while the token-level analysis does (0.85 for bare 1-3 token requests
+// without files). Taking the max for the high threshold restores those asks
+// without touching the gray zone.
+function readEscalationScore(analysis) {
+  const scores = [analysis?.contract?.ambiguity_score, analysis?.request_intelligence?.ambiguity_score]
+    .filter((v) => typeof v === "number" && Number.isFinite(v))
+    .map(clampScore);
+  return scores.length ? Math.max(...scores) : 0;
 }
 
 // PR-12: detección de peticiones vagas para fallback determinista
@@ -136,6 +157,11 @@ function withTimeout(promise, ms) {
 async function triageIntent({ analysis, prompt, recentTurns = [], judge, options = {} } = {}) {
   const cfg = { ...DEFAULTS, ...options };
   const score = readScore(analysis);
+  // With prior turns a terse message is usually an ANSWER ("resumen" after
+  // "¿qué necesitas de la tesis?"): the token-level score ignores history, so
+  // it may only escalate on a fresh conversation.
+  const hasHistory = Array.isArray(recentTurns) && recentTurns.length > 0;
+  const escalationScore = hasHistory ? score : readEscalationScore(analysis);
   const needsFlag = Boolean(analysis?.needs_clarification);
   const heuristicQ = pickHeuristicQuestion(analysis);
   const promptText = String(prompt || "").trim();
@@ -180,7 +206,7 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
   }
 
   // High-confidence ambiguity → ask immediately with heuristic question.
-  if (needsFlag || score >= cfg.highThreshold) {
+  if (needsFlag || escalationScore >= cfg.highThreshold) {
     const built = tryBuildOptions(analysis, promptText, recentTurns);
     const baseQuestion = built?.question || heuristicQ;
     const question = normalizeQuestion(
@@ -193,7 +219,7 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
         question,
         reason: needsFlag ? "envelope_needs_clarification" : "ambiguity_score_high",
         source: "heuristic",
-        score,
+        score: Math.max(score, escalationScore),
       };
       if (built && built.options && built.options.length > 0) {
         out.options = built.options;

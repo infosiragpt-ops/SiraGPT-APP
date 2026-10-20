@@ -39,14 +39,59 @@ test('allocate: trims lower tiers first', () => {
     mkBlock('master-prompt', 4000),
     mkBlock('circuit-attribution', 4000),
     mkBlock('memory', 4000),
-    mkBlock('evidence', 4000),
+    mkBlock('cowork', 4000),
   ];
   const a = allocator.allocate(blocks, { budgetTokens: 2500 });
-  const evidence = a.blocks.find((b) => b.kind === 'evidence');
+  const cowork = a.blocks.find((b) => b.kind === 'cowork');
   const memory = a.blocks.find((b) => b.kind === 'memory');
   const circuit = a.blocks.find((b) => b.kind === 'circuit-attribution');
-  assert.ok(evidence.ratio <= memory.ratio + 0.05, `evidence ${evidence.ratio} should be ≤ memory ${memory.ratio}`);
+  assert.ok(cowork.ratio <= memory.ratio + 0.05, `cowork ${cowork.ratio} should be ≤ memory ${memory.ratio}`);
   assert.ok(memory.ratio <= circuit.ratio + 0.05, `memory ${memory.ratio} should be ≤ circuit ${circuit.ratio}`);
+});
+
+test('allocate: explicit user instructions and personalization are protected', () => {
+  for (const kind of ['user-profile', 'constraints', 'response-posture', 'current-datetime', 'formatting-contract']) {
+    assert.strictEqual(allocator.TIER_BY_KIND[kind], 0, `${kind} must never be trimmed`);
+  }
+  for (const kind of ['inferred-profile', 'extra-block', 'active-memory', 'feedback', 'evidence', 'web-search', 'project']) {
+    assert.strictEqual(allocator.TIER_BY_KIND[kind], 1, `${kind} must outrank memory/cowork`);
+  }
+  assert.strictEqual(allocator.TIER_BY_KIND['enterprise-execution'], 3, 'the 100k-char operating prompt is cut first');
+});
+
+// Real shape of a heavy turn: a large protected master prompt, a giant
+// agentic operating prompt, and small personalization/evidence blocks. The
+// floors cannot fit, so the last resort runs. The fair share must keep the
+// small blocks intact and take the cut from the giant one (the old uniform
+// scaling left custom instructions and evidence at ~2-6%).
+test('allocate: last resort keeps small blocks intact and cuts the giant one', () => {
+  const blocks = [
+    mkBlock('master-prompt', 30000),          // ~7.5k tokens, tier 0
+    mkBlock('user-profile', 1200),            // tier 0
+    mkBlock('enterprise-execution', 140000),  // ~35k tokens, tier 3
+    mkBlock('inferred-profile', 800),
+    mkBlock('feedback', 1600),
+    mkBlock('extra-block', 1000),
+    mkBlock('evidence', 11000),
+  ];
+  const a = allocator.allocate(blocks, { budgetTokens: 12000 });
+  const ratio = (kind) => a.blocks.find((b) => b.kind === kind).ratio;
+  assert.strictEqual(a.overBudgetAfter, false, `final ${a.finalTokens} must fit 12000`);
+  assert.strictEqual(ratio('user-profile'), 1);
+  assert.strictEqual(ratio('inferred-profile'), 1);
+  assert.strictEqual(ratio('feedback'), 1);
+  assert.strictEqual(ratio('extra-block'), 1);
+  assert.ok(ratio('evidence') >= 0.8, `evidence kept ${ratio('evidence')}`);
+  assert.ok(ratio('enterprise-execution') < 0.1, `enterprise ${ratio('enterprise-execution')} absorbs the cut`);
+});
+
+test('fairShare: small items keep their size, weights favour higher tiers', () => {
+  assert.deepStrictEqual(allocator.fairShare([{ size: 10, weight: 1 }, { size: 1000, weight: 1 }], 100), [10, 90]);
+  const [hi, lo] = allocator.fairShare([{ size: 1000, weight: 1 }, { size: 1000, weight: 0.4 }], 140);
+  assert.ok(hi > lo, `${hi} > ${lo}`);
+  assert.ok(hi + lo <= 140);
+  assert.deepStrictEqual(allocator.fairShare([], 50), []);
+  assert.deepStrictEqual(allocator.fairShare([{ size: 5, weight: 1 }], 0), [0]);
 });
 
 test('allocate: respects per-tier min ratios for high tiers when possible', () => {

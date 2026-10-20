@@ -2893,3 +2893,10 @@ Pedido de Jorge: «la transcripción nunca debe fallar… cualquier tipo de audi
 - CI: GitHub Actions, check requerido "CI · required checks passed" (frontend, backend en 4
   shards, seguridad, licencias, UI lock, visual regression, e2e-critical, desktop)
 - Producción: https://siragpt.com (health en `/api/health`; `api.siragpt.com` es 404)
+
+## Entendimiento: presupuesto del prompt y preguntas aclaratorias (added 2026-10-20)
+
+Medido con el prompt maestro real en un turno pesado (bloque operativo agéntico de ~140k chars):
+- **Presupuesto** (`prompt-budget-allocator.js`): instrucciones personalizadas, restricciones explícitas, fecha y contrato de formato no estaban en `TIER_BY_KIND` → tier 3 → quedaban al ~4%; la evidencia RAG al 4.5% y los ejemplos 👍 al 9%. Ahora `user-profile`, `constraints`, `response-posture`, `current-datetime`, `formatting-contract` = tier 0; perfil inferido, lexicón/coref/reparación (`extra-block`), memoria activa, ejemplos 👍 (`feedback`), evidencia, web y proyecto = tier 1; `enterprise-execution` baja a tier 3. Último recurso = reparto justo ponderado (`fairShare`, "water filling") desde los tamaños originales en vez de escala uniforme: lo pequeño queda entero y el bloque gigante absorbe el recorte. Resultado: personalización 100%, evidencia ~92%.
+- **Aclaraciones** (`agents/intent-triage.js`): el score del contrato solo toma {0.12, 0.15, 0.3, 0.45, 0.85, 1}, así que «excel», «hazme uno», «un plan», «dame ideas» nunca preguntaban (recall 0.107). El umbral alto ahora usa `max(contrato, tokens)` solo en conversación nueva (con historial, un mensaje corto suele ser una respuesta); la zona gris sigue con el score del contrato (el de tokens está en ~0.62 para casi todo y mandaría cada turno al juez LLM). Eval `run-understanding-eval.js`: clarify P 0.75→0.957, R 0.107→0.786, F1 0.19→0.863.
+- Tests: `prompt-budget-allocator.test.js` (15, ahora registrado) e `intent-triage-escalation.test.js` (5).
