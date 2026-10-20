@@ -988,7 +988,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `file-type` | 22.0.1 | MIT | [link](https://github.com/sindresorhus/file-type) |
 | `fill-range` | 7.1.1 | MIT | [link](https://github.com/jonschlinkert/fill-range) |
 | `finalhandler` | 1.3.1, 2.1.1 | MIT | [link](https://github.com/pillarjs/finalhandler) |
-| `follow-redirects` | 1.16.0 | MIT | [link](https://github.com/follow-redirects/follow-redirects) |
+| `follow-redirects` | 1.16.1 | MIT | [link](https://github.com/follow-redirects/follow-redirects) |
 | `fontkit` | 2.0.4 | MIT | [link](https://github.com/foliojs/fontkit) |
 | `form-data` | 3.0.5, 4.0.6 | MIT | [link](https://github.com/form-data/form-data) |
 | `format` | 0.2.2 | MIT | [link](https://github.com/samsonjs/format) |
