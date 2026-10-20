@@ -25,6 +25,7 @@ const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 const crypto = require('crypto');
 const objectStorage = require('../object-storage');
 const sandbox = require('./code-sandbox');
+const isolatedRunner = require('./isolated-code-runner');
 const { materializeArtifactSource, readArtifactMetadata } = require('./artifact-local-source');
 const { MAX_SIMULTANEOUS_DOCUMENTS } = require('../../config/document-batch-limits');
 const {
@@ -429,13 +430,61 @@ function assertArtifactValidation(ext, buffer) {
   return validation;
 }
 
+// ─── Model-authored code: isolated container vs host ────────────────────
+// python_exec / bash_exec / create_document execute code an LLM wrote. With
+// SIRAGPT_CODE_SANDBOX=auto (default) it runs in production inside the
+// hardened document sandbox container (agents/isolated-code-runner.js:
+// gVisor, no network, read-only rootfs, the full library catalog) and on the
+// host runner elsewhere, so dev/CI keep working without Docker. Read at call
+// time so operators (and tests) can switch without a restart.
+function codeExecutionMode() {
+  return isolatedRunner.resolveCodeExecutionMode(process.env);
+}
+
+function isolatedUnavailablePayload(tool, result, ctx) {
+  const error = result?.stderr || isolatedRunner.UNAVAILABLE_MESSAGE;
+  ctx.onEvent?.({ type: 'tool_output', tool, ok: false, preview: error });
+  return { ok: false, error, code: 'E_SANDBOX_UNAVAILABLE', stdout: '', stderr: error };
+}
+
+/** "python-docx, docxtpl, …; pypdf, …" — a few libraries per area of the image catalog. */
+function sandboxLibraryHighlights(perArea = 5) {
+  try {
+    // eslint-disable-next-line global-require
+    const { CAPABILITIES, distributionName } = require('../agent-runner/sandbox-environment');
+    const byArea = new Map();
+    for (const entry of CAPABILITIES.python || []) {
+      const names = byArea.get(entry.area) || [];
+      if (names.length < perArea) names.push(distributionName(entry.pip));
+      byArea.set(entry.area, names);
+    }
+    return [...byArea.values()].map((names) => names.join(', ')).join('; ');
+  } catch {
+    return '';
+  }
+}
+
+function pythonExecDescription(mode = codeExecutionMode()) {
+  if (mode === 'isolated') {
+    const libs = sandboxLibraryHighlights();
+    return 'Run a short Python 3 script in an isolated sandbox container (no network, read-only system, fresh workspace per run; 10 s default, 60 s max). Returns stdout, stderr, exit code. Use for data wrangling, statistics, charts, numeric computation and table/JSON shaping. '
+      + (libs ? `Preinstalled (never pip install): ${libs}, among others. ` : '')
+      + 'Files generated earlier in this chat are available through ARTIFACT_FILES when provided. Print results to stdout.';
+  }
+  return 'Run a short Python 3 script with the host interpreter (10 s wall-clock default, no network credentials, fresh temp dir). Returns stdout, stderr, exit code. Use for data wrangling, numeric computation, JSON shaping. Only the Python standard library is guaranteed; other packages depend on the host.';
+}
+
 // A $FL2 header alone does not prove that an SPSS system file is usable.
 // Both creation and verification reopen the finished file with the same
 // reader. Missing pyreadstat is a hard failure, never a size-only pass.
 async function inspectSavArtifact(filePath, signal) {
+  const isolated = codeExecutionMode() === 'isolated';
+  // Isolated: the file is copied into the run directory and read there with
+  // the sandbox's own pyreadstat (the host interpreter lacks it).
+  const readerPath = isolated ? 'inputs/artifact.sav' : filePath;
   const source = [
     'import json',
-    `path = ${JSON.stringify(filePath)}`,
+    `path = ${JSON.stringify(readerPath)}`,
     'try:',
     '    import pyreadstat',
     '    frame, _metadata = pyreadstat.read_sav(path)',
@@ -449,7 +498,15 @@ async function inspectSavArtifact(filePath, signal) {
     '    result = {"ok": False, "error": "El archivo SPSS .sav no se pudo abrir: " + type(exc).__name__}',
     'print(json.dumps(result))',
   ].join('\n');
-  const run = await sandbox.run({ language: 'python', source, timeoutMs: 12000, signal });
+  const run = isolated
+    ? await isolatedRunner.runIsolated({
+      language: 'python',
+      source,
+      timeoutMs: 12000,
+      signal,
+      inputs: [{ rel: readerPath, buffer: fs.readFileSync(filePath) }],
+    })
+    : await sandbox.run({ language: 'python', source, timeoutMs: 12000, signal });
   if (!run.ok) {
     return { ok: false, error: run.timedOut ? 'Tiempo agotado al verificar SPSS .sav' : 'No se pudo ejecutar el verificador SPSS .sav' };
   }
@@ -511,7 +568,7 @@ function previewText(s, max = 600) {
 
 const pythonExec = {
   name: 'python_exec',
-  description: 'Run a short Python 3 script in an isolated sandbox (10 s wall-clock default, no network credentials, fresh temp dir). Returns stdout, stderr, exit code. Use for data wrangling, pandas/openpyxl table construction, numeric computation, JSON shaping. Common deps pre-installed: pandas, numpy, openpyxl, python-docx, python-pptx, reportlab, PIL, matplotlib.',
+  description: pythonExecDescription(),
   parameters: {
     type: 'object',
     properties: {
@@ -529,6 +586,7 @@ const pythonExec = {
     }
     ctx.onEvent?.({ type: 'tool_call', tool: 'python_exec', preview: previewText(source, 400), language: 'python' });
     ctx.onEvent?.({ type: 'stage', label: 'Ejecutando código Python', pct: 20 });
+    const isolated = codeExecutionMode() === 'isolated';
     const refs = Array.isArray(ctx.generatedArtifactRefs)
       ? ctx.generatedArtifactRefs.slice(0, Math.min(8, MAX_SIMULTANEOUS_DOCUMENTS))
       : [];
@@ -536,6 +594,7 @@ const pythonExec = {
     let r;
     try {
       const artifactFiles = {};
+      const inputs = [];
       if (refs.length && (!ctx.userId || !ctx.chatId)) {
         throw new Error('No se pudo verificar el propietario y el chat de los archivos generados.');
       }
@@ -555,18 +614,40 @@ const pythonExec = {
         });
         if (!resolved.ok) throw new Error('No se pudo abrir uno de los archivos generados de este chat.');
         hydrated.push(resolved);
-        artifactFiles[`archivo_${index + 1}`] = { filename: resolved.filename, path: resolved.sourcePath };
+        const key = `archivo_${index + 1}`;
+        if (isolated) {
+          // Copied into the run directory; the injected prelude turns the
+          // relative path absolute inside the container.
+          const ext = path.extname(String(resolved.filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '').slice(0, 12);
+          const rel = `inputs/${key}${ext}`;
+          inputs.push({ rel, buffer: await fs.promises.readFile(resolved.sourcePath) });
+          artifactFiles[key] = { filename: resolved.filename, path: rel };
+        } else {
+          artifactFiles[key] = { filename: resolved.filename, path: resolved.sourcePath };
+        }
       }
-      const executionSource = refs.length
-        ? `import json as _sira_json\nARTIFACT_FILES = _sira_json.loads(${JSON.stringify(JSON.stringify(artifactFiles))})\n${source}`
-        : source;
-      r = await sandbox.run({
+      const prelude = refs.length
+        ? [
+          'import json as _sira_json',
+          `ARTIFACT_FILES = _sira_json.loads(${JSON.stringify(JSON.stringify(artifactFiles))})`,
+          ...(isolated ? [
+            'import os as _sira_os',
+            'for _sira_item in ARTIFACT_FILES.values():',
+            '    _sira_item["path"] = _sira_os.path.abspath(_sira_item["path"])',
+          ] : []),
+        ].join('\n')
+        : '';
+      const executionSource = prelude ? `${prelude}\n${source}` : source;
+      const runOpts = {
         language: 'python',
         source: executionSource,
         timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
         stdin: stdin || '',
         signal: ctx.signal,
-      });
+      };
+      r = isolated
+        ? await isolatedRunner.runIsolated({ ...runOpts, inputs, persistKey: ctx.chatId || null })
+        : await sandbox.run(runOpts);
     } catch (err) {
       const error = err?.message || 'No se pudieron abrir los archivos generados.';
       ctx.onEvent?.({ type: 'tool_output', tool: 'python_exec', ok: false, preview: error });
@@ -574,6 +655,7 @@ const pythonExec = {
     } finally {
       await Promise.allSettled(hydrated.map((item) => item.cleanup()));
     }
+    if (r?.unavailable) return isolatedUnavailablePayload('python_exec', r, ctx);
     const redactArtifactInternals = (value) => {
       let safe = String(value || '');
       for (const item of hydrated) {
@@ -630,12 +712,16 @@ const bashExec = {
       return { ok: false, error: 'bash_exec requires a non-empty "source" string' };
     }
     ctx.onEvent?.({ type: 'tool_call', tool: 'bash_exec', preview: previewText(source, 400), language: 'javascript' });
-    const r = await sandbox.run({
+    const runOpts = {
       language: 'javascript',
       source,
       timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 30000, defaultMs: 8000 }),
       signal: ctx.signal,
-    });
+    };
+    const r = codeExecutionMode() === 'isolated'
+      ? await isolatedRunner.runIsolated({ ...runOpts, persistKey: ctx.chatId || null })
+      : await sandbox.run(runOpts);
+    if (r?.unavailable) return isolatedUnavailablePayload('bash_exec', r, ctx);
     const rawStdout = r.stdout || '';
     const rawStderr = r.stderr || '';
     const payload = {
@@ -782,14 +868,19 @@ const createDocument = {
     // would clobber the other's artifact mid-write.
     const tmpOut = path.join(ARTIFACT_DIR, `pending-${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${cleanName}`);
     const ext = path.extname(cleanName).slice(1).toLowerCase();
+    const isolated = codeExecutionMode() === 'isolated';
+    const runCode = (opts) => (isolated
+      ? isolatedRunner.runIsolated({ ...opts, persistKey: ctx.chatId || null })
+      : sandbox.run(opts));
 
     if (ext === 'sav') {
-      const dependency = await sandbox.run({
+      const dependency = await runCode({
         language: 'python',
         source: 'import pandas, pyreadstat\nprint("SPSS_READY")',
         timeoutMs: 5000,
         signal: ctx.signal,
       });
+      if (dependency?.unavailable) return isolatedUnavailablePayload('create_document', dependency, ctx);
       if (!dependency.ok || !(dependency.stdout || '').includes('SPSS_READY')) {
         const error = 'No se puede crear un archivo SPSS .sav: pyreadstat y pandas deben estar disponibles en el entorno de ejecución.';
         ctx.onEvent?.({ type: 'tool_output', tool: 'create_document', ok: false, preview: error });
@@ -811,6 +902,16 @@ const createDocument = {
     // despite the contract; the recovery footer copies the newest
     // matching artifact into OUT_PATH so the task does not loop forever
     // on a valid-but-misplaced document.
+    // Isolated: OUT_PATH lives in the container's run directory and the file
+    // is read back into tmpOut afterwards, so validation and registration
+    // below are identical in both modes.
+    const isolatedOutRel = `out/${cleanName}`;
+    const outPathLines = isolated
+      ? [
+        `os.environ["OUT_PATH"] = os.path.abspath(${JSON.stringify(isolatedOutRel)})`,
+        'os.makedirs(os.path.dirname(os.environ["OUT_PATH"]), exist_ok=True)',
+      ]
+      : [`os.environ["OUT_PATH"] = ${JSON.stringify(tmpOut)}`];
     const recoveryPatterns = [
       cleanName,
       ext ? `*.${ext}` : '*',
@@ -818,7 +919,7 @@ const createDocument = {
     ];
     const wrapped = [
       'import os, glob, shutil',
-      `os.environ["OUT_PATH"] = ${JSON.stringify(tmpOut)}`,
+      ...outPathLines,
       'OUT_PATH = os.environ["OUT_PATH"]',
       python,
       '',
@@ -835,12 +936,18 @@ const createDocument = {
     ].join('\n');
 
     ctx.onEvent?.({ type: 'stage', label: 'Ejecutando script Python', pct: 15 });
-    const r = await sandbox.run({
+    const r = await runCode({
       language: 'python',
       source: wrapped,
       timeoutMs: clampTimeoutMs(timeoutMs, { min: 1000, max: 60000, defaultMs: 30000 }),
       signal: ctx.signal,
+      ...(isolated ? { collect: [isolatedOutRel] } : {}),
     });
+    if (r?.unavailable) return isolatedUnavailablePayload('create_document', r, ctx);
+    if (isolated && r.ok) {
+      const produced = r.collected?.[isolatedOutRel];
+      if (Buffer.isBuffer(produced) && produced.length > 0) fs.writeFileSync(tmpOut, produced);
+    }
 
     if (!r.ok || !fs.existsSync(tmpOut)) {
       try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch { /* best effort */ }
@@ -2447,6 +2554,10 @@ module.exports = {
     selfRagDeps,
     pythonExec,
     bashExec,
+    codeExecutionMode,
+    pythonExecDescription,
+    sandboxLibraryHighlights,
+    inspectSavArtifact,
     webSearch,
     createDocument,
     ragRetrieve,
