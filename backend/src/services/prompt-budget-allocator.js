@@ -51,11 +51,31 @@ const TIER_BY_KIND = Object.freeze({
   // Agent Skills the user activated for this turn: an explicit instruction,
   // already capped by chat-skills (16k chars), so it is never trimmed.
   'selected-skills': 0,
+  // Explicit user/operator instructions and tiny turn facts. Before these
+  // were listed they fell to DEFAULT_TIER (3) and were cut first — custom
+  // instructions and the user's explicit constraints ended at ~2% on heavy
+  // turns (measured with the real master prompt).
+  'current-datetime': 0,
+  'user-profile': 0,
+  'constraints': 0,
+  'response-posture': 0,
+  'formatting-contract': 0,
 
-  // Demoted from tier-0 → tier-1 so the allocator actually has a lever when the
-  // protected blocks alone blow the budget (was producing ~40k-token prompts
-  // → ~74s turns). These tolerate 60% retention; the base identity stays tier-0.
-  'enterprise-execution': 1,
+  // Understanding, personalization and grounding: what makes the answer
+  // about THIS user and THIS evidence. Tier 1 (60% floor).
+  'project': 1,
+  'inferred-profile': 1,
+  'extra-block': 1,
+  'active-memory': 1,
+  'reasoning-effort': 1,
+  'intent-context': 1,
+  'intent-alignment': 1,
+  'llm-understanding-packet': 1,
+  'document-analysis-quality': 1,
+  'feedback': 1,
+  'evidence': 1,
+  'web-search': 1,
+
   'pr5-grounding': 1,
 
   'attribution': 1,
@@ -66,17 +86,43 @@ const TIER_BY_KIND = Object.freeze({
   'memory': 2,
   'orchestration-memory': 2,
   'cross-chat': 2,
-  'feedback': 2,
 
-  'evidence': 3,
+  // The agentic operating prompt is 100k+ chars: at tier 1 its 60% floor
+  // alone exceeded the whole budget and forced the uniform last resort that
+  // shrank everything else to a few percent. It is the first thing to cut.
+  'enterprise-execution': 3,
   'document-enrichment': 3,
   'cowork': 3,
-  'web-search': 3,
 });
 
 const DEFAULT_TIER = 3;
 const TIER_MIN_RATIO = Object.freeze({ 0: 1, 1: 0.6, 2: 0.4, 3: 0.2 });
 const TIER_TRIM_ORDER = [3, 2, 1, 0];
+// Relative share of the fair-share level per tier in the last resort.
+const TIER_FAIR_WEIGHT = Object.freeze({ 1: 1, 2: 0.7, 3: 0.4 });
+
+/**
+ * Weighted max-min fair allocation ("water filling"). Each item receives
+ * min(size, level × weight); the level is the largest value whose total fits
+ * `capacity`. Items smaller than their fair share keep their full size and
+ * hand the rest to the larger ones. Returns integer tokens per item.
+ */
+function fairShare(items, capacity) {
+  const out = new Array(items.length).fill(0);
+  let cap = Math.max(0, Math.floor(capacity));
+  const order = items
+    .map((item, i) => ({ i, size: Math.max(0, item.size), weight: Math.max(0.01, item.weight || 1) }))
+    .sort((a, b) => (a.size / a.weight) - (b.size / b.weight));
+  let weightLeft = order.reduce((acc, it) => acc + it.weight, 0);
+  for (const it of order) {
+    const level = weightLeft > 0 ? cap / weightLeft : 0;
+    const give = Math.max(0, Math.min(it.size, Math.floor(level * it.weight)));
+    out[it.i] = give;
+    cap -= give;
+    weightLeft -= it.weight;
+  }
+  return out;
+}
 
 function estimateTokens(text) {
   if (!text || typeof text !== 'string') return 0;
@@ -158,17 +204,23 @@ function allocate(rawBlocks, opts = {}) {
     }
   }
 
-  // Last resort: still over budget. Scale all non-tier-0 uniformly.
+  // Last resort: the per-tier floors still don't fit (some block is huge).
+  // Weighted max-min fair share from the ORIGINAL sizes ("water filling"):
+  // every non-protected block keeps min(original, level × tierWeight), with
+  // the level chosen so the total fits. Small blocks — custom instructions,
+  // learned preferences, the turn's evidence — survive intact and the giant
+  // ones absorb the cut. The old uniform scaling shrank every block by the
+  // same factor, so one 100k-char block reduced all the others to ~2-6%.
   let total = sumAlloc();
   if (total > budget) {
     const protectedTokens = allocated.filter((b) => b.tier === 0).reduce((a, b) => a + b.allocatedTokens, 0);
     const remaining = Math.max(0, budget - protectedTokens);
     const nonProtected = allocated.filter((b) => b.tier !== 0);
-    const nonProtectedTotal = nonProtected.reduce((a, b) => a + b.allocatedTokens, 0);
-    if (nonProtectedTotal > 0) {
-      const scale = Math.min(1, remaining / nonProtectedTotal);
-      for (const m of nonProtected) m.allocatedTokens = Math.max(1, Math.floor(m.allocatedTokens * scale));
-    }
+    const shares = fairShare(
+      nonProtected.map((b) => ({ size: b.originalTokens, weight: TIER_FAIR_WEIGHT[b.tier] ?? TIER_FAIR_WEIGHT[DEFAULT_TIER] })),
+      remaining,
+    );
+    nonProtected.forEach((m, i) => { m.allocatedTokens = Math.max(1, shares[i]); });
     total = sumAlloc();
   }
 
@@ -222,5 +274,7 @@ module.exports = {
   buildBudgetSummaryLine,
   TIER_BY_KIND,
   TIER_MIN_RATIO,
+  TIER_FAIR_WEIGHT,
   DEFAULT_BUDGET_TOKENS,
+  fairShare,
 };
