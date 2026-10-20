@@ -692,9 +692,15 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       case 'disk':
         return 'the sandbox has no space left; nothing was installed.';
       case 'conflict':
-        return 'the request conflicts with the libraries built into the sandbox image (their versions are fixed so numpy/pandas/lxml/python-pptx keep working); nothing was installed. Drop the version pin or use the installed version.';
+        return 'the request conflicts with libraries in the sandbox image or already installed in this conversation; their versions are preserved. Nothing was installed. Use the installed version or a compatible package.';
       case 'commit_failed':
-        return 'the packages were downloaded but could not be written into the workspace, so the package folder may be incomplete; do not rely on them in this turn.';
+        return 'the packages could not be activated; the previous environment was preserved. Continue with the existing packages or report the installation failure.';
+      case 'environment_invalid':
+        return 'the existing package environment could not be verified; nothing was installed. Continue with working libraries and report that the sandbox needs inspection.';
+      case 'environment_changed':
+        return 'another installation changed the environment before this one could be activated; this request was not applied. Check whether the needed import now works before requesting a fresh installation.';
+      case 'commit_unknown':
+        return 'the installer lost confirmation while activating the packages. The result is unknown: do not claim success or that nothing changed, and do not blindly repeat the installation. Verify the needed imports and report any remaining uncertainty.';
       default:
         return `the install failed (${code})${detail ? `: ${detail.slice(-300)}` : ''}; nothing was installed.`;
     }
