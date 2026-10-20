@@ -41,11 +41,13 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from lxml import etree
@@ -3004,16 +3006,16 @@ _RECALC_XCU = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def _lo_profile() -> str:
-    """Perfil propio de LibreOffice: evita bloqueos entre procesos y fuerza recálculo de fórmulas al abrir."""
-    base = os.environ.get("SIRA_LO_PROFILE") or os.path.join(tempfile.gettempdir(), f"sira-lo-profile-{os.getuid()}")
+def _lo_profile(base: Optional[str] = None) -> str:
+    """Configura recálculo; las conversiones pasan un perfil privado por intento."""
+    base = base or os.environ.get("SIRA_LO_PROFILE") or os.path.join(tempfile.gettempdir(), f"sira-lo-profile-{os.getuid()}")
     user = os.path.join(base, "user")
     xcu = os.path.join(user, "registrymodifications.xcu")
     if not os.path.exists(xcu):
         os.makedirs(user, exist_ok=True)
         with open(xcu, "w", encoding="utf-8") as fh:
             fh.write(_RECALC_XCU)
-    return "file://" + base
+    return Path(base).resolve().as_uri()
 
 
 def soffice_convert(src: str, outdir: str, target: str = "pdf", timeout: int = 180) -> str:
@@ -3021,15 +3023,27 @@ def soffice_convert(src: str, outdir: str, target: str = "pdf", timeout: int = 1
     if not exe:
         raise EditError("LibreOffice (soffice) no está instalado en el sandbox: no se puede renderizar")
     os.makedirs(outdir, exist_ok=True)
-    cmd = [exe, f"-env:UserInstallation={_lo_profile()}", "--headless", "--norestore", "--nolockcheck",
-           "--nologo", "--nodefault", "--convert-to", target, "--outdir", outdir, src]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise EditError(f"LibreOffice tardó más de {timeout} s convirtiendo «{os.path.basename(src)}»")
     out = os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + "." + target.split(":")[0])
-    if not os.path.exists(out):
-        raise EditError(f"LibreOffice no generó {os.path.basename(out)} (código {r.returncode}): {(r.stderr or r.stdout)[-300:]}")
+    # Never let an old PDF satisfy this attempt. Use the destination filesystem
+    # for an atomic publish, and a private profile to avoid process forwarding.
+    with tempfile.TemporaryDirectory(prefix=".sira-convert-", dir=os.path.abspath(outdir)) as attempt:
+        profile = _lo_profile(os.path.join(attempt, "profile"))
+        cmd = [exe, f"-env:UserInstallation={profile}", "--headless", "--norestore", "--nolockcheck",
+               "--nologo", "--nodefault", "--convert-to", target, "--outdir", attempt, src]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise EditError(f"LibreOffice tardó más de {timeout} s convirtiendo «{os.path.basename(src)}»")
+        if r.returncode != 0:
+            raise EditError(f"LibreOffice falló convirtiendo {os.path.basename(src)} (código {r.returncode}): {(r.stderr or r.stdout)[-300:]}")
+        generated = os.path.join(attempt, os.path.basename(out))
+        try:
+            output_stat = os.lstat(generated)
+        except FileNotFoundError:
+            output_stat = None
+        if output_stat is None or not stat.S_ISREG(output_stat.st_mode) or output_stat.st_size == 0:
+            raise EditError(f"LibreOffice no generó un archivo nuevo válido: {os.path.basename(out)}")
+        os.replace(generated, out)
     return out
 
 
