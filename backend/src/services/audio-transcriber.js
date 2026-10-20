@@ -2282,8 +2282,13 @@ async function rememberManifestLanguage(prepared, language) {
  */
 async function transcribeCloudFile(provider, filePath, mimeType, fileName, options, language, prompt, call = {}) {
   const signal = call.signal || options.signal;
+  throwIfAborted(signal);
   if (typeof provider.transcribeFile === 'function') {
-    const start = () => ({ p: provider.transcribeFile(filePath, mimeType, fileName, language, prompt, { signal, timeoutMs: call.timeoutMs, durationSeconds: call.durationSeconds }) });
+    const start = () => {
+      // Cancellation can arrive while this request waits for its dispatch turn.
+      throwIfAborted(signal);
+      return { p: provider.transcribeFile(filePath, mimeType, fileName, language, prompt, { signal, timeoutMs: call.timeoutMs, durationSeconds: call.durationSeconds }) };
+    };
     const handle = call.dispatch ? await call.dispatch(start) : start();
     const out = await handle.p;
     return {
@@ -2296,7 +2301,11 @@ async function transcribeCloudFile(provider, filePath, mimeType, fileName, optio
   const client = provider.client();
   const caps = provider.caps || (provider.verbose ? transcriptionModelCaps('whisper-1') : PLAIN_JSON_CAPS);
   const startRequest = async () => {
+    throwIfAborted(signal);
     const fileBuffer = await fsPromises.readFile(filePath);
+    // Stop during upload preparation must not dispatch an already-cancelled
+    // request: a provider listening only for future abort events would hang.
+    throwIfAborted(signal);
     const blob = typeof options.createFile === 'function'
       ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
       : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
@@ -2310,6 +2319,7 @@ async function transcribeCloudFile(provider, filePath, mimeType, fileName, optio
       maxRetries: Number.isInteger(call.maxRetries) ? call.maxRetries : 2,
       ...(signal ? { signal } : {}),
     };
+    throwIfAborted(signal);
     return { p: client.audio.transcriptions.create(request, requestOptions) };
   };
   const handle = call.dispatch ? await call.dispatch(startRequest) : await startRequest();
