@@ -172,3 +172,43 @@ regenerating `.env` on the host + updating the Replit Secret.
   sessions destroyed on TTL (10 min) or `DELETE`.
 - The host's own SSH hardening (key-only auth, fail2ban, unattended-upgrades)
   is documented in `scripts/server-setup.sh` and applied during deploy.
+
+
+## Conversation package installation
+
+Additional approved Python wheels are installed by a separate temporary installer;
+the execution sandbox keeps its network disabled. Before each installation the
+runner reads the conversation's real distribution metadata using isolated Python
+(`-I -s`), without executing workspace `.pth` or startup hooks. Both the image's
+versions and the conversation's existing versions are preserved. Conflicting
+requirements fail before changing the active package tree. Distinct constraints
+and extras in a request are all passed to pip.
+
+The installer rebuilds the complete conversation package set in a candidate
+directory. Activation uses an atomic directory exchange (`renameat2` on Linux;
+`renamex_np` for macOS development), guarded by a workspace file lock and a
+revision check. Unsupported filesystems fail without a partial copy. This also
+handles older workspaces that already contain a real `.sira-packages` directory.
+The current archive/timeout limits apply to the **complete** candidate, not just
+the latest addition. Rebuilding may download existing wheels again; if their
+pinned versions are no longer available, the prior environment is preserved.
+
+A concurrent change returns `environment_changed`; inspect the needed import
+before trying again. An unreadable inventory returns `environment_invalid`.
+If activation loses its response, a transaction marker confirms success when
+possible. Otherwise `commit_unknown` is returned, and the candidate is retained
+for inspection: do not automatically retry or claim rollback. Ordinary failures
+and confirmed successes clean their staging directories. No image packages,
+allowlist, network policy, credentials or environment configuration are changed
+by this mechanism.
+
+Regression coverage (Python with pip >= 23 required):
+
+```sh
+node --test backend/tests/sandbox-package-policy.test.js backend/tests/sandbox-pip-installer.test.js backend/tests/sandbox-package-transactions.test.js backend/tests/agent-runner-install-sandbox-package.test.js
+```
+
+The transaction suite serves synthetic wheels on a test-only loopback index and
+uses the real pip resolver and filesystem. It verifies accumulation, conflicts,
+cancellation, concurrent activation, lost responses and startup-hook isolation;
+it does not download third-party packages or access production data.

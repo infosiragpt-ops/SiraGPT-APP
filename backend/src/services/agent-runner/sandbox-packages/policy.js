@@ -257,8 +257,11 @@ function validateRequest(rawList, policy) {
       rejected.push({ raw: String(raw == null ? '' : raw).slice(0, 120), reason: 'invalid_spec' });
       continue;
     }
-    if (seen.has(parsed.name)) continue;
-    seen.add(parsed.name);
+    // Repeated names may carry additional version bounds or extras. Keep
+    // every distinct requirement so pip can resolve them together (including
+    // reporting conflicts), instead of silently accepting the first one.
+    if (seen.has(parsed.spec)) continue;
+    seen.add(parsed.spec);
     if (!isAllowed(parsed.name, policy)) {
       rejected.push({ raw: parsed.raw, name: parsed.name, reason: 'not_allowed' });
       continue;

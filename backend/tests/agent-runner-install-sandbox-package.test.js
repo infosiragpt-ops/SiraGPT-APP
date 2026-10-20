@@ -112,6 +112,11 @@ test('install failures are explained honestly per code and unapproved resolved d
     [{ code: 'too_large' }, /exceed the \d+ MB sandbox cap/],
     [{ code: 'aborted' }, /cancelled/],
     [{ code: 'disk' }, /no space left/],
+    [{ code: 'conflict' }, /already installed in this conversation; their versions are preserved/],
+    [{ code: 'commit_failed' }, /previous environment was preserved/],
+    [{ code: 'environment_invalid' }, /existing package environment could not be verified/],
+    [{ code: 'environment_changed' }, /another installation changed the environment/],
+    [{ code: 'commit_unknown' }, /result is unknown: do not claim success/],
     [{ code: 'extract_failed', detail: 'tar: broken' }, /install failed \(extract_failed\): tar: broken/],
   ];
   for (const [result, expected] of cases) {
@@ -202,8 +207,8 @@ test('wrong submodules, SiraGPT helpers and bash tracebacks are classified befor
 
 test('conflicts with the image and a failed commit are explained without inviting a retry loop', async () => {
   for (const [code, re] of [
-    ['conflict', /conflicts with the libraries built into the sandbox image/],
-    ['commit_failed', /could not be written into the workspace/],
+    ['conflict', /conflicts with libraries in the sandbox image or already installed in this conversation/],
+    ['commit_failed', /could not be activated; the previous environment was preserved/],
   ]) {
     const sandbox = fakeSandbox({ installResult: { ok: false, code, installed: [], notAllowed: [], notFound: [], bytes: 0, durationMs: 1, detail: '' } });
     const ex = tools.makeToolExecutors(sandbox, { capability: { policy: ON } });

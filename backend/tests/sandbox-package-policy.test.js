@@ -98,9 +98,9 @@ test('the default allowlist covers the document / data stack with its transitive
   for (const name of allow) assert.equal(name, policy.normalizePackageName(name), `allowlist entries are normalised: ${name}`);
 });
 
-test('validateRequest refuses the whole call on any invalid or unapproved entry and dedupes by name', () => {
+test('validateRequest refuses the whole call on any invalid or unapproved entry', () => {
   const pol = policy.resolvePolicy({ NODE_ENV: 'production', SIRAGPT_SANDBOX_PIP_MAX_PACKAGES: '3' });
-  const ok = policy.validateRequest(['NumPy', 'numpy==2.1', 'seaborn'], pol);
+  const ok = policy.validateRequest(['NumPy', 'numpy', 'seaborn'], pol);
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.requirements.map((r) => r.spec), ['numpy', 'seaborn']);
   const mixed = policy.validateRequest(['numpy', 'git+https://x', 'torch'], pol);
@@ -117,4 +117,32 @@ test('validateRequest refuses the whole call on any invalid or unapproved entry 
   assert.equal(policy.isAllowed('Scikit_Learn', pol), true);
   const json = JSON.parse(policy.allowlistJson(pol));
   assert.ok(Array.isArray(json) && json.includes('numpy') && json.every((n) => /^[a-z0-9][a-z0-9-]*$/.test(n)));
+});
+
+
+test('validateRequest preserves distinct restrictions and extras for the package resolver', () => {
+  const pol = policy.resolvePolicy({ NODE_ENV: 'production' });
+  const cases = [
+    { input: ['seaborn>=0.13', 'seaborn<0.13'], expected: ['seaborn>=0.13', 'seaborn<0.13'] },
+    { input: ['numpy==2', 'NumPy==1'], expected: ['numpy==2', 'numpy==1'] },
+    { input: ['pydantic', 'pydantic[email]'], expected: ['pydantic', 'pydantic[email]'] },
+    { input: ['numpy>=1.24', 'numpy<3'], expected: ['numpy>=1.24', 'numpy<3'] },
+  ];
+  for (const { input, expected } of cases) {
+    const result = policy.validateRequest(input, pol);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.requirements.map((r) => r.spec), expected);
+    assert.deepEqual(result.rejected, []);
+  }
+});
+
+test('validateRequest dedupes only identical normalized specs and keeps the request bounded', () => {
+  const pol = policy.resolvePolicy({ NODE_ENV: 'production', SIRAGPT_SANDBOX_PIP_MAX_PACKAGES: '2' });
+  const duplicate = policy.validateRequest(['Python_Docx >= 1.1', 'python-docx>=1.1', 'Python.Docx >=1.1', 'pydantic[EMAIL]', 'Pydantic[email]'], pol);
+  assert.equal(duplicate.ok, true);
+  assert.deepEqual(duplicate.requirements.map((r) => r.spec), ['python-docx>=1.1', 'pydantic[email]']);
+  const distinct = policy.validateRequest(['numpy>=1', 'numpy<3', 'numpy!=2'], pol);
+  assert.equal(distinct.ok, false);
+  assert.deepEqual(distinct.requirements.map((r) => r.spec), ['numpy>=1', 'numpy<3', 'numpy!=2']);
+  assert.deepEqual(distinct.rejected, [{ raw: '', reason: 'too_many', limit: 2 }]);
 });

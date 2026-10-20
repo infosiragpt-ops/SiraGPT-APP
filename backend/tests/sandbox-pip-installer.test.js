@@ -10,15 +10,22 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 
 const pip = require('../src/services/doc-agent/sandbox-pip');
 const sandboxModule = require('../src/services/doc-agent/sandbox');
 const { createRemoteSandbox } = require('../src/services/doc-agent/remote-sandbox');
-const { writeFakePython3 } = require('./helpers/fake-pip-python');
+const { writeFakePython3, realPython3 } = require('./helpers/fake-pip-python');
 const { writeFakeDocker } = require('./helpers/fake-docker');
 
 const REPO = path.join(__dirname, '..', '..');
+const USER_SITE_REL = execFileSync(realPython3(), ['-I', '-s', '-c',
+  'import os, site; print(os.path.relpath(site._get_path("/sira-packages"), "/sira-packages"))',
+], { encoding: 'utf8' }).trim();
+
+function packageFile(root, ...parts) {
+  return path.join(root, '.sira-packages', USER_SITE_REL, ...parts);
+}
 
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -35,8 +42,12 @@ function fakeSpawn(binDir, extra = {}) {
 test('the install script: pip --user --only-binary, output on stderr, allowlist validation of the report, tar on stdout', () => {
   const script = pip.buildInstallScript({ requirements: ['seaborn==0.13.2', 'numpy'], indexUrl: 'https://devpi.local/simple/' });
   assert.match(script, /python3 -m pip install --user --only-binary=:all: --no-cache-dir --no-warn-script-location --timeout 60 --retries 2 --index-url 'https:\/\/devpi\.local\/simple\/' -c "\$BASE\/constraints\.txt" --report "\$BASE\/report\.json" -- 'seaborn==0\.13\.2' 'numpy' 1>&2/);
-  // The image's distributions are frozen as constraints (PEP 440 lines only).
-  assert.match(script, /PYTHONNOUSERSITE=1 python3 -m pip list --format=freeze 2>\/dev\/null \| grep -E '[^']+' > "\$BASE\/constraints\.txt" \|\| : > "\$BASE\/constraints\.txt"/);
+  // Freeze the actual image inventory without activating the user site;
+  // distribution-specific versions must not be silently dropped.
+  assert.match(script, /python3 -I -s - "\$BASE\/constraints\.txt"/);
+  assert.match(script, /for dist in metadata\.distributions\(\):/);
+  assert.match(script, /name \+ "===" \+ version/);
+  assert.doesNotMatch(script, /pip list|\|\| : > .*constraints/);
   // The validator never loads the freshly installed user site.
   assert.match(script, /PYTHONNOUSERSITE=1 python3 -I -s - "\$BASE" 1>&2 <<'PY'/);
   assert.match(script, /SIRA_PIP_ALLOW/);
@@ -49,6 +60,41 @@ test('the install script: pip --user --only-binary, output on stderr, allowlist 
   }
   assert.throws(() => pip.buildInstallScript({ requirements: ['numpy'], indexUrl: 'ftp://x' }), /unsafe index url/);
   assert.throws(() => pip.buildInstallScript({ requirements: ['numpy'], base: '/tmp/x; id' }), /unsafe base dir/);
+});
+
+test('base constraints preserve the effective sys.path precedence of duplicate distribution metadata', (t) => {
+  const root = tmpDir('sira-base-precedence-');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const localSite = path.join(root, 'local-site');
+  const distroSite = path.join(root, 'distro-site');
+  const fixtures = [
+    { site: localSite, name: 'Sira_Precedence_Fixture', version: '2.4.0' },
+    { site: distroSite, name: 'sira-precedence-fixture', version: '1.0ubuntu1' },
+  ];
+  for (const fixture of fixtures) {
+    const metadata = path.join(fixture.site, `sira_precedence_fixture-${fixture.version}.dist-info`);
+    fs.mkdirSync(metadata, { recursive: true });
+    fs.writeFileSync(path.join(metadata, 'METADATA'), [
+      'Metadata-Version: 2.1', `Name: ${fixture.name}`, `Version: ${fixture.version}`, '',
+    ].join('\n'));
+    // Inspecting metadata must not import any of the installed packages.
+    fs.writeFileSync(path.join(fixture.site, 'sira_precedence_fixture.py'), 'raise RuntimeError("package code must not run during inventory")\n');
+  }
+  const script = pip.buildInstallScript({ requirements: ['seaborn'] });
+  const block = script.match(/python3 -I -s - "\$BASE\/constraints\.txt" <<'PY'\n([\s\S]*?)\nPY/);
+  assert.ok(block, 'the isolated inventory script is present');
+  for (const [first, second] of [[fixtures[0], fixtures[1]], [fixtures[1], fixtures[0]]]) {
+    const output = path.join(root, `constraints-${first.version}.txt`);
+    // Execute the actual emitted script with real importlib.metadata. This
+    // models /usr/local taking precedence over distro packages, then reverses
+    // it to prove that path precedence, not version sorting, selects the pin.
+    execFileSync(realPython3(), ['-I', '-s', '-', output, first.site, second.site], {
+      input: `import sys\nsys.path[0:0] = [sys.argv[2], sys.argv[3]]\n${block[1]}\n`,
+      encoding: 'utf8',
+    });
+    const pins = fs.readFileSync(output, 'utf8').split('\n').filter((line) => line.startsWith('sira-precedence-fixture==='));
+    assert.deepEqual(pins, [`sira-precedence-fixture===${first.version}`]);
+  }
 });
 
 test('the installer container mirrors the sandbox hardening, gets a network and NEVER the workspace', () => {
@@ -111,36 +157,52 @@ test('local driver: an approved install lands in <root>/.sira-packages and every
   const bin = tmpDir('sira-fakebin-');
   writeFakePython3(bin);
   const root = tmpDir('sira-ws-');
-  const tmpBefore = new Set(fs.readdirSync(os.tmpdir()));
-  const run = (requirements, allow, extra = {}, more = {}) => pip.runSandboxInstall({
-    kind: 'local', root, requirements, allowJson: JSON.stringify(allow), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
-    spawnImpl: fakeSpawn(bin, extra), ...more,
-  });
+  const run = async (requirements, allow, extra = {}, more = {}) => {
+    const installerBases = [];
+    const innerSpawn = fakeSpawn(bin, extra);
+    const result = await pip.runSandboxInstall({
+      kind: 'local', root, requirements, allowJson: JSON.stringify(allow), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
+      ...more,
+      spawnImpl: (cmd, args, opts) => {
+        if (cmd === 'bash' && args[0] === '-c') {
+          const base = String(args[1]).match(/^BASE='([^'\n]+)'$/m);
+          if (base) installerBases.push(base[1]);
+        }
+        return innerSpawn(cmd, args, opts);
+      },
+    });
+    assert.equal(installerBases.length, 1, 'this attempt starts one installer');
+    for (const base of installerBases) {
+      assert.equal(fs.existsSync(base), false, `this attempt cleans its installer base after ${result.code}`);
+    }
+    return result;
+  };
   const ok = await run(['seaborn==0.13.2'], ['seaborn', 'numpy']);
   assert.equal(ok.ok, true);
   assert.equal(ok.code, 'ok');
-  assert.deepEqual(ok.installed, [{ name: 'seaborn', version: '1.2.3' }]);
+  assert.deepEqual(ok.installed, [{ name: 'seaborn', version: '0.13.2' }]);
   assert.ok(ok.bytes > 0);
-  assert.ok(fs.existsSync(path.join(root, '.sira-packages/lib/python3.12/site-packages/seaborn/__init__.py')));
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.sira-packages/.sira/installed.json'), 'utf8')), { installed: [{ name: 'seaborn', version: '1.2.3' }] });
-  const notAllowed = await run(['numpy'], ['numpy'], { FAKE_PIP_DEP: 'torch' });
+  assert.ok(fs.existsSync(packageFile(root, 'seaborn', '__init__.py')));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, '.sira-packages/.sira/installed.json'), 'utf8')), { installed: [{ name: 'seaborn', version: '0.13.2' }] });
+  const notAllowed = await run(['numpy'], ['numpy', 'seaborn'], { FAKE_PIP_DEP: 'torch' });
   assert.equal(notAllowed.code, 'not_allowed');
   assert.deepEqual(notAllowed.notAllowed, ['torch']);
-  assert.ok(!fs.existsSync(path.join(root, '.sira-packages/lib/python3.12/site-packages/numpy')), 'one unapproved dependency refuses the whole batch');
-  assert.equal((await run(['foo==9'], ['foo'], { FAKE_PIP_FAIL: 'notfound' })).code, 'not_found');
-  assert.equal((await run(['foo'], ['foo'], { FAKE_PIP_FAIL: 'network' })).code, 'network');
-  assert.equal((await run(['bigpkg'], ['bigpkg'], { FAKE_PIP_BYTES: String(30 * 1024 * 1024) }, { maxBytes: 10 * 1024 * 1024 })).code, 'too_large');
-  assert.equal((await run(['slowpkg'], ['slowpkg'], { FAKE_PIP_SLEEP: '5' }, { timeoutMs: 800 })).code, 'timeout');
-  const second = await run(['numpy'], ['numpy']);
+  assert.ok(!fs.existsSync(packageFile(root, 'numpy')), 'one unapproved dependency refuses the whole batch');
+  assert.equal((await run(['foo==9'], ['foo', 'seaborn'], { FAKE_PIP_FAIL: 'notfound' })).code, 'not_found');
+  assert.equal((await run(['foo'], ['foo', 'seaborn'], { FAKE_PIP_FAIL: 'network' })).code, 'network');
+  assert.equal((await run(['bigpkg'], ['bigpkg', 'seaborn'], { FAKE_PIP_BYTES: String(30 * 1024 * 1024) }, { maxBytes: 10 * 1024 * 1024 })).code, 'too_large');
+  assert.equal((await run(['slowpkg'], ['slowpkg', 'seaborn'], { FAKE_PIP_SLEEP: '5' }, { timeoutMs: 800 })).code, 'timeout');
+  const second = await run(['numpy'], ['numpy', 'seaborn']);
   assert.equal(second.code, 'ok');
-  for (const name of ['seaborn', 'numpy']) assert.ok(fs.existsSync(path.join(root, `.sira-packages/lib/python3.12/site-packages/${name}/__init__.py`)), `${name} survives the next install`);
+  assert.ok(second.installed.some((item) => item.name === 'seaborn' && item.version === '0.13.2'), 'the real inventory carries forward the earlier pinned version');
+  assert.match(fs.readFileSync(packageFile(root, 'seaborn', '__init__.py'), 'utf8'), /0\.13\.2/);
+  for (const name of ['seaborn', 'numpy']) assert.ok(fs.existsSync(packageFile(root, name, '__init__.py')), `${name} survives the next install`);
   assert.deepEqual(fs.readdirSync(root).filter((n) => n.includes('staging')), [], 'no staging dir survives');
-  assert.deepEqual(fs.readdirSync(os.tmpdir()).filter((n) => !tmpBefore.has(n) && n.startsWith('sira-pip-') && fs.existsSync(path.join(os.tmpdir(), n, 'report.json'))), [], 'installer bases this test created are cleaned');
   assert.equal((await pip.runSandboxInstall({ kind: 'local', root, requirements: ['git+https://x'] })).code, 'invalid_request');
   assert.equal((await pip.runSandboxInstall({ kind: 'nope', requirements: ['numpy'] })).code, 'invalid_request');
 });
 
-test('docker driver: installer `docker run` streams into `docker exec -i tar`, staging is committed with cp -a and the sandbox never gets a network', async () => {
+test('docker driver: installer streams into staging and activates atomically without giving the sandbox a network', async () => {
   const bin = tmpDir('sira-fakebin-');
   writeFakePython3(bin);
   writeFakeDocker(bin);
@@ -156,21 +218,29 @@ test('docker driver: installer `docker run` streams into `docker exec -i tar`, s
     network: 'bridge', timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024, spawnImpl, runCommand,
   });
   assert.equal(result.code, 'ok', result.detail);
-  assert.ok(fs.existsSync(path.join(root, '.sira-packages/lib/python3.12/site-packages/seaborn/__init__.py')));
+  assert.ok(fs.existsSync(packageFile(root, 'seaborn', '__init__.py')));
   const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
-  assert.match(lines[0], /^docker run --rm --name sira-pip-[0-9a-f]+ --runtime runsc --network bridge --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs \/tmp:rw,exec,size=1g -e HOME=\/tmp -e TMPDIR=\/tmp -e SIRA_PIP_ALLOW=\["seaborn"\] siragpt-doc-sandbox:latest bash -c /);
-  assert.match(lines[1], /^docker exec -i sira-doc-abc sh -c rm -rf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+' && mkdir -p .* && tar -xf - -C /);
-  // Hard-link merge (no second copy of the payload), plain copy as fallback.
-  assert.match(lines[2], /^docker exec sira-doc-abc sh -c mkdir -p '\/workspace\/\.sira-packages' && \{ cp -alf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+'\/\. '\/workspace\/\.sira-packages'\/ 2>\/dev\/null \|\| cp -af .*; \} && rm -rf /);
-  assert.equal(lines.length, 3, 'no rollback and no rm on success');
+  assert.match(lines[0], /^docker exec sira-doc-abc sh -c python3 -I -s - '\/workspace\/\.sira-packages'/);
+  assert.match(lines[0], /metadata\.distributions\(path=\[site\.getusersitepackages\(\)\]\)/, 'read actual installed metadata before resolving');
+  // Producer and consumer start concurrently; their log order is not fixed.
+  const producer = lines.find((line) => line.startsWith('docker run '));
+  const extractor = lines.find((line) => line.startsWith('docker exec -i '));
+  const activation = lines.find((line) => line.includes('libc.renameat2'));
+  assert.match(producer, /^docker run --rm --name sira-pip-[0-9a-f]+ --runtime runsc --network bridge --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs \/tmp:rw,exec,size=1g -e HOME=\/tmp -e TMPDIR=\/tmp -e SIRA_PIP_ALLOW=\["seaborn"\] siragpt-doc-sandbox:latest bash -c /);
+  assert.match(extractor, /^docker exec -i sira-doc-abc sh -c rm -rf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+' && mkdir -p .* && tar -xf - -C /);
+  assert.match(activation, /^docker exec sira-doc-abc sh -c python3 -I -s - '\/workspace\/\.sira-packages\.staging-[0-9a-f]+' '\/workspace\/\.sira-packages' 'null'/);
+  assert.doesNotMatch(activation, /cp -a/, 'never partially copy files over the active environment');
+  assert.ok(lines.indexOf(activation) > lines.indexOf(producer) && lines.indexOf(activation) > lines.indexOf(extractor));
+  assert.ok(lines.some((line) => /^docker rm -f sira-pip-/.test(line)), 'installer is cleaned after success too');
+  assert.equal(lines.length, 6, 'inventory, producer, extractor, activation and both cleanups');
   // A refused batch: rollback of the staging dir + rm -f of the installer.
   const refused = await pip.runSandboxInstall({
     kind: 'docker', containerName: 'sira-doc-abc', image: 'siragpt-doc-sandbox:latest', runtime: null,
-    requirements: ['numpy'], allowJson: JSON.stringify(['numpy']), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
+    requirements: ['numpy'], allowJson: JSON.stringify(['numpy', 'seaborn']), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
     spawnImpl: fakeSpawn(bin, { ...env, FAKE_PIP_DEP: 'torch' }), runCommand,
   });
   assert.equal(refused.code, 'not_allowed');
-  const after = fs.readFileSync(log, 'utf8').trim().split('\n').slice(3);
+  const after = fs.readFileSync(log, 'utf8').trim().split('\n').slice(lines.length);
   assert.ok(after.some((l) => /^docker exec sira-doc-abc sh -c rm -rf '\/workspace\/\.sira-packages\.staging-/.test(l)), 'staging rolled back');
   assert.ok(after.some((l) => /^docker rm -f sira-pip-/.test(l)), 'installer removed');
   assert.deepEqual(fs.readdirSync(root).filter((n) => n.includes('staging')), []);
@@ -248,8 +318,7 @@ test('a hostile wheel cannot forge the allowlist check: the validator never load
   assert.equal(r.code, 'not_allowed', r.detail);
   assert.deepEqual(r.notAllowed, ['torch']);
   assert.ok(!fs.existsSync(path.join(root, '.sira-packages')), 'nothing reached the workspace');
-  // pip ran with the image frozen as constraints, and the filter dropped the
-  // non-PEP 440 distro version the fake image lists.
+  // pip ran with the real interpreter inventory frozen as constraints.
   assert.match(fs.readFileSync(argsLog, 'utf8'), / -c \S+constraints\.txt /);
 });
 
@@ -321,11 +390,11 @@ test('a failed install keeps its own verdict when tar closes before the installe
     kind: 'local', root, requirements, allowJson: JSON.stringify(allow), timeoutMs: 30_000, maxBytes: 50 * 1024 * 1024,
     spawnImpl: lateProducerClose(extra),
   });
-  const notAllowed = await run(['numpy'], ['numpy'], { FAKE_PIP_DEP: 'torch' });
+  const notAllowed = await run(['numpy'], ['numpy', 'seaborn'], { FAKE_PIP_DEP: 'torch' });
   assert.equal(notAllowed.code, 'not_allowed');
   assert.deepEqual(notAllowed.notAllowed, ['torch']);
-  assert.equal((await run(['foo==9'], ['foo'], { FAKE_PIP_FAIL: 'notfound' })).code, 'not_found');
-  assert.equal((await run(['foo'], ['foo'], { FAKE_PIP_FAIL: 'network' })).code, 'network');
+  assert.equal((await run(['foo==9'], ['foo', 'seaborn'], { FAKE_PIP_FAIL: 'notfound' })).code, 'not_found');
+  assert.equal((await run(['foo'], ['foo', 'seaborn'], { FAKE_PIP_FAIL: 'network' })).code, 'network');
   assert.equal((await run(['seaborn'], ['seaborn'], {})).code, 'ok', 'a successful install is unaffected by the late close');
   assert.deepEqual(fs.readdirSync(root).filter((n) => n.includes('staging')), [], 'no staging dir survives');
 });
