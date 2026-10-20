@@ -7,6 +7,9 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import unquote, urlparse
 
 from lxml import etree
 
@@ -350,8 +353,117 @@ class TestPptx(Base):
             self.assertIsNotNone(r.find(so.A("t")))
 
 # ─────────────────────── RENDER Y VERIFICACIÓN ───────────────────────
+class TestSofficeFreshness(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="sira conversión ")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.src = self.root / "resultado.docx"
+        shutil.copy(Path(HERE).parent / "fixtures" / "office" / "tesis_demo.docx", self.src)
+        self.outdir = self.root / "preview"
+        self.outdir.mkdir()
+        self.output = self.outdir / "resultado.pdf"
+        self.previous = b"previous successful conversion"
+        self.output.write_bytes(self.previous)
+
+    def _output_for(self, cmd):
+        return Path(cmd[cmd.index("--outdir") + 1]) / "resultado.pdf"
+
+    def _assert_failed(self, effect):
+        with patch.object(so.shutil, "which", return_value="/test/soffice"), \
+                patch.object(so.subprocess, "run", side_effect=effect):
+            with self.assertRaises(so.EditError):
+                so.soffice_convert(str(self.src), str(self.outdir))
+        self.assertEqual(self.output.read_bytes(), self.previous)
+        self.assertEqual(sorted(p.name for p in self.outdir.iterdir()), [self.output.name])
+
+    def test_failed_conversion_cannot_publish_even_a_new_output(self):
+        def fail(cmd, **kwargs):
+            self._output_for(cmd).write_bytes(b"incomplete replacement")
+            return subprocess.CompletedProcess(cmd, 1, "", "conversion failed")
+        self._assert_failed(fail)
+
+    def test_success_exit_without_output_cannot_reuse_previous_pdf(self):
+        self._assert_failed(lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
+
+    def test_timeout_preserves_previous_pdf_and_removes_partial_attempt(self):
+        def timeout(cmd, **kwargs):
+            self._output_for(cmd).write_bytes(b"partial conversion")
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        self._assert_failed(timeout)
+
+    def test_invalid_output_is_not_published(self):
+        for kind in ("empty", "directory", "symlink"):
+            with self.subTest(kind=kind):
+                if self.output.is_dir():
+                    self.output.rmdir()
+                elif self.output.exists() or self.output.is_symlink():
+                    self.output.unlink()
+                self.output.write_bytes(self.previous)
+                def invalid(cmd, **kwargs):
+                    generated = self._output_for(cmd)
+                    if generated.exists():
+                        generated.unlink()
+                    if kind == "directory":
+                        generated.mkdir()
+                    elif kind == "symlink":
+                        generated.symlink_to(self.src)
+                    else:
+                        generated.write_bytes(b"")
+                    return subprocess.CompletedProcess(cmd, 0, "", "")
+                self._assert_failed(invalid)
+
+    def test_success_publishes_fresh_output_with_isolated_recalc_profiles(self):
+        attempts, profiles = [], []
+        def convert(cmd, **kwargs):
+            generated = self._output_for(cmd)
+            attempts.append(generated.parent)
+            profile_url = next(arg.split("=", 1)[1] for arg in cmd if arg.startswith("-env:UserInstallation="))
+            self.assertNotIn(" ", profile_url)
+            self.assertNotIn("ó", profile_url)
+            profile = Path(unquote(urlparse(profile_url).path))
+            profiles.append(profile)
+            self.assertIn('name="OOXMLRecalcMode"', (profile / "user" / "registrymodifications.xcu").read_text())
+            generated.write_bytes(b"conversion " + str(len(attempts)).encode())
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        with patch.object(so.shutil, "which", return_value="/test/soffice"), \
+                patch.object(so.subprocess, "run", side_effect=convert):
+            for n in (1, 2):
+                self.assertEqual(so.soffice_convert(str(self.src), str(self.outdir)), str(self.output))
+                self.assertEqual(self.output.read_bytes(), b"conversion " + str(n).encode())
+        self.assertEqual(len(set(attempts)), 2)
+        self.assertEqual(len(set(profiles)), 2)
+        self.assertTrue(all(not p.exists() for p in attempts + profiles))
+        self.assertEqual(sorted(p.name for p in self.outdir.iterdir()), [self.output.name])
+
+    def test_verify_cannot_validate_previous_pdf_after_failed_conversion(self):
+        after_dir = self.outdir / "after"
+        after_dir.mkdir()
+        (after_dir / self.output.name).write_bytes(self.previous)
+        with patch.object(so.shutil, "which", return_value="/test/soffice"), \
+                patch.object(so.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                patch.object(so, "pdf_page_count", side_effect=AssertionError("stale PDF reached verifier")) as pages:
+            with self.assertRaises(so.EditError):
+                so.verify(None, str(self.src), str(self.outdir), expect={"contains": ["previous"]})
+        pages.assert_not_called()
+        self.assertEqual((after_dir / self.output.name).read_bytes(), self.previous)
+
+
 @unittest.skipUnless(HAS_LO, "LibreOffice/poppler no disponibles")
 class TestVerify(Base):
+    def test_repeated_conversion_contains_the_latest_real_edit(self):
+        from pypdf import PdfReader
+        dst = self.out("repeated.docx")
+        outdir = self.out("repeated-preview")
+        for year, previous in (("2025", "2024"), ("2026", "2025")):
+            result = so.edit(self.docx, dst, [{"op": "replace_text", "find": "2024", "replace": year, "paragraph": 8}])
+            self.assertTrue(result["ok"], result)
+            pdf = so.soffice_convert(dst, outdir)
+            text = PdfReader(pdf).pages[0].extract_text()
+            self.assertIn("Lima, " + year, text)
+            self.assertNotIn("Lima, " + previous, text)
+        self.assertIn("Lima, 2024", so.docx_para_text(so.docx_paragraphs(so.OfficePackage(self.docx))[8]))
+
     def test_render_all_pages(self):
         res = so.render(self.docx, self.out("render"), dpi=80)
         self.assertGreaterEqual(res["page_count"], 2)
