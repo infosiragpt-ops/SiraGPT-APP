@@ -254,6 +254,12 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/openwebui
       PORT: 5000
       NODE_ENV: production
+      # NODE_ENV=production would route the chat's model-authored code
+      # (python_exec / bash_exec / create_document) to the gVisor document
+      # sandbox, which CI runners do not have. The isolated path is covered by
+      # isolated-code-runner / task-tools-isolated-exec (fakes + real local
+      # driver) and proven per release by verify-agent-sandbox-runtime.cjs.
+      SIRAGPT_CODE_SANDBOX: host
       REDIS_URL: redis://localhost:6379
       AGENT_QUEUE_NAME: siragpt-agent-tasks-ci
       AGENT_WORKER_CONCURRENCY: 1
