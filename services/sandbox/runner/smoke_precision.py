@@ -354,6 +354,11 @@ def encrypted_office(root):
     return {"checks": checks, "artifacts": artifacts}
 
 
+# Import only the registry; optional libraries load inside each proof.
+from smoke_document_toolkit import register_proofs
+register_proofs(proof)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('directory', nargs='?')

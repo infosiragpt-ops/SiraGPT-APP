@@ -123,7 +123,7 @@ test('functional coverage rejects missing, unknown and duplicate proof ids', () 
 
 test('the Dockerfile installs from the catalog and refuses an image that breaks it', () => {
   const dockerfile = read(RUNNER, 'Dockerfile');
-  for (const file of ['capabilities.json', 'verify_env.py', 'smoke_formats.py', 'smoke_precision.py']) {
+  for (const file of ['capabilities.json', 'verify_env.py', 'smoke_formats.py', 'smoke_precision.py', 'smoke_document_toolkit.py']) {
     assert.match(dockerfile, new RegExp(`^COPY[^\\n]*\\b${file.replace(/\./g, '\\.')}[^\\n]*/opt/sira/\\s*$`, 'm'), `${file} must ship in the real image`);
   }
   assert.match(dockerfile, /pip3 install --no-cache-dir --only-binary=:all: --no-binary=odfpy -r \/tmp\/requirements\.txt/);

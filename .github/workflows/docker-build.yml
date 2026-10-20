@@ -131,6 +131,20 @@ jobs:
           set -euo pipefail
           proof_dir="$RUNNER_TEMP/sandbox-precision-proof"
           mkdir -p "$proof_dir"
+          # Exercise the exact startup contract against the actual image, not
+          # mocked metadata or the CI host's Python environment.
+          node - <<'JS' > "$proof_dir/runtime-probe.py"
+          process.stdout.write(require('./backend/src/services/agent-runner/runtime-verification').buildRuntimeProbe());
+          JS
+          docker run --rm -i --network none --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --user 10001:10001 --memory 1g --cpus 1 --pids-limit 256 \
+            --entrypoint /usr/bin/python3 siragpt-doc-sandbox:ci -I -s - \
+            < "$proof_dir/runtime-probe.py" > "$proof_dir/runtime-contract.txt"
+          node - "$proof_dir/runtime-contract.txt" <<'JS'
+          const fs = require('node:fs');
+          const { parseRuntimeReport } = require('./backend/src/services/agent-runner/runtime-verification');
+          console.log(JSON.stringify(parseRuntimeReport({ exitCode: 0, stdout: fs.readFileSync(process.argv[2], 'utf8') })));
+          JS
           docker image inspect siragpt-doc-sandbox:ci \
             --format 'image_id={{.Id}} os={{.Os}} arch={{.Architecture}}' \
             | tee "$proof_dir/image.txt"

@@ -202,3 +202,35 @@ python3 /opt/sira/smoke_precision.py /workspace/tmp/precision-proof
 Adding a library to this toolkit requires a functional proof, not just a
 successful import. Library count is not a multiplier of quality, and these
 checks do not guarantee every document or every Office feature is supported.
+
+
+### Document toolkit extension
+
+The runner catalog now advertises 77 explicit Python entries: the previous 60,
+sixteen additional document/data libraries and an explicit `packaging` pin that
+was previously transitive. Exact releases, artifact license fingerprints and
+operating limits are documented in
+[`runner/DOCUMENT_TOOLKIT_LIBRARIES.md`](runner/DOCUMENT_TOOLKIT_LIBRARIES.md).
+
+Eight proof groups in `smoke_document_toolkit.py` are registered by the existing
+`smoke_precision.py` entrypoint. The same offline, non-root build/CI gate checks
+real Word composition, structured edits, candidate matching, units, SVG,
+SVG/PNG/PDF charts, Parquet and visual fingerprints. Run the precision command
+above in the candidate image and retain `precision-report.json` plus the image
+identity before claiming release validation. These checks do not certify every
+file format or arbitrary document layout.
+
+Before preparing a remote/Docker document workspace, AgentRunner now compares
+`/opt/sira/capabilities.json` with the backend release and checks every declared
+Python distribution version. The probe runs once per workspace preparation,
+without importing document libraries or reading credentials. Pure text turns
+that never allocate a sandbox do not run it. Local development is explicitly
+unverified, not treated as proof of the production image.
+
+Release the matching runner image and backend together using the existing
+publish workflow, which rebuilds the runner before publishing the app. Old
+sessions must be recreated against that image when their release catalog no
+longer matches. An image mismatch stops document execution with an actionable
+update error; capacity, timeout and process failures remain distinct errors.
+CI exercises this same startup probe against the built Linux image in addition
+to the functional artifact checks.

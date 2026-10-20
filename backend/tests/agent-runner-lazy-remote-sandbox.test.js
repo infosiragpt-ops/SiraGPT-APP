@@ -10,6 +10,7 @@ const KEY = 'lazy-sandbox-test-key';
 process.env.SANDBOX_API_KEY = KEY;
 const { createSandbox } = require('../src/services/doc-agent/sandbox');
 const { runAgentRunner } = require('../src/services/agent-runner');
+const { EXPECTED, MARKER } = require('../src/services/agent-runner/runtime-verification');
 
 const originalFetch = globalThis.fetch;
 const originalUrl = process.env.SANDBOX_SERVICE_URL;
@@ -17,6 +18,9 @@ const originalWorkspaceDir = process.env.SIRAGPT_AGENT_WORKSPACE_DIR;
 const sessions = new Map();
 let created = 0;
 let workspaceDir;
+let probes = 0;
+let mismatch = false;
+let commandsAfterMismatch = 0;
 
 function scriptedClient(turns) {
   let index = 0;
@@ -55,7 +59,21 @@ before(async () => {
         await sandbox.destroy();
         sessions.delete(sessionId);
         payload = { ok: true };
-      } else if (route[3] === 'exec') payload = await sandbox.exec(body.command, { timeoutMs: body.timeoutMs });
+      } else if (route[3] === 'exec') {
+        if (body.command.includes('SIRA_RUNTIME_PROBE')) {
+          probes += 1;
+          // The transport fixture runs on a local host, not the release image.
+          // Actual metadata and version failures are covered by the real probe suite.
+          payload = { exitCode: mismatch ? 1 : 0, stdout: MARKER + JSON.stringify({
+            protocol: 1, ok: !mismatch, digest: mismatch ? '0'.repeat(64) : EXPECTED.digest,
+            checked: mismatch ? 0 : EXPECTED.packages, missing: 0, mismatched: 0,
+            reason: mismatch ? 'catalog_mismatch' : 'verified',
+          }) + '\n' };
+        } else {
+          if (mismatch) commandsAfterMismatch += 1;
+          payload = await sandbox.exec(body.command, { timeoutMs: body.timeoutMs });
+        }
+      }
       else if (route[3] === 'put') {
         payload = { path: await sandbox.putFile(body.path, Buffer.from(body.contentBase64, 'base64')) };
       } else if (route[3] === 'write') {
@@ -123,6 +141,7 @@ test('Stop before the first sandbox tool cancels without creating a session', as
 
 test('the first sandbox tool prepares one session and still returns its file', async () => {
   const beforeRun = created;
+  const beforeProbes = probes;
   const result = await runAgentRunner({
     files: [], instruction: 'crea un archivo de texto con la palabra listo',
     client: scriptedClient([
@@ -133,6 +152,7 @@ test('the first sandbox tool prepares one session and still returns its file', a
     driver: 'remote', maxIterations: 4, persistMemory: false,
   });
   assert.equal(created - beforeRun, 1, 'one turn must use one remote container');
+  assert.equal(probes - beforeProbes, 1, 'all tools share one preparation probe');
   assert.equal(result.stoppedReason, 'final', JSON.stringify(result));
   assert.equal(result.outputs.find((output) => output.name === 'listo.txt')?.buffer.toString(), 'listo');
 });
@@ -174,4 +194,36 @@ test('an attached source is staged before the first model call', async () => {
     requireFileOutput: false, persistMemory: false,
   });
   assert.equal(created - beforeRun, 1);
+});
+
+
+test('a mismatched image stops before archiving old outputs or running user code', async () => {
+  const chatId = 'runtime-contract-history';
+  const seed = await createSandbox({ driver: 'local', persistKey: chatId });
+  await seed.writeFile('outputs/keep.txt', 'untouched');
+  await seed.destroy();
+  const beforeProbes = probes;
+  const beforeCommands = commandsAfterMismatch;
+  mismatch = true;
+  try {
+    await assert.rejects(runAgentRunner({
+      files: [], chatId, instruction: 'crea un archivo de texto',
+      client: scriptedClient([
+        { tool: 'execute_bash', args: { command: 'echo changed > /workspace/outputs/keep.txt' } },
+        { tool: 'list_files', args: { path: 'outputs' } },
+        { text: 'No pude continuar.' },
+      ]),
+      driver: 'remote', requireFileOutput: false, persistMemory: false, maxIterations: 4,
+    }), (error) => error.code === 'sandbox_capabilities_mismatch' && error.reason === 'catalog_mismatch');
+  } finally {
+    mismatch = false;
+  }
+  assert.equal(probes - beforeProbes, 1, 'a failed preparation is not retried by subsequent tools');
+  assert.equal(commandsAfterMismatch - beforeCommands, 0);
+  const workspace = await createSandbox({ driver: 'local', persistKey: chatId });
+  try {
+    assert.equal((await workspace.readFile('outputs/keep.txt')).toString(), 'untouched');
+  } finally {
+    await workspace.destroy();
+  }
 });

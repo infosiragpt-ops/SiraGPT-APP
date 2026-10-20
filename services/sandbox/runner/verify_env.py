@@ -2,10 +2,11 @@
 """Fail the image build when capabilities.json promises something the image lacks.
 
 Runs at build time (Dockerfile) and again in CI. Every python[].import must
-import, every cli[].bin must be on PATH and every node[] module must resolve
+import and its installed distribution must satisfy python[].pip; every cli[].bin must be on PATH and every node[] module must resolve
 from the global npm root. Prints one line per failure and exits 1.
 """
 import importlib
+import importlib.metadata
 import json
 import os
 import shutil
@@ -19,7 +20,21 @@ def main() -> int:
     with open(CATALOG, encoding="utf-8") as handle:
         catalog = json.load(handle)
     failures = []
+    try:
+        from packaging.requirements import Requirement
+    except ImportError:
+        print("MISSING packaging: cannot verify installed Python versions", file=sys.stderr)
+        return 1
     for entry in catalog["python"]:
+        try:
+            requirement = Requirement(entry["pip"])
+            if requirement.url or requirement.marker or not requirement.specifier:
+                raise ValueError("unsupported requirement")
+            installed = importlib.metadata.version(requirement.name)
+            if not requirement.specifier.contains(installed):
+                failures.append(f"python version {requirement.name}={installed} outside {requirement.specifier}")
+        except Exception as exc:
+            failures.append(f"python version {entry['pip']}: {type(exc).__name__}")
         try:
             importlib.import_module(entry["import"])
         except Exception as exc:  # noqa: BLE001 - report every broken import

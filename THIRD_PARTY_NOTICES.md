@@ -270,3 +270,19 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   corrections to the existing native bridge, not newly copied Hermes code.
   They use SiraGPT's canonical authentication and job ownership contracts;
   no upstream credentials, authentication server or scheduler is activated.
+
+
+- **Document toolkit Python dependencies** — the document runner installs
+  pinned releases of docxcompose, docx2python, striprtf, jsonschema, jsonpatch,
+  jmespath, ijson, packaging, RapidFuzz, Pint, uncertainties, svgpathtools,
+  Altair, vl-convert-python, DuckDB, PyArrow and ImageHash. Original projects,
+  exact release links, licenses, installed license-file fingerprints and
+  bundled-notice requirements are recorded in
+  [`services/sandbox/runner/DOCUMENT_TOOLKIT_LIBRARIES.md`](services/sandbox/runner/DOCUMENT_TOOLKIT_LIBRARIES.md).
+  These are installed dependencies, not copied upstream source. Their original
+  copyright, LICENSE/COPYING and NOTICE files remain in the distributions;
+  PyArrow's bundled notices and packaging's two offered licenses are retained.
+  SiraGPT's `smoke_document_toolkit.py` contains native integration fixtures,
+  registered by the existing precision smoke runner. The catalog has 77
+  explicit entries, including the formerly transitive packaging pin; this does
+  not assert universal document-format support.

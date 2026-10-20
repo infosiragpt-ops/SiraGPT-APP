@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createSandbox } = require('../doc-agent/sandbox');
+const { verifySandboxRuntime } = require('./runtime-verification');
 const { createDocumentTurnQueue } = require('./document-turn-queue');
 const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
 const { parseModelSpec, keyFor, resolveDocAgentCandidates, createFailoverClient, defaultCreateClient } = require('../doc-agent/llm-runtime');
@@ -1432,6 +1433,7 @@ async function runAgentRunner({
     let previousOutputs = new Map();
     let sandboxPrepared = false;
     let sandboxPreparing = null;
+    let sandboxPreparationError = null;
     // Fail-open: without the engine the agent still edits with execute_python.
     // With the office tools on, a failed install is reported to the admin
     // turn-failure tracker (the user may end up without visual verification).
@@ -1442,6 +1444,7 @@ async function runAgentRunner({
         sandboxPreparing = (async () => {
           throwIfAborted(abortScope.signal);
           if (deferRemotePreparation) announceSandbox();
+          await verifySandboxRuntime(sandbox, { signal: abortScope.signal });
           await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
           previousOutputs = (await archivePreviousOutputs(sandbox)) ? new Map() : await fingerprintOutputs(sandbox);
           const officeHelpersPy = loadOfficeHelpersPy();
@@ -1466,7 +1469,10 @@ async function runAgentRunner({
             }
           }
           sandboxPrepared = true;
-        })();
+        })().catch((error) => {
+          sandboxPreparationError = error;
+          throw error;
+        });
       }
       return sandboxPreparing;
     };
@@ -1474,6 +1480,7 @@ async function runAgentRunner({
     const toolSandbox = deferRemotePreparation ? {
       ...sandbox,
       exec: async (...args) => { await prepareSandbox(); return sandbox.exec(...args); },
+      installPythonPackages: async (...args) => { await prepareSandbox(); return sandbox.installPythonPackages(...args); },
       putFile: async (...args) => { await prepareSandbox(); return sandbox.putFile(...args); },
       readFile: async (...args) => { await prepareSandbox(); return sandbox.readFile(...args); },
       writeFile: async (...args) => { await prepareSandbox(); return sandbox.writeFile(...args); },
@@ -1482,6 +1489,9 @@ async function runAgentRunner({
     } : sandbox;
     const collectTurnOutputs = async () => {
       throwIfAborted(abortScope.signal);
+      // A tool may have converted the preparation error into an observation.
+      // It must never become a successful turn or trigger output retries.
+      if (sandboxPreparationError) throw sandboxPreparationError;
       const collected = sandboxPrepared ? await collectValidOutputs(sandbox, onEvent, editContext) : [];
       throwIfAborted(abortScope.signal);
       return dropPreviousTurnOutputs(collected, previousOutputs, onEvent);
@@ -2119,6 +2129,8 @@ const AGENT_RUNNER_FAILURE_COPY = {
   // Transient infrastructure: the document sandbox was full / slow.
   sandbox_capacity: 'el entorno de documentos está ocupado; reintenta en un momento',
   sandbox_timeout: 'el entorno de documentos tardó demasiado en responder; reintenta en un momento',
+  sandbox_unavailable: 'no se pudo iniciar el entorno de documentos; reintenta en un momento',
+  sandbox_capabilities_mismatch: 'el entorno de documentos necesita actualizarse para ofrecer las capacidades de esta versión; contacta con soporte',
   // F4 — orchestrator-specific honest failures
   budget_exceeded: 'el agente superó el presupuesto de iteraciones/tokens asignado a la tarea y se detuvo para no seguir consumiendo recursos',
   plan_failed: 'el director del agente no pudo construir un plan válido para la tarea multi-paso',
@@ -2128,6 +2140,8 @@ const AGENT_RUNNER_FAILURE_COPY = {
 /** Transient sandbox failures get their own reason instead of `exception`. */
 function sandboxFailureReason(err) {
   if (!err) return null;
+  if (err.code === 'sandbox_capabilities_mismatch' || err.code === 'sandbox_unavailable') return err.code;
+  if (err.code === 'remote_sandbox_timeout') return 'sandbox_timeout';
   if (err.category === 'capacity' || err.code === 'sandbox_at_capacity' || /sandbox service 429|at_capacity/i.test(String(err.message || ''))) {
     return 'sandbox_capacity';
   }
