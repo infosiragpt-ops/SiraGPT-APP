@@ -1558,6 +1558,17 @@ router.post('/messages/:messageId/feedback', [
       // respuesta del asistente. Fire-and-forget, no bloquea la
       // respuesta del endpoint.
       if (feedback === 'disliked') {
+        // A 👎 with a reason («demasiado largo», «inventó datos») teaches the
+        // per-user preference store (services/learned-preferences).
+        if (reasons.reasonCode) {
+          setImmediate(() => {
+            try {
+              const learned = require('../services/learned-preferences');
+              const trait = learned.traitFromReason(reasons.reasonCode);
+              if (trait) learned.recordSignals({ prisma, userId: req.user.id, traits: [trait], source: 'dislike' }).catch(() => {});
+            } catch (_learnErr) { /* learning never affects feedback */ }
+          });
+        }
         setImmediate(() => {
           try {
             const __misSignals = require('../services/agents/misunderstanding-signals');

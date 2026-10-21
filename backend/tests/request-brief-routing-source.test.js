@@ -62,7 +62,9 @@ test('the agentic loop honours the brief in its own runner / editor claims and p
   assert.match(loop, /const briefTargetsGeneratedOffice = Boolean\(requestBrief && requestBrief\.target && requestBrief\.target\.kind === 'generated_artifact'/);
   assert.match(loop, /const runnerClaim = !codingWorkspace && !briefTargetsPreviousAnswer && \(shouldRunAgentRunner\(\{[\s\S]*?\}\) \|\| \(briefTargetsGeneratedOffice && prior && uploadedFileRefs\.length === 0\)\);/);
   assert.match(loop, /&& isDocumentEditRequest\(userQuery\)\s*\/\/[^\n]*\n\s*\/\/[^\n]*\n\s*&& !briefTargetsPreviousAnswer/);
-  assert.match(loop, /customGptPersona \|\| '',\s*requestBriefBlock \|\| '',\s*pluginPromptBlock,/);
+  // Persona, then the brief, then the user's own context (profile, custom
+  // instructions, learned preferences), then plugins and generic rules.
+  assert.match(loop, /customGptPersona \|\| '',\s*requestBriefBlock \|\| '',\s*userContextBlock\s*\?\s*`=== CONTEXTO DEL USUARIO[\s\S]*?: '',\s*pluginPromptBlock,/);
 });
 
 test('the clarify short-circuit always emits the options frame and persists the decision-panel shape', () => {
