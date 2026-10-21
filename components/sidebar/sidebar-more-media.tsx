@@ -26,6 +26,10 @@ const MEDIA_HINTS: Record<MediaMode, string> = {
  * «··· Más» row under Empresas: a flyout with the media modes (Video, Voz,
  * Imagen, Música). Picking one starts a fresh chat with that mode selected in
  * the composer; the sidebar owns the new-chat flow (`onSelect`).
+ *
+ * Keyboard (WAI-ARIA menu button): ↓ / ↑ on the trigger open the menu on the
+ * first / last option; inside it ↓ ↑ move (wrapping), Inicio / Fin jump to
+ * the ends, Enter or Espacio pick, Escape closes and returns to «Más».
  */
 export function SidebarMoreMedia({
   rowClassName,
@@ -43,9 +47,52 @@ export function SidebarMoreMedia({
   onSelect: (mode: MediaMode) => void
 }) {
   const [open, setOpen] = React.useState(false)
+  // Which option receives focus when the menu opens (↑ on the trigger → last).
+  const focusOnOpenRef = React.useRef<"first" | "last">("first")
+
+  const menuItems = (root: HTMLElement | null) =>
+    Array.from(root?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+
+  const onTriggerKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+    event.preventDefault()
+    focusOnOpenRef.current = event.key === "ArrowUp" ? "last" : "first"
+    setOpen(true)
+  }
+
+  const onMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = menuItems(event.currentTarget)
+    if (!items.length) return
+    const current = items.indexOf(document.activeElement as HTMLButtonElement)
+    let next: number
+    switch (event.key) {
+      case "ArrowDown":
+        next = current < 0 ? 0 : (current + 1) % items.length
+        break
+      case "ArrowUp":
+        next = current < 0 ? items.length - 1 : (current - 1 + items.length) % items.length
+        break
+      case "Home":
+        next = 0
+        break
+      case "End":
+        next = items.length - 1
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    items[next]?.focus()
+  }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) focusOnOpenRef.current = "first"
+        setOpen(next)
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -53,6 +100,7 @@ export function SidebarMoreMedia({
           aria-label="Más"
           aria-haspopup="menu"
           aria-expanded={open}
+          onKeyDown={onTriggerKeyDown}
           className={cn(
             rowClassName,
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
@@ -70,7 +118,17 @@ export function SidebarMoreMedia({
         sideOffset={isMobile ? 6 : 10}
         role="menu"
         aria-label="Crear contenido"
+        aria-orientation="vertical"
         data-testid="sidebar-more-media-panel"
+        onKeyDown={onMenuKeyDown}
+        onOpenAutoFocus={(event) => {
+          // Radix focuses the first option by default; ↑ on the trigger
+          // asks for the last one.
+          if (focusOnOpenRef.current !== "last") return
+          event.preventDefault()
+          const items = menuItems(event.currentTarget as HTMLElement | null)
+          items[items.length - 1]?.focus()
+        }}
         className="w-[248px] rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-[var(--shadow-lg)]"
       >
         <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">Crear</div>
