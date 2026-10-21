@@ -92,7 +92,7 @@ test('workspace mode: the script runs in /workspace with the computer environmen
   assert.equal(lines[0], "cd '/workspace'");
   assert.ok(lines.includes('mkdir -p outputs uploads'));
   assert.ok(lines.some((line) => line.startsWith("find tmp -maxdepth 1 -type d -name 'run-*' -mmin +30")), 'stale run dirs of aborted runs are swept');
-  assert.ok(lines.includes(`export SIRA_RUN_DIR='/workspace/${runRel}' WORKSPACE_DIR='/workspace' OUTPUT_DIR='/workspace/outputs' UPLOADS_DIR='/workspace/uploads'`));
+  assert.ok(lines.includes(`export SIRA_RUN_DIR='/workspace/${runRel}' WORKSPACE_DIR='/workspace' OUTPUT_DIR='/workspace/outputs' UPLOADS_DIR='/workspace/uploads' OMP_NUM_THREADS='2' OPENBLAS_NUM_THREADS='2' MKL_NUM_THREADS='2' NUMEXPR_MAX_THREADS='2' RAYON_NUM_THREADS='2' POLARS_MAX_THREADS='2'`), 'thread pools sized to the container, not the host');
   assert.ok(command.includes(`timeout -k 2 10 python3 '${runRel}/main.py' < '${runRel}/.stdin'`));
   // Heredoc: the terminator stands alone, redirections come before it.
   assert.equal(lines.filter((line) => line === 'SIRA_OUTBOX_EOF').length, 2);

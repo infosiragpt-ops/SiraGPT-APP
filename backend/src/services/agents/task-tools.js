@@ -603,6 +603,50 @@ async function deliverSandboxOutbox(run, ctx = {}) {
   return { delivered, notDelivered };
 }
 
+/**
+ * Guidance for a failed sandbox run that is missing a dependency: the same
+ * wording as the document agent (agent-runner/capability-recovery.js), so
+ * the model hears «call install_sandbox_package» exactly when installing is
+ * possible (curated list, or vetting of any PyPI distribution).
+ */
+function sandboxRecoveryGuidance(stderr, { language = 'python', exitCode } = {}) {
+  try {
+    // eslint-disable-next-line global-require
+    const { capabilityRecoveryGuidance, detectMissingDependency } = require('../agent-runner/capability-recovery');
+    // eslint-disable-next-line global-require
+    const policyLib = require('../agent-runner/sandbox-packages/policy');
+    let lang = language;
+    let missing = detectMissingDependency(stderr, { language: lang, exitCode });
+    // `python3 script.py` inside bash dies with a traceback, not a 127.
+    if (!missing && lang === 'bash') {
+      missing = detectMissingDependency(stderr, { language: 'python' });
+      if (missing) lang = 'python';
+    }
+    if (!missing) return '';
+    if (missing.kind === 'python_module') {
+      if (missing.raw.includes('.') && !policyLib.isNamespaceRoot(missing.raw)) {
+        return capabilityRecoveryGuidance(stderr, { language: lang, exitCode, notADistribution: 'submodule' });
+      }
+      if (/^(?:sira_\w+|office_helpers|preview_stat)$/.test(missing.name)) {
+        return `[Capability recovery: missing_helper]\n«${missing.name}» is an internal helper of the document agent, not a library, and it is not available to python_exec. Use the installed libraries directly. Do not install anything.`;
+      }
+    }
+    const policy = policyLib.resolvePolicy(process.env);
+    const pkg = missing.kind === 'python_module' ? policyLib.packageForModule(missing.raw || missing.name) : null;
+    const allowed = Boolean(pkg) && policyLib.isAllowed(pkg, policy);
+    return capabilityRecoveryGuidance(stderr, {
+      language: lang,
+      exitCode,
+      policy,
+      package: pkg,
+      allowed,
+      vetting: Boolean(policy.enabled && policy.vetting),
+    });
+  } catch {
+    return '';
+  }
+}
+
 /** Fields the model sees about the sandbox computer after a run. */
 async function sandboxComputerFields(run, ctx, uploads) {
   const fields = {};
@@ -636,8 +680,8 @@ function sandboxLibraryHighlights(perArea = 5) {
 function pythonExecDescription(mode = codeExecutionMode()) {
   if (mode === 'isolated') {
     const libs = sandboxLibraryHighlights();
-    return 'Run Python 3 in this conversation\'s isolated Linux sandbox (no network; 10 s default, 60 s max). The working directory /workspace persists for the whole chat. The user\'s uploaded files of this turn are in uploads/ (UPLOADS_DIR). Every file you write to outputs/ (OUTPUT_DIR) is validated and delivered to the user as a download automatically: save charts, spreadsheets, CSV exports and converted files there. Returns stdout, stderr, exit code and the delivered files. Use for data analysis, statistics, charts, file conversion and numeric computation. '
-      + (libs ? `Preinstalled (never pip install): ${libs}, among others. ` : '')
+    return 'Run Python 3 in this conversation\'s isolated Linux sandbox (no network; 10 s default, 120 s max). The working directory /workspace persists for the whole chat. The user\'s uploaded files of this turn are in uploads/ (UPLOADS_DIR). Every file you write to outputs/ (OUTPUT_DIR) is validated and delivered to the user as a download automatically: save charts, spreadsheets, CSV exports and converted files there. Returns stdout, stderr, exit code and the delivered files. Use for data analysis, statistics, charts, file conversion and numeric computation. '
+      + (libs ? `Preinstalled (never pip install): ${libs}, among others; if an import fails, the result explains whether install_sandbox_package can add it. ` : '')
       + 'Files generated earlier in this chat are available through ARTIFACT_FILES when provided. Print results to stdout.';
   }
   return 'Run a short Python 3 script with the host interpreter (10 s wall-clock default, no network credentials, fresh temp dir). Returns stdout, stderr, exit code. Use for data wrangling, numeric computation, JSON shaping. Only the Python standard library is guaranteed; other packages depend on the host.';
@@ -657,7 +701,7 @@ function sandboxCliHighlights() {
 function bashExecDescription(mode = codeExecutionMode()) {
   if (mode === 'isolated') {
     const cli = sandboxCliHighlights();
-    return 'Run a bash script in this conversation\'s isolated Linux sandbox (Ubuntu; no network; 15 s default, 60 s max). The working directory /workspace persists for the whole chat: the user\'s uploaded files of this turn are in uploads/, and every file you write to outputs/ is validated and delivered to the user as a download automatically. '
+    return 'Run a bash script in this conversation\'s isolated Linux sandbox (Ubuntu; no network; 15 s default, 120 s max). The working directory /workspace persists for the whole chat: the user\'s uploaded files of this turn are in uploads/, and every file you write to outputs/ is validated and delivered to the user as a download automatically. '
       + (cli ? `Command-line tools: ${cli}, python3 and the usual coreutils. ` : '')
       + 'Use it for conversions (soffice --headless --convert-to pdf --outdir outputs uploads/file.docx), media (ffmpeg), PDFs (pdftotext, qpdf), OCR (tesseract), archives and quick inspection (ls, head, wc). Never install packages or use the network. Returns stdout, stderr, exit code and the delivered files.';
   }
@@ -763,7 +807,7 @@ const pythonExec = {
     type: 'object',
     properties: {
       source: { type: 'string', description: 'The full Python source to execute. Multi-line allowed.' },
-      timeoutMs: { type: 'integer', minimum: 500, maximum: 60000, description: 'Wall-clock timeout in ms (default 10000).' },
+      timeoutMs: { type: 'integer', minimum: 500, maximum: 120000, description: 'Wall-clock timeout in ms (default 10000, max 120000 for long conversions or analyses).' },
       stdin: { type: 'string', description: 'Optional stdin for the script.' },
     },
     required: ['source'],
@@ -834,7 +878,7 @@ const pythonExec = {
       const runOpts = {
         language: 'python',
         source: executionSource,
-        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
+        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 120000, defaultMs: 10000 }),
         stdin: stdin || '',
         signal: ctx.signal,
       };
@@ -883,6 +927,10 @@ const pythonExec = {
       stderrTruncated: rawStderr.length > SANDBOX_STDERR_CHARS,
       ...(isolated ? await sandboxComputerFields(r, ctx, uploads) : {}),
     };
+    if (isolated && !r.ok) {
+      const recovery = sandboxRecoveryGuidance(rawStderr, { language: 'python', exitCode: r.exitCode });
+      if (recovery) payload.recovery = recovery;
+    }
     ctx.onEvent?.({ type: 'stage', label: 'Capturando salida', pct: 90 });
     ctx.onEvent?.({
       type: 'tool_output',
@@ -909,7 +957,7 @@ const bashExec = {
     type: 'object',
     properties: {
       source: { type: 'string', description: 'The script to run: bash in the sandbox (Node.js on a development host).' },
-      timeoutMs: { type: 'integer', minimum: 500, maximum: 60000, description: 'Wall-clock timeout in ms (default 15000 in the sandbox).' },
+      timeoutMs: { type: 'integer', minimum: 500, maximum: 120000, description: 'Wall-clock timeout in ms (default 15000 in the sandbox, max 120000).' },
     },
     required: ['source'],
     additionalProperties: false,
@@ -928,7 +976,7 @@ const bashExec = {
       r = await isolatedRunner.runIsolated({
         language: 'bash',
         source,
-        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 15000 }),
+        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 120000, defaultMs: 15000 }),
         signal: ctx.signal,
         persistKey: ctx.chatId || null,
         workdir: 'workspace',
@@ -954,8 +1002,130 @@ const bashExec = {
       stderrTruncated: rawStderr.length > SANDBOX_STDERR_CHARS,
       ...(isolated ? await sandboxComputerFields(r, ctx, uploads) : {}),
     };
+    if (isolated && !r.ok) {
+      const recovery = sandboxRecoveryGuidance(rawStderr, { language: 'bash', exitCode: r.exitCode });
+      if (recovery) payload.recovery = recovery;
+    }
     ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: r.ok, preview: payload.ok ? previewText(rawStdout || '(sin salida)', 600) : previewText(rawStderr || '(sin stderr)', 600) });
     return payload;
+  },
+};
+
+// ─── install_sandbox_package (chat) ──────────────────────────────────────
+// The document agent's executor (agent-runner/tools.js) run against this
+// chat's sandbox: curated list + vetting of any other PyPI distribution
+// (sandbox-packages/vetting.js) with its dependencies; a throw-away installer
+// container streams the wheels into the chat volume (/workspace/.sira-packages,
+// on PYTHONUSERBASE for every later python_exec / bash_exec). One install
+// budget per turn, shared by all calls; gaps and installs reach the admin
+// capability ledger like the document agent's.
+
+function installPackageDescription(env = process.env) {
+  let vetting = true;
+  try {
+    // eslint-disable-next-line global-require
+    vetting = Boolean(require('../agent-runner/sandbox-packages/policy').resolvePolicy(env).vetting);
+  } catch { /* default wording */ }
+  const scope = vetting
+    ? 'Curated packages install directly; any other PyPI distribution is vetted first (PyPI history and adoption, malware advisories, look-alike names) together with its dependencies, and a refused name must not be retried.'
+    : 'Only packages on the approved list can be installed; others are refused and reported to the administrator.';
+  return 'Install Python packages into this conversation\'s sandbox so python_exec and bash_exec can import them in later calls (they stay for the whole chat). Call it only after an import failed with ModuleNotFoundError or a needed library is missing; pass exact PyPI distribution names («scikit-learn», «opencv-python-headless», «seaborn==0.13.2»), never module names, URLs or paths. '
+    + `${scope} The sandbox itself keeps no network; only the installer reaches the package index.`;
+}
+
+function setTurnValue(ctx, key, value) {
+  try {
+    Object.defineProperty(ctx, key, { value, enumerable: false, configurable: true, writable: true });
+  } catch { /* frozen ctx */ }
+}
+
+const installSandboxPackage = {
+  name: 'install_sandbox_package',
+  description: installPackageDescription(),
+  parameters: {
+    type: 'object',
+    properties: {
+      packages: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'PyPI distribution names, optionally pinned: ["lifelines", "opencv-python-headless==4.12.0.88"].',
+      },
+      reason: { type: 'string', description: 'The failed import or missing capability this install fixes (one line).' },
+    },
+    required: ['packages'],
+    additionalProperties: false,
+  },
+  async execute({ packages, reason } = {}, ctx = {}) {
+    const list = Array.isArray(packages) ? packages.map(String) : (packages ? [String(packages)] : []);
+    const refuse = (error) => {
+      ctx.onEvent?.({ type: 'tool_output', tool: 'install_sandbox_package', ok: false, preview: previewText(error, 300) });
+      return { ok: false, error };
+    };
+    if (codeExecutionMode() !== 'isolated') {
+      return refuse('Package installation only exists in the isolated sandbox (production). Use the standard library or the installed packages.');
+    }
+    if (!ctx.chatId) {
+      return refuse('Installing packages needs a saved conversation: the packages live in its workspace. Use the preinstalled libraries.');
+    }
+    // eslint-disable-next-line global-require
+    const policyLib = require('../agent-runner/sandbox-packages/policy');
+    const policy = policyLib.resolvePolicy(process.env);
+    if (!policy.enabled) return refuse('Package installation is disabled on this server. Use the installed libraries or state the missing capability.');
+    const used = Number(ctx.__siraInstallCalls || 0);
+    if (used >= policy.maxPerTurn) {
+      return refuse(`The install budget for this turn is exhausted (${policy.maxPerTurn} calls). Work with what is installed or state the missing capability.`);
+    }
+    setTurnValue(ctx, '__siraInstallCalls', used + 1);
+    ctx.onEvent?.({ type: 'tool_call', tool: 'install_sandbox_package', preview: previewText(list.join(', '), 200) });
+    ctx.onEvent?.({ type: 'stage', label: 'Instalando librerías en el sandbox', pct: 20 });
+
+    let box;
+    try {
+      // eslint-disable-next-line global-require
+      box = await require('../doc-agent/sandbox').createSandbox({
+        driver: process.env.SIRAGPT_CODE_SANDBOX_DRIVER || undefined,
+        signal: ctx.signal,
+        env: process.env,
+        persistKey: String(ctx.chatId),
+      });
+    } catch (err) {
+      return isolatedUnavailablePayload('install_sandbox_package', { stderr: isolatedRunner.UNAVAILABLE_MESSAGE, unavailableReason: String(err?.message || err) }, ctx);
+    }
+    try {
+      // eslint-disable-next-line global-require
+      const { makeToolExecutors } = require('../agent-runner/tools');
+      // eslint-disable-next-line global-require
+      const vetter = policy.vetting ? require('../agent-runner/sandbox-packages/vetting').sharedVetter() : null;
+      // eslint-disable-next-line global-require
+      const ledger = require('../capability-ledger');
+      const executors = makeToolExecutors(box, {
+        capability: {
+          policy,
+          vetter,
+          onGap: (gap) => {
+            void ledger.recordCapabilityGap({
+              userId: ctx.userId, chatId: ctx.chatId, kind: gap.kind, name: gap.name, package: gap.package, allowed: gap.allowed, tool: gap.tool, source: 'chat',
+            });
+          },
+          onInstall: (info) => {
+            void ledger.recordCapabilityInstall({
+              userId: ctx.userId, chatId: ctx.chatId, requested: info.requested, installed: info.installed, bytes: info.bytes, durationMs: info.durationMs, driver: info.driver, code: info.code,
+            });
+          },
+        },
+      });
+      // The executor speaks the document agent's tool names; the chat's
+      // Python tool is python_exec.
+      const text = String(await executors.install_sandbox_package({ packages: list, reason }, { signal: ctx.signal }) || '')
+        .replace(/\bexecute_python\b/g, 'python_exec');
+      const ok = !/^ERROR/.test(text);
+      ctx.onEvent?.({ type: 'tool_output', tool: 'install_sandbox_package', ok, preview: previewText(text, 300) });
+      return ok ? { ok: true, result: text } : { ok: false, error: text.replace(/^ERROR:\s*/, '') };
+    } catch (err) {
+      return refuse(`The install failed: ${String(err?.message || err).slice(0, 300)}`);
+    } finally {
+      try { await box.destroy(); } catch { /* best effort */ }
+    }
   },
 };
 
@@ -2806,6 +2976,9 @@ module.exports = {
     headTail,
     sandboxUploadsForTurn,
     deliverSandboxOutbox,
+    sandboxRecoveryGuidance,
+    installSandboxPackage,
+    installPackageDescription,
     inspectSavArtifact,
     webSearch,
     createDocument,
