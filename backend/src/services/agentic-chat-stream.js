@@ -155,6 +155,7 @@ const STAGE_LABELS = {
     compare_documents: () => 'Comparando documentos',
     python_exec: () => 'Ejecutando Python',
     bash_exec: () => 'Ejecutando comandos en el sandbox',
+    describe_image: (args) => `Mirando ${truncate(args?.path, 50) || 'la imagen'}`,
     install_sandbox_package: (args) => `Instalando ${truncate(Array.isArray(args?.packages) ? args.packages.join(', ') : '', 50) || 'librerías'} en el sandbox`,
     create_document: (args) => `Creando ${truncate(args?.filename || 'archivo', 48)}`,
     generate_image: (args) => `Generando imagen${args?.prompt ? `: ${truncate(args.prompt, 40)}` : ''}`,
@@ -3883,6 +3884,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     }
   }
 
+  // describe_image needs the isolated sandbox AND a vision-capable model with
+  // a key (the ladder is null under NODE_ENV=test and without providers).
+  function sandboxVisionOffered() {
+    try {
+      // eslint-disable-next-line global-require
+      if (require('./agents/isolated-code-runner').resolveCodeExecutionMode(process.env) !== 'isolated') return false;
+      // eslint-disable-next-line global-require
+      return Boolean(require('./agent-runner').buildVisionLadderClient({ env: process.env }));
+    } catch (_) {
+      return false;
+    }
+  }
+
   function loadTaskTools() {
     try {
       // Lazy-load: document/media helpers are heavy and should not be
@@ -3908,6 +3922,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         // Offered only where it can work: the isolated sandbox with the
         // package policy on (the tool re-checks both at call time).
         sandboxInstallOffered() ? taskTools.installSandboxPackage : null,
+        sandboxVisionOffered() ? taskTools.describeImage : null,
       ].filter(Boolean);
     } catch (err) {
       try { console.warn('[agentic-chat] task tools unavailable:', err && err.message); } catch (_) {}

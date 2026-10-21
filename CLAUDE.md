@@ -2941,3 +2941,8 @@ Inspirado en las capacidades públicas del entorno de archivos de Claude.ai (sin
 - **Pools de hilos acotados** (`OMP/OPENBLAS/MKL/NUMEXPR/RAYON/POLARS = 2`) en el entorno del sandbox del chat: el contenedor remoto tiene 1 CPU y un límite de 100 procesos que también cuenta hilos, mientras numpy/polars dimensionan sus pools a los núcleos del HOST.
 - Límite por ejecución de `python_exec`/`bash_exec`: 60 s → 120 s (conversiones largas de LibreOffice/ffmpeg). Manifiestos de herramientas (`tool-manifest.js`) actualizados a la realidad (bash real, outputs/, 120 s).
 - Tests (registrados): `chat-sandbox-install.test.js` (5).
+
+## Sandbox del chat: el modelo mira sus imágenes (added 2026-10-21)
+
+- **`describe_image` en el chat** (`agents/task-tools.js`): el modelo mira una imagen de su sandbox (un gráfico que guardó en `outputs/`, una foto en `uploads/`) con la escalera de visión del agente de documentos (`agent-runner/multimodal/vision.js` + `buildVisionLadderClient`): el modelo del chat suele ser solo texto, así que los píxeles van a un modelo con visión con failover, y la descripción vuelve en un sobre de datos (el texto de la imagen es dato, nunca instrucción). Acepta rutas con o sin `/workspace/`, rechaza las que escapan y lo que no es imagen; una subida que el código no tocó se sube antes de mirarla. Se ofrece solo en modo aislado y si hay un modelo con visión con clave (la escalera es null en `NODE_ENV=test`). Es lo que permite revisar un gráfico antes de entregarlo, como hace Claude con sus imágenes.
+- Tests (registrados): `chat-sandbox-vision.test.js` (4).
