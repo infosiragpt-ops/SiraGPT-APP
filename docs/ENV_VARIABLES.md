@@ -774,10 +774,15 @@ segundo componente. Todo comando del sandbox exporta
 `PYTHONUSERBASE=/workspace/.sira-packages`, así que la librería queda importable sin
 reiniciar nada. Un paquete fuera de la lista se **verifica** antes de instalarse
 (`sandbox-packages/vetting.js`, junto con las dependencias que pip resuelva fuera de la
-lista): existe en PyPI con wheels vivas, no está en cuarentena, OSV no tiene un aviso de
-código malicioso para la versión que pip instalaría, tiene ≥ 90 días y ≥ 2 000 descargas
+lista): existe en PyPI con un wheel instalable en el sandbox (CPython 3.12, Linux glibc de
+la arquitectura del servidor, `requires-python`), la versión elegida respeta el
+especificador pedido y lleva ≥ 7 días publicada (sin pin: la más nueva con esa
+antigüedad), y el instalador recibe exactamente `nombre==versión` (dependencias incluidas);
+no está en cuarentena, OSV no tiene un aviso de código malicioso para esa versión (MAL-*,
+CWE-506 o texto de paquete comprometido), el proyecto tiene ≥ 90 días y ≥ 2 000 descargas
 el último mes (sin estadísticas: ≥ 1 año y ≥ 5 versiones) y su nombre no imita a uno
-popular. Si PyPI u OSV no responden, se rechaza. Lo rechazado queda como
+popular. Si PyPI u OSV no responden (o OSV pagina), se rechaza; las aprobaciones se
+recuerdan 30 min y los rechazos 6 h. Lo rechazado queda como
 `agent.capability_gap` en Admin → Logs → Auditoría (y en `GET /api/admin/capabilities`)
 para que el administrador decida si ampliar la lista. La allowlist por defecto vive en
 `backend/src/services/agent-runner/sandbox-packages/policy.js` (datos, documentos,

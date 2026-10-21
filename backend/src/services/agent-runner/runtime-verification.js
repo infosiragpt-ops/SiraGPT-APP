@@ -22,7 +22,10 @@ const EXPECTED = Object.freeze({
   digest: createHash('sha256').update(catalogBytes).digest('hex'),
   packages: catalogJson.python.length,
   requirements: Object.freeze(catalogJson.python.map((entry) => String(entry.pip))),
+  // Command-line tools this release promises (soffice, pandoc, ffmpeg…).
+  cli: Object.freeze((Array.isArray(catalogJson.cli) ? catalogJson.cli : []).map((entry) => String(entry && entry.bin || '')).filter(Boolean)),
 });
+const SAFE_BIN_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/;
 
 class SandboxCapabilitiesError extends Error {
   constructor(reason, counts = {}) {
@@ -35,6 +38,10 @@ class SandboxCapabilitiesError extends Error {
     this.checked = counts.checked || 0;
     this.missing = counts.missing || 0;
     this.mismatched = counts.mismatched || 0;
+    // Mismatches caused only by packages a user installed into the chat
+    // (/workspace/.sira-packages), and promised CLI tools not on PATH.
+    this.overlay = counts.overlay || 0;
+    this.cliMissing = counts.cliMissing || 0;
   }
 }
 
@@ -64,16 +71,19 @@ function sandboxTransportError(error = {}) {
  */
 function buildRuntimeProbe(expected = EXPECTED, catalogPath = '/opt/sira/capabilities.json') {
   const requirements = Array.isArray(expected?.requirements) ? expected.requirements.map(String) : null;
+  const cli = Array.isArray(expected?.cli) ? expected.cli.map(String) : [];
   if (!/^[a-f0-9]{64}$/.test(expected.digest) || !Number.isInteger(expected.packages)
     || expected.packages < 1 || expected.packages > 512
     || !requirements || requirements.length !== expected.packages
-    || requirements.some((pip) => !pip || pip.length > 200)) throw new Error('invalid runtime expectation');
-  return `import hashlib, importlib.metadata, json, site, sys
+    || requirements.some((pip) => !pip || pip.length > 200)
+    || cli.length > 128 || cli.some((bin) => !SAFE_BIN_RE.test(bin))) throw new Error('invalid runtime expectation');
+  return `import hashlib, importlib.metadata, json, shutil, site, sys
 EXPECTED = ${JSON.stringify(expected.digest)}
 EXPECTED_COUNT = ${expected.packages}
 REQUIREMENTS = json.loads(${JSON.stringify(JSON.stringify(requirements))})
+CLI = json.loads(${JSON.stringify(JSON.stringify(cli))})
 CATALOG = ${JSON.stringify(catalogPath)}
-report = {"protocol": 1, "ok": False, "digest": "", "checked": 0, "missing": 0, "mismatched": 0, "reason": "probe_unavailable"}
+report = {"protocol": 1, "ok": False, "digest": "", "checked": 0, "missing": 0, "mismatched": 0, "overlay": 0, "cliMissing": 0, "reason": "probe_unavailable"}
 
 def check():
     try:
@@ -110,21 +120,28 @@ def check():
             except importlib.metadata.PackageNotFoundError:
                 report["missing"] += 1
                 continue
+            overlay_only = False
             try:
                 base_version = Version(version)
-                mismatch = not requirement.specifier.contains(base_version)
+                base_mismatch = not requirement.specifier.contains(base_version)
                 # The installer preserves base-image versions. Even another
                 # in-range overlay can break the image's tested dependency set.
-                mismatch = mismatch or any(
+                overlay_mismatch = any(
                     Version(overlay) != base_version
                     for overlay in overlays.get(canonicalize_name(requirement.name), [])
                 )
+                mismatch = base_mismatch or overlay_mismatch
+                overlay_only = overlay_mismatch and not base_mismatch
             except (InvalidVersion, TypeError):
                 mismatch = True
             if mismatch:
                 report["mismatched"] += 1
-        report["ok"] = not (report["missing"] or report["mismatched"])
-        report["reason"] = "verified" if report["ok"] else "packages_mismatch"
+                if overlay_only:
+                    report["overlay"] += 1
+        report["cliMissing"] = sum(1 for name in CLI if shutil.which(name) is None)
+        packages_ok = not (report["missing"] or report["mismatched"])
+        report["ok"] = packages_ok and not report["cliMissing"]
+        report["reason"] = "verified" if report["ok"] else ("packages_mismatch" if not packages_ok else "cli_missing")
     except (ValueError, KeyError, TypeError):
         report["reason"] = "catalog_invalid"
     except Exception:
@@ -151,12 +168,15 @@ function parseRuntimeReport(result, expected = EXPECTED) {
   try { report = JSON.parse(output.slice(MARKER.length)); } catch (_) {
     throw new SandboxCapabilitiesError('report_invalid');
   }
-  const reasons = ['verified', 'catalog_mismatch', 'catalog_invalid', 'packages_mismatch', 'probe_unavailable'];
+  const reasons = ['verified', 'catalog_mismatch', 'catalog_invalid', 'packages_mismatch', 'cli_missing', 'probe_unavailable'];
+  const cliCount = Array.isArray(expected.cli) ? expected.cli.length : 0;
+  const optionalCount = (key, max) => report[key] === undefined || (Number.isInteger(report[key]) && report[key] >= 0 && report[key] <= max);
   if (!report || report.protocol !== 1 || typeof report.ok !== 'boolean'
     || typeof report.digest !== 'string' || !/^(?:[a-f0-9]{64})?$/.test(report.digest)
     || !reasons.includes(report.reason)
     || !['checked', 'missing', 'mismatched'].every((key) => Number.isInteger(report[key]) && report[key] >= 0 && report[key] <= expected.packages)
-    || report.missing + report.mismatched > report.checked) throw new SandboxCapabilitiesError('report_invalid');
+    || report.missing + report.mismatched > report.checked
+    || !optionalCount('overlay', report.mismatched) || !optionalCount('cliMissing', cliCount)) throw new SandboxCapabilitiesError('report_invalid');
   if (!report.ok) throw new SandboxCapabilitiesError(report.reason, report);
   if (result.exitCode !== 0 || report.reason !== 'verified'
     || report.checked !== expected.packages || report.missing || report.mismatched) {
@@ -167,12 +187,7 @@ function parseRuntimeReport(result, expected = EXPECTED) {
   return { verified: true, digest: report.digest, checked: report.checked, catalogMatches: report.digest === expected.digest };
 }
 
-async function verifySandboxRuntime(sandbox, { signal } = {}) {
-  throwIfAborted(signal);
-  // Local development deliberately uses the host, not the published image.
-  // Do not mistake that exception for an attestation of installed libraries.
-  if (sandbox?.driver === 'local') return { verified: false, reason: 'local_driver' };
-  if (!['docker', 'remote'].includes(sandbox?.driver)) throw new SandboxCapabilitiesError('driver_unknown');
+async function probeRuntime(sandbox, signal) {
   let result;
   try {
     result = await sandbox.exec(`/usr/bin/python3 -I -s - <<'SIRA_RUNTIME_PROBE'\n${buildRuntimeProbe()}SIRA_RUNTIME_PROBE`, { timeoutMs: 10_000, signal });
@@ -184,6 +199,34 @@ async function verifySandboxRuntime(sandbox, { signal } = {}) {
   }
   throwIfAborted(signal);
   return parseRuntimeReport(result);
+}
+
+async function verifySandboxRuntime(sandbox, { signal } = {}) {
+  throwIfAborted(signal);
+  // Local development deliberately uses the host, not the published image.
+  // Do not mistake that exception for an attestation of installed libraries.
+  if (sandbox?.driver === 'local') return { verified: false, reason: 'local_driver' };
+  if (!['docker', 'remote'].includes(sandbox?.driver)) throw new SandboxCapabilitiesError('driver_unknown');
+  try {
+    return await probeRuntime(sandbox, signal);
+  } catch (error) {
+    // A package the user installed into this chat that the image now ships
+    // at another version shadows it: the image itself is fine. Those
+    // installs are re-done on demand, so clear them and check once more
+    // instead of failing every document turn of the chat forever.
+    const overlayOnly = error instanceof SandboxCapabilitiesError && error.reason === 'packages_mismatch'
+      && error.missing === 0 && error.cliMissing === 0 && error.overlay > 0 && error.overlay === error.mismatched;
+    if (!overlayOnly) throw error;
+    try {
+      await sandbox.exec('command -p rm -rf -- /workspace/.sira-packages', { timeoutMs: 30_000, signal });
+    } catch {
+      throwIfAborted(signal);
+      throw error;
+    }
+    throwIfAborted(signal);
+    const verified = await probeRuntime(sandbox, signal);
+    return { ...verified, overlayReset: true };
+  }
 }
 
 module.exports = { verifySandboxRuntime, SandboxCapabilitiesError, buildRuntimeProbe, parseRuntimeReport, EXPECTED, MARKER };
