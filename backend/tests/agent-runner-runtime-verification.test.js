@@ -50,7 +50,7 @@ function withFixture(fn) {
     const raw = JSON.stringify({ version: 2, python: requirements.map((pip) => ({ pip })), cli: [], node: [] });
     const file = path.join(root, 'capabilities.json');
     fs.writeFileSync(file, raw);
-    return { file, expected: { digest: createHash('sha256').update(raw).digest('hex'), packages: requirements.length } };
+    return { file, expected: { digest: createHash('sha256').update(raw).digest('hex'), packages: requirements.length, requirements } };
   }
   function probe(config, { paths = [site], env = process.env } = {}) {
     const code = `import sys\nsys.path[0:0] = ${JSON.stringify(paths)}\n${buildRuntimeProbe(config.expected, config.file)}`;
@@ -71,7 +71,7 @@ test('remote and docker verify each sandbox, using isolated absolute Python and 
       assert.ok(opts.timeoutMs <= 10_000);
       return success();
     } });
-    assert.deepEqual(verified, { verified: true, digest: EXPECTED.digest, checked: EXPECTED.packages });
+    assert.deepEqual(verified, { verified: true, digest: EXPECTED.digest, checked: EXPECTED.packages, catalogMatches: true });
   }
   assert.equal(calls.length, 2, 'success is not globally cached for the next sandbox');
 });
@@ -88,10 +88,13 @@ test('invalid, partial, timed out and contradictory reports cannot attest the ru
     { stdout: MARKER + '{', exitCode: 0 },
     { ...success(), stdout: success().stdout.repeat(2) },
     { ...success(), stdout: MARKER + ' '.repeat(3000) },
-    success({ digest: '0'.repeat(64) }), success({ checked: 0 }), success({ missing: 1 }),
+    success({ checked: 0 }), success({ missing: 1 }),
     success({ ok: 'true' }), { ...success(), exitCode: 1 }, { ...success(), exitCode: null },
   ];
   for (const result of cases) assert.throws(() => parseRuntimeReport(result), expectFailure('report_invalid'));
+  // A different image catalog is a NEWER image (more libraries), not a broken one:
+  // compatible as long as every promised package checked out.
+  assert.deepEqual(parseRuntimeReport(success({ digest: '0'.repeat(64) })), { verified: true, digest: '0'.repeat(64), checked: EXPECTED.packages, catalogMatches: false });
   assert.throws(() => parseRuntimeReport({ ...success(), timedOut: true }), (error) => error.code === 'remote_sandbox_timeout');
   assert.throws(() => parseRuntimeReport({ ...success(), aborted: true }), (error) => error.code === 'sandbox_unavailable');
 });
@@ -116,7 +119,7 @@ test('real metadata accepts versions within bounds without importing the library
   distribution('sira-fixture', '1.4.2');
   fs.writeFileSync(path.join(site, 'sira_fixture.py'), 'raise RuntimeError("library imports are forbidden in the metadata probe")\n');
   const config = catalog(['sira-fixture>=1.4,<2']);
-  assert.deepEqual(parseRuntimeReport(probe(config), config.expected), { verified: true, digest: config.expected.digest, checked: 1 });
+  assert.deepEqual(parseRuntimeReport(probe(config), config.expected), { verified: true, digest: config.expected.digest, checked: 1, catalogMatches: true });
 }));
 
 test('real metadata counts missing and out-of-range distributions even when catalog hashes match', pythonOptions, () => withFixture(({ distribution, catalog, probe }) => {
@@ -133,11 +136,27 @@ test('real metadata counts missing and out-of-range distributions even when cata
   });
 }));
 
-test('an older internally consistent catalog still fails the release digest check', pythonOptions, () => withFixture(({ distribution, catalog, probe }) => {
+test('a newer image that promises more is accepted; one missing a promised package is not', pythonOptions, () => withFixture(({ distribution, catalog, probe }) => {
+  // During a deploy the new image goes live minutes before the new backend:
+  // its catalog lists extra libraries, but everything THIS release promises
+  // is installed in range, so document tasks keep working.
   distribution('sira-fixture', '1.0');
+  distribution('sira-extra', '3.1');
   const config = catalog(['sira-fixture==1.0']);
-  fs.writeFileSync(config.file, JSON.stringify({ python: [{ pip: 'sira-fixture>=1' }] }));
-  assert.throws(() => parseRuntimeReport(probe(config), config.expected), expectFailure('catalog_mismatch'));
+  fs.writeFileSync(config.file, JSON.stringify({ python: [{ pip: 'sira-fixture==1.0' }, { pip: 'sira-extra>=3,<4' }] }));
+  const accepted = parseRuntimeReport(probe(config), config.expected);
+  assert.equal(accepted.verified, true);
+  assert.equal(accepted.catalogMatches, false);
+  // The promise is still enforced: a promised package absent from the image fails.
+  const promise = catalog(['sira-fixture==1.0', 'sira-removed>=1']);
+  fs.writeFileSync(promise.file, JSON.stringify({ python: [{ pip: 'sira-fixture==1.0' }] }));
+  assert.throws(() => parseRuntimeReport(probe(promise), promise.expected), (error) => {
+    assert.ok(expectFailure('packages_mismatch')(error));
+    assert.equal(error.missing, 1);
+    return true;
+  });
+  // A probe without the promised list is refused outright.
+  assert.throws(() => buildRuntimeProbe({ digest: config.expected.digest, packages: 1 }), /invalid runtime expectation/);
 }));
 
 test('base metadata follows effective sys.path precedence without executing user-site .pth', pythonOptions, () => withFixture(({ root, site, distribution, catalog, probe }) => {
@@ -285,7 +304,7 @@ test('the complete real release catalog supports distribution extras and all req
   assert.equal(fixture.status, 0, fixture.stderr);
   const copy = path.join(root, 'release-catalog.json');
   fs.writeFileSync(copy, raw);
-  const expected = { digest: createHash('sha256').update(raw).digest('hex'), packages: catalog.python.length };
+  const expected = { digest: createHash('sha256').update(raw).digest('hex'), packages: catalog.python.length, requirements: catalog.python.map((entry) => entry.pip) };
   const result = parseRuntimeReport(probe({ file: copy, expected }), expected);
   assert.equal(result.checked, catalog.python.length);
   assert.equal(result.verified, true);

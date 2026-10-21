@@ -11,9 +11,17 @@ const MAX_CATALOG_BYTES = 256 * 1024;
 // Read the same immutable release asset used to compose the agent's prompt.
 // A successful check is scoped to prepareSandbox, never cached across sessions.
 const catalogBytes = fs.readFileSync(path.join(__dirname, 'sandbox-capabilities.json'));
+const catalogJson = JSON.parse(catalogBytes);
+// What this release PROMISES (the agent's prompt is built from it): every
+// requirement must be installed in range. The image's own catalog may list
+// MORE (a newer image published ahead of this backend during a deploy): that
+// is compatible, so its digest is reported but no longer required to match.
+// The publish workflow keeps the strict, exact check of the image it ships
+// (backend/scripts/verify-agent-sandbox-runtime.cjs).
 const EXPECTED = Object.freeze({
   digest: createHash('sha256').update(catalogBytes).digest('hex'),
-  packages: JSON.parse(catalogBytes).python.length,
+  packages: catalogJson.python.length,
+  requirements: Object.freeze(catalogJson.python.map((entry) => String(entry.pip))),
 });
 
 class SandboxCapabilitiesError extends Error {
@@ -55,28 +63,29 @@ function sandboxTransportError(error = {}) {
  * The image build remains responsible for actual import/format smoke tests.
  */
 function buildRuntimeProbe(expected = EXPECTED, catalogPath = '/opt/sira/capabilities.json') {
+  const requirements = Array.isArray(expected?.requirements) ? expected.requirements.map(String) : null;
   if (!/^[a-f0-9]{64}$/.test(expected.digest) || !Number.isInteger(expected.packages)
-    || expected.packages < 1 || expected.packages > 512) throw new Error('invalid runtime expectation');
+    || expected.packages < 1 || expected.packages > 512
+    || !requirements || requirements.length !== expected.packages
+    || requirements.some((pip) => !pip || pip.length > 200)) throw new Error('invalid runtime expectation');
   return `import hashlib, importlib.metadata, json, site, sys
 EXPECTED = ${JSON.stringify(expected.digest)}
 EXPECTED_COUNT = ${expected.packages}
+REQUIREMENTS = json.loads(${JSON.stringify(JSON.stringify(requirements))})
 CATALOG = ${JSON.stringify(catalogPath)}
 report = {"protocol": 1, "ok": False, "digest": "", "checked": 0, "missing": 0, "mismatched": 0, "reason": "probe_unavailable"}
 
 def check():
     try:
-        with open(CATALOG, "rb") as handle:
-            raw = handle.read(${MAX_CATALOG_BYTES + 1})
-        if len(raw) > ${MAX_CATALOG_BYTES}:
-            report["reason"] = "catalog_invalid"
-            return
-        report["digest"] = hashlib.sha256(raw).hexdigest()
-        if report["digest"] != EXPECTED:
-            report["reason"] = "catalog_mismatch"
-            return
-        catalog = json.loads(raw)
-        entries = catalog.get("python")
-        if not isinstance(entries, list) or len(entries) != EXPECTED_COUNT:
+        # The image catalog is informational: a newer image may promise more.
+        try:
+            with open(CATALOG, "rb") as handle:
+                raw = handle.read(${MAX_CATALOG_BYTES + 1})
+            if len(raw) <= ${MAX_CATALOG_BYTES}:
+                report["digest"] = hashlib.sha256(raw).hexdigest()
+        except OSError:
+            pass
+        if not isinstance(REQUIREMENTS, list) or len(REQUIREMENTS) != EXPECTED_COUNT:
             report["reason"] = "catalog_invalid"
             return
         from packaging.requirements import Requirement
@@ -90,8 +99,8 @@ def check():
             name = distribution.metadata.get("Name")
             if name:
                 overlays.setdefault(canonicalize_name(name), []).append(distribution.version)
-        for entry in entries:
-            requirement = Requirement(entry["pip"])
+        for pip in REQUIREMENTS:
+            requirement = Requirement(pip)
             if requirement.url or requirement.marker or not requirement.specifier:
                 report["reason"] = "catalog_invalid"
                 return
@@ -149,11 +158,13 @@ function parseRuntimeReport(result, expected = EXPECTED) {
     || !['checked', 'missing', 'mismatched'].every((key) => Number.isInteger(report[key]) && report[key] >= 0 && report[key] <= expected.packages)
     || report.missing + report.mismatched > report.checked) throw new SandboxCapabilitiesError('report_invalid');
   if (!report.ok) throw new SandboxCapabilitiesError(report.reason, report);
-  if (result.exitCode !== 0 || report.reason !== 'verified' || report.digest !== expected.digest
+  if (result.exitCode !== 0 || report.reason !== 'verified'
     || report.checked !== expected.packages || report.missing || report.mismatched) {
     throw new SandboxCapabilitiesError('report_invalid', report);
   }
-  return { verified: true, digest: report.digest, checked: report.checked };
+  // catalogMatches=false: the image is a newer release that promises more
+  // than this backend knows about (compatible; the deploy finishes shortly).
+  return { verified: true, digest: report.digest, checked: report.checked, catalogMatches: report.digest === expected.digest };
 }
 
 async function verifySandboxRuntime(sandbox, { signal } = {}) {
