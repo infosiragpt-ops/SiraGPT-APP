@@ -175,7 +175,7 @@ test('checkOutputFormat allows an extensionless filename (no false format_not_al
 });
 
 test('checkTimeoutBudget clamps timeouts that exceed the manifest max', () => {
-  // python_exec has timeout_ms_max: 60000
+  // python_exec has timeout_ms_max: 120000
   const within = checkTimeoutBudget('python_exec', 30000);
   assert.equal(within.ok, true);
   assert.equal(within.effectiveMs, 30000);
@@ -183,7 +183,7 @@ test('checkTimeoutBudget clamps timeouts that exceed the manifest max', () => {
   const tooLong = checkTimeoutBudget('python_exec', 600000);
   assert.equal(tooLong.ok, false);
   assert.equal(tooLong.reason, 'timeout_exceeds_max');
-  assert.equal(tooLong.effectiveMs, 60000);
+  assert.equal(tooLong.effectiveMs, 120000);
 
   const noRequest = checkTimeoutBudget('python_exec');
   assert.equal(noRequest.ok, true);

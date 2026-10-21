@@ -75,6 +75,18 @@ const MAX_STAGE_FILES = 16;
 const DEFAULT_MAX_STAGE_FILE_BYTES = 64 * 1024 * 1024;
 const OUTBOX_MAX_FILES = 10;
 const OUTBOX_MAX_FILE_BYTES = 50 * 1024 * 1024;
+// The container gets one CPU and a small pids limit that also counts
+// threads, while numpy/OpenBLAS, numexpr and polars size their pools to the
+// HOST's cores: a heavy script could die with «can't start new thread» and
+// gains nothing from extra threads anyway.
+const THREAD_CAPS = Object.freeze({
+  OMP_NUM_THREADS: '2',
+  OPENBLAS_NUM_THREADS: '2',
+  MKL_NUM_THREADS: '2',
+  NUMEXPR_MAX_THREADS: '2',
+  RAYON_NUM_THREADS: '2',
+  POLARS_MAX_THREADS: '2',
+});
 // Stale run directories (an aborted run cannot clean up: its exec shares the
 // aborted signal) are swept by the next run of the same chat.
 const STALE_RUN_MINUTES = 30;
@@ -381,7 +393,7 @@ async function runIsolated(opts = {}) {
       outboxDir ? detector(`snapshot ${shQuote(outboxDir)}`, `${prefix}.outbox-pre.json`) : '',
       exportLine({
         SIRA_RUN_DIR: runDir,
-        ...(inWorkspace ? { WORKSPACE_DIR: '/workspace', OUTPUT_DIR: '/workspace/outputs', UPLOADS_DIR: '/workspace/uploads' } : {}),
+        ...(inWorkspace ? { WORKSPACE_DIR: '/workspace', OUTPUT_DIR: '/workspace/outputs', UPLOADS_DIR: '/workspace/uploads', ...THREAD_CAPS } : {}),
         ...exportEnv,
       }),
       `if command -v timeout >/dev/null 2>&1; then timeout -k 2 ${seconds} ${invocation}; else ${invocation}; fi`,

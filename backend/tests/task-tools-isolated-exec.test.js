@@ -63,7 +63,7 @@ test('python_exec runs in the container with clamped budget and stdin', async ()
   assert.equal(calls[0].language, 'python');
   assert.equal(calls[0].source, 'print(6*7)');
   assert.equal(calls[0].stdin, 'x');
-  assert.equal(calls[0].timeoutMs, 60_000, 'schema max enforced');
+  assert.equal(calls[0].timeoutMs, 120_000, 'schema max enforced');
   assert.deepEqual(calls[0].inputs, []);
   assert.equal(calls[0].persistKey, 'chat-42', 'runs in the chat workspace volume');
 });

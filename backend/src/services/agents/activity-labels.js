@@ -35,6 +35,7 @@ const TOOL_ACTIVITY = {
   rag_retrieve: 'Consultando documentación…',
   self_rag_answer: 'Sintetizando evidencia…',
   python_exec: 'Ejecutando código…',
+  install_sandbox_package: 'Instalando librerías en el sandbox…',
   execute_python: 'Ejecutando código…',
   python: 'Ejecutando código…',
   bash_exec: 'Ejecutando comando…',
