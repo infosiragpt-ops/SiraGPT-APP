@@ -447,6 +447,175 @@ function isolatedUnavailablePayload(tool, result, ctx) {
   return { ok: false, error, code: 'E_SANDBOX_UNAVAILABLE', stdout: '', stderr: error };
 }
 
+// ─── The chat's sandbox computer (isolated mode) ─────────────────────────
+// python_exec / bash_exec run with /workspace (this chat's persistent
+// volume) as working directory. The user's uploads of the turn are staged in
+// uploads/ (same folder and names as the document agent's staging); every
+// file the code writes to outputs/ during a call is validated and delivered
+// as a downloadable artifact, the way a person hands over a finished file.
+
+const SANDBOX_UPLOAD_MAX_FILES = 8;
+const SANDBOX_UPLOAD_MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const SANDBOX_STDOUT_CHARS = 8000;
+const SANDBOX_STDERR_CHARS = 4000;
+
+/**
+ * Head + tail of a long output: errors usually sit at the end, headers at
+ * the start. Never splits a surrogate pair.
+ */
+function headTail(value, max) {
+  const text = String(value || '');
+  if (text.length <= max) return text;
+  let headEnd = Math.floor(max * 0.6);
+  let tailStart = text.length - (max - headEnd);
+  const hi = (i) => { const c = text.charCodeAt(i); return c >= 0xd800 && c <= 0xdbff; };
+  if (headEnd > 0 && hi(headEnd - 1)) headEnd -= 1;
+  if (tailStart > 0 && hi(tailStart - 1)) tailStart += 1;
+  return `${text.slice(0, headEnd)}\n…[${tailStart - headEnd} caracteres omitidos]…\n${text.slice(tailStart)}`;
+}
+
+/**
+ * The user's uploads of this turn as files for the sandbox's uploads/
+ * folder. Loaded once per turn (the promise rides on ctx, which react-agent
+ * keeps for the whole loop) and owner-checked by loadFilesByIds.
+ */
+function sandboxUploadsForTurn(ctx = {}) {
+  if (ctx && ctx.__siraSandboxUploads) return ctx.__siraSandboxUploads;
+  const promise = (async () => {
+    const empty = { stage: [], names: [], skipped: [] };
+    const fileIds = (Array.isArray(ctx.fileIds) ? ctx.fileIds : [])
+      .map((id) => String(id || '').trim()).filter(Boolean).slice(0, SANDBOX_UPLOAD_MAX_FILES);
+    const prisma = fileIds.length && ctx.userId ? getPrismaForTool(ctx) : null;
+    if (!prisma) return empty;
+    let files = [];
+    try {
+      // eslint-disable-next-line global-require
+      files = await require('../agent-runner').loadFilesByIds({ prisma, userId: ctx.userId, fileIds });
+    } catch {
+      return empty;
+    }
+    // eslint-disable-next-line global-require
+    const { sanitizeUploadName } = require('../agent-runner/artifacts');
+    const out = { stage: [], names: [], skipped: [] };
+    let total = 0;
+    (Array.isArray(files) ? files : []).forEach((file, index) => {
+      if (!Buffer.isBuffer(file?.buffer)) return;
+      let name = sanitizeUploadName(file.name, index);
+      // «.» / «..» would resolve to the folder itself (uploads/. → uploads).
+      if (/^\.+$/.test(name)) name = `file-${index + 1}`;
+      if (out.names.some((n) => n.toLowerCase() === name.toLowerCase())) name = `${index + 1}-${name}`;
+      if (total + file.buffer.length > SANDBOX_UPLOAD_MAX_TOTAL_BYTES) {
+        out.skipped.push({ name, reason: 'too_large' });
+        return;
+      }
+      total += file.buffer.length;
+      out.stage.push({ rel: `uploads/${name}`, buffer: file.buffer });
+      out.names.push(name);
+    });
+    return out;
+  })();
+  try {
+    Object.defineProperty(ctx, '__siraSandboxUploads', { value: promise, enumerable: false, configurable: true, writable: true });
+  } catch { /* frozen ctx: loaded again on the next call */ }
+  return promise;
+}
+
+const VALIDATION_CHECK_REASONS = {
+  notEmpty: 'vacío o demasiado pequeño',
+  validMagic: 'la cabecera no corresponde a su extensión',
+  readable: 'sin contenido legible',
+  parseable: 'no se puede interpretar',
+  svgOpen: 'SVG incompleto',
+  svgClose: 'SVG incompleto',
+  noScript: 'SVG con scripts',
+  noEventHandlers: 'SVG con manejadores de eventos',
+  noJavascriptHref: 'SVG con enlaces javascript:',
+};
+
+function validationFailureSummary(validation) {
+  const failed = [...new Set(Object.entries((validation && validation.checks) || {})
+    .filter(([, ok]) => !ok).map(([name]) => VALIDATION_CHECK_REASONS[name] || name))];
+  const score = Number.isFinite(validation?.technicalScore) ? ` (calidad técnica ${validation.technicalScore}/100)` : '';
+  return failed.length ? `no pasó la validación: ${failed.slice(0, 6).join(', ')}${score}` : `no pasó la validación${score}`;
+}
+
+/**
+ * Validate + save every file the run wrote to outputs/ and announce it as a
+ * file_artifact (the same event create_document uses, so the chat's delivery
+ * guard treats both alike). Returns what the model is told.
+ */
+async function deliverSandboxOutbox(run, ctx = {}) {
+  const delivered = [];
+  const notDelivered = [];
+  const outbox = run && run.outbox;
+  if (!outbox) return { delivered, notDelivered };
+  for (const file of Array.isArray(outbox.files) ? outbox.files : []) {
+    const filename = sanitizeArtifactFilename(path.posix.basename(String(file.rel || '')));
+    const ext = path.extname(filename).slice(1).toLowerCase();
+    let validation = null;
+    try { validation = validateAgentArtifactBuffer(ext, file.buffer); } catch (err) {
+      validation = { passed: false, checks: { readable: false }, details: { error: String(err?.message || err).slice(0, 200) } };
+    }
+    if (!validation || validation.passed !== true) {
+      notDelivered.push({ file: `outputs/${file.rel}`, reason: validationFailureSummary(validation) });
+      continue;
+    }
+    try {
+      const artifact = saveArtifact({
+        filename,
+        base64: file.buffer.toString('base64'),
+        mime: EXTENSION_TO_MIME[ext],
+        ownerUserId: ctx.userId,
+        chatId: ctx.chatId,
+        validation,
+        folderCode: ctx.folderCode || null,
+      });
+      ctx.onEvent?.({
+        type: 'file_artifact',
+        artifact: {
+          id: artifact.id,
+          filename: artifact.filename,
+          format: artifact.format,
+          mime: artifact.mime,
+          sizeBytes: artifact.sizeBytes,
+          downloadUrl: artifact.downloadUrl,
+        },
+      });
+      delivered.push({
+        file: `outputs/${file.rel}`,
+        filename: artifact.filename,
+        artifactId: artifact.id,
+        sizeBytes: artifact.sizeBytes,
+        downloadUrl: artifact.downloadUrl,
+      });
+    } catch (err) {
+      notDelivered.push({ file: `outputs/${file.rel}`, reason: String(err?.message || err).slice(0, 200) });
+    }
+  }
+  for (const skipped of Array.isArray(outbox.skipped) ? outbox.skipped : []) {
+    const reason = skipped.reason === 'too_large'
+      ? `demasiado grande (${Math.round((Number(skipped.size) || 0) / (1024 * 1024))} MB; máximo 50 MB por archivo)`
+      : skipped.reason === 'too_many'
+        ? 'más de 10 archivos nuevos en una sola ejecución'
+        : 'no se pudo leer';
+    notDelivered.push({ file: `outputs/${skipped.rel}`, reason });
+  }
+  return { delivered, notDelivered };
+}
+
+/** Fields the model sees about the sandbox computer after a run. */
+async function sandboxComputerFields(run, ctx, uploads) {
+  const fields = {};
+  if (uploads && uploads.names.length) fields.uploads = uploads.names.map((name) => `uploads/${name}`);
+  const { delivered, notDelivered } = await deliverSandboxOutbox(run, ctx);
+  if (delivered.length) {
+    fields.filesDelivered = delivered;
+    fields.deliveryNote = 'Estos archivos ya se entregaron al usuario como descargas; no los vuelvas a crear con create_document.';
+  }
+  if (notDelivered.length) fields.filesNotDelivered = notDelivered;
+  return fields;
+}
+
 /** "python-docx, docxtpl, …; pypdf, …" — a few libraries per area of the image catalog. */
 function sandboxLibraryHighlights(perArea = 5) {
   try {
@@ -467,11 +636,32 @@ function sandboxLibraryHighlights(perArea = 5) {
 function pythonExecDescription(mode = codeExecutionMode()) {
   if (mode === 'isolated') {
     const libs = sandboxLibraryHighlights();
-    return 'Run a short Python 3 script in an isolated sandbox container (no network, read-only system, fresh workspace per run; 10 s default, 60 s max). Returns stdout, stderr, exit code. Use for data wrangling, statistics, charts, numeric computation and table/JSON shaping. '
+    return 'Run Python 3 in this conversation\'s isolated Linux sandbox (no network; 10 s default, 60 s max). The working directory /workspace persists for the whole chat. The user\'s uploaded files of this turn are in uploads/ (UPLOADS_DIR). Every file you write to outputs/ (OUTPUT_DIR) is validated and delivered to the user as a download automatically: save charts, spreadsheets, CSV exports and converted files there. Returns stdout, stderr, exit code and the delivered files. Use for data analysis, statistics, charts, file conversion and numeric computation. '
       + (libs ? `Preinstalled (never pip install): ${libs}, among others. ` : '')
       + 'Files generated earlier in this chat are available through ARTIFACT_FILES when provided. Print results to stdout.';
   }
   return 'Run a short Python 3 script with the host interpreter (10 s wall-clock default, no network credentials, fresh temp dir). Returns stdout, stderr, exit code. Use for data wrangling, numeric computation, JSON shaping. Only the Python standard library is guaranteed; other packages depend on the host.';
+}
+
+/** "soffice, pandoc, …" — the command-line tools of the image catalog. */
+function sandboxCliHighlights() {
+  try {
+    // eslint-disable-next-line global-require
+    const { CAPABILITIES } = require('../agent-runner/sandbox-environment');
+    return (CAPABILITIES.cli || []).map((entry) => entry && entry.bin).filter(Boolean).join(', ');
+  } catch {
+    return '';
+  }
+}
+
+function bashExecDescription(mode = codeExecutionMode()) {
+  if (mode === 'isolated') {
+    const cli = sandboxCliHighlights();
+    return 'Run a bash script in this conversation\'s isolated Linux sandbox (Ubuntu; no network; 15 s default, 60 s max). The working directory /workspace persists for the whole chat: the user\'s uploaded files of this turn are in uploads/, and every file you write to outputs/ is validated and delivered to the user as a download automatically. '
+      + (cli ? `Command-line tools: ${cli}, python3 and the usual coreutils. ` : '')
+      + 'Use it for conversions (soffice --headless --convert-to pdf --outdir outputs uploads/file.docx), media (ffmpeg), PDFs (pdftotext, qpdf), OCR (tesseract), archives and quick inspection (ls, head, wc). Never install packages or use the network. Returns stdout, stderr, exit code and the delivered files.';
+  }
+  return 'Run a short Node.js script snippet with the host runner (used for quick JSON shaping / HTTP-free data work). For unsafe-looking shell ops, use python_exec with subprocess instead. Same sandbox policy as python_exec.';
 }
 
 // A $FL2 header alone does not prove that an SPSS system file is usable.
@@ -592,6 +782,7 @@ const pythonExec = {
       : [];
     const hydrated = [];
     let r;
+    let uploads = null;
     try {
       const artifactFiles = {};
       const inputs = [];
@@ -631,9 +822,11 @@ const pythonExec = {
           'import json as _sira_json',
           `ARTIFACT_FILES = _sira_json.loads(${JSON.stringify(JSON.stringify(artifactFiles))})`,
           ...(isolated ? [
+            // The copies live in the run directory; the script's working
+            // directory is the chat workspace.
             'import os as _sira_os',
             'for _sira_item in ARTIFACT_FILES.values():',
-            '    _sira_item["path"] = _sira_os.path.abspath(_sira_item["path"])',
+            '    _sira_item["path"] = _sira_os.path.join(_sira_os.environ.get("SIRA_RUN_DIR", _sira_os.getcwd()), _sira_item["path"])',
           ] : []),
         ].join('\n')
         : '';
@@ -645,9 +838,19 @@ const pythonExec = {
         stdin: stdin || '',
         signal: ctx.signal,
       };
-      r = isolated
-        ? await isolatedRunner.runIsolated({ ...runOpts, inputs, persistKey: ctx.chatId || null })
-        : await sandbox.run(runOpts);
+      if (isolated) {
+        uploads = await sandboxUploadsForTurn(ctx);
+        r = await isolatedRunner.runIsolated({
+          ...runOpts,
+          inputs,
+          persistKey: ctx.chatId || null,
+          workdir: 'workspace',
+          stage: uploads.stage,
+          outbox: { dir: 'outputs' },
+        });
+      } else {
+        r = await sandbox.run(runOpts);
+      }
     } catch (err) {
       const error = err?.message || 'No se pudieron abrir los archivos generados.';
       ctx.onEvent?.({ type: 'tool_output', tool: 'python_exec', ok: false, preview: error });
@@ -674,10 +877,11 @@ const pythonExec = {
       durationMs: r.durationMs,
       timedOut: r.timedOut,
       aborted: r.aborted,
-      stdout: previewText(rawStdout, 4000),
-      stderr: previewText(rawStderr, 2000),
-      stdoutTruncated: rawStdout.length > 4000,
-      stderrTruncated: rawStderr.length > 2000,
+      stdout: headTail(rawStdout, SANDBOX_STDOUT_CHARS),
+      stderr: headTail(rawStderr, SANDBOX_STDERR_CHARS),
+      stdoutTruncated: rawStdout.length > SANDBOX_STDOUT_CHARS,
+      stderrTruncated: rawStderr.length > SANDBOX_STDERR_CHARS,
+      ...(isolated ? await sandboxComputerFields(r, ctx, uploads) : {}),
     };
     ctx.onEvent?.({ type: 'stage', label: 'Capturando salida', pct: 90 });
     ctx.onEvent?.({
@@ -692,16 +896,20 @@ const pythonExec = {
   },
 };
 
-// ─── Tool 2: bash_exec (via node child_process through sandbox's node language) ─
+// ─── Tool 2: bash_exec — a real shell in the isolated sandbox ────────────
+// Production (isolated mode): bash in this chat's sandbox computer, same
+// workspace, uploads and outputs as python_exec. The host runner (dev/CI)
+// has no shell sandbox, so there it keeps running a Node.js snippet and says
+// so in its description.
 
 const bashExec = {
   name: 'bash_exec',
-  description: 'Run a short Node.js script snippet (used for quick JSON shaping / HTTP-free data work). For unsafe-looking shell ops, use python_exec with subprocess instead. Same sandbox policy as python_exec.',
+  description: bashExecDescription(),
   parameters: {
     type: 'object',
     properties: {
-      source: { type: 'string', description: 'The full Node.js source to execute.' },
-      timeoutMs: { type: 'integer', minimum: 500, maximum: 30000 },
+      source: { type: 'string', description: 'The script to run: bash in the sandbox (Node.js on a development host).' },
+      timeoutMs: { type: 'integer', minimum: 500, maximum: 60000, description: 'Wall-clock timeout in ms (default 15000 in the sandbox).' },
     },
     required: ['source'],
     additionalProperties: false,
@@ -711,26 +919,42 @@ const bashExec = {
       ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: false, preview: 'empty source' });
       return { ok: false, error: 'bash_exec requires a non-empty "source" string' };
     }
-    ctx.onEvent?.({ type: 'tool_call', tool: 'bash_exec', preview: previewText(source, 400), language: 'javascript' });
-    const runOpts = {
-      language: 'javascript',
-      source,
-      timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 30000, defaultMs: 8000 }),
-      signal: ctx.signal,
-    };
-    const r = codeExecutionMode() === 'isolated'
-      ? await isolatedRunner.runIsolated({ ...runOpts, persistKey: ctx.chatId || null })
-      : await sandbox.run(runOpts);
+    const isolated = codeExecutionMode() === 'isolated';
+    ctx.onEvent?.({ type: 'tool_call', tool: 'bash_exec', preview: previewText(source, 400), language: isolated ? 'bash' : 'javascript' });
+    let r;
+    let uploads = null;
+    if (isolated) {
+      uploads = await sandboxUploadsForTurn(ctx);
+      r = await isolatedRunner.runIsolated({
+        language: 'bash',
+        source,
+        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 15000 }),
+        signal: ctx.signal,
+        persistKey: ctx.chatId || null,
+        workdir: 'workspace',
+        stage: uploads.stage,
+        outbox: { dir: 'outputs' },
+      });
+    } else {
+      r = await sandbox.run({
+        language: 'javascript',
+        source,
+        timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 30000, defaultMs: 8000 }),
+        signal: ctx.signal,
+      });
+    }
     if (r?.unavailable) return isolatedUnavailablePayload('bash_exec', r, ctx);
     const rawStdout = r.stdout || '';
     const rawStderr = r.stderr || '';
     const payload = {
       ok: r.ok, exitCode: r.exitCode, durationMs: r.durationMs, timedOut: r.timedOut, aborted: r.aborted,
-      stdout: previewText(rawStdout, 4000), stderr: previewText(rawStderr, 2000),
-      stdoutTruncated: rawStdout.length > 4000,
-      stderrTruncated: rawStderr.length > 2000,
+      stdout: headTail(rawStdout, SANDBOX_STDOUT_CHARS),
+      stderr: headTail(rawStderr, SANDBOX_STDERR_CHARS),
+      stdoutTruncated: rawStdout.length > SANDBOX_STDOUT_CHARS,
+      stderrTruncated: rawStderr.length > SANDBOX_STDERR_CHARS,
+      ...(isolated ? await sandboxComputerFields(r, ctx, uploads) : {}),
     };
-    ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: r.ok, preview: payload.ok ? previewText(rawStdout, 600) : previewText(rawStderr, 600) });
+    ctx.onEvent?.({ type: 'tool_output', tool: 'bash_exec', ok: r.ok, preview: payload.ok ? previewText(rawStdout || '(sin salida)', 600) : previewText(rawStderr || '(sin stderr)', 600) });
     return payload;
   },
 };
@@ -2065,9 +2289,15 @@ const verifyArtifact = {
     // Stdlib-only Python: openpyxl/python-docx might be missing in
     // some environments; we degrade gracefully and still return
     // size + extension so the agent at least confirms the file exists.
+    // Production (isolated mode): the file is copied into the sandbox run
+    // directory and read there with the image's python-docx / python-pptx /
+    // pypdf; the API host only has openpyxl, so docx/pptx/pdf used to be
+    // "verified" by size alone.
+    const verifyIsolated = codeExecutionMode() === 'isolated';
+    const readerRel = `inputs/artifact.${ext.replace(/[^a-z0-9]/g, '') || 'bin'}`;
     const py = `
 import sys, json, os
-path = ${JSON.stringify(full)}
+path = ${JSON.stringify(verifyIsolated ? readerRel : full)}
 ext = ${JSON.stringify(ext)}
 result = {"ok": True, "ext": ext, "sizeBytes": os.path.getsize(path)}
 try:
@@ -2156,7 +2386,16 @@ except Exception as e:
     result = {"ok": False, "error": str(e), "ext": ext, "sizeBytes": os.path.getsize(path)}
 print(json.dumps(result))
 `;
-    const r = await sandbox.run({ language: 'python', source: py, timeoutMs: 12000, signal: ctx.signal });
+    const r = verifyIsolated
+      ? await isolatedRunner.runIsolated({
+        language: 'python',
+        source: py,
+        timeoutMs: 30000,
+        signal: ctx.signal,
+        inputs: [{ rel: readerRel, buffer: await fs.promises.readFile(full) }],
+      })
+      : await sandbox.run({ language: 'python', source: py, timeoutMs: 12000, signal: ctx.signal });
+    if (r?.unavailable) return isolatedUnavailablePayload('verify_artifact', r, ctx);
     let summary;
     const lastLine = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
     if (!lastLine) {
@@ -2270,13 +2509,18 @@ const runTests = {
       language,
       codePreview: previewText(`# solution\n${source}\n\n# tests\n${testSource}`, 600),
     });
+    // Model-written code: in production the harness runs in the isolated
+    // sandbox container like python_exec, never on the API host.
+    const isolated = codeExecutionMode() === 'isolated';
     const r = await sandbox.runTests({
       language,
       source,
       testSource,
       timeoutMs: clampTimeoutMs(timeoutMs, { min: 500, max: 60000, defaultMs: 10000 }),
       signal: ctx.signal,
+      ...(isolated ? { runner: (opts) => isolatedRunner.runIsolated({ ...opts, persistKey: ctx.chatId || null }) } : {}),
     });
+    if (r?.unavailable) return isolatedUnavailablePayload('run_tests', { stderr: r.stderr }, ctx);
     const summary = `${r.passed}✓ / ${r.failed}✗${r.timedOut ? ' (timeout)' : ''}`;
     ctx.onEvent?.({
       type: 'tool_output',
@@ -2556,7 +2800,12 @@ module.exports = {
     bashExec,
     codeExecutionMode,
     pythonExecDescription,
+    bashExecDescription,
     sandboxLibraryHighlights,
+    sandboxCliHighlights,
+    headTail,
+    sandboxUploadsForTurn,
+    deliverSandboxOutbox,
     inspectSavArtifact,
     webSearch,
     createDocument,

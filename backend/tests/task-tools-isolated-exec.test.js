@@ -78,12 +78,16 @@ test('python_exec reports an unavailable sandbox honestly and never falls back t
   assert.ok(events.some((e) => e.type === 'tool_output' && e.ok === false));
 });
 
-test('bash_exec runs node in the container', async () => {
-  stubRunner({ ok: true, exitCode: 0, stdout: '{"a":1}', stderr: '' });
-  const r = await INTERNAL.bashExec.execute({ source: 'console.log(JSON.stringify({a:1}))' }, {});
+test('bash_exec is a real shell in the chat computer (workspace, uploads, outputs)', async () => {
+  stubRunner({ ok: true, exitCode: 0, stdout: 'uploads\noutputs\n', stderr: '', outbox: { files: [], skipped: [] } });
+  const r = await INTERNAL.bashExec.execute({ source: 'ls' }, { chatId: 'chat-sh' });
   assert.equal(r.ok, true);
-  assert.equal(calls[0].language, 'javascript');
-  assert.equal(calls[0].timeoutMs, 8000);
+  assert.equal(calls[0].language, 'bash');
+  assert.equal(calls[0].source, 'ls');
+  assert.equal(calls[0].timeoutMs, 15000);
+  assert.equal(calls[0].workdir, 'workspace');
+  assert.deepEqual(calls[0].outbox, { dir: 'outputs' });
+  assert.equal(calls[0].persistKey, 'chat-sh');
 });
 
 test('create_document writes OUT_PATH inside the run dir and registers the collected file', async () => {
@@ -125,14 +129,22 @@ test('SPSS inspection reads the file inside the container', async () => {
 
 test('descriptions are truthful per mode', () => {
   const isolated = INTERNAL.pythonExecDescription('isolated');
-  assert.match(isolated, /isolated sandbox container/);
+  assert.match(isolated, /isolated Linux sandbox/);
   assert.match(isolated, /never pip install/);
   assert.match(isolated, /pandas/);
   assert.match(isolated, /matplotlib/);
+  assert.match(isolated, /uploads\//);
+  assert.match(isolated, /outputs\/ \(OUTPUT_DIR\) is validated and delivered/);
+  assert.doesNotMatch(isolated, /read-only system|fresh workspace per run/, 'the chat volume persists: never claim otherwise');
   const host = INTERNAL.pythonExecDescription('host');
   assert.match(host, /host interpreter/);
   assert.match(host, /Only the Python standard library is guaranteed/);
   assert.doesNotMatch(host, /python-pptx/);
+  const shell = INTERNAL.bashExecDescription('isolated');
+  assert.match(shell, /bash script/);
+  assert.match(shell, /soffice/);
+  assert.match(shell, /outputs\//);
+  assert.match(INTERNAL.bashExecDescription('host'), /Node\.js/);
 });
 
 // End-to-end through the REAL isolated runner and the doc-agent sandbox
