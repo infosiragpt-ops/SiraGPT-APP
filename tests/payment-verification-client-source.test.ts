@@ -10,11 +10,6 @@ const copies = [
     api: path.join(root, "lib", "api.ts"),
     page: path.join(root, "app", "payment", "success", "page.tsx"),
   },
-  {
-    name: "nested",
-    api: path.join(root, "siraGPT", "lib", "api.ts"),
-    page: path.join(root, "siraGPT", "app", "payment", "success", "page.tsx"),
-  },
 ]
 
 describe("payment verification client contract", () => {

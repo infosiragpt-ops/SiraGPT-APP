@@ -141,10 +141,7 @@ test('Compose passes fail-closed sensitive and billing limiter configuration', (
 });
 
 test('production CI smoke environments never pair credentialed CORS with a wildcard', () => {
-  for (const workflow of [
-    '.github/workflows/ci.yml',
-    'siraGPT/.github/workflows/ci.yml',
-  ]) {
+  for (const workflow of ['.github/workflows/ci.yml']) {
     const source = read(workflow);
     assert.match(source, /^\s+NODE_ENV:\s*production\s*$/m, `${workflow} must use literal production`);
     assert.doesNotMatch(

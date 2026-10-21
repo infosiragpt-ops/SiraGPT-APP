@@ -1,5 +1,0 @@
-marker-pdf
-docling
-markitdown
-surya-ocr
-unstructured[pdf]

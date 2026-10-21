@@ -63,7 +63,6 @@ jobs:
               - "extensions/upstream/**"
               - "packages/upstream/**"
               - "src/upstream/**"
-              - "siraGPT/**"
               - "skills/**"
               - "scripts/upstream/**"
               - "test/**"
@@ -79,7 +78,6 @@ jobs:
               - "test-results/**"
               - ".next/**"
               - ".next.broken-*/**"
-              - ".root-backup-before-siragpt-publish-*/**"
 
       # JavaScript/TypeScript CodeQL extracts directly from source. Skipping
       # autobuild avoids spending minutes on vendored/upstream trees before the
