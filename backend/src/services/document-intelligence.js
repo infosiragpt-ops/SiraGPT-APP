@@ -17,8 +17,10 @@ const MAX_CHUNKS = Math.max(
   Math.min(Number(process.env.DOCINTEL_MAX_CHUNKS) || 1200, 5000)
 );
 const MAX_TABLE_PREVIEW_ROWS = 30;
+// Each content word can contribute its surface form plus a light stem, so
+// 40 terms cover about the same question length the old 24 did.
 const MAX_TERMS_FOR_EVIDENCE = Number.parseInt(
-  process.env.SIRAGPT_DOCINTEL_MAX_EVIDENCE_TERMS || '24',
+  process.env.SIRAGPT_DOCINTEL_MAX_EVIDENCE_TERMS || '40',
   10
 );
 const MAX_EVIDENCE_CHUNKS = Number.parseInt(
@@ -1000,9 +1002,9 @@ async function retrieveEvidence(prisma, { userId, fileId, query, limit = MAX_EVI
     title: [chunk.sectionTitle, chunk.sourceLabel, chunk.sectionPath || chunk.metadata?.sectionPath].filter(Boolean).join(' '),
     text: chunk.text || '',
   }));
-  const lexicalHits = new Map(searchDocumentLexical(entries.map(entry => ({ text: entry.text })), terms.join(' '), chunks.length)
+  const lexicalHits = new Map(searchDocumentLexical(entries.map(entry => ({ text: entry.text })), terms, chunks.length)
     .map(hit => [hit.doc._idx, hit]));
-  const structuralHits = new Map(searchDocumentLexical(entries.map(entry => ({ text: entry.title })), terms.join(' '), chunks.length)
+  const structuralHits = new Map(searchDocumentLexical(entries.map(entry => ({ text: entry.title })), terms, chunks.length)
     .map(hit => [hit.doc._idx, hit]));
   // BM25 makes a specific case number stronger than boilerplate words shared
   // by every passage. Structural labels and ancestor sections remain indexed.

@@ -4540,6 +4540,8 @@ router.post(
             customGpt,
             openai: rag.getOpenAI(),
             onProgress: __ragProgress.onProgress,
+            // «profundiza en el tercero» → also search the resolved item.
+            retrievalQuery: operationalRag.retrievalQueryFor(prompt, __pr3CorefResult),
           });
         } catch (ragErr) {
           __ragFailed = true;
@@ -4588,7 +4590,7 @@ router.post(
           if (ragFilter.isRagFilterEnabled()) {
             __ragProgress.noteFiltering();
             const __filtered = await ragFilter.filterHits({
-              query: prompt,
+              query: operationalRagContext.retrievalQuery || prompt,
               hits: operationalRagContext.hits,
               chatId: canPersist ? chatId : null,
               ledger: require('../services/rlcd').ledger,
@@ -4598,6 +4600,7 @@ router.post(
               operationalRagContext.hits = __filtered.hits;
               operationalRagContext.contextBlock = operationalRag.buildEvidenceBlock({
                 query: prompt,
+                focusQuery: operationalRagContext.retrievalQuery || null,
                 collection: operationalRagContext.collection,
                 docs: operationalRagContext.docs,
                 hits: __filtered.hits,

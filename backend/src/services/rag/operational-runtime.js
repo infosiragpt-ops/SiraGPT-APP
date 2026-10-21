@@ -198,6 +198,40 @@ async function safeStats(rag, userId, collection) {
   }
 }
 
+// Follow-ups such as «profundiza en el tercero» or «explícame eso» carry no
+// searchable content: the referent lives in the previous answer. When the
+// coreference resolver pinned it to concrete text (a numbered item of the
+// last answer, or the LLM judge), search with the prompt PLUS that text.
+// File-name and code-snippet resolutions are left out: passages do not talk
+// about «el adjunto informe.pdf». Low-confidence fallbacks are left out too.
+const RETRIEVAL_COREF_SOURCES = new Set(['ordinal_list', 'judge']);
+const RETRIEVAL_COREF_MIN_CONFIDENCE = 0.6;
+const RETRIEVAL_COREF_MAX_CHARS = 200;
+
+function retrievalQueryFor(prompt, coreference) {
+  const base = String(prompt || '');
+  const refs = Array.isArray(coreference?.references) ? coreference.references : [];
+  const additions = [];
+  for (const ref of refs) {
+    if (!ref || typeof ref.resolvesTo !== 'string') continue;
+    if (!RETRIEVAL_COREF_SOURCES.has(ref.source)) continue;
+    if (!(Number(ref.confidence) >= RETRIEVAL_COREF_MIN_CONFIDENCE)) continue;
+    const text = ref.resolvesTo.replace(/\s+/g, ' ').trim().slice(0, RETRIEVAL_COREF_MAX_CHARS);
+    if (!text || additions.includes(text) || base.includes(text)) continue;
+    additions.push(text);
+  }
+  return additions.length > 0 ? `${base}\n${additions.join('\n')}` : base;
+}
+
+function graphCanLink(userId, collection) {
+  try {
+    const stats = require('../triple-graph').stats(userId, collection);
+    return (stats.triples || 0) > 0 && (stats.embedded || 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
 function shouldUseGraphBackfill(docs) {
   if (process.env.SIRAGPT_RAG_GRAPH_BACKFILL === '0') return false;
   return (docs || []).some(doc => (doc?.chars || doc?.text?.length || 0) >= LONG_DOC_CHAR_THRESHOLD);
@@ -333,7 +367,9 @@ function formatHit(hit, index, query) {
   return `[S${index + 1}] ${title}${score}\nSource: ${hit.source || 'unknown'}\nExcerpt: ${text}`;
 }
 
-function buildEvidenceBlock({ query, collection, docs, hits, graphAnswer = null, retrievalMeta = {} }) {
+// focusQuery (optional) picks each excerpt window; it is the text the hits
+// were retrieved with. The «Query:» line always shows the user's own prompt.
+function buildEvidenceBlock({ query, focusQuery = null, collection, docs, hits, graphAnswer = null, retrievalMeta = {} }) {
   const hasHits = Array.isArray(hits) && hits.length > 0;
   const hasGraphAnswer = Boolean(graphAnswer?.answer && !graphAnswer?.stats?.index_missing);
   if (!hasHits && !hasGraphAnswer) return '';
@@ -342,7 +378,7 @@ function buildEvidenceBlock({ query, collection, docs, hits, graphAnswer = null,
     .map(d => `- ${d.title} (${d.source}${d.truncated ? '; indexed text truncated for safety' : ''})`)
     .join('\n');
   const evidence = hasHits
-    ? hits.map((hit, index) => formatHit(hit, index, query)).join('\n\n')
+    ? hits.map((hit, index) => formatHit(hit, index, focusQuery || query)).join('\n\n')
     : '(no local vector snippets retrieved)';
   const graphCommunities = (graphAnswer?.contributing_communities || []).join(', ') || 'none';
   const graphSection = hasGraphAnswer
@@ -586,6 +622,9 @@ async function buildRuntimeContext({
   // retrieve_done {hits, totalChunks, docs}, graph_query. Only emitted when
   // the work really runs — a turn without documents emits nothing.
   onProgress = null,
+  // Search text for the passage retrieval only (see retrievalQueryFor).
+  // Routing decisions and the evidence block keep the user's own prompt.
+  retrievalQuery = null,
 } = {}) {
   const currentDocs = normaliseDocs(processedFiles);
   const projectDocs = normaliseDocs(project?.files || []);
@@ -633,7 +672,10 @@ async function buildRuntimeContext({
       allowedSources,
       logger,
     });
-  } else if (shouldUseGraphBackfill(docs)) {
+  } else if (shouldUseGraphBackfill(docs) && (indexResult.chunksAdded || 0) > 0) {
+    // Only when THIS turn ingested new text: a follow-up on an indexed
+    // document used to re-run one LLM extraction per chunk on every turn
+    // (duplicates were only dropped after paying for the calls).
     const graphSources = (indexResult.ingestedSources && indexResult.ingestedSources.length > 0)
       ? indexResult.ingestedSources
       : docs.map(doc => doc.source);
@@ -646,15 +688,20 @@ async function buildRuntimeContext({
     documentMode: true,
     sourceDiversity: docs.length > 1 && (isGlobalSensemakingQuery(prompt) || /\b(compara|comparar|comparaci[oó]n|contrasta|coteja|compare|comparison)\b/i.test(prompt)),
     useMMR: true,
-    useGraph: true,
+    // Graph expansion opens with an LLM call (proximal triples) before the
+    // first token, and linking needs embedded stored triples. On the chat
+    // path none exist yet, so it always returned [] after paying that call
+    // on every follow-up of a long document. Only expand when it can link.
+    useGraph: graphCanLink(userId, collection),
     graphRag: Boolean(graphIndexResult?.ready),
     rerank: process.env.SIRAGPT_RAG_RERANK === '1',
   };
 
   let hits = [];
+  const searchQuery = typeof retrievalQuery === 'string' && retrievalQuery.trim() ? retrievalQuery : prompt;
   emitRagProgress(onProgress, { type: 'retrieve_start', docs: docs.length });
   try {
-    hits = await rag.retrieve(userId, collection, prompt, k, {
+    hits = await rag.retrieve(userId, collection, searchQuery, k, {
       ...retrievalMeta,
       allowedSources,
       mmrLambda: 0.72,
@@ -705,6 +752,7 @@ async function buildRuntimeContext({
 
   const contextBlock = buildEvidenceBlock({
     query: prompt,
+    focusQuery: searchQuery,
     collection,
     docs,
     hits,
@@ -717,6 +765,9 @@ async function buildRuntimeContext({
     collection,
     docs,
     hits,
+    // What the passages were searched with (the prompt, or the prompt plus a
+    // resolved referent). Later filters/re-renders should judge hits by it.
+    retrievalQuery: searchQuery,
     graphAnswer,
     graphIndexResult,
     indexResult,
@@ -738,6 +789,8 @@ module.exports = {
   scheduleGraphBackfill,
   shouldUseGraphBackfill,
   shouldUseGraphRagForPrompt,
+  retrievalQueryFor,
+  graphCanLink,
   buildEvidenceBlock,
   buildRuntimeContext,
   shouldForceCustomGptKnowledge,

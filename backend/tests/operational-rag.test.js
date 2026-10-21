@@ -120,7 +120,10 @@ test('buildRuntimeContext indexes docs and builds a cited evidence block', async
   assert.deepEqual(rag.calls.retrieve[0].opts.allowedSources, ['file:doc1']);
   assert.equal(rag.calls.retrieve[0].opts.useExpansion, true);
   assert.equal(rag.calls.retrieve[0].opts.useMMR, true);
-  assert.equal(rag.calls.retrieve[0].opts.useGraph, true);
+  // No embedded triple exists for this chat, so graph expansion could not
+  // link anything: it is skipped instead of paying its LLM call
+  // (rag-graph-cost-gates.test.js covers the enabled case).
+  assert.equal(rag.calls.retrieve[0].opts.useGraph, false);
 });
 
 test('buildRuntimeContext reports real progress (index → retrieve with counts), and nothing when it does not run', async () => {
