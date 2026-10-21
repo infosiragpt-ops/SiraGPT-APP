@@ -27,7 +27,7 @@
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
 const { capabilityRecoveryGuidance, detectMissingDependency } = require('./capability-recovery');
 const sandboxPackages = require('./sandbox-packages/policy');
-const { pinnedVersion: vettingPinnedVersion, describeEvidence: describeVettingEvidence } = require('./sandbox-packages/vetting');
+const { describeEvidence: describeVettingEvidence } = require('./sandbox-packages/vetting');
 const { PACKAGES_DIR } = require('../doc-agent/sandbox-pip');
 const { CHART_SCHEMA, normalizeNativeChart } = require('../document-pipeline/pptx-native-chart');
 const { executePythonDescription, executeBashDescription } = require('./sandbox-environment');
@@ -605,6 +605,15 @@ const VETTED_INSTALL_TOOL_DEFINITION = {
   },
 };
 
+/** A requirement pinned to the release the vetting approved (extras kept). */
+function pinnedRequirement(parsed, verdict) {
+  const name = (verdict && verdict.name) || (parsed && parsed.name);
+  const version = verdict && verdict.evidence && verdict.evidence.version;
+  if (!name || !version) return parsed || null;
+  const extras = (parsed && parsed.extras) || '';
+  return { ...(parsed || {}), name, extras, specifier: `==${version}`, spec: `${name}${extras}==${version}` };
+}
+
 // Dependencies outside the curated list vetted for one install; a library
 // pulling in more than this is refused rather than vetted name by name.
 const MAX_VETTED_DEPENDENCIES = 40;
@@ -722,6 +731,8 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         return 'the request conflicts with the libraries built into the sandbox image (their versions are fixed so numpy/pandas/lxml/python-pptx keep working); nothing was installed. Drop the version pin or use the installed version.';
       case 'dependency_refused':
         return `the dependencies it needs did not pass vetting (${(result.refusedDependencies || []).map((v) => `«${v.name}»: ${v.detail}`).join('; ')}); nothing was installed. Do not retry; use an installed equivalent or state the missing capability.`;
+      case 'pinned_dependency_conflict':
+        return `its dependencies only install at the vetted releases (${(result.pinnedDependencies || []).join(', ')}), and the package requires other versions of them; nothing was installed. Pin a release of the package that accepts those versions, or use an installed equivalent.`;
       case 'too_many_dependencies':
         return `it pulls in ${result.dependencyCount} packages outside the curated list (at most ${MAX_VETTED_DEPENDENCIES} are vetted per install); nothing was installed. Use a lighter library or state the missing capability.`;
       case 'commit_failed':
@@ -842,7 +853,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       if (vetOutside) {
         const parsedOutside = outside.map((r) => sandboxPackages.parseRequirement(r.raw)).filter(Boolean);
         const verdicts = await vetter.vet(
-          parsedOutside.map((r) => ({ name: r.name, version: vettingPinnedVersion(r.specifier) })),
+          parsedOutside.map((r) => ({ name: r.name, specifier: r.specifier || '' })),
           { signal: ctx.signal },
         );
         const refused = verdicts.filter((v) => !v || !v.ok);
@@ -856,9 +867,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         }
         vetted = verdicts;
         for (const v of verdicts) allow.add(v.name);
-        requirements.push(...parsedOutside);
+        // pip gets EXACTLY the vetted release: an open range or an unpinned
+        // name could otherwise resolve to another (unvetted) version.
+        requirements.push(...parsedOutside.map((r, i) => pinnedRequirement(r, verdicts[i])));
       }
-      const specs = requirements.map((r) => r.spec);
+      let specs = requirements.map((r) => r.spec);
       const install = async (timeoutMs) => {
         try {
           return await sandbox.installPythonPackages({
@@ -902,7 +915,14 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
           } else {
             vetted = [...vetted, ...verdicts];
             for (const v of verdicts) allow.add(v.name);
+            // The dependencies are pinned to the vetted releases too.
+            const pinnedDeps = verdicts.map((v) => pinnedRequirement(null, v)).filter(Boolean);
+            requirements.push(...pinnedDeps);
+            specs = requirements.map((r) => r.spec);
             result = await install(Math.max(30_000, policy.timeoutMs - (Date.now() - startedAt)));
+            if (result && result.code === 'conflict') {
+              result = { ...result, code: 'pinned_dependency_conflict', pinnedDependencies: pinnedDeps.map((r) => r.spec) };
+            }
           }
         }
       }

@@ -351,3 +351,57 @@ test('a killed or unavailable exec process without a report is a transport failu
     });
   }
 });
+
+test('a chat whose installed packages shadow the image is repaired, not broken forever', async () => {
+  const report = (extra) => ({ stdout: MARKER + JSON.stringify({
+    protocol: 1, ok: false, digest: EXPECTED.digest, checked: EXPECTED.packages,
+    missing: 0, mismatched: 2, overlay: 2, cliMissing: 0, reason: 'packages_mismatch', ...extra,
+  }) + '\n', exitCode: 1 });
+  const commands = [];
+  let probes = 0;
+  const sandbox = {
+    driver: 'remote',
+    exec: async (command) => {
+      commands.push(command);
+      if (command.startsWith('/usr/bin/python3 -I -s - <<')) {
+        probes += 1;
+        return probes === 1 ? report() : success();
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  };
+  const verified = await verifySandboxRuntime(sandbox);
+  assert.equal(verified.verified, true);
+  assert.equal(verified.overlayReset, true);
+  assert.deepEqual(commands.filter((c) => !c.startsWith('/usr/bin/python3')), ['command -p rm -rf -- /workspace/.sira-packages']);
+  assert.equal(probes, 2);
+
+  // A broken IMAGE (base versions wrong or a package missing) is never "repaired".
+  for (const bad of [report({ overlay: 1 }), report({ missing: 1, mismatched: 1, overlay: 1 })]) {
+    const cleaned = [];
+    await assert.rejects(verifySandboxRuntime({
+      driver: 'docker',
+      exec: async (command) => { cleaned.push(command); return command.startsWith('/usr/bin/python3') ? bad : { exitCode: 0 }; },
+    }), expectFailure('packages_mismatch'));
+    assert.equal(cleaned.filter((c) => c.includes('rm -rf')).length, 0);
+  }
+});
+
+test('promised command-line tools are checked again (cli_missing)', async () => {
+  assert.ok(EXPECTED.cli.includes('soffice') && EXPECTED.cli.includes('ffmpeg'));
+  const probe = buildRuntimeProbe();
+  assert.match(probe, /CLI = json\.loads\(/);
+  assert.match(probe, /shutil\.which\(name\) is None/);
+  const missingTool = { stdout: MARKER + JSON.stringify({
+    protocol: 1, ok: false, digest: EXPECTED.digest, checked: EXPECTED.packages,
+    missing: 0, mismatched: 0, overlay: 0, cliMissing: 1, reason: 'cli_missing',
+  }) + '\n', exitCode: 1 };
+  assert.throws(() => parseRuntimeReport(missingTool), expectFailure('cli_missing'));
+  assert.throws(() => buildRuntimeProbe({ ...EXPECTED, cli: ['soffice; rm -rf /'] }), /invalid runtime expectation/);
+  // An impossible count is not trusted.
+  const lying = { stdout: MARKER + JSON.stringify({
+    protocol: 1, ok: true, digest: EXPECTED.digest, checked: EXPECTED.packages,
+    missing: 0, mismatched: 0, overlay: 0, cliMissing: 999, reason: 'verified',
+  }) + '\n', exitCode: 0 };
+  assert.throws(() => parseRuntimeReport(lying), expectFailure('report_invalid'));
+});

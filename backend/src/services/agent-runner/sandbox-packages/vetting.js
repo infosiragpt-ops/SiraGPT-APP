@@ -11,8 +11,12 @@
  *   - it exists on PyPI and ships at least one live (non-yanked) wheel: the
  *     installer is wheels-only, so no setup.py ever runs;
  *   - PyPI has not quarantined it (PEP 792 project status);
- *   - OSV has no malicious-code advisory for the version pip would install
- *     (OpenSSF MAL-* entries, or a PYSEC/GHSA describing a hijacked release);
+ *   - the version is chosen the way pip would (a wheel for CPython 3.12 on
+ *     glibc Linux of the host architecture, requires-python, the user's
+ *     specifier) among releases public for RELEASE_MIN_AGE_DAYS, and the
+ *     installer receives exactly that pin (`name==version`);
+ *   - OSV has no malicious-code advisory for that version (OpenSSF MAL-*,
+ *     CWE-506, or a PYSEC/GHSA describing a hijacked release);
  *   - the project is at least MIN_PROJECT_AGE_DAYS old: almost every
  *     malicious upload is removed within days of publication;
  *   - it has real adoption (pypistats last-month downloads). When the stats
@@ -39,8 +43,19 @@ const FALLBACK_MIN_RELEASES = 5;
 // A name near a popular one passes only with this much adoption of its own
 // («scapy» is not a typo of «scipy»).
 const TYPOSQUAT_EXEMPT_DOWNLOADS = 50_000;
+// A release must have been public this long before it is installed: almost
+// every hijacked release of an established project (ultralytics 8.3.41) is
+// reported and pulled within days. Without a pin the newest release at least
+// this old is chosen.
+const RELEASE_MIN_AGE_DAYS = 7;
+// The sandbox image: Ubuntu 24.04 (glibc 2.39), CPython 3.12.
+const TARGET_PYTHON = '3.12.3';
+const TARGET_GLIBC_MINOR = 39;
 const REQUEST_TIMEOUT_MS = 8000;
+// Refusals keep for hours; an approval is re-checked soon (a new advisory for
+// the approved version must not wait six hours).
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const OK_CACHE_TTL_MS = 30 * 60 * 1000;
 const CACHE_MAX = 2000;
 const CONCURRENCY = 6;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -186,11 +201,135 @@ function highestVersion(versions) {
 // NOT match, or every package with an open CVE would be refused.
 const MALICIOUS_ADVISORY_RE = /\b(?:malware|backdoor(?:ed|s)?|supply[- ]chain (?:attack|compromise)|crypto ?(?:currency )?miners?|cryptominers?|malicious (?:software|packages?|releases?|versions?|dependenc(?:y|ies)|updates?)|(?:contained|contains|containing|shipped|injected|included) (?:a |an )?malicious|compromised (?:releases?|versions?|packages?|accounts?|maintainers?))\b/i;
 
+// Phrases that describe a compromised PACKAGE, not a flaw exploitable by «a
+// malicious user». Kept narrow: «account takeover», «session hijacking» or
+// «malicious payload» are ordinary vulnerability wording.
+const COMPROMISED_PACKAGE_RE = /\b(?:embedded\s+malicious\s+code|replaced\s+with\s+a\s+malicious|malicious\s+project|(?:pypi|package|project|maintainer)(?:'s)?\s+account\s+(?:was\s+)?(?:compromised|taken\s+over|hijacked)|stealer)\b/i;
+
 function isMaliciousAdvisory(vuln) {
   if (!vuln) return false;
   if (String(vuln.id || '').startsWith('MAL-')) return true;
   if ((Array.isArray(vuln.aliases) ? vuln.aliases : []).some((id) => String(id).startsWith('MAL-'))) return true;
-  return MALICIOUS_ADVISORY_RE.test(`${vuln.summary || ''}\n${String(vuln.details || '').slice(0, 2000)}`);
+  // GitHub's malware advisories carry CWE-506 (Embedded Malicious Code).
+  const cwes = vuln.database_specific && Array.isArray(vuln.database_specific.cwe_ids) ? vuln.database_specific.cwe_ids : [];
+  if (cwes.map(String).includes('CWE-506')) return true;
+  const text = `${vuln.summary || ''}\n${String(vuln.details || '').slice(0, 2000)}`;
+  return MALICIOUS_ADVISORY_RE.test(text) || COMPROMISED_PACKAGE_RE.test(text);
+}
+
+/**
+ * PEP 440 specifier check for the operators pip users write: ==, !=, <=, >=,
+ * <, >, ~=, === and the `==1.2.*` / `!=1.2.*` wildcards. Unparsable input
+ * never matches (fail closed).
+ */
+function versionMatches(versionText, specifierText) {
+  const version = parseVersion(versionText);
+  if (!version) return false;
+  const clauses = String(specifierText || '').split(',').map((c) => c.trim()).filter(Boolean);
+  for (const clause of clauses) {
+    const m = /^(===|==|!=|<=|>=|~=|<|>)\s*(\S+)$/.exec(clause);
+    if (!m) return false;
+    const [, op, target] = m;
+    if (op === '===') {
+      if (String(versionText) !== target) return false;
+      continue;
+    }
+    if ((op === '==' || op === '!=') && target.endsWith('.*')) {
+      const prefix = target.slice(0, -2).split('.').map(Number);
+      if (prefix.some((n) => !Number.isInteger(n))) return false;
+      const same = prefix.every((n, i) => (version.release[i] || 0) === n);
+      if ((op === '==') !== same) return false;
+      continue;
+    }
+    const goal = parseVersion(target);
+    if (!goal) return false;
+    const cmp = compareParsedVersions(version, goal);
+    if (op === '==' && cmp !== 0) return false;
+    if (op === '!=' && cmp === 0) return false;
+    if (op === '<=' && cmp > 0) return false;
+    if (op === '>=' && cmp < 0) return false;
+    if (op === '<' && cmp >= 0) return false;
+    if (op === '>' && cmp <= 0) return false;
+    if (op === '~=') {
+      if (goal.release.length < 2 || cmp < 0) return false;
+      const prefix = goal.release.slice(0, -1);
+      if (!prefix.every((n, i) => (version.release[i] || 0) === n)) return false;
+    }
+  }
+  return true;
+}
+
+/** Architecture tag of the sandbox host (the backend runs on the same machine). */
+function hostWheelArch() {
+  return process.arch === 'arm64' ? 'aarch64' : 'x86_64';
+}
+
+function pythonTagOk(pyTag, abiTags) {
+  if (/^py3(?:\d+)?$/.test(pyTag)) {
+    const minor = Number(pyTag.slice(3) || '0');
+    return pyTag === 'py3' || minor <= 12;
+  }
+  if (pyTag === 'cp312') return abiTags.some((abi) => abi === 'cp312' || abi === 'abi3' || abi === 'none');
+  const cp = /^cp3(\d+)$/.exec(pyTag);
+  return Boolean(cp) && Number(cp[1]) < 12 && abiTags.includes('abi3');
+}
+
+function platformTagOk(platTag, arch) {
+  if (platTag === 'any' || platTag === `linux_${arch}`) return true;
+  const legacy = /^manylinux(1|2010|2014)_([a-z0-9_]+)$/.exec(platTag);
+  if (legacy) return legacy[2] === arch && (arch === 'x86_64' || legacy[1] === '2014');
+  const glibc = /^manylinux_2_(\d+)_([a-z0-9_]+)$/.exec(platTag);
+  return Boolean(glibc) && glibc[2] === arch && Number(glibc[1]) <= TARGET_GLIBC_MINOR;
+}
+
+/** True when pip on the sandbox (CPython 3.12, glibc Linux) could install this wheel. */
+function wheelCompatible(filename, arch = hostWheelArch()) {
+  const parts = String(filename || '').replace(/\.whl$/i, '').split('-');
+  if (parts.length < 5) return false;
+  const [py, abi, plat] = parts.slice(-3);
+  const abiTags = abi.split('.');
+  return py.split('.').some((tag) => pythonTagOk(tag, abiTags)) && plat.split('.').some((tag) => platformTagOk(tag, arch));
+}
+
+/**
+ * Installable releases: versions with at least one live, compatible wheel
+ * whose requires-python admits the sandbox's Python. `newestUploadAt` is the
+ * latest upload among those wheels — a wheel added recently to an old release
+ * counts as new.
+ */
+function installableReleases(files, { arch = hostWheelArch() } = {}) {
+  const byVersion = new Map();
+  for (const file of Array.isArray(files) ? files : []) {
+    if (!file || file.yanked) continue;
+    const filename = String(file.filename || '');
+    if (!/\.whl$/i.test(filename) || !wheelCompatible(filename, arch)) continue;
+    const version = wheelVersion(filename);
+    if (!version || !parseVersion(version)) continue;
+    const requires = file['requires-python'];
+    if (requires && !versionMatches(TARGET_PYTHON, String(requires))) continue;
+    const at = Date.parse(file['upload-time']) || 0;
+    const entry = byVersion.get(version) || { version, newestUploadAt: 0 };
+    entry.newestUploadAt = Math.max(entry.newestUploadAt, at);
+    byVersion.set(version, entry);
+  }
+  return [...byVersion.values()];
+}
+
+/**
+ * The release to install: the highest matching the specifier (stable first,
+ * pre-releases only when the specifier names one or nothing else exists) that
+ * has been public for RELEASE_MIN_AGE_DAYS.
+ */
+function chooseRelease(releases, { specifier = '', now = Date.now() } = {}) {
+  const matching = releases.filter((r) => !specifier || versionMatches(r.version, specifier));
+  if (!matching.length) return { release: null, reason: 'no_match' };
+  const wantsPre = /\d(?:a|b|rc|dev)\d/i.test(String(specifier));
+  const stable = matching.filter((r) => { const v = parseVersion(r.version); return v && !v.pre && v.dev == null; });
+  const pool = wantsPre || !stable.length ? matching : stable;
+  const sorted = [...pool].sort((a, b) => compareParsedVersions(parseVersion(b.version), parseVersion(a.version)));
+  const oldEnough = sorted.find((r) => now - r.newestUploadAt >= RELEASE_MIN_AGE_DAYS * DAY_MS);
+  if (oldEnough) return { release: oldEnough, reason: 'ok' };
+  return { release: sorted[0], reason: 'too_new' };
 }
 
 /** Version of a wheel file name: {dist}-{version}(-{build})?-{py}-{abi}-{plat}.whl */
@@ -204,7 +343,12 @@ function pinnedVersion(specifier) {
   return m ? m[1] : null;
 }
 
-async function fetchWithTimeout(fetchImpl, url, init = {}, { timeoutMs = REQUEST_TIMEOUT_MS, signal } = {}) {
+/**
+ * fetch + JSON body, both inside one timeout / abort window: a response whose
+ * body stalls can neither hang the tool nor escape Stop.
+ * @returns {Promise<{ status: number, ok: boolean, body: any }>}
+ */
+async function fetchJson(fetchImpl, url, init = {}, { timeoutMs = REQUEST_TIMEOUT_MS, signal } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const onAbort = () => controller.abort();
@@ -213,7 +357,9 @@ async function fetchWithTimeout(fetchImpl, url, init = {}, { timeoutMs = REQUEST
     else signal.addEventListener('abort', onAbort, { once: true });
   }
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
+    const res = await fetchImpl(url, { ...init, signal: controller.signal });
+    const body = res.ok ? await res.json() : null;
+    return { status: res.status, ok: res.ok, body };
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener('abort', onAbort);
@@ -221,41 +367,38 @@ async function fetchWithTimeout(fetchImpl, url, init = {}, { timeoutMs = REQUEST
 }
 
 async function readProject(fetchImpl, name, opts) {
-  const res = await fetchWithTimeout(fetchImpl, `${PYPI_SIMPLE}/${encodeURIComponent(name)}/`, {
+  const res = await fetchJson(fetchImpl, `${PYPI_SIMPLE}/${encodeURIComponent(name)}/`, {
     headers: { Accept: 'application/vnd.pypi.simple.v1+json', 'User-Agent': 'SiraGPT-sandbox-vetting' },
   }, opts);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`pypi_http_${res.status}`);
-  const body = await res.json();
+  const body = res.body;
   const files = Array.isArray(body && body.files) ? body.files : [];
   const uploads = files.map((f) => Date.parse(f && f['upload-time'])).filter(Number.isFinite);
-  const liveWheels = files
-    .filter((f) => f && !f.yanked && /\.whl$/i.test(String(f.filename || '')))
-    .map((f) => ({ version: wheelVersion(f.filename), at: Date.parse(f['upload-time']) || 0 }))
-    .filter((w) => w.version);
-  liveWheels.sort((a, b) => b.at - a.at);
   const status = body && body['project-status'] && body['project-status'].status;
   return {
-    files: files.length,
-    versions: Array.isArray(body && body.versions) ? body.versions.length : new Set(liveWheels.map((w) => w.version)).size,
+    files,
+    versions: Array.isArray(body && body.versions) ? body.versions.length : new Set(files.map((f) => wheelVersion(f && f.filename)).filter(Boolean)).size,
     firstUploadAt: uploads.length ? Math.min(...uploads) : null,
-    newestWheelVersion: liveWheels.length ? (highestVersion(new Set(liveWheels.map((w) => w.version))) || liveWheels[0].version) : null,
-    wheelVersions: new Set(liveWheels.map((w) => w.version)),
+    anyWheel: files.some((f) => f && !f.yanked && /\.whl$/i.test(String(f.filename || ''))),
     allYanked: files.length > 0 && files.every((f) => f && f.yanked),
     status: typeof status === 'string' ? status.toLowerCase() : null,
   };
 }
 
 async function readMaliciousAdvisories(fetchImpl, name, version, opts) {
-  const body = { package: { name, ecosystem: 'PyPI' } };
-  if (version) body.version = version;
-  const res = await fetchWithTimeout(fetchImpl, OSV_QUERY, {
+  const query = { package: { name, ecosystem: 'PyPI' } };
+  if (version) query.version = version;
+  const res = await fetchJson(fetchImpl, OSV_QUERY, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': 'SiraGPT-sandbox-vetting' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(query),
   }, opts);
   if (!res.ok) throw new Error(`osv_http_${res.status}`);
-  const data = await res.json();
+  const data = res.body;
+  // A paginated answer may hold only part of the advisories (or none): it
+  // cannot clear a package.
+  if (data && data.next_page_token) throw new Error('osv_paginated');
   return (Array.isArray(data && data.vulns) ? data.vulns : [])
     .filter(isMaliciousAdvisory)
     .map((v) => String(v.id || 'unnamed advisory'));
@@ -264,12 +407,12 @@ async function readMaliciousAdvisories(fetchImpl, name, version, opts) {
 /** Last-month downloads; 0 when pypistats has never seen the project; null when unknown. */
 async function readMonthlyDownloads(fetchImpl, name, opts) {
   try {
-    const res = await fetchWithTimeout(fetchImpl, `${PYPISTATS}/${encodeURIComponent(name)}/recent?period=month`, {
+    const res = await fetchJson(fetchImpl, `${PYPISTATS}/${encodeURIComponent(name)}/recent?period=month`, {
       headers: { Accept: 'application/json', 'User-Agent': 'SiraGPT-sandbox-vetting' },
     }, opts);
     if (res.status === 404) return 0;
     if (!res.ok) return null;
-    const data = await res.json();
+    const data = res.body;
     const n = Number(data && data.data && data.data.last_month);
     return Number.isFinite(n) && n >= 0 ? n : null;
   } catch (_) {
@@ -292,10 +435,14 @@ function refuse(name, reason, detail, evidence = {}) {
  * @param {number} [opts.now]
  * @param {AbortSignal} [opts.signal]
  */
-async function vetPackage(rawName, { version = null, fetchImpl = globalThis.fetch, now = Date.now(), signal, popular = popularNames() } = {}) {
+async function vetPackage(rawName, {
+  specifier = '', version = null, fetchImpl = globalThis.fetch, now = Date.now(), signal, popular = popularNames(), arch = hostWheelArch(),
+} = {}) {
   const name = policy.normalizePackageName(rawName);
   if (!name) return refuse(String(rawName || ''), 'invalid_name', 'not a valid distribution name');
   if (typeof fetchImpl !== 'function') return refuse(name, 'vet_unavailable', 'no network client to verify it');
+  // `version` (an exact pin) is the older calling convention.
+  const spec = String(specifier || (version ? `==${version}` : '')).replace(/\s+/g, '');
   const opts = { signal };
   let project;
   try {
@@ -307,10 +454,21 @@ async function vetPackage(rawName, { version = null, fetchImpl = globalThis.fetc
   if (project.status === 'quarantined' || project.allYanked) {
     return refuse(name, 'withdrawn', project.status === 'quarantined' ? 'PyPI has quarantined it' : 'every release was withdrawn (yanked)');
   }
-  if (!project.newestWheelVersion) return refuse(name, 'no_wheels', 'it publishes no installable wheel (source-only packages are not installed)');
-  const targetVersion = version && project.wheelVersions.has(version) ? version : project.newestWheelVersion;
+  const platform = `Python 3.12 on Linux ${arch}`;
+  if (!project.anyWheel) return refuse(name, 'no_wheels', 'it publishes no installable wheel (source-only packages are not installed)');
+  const releases = installableReleases(project.files, { arch });
+  if (!releases.length) return refuse(name, 'no_wheels', `none of its wheels installs on ${platform}`);
+  const choice = chooseRelease(releases, { specifier: spec, now });
+  if (!choice.release) {
+    return refuse(name, 'version_not_found', `no release matching «${spec}» has a wheel for ${platform} (it may not exist or was withdrawn)`);
+  }
+  const targetVersion = choice.release.version;
   const ageDays = project.firstUploadAt ? Math.floor((now - project.firstUploadAt) / DAY_MS) : 0;
-  const evidence = { version: targetVersion, ageDays, releases: project.versions };
+  const releaseAgeDays = Math.floor((now - choice.release.newestUploadAt) / DAY_MS);
+  const evidence = { version: targetVersion, ageDays, releaseAgeDays, releases: project.versions };
+  if (choice.reason === 'too_new') {
+    return refuse(name, 'release_too_new', `the matching release ${targetVersion} was published ${releaseAgeDays} day(s) ago; releases need ${RELEASE_MIN_AGE_DAYS} days before they are installed`, evidence);
+  }
 
   let malicious;
   try {
@@ -332,10 +490,15 @@ async function vetPackage(rawName, { version = null, fetchImpl = globalThis.fetc
     return refuse(name, 'vet_unavailable', 'download statistics are unavailable and the project lacks a long track record', evidence);
   }
   const squat = typosquatTarget(name, popular);
-  if (squat && (downloads == null || downloads < TYPOSQUAT_EXEMPT_DOWNLOADS)) {
+  if (squat && downloads == null) {
+    // Without adoption data a look-alike name can be neither cleared nor
+    // condemned («scrapy» vs «scapy»): ask again later, never cache.
+    return refuse(name, 'vet_unavailable', `its name resembles «${squat}» and its adoption cannot be checked right now`, { ...evidence, imitates: squat });
+  }
+  if (squat && downloads < TYPOSQUAT_EXEMPT_DOWNLOADS) {
     return refuse(name, 'possible_typosquat', `its name imitates «${squat}»; if that is the library you meant, install «${squat}»`, { ...evidence, imitates: squat });
   }
-  return { ok: true, name, reason: 'vetted', detail: '', evidence };
+  return { ok: true, name, reason: 'vetted', detail: '', evidence, pin: `${name}==${targetVersion}` };
 }
 
 function describeEvidence(evidence = {}) {
@@ -356,19 +519,22 @@ function createVetter({ fetchImpl = globalThis.fetch, now = () => Date.now(), tt
   const cache = new Map();
   const vetOne = async (entry, signal) => {
     const name = policy.normalizePackageName(entry && entry.name);
-    const version = entry && entry.version ? String(entry.version) : null;
-    const key = `${name}@${version || ''}`;
+    const specifier = String((entry && entry.specifier) || (entry && entry.version ? `==${entry.version}` : '')).replace(/\s+/g, '');
+    const key = `${name}@${specifier}`;
     const hit = cache.get(key);
-    if (hit && now() - hit.at < ttlMs) return hit.result;
-    const result = await vetPackage(name, { version, fetchImpl, now: now(), signal });
-    if (result.reason !== 'vet_unavailable') {
+    if (hit && now() - hit.at < (hit.result.ok ? Math.min(ttlMs, OK_CACHE_TTL_MS) : ttlMs)) return hit.result;
+    const result = await vetPackage(name, { specifier, fetchImpl, now: now(), signal });
+    // Never cache an outage, nor a verdict reached without adoption data.
+    const cacheable = result.reason !== 'vet_unavailable'
+      && !(result.evidence && Object.prototype.hasOwnProperty.call(result.evidence, 'monthlyDownloads') && result.evidence.monthlyDownloads == null);
+    if (cacheable) {
       if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
       cache.set(key, { at: now(), result });
     }
     return result;
   };
   return {
-    /** @param {Array<{name: string, version?: string|null}>} entries */
+    /** @param {Array<{name: string, specifier?: string, version?: string|null}>} entries */
     async vet(entries, { signal } = {}) {
       const list = Array.isArray(entries) ? entries : [];
       const out = new Array(list.length);
@@ -404,10 +570,15 @@ module.exports = {
   popularNames,
   editDistance,
   typosquatTarget,
+  RELEASE_MIN_AGE_DAYS,
   wheelVersion,
   pinnedVersion,
   parseVersion,
   highestVersion,
+  versionMatches,
+  wheelCompatible,
+  installableReleases,
+  chooseRelease,
   isMaliciousAdvisory,
   vetPackage,
   describeEvidence,
