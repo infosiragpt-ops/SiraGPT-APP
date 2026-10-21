@@ -27,6 +27,7 @@
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
 const { capabilityRecoveryGuidance, detectMissingDependency } = require('./capability-recovery');
 const sandboxPackages = require('./sandbox-packages/policy');
+const { pinnedVersion: vettingPinnedVersion, describeEvidence: describeVettingEvidence } = require('./sandbox-packages/vetting');
 const { PACKAGES_DIR } = require('../doc-agent/sandbox-pip');
 const { CHART_SCHEMA, normalizeNativeChart } = require('../document-pipeline/pptx-native-chart');
 const { executePythonDescription, executeBashDescription } = require('./sandbox-environment');
@@ -591,6 +592,28 @@ const INSTALL_TOOL_DEFINITION = {
   },
 };
 
+/**
+ * The same tool when vetting is on (policy.vetting): names outside the
+ * curated list are not refused outright; the server vets them first.
+ */
+const VETTED_INSTALL_TOOL_DEFINITION = {
+  type: 'function',
+  function: {
+    ...INSTALL_TOOL_DEFINITION.function,
+    description:
+      'Install Python packages from PyPI into this conversation\'s sandbox (kept for later turns). Call it ONLY after an import failed with ModuleNotFoundError; pass exact PyPI distribution names («opencv-python-headless», «seaborn==0.13.2»), never URLs, paths or modules («cv2»; the import name can differ from the distribution). Curated packages install directly; any other package is vetted first (PyPI history and adoption, malware advisories, look-alike names) together with its dependencies, and a refused name must not be retried. execute_python keeps no network; only the installer reaches the package index.',
+  },
+};
+
+// Dependencies outside the curated list vetted for one install; a library
+// pulling in more than this is refused rather than vetted name by name.
+const MAX_VETTED_DEPENDENCIES = 40;
+
+/** The install tool definition for a resolved package policy. */
+function installToolDefinition(policy) {
+  return policy && policy.vetting ? VETTED_INSTALL_TOOL_DEFINITION : INSTALL_TOOL_DEFINITION;
+}
+
 const PREVIEW_SCRIPT = `
 import json, os, sys, glob
 out_dir = sys.argv[1]
@@ -631,6 +654,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
   const policy = capabilityOpts.policy || sandboxPackages.resolvePolicy(capabilityOpts.env || process.env);
   const onGap = typeof capabilityOpts.onGap === 'function' ? capabilityOpts.onGap : null;
   const onInstall = typeof capabilityOpts.onInstall === 'function' ? capabilityOpts.onInstall : null;
+  // Vetting of names outside the curated list (sandbox-packages/vetting.js)
+  // runs only when the caller wires a vetter AND the policy allows it.
+  const vetter = capabilityOpts.vetter && typeof capabilityOpts.vetter.vet === 'function' ? capabilityOpts.vetter : null;
+  const vettingOn = Boolean(vetter && policy.enabled && policy.vetting);
   const reportedGaps = new Set();
   let installCalls = 0;
   const reportGap = (gap) => {
@@ -671,7 +698,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       allowed: policy.enabled && allowed,
       tool,
     });
-    return capabilityRecoveryGuidance(stderr, { language: lang, exitCode, policy, package: pkg, allowed });
+    return capabilityRecoveryGuidance(stderr, { language: lang, exitCode, policy, package: pkg, allowed, vetting: vettingOn });
   };
   const explainInstallFailure = (result) => {
     const code = String(result && result.code || 'install_failed');
@@ -693,6 +720,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         return 'the sandbox has no space left; nothing was installed.';
       case 'conflict':
         return 'the request conflicts with the libraries built into the sandbox image (their versions are fixed so numpy/pandas/lxml/python-pptx keep working); nothing was installed. Drop the version pin or use the installed version.';
+      case 'dependency_refused':
+        return `the dependencies it needs did not pass vetting (${(result.refusedDependencies || []).map((v) => `«${v.name}»: ${v.detail}`).join('; ')}); nothing was installed. Do not retry; use an installed equivalent or state the missing capability.`;
+      case 'too_many_dependencies':
+        return `it pulls in ${result.dependencyCount} packages outside the curated list (at most ${MAX_VETTED_DEPENDENCIES} are vetted per install); nothing was installed. Use a lighter library or state the missing capability.`;
       case 'commit_failed':
         return 'the packages were downloaded but could not be written into the workspace, so the package folder may be incomplete; do not rely on them in this turn.';
       default:
@@ -774,15 +805,22 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       const raw = args && args.packages;
       const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
       const checked = sandboxPackages.validateRequest(list, policy);
-      if (!checked.ok) {
-        const invalid = checked.rejected.filter((r) => r.reason === 'invalid_spec').map((r) => r.raw);
-        const denied = checked.rejected.filter((r) => r.reason === 'not_allowed').map((r) => r.name);
-        const tooMany = checked.rejected.find((r) => r.reason === 'too_many');
-        for (const name of denied) reportGap({ kind: 'python_package', name, package: name, allowed: false, tool: 'install_sandbox_package' });
+      const invalid = checked.rejected.filter((r) => r.reason === 'invalid_spec').map((r) => r.raw);
+      const outside = checked.rejected.filter((r) => r.reason === 'not_allowed');
+      const tooMany = checked.rejected.find((r) => r.reason === 'too_many')
+        || (vettingOn && checked.requirements.length + outside.length > policy.maxPackages ? { limit: policy.maxPackages } : null);
+      // With vetting on, a name outside the curated list is vetted instead of
+      // refused. Invalid specs and oversize batches are still refused whole.
+      const vetOutside = vettingOn && outside.length > 0 && !invalid.length && !tooMany;
+      if (!checked.ok && !vetOutside) {
+        const denied = outside.map((r) => r.name);
+        // With vetting on these names were not judged (the batch failed for
+        // another reason), so they are not gaps yet.
+        if (!vettingOn) for (const name of denied) reportGap({ kind: 'python_package', name, package: name, allowed: false, tool: 'install_sandbox_package' });
         const parts = ['ERROR: nothing was installed.'];
         if (!list.length) parts.push('Pass packages: ["name", …].');
         if (invalid.length) parts.push(`Invalid specs (only «name», «name[extra]», «name==1.2» are accepted; never URLs, paths or module names): ${invalid.join(', ')}.`);
-        if (denied.length) parts.push(`Not on the approved package list (reported to the administrator; do not retry them): ${denied.join(', ')}.`);
+        if (denied.length && !vettingOn) parts.push(`Not on the approved package list (reported to the administrator; do not retry them): ${denied.join(', ')}.`);
         if (tooMany) parts.push(`At most ${tooMany.limit} packages per call.`);
         parts.push('Use an installed equivalent or tell the user precisely which capability is missing.');
         return parts.join(' ');
@@ -790,37 +828,98 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       if (installCalls >= policy.maxPerTurn) {
         return `ERROR: the install budget for this turn is exhausted (${policy.maxPerTurn} calls). Work with what is installed or state the missing capability.`;
       }
+      const isDenied = (name) => Boolean(policy.deny && policy.deny.has(sandboxPackages.normalizePackageName(name)));
+      const deniedOutside = vetOutside ? outside.filter((r) => isDenied(r.name)).map((r) => r.name) : [];
+      if (deniedOutside.length) {
+        for (const name of deniedOutside) reportGap({ kind: 'python_package', name, package: name, allowed: false, tool: 'install_sandbox_package' });
+        return `ERROR: nothing was installed. Blocked by the administrator on this server: ${deniedOutside.join(', ')}. Do not retry them; use an installed equivalent or tell the user precisely which capability is missing.`;
+      }
       installCalls += 1;
-      const specs = checked.requirements.map((r) => r.spec);
       const startedAt = Date.now();
-      let result;
-      try {
-        result = await sandbox.installPythonPackages({
-          requirements: specs,
-          allowJson: sandboxPackages.allowlistJson(policy),
-          indexUrl: policy.indexUrl,
-          network: policy.network,
-          timeoutMs: policy.timeoutMs,
-          maxBytes: policy.maxBytes,
-          tmpSize: policy.tmpSize,
-          signal: ctx.signal,
-        });
-      } catch (err) {
-        result = {
-          ok: false, code: 'install_failed', installed: [], notAllowed: [], notFound: [], bytes: 0,
-          durationMs: Date.now() - startedAt, detail: String(err && err.message || err).slice(0, 300),
-        };
+      const requirements = [...checked.requirements];
+      const allow = new Set(policy.allow);
+      let vetted = [];
+      if (vetOutside) {
+        const parsedOutside = outside.map((r) => sandboxPackages.parseRequirement(r.raw)).filter(Boolean);
+        const verdicts = await vetter.vet(
+          parsedOutside.map((r) => ({ name: r.name, version: vettingPinnedVersion(r.specifier) })),
+          { signal: ctx.signal },
+        );
+        const refused = verdicts.filter((v) => !v || !v.ok);
+        if (refused.length) {
+          for (const v of refused) reportGap({ kind: 'python_package', name: v.name, package: v.name, allowed: false, tool: 'install_sandbox_package' });
+          if (onInstall) {
+            try { onInstall({ requested: parsedOutside.map((r) => r.spec), driver: sandbox.driver || null, ok: false, code: 'vetting_refused', refused: refused.map((v) => ({ name: v.name, reason: v.reason })) }); } catch (_) { /* telemetry never breaks a tool */ }
+          }
+          const reasons = refused.map((v) => `«${v.name}»: ${v.detail}`).join('; ');
+          return `ERROR: nothing was installed. Refused by the package vetting: ${reasons}. Do not retry these names; use an installed equivalent or tell the user precisely which capability is missing.`;
+        }
+        vetted = verdicts;
+        for (const v of verdicts) allow.add(v.name);
+        requirements.push(...parsedOutside);
+      }
+      const specs = requirements.map((r) => r.spec);
+      const install = async (timeoutMs) => {
+        try {
+          return await sandbox.installPythonPackages({
+            requirements: specs,
+            allowJson: JSON.stringify([...allow].sort()),
+            indexUrl: policy.indexUrl,
+            network: policy.network,
+            timeoutMs,
+            maxBytes: policy.maxBytes,
+            tmpSize: policy.tmpSize,
+            signal: ctx.signal,
+          });
+        } catch (err) {
+          return {
+            ok: false, code: 'install_failed', installed: [], notAllowed: [], notFound: [], bytes: 0,
+            durationMs: Date.now() - startedAt, detail: String(err && err.message || err).slice(0, 300),
+          };
+        }
+      };
+      let result = await install(policy.timeoutMs);
+      // pip resolved dependencies outside the list. The installer refused
+      // BEFORE streaming anything, so vet exactly those names and try once
+      // more with them allowed.
+      if (vettingOn && result && result.code === 'not_allowed' && Array.isArray(result.notAllowed) && result.notAllowed.length) {
+        const deps = [...new Set(result.notAllowed.map((n) => sandboxPackages.normalizePackageName(n)))].filter((n) => n && !allow.has(n));
+        const blockedDeps = deps.filter(isDenied);
+        if (blockedDeps.length) {
+          result = {
+            ...result,
+            code: 'dependency_refused',
+            refusedDependencies: blockedDeps.map((name) => ({ name, detail: 'blocked by the administrator on this server' })),
+            notAllowed: blockedDeps,
+          };
+        } else if (deps.length > MAX_VETTED_DEPENDENCIES) {
+          result = { ...result, code: 'too_many_dependencies', dependencyCount: deps.length };
+        } else if (deps.length) {
+          const verdicts = await vetter.vet(deps.map((name) => ({ name })), { signal: ctx.signal });
+          const refusedDeps = verdicts.filter((v) => !v || !v.ok);
+          if (refusedDeps.length) {
+            result = { ...result, code: 'dependency_refused', refusedDependencies: refusedDeps, notAllowed: refusedDeps.map((v) => v.name) };
+          } else {
+            vetted = [...vetted, ...verdicts];
+            for (const v of verdicts) allow.add(v.name);
+            result = await install(Math.max(30_000, policy.timeoutMs - (Date.now() - startedAt)));
+          }
+        }
       }
       if (!result || typeof result !== 'object') result = { ok: false, code: 'install_failed', installed: [], notAllowed: [], notFound: [], bytes: 0, durationMs: Date.now() - startedAt, detail: '' };
       if (onInstall) {
-        try { onInstall({ requested: specs, driver: sandbox.driver || null, ...result }); } catch (_) { /* telemetry never breaks a tool */ }
+        const vettedTelemetry = vetted.length ? { vetted: vetted.map((v) => ({ name: v.name, ...v.evidence })) } : {};
+        try { onInstall({ requested: specs, driver: sandbox.driver || null, ...result, ...vettedTelemetry }); } catch (_) { /* telemetry never breaks a tool */ }
       }
       if (result.ok) {
         const installed = Array.isArray(result.installed) ? result.installed : [];
         await updateManifest(installed, specs);
         const names = installed.map((i) => `${i.name}${i.version ? ` ${i.version}` : ''}`);
+        const vettedNote = vetted.length
+          ? ` Outside the curated list, vetted: ${vetted.map((v) => `${v.name} (${describeVettingEvidence(v.evidence)})`).join('; ')}.`
+          : '';
         return names.length
-          ? `Installed into the sandbox: ${names.join(', ')}. Import them normally in execute_python (no restart needed).`
+          ? `Installed into the sandbox: ${names.join(', ')}. Import them normally in execute_python (no restart needed).${vettedNote}`
           : `Already available: ${specs.join(', ')} (nothing new was needed). Import them normally in execute_python.`;
       }
       for (const name of result.notAllowed || []) reportGap({ kind: 'python_package', name, package: name, allowed: false, tool: 'install_sandbox_package' });
@@ -1170,7 +1269,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
  */
 function buildToolDefinitions(env = process.env) {
   const base = officeEngineEnabled(env) ? withOfficeTools(BASE_TOOL_DEFINITIONS) : [...BASE_TOOL_DEFINITIONS];
-  if (sandboxPipEnabled(env)) base.push(INSTALL_TOOL_DEFINITION);
+  if (sandboxPipEnabled(env)) base.push(installToolDefinition(sandboxPackages.resolvePolicy(env)));
   return webToolsEnabled(env) ? [...base, ...WEB_TOOL_DEFINITIONS] : base;
 }
 
@@ -1204,6 +1303,8 @@ module.exports = {
   webToolsEnabled,
   sandboxPipEnabled,
   INSTALL_TOOL_DEFINITION,
+  VETTED_INSTALL_TOOL_DEFINITION,
+  installToolDefinition,
   PACKAGES_DIR,
   MANIFEST_REL,
   normalizeHex,

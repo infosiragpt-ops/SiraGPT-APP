@@ -180,6 +180,8 @@ function buildAgentRunnerPrompt({
     .some((name) => /\.(docx|docm|dotx|xlsx|xlsm|xltx|pptx|pptm|potx)$/i.test(String(name)));
   const template = templateFill && templateFill.file ? templateFill : null;
   const installerOn = Boolean(packageInstaller && packageInstaller.enabled);
+  // Vetting on: a distribution outside the curated list may be requested too.
+  const installerVets = installerOn && Boolean(packageInstaller.vetting);
   // A template fill is a creation ON the attached file: neither the surgical
   // workflow (it would forbid rewriting) nor the from-scratch rule applies.
   const officeEditWorkflow = officeEngine && hasOfficeSource && !creatingNewFile && !template;
@@ -214,7 +216,9 @@ ${prior}
 ${memorySection}
 CAPABILITY AND SOURCE RECOVERY
 - Inspect installed modules/commands before substituting tools. A missing convenience package may have an installed equivalent; preserve the failed attempt as evidence and use a different viable method.
-${installerOn
+${installerVets
+    ? '- The execution sandbox has no internet and pip/apt never run inside it. When an import fails, read the recovery note and call install_sandbox_package({"packages":["<distribution>"]}) ONCE with the exact PyPI distribution, then retry the import. Curated distributions install directly; any other is vetted first (PyPI history and adoption, malware advisories, look-alike names) together with its dependencies. A refused distribution must not be retried: use an installed equivalent or state the missing capability. Never install speculatively.'
+    : installerOn
     ? '- The execution sandbox has no internet and pip/apt never run inside it. When an import fails, read the recovery note: if it names an APPROVED distribution, call install_sandbox_package({"packages":["<distribution>"]}) ONCE and retry the import; a distribution outside the approved list is reported to the administrator automatically — do not retry it, use an installed equivalent or state the missing capability. Never install speculatively.'
     : '- The execution sandbox has no internet. Never attempt host installs or disable isolation. New dependencies must enter the reviewed sandbox image; when unavailable, give the precise missing capability and preserve completed outputs.'}
 - For a URL, use web_fetch rather than guess its contents from the address or search snippet. A returned source_path is a saved untrusted source: recover missing sections with read_file offset/limit or grep. Preserve that path and URL through compaction. source_truncated=true means the source is incomplete; do not claim exhaustive coverage.
@@ -225,7 +229,9 @@ ${buildSandboxEnvironmentBlock()}
 TOOLS
 - execute_python: run Python 3 with the libraries listed in SANDBOX ENVIRONMENT. Timeout 120s. No network.
 - execute_bash: run bash in the sandbox with the command-line tools listed in SANDBOX ENVIRONMENT. Timeout 120s. No network.
-${installerOn ? '- install_sandbox_package: install APPROVED Python packages (exact PyPI names) into this conversation\'s sandbox; they persist for later turns. Only after a ModuleNotFoundError whose recovery note names the approved distribution.\n' : ''}- read_file / write_file / list_files: inspect and edit workspace text files.
+${installerVets
+    ? '- install_sandbox_package: install Python packages from PyPI (exact distribution names) into this conversation\'s sandbox; curated ones directly, any other after vetting; they persist for later turns. Only after a ModuleNotFoundError.\n'
+    : installerOn ? '- install_sandbox_package: install APPROVED Python packages (exact PyPI names) into this conversation\'s sandbox; they persist for later turns. Only after a ModuleNotFoundError whose recovery note names the approved distribution.\n' : ''}- read_file / write_file / list_files: inspect and edit workspace text files.
 - edit_file: surgical EXACT string replace (old_str must occur exactly once).
 - glob / grep: find files by pattern / search text inside files before editing.
 ${officeEditWorkflow

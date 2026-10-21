@@ -772,7 +772,12 @@ librería ESTÁ y la API es otra) o de un helper de SiraGPT (`sira_charts`) no s
 como paquete faltante; en raíces *namespace* (`google.protobuf`) la distribución es el
 segundo componente. Todo comando del sandbox exporta
 `PYTHONUSERBASE=/workspace/.sira-packages`, así que la librería queda importable sin
-reiniciar nada. Un paquete fuera de la lista nunca se instala: queda como
+reiniciar nada. Un paquete fuera de la lista se **verifica** antes de instalarse
+(`sandbox-packages/vetting.js`, junto con las dependencias que pip resuelva fuera de la
+lista): existe en PyPI con wheels vivas, no está en cuarentena, OSV no tiene un aviso de
+código malicioso para la versión que pip instalaría, tiene ≥ 90 días y ≥ 2 000 descargas
+el último mes (sin estadísticas: ≥ 1 año y ≥ 5 versiones) y su nombre no imita a uno
+popular. Si PyPI u OSV no responden, se rechaza. Lo rechazado queda como
 `agent.capability_gap` en Admin → Logs → Auditoría (y en `GET /api/admin/capabilities`)
 para que el administrador decida si ampliar la lista. La allowlist por defecto vive en
 `backend/src/services/agent-runner/sandbox-packages/policy.js` (datos, documentos,
@@ -781,7 +786,7 @@ imágenes, texto; con sus dependencias transitivas). Driver remoto: el microserv
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SIRAGPT_SANDBOX_PIP` | `1` (`0` en `NODE_ENV=test`) | `0` apaga el instalador: la herramienta no se ofrece y la guía vuelve a «el sandbox no tiene red» |
+| `SIRAGPT_SANDBOX_PIP` | `1` (`0` en `NODE_ENV=test`) | `0` apaga el instalador: la herramienta no se ofrece y la guía vuelve a «el sandbox no tiene red». `allowlist` instala SOLO la lista curada (sin verificación de otros paquetes). Con `SIRAGPT_SANDBOX_PIP_INDEX_URL` definido tampoco se verifican paquetes fuera de la lista |
 | `SIRAGPT_SANDBOX_PIP_EXTRA_ALLOW` | — | Lista (comas/espacios) de distribuciones que se SUMAN a la allowlist (nombres PEP 503; `My_Pkg` → `my-pkg`) |
 | `SIRAGPT_SANDBOX_PIP_DENY` | — | Lista que se QUITA de la allowlist por defecto |
 | `SIRAGPT_SANDBOX_PIP_INDEX_URL` | PyPI | Índice de paquetes (`https://…`), p. ej. un devpi/proxy local con los paquetes fijados; solo http(s) |

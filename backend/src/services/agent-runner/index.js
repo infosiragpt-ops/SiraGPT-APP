@@ -23,7 +23,7 @@ const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signa
 const { fileConversionTarget } = require('./conversion-intent');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { loadConversationContext, conversationContextMessage } = require('./conversation-context');
-const { TOOL_DEFINITIONS, makeToolExecutors, officeEngineEnabled } = require('./tools');
+const { TOOL_DEFINITIONS, VETTED_INSTALL_TOOL_DEFINITION, makeToolExecutors, officeEngineEnabled } = require('./tools');
 const { installOfficeEngine, ENGINE_REL: OFFICE_ENGINE_REL } = require('./tools.office');
 const { createOfficeFailureReporter, verificationFailureFromSteps } = require('./turn-failure-hook');
 const sandboxPackages = require('./sandbox-packages/policy');
@@ -1565,6 +1565,12 @@ async function runAgentRunner({
     const installerOffered = livePolicy.enabled
       && TOOL_DEFINITIONS.some((d) => d && d.function && d.function.name === 'install_sandbox_package');
     const packagePolicy = installerOffered ? livePolicy : { ...livePolicy, enabled: false };
+    // Names outside the curated list are vetted (sandbox-packages/vetting.js)
+    // only when the offered install tool told the model so: same snapshot.
+    const packageVetter = packagePolicy.enabled && packagePolicy.vetting
+      && TOOL_DEFINITIONS.includes(VETTED_INSTALL_TOOL_DEFINITION)
+      ? require('./sandbox-packages/vetting').sharedVetter()
+      : null;
     const baseSystem = buildAgentRunnerPrompt({
       fileNames: names,
       priorArtifactNames: priorNames,
@@ -1573,7 +1579,7 @@ async function runAgentRunner({
       designUpgrade,
       designTheme,
       templateFill: templateFill ? { file: templateFill.file, format: templateFill.format, summary: templateFill.summary } : null,
-      packageInstaller: { enabled: packagePolicy.enabled },
+      packageInstaller: { enabled: packagePolicy.enabled, vetting: Boolean(packageVetter) },
     });
     const onCapabilityGap = (gap) => {
       const label = gap.allowed
@@ -1626,7 +1632,7 @@ async function runAgentRunner({
         },
         // The user's words pick the deck theme when the model passes none.
         deck: { prompt: task },
-        capability: { policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall },
+        capability: { policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall, vetter: packageVetter },
       }),
       ...f8.executors,
     };
