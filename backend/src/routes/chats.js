@@ -1565,7 +1565,8 @@ router.post('/messages/:messageId/feedback', [
             try {
               const learned = require('../services/learned-preferences');
               const trait = learned.traitFromReason(reasons.reasonCode);
-              if (trait) learned.recordSignals({ prisma, userId: req.user.id, traits: [trait], source: 'dislike' }).catch(() => {});
+              // Keyed by message: re-submitting a 👎 never adds weight twice.
+              if (trait) learned.recordSignals({ prisma, userId: req.user.id, traits: [trait], source: 'dislike', dedupeKey: message.id }).catch(() => {});
             } catch (_learnErr) { /* learning never affects feedback */ }
           });
         }

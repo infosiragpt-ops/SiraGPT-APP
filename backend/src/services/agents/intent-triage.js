@@ -100,6 +100,51 @@ function readEscalationScore(analysis) {
   return scores.length ? Math.max(...scores) : 0;
 }
 
+// A BARE request has nothing to answer about yet: a deliverable or a generic
+// verb with no topic («excel», «un plan», «dame ideas», «hazlo ya»), one of
+// the vague formulas below, or input with no content («?», «123», «NULL»).
+// Only bare requests may escalate on the token score: that score is 0.85 for
+// ANY prompt under 3 tokens, so without this gate «buen día», «thank you»,
+// «2+2» or «explícame recursión» were answered with a clarifying question.
+const BARE_DELIVERABLES = new Set([
+  'informe', 'informes', 'reporte', 'reportes', 'documento', 'documentos', 'doc', 'word', 'excel', 'pdf',
+  'ppt', 'pptx', 'powerpoint', 'presentacion', 'presentaciones', 'diapositivas', 'slides', 'plan', 'planes',
+  'resumen', 'resumenes', 'tabla', 'tablas', 'grafico', 'graficos', 'imagen', 'imagenes', 'foto', 'fotos',
+  'logo', 'logos', 'video', 'videos', 'cancion', 'canciones', 'musica', 'audio', 'idea', 'ideas', 'lista',
+  'listas', 'contenido', 'material', 'texto', 'textos', 'articulo', 'ensayo', 'carta', 'correo', 'email',
+  'mensaje', 'codigo', 'script', 'app', 'aplicacion', 'pagina', 'web', 'landing', 'sitio', 'report',
+  'document', 'presentation', 'chart', 'image', 'picture', 'song', 'list', 'content', 'text', 'essay',
+  'letter', 'code', 'page', 'website', 'site', 'summary', 'table', 'spreadsheet', 'deck',
+]);
+const BARE_VERBS = new Set([
+  'haz', 'hazme', 'hazlo', 'hazla', 'hacer', 'hacelo', 'hace', 'crea', 'creame', 'crealo', 'crear', 'genera',
+  'generame', 'generalo', 'generar', 'dame', 'damelo', 'quiero', 'necesito', 'prepara', 'preparame',
+  'preparalo', 'preparala', 'escribe', 'escribeme', 'redacta', 'redactame', 'arma', 'armame', 'elabora',
+  'elaborame', 'manda', 'mandame', 'pasame', 'make', 'create', 'give', 'write', 'generate', 'need', 'want',
+  'build', 'do',
+]);
+const BARE_FILLERS = new Set([
+  'un', 'una', 'unos', 'unas', 'el', 'la', 'los', 'las', 'lo', 'algo', 'uno', 'eso', 'esto', 'ese', 'esa',
+  'que', 'de', 'del', 'para', 'con', 'por', 'favor', 'porfa', 'me', 'mi', 'ya', 'ahora', 'rapido', 'pls',
+  'plz', 'please', 'a', 'an', 'the', 'some', 'something', 'one', 'it', 'me', 'now',
+]);
+const BARE_JUNK = new Set(['null', 'undefined', 'none', 'nan', 'test', 'asdf', 'xxx']);
+
+function isBareRequest(promptText) {
+  const text = String(promptText || '').trim();
+  if (!text) return false;
+  if (looksLikeVagueRequest(text)) return true;
+  const norm = text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+  if (!/\p{L}/u.test(norm)) {
+    // «?», «...», «123» carry no request; «2+2» or «15*3» is a computation.
+    return !/\d\s*[-+*/x^%=]\s*\d/.test(norm);
+  }
+  const words = norm.match(/[\p{L}\p{N}]+/gu) || [];
+  if (!words.length || words.length > 6) return false;
+  return words.every((word) => BARE_DELIVERABLES.has(word) || BARE_VERBS.has(word)
+    || BARE_FILLERS.has(word) || BARE_JUNK.has(word));
+}
+
 // PR-12: detección de peticiones vagas para fallback determinista
 // en zona gris. Retorna un string descriptor (categoría) si el prompt
 // es vago, o null si parece concreto. Sólo se usa cuando NO hay judge
@@ -161,10 +206,11 @@ async function triageIntent({ analysis, prompt, recentTurns = [], judge, options
   // "¿qué necesitas de la tesis?"): the token-level score ignores history, so
   // it may only escalate on a fresh conversation.
   const hasHistory = Array.isArray(recentTurns) && recentTurns.length > 0;
-  const escalationScore = hasHistory ? score : readEscalationScore(analysis);
+  const promptText = String(prompt || "").trim();
+  // Only a bare request («excel», «un plan») may escalate on the token score.
+  const escalationScore = hasHistory || !isBareRequest(promptText) ? score : readEscalationScore(analysis);
   const needsFlag = Boolean(analysis?.needs_clarification);
   const heuristicQ = pickHeuristicQuestion(analysis);
-  const promptText = String(prompt || "").trim();
 
   if (!promptText) {
     return { action: "execute", reason: "empty_prompt", source: "skip", score };
@@ -315,5 +361,5 @@ module.exports = {
   isShortChitchatPrompt,
   DEFAULTS,
   // exposed for tests
-  _internal: { normalizeQuestion, pickHeuristicQuestion, readScore, withTimeout, looksLikeVagueRequest },
+  _internal: { normalizeQuestion, pickHeuristicQuestion, readScore, withTimeout, looksLikeVagueRequest, isBareRequest },
 };
