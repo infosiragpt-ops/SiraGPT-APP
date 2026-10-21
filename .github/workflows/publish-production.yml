@@ -114,10 +114,15 @@ jobs:
           for attempt in $(seq 1 100); do
             # The commit↔PR association can lag a few seconds after the merge.
             if [ "$attempt" -le 6 ] && pr_ci_verified; then exit 0; fi
+            # A transfer cut mid-body leaves PARTIAL JSON in the substitution:
+            # `$(curl … || echo '{}')` appended '{}' to it, jq could not parse
+            # it and `set -e` aborted the publish (2026-10-20, exit 5) while CI
+            # was green. Discard partial output; an unreadable answer is just
+            # one more polling attempt.
             runs=$(curl -fsS --max-time 20 \
               -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=production-main&event=push&head_sha=${TARGET}&per_page=10" || echo '{}')
-            state=$(jq -r --arg sha "$TARGET" '[.workflow_runs[]? | select(.head_sha==$sha)] | sort_by(.run_number) | last | "\(.status)/\(.conclusion)"' <<<"$runs")
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=production-main&event=push&head_sha=${TARGET}&per_page=10") || runs='{}'
+            state=$(jq -r --arg sha "$TARGET" '[.workflow_runs[]? | select(.head_sha==$sha)] | sort_by(.run_number) | last | "\(.status)/\(.conclusion)"' <<<"$runs" 2>/dev/null) || state='unreadable/null'
             case "$state" in
               completed/success) echo "CI push run for $TARGET is green"; exit 0 ;;
               completed/*) echo "::error::CI push run for $TARGET concluded '${state#completed/}' — not publishing"; exit 1 ;;
