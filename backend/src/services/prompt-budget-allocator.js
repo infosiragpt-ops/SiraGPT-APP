@@ -100,6 +100,13 @@ const TIER_MIN_RATIO = Object.freeze({ 0: 1, 1: 0.6, 2: 0.4, 3: 0.2 });
 const TIER_TRIM_ORDER = [3, 2, 1, 0];
 // Relative share of the fair-share level per tier in the last resort.
 const TIER_FAIR_WEIGHT = Object.freeze({ 1: 1, 2: 0.7, 3: 0.4 });
+// Protected (tier 0) blocks can fill the whole budget on long chats with
+// custom instructions; the evidence, memory and web results still need room.
+// This share of the budget is always available to the other tiers, even if
+// the prompt ends above the (soft) budget.
+const NON_PROTECTED_FLOOR_RATIO = 0.2;
+// Below this many tokens a trimmed block is noise («y…»): it is dropped.
+const MIN_USEFUL_TOKENS = 40;
 
 /**
  * Weighted max-min fair allocation ("water filling"). Each item receives
@@ -214,13 +221,17 @@ function allocate(rawBlocks, opts = {}) {
   let total = sumAlloc();
   if (total > budget) {
     const protectedTokens = allocated.filter((b) => b.tier === 0).reduce((a, b) => a + b.allocatedTokens, 0);
-    const remaining = Math.max(0, budget - protectedTokens);
+    const remaining = Math.max(budget - protectedTokens, Math.floor(budget * NON_PROTECTED_FLOOR_RATIO));
     const nonProtected = allocated.filter((b) => b.tier !== 0);
     const shares = fairShare(
       nonProtected.map((b) => ({ size: b.originalTokens, weight: TIER_FAIR_WEIGHT[b.tier] ?? TIER_FAIR_WEIGHT[DEFAULT_TIER] })),
       remaining,
     );
-    nonProtected.forEach((m, i) => { m.allocatedTokens = Math.max(1, shares[i]); });
+    nonProtected.forEach((m, i) => {
+      // Whole small blocks survive; a stub of a big one is dropped, not kept as «y…».
+      const useful = Math.min(MIN_USEFUL_TOKENS, m.originalTokens);
+      m.allocatedTokens = shares[i] >= useful ? shares[i] : 0;
+    });
     total = sumAlloc();
   }
 
@@ -268,6 +279,8 @@ function buildBudgetSummaryLine(allocation) {
 }
 
 module.exports = {
+  NON_PROTECTED_FLOOR_RATIO,
+  MIN_USEFUL_TOKENS,
   estimateTokens,
   allocate,
   applyAllocation,

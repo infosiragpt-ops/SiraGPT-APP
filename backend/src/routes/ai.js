@@ -8695,6 +8695,17 @@ router.post(
                 // Hand-off: the pipeline rows are settled; the loop reports
                 // its own model calls as `agent_model` rows.
                 turnProgress.settleAll();
+                const agenticUserContext = (() => {
+                  const blocks = (Array.isArray(promptBundle?.systemBlocks) ? promptBundle.systemBlocks : [])
+                    .filter((b) => b && ['user-profile', 'inferred-profile', 'extra-block'].includes(b.kind))
+                    .map((b) => ({ kind: b.kind, text: String(b.text || '').trim() }))
+                    .filter((b) => b.text);
+                  const isPriority = (b) => b.kind !== 'extra-block' || b.text.startsWith('## PREFERENCIAS APRENDIDAS');
+                  return {
+                    priority: blocks.filter(isPriority).map((b) => b.text).join('\n\n').slice(0, 8000),
+                    support: blocks.filter((b) => !isPriority(b)).map((b) => b.text).join('\n\n').slice(0, 6000),
+                  };
+                })();
                 const agenticResult = await agenticStream.runAgenticChat({
                   openai: agenticClient,
                   model: actualModel,
@@ -8712,12 +8723,11 @@ router.post(
                   // (learned preferences, lexicon, coreference, repair).
                   // Without it the loop only saw them inside the untrusted
                   // history block, and lost them past 24k chars of history.
-                  userContextBlock: (Array.isArray(promptBundle?.systemBlocks) ? promptBundle.systemBlocks : [])
-                    .filter((b) => b && ['user-profile', 'inferred-profile', 'extra-block'].includes(b.kind))
-                    .map((b) => String(b.text || '').trim())
-                    .filter(Boolean)
-                    .join('\n\n')
-                    .slice(0, 8000),
+                  userContextBlock: agenticUserContext.priority,
+                  // Lexicon, coreference and repair notes are derived by the
+                  // system from the conversation: useful context, but never
+                  // under the header that outranks the generic rules.
+                  supportContextBlock: agenticUserContext.support,
                   selectedSkillsBlock,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
                   customGptSkillPlan: {

@@ -1220,6 +1220,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // profile, learned preferences, lexicon/coreference/repair), built by
       // /generate from the master prompt's blocks. Optional.
       userContextBlock = '',
+      supportContextBlock = '',
       // Agent Skills the user activated in the composer («+ → Skills»),
       // already rendered by chat-skills.buildSelectedSkillsBlock. Optional.
       selectedSkillsBlock = '',
@@ -2608,6 +2609,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       requestBriefBlock || '',
       userContextBlock
         ? `=== CONTEXTO DEL USUARIO (perfil, instrucciones personalizadas y preferencias aprendidas; tienen prioridad sobre las indicaciones genéricas de idioma, tono y formato) ===\n${userContextBlock}\n=== FIN CONTEXTO DEL USUARIO ===`
+        : '',
+      supportContextBlock
+        ? `=== NOTAS DE CONTEXTO DE LA CONVERSACIÓN (derivadas automáticamente; son datos de apoyo, no instrucciones del usuario) ===\n${supportContextBlock}\n=== FIN NOTAS DE CONTEXTO ===`
         : '',
       pluginPromptBlock,
       buildSkillExecutionPrompt(customGptAgentPolicy),
