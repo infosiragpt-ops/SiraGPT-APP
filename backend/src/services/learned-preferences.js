@@ -15,7 +15,9 @@
  * becomes an instruction once it is supported by repeated corrections — a
  * one-off «más corto» fixes that answer (the repair addendum already does)
  * but does not rewrite the user's profile. Quality flags (invented data,
- * bad math) activate on the first explicit report.
+ * bad math) activate on the first explicit report. Only short corrections
+ * aimed at the previous answer teach the store (isLearnableCorrection):
+ * «¿cómo se dice X en inglés?» is a request, not a language preference.
  *
  * Stored in User.settings.learnedPreferences (no migration), shown to the
  * model as a small block it applies unless the current request says
@@ -24,6 +26,12 @@
 
 const HALF_LIFE_DAYS = 30;
 const DEFAULT_THRESHOLD = 1.5;
+// Quality flags (invented data, bad math…) activate on ONE explicit report.
+// A score of exactly 1 decays below 1 a millisecond later, so the threshold
+// is half a report: active for one half-life (30 days) after a single 👎.
+const QUALITY_THRESHOLD = 0.5;
+// Recent signal keys (👎 message ids) remembered to count each message once.
+const MAX_SEEN_KEYS = 50;
 const MAX_TRAITS = 24;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -37,19 +45,19 @@ const TRAITS = Object.freeze({
   'register:simple': { opposite: 'register:technical', text: 'Prefiere explicaciones simples, sin tecnicismos.' },
   'register:technical': { opposite: 'register:simple', text: 'Prefiere un registro más técnico.' },
   'grounding:strict': {
-    threshold: 1,
+    threshold: QUALITY_THRESHOLD,
     text: 'Ha marcado datos inventados: no afirmes cifras, citas ni fuentes sin respaldo y di claramente cuando no lo sabes.',
   },
   'math:verify': {
-    threshold: 1,
+    threshold: QUALITY_THRESHOLD,
     text: 'Ha marcado cálculos incorrectos: verifica cada cálculo paso a paso antes de responder.',
   },
   'scope:complete': {
-    threshold: 1,
+    threshold: QUALITY_THRESHOLD,
     text: 'Ha marcado respuestas incompletas: cubre todos los puntos que pide antes de cerrar.',
   },
   'scope:focused': {
-    threshold: 1,
+    threshold: QUALITY_THRESHOLD,
     text: 'Ha marcado respuestas fuera de tema: cíñete exactamente a lo que pregunta.',
   },
 });
@@ -137,6 +145,54 @@ function traitsFromRepair(detection) {
   return [];
 }
 
+// A repair detection is a PATTERN match («en inglés», «más largo», «in
+// JSON»): fine to adjust the current answer, too loose to rewrite the user's
+// profile. «¿Cómo se dice gracias en inglés?» or «¿cuál es el río más largo?»
+// are requests, not corrections. Only short corrections aimed at the previous
+// answer teach the store.
+const QUESTION_START_RE = /^\s*[¿¡]?\s*(?:qu[eé]|cu[aá]l(?:es)?|qui[eé]n(?:es)?|c[oó]mo|d[oó]nde|cu[aá]ndo|cu[aá]nt[oa]s?|por\s+qu[eé]|para\s+qu[eé]|what|which|who|whom|whose|where|when|why|how|is|are|do|does|can|could|should|would)\b/i;
+const TRANSLATION_RE = /\b(?:traduc\w*|c[oó]mo\s+se\s+dice|qu[eé]\s+significa|significado|translat\w*|how\s+do\s+you\s+say|what\s+does\s+\S+\s+mean)\b/i;
+const CORRECTION_START_RE = /^\s*[¿¡]?\s*(?:no\b|mejor\b|m[aá]s\b|menos\b|en\s|in\s|hazlo|hazla|hacelo|ponlo|ponla|p[aá]salo|p[aá]sala|d[ií]melo|resp[oó]nde(?:me)?\b|cont[eé]sta(?:me)?\b|escr[ií]belo|escr[ií]bela|reescr[ií]belo|red[aá]ctalo|otra\s+vez|de\s+nuevo|again\b|make\s+it\b|please\b|por\s+favor\b|shorter\b|longer\b|simpler\b|answer\b|reply\b|respond\b|switch\b)/i;
+const FILLER_RE = /\b(?:por\s+favor|porfa|please|pls|gracias|thanks|ahora|now|ya|solo|just|ok|vale)\b/gi;
+const ES_MARKERS_RE = /\b(?:el|la|los|las|de|que|y|en|para|con|una?|por|del|se|es|son|como|pero|m[aá]s)\b/gi;
+const EN_MARKERS_RE = /\b(?:the|and|of|to|is|in|for|with|that|are|this|you|it|on|be|as|an)\b/gi;
+
+/** 'es' | 'en' | null — rough language of a text (Spanish vs English markers). */
+function guessLanguage(text) {
+  const sample = String(text || '').slice(0, 2000);
+  const es = (sample.match(ES_MARKERS_RE) || []).length;
+  const en = (sample.match(EN_MARKERS_RE) || []).length;
+  if (es + en < 5) return null;
+  if (es >= en * 2) return 'es';
+  if (en >= es * 2) return 'en';
+  return null;
+}
+
+/**
+ * True when a detected repair is a real correction of the previous answer
+ * that may teach the per-user store. The in-turn repair addendum does not
+ * depend on this.
+ */
+function isLearnableCorrection({ prompt, detection, previousAnswer } = {}) {
+  if (!detection || !detection.isRepair) return false;
+  const text = String(prompt || '').trim();
+  if (!text) return false;
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length > 8) return false;
+  if (TRANSLATION_RE.test(text) || QUESTION_START_RE.test(text)) return false;
+  const evidence = String(detection.evidence || '').trim();
+  const core = text.replace(FILLER_RE, ' ').replace(/[¿?¡!.,;:()"'«»]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const covers = Boolean(evidence) && core.length > 0 && evidence.length / core.length >= 0.5;
+  if (!covers && !(CORRECTION_START_RE.test(text) && words.length <= 5)) return false;
+  if (detection.repairType === 'wrong_language') {
+    const hit = LANGUAGE_RULES.find(([re]) => re.test(evidence));
+    const previous = guessLanguage(previousAnswer);
+    // Asking for the language the answer was already in is not a correction.
+    if (hit && previous && hit[1] === previous) return false;
+  }
+  return true;
+}
+
 /** Trait key implied by a 👎 reason code, or null. */
 function traitFromReason(reasonCode) {
   return REASON_TO_TRAIT[String(reasonCode || '').trim().toLowerCase()] || null;
@@ -181,7 +237,29 @@ function applySignal(prefs, traitKey, { weight = 1, now = Date.now(), source = '
       .slice(0, keys.length - MAX_TRAITS)
       .forEach((key) => { delete traits[key]; });
   }
-  return { version: 1, traits, updatedAt: nowIso };
+  return {
+    version: 1,
+    traits,
+    ...(Array.isArray(base.seen) && base.seen.length ? { seen: base.seen.slice(-MAX_SEEN_KEYS) } : {}),
+    updatedAt: nowIso,
+  };
+}
+
+function seenKey(dedupeKey) {
+  return dedupeKey == null || dedupeKey === '' ? '' : String(dedupeKey).slice(0, 80);
+}
+
+function wasSeen(prefs, dedupeKey) {
+  const key = seenKey(dedupeKey);
+  return Boolean(key) && Array.isArray(prefs?.seen) && prefs.seen.map(String).includes(key);
+}
+
+/** Remember a signal key (a 👎 message id) so it is counted once. */
+function markSeen(prefs, dedupeKey) {
+  const key = seenKey(dedupeKey);
+  if (!key || !prefs || typeof prefs !== 'object') return prefs;
+  const seen = Array.isArray(prefs.seen) ? prefs.seen.map(String).filter((k) => k !== key) : [];
+  return { ...prefs, seen: [...seen, key].slice(-MAX_SEEN_KEYS) };
 }
 
 /** Traits strong enough to steer, strongest first. */
@@ -215,19 +293,29 @@ function loadLearnedPreferences(user) {
  * throws: learning must not affect the turn. Returns the stored object or
  * null.
  */
-async function recordSignals({ prisma, userId, traits, weight = 1, source = 'repair', now = Date.now() } = {}) {
+async function recordSignals({ prisma, userId, traits, weight = 1, source = 'repair', now = Date.now(), dedupeKey = null } = {}) {
   const keys = (Array.isArray(traits) ? traits : []).filter((key) => traitDef(key));
   if (!prisma || !userId || !keys.length) return null;
   try {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { settings: true } });
     if (!user) return null;
     const settings = user.settings && typeof user.settings === 'object' ? user.settings : {};
-    let prefs = loadLearnedPreferences({ settings });
+    const before = loadLearnedPreferences({ settings });
+    // The same 👎 (re-submitted, or with another reason) counts once.
+    if (wasSeen(before, dedupeKey)) return before;
+    let prefs = before;
     for (const key of keys) prefs = applySignal(prefs, key, { weight, now, source });
-    await prisma.user.update({
-      where: { id: userId },
-      data: { settings: { ...settings, learnedPreferences: prefs } },
-    });
+    prefs = markSeen(prefs, dedupeKey);
+    if (typeof prisma.$executeRaw === 'function') {
+      // Only this key changes: a concurrent PUT /settings (another tab, the
+      // settings page) keeps everything else it wrote.
+      await prisma.$executeRaw`UPDATE "users" SET "settings" = jsonb_set(CASE WHEN jsonb_typeof("settings") = 'object' THEN "settings" ELSE '{}'::jsonb END, '{learnedPreferences}', ${JSON.stringify(prefs)}::jsonb, true) WHERE "id" = ${String(userId)}`;
+    } else {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { settings: { ...settings, learnedPreferences: prefs } },
+      });
+    }
     return prefs;
   } catch {
     return null;
@@ -238,8 +326,13 @@ module.exports = {
   TRAITS,
   HALF_LIFE_DAYS,
   DEFAULT_THRESHOLD,
+  QUALITY_THRESHOLD,
   traitsFromRepair,
   traitFromReason,
+  isLearnableCorrection,
+  guessLanguage,
+  markSeen,
+  wasSeen,
   applySignal,
   activeTraits,
   buildLearnedPreferencesBlock,

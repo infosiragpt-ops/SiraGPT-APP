@@ -4208,7 +4208,13 @@ router.post(
             try {
               const __learned = require('../services/learned-preferences');
               const __traits = __learned.traitsFromRepair(__repairDet);
-              if (__traits.length) {
+              // Only a real correction of the previous answer teaches the
+              // store; «¿cómo se dice X en inglés?» is a request.
+              if (__traits.length && __learned.isLearnableCorrection({
+                prompt,
+                detection: __repairDet,
+                previousAnswer: __prevAssistant ? (__prevAssistant.text || __prevAssistant.content || '') : '',
+              })) {
                 __learned.recordSignals({ prisma, userId, traits: __traits, source: 'repair' }).catch(() => {});
               }
             } catch (_learnErr) { /* best-effort */ }

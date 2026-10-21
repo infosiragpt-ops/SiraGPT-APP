@@ -710,6 +710,18 @@ router.delete('/account', authenticateToken, async (req, res) => {
 // live in their own columns for query-side use and are mirrored
 // here when present so the UI has a single source to render.
 // ────────────────────────────────────────────────────────────
+// Keys the SERVER maintains inside settings (learned preferences, the
+// inferred profile). They never round-trip through the client: a stale tab or
+// a shared browser's localStorage would otherwise write old or another
+// user's values back on the next settings save.
+const SERVER_OWNED_SETTINGS_KEYS = Object.freeze(['learnedPreferences', 'inferred']);
+function withoutServerOwnedSettings(settings) {
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return settings;
+  const out = { ...settings };
+  for (const key of SERVER_OWNED_SETTINGS_KEYS) delete out[key];
+  return out;
+}
+
 router.get('/settings', authenticateToken, async (req, res) => {
   try {
     const u = await prisma.user.findUnique({
@@ -717,7 +729,7 @@ router.get('/settings', authenticateToken, async (req, res) => {
       select: { settings: true, locale: true, preferredTone: true, customInstructions: true, name: true, avatar: true, plan: true },
     });
     if (!u) return res.status(404).json({ error: 'User not found' });
-    const settings = (u.settings && typeof u.settings === 'object') ? u.settings : {};
+    const settings = withoutServerOwnedSettings((u.settings && typeof u.settings === 'object') ? u.settings : {});
     // Mirror top-level personalization columns into the response so
     // the client renders from one merged object.
     res.json({
@@ -737,7 +749,11 @@ router.get('/settings', authenticateToken, async (req, res) => {
 
 router.put('/settings', authenticateToken, async (req, res) => {
   try {
-    const patch = req.body && typeof req.body === 'object' ? req.body : {};
+    const patch = withoutServerOwnedSettings(req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
+    // Same cap as PUT /profile: the instructions ride every system prompt.
+    if (typeof patch.customInstructions === 'string') {
+      patch.customInstructions = stripHtml(patch.customInstructions).slice(0, 4000);
+    }
     const current = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { settings: true },
@@ -762,7 +778,7 @@ router.put('/settings', authenticateToken, async (req, res) => {
 
     res.json({
       settings: {
-        ...(updated.settings && typeof updated.settings === 'object' ? updated.settings : {}),
+        ...withoutServerOwnedSettings(updated.settings && typeof updated.settings === 'object' ? updated.settings : {}),
         locale: updated.locale,
         preferredTone: updated.preferredTone,
         customInstructions: updated.customInstructions,
@@ -2375,6 +2391,8 @@ router.delete('/me/sso-identities/:id', authenticateToken, async (req, res) => {
 module.exports = router;
 // Test-only internals (ratchet 45)
 module.exports.INTERNAL = {
+  SERVER_OWNED_SETTINGS_KEYS,
+  withoutServerOwnedSettings,
   EXPORT_QUARTERLY_LIMIT,
   EXPORT_QUARTERLY_LIMIT_MAX,
   resolveExportQuarterlyLimit,
