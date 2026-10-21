@@ -313,11 +313,16 @@ function clearSource(userId, collection, sourceId) {
 
 function stats(userId, collection) {
   const ns = store.get(storeKey(userId, collection));
-  if (!ns) return { triples: 0, entities: 0, sources: 0 };
+  if (!ns) return { triples: 0, entities: 0, sources: 0, embedded: 0 };
+  // Only embedded triples can be reached by linkTriple(); graph expansion is
+  // pointless (but still costs an LLM call) when none are.
+  let embedded = 0;
+  for (const t of ns.triples.values()) if (t.embedding) embedded += 1;
   return {
     triples: ns.triples.size,
     entities: ns.byEntity.size,
     sources: ns.bySource.size,
+    embedded,
   };
 }
 

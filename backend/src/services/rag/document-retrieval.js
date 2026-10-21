@@ -2,7 +2,43 @@
 
 const { createBm25Index, DEFAULT_STOPWORDS } = require('./bm25');
 
-const STOPWORDS = new Set([...DEFAULT_STOPWORDS].map(word => word.normalize('NFD').replace(/\p{M}/gu, '')));
+// Question words and function words that the shared BM25 list lacks. In
+// document search they match every passage («¿cuál es…?», «what are…») and
+// dilute the terms that carry the question. Kept local to document search:
+// the shared list in bm25.js serves other indexes. Words that are also
+// content nouns in real documents stay searchable: «will» (testament),
+// «can», «era», «not» (negation can be the point of a clause).
+const QUESTION_STOPWORDS = [
+  'cual', 'cuales', 'como', 'donde', 'cuando', 'cuanto', 'cuanta', 'cuantos', 'cuantas', 'quien', 'quienes',
+  'este', 'esta', 'estos', 'estas', 'ese', 'esa', 'esos', 'esas', 'esto', 'eso', 'aquel', 'aquella',
+  'hay', 'muy', 'tambien', 'segun', 'sobre', 'entre', 'cada', 'otro', 'otra', 'otros', 'otras',
+  'mi', 'mis', 'tu', 'tus', 'nos', 'les', 'ya', 'han', 'ha', 'he', 'estan', 'eran', 'sea', 'sean',
+  'what', 'which', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how', 'about', 'into', 'there',
+  'their', 'they', 'them', 'could', 'would', 'should', 'does', 'any', 'some',
+];
+
+const STOPWORDS = new Set([...DEFAULT_STOPWORDS, ...QUESTION_STOPWORDS]
+  .map(word => word.normalize('NFD').replace(/\p{M}/gu, '')));
+
+// Light inflection folding for Spanish and English. The surface token is
+// always kept (an exact match still scores on both forms); the stem is added
+// so «riesgo» finds «riesgos», «evaluación» finds «evaluaciones», «nueva»
+// finds «nuevo» and «study» finds «studies». Deliberately conservative: only
+// plural, gender and the -ción/-ciones pair; alphabetic tokens of 5+ letters.
+const STEM_MIN_LENGTH = 5;
+const STEM_MIN_RESULT = 4;
+function lightStem(token) {
+  if (token.length < STEM_MIN_LENGTH || !/^\p{L}+$/u.test(token)) return null;
+  let s = token;
+  if (s.endsWith('ciones')) s = `${s.slice(0, -6)}cion`;
+  else if (s.endsWith('siones')) s = `${s.slice(0, -6)}sion`;
+  else if (s.endsWith('ies') && s.length > 5) s = `${s.slice(0, -3)}y`;
+  else if (s.endsWith('ces') && s.length > 5) s = `${s.slice(0, -3)}z`;
+  else if (/[lrndjz]es$/.test(s) && s.length > 5) s = s.slice(0, -2);
+  else if (s.endsWith('s') && !s.endsWith('ss') && !/(?:is|us)$/.test(s)) s = s.slice(0, -1);
+  if (/[aoe]$/.test(s) && s.length > STEM_MIN_RESULT) s = s.slice(0, -1);
+  return s !== token && s.length >= STEM_MIN_RESULT ? s : null;
+}
 
 // Normalize only the search representation. Stored text and cited excerpts
 // retain original accents, table line breaks, decimal punctuation and values.
@@ -16,6 +52,8 @@ function documentTokens(text) {
     // Decimal values stay whole: 0,05 is not interchangeable with 0,01.
     // File names and identifiers also retain their exact compound token.
     if (token.length > 1 || /^\p{N}$/u.test(token)) tokens.push(token);
+    const stem = lightStem(token);
+    if (stem) tokens.push(stem);
     if (/^\p{L}/u.test(token) && /[-./]/.test(token)) {
       for (const part of token.split(/[-./]/)) {
         if ((part.length > 1 || /^\p{N}$/u.test(part)) && !STOPWORDS.has(part)) tokens.push(part);
@@ -25,9 +63,16 @@ function documentTokens(text) {
   return tokens;
 }
 
+// A pre-tokenized term list is used as-is. Re-tokenizing terms joined into a
+// string stemmed the stems a second time («intereses» → «interes» → «inter»,
+// which then matched unrelated compound parts such as «inter-institucional»).
+function lexicalTokens(input) {
+  return Array.isArray(input) ? input : documentTokens(input);
+}
+
 function searchDocumentLexical(entries, query, k = 10) {
-  const index = createBm25Index({ tokenize: documentTokens, k1: 1.5 });
-  const queryTerms = new Set(documentTokens(query));
+  const index = createBm25Index({ tokenize: lexicalTokens, k1: 1.5 });
+  const queryTerms = new Set(lexicalTokens(query));
   const matchingTerms = new Set();
   const coverage = new Map();
   entries.forEach((entry, position) => {
