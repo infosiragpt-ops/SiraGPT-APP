@@ -298,6 +298,55 @@ test('isolated code runner: the exact chat path is proven with an isolated drive
   assert.match(call.source, /import os, sys, pandas as pd/);
 });
 
+test('workspace computer: staged upload, real bash and the outputs/ hand-back are proven, and reported without blocking', async () => {
+  const workspaceResult = (extra = {}) => ({
+    ok: true,
+    stdout: 'WORKSPACE_OK 1\n',
+    isolation: { driver: 'remote' },
+    outbox: { files: [{ rel: 'probe-out.txt', buffer: Buffer.from('SIRA PROBE\n') }], skipped: [] },
+    ...extra,
+  });
+  const runnerWith = (second) => {
+    const calls = [];
+    return {
+      calls,
+      loadRunner: () => ({
+        OUTBOX_DETECTOR: 'import json',
+        resolveCodeExecutionMode: () => 'isolated',
+        runIsolated: async (opts) => {
+          calls.push(opts);
+          if (opts.workdir === 'workspace') {
+            if (second instanceof Error) throw second;
+            return second;
+          }
+          return runnerOk({ isolation: { driver: 'remote', gvisor: false } });
+        },
+      }),
+    };
+  };
+  const good = runnerWith(workspaceResult());
+  assert.deepEqual(await verifyIsolatedCodeRunner({ loadRunner: good.loadRunner, env: {} }), {
+    status: 'ok', driver: 'remote', gvisor: false, workspace: 'ok',
+  });
+  const probe = good.calls.find((call) => call.workdir === 'workspace');
+  assert.equal(probe.language, 'bash');
+  assert.equal(probe.persistKey, null, 'never a user workspace');
+  assert.deepEqual(probe.outbox, { dir: 'outputs' });
+  assert.deepEqual(probe.stage.map((item) => item.rel), ['uploads/probe.txt']);
+  // A failing workspace probe is reported in the release line, never fatal.
+  for (const [result, status] of [
+    [workspaceResult({ ok: false }), 'failed:run'],
+    [workspaceResult({ stdout: 'otra cosa' }), 'failed:stdout'],
+    [workspaceResult({ outbox: { files: [], skipped: [] } }), 'failed:outbox'],
+    [new Error(PRIVATE), 'failed:error'],
+  ]) {
+    const out = await verifyIsolatedCodeRunner({ loadRunner: runnerWith(result).loadRunner, env: {} });
+    assert.equal(out.status, 'ok');
+    assert.equal(out.workspace, status);
+    assert.ok(!JSON.stringify(out).includes(PRIVATE));
+  }
+});
+
 test('isolated code runner: host mode and old releases are reported, not failed', async () => {
   assert.deepEqual(await verifyIsolatedCodeRunner({ loadRunner: fakeRunner({ mode: 'host' }).loadRunner, env: {} }), { status: 'host_mode' });
   const missing = () => { const error = new Error('missing'); error.code = 'MODULE_NOT_FOUND'; throw error; };

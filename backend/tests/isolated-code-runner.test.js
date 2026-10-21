@@ -288,6 +288,6 @@ test('persistKey mounts the chat workspace and the run dir is removed afterwards
   assert.equal(seenOpts.persistKey, 'chat123');
   assert.equal(r.isolation.persistent, true);
   assert.equal(fake.calls.exec.length, 2);
-  assert.match(fake.calls.exec[1].command, /^rm -rf -- '\/workspace\/tmp\/run-[0-9a-f]{12}'$/);
+  assert.match(fake.calls.exec[1].command, /^command -p rm -rf -- '\/workspace\/tmp\/run-[0-9a-f]{12}'$/);
   assert.equal(fake.calls.destroyed, 1);
 });
