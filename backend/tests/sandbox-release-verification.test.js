@@ -347,6 +347,32 @@ test('workspace computer: staged upload, real bash and the outputs/ hand-back ar
   }
 });
 
+test('document runtime: the agent\'s own probe runs against the real driver and is reported, never fatal', async () => {
+  const { verifyDocumentRuntime } = require('../scripts/verify-agent-sandbox-runtime.cjs');
+  let created = 0;
+  let destroyed = 0;
+  const createSandbox = async (...args) => {
+    assert.deepEqual(args, [], 'never a user workspace');
+    created += 1;
+    return { driver: 'remote', async destroy() { destroyed += 1; } };
+  };
+  const verifier = (result) => () => ({ verifySandboxRuntime: async () => (result instanceof Error ? Promise.reject(result) : result) });
+  assert.equal(await verifyDocumentRuntime({ createSandbox, loadVerifier: verifier({ verified: true, catalogMatches: true }) }), 'verified');
+  assert.equal(await verifyDocumentRuntime({ createSandbox, loadVerifier: verifier({ verified: true, catalogMatches: false }) }), 'verified_newer_image');
+  assert.equal(await verifyDocumentRuntime({ createSandbox, loadVerifier: verifier({ verified: false, reason: 'local_driver' }) }), 'unverified:local_driver');
+  const mismatch = Object.assign(new Error(PRIVATE), { reason: 'cli_missing' });
+  const out = await verifyDocumentRuntime({ createSandbox, loadVerifier: verifier(mismatch) });
+  assert.equal(out, 'failed:cli_missing');
+  assert.ok(!out.includes(PRIVATE));
+  assert.equal(created, destroyed, 'every probe sandbox is released');
+  // A backend without the module reports nothing.
+  const missing = () => { const error = new Error('missing'); error.code = 'MODULE_NOT_FOUND'; throw error; };
+  assert.equal(await verifyDocumentRuntime({ createSandbox, loadVerifier: missing }), null);
+  // The real verifier module of this release is the one loaded by default.
+  const real = require('../src/services/agent-runner/runtime-verification');
+  assert.equal(typeof real.verifySandboxRuntime, 'function');
+});
+
 test('isolated code runner: host mode and old releases are reported, not failed', async () => {
   assert.deepEqual(await verifyIsolatedCodeRunner({ loadRunner: fakeRunner({ mode: 'host' }).loadRunner, env: {} }), { status: 'host_mode' });
   const missing = () => { const error = new Error('missing'); error.code = 'MODULE_NOT_FOUND'; throw error; };

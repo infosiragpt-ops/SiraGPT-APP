@@ -123,7 +123,8 @@ async function main(args = process.argv.slice(2)) {
     if (args.length !== 1) fail('expected_catalog_argument_required');
     const result = await verifySandboxRelease(args[0]);
     const codeRunner = await verifyIsolatedCodeRunner();
-    process.stdout.write(`SIRA_SANDBOX_RELEASE_OK ${JSON.stringify({ ...result, codeRunner })}\n`);
+    const documentRuntime = await verifyDocumentRuntime();
+    process.stdout.write(`SIRA_SANDBOX_RELEASE_OK ${JSON.stringify({ ...result, codeRunner, ...(documentRuntime ? { documentRuntime } : {}) })}\n`);
   } catch (error) {
     // Never replay raw process output, endpoint, keys or session details.
     const code = error instanceof ReleaseVerificationError ? error.code : 'verification_failed';
@@ -216,7 +217,35 @@ async function verifyWorkspaceComputer(runner, env) {
   }
 }
 
+// The document agent checks every workspace with its own runtime probe
+// (agent-runner/runtime-verification.js: promised packages in range, no
+// shadowing user installs, promised CLI tools). A failure there fails EVERY
+// document turn, so prove it against the real driver on each release, in a
+// sandbox of its own (no user's files). Reported, never fatal; omitted by a
+// backend that predates the module.
+async function verifyDocumentRuntime({ loadVerifier, createSandbox } = {}) {
+  let verifier;
+  try {
+    verifier = loadVerifier ? loadVerifier() : require(path.join(process.cwd(), 'src/services/agent-runner/runtime-verification'));
+  } catch {
+    return null;
+  }
+  if (!verifier || typeof verifier.verifySandboxRuntime !== 'function') return null;
+  let sandbox;
+  try {
+    const create = createSandbox || require(path.join(process.cwd(), 'src/services/doc-agent/sandbox')).createSandbox;
+    sandbox = await create();
+    const result = await verifier.verifySandboxRuntime(sandbox);
+    if (!result || result.verified !== true) return `unverified:${String(result?.reason || 'unknown').replace(/[^a-z_]/gi, '').slice(0, 40)}`;
+    return result.catalogMatches === false ? 'verified_newer_image' : 'verified';
+  } catch (error) {
+    return `failed:${String(error?.reason || error?.code || 'error').replace(/[^a-z_]/gi, '').slice(0, 40)}`;
+  } finally {
+    try { await sandbox?.destroy(); } catch { /* reported above or harmless */ }
+  }
+}
+
 if (require.main === module || module.id === '[stdin]') main();
 module.exports = {
-  verifySandboxRelease, verifyIsolatedCodeRunner, verifyWorkspaceComputer, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
+  verifySandboxRelease, verifyIsolatedCodeRunner, verifyWorkspaceComputer, verifyDocumentRuntime, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
 };
