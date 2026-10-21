@@ -51,7 +51,9 @@
  *     the shared volume are never delivered twice. The change detector runs
  *     inline from this module's command, never from a file the model could
  *     rewrite, and sizes are re-measured with a trusted command before any
- *     byte is read back;
+ *     byte is read back (every helper is resolved through the system PATH,
+ *     never /workspace/.sira-packages/bin, and Python helpers run isolated);
+ *     at most 10 files, 50 MB each, 100 MB per run;
  *   - OUTPUT_DIR / UPLOADS_DIR / WORKSPACE_DIR / SIRA_RUN_DIR are exported.
  * `bash` is a language too: the chat's bash_exec is a real shell.
  */
@@ -75,6 +77,9 @@ const MAX_STAGE_FILES = 16;
 const DEFAULT_MAX_STAGE_FILE_BYTES = 64 * 1024 * 1024;
 const OUTBOX_MAX_FILES = 10;
 const OUTBOX_MAX_FILE_BYTES = 50 * 1024 * 1024;
+// Everything one run hands back is read into backend memory (the remote
+// service ships file bytes as base64 JSON): bound the total, not just files.
+const OUTBOX_MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 // The container gets one CPU and a small pids limit that also counts
 // threads, while numpy/OpenBLAS, numexpr and polars size their pools to the
 // HOST's cores: a heavy script could die with «can't start new thread» and
@@ -178,6 +183,35 @@ function truncateText(value, maxBytes) {
   };
 }
 
+// The commands the RUNNER executes after (or around) the user's script must
+// not be resolvable through /workspace/.sira-packages/bin, which is first in
+// PATH and writable by that script. `command -p` looks a utility up in the
+// system's default PATH; `python3 -I -s` ignores PYTHON* variables and the
+// user site-packages (no .pth file can run in a helper).
+const SYS_PYTHON = 'command -p python3 -I -s';
+const SYS_PATH_PREFIX = 'PATH="$(command -p getconf PATH 2>/dev/null || printf %s /usr/bin:/bin)"';
+
+// Sizes (and optionally sha256) of regular, non-symlink files under
+// /workspace: {rel: [size, sha256|null]}. Paths travel as JSON, so names with
+// quotes, accents or newlines are safe.
+const FILE_INFO_PROGRAM = [
+  'import hashlib, json, os, sys',
+  'rels, want_hash = json.loads(sys.argv[1]), sys.argv[2] == "1"',
+  'out = {}',
+  'for rel in rels:',
+  '    try:',
+  '        if os.path.islink(rel) or not os.path.isfile(rel): continue',
+  '        size, digest = os.path.getsize(rel), None',
+  '        if want_hash:',
+  '            h = hashlib.sha256()',
+  '            with open(rel, "rb") as handle:',
+  '                for block in iter(lambda: handle.read(1 << 20), b""): h.update(block)',
+  '            digest = h.hexdigest()',
+  '        out[rel] = [size, digest]',
+  '    except OSError: pass',
+  'json.dump(out, sys.stdout)',
+].join('\n');
+
 /**
  * putFile, in chunks when the file is large: parts are written next to the
  * target and concatenated inside the sandbox.
@@ -194,26 +228,35 @@ async function putFileChunked(sandbox, rel, buffer, { chunkBytes = PUT_CHUNK_BYT
     parts.push(partRel);
   }
   const quoted = parts.map(shQuote).join(' ');
-  const r = await sandbox.exec(`cd /workspace && cat ${quoted} > ${shQuote(rel)} && rm -f -- ${quoted}`, { timeoutMs: 120_000 });
+  const r = await sandbox.exec(`cd /workspace && command -p cat ${quoted} > ${shQuote(rel)} && command -p rm -f -- ${quoted}`, { timeoutMs: 120_000 });
   if (!r || r.exitCode !== 0) throw new Error(`could not assemble ${rel} inside the sandbox`);
 }
 
 /**
- * Sizes of regular (non-symlink) files under /workspace, measured with a
- * command this module builds. Missing files are absent from the map.
+ * Sizes (and sha256 when `hash`) of regular, non-symlink files under
+ * /workspace, measured by a trusted helper. Missing files are absent.
+ * @returns {Promise<Map<string, { size: number, sha256: string|null }>>}
  */
-async function workspaceFileSizes(sandbox, rels) {
-  const sizes = new Map();
-  if (!rels.length) return sizes;
-  const probes = rels.map((rel) => `if [ -f ${shQuote(rel)} ] && [ ! -L ${shQuote(rel)} ]; then printf '%s\\t' ${shQuote(rel)}; wc -c < ${shQuote(rel)}; fi`);
-  const r = await sandbox.exec(`cd /workspace && { ${probes.join('; ')}; } 2>/dev/null`, { timeoutMs: 20_000 });
-  for (const line of String(r?.stdout || '').split('\n')) {
-    const tab = line.lastIndexOf('\t');
-    if (tab <= 0) continue;
-    const size = Number(line.slice(tab + 1).trim());
-    if (Number.isFinite(size) && size >= 0) sizes.set(line.slice(0, tab), size);
+async function workspaceFileInfo(sandbox, rels, { hash = false } = {}) {
+  const info = new Map();
+  if (!rels.length) return info;
+  const command = `cd /workspace && ${SYS_PYTHON} - ${shQuote(JSON.stringify(rels))} ${hash ? '1' : '0'} 2>/dev/null <<'SIRA_FILEINFO_EOF'\n${FILE_INFO_PROGRAM}\nSIRA_FILEINFO_EOF`;
+  const r = await sandbox.exec(command, { timeoutMs: hash ? 120_000 : 20_000 });
+  let parsed = {};
+  try { parsed = JSON.parse(String(r?.stdout || '').trim() || '{}'); } catch { parsed = {}; }
+  for (const [rel, value] of Object.entries(parsed && typeof parsed === 'object' ? parsed : {})) {
+    const size = Number(Array.isArray(value) ? value[0] : NaN);
+    if (!Number.isFinite(size) || size < 0) continue;
+    const digest = Array.isArray(value) && typeof value[1] === 'string' && /^[a-f0-9]{64}$/.test(value[1]) ? value[1] : null;
+    info.set(rel, { size, sha256: digest });
   }
-  return sizes;
+  return info;
+}
+
+/** Sizes only (see workspaceFileInfo). */
+async function workspaceFileSizes(sandbox, rels) {
+  const info = await workspaceFileInfo(sandbox, rels);
+  return new Map([...info].map(([rel, value]) => [rel, value.size]));
 }
 
 function exportLine(vars) {
@@ -352,6 +395,12 @@ async function runIsolated(opts = {}) {
       gvisor: Boolean(sandbox.gvisor),
       persistent: Boolean(sandbox.persistent),
     };
+    // The local driver runs on the API host itself. In production that is
+    // never "isolated": an operator who wants host execution says so with
+    // SIRAGPT_CODE_SANDBOX=host. Fail closed instead of claiming isolation.
+    if (isolation.driver === 'local' && String(env.NODE_ENV || '').trim().toLowerCase() === 'production') {
+      return failure(lang, UNAVAILABLE_MESSAGE, { unavailable: true, unavailableReason: 'local_driver_in_production' });
+    }
 
     const runRel = `tmp/run-${crypto.randomBytes(6).toString('hex')}`;
     const runDir = `/workspace/${runRel}`;
@@ -364,11 +413,18 @@ async function runIsolated(opts = {}) {
 
     // The user's uploads: a persistent chat volume usually has them from an
     // earlier call already; only missing or different-size files travel.
+    // Same name AND same content: skip. A corrected re-upload of the same
+    // size must replace the old file, so content is compared, not size.
     const staged = [];
     if (stageItems.length) {
-      const present = isolation.persistent ? await workspaceFileSizes(sandbox, stageItems.map((i) => i.rel)) : new Map();
+      const present = isolation.persistent
+        ? await workspaceFileInfo(sandbox, stageItems.map((i) => i.rel), { hash: true })
+        : new Map();
       for (const item of stageItems) {
-        if (present.get(item.rel) !== item.buffer.length) await putFileChunked(sandbox, item.rel, item.buffer);
+        const have = present.get(item.rel);
+        const same = have && have.size === item.buffer.length
+          && have.sha256 === crypto.createHash('sha256').update(item.buffer).digest('hex');
+        if (!same) await putFileChunked(sandbox, item.rel, item.buffer);
         staged.push(item.rel);
       }
     }
@@ -383,12 +439,12 @@ async function runIsolated(opts = {}) {
     const prefix = inWorkspace ? `${runRel}/` : '';
     const invocation = `${cfg.interpreter} ${shQuote(`${prefix}${cfg.filename}`)} < ${shQuote(`${prefix}.stdin`)}`;
     // Redirections go BEFORE the heredoc: the terminator line must stand alone.
-    const detector = (args, outFile) => `python3 - ${args} > ${shQuote(outFile)} 2>/dev/null <<'SIRA_OUTBOX_EOF'\n${OUTBOX_DETECTOR}\nSIRA_OUTBOX_EOF`;
+    const detector = (args, outFile) => `${SYS_PYTHON} - ${args} > ${shQuote(outFile)} 2>/dev/null <<'SIRA_OUTBOX_EOF'\n${OUTBOX_DETECTOR}\nSIRA_OUTBOX_EOF`;
     const lines = [
       `cd ${shQuote(inWorkspace ? '/workspace' : runDir)}`,
       inWorkspace ? 'mkdir -p outputs uploads' : '',
       inWorkspace && isolation.persistent
-        ? `find tmp -maxdepth 1 -type d -name 'run-*' -mmin +${STALE_RUN_MINUTES} -exec rm -rf {} + 2>/dev/null`
+        ? `${SYS_PATH_PREFIX} find tmp -maxdepth 1 -type d -name 'run-*' -mmin +${STALE_RUN_MINUTES} -exec rm -rf {} + 2>/dev/null`
         : '',
       outboxDir ? detector(`snapshot ${shQuote(outboxDir)}`, `${prefix}.outbox-pre.json`) : '',
       exportLine({
@@ -396,7 +452,8 @@ async function runIsolated(opts = {}) {
         ...(inWorkspace ? { WORKSPACE_DIR: '/workspace', OUTPUT_DIR: '/workspace/outputs', UPLOADS_DIR: '/workspace/uploads', ...THREAD_CAPS } : {}),
         ...exportEnv,
       }),
-      `if command -v timeout >/dev/null 2>&1; then timeout -k 2 ${seconds} ${invocation}; else ${invocation}; fi`,
+      '__sira_timeout="$(command -p -v timeout 2>/dev/null)"',
+      `if [ -n "$__sira_timeout" ]; then "$__sira_timeout" -k 2 ${seconds} ${invocation}; else ${invocation}; fi`,
       '__sira_status=$?',
       outboxDir
         ? detector(`diff ${shQuote(outboxDir)} ${shQuote(`${prefix}.outbox-pre.json`)}`, `${prefix}.outbox.json`)
@@ -440,10 +497,13 @@ async function runIsolated(opts = {}) {
         const wanted = changed.slice(0, outboxMaxFiles);
         for (const rel of changed.slice(outboxMaxFiles)) outboxResult.skipped.push({ rel, reason: 'too_many' });
         const sizes = await workspaceFileSizes(sandbox, wanted.map((rel) => `${base}/${rel}`));
+        let totalBytes = 0;
         for (const rel of wanted) {
           const size = sizes.get(`${base}/${rel}`);
           if (size == null) continue; // deleted again, or a symlink
           if (size > outboxMaxBytes) { outboxResult.skipped.push({ rel, reason: 'too_large', size }); continue; }
+          if (totalBytes + size > OUTBOX_MAX_TOTAL_BYTES) { outboxResult.skipped.push({ rel, reason: 'total_too_large', size }); continue; }
+          totalBytes += size;
           try {
             const buffer = await sandbox.readFile(`${base}/${rel}`);
             if (buffer.length > outboxMaxBytes) { outboxResult.skipped.push({ rel, reason: 'too_large', size: buffer.length }); continue; }
@@ -490,7 +550,7 @@ async function runIsolated(opts = {}) {
       // up. An aborted run cannot (its exec shares the aborted signal): the
       // next run of the chat sweeps stale run dirs.
       try {
-        await sandbox.exec(`rm -rf -- ${shQuote(runDirToRemove)}`, { timeoutMs: 15_000 });
+        await sandbox.exec(`command -p rm -rf -- ${shQuote(runDirToRemove)}`, { timeoutMs: 15_000 });
       } catch { /* best effort */ }
     }
     if (sandbox && typeof sandbox.destroy === 'function') {
@@ -506,7 +566,9 @@ module.exports = {
   safeRunRel,
   putFileChunked,
   workspaceFileSizes,
+  workspaceFileInfo,
   OUTBOX_DETECTOR,
+  OUTBOX_MAX_TOTAL_BYTES,
   UNAVAILABLE_MESSAGE,
   DEFAULT_TIMEOUT_MS,
   MAX_TIMEOUT_MS,

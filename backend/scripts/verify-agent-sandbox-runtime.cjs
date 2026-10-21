@@ -175,10 +175,48 @@ async function verifyIsolatedCodeRunner({ loadRunner, env = process.env } = {}) 
   const csv = result?.collected?.['out/proof.csv'];
   if (result.ok !== true || String(result.stdout || '').trim() !== 'CODE_RUNNER_OK proof 10'
     || !Buffer.isBuffer(csv) || csv.toString('utf8').replace(/\r/g, '') !== 'a,b\n1,3\n2,4\n') fail('code_runner_failed');
-  return { status: 'ok', driver, gvisor: Boolean(result.isolation.gvisor) };
+  const workspace = await verifyWorkspaceComputer(runner, env);
+  return { status: 'ok', driver, gvisor: Boolean(result.isolation.gvisor), ...(workspace ? { workspace } : {}) };
+}
+
+// The chat's computer mode (python_exec / bash_exec): staged uploads, a real
+// bash, and files written to outputs/ handed back by the change detector.
+// Exercised through the REAL driver of this release, on an ephemeral
+// workspace (persistKey null: no user's files). Reported, never fatal: the
+// pre-publish probe runs in the previous backend, and a failure here must
+// not block shipping its fix. Older runners without the mode report nothing.
+const workspaceSource = [
+  'set -e',
+  'test -f uploads/probe.txt',
+  'tr a-z A-Z < uploads/probe.txt > outputs/probe-out.txt',
+  'printf "WORKSPACE_OK %s\\n" "$(wc -l < uploads/probe.txt | tr -d \' \')"',
+].join('\n');
+
+async function verifyWorkspaceComputer(runner, env) {
+  if (typeof runner.OUTBOX_DETECTOR !== 'string') return null;
+  try {
+    const result = await runner.runIsolated({
+      language: 'bash',
+      source: workspaceSource,
+      timeoutMs: 60000,
+      workdir: 'workspace',
+      stage: [{ rel: 'uploads/probe.txt', buffer: Buffer.from('sira probe\n') }],
+      outbox: { dir: 'outputs' },
+      persistKey: null,
+      env,
+    });
+    if (result?.ok !== true) return 'failed:run';
+    if (String(result.stdout || '').trim() !== 'WORKSPACE_OK 1') return 'failed:stdout';
+    const files = Array.isArray(result?.outbox?.files) ? result.outbox.files : [];
+    const out = files.find((file) => file && file.rel === 'probe-out.txt');
+    if (!out || !Buffer.isBuffer(out.buffer) || out.buffer.toString('utf8') !== 'SIRA PROBE\n') return 'failed:outbox';
+    return 'ok';
+  } catch {
+    return 'failed:error';
+  }
 }
 
 if (require.main === module || module.id === '[stdin]') main();
 module.exports = {
-  verifySandboxRelease, verifyIsolatedCodeRunner, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
+  verifySandboxRelease, verifyIsolatedCodeRunner, verifyWorkspaceComputer, buildCatalogProbe, parseCatalog, parseProofs, CATALOG_MARKER,
 };

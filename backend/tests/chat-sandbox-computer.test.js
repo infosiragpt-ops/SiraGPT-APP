@@ -91,17 +91,18 @@ test('workspace mode: the script runs in /workspace with the computer environmen
   const lines = command.split('\n');
   assert.equal(lines[0], "cd '/workspace'");
   assert.ok(lines.includes('mkdir -p outputs uploads'));
-  assert.ok(lines.some((line) => line.startsWith("find tmp -maxdepth 1 -type d -name 'run-*' -mmin +30")), 'stale run dirs of aborted runs are swept');
+  assert.ok(lines.some((line) => line.startsWith('PATH="$(command -p getconf PATH 2>/dev/null || printf %s /usr/bin:/bin)" find tmp -maxdepth 1 -type d -name \'run-*\' -mmin +30')), 'stale run dirs of aborted runs are swept with the system rm');
   assert.ok(lines.includes(`export SIRA_RUN_DIR='/workspace/${runRel}' WORKSPACE_DIR='/workspace' OUTPUT_DIR='/workspace/outputs' UPLOADS_DIR='/workspace/uploads' OMP_NUM_THREADS='2' OPENBLAS_NUM_THREADS='2' MKL_NUM_THREADS='2' NUMEXPR_MAX_THREADS='2' RAYON_NUM_THREADS='2' POLARS_MAX_THREADS='2'`), 'thread pools sized to the container, not the host');
-  assert.ok(command.includes(`timeout -k 2 10 python3 '${runRel}/main.py' < '${runRel}/.stdin'`));
+  assert.ok(lines.includes('__sira_timeout="$(command -p -v timeout 2>/dev/null)"'), 'timeout is the system one, not a workspace binary');
+  assert.ok(command.includes(`"$__sira_timeout" -k 2 10 python3 '${runRel}/main.py' < '${runRel}/.stdin'`));
   // Heredoc: the terminator stands alone, redirections come before it.
   assert.equal(lines.filter((line) => line === 'SIRA_OUTBOX_EOF').length, 2);
-  assert.ok(lines.some((line) => line.startsWith("python3 - snapshot 'outputs' > ") && line.endsWith("<<'SIRA_OUTBOX_EOF'")));
+  assert.ok(lines.some((line) => line.startsWith("command -p python3 -I -s - snapshot 'outputs' > ") && line.endsWith("<<'SIRA_OUTBOX_EOF'")), 'the detector is the system python, isolated from the user site');
   assert.equal(lines[lines.length - 1], 'exit $__sira_status');
   // Only the script and its stdin are written: no detector file the model could rewrite.
   assert.deepEqual(fake.log.put.sort(), [`${runRel}/.stdin`, `${runRel}/main.py`].sort());
   // Persistent volume: the run dir is removed afterwards.
-  assert.match(fake.log.exec.at(-1).command, /^rm -rf -- '\/workspace\/tmp\/run-[0-9a-f]{12}'$/);
+  assert.match(fake.log.exec.at(-1).command, /^command -p rm -rf -- '\/workspace\/tmp\/run-[0-9a-f]{12}'$/);
   assert.equal(fake.log.destroyed, 1);
 });
 
@@ -124,9 +125,9 @@ test('outbox: only changed files come back; sizes are re-measured by a trusted c
         store.set(report, Buffer.from(JSON.stringify({ changed: ['a.csv', 'sub/b.png', 'big.bin', '../escape.txt', 'c1.txt', 'c2.txt'] })));
         return { stdout: 'listo\n', stderr: '', exitCode: 0 };
       }
-      if (command.includes('wc -c <')) {
-        // The size probe: a.csv and b.png small, big.bin over the cap; c1/c2 absent.
-        return { stdout: 'outputs/a.csv\t8\noutputs/sub/b.png\t9\noutputs/big.bin\t   5000\n', stderr: '', exitCode: 0 };
+      if (command.includes('SIRA_FILEINFO_EOF')) {
+        // The trusted size probe: a.csv and b.png small, big.bin over the cap; c1/c2 absent.
+        return { stdout: JSON.stringify({ 'outputs/a.csv': [8, null], 'outputs/sub/b.png': [9, null], 'outputs/big.bin': [5000, null] }), stderr: '', exitCode: 0 };
       }
       return { stdout: '', stderr: '', exitCode: 0 };
     },
@@ -140,32 +141,48 @@ test('outbox: only changed files come back; sizes are re-measured by a trusted c
     { rel: 'big.bin', reason: 'too_large', size: 5000 },
   ]);
   assert.ok(!fake.log.read.some((rel) => rel.includes('escape') || rel.includes('big.bin')), 'never reads an escaping or oversize file');
-  const probe = fake.log.exec.find((e) => e.command.includes('wc -c <')).command;
-  assert.match(probe, /\[ ! -L 'outputs\/a\.csv' \]/, 'symlinks are never followed');
+  const probe = fake.log.exec.find((e) => e.command.includes('SIRA_FILEINFO_EOF')).command;
+  assert.ok(probe.startsWith("cd /workspace && command -p python3 -I -s - '[\"outputs/a.csv\""), 'paths travel as JSON to the system python');
+  assert.match(probe, /os\.path\.islink\(rel\) or not os\.path\.isfile\(rel\)/, 'symlinks and special files are never measured or read');
 });
 
-test('stage: missing or different-size uploads travel, identical ones stay; tmp/ and oversize targets are refused', async () => {
+test('stage: an identical upload stays, a changed one travels even with the same size; tmp/ and escaping targets are refused', async () => {
+  const sha = (text) => crypto.createHash('sha256').update(text).digest('hex');
+  let probe = '';
   const fake = fakeSandbox({
     persistent: true,
-    exec: (command) => (command.includes('wc -c <') && !command.includes('SIRA_OUTBOX_EOF')
-      ? { stdout: 'uploads/igual.csv\t5\nuploads/cambio.csv\t3\n', stderr: '', exitCode: 0 }
-      : { stdout: '', stderr: '', exitCode: 0 }),
+    exec: (command) => {
+      if (command.includes('SIRA_FILEINFO_EOF')) {
+        probe = command;
+        return {
+          stdout: JSON.stringify({
+            'uploads/igual.csv': [5, sha('12345')],
+            // Same size as the new upload, different content (a corrected re-upload).
+            'uploads/corregido.csv': [5, sha('12399')],
+          }),
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
   });
   const r = await runIsolated({
     fake,
     workdir: 'workspace',
     stage: [
       { rel: 'uploads/igual.csv', buffer: Buffer.from('12345') },
-      { rel: 'uploads/cambio.csv', buffer: Buffer.from('1234') },
+      { rel: 'uploads/corregido.csv', buffer: Buffer.from('12345') },
       { rel: 'uploads/nuevo.csv', buffer: Buffer.from('n') },
       { rel: 'tmp/run-evil/main.py', buffer: Buffer.from('x') },
       { rel: '../fuera.csv', buffer: Buffer.from('x') },
     ],
   });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.staged, ['uploads/igual.csv', 'uploads/cambio.csv', 'uploads/nuevo.csv']);
+  assert.deepEqual(r.staged, ['uploads/igual.csv', 'uploads/corregido.csv', 'uploads/nuevo.csv']);
   const uploadsPut = fake.log.put.filter((rel) => rel.startsWith('uploads/'));
-  assert.deepEqual(uploadsPut, ['uploads/cambio.csv', 'uploads/nuevo.csv']);
+  assert.deepEqual(uploadsPut, ['uploads/corregido.csv', 'uploads/nuevo.csv']);
+  assert.match(probe, / 1 2>\/dev\/null <<'SIRA_FILEINFO_EOF'/, 'the staging probe asks for content hashes');
   assert.ok(!fake.log.put.some((rel) => rel.includes('evil') || rel.includes('fuera')));
 });
 
@@ -176,7 +193,7 @@ test('big files travel in chunks that are joined inside the sandbox', async () =
   assert.deepEqual(fake.log.put, ['uploads/grande.bin.sira-part-0000', 'uploads/grande.bin.sira-part-0001', 'uploads/grande.bin.sira-part-0002']);
   assert.equal(Buffer.concat(fake.log.put.map((rel) => fake.store.get(rel))).toString('hex'), buffer.toString('hex'));
   assert.equal(fake.log.exec[0].command,
-    "cd /workspace && cat 'uploads/grande.bin.sira-part-0000' 'uploads/grande.bin.sira-part-0001' 'uploads/grande.bin.sira-part-0002' > 'uploads/grande.bin' && rm -f -- 'uploads/grande.bin.sira-part-0000' 'uploads/grande.bin.sira-part-0001' 'uploads/grande.bin.sira-part-0002'");
+    "cd /workspace && command -p cat 'uploads/grande.bin.sira-part-0000' 'uploads/grande.bin.sira-part-0001' 'uploads/grande.bin.sira-part-0002' > 'uploads/grande.bin' && command -p rm -f -- 'uploads/grande.bin.sira-part-0000' 'uploads/grande.bin.sira-part-0001' 'uploads/grande.bin.sira-part-0002'");
   const small = fakeSandbox();
   await runner.putFileChunked(small.sandbox, 'a.txt', Buffer.from('hola'), { chunkBytes: 10 });
   assert.deepEqual(small.log.put, ['a.txt']);
@@ -251,13 +268,16 @@ test('the turn uploads are staged into uploads/ once per turn, owner-checked, wi
   const r1 = await INTERNAL.pythonExec.execute({ source: 'print(1)' }, ctx);
   const r2 = await INTERNAL.bashExec.execute({ source: 'ls uploads' }, ctx);
   assert.equal(prisma.counter.findMany, 1, 'loaded once for the whole turn');
-  for (const call of calls) {
-    assert.deepEqual(call.stage.map((item) => item.rel), ['uploads/Ventas Q1.csv'], 'another user\'s file never reaches the sandbox');
-    assert.equal(call.stage[0].buffer.toString(), 'a,b\n1,2\n');
-    assert.equal(call.workdir, 'workspace');
-  }
+  assert.deepEqual(calls[0].stage.map((item) => item.rel), ['uploads/Ventas Q1.csv'], 'another user\'s file never reaches the sandbox');
+  assert.equal(calls[0].stage[0].buffer.toString(), 'a,b\n1,2\n');
+  assert.deepEqual(calls[1].stage, [], 'staged on the first call of the turn only: a later call never reverts an in-place edit');
+  for (const call of calls) assert.equal(call.workdir, 'workspace');
   assert.deepEqual(r1.uploads, ['uploads/Ventas Q1.csv']);
   assert.deepEqual(r2.uploads, ['uploads/Ventas Q1.csv']);
+  // A new turn (new signal) stages again: a corrected re-upload replaces the old copy.
+  calls.length = 0;
+  await INTERNAL.pythonExec.execute({ source: 'print(2)' }, { ...ctx, signal: new AbortController().signal });
+  assert.deepEqual(calls[0].stage.map((item) => item.rel), ['uploads/Ventas Q1.csv']);
 });
 
 test('files written to outputs/ are validated and delivered; broken or oversize ones are reported, not delivered', async () => {
@@ -373,6 +393,6 @@ test('end to end (real local driver): analysis of an upload delivered as a downl
   ].join('\n') }, ctx);
   assert.equal(shell.ok, true, shell.stderr);
   assert.equal(shell.stdout.trim(), '3');
-  assert.deepEqual(shell.filesDelivered.map((f) => f.filename), ['nota.txt'], 'resumen.csv was already delivered');
-  assert.deepEqual(shell.filesNotDelivered, [{ file: 'outputs/mini.txt', reason: 'no pasó la validación: vacío o demasiado pequeño (calidad técnica 67/100)' }]);
+  assert.deepEqual(shell.filesDelivered.map((f) => f.filename).sort(), ['mini.txt', 'nota.txt'], 'resumen.csv was already delivered; a short note is a legitimate result');
+  assert.equal(shell.filesNotDelivered, undefined);
 });
