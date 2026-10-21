@@ -117,7 +117,11 @@ test('wiring: /generate injects and records, 👎 reasons record, the agentic lo
   const ai = fs.readFileSync(path.join(root, 'routes/ai.js'), 'utf8');
   assert.match(ai, /buildLearnedPreferencesBlock\(__learned\.loadLearnedPreferences\(_userPrefetch\)\)/);
   assert.match(ai, /__learned\.traitsFromRepair\(__repairDet\)/);
-  assert.match(ai, /userContextBlock: \(Array\.isArray\(promptBundle\?\.systemBlocks\)/);
+  // Profile + learned preferences ride under the priority header; the
+  // system-derived notes (lexicon, coreference, repair) go as plain context.
+  assert.match(ai, /userContextBlock: agenticUserContext\.priority,/);
+  assert.match(ai, /supportContextBlock: agenticUserContext\.support,/);
+  assert.match(ai, /const isPriority = \(b\) => b\.kind !== 'extra-block' \|\| b\.text\.startsWith\('## PREFERENCIAS APRENDIDAS'\);/);
   const chats = fs.readFileSync(path.join(root, 'routes/chats.js'), 'utf8');
   assert.match(chats, /learned\.traitFromReason\(reasons\.reasonCode\)/);
   const stream = fs.readFileSync(path.join(root, 'services/agentic-chat-stream.js'), 'utf8');

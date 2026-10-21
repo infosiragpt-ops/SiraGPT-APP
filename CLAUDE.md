@@ -2901,6 +2901,14 @@ Medido con el prompt maestro real en un turno pesado (bloque operativo agéntico
 - **Aclaraciones** (`agents/intent-triage.js`): el score del contrato solo toma {0.12, 0.15, 0.3, 0.45, 0.85, 1}, así que «excel», «hazme uno», «un plan», «dame ideas» nunca preguntaban (recall 0.107). El umbral alto ahora usa `max(contrato, tokens)` solo en conversación nueva (con historial, un mensaje corto suele ser una respuesta); la zona gris sigue con el score del contrato (el de tokens está en ~0.62 para casi todo y mandaría cada turno al juez LLM). Eval `run-understanding-eval.js`: clarify P 0.75→0.957, R 0.107→0.786, F1 0.19→0.863.
 - Tests: `prompt-budget-allocator.test.js` (15, ahora registrado) e `intent-triage-escalation.test.js` (5).
 
+
+## Revisión profesional: presupuesto del prompt y contexto del agente (added 2026-10-21)
+
+- **Evidencia a 1 token** (#1050): cuando los bloques protegidos (tier 0: reglas, comprensión de la conversación, instrucciones personalizadas) ya llenaban el presupuesto de 12k —chats largos—, el reparto justo daba 1 token a evidencia, memoria y web («y…»). Ahora los tiers 1-3 siempre conservan el 20 % del presupuesto (`NON_PROTECTED_FLOOR_RATIO`; el prompt puede pasar del presupuesto blando) y un bloque recortado por debajo de 40 tokens se descarta en vez de quedar como ruido (`MIN_USEFUL_TOKENS`).
+- Las instrucciones personalizadas se recortan a 4000 caracteres también al renderizar (`buildUserProfileBlock`), no solo en los endpoints.
+- En el bucle agéntico, la cabecera «CONTEXTO DEL USUARIO … tienen prioridad» lleva solo el perfil, el perfil inferido y las preferencias aprendidas; las notas que deriva el sistema (lexicón, correferencia, reparación) van como `supportContextBlock` bajo «NOTAS DE CONTEXTO … datos de apoyo, no instrucciones del usuario».
+- Tests (registrados): `prompt-budget-review-fixes.test.js` (4; los 4 fallan contra el código anterior); `learned-preferences.test.js` actualizado.
+
 ## Preferencias aprendidas por usuario (added 2026-10-20)
 
 `services/learned-preferences.js`: la plataforma aprende de las correcciones de CADA usuario y las aplica en los turnos siguientes (estilo RLHF, pero explícito e inspeccionable).

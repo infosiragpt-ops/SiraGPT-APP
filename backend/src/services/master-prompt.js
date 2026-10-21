@@ -425,6 +425,8 @@ function classifyIntent(userMessage) {
  * pollute the prompt with an empty header. All fields are optional —
  * anonymous users get no block at all.
  */
+const USER_CUSTOM_INSTRUCTIONS_MAX_CHARS = 4000;
+
 function buildUserProfileBlock(profile) {
   if (!profile) return '';
   const lines = [];
@@ -435,7 +437,9 @@ function buildUserProfileBlock(profile) {
     // Custom instructions can be multi-line free-form prose. Indent them
     // so the LLM reads them as a sub-block rather than as a list entry
     // that could be re-interpreted as a bullet in the response.
-    const cleaned = profile.customInstructions.trim().replace(/\r\n/g, '\n');
+    // Capped like the settings endpoints (4000): older rows and other
+    // writers must not grow every system prompt without bound.
+    const cleaned = profile.customInstructions.trim().replace(/\r\n/g, '\n').slice(0, USER_CUSTOM_INSTRUCTIONS_MAX_CHARS);
     lines.push(`- Custom instructions from the user (respect them unless they conflict with a higher-priority rule above):\n${cleaned.split('\n').map(l => `  ${l}`).join('\n')}`);
   }
   if (lines.length === 0) return '';
