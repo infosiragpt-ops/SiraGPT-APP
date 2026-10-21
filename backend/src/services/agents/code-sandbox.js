@@ -394,7 +394,12 @@ async function runTests(opts) {
     entry = 'solution', // eslint-disable-line no-unused-vars -- documented API surface
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal,
+    // Where the harness executes: this host runner by default; production
+    // passes the isolated container runner (isolated-code-runner.runIsolated)
+    // so model-written tests never run on the API host.
+    runner = run,
   } = (opts && typeof opts === 'object') ? opts : {};
+  const execute = typeof runner === 'function' ? runner : run;
   const lang = String(language || '').toLowerCase();
   const invalidInput = (msg) => ({
     ok: false, passed: 0, failed: 0,
@@ -434,7 +439,7 @@ async function runTests(opts) {
       `for name, detail in _FAILURES:\n` +
       `    flat = str(detail).replace('\\r', ' ').replace('\\n', ' | ')\n` +
       `    print(f'FAIL {name}: {flat}')\n`;
-    const r = await run({ language: 'python', source: harness, timeoutMs, signal });
+    const r = await execute({ language: 'python', source: harness, timeoutMs, signal });
     return parseHarness(r);
   }
   if (lang === 'javascript' || lang === 'node') {
@@ -458,7 +463,7 @@ async function runTests(opts) {
       `  const flat = String(detail).replace(/\\r/g, ' ').replace(/\\n/g, ' | ');\n` +
       `  console.log('FAIL ' + name + ': ' + flat);\n` +
       `}\n`;
-    const r = await run({ language: 'javascript', source: harness, timeoutMs, signal });
+    const r = await execute({ language: 'javascript', source: harness, timeoutMs, signal });
     return parseHarness(r);
   }
   return {
@@ -472,11 +477,11 @@ async function runTests(opts) {
 }
 
 function parseHarness(r) {
-  const m = r.stdout.match(/SANDBOX_RESULT passed=(\d+) failed=(\d+)/);
+  const m = String(r.stdout || '').match(/SANDBOX_RESULT passed=(\d+) failed=(\d+)/);
   const passed = m ? parseInt(m[1], 10) : 0;
   const failed = m ? parseInt(m[2], 10) : 0;
   const failures = [];
-  for (const line of r.stdout.split('\n')) {
+  for (const line of String(r.stdout || '').split('\n')) {
     const mm = line.match(/^FAIL ([^:]+): (.*)$/);
     if (mm) failures.push({ name: mm[1], detail: mm[2] });
   }
@@ -491,6 +496,7 @@ function parseHarness(r) {
     exitCode: r.exitCode,
     durationMs: r.durationMs,
     failures,
+    ...(r.unavailable ? { unavailable: true } : {}),
   };
 }
 

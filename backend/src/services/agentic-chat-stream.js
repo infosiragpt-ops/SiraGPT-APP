@@ -154,7 +154,7 @@ const STAGE_LABELS = {
     auto_file: () => 'Archivando contenido como documento',
     compare_documents: () => 'Comparando documentos',
     python_exec: () => 'Ejecutando Python',
-    bash_exec: () => 'Ejecutando JavaScript aislado',
+    bash_exec: () => 'Ejecutando comandos en el sandbox',
     create_document: (args) => `Creando ${truncate(args?.filename || 'archivo', 48)}`,
     generate_image: (args) => `Generando imagen${args?.prompt ? `: ${truncate(args.prompt, 40)}` : ''}`,
     generate_video: (args) => `Generando video${args?.prompt ? `: ${truncate(args.prompt, 40)}` : ''}`,
@@ -2662,7 +2662,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Para continuidad entre conversaciones (el usuario dice "lo que hablamos antes", "retoma", "¿en qué quedamos?", "mis chats", "la sesión de ayer"): usa `session_list` para ver sus sesiones recientes, `session_search` para encontrar un tema concreto, y `session_history` para abrir una sesión por su id y leer el hilo completo antes de continuar. Solo accedes a sesiones del propio usuario.',
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
       'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
-      'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
+      require('./agents/isolated-code-runner').resolveCodeExecutionMode(process.env) === 'isolated'
+        ? 'Para calculos, analisis de datos, graficos, conversiones de archivos o verificacion deterministica, usa `python_exec` (Python) o `bash_exec` (terminal: soffice, pandoc, ffmpeg, pdftotext, tesseract…). Ambos trabajan en la computadora aislada de este chat: los archivos que el usuario adjuntó en este turno están en uploads/, lo que guardes en outputs/ se valida y se entrega solo como descarga, y /workspace se conserva entre llamadas del chat. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.'
+        : 'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida audio, voz, narración, locución, mp3 o wav, DEBES llamar `generate_speech` con el texto exacto y adjuntar el archivo MP3 descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API, un reproductor en el navegador, o decirle al usuario que pulse reproducir. El entregable es un archivo de audio real.',
       githubLocalPreviewTurn
         ? 'El usuario pidio clonar un repo GitHub y verlo en local ("dame la web en local", "en local 5000"). DEBES usar `project_clone_repo` con la URL https://github.com/owner/repo y luego `project_preview_start`. Comparte previewUrl como su web en local. El puerto lo asigna el runner; si pidio 5000 y el sandbox usa otro, explica el enlace — NUNCA digas que no puedes abrir el puerto ni le pidas clonar en su telefono/laptop. PROHIBIDO "Nivel de confianza". PROHIBIDO inventar tokens o model_id. No uses create_document.'
