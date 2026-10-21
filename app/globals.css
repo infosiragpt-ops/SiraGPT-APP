@@ -498,6 +498,47 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   padding: 1rem 1rem 0;
 }
 
+/* Liquid glass behind the chat header. The transcript scrolls under this
+   absolutely positioned bar, and without a surface the scrolled message text
+   ran straight under the title and the icons. At rest nothing changes (a
+   translucent page background over the page background); the frosting only
+   appears when content passes underneath. The layer reaches 16px below the
+   header (the transcript's empty top gutter) and fades out there, so the
+   glass has no hard edge. Solid wherever translucency is unavailable or the
+   user asked for less of it / more contrast. */
+.chat-mobile-header::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -16px;
+  z-index: -1;
+  pointer-events: none;
+  background: hsl(var(--background) / 0.78);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .chat-mobile-header::before {
+    background: hsl(var(--background));
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .chat-mobile-header::before {
+    background: hsl(var(--background));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+.high-contrast .chat-mobile-header::before {
+  background: hsl(var(--background));
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .chat-header-row {
   gap: 0.5rem;
   min-width: 0;
@@ -4200,6 +4241,37 @@ button:not(:disabled):active,
   background-color: rgba(120, 120, 120, 0.6);
   border-radius: 9999px;
   /* fully rounded */
+}
+
+/* Discreet on pointer devices: the thumb shows while the pointer is over the
+   list (that includes wheel / trackpad scrolling) or keyboard focus is inside
+   it. The gutter keeps its width, so nothing shifts when it appears. Touch
+   devices keep the previous behaviour. Separate rules so a browser without
+   :has() still gets the hover reveal. */
+@media (hover: hover) {
+  .custom-scrollbar {
+    scrollbar-color: transparent transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+
+  .custom-scrollbar:hover {
+    scrollbar-color: rgba(120, 120, 120, 0.5) transparent;
+  }
+
+  .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(120, 120, 120, 0.6);
+  }
+
+  .custom-scrollbar:has(:focus-visible) {
+    scrollbar-color: rgba(120, 120, 120, 0.5) transparent;
+  }
+
+  .custom-scrollbar:has(:focus-visible)::-webkit-scrollbar-thumb {
+    background-color: rgba(120, 120, 120, 0.6);
+  }
 }
 
 /* Example: styles/GlowEffect.css */

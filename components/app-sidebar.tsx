@@ -192,26 +192,29 @@ const LG_SEP = "my-1 bg-border/60"
 
 const CHAT_ACTION_MENU = cn(
   "relative isolate w-[214px] overflow-y-auto overflow-x-hidden overscroll-contain rounded-[18px] p-1.5",
-  "border border-white/65 bg-white/72 text-zinc-800",
+  "border border-white/65 bg-white/[0.72] text-zinc-800",
   "shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_50px_rgba(23,23,23,0.16)]",
-  "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
+  "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/[0.58]",
   "dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100",
   "dark:shadow-[0_20px_54px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]",
+  // Solid where the user asked the system for less transparency.
+  "[@media(prefers-reduced-transparency:reduce)]:bg-popover [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none",
 )
 const CHAT_ACTION_ITEM = cn(
   "h-8 cursor-pointer rounded-[10px] px-2 text-[13px] font-medium leading-none",
   "text-zinc-700 transition-all duration-150",
-  "focus:bg-white/72 focus:text-zinc-950 focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.76),0_8px_18px_rgba(23,23,23,0.08)]",
-  "data-[highlighted]:bg-white/72 data-[highlighted]:text-zinc-950",
-  "dark:text-zinc-300 dark:focus:bg-white/12 dark:focus:text-white dark:data-[highlighted]:bg-white/12 dark:data-[highlighted]:text-white",
+  "focus:bg-white/[0.72] focus:text-zinc-950 focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.76),0_8px_18px_rgba(23,23,23,0.08)]",
+  "data-[highlighted]:bg-white/[0.72] data-[highlighted]:text-zinc-950",
+  "dark:text-zinc-300 dark:focus:bg-white/[0.12] dark:focus:text-white dark:data-[highlighted]:bg-white/[0.12] dark:data-[highlighted]:text-white",
 )
 const CHAT_ACTION_ICON = "mr-2 h-3.5 w-3.5 shrink-0 stroke-[1.9]"
 const CHAT_ACTION_SEP = "mx-1 my-1 bg-zinc-950/[0.08] dark:bg-white/10"
 const CHAT_ACTION_SUBMENU = cn(
-  "w-[196px] rounded-[16px] border border-white/65 bg-white/72 p-1.5",
+  "w-[196px] rounded-[16px] border border-white/65 bg-white/[0.72] p-1.5",
   "shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_16px_42px_rgba(23,23,23,0.14)]",
-  "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
-  "dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_46px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.08)]",
+  "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/[0.58]",
+  "dark:border-white/10 dark:bg-zinc-950/[0.72] dark:shadow-[0_18px_46px_rgba(0,0,0,0.38),inset_0_1px_0_rgba(255,255,255,0.08)]",
+  "[@media(prefers-reduced-transparency:reduce)]:bg-popover [@media(prefers-reduced-transparency:reduce)]:backdrop-blur-none",
 )
 
 const LEADING_CHAT_EMOJI_RE =
@@ -2129,7 +2132,7 @@ export function AppSidebar() {
                         return (
                           <SidebarMenuItem key={chat.id} className="chat-history-item">
                             <div
-                              className="flex w-full items-center gap-0.5 group group/chat-row"
+                              className="relative flex w-full items-center gap-0.5 group group/chat-row"
                               draggable={!isEditing}
                               onDragStart={(event) => {
                                 event.dataTransfer.setData("text/plain", encodeChatFolderDragId(chat.id))
@@ -2189,6 +2192,11 @@ export function AppSidebar() {
                                         className={cn(
                                           "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
                                           "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1",
+                                          // On pointer devices «…» floats over this button's
+                                          // time slot: the row stays highlighted while the
+                                          // pointer is on it and while its menu is open.
+                                          "[@media(hover:hover)]:group-hover/chat-row:bg-sidebar-accent [@media(hover:hover)]:group-hover/chat-row:text-sidebar-accent-foreground",
+                                          "group-has-[[data-state=open]]/chat-row:bg-sidebar-accent group-has-[[data-state=open]]/chat-row:text-sidebar-accent-foreground",
                                         )}
                                       >
                                           <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -2230,7 +2238,7 @@ export function AppSidebar() {
                                             <span className="text-sm flex-1 truncate">
                                               {displayTitle}
                                             </span>
-                                            <span className="flex shrink-0 items-center gap-1 text-muted-foreground/55">
+                                            <span className="flex shrink-0 items-center gap-1 text-muted-foreground/55 empty:hidden">
                                               {isChatPinned(chat) && (
                                                 <Pin className="h-3 w-3" aria-label="Chat fijado" />
                                               )}
@@ -2249,7 +2257,7 @@ export function AppSidebar() {
                                                 the native browser tooltip keeps it free of layout
                                                 cost and works on touch via long-press. */}
                                             <span
-                                              className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover/chat-row:opacity-0 group-has-[:focus-visible]/chat-row:opacity-0 group-has-[[data-state=open]]/chat-row:opacity-0"
+                                              className="min-w-6 text-right text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover/chat-row:opacity-0 group-has-[:focus-visible]/chat-row:opacity-0 group-has-[[data-state=open]]/chat-row:opacity-0"
                                               title={(() => {
                                                 try {
                                                   const d = new Date(chat.updatedAt)
@@ -2277,6 +2285,10 @@ export function AppSidebar() {
                                           // tablets always see it; keyboard focus inside the row and
                                           // an open menu keep it visible on hover devices too.
                                           "opacity-100 text-muted-foreground transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/chat-row:opacity-100 group-has-[:focus-visible]/chat-row:opacity-100 data-[state=open]:opacity-100",
+                                          // Pointer devices: float over the time slot (the time
+                                          // fades out when «…» appears) so the title gets the
+                                          // full row instead of a reserved, mostly empty slot.
+                                          "[@media(hover:hover)]:absolute [@media(hover:hover)]:right-0 [@media(hover:hover)]:top-0",
                                         )}
                                         aria-label="Acciones del chat"
                                         onClick={(e) => e.stopPropagation()}
@@ -2395,8 +2407,13 @@ export function AppSidebar() {
                       // Static date separators — they only label/count each
                       // bucket now. Collapsing happens once at the "Recent
                       // chats" header, so these are no longer interactive.
+                      // The label starts where the chat titles start (the row
+                      // button's 8px padding) and the count's right edge sits on
+                      // the times column: 4px from the row edge on pointer devices
+                      // (where «…» floats over the time), 38px on touch devices
+                      // (where «…» keeps its own 32px slot + 2px gap).
                       const renderChatGroupHeader = (label: string, count: number) => (
-                        <div className="flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none">
+                        <div className="flex w-full items-center gap-1 pl-2 pr-[38px] pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/50 select-none [@media(hover:hover)]:pr-1">
                           <span className="truncate">{label}</span>
                           <span className="ml-auto rounded-full bg-muted/70 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground/70">
                             {count}
