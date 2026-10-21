@@ -20,24 +20,34 @@ const QUESTION_STOPWORDS = [
 const STOPWORDS = new Set([...DEFAULT_STOPWORDS, ...QUESTION_STOPWORDS]
   .map(word => word.normalize('NFD').replace(/\p{M}/gu, '')));
 
-// Light inflection folding for Spanish and English. The surface token is
-// always kept (an exact match still scores on both forms); the stem is added
-// so «riesgo» finds «riesgos», «evaluación» finds «evaluaciones», «nueva»
-// finds «nuevo» and «study» finds «studies». Deliberately conservative: only
-// plural, gender and the -ción/-ciones pair; alphabetic tokens of 5+ letters.
+// Light PLURAL folding for Spanish and English. The surface token is always
+// kept (an exact match still scores on both forms); singular candidates are
+// added so «riesgo» finds «riesgos», «evaluación» finds «evaluaciones»,
+// «interés» finds «intereses», «study» finds «studies», «source» finds
+// «sources». Gender is NOT folded: dropping a final a/o/e conflated
+// plazo/plaza, marco/marca, cuento/cuenta, and docintel treats any shared
+// term as evidence. Alphabetic tokens of 5+ letters only.
 const STEM_MIN_LENGTH = 5;
 const STEM_MIN_RESULT = 4;
-function lightStem(token) {
-  if (token.length < STEM_MIN_LENGTH || !/^\p{L}+$/u.test(token)) return null;
-  let s = token;
-  if (s.endsWith('ciones')) s = `${s.slice(0, -6)}cion`;
-  else if (s.endsWith('siones')) s = `${s.slice(0, -6)}sion`;
-  else if (s.endsWith('ies') && s.length > 5) s = `${s.slice(0, -3)}y`;
-  else if (s.endsWith('ces') && s.length > 5) s = `${s.slice(0, -3)}z`;
-  else if (/[lrndjz]es$/.test(s) && s.length > 5) s = s.slice(0, -2);
-  else if (s.endsWith('s') && !s.endsWith('ss') && !/(?:is|us)$/.test(s)) s = s.slice(0, -1);
-  if (/[aoe]$/.test(s) && s.length > STEM_MIN_RESULT) s = s.slice(0, -1);
-  return s !== token && s.length >= STEM_MIN_RESULT ? s : null;
+function lightStems(token) {
+  if (token.length < STEM_MIN_LENGTH || !/^\p{L}+$/u.test(token)) return [];
+  const out = [];
+  const add = (candidate, minLength = STEM_MIN_RESULT) => {
+    if (candidate !== token && candidate.length >= minLength && !out.includes(candidate)) out.push(candidate);
+  };
+  if (token.endsWith('ciones')) add(`${token.slice(0, -6)}cion`);
+  else if (token.endsWith('siones')) add(`${token.slice(0, -6)}sion`);
+  else if (token.endsWith('ies')) add(`${token.slice(0, -3)}y`);
+  else if (token.endsWith('ces')) {
+    add(`${token.slice(0, -3)}z`, 3); // veces → vez, luces → luz, voces → voz
+    add(token.slice(0, -1)); // prices → price, sources → source
+  } else if (/[lrndjzs]es$/.test(token)) {
+    add(token.slice(0, -2)); // ciudades → ciudad, intereses → interes, classes → class
+    add(token.slice(0, -1)); // files → file, cases → case
+  } else if (token.endsWith('s') && !token.endsWith('ss') && !/(?:is|us)$/.test(token)) {
+    add(token.slice(0, -1));
+  }
+  return out;
 }
 
 // Normalize only the search representation. Stored text and cited excerpts
@@ -52,8 +62,7 @@ function documentTokens(text) {
     // Decimal values stay whole: 0,05 is not interchangeable with 0,01.
     // File names and identifiers also retain their exact compound token.
     if (token.length > 1 || /^\p{N}$/u.test(token)) tokens.push(token);
-    const stem = lightStem(token);
-    if (stem) tokens.push(stem);
+    for (const stem of lightStems(token)) tokens.push(stem);
     if (/^\p{L}/u.test(token) && /[-./]/.test(token)) {
       for (const part of token.split(/[-./]/)) {
         if ((part.length > 1 || /^\p{N}$/u.test(part)) && !STOPWORDS.has(part)) tokens.push(part);

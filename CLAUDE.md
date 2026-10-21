@@ -2924,6 +2924,12 @@ Medido con el prompt maestro real en un turno pesado (bloque operativo agéntico
 - **Coste del grafo**: la expansión por grafo (`useGraph`) empieza con una llamada LLM y solo sirve si algún triple almacenado tiene embedding (`linkTriple`). El backfill del chat nunca los embebe, así que en cada seguimiento pagaba la llamada y devolvía `[]`. Ahora el chat solo la activa con triples enlazables (`triple-graph.stats().embedded`). El backfill de triples de documentos largos (una extracción LLM por chunk) corría en cada turno; ahora solo cuando el turno indexó texto nuevo. Su salida no se lee en el chat (GraphRAG se omite con fuentes acotadas), así que no se pierde respuesta.
 - Tests (registrados): `rag-inflection-retrieval.test.js` (5), `rag-chat-retrieval-gates.test.js` (5); `operational-rag.test.js` actualizado (`useGraph` es false sin triples enlazables).
 
+
+## Revisión profesional: stemming del RAG (added 2026-10-21)
+
+- **Colisiones por género** (#1052): quitar la a/o/e final juntaba palabras distintas (plazo/plaza, marco/marca, cuento/cuenta, medio/media) y docintel trata cualquier término compartido como evidencia: «¿cuál es el plazo?» traía el pasaje de la plaza de toros. `lightStems` (en `rag/document-retrieval.js`) ahora solo pliega PLURALES: -ciones/-siones, -ies→-y, -ces→-z y quitando la -s (prices→price, sources→source; antes «priz»/«sourz»), -[lrndjzs]es→ quitando -es y -s (ciudades→ciudad, intereses→interes, files→file, cases→case), y -s simple. Se pierde «nueva»≈«nuevo» a propósito.
+- Test: `rag-inflection-retrieval.test.js` +1 (falla contra el stemmer anterior); 288/289 en las suites de RAG/docintel (1 omitido, igual que antes).
+
 ## Sandbox: cualquier librería de PyPI, verificada antes de instalarse (added 2026-10-20)
 
 - **Antes**: `install_sandbox_package` solo instalaba la lista curada (`sandbox-packages/policy.js`, ~145 nombres); todo lo demás se rechazaba y quedaba como gap para el administrador.

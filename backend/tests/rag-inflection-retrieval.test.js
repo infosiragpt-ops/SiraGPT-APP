@@ -55,7 +55,7 @@ test('surface forms are kept: exact matches still outrank stem-only matches', ()
 
 test('question words no longer count as evidence terms', () => {
   assert.deepEqual(documentTokens('¿Cuál es? ¿Cómo? ¿Dónde? what which how'), []);
-  assert.deepEqual(documentTokens('¿Cuál es el riesgo?'), ['riesgo', 'riesg']);
+  assert.deepEqual(documentTokens('¿Cuál es el riesgo?'), ['riesgo']);
 });
 
 test('pre-tokenized terms are searched as-is, never stemmed a second time', () => {
@@ -67,7 +67,7 @@ test('pre-tokenized terms are searched as-is, never stemmed a second time', () =
     { text: 'Los intereses moratorios se calculan mensualmente.' },
   ];
   const terms = documentTokens('¿Cómo se calculan los intereses?');
-  assert.deepEqual(terms, ['calculan', 'intereses', 'interes']);
+  assert.deepEqual(terms, ['calculan', 'intereses', 'interes', 'interese']);
   const hits = searchDocumentLexical(docs, terms, 2);
   assert.deepEqual(hits.map((hit) => hit.doc._idx), [1]);
   assert.equal(hits[0].coverage, 1);
@@ -80,4 +80,28 @@ test('identifiers, decimals and short tokens are never stemmed', () => {
   assert.deepEqual(documentTokens('análisis crisis tesis virus'), ['analisis', 'crisis', 'tesis', 'virus']);
   assert.deepEqual(documentTokens('evaluaciones'), ['evaluaciones', 'evaluacion']);
   assert.deepEqual(documentTokens('studies'), ['studies', 'study']);
+});
+
+test('plurals fold, gender does not: plazo never matches plaza, source matches sources', () => {
+  // Folding a final a/o/e conflated different words, and docintel treats any
+  // shared term as evidence («¿cuál es el plazo?» → the bullfighting passage).
+  const es = [{ text: 'La corrida en la plaza de toros fue suspendida.' }, { text: 'El plazo de entrega vence el viernes.' }];
+  assert.deepEqual(searchDocumentLexical(es, '¿cuál es el plazo?', 2).map((h) => h.doc._idx), [1]);
+  assert.deepEqual(searchDocumentLexical(es, 'plazos de entrega', 2).map((h) => h.doc._idx), [1]);
+  for (const [word, other] of [['plazo', 'plaza'], ['marco', 'marca'], ['cuento', 'cuenta'], ['medio', 'media']]) {
+    const shared = documentTokens(word).filter((t) => documentTokens(other).includes(t));
+    assert.deepEqual(shared, [], `${word} / ${other}`);
+  }
+  // English plurals in -ces / -es keep the singular (no «priz», «sourz» only).
+  const en = [{ text: 'Data sources are listed in the appendix.' }, { text: 'Prices rose sharply this year.' }];
+  assert.deepEqual(searchDocumentLexical(en, 'which source was used', 2).map((h) => h.doc._idx), [0]);
+  assert.deepEqual(searchDocumentLexical(en, 'price trend', 2).map((h) => h.doc._idx), [1]);
+  assert.ok(documentTokens('files').includes('file'));
+  assert.ok(documentTokens('cases').includes('case'));
+  // Spanish -ces / -es plurals.
+  assert.ok(documentTokens('veces').includes('vez'));
+  assert.ok(documentTokens('luces').includes('luz'));
+  assert.ok(documentTokens('intereses').includes('interes'));
+  assert.ok(documentTokens('países').includes('pais'));
+  assert.ok(documentTokens('ciudades').includes('ciudad'));
 });
