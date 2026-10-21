@@ -158,10 +158,17 @@ test('docker driver: installer `docker run` streams into `docker exec -i tar`, s
   assert.equal(result.code, 'ok', result.detail);
   assert.ok(fs.existsSync(path.join(root, '.sira-packages/lib/python3.12/site-packages/seaborn/__init__.py')));
   const lines = fs.readFileSync(log, 'utf8').trim().split('\n');
-  assert.match(lines[0], /^docker run --rm --name sira-pip-[0-9a-f]+ --runtime runsc --network bridge --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs \/tmp:rw,exec,size=1g -e HOME=\/tmp -e TMPDIR=\/tmp -e SIRA_PIP_ALLOW=\["seaborn"\] siragpt-doc-sandbox:latest bash -c /);
-  assert.match(lines[1], /^docker exec -i sira-doc-abc sh -c rm -rf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+' && mkdir -p .* && tar -xf - -C /);
+  // The installer (`docker run`) and the receiving `docker exec -i … tar` are
+  // spawned together as a pipe, so either may log first: assert each line by
+  // its content, not by position (this used to fail at random).
+  const runLine = lines.find((l) => l.startsWith('docker run '));
+  const receiveLine = lines.find((l) => l.startsWith('docker exec -i '));
+  const mergeLine = lines.find((l) => l.includes('cp -alf'));
+  assert.match(runLine || '', /^docker run --rm --name sira-pip-[0-9a-f]+ --runtime runsc --network bridge --memory 1g --memory-swap 1g --cpus 1 --pids-limit 256 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs \/tmp:rw,exec,size=1g -e HOME=\/tmp -e TMPDIR=\/tmp -e SIRA_PIP_ALLOW=\["seaborn"\] siragpt-doc-sandbox:latest bash -c /);
+  assert.match(receiveLine || '', /^docker exec -i sira-doc-abc sh -c rm -rf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+' && mkdir -p .* && tar -xf - -C /);
   // Hard-link merge (no second copy of the payload), plain copy as fallback.
-  assert.match(lines[2], /^docker exec sira-doc-abc sh -c mkdir -p '\/workspace\/\.sira-packages' && \{ cp -alf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+'\/\. '\/workspace\/\.sira-packages'\/ 2>\/dev\/null \|\| cp -af .*; \} && rm -rf /);
+  assert.match(mergeLine || '', /^docker exec sira-doc-abc sh -c mkdir -p '\/workspace\/\.sira-packages' && \{ cp -alf '\/workspace\/\.sira-packages\.staging-[0-9a-f]+'\/\. '\/workspace\/\.sira-packages'\/ 2>\/dev\/null \|\| cp -af .*; \} && rm -rf /);
+  assert.equal(lines.indexOf(mergeLine), 2, 'the merge runs only after the payload arrived');
   assert.equal(lines.length, 3, 'no rollback and no rm on success');
   // A refused batch: rollback of the staging dir + rm -f of the installer.
   const refused = await pip.runSandboxInstall({
