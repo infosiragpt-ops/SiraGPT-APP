@@ -23,7 +23,7 @@ async function persistSuccess(chatId, userId, displayPrompt, content, file) {
     data: { chatId, role: 'ASSISTANT', content, files: JSON.stringify([file]) },
   });
   await prisma.chat.update({ where: { id: chatId }, data: { updatedAt: new Date() } });
-  return { id: assistant.id, role: assistant.role, content: assistant.content, files: [file] };
+  return { id: assistant.id, chatId, role: assistant.role, content: assistant.content, files: [file] };
 }
 
 async function persistFailure(chatId, userId, displayPrompt, reason) {

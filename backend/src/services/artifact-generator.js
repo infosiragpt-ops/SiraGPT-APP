@@ -21,6 +21,7 @@
  */
 
 const OpenAI = require('openai');
+const { randomUUID } = require('node:crypto');
 
 function clientForModel(modelName) {
   if (!modelName) return { provider: 'OpenAI', client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) };
@@ -136,6 +137,9 @@ async function callLlm({ prompt, model, signal }) {
 
 function buildArtefact(parsed) {
   const file = {
+    // Each generation is a new artifact. Revisions can preserve this id only
+    // when a future edit path explicitly verifies their lineage.
+    id: randomUUID(),
     type: 'artifact',
     runtime: 'react',
     title: parsed.title || 'Artefacto interactivo',
