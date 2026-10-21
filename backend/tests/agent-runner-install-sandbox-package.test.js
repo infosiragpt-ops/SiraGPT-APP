@@ -256,8 +256,10 @@ test('the tool is offered exactly when the policy is on, and the runner + prompt
   assert.match(index, /const livePolicy = sandboxPackages\.resolvePolicy\(\);/);
   assert.match(index, /TOOL_DEFINITIONS\.some\(\(d\) => d && d\.function && d\.function\.name === 'install_sandbox_package'\)/);
   assert.match(index, /const packagePolicy = installerOffered \? livePolicy : \{ \.\.\.livePolicy, enabled: false \};/);
-  assert.match(index, /packageInstaller: \{ enabled: packagePolicy\.enabled \}/);
-  assert.match(index, /capability: \{ policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall \}/);
+  assert.match(index, /packageInstaller: \{ enabled: packagePolicy\.enabled, vetting: Boolean\(packageVetter\) \}/);
+  assert.match(index, /capability: \{ policy: packagePolicy, onGap: onCapabilityGap, onInstall: onCapabilityInstall, vetter: packageVetter \}/);
+  // Vetting outside the curated list follows the offered tool (same snapshot).
+  assert.match(index, /TOOL_DEFINITIONS\.includes\(VETTED_INSTALL_TOOL_DEFINITION\)/);
   assert.match(index, /step: 'capability_gap'/);
   assert.match(index, /step: 'capability_install'/);
   assert.match(index, /capabilityLedger\.recordCapabilityGap\(/);

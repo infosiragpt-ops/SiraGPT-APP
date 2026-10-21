@@ -7,6 +7,8 @@
 // whether the missing distribution is APPROVED — then the agent may install
 // it into its own sandbox with install_sandbox_package — or not, in which
 // case the gap is reported to the administrator and the agent stays honest.
+// With vetting on (policy.vetting + a wired vetter) a distribution outside
+// the curated list may still be requested: the server vets it first.
 
 const PYTHON_MISSING_RE = /(?:ModuleNotFoundError|ImportError): No module named ['"]([A-Za-z_][\w.]*)['"]/;
 
@@ -34,7 +36,7 @@ function detectMissingDependency(stderr, { language = 'python', exitCode } = {})
  * @param {string} [opts.package] distribution name for the module (policy.packageForModule)
  * @param {boolean} [opts.allowed]
  */
-function capabilityRecoveryGuidance(stderr, { language = 'python', exitCode, policy = null, package: pkg = null, allowed = null, notADistribution = null } = {}) {
+function capabilityRecoveryGuidance(stderr, { language = 'python', exitCode, policy = null, package: pkg = null, allowed = null, notADistribution = null, vetting = false } = {}) {
   const missing = detectMissingDependency(stderr, { language, exitCode });
   if (!missing) return '';
   const moduleName = missing.kind === 'python_module' ? missing.name : '';
@@ -65,6 +67,8 @@ function capabilityRecoveryGuidance(stderr, { language = 'python', exitCode, pol
   let installLine;
   if (installerOn && allowed && pkg) {
     installLine = `The distribution «${pkg}» is on the APPROVED list: call install_sandbox_package({"packages":["${pkg}"]}) once, then retry the import. Do not try pip yourself.`;
+  } else if (installerOn && pkg && vetting) {
+    installLine = `«${pkg}» is not on the curated list, but the server can vet it (PyPI history and adoption, malware advisories, look-alike names) and install it: call install_sandbox_package once with the exact PyPI distribution that provides this module — usually ["${pkg}"], but the import name can differ — then retry the import. If the vetting refuses it, do not retry; use an installed equivalent or state the missing capability. Do not try pip yourself.`;
   } else if (installerOn && pkg) {
     installLine = `The distribution «${pkg}» is NOT on the approved package list: it was reported to the administrator. Do not try to install it; use an installed equivalent or state the missing capability.`;
   } else {

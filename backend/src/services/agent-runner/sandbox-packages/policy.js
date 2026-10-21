@@ -202,7 +202,9 @@ function safeIndexUrl(value) {
 /**
  * Operator policy, read at call time (no restart needed).
  *
- *  SIRAGPT_SANDBOX_PIP             '0' disables the installer (default ON; OFF under NODE_ENV=test unless '1')
+ *  SIRAGPT_SANDBOX_PIP             '0' disables the installer (default ON; OFF under NODE_ENV=test unless '1').
+ *                                  'allowlist' installs ONLY the curated list; otherwise a name outside it
+ *                                  may be installed after vetting (sandbox-packages/vetting.js)
  *  SIRAGPT_SANDBOX_PIP_EXTRA_ALLOW comma/space list added to the allowlist
  *  SIRAGPT_SANDBOX_PIP_DENY        comma/space list removed from the allowlist
  *  SIRAGPT_SANDBOX_PIP_INDEX_URL   package index (a local devpi/proxy), default PyPI
@@ -215,16 +217,24 @@ function safeIndexUrl(value) {
  */
 function resolvePolicy(env = process.env) {
   const e = env || {};
-  const flag = String(e.SIRAGPT_SANDBOX_PIP ?? '').trim();
+  const flag = String(e.SIRAGPT_SANDBOX_PIP ?? '').trim().toLowerCase();
   const isTest = String(e.NODE_ENV || '') === 'test';
-  const enabled = flag === '0' ? false : (flag === '1' ? true : !isTest);
+  const enabled = flag === '0' ? false : (flag === '1' || flag === 'allowlist' ? true : !isTest);
+  const indexUrl = safeIndexUrl(e.SIRAGPT_SANDBOX_PIP_INDEX_URL);
   const allow = new Set(DEFAULT_ALLOWLIST);
+  // Denied names also never reach the vetting: the operator's word is final.
+  const deny = new Set(splitList(e.SIRAGPT_SANDBOX_PIP_DENY));
   for (const name of splitList(e.SIRAGPT_SANDBOX_PIP_EXTRA_ALLOW)) allow.add(name);
-  for (const name of splitList(e.SIRAGPT_SANDBOX_PIP_DENY)) allow.delete(name);
+  for (const name of deny) allow.delete(name);
   return {
     enabled,
     allow,
-    indexUrl: safeIndexUrl(e.SIRAGPT_SANDBOX_PIP_INDEX_URL),
+    deny,
+    // Names outside the curated list may be installed once vetted against
+    // public PyPI / OSV data. Not with a private index: its packages are not
+    // the ones that data describes.
+    vetting: enabled && flag !== 'allowlist' && !indexUrl,
+    indexUrl,
     // null = the driver's default (bridge for the local docker daemon; the
     // sandbox host's own SANDBOX_PIP_NETWORK for the remote service).
     network: safeDockerNetwork(e.SIRAGPT_SANDBOX_PIP_NETWORK, null),
