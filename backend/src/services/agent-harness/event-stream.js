@@ -528,17 +528,48 @@ function createAgentEventStream(opts = {}) {
               : DEFAULT_TOOL_TIMEOUT_MS;
             let result;
             if (toolTimeoutMs > 0 && toolTimeoutMs < Infinity) {
+              // Losing the race does not stop the tool by itself. A tool with
+              // side effects that outlive the answer (a sandbox run that keeps
+              // writing files and delivering them after the model was told
+              // "timeout", or that a retry would run a second time at once)
+              // declares `abortOnTimeout` and gets `ctx.callSignal`: aborted
+              // at the timeout and on Stop. `ctx.signal` stays the turn's own
+              // signal (per-turn state is keyed on it), and the copy is made
+              // only for those tools.
+              let callAbort = null;
+              let detachTurnSignal = null;
+              if (tool.abortOnTimeout === true && runCtx && typeof runCtx === 'object') {
+                callAbort = new AbortController();
+                const turnSignal = runCtx.signal;
+                if (turnSignal && typeof turnSignal.addEventListener === 'function') {
+                  if (turnSignal.aborted) callAbort.abort(turnSignal.reason);
+                  else {
+                    const onTurnAbort = () => callAbort.abort(turnSignal.reason);
+                    turnSignal.addEventListener('abort', onTurnAbort, { once: true });
+                    detachTurnSignal = () => turnSignal.removeEventListener('abort', onTurnAbort);
+                  }
+                }
+                runCtx = { ...runCtx, callSignal: callAbort.signal };
+              }
               let timer;
               const timeout = new Promise((_, reject) => {
-                timer = setTimeout(() => reject(new Error(
-                  `tool_timeout: "${tool.name}" no respondió en ${Math.round(toolTimeoutMs / 1000)}s. No reintentes la misma llamada; adapta el plan o informa al usuario.`,
-                )), toolTimeoutMs);
+                timer = setTimeout(() => {
+                  const timeoutError = new Error(
+                    `tool_timeout: "${tool.name}" no respondió en ${Math.round(toolTimeoutMs / 1000)}s. No reintentes la misma llamada; adapta el plan o informa al usuario.`,
+                  );
+                  // Reject BEFORE aborting: a tool that settles as soon as
+                  // it sees the abort must not win the race with that late
+                  // result — the model's observation is the timeout.
+                  reject(timeoutError);
+                  if (callAbort) callAbort.abort(timeoutError);
+                }, toolTimeoutMs);
                 if (timer && typeof timer.unref === 'function') timer.unref();
               });
               try {
                 result = await Promise.race([Promise.resolve(inner(args, runCtx)), timeout]);
               } finally {
                 clearTimeout(timer);
+                if (detachTurnSignal) detachTurnSignal();
               }
             } else {
               result = await inner(args, runCtx);

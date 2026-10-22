@@ -54,10 +54,14 @@ test('delivered files are checked for integrity, not for size or "substance"', (
   assert.equal(ok('json', '{"a":1}'), true);
   assert.equal(ok('json', '{roto'), false);
   assert.equal(ok('txt', ''), false, 'empty files are never delivered');
-  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16)]);
+  // A complete PNG ends with its IEND chunk; a complete ZIP with its
+  // end-of-central-directory record (truncated files: chat-sandbox-review-round2).
+  const pngEnd = Buffer.from([0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16), pngEnd]);
   assert.equal(ok('png', png), true);
   assert.equal(ok('png', 'no soy un png'), false);
-  const zip = (body) => Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(body)]);
+  const zipEnd = Buffer.concat([Buffer.from([0x50, 0x4b, 0x05, 0x06]), Buffer.alloc(18)]);
+  const zip = (body) => Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from(body), zipEnd]);
   assert.equal(ok('xlsx', zip('...[Content_Types].xml...')), true);
   assert.equal(ok('docx', zip('sin manifiesto')), false, 'an Office file without its package manifest is broken');
   assert.equal(ok('docx', 'texto con extension equivocada'), false);

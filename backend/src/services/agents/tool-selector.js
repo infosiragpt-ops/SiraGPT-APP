@@ -45,7 +45,7 @@ const CATEGORY_PATTERNS = Object.freeze({
   web: /^(web_search|read_url|web_extract|deep_search|browser_)/,
   research: /^(scientific_search|github_search|x_search|deep_search|sunat_|github_list_repos|github_create_issue|github_publish_project|github_open_repo|github_open_pull_request|linkedin_|x_list_mentions|x_publish_post)/,
   rag: /(rag_retrieve|search_docs|search_code|get_symbol|list_files|read_file|docintel|deep_analyze|compare_documents|auto_file|memory_recall)/,
-  code: /(python_exec|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol|project_read|project_write|project_exec|project_clone_repo|project_preview_|project_changes|project_open_pull_request|project_pull_request_checks|construir_scaffold|github_publish_project|github_open_repo|github_repo_|github_open_pull_request)/,
+  code: /(python_exec|bash_exec|install_sandbox_package|describe_image|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol|project_read|project_write|project_exec|project_clone_repo|project_preview_|project_changes|project_open_pull_request|project_pull_request_checks|construir_scaffold|github_publish_project|github_open_repo|github_repo_|github_open_pull_request)/,
   generation: /(create_document|verify_artifact)/,
   media: /(image|video|audio|music|chart|diagram|svg|infograph|dashboard|organigram|mermaid|timeline|kanban|swot|eisenhower|raci|canvas|pyramid|porter|risk_matrix|funnel|radar|journey|okr|empathy|lean|scorecard|ansoff|bcg|moscow|decision_tree|concept_map|mindmap|swimlane|pestel|process_flow|comparison_table|gantt|gauge|waterfall|heatmap|treemap)/i,
   memory: /(memory_recall|session_|active_memory)/,
@@ -216,6 +216,15 @@ function selectTools(rawInput, deps = {}) {
   // Guarantee a minimum even if scores were flat.
   if (kept.size < MIN_KEPT) {
     for (const s of scored) { if (kept.size >= MIN_KEPT) break; kept.set(s.name, true); }
+  }
+  // The sandbox computer's recovery path: a ModuleNotFoundError in
+  // python_exec / bash_exec tells the model to call install_sandbox_package.
+  // Dropping it while keeping them turns that advice into «unknown_tool».
+  const keptNames = new Set([...kept.keys()].map((n) => n.toLowerCase()));
+  if (keptNames.has('python_exec') || keptNames.has('bash_exec')) {
+    for (const t of tools) {
+      if (toName(t).toLowerCase() === 'install_sandbox_package') kept.set(toName(t), true);
+    }
   }
 
   const keptTools = tools.filter((t) => kept.has(toName(t)));
