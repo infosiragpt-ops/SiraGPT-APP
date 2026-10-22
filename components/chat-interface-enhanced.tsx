@@ -1476,46 +1476,7 @@ const ActionsDropdown = ({
     },
   ];
 
-  const controlAppItems = [
-    {
-      key: "browser-control",
-      brand: "browser-control",
-      label: "Navegador",
-      description: "Navega, busca y extrae datos",
-      active: isComputerUseActive && computerUseAppMode === "browser",
-      disabled: isToolSwitchDisabled,
-      dotClassName: "bg-sky-500",
-      iconClassName: "bg-sky-100 dark:bg-sky-900/20",
-      icon: <AppWindow className="h-4 w-4 text-sky-600 dark:text-sky-400" />,
-      onClick: () => handleComputerUseAppToggle("browser"),
-    },
-    {
-      key: "chrome-control",
-      brand: "chrome-control",
-      label: "Chrome",
-      description: "Automatiza Chrome",
-      active: isComputerUseActive && computerUseAppMode === "chrome",
-      disabled: isToolSwitchDisabled,
-      dotClassName: "bg-blue-500",
-      iconClassName: "bg-blue-100 dark:bg-blue-900/20",
-      icon: <Chrome className="h-4 w-4 text-blue-600 dark:text-blue-400" />,
-      onClick: () => handleComputerUseAppToggle("chrome"),
-    },
-    {
-      key: "computer-control",
-      brand: "computer-control",
-      label: "Computadora",
-      description: "Control local seguro",
-      active: isComputerUseActive && computerUseAppMode === "computer",
-      disabled: isToolSwitchDisabled,
-      dotClassName: "bg-indigo-500",
-      iconClassName: "bg-indigo-100 dark:bg-indigo-900/20",
-      icon: <Monitor className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />,
-      onClick: () => handleComputerUseAppToggle("computer"),
-    },
-  ];
-
-  const activeAppsCount = [...connectorItems, ...controlAppItems].filter((item) => item.active).length;
+  const activeAppsCount = connectorItems.filter((item) => item.active).length;
 
   const renderAppMenuItem = (item: {
     key: string;
@@ -1560,8 +1521,6 @@ const ActionsDropdown = ({
 
   const renderConnectorItems = () => connectorItems.map((item) => renderAppMenuItem(item));
 
-  const renderControlAppItems = () => controlAppItems.map((item) => renderAppMenuItem(item));
-
   const renderAppsMenuContent = () => (
     <>
       {renderConnectorItems()}
@@ -1584,11 +1543,6 @@ const ActionsDropdown = ({
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
         </div>
       </DropdownMenuItem>
-      <div className="my-1 h-px bg-border/45" />
-      <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        Control
-      </div>
-      {renderControlAppItems()}
     </>
   );
 
@@ -1689,7 +1643,7 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Apps</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
+                  {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, GitHub, Spotify"}
                 </div>
               </div>
               <ChevronDown className={cn("h-4 w-4 shrink-0 opacity-60 transition-transform", mobileAppsOpen && "rotate-180")} />
@@ -1717,7 +1671,7 @@ const ActionsDropdown = ({
                 <div className="min-w-0 flex-1">
                   <div className="liquid-label font-medium text-sm">Apps</div>
                   <div className="truncate text-xs text-muted-foreground">
-                    {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, Navegador, Chrome"}
+                    {activeAppsCount > 0 ? `${activeAppsCount} activa${activeAppsCount > 1 ? "s" : ""}` : "Gmail, Drive, GitHub, Spotify"}
                   </div>
                 </div>
               </div>
