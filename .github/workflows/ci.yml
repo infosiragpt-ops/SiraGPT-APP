@@ -1109,12 +1109,40 @@ jobs:
           restore-keys: |
             playwright-${{ runner.os }}-
 
+      # Same Azure mirror stalls as the backend shard: on 2026-10-22 Playwright's
+      # --with-deps and the desktop input packages spent ~20 of this job's 30
+      # minutes on apt. Route every apt download of the job through a weekly
+      # Actions cache (restored from the previous week) with bounded retries.
+      - name: Week key for the E2E .deb cache
+        id: e2e-apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache E2E .deb archives
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/apt-e2e
+          key: apt-e2e-${{ runner.os }}-${{ matrix.desktop_gate && 'desktop' || 'base' }}-${{ steps.e2e-apt-week.outputs.week }}
+          restore-keys: |
+            apt-e2e-${{ runner.os }}-${{ matrix.desktop_gate && 'desktop' || 'base' }}-
+
+      - name: Route apt downloads through the cache
+        run: |
+          mkdir -p "$HOME/.cache/apt-e2e/partial"
+          printf 'Dir::Cache::Archives "%s";\nAcquire::Retries "3";\nAcquire::http::Timeout "30";\n' "$HOME/.cache/apt-e2e" \
+            | sudo tee /etc/apt/apt.conf.d/99-ci-deb-cache >/dev/null
+
       - name: Install Playwright chromium
         run: npx playwright install --with-deps chromium
 
       - name: Install real desktop input dependencies
         if: matrix.desktop_gate
         run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox x11vnc
+
+      # apt wrote the archives as root; the cache action saves them as the runner user.
+      - name: Hand the E2E .deb cache back to the runner user
+        run: |
+          sudo rm -rf "$HOME/.cache/apt-e2e/partial" "$HOME/.cache/apt-e2e/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/apt-e2e"
 
       # Real Chromium + X11 gate. The only retried failure is Chrome not
       # bringing up its CDP endpoint on a loaded runner (infrastructure, not
