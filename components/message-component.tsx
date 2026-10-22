@@ -3487,7 +3487,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     files={Array.isArray(parsedFiles) ? parsedFiles : []}
                                     onDocumentPreview={onDocumentPreview}
                                 />
-                                <InteractiveArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} />
+                                <InteractiveArtifactDisplay files={Array.isArray(parsedFiles) ? parsedFiles : []} ownerId={user?.id} chatId={message.chatId} messageId={message.id} />
                                 {GmailConnectionDisplay()}
                                 {GoogleServicesConnectionDisplay()}
                                 {SpotifyConnectionDisplay()}
@@ -3664,6 +3664,11 @@ const agentMetadataKey = (value: unknown): string => {
 export const areMessagePropsEqual = (prev: any, next: any) => {
     const a = prev.message
     const b = next.message
+    // Artifact storage is scoped to the signed-in account and owning chat.
+    // Even a reference-identical message must drop its old iframe on logout
+    // or account change, before the settled-message fast path can return.
+    if (prev.user?.id !== next.user?.id) return false
+    if (a.chatId !== b.chatId) return false
     // Same row object and same live flag: nothing below can differ. This is
     // the common case for every settled bubble on every stream flush.
     if (a === b && Boolean(prev.isStreaming) === Boolean(next.isStreaming)) return true
@@ -3701,7 +3706,7 @@ export const areMessagePropsEqual = (prev: any, next: any) => {
     }
     if (fileKey(a.files) !== fileKey(b.files)) return false
 
-    // Ignore parent re-renders from user, callbacks (they’re stable from context)
+    // Ignore profile-only updates and stable callbacks; account identity is checked above.
     return true
 }
 

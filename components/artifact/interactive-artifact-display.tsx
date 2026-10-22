@@ -24,6 +24,8 @@ import { Code2, Download, Maximize2, Minimize2, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 interface ArtifactFile {
+  /** Issued by the server and persisted with the message, never derived from JSX. */
+  id?: string
   type: "artifact"
   runtime: "react"
   title?: string
@@ -31,73 +33,99 @@ interface ArtifactFile {
   jsx: string
 }
 
-export function InteractiveArtifactDisplay({ files }: { files: any[] }) {
-  const artefacts = React.useMemo<ArtifactFile[]>(
-    () => (Array.isArray(files) ? files.filter((f: any) => f?.type === "artifact") : []),
+type ArtifactOwner = {
+  ownerId?: string | null
+  chatId?: string | null
+  messageId?: string | null
+}
+
+const identityPart = (value: unknown): string => typeof value === "string" ? value.trim() : ""
+
+function artifactStorageScope(owner: ArtifactOwner, artifact: ArtifactFile, index: number): string | null {
+  const user = identityPart(owner.ownerId)
+  const chat = identityPart(owner.chatId)
+  const id = identityPart(artifact.id)
+  const message = identityPart(owner.messageId)
+  if (!user || !chat || (!id && !message)) return null
+  // A legacy message has no artifact id: its persisted attachment slot is its
+  // identity. Never claim the old title/JSX hash data, whose owner is unknown.
+  const parts = id ? [user, chat, "artifact", id] : [user, chat, "message", message, index]
+  return `siraGPT:artifact:v2:${encodeURIComponent(JSON.stringify(parts))}:`
+}
+
+export function InteractiveArtifactDisplay({ files, ownerId, chatId, messageId }: { files: any[] } & ArtifactOwner) {
+  const artefacts = React.useMemo(
+    () => (Array.isArray(files) ? files.flatMap((file: any, index) => file?.type === "artifact" ? [{ file: file as ArtifactFile, index }] : []) : []),
     [files]
   )
   if (artefacts.length === 0) return null
+  const owner = { ownerId, chatId, messageId }
   return (
     <div className="mt-3 space-y-3">
-      {artefacts.map((a, i) => <ArtifactCard key={i} artefact={a} />)}
+      {artefacts.map(({ file, index }) => {
+        const scope = artifactStorageScope(owner, file, index)
+        // A different account/chat/identity gets a new iframe as well as a new
+        // store. Queued messages and in-memory state from the old frame cannot
+        // cross the ownership boundary. Missing identity is memory-only.
+        const key = scope || JSON.stringify([ownerId, chatId, messageId, file.id])
+        return <ArtifactCard key={`${key}:${index}`} artefact={file} storageScope={scope} />
+      })}
     </div>
   )
 }
 
-function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
+function ArtifactCard({ artefact, storageScope }: { artefact: ArtifactFile; storageScope: string | null }) {
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null)
   const [expanded, setExpanded] = React.useState(false)
   const [showSource, setShowSource] = React.useState(false)
   const [reloadKey, setReloadKey] = React.useState(0)
   const srcDoc = React.useMemo(() => buildShellHtml(artefact.jsx), [artefact.jsx])
-  const storageScope = React.useMemo(
-    () => artifactStorageScope(artefact),
-    // artefact.title + artefact.jsx fully identify the storage scope —
-    // listing the full artefact object would re-fire on every prop
-    // identity change without changing the scope value.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [artefact.title, artefact.jsx]
-  )
+  const temporaryData = React.useRef(new Map<string, string>())
 
   React.useEffect(() => {
     const maxBytes = 5 * 1024 * 1024
-    const prefix = `siraGPT:artifact:${storageScope}:`
-    const reply = (id: string, payload: any) => {
-      iframeRef.current?.contentWindow?.postMessage(
-        { type: "sgpt-artifact-storage-result", id, ...payload },
-        "*"
-      )
-    }
     const onMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow) return
+      const target = iframeRef.current?.contentWindow
+      if (!target || event.source !== target) return
       const msg = event.data
       if (!msg || msg.type !== "sgpt-artifact-storage" || typeof msg.id !== "string") return
       const key = typeof msg.key === "string" ? msg.key : ""
-      const storageKey = `${prefix}${key}`
+      const storageKey = `${storageScope || ""}${key}`
+      const reply = (payload: { ok: boolean; value?: unknown; error?: string }) => {
+        target.postMessage({ type: "sgpt-artifact-storage-result", id: msg.id, ...payload }, "*")
+      }
 
       try {
+        const store = storageScope ? localStorage : null
         if (msg.action === "get") {
-          const raw = localStorage.getItem(storageKey)
-          reply(msg.id, { ok: true, value: raw == null ? msg.fallback ?? null : JSON.parse(raw) })
+          const raw = store ? store.getItem(storageKey) : temporaryData.current.get(key)
+          reply({ ok: true, value: raw == null ? msg.fallback ?? null : JSON.parse(raw) })
         } else if (msg.action === "set") {
           if (!key) throw new Error("storage key is required")
           const raw = JSON.stringify(msg.value)
+          if (typeof raw !== "string") throw new Error("storage value must be JSON serializable")
           if (new Blob([raw]).size > maxBytes) throw new Error("storage value exceeds 5MB")
-          localStorage.setItem(storageKey, raw)
-          reply(msg.id, { ok: true, value: true })
+          if (store) store.setItem(storageKey, raw)
+          else temporaryData.current.set(key, raw)
+          reply({ ok: true, value: true })
         } else if (msg.action === "delete") {
-          localStorage.removeItem(storageKey)
-          reply(msg.id, { ok: true, value: true })
+          if (store) store.removeItem(storageKey)
+          else temporaryData.current.delete(key)
+          reply({ ok: true, value: true })
         } else if (msg.action === "list") {
           const keys: string[] = []
-          for (let i = 0; i < localStorage.length; i += 1) {
-            const k = localStorage.key(i)
-            if (k?.startsWith(prefix)) keys.push(k.slice(prefix.length))
-          }
-          reply(msg.id, { ok: true, value: keys })
+          if (store) {
+            for (let i = 0; i < store.length; i += 1) {
+              const k = store.key(i)
+              if (k?.startsWith(storageScope!)) keys.push(k.slice(storageScope!.length))
+            }
+          } else keys.push(...temporaryData.current.keys())
+          reply({ ok: true, value: keys })
+        } else {
+          reply({ ok: false, error: "unsupported storage action" })
         }
       } catch (error: any) {
-        reply(msg.id, { ok: false, error: error?.message || "storage error" })
+        reply({ ok: false, error: error?.message || "storage error" })
       }
     }
 
@@ -164,15 +192,6 @@ function ArtifactCard({ artefact }: { artefact: ArtifactFile }) {
 }
 
 // ─── HTML shell ────────────────────────────────────────────────────────────
-
-function artifactStorageScope(artefact: ArtifactFile): string {
-  const seed = `${artefact.title || ""}\n${artefact.jsx || ""}`
-  let hash = 5381
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = ((hash << 5) + hash) ^ seed.charCodeAt(i)
-  }
-  return Math.abs(hash >>> 0).toString(36)
-}
 
 /**
  * Build a self-contained HTML document that hosts the artefact JSX
