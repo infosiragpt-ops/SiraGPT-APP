@@ -380,1866 +380,337 @@ function summarizeAnalyzerTelemetry(telemetry) {
 // hot path of routes that don't enrich attachments. Each module is optional
 // at runtime: if missing, callers receive an empty block instead of an
 // exception. Direct unit tests import the modules without going through here.
-let insightsEngineCache = null;
-function getInsightsEngine() {
-  if (insightsEngineCache) return insightsEngineCache;
-  try { insightsEngineCache = require('./document-insights-engine'); } catch { insightsEngineCache = null; }
-  return insightsEngineCache;
-}
-let comparisonEngineCache = null;
-function getComparisonEngine() {
-  if (comparisonEngineCache) return comparisonEngineCache;
-  try { comparisonEngineCache = require('./document-comparison-engine'); } catch { comparisonEngineCache = null; }
-  return comparisonEngineCache;
-}
-let glossaryEngineCache = null;
-function getGlossaryEngine() {
-  if (glossaryEngineCache) return glossaryEngineCache;
-  try { glossaryEngineCache = require('./document-glossary-extractor'); } catch { glossaryEngineCache = null; }
-  return glossaryEngineCache;
-}
-let piiEngineCache = null;
-function getPiiEngine() {
-  if (piiEngineCache) return piiEngineCache;
-  try { piiEngineCache = require('./document-pii-detector'); } catch { piiEngineCache = null; }
-  return piiEngineCache;
-}
-let consistencyCheckerCache = null;
-function getConsistencyChecker() {
-  if (consistencyCheckerCache) return consistencyCheckerCache;
-  try { consistencyCheckerCache = require('./document-consistency-checker'); } catch { consistencyCheckerCache = null; }
-  return consistencyCheckerCache;
-}
-let outlineGeneratorCache = null;
-function getOutlineGenerator() {
-  if (outlineGeneratorCache) return outlineGeneratorCache;
-  try { outlineGeneratorCache = require('./document-outline-generator'); } catch { outlineGeneratorCache = null; }
-  return outlineGeneratorCache;
-}
-let readabilityAnalyzerCache = null;
-function getReadabilityAnalyzer() {
-  if (readabilityAnalyzerCache) return readabilityAnalyzerCache;
-  try { readabilityAnalyzerCache = require('./document-readability-analyzer'); } catch { readabilityAnalyzerCache = null; }
-  return readabilityAnalyzerCache;
-}
-let qualityScorerCache = null;
-function getQualityScorer() {
-  if (qualityScorerCache) return qualityScorerCache;
-  try { qualityScorerCache = require('./document-analysis-quality-scorer'); } catch { qualityScorerCache = null; }
-  return qualityScorerCache;
-}
-let deepAnalyzerCache = null;
-function getDeepAnalyzer() {
-  if (deepAnalyzerCache) return deepAnalyzerCache;
-  try { deepAnalyzerCache = require('./document-deep-analyzer'); } catch { deepAnalyzerCache = null; }
-  return deepAnalyzerCache;
-}
-let quoteExtractorCache = null;
-function getQuoteExtractor() {
-  if (quoteExtractorCache) return quoteExtractorCache;
-  try { quoteExtractorCache = require('./document-quote-extractor'); } catch { quoteExtractorCache = null; }
-  return quoteExtractorCache;
-}
-let discourseMapperCache = null;
-function getDiscourseMapper() {
-  if (discourseMapperCache) return discourseMapperCache;
-  try { discourseMapperCache = require('./document-discourse-mapper'); } catch { discourseMapperCache = null; }
-  return discourseMapperCache;
-}
-let sectionClassifierCache = null;
-function getSectionClassifier() {
-  if (sectionClassifierCache) return sectionClassifierCache;
-  try { sectionClassifierCache = require('./document-section-classifier'); } catch { sectionClassifierCache = null; }
-  return sectionClassifierCache;
-}
-let evidenceMapCache = null;
-function getEvidenceMap() {
-  if (evidenceMapCache) return evidenceMapCache;
-  try { evidenceMapCache = require('./document-evidence-map'); } catch { evidenceMapCache = null; }
-  return evidenceMapCache;
-}
-let numericCoherenceCache = null;
-function getNumericCoherence() {
-  if (numericCoherenceCache) return numericCoherenceCache;
-  try { numericCoherenceCache = require('./document-numeric-coherence'); } catch { numericCoherenceCache = null; }
-  return numericCoherenceCache;
-}
-let temporalTimelineCache = null;
-function getTemporalTimeline() {
-  if (temporalTimelineCache) return temporalTimelineCache;
-  try { temporalTimelineCache = require('./document-temporal-timeline'); } catch { temporalTimelineCache = null; }
-  return temporalTimelineCache;
-}
-let actionDashboardCache = null;
-function getActionDashboard() {
-  if (actionDashboardCache) return actionDashboardCache;
-  try { actionDashboardCache = require('./document-action-dashboard'); } catch { actionDashboardCache = null; }
-  return actionDashboardCache;
-}
-let audienceToneCache = null;
-function getAudienceTone() {
-  if (audienceToneCache) return audienceToneCache;
-  try { audienceToneCache = require('./document-audience-tone'); } catch { audienceToneCache = null; }
-  return audienceToneCache;
-}
-let semanticGraphCache = null;
-function getSemanticGraph() {
-  if (semanticGraphCache) return semanticGraphCache;
-  try { semanticGraphCache = require('./document-semantic-graph'); } catch { semanticGraphCache = null; }
-  return semanticGraphCache;
-}
-let kpiExtractorCache = null;
-function getKpiExtractor() {
-  if (kpiExtractorCache) return kpiExtractorCache;
-  try { kpiExtractorCache = require('./document-kpi-extractor'); } catch { kpiExtractorCache = null; }
-  return kpiExtractorCache;
-}
-let riskRegisterCache = null;
-function getRiskRegister() {
-  if (riskRegisterCache) return riskRegisterCache;
-  try { riskRegisterCache = require('./document-risk-register'); } catch { riskRegisterCache = null; }
-  return riskRegisterCache;
-}
-let factDensityCache = null;
-function getFactDensity() {
-  if (factDensityCache) return factDensityCache;
-  try { factDensityCache = require('./document-fact-density'); } catch { factDensityCache = null; }
-  return factDensityCache;
-}
-let relationshipClassifierCache = null;
-function getRelationshipClassifier() {
-  if (relationshipClassifierCache) return relationshipClassifierCache;
-  try { relationshipClassifierCache = require('./document-relationship-classifier'); } catch { relationshipClassifierCache = null; }
-  return relationshipClassifierCache;
-}
-let sectionSimilarityCache = null;
-function getSectionSimilarity() {
-  if (sectionSimilarityCache) return sectionSimilarityCache;
-  try { sectionSimilarityCache = require('./document-section-similarity'); } catch { sectionSimilarityCache = null; }
-  return sectionSimilarityCache;
-}
-let numericStatisticsCache = null;
-function getNumericStatistics() {
-  if (numericStatisticsCache) return numericStatisticsCache;
-  try { numericStatisticsCache = require('./document-numeric-statistics'); } catch { numericStatisticsCache = null; }
-  return numericStatisticsCache;
-}
-let qualityGradeCache = null;
-function getQualityGrade() {
-  if (qualityGradeCache) return qualityGradeCache;
-  try { qualityGradeCache = require('./document-quality-grade'); } catch { qualityGradeCache = null; }
-  return qualityGradeCache;
-}
-let titleExtractorCache = null;
-function getTitleExtractor() {
-  if (titleExtractorCache) return titleExtractorCache;
-  try { titleExtractorCache = require('./document-title-extractor'); } catch { titleExtractorCache = null; }
-  return titleExtractorCache;
-}
-let tldrCache = null;
-function getTldr() {
-  if (tldrCache) return tldrCache;
-  try { tldrCache = require('./document-tldr'); } catch { tldrCache = null; }
-  return tldrCache;
-}
-let sentimentCache = null;
-function getSentiment() {
-  if (sentimentCache) return sentimentCache;
-  try { sentimentCache = require('./document-sentiment'); } catch { sentimentCache = null; }
-  return sentimentCache;
-}
-let keyPhrasesCache = null;
-function getKeyPhrases() {
-  if (keyPhrasesCache) return keyPhrasesCache;
-  try { keyPhrasesCache = require('./document-key-phrases'); } catch { keyPhrasesCache = null; }
-  return keyPhrasesCache;
-}
-let obligationsCache = null;
-function getObligations() {
-  if (obligationsCache) return obligationsCache;
-  try { obligationsCache = require('./document-obligations-extractor'); } catch { obligationsCache = null; }
-  return obligationsCache;
-}
-let scopeExclusionsCache = null;
-function getScopeExclusions() {
-  if (scopeExclusionsCache) return scopeExclusionsCache;
-  try { scopeExclusionsCache = require('./document-scope-exclusions'); } catch { scopeExclusionsCache = null; }
-  return scopeExclusionsCache;
-}
-let stakeholderMapCache = null;
-function getStakeholderMap() {
-  if (stakeholderMapCache) return stakeholderMapCache;
-  try { stakeholderMapCache = require('./document-stakeholder-map'); } catch { stakeholderMapCache = null; }
-  return stakeholderMapCache;
-}
-let jurisdictionDetectorCache = null;
-function getJurisdictionDetector() {
-  if (jurisdictionDetectorCache) return jurisdictionDetectorCache;
-  try { jurisdictionDetectorCache = require('./document-jurisdiction-detector'); } catch { jurisdictionDetectorCache = null; }
-  return jurisdictionDetectorCache;
-}
-let definitionsExtractorCache = null;
-function getDefinitionsExtractor() {
-  if (definitionsExtractorCache) return definitionsExtractorCache;
-  try { definitionsExtractorCache = require('./document-definitions-extractor'); } catch { definitionsExtractorCache = null; }
-  return definitionsExtractorCache;
-}
-let crossReferenceCache = null;
-function getCrossReference() {
-  if (crossReferenceCache) return crossReferenceCache;
-  try { crossReferenceCache = require('./document-cross-reference'); } catch { crossReferenceCache = null; }
-  return crossReferenceCache;
-}
-let pricingExtractorCache = null;
-function getPricingExtractor() {
-  if (pricingExtractorCache) return pricingExtractorCache;
-  try { pricingExtractorCache = require('./document-pricing-extractor'); } catch { pricingExtractorCache = null; }
-  return pricingExtractorCache;
-}
-let metadataExtractorCache = null;
-function getMetadataExtractor() {
-  if (metadataExtractorCache) return metadataExtractorCache;
-  try { metadataExtractorCache = require('./document-metadata-extractor'); } catch { metadataExtractorCache = null; }
-  return metadataExtractorCache;
-}
-let complianceMatcherCache = null;
-function getComplianceMatcher() {
-  if (complianceMatcherCache) return complianceMatcherCache;
-  try { complianceMatcherCache = require('./document-compliance-matcher'); } catch { complianceMatcherCache = null; }
-  return complianceMatcherCache;
-}
-let warrantiesExtractorCache = null;
-function getWarrantiesExtractor() {
-  if (warrantiesExtractorCache) return warrantiesExtractorCache;
-  try { warrantiesExtractorCache = require('./document-warranties-extractor'); } catch { warrantiesExtractorCache = null; }
-  return warrantiesExtractorCache;
-}
-let disputeResolutionCache = null;
-function getDisputeResolution() {
-  if (disputeResolutionCache) return disputeResolutionCache;
-  try { disputeResolutionCache = require('./document-dispute-resolution'); } catch { disputeResolutionCache = null; }
-  return disputeResolutionCache;
-}
-let indemnificationCache = null;
-function getIndemnification() {
-  if (indemnificationCache) return indemnificationCache;
-  try { indemnificationCache = require('./document-indemnification'); } catch { indemnificationCache = null; }
-  return indemnificationCache;
-}
-let acronymExpansionCache = null;
-function getAcronymExpansion() {
-  if (acronymExpansionCache) return acronymExpansionCache;
-  try { acronymExpansionCache = require('./document-acronym-expansion'); } catch { acronymExpansionCache = null; }
-  return acronymExpansionCache;
-}
-let temporalExpressionsCache = null;
-function getTemporalExpressions() {
-  if (temporalExpressionsCache) return temporalExpressionsCache;
-  try { temporalExpressionsCache = require('./document-temporal-expressions'); } catch { temporalExpressionsCache = null; }
-  return temporalExpressionsCache;
-}
-let crossNumericCache = null;
-function getCrossNumeric() {
-  if (crossNumericCache) return crossNumericCache;
-  try { crossNumericCache = require('./document-cross-numeric'); } catch { crossNumericCache = null; }
-  return crossNumericCache;
-}
-let signatureBlockCache = null;
-function getSignatureBlock() {
-  if (signatureBlockCache) return signatureBlockCache;
-  try { signatureBlockCache = require('./document-signature-block'); } catch { signatureBlockCache = null; }
-  return signatureBlockCache;
-}
-let qaPairsCache = null;
-function getQaPairs() {
-  if (qaPairsCache) return qaPairsCache;
-  try { qaPairsCache = require('./document-qa-pairs'); } catch { qaPairsCache = null; }
-  return qaPairsCache;
-}
-let hypothesesCache = null;
-function getHypotheses() {
-  if (hypothesesCache) return hypothesesCache;
-  try { hypothesesCache = require('./document-hypotheses'); } catch { hypothesesCache = null; }
-  return hypothesesCache;
-}
-let recommendationsCache = null;
-function getRecommendations() {
-  if (recommendationsCache) return recommendationsCache;
-  try { recommendationsCache = require('./document-recommendations'); } catch { recommendationsCache = null; }
-  return recommendationsCache;
-}
-let assumptionsCache = null;
-function getAssumptions() {
-  if (assumptionsCache) return assumptionsCache;
-  try { assumptionsCache = require('./document-assumptions'); } catch { assumptionsCache = null; }
-  return assumptionsCache;
-}
-let conditionalClausesCache = null;
-function getConditionalClauses() {
-  if (conditionalClausesCache) return conditionalClausesCache;
-  try { conditionalClausesCache = require('./document-conditional-clauses'); } catch { conditionalClausesCache = null; }
-  return conditionalClausesCache;
-}
-let counterArgumentsCache = null;
-function getCounterArguments() {
-  if (counterArgumentsCache) return counterArgumentsCache;
-  try { counterArgumentsCache = require('./document-counter-arguments'); } catch { counterArgumentsCache = null; }
-  return counterArgumentsCache;
-}
-let callToActionCache = null;
-function getCallToAction() {
-  if (callToActionCache) return callToActionCache;
-  try { callToActionCache = require('./document-call-to-action'); } catch { callToActionCache = null; }
-  return callToActionCache;
-}
-let disclosuresCache = null;
-function getDisclosures() {
-  if (disclosuresCache) return disclosuresCache;
-  try { disclosuresCache = require('./document-disclosures'); } catch { disclosuresCache = null; }
-  return disclosuresCache;
-}
-let factVsOpinionCache = null;
-function getFactVsOpinion() {
-  if (factVsOpinionCache) return factVsOpinionCache;
-  try { factVsOpinionCache = require('./document-fact-vs-opinion'); } catch { factVsOpinionCache = null; }
-  return factVsOpinionCache;
-}
-let scenariosCache = null;
-function getScenarios() {
-  if (scenariosCache) return scenariosCache;
-  try { scenariosCache = require('./document-scenarios'); } catch { scenariosCache = null; }
-  return scenariosCache;
-}
-let benchmarksCache = null;
-function getBenchmarks() {
-  if (benchmarksCache) return benchmarksCache;
-  try { benchmarksCache = require('./document-benchmarks'); } catch { benchmarksCache = null; }
-  return benchmarksCache;
-}
-let goalsTargetsCache = null;
-function getGoalsTargets() {
-  if (goalsTargetsCache) return goalsTargetsCache;
-  try { goalsTargetsCache = require('./document-goals-targets'); } catch { goalsTargetsCache = null; }
-  return goalsTargetsCache;
-}
-let slaTermsCache = null;
-function getSLATerms() {
-  if (slaTermsCache) return slaTermsCache;
-  try { slaTermsCache = require('./document-sla-terms'); } catch { slaTermsCache = null; }
-  return slaTermsCache;
-}
-let dataClassificationCache = null;
-function getDataClassification() {
-  if (dataClassificationCache) return dataClassificationCache;
-  try { dataClassificationCache = require('./document-data-classification'); } catch { dataClassificationCache = null; }
-  return dataClassificationCache;
-}
-let approvalWorkflowCache = null;
-function getApprovalWorkflow() {
-  if (approvalWorkflowCache) return approvalWorkflowCache;
-  try { approvalWorkflowCache = require('./document-approval-workflow'); } catch { approvalWorkflowCache = null; }
-  return approvalWorkflowCache;
-}
-let executiveSummaryCache = null;
-function getExecutiveSummary() {
-  if (executiveSummaryCache) return executiveSummaryCache;
-  try { executiveSummaryCache = require('./document-executive-summary'); } catch { executiveSummaryCache = null; }
-  return executiveSummaryCache;
-}
-let urlExtractorCache = null;
-function getUrlExtractor() {
-  if (urlExtractorCache) return urlExtractorCache;
-  try { urlExtractorCache = require('./document-url-extractor'); } catch { urlExtractorCache = null; }
-  return urlExtractorCache;
-}
-let contactInfoCache = null;
-function getContactInfo() {
-  if (contactInfoCache) return contactInfoCache;
-  try { contactInfoCache = require('./document-contact-info'); } catch { contactInfoCache = null; }
-  return contactInfoCache;
-}
-let footnotesCache = null;
-function getFootnotes() {
-  if (footnotesCache) return footnotesCache;
-  try { footnotesCache = require('./document-footnotes'); } catch { footnotesCache = null; }
-  return footnotesCache;
-}
-let tablesCache = null;
-function getTables() {
-  if (tablesCache) return tablesCache;
-  try { tablesCache = require('./document-tables'); } catch { tablesCache = null; }
-  return tablesCache;
-}
-let codeBlocksCache = null;
-function getCodeBlocks() {
-  if (codeBlocksCache) return codeBlocksCache;
-  try { codeBlocksCache = require('./document-code-blocks'); } catch { codeBlocksCache = null; }
-  return codeBlocksCache;
-}
-let figureRefsCache = null;
-function getFigureRefs() {
-  if (figureRefsCache) return figureRefsCache;
-  try { figureRefsCache = require('./document-figure-refs'); } catch { figureRefsCache = null; }
-  return figureRefsCache;
-}
-let checklistsCache = null;
-function getChecklists() {
-  if (checklistsCache) return checklistsCache;
-  try { checklistsCache = require('./document-checklists'); } catch { checklistsCache = null; }
-  return checklistsCache;
-}
-let identifiersCache = null;
-function getIdentifiers() {
-  if (identifiersCache) return identifiersCache;
-  try { identifiersCache = require('./document-identifiers'); } catch { identifiersCache = null; }
-  return identifiersCache;
-}
-let bulletListsCache = null;
-function getBulletLists() {
-  if (bulletListsCache) return bulletListsCache;
-  try { bulletListsCache = require('./document-bullet-lists'); } catch { bulletListsCache = null; }
-  return bulletListsCache;
-}
-let mermaidCache = null;
-function getMermaid() {
-  if (mermaidCache) return mermaidCache;
-  try { mermaidCache = require('./document-mermaid'); } catch { mermaidCache = null; }
-  return mermaidCache;
-}
-let priorityCache = null;
-function getPriority() {
-  if (priorityCache) return priorityCache;
-  try { priorityCache = require('./document-priority'); } catch { priorityCache = null; }
-  return priorityCache;
-}
-let ownershipCache = null;
-function getOwnership() {
-  if (ownershipCache) return ownershipCache;
-  try { ownershipCache = require('./document-ownership'); } catch { ownershipCache = null; }
-  return ownershipCache;
-}
-let timestampsCache = null;
-function getTimestamps() {
-  if (timestampsCache) return timestampsCache;
-  try { timestampsCache = require('./document-timestamps'); } catch { timestampsCache = null; }
-  return timestampsCache;
-}
-let statusCache = null;
-function getStatus() {
-  if (statusCache) return statusCache;
-  try { statusCache = require('./document-status'); } catch { statusCache = null; }
-  return statusCache;
-}
-let acceptanceCriteriaCache = null;
-function getAcceptanceCriteria() {
-  if (acceptanceCriteriaCache) return acceptanceCriteriaCache;
-  try { acceptanceCriteriaCache = require('./document-acceptance-criteria'); } catch { acceptanceCriteriaCache = null; }
-  return acceptanceCriteriaCache;
-}
-let apiEndpointsCache = null;
-function getApiEndpoints() {
-  if (apiEndpointsCache) return apiEndpointsCache;
-  try { apiEndpointsCache = require('./document-api-endpoints'); } catch { apiEndpointsCache = null; }
-  return apiEndpointsCache;
-}
-let envVarsCache = null;
-function getEnvVars() {
-  if (envVarsCache) return envVarsCache;
-  try { envVarsCache = require('./document-env-vars'); } catch { envVarsCache = null; }
-  return envVarsCache;
-}
-let sqlCache = null;
-function getSql() {
-  if (sqlCache) return sqlCache;
-  try { sqlCache = require('./document-sql'); } catch { sqlCache = null; }
-  return sqlCache;
-}
-let filePathsCache = null;
-function getFilePaths() {
-  if (filePathsCache) return filePathsCache;
-  try { filePathsCache = require('./document-file-paths'); } catch { filePathsCache = null; }
-  return filePathsCache;
-}
-let cronCache = null;
-function getCron() {
-  if (cronCache) return cronCache;
-  try { cronCache = require('./document-cron'); } catch { cronCache = null; }
-  return cronCache;
-}
-let licensesCache = null;
-function getLicenses() {
-  if (licensesCache) return licensesCache;
-  try { licensesCache = require('./document-licenses'); } catch { licensesCache = null; }
-  return licensesCache;
-}
-let dependenciesCache = null;
-function getDependencies() {
-  if (dependenciesCache) return dependenciesCache;
-  try { dependenciesCache = require('./document-dependencies'); } catch { dependenciesCache = null; }
-  return dependenciesCache;
-}
-let riskMatrixCache = null;
-function getRiskMatrix() {
-  if (riskMatrixCache) return riskMatrixCache;
-  try { riskMatrixCache = require('./document-risk-matrix'); } catch { riskMatrixCache = null; }
-  return riskMatrixCache;
-}
-let versionsCache = null;
-function getVersions() {
-  if (versionsCache) return versionsCache;
-  try { versionsCache = require('./document-versions'); } catch { versionsCache = null; }
-  return versionsCache;
-}
-let decisionRecordsCache = null;
-function getDecisionRecords() {
-  if (decisionRecordsCache) return decisionRecordsCache;
-  try { decisionRecordsCache = require('./document-decision-records'); } catch { decisionRecordsCache = null; }
-  return decisionRecordsCache;
-}
-let domainsCache = null;
-function getDomains() {
-  if (domainsCache) return domainsCache;
-  try { domainsCache = require('./document-domains'); } catch { domainsCache = null; }
-  return domainsCache;
-}
-let currencyCache = null;
-function getCurrency() {
-  if (currencyCache) return currencyCache;
-  try { currencyCache = require('./document-currency'); } catch { currencyCache = null; }
-  return currencyCache;
-}
-let percentagesCache = null;
-function getPercentages() {
-  if (percentagesCache) return percentagesCache;
-  try { percentagesCache = require('./document-percentages'); } catch { percentagesCache = null; }
-  return percentagesCache;
-}
-let citationsCache = null;
-function getCitations() {
-  if (citationsCache) return citationsCache;
-  try { citationsCache = require('./document-citations'); } catch { citationsCache = null; }
-  return citationsCache;
-}
-let colorsCache = null;
-function getColors() {
-  if (colorsCache) return colorsCache;
-  try { colorsCache = require('./document-colors'); } catch { colorsCache = null; }
-  return colorsCache;
-}
-let coordinatesCache = null;
-function getCoordinates() {
-  if (coordinatesCache) return coordinatesCache;
-  try { coordinatesCache = require('./document-coordinates'); } catch { coordinatesCache = null; }
-  return coordinatesCache;
-}
-let trademarkCache = null;
-function getTrademark() {
-  if (trademarkCache) return trademarkCache;
-  try { trademarkCache = require('./document-trademark'); } catch { trademarkCache = null; }
-  return trademarkCache;
-}
-let hashtagsCache = null;
-function getHashtags() {
-  if (hashtagsCache) return hashtagsCache;
-  try { hashtagsCache = require('./document-hashtags'); } catch { hashtagsCache = null; }
-  return hashtagsCache;
-}
-let sectionLabelsCache = null;
-function getSectionLabels() {
-  if (sectionLabelsCache) return sectionLabelsCache;
-  try { sectionLabelsCache = require('./document-section-labels'); } catch { sectionLabelsCache = null; }
-  return sectionLabelsCache;
-}
-let signoffsCache = null;
-function getSignoffs() {
-  if (signoffsCache) return signoffsCache;
-  try { signoffsCache = require('./document-signoffs'); } catch { signoffsCache = null; }
-  return signoffsCache;
-}
-let hashesCache = null;
-function getHashes() {
-  if (hashesCache) return hashesCache;
-  try { hashesCache = require('./document-hashes'); } catch { hashesCache = null; }
-  return hashesCache;
-}
-let couponsCache = null;
-function getCoupons() {
-  if (couponsCache) return couponsCache;
-  try { couponsCache = require('./document-coupons'); } catch { couponsCache = null; }
-  return couponsCache;
-}
-let fileSizesCache = null;
-function getFileSizes() {
-  if (fileSizesCache) return fileSizesCache;
-  try { fileSizesCache = require('./document-file-sizes'); } catch { fileSizesCache = null; }
-  return fileSizesCache;
-}
-let vcsRefsCache = null;
-function getVcsRefs() {
-  if (vcsRefsCache) return vcsRefsCache;
-  try { vcsRefsCache = require('./document-vcs-refs'); } catch { vcsRefsCache = null; }
-  return vcsRefsCache;
-}
-let standardsCache = null;
-function getStandards() {
-  if (standardsCache) return standardsCache;
-  try { standardsCache = require('./document-standards'); } catch { standardsCache = null; }
-  return standardsCache;
-}
-let networkCache = null;
-function getNetwork() {
-  if (networkCache) return networkCache;
-  try { networkCache = require('./document-network'); } catch { networkCache = null; }
-  return networkCache;
-}
-let httpStatusCache = null;
-function getHttpStatus() {
-  if (httpStatusCache) return httpStatusCache;
-  try { httpStatusCache = require('./document-http-status'); } catch { httpStatusCache = null; }
-  return httpStatusCache;
-}
-let timezonesCache = null;
-function getTimezones() {
-  if (timezonesCache) return timezonesCache;
-  try { timezonesCache = require('./document-timezones'); } catch { timezonesCache = null; }
-  return timezonesCache;
-}
-let mathCache = null;
-function getMath() {
-  if (mathCache) return mathCache;
-  try { mathCache = require('./document-math'); } catch { mathCache = null; }
-  return mathCache;
-}
-let booleanCache = null;
-function getBoolean() {
-  if (booleanCache) return booleanCache;
-  try { booleanCache = require('./document-boolean'); } catch { booleanCache = null; }
-  return booleanCache;
-}
-let tocCache = null;
-function getToc() {
-  if (tocCache) return tocCache;
-  try { tocCache = require('./document-toc'); } catch { tocCache = null; }
-  return tocCache;
-}
-let htmlAttrsCache = null;
-function getHtmlAttrs() {
-  if (htmlAttrsCache) return htmlAttrsCache;
-  try { htmlAttrsCache = require('./document-html-attrs'); } catch { htmlAttrsCache = null; }
-  return htmlAttrsCache;
-}
-let blockquotesCache = null;
-function getBlockquotes() {
-  if (blockquotesCache) return blockquotesCache;
-  try { blockquotesCache = require('./document-blockquotes'); } catch { blockquotesCache = null; }
-  return blockquotesCache;
-}
-let definitionListsCache = null;
-function getDefinitionLists() {
-  if (definitionListsCache) return definitionListsCache;
-  try { definitionListsCache = require('./document-definition-lists'); } catch { definitionListsCache = null; }
-  return definitionListsCache;
-}
-let todosCache = null;
-function getTodos() {
-  if (todosCache) return todosCache;
-  try { todosCache = require('./document-todos'); } catch { todosCache = null; }
-  return todosCache;
-}
-let imagesCache = null;
-function getImages() {
-  if (imagesCache) return imagesCache;
-  try { imagesCache = require('./document-images'); } catch { imagesCache = null; }
-  return imagesCache;
-}
-let mediaCache = null;
-function getMedia() {
-  if (mediaCache) return mediaCache;
-  try { mediaCache = require('./document-media'); } catch { mediaCache = null; }
-  return mediaCache;
-}
-let languageRatioCache = null;
-function getLanguageRatio() {
-  if (languageRatioCache) return languageRatioCache;
-  try { languageRatioCache = require('./document-language-ratio'); } catch { languageRatioCache = null; }
-  return languageRatioCache;
-}
-let regexPatternsCache = null;
-function getRegexPatterns() {
-  if (regexPatternsCache) return regexPatternsCache;
-  try { regexPatternsCache = require('./document-regex-patterns'); } catch { regexPatternsCache = null; }
-  return regexPatternsCache;
-}
-let fileExtensionsCache = null;
-function getFileExtensions() {
-  if (fileExtensionsCache) return fileExtensionsCache;
-  try { fileExtensionsCache = require('./document-file-extensions'); } catch { fileExtensionsCache = null; }
-  return fileExtensionsCache;
-}
-let codeDefsCache = null;
-function getCodeDefs() {
-  if (codeDefsCache) return codeDefsCache;
-  try { codeDefsCache = require('./document-code-defs'); } catch { codeDefsCache = null; }
-  return codeDefsCache;
-}
-let tonePolarityCache = null;
-function getTonePolarity() {
-  if (tonePolarityCache) return tonePolarityCache;
-  try { tonePolarityCache = require('./document-tone-polarity'); } catch { tonePolarityCache = null; }
-  return tonePolarityCache;
-}
-let quantifiersCache = null;
-function getQuantifiers() {
-  if (quantifiersCache) return quantifiersCache;
-  try { quantifiersCache = require('./document-quantifiers'); } catch { quantifiersCache = null; }
-  return quantifiersCache;
-}
-let modalsCache = null;
-function getModals() {
-  if (modalsCache) return modalsCache;
-  try { modalsCache = require('./document-modals'); } catch { modalsCache = null; }
-  return modalsCache;
-}
-let negationCache = null;
-function getNegation() {
-  if (negationCache) return negationCache;
-  try { negationCache = require('./document-negation'); } catch { negationCache = null; }
-  return negationCache;
-}
-let readingTimeCache = null;
-function getReadingTime() {
-  if (readingTimeCache) return readingTimeCache;
-  try { readingTimeCache = require('./document-reading-time'); } catch { readingTimeCache = null; }
-  return readingTimeCache;
-}
-let attributionsCache = null;
-function getAttributions() {
-  if (attributionsCache) return attributionsCache;
-  try { attributionsCache = require('./document-attributions'); } catch { attributionsCache = null; }
-  return attributionsCache;
-}
-let comparativesCache = null;
-function getComparatives() {
-  if (comparativesCache) return comparativesCache;
-  try { comparativesCache = require('./document-comparatives'); } catch { comparativesCache = null; }
-  return comparativesCache;
-}
-let causalCache = null;
-function getCausal() {
-  if (causalCache) return causalCache;
-  try { causalCache = require('./document-causal'); } catch { causalCache = null; }
-  return causalCache;
-}
-let concessionCache = null;
-function getConcession() {
-  if (concessionCache) return concessionCache;
-  try { concessionCache = require('./document-concession'); } catch { concessionCache = null; }
-  return concessionCache;
-}
-let hedgingCache = null;
-function getHedging() {
-  if (hedgingCache) return hedgingCache;
-  try { hedgingCache = require('./document-hedging'); } catch { hedgingCache = null; }
-  return hedgingCache;
-}
-let intensifiersCache = null;
-function getIntensifiers() {
-  if (intensifiersCache) return intensifiersCache;
-  try { intensifiersCache = require('./document-intensifiers'); } catch { intensifiersCache = null; }
-  return intensifiersCache;
-}
-let reportingCache = null;
-function getReporting() {
-  if (reportingCache) return reportingCache;
-  try { reportingCache = require('./document-reporting'); } catch { reportingCache = null; }
-  return reportingCache;
-}
-let examplesCache = null;
-function getExamples() {
-  if (examplesCache) return examplesCache;
-  try { examplesCache = require('./document-examples'); } catch { examplesCache = null; }
-  return examplesCache;
-}
-let approximationsCache = null;
-function getApproximations() {
-  if (approximationsCache) return approximationsCache;
-  try { approximationsCache = require('./document-approximations'); } catch { approximationsCache = null; }
-  return approximationsCache;
-}
-let questionsCache = null;
-function getQuestions() {
-  if (questionsCache) return questionsCache;
-  try { questionsCache = require('./document-questions'); } catch { questionsCache = null; }
-  return questionsCache;
-}
-let imperativesCache = null;
-function getImperatives() {
-  if (imperativesCache) return imperativesCache;
-  try { imperativesCache = require('./document-imperatives'); } catch { imperativesCache = null; }
-  return imperativesCache;
-}
-let definitionsCache = null;
-function getDefinitions() {
-  if (definitionsCache) return definitionsCache;
-  try { definitionsCache = require('./document-definitions'); } catch { definitionsCache = null; }
-  return definitionsCache;
-}
-let fiscalYearCache = null;
-function getFiscalYear() {
-  if (fiscalYearCache) return fiscalYearCache;
-  try { fiscalYearCache = require('./document-fiscal-year'); } catch { fiscalYearCache = null; }
-  return fiscalYearCache;
-}
-let ratiosCache = null;
-function getRatios() {
-  if (ratiosCache) return ratiosCache;
-  try { ratiosCache = require('./document-ratios'); } catch { ratiosCache = null; }
-  return ratiosCache;
-}
-let ordinalsCache = null;
-function getOrdinals() {
-  if (ordinalsCache) return ordinalsCache;
-  try { ordinalsCache = require('./document-ordinals'); } catch { ordinalsCache = null; }
-  return ordinalsCache;
-}
-let geoRegionsCache = null;
-function getGeoRegions() {
-  if (geoRegionsCache) return geoRegionsCache;
-  try { geoRegionsCache = require('./document-geo-regions'); } catch { geoRegionsCache = null; }
-  return geoRegionsCache;
-}
-let trackingCache = null;
-function getTracking() {
-  if (trackingCache) return trackingCache;
-  try { trackingCache = require('./document-tracking'); } catch { trackingCache = null; }
-  return trackingCache;
-}
-let weatherCache = null;
-function getWeather() {
-  if (weatherCache) return weatherCache;
-  try { weatherCache = require('./document-weather'); } catch { weatherCache = null; }
-  return weatherCache;
-}
-let scientificNotationCache = null;
-function getScientificNotation() {
-  if (scientificNotationCache) return scientificNotationCache;
-  try { scientificNotationCache = require('./document-scientific-notation'); } catch { scientificNotationCache = null; }
-  return scientificNotationCache;
-}
-let taxaCache = null;
-function getTaxa() {
-  if (taxaCache) return taxaCache;
-  try { taxaCache = require('./document-taxa'); } catch { taxaCache = null; }
-  return taxaCache;
-}
-let chemistryCache = null;
-function getChemistry() {
-  if (chemistryCache) return chemistryCache;
-  try { chemistryCache = require('./document-chemistry'); } catch { chemistryCache = null; }
-  return chemistryCache;
-}
-let fxRatesCache = null;
-function getFxRates() {
-  if (fxRatesCache) return fxRatesCache;
-  try { fxRatesCache = require('./document-fx-rates'); } catch { fxRatesCache = null; }
-  return fxRatesCache;
-}
-let ibanSwiftCache = null;
-function getIbanSwift() {
-  if (ibanSwiftCache) return ibanSwiftCache;
-  try { ibanSwiftCache = require('./document-iban-swift'); } catch { ibanSwiftCache = null; }
-  return ibanSwiftCache;
-}
-let licensePlatesCache = null;
-function getLicensePlates() {
-  if (licensePlatesCache) return licensePlatesCache;
-  try { licensePlatesCache = require('./document-license-plates'); } catch { licensePlatesCache = null; }
-  return licensePlatesCache;
-}
-let legalCitationsCache = null;
-function getLegalCitations() {
-  if (legalCitationsCache) return legalCitationsCache;
-  try { legalCitationsCache = require('./document-legal-citations'); } catch { legalCitationsCache = null; }
-  return legalCitationsCache;
-}
-let socialUrlsCache = null;
-function getSocialUrls() {
-  if (socialUrlsCache) return socialUrlsCache;
-  try { socialUrlsCache = require('./document-social-urls'); } catch { socialUrlsCache = null; }
-  return socialUrlsCache;
-}
-let geneProteinCache = null;
-function getGeneProtein() {
-  if (geneProteinCache) return geneProteinCache;
-  try { geneProteinCache = require('./document-gene-protein'); } catch { geneProteinCache = null; }
-  return geneProteinCache;
-}
-let currencySymbolsCache = null;
-function getCurrencySymbols() {
-  if (currencySymbolsCache) return currencySymbolsCache;
-  try { currencySymbolsCache = require('./document-currency-symbols'); } catch { currencySymbolsCache = null; }
-  return currencySymbolsCache;
-}
-let phoneCodesCache = null;
-function getPhoneCodes() {
-  if (phoneCodesCache) return phoneCodesCache;
-  try { phoneCodesCache = require('./document-phone-codes'); } catch { phoneCodesCache = null; }
-  return phoneCodesCache;
-}
-let postalCodesCache = null;
-function getPostalCodes() {
-  if (postalCodesCache) return postalCodesCache;
-  try { postalCodesCache = require('./document-postal-codes'); } catch { postalCodesCache = null; }
-  return postalCodesCache;
-}
-let addressesCache = null;
-function getAddresses() {
-  if (addressesCache) return addressesCache;
-  try { addressesCache = require('./document-addresses'); } catch { addressesCache = null; }
-  return addressesCache;
-}
-let mimeTypesCache = null;
-function getMimeTypes() {
-  if (mimeTypesCache) return mimeTypesCache;
-  try { mimeTypesCache = require('./document-mime-types'); } catch { mimeTypesCache = null; }
-  return mimeTypesCache;
-}
-let utmParamsCache = null;
-function getUtmParams() {
-  if (utmParamsCache) return utmParamsCache;
-  try { utmParamsCache = require('./document-utm-params'); } catch { utmParamsCache = null; }
-  return utmParamsCache;
-}
-let creditCardsCache = null;
-function getCreditCards() {
-  if (creditCardsCache) return creditCardsCache;
-  try { creditCardsCache = require('./document-credit-cards'); } catch { creditCardsCache = null; }
-  return creditCardsCache;
-}
-let ssnPiiCache = null;
-function getSsnPii() {
-  if (ssnPiiCache) return ssnPiiCache;
-  try { ssnPiiCache = require('./document-ssn-pii'); } catch { ssnPiiCache = null; }
-  return ssnPiiCache;
-}
-let apiKeysCache = null;
-function getApiKeys() {
-  if (apiKeysCache) return apiKeysCache;
-  try { apiKeysCache = require('./document-api-keys'); } catch { apiKeysCache = null; }
-  return apiKeysCache;
-}
-let httpMethodsCache = null;
-function getHttpMethods() {
-  if (httpMethodsCache) return httpMethodsCache;
-  try { httpMethodsCache = require('./document-http-methods'); } catch { httpMethodsCache = null; }
-  return httpMethodsCache;
-}
-let containerRefsCache = null;
-function getContainerRefs() {
-  if (containerRefsCache) return containerRefsCache;
-  try { containerRefsCache = require('./document-container-refs'); } catch { containerRefsCache = null; }
-  return containerRefsCache;
-}
-let k8sRefsCache = null;
-function getK8sRefs() {
-  if (k8sRefsCache) return k8sRefsCache;
-  try { k8sRefsCache = require('./document-k8s-refs'); } catch { k8sRefsCache = null; }
-  return k8sRefsCache;
-}
-let metricsCache = null;
-function getMetrics() {
-  if (metricsCache) return metricsCache;
-  try { metricsCache = require('./document-metrics'); } catch { metricsCache = null; }
-  return metricsCache;
-}
-let oauthScopesCache = null;
-function getOauthScopes() {
-  if (oauthScopesCache) return oauthScopesCache;
-  try { oauthScopesCache = require('./document-oauth-scopes'); } catch { oauthScopesCache = null; }
-  return oauthScopesCache;
-}
-let cspDirectivesCache = null;
-function getCspDirectives() {
-  if (cspDirectivesCache) return cspDirectivesCache;
-  try { cspDirectivesCache = require('./document-csp-directives'); } catch { cspDirectivesCache = null; }
-  return cspDirectivesCache;
-}
-let mathOperatorsCache = null;
-function getMathOperators() {
-  if (mathOperatorsCache) return mathOperatorsCache;
-  try { mathOperatorsCache = require('./document-math-operators'); } catch { mathOperatorsCache = null; }
-  return mathOperatorsCache;
-}
-let spdxComplexCache = null;
-function getSpdxComplex() {
-  if (spdxComplexCache) return spdxComplexCache;
-  try { spdxComplexCache = require('./document-spdx-complex'); } catch { spdxComplexCache = null; }
-  return spdxComplexCache;
-}
-let featureFlagsCache = null;
-function getFeatureFlags() {
-  if (featureFlagsCache) return featureFlagsCache;
-  try { featureFlagsCache = require('./document-feature-flags'); } catch { featureFlagsCache = null; }
-  return featureFlagsCache;
-}
-let cookieAttrsCache = null;
-function getCookieAttrs() {
-  if (cookieAttrsCache) return cookieAttrsCache;
-  try { cookieAttrsCache = require('./document-cookie-attrs'); } catch { cookieAttrsCache = null; }
-  return cookieAttrsCache;
-}
-let otelTraceCache = null;
-function getOtelTrace() {
-  if (otelTraceCache) return otelTraceCache;
-  try { otelTraceCache = require('./document-otel-trace'); } catch { otelTraceCache = null; }
-  return otelTraceCache;
-}
-let cloudArnsCache = null;
-function getCloudArns() {
-  if (cloudArnsCache) return cloudArnsCache;
-  try { cloudArnsCache = require('./document-cloud-arns'); } catch { cloudArnsCache = null; }
-  return cloudArnsCache;
-}
-let mlModelsCache = null;
-function getMlModels() {
-  if (mlModelsCache) return mlModelsCache;
-  try { mlModelsCache = require('./document-ml-models'); } catch { mlModelsCache = null; }
-  return mlModelsCache;
-}
-let dbConnStringsCache = null;
-function getDbConnStrings() {
-  if (dbConnStringsCache) return dbConnStringsCache;
-  try { dbConnStringsCache = require('./document-db-conn-strings'); } catch { dbConnStringsCache = null; }
-  return dbConnStringsCache;
-}
-let graphqlOpsCache = null;
-function getGraphqlOps() {
-  if (graphqlOpsCache) return graphqlOpsCache;
-  try { graphqlOpsCache = require('./document-graphql-ops'); } catch { graphqlOpsCache = null; }
-  return graphqlOpsCache;
-}
-let grpcRefsCache = null;
-function getGrpcRefs() {
-  if (grpcRefsCache) return grpcRefsCache;
-  try { grpcRefsCache = require('./document-grpc-refs'); } catch { grpcRefsCache = null; }
-  return grpcRefsCache;
-}
-let stackTracesCache = null;
-function getStackTraces() {
-  if (stackTracesCache) return stackTracesCache;
-  try { stackTracesCache = require('./document-stack-traces'); } catch { stackTracesCache = null; }
-  return stackTracesCache;
-}
-let envNamesCache = null;
-function getEnvNames() {
-  if (envNamesCache) return envNamesCache;
-  try { envNamesCache = require('./document-env-names'); } catch { envNamesCache = null; }
-  return envNamesCache;
-}
-let testBlocksCache = null;
-function getTestBlocks() {
-  if (testBlocksCache) return testBlocksCache;
-  try { testBlocksCache = require('./document-test-blocks'); } catch { testBlocksCache = null; }
-  return testBlocksCache;
-}
-let gitShasCache = null;
-function getGitShas() {
-  if (gitShasCache) return gitShasCache;
-  try { gitShasCache = require('./document-git-shas'); } catch { gitShasCache = null; }
-  return gitShasCache;
-}
-let cloudStorageCache = null;
-function getCloudStorage() {
-  if (cloudStorageCache) return cloudStorageCache;
-  try { cloudStorageCache = require('./document-cloud-storage'); } catch { cloudStorageCache = null; }
-  return cloudStorageCache;
-}
-let webVitalsCache = null;
-function getWebVitals() {
-  if (webVitalsCache) return webVitalsCache;
-  try { webVitalsCache = require('./document-web-vitals'); } catch { webVitalsCache = null; }
-  return webVitalsCache;
-}
-let ariaA11yCache = null;
-function getAriaA11y() {
-  if (ariaA11yCache) return ariaA11yCache;
-  try { ariaA11yCache = require('./document-aria-a11y'); } catch { ariaA11yCache = null; }
-  return ariaA11yCache;
-}
-let i18nKeysCache = null;
-function getI18nKeys() {
-  if (i18nKeysCache) return i18nKeysCache;
-  try { i18nKeysCache = require('./document-i18n-keys'); } catch { i18nKeysCache = null; }
-  return i18nKeysCache;
-}
-let ciBuildIdsCache = null;
-function getCiBuildIds() {
-  if (ciBuildIdsCache) return ciBuildIdsCache;
-  try { ciBuildIdsCache = require('./document-ci-build-ids'); } catch { ciBuildIdsCache = null; }
-  return ciBuildIdsCache;
-}
-let userAgentsCache = null;
-function getUserAgents() {
-  if (userAgentsCache) return userAgentsCache;
-  try { userAgentsCache = require('./document-user-agents'); } catch { userAgentsCache = null; }
-  return userAgentsCache;
-}
-let cidrRangesCache = null;
-function getCidrRanges() {
-  if (cidrRangesCache) return cidrRangesCache;
-  try { cidrRangesCache = require('./document-cidr-ranges'); } catch { cidrRangesCache = null; }
-  return cidrRangesCache;
-}
-let cacheHeadersCache = null;
-function getCacheHeaders() {
-  if (cacheHeadersCache) return cacheHeadersCache;
-  try { cacheHeadersCache = require('./document-cache-headers'); } catch { cacheHeadersCache = null; }
-  return cacheHeadersCache;
-}
-let githubRefsCache = null;
-function getGithubRefs() {
-  if (githubRefsCache) return githubRefsCache;
-  try { githubRefsCache = require('./document-github-refs'); } catch { githubRefsCache = null; }
-  return githubRefsCache;
-}
-let apmRefsCache = null;
-function getApmRefs() {
-  if (apmRefsCache) return apmRefsCache;
-  try { apmRefsCache = require('./document-apm-refs'); } catch { apmRefsCache = null; }
-  return apmRefsCache;
-}
-let attackPatternsCache = null;
-function getAttackPatterns() {
-  if (attackPatternsCache) return attackPatternsCache;
-  try { attackPatternsCache = require('./document-attack-patterns'); } catch { attackPatternsCache = null; }
-  return attackPatternsCache;
-}
-let webhookUrlsCache = null;
-function getWebhookUrls() {
-  if (webhookUrlsCache) return webhookUrlsCache;
-  try { webhookUrlsCache = require('./document-webhook-urls'); } catch { webhookUrlsCache = null; }
-  return webhookUrlsCache;
-}
-let sshFingerprintsCache = null;
-function getSshFingerprints() {
-  if (sshFingerprintsCache) return sshFingerprintsCache;
-  try { sshFingerprintsCache = require('./document-ssh-fingerprints'); } catch { sshFingerprintsCache = null; }
-  return sshFingerprintsCache;
-}
-let npmRefsCache = null;
-function getNpmRefs() {
-  if (npmRefsCache) return npmRefsCache;
-  try { npmRefsCache = require('./document-npm-refs'); } catch { npmRefsCache = null; }
-  return npmRefsCache;
-}
-let correlationIdsCache = null;
-function getCorrelationIds() {
-  if (correlationIdsCache) return correlationIdsCache;
-  try { correlationIdsCache = require('./document-correlation-ids'); } catch { correlationIdsCache = null; }
-  return correlationIdsCache;
-}
-let paymentIdsCache = null;
-function getPaymentIds() {
-  if (paymentIdsCache) return paymentIdsCache;
-  try { paymentIdsCache = require('./document-payment-ids'); } catch { paymentIdsCache = null; }
-  return paymentIdsCache;
-}
-let emailHeadersCache = null;
-function getEmailHeaders() {
-  if (emailHeadersCache) return emailHeadersCache;
-  try { emailHeadersCache = require('./document-email-headers'); } catch { emailHeadersCache = null; }
-  return emailHeadersCache;
-}
-let icalEventsCache = null;
-function getIcalEvents() {
-  if (icalEventsCache) return icalEventsCache;
-  try { icalEventsCache = require('./document-ical-events'); } catch { icalEventsCache = null; }
-  return icalEventsCache;
-}
-let frontmatterCache = null;
-function getFrontmatter() {
-  if (frontmatterCache) return frontmatterCache;
-  try { frontmatterCache = require('./document-frontmatter'); } catch { frontmatterCache = null; }
-  return frontmatterCache;
-}
-let pullQuotesCache = null;
-function getPullQuotes() {
-  if (pullQuotesCache) return pullQuotesCache;
-  try { pullQuotesCache = require('./document-pull-quotes'); } catch { pullQuotesCache = null; }
-  return pullQuotesCache;
-}
-let ghaStepsCache = null;
-function getGhaSteps() {
-  if (ghaStepsCache) return ghaStepsCache;
-  try { ghaStepsCache = require('./document-gha-steps'); } catch { ghaStepsCache = null; }
-  return ghaStepsCache;
-}
-let terraformRefsCache = null;
-function getTerraformRefs() {
-  if (terraformRefsCache) return terraformRefsCache;
-  try { terraformRefsCache = require('./document-terraform-refs'); } catch { terraformRefsCache = null; }
-  return terraformRefsCache;
-}
-let helmRefsCache = null;
-function getHelmRefs() {
-  if (helmRefsCache) return helmRefsCache;
-  try { helmRefsCache = require('./document-helm-refs'); } catch { helmRefsCache = null; }
-  return helmRefsCache;
-}
-let naturalSchedulesCache = null;
-function getNaturalSchedules() {
-  if (naturalSchedulesCache) return naturalSchedulesCache;
-  try { naturalSchedulesCache = require('./document-natural-schedules'); } catch { naturalSchedulesCache = null; }
-  return naturalSchedulesCache;
-}
-let chatPermalinksCache = null;
-function getChatPermalinks() {
-  if (chatPermalinksCache) return chatPermalinksCache;
-  try { chatPermalinksCache = require('./document-chat-permalinks'); } catch { chatPermalinksCache = null; }
-  return chatPermalinksCache;
-}
-let pmTicketsCache = null;
-function getPmTickets() {
-  if (pmTicketsCache) return pmTicketsCache;
-  try { pmTicketsCache = require('./document-pm-tickets'); } catch { pmTicketsCache = null; }
-  return pmTicketsCache;
-}
-let slaTargetsCache = null;
-function getSlaTargets() {
-  if (slaTargetsCache) return slaTargetsCache;
-  try { slaTargetsCache = require('./document-sla-targets'); } catch { slaTargetsCache = null; }
-  return slaTargetsCache;
-}
-let tldsCache = null;
-function getTlds() {
-  if (tldsCache) return tldsCache;
-  try { tldsCache = require('./document-tlds'); } catch { tldsCache = null; }
-  return tldsCache;
-}
-let stockTickersCache = null;
-function getStockTickers() {
-  if (stockTickersCache) return stockTickersCache;
-  try { stockTickersCache = require('./document-stock-tickers'); } catch { stockTickersCache = null; }
-  return stockTickersCache;
-}
-let hardwareSpecsCache = null;
-function getHardwareSpecs() {
-  if (hardwareSpecsCache) return hardwareSpecsCache;
-  try { hardwareSpecsCache = require('./document-hardware-specs'); } catch { hardwareSpecsCache = null; }
-  return hardwareSpecsCache;
-}
-let bandwidthUnitsCache = null;
-function getBandwidthUnits() {
-  if (bandwidthUnitsCache) return bandwidthUnitsCache;
-  try { bandwidthUnitsCache = require('./document-bandwidth-units'); } catch { bandwidthUnitsCache = null; }
-  return bandwidthUnitsCache;
-}
-let trackingNumbersCache = null;
-function getTrackingNumbers() {
-  if (trackingNumbersCache) return trackingNumbersCache;
-  try { trackingNumbersCache = require('./document-tracking-numbers'); } catch { trackingNumbersCache = null; }
-  return trackingNumbersCache;
-}
-let rateLimitHeadersCache = null;
-function getRateLimitHeaders() {
-  if (rateLimitHeadersCache) return rateLimitHeadersCache;
-  try { rateLimitHeadersCache = require('./document-rate-limit-headers'); } catch { rateLimitHeadersCache = null; }
-  return rateLimitHeadersCache;
-}
-let cryptoWalletsCache = null;
-function getCryptoWallets() {
-  if (cryptoWalletsCache) return cryptoWalletsCache;
-  try { cryptoWalletsCache = require('./document-crypto-wallets'); } catch { cryptoWalletsCache = null; }
-  return cryptoWalletsCache;
-}
-let cveIdsCache = null;
-function getCveIds() {
-  if (cveIdsCache) return cveIdsCache;
-  try { cveIdsCache = require('./document-cve-ids'); } catch { cveIdsCache = null; }
-  return cveIdsCache;
-}
-let mediaTimestampsCache = null;
-function getMediaTimestamps() {
-  if (mediaTimestampsCache) return mediaTimestampsCache;
-  try { mediaTimestampsCache = require('./document-media-timestamps'); } catch { mediaTimestampsCache = null; }
-  return mediaTimestampsCache;
-}
-let linuxSignalsCache = null;
-function getLinuxSignals() {
-  if (linuxSignalsCache) return linuxSignalsCache;
-  try { linuxSignalsCache = require('./document-linux-signals'); } catch { linuxSignalsCache = null; }
-  return linuxSignalsCache;
-}
-let exitCodesCache = null;
-function getExitCodes() {
-  if (exitCodesCache) return exitCodesCache;
-  try { exitCodesCache = require('./document-exit-codes'); } catch { exitCodesCache = null; }
-  return exitCodesCache;
-}
-let networkPortsCache = null;
-function getNetworkPorts() {
-  if (networkPortsCache) return networkPortsCache;
-  try { networkPortsCache = require('./document-network-ports'); } catch { networkPortsCache = null; }
-  return networkPortsCache;
-}
-let linuxDistrosCache = null;
-function getLinuxDistros() {
-  if (linuxDistrosCache) return linuxDistrosCache;
-  try { linuxDistrosCache = require('./document-linux-distros'); } catch { linuxDistrosCache = null; }
-  return linuxDistrosCache;
-}
-let lifecyclePhasesCache = null;
-function getLifecyclePhases() {
-  if (lifecyclePhasesCache) return lifecyclePhasesCache;
-  try { lifecyclePhasesCache = require('./document-lifecycle-phases'); } catch { lifecyclePhasesCache = null; }
-  return lifecyclePhasesCache;
-}
-let projectCodenamesCache = null;
-function getProjectCodenames() {
-  if (projectCodenamesCache) return projectCodenamesCache;
-  try { projectCodenamesCache = require('./document-project-codenames'); } catch { projectCodenamesCache = null; }
-  return projectCodenamesCache;
-}
-let riskLevelsCache = null;
-function getRiskLevels() {
-  if (riskLevelsCache) return riskLevelsCache;
-  try { riskLevelsCache = require('./document-risk-levels'); } catch { riskLevelsCache = null; }
-  return riskLevelsCache;
-}
-let saasMetricsCache = null;
-function getSaasMetrics() {
-  if (saasMetricsCache) return saasMetricsCache;
-  try { saasMetricsCache = require('./document-saas-metrics'); } catch { saasMetricsCache = null; }
-  return saasMetricsCache;
-}
-let recipeMeasurementsCache = null;
-function getRecipeMeasurements() {
-  if (recipeMeasurementsCache) return recipeMeasurementsCache;
-  try { recipeMeasurementsCache = require('./document-recipe-measurements'); } catch { recipeMeasurementsCache = null; }
-  return recipeMeasurementsCache;
-}
-let isoLangsCache = null;
-function getIsoLangs() {
-  if (isoLangsCache) return isoLangsCache;
-  try { isoLangsCache = require('./document-iso-langs'); } catch { isoLangsCache = null; }
-  return isoLangsCache;
-}
-let prReviewStatesCache = null;
-function getPrReviewStates() {
-  if (prReviewStatesCache) return prReviewStatesCache;
-  try { prReviewStatesCache = require('./document-pr-review-states'); } catch { prReviewStatesCache = null; }
-  return prReviewStatesCache;
-}
-let pricingTiersCache = null;
-function getPricingTiers() {
-  if (pricingTiersCache) return pricingTiersCache;
-  try { pricingTiersCache = require('./document-pricing-tiers'); } catch { pricingTiersCache = null; }
-  return pricingTiersCache;
-}
-let arxivIdsCache = null;
-function getArxivIds() {
-  if (arxivIdsCache) return arxivIdsCache;
-  try { arxivIdsCache = require('./document-arxiv-ids'); } catch { arxivIdsCache = null; }
-  return arxivIdsCache;
-}
-let doiIdsCache = null;
-function getDoiIds() {
-  if (doiIdsCache) return doiIdsCache;
-  try { doiIdsCache = require('./document-doi-ids'); } catch { doiIdsCache = null; }
-  return doiIdsCache;
-}
-let orcidIdsCache = null;
-function getOrcidIds() {
-  if (orcidIdsCache) return orcidIdsCache;
-  try { orcidIdsCache = require('./document-orcid-ids'); } catch { orcidIdsCache = null; }
-  return orcidIdsCache;
-}
-let wikiRefsCache = null;
-function getWikiRefs() {
-  if (wikiRefsCache) return wikiRefsCache;
-  try { wikiRefsCache = require('./document-wiki-refs'); } catch { wikiRefsCache = null; }
-  return wikiRefsCache;
-}
-let pubmedIdsCache = null;
-function getPubmedIds() {
-  if (pubmedIdsCache) return pubmedIdsCache;
-  try { pubmedIdsCache = require('./document-pubmed-ids'); } catch { pubmedIdsCache = null; }
-  return pubmedIdsCache;
-}
-let serviceAccountsCache = null;
-function getServiceAccounts() {
-  if (serviceAccountsCache) return serviceAccountsCache;
-  try { serviceAccountsCache = require('./document-service-accounts'); } catch { serviceAccountsCache = null; }
-  return serviceAccountsCache;
-}
-let vinNumbersCache = null;
-function getVinNumbers() {
-  if (vinNumbersCache) return vinNumbersCache;
-  try { vinNumbersCache = require('./document-vin-numbers'); } catch { vinNumbersCache = null; }
-  return vinNumbersCache;
-}
-let emojiShortcodesCache = null;
-function getEmojiShortcodes() {
-  if (emojiShortcodesCache) return emojiShortcodesCache;
-  try { emojiShortcodesCache = require('./document-emoji-shortcodes'); } catch { emojiShortcodesCache = null; }
-  return emojiShortcodesCache;
-}
-let bibtexEntriesCache = null;
-function getBibtexEntries() {
-  if (bibtexEntriesCache) return bibtexEntriesCache;
-  try { bibtexEntriesCache = require('./document-bibtex-entries'); } catch { bibtexEntriesCache = null; }
-  return bibtexEntriesCache;
-}
-let latexCommandsCache = null;
-function getLatexCommands() {
-  if (latexCommandsCache) return latexCommandsCache;
-  try { latexCommandsCache = require('./document-latex-commands'); } catch { latexCommandsCache = null; }
-  return latexCommandsCache;
-}
-let progLangsCache = null;
-function getProgLangs() {
-  if (progLangsCache) return progLangsCache;
-  try { progLangsCache = require('./document-prog-langs'); } catch { progLangsCache = null; }
-  return progLangsCache;
-}
-let complianceRefsCache = null;
-function getComplianceRefs() {
-  if (complianceRefsCache) return complianceRefsCache;
-  try { complianceRefsCache = require('./document-compliance-refs'); } catch { complianceRefsCache = null; }
-  return complianceRefsCache;
-}
-let tlsCiphersCache = null;
-function getTlsCiphers() {
-  if (tlsCiphersCache) return tlsCiphersCache;
-  try { tlsCiphersCache = require('./document-tls-ciphers'); } catch { tlsCiphersCache = null; }
-  return tlsCiphersCache;
-}
-let dnsRecordsCache = null;
-function getDnsRecords() {
-  if (dnsRecordsCache) return dnsRecordsCache;
-  try { dnsRecordsCache = require('./document-dns-records'); } catch { dnsRecordsCache = null; }
-  return dnsRecordsCache;
-}
-let emailAuthCache = null;
-function getEmailAuth() {
-  if (emailAuthCache) return emailAuthCache;
-  try { emailAuthCache = require('./document-email-auth'); } catch { emailAuthCache = null; }
-  return emailAuthCache;
-}
-let openapiKeysCache = null;
-function getOpenapiKeys() {
-  if (openapiKeysCache) return openapiKeysCache;
-  try { openapiKeysCache = require('./document-openapi-keys'); } catch { openapiKeysCache = null; }
-  return openapiKeysCache;
-}
-let kafkaRefsCache = null;
-function getKafkaRefs() {
-  if (kafkaRefsCache) return kafkaRefsCache;
-  try { kafkaRefsCache = require('./document-kafka-refs'); } catch { kafkaRefsCache = null; }
-  return kafkaRefsCache;
-}
-let ansiEscapesCache = null;
-function getAnsiEscapes() {
-  if (ansiEscapesCache) return ansiEscapesCache;
-  try { ansiEscapesCache = require('./document-ansi-escapes'); } catch { ansiEscapesCache = null; }
-  return ansiEscapesCache;
-}
-let sqlWindowsCache = null;
-function getSqlWindows() {
-  if (sqlWindowsCache) return sqlWindowsCache;
-  try { sqlWindowsCache = require('./document-sql-windows'); } catch { sqlWindowsCache = null; }
-  return sqlWindowsCache;
-}
-let websocketMarkersCache = null;
-function getWebsocketMarkers() {
-  if (websocketMarkersCache) return websocketMarkersCache;
-  try { websocketMarkersCache = require('./document-websocket-markers'); } catch { websocketMarkersCache = null; }
-  return websocketMarkersCache;
-}
-let isoDurationsCache = null;
-function getIsoDurations() {
-  if (isoDurationsCache) return isoDurationsCache;
-  try { isoDurationsCache = require('./document-iso-durations'); } catch { isoDurationsCache = null; }
-  return isoDurationsCache;
-}
-let browserSupportCache = null;
-function getBrowserSupport() {
-  if (browserSupportCache) return browserSupportCache;
-  try { browserSupportCache = require('./document-browser-support'); } catch { browserSupportCache = null; }
-  return browserSupportCache;
-}
-let numberBasesCache = null;
-function getNumberBases() {
-  if (numberBasesCache) return numberBasesCache;
-  try { numberBasesCache = require('./document-number-bases'); } catch { numberBasesCache = null; }
-  return numberBasesCache;
-}
-let dmsCoordsCache = null;
-function getDmsCoords() {
-  if (dmsCoordsCache) return dmsCoordsCache;
-  try { dmsCoordsCache = require('./document-dms-coords'); } catch { dmsCoordsCache = null; }
-  return dmsCoordsCache;
-}
-let containerRegistriesCache = null;
-function getContainerRegistries() {
-  if (containerRegistriesCache) return containerRegistriesCache;
-  try { containerRegistriesCache = require('./document-container-registries'); } catch { containerRegistriesCache = null; }
-  return containerRegistriesCache;
-}
-let wktGeometryCache = null;
-function getWktGeometry() {
-  if (wktGeometryCache) return wktGeometryCache;
-  try { wktGeometryCache = require('./document-wkt-geometry'); } catch { wktGeometryCache = null; }
-  return wktGeometryCache;
-}
-let mdRefLinksCache = null;
-function getMdRefLinks() {
-  if (mdRefLinksCache) return mdRefLinksCache;
-  try { mdRefLinksCache = require('./document-md-ref-links'); } catch { mdRefLinksCache = null; }
-  return mdRefLinksCache;
-}
-let botTokensCache = null;
-function getBotTokens() {
-  if (botTokensCache) return botTokensCache;
-  try { botTokensCache = require('./document-bot-tokens'); } catch { botTokensCache = null; }
-  return botTokensCache;
-}
-let cargoPackagesCache = null;
-function getCargoPackages() {
-  if (cargoPackagesCache) return cargoPackagesCache;
-  try { cargoPackagesCache = require('./document-cargo-packages'); } catch { cargoPackagesCache = null; }
-  return cargoPackagesCache;
-}
-let goModulesCache = null;
-function getGoModules() {
-  if (goModulesCache) return goModulesCache;
-  try { goModulesCache = require('./document-go-modules'); } catch { goModulesCache = null; }
-  return goModulesCache;
-}
-let mavenCoordsCache = null;
-function getMavenCoords() {
-  if (mavenCoordsCache) return mavenCoordsCache;
-  try { mavenCoordsCache = require('./document-maven-coords'); } catch { mavenCoordsCache = null; }
-  return mavenCoordsCache;
-}
-let pipReqsCache = null;
-function getPipReqs() {
-  if (pipReqsCache) return pipReqsCache;
-  try { pipReqsCache = require('./document-pip-reqs'); } catch { pipReqsCache = null; }
-  return pipReqsCache;
-}
-let composerPkgsCache = null;
-function getComposerPkgs() {
-  if (composerPkgsCache) return composerPkgsCache;
-  try { composerPkgsCache = require('./document-composer-pkgs'); } catch { composerPkgsCache = null; }
-  return composerPkgsCache;
-}
-let nugetPkgsCache = null;
-function getNugetPkgs() {
-  if (nugetPkgsCache) return nugetPkgsCache;
-  try { nugetPkgsCache = require('./document-nuget-pkgs'); } catch { nugetPkgsCache = null; }
-  return nugetPkgsCache;
-}
-let gemPkgsCache = null;
-function getGemPkgs() {
-  if (gemPkgsCache) return gemPkgsCache;
-  try { gemPkgsCache = require('./document-gem-pkgs'); } catch { gemPkgsCache = null; }
-  return gemPkgsCache;
-}
-let hexPkgsCache = null;
-function getHexPkgs() {
-  if (hexPkgsCache) return hexPkgsCache;
-  try { hexPkgsCache = require('./document-hex-pkgs'); } catch { hexPkgsCache = null; }
-  return hexPkgsCache;
-}
-let svgPathCmdsCache = null;
-function getSvgPathCmds() {
-  if (svgPathCmdsCache) return svgPathCmdsCache;
-  try { svgPathCmdsCache = require('./document-svg-path-cmds'); } catch { svgPathCmdsCache = null; }
-  return svgPathCmdsCache;
-}
-let geojsonCache = null;
-function getGeojson() {
-  if (geojsonCache) return geojsonCache;
-  try { geojsonCache = require('./document-geojson'); } catch { geojsonCache = null; }
-  return geojsonCache;
-}
-let pwaManifestCache = null;
-function getPwaManifest() {
-  if (pwaManifestCache) return pwaManifestCache;
-  try { pwaManifestCache = require('./document-pwa-manifest'); } catch { pwaManifestCache = null; }
-  return pwaManifestCache;
-}
-let permissionsApiCache = null;
-function getPermissionsApi() {
-  if (permissionsApiCache) return permissionsApiCache;
-  try { permissionsApiCache = require('./document-permissions-api'); } catch { permissionsApiCache = null; }
-  return permissionsApiCache;
-}
-let serverlessFnsCache = null;
-function getServerlessFns() {
-  if (serverlessFnsCache) return serverlessFnsCache;
-  try { serverlessFnsCache = require('./document-serverless-fns'); } catch { serverlessFnsCache = null; }
-  return serverlessFnsCache;
-}
-let dbMigrationsCache = null;
-function getDbMigrations() {
-  if (dbMigrationsCache) return dbMigrationsCache;
-  try { dbMigrationsCache = require('./document-db-migrations'); } catch { dbMigrationsCache = null; }
-  return dbMigrationsCache;
-}
-let eslintRulesCache = null;
-function getEslintRules() {
-  if (eslintRulesCache) return eslintRulesCache;
-  try { eslintRulesCache = require('./document-eslint-rules'); } catch { eslintRulesCache = null; }
-  return eslintRulesCache;
-}
-let buildToolsCache = null;
-function getBuildTools() {
-  if (buildToolsCache) return buildToolsCache;
-  try { buildToolsCache = require('./document-build-tools'); } catch { buildToolsCache = null; }
-  return buildToolsCache;
-}
-let jwtClaimsCache = null;
-function getJwtClaims() {
-  if (jwtClaimsCache) return jwtClaimsCache;
-  try { jwtClaimsCache = require('./document-jwt-claims'); } catch { jwtClaimsCache = null; }
-  return jwtClaimsCache;
-}
-let sriHashesCache = null;
-function getSriHashes() {
-  if (sriHashesCache) return sriHashesCache;
-  try { sriHashesCache = require('./document-sri-hashes'); } catch { sriHashesCache = null; }
-  return sriHashesCache;
-}
-let jsonSchemaCache = null;
-function getJsonSchema() {
-  if (jsonSchemaCache) return jsonSchemaCache;
-  try { jsonSchemaCache = require('./document-json-schema'); } catch { jsonSchemaCache = null; }
-  return jsonSchemaCache;
-}
-let prismaSchemaCache = null;
-function getPrismaSchema() {
-  if (prismaSchemaCache) return prismaSchemaCache;
-  try { prismaSchemaCache = require('./document-prisma-schema'); } catch { prismaSchemaCache = null; }
-  return prismaSchemaCache;
-}
-let graphqlFragmentsCache = null;
-function getGraphqlFragments() {
-  if (graphqlFragmentsCache) return graphqlFragmentsCache;
-  try { graphqlFragmentsCache = require('./document-graphql-fragments'); } catch { graphqlFragmentsCache = null; }
-  return graphqlFragmentsCache;
-}
-let cssVarsCache = null;
-function getCssVars() {
-  if (cssVarsCache) return cssVarsCache;
-  try { cssVarsCache = require('./document-css-vars'); } catch { cssVarsCache = null; }
-  return cssVarsCache;
-}
-let composeServicesCache = null;
-function getComposeServices() {
-  if (composeServicesCache) return composeServicesCache;
-  try { composeServicesCache = require('./document-compose-services'); } catch { composeServicesCache = null; }
-  return composeServicesCache;
-}
-let regexFlagsCache = null;
-function getRegexFlags() {
-  if (regexFlagsCache) return regexFlagsCache;
-  try { regexFlagsCache = require('./document-regex-flags'); } catch { regexFlagsCache = null; }
-  return regexFlagsCache;
-}
-let vueSfcCache = null;
-function getVueSfc() {
-  if (vueSfcCache) return vueSfcCache;
-  try { vueSfcCache = require('./document-vue-sfc'); } catch { vueSfcCache = null; }
-  return vueSfcCache;
-}
-let astroCache = null;
-function getAstro() {
-  if (astroCache) return astroCache;
-  try { astroCache = require('./document-astro'); } catch { astroCache = null; }
-  return astroCache;
-}
-let e2eTestsCache = null;
-function getE2eTests() {
-  if (e2eTestsCache) return e2eTestsCache;
-  try { e2eTestsCache = require('./document-e2e-tests'); } catch { e2eTestsCache = null; }
-  return e2eTestsCache;
-}
-let mswHandlersCache = null;
-function getMswHandlers() {
-  if (mswHandlersCache) return mswHandlersCache;
-  try { mswHandlersCache = require('./document-msw-handlers'); } catch { mswHandlersCache = null; }
-  return mswHandlersCache;
-}
-let ghWorkflowsCache = null;
-function getGhWorkflows() {
-  if (ghWorkflowsCache) return ghWorkflowsCache;
-  try { ghWorkflowsCache = require('./document-gh-workflows'); } catch { ghWorkflowsCache = null; }
-  return ghWorkflowsCache;
-}
-let jsonLdCache = null;
-function getJsonLd() {
-  if (jsonLdCache) return jsonLdCache;
-  try { jsonLdCache = require('./document-json-ld'); } catch { jsonLdCache = null; }
-  return jsonLdCache;
-}
-let tailwindCache = null;
-function getTailwind() {
-  if (tailwindCache) return tailwindCache;
-  try { tailwindCache = require('./document-tailwind'); } catch { tailwindCache = null; }
-  return tailwindCache;
-}
-let mongoAggCache = null;
-function getMongoAgg() {
-  if (mongoAggCache) return mongoAggCache;
-  try { mongoAggCache = require('./document-mongo-agg'); } catch { mongoAggCache = null; }
-  return mongoAggCache;
-}
-let helmCache = null;
-function getHelm() {
-  if (helmCache) return helmCache;
-  try { helmCache = require('./document-helm'); } catch { helmCache = null; }
-  return helmCache;
-}
-let vitestCache = null;
-function getVitest() {
-  if (vitestCache) return vitestCache;
-  try { vitestCache = require('./document-vitest'); } catch { vitestCache = null; }
-  return vitestCache;
-}
-let mjmlCache = null;
-function getMjml() {
-  if (mjmlCache) return mjmlCache;
-  try { mjmlCache = require('./document-mjml'); } catch { mjmlCache = null; }
-  return mjmlCache;
-}
-let stripeCache = null;
-function getStripe() {
-  if (stripeCache) return stripeCache;
-  try { stripeCache = require('./document-stripe'); } catch { stripeCache = null; }
-  return stripeCache;
-}
-let terraformVarsCache = null;
-function getTerraformVars() {
-  if (terraformVarsCache) return terraformVarsCache;
-  try { terraformVarsCache = require('./document-terraform-vars'); } catch { terraformVarsCache = null; }
-  return terraformVarsCache;
-}
-let openapiSecurityCache = null;
-function getOpenapiSecurity() {
-  if (openapiSecurityCache) return openapiSecurityCache;
-  try { openapiSecurityCache = require('./document-openapi-security'); } catch { openapiSecurityCache = null; }
-  return openapiSecurityCache;
-}
-let k8sResourcesCache = null;
-function getK8sResources() {
-  if (k8sResourcesCache) return k8sResourcesCache;
-  try { k8sResourcesCache = require('./document-k8s-resources'); } catch { k8sResourcesCache = null; }
-  return k8sResourcesCache;
-}
-let cssAnimCache = null;
-function getCssAnim() {
-  if (cssAnimCache) return cssAnimCache;
-  try { cssAnimCache = require('./document-css-anim'); } catch { cssAnimCache = null; }
-  return cssAnimCache;
-}
-let storybookCache = null;
-function getStorybook() {
-  if (storybookCache) return storybookCache;
-  try { storybookCache = require('./document-storybook'); } catch { storybookCache = null; }
-  return storybookCache;
-}
-let sentryCache = null;
-function getSentry() {
-  if (sentryCache) return sentryCache;
-  try { sentryCache = require('./document-sentry'); } catch { sentryCache = null; }
-  return sentryCache;
-}
-let natsCache = null;
-function getNats() {
-  if (natsCache) return natsCache;
-  try { natsCache = require('./document-nats'); } catch { natsCache = null; }
-  return natsCache;
-}
-let pkgJsonCache = null;
-function getPkgJson() {
-  if (pkgJsonCache) return pkgJsonCache;
-  try { pkgJsonCache = require('./document-pkg-json'); } catch { pkgJsonCache = null; }
-  return pkgJsonCache;
-}
-let redisCache = null;
-function getRedis() {
-  if (redisCache) return redisCache;
-  try { redisCache = require('./document-redis'); } catch { redisCache = null; }
-  return redisCache;
-}
-let nginxCache = null;
-function getNginx() {
-  if (nginxCache) return nginxCache;
-  try { nginxCache = require('./document-nginx'); } catch { nginxCache = null; }
-  return nginxCache;
-}
-let otelCache = null;
-function getOtel() {
-  if (otelCache) return otelCache;
-  try { otelCache = require('./document-otel'); } catch { otelCache = null; }
-  return otelCache;
-}
-let moduleFederationCache = null;
-function getModuleFederation() {
-  if (moduleFederationCache) return moduleFederationCache;
-  try { moduleFederationCache = require('./document-module-federation'); } catch { moduleFederationCache = null; }
-  return moduleFederationCache;
-}
-let drizzleCache = null;
-function getDrizzle() {
-  if (drizzleCache) return drizzleCache;
-  try { drizzleCache = require('./document-drizzle'); } catch { drizzleCache = null; }
-  return drizzleCache;
-}
-let twilioCache = null;
-function getTwilio() {
-  if (twilioCache) return twilioCache;
-  try { twilioCache = require('./document-twilio'); } catch { twilioCache = null; }
-  return twilioCache;
-}
-let awsSdkCache = null;
-function getAwsSdk() {
-  if (awsSdkCache) return awsSdkCache;
-  try { awsSdkCache = require('./document-aws-sdk'); } catch { awsSdkCache = null; }
-  return awsSdkCache;
-}
-let oauthFlowsCache = null;
-function getOauthFlows() {
-  if (oauthFlowsCache) return oauthFlowsCache;
-  try { oauthFlowsCache = require('./document-oauth-flows'); } catch { oauthFlowsCache = null; }
-  return oauthFlowsCache;
-}
-let gqlClientsCache = null;
-function getGqlClients() {
-  if (gqlClientsCache) return gqlClientsCache;
-  try { gqlClientsCache = require('./document-gql-clients'); } catch { gqlClientsCache = null; }
-  return gqlClientsCache;
-}
-let webhookSigsCache = null;
-function getWebhookSigs() {
-  if (webhookSigsCache) return webhookSigsCache;
-  try { webhookSigsCache = require('./document-webhook-sigs'); } catch { webhookSigsCache = null; }
-  return webhookSigsCache;
-}
-let bullmqCache = null;
-function getBullmq() {
-  if (bullmqCache) return bullmqCache;
-  try { bullmqCache = require('./document-bullmq'); } catch { bullmqCache = null; }
-  return bullmqCache;
-}
-let webCryptoCache = null;
-function getWebCrypto() {
-  if (webCryptoCache) return webCryptoCache;
-  try { webCryptoCache = require('./document-web-crypto'); } catch { webCryptoCache = null; }
-  return webCryptoCache;
-}
+// One cache entry per analyzer module. A failed require leaves no entry, so
+// the next call retries it (an optional module may appear after a deploy).
+const _lazyModules = new Map();
+function lazyModule(id, load) {
+  const cached = _lazyModules.get(id);
+  if (cached) return cached;
+  let mod = null;
+  try { mod = load(); } catch { mod = null; }
+  if (mod) _lazyModules.set(id, mod);
+  return mod;
+}
+
+// Most analyzers share one shape: run `method` over the attached files and
+// render the report with `render`. A missing engine or no files yields ''.
+function renderFileReport(engine, method, render, files) {
+  if (!engine || typeof engine[method] !== 'function') return '';
+  const list = Array.isArray(files) ? files : [];
+  if (list.length === 0) return '';
+  return engine[render](engine[method](list));
+}
+
+function getInsightsEngine() { return lazyModule('./document-insights-engine', () => require('./document-insights-engine')); }
+function getComparisonEngine() { return lazyModule('./document-comparison-engine', () => require('./document-comparison-engine')); }
+function getGlossaryEngine() { return lazyModule('./document-glossary-extractor', () => require('./document-glossary-extractor')); }
+function getPiiEngine() { return lazyModule('./document-pii-detector', () => require('./document-pii-detector')); }
+function getConsistencyChecker() { return lazyModule('./document-consistency-checker', () => require('./document-consistency-checker')); }
+function getOutlineGenerator() { return lazyModule('./document-outline-generator', () => require('./document-outline-generator')); }
+function getReadabilityAnalyzer() { return lazyModule('./document-readability-analyzer', () => require('./document-readability-analyzer')); }
+function getQualityScorer() { return lazyModule('./document-analysis-quality-scorer', () => require('./document-analysis-quality-scorer')); }
+function getDeepAnalyzer() { return lazyModule('./document-deep-analyzer', () => require('./document-deep-analyzer')); }
+function getQuoteExtractor() { return lazyModule('./document-quote-extractor', () => require('./document-quote-extractor')); }
+function getDiscourseMapper() { return lazyModule('./document-discourse-mapper', () => require('./document-discourse-mapper')); }
+function getSectionClassifier() { return lazyModule('./document-section-classifier', () => require('./document-section-classifier')); }
+function getEvidenceMap() { return lazyModule('./document-evidence-map', () => require('./document-evidence-map')); }
+function getNumericCoherence() { return lazyModule('./document-numeric-coherence', () => require('./document-numeric-coherence')); }
+function getTemporalTimeline() { return lazyModule('./document-temporal-timeline', () => require('./document-temporal-timeline')); }
+function getActionDashboard() { return lazyModule('./document-action-dashboard', () => require('./document-action-dashboard')); }
+function getAudienceTone() { return lazyModule('./document-audience-tone', () => require('./document-audience-tone')); }
+function getSemanticGraph() { return lazyModule('./document-semantic-graph', () => require('./document-semantic-graph')); }
+function getKpiExtractor() { return lazyModule('./document-kpi-extractor', () => require('./document-kpi-extractor')); }
+function getRiskRegister() { return lazyModule('./document-risk-register', () => require('./document-risk-register')); }
+function getFactDensity() { return lazyModule('./document-fact-density', () => require('./document-fact-density')); }
+function getRelationshipClassifier() { return lazyModule('./document-relationship-classifier', () => require('./document-relationship-classifier')); }
+function getSectionSimilarity() { return lazyModule('./document-section-similarity', () => require('./document-section-similarity')); }
+function getNumericStatistics() { return lazyModule('./document-numeric-statistics', () => require('./document-numeric-statistics')); }
+function getQualityGrade() { return lazyModule('./document-quality-grade', () => require('./document-quality-grade')); }
+function getTitleExtractor() { return lazyModule('./document-title-extractor', () => require('./document-title-extractor')); }
+function getTldr() { return lazyModule('./document-tldr', () => require('./document-tldr')); }
+function getSentiment() { return lazyModule('./document-sentiment', () => require('./document-sentiment')); }
+function getKeyPhrases() { return lazyModule('./document-key-phrases', () => require('./document-key-phrases')); }
+function getObligations() { return lazyModule('./document-obligations-extractor', () => require('./document-obligations-extractor')); }
+function getScopeExclusions() { return lazyModule('./document-scope-exclusions', () => require('./document-scope-exclusions')); }
+function getStakeholderMap() { return lazyModule('./document-stakeholder-map', () => require('./document-stakeholder-map')); }
+function getJurisdictionDetector() { return lazyModule('./document-jurisdiction-detector', () => require('./document-jurisdiction-detector')); }
+function getDefinitionsExtractor() { return lazyModule('./document-definitions-extractor', () => require('./document-definitions-extractor')); }
+function getCrossReference() { return lazyModule('./document-cross-reference', () => require('./document-cross-reference')); }
+function getPricingExtractor() { return lazyModule('./document-pricing-extractor', () => require('./document-pricing-extractor')); }
+function getMetadataExtractor() { return lazyModule('./document-metadata-extractor', () => require('./document-metadata-extractor')); }
+function getComplianceMatcher() { return lazyModule('./document-compliance-matcher', () => require('./document-compliance-matcher')); }
+function getWarrantiesExtractor() { return lazyModule('./document-warranties-extractor', () => require('./document-warranties-extractor')); }
+function getDisputeResolution() { return lazyModule('./document-dispute-resolution', () => require('./document-dispute-resolution')); }
+function getIndemnification() { return lazyModule('./document-indemnification', () => require('./document-indemnification')); }
+function getAcronymExpansion() { return lazyModule('./document-acronym-expansion', () => require('./document-acronym-expansion')); }
+function getTemporalExpressions() { return lazyModule('./document-temporal-expressions', () => require('./document-temporal-expressions')); }
+function getCrossNumeric() { return lazyModule('./document-cross-numeric', () => require('./document-cross-numeric')); }
+function getSignatureBlock() { return lazyModule('./document-signature-block', () => require('./document-signature-block')); }
+function getQaPairs() { return lazyModule('./document-qa-pairs', () => require('./document-qa-pairs')); }
+function getHypotheses() { return lazyModule('./document-hypotheses', () => require('./document-hypotheses')); }
+function getRecommendations() { return lazyModule('./document-recommendations', () => require('./document-recommendations')); }
+function getAssumptions() { return lazyModule('./document-assumptions', () => require('./document-assumptions')); }
+function getConditionalClauses() { return lazyModule('./document-conditional-clauses', () => require('./document-conditional-clauses')); }
+function getCounterArguments() { return lazyModule('./document-counter-arguments', () => require('./document-counter-arguments')); }
+function getCallToAction() { return lazyModule('./document-call-to-action', () => require('./document-call-to-action')); }
+function getDisclosures() { return lazyModule('./document-disclosures', () => require('./document-disclosures')); }
+function getFactVsOpinion() { return lazyModule('./document-fact-vs-opinion', () => require('./document-fact-vs-opinion')); }
+function getScenarios() { return lazyModule('./document-scenarios', () => require('./document-scenarios')); }
+function getBenchmarks() { return lazyModule('./document-benchmarks', () => require('./document-benchmarks')); }
+function getGoalsTargets() { return lazyModule('./document-goals-targets', () => require('./document-goals-targets')); }
+function getSLATerms() { return lazyModule('./document-sla-terms', () => require('./document-sla-terms')); }
+function getDataClassification() { return lazyModule('./document-data-classification', () => require('./document-data-classification')); }
+function getApprovalWorkflow() { return lazyModule('./document-approval-workflow', () => require('./document-approval-workflow')); }
+function getExecutiveSummary() { return lazyModule('./document-executive-summary', () => require('./document-executive-summary')); }
+function getUrlExtractor() { return lazyModule('./document-url-extractor', () => require('./document-url-extractor')); }
+function getContactInfo() { return lazyModule('./document-contact-info', () => require('./document-contact-info')); }
+function getFootnotes() { return lazyModule('./document-footnotes', () => require('./document-footnotes')); }
+function getTables() { return lazyModule('./document-tables', () => require('./document-tables')); }
+function getCodeBlocks() { return lazyModule('./document-code-blocks', () => require('./document-code-blocks')); }
+function getFigureRefs() { return lazyModule('./document-figure-refs', () => require('./document-figure-refs')); }
+function getChecklists() { return lazyModule('./document-checklists', () => require('./document-checklists')); }
+function getIdentifiers() { return lazyModule('./document-identifiers', () => require('./document-identifiers')); }
+function getBulletLists() { return lazyModule('./document-bullet-lists', () => require('./document-bullet-lists')); }
+function getMermaid() { return lazyModule('./document-mermaid', () => require('./document-mermaid')); }
+function getPriority() { return lazyModule('./document-priority', () => require('./document-priority')); }
+function getOwnership() { return lazyModule('./document-ownership', () => require('./document-ownership')); }
+function getTimestamps() { return lazyModule('./document-timestamps', () => require('./document-timestamps')); }
+function getStatus() { return lazyModule('./document-status', () => require('./document-status')); }
+function getAcceptanceCriteria() { return lazyModule('./document-acceptance-criteria', () => require('./document-acceptance-criteria')); }
+function getApiEndpoints() { return lazyModule('./document-api-endpoints', () => require('./document-api-endpoints')); }
+function getEnvVars() { return lazyModule('./document-env-vars', () => require('./document-env-vars')); }
+function getSql() { return lazyModule('./document-sql', () => require('./document-sql')); }
+function getFilePaths() { return lazyModule('./document-file-paths', () => require('./document-file-paths')); }
+function getCron() { return lazyModule('./document-cron', () => require('./document-cron')); }
+function getLicenses() { return lazyModule('./document-licenses', () => require('./document-licenses')); }
+function getDependencies() { return lazyModule('./document-dependencies', () => require('./document-dependencies')); }
+function getRiskMatrix() { return lazyModule('./document-risk-matrix', () => require('./document-risk-matrix')); }
+function getVersions() { return lazyModule('./document-versions', () => require('./document-versions')); }
+function getDecisionRecords() { return lazyModule('./document-decision-records', () => require('./document-decision-records')); }
+function getDomains() { return lazyModule('./document-domains', () => require('./document-domains')); }
+function getCurrency() { return lazyModule('./document-currency', () => require('./document-currency')); }
+function getPercentages() { return lazyModule('./document-percentages', () => require('./document-percentages')); }
+function getCitations() { return lazyModule('./document-citations', () => require('./document-citations')); }
+function getColors() { return lazyModule('./document-colors', () => require('./document-colors')); }
+function getCoordinates() { return lazyModule('./document-coordinates', () => require('./document-coordinates')); }
+function getTrademark() { return lazyModule('./document-trademark', () => require('./document-trademark')); }
+function getHashtags() { return lazyModule('./document-hashtags', () => require('./document-hashtags')); }
+function getSectionLabels() { return lazyModule('./document-section-labels', () => require('./document-section-labels')); }
+function getSignoffs() { return lazyModule('./document-signoffs', () => require('./document-signoffs')); }
+function getHashes() { return lazyModule('./document-hashes', () => require('./document-hashes')); }
+function getCoupons() { return lazyModule('./document-coupons', () => require('./document-coupons')); }
+function getFileSizes() { return lazyModule('./document-file-sizes', () => require('./document-file-sizes')); }
+function getVcsRefs() { return lazyModule('./document-vcs-refs', () => require('./document-vcs-refs')); }
+function getStandards() { return lazyModule('./document-standards', () => require('./document-standards')); }
+function getNetwork() { return lazyModule('./document-network', () => require('./document-network')); }
+function getHttpStatus() { return lazyModule('./document-http-status', () => require('./document-http-status')); }
+function getTimezones() { return lazyModule('./document-timezones', () => require('./document-timezones')); }
+function getMath() { return lazyModule('./document-math', () => require('./document-math')); }
+function getBoolean() { return lazyModule('./document-boolean', () => require('./document-boolean')); }
+function getToc() { return lazyModule('./document-toc', () => require('./document-toc')); }
+function getHtmlAttrs() { return lazyModule('./document-html-attrs', () => require('./document-html-attrs')); }
+function getBlockquotes() { return lazyModule('./document-blockquotes', () => require('./document-blockquotes')); }
+function getDefinitionLists() { return lazyModule('./document-definition-lists', () => require('./document-definition-lists')); }
+function getTodos() { return lazyModule('./document-todos', () => require('./document-todos')); }
+function getImages() { return lazyModule('./document-images', () => require('./document-images')); }
+function getMedia() { return lazyModule('./document-media', () => require('./document-media')); }
+function getLanguageRatio() { return lazyModule('./document-language-ratio', () => require('./document-language-ratio')); }
+function getRegexPatterns() { return lazyModule('./document-regex-patterns', () => require('./document-regex-patterns')); }
+function getFileExtensions() { return lazyModule('./document-file-extensions', () => require('./document-file-extensions')); }
+function getCodeDefs() { return lazyModule('./document-code-defs', () => require('./document-code-defs')); }
+function getTonePolarity() { return lazyModule('./document-tone-polarity', () => require('./document-tone-polarity')); }
+function getQuantifiers() { return lazyModule('./document-quantifiers', () => require('./document-quantifiers')); }
+function getModals() { return lazyModule('./document-modals', () => require('./document-modals')); }
+function getNegation() { return lazyModule('./document-negation', () => require('./document-negation')); }
+function getReadingTime() { return lazyModule('./document-reading-time', () => require('./document-reading-time')); }
+function getAttributions() { return lazyModule('./document-attributions', () => require('./document-attributions')); }
+function getComparatives() { return lazyModule('./document-comparatives', () => require('./document-comparatives')); }
+function getCausal() { return lazyModule('./document-causal', () => require('./document-causal')); }
+function getConcession() { return lazyModule('./document-concession', () => require('./document-concession')); }
+function getHedging() { return lazyModule('./document-hedging', () => require('./document-hedging')); }
+function getIntensifiers() { return lazyModule('./document-intensifiers', () => require('./document-intensifiers')); }
+function getReporting() { return lazyModule('./document-reporting', () => require('./document-reporting')); }
+function getExamples() { return lazyModule('./document-examples', () => require('./document-examples')); }
+function getApproximations() { return lazyModule('./document-approximations', () => require('./document-approximations')); }
+function getQuestions() { return lazyModule('./document-questions', () => require('./document-questions')); }
+function getImperatives() { return lazyModule('./document-imperatives', () => require('./document-imperatives')); }
+function getDefinitions() { return lazyModule('./document-definitions', () => require('./document-definitions')); }
+function getFiscalYear() { return lazyModule('./document-fiscal-year', () => require('./document-fiscal-year')); }
+function getRatios() { return lazyModule('./document-ratios', () => require('./document-ratios')); }
+function getOrdinals() { return lazyModule('./document-ordinals', () => require('./document-ordinals')); }
+function getGeoRegions() { return lazyModule('./document-geo-regions', () => require('./document-geo-regions')); }
+function getTracking() { return lazyModule('./document-tracking', () => require('./document-tracking')); }
+function getWeather() { return lazyModule('./document-weather', () => require('./document-weather')); }
+function getScientificNotation() { return lazyModule('./document-scientific-notation', () => require('./document-scientific-notation')); }
+function getTaxa() { return lazyModule('./document-taxa', () => require('./document-taxa')); }
+function getChemistry() { return lazyModule('./document-chemistry', () => require('./document-chemistry')); }
+function getFxRates() { return lazyModule('./document-fx-rates', () => require('./document-fx-rates')); }
+function getIbanSwift() { return lazyModule('./document-iban-swift', () => require('./document-iban-swift')); }
+function getLicensePlates() { return lazyModule('./document-license-plates', () => require('./document-license-plates')); }
+function getLegalCitations() { return lazyModule('./document-legal-citations', () => require('./document-legal-citations')); }
+function getSocialUrls() { return lazyModule('./document-social-urls', () => require('./document-social-urls')); }
+function getGeneProtein() { return lazyModule('./document-gene-protein', () => require('./document-gene-protein')); }
+function getCurrencySymbols() { return lazyModule('./document-currency-symbols', () => require('./document-currency-symbols')); }
+function getPhoneCodes() { return lazyModule('./document-phone-codes', () => require('./document-phone-codes')); }
+function getPostalCodes() { return lazyModule('./document-postal-codes', () => require('./document-postal-codes')); }
+function getAddresses() { return lazyModule('./document-addresses', () => require('./document-addresses')); }
+function getMimeTypes() { return lazyModule('./document-mime-types', () => require('./document-mime-types')); }
+function getUtmParams() { return lazyModule('./document-utm-params', () => require('./document-utm-params')); }
+function getCreditCards() { return lazyModule('./document-credit-cards', () => require('./document-credit-cards')); }
+function getSsnPii() { return lazyModule('./document-ssn-pii', () => require('./document-ssn-pii')); }
+function getApiKeys() { return lazyModule('./document-api-keys', () => require('./document-api-keys')); }
+function getHttpMethods() { return lazyModule('./document-http-methods', () => require('./document-http-methods')); }
+function getContainerRefs() { return lazyModule('./document-container-refs', () => require('./document-container-refs')); }
+function getK8sRefs() { return lazyModule('./document-k8s-refs', () => require('./document-k8s-refs')); }
+function getMetrics() { return lazyModule('./document-metrics', () => require('./document-metrics')); }
+function getOauthScopes() { return lazyModule('./document-oauth-scopes', () => require('./document-oauth-scopes')); }
+function getCspDirectives() { return lazyModule('./document-csp-directives', () => require('./document-csp-directives')); }
+function getMathOperators() { return lazyModule('./document-math-operators', () => require('./document-math-operators')); }
+function getSpdxComplex() { return lazyModule('./document-spdx-complex', () => require('./document-spdx-complex')); }
+function getFeatureFlags() { return lazyModule('./document-feature-flags', () => require('./document-feature-flags')); }
+function getCookieAttrs() { return lazyModule('./document-cookie-attrs', () => require('./document-cookie-attrs')); }
+function getOtelTrace() { return lazyModule('./document-otel-trace', () => require('./document-otel-trace')); }
+function getCloudArns() { return lazyModule('./document-cloud-arns', () => require('./document-cloud-arns')); }
+function getMlModels() { return lazyModule('./document-ml-models', () => require('./document-ml-models')); }
+function getDbConnStrings() { return lazyModule('./document-db-conn-strings', () => require('./document-db-conn-strings')); }
+function getGraphqlOps() { return lazyModule('./document-graphql-ops', () => require('./document-graphql-ops')); }
+function getGrpcRefs() { return lazyModule('./document-grpc-refs', () => require('./document-grpc-refs')); }
+function getStackTraces() { return lazyModule('./document-stack-traces', () => require('./document-stack-traces')); }
+function getEnvNames() { return lazyModule('./document-env-names', () => require('./document-env-names')); }
+function getTestBlocks() { return lazyModule('./document-test-blocks', () => require('./document-test-blocks')); }
+function getGitShas() { return lazyModule('./document-git-shas', () => require('./document-git-shas')); }
+function getCloudStorage() { return lazyModule('./document-cloud-storage', () => require('./document-cloud-storage')); }
+function getWebVitals() { return lazyModule('./document-web-vitals', () => require('./document-web-vitals')); }
+function getAriaA11y() { return lazyModule('./document-aria-a11y', () => require('./document-aria-a11y')); }
+function getI18nKeys() { return lazyModule('./document-i18n-keys', () => require('./document-i18n-keys')); }
+function getCiBuildIds() { return lazyModule('./document-ci-build-ids', () => require('./document-ci-build-ids')); }
+function getUserAgents() { return lazyModule('./document-user-agents', () => require('./document-user-agents')); }
+function getCidrRanges() { return lazyModule('./document-cidr-ranges', () => require('./document-cidr-ranges')); }
+function getCacheHeaders() { return lazyModule('./document-cache-headers', () => require('./document-cache-headers')); }
+function getGithubRefs() { return lazyModule('./document-github-refs', () => require('./document-github-refs')); }
+function getApmRefs() { return lazyModule('./document-apm-refs', () => require('./document-apm-refs')); }
+function getAttackPatterns() { return lazyModule('./document-attack-patterns', () => require('./document-attack-patterns')); }
+function getWebhookUrls() { return lazyModule('./document-webhook-urls', () => require('./document-webhook-urls')); }
+function getSshFingerprints() { return lazyModule('./document-ssh-fingerprints', () => require('./document-ssh-fingerprints')); }
+function getNpmRefs() { return lazyModule('./document-npm-refs', () => require('./document-npm-refs')); }
+function getCorrelationIds() { return lazyModule('./document-correlation-ids', () => require('./document-correlation-ids')); }
+function getPaymentIds() { return lazyModule('./document-payment-ids', () => require('./document-payment-ids')); }
+function getEmailHeaders() { return lazyModule('./document-email-headers', () => require('./document-email-headers')); }
+function getIcalEvents() { return lazyModule('./document-ical-events', () => require('./document-ical-events')); }
+function getFrontmatter() { return lazyModule('./document-frontmatter', () => require('./document-frontmatter')); }
+function getPullQuotes() { return lazyModule('./document-pull-quotes', () => require('./document-pull-quotes')); }
+function getGhaSteps() { return lazyModule('./document-gha-steps', () => require('./document-gha-steps')); }
+function getTerraformRefs() { return lazyModule('./document-terraform-refs', () => require('./document-terraform-refs')); }
+function getHelmRefs() { return lazyModule('./document-helm-refs', () => require('./document-helm-refs')); }
+function getNaturalSchedules() { return lazyModule('./document-natural-schedules', () => require('./document-natural-schedules')); }
+function getChatPermalinks() { return lazyModule('./document-chat-permalinks', () => require('./document-chat-permalinks')); }
+function getPmTickets() { return lazyModule('./document-pm-tickets', () => require('./document-pm-tickets')); }
+function getSlaTargets() { return lazyModule('./document-sla-targets', () => require('./document-sla-targets')); }
+function getTlds() { return lazyModule('./document-tlds', () => require('./document-tlds')); }
+function getStockTickers() { return lazyModule('./document-stock-tickers', () => require('./document-stock-tickers')); }
+function getHardwareSpecs() { return lazyModule('./document-hardware-specs', () => require('./document-hardware-specs')); }
+function getBandwidthUnits() { return lazyModule('./document-bandwidth-units', () => require('./document-bandwidth-units')); }
+function getTrackingNumbers() { return lazyModule('./document-tracking-numbers', () => require('./document-tracking-numbers')); }
+function getRateLimitHeaders() { return lazyModule('./document-rate-limit-headers', () => require('./document-rate-limit-headers')); }
+function getCryptoWallets() { return lazyModule('./document-crypto-wallets', () => require('./document-crypto-wallets')); }
+function getCveIds() { return lazyModule('./document-cve-ids', () => require('./document-cve-ids')); }
+function getMediaTimestamps() { return lazyModule('./document-media-timestamps', () => require('./document-media-timestamps')); }
+function getLinuxSignals() { return lazyModule('./document-linux-signals', () => require('./document-linux-signals')); }
+function getExitCodes() { return lazyModule('./document-exit-codes', () => require('./document-exit-codes')); }
+function getNetworkPorts() { return lazyModule('./document-network-ports', () => require('./document-network-ports')); }
+function getLinuxDistros() { return lazyModule('./document-linux-distros', () => require('./document-linux-distros')); }
+function getLifecyclePhases() { return lazyModule('./document-lifecycle-phases', () => require('./document-lifecycle-phases')); }
+function getProjectCodenames() { return lazyModule('./document-project-codenames', () => require('./document-project-codenames')); }
+function getRiskLevels() { return lazyModule('./document-risk-levels', () => require('./document-risk-levels')); }
+function getSaasMetrics() { return lazyModule('./document-saas-metrics', () => require('./document-saas-metrics')); }
+function getRecipeMeasurements() { return lazyModule('./document-recipe-measurements', () => require('./document-recipe-measurements')); }
+function getIsoLangs() { return lazyModule('./document-iso-langs', () => require('./document-iso-langs')); }
+function getPrReviewStates() { return lazyModule('./document-pr-review-states', () => require('./document-pr-review-states')); }
+function getPricingTiers() { return lazyModule('./document-pricing-tiers', () => require('./document-pricing-tiers')); }
+function getArxivIds() { return lazyModule('./document-arxiv-ids', () => require('./document-arxiv-ids')); }
+function getDoiIds() { return lazyModule('./document-doi-ids', () => require('./document-doi-ids')); }
+function getOrcidIds() { return lazyModule('./document-orcid-ids', () => require('./document-orcid-ids')); }
+function getWikiRefs() { return lazyModule('./document-wiki-refs', () => require('./document-wiki-refs')); }
+function getPubmedIds() { return lazyModule('./document-pubmed-ids', () => require('./document-pubmed-ids')); }
+function getServiceAccounts() { return lazyModule('./document-service-accounts', () => require('./document-service-accounts')); }
+function getVinNumbers() { return lazyModule('./document-vin-numbers', () => require('./document-vin-numbers')); }
+function getEmojiShortcodes() { return lazyModule('./document-emoji-shortcodes', () => require('./document-emoji-shortcodes')); }
+function getBibtexEntries() { return lazyModule('./document-bibtex-entries', () => require('./document-bibtex-entries')); }
+function getLatexCommands() { return lazyModule('./document-latex-commands', () => require('./document-latex-commands')); }
+function getProgLangs() { return lazyModule('./document-prog-langs', () => require('./document-prog-langs')); }
+function getComplianceRefs() { return lazyModule('./document-compliance-refs', () => require('./document-compliance-refs')); }
+function getTlsCiphers() { return lazyModule('./document-tls-ciphers', () => require('./document-tls-ciphers')); }
+function getDnsRecords() { return lazyModule('./document-dns-records', () => require('./document-dns-records')); }
+function getEmailAuth() { return lazyModule('./document-email-auth', () => require('./document-email-auth')); }
+function getOpenapiKeys() { return lazyModule('./document-openapi-keys', () => require('./document-openapi-keys')); }
+function getKafkaRefs() { return lazyModule('./document-kafka-refs', () => require('./document-kafka-refs')); }
+function getAnsiEscapes() { return lazyModule('./document-ansi-escapes', () => require('./document-ansi-escapes')); }
+function getSqlWindows() { return lazyModule('./document-sql-windows', () => require('./document-sql-windows')); }
+function getWebsocketMarkers() { return lazyModule('./document-websocket-markers', () => require('./document-websocket-markers')); }
+function getIsoDurations() { return lazyModule('./document-iso-durations', () => require('./document-iso-durations')); }
+function getBrowserSupport() { return lazyModule('./document-browser-support', () => require('./document-browser-support')); }
+function getNumberBases() { return lazyModule('./document-number-bases', () => require('./document-number-bases')); }
+function getDmsCoords() { return lazyModule('./document-dms-coords', () => require('./document-dms-coords')); }
+function getContainerRegistries() { return lazyModule('./document-container-registries', () => require('./document-container-registries')); }
+function getWktGeometry() { return lazyModule('./document-wkt-geometry', () => require('./document-wkt-geometry')); }
+function getMdRefLinks() { return lazyModule('./document-md-ref-links', () => require('./document-md-ref-links')); }
+function getBotTokens() { return lazyModule('./document-bot-tokens', () => require('./document-bot-tokens')); }
+function getCargoPackages() { return lazyModule('./document-cargo-packages', () => require('./document-cargo-packages')); }
+function getGoModules() { return lazyModule('./document-go-modules', () => require('./document-go-modules')); }
+function getMavenCoords() { return lazyModule('./document-maven-coords', () => require('./document-maven-coords')); }
+function getPipReqs() { return lazyModule('./document-pip-reqs', () => require('./document-pip-reqs')); }
+function getComposerPkgs() { return lazyModule('./document-composer-pkgs', () => require('./document-composer-pkgs')); }
+function getNugetPkgs() { return lazyModule('./document-nuget-pkgs', () => require('./document-nuget-pkgs')); }
+function getGemPkgs() { return lazyModule('./document-gem-pkgs', () => require('./document-gem-pkgs')); }
+function getHexPkgs() { return lazyModule('./document-hex-pkgs', () => require('./document-hex-pkgs')); }
+function getSvgPathCmds() { return lazyModule('./document-svg-path-cmds', () => require('./document-svg-path-cmds')); }
+function getGeojson() { return lazyModule('./document-geojson', () => require('./document-geojson')); }
+function getPwaManifest() { return lazyModule('./document-pwa-manifest', () => require('./document-pwa-manifest')); }
+function getPermissionsApi() { return lazyModule('./document-permissions-api', () => require('./document-permissions-api')); }
+function getServerlessFns() { return lazyModule('./document-serverless-fns', () => require('./document-serverless-fns')); }
+function getDbMigrations() { return lazyModule('./document-db-migrations', () => require('./document-db-migrations')); }
+function getEslintRules() { return lazyModule('./document-eslint-rules', () => require('./document-eslint-rules')); }
+function getBuildTools() { return lazyModule('./document-build-tools', () => require('./document-build-tools')); }
+function getJwtClaims() { return lazyModule('./document-jwt-claims', () => require('./document-jwt-claims')); }
+function getSriHashes() { return lazyModule('./document-sri-hashes', () => require('./document-sri-hashes')); }
+function getJsonSchema() { return lazyModule('./document-json-schema', () => require('./document-json-schema')); }
+function getPrismaSchema() { return lazyModule('./document-prisma-schema', () => require('./document-prisma-schema')); }
+function getGraphqlFragments() { return lazyModule('./document-graphql-fragments', () => require('./document-graphql-fragments')); }
+function getCssVars() { return lazyModule('./document-css-vars', () => require('./document-css-vars')); }
+function getComposeServices() { return lazyModule('./document-compose-services', () => require('./document-compose-services')); }
+function getRegexFlags() { return lazyModule('./document-regex-flags', () => require('./document-regex-flags')); }
+function getVueSfc() { return lazyModule('./document-vue-sfc', () => require('./document-vue-sfc')); }
+function getAstro() { return lazyModule('./document-astro', () => require('./document-astro')); }
+function getE2eTests() { return lazyModule('./document-e2e-tests', () => require('./document-e2e-tests')); }
+function getMswHandlers() { return lazyModule('./document-msw-handlers', () => require('./document-msw-handlers')); }
+function getGhWorkflows() { return lazyModule('./document-gh-workflows', () => require('./document-gh-workflows')); }
+function getJsonLd() { return lazyModule('./document-json-ld', () => require('./document-json-ld')); }
+function getTailwind() { return lazyModule('./document-tailwind', () => require('./document-tailwind')); }
+function getMongoAgg() { return lazyModule('./document-mongo-agg', () => require('./document-mongo-agg')); }
+function getHelm() { return lazyModule('./document-helm', () => require('./document-helm')); }
+function getVitest() { return lazyModule('./document-vitest', () => require('./document-vitest')); }
+function getMjml() { return lazyModule('./document-mjml', () => require('./document-mjml')); }
+function getStripe() { return lazyModule('./document-stripe', () => require('./document-stripe')); }
+function getTerraformVars() { return lazyModule('./document-terraform-vars', () => require('./document-terraform-vars')); }
+function getOpenapiSecurity() { return lazyModule('./document-openapi-security', () => require('./document-openapi-security')); }
+function getK8sResources() { return lazyModule('./document-k8s-resources', () => require('./document-k8s-resources')); }
+function getCssAnim() { return lazyModule('./document-css-anim', () => require('./document-css-anim')); }
+function getStorybook() { return lazyModule('./document-storybook', () => require('./document-storybook')); }
+function getSentry() { return lazyModule('./document-sentry', () => require('./document-sentry')); }
+function getNats() { return lazyModule('./document-nats', () => require('./document-nats')); }
+function getPkgJson() { return lazyModule('./document-pkg-json', () => require('./document-pkg-json')); }
+function getRedis() { return lazyModule('./document-redis', () => require('./document-redis')); }
+function getNginx() { return lazyModule('./document-nginx', () => require('./document-nginx')); }
+function getOtel() { return lazyModule('./document-otel', () => require('./document-otel')); }
+function getModuleFederation() { return lazyModule('./document-module-federation', () => require('./document-module-federation')); }
+function getDrizzle() { return lazyModule('./document-drizzle', () => require('./document-drizzle')); }
+function getTwilio() { return lazyModule('./document-twilio', () => require('./document-twilio')); }
+function getAwsSdk() { return lazyModule('./document-aws-sdk', () => require('./document-aws-sdk')); }
+function getOauthFlows() { return lazyModule('./document-oauth-flows', () => require('./document-oauth-flows')); }
+function getGqlClients() { return lazyModule('./document-gql-clients', () => require('./document-gql-clients')); }
+function getWebhookSigs() { return lazyModule('./document-webhook-sigs', () => require('./document-webhook-sigs')); }
+function getBullmq() { return lazyModule('./document-bullmq', () => require('./document-bullmq')); }
+function getWebCrypto() { return lazyModule('./document-web-crypto', () => require('./document-web-crypto')); }
 
 // ──────────────────────────────────────────────────────────────────────────
 // Document type classification
@@ -4291,14 +2762,7 @@ function buildQualityBlock(files, profiles) {
  * anchors. This gives the model a compact audit layer before it reads raw
  * extracted text.
  */
-function buildEvidenceMapBlock(files) {
-  const engine = getEvidenceMap();
-  if (!engine || typeof engine.buildEvidenceMapForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEvidenceMapForFiles(list);
-  return engine.renderEvidenceMapBlock(report);
-}
+function buildEvidenceMapBlock(files) { return renderFileReport(getEvidenceMap(), 'buildEvidenceMapForFiles', 'renderEvidenceMapBlock', files); }
 
 /**
  * Internal-consistency block — fires whenever the checker finds at least
@@ -4311,14 +2775,7 @@ function buildEvidenceMapBlock(files) {
  * questions and risks. Complementary to insights (entities/numbers) and
  * consistency (intra-doc contradictions). Empty when nothing extracted.
  */
-function buildDeepAnalysisBlock(files) {
-  const engine = getDeepAnalyzer();
-  if (!engine || typeof engine.buildDeepAnalysisForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDeepAnalysisForFiles(list);
-  return engine.renderDeepAnalysisBlock(report);
-}
+function buildDeepAnalysisBlock(files) { return renderFileReport(getDeepAnalyzer(), 'buildDeepAnalysisForFiles', 'renderDeepAnalysisBlock', files); }
 
 /**
  * Quotes & citations block — surfaces verbatim language and bibliographic
@@ -4326,28 +2783,14 @@ function buildDeepAnalysisBlock(files) {
  * markers) so the model can answer literal-quote and source-trace
  * questions without paraphrasing. Empty when nothing is extracted.
  */
-function buildQuotesBlock(files) {
-  const engine = getQuoteExtractor();
-  if (!engine || typeof engine.buildQuotesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildQuotesForFiles(list);
-  return engine.renderQuotesBlock(report);
-}
+function buildQuotesBlock(files) { return renderFileReport(getQuoteExtractor(), 'buildQuotesForFiles', 'renderQuotesBlock', files); }
 
 /**
  * Discourse map block — surfaces the argumentative connectives in reading
  * order so the model can navigate by argument flow (contrast / causation /
  * sequence / conclusion / exemplification / concession / emphasis).
  */
-function buildDiscourseBlock(files) {
-  const engine = getDiscourseMapper();
-  if (!engine || typeof engine.buildDiscourseForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDiscourseForFiles(list);
-  return engine.renderDiscourseBlock(report);
-}
+function buildDiscourseBlock(files) { return renderFileReport(getDiscourseMapper(), 'buildDiscourseForFiles', 'renderDiscourseBlock', files); }
 
 /**
  * Section roles block — maps each heading to a rhetorical role
@@ -4356,14 +2799,7 @@ function buildDiscourseBlock(files) {
  * questions directly to the relevant span. Distinct from the outline,
  * which is purely a literal table of contents.
  */
-function buildSectionRolesBlock(files) {
-  const engine = getSectionClassifier();
-  if (!engine || typeof engine.buildSectionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSectionsForFiles(list);
-  return engine.renderSectionsBlock(report);
-}
+function buildSectionRolesBlock(files) { return renderFileReport(getSectionClassifier(), 'buildSectionsForFiles', 'renderSectionsBlock', files); }
 
 /**
  * Numeric coherence block — positive math validation that pairs with the
@@ -4372,28 +2808,14 @@ function buildSectionRolesBlock(files) {
  * that don't reconcile (percentages, growth deltas, currency mixing,
  * share totals, averages out of declared range).
  */
-function buildNumericCoherenceBlock(files) {
-  const engine = getNumericCoherence();
-  if (!engine || typeof engine.buildCoherenceForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCoherenceForFiles(list);
-  return engine.renderCoherenceBlock(report);
-}
+function buildNumericCoherenceBlock(files) { return renderFileReport(getNumericCoherence(), 'buildCoherenceForFiles', 'renderCoherenceBlock', files); }
 
 /**
  * Temporal timeline block — chronological ordering of dated events across
  * the attached document(s). Lets the model answer "what happened when",
  * "what is upcoming", "what is overdue" without re-scanning raw text.
  */
-function buildTemporalTimelineBlock(files) {
-  const engine = getTemporalTimeline();
-  if (!engine || typeof engine.buildTimelineForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTimelineForFiles(list);
-  return engine.renderTimelineBlock(report);
-}
+function buildTemporalTimelineBlock(files) { return renderFileReport(getTemporalTimeline(), 'buildTimelineForFiles', 'renderTimelineBlock', files); }
 
 /**
  * Action dashboard block — priority-ordered operations punch list that
@@ -4403,14 +2825,7 @@ function buildTemporalTimelineBlock(files) {
  * questions ("what's overdue?", "what's pending?") from a single
  * authoritative summary instead of re-scanning per call.
  */
-function buildActionDashboardBlock(files) {
-  const engine = getActionDashboard();
-  if (!engine || typeof engine.buildDashboardForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDashboardForFiles(list);
-  return engine.renderDashboardBlock(report);
-}
+function buildActionDashboardBlock(files) { return renderFileReport(getActionDashboard(), 'buildDashboardForFiles', 'renderDashboardBlock', files); }
 
 /**
  * Audience + tone block — two-axis classification of each file. The chat
@@ -4420,14 +2835,7 @@ function buildActionDashboardBlock(files) {
  * style. Flags mixed-register batches so multi-file uploads don't get
  * their analyses smudged together.
  */
-function buildAudienceToneBlock(files) {
-  const engine = getAudienceTone();
-  if (!engine || typeof engine.buildAudienceToneForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAudienceToneForFiles(list);
-  return engine.renderAudienceToneBlock(report);
-}
+function buildAudienceToneBlock(files) { return renderFileReport(getAudienceTone(), 'buildAudienceToneForFiles', 'renderAudienceToneBlock', files); }
 
 /**
  * Cross-document semantic graph block — entity-keyed view of the
@@ -4436,14 +2844,7 @@ function buildAudienceToneBlock(files) {
  * paired with different amounts across files. Only fires for 1+ file
  * but is most useful for multi-document analysis.
  */
-function buildSemanticGraphBlock(files) {
-  const engine = getSemanticGraph();
-  if (!engine || typeof engine.buildGraphForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGraphForFiles(list);
-  return engine.renderGraphBlock(report);
-}
+function buildSemanticGraphBlock(files) { return renderFileReport(getSemanticGraph(), 'buildGraphForFiles', 'renderGraphBlock', files); }
 
 /**
  * KPI extractor block — quantitative metrics (label / value / period /
@@ -4451,14 +2852,7 @@ function buildSemanticGraphBlock(files) {
  * "what's the X metric?" / "show me the headline numbers" questions
  * directly to a citeable list instead of re-scanning text.
  */
-function buildKpisBlock(files) {
-  const engine = getKpiExtractor();
-  if (!engine || typeof engine.buildKpisForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildKpisForFiles(list);
-  return engine.renderKpisBlock(report);
-}
+function buildKpisBlock(files) { return renderFileReport(getKpiExtractor(), 'buildKpisForFiles', 'renderKpisBlock', files); }
 
 /**
  * Risk register block — categorised, severity-scored risks across the
@@ -4469,14 +2863,7 @@ function buildKpisBlock(files) {
  * proposes a mitigation. Sits next to the KPI block so the model has
  * both axes (numbers + threats) before the cross-doc synthesis.
  */
-function buildRiskRegisterBlock(files) {
-  const engine = getRiskRegister();
-  if (!engine || typeof engine.buildRegisterForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRegisterForFiles(list);
-  return engine.renderRegisterBlock(report);
-}
+function buildRiskRegisterBlock(files) { return renderFileReport(getRiskRegister(), 'buildRegisterForFiles', 'renderRegisterBlock', files); }
 
 /**
  * Fact-density block — ranks sections by verifiable-anchor density
@@ -4485,14 +2872,7 @@ function buildRiskRegisterBlock(files) {
  * when answering numeric or evidentiary questions instead of treating
  * every section uniformly.
  */
-function buildFactDensityBlock(files) {
-  const engine = getFactDensity();
-  if (!engine || typeof engine.buildDensityForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDensityForFiles(list);
-  return engine.renderDensityBlock(report);
-}
+function buildFactDensityBlock(files) { return renderFileReport(getFactDensity(), 'buildDensityForFiles', 'renderDensityBlock', files); }
 
 /**
  * Document relationships block — pairwise classification (versions /
@@ -4532,14 +2912,7 @@ function buildSectionSimilarityBlock(files) {
  * surfaces statistical claims the model can cite directly when the
  * user asks "what's the average / median / spread?".
  */
-function buildNumericStatisticsBlock(files) {
-  const engine = getNumericStatistics();
-  if (!engine || typeof engine.buildStatisticsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStatisticsForFiles(list);
-  return engine.renderStatisticsBlock(report);
-}
+function buildNumericStatisticsBlock(files) { return renderFileReport(getNumericStatistics(), 'buildStatisticsForFiles', 'renderStatisticsBlock', files); }
 
 /**
  * Quality grade block — letter grade per document (A → F) over seven
@@ -4549,14 +2922,7 @@ function buildNumericStatisticsBlock(files) {
  * not mean the content is correct, only that it's well-structured,
  * sourced, and current.
  */
-function buildQualityGradeBlock(files) {
-  const engine = getQualityGrade();
-  if (!engine || typeof engine.buildGradesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGradesForFiles(list);
-  return engine.renderGradeBlock(report);
-}
+function buildQualityGradeBlock(files) { return renderFileReport(getQualityGrade(), 'buildGradesForFiles', 'renderGradeBlock', files); }
 
 /**
  * Title block — canonical title detected per document. Heuristic
@@ -4564,14 +2930,7 @@ function buildQualityGradeBlock(files) {
  * → filename fallback. Lets the chat cite the document by its
  * human title rather than its filename.
  */
-function buildTitlesBlock(files) {
-  const engine = getTitleExtractor();
-  if (!engine || typeof engine.buildTitlesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTitlesForFiles(list);
-  return engine.renderTitlesBlock(report);
-}
+function buildTitlesBlock(files) { return renderFileReport(getTitleExtractor(), 'buildTitlesForFiles', 'renderTitlesBlock', files); }
 
 /**
  * TL;DR block — three-bullet deterministic executive summary per
@@ -4579,14 +2938,7 @@ function buildTitlesBlock(files) {
  * the top deep-analyzer claim, and the top actionable / decision /
  * risk. Bullets are verbatim sentences so the model can quote them.
  */
-function buildTldrBlock(files) {
-  const engine = getTldr();
-  if (!engine || typeof engine.buildTldrForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTldrForFiles(list);
-  return engine.renderTldrBlock(report);
-}
+function buildTldrBlock(files) { return renderFileReport(getTldr(), 'buildTldrForFiles', 'renderTldrBlock', files); }
 
 /**
  * Sentiment block — per-section polarity surfaced from a positive vs
@@ -4595,14 +2947,7 @@ function buildTldrBlock(files) {
  * single document (neutral intro → very-negative risks → positive
  * conclusion) instead of flattening everything to a single mood.
  */
-function buildSentimentBlock(files) {
-  const engine = getSentiment();
-  if (!engine || typeof engine.buildSentimentForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSentimentForFiles(list);
-  return engine.renderSentimentBlock(report);
-}
+function buildSentimentBlock(files) { return renderFileReport(getSentiment(), 'buildSentimentForFiles', 'renderSentimentBlock', files); }
 
 /**
  * Key phrases block — TF × IDF-light keyphrase ranking across the
@@ -4610,14 +2955,7 @@ function buildSentimentBlock(files) {
  * chat answer "what is this document about?" with the topical anchors
  * already weighted against the rest of the batch.
  */
-function buildKeyPhrasesBlock(files) {
-  const engine = getKeyPhrases();
-  if (!engine || typeof engine.buildKeyPhrasesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildKeyPhrasesForFiles(list);
-  return engine.renderKeyPhrasesBlock(report);
-}
+function buildKeyPhrasesBlock(files) { return renderFileReport(getKeyPhrases(), 'buildKeyPhrasesForFiles', 'renderKeyPhrasesBlock', files); }
 
 /**
  * Obligations block — binding clauses surfaced from contracts /
@@ -4626,14 +2964,7 @@ function buildKeyPhrasesBlock(files) {
  * verbs ("shall", "must", "deberá") + subject attribution + deadline
  * detection. Tags each clause as positive obligation or prohibition.
  */
-function buildObligationsBlock(files) {
-  const engine = getObligations();
-  if (!engine || typeof engine.buildObligationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildObligationsForFiles(list);
-  return engine.renderObligationsBlock(report);
-}
+function buildObligationsBlock(files) { return renderFileReport(getObligations(), 'buildObligationsForFiles', 'renderObligationsBlock', files); }
 
 /**
  * Scope & exclusions block — sentences that explicitly state what is
@@ -4641,14 +2972,7 @@ function buildObligationsBlock(files) {
  * / "what's NOT included?" / "does this cover Y?" by quoting the
  * source boundary directly rather than inferring from prose.
  */
-function buildScopeExclusionsBlock(files) {
-  const engine = getScopeExclusions();
-  if (!engine || typeof engine.buildScopeForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildScopeForFiles(list);
-  return engine.renderScopeBlock(report);
-}
+function buildScopeExclusionsBlock(files) { return renderFileReport(getScopeExclusions(), 'buildScopeForFiles', 'renderScopeBlock', files); }
 
 /**
  * Stakeholder map block — role-based stakeholder counts grouped by
@@ -4657,14 +2981,7 @@ function buildScopeExclusionsBlock(files) {
  * interests dominate each document before answering "who is
  * affected?" / "who decides?".
  */
-function buildStakeholderMapBlock(files) {
-  const engine = getStakeholderMap();
-  if (!engine || typeof engine.buildStakeholderMapForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStakeholderMapForFiles(list);
-  return engine.renderStakeholderBlock(report);
-}
+function buildStakeholderMapBlock(files) { return renderFileReport(getStakeholderMap(), 'buildStakeholderMapForFiles', 'renderStakeholderBlock', files); }
 
 /**
  * Jurisdiction block — surfaces country/sub-national jurisdictions
@@ -4672,14 +2989,7 @@ function buildStakeholderMapBlock(files) {
  * governing-law clauses. Lets the chat answer "which law applies?"
  * "which regulator oversees this?" without re-scanning raw text.
  */
-function buildJurisdictionBlock(files) {
-  const engine = getJurisdictionDetector();
-  if (!engine || typeof engine.buildJurisdictionForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildJurisdictionForFiles(list);
-  return engine.renderJurisdictionBlock(report);
-}
+function buildJurisdictionBlock(files) { return renderFileReport(getJurisdictionDetector(), 'buildJurisdictionForFiles', 'renderJurisdictionBlock', files); }
 
 /**
  * Definitions block — captures formal "X means Y" / "X se define como
@@ -4688,14 +2998,7 @@ function buildJurisdictionBlock(files) {
  * definitions (what those terms mean here) before answering content
  * questions.
  */
-function buildDefinitionsBlock(files) {
-  const engine = getDefinitionsExtractor();
-  if (!engine || typeof engine.buildDefinitionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDefinitionsForFiles(list);
-  return engine.renderDefinitionsBlock(report);
-}
+function buildDefinitionsBlock(files) { return renderFileReport(getDefinitionsExtractor(), 'buildDefinitionsForFiles', 'renderDefinitionsBlock', files); }
 
 /**
  * Cross-reference block — internal pointers ("see Section 4.2",
@@ -4703,14 +3006,7 @@ function buildDefinitionsBlock(files) {
  * across the same document when answering "what does Section X
  * say?" without re-scanning.
  */
-function buildCrossReferenceBlock(files) {
-  const engine = getCrossReference();
-  if (!engine || typeof engine.buildReferencesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildReferencesForFiles(list);
-  return engine.renderReferencesBlock(report);
-}
+function buildCrossReferenceBlock(files) { return renderFileReport(getCrossReference(), 'buildReferencesForFiles', 'renderReferencesBlock', files); }
 
 /**
  * Pricing block — monetary anchors with label / amount / currency /
@@ -4718,14 +3014,7 @@ function buildCrossReferenceBlock(files) {
  * "how much does X cost?" / "what's the rate?" questions to a
  * citeable list rather than re-scanning prose.
  */
-function buildPricingBlock(files) {
-  const engine = getPricingExtractor();
-  if (!engine || typeof engine.buildPricingForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPricingForFiles(list);
-  return engine.renderPricingBlock(report);
-}
+function buildPricingBlock(files) { return renderFileReport(getPricingExtractor(), 'buildPricingForFiles', 'renderPricingBlock', files); }
 
 /**
  * Metadata block — authoring stamps the document itself emits
@@ -4733,14 +3022,7 @@ function buildPricingBlock(files) {
  * reference number). Lets the chat anchor its answer in the
  * document's stated provenance.
  */
-function buildMetadataBlock(files) {
-  const engine = getMetadataExtractor();
-  if (!engine || typeof engine.buildMetadataForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMetadataForFiles(list);
-  return engine.renderMetadataBlock(report);
-}
+function buildMetadataBlock(files) { return renderFileReport(getMetadataExtractor(), 'buildMetadataForFiles', 'renderMetadataBlock', files); }
 
 /**
  * Compliance framework block — explicit mentions of regulated
@@ -4748,14 +3030,7 @@ function buildMetadataBlock(files) {
  * Act / etc.) with a one-line summary so the model speaks to the
  * named framework specifically.
  */
-function buildComplianceBlock(files) {
-  const engine = getComplianceMatcher();
-  if (!engine || typeof engine.buildComplianceForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildComplianceForFiles(list);
-  return engine.renderComplianceBlock(report);
-}
+function buildComplianceBlock(files) { return renderFileReport(getComplianceMatcher(), 'buildComplianceForFiles', 'renderComplianceBlock', files); }
 
 /**
  * Warranties block — express warranties / representations and
@@ -4763,14 +3038,7 @@ function buildComplianceBlock(files) {
  * STATEMENTS OF FACT a party is asserting, vs obligations which
  * compel future action. Helpful for risk allocation analysis.
  */
-function buildWarrantiesBlock(files) {
-  const engine = getWarrantiesExtractor();
-  if (!engine || typeof engine.buildWarrantiesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWarrantiesForFiles(list);
-  return engine.renderWarrantiesBlock(report);
-}
+function buildWarrantiesBlock(files) { return renderFileReport(getWarrantiesExtractor(), 'buildWarrantiesForFiles', 'renderWarrantiesBlock', files); }
 
 /**
  * Dispute resolution block — arbitration / mediation / litigation /
@@ -4778,14 +3046,7 @@ function buildWarrantiesBlock(files) {
  * Completes the legal cluster (obligations + scope + warranties +
  * compliance + jurisdiction) by surfacing how disputes are handled.
  */
-function buildDisputeResolutionBlock(files) {
-  const engine = getDisputeResolution();
-  if (!engine || typeof engine.buildDisputesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDisputesForFiles(list);
-  return engine.renderDisputesBlock(report);
-}
+function buildDisputeResolutionBlock(files) { return renderFileReport(getDisputeResolution(), 'buildDisputesForFiles', 'renderDisputesBlock', files); }
 
 /**
  * Indemnification & liability block — captures clauses that allocate
@@ -4794,14 +3055,7 @@ function buildDisputeResolutionBlock(files) {
  * damages). Lets the chat answer "who bears the cost if X goes
  * wrong?" with citeable clauses.
  */
-function buildIndemnificationBlock(files) {
-  const engine = getIndemnification();
-  if (!engine || typeof engine.buildIndemnificationForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIndemnificationForFiles(list);
-  return engine.renderIndemnificationBlock(report);
-}
+function buildIndemnificationBlock(files) { return renderFileReport(getIndemnification(), 'buildIndemnificationForFiles', 'renderIndemnificationBlock', files); }
 
 /**
  * Acronyms block — acronym ↔ expanded-form mappings as DECLARED by
@@ -4809,14 +3063,7 @@ function buildIndemnificationBlock(files) {
  * Overrides external dictionaries when the user asks "what does X
  * stand for?".
  */
-function buildAcronymsBlock(files) {
-  const engine = getAcronymExpansion();
-  if (!engine || typeof engine.buildAcronymsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAcronymsForFiles(list);
-  return engine.renderAcronymsBlock(report);
-}
+function buildAcronymsBlock(files) { return renderFileReport(getAcronymExpansion(), 'buildAcronymsForFiles', 'renderAcronymsBlock', files); }
 
 /**
  * Temporal expressions block — RELATIVE time anchors (today / next
@@ -4825,14 +3072,7 @@ function buildAcronymsBlock(files) {
  * surfacing the soft time anchors documents lean on when speaking
  * about plans, forecasts and commitments.
  */
-function buildTemporalExpressionsBlock(files) {
-  const engine = getTemporalExpressions();
-  if (!engine || typeof engine.buildExpressionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildExpressionsForFiles(list);
-  return engine.renderExpressionsBlock(report);
-}
+function buildTemporalExpressionsBlock(files) { return renderFileReport(getTemporalExpressions(), 'buildExpressionsForFiles', 'renderExpressionsBlock', files); }
 
 /**
  * Cross-file numeric comparison block — side-by-side leaderboard for
@@ -4855,14 +3095,7 @@ function buildCrossNumericBlock(files) {
  * answer "who signed this and on behalf of whom?" with verbatim
  * lines instead of inference from prose.
  */
-function buildSignatureBlocksBlock(files) {
-  const engine = getSignatureBlock();
-  if (!engine || typeof engine.buildSignaturesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSignaturesForFiles(list);
-  return engine.renderSignaturesBlock(report);
-}
+function buildSignatureBlocksBlock(files) { return renderFileReport(getSignatureBlock(), 'buildSignaturesForFiles', 'renderSignaturesBlock', files); }
 
 /**
  * Q&A pairs block — explicit question + answer pairs from FAQs /
@@ -4870,14 +3103,7 @@ function buildSignatureBlocksBlock(files) {
  * answer verbatim when the user's question semantically matches one
  * already in the source, rather than re-synthesising the answer.
  */
-function buildQaPairsBlock(files) {
-  const engine = getQaPairs();
-  if (!engine || typeof engine.buildQaForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildQaForFiles(list);
-  return engine.renderQaBlock(report);
-}
+function buildQaPairsBlock(files) { return renderFileReport(getQaPairs(), 'buildQaForFiles', 'renderQaBlock', files); }
 
 /**
  * Hypotheses block — research hypotheses, null hypotheses, and
@@ -4885,14 +3111,7 @@ function buildQaPairsBlock(files) {
  * the chat answer "what is the document testing?" with citeable
  * statements instead of synthesising from prose.
  */
-function buildHypothesesBlock(files) {
-  const engine = getHypotheses();
-  if (!engine || typeof engine.buildHypothesesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHypothesesForFiles(list);
-  return engine.renderHypothesesBlock(report);
-}
+function buildHypothesesBlock(files) { return renderFileReport(getHypotheses(), 'buildHypothesesForFiles', 'renderHypothesesBlock', files); }
 
 /**
  * Recommendations block — explicit "we recommend / suggest" sentences
@@ -4900,14 +3119,7 @@ function buildHypothesesBlock(files) {
  * deep-analyzer actions (generic): these are SUGGESTED courses of
  * action the author explicitly proposes.
  */
-function buildRecommendationsBlock(files) {
-  const engine = getRecommendations();
-  if (!engine || typeof engine.buildRecommendationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRecommendationsForFiles(list);
-  return engine.renderRecommendationsBlock(report);
-}
+function buildRecommendationsBlock(files) { return renderFileReport(getRecommendations(), 'buildRecommendationsForFiles', 'renderRecommendationsBlock', files); }
 
 /**
  * Assumptions block — "we assume / suponemos / under the assumption
@@ -4916,56 +3128,28 @@ function buildRecommendationsBlock(files) {
  * mental model so the chat treats the document's claims as
  * conditional on these premises.
  */
-function buildAssumptionsBlock(files) {
-  const engine = getAssumptions();
-  if (!engine || typeof engine.buildAssumptionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAssumptionsForFiles(list);
-  return engine.renderAssumptionsBlock(report);
-}
+function buildAssumptionsBlock(files) { return renderFileReport(getAssumptions(), 'buildAssumptionsForFiles', 'renderAssumptionsBlock', files); }
 
 /**
  * Conditional clauses block — "if … then", "unless", "provided that",
  * "in the event of", "subject to", "failing which". Routes
  * "what happens if X?" questions to citeable trigger sentences.
  */
-function buildConditionalClausesBlock(files) {
-  const engine = getConditionalClauses();
-  if (!engine || typeof engine.buildConditionalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildConditionalsForFiles(list);
-  return engine.renderConditionalsBlock(report);
-}
+function buildConditionalClausesBlock(files) { return renderFileReport(getConditionalClauses(), 'buildConditionalsForFiles', 'renderConditionalsBlock', files); }
 
 /**
  * Counter-arguments block — sentences that introduce a contrasting
  * view, exception or caveat. Lets the chat answer "what are the
  * objections?" / "what's the counter-view?" with citeable sentences.
  */
-function buildCounterArgumentsBlock(files) {
-  const engine = getCounterArguments();
-  if (!engine || typeof engine.buildCounterArgumentsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCounterArgumentsForFiles(list);
-  return engine.renderCounterArgumentsBlock(report);
-}
+function buildCounterArgumentsBlock(files) { return renderFileReport(getCounterArguments(), 'buildCounterArgumentsForFiles', 'renderCounterArgumentsBlock', files); }
 
 /**
  * Calls-to-action block — reader-directed imperatives (sign up /
  * subscribe / register / regístrate / suscríbete). Urgency tag set
  * when "now / today / limited time" qualifiers are present.
  */
-function buildCallsToActionBlock(files) {
-  const engine = getCallToAction();
-  if (!engine || typeof engine.buildCTAsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCTAsForFiles(list);
-  return engine.renderCTAsBlock(report);
-}
+function buildCallsToActionBlock(files) { return renderFileReport(getCallToAction(), 'buildCTAsForFiles', 'renderCTAsBlock', files); }
 
 /**
  * Required disclosures block — forward-looking statements, safe-
@@ -4974,14 +3158,7 @@ function buildCallsToActionBlock(files) {
  * chat has the full set of disclaimers the document carries before
  * any cross-document synthesis.
  */
-function buildDisclosuresBlock(files) {
-  const engine = getDisclosures();
-  if (!engine || typeof engine.buildDisclosuresForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDisclosuresForFiles(list);
-  return engine.renderDisclosuresBlock(report);
-}
+function buildDisclosuresBlock(files) { return renderFileReport(getDisclosures(), 'buildDisclosuresForFiles', 'renderDisclosuresBlock', files); }
 
 /**
  * Fact vs opinion block — separates sentences into verifiable facts
@@ -4990,14 +3167,7 @@ function buildDisclosuresBlock(files) {
  * chat distinguish "what's verifiable" from "what's the author's
  * view".
  */
-function buildFactVsOpinionBlock(files) {
-  const engine = getFactVsOpinion();
-  if (!engine || typeof engine.buildClassificationForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildClassificationForFiles(list);
-  return engine.renderClassificationBlock(report);
-}
+function buildFactVsOpinionBlock(files) { return renderFileReport(getFactVsOpinion(), 'buildClassificationForFiles', 'renderClassificationBlock', files); }
 
 /**
  * Scenarios block — scenario-planning language (best / worst / base
@@ -5005,14 +3175,7 @@ function buildFactVsOpinionBlock(files) {
  * "what scenarios does the document model?" / "what's the worst
  * case?" with citeable trigger sentences.
  */
-function buildScenariosBlock(files) {
-  const engine = getScenarios();
-  if (!engine || typeof engine.buildScenariosForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildScenariosForFiles(list);
-  return engine.renderScenariosBlock(report);
-}
+function buildScenariosBlock(files) { return renderFileReport(getScenarios(), 'buildScenariosForFiles', 'renderScenariosBlock', files); }
 
 /**
  * Benchmarks block — comparison / reference points ("vs competitor",
@@ -5020,28 +3183,14 @@ function buildScenariosBlock(files) {
  * the chat answer "how does X compare to Y?" with citeable trigger
  * sentences.
  */
-function buildBenchmarksBlock(files) {
-  const engine = getBenchmarks();
-  if (!engine || typeof engine.buildBenchmarksForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBenchmarksForFiles(list);
-  return engine.renderBenchmarksBlock(report);
-}
+function buildBenchmarksBlock(files) { return renderFileReport(getBenchmarks(), 'buildBenchmarksForFiles', 'renderBenchmarksBlock', files); }
 
 /**
  * Goals & targets block — explicit objective / OKR / target / KR
  * statements. Different from action items (operational TODOs) and
  * recommendations (suggestions): these are aspirational commitments.
  */
-function buildGoalsTargetsBlock(files) {
-  const engine = getGoalsTargets();
-  if (!engine || typeof engine.buildGoalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGoalsForFiles(list);
-  return engine.renderGoalsBlock(report);
-}
+function buildGoalsTargetsBlock(files) { return renderFileReport(getGoalsTargets(), 'buildGoalsForFiles', 'renderGoalsBlock', files); }
 
 /**
  * SLA terms block — service-level commitments (uptime / response /
@@ -5049,14 +3198,7 @@ function buildGoalsTargetsBlock(files) {
  * "what's the uptime SLA?" / "what's the credit policy?" with
  * quantitative source sentences.
  */
-function buildSLATermsBlock(files) {
-  const engine = getSLATerms();
-  if (!engine || typeof engine.buildSLATermsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSLATermsForFiles(list);
-  return engine.renderSLATermsBlock(report);
-}
+function buildSLATermsBlock(files) { return renderFileReport(getSLATerms(), 'buildSLATermsForFiles', 'renderSLATermsBlock', files); }
 
 /**
  * Data-classification block — document-level labels (Confidential /
@@ -5064,14 +3206,7 @@ function buildSLATermsBlock(files) {
  * / TLP Red/Amber/Green/White). Lets the chat respect the source's
  * handling policy when answering.
  */
-function buildDataClassificationBlock(files) {
-  const engine = getDataClassification();
-  if (!engine || typeof engine.buildClassificationForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildClassificationForFiles(list);
-  return engine.renderClassificationBlock(report);
-}
+function buildDataClassificationBlock(files) { return renderFileReport(getDataClassification(), 'buildClassificationForFiles', 'renderClassificationBlock', files); }
 
 /**
  * Approval-workflow block — Drafted by / Reviewed by / Approved by /
@@ -5079,14 +3214,7 @@ function buildDataClassificationBlock(files) {
  * Different from the signature-block detector (legal tail sign-off):
  * this surfaces workflow STAGES in change-control headers.
  */
-function buildApprovalWorkflowBlock(files) {
-  const engine = getApprovalWorkflow();
-  if (!engine || typeof engine.buildApprovalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildApprovalsForFiles(list);
-  return engine.renderApprovalsBlock(report);
-}
+function buildApprovalWorkflowBlock(files) { return renderFileReport(getApprovalWorkflow(), 'buildApprovalsForFiles', 'renderApprovalsBlock', files); }
 
 /**
  * Executive summary block — single-card per-file synthesis combining
@@ -5094,56 +3222,28 @@ function buildApprovalWorkflowBlock(files) {
  * chat opens analytical answers with this block before diving into
  * per-axis detail.
  */
-function buildExecutiveSummaryBlock(files) {
-  const engine = getExecutiveSummary();
-  if (!engine || typeof engine.buildExecutiveSummaryForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildExecutiveSummaryForFiles(list);
-  return engine.renderExecutiveSummaryBlock(report);
-}
+function buildExecutiveSummaryBlock(files) { return renderFileReport(getExecutiveSummary(), 'buildExecutiveSummaryForFiles', 'renderExecutiveSummaryBlock', files); }
 
 /**
  * URLs & links block — HTTP(S) URLs + markdown links with anchor /
  * context. Lets the chat answer "what URLs does the document
  * reference?" with citeable verbatim links.
  */
-function buildUrlsBlock(files) {
-  const engine = getUrlExtractor();
-  if (!engine || typeof engine.buildURLsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildURLsForFiles(list);
-  return engine.renderURLsBlock(report);
-}
+function buildUrlsBlock(files) { return renderFileReport(getUrlExtractor(), 'buildURLsForFiles', 'renderURLsBlock', files); }
 
 /**
  * Contacts block — emails, phones, social handles, addresses. Both
  * raw + masked variants are shown so the chat can echo the masked
  * form when the user's question doesn't require the raw value.
  */
-function buildContactsBlock(files) {
-  const engine = getContactInfo();
-  if (!engine || typeof engine.buildContactsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildContactsForFiles(list);
-  return engine.renderContactsBlock(report);
-}
+function buildContactsBlock(files) { return renderFileReport(getContactInfo(), 'buildContactsForFiles', 'renderContactsBlock', files); }
 
 /**
  * Footnotes block — markdown / numbered footnote definitions paired
  * with their markers. Routes "what does footnote N say?" to a
  * citeable marker→body table.
  */
-function buildFootnotesBlock(files) {
-  const engine = getFootnotes();
-  if (!engine || typeof engine.buildFootnotesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFootnotesForFiles(list);
-  return engine.renderFootnotesBlock(report);
-}
+function buildFootnotesBlock(files) { return renderFileReport(getFootnotes(), 'buildFootnotesForFiles', 'renderFootnotesBlock', files); }
 
 /**
  * Markdown tables block — surfaces embedded markdown tables with
@@ -5151,28 +3251,14 @@ function buildFootnotesBlock(files) {
  * verbatim. Different from the evidence-map block which extracts
  * table previews from spreadsheet attachments via DB hydration.
  */
-function buildTablesBlock(files) {
-  const engine = getTables();
-  if (!engine || typeof engine.buildTablesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTablesForFiles(list);
-  return engine.renderTablesBlock(report);
-}
+function buildTablesBlock(files) { return renderFileReport(getTables(), 'buildTablesForFiles', 'renderTablesBlock', files); }
 
 /**
  * Code-blocks block — fenced code blocks (\`\`\`language) with a
  * 12-line preview. Useful for technical / SDK / runbook docs;
  * empty for prose-only files.
  */
-function buildCodeBlocksBlock(files) {
-  const engine = getCodeBlocks();
-  if (!engine || typeof engine.buildCodeBlocksForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCodeBlocksForFiles(list);
-  return engine.renderCodeBlocksBlock(report);
-}
+function buildCodeBlocksBlock(files) { return renderFileReport(getCodeBlocks(), 'buildCodeBlocksForFiles', 'renderCodeBlocksBlock', files); }
 
 /**
  * Figure / table references block — Figure / Table / Chart /
@@ -5180,14 +3266,7 @@ function buildCodeBlocksBlock(files) {
  * Different from cross-references (Section / Article pointers):
  * targets visual / artefact references with optional captions.
  */
-function buildFigureRefsBlock(files) {
-  const engine = getFigureRefs();
-  if (!engine || typeof engine.buildFigureRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFigureRefsForFiles(list);
-  return engine.renderFigureRefsBlock(report);
-}
+function buildFigureRefsBlock(files) { return renderFileReport(getFigureRefs(), 'buildFigureRefsForFiles', 'renderFigureRefsBlock', files); }
 
 /**
  * Checklists block — markdown checkbox items grouped under their
@@ -5195,42 +3274,21 @@ function buildFigureRefsBlock(files) {
  * "what's still pending?" / "what's been done?" to source-marked
  * bullets instead of inference.
  */
-function buildChecklistsBlock(files) {
-  const engine = getChecklists();
-  if (!engine || typeof engine.buildChecklistsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildChecklistsForFiles(list);
-  return engine.renderChecklistsBlock(report);
-}
+function buildChecklistsBlock(files) { return renderFileReport(getChecklists(), 'buildChecklistsForFiles', 'renderChecklistsBlock', files); }
 
 /**
  * Identifiers block — standardised IDs (ISBN, DOI, arXiv, PMID,
  * ticker, CUSIP, CIK, ISIN, UUID, ARN, CVE, RFC). Routes "what's
  * the document ID?" to a citeable list.
  */
-function buildIdentifiersBlock(files) {
-  const engine = getIdentifiers();
-  if (!engine || typeof engine.buildIdentifiersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIdentifiersForFiles(list);
-  return engine.renderIdentifiersBlock(report);
-}
+function buildIdentifiersBlock(files) { return renderFileReport(getIdentifiers(), 'buildIdentifiersForFiles', 'renderIdentifiersBlock', files); }
 
 /**
  * Bullet lists block — markdown bullets / numbered lists grouped
  * under their heading. Surfaces source-structured lists verbatim
  * (skips checkbox items since those go in the checklists block).
  */
-function buildBulletListsBlock(files) {
-  const engine = getBulletLists();
-  if (!engine || typeof engine.buildBulletListsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBulletListsForFiles(list);
-  return engine.renderBulletListsBlock(report);
-}
+function buildBulletListsBlock(files) { return renderFileReport(getBulletLists(), 'buildBulletListsForFiles', 'renderBulletListsBlock', files); }
 
 /**
  * Mermaid diagrams block — surfaces fenced ```mermaid blocks with
@@ -5240,14 +3298,7 @@ function buildBulletListsBlock(files) {
  * Routes "what does the diagram show?" / "is there a flowchart?"
  * to a structured citeable preview.
  */
-function buildMermaidBlock(files) {
-  const engine = getMermaid();
-  if (!engine || typeof engine.buildMermaidForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMermaidForFiles(list);
-  return engine.renderMermaidBlock(report);
-}
+function buildMermaidBlock(files) { return renderFileReport(getMermaid(), 'buildMermaidForFiles', 'renderMermaidBlock', files); }
 
 /**
  * Priorities block — surfaces priority/severity markers (P0–P4,
@@ -5256,14 +3307,7 @@ function buildMermaidBlock(files) {
  * level (critical/high/medium/low/trivial) and citeable context.
  * Routes "what are the critical items?" to a structured citeable list.
  */
-function buildPrioritiesBlock(files) {
-  const engine = getPriority();
-  if (!engine || typeof engine.buildPrioritiesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPrioritiesForFiles(list);
-  return engine.renderPrioritiesBlock(report);
-}
+function buildPrioritiesBlock(files) { return renderFileReport(getPriority(), 'buildPrioritiesForFiles', 'renderPrioritiesBlock', files); }
 
 /**
  * Ownership block — per-document role attributions (Owner/DRI,
@@ -5271,14 +3315,7 @@ function buildPrioritiesBlock(files) {
  * Stakeholder, Lead/Driver) including Spanish equivalents.
  * Routes "who owns this?" / "who's the DRI?" to a citeable list.
  */
-function buildOwnershipBlock(files) {
-  const engine = getOwnership();
-  if (!engine || typeof engine.buildOwnershipForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOwnershipForFiles(list);
-  return engine.renderOwnershipBlock(report);
-}
+function buildOwnershipBlock(files) { return renderFileReport(getOwnership(), 'buildOwnershipForFiles', 'renderOwnershipBlock', files); }
 
 /**
  * Timestamps block — machine-format ISO 8601 datetimes + dates,
@@ -5288,14 +3325,7 @@ function buildOwnershipBlock(files) {
  * SLAs. Routes "when did X happen?" / "how long is the SLA?" to
  * a structured citeable list.
  */
-function buildTimestampsBlock(files) {
-  const engine = getTimestamps();
-  if (!engine || typeof engine.buildTimestampsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTimestampsForFiles(list);
-  return engine.renderTimestampsBlock(report);
-}
+function buildTimestampsBlock(files) { return renderFileReport(getTimestamps(), 'buildTimestampsForFiles', 'renderTimestampsBlock', files); }
 
 /**
  * Status / lifecycle block — Status / Stage / Lifecycle / State lines
@@ -5304,14 +3334,7 @@ function buildTimestampsBlock(files) {
  * pre-release). Routes "is this approved?" / "what's the status?" to
  * a citeable signal.
  */
-function buildStatusBlock(files) {
-  const engine = getStatus();
-  if (!engine || typeof engine.buildStatusForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStatusForFiles(list);
-  return engine.renderStatusBlock(report);
-}
+function buildStatusBlock(files) { return renderFileReport(getStatus(), 'buildStatusForFiles', 'renderStatusBlock', files); }
 
 /**
  * Acceptance criteria block — Gherkin scenarios (Scenario / Background
@@ -5320,14 +3343,7 @@ function buildStatusBlock(files) {
  * acceptance criteria?" / "what are the test scenarios?" to a citeable
  * structure.
  */
-function buildAcceptanceCriteriaBlock(files) {
-  const engine = getAcceptanceCriteria();
-  if (!engine || typeof engine.buildAcceptanceCriteriaForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAcceptanceCriteriaForFiles(list);
-  return engine.renderAcceptanceCriteriaBlock(report);
-}
+function buildAcceptanceCriteriaBlock(files) { return renderFileReport(getAcceptanceCriteria(), 'buildAcceptanceCriteriaForFiles', 'renderAcceptanceCriteriaBlock', files); }
 
 /**
  * API endpoints block — HTTP method + path references surfaced from
@@ -5336,14 +3352,7 @@ function buildAcceptanceCriteriaBlock(files) {
  * does this expose?" / "is there a POST /api/x?" to a citeable
  * inventory.
  */
-function buildApiEndpointsBlock(files) {
-  const engine = getApiEndpoints();
-  if (!engine || typeof engine.buildApiEndpointsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildApiEndpointsForFiles(list);
-  return engine.renderApiEndpointsBlock(report);
-}
+function buildApiEndpointsBlock(files) { return renderFileReport(getApiEndpoints(), 'buildApiEndpointsForFiles', 'renderApiEndpointsBlock', files); }
 
 /**
  * Env vars block — SCREAMING_SNAKE_CASE tokens referenced as
@@ -5353,14 +3362,7 @@ function buildApiEndpointsBlock(files) {
  * "what env vars does this need?" / "what config does it expect?"
  * to a citeable inventory.
  */
-function buildEnvVarsBlock(files) {
-  const engine = getEnvVars();
-  if (!engine || typeof engine.buildEnvVarsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEnvVarsForFiles(list);
-  return engine.renderEnvVarsBlock(report);
-}
+function buildEnvVarsBlock(files) { return renderFileReport(getEnvVars(), 'buildEnvVarsForFiles', 'renderEnvVarsBlock', files); }
 
 /**
  * SQL block — classifies SQL statements detected in the document(s)
@@ -5368,14 +3370,7 @@ function buildEnvVarsBlock(files) {
  * applicable. Routes "what tables does this touch?" / "is there a
  * DDL change?" to a citeable inventory.
  */
-function buildSqlBlock(files) {
-  const engine = getSql();
-  if (!engine || typeof engine.buildSqlForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSqlForFiles(list);
-  return engine.renderSqlBlock(report);
-}
+function buildSqlBlock(files) { return renderFileReport(getSql(), 'buildSqlForFiles', 'renderSqlBlock', files); }
 
 /**
  * File paths block — filesystem paths (POSIX absolute,
@@ -5383,28 +3378,14 @@ function buildSqlBlock(files) {
  * Windows absolute). Different from API endpoints and URLs.
  * Routes "what files does this reference?" to a citeable inventory.
  */
-function buildFilePathsBlock(files) {
-  const engine = getFilePaths();
-  if (!engine || typeof engine.buildFilePathsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFilePathsForFiles(list);
-  return engine.renderFilePathsBlock(report);
-}
+function buildFilePathsBlock(files) { return renderFileReport(getFilePaths(), 'buildFilePathsForFiles', 'renderFilePathsBlock', files); }
 
 /**
  * Cron block — 5/6/7-field cron expressions + named expressions
  * (@daily / @hourly / etc.) + K8s/YAML schedule: lines. Routes
  * "when does this run?" / "what's the schedule?" to a citeable list.
  */
-function buildCronBlock(files) {
-  const engine = getCron();
-  if (!engine || typeof engine.buildCronForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCronForFiles(list);
-  return engine.renderCronBlock(report);
-}
+function buildCronBlock(files) { return renderFileReport(getCron(), 'buildCronForFiles', 'renderCronBlock', files); }
 
 /**
  * Licenses block — SPDX identifiers, SPDX-License-Identifier headers,
@@ -5412,14 +3393,7 @@ function buildCronBlock(files) {
  * Reserved" declarations. Routes "what license is this under?" /
  * "who holds the copyright?" to a citeable inventory.
  */
-function buildLicensesBlock(files) {
-  const engine = getLicenses();
-  if (!engine || typeof engine.buildLicensesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLicensesForFiles(list);
-  return engine.renderLicensesBlock(report);
-}
+function buildLicensesBlock(files) { return renderFileReport(getLicenses(), 'buildLicensesForFiles', 'renderLicensesBlock', files); }
 
 /**
  * Dependencies block — package declarations across npm/pip/cargo/
@@ -5427,14 +3401,7 @@ function buildLicensesBlock(files) {
  * dependencies does this use?" / "what version of X?" to a citeable
  * inventory.
  */
-function buildDependenciesBlock(files) {
-  const engine = getDependencies();
-  if (!engine || typeof engine.buildDependenciesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDependenciesForFiles(list);
-  return engine.renderDependenciesBlock(report);
-}
+function buildDependenciesBlock(files) { return renderFileReport(getDependencies(), 'buildDependenciesForFiles', 'renderDependenciesBlock', files); }
 
 /**
  * Risk matrix block — likelihood/impact pairings and numeric risk
@@ -5442,14 +3409,7 @@ function buildDependenciesBlock(files) {
  * "what's the risk score?" / "what's the likelihood/impact?" to a
  * citeable matrix. Different from priority/severity (ticket-level).
  */
-function buildRiskMatrixBlock(files) {
-  const engine = getRiskMatrix();
-  if (!engine || typeof engine.buildRiskMatrixForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRiskMatrixForFiles(list);
-  return engine.renderRiskMatrixBlock(report);
-}
+function buildRiskMatrixBlock(files) { return renderFileReport(getRiskMatrix(), 'buildRiskMatrixForFiles', 'renderRiskMatrixBlock', files); }
 
 /**
  * Versions block — SemVer, labeled "Version: X.Y.Z" lines, release
@@ -5457,14 +3417,7 @@ function buildRiskMatrixBlock(files) {
  * on document-level versioning. Routes "what version is this?" /
  * "what's the latest release?" to a citeable list.
  */
-function buildVersionsBlock(files) {
-  const engine = getVersions();
-  if (!engine || typeof engine.buildVersionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildVersionsForFiles(list);
-  return engine.renderVersionsBlock(report);
-}
+function buildVersionsBlock(files) { return renderFileReport(getVersions(), 'buildVersionsForFiles', 'renderVersionsBlock', files); }
 
 /**
  * Decision records block — ADR-shaped fields (Decision / Context /
@@ -5472,56 +3425,28 @@ function buildVersionsBlock(files) {
  * and Spanish. Routes "what's the decision?", "why was this decided?",
  * "what are the alternatives?" to a citeable record.
  */
-function buildDecisionRecordsBlock(files) {
-  const engine = getDecisionRecords();
-  if (!engine || typeof engine.buildDecisionRecordsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDecisionRecordsForFiles(list);
-  return engine.renderDecisionRecordsBlock(report);
-}
+function buildDecisionRecordsBlock(files) { return renderFileReport(getDecisionRecords(), 'buildDecisionRecordsForFiles', 'renderDecisionRecordsBlock', files); }
 
 /**
  * Domains block — bare domain names (no scheme, no path). Validated
  * against a curated TLD list. Different from URLs (scheme+path) and
  * emails. Routes "what domains does this reference?" to a citeable list.
  */
-function buildDomainsBlock(files) {
-  const engine = getDomains();
-  if (!engine || typeof engine.buildDomainsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDomainsForFiles(list);
-  return engine.renderDomainsBlock(report);
-}
+function buildDomainsBlock(files) { return renderFileReport(getDomains(), 'buildDomainsForFiles', 'renderDomainsBlock', files); }
 
 /**
  * Currency block — monetary amounts with currency tags (symbol-prefix,
  * ISO-suffix, ISO-prefix). Different from pricing (named tiers) and
  * numeric stats. Routes "what amount?" / "how much?" to a list.
  */
-function buildCurrencyBlock(files) {
-  const engine = getCurrency();
-  if (!engine || typeof engine.buildCurrencyForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCurrencyForFiles(list);
-  return engine.renderCurrencyBlock(report);
-}
+function buildCurrencyBlock(files) { return renderFileReport(getCurrency(), 'buildCurrencyForFiles', 'renderCurrencyBlock', files); }
 
 /**
  * Percentages block — numeric (12%, +15%), word-form (12 percent /
  * por ciento), percentage-points, basis-points. Routes "what's the
  * rate?" / "what percentage?" to a citeable inventory.
  */
-function buildPercentagesBlock(files) {
-  const engine = getPercentages();
-  if (!engine || typeof engine.buildPercentagesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPercentagesForFiles(list);
-  return engine.renderPercentagesBlock(report);
-}
+function buildPercentagesBlock(files) { return renderFileReport(getPercentages(), 'buildPercentagesForFiles', 'renderPercentagesBlock', files); }
 
 /**
  * Citations block — academic citation patterns (numeric, bracketed
@@ -5530,28 +3455,14 @@ function buildPercentagesBlock(files) {
  * references are cited?" / "is this peer-reviewed?" to a citeable
  * inventory.
  */
-function buildCitationsBlock(files) {
-  const engine = getCitations();
-  if (!engine || typeof engine.buildCitationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCitationsForFiles(list);
-  return engine.renderCitationsBlock(report);
-}
+function buildCitationsBlock(files) { return renderFileReport(getCitations(), 'buildCitationsForFiles', 'renderCitationsBlock', files); }
 
 /**
  * Colors block — hex / RGB / HSL / Tailwind / named CSS colors.
  * Routes "what colors does this use?" / "what's the brand palette?"
  * to a citeable inventory.
  */
-function buildColorsBlock(files) {
-  const engine = getColors();
-  if (!engine || typeof engine.buildColorsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildColorsForFiles(list);
-  return engine.renderColorsBlock(report);
-}
+function buildColorsBlock(files) { return renderFileReport(getColors(), 'buildColorsForFiles', 'renderColorsBlock', files); }
 
 /**
  * Coordinates block — geographic coordinates (decimal lat/lng,
@@ -5559,40 +3470,19 @@ function buildColorsBlock(files) {
  * Validated against lat/lng ranges. Routes "where is this?" /
  * "what coordinates?" to a citeable list.
  */
-function buildCoordinatesBlock(files) {
-  const engine = getCoordinates();
-  if (!engine || typeof engine.buildCoordinatesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCoordinatesForFiles(list);
-  return engine.renderCoordinatesBlock(report);
-}
+function buildCoordinatesBlock(files) { return renderFileReport(getCoordinates(), 'buildCoordinatesForFiles', 'renderCoordinatesBlock', files); }
 
 /**
  * Trademark block — inline TM/®/℠/© symbols + attribution lines.
  * Routes "what trademarks / brand marks?" to a citeable list.
  */
-function buildTrademarkBlock(files) {
-  const engine = getTrademark();
-  if (!engine || typeof engine.buildTrademarkForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTrademarkForFiles(list);
-  return engine.renderTrademarkBlock(report);
-}
+function buildTrademarkBlock(files) { return renderFileReport(getTrademark(), 'buildTrademarkForFiles', 'renderTrademarkBlock', files); }
 
 /**
  * Hashtags block — social-style hashtags + handles (Twitter,
  * Bluesky, Fediverse). Routes "what hashtags?" / "who's mentioned?".
  */
-function buildHashtagsBlock(files) {
-  const engine = getHashtags();
-  if (!engine || typeof engine.buildHashtagsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHashtagsForFiles(list);
-  return engine.renderHashtagsBlock(report);
-}
+function buildHashtagsBlock(files) { return renderFileReport(getHashtags(), 'buildHashtagsForFiles', 'renderHashtagsBlock', files); }
 
 /**
  * Section labels block — numbered references (Section / § /
@@ -5600,2114 +3490,595 @@ function buildHashtagsBlock(files) {
  * including Spanish equivalents. Routes "what's Section X?" / "what
  * does Article 5 say?" to a citeable inventory.
  */
-function buildSectionLabelsBlock(files) {
-  const engine = getSectionLabels();
-  if (!engine || typeof engine.buildSectionLabelsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSectionLabelsForFiles(list);
-  return engine.renderSectionLabelsBlock(report);
-}
+function buildSectionLabelsBlock(files) { return renderFileReport(getSectionLabels(), 'buildSectionLabelsForFiles', 'renderSectionLabelsBlock', files); }
 
 /**
  * Sign-offs block — letter/email closing salutations (Sincerely,
  * Regards, Cheers, Atentamente, Saludos cordiales, …) + following
  * name. Routes "who signed?" / "what's the closing?".
  */
-function buildSignoffsBlock(files) {
-  const engine = getSignoffs();
-  if (!engine || typeof engine.buildSignoffsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSignoffsForFiles(list);
-  return engine.renderSignoffsBlock(report);
-}
+function buildSignoffsBlock(files) { return renderFileReport(getSignoffs(), 'buildSignoffsForFiles', 'renderSignoffsBlock', files); }
 
 /**
  * Hashes block — cryptographic hex digests classified by length
  * (MD5/SHA-1/SHA-256/SHA-512/BLAKE). Routes "what's the hash?".
  */
-function buildHashesBlock(files) {
-  const engine = getHashes();
-  if (!engine || typeof engine.buildHashesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHashesForFiles(list);
-  return engine.renderHashesBlock(report);
-}
+function buildHashesBlock(files) { return renderFileReport(getHashes(), 'buildHashesForFiles', 'renderHashesBlock', files); }
 
 /**
  * Coupons block — promo / discount / voucher codes (labeled and
  * use-phrase forms). Routes "what's the promo code?" / "what discount?".
  */
-function buildCouponsBlock(files) {
-  const engine = getCoupons();
-  if (!engine || typeof engine.buildCouponsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCouponsForFiles(list);
-  return engine.renderCouponsBlock(report);
-}
+function buildCouponsBlock(files) { return renderFileReport(getCoupons(), 'buildCouponsForFiles', 'renderCouponsBlock', files); }
 
 /**
  * File sizes block — KB/MB/GB/TB plus IEC binary variants and
  * bandwidth units. Routes "how big?" / "capacity?" / "throughput?".
  */
-function buildFileSizesBlock(files) {
-  const engine = getFileSizes();
-  if (!engine || typeof engine.buildFileSizesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFileSizesForFiles(list);
-  return engine.renderFileSizesBlock(report);
-}
+function buildFileSizesBlock(files) { return renderFileReport(getFileSizes(), 'buildFileSizesForFiles', 'renderFileSizesBlock', files); }
 
 /**
  * VCS refs block — commit SHAs, PR / issue numbers, owner/repo,
  * branches, tags. Routes "what commit?" / "what PR?" / "what branch?".
  */
-function buildVcsRefsBlock(files) {
-  const engine = getVcsRefs();
-  if (!engine || typeof engine.buildVcsRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildVcsRefsForFiles(list);
-  return engine.renderVcsRefsBlock(report);
-}
+function buildVcsRefsBlock(files) { return renderFileReport(getVcsRefs(), 'buildVcsRefsForFiles', 'renderVcsRefsBlock', files); }
 
 /**
  * Standards block — ISO / ANSI / IEEE / RFC / NIST / W3C / EN /
  * DIN / PCI-DSS / SOC 1-3 / compliance abbreviations. Routes
  * "what standards?" / "is this ISO 27001 compliant?".
  */
-function buildStandardsBlock(files) {
-  const engine = getStandards();
-  if (!engine || typeof engine.buildStandardsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStandardsForFiles(list);
-  return engine.renderStandardsBlock(report);
-}
+function buildStandardsBlock(files) { return renderFileReport(getStandards(), 'buildStandardsForFiles', 'renderStandardsBlock', files); }
 
 /**
  * Network block — IPv4 / IPv6 (with CIDR), MAC, ports. Routes
  * "what IP / port / network?".
  */
-function buildNetworkBlock(files) {
-  const engine = getNetwork();
-  if (!engine || typeof engine.buildNetworkForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNetworkForFiles(list);
-  return engine.renderNetworkBlock(report);
-}
+function buildNetworkBlock(files) { return renderFileReport(getNetwork(), 'buildNetworkForFiles', 'renderNetworkBlock', files); }
 
 /**
  * HTTP status block — 1xx/2xx/3xx/4xx/5xx codes with semantic class.
  * Routes "what status?" / "4xx error?" to a citeable list.
  */
-function buildHttpStatusBlock(files) {
-  const engine = getHttpStatus();
-  if (!engine || typeof engine.buildHttpStatusForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHttpStatusForFiles(list);
-  return engine.renderHttpStatusBlock(report);
-}
+function buildHttpStatusBlock(files) { return renderFileReport(getHttpStatus(), 'buildHttpStatusForFiles', 'renderHttpStatusBlock', files); }
 
 /**
  * Timezones block — UTC/GMT offsets, named abbreviations, IANA IDs.
  * Routes "what time zone?" / "what's the offset?".
  */
-function buildTimezonesBlock(files) {
-  const engine = getTimezones();
-  if (!engine || typeof engine.buildTimezonesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTimezonesForFiles(list);
-  return engine.renderTimezonesBlock(report);
-}
+function buildTimezonesBlock(files) { return renderFileReport(getTimezones(), 'buildTimezonesForFiles', 'renderTimezonesBlock', files); }
 
 /**
  * Math block — LaTeX inline / display / environment math expressions.
  * Routes "what equation?" / "what math?".
  */
-function buildMathBlock(files) {
-  const engine = getMath();
-  if (!engine || typeof engine.buildMathForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMathForFiles(list);
-  return engine.renderMathBlock(report);
-}
+function buildMathBlock(files) { return renderFileReport(getMath(), 'buildMathForFiles', 'renderMathBlock', files); }
 
 /**
  * Boolean block — labeled yes/no/true/false config / FAQ values
  * plus glyph forms (✓ / ✗ / ☑ / ☐). Routes "is X enabled?" /
  * "what's the answer?".
  */
-function buildBooleanBlock(files) {
-  const engine = getBoolean();
-  if (!engine || typeof engine.buildBooleansForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBooleansForFiles(list);
-  return engine.renderBooleansBlock(report);
-}
+function buildBooleanBlock(files) { return renderFileReport(getBoolean(), 'buildBooleansForFiles', 'renderBooleansBlock', files); }
 
 /**
  * TOC block — Table of Contents sections detected via explicit headers
  * (Contents / TOC / Índice / Sumario / Tabla de contenidos) followed by
  * indented or numbered items. Different from outline (heading-derived).
  */
-function buildTocBlock(files) {
-  const engine = getToc();
-  if (!engine || typeof engine.buildTocForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTocForFiles(list);
-  return engine.renderTocBlock(report);
-}
+function buildTocBlock(files) { return renderFileReport(getToc(), 'buildTocForFiles', 'renderTocBlock', files); }
 
 /**
  * HTML attrs block — referenced HTML attributes (inline values,
  * labeled mentions, aria-* / data-* / on*). Filtered by curated
  * whitelist. Routes "what HTML attributes are used?".
  */
-function buildHtmlAttrsBlock(files) {
-  const engine = getHtmlAttrs();
-  if (!engine || typeof engine.buildHtmlAttrsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHtmlAttrsForFiles(list);
-  return engine.renderHtmlAttrsBlock(report);
-}
+function buildHtmlAttrsBlock(files) { return renderFileReport(getHtmlAttrs(), 'buildHtmlAttrsForFiles', 'renderHtmlAttrsBlock', files); }
 
 /**
  * Blockquotes block — markdown blockquotes with optional "— Author"
  * attribution. Different from inline quote extractor. Routes
  * "what's the quote?" / "any pull quotes?".
  */
-function buildBlockquotesBlock(files) {
-  const engine = getBlockquotes();
-  if (!engine || typeof engine.buildBlockquotesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBlockquotesForFiles(list);
-  return engine.renderBlockquotesBlock(report);
-}
+function buildBlockquotesBlock(files) { return renderFileReport(getBlockquotes(), 'buildBlockquotesForFiles', 'renderBlockquotesBlock', files); }
 
 /**
  * Definition lists block — term/definition pairs (Markdown DL syntax
  * and HTML dt/dd mentions). Different from glossary extractor by
  * surfacing arbitrary pairs in any section.
  */
-function buildDefinitionListsBlock(files) {
-  const engine = getDefinitionLists();
-  if (!engine || typeof engine.buildDefinitionListsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDefinitionListsForFiles(list);
-  return engine.renderDefinitionListsBlock(report);
-}
+function buildDefinitionListsBlock(files) { return renderFileReport(getDefinitionLists(), 'buildDefinitionListsForFiles', 'renderDefinitionListsBlock', files); }
 
 /**
  * TODO markers block — TODO/FIXME/NOTE/HACK/XXX/WIP/BUG with severity
  * classification and Spanish equivalents. Routes "what's pending?"
  * / "what needs fixing?".
  */
-function buildTodosBlock(files) {
-  const engine = getTodos();
-  if (!engine || typeof engine.buildTodosForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTodosForFiles(list);
-  return engine.renderTodosBlock(report);
-}
+function buildTodosBlock(files) { return renderFileReport(getTodos(), 'buildTodosForFiles', 'renderTodosBlock', files); }
 
 /**
  * Images block — markdown / HTML images + emoji shortcodes with
  * alt-text accessibility status. Routes "what images?".
  */
-function buildImagesBlock(files) {
-  const engine = getImages();
-  if (!engine || typeof engine.buildImagesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildImagesForFiles(list);
-  return engine.renderImagesBlock(report);
-}
+function buildImagesBlock(files) { return renderFileReport(getImages(), 'buildImagesForFiles', 'renderImagesBlock', files); }
 
 /**
  * Media block — audio/video filenames, HTML5 audio/video tags,
  * timecodes, episode markers. Routes "what audio/video?".
  */
-function buildMediaBlock(files) {
-  const engine = getMedia();
-  if (!engine || typeof engine.buildMediaForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMediaForFiles(list);
-  return engine.renderMediaBlock(report);
-}
+function buildMediaBlock(files) { return renderFileReport(getMedia(), 'buildMediaForFiles', 'renderMediaBlock', files); }
 
 /**
  * Language ratio block — per-document stopword-frequency language mix
  * across 6 languages (en/es/pt/fr/it/de). Routes "what languages?".
  */
-function buildLanguageRatioBlock(files) {
-  const engine = getLanguageRatio();
-  if (!engine || typeof engine.buildLanguageRatioForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLanguageRatioForFiles(list);
-  return engine.renderLanguageRatioBlock(report);
-}
+function buildLanguageRatioBlock(files) { return renderFileReport(getLanguageRatio(), 'buildLanguageRatioForFiles', 'renderLanguageRatioBlock', files); }
 
 /**
  * Regex patterns block — JS/Python/backtick regex literals. Routes
  * "what regex?" / "show me the patterns".
  */
-function buildRegexPatternsBlock(files) {
-  const engine = getRegexPatterns();
-  if (!engine || typeof engine.buildRegexPatternsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRegexPatternsForFiles(list);
-  return engine.renderRegexPatternsBlock(report);
-}
+function buildRegexPatternsBlock(files) { return renderFileReport(getRegexPatterns(), 'buildRegexPatternsForFiles', 'renderRegexPatternsBlock', files); }
 
 /**
  * File extensions block — distribution of file extensions by category
  * (code/doc/data/image/archive/media/web/config/other). Routes
  * "what file types?".
  */
-function buildFileExtensionsBlock(files) {
-  const engine = getFileExtensions();
-  if (!engine || typeof engine.buildFileExtensionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFileExtensionsForFiles(list);
-  return engine.renderFileExtensionsBlock(report);
-}
+function buildFileExtensionsBlock(files) { return renderFileReport(getFileExtensions(), 'buildFileExtensionsForFiles', 'renderFileExtensionsBlock', files); }
 
 /**
  * Code definitions block — function/class/type definitions across
  * JS/TS/Python/Go/Rust. Routes "what functions/classes?".
  */
-function buildCodeDefsBlock(files) {
-  const engine = getCodeDefs();
-  if (!engine || typeof engine.buildCodeDefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCodeDefsForFiles(list);
-  return engine.renderCodeDefsBlock(report);
-}
+function buildCodeDefsBlock(files) { return renderFileReport(getCodeDefs(), 'buildCodeDefsForFiles', 'renderCodeDefsBlock', files); }
 
 /**
  * Tone polarity block — per-document positive/negative/neutral/mixed
  * scoring from a curated lexicon. Routes "what's the tone?".
  */
-function buildTonePolarityBlock(files) {
-  const engine = getTonePolarity();
-  if (!engine || typeof engine.buildTonePolarityForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTonePolarityForFiles(list);
-  return engine.renderTonePolarityBlock(report);
-}
+function buildTonePolarityBlock(files) { return renderFileReport(getTonePolarity(), 'buildTonePolarityForFiles', 'renderTonePolarityBlock', files); }
 
 /**
  * Quantifiers block — universal / existential / negative / cardinal
  * propositional quantifiers. Routes "what's the scope?".
  */
-function buildQuantifiersBlock(files) {
-  const engine = getQuantifiers();
-  if (!engine || typeof engine.buildQuantifiersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildQuantifiersForFiles(list);
-  return engine.renderQuantifiersBlock(report);
-}
+function buildQuantifiersBlock(files) { return renderFileReport(getQuantifiers(), 'buildQuantifiersForFiles', 'renderQuantifiersBlock', files); }
 
 /**
  * Modals block — modal verbs classified by normativity (strong /
  * recommended / permitted / possibility / prohibited).
  */
-function buildModalsBlock(files) {
-  const engine = getModals();
-  if (!engine || typeof engine.buildModalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildModalsForFiles(list);
-  return engine.renderModalsBlock(report);
-}
+function buildModalsBlock(files) { return renderFileReport(getModals(), 'buildModalsForFiles', 'renderModalsBlock', files); }
 
 /**
  * Negation block — negation density + double-neg patterns.
  */
-function buildNegationBlock(files) {
-  const engine = getNegation();
-  if (!engine || typeof engine.buildNegationForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNegationForFiles(list);
-  return engine.renderNegationBlock(report);
-}
+function buildNegationBlock(files) { return renderFileReport(getNegation(), 'buildNegationForFiles', 'renderNegationBlock', files); }
 
 /**
  * Reading time block — per-file word/char count + reading time
  * at three WPM bands.
  */
-function buildReadingTimeBlock(files) {
-  const engine = getReadingTime();
-  if (!engine || typeof engine.buildReadingTimeForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildReadingTimeForFiles(list);
-  return engine.renderReadingTimeBlock(report);
-}
+function buildReadingTimeBlock(files) { return renderFileReport(getReadingTime(), 'buildReadingTimeForFiles', 'renderReadingTimeBlock', files); }
 
 /** Attributions block — "According to X" / "Per X" / "Según X" source phrases. */
-function buildAttributionsBlock(files) {
-  const engine = getAttributions();
-  if (!engine || typeof engine.buildAttributionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAttributionsForFiles(list);
-  return engine.renderAttributionsBlock(report);
-}
+function buildAttributionsBlock(files) { return renderFileReport(getAttributions(), 'buildAttributionsForFiles', 'renderAttributionsBlock', files); }
 
 /** Comparatives block — magnitude / percent / multiplier / vs / Spanish. */
-function buildComparativesBlock(files) {
-  const engine = getComparatives();
-  if (!engine || typeof engine.buildComparativesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildComparativesForFiles(list);
-  return engine.renderComparativesBlock(report);
-}
+function buildComparativesBlock(files) { return renderFileReport(getComparatives(), 'buildComparativesForFiles', 'renderComparativesBlock', files); }
 
 /** Causal block — because/due to/owing to + Spanish equivalents. */
-function buildCausalBlock(files) {
-  const engine = getCausal();
-  if (!engine || typeof engine.buildCausalForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCausalForFiles(list);
-  return engine.renderCausalBlock(report);
-}
+function buildCausalBlock(files) { return renderFileReport(getCausal(), 'buildCausalForFiles', 'renderCausalBlock', files); }
 
 /** Concession block — although/however/sin embargo/no obstante connectives. */
-function buildConcessionBlock(files) {
-  const engine = getConcession();
-  if (!engine || typeof engine.buildConcessionForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildConcessionForFiles(list);
-  return engine.renderConcessionBlock(report);
-}
+function buildConcessionBlock(files) { return renderFileReport(getConcession(), 'buildConcessionForFiles', 'renderConcessionBlock', files); }
 
 /** Hedging block — epistemic softeners (perhaps/possibly/quizás). */
-function buildHedgingBlock(files) {
-  const engine = getHedging();
-  if (!engine || typeof engine.buildHedgingForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHedgingForFiles(list);
-  return engine.renderHedgingBlock(report);
-}
+function buildHedgingBlock(files) { return renderFileReport(getHedging(), 'buildHedgingForFiles', 'renderHedgingBlock', files); }
 
 /** Intensifiers block — very/extremely/muy/extremadamente. */
-function buildIntensifiersBlock(files) {
-  const engine = getIntensifiers();
-  if (!engine || typeof engine.buildIntensifiersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIntensifiersForFiles(list);
-  return engine.renderIntensifiersBlock(report);
-}
+function buildIntensifiersBlock(files) { return renderFileReport(getIntensifiers(), 'buildIntensifiersForFiles', 'renderIntensifiersBlock', files); }
 
 /** Reporting block — said/stated/dijo/afirmó verbs. */
-function buildReportingBlock(files) {
-  const engine = getReporting();
-  if (!engine || typeof engine.buildReportingForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildReportingForFiles(list);
-  return engine.renderReportingBlock(report);
-}
+function buildReportingBlock(files) { return renderFileReport(getReporting(), 'buildReportingForFiles', 'renderReportingBlock', files); }
 
 /** Examples block — for example/e.g./por ejemplo/es decir. */
-function buildExamplesBlock(files) {
-  const engine = getExamples();
-  if (!engine || typeof engine.buildExamplesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildExamplesForFiles(list);
-  return engine.renderExamplesBlock(report);
-}
+function buildExamplesBlock(files) { return renderFileReport(getExamples(), 'buildExamplesForFiles', 'renderExamplesBlock', files); }
 
 /** Approximations block — about/roughly/aproximadamente hedges around numbers. */
-function buildApproximationsBlock(files) {
-  const engine = getApproximations();
-  if (!engine || typeof engine.buildApproximationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildApproximationsForFiles(list);
-  return engine.renderApproximationsBlock(report);
-}
+function buildApproximationsBlock(files) { return renderFileReport(getApproximations(), 'buildApproximationsForFiles', 'renderApproximationsBlock', files); }
 
 /** Questions block — interrogative sentences classified by kind. */
-function buildQuestionsBlock(files) {
-  const engine = getQuestions();
-  if (!engine || typeof engine.buildQuestionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildQuestionsForFiles(list);
-  return engine.renderQuestionsBlock(report);
-}
+function buildQuestionsBlock(files) { return renderFileReport(getQuestions(), 'buildQuestionsForFiles', 'renderQuestionsBlock', files); }
 
 /** Imperatives block — commands/instructions via verb whitelist. */
-function buildImperativesBlock(files) {
-  const engine = getImperatives();
-  if (!engine || typeof engine.buildImperativesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildImperativesForFiles(list);
-  return engine.renderImperativesBlock(report);
-}
+function buildImperativesBlock(files) { return renderFileReport(getImperatives(), 'buildImperativesForFiles', 'renderImperativesBlock', files); }
 
 /** In-text definitions block — "X is Y" / "X means Y" patterns. */
-function buildInTextDefinitionsBlock(files) {
-  const engine = getDefinitions();
-  if (!engine || typeof engine.buildDefinitionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDefinitionsForFiles(list);
-  return engine.renderDefinitionsBlock(report);
-}
+function buildInTextDefinitionsBlock(files) { return renderFileReport(getDefinitions(), 'buildDefinitionsForFiles', 'renderDefinitionsBlock', files); }
 
 /** Fiscal year block — FY24/Q1/quarter markers. */
-function buildFiscalYearBlock(files) {
-  const engine = getFiscalYear();
-  if (!engine || typeof engine.buildFiscalYearForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFiscalYearForFiles(list);
-  return engine.renderFiscalYearBlock(report);
-}
+function buildFiscalYearBlock(files) { return renderFileReport(getFiscalYear(), 'buildFiscalYearForFiles', 'renderFiscalYearBlock', files); }
 
 /** Ratios block — 3:1 / "3 to 1" / X per Y / fractions. */
-function buildRatiosBlock(files) {
-  const engine = getRatios();
-  if (!engine || typeof engine.buildRatiosForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRatiosForFiles(list);
-  return engine.renderRatiosBlock(report);
-}
+function buildRatiosBlock(files) { return renderFileReport(getRatios(), 'buildRatiosForFiles', 'renderRatiosBlock', files); }
 
 /** Ordinals block — 1st/first/primero/1º position markers. */
-function buildOrdinalsBlock(files) {
-  const engine = getOrdinals();
-  if (!engine || typeof engine.buildOrdinalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOrdinalsForFiles(list);
-  return engine.renderOrdinalsBlock(report);
-}
+function buildOrdinalsBlock(files) { return renderFileReport(getOrdinals(), 'buildOrdinalsForFiles', 'renderOrdinalsBlock', files); }
 
 /** Geographic regions block — continents/groupings/ISO/countries. */
-function buildGeoRegionsBlock(files) {
-  const engine = getGeoRegions();
-  if (!engine || typeof engine.buildGeoRegionsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGeoRegionsForFiles(list);
-  return engine.renderGeoRegionsBlock(report);
-}
+function buildGeoRegionsBlock(files) { return renderFileReport(getGeoRegions(), 'buildGeoRegionsForFiles', 'renderGeoRegionsBlock', files); }
 
 /** Tracking block — UPS/FedEx/USPS/DHL parcel codes + labeled forms. */
-function buildTrackingBlock(files) {
-  const engine = getTracking();
-  if (!engine || typeof engine.buildTrackingForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTrackingForFiles(list);
-  return engine.renderTrackingBlock(report);
-}
+function buildTrackingBlock(files) { return renderFileReport(getTracking(), 'buildTrackingForFiles', 'renderTrackingBlock', files); }
 
 /** Weather block — temperature/precipitation/wind/humidity/climate terms. */
-function buildWeatherBlock(files) {
-  const engine = getWeather();
-  if (!engine || typeof engine.buildWeatherForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWeatherForFiles(list);
-  return engine.renderWeatherBlock(report);
-}
+function buildWeatherBlock(files) { return renderFileReport(getWeather(), 'buildWeatherForFiles', 'renderWeatherBlock', files); }
 
 /** Scientific notation block — E-notation, ×10^, superscript power-of-ten. */
-function buildScientificNotationBlock(files) {
-  const engine = getScientificNotation();
-  if (!engine || typeof engine.buildScientificNotationForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildScientificNotationForFiles(list);
-  return engine.renderScientificNotationBlock(report);
-}
+function buildScientificNotationBlock(files) { return renderFileReport(getScientificNotation(), 'buildScientificNotationForFiles', 'renderScientificNotationBlock', files); }
 
 /** Taxa block — Linnaean binomial nomenclature + family taxa. */
-function buildTaxaBlock(files) {
-  const engine = getTaxa();
-  if (!engine || typeof engine.buildTaxaForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTaxaForFiles(list);
-  return engine.renderTaxaBlock(report);
-}
+function buildTaxaBlock(files) { return renderFileReport(getTaxa(), 'buildTaxaForFiles', 'renderTaxaBlock', files); }
 
 /** Chemistry block — molecular formulas + element names. */
-function buildChemistryBlock(files) {
-  const engine = getChemistry();
-  if (!engine || typeof engine.buildChemistryForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildChemistryForFiles(list);
-  return engine.renderChemistryBlock(report);
-}
+function buildChemistryBlock(files) { return renderFileReport(getChemistry(), 'buildChemistryForFiles', 'renderChemistryBlock', files); }
 
 /** FX rates block — currency pair rates + equation + labeled. */
-function buildFxRatesBlock(files) {
-  const engine = getFxRates();
-  if (!engine || typeof engine.buildFxRatesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFxRatesForFiles(list);
-  return engine.renderFxRatesBlock(report);
-}
+function buildFxRatesBlock(files) { return renderFileReport(getFxRates(), 'buildFxRatesForFiles', 'renderFxRatesBlock', files); }
 
 /** IBAN/SWIFT block — international banking codes. */
-function buildIbanSwiftBlock(files) {
-  const engine = getIbanSwift();
-  if (!engine || typeof engine.buildIbanSwiftForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIbanSwiftForFiles(list);
-  return engine.renderIbanSwiftBlock(report);
-}
+function buildIbanSwiftBlock(files) { return renderFileReport(getIbanSwift(), 'buildIbanSwiftForFiles', 'renderIbanSwiftBlock', files); }
 
 /** License plates block — US/UK/MX/ES/labeled vehicle plates. */
-function buildLicensePlatesBlock(files) {
-  const engine = getLicensePlates();
-  if (!engine || typeof engine.buildLicensePlatesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLicensePlatesForFiles(list);
-  return engine.renderLicensePlatesBlock(report);
-}
+function buildLicensePlatesBlock(files) { return renderFileReport(getLicensePlates(), 'buildLicensePlatesForFiles', 'renderLicensePlatesBlock', files); }
 
 /** Legal citations block — Smith v Jones / reporter / USC / CFR / Ley. */
-function buildLegalCitationsBlock(files) {
-  const engine = getLegalCitations();
-  if (!engine || typeof engine.buildLegalCitationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLegalCitationsForFiles(list);
-  return engine.renderLegalCitationsBlock(report);
-}
+function buildLegalCitationsBlock(files) { return renderFileReport(getLegalCitations(), 'buildLegalCitationsForFiles', 'renderLegalCitationsBlock', files); }
 
 /** Social URLs block — twitter/instagram/linkedin/github/youtube/tiktok handles. */
-function buildSocialUrlsBlock(files) {
-  const engine = getSocialUrls();
-  if (!engine || typeof engine.buildSocialUrlsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSocialUrlsForFiles(list);
-  return engine.renderSocialUrlsBlock(report);
-}
+function buildSocialUrlsBlock(files) { return renderFileReport(getSocialUrls(), 'buildSocialUrlsForFiles', 'renderSocialUrlsBlock', files); }
 
 /** Gene/protein block — HGNC genes + p-proteins + mRNA + ENST + UniProt + rsIDs. */
-function buildGeneProteinBlock(files) {
-  const engine = getGeneProtein();
-  if (!engine || typeof engine.buildGeneProteinForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGeneProteinForFiles(list);
-  return engine.renderGeneProteinBlock(report);
-}
+function buildGeneProteinBlock(files) { return renderFileReport(getGeneProtein(), 'buildGeneProteinForFiles', 'renderGeneProteinBlock', files); }
 
 /** Currency symbols block — standalone €/$/£/¥/₹/₿ without amount. */
-function buildCurrencySymbolsBlock(files) {
-  const engine = getCurrencySymbols();
-  if (!engine || typeof engine.buildCurrencySymbolsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCurrencySymbolsForFiles(list);
-  return engine.renderCurrencySymbolsBlock(report);
-}
+function buildCurrencySymbolsBlock(files) { return renderFileReport(getCurrencySymbols(), 'buildCurrencySymbolsForFiles', 'renderCurrencySymbolsBlock', files); }
 
 /** Phone codes block — E.164 phone numbers with country resolution. */
-function buildPhoneCodesBlock(files) {
-  const engine = getPhoneCodes();
-  if (!engine || typeof engine.buildPhoneCodesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPhoneCodesForFiles(list);
-  return engine.renderPhoneCodesBlock(report);
-}
+function buildPhoneCodesBlock(files) { return renderFileReport(getPhoneCodes(), 'buildPhoneCodesForFiles', 'renderPhoneCodesBlock', files); }
 
 /** Postal codes block — UK/CA/BR/JP/US/labeled postal codes. */
-function buildPostalCodesBlock(files) {
-  const engine = getPostalCodes();
-  if (!engine || typeof engine.buildPostalCodesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPostalCodesForFiles(list);
-  return engine.renderPostalCodesBlock(report);
-}
+function buildPostalCodesBlock(files) { return renderFileReport(getPostalCodes(), 'buildPostalCodesForFiles', 'renderPostalCodesBlock', files); }
 
 /** Addresses block — street addresses (US/Spanish/PO Box/labeled). */
-function buildAddressesBlock(files) {
-  const engine = getAddresses();
-  if (!engine || typeof engine.buildAddressesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAddressesForFiles(list);
-  return engine.renderAddressesBlock(report);
-}
+function buildAddressesBlock(files) { return renderFileReport(getAddresses(), 'buildAddressesForFiles', 'renderAddressesBlock', files); }
 
 /** MIME types block — IANA Media-Type references. */
-function buildMimeTypesBlock(files) {
-  const engine = getMimeTypes();
-  if (!engine || typeof engine.buildMimeTypesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMimeTypesForFiles(list);
-  return engine.renderMimeTypesBlock(report);
-}
+function buildMimeTypesBlock(files) { return renderFileReport(getMimeTypes(), 'buildMimeTypesForFiles', 'renderMimeTypesBlock', files); }
 
 /** UTM params block — utm_source/medium/campaign/term/content/id. */
-function buildUtmParamsBlock(files) {
-  const engine = getUtmParams();
-  if (!engine || typeof engine.buildUtmParamsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildUtmParamsForFiles(list);
-  return engine.renderUtmParamsBlock(report);
-}
+function buildUtmParamsBlock(files) { return renderFileReport(getUtmParams(), 'buildUtmParamsForFiles', 'renderUtmParamsBlock', files); }
 
 /** Credit cards block — masked Visa/MC/Amex/Discover/JCB/Diners. */
-function buildCreditCardsBlock(files) {
-  const engine = getCreditCards();
-  if (!engine || typeof engine.buildCreditCardsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCreditCardsForFiles(list);
-  return engine.renderCreditCardsBlock(report);
-}
+function buildCreditCardsBlock(files) { return renderFileReport(getCreditCards(), 'buildCreditCardsForFiles', 'renderCreditCardsBlock', files); }
 
 /** SSN-style PII block — masked US/MX/ES/CA/UK/BR national IDs. */
-function buildSsnPiiBlock(files) {
-  const engine = getSsnPii();
-  if (!engine || typeof engine.buildSsnPiiForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSsnPiiForFiles(list);
-  return engine.renderSsnPiiBlock(report);
-}
+function buildSsnPiiBlock(files) { return renderFileReport(getSsnPii(), 'buildSsnPiiForFiles', 'renderSsnPiiBlock', files); }
 
 /** API keys block — masked OpenAI/GitHub/AWS/Stripe/Slack/Bearer/JWT. */
-function buildApiKeysBlock(files) {
-  const engine = getApiKeys();
-  if (!engine || typeof engine.buildApiKeysForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildApiKeysForFiles(list);
-  return engine.renderApiKeysBlock(report);
-}
+function buildApiKeysBlock(files) { return renderFileReport(getApiKeys(), 'buildApiKeysForFiles', 'renderApiKeysBlock', files); }
 
 /** HTTP methods census block — aggregate counts of GET/POST/PUT/PATCH/DELETE. */
-function buildHttpMethodsBlock(files) {
-  const engine = getHttpMethods();
-  if (!engine || typeof engine.buildHttpMethodsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHttpMethodsForFiles(list);
-  return engine.renderHttpMethodsBlock(report);
-}
+function buildHttpMethodsBlock(files) { return renderFileReport(getHttpMethods(), 'buildHttpMethodsForFiles', 'renderHttpMethodsBlock', files); }
 
 /** Container refs block — registry/digest/plain image:tag references. */
-function buildContainerRefsBlock(files) {
-  const engine = getContainerRefs();
-  if (!engine || typeof engine.buildContainerRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildContainerRefsForFiles(list);
-  return engine.renderContainerRefsBlock(report);
-}
+function buildContainerRefsBlock(files) { return renderFileReport(getContainerRefs(), 'buildContainerRefsForFiles', 'renderContainerRefsBlock', files); }
 
 /** K8s refs block — apiVersion/kind/namespace/kubectl command refs. */
-function buildK8sRefsBlock(files) {
-  const engine = getK8sRefs();
-  if (!engine || typeof engine.buildK8sRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildK8sRefsForFiles(list);
-  return engine.renderK8sRefsBlock(report);
-}
+function buildK8sRefsBlock(files) { return renderFileReport(getK8sRefs(), 'buildK8sRefsForFiles', 'renderK8sRefsBlock', files); }
 
 /** Metrics block — Prometheus-style metric names with type classification. */
-function buildMetricsBlock(files) {
-  const engine = getMetrics();
-  if (!engine || typeof engine.buildMetricsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMetricsForFiles(list);
-  return engine.renderMetricsBlock(report);
-}
-
-function buildOauthScopesBlock(files) {
-  const engine = getOauthScopes();
-  if (!engine || typeof engine.buildOauthScopesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOauthScopesForFiles(list);
-  return engine.renderOauthScopesBlock(report);
-}
-
-function buildCspDirectivesBlock(files) {
-  const engine = getCspDirectives();
-  if (!engine || typeof engine.buildCspDirectivesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCspDirectivesForFiles(list);
-  return engine.renderCspDirectivesBlock(report);
-}
-
-function buildMathOperatorsBlock(files) {
-  const engine = getMathOperators();
-  if (!engine || typeof engine.buildMathOperatorsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMathOperatorsForFiles(list);
-  return engine.renderMathOperatorsBlock(report);
-}
-
-function buildSpdxComplexBlock(files) {
-  const engine = getSpdxComplex();
-  if (!engine || typeof engine.buildSpdxComplexForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSpdxComplexForFiles(list);
-  return engine.renderSpdxComplexBlock(report);
-}
-
-function buildFeatureFlagsBlock(files) {
-  const engine = getFeatureFlags();
-  if (!engine || typeof engine.buildFeatureFlagsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFeatureFlagsForFiles(list);
-  return engine.renderFeatureFlagsBlock(report);
-}
-
-function buildCookieAttrsBlock(files) {
-  const engine = getCookieAttrs();
-  if (!engine || typeof engine.buildCookieAttrsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCookieAttrsForFiles(list);
-  return engine.renderCookieAttrsBlock(report);
-}
-
-function buildOtelTraceBlock(files) {
-  const engine = getOtelTrace();
-  if (!engine || typeof engine.buildOtelTraceForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOtelTraceForFiles(list);
-  return engine.renderOtelTraceBlock(report);
-}
-
-function buildCloudArnsBlock(files) {
-  const engine = getCloudArns();
-  if (!engine || typeof engine.buildCloudArnsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCloudArnsForFiles(list);
-  return engine.renderCloudArnsBlock(report);
-}
-
-function buildMlModelsBlock(files) {
-  const engine = getMlModels();
-  if (!engine || typeof engine.buildMlModelsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMlModelsForFiles(list);
-  return engine.renderMlModelsBlock(report);
-}
-
-function buildDbConnStringsBlock(files) {
-  const engine = getDbConnStrings();
-  if (!engine || typeof engine.buildDbConnStringsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDbConnStringsForFiles(list);
-  return engine.renderDbConnStringsBlock(report);
-}
-
-function buildGraphqlOpsBlock(files) {
-  const engine = getGraphqlOps();
-  if (!engine || typeof engine.buildGraphqlOpsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGraphqlOpsForFiles(list);
-  return engine.renderGraphqlOpsBlock(report);
-}
-
-function buildGrpcRefsBlock(files) {
-  const engine = getGrpcRefs();
-  if (!engine || typeof engine.buildGrpcRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGrpcRefsForFiles(list);
-  return engine.renderGrpcRefsBlock(report);
-}
-
-function buildStackTracesBlock(files) {
-  const engine = getStackTraces();
-  if (!engine || typeof engine.buildStackTracesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStackTracesForFiles(list);
-  return engine.renderStackTracesBlock(report);
-}
-
-function buildEnvNamesBlock(files) {
-  const engine = getEnvNames();
-  if (!engine || typeof engine.buildEnvNamesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEnvNamesForFiles(list);
-  return engine.renderEnvNamesBlock(report);
-}
-
-function buildTestBlocksBlock(files) {
-  const engine = getTestBlocks();
-  if (!engine || typeof engine.buildTestBlocksForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTestBlocksForFiles(list);
-  return engine.renderTestBlocksBlock(report);
-}
-
-function buildGitShasBlock(files) {
-  const engine = getGitShas();
-  if (!engine || typeof engine.buildGitShasForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGitShasForFiles(list);
-  return engine.renderGitShasBlock(report);
-}
-
-function buildCloudStorageBlock(files) {
-  const engine = getCloudStorage();
-  if (!engine || typeof engine.buildCloudStorageForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCloudStorageForFiles(list);
-  return engine.renderCloudStorageBlock(report);
-}
-
-function buildWebVitalsBlock(files) {
-  const engine = getWebVitals();
-  if (!engine || typeof engine.buildWebVitalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWebVitalsForFiles(list);
-  return engine.renderWebVitalsBlock(report);
-}
-
-function buildAriaA11yBlock(files) {
-  const engine = getAriaA11y();
-  if (!engine || typeof engine.buildAriaA11yForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAriaA11yForFiles(list);
-  return engine.renderAriaA11yBlock(report);
-}
-
-function buildI18nKeysBlock(files) {
-  const engine = getI18nKeys();
-  if (!engine || typeof engine.buildI18nKeysForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildI18nKeysForFiles(list);
-  return engine.renderI18nKeysBlock(report);
-}
-
-function buildCiBuildIdsBlock(files) {
-  const engine = getCiBuildIds();
-  if (!engine || typeof engine.buildCiBuildIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCiBuildIdsForFiles(list);
-  return engine.renderCiBuildIdsBlock(report);
-}
-
-function buildUserAgentsBlock(files) {
-  const engine = getUserAgents();
-  if (!engine || typeof engine.buildUserAgentsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildUserAgentsForFiles(list);
-  return engine.renderUserAgentsBlock(report);
-}
-
-function buildCidrRangesBlock(files) {
-  const engine = getCidrRanges();
-  if (!engine || typeof engine.buildCidrRangesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCidrRangesForFiles(list);
-  return engine.renderCidrRangesBlock(report);
-}
-
-function buildCacheHeadersBlock(files) {
-  const engine = getCacheHeaders();
-  if (!engine || typeof engine.buildCacheHeadersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCacheHeadersForFiles(list);
-  return engine.renderCacheHeadersBlock(report);
-}
-
-function buildGithubRefsBlock(files) {
-  const engine = getGithubRefs();
-  if (!engine || typeof engine.buildGithubRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGithubRefsForFiles(list);
-  return engine.renderGithubRefsBlock(report);
-}
-
-function buildApmRefsBlock(files) {
-  const engine = getApmRefs();
-  if (!engine || typeof engine.buildApmRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildApmRefsForFiles(list);
-  return engine.renderApmRefsBlock(report);
-}
-
-function buildAttackPatternsBlock(files) {
-  const engine = getAttackPatterns();
-  if (!engine || typeof engine.buildAttackPatternsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAttackPatternsForFiles(list);
-  return engine.renderAttackPatternsBlock(report);
-}
-
-function buildWebhookUrlsBlock(files) {
-  const engine = getWebhookUrls();
-  if (!engine || typeof engine.buildWebhookUrlsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWebhookUrlsForFiles(list);
-  return engine.renderWebhookUrlsBlock(report);
-}
-
-function buildSshFingerprintsBlock(files) {
-  const engine = getSshFingerprints();
-  if (!engine || typeof engine.buildSshFingerprintsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSshFingerprintsForFiles(list);
-  return engine.renderSshFingerprintsBlock(report);
-}
-
-function buildNpmRefsBlock(files) {
-  const engine = getNpmRefs();
-  if (!engine || typeof engine.buildNpmRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNpmRefsForFiles(list);
-  return engine.renderNpmRefsBlock(report);
-}
-
-function buildCorrelationIdsBlock(files) {
-  const engine = getCorrelationIds();
-  if (!engine || typeof engine.buildCorrelationIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCorrelationIdsForFiles(list);
-  return engine.renderCorrelationIdsBlock(report);
-}
-
-function buildPaymentIdsBlock(files) {
-  const engine = getPaymentIds();
-  if (!engine || typeof engine.buildPaymentIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPaymentIdsForFiles(list);
-  return engine.renderPaymentIdsBlock(report);
-}
-
-function buildEmailHeadersBlock(files) {
-  const engine = getEmailHeaders();
-  if (!engine || typeof engine.buildEmailHeadersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEmailHeadersForFiles(list);
-  return engine.renderEmailHeadersBlock(report);
-}
-
-function buildIcalEventsBlock(files) {
-  const engine = getIcalEvents();
-  if (!engine || typeof engine.buildIcalEventsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIcalEventsForFiles(list);
-  return engine.renderIcalEventsBlock(report);
-}
-
-function buildFrontmatterBlock(files) {
-  const engine = getFrontmatter();
-  if (!engine || typeof engine.buildFrontmatterForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildFrontmatterForFiles(list);
-  return engine.renderFrontmatterBlock(report);
-}
-
-function buildPullQuotesBlock(files) {
-  const engine = getPullQuotes();
-  if (!engine || typeof engine.buildPullQuotesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPullQuotesForFiles(list);
-  return engine.renderPullQuotesBlock(report);
-}
-
-function buildGhaStepsBlock(files) {
-  const engine = getGhaSteps();
-  if (!engine || typeof engine.buildGhaStepsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGhaStepsForFiles(list);
-  return engine.renderGhaStepsBlock(report);
-}
-
-function buildTerraformRefsBlock(files) {
-  const engine = getTerraformRefs();
-  if (!engine || typeof engine.buildTerraformRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTerraformRefsForFiles(list);
-  return engine.renderTerraformRefsBlock(report);
-}
-
-function buildHelmRefsBlock(files) {
-  const engine = getHelmRefs();
-  if (!engine || typeof engine.buildHelmRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHelmRefsForFiles(list);
-  return engine.renderHelmRefsBlock(report);
-}
-
-function buildNaturalSchedulesBlock(files) {
-  const engine = getNaturalSchedules();
-  if (!engine || typeof engine.buildNaturalSchedulesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNaturalSchedulesForFiles(list);
-  return engine.renderNaturalSchedulesBlock(report);
-}
-
-function buildChatPermalinksBlock(files) {
-  const engine = getChatPermalinks();
-  if (!engine || typeof engine.buildChatPermalinksForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildChatPermalinksForFiles(list);
-  return engine.renderChatPermalinksBlock(report);
-}
-
-function buildPmTicketsBlock(files) {
-  const engine = getPmTickets();
-  if (!engine || typeof engine.buildPmTicketsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPmTicketsForFiles(list);
-  return engine.renderPmTicketsBlock(report);
-}
-
-function buildSlaTargetsBlock(files) {
-  const engine = getSlaTargets();
-  if (!engine || typeof engine.buildSlaTargetsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSlaTargetsForFiles(list);
-  return engine.renderSlaTargetsBlock(report);
-}
-
-function buildTldsBlock(files) {
-  const engine = getTlds();
-  if (!engine || typeof engine.buildTldsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTldsForFiles(list);
-  return engine.renderTldsBlock(report);
-}
-
-function buildStockTickersBlock(files) {
-  const engine = getStockTickers();
-  if (!engine || typeof engine.buildStockTickersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStockTickersForFiles(list);
-  return engine.renderStockTickersBlock(report);
-}
-
-function buildHardwareSpecsBlock(files) {
-  const engine = getHardwareSpecs();
-  if (!engine || typeof engine.buildHardwareSpecsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHardwareSpecsForFiles(list);
-  return engine.renderHardwareSpecsBlock(report);
-}
-
-function buildBandwidthUnitsBlock(files) {
-  const engine = getBandwidthUnits();
-  if (!engine || typeof engine.buildBandwidthUnitsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBandwidthUnitsForFiles(list);
-  return engine.renderBandwidthUnitsBlock(report);
-}
-
-function buildTrackingNumbersBlock(files) {
-  const engine = getTrackingNumbers();
-  if (!engine || typeof engine.buildTrackingNumbersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTrackingNumbersForFiles(list);
-  return engine.renderTrackingNumbersBlock(report);
-}
-
-function buildRateLimitHeadersBlock(files) {
-  const engine = getRateLimitHeaders();
-  if (!engine || typeof engine.buildRateLimitHeadersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRateLimitHeadersForFiles(list);
-  return engine.renderRateLimitHeadersBlock(report);
-}
-
-function buildCryptoWalletsBlock(files) {
-  const engine = getCryptoWallets();
-  if (!engine || typeof engine.buildCryptoWalletsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCryptoWalletsForFiles(list);
-  return engine.renderCryptoWalletsBlock(report);
-}
-
-function buildCveIdsBlock(files) {
-  const engine = getCveIds();
-  if (!engine || typeof engine.buildCveIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCveIdsForFiles(list);
-  return engine.renderCveIdsBlock(report);
-}
-
-function buildMediaTimestampsBlock(files) {
-  const engine = getMediaTimestamps();
-  if (!engine || typeof engine.buildMediaTimestampsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMediaTimestampsForFiles(list);
-  return engine.renderMediaTimestampsBlock(report);
-}
-
-function buildLinuxSignalsBlock(files) {
-  const engine = getLinuxSignals();
-  if (!engine || typeof engine.buildLinuxSignalsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLinuxSignalsForFiles(list);
-  return engine.renderLinuxSignalsBlock(report);
-}
-
-function buildExitCodesBlock(files) {
-  const engine = getExitCodes();
-  if (!engine || typeof engine.buildExitCodesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildExitCodesForFiles(list);
-  return engine.renderExitCodesBlock(report);
-}
-
-function buildNetworkPortsBlock(files) {
-  const engine = getNetworkPorts();
-  if (!engine || typeof engine.buildNetworkPortsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNetworkPortsForFiles(list);
-  return engine.renderNetworkPortsBlock(report);
-}
-
-function buildLinuxDistrosBlock(files) {
-  const engine = getLinuxDistros();
-  if (!engine || typeof engine.buildLinuxDistrosForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLinuxDistrosForFiles(list);
-  return engine.renderLinuxDistrosBlock(report);
-}
-
-function buildLifecyclePhasesBlock(files) {
-  const engine = getLifecyclePhases();
-  if (!engine || typeof engine.buildLifecyclePhasesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLifecyclePhasesForFiles(list);
-  return engine.renderLifecyclePhasesBlock(report);
-}
-
-function buildProjectCodenamesBlock(files) {
-  const engine = getProjectCodenames();
-  if (!engine || typeof engine.buildProjectCodenamesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildProjectCodenamesForFiles(list);
-  return engine.renderProjectCodenamesBlock(report);
-}
-
-function buildRiskLevelsBlock(files) {
-  const engine = getRiskLevels();
-  if (!engine || typeof engine.buildRiskLevelsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRiskLevelsForFiles(list);
-  return engine.renderRiskLevelsBlock(report);
-}
-
-function buildSaasMetricsBlock(files) {
-  const engine = getSaasMetrics();
-  if (!engine || typeof engine.buildSaasMetricsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSaasMetricsForFiles(list);
-  return engine.renderSaasMetricsBlock(report);
-}
-
-function buildRecipeMeasurementsBlock(files) {
-  const engine = getRecipeMeasurements();
-  if (!engine || typeof engine.buildRecipeMeasurementsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRecipeMeasurementsForFiles(list);
-  return engine.renderRecipeMeasurementsBlock(report);
-}
-
-function buildIsoLangsBlock(files) {
-  const engine = getIsoLangs();
-  if (!engine || typeof engine.buildIsoLangsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIsoLangsForFiles(list);
-  return engine.renderIsoLangsBlock(report);
-}
-
-function buildPrReviewStatesBlock(files) {
-  const engine = getPrReviewStates();
-  if (!engine || typeof engine.buildPrReviewStatesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPrReviewStatesForFiles(list);
-  return engine.renderPrReviewStatesBlock(report);
-}
-
-function buildPricingTiersBlock(files) {
-  const engine = getPricingTiers();
-  if (!engine || typeof engine.buildPricingTiersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPricingTiersForFiles(list);
-  return engine.renderPricingTiersBlock(report);
-}
-
-function buildArxivIdsBlock(files) {
-  const engine = getArxivIds();
-  if (!engine || typeof engine.buildArxivIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildArxivIdsForFiles(list);
-  return engine.renderArxivIdsBlock(report);
-}
-
-function buildDoiIdsBlock(files) {
-  const engine = getDoiIds();
-  if (!engine || typeof engine.buildDoiIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDoiIdsForFiles(list);
-  return engine.renderDoiIdsBlock(report);
-}
-
-function buildOrcidIdsBlock(files) {
-  const engine = getOrcidIds();
-  if (!engine || typeof engine.buildOrcidIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOrcidIdsForFiles(list);
-  return engine.renderOrcidIdsBlock(report);
-}
-
-function buildWikiRefsBlock(files) {
-  const engine = getWikiRefs();
-  if (!engine || typeof engine.buildWikiRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWikiRefsForFiles(list);
-  return engine.renderWikiRefsBlock(report);
-}
-
-function buildPubmedIdsBlock(files) {
-  const engine = getPubmedIds();
-  if (!engine || typeof engine.buildPubmedIdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPubmedIdsForFiles(list);
-  return engine.renderPubmedIdsBlock(report);
-}
-
-function buildServiceAccountsBlock(files) {
-  const engine = getServiceAccounts();
-  if (!engine || typeof engine.buildServiceAccountsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildServiceAccountsForFiles(list);
-  return engine.renderServiceAccountsBlock(report);
-}
-
-function buildVinNumbersBlock(files) {
-  const engine = getVinNumbers();
-  if (!engine || typeof engine.buildVinNumbersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildVinNumbersForFiles(list);
-  return engine.renderVinNumbersBlock(report);
-}
-
-function buildEmojiShortcodesBlock(files) {
-  const engine = getEmojiShortcodes();
-  if (!engine || typeof engine.buildEmojiShortcodesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEmojiShortcodesForFiles(list);
-  return engine.renderEmojiShortcodesBlock(report);
-}
-
-function buildBibtexEntriesBlock(files) {
-  const engine = getBibtexEntries();
-  if (!engine || typeof engine.buildBibtexEntriesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBibtexEntriesForFiles(list);
-  return engine.renderBibtexEntriesBlock(report);
-}
-
-function buildLatexCommandsBlock(files) {
-  const engine = getLatexCommands();
-  if (!engine || typeof engine.buildLatexCommandsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildLatexCommandsForFiles(list);
-  return engine.renderLatexCommandsBlock(report);
-}
-
-function buildProgLangsBlock(files) {
-  const engine = getProgLangs();
-  if (!engine || typeof engine.buildProgLangsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildProgLangsForFiles(list);
-  return engine.renderProgLangsBlock(report);
-}
-
-function buildComplianceRefsBlock(files) {
-  const engine = getComplianceRefs();
-  if (!engine || typeof engine.buildComplianceRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildComplianceRefsForFiles(list);
-  return engine.renderComplianceRefsBlock(report);
-}
-
-function buildTlsCiphersBlock(files) {
-  const engine = getTlsCiphers();
-  if (!engine || typeof engine.buildTlsCiphersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTlsCiphersForFiles(list);
-  return engine.renderTlsCiphersBlock(report);
-}
-
-function buildDnsRecordsBlock(files) {
-  const engine = getDnsRecords();
-  if (!engine || typeof engine.buildDnsRecordsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDnsRecordsForFiles(list);
-  return engine.renderDnsRecordsBlock(report);
-}
-
-function buildEmailAuthBlock(files) {
-  const engine = getEmailAuth();
-  if (!engine || typeof engine.buildEmailAuthForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEmailAuthForFiles(list);
-  return engine.renderEmailAuthBlock(report);
-}
-
-function buildOpenapiKeysBlock(files) {
-  const engine = getOpenapiKeys();
-  if (!engine || typeof engine.buildOpenapiKeysForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOpenapiKeysForFiles(list);
-  return engine.renderOpenapiKeysBlock(report);
-}
-
-function buildKafkaRefsBlock(files) {
-  const engine = getKafkaRefs();
-  if (!engine || typeof engine.buildKafkaRefsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildKafkaRefsForFiles(list);
-  return engine.renderKafkaRefsBlock(report);
-}
-
-function buildAnsiEscapesBlock(files) {
-  const engine = getAnsiEscapes();
-  if (!engine || typeof engine.buildAnsiEscapesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAnsiEscapesForFiles(list);
-  return engine.renderAnsiEscapesBlock(report);
-}
-
-function buildSqlWindowsBlock(files) {
-  const engine = getSqlWindows();
-  if (!engine || typeof engine.buildSqlWindowsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSqlWindowsForFiles(list);
-  return engine.renderSqlWindowsBlock(report);
-}
-
-function buildWebsocketMarkersBlock(files) {
-  const engine = getWebsocketMarkers();
-  if (!engine || typeof engine.buildWebsocketMarkersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWebsocketMarkersForFiles(list);
-  return engine.renderWebsocketMarkersBlock(report);
-}
-
-function buildIsoDurationsBlock(files) {
-  const engine = getIsoDurations();
-  if (!engine || typeof engine.buildIsoDurationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildIsoDurationsForFiles(list);
-  return engine.renderIsoDurationsBlock(report);
-}
-
-function buildBrowserSupportBlock(files) {
-  const engine = getBrowserSupport();
-  if (!engine || typeof engine.buildBrowserSupportForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBrowserSupportForFiles(list);
-  return engine.renderBrowserSupportBlock(report);
-}
-
-function buildNumberBasesBlock(files) {
-  const engine = getNumberBases();
-  if (!engine || typeof engine.buildNumberBasesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNumberBasesForFiles(list);
-  return engine.renderNumberBasesBlock(report);
-}
-
-function buildDmsCoordsBlock(files) {
-  const engine = getDmsCoords();
-  if (!engine || typeof engine.buildDmsCoordsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDmsCoordsForFiles(list);
-  return engine.renderDmsCoordsBlock(report);
-}
-
-function buildContainerRegistriesBlock(files) {
-  const engine = getContainerRegistries();
-  if (!engine || typeof engine.buildContainerRegistriesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildContainerRegistriesForFiles(list);
-  return engine.renderContainerRegistriesBlock(report);
-}
-
-function buildWktGeometryBlock(files) {
-  const engine = getWktGeometry();
-  if (!engine || typeof engine.buildWktGeometryForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWktGeometryForFiles(list);
-  return engine.renderWktGeometryBlock(report);
-}
-
-function buildMdRefLinksBlock(files) {
-  const engine = getMdRefLinks();
-  if (!engine || typeof engine.buildMdRefLinksForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMdRefLinksForFiles(list);
-  return engine.renderMdRefLinksBlock(report);
-}
-
-function buildBotTokensBlock(files) {
-  const engine = getBotTokens();
-  if (!engine || typeof engine.buildBotTokensForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBotTokensForFiles(list);
-  return engine.renderBotTokensBlock(report);
-}
-
-function buildCargoPackagesBlock(files) {
-  const engine = getCargoPackages();
-  if (!engine || typeof engine.buildCargoPackagesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCargoPackagesForFiles(list);
-  return engine.renderCargoPackagesBlock(report);
-}
-
-function buildGoModulesBlock(files) {
-  const engine = getGoModules();
-  if (!engine || typeof engine.buildGoModulesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGoModulesForFiles(list);
-  return engine.renderGoModulesBlock(report);
-}
-
-function buildMavenCoordsBlock(files) {
-  const engine = getMavenCoords();
-  if (!engine || typeof engine.buildMavenCoordsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMavenCoordsForFiles(list);
-  return engine.renderMavenCoordsBlock(report);
-}
-
-function buildPipReqsBlock(files) {
-  const engine = getPipReqs();
-  if (!engine || typeof engine.buildPipReqsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPipReqsForFiles(list);
-  return engine.renderPipReqsBlock(report);
-}
-
-function buildComposerPkgsBlock(files) {
-  const engine = getComposerPkgs();
-  if (!engine || typeof engine.buildComposerPkgsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildComposerPkgsForFiles(list);
-  return engine.renderComposerPkgsBlock(report);
-}
-
-function buildNugetPkgsBlock(files) {
-  const engine = getNugetPkgs();
-  if (!engine || typeof engine.buildNugetPkgsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNugetPkgsForFiles(list);
-  return engine.renderNugetPkgsBlock(report);
-}
-
-function buildGemPkgsBlock(files) {
-  const engine = getGemPkgs();
-  if (!engine || typeof engine.buildGemPkgsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGemPkgsForFiles(list);
-  return engine.renderGemPkgsBlock(report);
-}
-
-function buildHexPkgsBlock(files) {
-  const engine = getHexPkgs();
-  if (!engine || typeof engine.buildHexPkgsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHexPkgsForFiles(list);
-  return engine.renderHexPkgsBlock(report);
-}
-
-function buildSvgPathCmdsBlock(files) {
-  const engine = getSvgPathCmds();
-  if (!engine || typeof engine.buildSvgPathCmdsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSvgPathCmdsForFiles(list);
-  return engine.renderSvgPathCmdsBlock(report);
-}
-
-function buildGeojsonBlock(files) {
-  const engine = getGeojson();
-  if (!engine || typeof engine.buildGeojsonForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGeojsonForFiles(list);
-  return engine.renderGeojsonBlock(report);
-}
-
-function buildPwaManifestBlock(files) {
-  const engine = getPwaManifest();
-  if (!engine || typeof engine.buildPwaManifestForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPwaManifestForFiles(list);
-  return engine.renderPwaManifestBlock(report);
-}
-
-function buildPermissionsApiBlock(files) {
-  const engine = getPermissionsApi();
-  if (!engine || typeof engine.buildPermissionsApiForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPermissionsApiForFiles(list);
-  return engine.renderPermissionsApiBlock(report);
-}
-
-function buildServerlessFnsBlock(files) {
-  const engine = getServerlessFns();
-  if (!engine || typeof engine.buildServerlessFnsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildServerlessFnsForFiles(list);
-  return engine.renderServerlessFnsBlock(report);
-}
-
-function buildDbMigrationsBlock(files) {
-  const engine = getDbMigrations();
-  if (!engine || typeof engine.buildDbMigrationsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDbMigrationsForFiles(list);
-  return engine.renderDbMigrationsBlock(report);
-}
-
-function buildEslintRulesBlock(files) {
-  const engine = getEslintRules();
-  if (!engine || typeof engine.buildEslintRulesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildEslintRulesForFiles(list);
-  return engine.renderEslintRulesBlock(report);
-}
-
-function buildBuildToolsBlock(files) {
-  const engine = getBuildTools();
-  if (!engine || typeof engine.buildBuildToolsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBuildToolsForFiles(list);
-  return engine.renderBuildToolsBlock(report);
-}
-
-function buildJwtClaimsBlock(files) {
-  const engine = getJwtClaims();
-  if (!engine || typeof engine.buildJwtClaimsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildJwtClaimsForFiles(list);
-  return engine.renderJwtClaimsBlock(report);
-}
-
-function buildSriHashesBlock(files) {
-  const engine = getSriHashes();
-  if (!engine || typeof engine.buildSriHashesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSriHashesForFiles(list);
-  return engine.renderSriHashesBlock(report);
-}
-
-function buildJsonSchemaBlock(files) {
-  const engine = getJsonSchema();
-  if (!engine || typeof engine.buildJsonSchemaForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildJsonSchemaForFiles(list);
-  return engine.renderJsonSchemaBlock(report);
-}
-
-function buildPrismaSchemaBlock(files) {
-  const engine = getPrismaSchema();
-  if (!engine || typeof engine.buildPrismaSchemaForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPrismaSchemaForFiles(list);
-  return engine.renderPrismaSchemaBlock(report);
-}
-
-function buildGraphqlFragmentsBlock(files) {
-  const engine = getGraphqlFragments();
-  if (!engine || typeof engine.buildGraphqlFragmentsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGraphqlFragmentsForFiles(list);
-  return engine.renderGraphqlFragmentsBlock(report);
-}
-
-function buildCssVarsBlock(files) {
-  const engine = getCssVars();
-  if (!engine || typeof engine.buildCssVarsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCssVarsForFiles(list);
-  return engine.renderCssVarsBlock(report);
-}
-
-function buildComposeServicesBlock(files) {
-  const engine = getComposeServices();
-  if (!engine || typeof engine.buildComposeServicesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildComposeServicesForFiles(list);
-  return engine.renderComposeServicesBlock(report);
-}
-
-function buildRegexFlagsBlock(files) {
-  const engine = getRegexFlags();
-  if (!engine || typeof engine.buildRegexFlagsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRegexFlagsForFiles(list);
-  return engine.renderRegexFlagsBlock(report);
-}
-
-function buildVueSfcBlock(files) {
-  const engine = getVueSfc();
-  if (!engine || typeof engine.buildVueSfcForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildVueSfcForFiles(list);
-  return engine.renderVueSfcBlock(report);
-}
-
-function buildAstroBlock(files) {
-  const engine = getAstro();
-  if (!engine || typeof engine.buildAstroForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAstroForFiles(list);
-  return engine.renderAstroBlock(report);
-}
-
-function buildE2eTestsBlock(files) {
-  const engine = getE2eTests();
-  if (!engine || typeof engine.buildE2eTestsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildE2eTestsForFiles(list);
-  return engine.renderE2eTestsBlock(report);
-}
-
-function buildMswHandlersBlock(files) {
-  const engine = getMswHandlers();
-  if (!engine || typeof engine.buildMswHandlersForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMswHandlersForFiles(list);
-  return engine.renderMswHandlersBlock(report);
-}
-
-function buildGhWorkflowsBlock(files) {
-  const engine = getGhWorkflows();
-  if (!engine || typeof engine.buildGhWorkflowsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGhWorkflowsForFiles(list);
-  return engine.renderGhWorkflowsBlock(report);
-}
-
-function buildJsonLdBlock(files) {
-  const engine = getJsonLd();
-  if (!engine || typeof engine.buildJsonLdForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildJsonLdForFiles(list);
-  return engine.renderJsonLdBlock(report);
-}
-
-function buildTailwindBlock(files) {
-  const engine = getTailwind();
-  if (!engine || typeof engine.buildTailwindForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTailwindForFiles(list);
-  return engine.renderTailwindBlock(report);
-}
-
-function buildMongoAggBlock(files) {
-  const engine = getMongoAgg();
-  if (!engine || typeof engine.buildMongoAggForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMongoAggForFiles(list);
-  return engine.renderMongoAggBlock(report);
-}
-
-function buildHelmBlock(files) {
-  const engine = getHelm();
-  if (!engine || typeof engine.buildHelmForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildHelmForFiles(list);
-  return engine.renderHelmBlock(report);
-}
-
-function buildVitestBlock(files) {
-  const engine = getVitest();
-  if (!engine || typeof engine.buildVitestForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildVitestForFiles(list);
-  return engine.renderVitestBlock(report);
-}
-
-function buildMjmlBlock(files) {
-  const engine = getMjml();
-  if (!engine || typeof engine.buildMjmlForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildMjmlForFiles(list);
-  return engine.renderMjmlBlock(report);
-}
-
-function buildStripeBlock(files) {
-  const engine = getStripe();
-  if (!engine || typeof engine.buildStripeForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStripeForFiles(list);
-  return engine.renderStripeBlock(report);
-}
-
-function buildTerraformVarsBlock(files) {
-  const engine = getTerraformVars();
-  if (!engine || typeof engine.buildTerraformVarsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTerraformVarsForFiles(list);
-  return engine.renderTerraformVarsBlock(report);
-}
-
-function buildOpenapiSecurityBlock(files) {
-  const engine = getOpenapiSecurity();
-  if (!engine || typeof engine.buildOpenapiSecurityForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOpenapiSecurityForFiles(list);
-  return engine.renderOpenapiSecurityBlock(report);
-}
-
-function buildK8sResourcesBlock(files) {
-  const engine = getK8sResources();
-  if (!engine || typeof engine.buildK8sResourcesForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildK8sResourcesForFiles(list);
-  return engine.renderK8sResourcesBlock(report);
-}
-
-function buildCssAnimBlock(files) {
-  const engine = getCssAnim();
-  if (!engine || typeof engine.buildCssAnimForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildCssAnimForFiles(list);
-  return engine.renderCssAnimBlock(report);
-}
-
-function buildStorybookBlock(files) {
-  const engine = getStorybook();
-  if (!engine || typeof engine.buildStorybookForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildStorybookForFiles(list);
-  return engine.renderStorybookBlock(report);
-}
-
-function buildSentryBlock(files) {
-  const engine = getSentry();
-  if (!engine || typeof engine.buildSentryForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildSentryForFiles(list);
-  return engine.renderSentryBlock(report);
-}
-
-function buildNatsBlock(files) {
-  const engine = getNats();
-  if (!engine || typeof engine.buildNatsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNatsForFiles(list);
-  return engine.renderNatsBlock(report);
-}
-
-function buildPkgJsonBlock(files) {
-  const engine = getPkgJson();
-  if (!engine || typeof engine.buildPkgJsonForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPkgJsonForFiles(list);
-  return engine.renderPkgJsonBlock(report);
-}
-
-function buildRedisBlock(files) {
-  const engine = getRedis();
-  if (!engine || typeof engine.buildRedisForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildRedisForFiles(list);
-  return engine.renderRedisBlock(report);
-}
-
-function buildNginxBlock(files) {
-  const engine = getNginx();
-  if (!engine || typeof engine.buildNginxForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildNginxForFiles(list);
-  return engine.renderNginxBlock(report);
-}
-
-function buildOtelBlock(files) {
-  const engine = getOtel();
-  if (!engine || typeof engine.buildOtelForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOtelForFiles(list);
-  return engine.renderOtelBlock(report);
-}
-
-function buildModuleFederationBlock(files) {
-  const engine = getModuleFederation();
-  if (!engine || typeof engine.buildModuleFederationForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildModuleFederationForFiles(list);
-  return engine.renderModuleFederationBlock(report);
-}
-
-function buildDrizzleBlock(files) {
-  const engine = getDrizzle();
-  if (!engine || typeof engine.buildDrizzleForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildDrizzleForFiles(list);
-  return engine.renderDrizzleBlock(report);
-}
-
-function buildTwilioBlock(files) {
-  const engine = getTwilio();
-  if (!engine || typeof engine.buildTwilioForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildTwilioForFiles(list);
-  return engine.renderTwilioBlock(report);
-}
-
-function buildAwsSdkBlock(files) {
-  const engine = getAwsSdk();
-  if (!engine || typeof engine.buildAwsSdkForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildAwsSdkForFiles(list);
-  return engine.renderAwsSdkBlock(report);
-}
-
-function buildOauthFlowsBlock(files) {
-  const engine = getOauthFlows();
-  if (!engine || typeof engine.buildOauthFlowsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildOauthFlowsForFiles(list);
-  return engine.renderOauthFlowsBlock(report);
-}
-
-function buildGqlClientsBlock(files) {
-  const engine = getGqlClients();
-  if (!engine || typeof engine.buildGqlClientsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGqlClientsForFiles(list);
-  return engine.renderGqlClientsBlock(report);
-}
-
-function buildWebhookSigsBlock(files) {
-  const engine = getWebhookSigs();
-  if (!engine || typeof engine.buildWebhookSigsForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWebhookSigsForFiles(list);
-  return engine.renderWebhookSigsBlock(report);
-}
-
-function buildBullmqBlock(files) {
-  const engine = getBullmq();
-  if (!engine || typeof engine.buildBullmqForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildBullmqForFiles(list);
-  return engine.renderBullmqBlock(report);
-}
-
-function buildWebCryptoBlock(files) {
-  const engine = getWebCrypto();
-  if (!engine || typeof engine.buildWebCryptoForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildWebCryptoForFiles(list);
-  return engine.renderWebCryptoBlock(report);
-}
-
-function buildConsistencyBlock(files) {
-  const engine = getConsistencyChecker();
-  if (!engine || typeof engine.buildConsistencyForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildConsistencyForFiles(list);
-  return engine.renderConsistencyBlock(report);
-}
+function buildMetricsBlock(files) { return renderFileReport(getMetrics(), 'buildMetricsForFiles', 'renderMetricsBlock', files); }
+
+function buildOauthScopesBlock(files) { return renderFileReport(getOauthScopes(), 'buildOauthScopesForFiles', 'renderOauthScopesBlock', files); }
+
+function buildCspDirectivesBlock(files) { return renderFileReport(getCspDirectives(), 'buildCspDirectivesForFiles', 'renderCspDirectivesBlock', files); }
+
+function buildMathOperatorsBlock(files) { return renderFileReport(getMathOperators(), 'buildMathOperatorsForFiles', 'renderMathOperatorsBlock', files); }
+
+function buildSpdxComplexBlock(files) { return renderFileReport(getSpdxComplex(), 'buildSpdxComplexForFiles', 'renderSpdxComplexBlock', files); }
+
+function buildFeatureFlagsBlock(files) { return renderFileReport(getFeatureFlags(), 'buildFeatureFlagsForFiles', 'renderFeatureFlagsBlock', files); }
+
+function buildCookieAttrsBlock(files) { return renderFileReport(getCookieAttrs(), 'buildCookieAttrsForFiles', 'renderCookieAttrsBlock', files); }
+
+function buildOtelTraceBlock(files) { return renderFileReport(getOtelTrace(), 'buildOtelTraceForFiles', 'renderOtelTraceBlock', files); }
+
+function buildCloudArnsBlock(files) { return renderFileReport(getCloudArns(), 'buildCloudArnsForFiles', 'renderCloudArnsBlock', files); }
+
+function buildMlModelsBlock(files) { return renderFileReport(getMlModels(), 'buildMlModelsForFiles', 'renderMlModelsBlock', files); }
+
+function buildDbConnStringsBlock(files) { return renderFileReport(getDbConnStrings(), 'buildDbConnStringsForFiles', 'renderDbConnStringsBlock', files); }
+
+function buildGraphqlOpsBlock(files) { return renderFileReport(getGraphqlOps(), 'buildGraphqlOpsForFiles', 'renderGraphqlOpsBlock', files); }
+
+function buildGrpcRefsBlock(files) { return renderFileReport(getGrpcRefs(), 'buildGrpcRefsForFiles', 'renderGrpcRefsBlock', files); }
+
+function buildStackTracesBlock(files) { return renderFileReport(getStackTraces(), 'buildStackTracesForFiles', 'renderStackTracesBlock', files); }
+
+function buildEnvNamesBlock(files) { return renderFileReport(getEnvNames(), 'buildEnvNamesForFiles', 'renderEnvNamesBlock', files); }
+
+function buildTestBlocksBlock(files) { return renderFileReport(getTestBlocks(), 'buildTestBlocksForFiles', 'renderTestBlocksBlock', files); }
+
+function buildGitShasBlock(files) { return renderFileReport(getGitShas(), 'buildGitShasForFiles', 'renderGitShasBlock', files); }
+
+function buildCloudStorageBlock(files) { return renderFileReport(getCloudStorage(), 'buildCloudStorageForFiles', 'renderCloudStorageBlock', files); }
+
+function buildWebVitalsBlock(files) { return renderFileReport(getWebVitals(), 'buildWebVitalsForFiles', 'renderWebVitalsBlock', files); }
+
+function buildAriaA11yBlock(files) { return renderFileReport(getAriaA11y(), 'buildAriaA11yForFiles', 'renderAriaA11yBlock', files); }
+
+function buildI18nKeysBlock(files) { return renderFileReport(getI18nKeys(), 'buildI18nKeysForFiles', 'renderI18nKeysBlock', files); }
+
+function buildCiBuildIdsBlock(files) { return renderFileReport(getCiBuildIds(), 'buildCiBuildIdsForFiles', 'renderCiBuildIdsBlock', files); }
+
+function buildUserAgentsBlock(files) { return renderFileReport(getUserAgents(), 'buildUserAgentsForFiles', 'renderUserAgentsBlock', files); }
+
+function buildCidrRangesBlock(files) { return renderFileReport(getCidrRanges(), 'buildCidrRangesForFiles', 'renderCidrRangesBlock', files); }
+
+function buildCacheHeadersBlock(files) { return renderFileReport(getCacheHeaders(), 'buildCacheHeadersForFiles', 'renderCacheHeadersBlock', files); }
+
+function buildGithubRefsBlock(files) { return renderFileReport(getGithubRefs(), 'buildGithubRefsForFiles', 'renderGithubRefsBlock', files); }
+
+function buildApmRefsBlock(files) { return renderFileReport(getApmRefs(), 'buildApmRefsForFiles', 'renderApmRefsBlock', files); }
+
+function buildAttackPatternsBlock(files) { return renderFileReport(getAttackPatterns(), 'buildAttackPatternsForFiles', 'renderAttackPatternsBlock', files); }
+
+function buildWebhookUrlsBlock(files) { return renderFileReport(getWebhookUrls(), 'buildWebhookUrlsForFiles', 'renderWebhookUrlsBlock', files); }
+
+function buildSshFingerprintsBlock(files) { return renderFileReport(getSshFingerprints(), 'buildSshFingerprintsForFiles', 'renderSshFingerprintsBlock', files); }
+
+function buildNpmRefsBlock(files) { return renderFileReport(getNpmRefs(), 'buildNpmRefsForFiles', 'renderNpmRefsBlock', files); }
+
+function buildCorrelationIdsBlock(files) { return renderFileReport(getCorrelationIds(), 'buildCorrelationIdsForFiles', 'renderCorrelationIdsBlock', files); }
+
+function buildPaymentIdsBlock(files) { return renderFileReport(getPaymentIds(), 'buildPaymentIdsForFiles', 'renderPaymentIdsBlock', files); }
+
+function buildEmailHeadersBlock(files) { return renderFileReport(getEmailHeaders(), 'buildEmailHeadersForFiles', 'renderEmailHeadersBlock', files); }
+
+function buildIcalEventsBlock(files) { return renderFileReport(getIcalEvents(), 'buildIcalEventsForFiles', 'renderIcalEventsBlock', files); }
+
+function buildFrontmatterBlock(files) { return renderFileReport(getFrontmatter(), 'buildFrontmatterForFiles', 'renderFrontmatterBlock', files); }
+
+function buildPullQuotesBlock(files) { return renderFileReport(getPullQuotes(), 'buildPullQuotesForFiles', 'renderPullQuotesBlock', files); }
+
+function buildGhaStepsBlock(files) { return renderFileReport(getGhaSteps(), 'buildGhaStepsForFiles', 'renderGhaStepsBlock', files); }
+
+function buildTerraformRefsBlock(files) { return renderFileReport(getTerraformRefs(), 'buildTerraformRefsForFiles', 'renderTerraformRefsBlock', files); }
+
+function buildHelmRefsBlock(files) { return renderFileReport(getHelmRefs(), 'buildHelmRefsForFiles', 'renderHelmRefsBlock', files); }
+
+function buildNaturalSchedulesBlock(files) { return renderFileReport(getNaturalSchedules(), 'buildNaturalSchedulesForFiles', 'renderNaturalSchedulesBlock', files); }
+
+function buildChatPermalinksBlock(files) { return renderFileReport(getChatPermalinks(), 'buildChatPermalinksForFiles', 'renderChatPermalinksBlock', files); }
+
+function buildPmTicketsBlock(files) { return renderFileReport(getPmTickets(), 'buildPmTicketsForFiles', 'renderPmTicketsBlock', files); }
+
+function buildSlaTargetsBlock(files) { return renderFileReport(getSlaTargets(), 'buildSlaTargetsForFiles', 'renderSlaTargetsBlock', files); }
+
+function buildTldsBlock(files) { return renderFileReport(getTlds(), 'buildTldsForFiles', 'renderTldsBlock', files); }
+
+function buildStockTickersBlock(files) { return renderFileReport(getStockTickers(), 'buildStockTickersForFiles', 'renderStockTickersBlock', files); }
+
+function buildHardwareSpecsBlock(files) { return renderFileReport(getHardwareSpecs(), 'buildHardwareSpecsForFiles', 'renderHardwareSpecsBlock', files); }
+
+function buildBandwidthUnitsBlock(files) { return renderFileReport(getBandwidthUnits(), 'buildBandwidthUnitsForFiles', 'renderBandwidthUnitsBlock', files); }
+
+function buildTrackingNumbersBlock(files) { return renderFileReport(getTrackingNumbers(), 'buildTrackingNumbersForFiles', 'renderTrackingNumbersBlock', files); }
+
+function buildRateLimitHeadersBlock(files) { return renderFileReport(getRateLimitHeaders(), 'buildRateLimitHeadersForFiles', 'renderRateLimitHeadersBlock', files); }
+
+function buildCryptoWalletsBlock(files) { return renderFileReport(getCryptoWallets(), 'buildCryptoWalletsForFiles', 'renderCryptoWalletsBlock', files); }
+
+function buildCveIdsBlock(files) { return renderFileReport(getCveIds(), 'buildCveIdsForFiles', 'renderCveIdsBlock', files); }
+
+function buildMediaTimestampsBlock(files) { return renderFileReport(getMediaTimestamps(), 'buildMediaTimestampsForFiles', 'renderMediaTimestampsBlock', files); }
+
+function buildLinuxSignalsBlock(files) { return renderFileReport(getLinuxSignals(), 'buildLinuxSignalsForFiles', 'renderLinuxSignalsBlock', files); }
+
+function buildExitCodesBlock(files) { return renderFileReport(getExitCodes(), 'buildExitCodesForFiles', 'renderExitCodesBlock', files); }
+
+function buildNetworkPortsBlock(files) { return renderFileReport(getNetworkPorts(), 'buildNetworkPortsForFiles', 'renderNetworkPortsBlock', files); }
+
+function buildLinuxDistrosBlock(files) { return renderFileReport(getLinuxDistros(), 'buildLinuxDistrosForFiles', 'renderLinuxDistrosBlock', files); }
+
+function buildLifecyclePhasesBlock(files) { return renderFileReport(getLifecyclePhases(), 'buildLifecyclePhasesForFiles', 'renderLifecyclePhasesBlock', files); }
+
+function buildProjectCodenamesBlock(files) { return renderFileReport(getProjectCodenames(), 'buildProjectCodenamesForFiles', 'renderProjectCodenamesBlock', files); }
+
+function buildRiskLevelsBlock(files) { return renderFileReport(getRiskLevels(), 'buildRiskLevelsForFiles', 'renderRiskLevelsBlock', files); }
+
+function buildSaasMetricsBlock(files) { return renderFileReport(getSaasMetrics(), 'buildSaasMetricsForFiles', 'renderSaasMetricsBlock', files); }
+
+function buildRecipeMeasurementsBlock(files) { return renderFileReport(getRecipeMeasurements(), 'buildRecipeMeasurementsForFiles', 'renderRecipeMeasurementsBlock', files); }
+
+function buildIsoLangsBlock(files) { return renderFileReport(getIsoLangs(), 'buildIsoLangsForFiles', 'renderIsoLangsBlock', files); }
+
+function buildPrReviewStatesBlock(files) { return renderFileReport(getPrReviewStates(), 'buildPrReviewStatesForFiles', 'renderPrReviewStatesBlock', files); }
+
+function buildPricingTiersBlock(files) { return renderFileReport(getPricingTiers(), 'buildPricingTiersForFiles', 'renderPricingTiersBlock', files); }
+
+function buildArxivIdsBlock(files) { return renderFileReport(getArxivIds(), 'buildArxivIdsForFiles', 'renderArxivIdsBlock', files); }
+
+function buildDoiIdsBlock(files) { return renderFileReport(getDoiIds(), 'buildDoiIdsForFiles', 'renderDoiIdsBlock', files); }
+
+function buildOrcidIdsBlock(files) { return renderFileReport(getOrcidIds(), 'buildOrcidIdsForFiles', 'renderOrcidIdsBlock', files); }
+
+function buildWikiRefsBlock(files) { return renderFileReport(getWikiRefs(), 'buildWikiRefsForFiles', 'renderWikiRefsBlock', files); }
+
+function buildPubmedIdsBlock(files) { return renderFileReport(getPubmedIds(), 'buildPubmedIdsForFiles', 'renderPubmedIdsBlock', files); }
+
+function buildServiceAccountsBlock(files) { return renderFileReport(getServiceAccounts(), 'buildServiceAccountsForFiles', 'renderServiceAccountsBlock', files); }
+
+function buildVinNumbersBlock(files) { return renderFileReport(getVinNumbers(), 'buildVinNumbersForFiles', 'renderVinNumbersBlock', files); }
+
+function buildEmojiShortcodesBlock(files) { return renderFileReport(getEmojiShortcodes(), 'buildEmojiShortcodesForFiles', 'renderEmojiShortcodesBlock', files); }
+
+function buildBibtexEntriesBlock(files) { return renderFileReport(getBibtexEntries(), 'buildBibtexEntriesForFiles', 'renderBibtexEntriesBlock', files); }
+
+function buildLatexCommandsBlock(files) { return renderFileReport(getLatexCommands(), 'buildLatexCommandsForFiles', 'renderLatexCommandsBlock', files); }
+
+function buildProgLangsBlock(files) { return renderFileReport(getProgLangs(), 'buildProgLangsForFiles', 'renderProgLangsBlock', files); }
+
+function buildComplianceRefsBlock(files) { return renderFileReport(getComplianceRefs(), 'buildComplianceRefsForFiles', 'renderComplianceRefsBlock', files); }
+
+function buildTlsCiphersBlock(files) { return renderFileReport(getTlsCiphers(), 'buildTlsCiphersForFiles', 'renderTlsCiphersBlock', files); }
+
+function buildDnsRecordsBlock(files) { return renderFileReport(getDnsRecords(), 'buildDnsRecordsForFiles', 'renderDnsRecordsBlock', files); }
+
+function buildEmailAuthBlock(files) { return renderFileReport(getEmailAuth(), 'buildEmailAuthForFiles', 'renderEmailAuthBlock', files); }
+
+function buildOpenapiKeysBlock(files) { return renderFileReport(getOpenapiKeys(), 'buildOpenapiKeysForFiles', 'renderOpenapiKeysBlock', files); }
+
+function buildKafkaRefsBlock(files) { return renderFileReport(getKafkaRefs(), 'buildKafkaRefsForFiles', 'renderKafkaRefsBlock', files); }
+
+function buildAnsiEscapesBlock(files) { return renderFileReport(getAnsiEscapes(), 'buildAnsiEscapesForFiles', 'renderAnsiEscapesBlock', files); }
+
+function buildSqlWindowsBlock(files) { return renderFileReport(getSqlWindows(), 'buildSqlWindowsForFiles', 'renderSqlWindowsBlock', files); }
+
+function buildWebsocketMarkersBlock(files) { return renderFileReport(getWebsocketMarkers(), 'buildWebsocketMarkersForFiles', 'renderWebsocketMarkersBlock', files); }
+
+function buildIsoDurationsBlock(files) { return renderFileReport(getIsoDurations(), 'buildIsoDurationsForFiles', 'renderIsoDurationsBlock', files); }
+
+function buildBrowserSupportBlock(files) { return renderFileReport(getBrowserSupport(), 'buildBrowserSupportForFiles', 'renderBrowserSupportBlock', files); }
+
+function buildNumberBasesBlock(files) { return renderFileReport(getNumberBases(), 'buildNumberBasesForFiles', 'renderNumberBasesBlock', files); }
+
+function buildDmsCoordsBlock(files) { return renderFileReport(getDmsCoords(), 'buildDmsCoordsForFiles', 'renderDmsCoordsBlock', files); }
+
+function buildContainerRegistriesBlock(files) { return renderFileReport(getContainerRegistries(), 'buildContainerRegistriesForFiles', 'renderContainerRegistriesBlock', files); }
+
+function buildWktGeometryBlock(files) { return renderFileReport(getWktGeometry(), 'buildWktGeometryForFiles', 'renderWktGeometryBlock', files); }
+
+function buildMdRefLinksBlock(files) { return renderFileReport(getMdRefLinks(), 'buildMdRefLinksForFiles', 'renderMdRefLinksBlock', files); }
+
+function buildBotTokensBlock(files) { return renderFileReport(getBotTokens(), 'buildBotTokensForFiles', 'renderBotTokensBlock', files); }
+
+function buildCargoPackagesBlock(files) { return renderFileReport(getCargoPackages(), 'buildCargoPackagesForFiles', 'renderCargoPackagesBlock', files); }
+
+function buildGoModulesBlock(files) { return renderFileReport(getGoModules(), 'buildGoModulesForFiles', 'renderGoModulesBlock', files); }
+
+function buildMavenCoordsBlock(files) { return renderFileReport(getMavenCoords(), 'buildMavenCoordsForFiles', 'renderMavenCoordsBlock', files); }
+
+function buildPipReqsBlock(files) { return renderFileReport(getPipReqs(), 'buildPipReqsForFiles', 'renderPipReqsBlock', files); }
+
+function buildComposerPkgsBlock(files) { return renderFileReport(getComposerPkgs(), 'buildComposerPkgsForFiles', 'renderComposerPkgsBlock', files); }
+
+function buildNugetPkgsBlock(files) { return renderFileReport(getNugetPkgs(), 'buildNugetPkgsForFiles', 'renderNugetPkgsBlock', files); }
+
+function buildGemPkgsBlock(files) { return renderFileReport(getGemPkgs(), 'buildGemPkgsForFiles', 'renderGemPkgsBlock', files); }
+
+function buildHexPkgsBlock(files) { return renderFileReport(getHexPkgs(), 'buildHexPkgsForFiles', 'renderHexPkgsBlock', files); }
+
+function buildSvgPathCmdsBlock(files) { return renderFileReport(getSvgPathCmds(), 'buildSvgPathCmdsForFiles', 'renderSvgPathCmdsBlock', files); }
+
+function buildGeojsonBlock(files) { return renderFileReport(getGeojson(), 'buildGeojsonForFiles', 'renderGeojsonBlock', files); }
+
+function buildPwaManifestBlock(files) { return renderFileReport(getPwaManifest(), 'buildPwaManifestForFiles', 'renderPwaManifestBlock', files); }
+
+function buildPermissionsApiBlock(files) { return renderFileReport(getPermissionsApi(), 'buildPermissionsApiForFiles', 'renderPermissionsApiBlock', files); }
+
+function buildServerlessFnsBlock(files) { return renderFileReport(getServerlessFns(), 'buildServerlessFnsForFiles', 'renderServerlessFnsBlock', files); }
+
+function buildDbMigrationsBlock(files) { return renderFileReport(getDbMigrations(), 'buildDbMigrationsForFiles', 'renderDbMigrationsBlock', files); }
+
+function buildEslintRulesBlock(files) { return renderFileReport(getEslintRules(), 'buildEslintRulesForFiles', 'renderEslintRulesBlock', files); }
+
+function buildBuildToolsBlock(files) { return renderFileReport(getBuildTools(), 'buildBuildToolsForFiles', 'renderBuildToolsBlock', files); }
+
+function buildJwtClaimsBlock(files) { return renderFileReport(getJwtClaims(), 'buildJwtClaimsForFiles', 'renderJwtClaimsBlock', files); }
+
+function buildSriHashesBlock(files) { return renderFileReport(getSriHashes(), 'buildSriHashesForFiles', 'renderSriHashesBlock', files); }
+
+function buildJsonSchemaBlock(files) { return renderFileReport(getJsonSchema(), 'buildJsonSchemaForFiles', 'renderJsonSchemaBlock', files); }
+
+function buildPrismaSchemaBlock(files) { return renderFileReport(getPrismaSchema(), 'buildPrismaSchemaForFiles', 'renderPrismaSchemaBlock', files); }
+
+function buildGraphqlFragmentsBlock(files) { return renderFileReport(getGraphqlFragments(), 'buildGraphqlFragmentsForFiles', 'renderGraphqlFragmentsBlock', files); }
+
+function buildCssVarsBlock(files) { return renderFileReport(getCssVars(), 'buildCssVarsForFiles', 'renderCssVarsBlock', files); }
+
+function buildComposeServicesBlock(files) { return renderFileReport(getComposeServices(), 'buildComposeServicesForFiles', 'renderComposeServicesBlock', files); }
+
+function buildRegexFlagsBlock(files) { return renderFileReport(getRegexFlags(), 'buildRegexFlagsForFiles', 'renderRegexFlagsBlock', files); }
+
+function buildVueSfcBlock(files) { return renderFileReport(getVueSfc(), 'buildVueSfcForFiles', 'renderVueSfcBlock', files); }
+
+function buildAstroBlock(files) { return renderFileReport(getAstro(), 'buildAstroForFiles', 'renderAstroBlock', files); }
+
+function buildE2eTestsBlock(files) { return renderFileReport(getE2eTests(), 'buildE2eTestsForFiles', 'renderE2eTestsBlock', files); }
+
+function buildMswHandlersBlock(files) { return renderFileReport(getMswHandlers(), 'buildMswHandlersForFiles', 'renderMswHandlersBlock', files); }
+
+function buildGhWorkflowsBlock(files) { return renderFileReport(getGhWorkflows(), 'buildGhWorkflowsForFiles', 'renderGhWorkflowsBlock', files); }
+
+function buildJsonLdBlock(files) { return renderFileReport(getJsonLd(), 'buildJsonLdForFiles', 'renderJsonLdBlock', files); }
+
+function buildTailwindBlock(files) { return renderFileReport(getTailwind(), 'buildTailwindForFiles', 'renderTailwindBlock', files); }
+
+function buildMongoAggBlock(files) { return renderFileReport(getMongoAgg(), 'buildMongoAggForFiles', 'renderMongoAggBlock', files); }
+
+function buildHelmBlock(files) { return renderFileReport(getHelm(), 'buildHelmForFiles', 'renderHelmBlock', files); }
+
+function buildVitestBlock(files) { return renderFileReport(getVitest(), 'buildVitestForFiles', 'renderVitestBlock', files); }
+
+function buildMjmlBlock(files) { return renderFileReport(getMjml(), 'buildMjmlForFiles', 'renderMjmlBlock', files); }
+
+function buildStripeBlock(files) { return renderFileReport(getStripe(), 'buildStripeForFiles', 'renderStripeBlock', files); }
+
+function buildTerraformVarsBlock(files) { return renderFileReport(getTerraformVars(), 'buildTerraformVarsForFiles', 'renderTerraformVarsBlock', files); }
+
+function buildOpenapiSecurityBlock(files) { return renderFileReport(getOpenapiSecurity(), 'buildOpenapiSecurityForFiles', 'renderOpenapiSecurityBlock', files); }
+
+function buildK8sResourcesBlock(files) { return renderFileReport(getK8sResources(), 'buildK8sResourcesForFiles', 'renderK8sResourcesBlock', files); }
+
+function buildCssAnimBlock(files) { return renderFileReport(getCssAnim(), 'buildCssAnimForFiles', 'renderCssAnimBlock', files); }
+
+function buildStorybookBlock(files) { return renderFileReport(getStorybook(), 'buildStorybookForFiles', 'renderStorybookBlock', files); }
+
+function buildSentryBlock(files) { return renderFileReport(getSentry(), 'buildSentryForFiles', 'renderSentryBlock', files); }
+
+function buildNatsBlock(files) { return renderFileReport(getNats(), 'buildNatsForFiles', 'renderNatsBlock', files); }
+
+function buildPkgJsonBlock(files) { return renderFileReport(getPkgJson(), 'buildPkgJsonForFiles', 'renderPkgJsonBlock', files); }
+
+function buildRedisBlock(files) { return renderFileReport(getRedis(), 'buildRedisForFiles', 'renderRedisBlock', files); }
+
+function buildNginxBlock(files) { return renderFileReport(getNginx(), 'buildNginxForFiles', 'renderNginxBlock', files); }
+
+function buildOtelBlock(files) { return renderFileReport(getOtel(), 'buildOtelForFiles', 'renderOtelBlock', files); }
+
+function buildModuleFederationBlock(files) { return renderFileReport(getModuleFederation(), 'buildModuleFederationForFiles', 'renderModuleFederationBlock', files); }
+
+function buildDrizzleBlock(files) { return renderFileReport(getDrizzle(), 'buildDrizzleForFiles', 'renderDrizzleBlock', files); }
+
+function buildTwilioBlock(files) { return renderFileReport(getTwilio(), 'buildTwilioForFiles', 'renderTwilioBlock', files); }
+
+function buildAwsSdkBlock(files) { return renderFileReport(getAwsSdk(), 'buildAwsSdkForFiles', 'renderAwsSdkBlock', files); }
+
+function buildOauthFlowsBlock(files) { return renderFileReport(getOauthFlows(), 'buildOauthFlowsForFiles', 'renderOauthFlowsBlock', files); }
+
+function buildGqlClientsBlock(files) { return renderFileReport(getGqlClients(), 'buildGqlClientsForFiles', 'renderGqlClientsBlock', files); }
+
+function buildWebhookSigsBlock(files) { return renderFileReport(getWebhookSigs(), 'buildWebhookSigsForFiles', 'renderWebhookSigsBlock', files); }
+
+function buildBullmqBlock(files) { return renderFileReport(getBullmq(), 'buildBullmqForFiles', 'renderBullmqBlock', files); }
+
+function buildWebCryptoBlock(files) { return renderFileReport(getWebCrypto(), 'buildWebCryptoForFiles', 'renderWebCryptoBlock', files); }
+
+function buildConsistencyBlock(files) { return renderFileReport(getConsistencyChecker(), 'buildConsistencyForFiles', 'renderConsistencyBlock', files); }
 
 /**
  * Document outline block — emits the dominant file's table of contents so
@@ -7729,14 +4100,7 @@ function buildOutlineBlock(files) {
  * the model can mirror the register (or rewrite for plain language when
  * the source is too dense).
  */
-function buildReadabilityBlock(files) {
-  const engine = getReadabilityAnalyzer();
-  if (!engine || typeof engine.buildReadabilityForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildReadabilityForFiles(list);
-  return engine.renderReadabilityBlock(report);
-}
+function buildReadabilityBlock(files) { return renderFileReport(getReadabilityAnalyzer(), 'buildReadabilityForFiles', 'renderReadabilityBlock', files); }
 
 /**
  * Cross-document comparison block — only emitted when ≥2 files have text.
@@ -7837,14 +4201,7 @@ function renderComparisonBlockLocal(report) {
  * Domain glossary block — emitted whenever the glossary engine finds at
  * least one acronym, proper term or jargon entry across the file set.
  */
-function buildGlossaryBlock(files) {
-  const engine = getGlossaryEngine();
-  if (!engine || typeof engine.buildGlossaryForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildGlossaryForFiles(list);
-  return engine.renderGlossaryBlock(report);
-}
+function buildGlossaryBlock(files) { return renderFileReport(getGlossaryEngine(), 'buildGlossaryForFiles', 'renderGlossaryBlock', files); }
 
 /**
  * PII / sensitive-data safety block — emitted whenever any sensitive
@@ -7852,14 +4209,7 @@ function buildGlossaryBlock(files) {
  * block: it instructs the model to never echo PII verbatim and to flag
  * leaked credentials as immediate-rotation incidents.
  */
-function buildPiiSafetyBlock(files) {
-  const engine = getPiiEngine();
-  if (!engine || typeof engine.buildPiiReportForFiles !== 'function') return '';
-  const list = Array.isArray(files) ? files : [];
-  if (list.length === 0) return '';
-  const report = engine.buildPiiReportForFiles(list);
-  return engine.renderPiiSafetyBlock(report);
-}
+function buildPiiSafetyBlock(files) { return renderFileReport(getPiiEngine(), 'buildPiiReportForFiles', 'renderPiiSafetyBlock', files); }
 
 /**
  * Build the markdown EXTRACTED INSIGHTS block by running the insights
