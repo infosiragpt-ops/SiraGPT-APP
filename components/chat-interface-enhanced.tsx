@@ -10,7 +10,6 @@ import { OfficeFileIcon } from "@/components/office-file-icon"
 import * as React from "react"
 import dynamic from "next/dynamic"
 import {
-  Send,
   Paperclip,
   Code2,
   Mic,
@@ -28,24 +27,17 @@ import {
   Plus,
   Music,
   Brain,
-  FileSpreadsheet,
   File as FileIcon,
-  ArrowUp,
-  Mail,
-  Calendar,
   FolderOpen,
   Chrome,
   AppWindow,
-  NetworkIcon,
   Network,
   Monitor,
   Share,
   Search,
-  Download,
   AudioLines,
   RefreshCw,
   Check,
-  GripVertical,
   Info,
   Lock,
   Pin,
@@ -57,7 +49,6 @@ import {
   MessageSquare,
   Star,
   Disc3,
-  Menu as MenuIcon,
   BriefcaseBusiness,
   Maximize2,
   Minimize2,
@@ -136,7 +127,6 @@ import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/compone
 import { AppsMentionPicker } from "@/components/AppsMentionPicker"
 import { PinnedAppRail, type PinnedChipView } from "@/components/PinnedAppRail"
 import { useAppPins } from "@/lib/use-app-pins"
-import { MAX_PINS } from "@/lib/apps-pins"
 import {
   MENTION_COPY,
   REGISTRY_APP_IDS,
@@ -144,7 +134,6 @@ import {
   detectAtMention,
   filterPickerApps,
   groupPickerApps,
-  insertMention,
   resolveMentionedApps,
   type MentionPickerApp,
   type MentionTrigger,
@@ -204,7 +193,6 @@ import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, e
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { describeGenerateFailure, friendlyGenerateError } from "@/lib/generate-retry-policy"
 import { toast } from "sonner"
-import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -241,10 +229,6 @@ import { Virtuoso } from "react-virtuoso"
 // Optional media studios are several large client bundles. They are loaded
 // only after the user opens the corresponding tool, keeping the default chat
 // route responsive on first visit.
-const SpeechToTextComponent = dynamic(
-  () => import("./speech-to-text-component"),
-  { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando transcripción…" /> },
-)
 const TextToSpeechComponent = dynamic(
   () => import("./text-to-speech-component"),
   { ssr: false, loading: () => <ChatToolPanelLoading label="Cargando estudio de voz…" /> },
@@ -294,7 +278,6 @@ const VideoGenerationComponent = dynamic(
 import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
-import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
 import { useSidebar } from "@/components/ui/sidebar"
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
@@ -324,7 +307,6 @@ const CodePreview = dynamic(
   () => import("./code-preview").then(m => m.CodePreview),
   { ssr: false, loading: () => null },
 )
-import SpotifyResults from "./spotify-results"
 // Panel "Computer Use": solo aparece cuando el usuario activa esa
 // herramienta. Lo bajamos a dynamic para sacarlo del bundle inicial.
 const ComputerUseInterface = dynamic(
@@ -340,7 +322,6 @@ const ChatAgentComputerPanel = dynamic(
   () => import("@/components/chat/chat-agent-computer-panel"),
   { ssr: false, loading: () => <div className="h-full border-l border-border/40 bg-background" data-testid="chat-agent-computer-loading" /> },
 )
-import ExtractedDataDownload from "./ExtractedDataDownload"
 import { useComputerUse } from "@/hooks/use-computer-use"
 // Conector de Word: forwardRef pesado (TipTap/ProseMirror). Igual que
 // Excel: React.lazy (reenvía refs) + Suspense en el callsite, con prefetch
@@ -348,13 +329,6 @@ import { useComputerUse } from "@/hooks/use-computer-use"
 const WordConnector = React.lazy(() =>
   import("./WordConnector").then(m => ({ default: m.WordConnector })),
 )
-let __wordConnectorModulePromise: Promise<typeof import("./WordConnector")> | null = null
-function prefetchWordConnector() {
-  if (typeof window === "undefined") return
-  if (!__wordConnectorModulePromise) {
-    __wordConnectorModulePromise = import("./WordConnector")
-  }
-}
 // Conector de Excel: forwardRef pesado. next/dynamic no propaga refs,
 // así que usamos React.lazy + Suspense en el callsite. La carga se
 // dispara cuando el usuario activa la herramienta o pasa el ratón
@@ -363,13 +337,6 @@ const ExcelConnector = React.lazy(() =>
   import("./ExcelConnector").then(m => ({ default: m.ExcelConnector })),
 )
 import type { ExcelConnectorRef } from "./ExcelConnector"
-let __excelConnectorModulePromise: Promise<typeof import("./ExcelConnector")> | null = null
-function prefetchExcelConnector() {
-  if (typeof window === "undefined") return
-  if (!__excelConnectorModulePromise) {
-    __excelConnectorModulePromise = import("./ExcelConnector")
-  }
-}
 import {
   compareModelProviders,
   resolveModelAttributionName,
@@ -419,7 +386,6 @@ import {
   isVideoComposerFile,
   isMediaFollowupPrompt,
   isMediaUnderstandingTurn,
-  previewAttachmentKey,
   resolveComposerMediaSrc,
   resolveMediaFollowupFiles,
   resolveUploadFileId,
@@ -439,7 +405,6 @@ import { extractChatDecisionRequestFromMessages } from "@/lib/chat-work-status"
 import { ChatDecisionPanel } from "@/components/chat/decision-panel"
 import {
   DEFAULT_IMAGE_MODEL,
-  DEFAULT_IMAGE_PROVIDER,
   DEFAULT_VIDEO_DURATION,
   DEFAULT_VIDEO_MODEL,
   IMAGE_ASPECT_RATIO_OPTIONS,
@@ -881,12 +846,6 @@ function ComposerInlineLinkHighlights({ value }: { value: string }) {
   return <>{nodes}</>
 }
 
-function appendTextToken(current: string, token: string) {
-  const trimmedToken = token.trim()
-  if (!trimmedToken) return current
-  if (!current.trim()) return trimmedToken
-  return `${current.trimEnd()} ${trimmedToken}`
-}
 
 function buildSearchActivityEntry(evt: AgenticEvent, index: number, at: number): SearchActivityEntry | null {
   switch (evt.type) {
@@ -2749,17 +2708,6 @@ const ActiveToolsDisplay = ({
   );
   const hiddenImageAspectRatioCount = IMAGE_ASPECT_RATIO_OPTIONS.filter(option => !option.visibleByDefault).length;
 
-  const handleCloseAllConnectors = () => {
-    setIsGmailActive(false);
-    setIsGoogleCalendarActive(false);
-    setIsGoogleDriveActive(false);
-    setIsSpotifyActive(false);
-    setIsWordConnectorActive(false);
-    setIsExcelConnectorActive(false);
-    setIsComputerUseActive(false);
-    setComputerUseAppMode(null);
-    setChatType('text');
-  };
 
   // Remove a single connector chip (mirrors the direct-setter approach of
   // handleCloseAllConnectors so it never triggers a disconnect side-effect).
@@ -2773,35 +2721,7 @@ const ActiveToolsDisplay = ({
     else if (id.startsWith('computer-use')) { setIsComputerUseActive(false); setComputerUseAppMode(null); }
   };
 
-  const activateComputerUseMode = (mode: ComputerUseAppMode) => {
-    setIsWebSearchActive(false);
-    setIsImageGenerationActive(false);
-    setIsVoiceGenerationActive(false);
-    setIsMusicGenerationActive(false);
-    setIsVideoGenerationActive(false);
-    setIsGmailActive(false);
-    setIsGoogleCalendarActive(false);
-    setIsGoogleDriveActive(false);
-    setIsSpotifyActive(false);
-    setIsWordConnectorActive(false);
-    setIsExcelConnectorActive(false);
-    setComputerUseAppMode(mode);
-    setIsComputerUseActive(true);
-    setChatType('computer-use');
-  };
 
-  const handleComputerUseModeSwitch = (mode: ComputerUseAppMode, checked: boolean) => {
-    if (checked) {
-      activateComputerUseMode(mode);
-      return;
-    }
-
-    if (isComputerUseActive && activeComputerUseMode === mode) {
-      setIsComputerUseActive(false);
-      setComputerUseAppMode(null);
-      setChatType('text');
-    }
-  };
 
   const handleImageGenerationClose = () => {
     if (isGeneratingImage) return;
@@ -2832,10 +2752,6 @@ const ActiveToolsDisplay = ({
     setChatType('text');
   };
 
-  const handleComputerUseClose = () => {
-    setIsComputerUseActive(false);
-    setChatType('text');
-  };
 
   const handleThesisClose = () => {
     setChatType('text');
@@ -3030,92 +2946,6 @@ const ActiveToolsDisplay = ({
   const hasSkills = Boolean(composerSkills && composerSkills.selected.length > 0);
   if (!hasConnectors && !hasOtherTools && !hasThesis && !hasSkills) return null;
 
-  const renderAppSwitchItems = () => (
-    <>
-      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
-        <div className="flex items-center justify-between w-full gap-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/google.png" alt="Gmail" className="h-4 w-4 shrink-0" />
-            <span className="truncate">Gmail</span>
-          </div>
-          <Switch checked={isGmailActive} onCheckedChange={handleGmailToggle} />
-        </div>
-      </DropdownMenuItem>
-      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
-        <div className="flex items-center justify-between w-full gap-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4 shrink-0" />
-            <span className="truncate">Google Calendar</span>
-          </div>
-          <Switch checked={isGoogleCalendarActive} onCheckedChange={handleGoogleCalendarToggle} />
-        </div>
-      </DropdownMenuItem>
-      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
-        <div className="flex items-center justify-between w-full gap-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4 shrink-0" />
-            <span className="truncate">Google Drive</span>
-          </div>
-          <Switch checked={isGoogleDriveActive} onCheckedChange={handleGoogleDriveToggle} />
-        </div>
-      </DropdownMenuItem>
-      <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
-        <div className="flex items-center justify-between w-full gap-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4 shrink-0" />
-            <span className="truncate">Spotify</span>
-          </div>
-          <Switch checked={isSpotifyActive} onCheckedChange={handleSpotifyToggle} />
-        </div>
-      </DropdownMenuItem>
-      <DropdownMenuItem
-        className="chat-active-apps-menu-item"
-        onSelect={(e) => e.preventDefault()}
-        onMouseEnter={prefetchWordConnector}
-        onFocus={prefetchWordConnector}
-      >
-        <div className="flex items-center justify-between w-full gap-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <OfficeFileIcon kind="word" size={16} className="h-4 w-4 shrink-0" title="Word" />
-            <span className="truncate">Word</span>
-          </div>
-          <Switch checked={isWordConnectorActive} onCheckedChange={handleWordConnectorToggle} />
-        </div>
-      </DropdownMenuItem>
-      <DropdownMenuItem
-        className="chat-active-apps-menu-item"
-        onSelect={(e) => e.preventDefault()}
-        onMouseEnter={prefetchExcelConnector}
-        onFocus={prefetchExcelConnector}
-      >
-        <div className="flex items-center justify-between w-full gap-4">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <OfficeFileIcon kind="excel" size={16} className="h-4 w-4 shrink-0" title="Excel" />
-            <span className="truncate">Excel</span>
-          </div>
-          <Switch checked={isExcelConnectorActive} onCheckedChange={handleExcelConnectorToggle} />
-        </div>
-      </DropdownMenuItem>
-      <div className="my-1 h-px bg-border/45" />
-      <div className="px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        Control
-      </div>
-      {(["browser", "chrome", "computer"] as ComputerUseAppMode[]).map((mode) => (
-        <DropdownMenuItem key={mode} className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
-          <div className="flex items-center justify-between w-full gap-4">
-            <div className="flex min-w-0 items-center gap-2.5">
-              {computerUseAppMeta[mode].icon}
-              <span className="truncate">{computerUseAppMeta[mode].label}</span>
-            </div>
-            <Switch
-              checked={isComputerUseActive && activeComputerUseMode === mode}
-              onCheckedChange={(checked) => handleComputerUseModeSwitch(mode, checked)}
-            />
-          </div>
-        </DropdownMenuItem>
-      ))}
-    </>
-  );
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
@@ -3974,7 +3804,6 @@ const MODEL_BRAND_BY_ICON: Record<string, string> = {
   MessageSquare: "groq",
 }
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
 
 const getModelDisplayLabel = (model: any) => {
@@ -4069,48 +3898,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     void modelName;
   };
 
-  const pickModelForTier = React.useCallback((tier: "instant" | "thinking") => {
-    const models = Array.isArray(availableModels) ? availableModels : [];
-    const byName = (patterns: RegExp[]) => models.find((m: any) => {
-      const label = `${m?.name || ""} ${m?.displayName || ""}`.toLowerCase();
-      return patterns.some((pattern) => pattern.test(label));
-    });
 
-    if (tier === "instant") {
-      return byName([
-        /deepseek-v4-flash/,
-        /gpt-4o-mini|gpt-5-mini/,
-        /flash|fast|mini|haiku|lite|nano|turbo/,
-      ]) || models[0];
-    }
-
-    return byName([
-      /deepseek-v4-pro/,
-      /\bgpt-5\b|gpt-4\.1|o[134]\b/,
-      /thinking|reason|r1|pro|sonnet|opus|ultra|max/,
-    ]) || models[0];
-  }, [availableModels]);
-
-  const applyGptModelTier = React.useCallback(async (tier: "instant" | "thinking") => {
-    if (!currentChat?.id) return;
-    const nextModel = pickModelForTier(tier);
-    if (!nextModel?.name) {
-      toast.error("No hay modelos disponibles");
-      return;
-    }
-
-    setSelectedModel(nextModel.name);
-    setSelectedProvider(nextModel.provider);
-    recordRecent(nextModel.name);
-    setCurrentChat?.((chat: any) => chat ? { ...chat, model: nextModel.name } : chat);
-
-    try {
-      await apiClient.updateChat(currentChat.id, { model: nextModel.name });
-      toast.success(`Modelo actualizado: ${brandModelLabel(nextModel)}`);
-    } catch (error) {
-      toast.error("No se pudo actualizar el modelo del GPT");
-    }
-  }, [currentChat?.id, pickModelForTier, setCurrentChat, setSelectedModel, setSelectedProvider]);
 
   const startNewGptChat = React.useCallback(async () => {
     const gptId = currentChat?.customGpt?.id || currentChat?.customGptId;
@@ -5464,7 +5252,6 @@ function ChatInterfaceContent() {
     addMessage,
     addVideoMessage,
     addThesisMessage,
-    clearCurrentChat,
     selectedModel,
     createNewChat,
     setSelectedModel,
@@ -5476,9 +5263,8 @@ function ChatInterfaceContent() {
     selectChat,
     setUploadedFiles,
     chatType, setChatType,
-    availableModels, regenerateLastMessage, regenerateMessage,
+    availableModels, regenerateMessage,
     editAndRegenerate,
-    updateMessageInChat,
     activeStreamingChatIds,
     pendingStop, // Add pendingStop state
     stopStreaming,
@@ -5639,8 +5425,6 @@ function ChatInterfaceContent() {
       setInput(prev => (prev.trim() ? prev : saved))
     }
   }, [currentChat?.id, chatDraft])
-  const [isSearching, setIsSearching] = React.useState(false)
-  const [showInstructions, setShowInstructions] = React.useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = React.useState(false)
   const [selectedImageAspectRatio, setSelectedImageAspectRatio] = React.useState<ImageAspectRatio>("1:1")
   const [selectedImageQuality, setSelectedImageQuality] = React.useState<ImageQuality>("2K")
@@ -5739,7 +5523,6 @@ function ChatInterfaceContent() {
   const isVideoGenerationActiveRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
-  const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
   const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
   const [voiceCatalogModels, setVoiceCatalogModels] = React.useState<any[]>([])
@@ -6758,9 +6541,9 @@ function ChatInterfaceContent() {
   const [isProcessingGmail, setIsProcessingGmail] = React.useState(false);
   const [isGoogleCalendarActive, setIsGoogleCalendarActive] = React.useState(false);
   const [isGoogleDriveActive, setIsGoogleDriveActive] = React.useState(false);
-  const [isProcessingGoogleServices, setIsProcessingGoogleServices] = React.useState(false);
+  const [, setIsProcessingGoogleServices] = React.useState(false);
   const [isSpotifyActive, setIsSpotifyActive] = React.useState(false);
-  const [isProcessingSpotify, setIsProcessingSpotify] = React.useState(false);
+  const [, setIsProcessingSpotify] = React.useState(false);
   const [isImageGenerationActive, setIsImageGenerationActive] = React.useState(false);
   React.useEffect(() => {
     if (!isImageGenerationActive && chatType !== 'image') return;
@@ -6813,7 +6596,7 @@ function ChatInterfaceContent() {
     if (handle && chat?.isWordConnectorChat && chat.wordContent) hydrateWordConnector(chat);
   }, [hydrateWordConnector]);
   const [selectedWordText, setSelectedWordText] = React.useState<string | null>(null);
-  const [isRewriting, setIsRewriting] = React.useState(false);
+  const [, setIsRewriting] = React.useState(false);
 
   const [isExcelConnectorActive, setIsExcelConnectorActive] = React.useState(false);
   const [isGeneratingExcel, setIsGeneratingExcel] = React.useState(false);
@@ -6844,7 +6627,6 @@ function ChatInterfaceContent() {
     status: computerUseHookStatus,
     screenshot: computerUseHookScreenshot,
     reasoning: computerUseReasoning,
-    extractedData: computerUseExtractedData,
     finalUrl: computerUseFinalUrl,
     startComputerUse,
     stopComputerUse,
@@ -6853,7 +6635,6 @@ function ChatInterfaceContent() {
     currentUrl: computerUseCurrentUrl,
     actions: computerUseActions,
     takeoverState: computerUseTakeoverState,
-    addReasoningStep,
     clearReasoning
   } = useComputerUse();
 
@@ -7410,8 +7191,7 @@ But first, you need to connect your Spotify account securely using the button be
     return () => { cancelled = true; };
   }, [chatType, isVideoGenerationActive, refreshVideoModels, selectedVideoModel, videoCatalogModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
-  const [isSubscribing, setIsSubscribing] = React.useState(false);
-  const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
+  const [currentUserInfo] = React.useState<any>(null);
   const currentPlan = normalizePlanName(user?.plan);
   const isFreePlan = isFreePlanName(currentPlan);
   const [splitViewContent, setSplitViewContent] = React.useState<any>(null)
@@ -8276,58 +8056,6 @@ But first, you need to connect your Spotify account securely using the button be
     scheduleComposerTextareaResize();
   }, [input, scheduleComposerTextareaResize]);
 
-  // Instant upgrade function — restringido a super-admins.
-  // Para usuarios normales el endpoint devuelve 403, así que evitamos el
-  // round-trip y dirigimos al flujo estándar de Stripe Checkout abriendo el
-  // UpgradeModal (que internamente llama a apiClient.createStripePayment).
-  const instantUpgrade = async (plan: 'PRO' | 'PRO_MAX' | 'ENTERPRISE') => {
-    const authedUser: any = currentUserInfo || user;
-    const isSuperAdmin =
-      authedUser?.isSuperAdmin === true || authedUser?.role === 'SUPER_ADMIN';
-
-    if (!isSuperAdmin) {
-      // No emitir la petición — abrir el modal estándar de upgrade.
-      setSubscribeOpen(true);
-      return;
-    }
-
-    try {
-      setIsSubscribing(true);
-      const planMap: Record<string, { monthlyLimit: number; price?: number }> = {
-        PRO: { monthlyLimit: 500000, price: 5 },
-        PRO_MAX: { monthlyLimit: 1000000, price: 10 },
-        ENTERPRISE: { monthlyLimit: 10000000, price: 200 },
-      };
-
-      const payload = {
-        plan,
-        monthlyLimit: planMap[plan].monthlyLimit,
-        price: planMap[plan].price ?? 0,
-      };
-
-      const request = await apiClient.prepareMutatingFetch({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const res = await authenticatedFetch('/api/payments/instant', request);
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        console.warn('instantUpgrade backend failed:', body);
-        toast.error('No se pudo aplicar la actualización instantánea.');
-        return;
-      }
-
-      toast.success('Subscription applied — plan updated');
-      setSubscribeOpen(false);
-    } catch (err: any) {
-      console.error('instantUpgrade error', err);
-      toast.error('Error al aplicar la actualización instantánea.');
-    } finally {
-      setIsSubscribing(false);
-    }
-  };
 
 
   React.useEffect(() => {
@@ -9370,7 +9098,6 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => {
 
     const handleExtractionComplete = (event: Event) => {
-      const customEvent = event as CustomEvent;
       devLog('Computer Use extraction completed, refreshing chat...');
       // Refresh the current chat to show new messages
       if (currentChat?.id) {
@@ -10962,31 +10689,6 @@ But first, you need to connect your Spotify account securely using the button be
       setIsRewriting(true);
       setInput("");
 
-      // Get full document context
-      const fullDocumentContent = wordConnectorRef.current?.getHTML() || '';
-
-      // Construct prompt with full context but focus on selected text
-      const rewritePrompt = `You are editing a specific part of a document.
-
-CONTEXT:
-The user has selected the following text to edit:
-"${selectedWordText}"
-
-FULL DOCUMENT CONTEXT (for reference only):
-${fullDocumentContent}
-
-USER COMMAND:
-${msg}
-
-INSTRUCTIONS:
-1. Apply the user's command ONLY to the selected text.
-2. Use the full document context to ensure consistency in tone, style, and content, but DO NOT rewrite the whole document.
-3. Return ONLY the rewritten version of the selected text.
-4. Do NOT include any explanations, quotes, or conversational filler.
-5. If the user asks to "summarize", summarize only the selected text.
-6. If the user asks to "fix grammar", fix it only for the selected text.
-
-REWRITTEN TEXT:`;
 
       try {
         let accumulatedContent = '';
@@ -12639,136 +12341,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   };
 
-  const handlePPTGeneration = async (prompt: string, files?: any[]) => {
-    setIsGeneratingPPT(true);
-    try {
-      const professionalPrompt = buildProfessionalCapabilityPrompt('ppt', prompt);
-      let newChat = currentChat;
-      if (!currentChat) {
-        const response = await apiClient.createChat({
-          title: deriveSmartChatTitle(prompt, files, "Nuevo chat"),
-          model: selectedModel,
-        });
-        newChat = response.chat;
-        await selectChat(newChat?.id ?? "");
 
-        // Only add user message for new chat (existing chat already has it from handleSend)
-        const userMessage = {
-          id: `msg-user-${Date.now()}`,
-          chatId: newChat?.id || '',
-          role: 'USER' as const,
-          content: prompt,
-          timestamp: new Date().toISOString(),
-          files: files,
-        };
-
-        setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage];
-          return { ...prevChat, messages: updatedMessages };
-        });
-      }
-      // If currentChat exists, user message already added in handleSend
-      const assistantPlaceholder = {
-        id: `msg-assistant-generating-ppt-${Date.now()}`,
-        chatId: newChat?.id || '',
-        role: 'ASSISTANT' as const,
-        content: '[GENERATING_PPT]',
-        timestamp: new Date().toISOString(),
-      };
-
-      setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
-        return { ...prevChat, messages: updatedMessages };
-      });
-
-      const payload = {
-        prompt: professionalPrompt,
-        displayPrompt: prompt,
-        chatId: newChat?.id || '',
-        provider: selectProvider,
-        model: selectedModel,
-        files: collectUploadFileIds(files || [])
-      };
-
-      const response = await apiClient.generatePPT(payload);
-      await selectChat(newChat?.id ?? "");
-
-      toast.success(`Presentation created with ${response.slideCount} slides!`);
-    } catch (error: any) {
-      console.error('PPT generation failed:', error);
-      toast.error(error.message || 'PPT generation failed');
-    } finally {
-      setIsGeneratingPPT(false);
-    }
-  };
-
-  // Vector PPT Generation (Gamma-style, pure vector graphics)
-  const handleVectorPPTGeneration = async (prompt: string, files?: any[]) => {
-    setIsGeneratingPPT(true);
-    try {
-      const professionalPrompt = buildProfessionalCapabilityPrompt('ppt', prompt);
-      let newChat = currentChat;
-      if (!currentChat) {
-        const response = await apiClient.createChat({
-          title: deriveSmartChatTitle(prompt, files, "Nuevo chat"),
-          model: selectedModel,
-        });
-        newChat = response.chat;
-        await selectChat(newChat?.id ?? "");
-
-        const userMessage = {
-          id: `msg-user-${Date.now()}`,
-          chatId: newChat?.id || '',
-          role: 'USER' as const,
-          content: prompt,
-          timestamp: new Date().toISOString(),
-          files: files,
-        };
-
-        setCurrentChat(prevChat => {
-          if (!prevChat) return prevChat;
-          const updatedMessages = [...(prevChat.messages || []), userMessage];
-          return { ...prevChat, messages: updatedMessages };
-        });
-      }
-
-      const assistantPlaceholder = {
-        id: `msg-assistant-generating-vector-ppt-${Date.now()}`,
-        chatId: newChat?.id || '',
-        role: 'ASSISTANT' as const,
-        content: '[GENERATING_VECTOR_PPT]',
-        timestamp: new Date().toISOString(),
-      };
-
-      setCurrentChat(prevChat => {
-        if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), assistantPlaceholder];
-        return { ...prevChat, messages: updatedMessages };
-      });
-
-      const payload = {
-        prompt: professionalPrompt,
-        displayPrompt: prompt,
-        chatId: newChat?.id || '',
-        provider: selectProvider,
-        model: selectedModel,
-        files: collectUploadFileIds(files || [])
-      };
-
-      const response = await apiClient.generateVectorPPT(payload);
-
-      await selectChat(newChat?.id ?? "");
-
-      toast.success(`🎨 Vector presentation created with ${response.slideCount} slides! (${response.colorScheme} theme)`);
-    } catch (error: any) {
-      console.error('Vector PPT generation failed:', error);
-      toast.error(error.message || 'Vector PPT generation failed');
-    } finally {
-      setIsGeneratingPPT(false);
-    }
-  };
 
   // Keep a ref to the latest handleSend so the queue-drain effect below
   // can invoke the closure that sees current state — React declarations
@@ -13216,23 +12789,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeArtifact,
   ]);
 
-  const mainPaneAudioPanelEnabled = false;
-
-  const openCoworkPanel = React.useCallback(() => {
-    setShowAudioPanel(false);
-    setActiveSearchActivityId(null);
-    setDocumentPreviewUrl(null);
-    setComposerPreviewIndex(null);
-    setSidePreviewAttachment(null);
-    setSidePreviewSiblings([]);
-    setSourcesPanelData(null);
-    setIsWordConnectorActive(false);
-    setIsExcelConnectorActive(false);
-    closeArtifactPanel();
-    setCodePanelOpen(false);
-    setComputerPanelOpen(false);
-    setCoworkPanelOpen(true);
-  }, [closeArtifactPanel]);
 
   React.useEffect(() => {
     if (!codePanelOpen && !coworkPanelOpen && !computerPanelOpen) return;
@@ -15054,99 +14610,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
           ) : (
             <>
-              {mainPaneAudioPanelEnabled && showAudioPanel ? (
-                // Voice Studio responsive view
-                <div className="flex flex-1 flex-col lg:flex-row">
-                  {/* Navigation - Mobile: horizontal tabs, Desktop: vertical sidebar */}
-                  <div className="lg:w-56 lg:border-r border-border/40 p-3 sm:p-4">
-                    <div className="text-sm font-medium mb-2 hidden lg:block">Audio</div>
-
-                    {/* Mobile: Horizontal scrollable tabs */}
-                    <div className="flex lg:hidden overflow-x-auto gap-2 pb-2">
-                      <Button
-                        variant={audioTab === 'tts' ? 'default' : 'outline'}
-                        size="sm"
-                        className="flex-shrink-0"
-                        onClick={() => setAudioTab('tts')}
-                      >
-                        <Square className="h-4 w-4 mr-1" />
-                        <span className="text-xs">TTS</span>
-                      </Button>
-                      <Button
-                        variant={audioTab === 'stt' ? 'default' : 'outline'}
-                        size="sm"
-                        className="flex-shrink-0"
-                        onClick={() => setAudioTab('stt')}
-                      >
-                        <Mic className="h-4 w-4 mr-1" />
-                        <span className="text-xs">STT</span>
-                      </Button>
-                      <Button
-                        variant={audioTab === 'music' ? 'default' : 'outline'}
-                        size="sm"
-                        className="flex-shrink-0"
-                        onClick={() => setAudioTab('music')}
-                      >
-                        <Music className="h-4 w-4 mr-1" />
-                        <span className="text-xs">Music</span>
-                      </Button>
-
-                    </div>
-
-                    {/* Desktop: Vertical buttons */}
-                    <div className="hidden lg:block space-y-2">
-                      <Button
-                        variant={audioTab === 'tts' ? 'default' : 'outline'}
-                        className="w-full justify-start"
-                        onClick={() => setAudioTab('tts')}
-                      >
-                        <Square className="h-4 w-4 mr-2" />
-                        Text-to-Speech
-                      </Button>
-                      <Button
-                        variant={audioTab === 'stt' ? 'default' : 'outline'}
-                        className="w-full justify-start"
-                        onClick={() => setAudioTab('stt')}
-                      >
-                        <Mic className="h-4 w-4 mr-2" />
-                        Speech-to-Text
-                      </Button>
-                      <Button
-                        variant={audioTab === 'music' ? 'default' : 'outline'}
-                        className="w-full justify-start"
-                        onClick={() => setAudioTab('music')}
-                      >
-                        <Music className="h-4 w-4 mr-2" />
-                        Music
-                      </Button>
-
-                    </div>
-                  </div>
-
-                  {/* Content area */}
-                  <div className="flex-1 p-3 sm:p-4">
-                    {audioTab === 'tts' && (
-                      <TextToSpeechComponent />
-                    )}
-                    {audioTab === 'stt' && (
-                      <SpeechToTextComponent />
-                    )}
-                    {audioTab === 'music' && (
-                      <MusicGenerationComponent
-                        initialDuration={selectedMusicDuration}
-                        initialPromptInfluence={selectedMusicInfluence}
-                        initialStyle={selectedMusicStyle}
-                        initialMood={selectedMusicMood}
-                        initialEffect={selectedMusicEffect}
-                        initialModel={selectedMusicModel}
-                      />
-                    )}
-                    {audioTab === 'video' && (
-                      <VideoGenerationComponent />
-                    )}
-                  </div>
-                </div>
-              ) : (
+              {(
                 <>
                   {/* Messages — `min-h-0` is REQUIRED so this flex-1 scroll
                       area can shrink below its content size. Without it the

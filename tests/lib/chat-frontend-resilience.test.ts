@@ -13,7 +13,6 @@ const authSource = readFileSync(
 
 describe("chat frontend resilience contracts", () => {
   it.each([
-    "speech-to-text-component",
     "text-to-speech-component",
     "MusicGenerationComponent",
     "VideoGenerationComponent",
