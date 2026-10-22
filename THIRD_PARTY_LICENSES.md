@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1503**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1502**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -454,7 +454,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1, 22.0.0 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1103)
+## MIT (1102)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -1365,7 +1365,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `react-redux` | 9.2.0 | MIT | [link](https://github.com/reduxjs/react-redux) |
 | `react-remove-scroll` | 2.7.2 | MIT | [link](https://github.com/theKashey/react-remove-scroll) |
 | `react-remove-scroll-bar` | 2.3.8 | MIT | [link](https://github.com/theKashey/react-remove-scroll-bar) |
-| `react-resizable-panels` | 2.1.9 | MIT | [link](https://github.com/bvaughn/react-resizable-panels) |
 | `react-style-singleton` | 2.2.3 | MIT | [link](https://github.com/theKashey/react-style-singleton) |
 | `react-virtuoso` | 4.18.6 | MIT | [link](https://github.com/petyosi/react-virtuoso) |
 | `read-cache` | 1.0.0 | MIT | [link](https://github.com/TrySound/read-cache) |

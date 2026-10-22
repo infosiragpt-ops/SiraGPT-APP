@@ -196,11 +196,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(url, init)" || text === "fetch(next, init)",
   },
   {
-    file: "lib/api.ts",
-    reason: "Anonymous quota GET is intentionally unauthenticated.",
-    accepts: (text) => text.includes("/ai/anon-quota") && isNonMutatingFetchCall(text),
-  },
-  {
     file: "lib/authenticated-fetch.ts",
     reason: "Canonical transport dispatch resolves the instrumented global fetch at call time.",
     accepts: (text) => text === "globalThis.fetch(input, init)",
