@@ -2703,8 +2703,8 @@ de tres órbitas (2026-10-02). UI lock re-baselineado para los archivos tocados.
   (CI nunca lo renderiza); regenerar con `fonts-liberation` instalada. Las capturas de ficha de
   tienda `docs/store-submission/assets/**` (14 PNG) se regeneraron con
   `npm run native:store:assets:generate` (Playwright + Chromium; en un sandbox sin el build fijado,
-  un preload que fuerce `executablePath` al Chromium del sistema basta). Queda solo la copia
-  heredada `siraGPT/`, que no se compila ni se sirve.
+  un preload que fuerce `executablePath` al Chromium del sistema basta). La copia heredada
+  `siraGPT/` (no se compilaba ni se servía) se retiró el 2026-10-21.
 - Tests: `tests/lib/sira-motion.test.ts` (8, vitest), `brand-clover-source`,
   `thinking-core-source`, `sidebar-brand-header-source`, `claude-thinking-surface-source`,
   `claude-trace-rail-source`, `mobile-thinking-polish-source` actualizados; snapshot de
