@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-cross-reference.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -44,13 +46,6 @@ const REF_PATTERNS_EN = [
 const REF_PATTERNS_ES = [
   /(?:^|[^\p{L}])(?:v[eé]ase|seg[uú]n|conforme\s+al?|de\s+conformidad\s+con|en\s+los\s+t[eé]rminos\s+de|en\s+virtud\s+de|en\s+el\s+marco\s+de)\s+(?:la\s+|el\s+|los\s+|las\s+)?(Secci[oó]n|Art[ií]culo|Cl[áa]usula|Anexo|Ap[eé]ndice|Cap[ií]tulo|Apartado|P[áa]rrafo|Inciso|Acuerdo)\s+([A-Z0-9]+(?:\.[A-Z0-9]+){0,3})/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

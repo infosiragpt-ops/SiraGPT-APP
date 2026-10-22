@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-trademark.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const PRE_SYMBOL_RE = /([A-Z][A-Za-z0-9\-]{1,30}(?:\s+[A-Z][A-Za-z0-9\-]{1,30}){
 const COPYRIGHT_SYMBOL_RE = /(?:^|[\s`'"<>(])(©)\s*(\d{4}(?:[-–]\d{4})?)?\s*([A-Z][A-Za-z0-9.\-]{1,30}(?:\s+[A-Za-z0-9.\-]{1,30}){0,4})?/g;
 // "Trademark of Acme" / "Marca registrada de Acme"
 const ATTRIBUTION_RE = /\b(?:Trademark|Registered\s+Trademark|Service\s+Mark|Marca\s+(?:registrada|de\s+servicio))\s+(?:of|de)\s+([A-Z][A-Za-z0-9.\-]{1,40}(?:\s+[A-Z][A-Za-z0-9.\-]{1,40}){0,3})/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').trim();

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-priority.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -60,13 +62,6 @@ const TAG_PATTERNS = [
 
 // Labeled lines like "Priority: High" / "Severity: P1" / "Prioridad: Alta"
 const LABELED_LINE_RE = /^[\t ]*(Priority|Severity|Urgency|Prioridad|Severidad|Urgencia)\s*[:\-—]\s*([^\n]+)$/gim;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function normaliseLevel(token) {
   const t = (token || '').toLowerCase().trim();

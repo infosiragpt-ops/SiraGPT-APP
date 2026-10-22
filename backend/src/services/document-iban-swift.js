@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-iban-swift.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -47,13 +49,6 @@ const COUNTRY_PREFIXES = new Set([
   'QA', 'RO', 'RS', 'SA', 'SC', 'SE', 'SI', 'SK', 'SM', 'ST', 'SV', 'TL',
   'TN', 'TR', 'UA', 'VG', 'XK',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function isLikelyIBAN(s) {
   if (!s) return false;

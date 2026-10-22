@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-goals-targets.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const GOAL_PATTERNS_EN = [
 const GOAL_PATTERNS_ES = [
   /(?:^|[^\p{L}])(nuestro\s+objetivo\s+es|nuestra\s+meta\s+es|el\s+objetivo\s+es|la\s+meta\s+es|objetivo\s*:|meta\s*:|target\s*:|buscamos|aspiramos\s+a|nuestra\s+aspiraci[oó]n\s+es|resultado\s+clave\s*[:\d])(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

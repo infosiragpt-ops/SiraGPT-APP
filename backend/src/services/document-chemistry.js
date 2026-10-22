@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-chemistry.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +52,6 @@ const PATTERNS = [
 ];
 
 const KINDS = ['formula', 'element-name', 'symbol'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function looksLikeFormula(s) {
   if (!s) return false;

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-checklists.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -27,13 +29,6 @@ const MAX_ITEM_LEN = 200;
 
 // - [ ] item / - [x] item / * [X] item / + [-] item (indeterminate)
 const CHECKBOX_RE = /^(\s*)(?:[-*+])\s+\[([\sxX\-/?])\]\s+(.+)$/;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

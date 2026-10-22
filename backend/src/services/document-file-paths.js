@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-file-paths.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -51,13 +53,6 @@ const HOME_REL_RE = /(?:^|[\s`'"<>(,;:])(~\/(?:[a-zA-Z0-9_.\-]+\/?)+)(?=[\s`'"<>
 const PROJECT_REL_RE = /(?:^|[\s`'"<>(,;:])((?:[a-zA-Z0-9_\-]+\/)+[a-zA-Z0-9_.\-]+\.[a-zA-Z0-9]+)(?=[\s`'"<>):,;.!?]|$)/g;
 // Windows absolute
 const WINDOWS_ABS_RE = /(?:^|[\s`'"<>(,;:])([A-Z]:\\(?:[a-zA-Z0-9_.\- ]+\\)*[a-zA-Z0-9_.\- ]+)(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipPath(p) {
   const s = String(p || '');

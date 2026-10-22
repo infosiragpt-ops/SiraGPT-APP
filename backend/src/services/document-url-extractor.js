@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-url-extractor.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -28,13 +30,6 @@ const MAX_CONTEXT_LEN = 100;
 // path / query / fragment.
 const URL_RE = /\bhttps?:\/\/[\w.-]+(?::\d{1,5})?(?:\/[^\s<>"'`{}\\)\]]*)?/g;
 const MARKDOWN_LINK_RE = /\[([^\]]{1,120})\]\((https?:\/\/[^\s)]+)\)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

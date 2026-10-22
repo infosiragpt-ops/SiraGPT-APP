@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-http-methods.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -25,13 +27,6 @@ const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS', 'TR
 
 // METHOD followed by space + URL/path/quoted-URL — captures actual API call shape
 const METHOD_RE = new RegExp(`\\b(${METHODS.join('|')})\\s+(?:https?:\\/\\/|\\/|["'])`, 'g');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function emptyCounts() {
   const r = {};

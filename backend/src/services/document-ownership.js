@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-ownership.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -81,13 +83,6 @@ const ROLE_MAP = {
 };
 
 const ROLES = ['owner', 'assignee', 'reporter', 'author', 'reviewer', 'approver', 'stakeholder', 'lead'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').replace(/\s+/g, ' ').trim();

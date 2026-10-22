@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-stakeholder-map.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -92,13 +94,6 @@ const ROLE_GROUPS = [
     ],
   },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function countAll(text, re) {
   const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;

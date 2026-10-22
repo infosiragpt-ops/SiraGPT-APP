@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-hashtags.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -32,13 +34,6 @@ const MAX_VALUE_LEN = 50;
 const HASHTAG_RE = /(?:^|[\s`'"<>(,;:])#([\p{L}_][\p{L}\p{N}_]{1,49})(?=[\s`'"<>):,;.!?]|$)/gu;
 // @handle: @user, @user.subdomain, @user@instance.tld
 const HANDLE_RE = /(?:^|[\s`'"<>(,;:])(@[a-zA-Z0-9_]{2,30}(?:\.[a-zA-Z0-9_]{2,30})*(?:@[a-zA-Z0-9_.\-]{3,80})?)(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').trim();

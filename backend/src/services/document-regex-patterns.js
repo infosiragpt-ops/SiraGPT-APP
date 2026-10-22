@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-regex-patterns.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -28,13 +30,6 @@ const MAX_PATTERN_LEN = 120;
 const SLASH_REGEX_RE = /(?:^|[\s`'"<>(=,;:])(\/(?:[^/\\\n]|\\.){2,150}\/)([gimsuy]{0,6})(?=[\s`'"<>):,;.!?]|$)/g;
 const RE_COMPILE_RE = /\bre\.compile\s*\(\s*r?["']([^"'\n]{2,150})["']/gi;
 const RAW_BACKTICK_RE = /`([\^$].{1,148}[+*?$])`/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipPattern(s) {
   const t = String(s || '').trim();

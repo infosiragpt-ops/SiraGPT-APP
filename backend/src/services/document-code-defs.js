@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-code-defs.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -54,13 +56,6 @@ const PATTERNS = [
 ];
 
 const KINDS = ['function', 'class', 'type'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipName(s) {
   const t = String(s || '').trim();

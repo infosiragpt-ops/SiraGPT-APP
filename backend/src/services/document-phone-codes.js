@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-phone-codes.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -48,13 +50,6 @@ const COUNTRY_CODES = {
 
 const PHONE_RE = /(?<![\w])(\+\d{1,3})(?:[\s\-.]?\d){5,15}(?![\w])/g;
 const LABELED_RE = /\b(?:phone|tel|telephone|m[óo]vil|cell|tel[ée]fono|whatsapp)\s*[:=]?\s*(\+\d{1,3}(?:[\s\-.]?\d){5,15})/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipNumber(s) {
   const t = String(s || '').trim();

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-standards.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -47,13 +49,6 @@ const STANDARDS_PATTERNS = [
 ];
 
 const KINDS = ['ISO', 'ANSI', 'IEEE', 'RFC', 'NIST', 'W3C', 'EN', 'DIN', 'PCI', 'SOC', 'compliance'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

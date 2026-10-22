@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-call-to-action.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -47,13 +49,6 @@ const URGENCY_PATTERNS = [
   /\b(now|today|right\s+away|limited\s+time|don't\s+miss|hurry|act\s+fast)\b/i,
   /(?:^|[^\p{L}])(ahora|hoy|cuanto\s+antes|por\s+tiempo\s+limitado|no\s+lo\s+pierdas|date\s+prisa|act[uú]a\s+r[áa]pido)(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

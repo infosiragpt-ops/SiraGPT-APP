@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-recommendations.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const RECOMMEND_PATTERNS_EN = [
 const RECOMMEND_PATTERNS_ES = [
   /(?:^|[^\p{L}])(recomendamos|sugerimos|aconsejamos|proponemos|alentamos|se\s+recomienda|se\s+sugiere|se\s+aconseja|nuestra\s+recomendaci[oó]n\s+es|nuestro\s+consejo\s+es)(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-definitions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -40,13 +42,6 @@ const MEANS_RE = /\b([A-Z][A-Za-zÀ-ÿ0-9 _\-]{1,50})\s+(?:means|denotes|refers\
 const ES_RE = /(?:^|[.!?\n])\s*([A-Z][A-Za-zÀ-ÿ0-9 _\-]{1,50})\s+es\s+(?:un|una|el|la)\s+([^.!?\n]{8,200})/giu;
 // Spanish: "X se define como Y" / "X se refiere a Y" / "X significa Y"
 const ES_DEF_RE = /\b([A-Z][A-Za-zÀ-ÿ0-9 _\-]{1,50})\s+(?:se\s+define\s+como|significa|se\s+refiere\s+a)\s+([^.!?\n]{4,200})/giu;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipTerm(s) {
   const t = String(s || '').trim();

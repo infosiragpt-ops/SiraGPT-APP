@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-signature-block.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +52,6 @@ const FIELD_PATTERNS = [
   /\bWitnessed\s+by\s*:/i,
   /\bTestigo\s*:/i,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_LINE_LEN) {
   if (!text) return '';

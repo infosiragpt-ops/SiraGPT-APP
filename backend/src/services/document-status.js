@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-status.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -105,13 +107,6 @@ const BUCKETS = ['draft', 'review', 'approved', 'active', 'rejected', 'deprecate
 
 // Inline single-word callouts like "[DEPRECATED]" / "(DRAFT)" / "DEPRECATED:" at start of line
 const INLINE_CALLOUT_RE = /(?:^|\n|\s)\[?\(?\b(DRAFT|DEPRECATED|ARCHIVED|ACTIVE|APPROVED|REJECTED|BETA|ALPHA|CANARY|SUPERSEDED|OBSOLETO|BORRADOR|ACEPTADO|RECHAZADO|APROBADO)\b\)?\]?(?:[:\s\-]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').replace(/\s+/g, ' ').trim();

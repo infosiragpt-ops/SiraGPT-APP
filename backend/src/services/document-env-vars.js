@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-env-vars.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -51,13 +53,6 @@ const BARE_RE = /(?:^|[\s`'"<>(\[])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?=[\s`'"<>):,
 
 // .env-style declaration: FOO=value
 const ENV_DECLARATION_RE = /^[\t ]*(?:export\s+)?([A-Z][A-Z0-9_]*[A-Z0-9])\s*=\s*([^\n]*)$/gim;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').replace(/\s+/g, ' ').trim();

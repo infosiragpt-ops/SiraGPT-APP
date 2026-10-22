@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-sql.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -62,13 +64,6 @@ const TCL_PATTERNS = [
 ];
 
 const TYPES = ['ddl', 'dml', 'dql', 'dcl', 'tcl'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipTable(t) {
   const s = String(t || '').replace(/"/g, '').trim();

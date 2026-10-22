@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-contact-info.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -30,13 +32,6 @@ const EMAIL_RE = /\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b/g;
 const PHONE_RE = /(?:\+?\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]?\d{3,4}[\s.-]?\d{2,4}/g;
 const SOCIAL_RE = /\b(?:@[A-Za-z0-9_]{2,30}\b|(?:linkedin\.com\/in\/|twitter\.com\/|x\.com\/|github\.com\/|instagram\.com\/)[A-Za-z0-9_.\-]+)/g;
 const ADDRESS_RE = /\b\d{1,5}\s+[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,4}\s+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Calle|Av|Avenida)\b/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function maskEmail(email) {
   if (typeof email !== 'string') return '';

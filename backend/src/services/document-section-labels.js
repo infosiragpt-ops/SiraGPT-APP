@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-section-labels.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const SECTION_PATTERNS = [
 ];
 
 const KINDS = ['section', 'paragraph', 'chapter', 'article', 'part', 'annex', 'appendix', 'clause', 'paragraphTxt'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipLabel(s) {
   const t = String(s || '').trim();

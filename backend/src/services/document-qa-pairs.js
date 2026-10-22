@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-qa-pairs.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -44,13 +46,6 @@ const QA_PATTERNS = [
   // Markdown-style: "**How do I X?**\nText follows."
   /\*\*([A-Z¿][^\n?!]{6,180}\??)\*\*\s*\n([^\n]{12,500})/g,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

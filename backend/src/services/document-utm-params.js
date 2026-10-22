@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-utm-params.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -30,13 +32,6 @@ const MAX_VALUE_LEN = 80;
 const UTM_KEYS = ['source', 'medium', 'campaign', 'term', 'content', 'id'];
 
 const UTM_RE = /\butm_(source|medium|campaign|term|content|id)=([^&\s"'<>]+)/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

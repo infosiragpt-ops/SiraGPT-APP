@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-dispute-resolution.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -98,13 +100,6 @@ const SEAT_PATTERNS = [
   /\b(?:in|at|seat(?:ed)?\s+(?:in|at))\s+(?:the\s+(?:city\s+of\s+)?)?([A-Z][A-Za-zÁÉÍÓÚÑáéíóúñ.\s,-]{2,60}?)(?=[.,;]|\s+(?:before|under|administered|conducted))/i,
   /(?:^|[^\p{L}])(?:en|sede\s+(?:en|de))\s+(?:la\s+(?:ciudad\s+de\s+)?)?([A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.\s,-]{2,60}?)(?=[.,;]|\s+(?:ante|conforme|administrad[oa]))/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

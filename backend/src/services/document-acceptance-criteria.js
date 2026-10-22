@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-acceptance-criteria.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const SCENARIO_HEADER_RE = /^\s*(?:Scenario|Scenario\s+Outline|Background|Escena
 const GHERKIN_STEP_RE = /^\s*(Given|When|Then|And|But|Dado|Cuando|Entonces|Y|Pero)\b\s+([^\n]+)$/gim;
 const AC_SECTION_HEADER_RE = /^[\t ]*(?:#{1,6}\s+)?(?:Acceptance\s+Criteria|AC|Acceptance\s+Tests|Criterios\s+de\s+Aceptaci[óo]n|CA)\s*[:.]?\s*$/gim;
 const NUMBERED_BULLET_RE = /^[\t ]*(?:[-*+]|\d+[.)])\s+([^\n]+)$/gim;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const trimmed = String(s || '').replace(/\s+/g, ' ').trim();

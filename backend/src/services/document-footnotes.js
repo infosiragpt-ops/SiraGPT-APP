@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-footnotes.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -32,13 +34,6 @@ const MD_INLINE_RE = /\[\^([A-Za-z0-9_-]{1,24})\]/g;
 const NUMBERED_NOTE_RE = /^\s*(\d{1,3})[.)]\s+(.{8,400})$/gm;
 // Superscript footnote markers (¹²³). Optional second pass for richer docs.
 const SUPERSCRIPT_RE = /(?<=\w)([¹²³⁴⁵⁶⁷⁸⁹⁰]+)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

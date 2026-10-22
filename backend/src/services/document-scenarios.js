@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-scenarios.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -39,13 +41,6 @@ const SCENARIO_KIND = [
     /(?:^|[^\p{L}])(an[áa]lisis\s+de\s+sensibilidad|escenario\s+(?:de\s+sensibilidad|hipot[ée]tico)|qu[eé]\s+pasa\s+si)(?=[^\p{L}]|$)/iu,
   ] },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

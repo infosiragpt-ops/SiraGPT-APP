@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-file-sizes.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -32,13 +34,6 @@ const MAX_VALUE_LEN = 40;
 // Binary IEC: KiB, MiB, GiB, TiB, PiB
 // Bits with explicit b: Kb, Mb, Gb, Kbit, Mbit
 const SIZE_RE = /(?:^|[\s`'"<>(,;:])(\d{1,4}(?:[.,]\d{1,4})?)\s*((?:K|M|G|T|P|E)i?B|(?:K|M|G|T)i?bit|(?:K|M|G|T)bps|bytes?|bits?)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

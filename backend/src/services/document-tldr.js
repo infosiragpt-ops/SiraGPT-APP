@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-tldr.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const SCAN_HEAD_BYTES = 60_000;
 const MIN_SENTENCE_LEN = 14;
 const MAX_SENTENCE_LEN = 260;
 const MAX_BLOCK_CHARS = 3600;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-title-extractor.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -27,12 +29,6 @@
 const SCAN_HEAD_BYTES = 4_000;
 const MAX_TITLE_LEN = 140;
 const MAX_BLOCK_CHARS = 2400;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_TITLE_LEN) {
   if (!text) return '';

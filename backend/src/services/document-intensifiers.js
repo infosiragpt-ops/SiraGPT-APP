@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-intensifiers.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -36,13 +38,6 @@ const INTENSIFIERS = [
 ];
 
 const INTENSIFIER_RE = new RegExp(`(?<![A-Za-zÀ-ÿ0-9_])(${INTENSIFIERS.join('|')})(?![A-Za-zÀ-ÿ0-9_])`, 'giu');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipContext(text, idx, len) {
   const start = Math.max(0, idx - 40);

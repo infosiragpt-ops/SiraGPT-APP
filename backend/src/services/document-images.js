@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-images.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +37,6 @@ const HTML_SRC_RE = /\bsrc\s*=\s*["']([^"'\n]{1,300})["']/i;
 const HTML_ALT_RE = /\balt\s*=\s*["']([^"'\n]{0,200})["']/i;
 // :emoji_name: (gitmoji / shortcodes)
 const EMOJI_REF_RE = /(?:^|[\s`'"<>(])(:[a-z][a-z0-9_+\-]{1,30}:)(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

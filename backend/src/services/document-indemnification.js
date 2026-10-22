@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-indemnification.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -61,13 +63,6 @@ const EXCLUSION_PATTERNS_EN = [
 const EXCLUSION_PATTERNS_ES = [
   /(?:^|[^\p{L}])(da[ñn]os\s+(?:indirectos|consecuentes|incidentales|punitivos|emergentes)|lucro\s+cesante|p[eé]rdida\s+de\s+(?:datos|beneficios|ingresos))(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

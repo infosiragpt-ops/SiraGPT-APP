@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-network.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const MAC_RE = /(?<![\w:])(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}(?![\w:])/g;
 // Port: ":8080" or "port 443" or "Port: 8080"
 const PORT_LABEL_RE = /\b(?:port|puerto)\s*[:=]?\s*(\d{2,5})\b/gi;
 const PORT_INLINE_RE = /(?:^|[\s`'"<>(,;:])(?:listen(?:ing)?\s+on\s+)?:(\d{2,5})(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

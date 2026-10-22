@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-language-ratio.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -34,13 +36,6 @@ const STOPWORDS = {
 };
 
 const LANGS = Object.keys(STOPWORDS);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function tokenize(text) {
   const lower = text.toLowerCase();

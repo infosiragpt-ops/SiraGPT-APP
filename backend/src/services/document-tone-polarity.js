@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-tone-polarity.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -56,13 +58,6 @@ const NEGATIVE = new Set([
   'débil', 'pobre', 'peor', 'preocupación', 'crisis', 'desastre',
   'fatal', 'choque',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function tokenize(text) {
   return text.toLowerCase().match(/[a-záéíóúñüäöß]{2,30}/giu) || [];

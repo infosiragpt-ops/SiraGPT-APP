@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-licenses.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -57,13 +59,6 @@ const COPYRIGHT_RE = /(?:^|\s)(?:Copyright|Copyright\s*©|\(c\)|©|Derecho\s+de\
 
 // All Rights Reserved
 const ALL_RIGHTS_RE = /\b(All\s+Rights?\s+Reserved|Todos?\s+los?\s+derechos?\s+reservados?)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

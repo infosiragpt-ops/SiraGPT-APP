@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-risk-matrix.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const REVERSE_PAIR_RE = new RegExp(
   'giu'
 );
 const SCORE_RE = /\b(Risk\s+Score|Risk\s+Rating|Riesgo|Puntuaci[óo]n\s+de\s+Riesgo)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)(?:\s*\(\s*([A-Za-zÀ-ÿ ]+?)\s*\))?/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipContext(text, idx, len) {
   const start = Math.max(0, idx - 50);

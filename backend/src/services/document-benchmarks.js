@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-benchmarks.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -27,13 +29,6 @@ const BENCHMARK_PATTERNS = [
   /\b(vs\.?|versus|compared\s+to|compared\s+with|in\s+comparison\s+to|relative\s+to|against|industry\s+(?:average|benchmark|standard)|baseline|peer\s+group|market\s+average)\b/i,
   /(?:^|[^\p{L}])(frente\s+al?|comparado\s+con|en\s+comparaci[oó]n\s+con|respecto\s+al?|promedio\s+(?:de\s+la\s+)?industria|referencia\s+del\s+sector|grupo\s+de\s+pares|l[íi]nea\s+base)(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

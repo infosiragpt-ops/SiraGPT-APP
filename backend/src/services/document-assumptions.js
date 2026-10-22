@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-assumptions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -30,13 +32,6 @@ const ASSUME_PATTERNS_EN = [
 const ASSUME_PATTERNS_ES = [
   /(?:^|[^\p{L}])(asumimos|suponemos|se\s+asume|se\s+supone|partimos\s+de\s+la\s+premisa|bajo\s+el\s+supuesto\s+de\s+que|asunci[oó]n(?:es)?\s*[:.-]|supuesto(?:s)?\s*[:.-]|premisa(?:s)?\s*[:.-])(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

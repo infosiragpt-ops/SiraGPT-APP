@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-risk-register.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -94,17 +96,10 @@ const MITIGATION_TRIGGERS = [
   /\b(mitigar|mitigaci[oó]n|plan|contingencia|salvaguarda|control(?:es)?|monitoreo|respaldo|seguro|cobertura|playbook|runbook|escalamiento|escalamiento|plan\s+de\s+continuidad)\b/i,
 ];
 
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1).trimEnd()}…`;
-}
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
 }
 
 function splitSentences(text) {

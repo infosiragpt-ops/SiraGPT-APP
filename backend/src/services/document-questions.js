@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-questions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -33,13 +35,6 @@ const SPANISH_Q_RE = /¿([^¿?\n]{4,200})\?/g;
 
 const WH_WORDS_EN = ['what', 'who', 'where', 'when', 'why', 'how', 'which', 'whose'];
 const WH_WORDS_ES = ['qué', 'que', 'quién', 'quien', 'dónde', 'donde', 'cuándo', 'cuando', 'por qué', 'porque', 'cómo', 'como', 'cuál', 'cual'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

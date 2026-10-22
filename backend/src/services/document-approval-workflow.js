@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-approval-workflow.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -37,13 +39,6 @@ const STAGE_PATTERNS = [
 
 const DATE_NEAR_RE = /\bDate\s*[:\-]?\s*([0-9A-Za-zÁÉÍÓÚÑáéíóúñ ,\/-]{4,40})/i;
 const FECHA_NEAR_RE = /\bFecha\s*[:\-]?\s*([0-9A-Za-zÁÉÍÓÚÑáéíóúñ ,\/-]{4,40})/i;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-fact-density.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -42,12 +44,6 @@ const DATE_RE = /\b(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|Q[1-4]\s+\d{4}|\
 const ENTITY_RE = /\b([\p{Lu}][\p{L}\p{N}'\-]{2,}(?:\s+[\p{Lu}][\p{L}\p{N}'\-]+){0,3})\b/gu;
 const ACRONYM_RE = /\b([A-Z]{2,}[A-Z0-9]{0,6})\b/g;
 const CITATION_RE = /\(([A-ZÁÉÍÓÚÑ][\w'-]+(?:\s+(?:y|and|&|et al\.?))?(?:\s+[A-ZÁÉÍÓÚÑ][\w'-]+)*,?\s+(?:19|20)\d{2}[a-z]?)\)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = 80) {
   if (!text) return '';

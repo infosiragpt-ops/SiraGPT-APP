@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-pricing-extractor.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -59,13 +61,6 @@ const AMOUNT_RE = /([$€£¥]|US\$|MX\$|R\$|S\/\.?)\s?(\d{1,3}(?:[.,]\d{3})*(?:
 const CODE_AMOUNT_RE = /\b(USD|EUR|GBP|JPY|BRL|ARS|MXN|PEN|COP|CLP|CHF)\s?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?(?:\s?(?:[KkMmBb]|million|billion|millones?|billones?))?)/gi;
 
 const LABEL_BEFORE_AMOUNT_RE = /([A-Z][A-Za-z0-9ÁÉÍÓÚÑáéíóúñ\s/&\-]{2,40})\s*(?:[:=]|\bof\s+|\bes\s+de\s+|\bcuesta\s+|\bvale\s+|\bdel?\s+|\b)\s*([$€£¥]|US\$|MX\$|R\$|S\/\.?)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

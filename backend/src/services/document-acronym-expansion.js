@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-acronym-expansion.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const ACR_THEN_EXPANSION_RE = /\b([A-Z][A-Z0-9]{1,9})\s*\(((?:[A-ZÁÉÍÓÚÑ][
 
 // "Expanded Form, hereinafter X," / "Expanded Form, en adelante X,"
 const HEREINAFTER_RE = /\b((?:[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.\-']{1,30}\s+){1,8}[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ.\-']{1,30}),?\s+(?:hereinafter|hereafter|in\s+adelante|en\s+adelante|conocido\s+como)\s+("?[A-Z][A-Z0-9]{1,9}"?)\s*[,.]?/i;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clean(text) {
   return String(text || '').trim().replace(/\s+/g, ' ').replace(/^["']+|["']+$/g, '');

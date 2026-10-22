@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-conditional-clauses.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -61,13 +63,6 @@ const TRIGGER_PATTERNS = [
     /(?:^|[^\p{L}])en\s+su\s+defecto/iu,
   ] },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

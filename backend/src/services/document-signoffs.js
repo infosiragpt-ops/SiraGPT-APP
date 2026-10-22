@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-signoffs.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -39,13 +41,6 @@ const SIGNOFF_RE = new RegExp(
   '(?:^|\\n)\\s*(' + SIGNOFF_PHRASES.map((s) => s.replace(/[.+\\-]/g, '\\$&')).join('|') + ')[,.!]?[ \\t]*(?:\\n+[ \\t]*([^\\n]{1,80}))?',
   'gim'
 );
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipName(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

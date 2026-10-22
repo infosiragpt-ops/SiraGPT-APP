@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-taxa.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -45,13 +47,6 @@ const STOP_PAIRS = new Set([
   'New mexico', 'New hampshire', 'New zealand', 'South africa', 'South korea',
   'North korea', 'Saudi arabia', 'Dominican republic',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function isLikelyTaxon(text) {
   if (!text) return false;

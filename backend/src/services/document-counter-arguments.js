@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-counter-arguments.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const TRIGGER_PATTERNS = [
   /\b(one\s+concern\s+is|critics\s+argue|detractors\s+(?:claim|say|note)|opponents\s+of\s+\w+\s+(?:claim|say)|a\s+counter[-\s]?argument\s+is|the\s+counterpoint\s+is|a\s+caveat\s+is|a\s+limitation\s+is)\b/i,
   /(?:^|[^\p{L}])(sin\s+embargo|no\s+obstante|por\s+otro\s+lado|por\s+el\s+contrario|en\s+contraste|aunque|si\s+bien|a\s+pesar\s+de|cr[ií]ticos\s+(?:argumentan|sostienen|señalan)|detractores\s+(?:señalan|argumentan)|opositores\s+(?:señalan|argumentan)|un\s+contra-?argumento\s+es|un\s+inconveniente\s+es)(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

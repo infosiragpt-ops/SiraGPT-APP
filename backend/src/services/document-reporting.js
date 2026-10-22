@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-reporting.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const REPORTING_VERBS = [
 ];
 
 const REPORTING_RE = new RegExp(`(?<![A-Za-zÀ-ÿ0-9_])(${REPORTING_VERBS.join('|')})(?![A-Za-zÀ-ÿ0-9_])`, 'giu');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipContext(text, idx, len) {
   const start = Math.max(0, idx - 50);

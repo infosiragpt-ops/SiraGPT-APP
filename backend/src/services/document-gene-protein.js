@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-gene-protein.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -61,13 +63,6 @@ const COMMON_NON_GENES = new Set([
   'ETC', 'IE', 'EG', 'PHD', 'MBA', 'MSC', 'BSC', 'BCE', 'BCE',
   'AI', 'ML', 'NLP', 'CNN', 'RNN', 'LLM',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function emptyTotals() {
   const r = {};

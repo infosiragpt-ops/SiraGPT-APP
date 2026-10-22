@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-reading-time.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -27,13 +29,6 @@ const SCAN_HEAD_BYTES = 200_000;
 const MAX_BLOCK_CHARS = 3500;
 
 const WPM_BANDS = { slow: 200, average: 250, fast: 350 };
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function tokenize(text) {
   return text.match(/[a-zA-ZÀ-ÿ0-9]+/g) || [];

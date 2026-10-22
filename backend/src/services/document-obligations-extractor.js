@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-obligations-extractor.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -64,13 +66,6 @@ const SUBJECT_PATTERNS = [
   /^([A-ZÁÉÍÓÚÑ][\p{L}\p{N}'\-]+(?:\s+[A-ZÁÉÍÓÚÑ][\p{L}\p{N}'\-]+){0,4})\s+(?:shall|must|will|agrees|undertakes|is)\b/u,
   /^(?:The\s+|El\s+|La\s+|Los\s+|Las\s+|Un\s+|Una\s+)?([A-ZÁÉÍÓÚÑ][\p{L}\p{N}'\-]+(?:\s+[A-ZÁÉÍÓÚÑ][\p{L}\p{N}'\-]+){0,3})\s+(?:deber|tiene|se\s+compromete|est[áa]\s+obligad|se\s+obliga|queda\s+obligad)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

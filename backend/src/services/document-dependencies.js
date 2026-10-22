@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-dependencies.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -44,13 +46,6 @@ const CARGO_TOML_RE = /^[\t ]*([a-zA-Z][a-zA-Z0-9_\-]*)\s*=\s*"(\^?~?[\d.]+(?:[\
 const GO_MOD_RE = /\brequire\s+(?:\(|)([a-zA-Z0-9_./\-]+)\s+v?(\d+\.\d+\.\d+(?:[\-+][\w.]+)?)/gi;
 // maven/gradle: 'com.example:lib:1.2.3' or implementation 'com.example:lib:1.2.3'
 const MAVEN_RE = /['"]([a-zA-Z0-9_\-.]+:[a-zA-Z0-9_\-.]+:\d+\.\d+(?:\.\d+)?(?:[\-+][\w.]+)?)['"]/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipName(n) {
   const s = String(n || '').trim();

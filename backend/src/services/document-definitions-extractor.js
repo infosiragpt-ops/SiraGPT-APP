@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-definitions-extractor.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -42,13 +44,6 @@ const DEFINITION_PATTERNS_ES = [
   /(?:^|[^\p{L}])(?:["“]?)([A-ZÁÉÍÓÚÑ][A-Za-z0-9ÁÉÍÓÚÑáéíóúñ\s\-/&]{1,79})(?:["”]?)\s+(?:se\s+define\s+como|significa|se\s+entiende\s+(?:como|por)|hace\s+referencia\s+a|denota|representa)\s+([^.]{4,280})\.?/giu,
   /\bPor\s+["“]?([A-ZÁÉÍÓÚÑ][A-Za-z0-9ÁÉÍÓÚÑáéíóúñ\s\-/&]{1,79})(?:["”]?)\s+se\s+(?:entenderá|entiende|comprende|considerará|refiere\s+a)\s+([^.]{4,280})\.?/gi,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

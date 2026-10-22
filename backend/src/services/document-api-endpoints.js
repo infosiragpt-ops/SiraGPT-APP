@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-api-endpoints.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -40,13 +42,6 @@ const SECTION_HEADER_RE = /(?:^|\n)\s*#{1,6}\s+(GET|POST|PUT|PATCH|DELETE|HEAD|O
 
 // OpenAPI: '  /api/foo:' inside a paths: block
 const OPENAPI_PATH_RE = /(?:^|\n)\s{2,}(\/[a-zA-Z0-9_\-/{}.:]+)\s*:\s*(?=\n)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipPath(p) {
   const s = String(p || '');

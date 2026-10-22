@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-currency-symbols.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -42,13 +44,6 @@ const SYMBOL_TO_ISO = {
 
 // Symbols, NOT followed by a digit (since digits = amount captured by document-currency)
 const SYMBOL_RE = new RegExp(`([${Object.keys(SYMBOL_TO_ISO).join('')}])(?!\\s*-?\\d)`, 'g');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipContext(text, idx, len) {
   const start = Math.max(0, idx - 50);

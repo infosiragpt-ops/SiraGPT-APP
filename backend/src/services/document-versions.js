@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-versions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -36,13 +38,6 @@ const VERSION_LABEL_RE = /^[\t ]*(?:Version|Versi[óo]n|Release|Lanzamiento|Tag)
 const RELEASE_HEADER_RE = /^[\t ]*(?:#{1,6}\s+)?(?:Release|Version|Lanzamiento|Versi[óo]n)\s+(v?\d+(?:\.\d+){0,3}(?:[-+][\w.-]+)?)(?:\s*\(([^)]+)\))?/gim;
 // CalVer (YYYY.MM.DD or YYYY.M.D)
 const CALVER_RE = /(?:^|[\s`'"<>(])(20\d{2}\.(?:0?[1-9]|1[0-2])\.(?:0?[1-9]|[12]\d|3[01]))(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').trim();

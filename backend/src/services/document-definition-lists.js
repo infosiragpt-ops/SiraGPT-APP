@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-definition-lists.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -33,13 +35,6 @@ const MAX_DEF_LEN = 200;
 const MD_DL_RE = /(?:^|\n)([A-Z][A-Za-zÀ-ÿ0-9 .\-]{1,60})\n[\t ]*:[\t ]+([^\n]{4,200})/g;
 // HTML-style dt / dd references (semantic mention)
 const HTML_DL_RE = /<dt>([^<\n]{1,80})<\/dt>\s*<dd>([^<\n]{1,200})<\/dd>/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipTerm(s) {
   const t = String(s || '').trim();
