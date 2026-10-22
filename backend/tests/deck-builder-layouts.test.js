@@ -332,7 +332,7 @@ test('appendTextSlide (plain decks): the cloned «Gracias» slide drops the sour
 
 test('executive layouts: cover subtitle, kicker, takeaway bar, hero stat, 2x2 matrix, and 6-card Bento grid pass static design audit', async () => {
   const { auditPptxDesign } = require('../src/services/document-pipeline/pptx-design-audit');
-  const { sandbox, result, zip } = await createDeck({
+  const { sandbox, executors, result, zip } = await createDeck({
     topic: 'Transformación Digital 2027',
     title: 'Plan Estratégico de Transformación Digital',
     subtitle: 'Hoja de ruta ejecutiva para eficiencia operativa y crecimiento rentable',
@@ -399,5 +399,23 @@ test('executive layouts: cover subtitle, kicker, takeaway bar, hero stat, 2x2 ma
 
   const audit = auditPptxDesign(sandbox.files.get('outputs/ejecutivo.pptx'));
   assert.equal(audit.passed, true, JSON.stringify(audit.errors));
+
+  const addedRaw = await executors.add_slide({
+    path: '/workspace/outputs/ejecutivo.pptx',
+    title: 'La adopción regional superó la meta trimestral',
+    kicker: 'EXPANSIÓN COMERCIAL',
+    stat: { value: '94%', caption: 'Cobertura en cuentas corporativas clave', source: 'CRM Q4' },
+    bullets: ['Crecimiento sostenido en el segmento financiero', 'Retención neta de ingresos superior al objetivo'],
+    takeaway: 'El canal corporativo consolida el liderazgo regional.',
+    notes: 'Cierre de métricas comerciales.',
+  });
+  const added = JSON.parse(addedRaw);
+  assert.equal(added.ok, true);
+  assert.equal(added.layout, 'bullets');
+  const v2Slides = orderedSlideXml(new PizZip(sandbox.files.get('outputs/ejecutivo-v2.pptx')));
+  assert.equal(v2Slides.length, 6);
+  assert.ok(v2Slides[4].includes('EXPANSIÓN COMERCIAL') && v2Slides[4].includes('94%') && v2Slides[4].includes('SiraTakeaway text'));
+  const v2Audit = auditPptxDesign(sandbox.files.get('outputs/ejecutivo-v2.pptx'));
+  assert.equal(v2Audit.passed, true, JSON.stringify(v2Audit.errors));
 });
 

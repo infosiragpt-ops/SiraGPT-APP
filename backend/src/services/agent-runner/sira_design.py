@@ -47,7 +47,11 @@ FONT_FALLBACKS = {'aptos display': 'Calibri', 'aptos': 'Calibri'}
 HEX_RE = re.compile(r'^[0-9A-Fa-f]{6}$')
 DECO_PREFIX = 'SiraDeco'
 DECO_THEME_RE = re.compile(r'^SiraDeco\[([^\]]+)\]')
-KEEP_PREFIXES = ('SiraCard', 'SiraChip', 'SiraKpi')
+KEEP_PREFIXES = (
+    'SiraCard', 'SiraChip', 'SiraKpi',
+    'SiraKicker', 'SiraTakeaway', 'SiraCover',
+    'SiraStep', 'SiraQuote', 'SiraRail',
+)
 CLOSING_RE = re.compile(r'^\s*(gracias|muchas gracias|thank(s| you)|preguntas|q\s*&\s*a|fin)\b', re.I)
 # A KPI is a real METRIC followed by its label with a plain space («35 %
 # reducción…», «$2,4 M en ahorro»). Numbered outlines («1. Planificación»),
@@ -894,26 +898,48 @@ def _cards_from_bullets(slide, title, theme, W, H):
 
 
 def _restyle_cards(slide, theme):
-    """A second pass (v2 → v3) recolors the cards it made before."""
+    """A second pass (v2 → v3) recolors the cards and executive elements it made before."""
     pal = theme['palette']
     body = _text_for(pal['surface'], pal['body'])
+    alt_body = _text_for(pal['surfaceAlt'], pal['body'])
+    ink = _text_for(pal['surface'], pal['ink'])
     for shape in slide.shapes:
         name = str(shape.name)
         try:
-            if name.startswith('SiraCard') and not name.endswith('text'):
+            if name == 'SiraCard takeaway':
+                shape.fill.solid()
+                shape.fill.fore_color.rgb = _rgb(pal['surfaceAlt'])
+                shape.line.color.rgb = _rgb(pal['chipLine'])
+            elif name.startswith('SiraCard') and not name.endswith('text'):
                 shape.fill.solid()
                 shape.fill.fore_color.rgb = _rgb(pal['surface'])
                 shape.line.color.rgb = _rgb(pal['chipLine'])
             elif name.startswith('SiraChip'):
                 shape.fill.solid()
                 shape.fill.fore_color.rgb = _rgb(pal['accent'])
-                _style_text(shape.text_frame, theme['fonts']['display'], _on(pal['accent']), bold=True)
+                if getattr(shape, 'has_text_frame', False) and shape.has_text_frame:
+                    _style_text(shape.text_frame, theme['fonts']['display'], _on(pal['accent']), bold=True)
             elif name.startswith('SiraCard') and name.endswith('text'):
                 _style_text(shape.text_frame, theme['fonts']['body'], body)
             elif name.startswith('SiraKpi') and name.endswith('value'):
                 _style_text(shape.text_frame, theme['fonts']['display'], _text_for(pal['surface'], pal['accent'], 3.0), bold=True)
             elif name.startswith('SiraKpi'):
                 _style_text(shape.text_frame, theme['fonts']['body'], body)
+            elif name.startswith('SiraKicker'):
+                _style_text(shape.text_frame, theme['fonts']['display'], _text_for(pal['bg'], pal['accent'], 3.0), bold=True)
+            elif name.startswith('SiraTakeaway'):
+                _style_text(shape.text_frame, theme['fonts']['body'], alt_body)
+            elif name.startswith('SiraCover'):
+                _style_text(shape.text_frame, theme['fonts']['body'], _text_for(pal['coverBg'], pal['coverMuted']))
+            elif name.startswith('SiraStep') and name.endswith('title'):
+                _style_text(shape.text_frame, theme['fonts']['display'], ink, bold=True)
+            elif name.startswith('SiraStep'):
+                _style_text(shape.text_frame, theme['fonts']['body'], body)
+            elif name.startswith('SiraQuote'):
+                _style_text(shape.text_frame, theme['fonts']['display'], _text_for(pal['surfaceAlt'], pal['ink']))
+            elif name.startswith('SiraRail'):
+                shape.fill.solid()
+                shape.fill.fore_color.rgb = _rgb(pal['chipLine'])
         except Exception:
             continue
 
