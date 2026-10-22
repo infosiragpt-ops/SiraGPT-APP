@@ -219,34 +219,39 @@ test('the turn\'s uploads count as staged only on proof; a call that failed befo
 
 // ─── Delivery: complete files only ───────────────────────────────────────
 
-test('a file cut while saving is never delivered: ZIP / PNG / JPEG / GIF / WebP / SVG need their ending', () => {
+test('a file cut while saving is never delivered: ZIP/Office, PDF and SVG need their ending; images too when the run was cut', () => {
   const ok = (ext, data, opts) => INTERNAL.validateOutboxFile(ext, Buffer.isBuffer(data) ? data : Buffer.from(data), opts).passed;
+  const cut = { interrupted: true };
   const zipEnd = Buffer.concat([Buffer.from([0x50, 0x4b, 0x05, 0x06]), Buffer.alloc(18)]);
   const docx = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('[Content_Types].xml word/document.xml '.repeat(4)), zipEnd]);
   assert.equal(ok('docx', docx), true);
   assert.equal(ok('docx', docx.subarray(0, docx.length - 30)), false, 'python-docx writes the manifest first: a cut file still has it');
   assert.equal(ok('xlsx', docx.subarray(0, 60)), false);
   assert.equal(INTERNAL.zipEndRecordPresent(docx), true);
+  assert.equal(ok('svg', '<svg viewBox="0 0 10 10"><rect width="5"'), false, 'an SVG without its closing tag is cut');
+  assert.equal(ok('pdf', '%PDF-1.7\nsin final'), false);
   const png = Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(40, 3),
     Buffer.from([0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]),
   ]);
-  assert.equal(ok('png', png), true);
-  assert.equal(ok('png', png.subarray(0, 30)), false);
+  assert.equal(ok('png', png, cut), true);
+  assert.equal(ok('png', png.subarray(0, 30), cut), false);
   const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 1), Buffer.from([0xff, 0xd9])]);
-  assert.equal(ok('jpg', jpg), true);
-  assert.equal(ok('jpeg', jpg.subarray(0, 60)), false);
+  assert.equal(ok('jpg', jpg, cut), true);
+  assert.equal(ok('jpeg', jpg.subarray(0, 60), cut), false);
   const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(30, 2), Buffer.from([0x3b])]);
-  assert.equal(ok('gif', gif), true);
-  assert.equal(ok('gif', gif.subarray(0, 20)), false);
+  assert.equal(ok('gif', gif, cut), true);
+  assert.equal(ok('gif', gif.subarray(0, 20), cut), false);
   const webpBody = Buffer.concat([Buffer.from('WEBP'), Buffer.alloc(40, 5)]);
   const riffSize = Buffer.alloc(4);
   riffSize.writeUInt32LE(webpBody.length);
   const webp = Buffer.concat([Buffer.from('RIFF'), riffSize, webpBody]);
-  assert.equal(ok('webp', webp), true);
-  assert.equal(ok('webp', webp.subarray(0, 30)), false);
-  assert.equal(ok('svg', '<svg viewBox="0 0 10 10"><rect width="5"'), false, 'an SVG without its closing tag is cut');
-  assert.equal(ok('pdf', '%PDF-1.7\nsin final'), false);
+  assert.equal(ok('webp', webp, cut), true);
+  assert.equal(ok('webp', webp.subarray(0, 30), cut), false);
+  // A finished run closed its files: a camera photo copied as-is keeps the
+  // data after its end marker (motion photo, maker trailer) and is delivered.
+  const motionPhoto = Buffer.concat([jpg, Buffer.from('....ftypmp42 video data appended after the JPEG....')]);
+  assert.equal(ok('jpg', motionPhoto), true);
 });
 
 test('when the run was cut (time limit / killed), a format that cannot prove it is complete is not delivered', async () => {

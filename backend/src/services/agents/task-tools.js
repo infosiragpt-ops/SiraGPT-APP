@@ -650,9 +650,14 @@ const VALIDATION_CHECK_REASONS = {
 // Intact includes its END: a save cut short (the run hit its time limit or
 // the memory limit while writing) leaves a file whose first bytes are right —
 // python-docx and openpyxl write [Content_Types].xml first — and that Word,
-// Excel or an image viewer cannot open. Formats with a structural ending are
-// checked for it; when the run was cut, a format without one (CSV, text,
-// HTML…) cannot be proven complete and is not delivered.
+// Excel or an image viewer cannot open. A ZIP/Office package without its
+// central directory, a PDF without %%EOF or an SVG without </svg> is never
+// openable, so those are always checked. Images are checked for their
+// ending (PNG IEND, JPEG EOI, GIF trailer, WebP RIFF size) only when the run
+// was cut: a finished run closed its files, and a camera photo copied as-is
+// may legitimately carry data after its end marker (motion photos, maker
+// trailers). When the run was cut, a format without a structural ending
+// (CSV, text, HTML…) cannot be proven complete and is not delivered.
 const ZIP_BASED_FORMATS = new Set(['docx', 'xlsx', 'pptx', 'docm', 'xlsm', 'pptm', 'odt', 'ods', 'odp', 'epub', 'zip', 'jar']);
 const ZIP_END_OF_CENTRAL_DIRECTORY = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
 
@@ -687,8 +692,8 @@ function validateOutboxFile(ext, buffer, { interrupted = false } = {}) {
     checks.validMagic = Boolean(bufferHasMagic(buffer, format));
     const ended = binaryEndPresent(format, buffer);
     if (ended !== null) {
-      checks.complete = ended;
       verifiable = true;
+      if (interrupted) checks.complete = ended;
     }
   } else if (ZIP_BASED_FORMATS.has(format)) {
     checks.validMagic = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b
