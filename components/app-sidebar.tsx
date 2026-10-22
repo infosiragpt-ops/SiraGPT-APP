@@ -268,10 +268,10 @@ const getSidebarChatTitleParts = (value: unknown) => {
 
 /** Neutral nav chrome with fast visual feedback and no decorative color. */
 const NAV_ROW =
-  "group/nav flex h-9 w-full items-center justify-start gap-3 rounded-lg px-2.5 text-left text-[13px] font-normal leading-none text-muted-foreground transition-[background-color,color,transform] duration-150 hover:bg-foreground/[0.045] hover:text-foreground active:scale-[0.992] dark:hover:bg-white/[0.07]"
+  "group/nav sidebar-nav-row flex h-9 w-full items-center justify-start gap-3 rounded-lg px-2.5 text-left text-[13px] font-normal leading-none text-muted-foreground transition-[background-color,color,transform] duration-150 hover:bg-foreground/[0.045] hover:text-foreground active:scale-[0.992] dark:hover:bg-white/[0.07]"
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
-const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
+const NAV_ICON = "sidebar-nav-icon h-5 w-5 shrink-0 stroke-[1.85]"
 // The header's collapse toggle: a real 32px hit target (Notion/Linear size)
 // with a 20px glyph, flush with the rail's right edge.
 const HEADER_TOGGLE_BTN =

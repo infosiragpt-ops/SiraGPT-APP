@@ -9688,6 +9688,44 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   color: hsl(var(--foreground));
 }
 
+/* Futuristic gyroscopic hover rotation on sidebar navigation icons & brand mark (Luis, 2026-10-22). */
+@keyframes sira-futuristic-orbit {
+  0% {
+    transform: perspective(180px) rotateY(0deg) rotateZ(0deg) scale(1);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  45% {
+    transform: perspective(180px) rotateY(22deg) rotateZ(195deg) scale(1.12);
+    filter: drop-shadow(0 0 6px hsl(var(--celeste) / 0.42));
+  }
+  100% {
+    transform: perspective(180px) rotateY(0deg) rotateZ(360deg) scale(1.05);
+    filter: drop-shadow(0 0 3px hsl(var(--celeste) / 0.22));
+  }
+}
+
+.sidebar-nav-icon,
+.sidebar-brand svg {
+  transform-origin: center;
+  will-change: transform;
+  transition: color 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sidebar-nav-row:hover .sidebar-nav-icon,
+.sidebar-nav-row:focus-visible .sidebar-nav-icon,
+.sidebar-brand:hover svg {
+  animation: sira-futuristic-orbit 560ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-nav-row:hover .sidebar-nav-icon,
+  .sidebar-nav-row:focus-visible .sidebar-nav-icon,
+  .sidebar-brand:hover svg {
+    animation: none;
+    transform: none;
+  }
+}
+
 /* Title rename field: thin professional light-blue border. */
 .chat-title-input--celeste {
   border: 1px solid hsl(var(--celeste) / 0.85);
