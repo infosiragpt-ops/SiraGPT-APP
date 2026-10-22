@@ -1,9 +1,10 @@
 'use strict';
 
 const { isDeepStrictEqual } = require('node:util');
+const contextWindow = require('../context-window');
 const { throwIfAborted } = require('../../utils/abort-signals');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
-const { normalizeToolTranscript, sealToolTranscriptInPlace, isToolTranscriptError } = require('./tool-transcript');
+const { normalizeToolTranscript, sealToolTranscriptInPlace, isToolTranscriptError, toolCallGroups } = require('./tool-transcript');
 const {
   MAX_VERIFICATION_RETRIES,
   needsVerification,
@@ -707,10 +708,77 @@ function classifyLoopError({ code, err } = {}) {
  * max(1500, max_tokens) ≈ 2048 tokens used to cut tool results to 80–400
  * chars and could drop the user's own request).
  */
-function resolveContextBudgetTokens(env = process.env) {
+function resolveContextBudgetTokens(env = process.env, { model, maxTokens, tools = [] } = {}) {
   const raw = Number(env.SIRAGPT_AGENT_RUNNER_CONTEXT_TOKENS);
   const n = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60_000;
-  return Math.max(8_000, Math.min(120_000, n));
+  const configured = Math.max(8_000, Math.min(120_000, n));
+  if (!model) return configured;
+  const completion = Number(maxTokens) > 0 ? Number(maxTokens) : resolveAgentRunnerMaxTokens(env);
+  const schema = tools.length ? Math.ceil(Buffer.byteLength(JSON.stringify(tools), 'utf8') / 4) : 0;
+  return Math.max(0, Math.min(configured, Math.floor(contextWindow.getContextLimit(model) * 0.8) - completion - schema));
+}
+
+// Count the wire shape too: String(content) ignores image/text parts and
+// tool arguments. Image bytes are not text tokens; reserve a vision allowance.
+function estimateRunnerContextTokens(messages, model) {
+  let tokens = 0;
+  for (const message of messages || []) {
+    let content = message?.content;
+    if (Array.isArray(content)) content = content.map((part) => {
+      if (part?.type === 'image_url' || part?.type === 'image') {
+        tokens += 1100;
+        return { type: part.type };
+      }
+      return part;
+    });
+    const wireBytes = Buffer.byteLength(JSON.stringify({ ...message, content }), 'utf8');
+    // Native signed reasoning blocks are non-enumerable but are sent by the
+    // first-party adapter. Count them instead of counting their projection twice.
+    const nativeBytes = Array.isArray(message?._anthropicContent) && (!model || message._anthropicModel === model)
+      ? Buffer.byteLength(JSON.stringify(message._anthropicContent), 'utf8') : 0;
+    const nudgeBytes = typeof message?._anthropicToolNudge === 'string' ? Buffer.byteLength(message._anthropicToolNudge, 'utf8') : 0;
+    tokens += Math.ceil((Math.max(wireBytes, nativeBytes) + nudgeBytes) / 4) + 4;
+  }
+  return tokens;
+}
+
+function contextBudgetError() {
+  const error = new Error('El contexto necesario supera la capacidad del modelo. Continúa por partes o selecciona un modelo con mayor contexto; conservé el historial y los archivos.');
+  error.code = 'E_PARAMS';
+  error.reason = 'context_budget_exceeded';
+  return error;
+}
+
+// After restoring pins, remove only whole optional transcript units. Never
+// truncate the active request, pinned facts, recent user turns, system policy,
+// current map or the latest tool exchange.
+function fitRestoredContext(messages, budget, pinned, model, original = messages) {
+  const protectedContent = new Set((pinned?.turnUserMessages || []).map((m) => JSON.stringify(m.content)));
+  if (pinned?.request) protectedContent.add(JSON.stringify(pinned.request));
+  for (const m of original.filter((item) => item.role === 'user').slice(-3)) protectedContent.add(JSON.stringify(m.content));
+  const anchors = loadEngine3h59()?.anchorCriticalFacts(original)?.anchors || [];
+  for (const m of anchors) protectedContent.add(JSON.stringify(m.content));
+  const latestGroup = toolCallGroups(messages).at(-1);
+  const protectedGroup = new Set(latestGroup ? messages.slice(latestGroup.start, latestGroup.end + 1) : []);
+  while (estimateRunnerContextTokens(messages, model) > budget) {
+    const groups = toolCallGroups(messages);
+    let removable = null;
+    for (let i = 0; i < messages.length - 1;) {
+      const group = groups.find((item) => item.start === i);
+      const end = group ? group.end : i;
+      const unit = messages.slice(i, end + 1);
+      if (end < messages.length - 1 && unit.every((m) => !protectedGroup.has(m) && m.role !== 'system' && m.pin !== true
+        && !protectedContent.has(JSON.stringify(m.content))
+        && !(typeof m.content === 'string' && m.content.startsWith('[Mapa del documento — último resultado de inspect_document'))
+        && !(pinned?.inspectCallId && m.tool_call_id === pinned.inspectCallId))) {
+        removable = { start: i, count: end - i + 1 };
+        break;
+      }
+      i = end + 1;
+    }
+    if (!removable) throw contextBudgetError();
+    messages.splice(removable.start, removable.count);
+  }
 }
 
 /**
@@ -796,13 +864,78 @@ function restorePinnedMessages(messages, pinned) {
   }
 }
 
+// Accept candidate compaction only when the protected original messages remain
+// byte-for-byte equivalent and in order. If an older compactor cannot preserve
+// them, prune whole optional units from the original instead of guessing where
+// a missing or repeated user message belonged.
+function preservesProtectedTranscript(original, compacted) {
+  const protectedMessages = new Set(original.filter((m) => m.role === 'system' || m.pin === true));
+  for (const m of original.filter((m) => m.role === 'user').slice(-3)) protectedMessages.add(m);
+  const anchors = loadEngine3h59()?.anchorCriticalFacts(original)?.anchors || [];
+  for (const m of anchors) protectedMessages.add(m);
+  const group = toolCallGroups(original).at(-1);
+  if (group) for (const m of original.slice(group.start, group.end + 1)) protectedMessages.add(m);
+  let cursor = 0;
+  for (const candidate of compacted) {
+    const index = original.findIndex((source, i) => i >= cursor && isDeepStrictEqual(source, candidate)
+      && isDeepStrictEqual(source._anthropicContent, candidate._anthropicContent)
+      && source._anthropicModel === candidate._anthropicModel);
+    if (index < 0) continue;
+    protectedMessages.delete(original[index]);
+    cursor = index + 1;
+  }
+  return protectedMessages.size === 0;
+}
+
+function cloneTranscript(messages) {
+  return messages.map((message) => {
+    const descriptors = Object.getOwnPropertyDescriptors(message);
+    for (const descriptor of Object.values(descriptors)) {
+      if ('value' in descriptor) descriptor.value = structuredClone(descriptor.value);
+    }
+    return Object.defineProperties({}, descriptors);
+  });
+}
+
 function compactMessagesInPlace(messages, opts = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const budget = resolveContextBudgetTokens(opts.env || process.env, opts);
+  const original = cloneTranscript(messages);
+  let next = cloneTranscript(original);
+  const before = estimateRunnerContextTokens(next, opts.model);
+  let announced = false;
+  const announce = () => {
+    if (announced) return;
+    announced = true;
+    opts.onEvent?.({ type: 'stage', step: 'context_compaction', label: 'Compactando contexto', tool: 'agent_runner', iteration: opts.iteration });
+  };
+  if (before > budget) announce();
+  try {
+    compactCandidateMessagesInPlace(next, { ...opts, budget });
+    if (!preservesProtectedTranscript(original, next)) {
+      next = tryRestorePins(original, original.slice(), opts) || original.slice();
+    }
+    restorePinnedMessages(next, opts.pinned);
+    if (!isDeepStrictEqual(messages, next)) sealToolTranscriptInPlace(next);
+    if (estimateRunnerContextTokens(next, opts.model) > budget) announce();
+    fitRestoredContext(next, budget, opts.pinned, opts.model, original);
+  } catch (error) {
+    if (announced && opts.onEvent) opts.onEvent({ type: 'stage', step: 'context_compaction', label: 'No se pudo compactar sin perder contexto', tool: 'agent_runner', ok: false, iteration: opts.iteration });
+    throw error;
+  }
+  const changed = !isDeepStrictEqual(messages, next);
+  if (changed) messages.splice(0, messages.length, ...next);
+  if (announced && opts.onEvent) opts.onEvent({ type: 'stage', step: 'context_compaction', label: 'Contexto compactado', tool: 'agent_runner', ok: true, iteration: opts.iteration });
+  return changed;
+}
+
+function compactCandidateMessagesInPlace(messages, opts = {}) {
   const adapter = loadEngineAdapter();
   if (!adapter || typeof adapter.compactUntilTokenBudget !== 'function') return false;
   if (!Array.isArray(messages) || messages.length === 0) return false;
-  const budget = resolveContextBudgetTokens();
+  const budget = opts.budget;
   if (typeof adapter.estimateCompactTokens === 'function') {
-    const used = adapter.estimateCompactTokens(messages);
+    const used = estimateRunnerContextTokens(messages, opts.model);
     if (Number.isFinite(used) && used <= budget) {
       const pinned = tryRestorePins(messages, messages, opts);
       if (pinned && pinned !== messages && Array.isArray(opts.memoryHits) && opts.memoryHits.length) {
@@ -1228,14 +1361,19 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
   const normalized = normalizeToolTranscript(messages);
   logTranscriptRepair(normalized, repairLog);
   // `extraMessages` ride on this request only, never on the runner's state.
-  const create = (withTools, { tokenLimit: limit = tokenLimit, extraMessages = null } = {}) => client.chat.completions.create({
-    model,
-    messages: extraMessages && extraMessages.length ? [...normalized.messages, ...extraMessages] : normalized.messages,
-    ...(withTools ? { tools, tool_choice: 'auto' } : {}),
-    ...(usesNativeOpenAiCompletionTokens(model, client)
-      ? { max_completion_tokens: limit }
-      : { max_tokens: limit }),
-  }, signal ? { signal } : undefined);
+  const create = (withTools, { tokenLimit: limit = tokenLimit, extraMessages = null } = {}) => {
+    const requestMessages = extraMessages && extraMessages.length ? [...normalized.messages, ...extraMessages] : normalized.messages;
+    const budget = resolveContextBudgetTokens(process.env, { model, maxTokens: limit, tools: withTools ? tools : [] });
+    if (estimateRunnerContextTokens(requestMessages, model) > budget) throw contextBudgetError();
+    return client.chat.completions.create({
+      model,
+      messages: requestMessages,
+      ...(withTools ? { tools, tool_choice: 'auto' } : {}),
+      ...(usesNativeOpenAiCompletionTokens(model, client)
+        ? { max_completion_tokens: limit }
+        : { max_tokens: limit }),
+    }, signal ? { signal } : undefined);
+  };
   const recoverTruncatedToolCall = async (first) => {
     let last = first;
     let budget = tokenLimit;
@@ -1898,10 +2036,12 @@ async function runAgentLoopInner({
           const kept = w60.neverDropLastUserOnCompact(messages, next);
           if (kept && Array.isArray(kept.messages)) next = kept.messages;
         }
-        if (Array.isArray(next) && next.length) {
-          messages.length = 0;
-          for (const m of next) messages.push(m);
+        if (Array.isArray(next) && next.length && !isDeepStrictEqual(messages, next)
+          && preservesProtectedTranscript(messages, next)) {
+          onEvent({ type: 'stage', step: 'context_compaction', label: 'Compactando contexto', tool: 'agent_runner', iteration });
+          messages.splice(0, messages.length, ...next);
           sealToolTranscriptInPlace(messages);
+          onEvent({ type: 'stage', step: 'context_compaction', label: 'Contexto compactado', tool: 'agent_runner', ok: true, iteration });
         }
       }
     } catch (_) { /* 3H60 fail-open */ }
@@ -1968,7 +2108,7 @@ async function runAgentLoopInner({
       // Query-overlap pruning can drop the active request even when the
       // remaining messages are below the token budget for full compaction.
       restorePinnedMessages(messages, pinnedContext);
-      compactMessagesInPlace(messages, { memoryHits: pinHits, pinned: pinnedContext });
+      compactMessagesInPlace(messages, { memoryHits: pinHits, pinned: pinnedContext, model, maxTokens, tools, onEvent, iteration });
       response = await callModel({
         client,
         model,
@@ -2026,6 +2166,10 @@ async function runAgentLoopInner({
         ttftMs: modelTtfbMs,
       });
       if (signal?.aborted) bail(iteration);
+      if (err?.reason === 'context_budget_exceeded') {
+        onEvent({ type: 'error', code: 'E_PARAMS', message: err.message, retryable: false, iteration });
+        return { finalText: '', iterations: iteration, steps, stoppedReason: err.reason, verificationAttempts, errorCode: 'E_PARAMS', errorMessage: err.message };
+      }
       if (err?.code === 'E_PROVIDER') {
         const { message, cause } = describeProviderFailureForUser(err, { client, model, modelLabel });
         logProviderFailure(err, iteration);
@@ -3582,5 +3726,6 @@ module.exports = {
   stealStaleFence,
   classifyLoopError,
   compactMessagesInPlace,
+  estimateRunnerContextTokens,
   providerFailurePublicMessage,
 };
