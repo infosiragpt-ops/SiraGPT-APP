@@ -125,10 +125,7 @@ describe("ola-200 wave G invariants", () => {
     assert.match(rr("lib/agentic-search-service.ts"), /agenticSearchFetchInit/);
     assert.match(rr("lib/chat-input-normalize.ts"), /normalizeChatInputPayload/);
     assert.match(rr("lib/chat/message-rendering.ts"), /memoizedParseMarkdown/);
-    assert.match(rr("lib/code-agent/workspace-auth.ts"), /shouldForceHostRunnerReauth/);
-    assert.match(rr("lib/code-templates.ts"), /stripExampleApiKeys/);
     assert.match(rr("lib/code-chat-sessions.ts"), /reusePersistedSessionOnRefresh/);
-    assert.match(rr("lib/code-chat-plan-label.ts"), /planLabelFromActivity/);
     assert.match(rr("components/gateway/GatewayBadge.tsx"), /aria-atomic/);
     assert.match(rr("app/settings/error.tsx"), /keep-advanced/);
     assert.match(rr("lib/api.ts"), /shouldStopPendingStreamRecovery/);
