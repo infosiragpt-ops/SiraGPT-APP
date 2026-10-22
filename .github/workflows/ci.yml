@@ -354,11 +354,37 @@ jobs:
       # Installing LibreOffice/Poppler on every shard would activate unrelated
       # soffice-gated tests (e.g. agent-runner render checks) on shards that do
       # not need these tools, so scope the install to shard 1.
+      # These ~180 MB of .debs come from the Azure Ubuntu mirror, which can
+      # stall for 20+ minutes (2026-10-22: 76 of 160 packages in 22 min) and
+      # time out the whole shard. Keep the archives in the Actions cache: one
+      # new entry per ISO week, restored from the previous week, so a warm run
+      # only downloads packages whose version changed.
+      - name: Week key for the document validator .deb cache
+        if: matrix.shard == 1
+        id: apt-week
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache document validator .deb archives
+        if: matrix.shard == 1
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/apt-doc-validators
+          key: apt-doc-validators-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
+          restore-keys: |
+            apt-doc-validators-${{ runner.os }}-
+
       - name: Install real document validators (no skipped validation tests)
         if: matrix.shard == 1
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils ffmpeg qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
+          APT_CACHE="$HOME/.cache/apt-doc-validators"
+          mkdir -p "$APT_CACHE/partial"
+          sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30
+          sudo apt-get install -y --no-install-recommends \
+            -o Dir::Cache::Archives="$APT_CACHE" -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils ffmpeg qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
+          # apt writes the archives as root; the cache action saves them as the runner user.
+          sudo rm -rf "$APT_CACHE/partial" "$APT_CACHE/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$APT_CACHE"
           python -m pip install --disable-pip-version-check --no-cache-dir -r ../infra/doc-validation/requirements-test.txt
 
       - name: Real Word/PDF and MP3/MP4 conversions
