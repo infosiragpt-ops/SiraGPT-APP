@@ -43,4 +43,13 @@ describe("sidebar brand header (Sira mark + SiraGPT wordmark)", () => {
     const css = source("app/globals.css")
     assert.match(css, /\.sidebar-brand__wordmark \{[\s\S]{0,160}letter-spacing: -0\.02em;/)
   })
+
+  it("rotates sidebar navigation icons and brand mark with a futuristic orbital effect on hover while respecting reduced motion", () => {
+    assert.match(sidebar, /const NAV_ROW =\s*\n\s*"[^"]*\bsidebar-nav-row\b/)
+    assert.match(sidebar, /const NAV_ICON = "[^"]*\bsidebar-nav-icon\b/)
+    const css = source("app/globals.css")
+    assert.match(css, /@keyframes sira-futuristic-orbit/)
+    assert.match(css, /\.sidebar-nav-row:hover \.sidebar-nav-icon/)
+    assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,200}\.sidebar-nav-row:hover \.sidebar-nav-icon/)
+  })
 })
