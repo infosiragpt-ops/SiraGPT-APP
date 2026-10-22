@@ -1377,10 +1377,6 @@ class ApiClient {
   // failure closes the session and blocks new attempts for a minute.
   private _refreshBlockedUntil = 0;
   private readonly REFRESH_FAILURE_COOLDOWN_MS = 60_000;
-  private _pendingQueue: Array<{
-    resolve: (value: any) => void;
-    reject: (err: any) => void;
-  }> = [];
 
   constructor(baseURL: string) {
     this.baseURL = baseURL;
@@ -1929,10 +1925,6 @@ class ApiClient {
     })) as ImpersonateEnvelope;
   }
 
-  async endImpersonation(): Promise<SuccessEnvelope> {
-    return (await this.request('/auth/end-impersonation', { method: 'POST' })) as SuccessEnvelope;
-  }
-
   // Returns CurrentUserEnvelope at runtime, but typed as `any` because the
   // local User type in auth-context narrows `id` to `string` while the
   // codegen accepts `string | number`. Callers cast at consumption sites.
@@ -2012,14 +2004,6 @@ class ApiClient {
       | null;
   }
 
-  async getActiveChatRuns(): Promise<{ runs: ChatRunSummary[] }> {
-    return (await this.request('/chats/active-runs')) as { runs: ChatRunSummary[] };
-  }
-
-  async getActiveAgentTasks(): Promise<{ ok: boolean; tasks: AgentTaskPointer[] }> {
-    return (await this.request('/chats/active-tasks')) as { ok: boolean; tasks: AgentTaskPointer[] };
-  }
-
   /** Forget a single recalled memory by id (powers the "Olvidar" action). */
   async forgetMemory(id: string): Promise<boolean> {
     if (!id) return false;
@@ -2029,17 +2013,6 @@ class ApiClient {
     } catch {
       return false;
     }
-  }
-
-  async getActiveChatRun(chatId: string): Promise<{ run: ChatRunSummary | null }> {
-    return (await this.request(`/chats/${chatId}/run/active`)) as { run: ChatRunSummary | null };
-  }
-
-  async cancelChatRun(chatId: string, runId: string, reason = 'user_cancel'): Promise<{ ok: boolean; run: ChatRunSummary; noop?: boolean }> {
-    return (await this.request(`/chats/${chatId}/run/${runId}/cancel`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    })) as { ok: boolean; run: ChatRunSummary; noop?: boolean };
   }
 
   async pinChat(id: string, pinned: boolean): Promise<{ chat: { id: string; isPinned: boolean; pinnedAt: string | null } }> {
@@ -2063,12 +2036,6 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify(data),
     });
-  }
-
-  /** Persistent app pins of a conversation (server-side source of truth). */
-  async getChatPins(chatId: string): Promise<string[]> {
-    const res = await this.request(`/chats/${chatId}/pins`, { method: 'GET' });
-    return Array.isArray(res?.pinnedAppIds) ? res.pinnedAppIds.map(String) : [];
   }
 
   /** Replace the conversation's pinned apps. Throws with { code, appId } on rejection. */
@@ -2309,11 +2276,6 @@ class ApiClient {
         ...(opts.timing || {}),
       },
     });
-  }
-
-  async getFiles(params?: { page?: number; limit?: number; type?: string }) {
-    const query = new URLSearchParams(params as any).toString();
-    return this.request(`/files${query ? `?${query}` : ''}`);
   }
 
   async getFilesProcessingStatus(ids: string[]): Promise<any> {
@@ -3372,28 +3334,6 @@ class ApiClient {
     }
     return response;
   }
-  async generateImageByImage(data: { fileId: string, prompt: string; chatId?: string, provider: string; model: string; }) {
-    const timeoutMs = 210000;
-    const imageRequestStartedAt = Date.now();
-    const requestPromise = this.request('/ai/generate-image', {
-      method: 'POST',
-      body: JSON.stringify(pinGenerateRequest(data)),
-      timeoutMs, // > backend 200s deadline; see generateImage
-      maxRetries: 0,     // non-idempotent paid generation — never auto-retry
-      suppressFailureLog: true,
-    })
-    const response = await this.resolveImageRequestWithChatRecovery(requestPromise, {
-      chatId: data.chatId,
-      sinceMs: imageRequestStartedAt,
-      timeoutMs,
-    });
-    if (response && typeof response === 'object' && (response as any).error) {
-      const err: any = new Error((response as any).error);
-      err.code = (response as any).code;
-      throw err;
-    }
-    return response
-  }
 
   private async resolveImageRequestWithChatRecovery(
     requestPromise: Promise<any>,
@@ -3786,20 +3726,6 @@ class ApiClient {
     });
   }
 
-  async createPayPalPayment(data: Pick<CreatePaymentRequest, 'plan'>) {
-    return this.request('/payments/paypal', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async createMercadoPagoPayment(data: Pick<CreatePaymentRequest, 'plan'>) {
-    return this.request('/payments/mercadopago', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
   async getPayments(params?: { page?: number; limit?: number }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/payments${query ? `?${query}` : ''}`);
@@ -3842,26 +3768,10 @@ class ApiClient {
     })) as OrganizationInvitationAcceptResult;
   }
 
-  // User endpoints
-  async getUserProfile() {
-    return this.request('/users/profile');
-  }
-
   async updateUserProfile(data: { name?: string; email?: string; avatar?: string }) {
     return this.request('/users/profile', {
       method: 'PUT',
       body: JSON.stringify(data),
-    });
-  }
-
-  async getUserSettings() {
-    return this.request('/users/settings');
-  }
-
-  async updateUserSettings(patch: Record<string, any>) {
-    return this.request('/users/settings', {
-      method: 'PUT',
-      body: JSON.stringify(patch),
     });
   }
 
@@ -3900,9 +3810,6 @@ class ApiClient {
   async getMemory(): Promise<{ entries: any[]; markdown: string; stats: { total: number; byCategory: Record<string, number> } }> {
     return this.request('/memory');
   }
-  async searchMemory(q: string): Promise<{ query: string; results: any[] }> {
-    return this.request(`/memory/search?q=${encodeURIComponent(q)}`);
-  }
   async addMemoryEntry(text: string, category?: string): Promise<{ entry: any }> {
     return this.request('/memory', { method: 'POST', body: JSON.stringify({ text, category }) });
   }
@@ -3927,62 +3834,6 @@ class ApiClient {
 
   async changePassword(data: { currentPassword: string; newPassword: string }) {
     return this.request('/users/password', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async getUserUsage(period?: string) {
-    return this.request(`/users/usage${period ? `?period=${period}` : ''}`);
-  }
-
-  async deleteAccount() {
-    return this.request('/users/account', { method: 'DELETE' });
-  }
-
-  // User preferences endpoints
-  async getUserPreferences() {
-    return this.request('/users/preferences');
-  }
-
-  async updateUserPreferences(data: any) {
-    return this.request('/users/preferences', {
-      method: 'PUT',
-      body: JSON.stringify(data),
-    });
-  }
-
-  // Payment method endpoints
-  async getPaymentMethods() {
-    return this.request('/payments/methods');
-  }
-
-  async addPaymentMethod(data: any) {
-    return this.request('/payments/methods', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async removePaymentMethod(id: string) {
-    return this.request(`/payments/methods/${id}`, {
-      method: 'DELETE',
-    });
-  }
-
-  async setDefaultPaymentMethod(id: string) {
-    return this.request(`/payments/methods/${id}/default`, {
-      method: 'PUT',
-    });
-  }
-
-  // Billing address endpoints
-  async getBillingAddress() {
-    return this.request('/payments/billing-address');
-  }
-
-  async updateBillingAddress(data: any) {
-    return this.request('/payments/billing-address', {
       method: 'PUT',
       body: JSON.stringify(data),
     });
@@ -4115,16 +3966,6 @@ class ApiClient {
     return this.request(`/admin/stats/usage${query ? `?${query}` : ''}`);
   }
 
-  async getAdminFileStats(params?: { from?: string; to?: string }) {
-    const query = new URLSearchParams(params as any).toString();
-    return this.request(`/admin/stats/files${query ? `?${query}` : ''}`);
-  }
-
-  async getAdminAgentStats(params?: { from?: string; to?: string }) {
-    const query = new URLSearchParams(params as any).toString();
-    return this.request(`/admin/stats/agents${query ? `?${query}` : ''}`);
-  }
-
   async getAdminProductQualityStats(params?: { from?: string; to?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/admin/stats/product-quality${query ? `?${query}` : ''}`);
@@ -4132,29 +3973,6 @@ class ApiClient {
 
   async getAdminServiceHealth() {
     return this.request('/admin/health/services');
-  }
-
-  async getAdminBackups() {
-    return this.request('/admin/backups');
-  }
-
-  async getAdminMaintenanceMode() {
-    return this.request('/admin/maintenance/mode');
-  }
-
-  async setAdminMaintenanceMode(data: { enabled: boolean; message?: string | null }) {
-    return this.request('/admin/maintenance/mode', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async getAdminSystemSummary() {
-    return this.request('/admin/system-summary');
-  }
-
-  async getAdminSystemSnapshot() {
-    return this.request('/admin/system-snapshot');
   }
 
   async getAdminAuditLogs(params?: {
@@ -4308,30 +4126,6 @@ class ApiClient {
     return response.text()
   }
 
-  async getAdminSoftwareErrors(params?: {
-    page?: number
-    limit?: number
-    severity?: string
-    service?: string
-    status?: string
-    from?: string
-    to?: string
-    q?: string
-  }) {
-    const query = new URLSearchParams(
-      Object.fromEntries(
-        Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== ''),
-      ) as Record<string, string>,
-    ).toString();
-    return this.request(`/admin/software-errors${query ? `?${query}` : ''}`);
-  }
-
-  async retryAdminSoftwareError(id: string) {
-    return this.request(`/admin/software-errors/${encodeURIComponent(id)}/retry`, {
-      method: 'POST',
-    });
-  }
-
   // Admin invoices
   async getAdminStripeInvoices(params?: { limit?: number; starting_after?: string }) {
     const query = new URLSearchParams(params as any).toString();
@@ -4368,16 +4162,15 @@ class ApiClient {
     return response.text();
   }
 
-  // Download endpoints
-  async downloadExcel(messageId: string, filename?: string) {
-    const url = `${this.baseURL}/download/excel`;
+  // Download endpoints: the server renders a message as a file of the given kind.
+  private async downloadMessageExport(kind: 'excel' | 'csv' | 'text' | 'word' | 'powerpoint', messageId: string, filename?: string) {
     const config = await this.prepareMutatingFetch({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId, filename }),
     });
 
-    const response = await this.authenticatedFetch(url, config);
+    const response = await this.authenticatedFetch(`${this.baseURL}/download/${kind}`, config);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Network error' }));
@@ -4387,76 +4180,24 @@ class ApiClient {
     return response.blob();
   }
 
-  async downloadCSV(messageId: string, filename?: string) {
-    const url = `${this.baseURL}/download/csv`;
-    const config = await this.prepareMutatingFetch({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, filename }),
-    });
-
-    const response = await this.authenticatedFetch(url, config);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Network error' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
-    }
-
-    return response.blob();
+  downloadExcel(messageId: string, filename?: string) {
+    return this.downloadMessageExport('excel', messageId, filename);
   }
 
-  async downloadText(messageId: string, filename?: string) {
-    const url = `${this.baseURL}/download/text`;
-    const config = await this.prepareMutatingFetch({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, filename }),
-    });
-
-    const response = await this.authenticatedFetch(url, config);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Network error' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
-    }
-
-    return response.blob();
+  downloadCSV(messageId: string, filename?: string) {
+    return this.downloadMessageExport('csv', messageId, filename);
   }
 
-  async downloadWord(messageId: string, filename?: string) {
-    const url = `${this.baseURL}/download/word`;
-    const config = await this.prepareMutatingFetch({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, filename }),
-    });
-
-    const response = await this.authenticatedFetch(url, config);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Network error' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
-    }
-
-    return response.blob();
+  downloadText(messageId: string, filename?: string) {
+    return this.downloadMessageExport('text', messageId, filename);
   }
 
-  async downloadPowerPoint(messageId: string, filename?: string) {
-    const url = `${this.baseURL}/download/powerpoint`;
-    const config = await this.prepareMutatingFetch({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messageId, filename }),
-    });
+  downloadWord(messageId: string, filename?: string) {
+    return this.downloadMessageExport('word', messageId, filename);
+  }
 
-    const response = await this.authenticatedFetch(url, config);
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Network error' }));
-      throw new Error(error.error || `HTTP ${response.status}`);
-    }
-
-    return response.blob();
+  downloadPowerPoint(messageId: string, filename?: string) {
+    return this.downloadMessageExport('powerpoint', messageId, filename);
   }
 
   // ── Sira Voz — VoiceStudio (open source, local, free) ─────────────────
@@ -4611,14 +4352,6 @@ class ApiClient {
   // Paso 4: estado (.fine_tuning.state: queued | fine_tuning | fine_tuned | failed | delayed).
   async getElevenLabsPvcVoice(voiceId: string): Promise<Record<string, unknown>> {
     return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}`, { suppressFailureLog: true });
-  }
-
-  async deleteElevenLabsPvcSample(voiceId: string, sampleId: string): Promise<Record<string, unknown>> {
-    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/samples/${encodeURIComponent(sampleId)}`, { method: 'DELETE' });
-  }
-
-  async getElevenLabsPvcCaptcha(voiceId: string): Promise<Record<string, unknown>> {
-    return this.request(`/elevenlabs/pvc/voices/${encodeURIComponent(voiceId)}/captcha`);
   }
 
   async requestElevenLabsPvcVerification(voiceId: string): Promise<Record<string, unknown>> {
@@ -4841,14 +4574,6 @@ class ApiClient {
 
 
 
-  async getVoiceSettings(voiceId: string) {
-    return this.request(`/elevenlabs/voices/${voiceId}/settings`);
-  }
-
-  async getElevenLabsSubscription() {
-    return this.request('/elevenlabs/user/subscription');
-  }
-
   async getAudioFile(filename: string) {
     const response = await this.request(`/elevenlabs/audio/${filename}`);
     return response.blob();
@@ -4873,48 +4598,6 @@ class ApiClient {
   }
 
 
-  // // Web Search endpoints
-  // async webSearch(data: { query: string; chatId?: string }) {
-  //   return this.request('/search/web', {
-  //     method: 'POST',
-  //     body: JSON.stringify(data),
-  //   });
-  // }
-  // Replace the webSearch method with this streaming version:
-
-  // Web Search endpoints
-  async webSearchStream(
-    data: { query: string; chatId?: string; model?: string; provider?: string },
-    onData: (chunk: any) => void,
-    onComplete: (data: any) => void,
-    onError: (error: Error) => void
-  ) {
-    const url = `${this.baseURL}/search/web`;
-    const config = await this.prepareMutatingFetch({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-
-    try {
-      const response = await this.authenticatedFetch(url, config);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      if (!response.body) {
-        throw new Error('No response body');
-      }
-
-      for await (const jsonData of streamSseJson<any>(response.body, { stopOnDoneMessage: true })) {
-        onData(jsonData);
-      }
-    } catch (error: any) {
-      console.error('Web search stream failed:', error);
-      onError(error);
-    }
-  }
   // Update the video generation method
   // Update the generateVideo method:
 
@@ -4964,13 +4647,6 @@ class ApiClient {
       suppressFailureLog: true,
     });
   }
-  async getVideoHistory(params?: {
-    page?: number;
-    limit?: number;
-  }) {
-    const query = new URLSearchParams(params as any).toString();
-    return this.request(`/video/history${query ? `?${query}` : ''}`);
-  }
 
   getVideoFile(filename: string) {
     return `${this.apiBaseURL}/video/watch/${filename}`;
@@ -4987,18 +4663,6 @@ class ApiClient {
       throw new Error('Failed to download video');
     }
     return response.blob();
-  }
-  async getAnonQuota() {
-    try { localStorage.setItem('currentChatId', "") } catch { /* storage blocked */ }
-
-    const res = await fetch(`${this.apiBaseURL}/ai/anon-quota`, {
-      method: 'GET',
-      credentials: 'include'
-    });
-    if (!res.ok) {
-      throw new Error('Failed to fetch anonymous quota');
-    }
-    return res.json();
   }
 
   async getMediaLibrary(params?: { page?: number; limit?: number; type?: 'image' | 'video' | 'audio' | 'music' | 'webapp' | 'mobileapp' }) {
@@ -5039,28 +4703,11 @@ class ApiClient {
     return this.request('/research-library/collections', { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateResearchCollection(id: string, data: { name?: string; description?: string | null; folder?: string | null; tags?: string[]; organizationId?: string }) {
-    return this.request(`/research-library/collections/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
-  }
-
-  async deleteResearchCollection(id: string, organizationId?: string) {
-    const query = organizationId ? `?organizationId=${encodeURIComponent(organizationId)}` : '';
-    return this.request(`/research-library/collections/${encodeURIComponent(id)}${query}`, { method: 'DELETE' });
-  }
-
-  async addReferencesToResearchCollection(collectionId: string, referenceIds: string[], organizationId?: string) {
-    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/references`, { method: 'POST', body: JSON.stringify({ referenceIds, organizationId }) });
-  }
-
   async shareResearchCollection(collectionId: string, organizationId: string, access: 'VIEW' | 'EDIT') {
     return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/share`, {
       method: 'POST',
       body: JSON.stringify({ organizationId, access }),
     });
-  }
-
-  async unshareResearchCollection(collectionId: string, organizationId: string) {
-    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/share/${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
   }
 
   async getResearchCollectionComments(collectionId: string, organizationId: string): Promise<{ items: ResearchCollectionCommentRecord[]; canComment: boolean; canEdit: boolean }> {
@@ -5074,20 +4721,12 @@ class ApiClient {
     }) as Promise<ResearchCollectionCommentRecord>;
   }
 
-  async deleteResearchCollectionComment(collectionId: string, commentId: string, organizationId: string) {
-    return this.request(`/research-library/collections/${encodeURIComponent(collectionId)}/comments/${encodeURIComponent(commentId)}?organizationId=${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
-  }
-
   async getResearchTemplates(organizationId: string): Promise<{ items: ResearchTemplateRecord[]; role: OrganizationRole }> {
     return (await this.request(`/research-library/templates?organizationId=${encodeURIComponent(organizationId)}`)) as { items: ResearchTemplateRecord[]; role: OrganizationRole };
   }
 
   async createResearchTemplate(data: { organizationId: string; name: string; description?: string; query: string; filters?: Record<string, unknown>; methodology?: Record<string, unknown>; tags?: string[]; isDefault?: boolean }) {
     return this.request('/research-library/templates', { method: 'POST', body: JSON.stringify(data) }) as Promise<ResearchTemplateRecord>;
-  }
-
-  async deleteResearchTemplate(id: string, organizationId: string) {
-    return this.request(`/research-library/templates/${encodeURIComponent(id)}?organizationId=${encodeURIComponent(organizationId)}`, { method: 'DELETE' });
   }
 
   async exportResearchReferences(data: { collectionId?: string; referenceIds?: string[]; format: 'bibtex' | 'ris'; organizationId?: string }) {
@@ -5480,49 +5119,13 @@ class ApiClient {
     return response.blob();
   }
 
-  // Gmail endpoints
-  async getGmailStatus() {
-    return this.request('/gmail/status');
-  }
-
   async connectGmail() {
     return this.request('/gmail/connect');
-  }
-
-  async sendGmailEmail(data: {
-    to: string;
-    subject: string;
-    message: string;
-    cc?: string;
-    bcc?: string;
-  }) {
-    return this.request('/gmail/send', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async getGmailEmails(params?: {
-    maxResults?: number;
-    query?: string;
-    labelIds?: string[];
-  }) {
-    const query = new URLSearchParams(params as any).toString();
-    return this.request(`/gmail/emails${query ? `?${query}` : ''}`);
   }
 
   async deleteGmailEmail(emailId: string) {
     return this.request(`/gmail/email/${emailId}`, {
       method: 'DELETE',
-    });
-  }
-
-  // Prefer using replyGmail below which matches backend contract
-
-  async searchGmailEmails(query: string, limit: number = 10) {
-    const q = encodeURIComponent(query);
-    return this.request(`/gmail/search?q=${q}&limit=${limit}`, {
-      method: 'GET'
     });
   }
 
@@ -5555,29 +5158,6 @@ class ApiClient {
     return this.request(`/gmail/email/${messageId}/archive`, {
       method: 'PATCH',
       body: JSON.stringify({ archive })
-    });
-  }
-
-  // Gmail chat command endpoint
-  async processGmailCommand(data: { command: string; chatId: string }) {
-    return this.request('/gmail/chat-command', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  // Google Services (Calendar & Drive) endpoints
-  async getGoogleServicesStatus() {
-    return this.request('/auth/google-services/status');
-  }
-
-  async connectGoogleServices() {
-    return this.request('/auth/google-services');
-  }
-
-  async disconnectGoogleServices() {
-    return this.request('/auth/google-services/disconnect', {
-      method: 'POST',
     });
   }
 
@@ -5644,13 +5224,6 @@ class ApiClient {
     return this.request(`/thesis/status/${sessionId}`);
   }
 
-  async updateWordContent(chatId: string, content: string) {
-    return this.request(`/chats/${chatId}/word-content`, {
-      method: 'PUT',
-      body: JSON.stringify({ content }),
-    });
-  }
-
   async saveOfficeDraft(chatId: string, kind: 'word' | 'excel', content: unknown, expectedContent: unknown) {
     return this.request(`/chats/${encodeURIComponent(chatId)}/${kind}-content`, {
       method: 'PUT',
@@ -5686,11 +5259,6 @@ class ApiClient {
     document.body.removeChild(a);
   }
 
-  // ── Contabilidad (módulo contable PCGE) ────────────────────────────────────
-  async getAccountingTrialBalance(params: { from?: string; to?: string } = {}) {
-    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
-    return this.request(`/accounting/trial-balance${qs ? `?${qs}` : ''}`);
-  }
   async listAccountingJournalEntries(params: { from?: string; to?: string; take?: number } = {}) {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)])).toString();
     return this.request(`/accounting/journal-entries${qs ? `?${qs}` : ''}`);
@@ -5706,10 +5274,6 @@ class ApiClient {
   async getAccountingBalanceSheet(params: { asOf?: string } = {}) {
     const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
     return this.request(`/accounting/reports/balance-sheet${qs ? `?${qs}` : ''}`);
-  }
-  async getAccountingCashFlow(params: { from?: string; to?: string } = {}) {
-    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
-    return this.request(`/accounting/reports/cash-flow${qs ? `?${qs}` : ''}`);
   }
   /** Download an accounting export (xlsx/pdf) with auth, triggering a browser save. */
   async downloadAccountingExport(path: string, filename: string) {
@@ -5731,141 +5295,4 @@ class ApiClient {
 
 export const apiClient = new ApiClient(API_BASE_URL);
 
-// -----------------------------------------------------------------------------
-// SWR-style cache for static-ish data (user profile, model list, plan info).
-//
-// Why parallel to existing methods, not a replacement:
-//   - Existing call sites assume each call returns fresh data; reordering
-//     reads to a cached promise could surface stale data in flows that
-//     depend on side effects (e.g. just-saved profile changes).
-//   - `apiClient.swr.*` is an opt-in surface for new code that wants
-//     stale-while-revalidate semantics without breaking anything else.
-//
-// Semantics:
-//   - Returns the cached value immediately if present (fresh or stale).
-//   - In parallel kicks off a background revalidate when stale or on
-//     window focus.
-//   - Two-tier: in-memory (per-tab, instant) + sessionStorage (per-tab,
-//     survives navigation but not full window close — matches OWASP
-//     guidance for not persisting auth-bearing state to localStorage).
-// -----------------------------------------------------------------------------
-
-type SWREntry<T> = { value: T; storedAt: number };
-type SWRFetcher<T> = () => Promise<T>;
-
-const SWR_FRESH_MS = 30_000;    // value is fresh for 30s
-const SWR_STALE_MS = 5 * 60_000; // stale but usable up to 5m
-const SWR_NAMESPACE = 'sira:swr:v1';
-
-class SWRCache {
-  private mem = new Map<string, SWREntry<unknown>>();
-  private inflight = new Map<string, Promise<unknown>>();
-  private listeners: Set<(key: string) => void> = new Set();
-  private focusBound = false;
-
-  private storageKey(key: string): string {
-    return `${SWR_NAMESPACE}:${key}`;
-  }
-
-  private readSession<T>(key: string): SWREntry<T> | null {
-    if (typeof window === 'undefined' || !window.sessionStorage) return null;
-    try {
-      const raw = window.sessionStorage.getItem(this.storageKey(key));
-      if (!raw) return null;
-      return JSON.parse(raw) as SWREntry<T>;
-    } catch {
-      return null;
-    }
-  }
-
-  private writeSession<T>(key: string, entry: SWREntry<T>): void {
-    if (typeof window === 'undefined' || !window.sessionStorage) return;
-    try {
-      window.sessionStorage.setItem(this.storageKey(key), JSON.stringify(entry));
-    } catch {
-      // Quota / private mode — silently degrade to in-memory only.
-    }
-  }
-
-  private bindFocusOnce(): void {
-    if (this.focusBound || typeof window === 'undefined') return;
-    this.focusBound = true;
-    window.addEventListener('focus', () => {
-      // Revalidate every entry that's older than the fresh threshold.
-      const now = Date.now();
-      this.mem.forEach((entry, key) => {
-        if (now - entry.storedAt > SWR_FRESH_MS) {
-          this.listeners.forEach((l) => l(key));
-        }
-      });
-    });
-  }
-
-  get<T>(key: string): SWREntry<T> | null {
-    if (this.mem.has(key)) return this.mem.get(key) as SWREntry<T>;
-    const fromSession = this.readSession<T>(key);
-    if (fromSession) this.mem.set(key, fromSession);
-    return fromSession;
-  }
-
-  set<T>(key: string, value: T): void {
-    const entry: SWREntry<T> = { value, storedAt: Date.now() };
-    this.mem.set(key, entry);
-    this.writeSession(key, entry);
-  }
-
-  invalidate(key: string): void {
-    this.mem.delete(key);
-    if (typeof window !== 'undefined' && window.sessionStorage) {
-      try { window.sessionStorage.removeItem(this.storageKey(key)); } catch { /* noop */ }
-    }
-  }
-
-  async fetch<T>(key: string, fetcher: SWRFetcher<T>): Promise<T> {
-    this.bindFocusOnce();
-    const cached = this.get<T>(key);
-    const now = Date.now();
-    if (cached && now - cached.storedAt < SWR_FRESH_MS) {
-      // Fresh — return immediately, no revalidation needed.
-      return cached.value;
-    }
-    if (cached && now - cached.storedAt < SWR_STALE_MS) {
-      // Stale-but-usable: return cached value AND kick off background revalidate.
-      if (!this.inflight.has(key)) {
-        const p = fetcher()
-          .then((v) => { this.set(key, v); return v; })
-          .catch(() => cached.value)
-          .finally(() => { this.inflight.delete(key); });
-        this.inflight.set(key, p);
-      }
-      return cached.value;
-    }
-    // Cold / fully expired: dedupe concurrent callers on the inflight promise.
-    let inflight = this.inflight.get(key) as Promise<T> | undefined;
-    if (!inflight) {
-      inflight = fetcher()
-        .then((v) => { this.set(key, v); return v; })
-        .finally(() => { this.inflight.delete(key); });
-      this.inflight.set(key, inflight);
-    }
-    return inflight;
-  }
-}
-
-const swrCache = new SWRCache();
-
-// Augment apiClient with an `swr` surface. Add new entries here as the
-// caller list grows — keep existing methods untouched.
-type SWRSurface = {
-  getModels: () => Promise<unknown>;
-  invalidate: (key: string) => void;
-  _cache: SWRCache;
-};
-(apiClient as unknown as { swr: SWRSurface }).swr = {
-  getModels: () => swrCache.fetch('models', () => apiClient.getModels()),
-  invalidate: (key: string) => swrCache.invalidate(key),
-  _cache: swrCache,
-};
-
-export { swrCache };
 export default apiClient;
