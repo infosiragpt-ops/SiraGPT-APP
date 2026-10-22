@@ -2979,6 +2979,18 @@ Hallazgos verificados de la revisión de #1050/#1051 y su corrección:
 - `learnedPreferences` e `inferred` son del servidor: GET `/api/users/settings` ya no los devuelve y PUT los ignora (una pestaña vieja o el localStorage de un navegador compartido los reescribía, incluso en otra cuenta). PUT `/settings` recorta las instrucciones personalizadas a 4000 caracteres como PUT `/profile`.
 - Tests (registrados): `understanding-review-fixes.test.js` (9; los 9 fallan contra el código anterior).
 
+## Segunda revisión: agente de documentos — ejecución y autorreparación del sandbox (added 2026-10-22)
+
+Hallazgos verificados (cada uno con un test que falla sin la corrección):
+- **`execute_python` cortado por una línea «PY»**: el heredoc terminaba en cualquier línea igual a `PY` (una cadena multilínea con códigos de país: AR / PY / UY) y bash ejecutaba el resto del Python como comandos de shell. `heredocDelimiter` (`agent-runner/tools.js`) conserva `PY` salvo que el script lo contenga; entonces usa uno único.
+- **`grep` con comillas de JSON**: dentro de comillas dobles bash convertía `\$[0-9]+` (buscar montos) en `\-9+` y ejecutaría `$(…)`/backticks del patrón. Ahora comillas simples y `--`.
+- **Una caída de PyPI/OSV era un rechazo permanente**: «do not retry», hueco de capacidad para el admin y presupuesto de instalación gastado. Ahora `vet_unavailable` es temporal (se puede reintentar, sin hueco, el presupuesto se devuelve); un rechazo real al lado se distingue; Detener durante la verificación es «cancelado»; en dependencias, código `vetting_unavailable`.
+- **Límite de 20 requisitos del servicio remoto**: el reintento con dependencias fijadas podía superar el límite de `services/sandbox` y fallar con un 400 opaco después de verificar todo. El driver remoto declara `maxInstallRequirements: 20` y se rechaza antes con el límite real (`too_many_dependencies`).
+- **`execute_python` reenviado tras un 502/503/reset**: solo se excluía el timeout de transporte; el comando podía estar corriendo y se mandaba hasta 3 veces. Ahora los comandos de ejecución solo se reintentan si el fallo prueba que no arrancó (sin capacidad, conexión rechazada, DNS); lo demás devuelve una observación honesta («puede que se haya ejecutado o no») y el turno sigue.
+- **Overlay roto = chat roto para siempre**: un paquete del usuario con versión inválida o metadatos ilegibles contaba como imagen incompatible (`catalog_invalid` / mismatch sin `overlay`) y la reparación nunca corría. Ahora es `overlay` u `overlayBroken` y se repara borrando `/workspace/.sira-packages`. Las herramientas CLI prometidas se buscan fuera del workspace (un script de consola en `.sira-packages/bin` ya no tapa un binario ausente).
+- **Una imagen mala apagaba la visión de todos**: un 400/415/422 degradaba el modelo 6 h en todo el proceso; una imagen corrupta, mal etiquetada o rechazada por política degradaba a todos los candidatos. Ahora un 404 degrada al instante, y un 400/415/422 solo tras fallar con dos imágenes distintas.
+- Tests (registrados): `agent-runner-sandbox-review-round2.test.js` (11: 10 fallan contra el código anterior; el de capacidad comprueba que se conserva ese reintento; las 2 sondas reales con Python requieren `packaging`). Ajustados `agent-runner-office-gate` (degradación con dos imágenes) y `agent-runner-runtime-verification` (búsqueda de CLI fuera del workspace).
+
 ## Revisión profesional: computadora del chat (added 2026-10-21)
 
 Hallazgos verificados en la revisión de #1056/#1057/#1059 y su corrección:

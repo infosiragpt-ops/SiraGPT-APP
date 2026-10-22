@@ -1385,6 +1385,25 @@ function isSandboxTransportTimeout(err) {
     || /remote_sandbox_timeout|sandbox_timeout/i.test(String(err.message || err));
 }
 
+// The same holds for any exec failure once the request may have reached the
+// sandbox: a 502/503/504 from the service or the tunnel, a connection reset
+// mid-request. The command can already be running, and a retry re-runs
+// non-idempotent code (appends, renames, long jobs), possibly in parallel.
+// Only failures that prove the command never started may be retried: no
+// session for lack of capacity, a refused connection, an unknown host.
+function sandboxExecNeverStarted(err) {
+  if (!err) return false;
+  if (err.code === 'sandbox_at_capacity' || err.category === 'capacity') return true;
+  const cause = err.cause || {};
+  const text = [err.code, cause.code, err.message, cause.message].filter(Boolean).join(' ');
+  return /\b(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b/.test(text);
+}
+
+function sandboxExecUncertainObservation(err) {
+  const detail = String((err && err.message) || err || 'error desconocido').slice(0, 160);
+  return `ERROR: el entorno de documentos falló durante el comando (${detail}); puede que se haya ejecutado o no. Comprueba su efecto (los archivos que debía crear o cambiar) antes de repetirlo.`;
+}
+
 const TURN_STOPPED_RESULT = 'no se ejecutó: el turno se detuvo antes de esta herramienta';
 
 /**
@@ -3042,6 +3061,7 @@ async function runAgentLoopInner({
                   maxAttempts: 3,
                   isRetryable: (err) => {
                     if (execTool && isSandboxTransportTimeout(err)) return false;
+                    if (execTool && !sandboxExecNeverStarted(err)) return false;
                     try {
                       const w65r = loadEngine3h65();
                       if (w65r && typeof w65r.applyDeepSeekCreditGuardsClosed === 'function') {
@@ -3071,6 +3091,7 @@ async function runAgentLoopInner({
               if (signal?.aborted) bail(iteration);
               const err = (retried && retried.error) || new Error('tool_retry_exhausted');
               if (execTool && isSandboxTransportTimeout(err)) return SANDBOX_EXEC_TIMEOUT_OBSERVATION;
+              if (execTool && !sandboxExecNeverStarted(err)) return sandboxExecUncertainObservation(err);
               const transient = typeof adapter.isRetryableToolFailure === 'function'
                 && adapter.isRetryableToolFailure(err);
               if (transient) {
@@ -3088,6 +3109,7 @@ async function runAgentLoopInner({
             } catch (execErr) {
               if (signal?.aborted) bail(iteration);
               if (execTool && isSandboxTransportTimeout(execErr)) return SANDBOX_EXEC_TIMEOUT_OBSERVATION;
+              if (execTool && !sandboxExecNeverStarted(execErr)) return sandboxExecUncertainObservation(execErr);
               let retried = false;
               try {
                 const w60 = loadEngine3h60();

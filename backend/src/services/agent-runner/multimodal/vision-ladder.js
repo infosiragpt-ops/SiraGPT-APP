@@ -15,9 +15,14 @@
  *   6. OpenAI `gpt-5.6-sol`
  *
  * Per call: quota / auth / transport / 5xx errors move to the next candidate;
- * a 400/404/415/422 (this model cannot take the image) also moves on AND
- * demotes that candidate for DEMOTE_MS — a live probe on first use, cached,
- * instead of trusting a capability table. An answer the caller cannot use
+ * a 400/404/415/422 (this model cannot take the image) also moves on, and
+ * demotes that candidate for DEMOTE_MS — a live probe, cached, instead of
+ * trusting a capability table. A 404 (no such model) demotes at once; a
+ * 400/415/422 only once the candidate failed that way on TWO DIFFERENT
+ * images: a model without vision fails on every image, while a broken or
+ * mislabeled image (or a content-policy refusal) fails on every model — and
+ * demoting them all on one bad upload switched visual review off for every
+ * user of the process for six hours. An answer the caller cannot use
  * (`accept` → false: empty content because a reasoning model spent its budget
  * thinking, or no JSON) also moves on, without demotion. When no candidate
  * answers, the verifier returns ok:null and the reply says no visual review ran.
@@ -42,6 +47,37 @@ const VISION_DEFAULTS = Object.freeze([
 
 // provider:model → demoted-until timestamp (module lifetime = process lifetime).
 const demoted = new Map();
+// provider:model → { since, images: Set<fingerprint> } of 400/415/422 answers.
+const capabilityStrikes = new Map();
+const STRIKES_TO_DEMOTE = 2;
+
+/** Which image(s) a request carries: a hash of its image parts (or of the messages). */
+function payloadFingerprint(payload) {
+  const urls = [];
+  for (const message of (payload && Array.isArray(payload.messages)) ? payload.messages : []) {
+    for (const part of Array.isArray(message && message.content) ? message.content : []) {
+      const url = part && part.image_url && (typeof part.image_url === 'string' ? part.image_url : part.image_url.url);
+      if (url) urls.push(String(url));
+    }
+  }
+  let source;
+  try { source = urls.length ? urls.join('\n') : JSON.stringify((payload && payload.messages) || []); } catch (_) { source = String(Date.now()); }
+  return require('crypto').createHash('sha256').update(source).digest('hex');
+}
+
+/** True when this capability answer should demote the candidate now. */
+function recordCapabilityStrike(key, err, payload, at) {
+  if (errorStatus(err) === 404) return true;
+  let strikes = capabilityStrikes.get(key);
+  if (!strikes || at - strikes.since > DEMOTE_MS) {
+    strikes = { since: at, images: new Set() };
+    capabilityStrikes.set(key, strikes);
+  }
+  strikes.images.add(payloadFingerprint(payload));
+  if (strikes.images.size < STRIKES_TO_DEMOTE) return false;
+  capabilityStrikes.delete(key);
+  return true;
+}
 
 function ladderEntry(provider) {
   return LADDER.find((e) => e.provider === provider) || null;
@@ -196,9 +232,10 @@ function createVisionClient(candidates, {
         lastError = err;
         const capability = isCapabilityError(err);
         if (!capability && !isTransientError(err)) throw err;
-        if (capability) demoted.set(key, now() + DEMOTE_MS);
+        const demote = capability && recordCapabilityStrike(key, err, payload, now());
+        if (demote) demoted.set(key, now() + DEMOTE_MS);
         try {
-          onFailover({ provider: c.provider, model: c.model, status: errorStatus(err), demoted: capability,
+          onFailover({ provider: c.provider, model: c.model, status: errorStatus(err), demoted: demote,
             message: String((err && err.message) || err).slice(0, 160) });
         } catch (_) { /* observer errors never break the review */ }
       }
@@ -215,6 +252,7 @@ function createVisionClient(candidates, {
 
 function resetVisionDemotions() {
   demoted.clear();
+  capabilityStrikes.clear();
 }
 
 module.exports = {
