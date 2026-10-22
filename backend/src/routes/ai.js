@@ -6171,6 +6171,7 @@ router.post(
           const __compactionPlan = conversationCompactor.planCompaction({
             model: actualModel,
             rows: historyMessages,
+            previousMeta: __chatContextState?.contextSummaryMeta,
             systemTokens: contextWindow.estimateTokens(systemInstruction.content),
             promptTokens: contextWindow.estimateTokens(prompt) + __attachmentTokens,
             reservedCompletionTokens: Math.min(actualMaxOutputTokens || 16384, contextWindow.getCompletionLimit(actualModel)),
@@ -6189,9 +6190,13 @@ router.post(
               complete: buildCompactionCompletion(__runtime, req),
               model: actualModel,
               runtime: __runtime,
+              contextBudgetTokens: __compactionPlan.contextBudgetTokens,
+              signal,
             });
             if (__result?.ok) {
-              historyMessages = __compactionPlan.rowsToKeep;
+              // A concurrent compaction may cover fewer rows than our plan.
+              // Consume only its actual committed cursor, never our proposal.
+              historyMessages = historyMessages.filter((row) => new Date(row.timestamp) > new Date(__result.until));
               __chatContextState = {
                 contextSummary: __result.summary,
                 contextSummaryUntil: __result.until,
@@ -6249,7 +6254,9 @@ router.post(
       const keepImagesForVision = processedFiles.some(f => isImageFileRecord(f))
         && (nativeVisionForTurn
           || (!currentTurnHasNonImageFiles && routeCanReachVision(actualProvider, actualModel)));
-      let messages = [systemInstruction];
+      const retainedContextMessages = conversationCompactor.retentionMessages(__chatContextState?.contextSummaryMeta?.retention);
+      const protectedContextMessages = [...retainedContextMessages];
+      let messages = [systemInstruction, ...retainedContextMessages];
       // «está en inglés», «los nombres son…» said while recordings of this
       // turn or of earlier turns are still in the queue reach their jobs
       // (contract C7). Fire-and-forget, never blocks the turn.
@@ -6273,6 +6280,7 @@ router.post(
         }).catch(() => new Map());
         const inlineImageRows = historyRowsWithInlineImages(historyMessages, isHistoryImageAttachment);
         for (const [historyIndex, m] of historyMessages.entries()) {
+          const historyRowStart = messages.length;
           const messageRole = m.role === 'USER' ? 'user' : 'assistant';
 
           // Parse files if present
@@ -6409,6 +6417,9 @@ router.post(
                 ? { reasoning_details: m.reasoningDetails }
                 : {}),
             });
+          }
+          if (messageRole === 'user' || parsedFiles.length) {
+            protectedContextMessages.push(...messages.slice(historyRowStart));
           }
         }
       }
@@ -6559,12 +6570,18 @@ router.post(
       });
 
       const fittedContext = contextWindow.fitMessagesToContext(messages, actualModel, {
+        protectedMessages: protectedContextMessages,
         // Reserve enough completion room for trained-GPT full deliverables.
         reservedCompletionTokens: Math.min(
           actualMaxOutputTokens || 16384,
           contextWindow.getCompletionLimit(actualModel),
         ),
       });
+      if (fittedContext.retentionFailed) {
+        streamFailureMessage = 'Las instrucciones y los archivos de este hilo no caben en el contexto del modelo seleccionado. Conservé el historial completo. Elige un modelo con mayor capacidad de contexto o continúa en un chat nuevo con los archivos necesarios.';
+        closeGenerateSseWithError(res, { message: streamFailureMessage, code: 'E_PARAMS', recovered: false });
+        return;
+      }
       messages = fittedContext.messages;
       if (fittedContext.droppedCount > 0) {
         generateLog.info('context.fitted', {
@@ -7538,6 +7555,7 @@ router.post(
                       : null,
                   userQuery: prompt,
                   history: priorHistory,
+                  protectedMessages: protectedContextMessages.filter((message) => priorHistory.includes(message)),
                   res,
                   signal,
                   maxSteps: Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
@@ -7742,6 +7760,12 @@ router.post(
                 });
               }
             } catch (agenticErr) {
+              if (agenticErr?.retentionFailed) {
+                const message = 'No puedo continuar sin perder instrucciones o referencias del hilo. Reduce el contexto o elige un modelo con mayor capacidad.';
+                streamFailureMessage = message;
+                closeGenerateSseWithError(res, { message, code: 'E_PARAMS', recovered: false, retryable: false });
+                return message;
+              }
               generateLog.warnError('agentic.loop_failed', agenticErr);
               // Fall through to aiService.generateStream below.
             }
@@ -7925,6 +7949,10 @@ router.post(
             return out;
           },
         );
+
+        // A failed required-context preflight already closed the SSE response.
+        // Do not audit, bill or persist its explanatory text as a successful turn.
+        if (streamFailureMessage) return;
 
         // A connection instruction is fixed account UI copy; do not run
         // document repair or LLM response audits over it.

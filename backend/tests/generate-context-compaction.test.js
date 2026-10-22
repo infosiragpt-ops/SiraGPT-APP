@@ -27,11 +27,11 @@ test('history replay filters soft-deleted rows and everything the summary alread
 
 test('compaction runs before the prompt is assembled and announces itself on the timeline', () => {
   const planAt = ai.indexOf('const __compactionPlan = conversationCompactor.planCompaction({');
-  const loopAt = ai.indexOf('let messages = [systemInstruction];');
+  const loopAt = ai.indexOf('let messages = [systemInstruction, ...retainedContextMessages];');
   assert.ok(planAt > 0 && loopAt > planAt, 'planning happens before the history is mapped into messages');
   assert.match(ai, /turnProgress\.begin\('history', `Comprimiendo el contexto \(\$\{__compactionPlan\.rowsToCompact\.length\} mensajes\)`/);
   assert.match(ai, /__compactHandle\.done\(`Contexto comprimido · \$\{__result\.coveredMessages\} mensajes resumidos`/);
-  assert.match(ai, /historyMessages = __compactionPlan\.rowsToKeep;/);
+  assert.match(ai, /historyMessages = historyMessages\.filter\(\(row\) => new Date\(row\.timestamp\) > new Date\(__result\.until\)\);/);
   assert.match(ai, /if \(canPersist && !req\._miniShortChitchat && historyMessages\.length > 0\) \{/);
 });
 
@@ -65,4 +65,14 @@ test('schema + migration carry the three nullable columns', () => {
   assert.match(migration, /ALTER TABLE "chats" ADD COLUMN "context_summary" TEXT;/);
   assert.match(migration, /ALTER TABLE "chats" ADD COLUMN "context_summary_until" TIMESTAMP\(3\);/);
   assert.match(migration, /ALTER TABLE "chats" ADD COLUMN "context_summary_meta" JSONB;/);
+});
+
+// This is the production consumer contract: the ledger must reach the model,
+// survive the final fit, and stop before a provider call if it cannot fit.
+test('retained instructions are replayed and protected by the final context fit', () => {
+  assert.match(ai, /retainedContextMessages = conversationCompactor\.retentionMessages\(__chatContextState\?\.contextSummaryMeta\?\.retention\)/);
+  assert.match(ai, /protectedMessages: protectedContextMessages,/);
+  assert.match(ai, /if \(messageRole === 'user' \|\| parsedFiles\.length\)/);
+  assert.match(ai, /if \(fittedContext\.retentionFailed\) \{[\s\S]{0,600}closeGenerateSseWithError[\s\S]{0,150}return;/);
+  assert.match(ai, /contextBudgetTokens: __compactionPlan\.contextBudgetTokens,/);
 });

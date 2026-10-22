@@ -67,8 +67,8 @@ test('chat ReAct recovers a preflight rejection and tests the SAME project after
   // summary creation must not update/delete the visible message rows.
   const compactor = require('../src/services/conversation-compactor');
   const visibleRows = [
-    { role: 'USER', content: 'DECISION_CODING_418: conservar app.js y las pruebas existentes.', timestamp: new Date('2026-09-01T10:00:00Z') },
-    { role: 'ASSISTANT', content: 'Pendiente cambiar solo el valor exportado.', timestamp: new Date('2026-09-01T10:01:00Z') },
+    { id: 'coding-user-418', role: 'USER', content: 'DECISION_CODING_418: conservar app.js y las pruebas existentes.', timestamp: new Date('2026-09-01T10:00:00Z') },
+    { id: 'coding-assistant-418', role: 'ASSISTANT', content: 'Pendiente cambiar solo el valor exportado.', timestamp: new Date('2026-09-01T10:01:00Z') },
   ];
   const originalRows = structuredClone(visibleRows);
   const persisted = [];

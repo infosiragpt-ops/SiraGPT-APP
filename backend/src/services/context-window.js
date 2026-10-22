@@ -335,7 +335,7 @@ function tokensOfMessage(msg) {
  *
  * Returns { messages, droppedCount, totalTokens, budget }.
  */
-function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024 } = {}) {
+function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024, protectedMessages = [] } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return { messages: messages || [], droppedCount: 0, totalTokens: 0, budget: 0 };
   }
@@ -347,6 +347,40 @@ function fitMessagesToContext(messages, model, { reservedCompletionTokens = 1024
   let total = messages.reduce((acc, m) => acc + tokensOfMessage(m), 0);
   if (total <= budget) {
     return { messages, droppedCount: 0, droppedMessages: [], totalTokens: total, budget, reservedCompletionTokens: reserved };
+  }
+
+  // Callers with verified retained instructions must never trade them for a
+  // short breadcrumb. Preserve identity, role and order; omit only optional
+  // history. A caller must surface retentionFailed before sending any request.
+  if (protectedMessages.length) {
+    const groups = new Map(messages.map((message) => [message, new Set([message])]));
+    const owners = new Map();
+    for (const message of messages) for (const call of message.tool_calls || []) owners.set(call.id, message);
+    for (const message of messages) {
+      const owner = message.role === 'tool' && owners.get(message.tool_call_id);
+      if (owner) { groups.get(owner).add(message); groups.set(message, groups.get(owner)); }
+    }
+    const required = new Set();
+    for (const message of [messages[0], messages[messages.length - 1], ...protectedMessages]) {
+      for (const member of groups.get(message) || []) required.add(member);
+    }
+    const requiredTokens = [...required].reduce((sum, message) => sum + tokensOfMessage(message), 0);
+    if (requiredTokens > budget) {
+      return { messages, droppedCount: 0, droppedMessages: [], totalTokens: total,
+        budget, reservedCompletionTokens: reserved, retentionFailed: true };
+    }
+    const selected = new Set(required);
+    let used = requiredTokens;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const group = [...groups.get(messages[i])];
+      if (selected.has(messages[i])) continue;
+      const tokens = group.reduce((sum, message) => sum + tokensOfMessage(message), 0);
+      if (used + tokens <= budget) { group.forEach((message) => selected.add(message)); used += tokens; }
+    }
+    const droppedMessages = messages.filter((message) => !selected.has(message));
+    return { messages: messages.filter((message) => selected.has(message)),
+      droppedCount: droppedMessages.length, droppedMessages, totalTokens: used,
+      budget, reservedCompletionTokens: reserved };
   }
 
   const keepTail = getKeepTail(model);

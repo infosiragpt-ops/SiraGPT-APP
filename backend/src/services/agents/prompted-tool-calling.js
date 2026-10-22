@@ -204,11 +204,16 @@ function parsePromptedToolCalls(content, knownNames = null) {
  *     name (resolved via the preceding assistant's call ids),
  *   - an optional forced-tool instruction is appended (emulates tool_choice).
  */
-function toPromptedTranscript(messages, { forceToolName = null } = {}) {
+function toPromptedTranscript(messages, { forceToolName = null, preserveMessages = [] } = {}) {
+  const preserved = new Set(preserveMessages);
   const idToName = new Map();
   const out = [];
   for (const msg of (Array.isArray(messages) ? messages : [])) {
     if (!msg || !msg.role) continue;
+    if (preserved.has(msg) && ['user', 'assistant'].includes(msg.role) && !msg.tool_calls?.length) {
+      out.push({ role: msg.role, content: msg.content });
+      continue;
+    }
     if (msg.role === 'assistant') {
       const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
       for (const c of calls) {

@@ -120,6 +120,7 @@ async function fixture(testContext, options = {}) {
       resolveToolCallMode: () => options.modelHasTools === false ? 'none' : 'native',
       runAgenticChat: async (input) => {
         agenticRuns.push(input);
+        if (options.agenticError) throw options.agenticError;
         const result = options.agenticResult || { finalAnswer: 'Fixture coding result', stoppedReason: 'finalized' };
         input.res.write(`data: ${JSON.stringify({ content: result.finalAnswer })}\n\n`);
         return result;
@@ -202,7 +203,11 @@ async function fixture(testContext, options = {}) {
     getMemoryAdapter: () => null,
     webSearchPlanned: () => false,
     routeSupportsVision: visionRuntime.modelSupportsVision,
-    conversationCompactor: { loadChatSummaryState: async () => null, historyWhere: (chatId) => ({ chatId }) },
+    conversationCompactor: {
+      ...require('../src/services/conversation-compactor'),
+      loadChatSummaryState: async () => options.summaryState || null,
+      historyWhere: (chatId) => ({ chatId }),
+    },
     contextWindow: {
       getCompletionLimit: () => 16384,
       getContextLimit: () => 1000000,
@@ -589,4 +594,52 @@ test('uploaded image descriptions reach the selected native vision API with orig
   assert.ok(promptText.includes(IMAGE_READ_REQUEST));
   assert.match(response.text, /QA-731/);
   assert.match(response.text, /data: \[DONE\]/);
+});
+
+
+test('retained instructions and file identity reach the coding agent without the 24k history truncation', async (testContext) => {
+  const { retainRows, retentionMessages } = require('../src/services/conversation-retention');
+  const rows = Array.from({ length: 8 }, (_, index) => ({
+    id: `retained-coding-${index}`, role: 'USER', timestamp: new Date(1700000000000 + index * 1000),
+    content: `CONSTRAINT_${index}: ` + 'Conservar el contrato y los datos. '.repeat(120),
+    files: index === 0 ? [{ id: 'source-contract', name: 'contract.txt', mimeType: 'text/plain' }] : [],
+  }));
+  const retained = retainRows(rows);
+  assert.equal(retained.ok, true);
+  const expected = retentionMessages(retained.retention);
+  assert.ok(JSON.stringify(expected).length > 24000);
+  const harness = await fixture(testContext, {
+    stopAfterReady: false, existingProject: { id: 'project-existing', name: 'Proyecto', status: 'ready' },
+    summaryState: {
+      contextSummary: 'Continuar el proyecto existente.',
+      contextSummaryUntil: rows.at(-1).timestamp,
+      contextSummaryMeta: { version: 2, retention: retained.retention },
+    },
+  });
+  const response = await harness.request({ prompt: 'Continúa en este mismo proyecto.', codingWorkspace: true });
+  assert.equal(response.status, 200);
+  assert.equal(harness.agenticRuns.length, 1, response.text);
+  const run = harness.agenticRuns[0];
+  assert.ok(Array.isArray(run.protectedMessages), 'retained messages must cross the route boundary');
+  assert.deepEqual(JSON.parse(JSON.stringify(run.protectedMessages)), expected);
+  assert.ok(run.protectedMessages.every(message => run.history.includes(message)), 'protection uses the actual history messages');
+  assert.equal(harness.plainRuns.length, 0);
+});
+
+test('retention overflow returns a terminal E_PARAMS without falling back to an unprotected completion', async (testContext) => {
+  const harness = await fixture(testContext, {
+    stopAfterReady: false, existingProject: { id: 'project-existing', name: 'Proyecto', status: 'ready' },
+    agenticError: Object.assign(new Error('retained context does not fit'), { code: 'E_PARAMS', retentionFailed: true }),
+  });
+  const response = await harness.request({ prompt: 'Continúa en este mismo proyecto.', codingWorkspace: true });
+  assert.equal(response.status, 200);
+  assert.equal(harness.agenticRuns.length, 1);
+  assert.equal(harness.plainRuns.length, 0);
+  assert.equal(harness.artifactRuns.length, 0);
+  assert.equal(harness.events.filter(event => event.type === 'error' && event.code === 'E_PARAMS').length, 1, response.text);
+  assert.equal(harness.persistedTurns.length, 0, 'retention failure is not persisted as a completed model answer');
+  assert.match(response.text, /perder instrucciones o referencias/);
+  assert.doesNotMatch(response.text, /Fixture plain completion|Fixture coding result/);
+  assert.match(response.text, /data: \[DONE\]/);
+  assert.equal(harness.streamControllers.size, 0);
 });

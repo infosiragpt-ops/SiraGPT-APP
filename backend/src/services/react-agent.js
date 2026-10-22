@@ -32,6 +32,9 @@
 
 const { calculateCost } = require('./observability/llm-cost');
 const { createHash } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
+const { getContextLimit, getCompletionLimit } = require('./context-window');
+const { estimateMessageBudgetChars } = require('./agents/hermes-context-patterns');
 const { normalizeToolCalls, collectToolCallIds } = require('./agents/tool-call-normalizer');
 const {
   attachToolFailureCircuit,
@@ -517,6 +520,21 @@ function estimateMessagesChars(messages) {
   return total;
 }
 
+// Image bytes are transported verbatim but are not text tokens. Reuse the
+// existing multimodal budget (1600 tokens/image) without modifying the payload.
+function estimateRequestTokens(payload) {
+  let imageTokens = 0;
+  const budgetMessages = payload.messages.map((message) => ({
+    ...message,
+    content: Array.isArray(message.content) ? message.content.map((part) => {
+      if (part?.type !== 'image_url' && part?.type !== 'image') return part;
+      imageTokens += estimateMessageBudgetChars([part]) / 4;
+      return { type: part.type };
+    }) : message.content,
+  }));
+  return imageTokens + Math.ceil(Buffer.byteLength(JSON.stringify({ ...payload, messages: budgetMessages }), 'utf8') / 4);
+}
+
 /**
  * Condense a single tool observation (the JSON content of a `role:'tool'`
  * message) into a one-line gist: keep error codes verbatim, otherwise list
@@ -711,7 +729,8 @@ function compactMessages(messages, opts = {}) {
   if (originalChars <= maxChars) return messages;
 
   // Head: leading non-assistant messages (system + first user query).
-  let headEnd = 0;
+  let headEnd = Number.isSafeInteger(opts.protectedHeadLength)
+    ? Math.max(0, Math.min(messages.length, opts.protectedHeadLength)) : 0;
   while (headEnd < messages.length && messages[headEnd].role !== 'assistant') headEnd += 1;
   if (headEnd === 0) return messages; // malformed (no head) — leave untouched
   const head = messages.slice(0, headEnd);
@@ -983,6 +1002,7 @@ async function run(openai, opts) {
     ctx = {},
     model = 'gpt-4o',
     extraSystem = '',
+    contextMessages = [],
     finalizeGuard = null,
     initialToolChoice = null,
     toolCallMode = 'native',
@@ -1011,6 +1031,15 @@ async function run(openai, opts) {
 
   if (!query) throw new Error('react-agent: query is required');
   if (!Array.isArray(tools)) throw new Error('react-agent: tools must be an array');
+  const retentionError = () => Object.assign(new Error(
+    'No puedo continuar sin perder instrucciones o referencias del hilo. Reduce el contexto o elige un modelo con mayor capacidad.'
+  ), { code: 'E_PARAMS', retentionFailed: true });
+  // This lane accepts retained conversational content, not tool exchanges or
+  // new authority. Copy it once so observation/compaction cannot mutate the
+  // caller's ledger. Unsupported roles fail closed instead of disappearing.
+  if (!Array.isArray(contextMessages) || contextMessages.some((message) => !message
+      || !['user', 'assistant'].includes(message.role) || message.tool_calls?.length)) throw retentionError();
+  const retainedMessages = structuredClone(contextMessages);
 
   const fireHook = (fn, payload) => {
     if (typeof fn !== 'function') return;
@@ -1158,8 +1187,10 @@ async function run(openai, opts) {
         + (extraSystem ? `\n\n${extraSystem}` : '')
         + (promptedBlock ? `\n\n${promptedBlock}` : ''),
     },
+    ...retainedMessages,
     { role: 'user',   content: query },
   ];
+  let protectedHeadLength = retainedMessages.length ? messages.length : 0;
 
   const steps = [];
   let finalAnswer = null;
@@ -1264,6 +1295,16 @@ async function run(openai, opts) {
         throw new Error('invalid_checkpoint_progress');
       }
       {
+        // Checkpoint JSON breaks object identity. Persist the protected prefix
+        // length, then restore protection over the same original-role messages.
+        const cpProtected = cp.protectedPrefixLength;
+        if (cpProtected != null && (!Number.isSafeInteger(cpProtected) || cpProtected < 1
+            || cpProtected > cpMessages.length)) throw new Error('invalid_checkpoint_retention');
+        if (retainedMessages.length && (cpProtected !== retainedMessages.length + 1
+            || !isDeepStrictEqual(cpMessages.slice(0, retainedMessages.length), retainedMessages))) {
+          throw new Error('checkpoint_retention_mismatch');
+        }
+        protectedHeadLength = cpProtected == null ? 0 : cpProtected + 1;
         messages.length = 1; // keep the fresh system head
         messages.push(...cpMessages);
         messages.push({
@@ -1315,6 +1356,7 @@ async function run(openai, opts) {
     stepsCompleted,
     savedAt: new Date().toISOString(),
     messages: messages.filter((m) => m && m.role !== 'system'),
+    ...(protectedHeadLength ? { protectedPrefixLength: protectedHeadLength - 1 } : {}),
     steps: steps.map((s) => ({
       step: s.step,
       thought: typeof s.thought === 'string' ? s.thought.slice(0, 500) : '',
@@ -1420,6 +1462,7 @@ async function run(openai, opts) {
       const compacted = compactMessages(messages, {
         maxChars: compactMaxChars,
         tailRounds: compactTailRounds,
+        protectedHeadLength,
       });
       if (compacted !== messages && compacted.length < messages.length) {
         const removed = messages.length - compacted.length;
@@ -1459,6 +1502,66 @@ async function run(openai, opts) {
       ? { type: 'function', function: { name: 'finalize' } }
       : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
+    // The observed Grok failure gets a bounded streaming transport. Preserve
+    // other providers' effort/output budgets and signed native transcripts.
+    const boundedCodingTurn = !prompted && Boolean(ctx?.codingWorkspace?.projectId)
+      && /^(?:xai|grok)$/i.test(String(activeProvider || ''));
+    const streamCodingTurn = boundedCodingTurn;
+    let effortFields = {};
+    try {
+      effortFields = require('./ai-product-os/litellm-gateway').resolveProviderEffortFields({
+        provider: activeProvider,
+        model: activeModel,
+        thinkingLevel,
+        thinkingLevelExplicit,
+      }) || {};
+    } catch (_) { effortFields = {}; }
+    // Budget the exact request after native effort, output limits and transport
+    // conversion. Count UTF-8 bytes conservatively; when the transport has no
+    // explicit output cap, reserve the model's supported completion window.
+    const forceToolName = (toolChoice && typeof toolChoice === 'object' && toolChoice.function)
+      ? toolChoice.function.name : null;
+    const transportMessages = prompted
+      ? promptedTC.toPromptedTranscript(messages, {
+        forceToolName,
+        preserveMessages: messages.slice(0, protectedHeadLength),
+      }) : messages;
+    const nativePayload = {
+      model: activeModel,
+      messages: transportMessages,
+      ...(prompted ? {} : {
+        tools: toolsSchema,
+        tool_choice: toolChoice,
+        ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
+      }),
+      temperature: 0.3,
+      ...effortFields,
+      ...(boundedCodingTurn ? require('./codex/coding-model-response').codingOutputFields(activeProvider, activeModel) : {}),
+      ...(streamCodingTurn ? { stream: true, stream_options: { include_usage: true } } : {}),
+    };
+    const payload = !prompted && String(activeProvider || '').toLowerCase() === 'deepseek'
+      ? require('./ai/deepseek-billing-failover').prepareDeepSeekDirectToolRequest(nativePayload)
+      : nativePayload;
+    if (protectedHeadLength) {
+      let requestedOutput = Math.max(0, Number(payload.max_tokens) || 0,
+        Number(payload.max_completion_tokens) || 0, Number(payload.thinking?.budget_tokens) || 0);
+      const safeWindow = Math.floor(getContextLimit(activeModel) * 0.8);
+      // Some catalogs permit output as large as the entire context (GPT-4,
+      // R1). Reserving that maximum would reject even an empty conversation.
+      // Only when no output/effort cap was requested, send a real proportional
+      // default; never merely lower the estimate or override an explicit cap.
+      if (!requestedOutput && getCompletionLimit(activeModel) >= safeWindow) {
+        requestedOutput = Math.min(getCompletionLimit(activeModel), Math.floor(getContextLimit(activeModel) * 0.25));
+        const runtime = require('./ai-product-os/litellm-gateway').getProviderRuntimeProfile({
+          provider: activeProvider, modelId: activeModel,
+        });
+        payload[runtime.maxTokensField || 'max_tokens'] = requestedOutput;
+      }
+      const reservedOutput = requestedOutput || getCompletionLimit(activeModel);
+      const budget = safeWindow - reservedOutput;
+      if (estimateRequestTokens(payload) > budget) throw retentionError();
+    }
+
     let resp;
     // Per-model canary telemetry timers (best-effort; never alters behavior).
     const modelTelemetryStepStart = Date.now();
@@ -1489,20 +1592,6 @@ async function run(openai, opts) {
       if (ctx.signal.aborted) onParentAbort();
       else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
     }
-    // The observed Grok failure gets a bounded streaming transport. Preserve
-    // other providers' effort/output budgets and signed native transcripts.
-    const boundedCodingTurn = !prompted && Boolean(ctx?.codingWorkspace?.projectId)
-      && /^(?:xai|grok)$/i.test(String(activeProvider || ''));
-    const streamCodingTurn = boundedCodingTurn;
-    let effortFields = {};
-    try {
-      effortFields = require('./ai-product-os/litellm-gateway').resolveProviderEffortFields({
-        provider: activeProvider,
-        model: activeModel,
-        thinkingLevel,
-        thinkingLevelExplicit,
-      }) || {};
-    } catch (_) { effortFields = {}; }
     const finalizeStep = Boolean(toolChoice && typeof toolChoice === 'object'
       && toolChoice.function && toolChoice.function.name === 'finalize');
     fireHook(onModelCall, {
@@ -1514,43 +1603,12 @@ async function run(openai, opts) {
       stepTimeoutMs,
     });
     try {
-      if (prompted) {
-        // Provider-safe payload: no tools/tool_choice params, no role:'tool'
-        // messages. Forced narrowing (finalize / initial tool) is emulated
-        // with an explicit instruction appended to the transcript.
-        const forceToolName = (toolChoice && typeof toolChoice === 'object' && toolChoice.function)
-          ? toolChoice.function.name
-          : null;
-        resp = await activeOpenai.chat.completions.create({
-          model: activeModel,
-          messages: promptedTC.toPromptedTranscript(messages, { forceToolName }),
-          temperature: 0.3,
-          ...effortFields,
-        }, { signal: stepCtl.signal });
-      } else {
-        const nativePayload = {
-          model: activeModel,
-          messages,
-          tools: toolsSchema,
-          tool_choice: toolChoice,
-          ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
-          temperature: 0.3,
-          ...effortFields,
-          ...(boundedCodingTurn ? require('./codex/coding-model-response').codingOutputFields(activeProvider, activeModel) : {}),
-          ...(streamCodingTurn ? { stream: true, stream_options: { include_usage: true } } : {}),
-        };
-        // Direct V4 thinking supports native tools, but not forced choices.
-        // Preserve the shared transcript/schema; adapt only this request.
-        const payload = String(activeProvider || '').toLowerCase() === 'deepseek'
-          ? require('./ai/deepseek-billing-failover').prepareDeepSeekDirectToolRequest(nativePayload)
-          : nativePayload;
-        resp = await activeOpenai.chat.completions.create(payload, { signal: stepCtl.signal });
-        if (streamCodingTurn) {
-          resp = await require('./codex/coding-model-response').collectCodingResponse(resp, {
-            signal: stepCtl.signal,
-            onFirstDelta: () => { modelTelemetryTtfbAt = Date.now(); },
-          });
-        }
+      resp = await activeOpenai.chat.completions.create(payload, { signal: stepCtl.signal });
+      if (streamCodingTurn) {
+        resp = await require('./codex/coding-model-response').collectCodingResponse(resp, {
+          signal: stepCtl.signal,
+          onFirstDelta: () => { modelTelemetryTtfbAt = Date.now(); },
+        });
       }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);

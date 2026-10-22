@@ -1170,6 +1170,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       model,
       userQuery,
       history = [],
+      protectedMessages = [],
       res,
       signal,
       maxSteps = DEFAULT_MAX_STEPS,
@@ -1308,6 +1309,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
       return value;
     };
+    // Resolve identity before any redaction clones the history. Retained user
+    // requests and source references are conversation messages, not optional
+    // quoted evidence inside the system prompt. Never silently miss a pin.
+    const protectedSet = new Set(Array.isArray(protectedMessages) ? protectedMessages : []);
+    if (!Array.isArray(protectedMessages) || protectedMessages.some((message) => !history.includes(message))) {
+      const error = new Error('No se pudo conservar el contexto requerido del hilo.');
+      error.code = 'E_PARAMS';
+      error.retentionFailed = true;
+      throw error;
+    }
+    const contextMessages = history.filter((message) => protectedSet.has(message)).map((message) => {
+      if (!generatedArtifactRefs.length) return message;
+      return {
+        ...message,
+        content: redactGeneratedArtifactPayload(typeof message.content === 'string'
+          ? message.content.replace(/^```agent-task-state\n[\s\S]*?\n```\s*/, '')
+          : message.content),
+      };
+    });
     const safeHistory = generatedArtifactRefs.length
       ? history.map((message) => ({
         ...message,
@@ -2572,7 +2592,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
 
     // One bounded transcript: do not duplicate/re-truncate the already-fitted
     // history in the inferred-goals block. The current query stays separate.
-    const historyForPrompt = buildAgentHistoryBlock(safeHistory);
+    const historyForPrompt = buildAgentHistoryBlock(safeHistory.filter((_, index) => !protectedSet.has(history[index])));
 
     let pluginPromptBlock = '';
     if (pluginLifecycle) {
@@ -3128,6 +3148,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     try {
       result = await reactAgent.run(openai, {
         query: userQuery,
+        contextMessages,
         tools: coreTools,
         deferredTools: deferredAgentTools,
         model,
