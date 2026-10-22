@@ -91,7 +91,6 @@ const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
 const conversationCompactor = require('../services/conversation-compactor');
 const { optionalAuth } = require('../middleware/optionalAuth');
-const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const { responseCache } = require('../middleware/response-cache');
 const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
@@ -104,7 +103,6 @@ const { runParaphrasePipeline } = require('../services/paraphrase-engine');
 const {
   buildModelQuotaPolicy,
   resolveModelForUser,
-  persistModelPreference,
 } = require('../services/model-quota-router');
 const {
   curateVisibleAdminMediaModels,
@@ -116,8 +114,6 @@ const promptInjectionDetector = require('../services/ai/prompt-injection-detecto
 const { publicWebTurnDedupe } = require('../services/ai/public-web-turn-dedupe');
 const { scrubPublicWebResponse } = require('../services/ai/public-web-safety');
 const longTermMemory = require('../services/long-term-memory');
-const { getRouteEnricher } = require('../orchestration/route-enricher');
-const routeEnricher = getRouteEnricher();
 const artifactGenerator = require('../services/artifacts/artifact-generator');
 const {
   streamGeneration: streamDesignGeneration,
@@ -204,7 +200,6 @@ const {
 const postResponseBrainHook = require('../services/sira/post-response-brain-hook');
 const coworkEngine = require('../services/cowork-engine');
 const activeMemory = require('../services/active-memory');
-const memoryDecision = require('../services/memory-decision');
 const memoryIntelligence = require('../services/memory-intelligence');
 const memoryEngine = require('../services/memory-engine');
 const memoryMetrics = require('../services/memory-metrics');
@@ -234,15 +229,13 @@ const crypto = require('crypto');
 const mime = require('mime-types');
 const sharp = require('sharp');
 
-const { enrichWithWebSearch, getTracer, getMemoryAdapter, webSearchPlanned, sanitizeWebSearchQuery } = require('../orchestration/gateway-adapter');
+const { enrichWithWebSearch, getMemoryAdapter, webSearchPlanned, sanitizeWebSearchQuery } = require('../orchestration/gateway-adapter');
 
-const { exec } = require('child_process');
 // Dependencies ko file ke top par import karen
 const fs = require('fs').promises;
 const fsSync = require('fs'); // ✅ For synchronous file operations
 const objectStorage = require('../services/object-storage');
 const path = require('path');
-const { use } = require('passport');
 
 // Initialize OpenAI client
 // const openai = new OpenAI({
@@ -592,32 +585,6 @@ function buildCompactionCompletion(runtime, req) {
   }
 })();
 
-/**
- * Resolve a provider client with automatic failover via the
- * provider-registry. Falls back to createProviderClient() if
- * the registry has no matching provider registered.
- *
- * @param {string} provider — "OpenAI", "Gemini", "DeepSeek", "OpenRouter"
- * @returns {Promise<{ client: OpenAI, providerName: string }>}
- */
-async function resolveProviderWithFailover(provider) {
-  try {
-    const { getProviderRegistry } = require('../services/agents/provider-registry');
-    const registry = getProviderRegistry();
-    const resolved = await registry.resolve(provider);
-    if (resolved) {
-      const client = new OpenAI({ apiKey: resolved.apiKey, baseURL: resolved.baseURL });
-      return { client, providerName: resolved.name || provider };
-    }
-  } catch {
-    // Registry unavailable — fall through to legacy path
-  }
-  return { client: createProviderClient(provider), providerName: provider };
-}
-
-function isDirectDeepSeekModel(modelName) {
-  return /^deepseek-(v\d|chat|reasoner)/i.test(String(modelName || '').trim());
-}
 
 const PARAPHRASE_MODE_GUIDANCE = Object.freeze({
   standard: 'Reescribe con claridad, naturalidad y tono profesional, conservando la intención original.',
@@ -11611,7 +11578,6 @@ router.post(
           });
 
 
-
           const imagePromise = openai.images.generate({
             // Google's OpenAI-compatible image endpoint returns b64_json by
             // default and REJECTS `response_format` with
@@ -11807,9 +11773,6 @@ function normalizeImageQuality(value) {
   return ['512px', '1K', '2K', '4K'].includes(value) ? value : '2K';
 }
 
-function openAiImageQualityFor(quality) {
-  return quality === '2K' || quality === '4K' ? 'hd' : 'standard';
-}
 
 function usageNumber(value) {
   if (value === null || value === undefined) return 0;
@@ -11825,9 +11788,6 @@ function usagePayloadFor(user) {
   };
 }
 
-function openRouterImageSizeFor(quality) {
-  return quality === '2K' || quality === '4K' ? '2K' : '1K';
-}
 
 const ENGINE_PROVIDER_TO_ROUTE_PROVIDER = {
   openai: 'OpenAI',
@@ -11897,56 +11857,6 @@ function imageProviderAttemptTimeoutMs() {
   return Math.min(180000, Math.max(5000, raw));
 }
 
-// gpt-image-2 only accepts a fixed set of sizes (1024x1024 | 1536x1024 |
-// 1024x1536 | auto) and REJECTS the old DALL-E sizes (1792x1024 / 1024x1792
-// → 400 invalid size). Map the app's aspect ratio to the nearest valid
-// gpt-image size, deriving orientation from IMAGE_ASPECT_RATIOS (or the
-// raw "w:h" string) so new ratios stay supported. Defaults to square.
-function gptImageSizeFor(aspectRatio) {
-  let width;
-  let height;
-  const entry = IMAGE_ASPECT_RATIOS[aspectRatio];
-  if (entry) {
-    width = entry.width;
-    height = entry.height;
-  } else if (typeof aspectRatio === 'string' && aspectRatio.includes(':')) {
-    const [w, h] = aspectRatio.split(':').map((n) => Number.parseFloat(n));
-    if (Number.isFinite(w) && Number.isFinite(h)) {
-      width = w;
-      height = h;
-    }
-  }
-  if (Number.isFinite(width) && Number.isFinite(height) && width !== height) {
-    return width > height ? '1536x1024' : '1024x1536';
-  }
-  return '1024x1024';
-}
-
-// gpt-image-2 quality must be one of high | medium | low | auto and REJECTS
-// the old DALL-E 'standard'/'hd' tokens (400). Translate the app's quality
-// tokens ('512px'/'1K'/'2K'/'4K', same inputs openAiImageQualityFor handles).
-function gptImageQualityFor(quality) {
-  switch (quality) {
-    case '512px': return 'low';
-    case '1K': return 'medium';
-    case '2K': return 'high';
-    case '4K': return 'high';
-    default: return 'auto';
-  }
-}
-
-function isOpenAiResponsesImageModel(model) {
-  const normalized = String(model || '').trim().toLowerCase();
-  return normalized.startsWith('gpt-image-') || normalized === 'chatgpt-image-latest';
-}
-
-function openRouterImageModalitiesFor(model) {
-  void model;
-  // OpenRouter image-generation chat completions expect both requested output
-  // modalities; asking for image only can make recent image models return no
-  // usable image payload.
-  return ['image', 'text'];
-}
 
 function stripImageDataUrl(value) {
   if (typeof value !== 'string') return null;
@@ -11955,156 +11865,6 @@ function stripImageDataUrl(value) {
   return match ? match[1] : trimmed;
 }
 
-function extractOpenRouterImageBase64s(response) {
-  const message = response?.choices?.[0]?.message || {};
-  const candidates = [];
-
-  if (Array.isArray(message.images)) {
-    for (const image of message.images) {
-      candidates.push(
-        image?.image_url?.url ||
-        image?.imageUrl?.url ||
-        image?.url ||
-        image?.data
-      );
-    }
-  }
-
-  if (Array.isArray(message.content)) {
-    for (const part of message.content) {
-      candidates.push(
-        part?.image_url?.url ||
-        part?.imageUrl?.url ||
-        part?.url ||
-        part?.data
-      );
-    }
-  }
-
-  if (typeof message.content === 'string' && message.content.startsWith('data:image/')) {
-    candidates.push(message.content);
-  }
-
-  return candidates.map(stripImageDataUrl).filter(Boolean);
-}
-
-function createOpenRouterClient() {
-  return new OpenAI({
-    apiKey: process.env.OPENROUTER_API_KEY,
-    baseURL: 'https://openrouter.ai/api/v1',
-    defaultHeaders: {
-      'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.BASE_URL || 'http://localhost:3000',
-      'X-Title': 'siraGPT',
-    },
-  });
-}
-
-// Reliable OpenRouter image fallback. Keep this aligned with the current
-// OpenRouter model catalog: the route uses it when a requested image model has
-// no usable image output endpoint.
-const BEST_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
-
-async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
-  if (!process.env.OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY is required for OpenRouter image generation.');
-  }
-
-  const callOnce = async (useModel) => {
-    const response = await openrouter.chat.completions.create(
-      {
-        model: useModel,
-        messages: [{ role: 'user', content: prompt }],
-        modalities: openRouterImageModalitiesFor(useModel),
-        image_config: {
-          aspect_ratio: aspectRatio,
-          image_size: openRouterImageSizeFor(quality),
-        },
-        stream: false,
-      },
-      { signal }
-    );
-
-    const images = extractOpenRouterImageBase64s(response);
-    if (!images.length) {
-      throw new Error('OpenRouter did not return an image.');
-    }
-    return images[0];
-  };
-
-  try {
-    return await callOnce(model);
-  } catch (err) {
-    // Some OpenRouter image models intermittently report no endpoint for the
-    // requested output modalities (HTTP 404) or return an empty payload.
-    // Fall back once to the best, broadly-available image model so the user
-    // still gets a result instead of a hard error.
-    const msg = String((err && err.message) || '').toLowerCase();
-    const status = err && (err.status || err.statusCode);
-    const recoverable =
-      status === 404 ||
-      msg.includes('no endpoints') ||
-      msg.includes('output modalities') ||
-      msg.includes('did not return an image') ||
-      msg.includes('not a valid model');
-    if (recoverable && model !== BEST_OPENROUTER_IMAGE_MODEL) {
-      console.warn(`[generate-image] model '${model}' failed (${msg || status}); retrying with ${BEST_OPENROUTER_IMAGE_MODEL}`);
-      return await callOnce(BEST_OPENROUTER_IMAGE_MODEL);
-    }
-    throw err;
-  }
-}
-
-// Map the app's "w:h" aspect ratio to fal.ai's `image_size` enum. fal.ai flux
-// endpoints accept a fixed set of named sizes (or an explicit {width,height});
-// we use the named enum so requests stay valid across flux/schnell|dev|pro.
-function falImageSizeFor(aspectRatio) {
-  switch (aspectRatio) {
-    case '9:16':
-    case '2:3': return 'portrait_16_9';
-    case '3:4': return 'portrait_4_3';
-    case '16:9':
-    case '3:2': return 'landscape_16_9';
-    case '4:3': return 'landscape_4_3';
-    case '1:1':
-    default: return 'square_hd';
-  }
-}
-
-// Generate an image via fal.ai (FLUX family). fal.ai is fast (~1-3s for schnell)
-// which sidesteps the GCLB ~30s response cut that made the slower OpenAI/Gemini
-// paths drop the connection. Returns the image as a base64 string (no data:
-// prefix) to match the other provider branches. Accepts FAL_KEY or FAL_API_KEY.
-async function generateFalImage({ model, prompt, aspectRatio, signal }) {
-  const credentials = process.env.FAL_KEY || process.env.FAL_API_KEY || '';
-  if (!credentials) {
-    throw new Error('La generación con fal.ai requiere FAL_KEY o FAL_API_KEY. Configúrala o elige otro modelo de imagen.');
-  }
-  // eslint-disable-next-line global-require
-  const { fal } = require('@fal-ai/client');
-  fal.config({ credentials });
-
-  const endpoint = String(model || 'fal-ai/flux/schnell').trim() || 'fal-ai/flux/schnell';
-  const result = await fal.subscribe(endpoint, {
-    input: {
-      prompt,
-      image_size: falImageSizeFor(aspectRatio),
-      num_images: 1,
-    },
-    logs: false,
-  });
-
-  const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
-  if (!url) {
-    throw new Error('fal.ai no devolvió ninguna imagen.');
-  }
-
-  const resp = await fetch(url, signal ? { signal } : undefined);
-  if (!resp || !resp.ok) {
-    throw new Error(`fal.ai: no se pudo descargar la imagen generada (HTTP ${resp ? resp.status : 'sin respuesta'}).`);
-  }
-  const buffer = Buffer.from(await resp.arrayBuffer());
-  return buffer.toString('base64');
-}
 
 function promptWithImageAspectRatio(prompt, aspectRatio, quality = '2K') {
   const descriptor = IMAGE_ASPECT_RATIOS[aspectRatio]?.prompt || IMAGE_ASPECT_RATIOS['1:1'].prompt;
