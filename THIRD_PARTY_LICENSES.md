@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1524**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1502**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -454,7 +454,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1, 22.0.0 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1124)
+## MIT (1102)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -478,7 +478,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@csstools/css-color-parser` | 3.1.0 | MIT | [link](https://github.com/csstools/postcss-plugins) |
 | `@csstools/css-parser-algorithms` | 3.0.5 | MIT | [link](https://github.com/csstools/postcss-plugins) |
 | `@csstools/css-tokenizer` | 3.0.4 | MIT | [link](https://github.com/csstools/postcss-plugins) |
-| `@date-fns/tz` | 1.4.1 | MIT | [link](https://github.com/date-fns/tz) |
 | `@e2b/code-interpreter` | 1.5.1 | MIT | [link](https://github.com/e2b-dev/code-interpreter) |
 | `@elevenlabs/elevenlabs-js` | 2.49.1 | MIT | [link](https://github.com/elevenlabs/elevenlabs-js) |
 | `@fal-ai/client` | 1.7.0 | MIT | [link](https://github.com/fal-ai/fal-js) |
@@ -494,7 +493,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@formatjs/intl-localematcher` | 0.8.3 | MIT | [link](https://github.com/formatjs/formatjs) |
 | `@hexagon/base64` | 1.1.28 | MIT | [link](https://github.com/hexagon/base64) |
 | `@hono/node-server` | 1.19.17 | MIT | [link](https://github.com/honojs/node-server) |
-| `@hookform/resolvers` | 3.10.0 | MIT | [link](https://github.com/react-hook-form/resolvers) |
 | `@huggingface/jinja` | 0.5.9 | MIT | [link](https://github.com/huggingface/huggingface.js) |
 | `@iconify/types` | 2.0.0 | MIT | [link](https://github.com/iconify/iconify) |
 | `@iconify/utils` | 3.1.1 | MIT | [link](https://github.com/iconify/iconify) |
@@ -583,36 +581,28 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@posthog/types` | 1.386.4 | MIT | [link](https://github.com/PostHog/posthog-js) |
 | `@radix-ui/number` | 1.1.0, 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/primitive` | 1.1.1, 1.1.3 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-accordion` | 1.2.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-alert-dialog` | 1.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-arrow` | 1.1.1, 1.1.7 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-aspect-ratio` | 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-avatar` | 1.1.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-checkbox` | 1.3.3 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-collapsible` | 1.1.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-collection` | 1.1.1, 1.1.7 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-compose-refs` | 1.1.1, 1.1.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-context` | 1.1.1, 1.1.2 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-context-menu` | 2.2.4 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-dialog` | 1.1.15, 1.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-direction` | 1.1.0, 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-dismissable-layer` | 1.1.11, 1.1.3 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-dropdown-menu` | 2.1.16 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-focus-guards` | 1.1.1, 1.1.3 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-focus-scope` | 1.1.1, 1.1.7 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-hover-card` | 1.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-id` | 1.1.0, 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-label` | 2.1.8 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-menu` | 2.1.16, 2.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-menubar` | 1.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-navigation-menu` | 1.2.3 | MIT | [link](https://github.com/radix-ui/primitives) |
+| `@radix-ui/react-menu` | 2.1.16 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-popover` | 1.1.15 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-popper` | 1.2.1, 1.2.8 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-portal` | 1.1.3, 1.1.9 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-presence` | 1.1.2, 1.1.5 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-primitive` | 2.0.1, 2.1.3, 2.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-progress` | 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-radio-group` | 1.2.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-roving-focus` | 1.1.1, 1.1.11 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-scroll-area` | 1.2.10 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-select` | 2.1.4 | MIT | [link](https://github.com/radix-ui/primitives) |
@@ -622,8 +612,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@radix-ui/react-switch` | 1.1.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-tabs` | 1.1.2 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-toast` | 1.2.4 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-toggle` | 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
-| `@radix-ui/react-toggle-group` | 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-tooltip` | 1.2.8 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-use-callback-ref` | 1.1.0, 1.1.1 | MIT | [link](https://github.com/radix-ui/primitives) |
 | `@radix-ui/react-use-controllable-state` | 1.1.0, 1.2.2 | MIT | [link](https://github.com/radix-ui/primitives) |
@@ -664,7 +652,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@simplewebauthn/types` | 11.0.0 | MIT | [link](https://github.com/MasterKale/SimpleWebAuthn) |
 | `@standard-schema/spec` | 1.1.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
-| `@tabby_ai/hijri-converter` | 1.0.5 | MIT |  |
 | `@tarikjabiri/dxf` | 2.8.9 | MIT | [link](https://github.com/dxfjs/writer) |
 | `@tiptap/core` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
 | `@tiptap/extension-blockquote` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
@@ -904,7 +891,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `data-uri-to-buffer` | 4.0.1 | MIT | [link](https://github.com/TooTallNate/node-data-uri-to-buffer) |
 | `data-urls` | 5.0.0 | MIT | [link](https://github.com/jsdom/data-urls) |
 | `date-fns` | 4.1.0 | MIT | [link](https://github.com/date-fns/date-fns) |
-| `date-fns-jalali` | 4.1.0-0 | MIT | [link](https://github.com/date-fns-jalali/date-fns-jalali) |
 | `dayjs` | 1.11.20 | MIT | [link](https://github.com/iamkun/dayjs) |
 | `debug` | 2.6.9, 4.4.3 | MIT | [link](https://github.com/debug-js/debug) |
 | `decamelize` | 1.2.0 | MIT | [link](https://github.com/sindresorhus/decamelize) |
@@ -937,9 +923,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `eastasianwidth` | 0.2.0 | MIT | [link](https://github.com/komagata/eastasianwidth) |
 | `ee-first` | 1.1.1 | MIT | [link](https://github.com/jonathanong/ee-first) |
 | `effect` | 3.21.0 | MIT | [link](https://github.com/Effect-TS/effect) |
-| `embla-carousel` | 8.5.1 | MIT | [link](https://github.com/davidjerleke/embla-carousel) |
-| `embla-carousel-react` | 8.5.1 | MIT | [link](https://github.com/davidjerleke/embla-carousel) |
-| `embla-carousel-reactive-utils` | 8.5.1 | MIT | [link](https://github.com/davidjerleke/embla-carousel) |
 | `emoji-regex` | 10.6.0, 8.0.0, 9.2.2 | MIT | [link](https://github.com/mathiasbynens/emoji-regex) |
 | `emoji-regex-xs` | 1.0.0 | MIT | [link](https://github.com/slevithan/emoji-regex-xs) |
 | `empathic` | 2.0.0 | MIT | [link](https://github.com/lukeed/empathic) |
@@ -1051,7 +1034,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `immediate` | 3.0.6 | MIT | [link](https://github.com/calvinmetcalf/immediate) |
 | `immer` | 10.2.0, 11.1.4 | MIT | [link](https://github.com/immerjs/immer) |
 | `inline-style-parser` | 0.2.7 | MIT | [link](https://github.com/remarkablemark/inline-style-parser) |
-| `input-otp` | 1.4.1 | MIT | [link](https://github.com/guilhermerodz/input-otp) |
 | `ioredis` | 5.10.1 | MIT | [link](https://github.com/luin/ioredis) |
 | `ip-address` | 10.5.0 | MIT | [link](https://github.com/beaugunderson/ip-address) |
 | `ipaddr.js` | 1.9.1 | MIT | [link](https://github.com/whitequark/ipaddr.js) |
@@ -1374,9 +1356,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `rc` | 1.2.8 | BSD-2-Clause OR MIT OR Apache-2.0 | [link](https://github.com/dominictarr/rc) |
 | `rc9` | 2.1.2 | MIT | [link](https://github.com/unjs/rc9) |
 | `react` | 18.3.1, 19.2.6 | MIT | [link](https://github.com/facebook/react) |
-| `react-day-picker` | 9.14.0 | MIT | [link](https://github.com/gpbl/react-day-picker) |
 | `react-dom` | 18.3.1 | MIT | [link](https://github.com/facebook/react) |
-| `react-hook-form` | 7.73.1 | MIT | [link](https://github.com/react-hook-form/react-hook-form) |
 | `react-is` | 16.13.1, 19.2.5 | MIT | [link](https://github.com/facebook/react) |
 | `react-katex` | 3.1.0 | MIT | [link](https://github.com/talyssonoc/react-katex) |
 | `react-markdown` | 10.1.0 | MIT | [link](https://github.com/remarkjs/react-markdown) |
@@ -1385,7 +1365,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `react-redux` | 9.2.0 | MIT | [link](https://github.com/reduxjs/react-redux) |
 | `react-remove-scroll` | 2.7.2 | MIT | [link](https://github.com/theKashey/react-remove-scroll) |
 | `react-remove-scroll-bar` | 2.3.8 | MIT | [link](https://github.com/theKashey/react-remove-scroll-bar) |
-| `react-resizable-panels` | 2.1.9 | MIT | [link](https://github.com/bvaughn/react-resizable-panels) |
 | `react-style-singleton` | 2.2.3 | MIT | [link](https://github.com/theKashey/react-style-singleton) |
 | `react-virtuoso` | 4.18.6 | MIT | [link](https://github.com/petyosi/react-virtuoso) |
 | `read-cache` | 1.0.0 | MIT | [link](https://github.com/TrySound/read-cache) |
@@ -1550,7 +1529,6 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `uuid` | 11.1.1, 13.0.1 | MIT | [link](https://github.com/uuidjs/uuid) |
 | `validator` | 13.15.35 | MIT | [link](https://github.com/validatorjs/validator.js) |
 | `vary` | 1.1.2 | MIT | [link](https://github.com/jshttp/vary) |
-| `vaul` | 0.9.9 | MIT | [link](https://github.com/emilkowalski/vaul) |
 | `vfile` | 6.0.3 | MIT | [link](https://github.com/vfile/vfile) |
 | `vfile-location` | 5.0.3 | MIT | [link](https://github.com/vfile/vfile-location) |
 | `vfile-message` | 4.0.3 | MIT | [link](https://github.com/vfile/vfile-message) |
