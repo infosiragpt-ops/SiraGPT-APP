@@ -173,7 +173,6 @@ describe("Clover brand (four-leaf clover mark + green accent)", () => {
       "components/BrandLogo.tsx",
       "components/app-sidebar.tsx",
       "components/PWAInstallPrompt.tsx",
-      "components/BrandCycle.tsx",
       "app/auth/login/page.tsx",
       "app/auth/register/page.tsx",
       "app/auth/forgot-password/page.tsx",

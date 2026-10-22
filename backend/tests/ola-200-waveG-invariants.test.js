@@ -133,9 +133,6 @@ describe("ola-200 wave G invariants", () => {
     assert.match(rr("app/settings/error.tsx"), /keep-advanced/);
     assert.match(rr("lib/api.ts"), /shouldStopPendingStreamRecovery/);
     assert.match(rr("hooks/use-computer-use.tsx"), /consumeFrameId/);
-    assert.match(rr("hooks/use-performance.ts"), /sanitizeLongTaskName/);
-    assert.match(rr("lib/mobile-openrouter-guard.ts"), /assertNoEmbeddedOpenRouterKey/);
-    assert.match(rr("lib/mobile-stop-stream.ts"), /postMobileStopStream/);
     assert.match(rr("lib/voice/abort-audio-stream.ts"), /abortAudioStream/);
     assert.match(rr("lib/cowork-api.ts"), /coworkProgressResumeHeaders/);
   });

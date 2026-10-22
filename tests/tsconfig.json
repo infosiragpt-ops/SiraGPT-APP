@@ -66,8 +66,6 @@
     "../lib/native/share.ts",
     "../lib/native/clipboard.ts",
     "../lib/native/storage.ts",
-    "../lib/native/haptics.ts",
-    "../lib/notifications/push.ts",
     "../lib/integrations/verify-webhook.ts",
     "../lib/format-schedule-es-pe.ts",
     "../lib/thinking-loaders.ts",
