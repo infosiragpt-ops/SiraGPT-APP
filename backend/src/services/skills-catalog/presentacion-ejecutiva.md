@@ -30,16 +30,20 @@ Genera el archivo (PPTX u otro formato) con las herramientas de documentos dispo
 4. **Contenido de cada diapositiva:** una sola idea, con la evidencia mínima que la
    sostiene: un gráfico, una tabla corta, 3–5 viñetas breves o una cifra destacada.
    Todo dato viene del usuario o de fuentes verificadas; lo pendiente se marca `[dato]`.
-5. **Elige la visualización adecuada:** evolución → línea; comparación → barras
-   ordenadas; composición (≤6 partes) → dona o barra apilada; cifra clave → número grande
-   con contexto. Usa las herramientas de gráficos/diagramas disponibles.
-6. **Estructura típica (10–12 diapositivas):** portada · resumen ejecutivo · contexto ·
-   3–5 diapositivas de hallazgos o propuesta · plan y cronograma · riesgos · decisión
-   solicitada / próximos pasos · anexo.
-7. **Diseño:** tema coherente (si el usuario tiene plantilla o manual de marca, úsalo),
-   máximo dos tipografías, jerarquía clara, márgenes amplios, contraste suficiente,
-   texto de cuerpo no menor a 18 pt. Si edita un deck existente, respeta sus layouts y
-   haz cambios quirúrgicos.
+5. **Elige la visualización adecuada:** evolución → línea; comparación de 2–3 opciones → `columns`;
+   matriz 2×2 / FODA / priorización → `matrix`; proceso o hoja de ruta (2–6 etapas) → `steps` (`timeline`);
+   composición (≤6 partes) → dona o barra apilada; cifra clave → `stat` (`{value, caption, source}`) o
+   viñetas con cifra al inicio (`"35% ahorro anual"`) que se renderizan como mosaicos KPI.
+   Usa `kicker` (categoría breve en mayúsculas sobre el título) y `takeaway` (barra inferior de síntesis
+   ejecutiva) en las láminas clave.
+6. **Estructura típica (8–12 diapositivas):** portada con `subtitle` ejecutivo · agenda (automática en 6+ láminas) ·
+   contexto / diagnóstico · 3–5 diapositivas de hallazgos o propuesta alternando layouts (`stat`, `columns`,
+   `matrix`, `steps`, `table`, `chart`) · plan y cronograma · riesgos · cierre (`layout: "closing"`, decisión
+   solicitada / próximos pasos).
+7. **Diseño:** tema coherente (`boardroom`, `consulting`, `aurora`, `editorial` o `minimal`; si el usuario
+   tiene plantilla o manual de marca, úsalo sin mezclar temas), máximo dos tipografías, jerarquía clara,
+   márgenes amplios, contraste suficiente, texto de cuerpo no menor a 18 pt. Si edita un deck existente,
+   respeta sus layouts y haz cambios quirúrgicos.
 8. **Notas del orador:** 2–4 frases por diapositiva con lo que se dirá y los datos de apoyo.
 9. **Revisa:** lectura solo de títulos, coherencia de cifras entre diapositivas,
    ortografía, que cada gráfico tenga fuente y unidades.

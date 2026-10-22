@@ -165,7 +165,7 @@ const MAX_TABLE_COLS = 8;
 function normalizeOutline(raw) {
   if (!Array.isArray(raw)) return [];
   if (raw.length > 20 && raw.some((item) => item?.chart)) throw new Error('E_PARAMS: Más de 20 diapositivas con gráficas; usa execute_python sin recortar el contenido.');
-  const { normalizeLayoutName, stepParts, tableParts, columnParts, quoteParts } = require('./deck-builder');
+  const { normalizeLayoutName, stepParts, tableParts, columnParts, matrixParts, quoteParts, statParts } = require('./deck-builder');
   const out = [];
   for (const item of raw.slice(0, 20)) {
     if (typeof item === 'string') {
@@ -185,16 +185,32 @@ function normalizeOutline(raw) {
     const entry = { title: t.slice(0, 200), bullets };
     const layout = normalizeLayoutName(item.layout);
     if (layout !== 'auto') entry.layout = layout;
+    if (typeof item.kicker === 'string' && item.kicker.trim()) entry.kicker = item.kicker.trim().slice(0, 60);
     if (typeof item.subtitle === 'string' && item.subtitle.trim()) entry.subtitle = item.subtitle.trim().slice(0, 200);
+    if (typeof item.takeaway === 'string' && item.takeaway.trim()) entry.takeaway = item.takeaway.trim().slice(0, 200);
     if (typeof item.notes === 'string' && item.notes.trim()) entry.notes = item.notes.trim().slice(0, 1500);
-    const columns = columnParts(item.columns);
-    if (columns) {
-      entry.columns = columns.map((col) => ({
-        title: col.title.slice(0, 80),
-        bullets: col.bullets.slice(0, 8).map((b) => b.slice(0, 220)),
+    const stat = statParts(item.stat);
+    if (stat) entry.stat = { value: stat.value.slice(0, 40), caption: String(stat.caption || stat.label || '').slice(0, 140), ...(stat.source ? { source: stat.source.slice(0, 80) } : {}) };
+    const matrixSource = item.matrix || (layout === 'matrix' ? item.columns : null);
+    const matrix = matrixParts(matrixSource);
+    if (matrix) {
+      entry.matrix = matrix.map((cell) => ({
+        title: cell.title.slice(0, 80),
+        bullets: cell.bullets.slice(0, 6).map((b) => b.slice(0, 180)),
       }));
-    } else if (Array.isArray(item.columns) && item.columns.length > 3) {
-      throw new Error(`E_PARAMS: «${entry.title}» tiene ${item.columns.length} columnas; máximo 3 por diapositiva (divide en dos diapositivas).`);
+    } else if (Array.isArray(item.matrix) && item.matrix.length > 4) {
+      throw new Error(`E_PARAMS: «${entry.title}» tiene ${item.matrix.length} cuadrantes; máximo 4 por diapositiva (2×2).`);
+    }
+    if (layout !== 'matrix') {
+      const columns = columnParts(item.columns);
+      if (columns) {
+        entry.columns = columns.map((col) => ({
+          title: col.title.slice(0, 80),
+          bullets: col.bullets.slice(0, 8).map((b) => b.slice(0, 220)),
+        }));
+      } else if (Array.isArray(item.columns) && item.columns.length > 3) {
+        throw new Error(`E_PARAMS: «${entry.title}» tiene ${item.columns.length} columnas; máximo 3 por diapositiva (divide en dos diapositivas).`);
+      }
     }
     const steps = (Array.isArray(item.steps) ? item.steps : []).map(stepParts).filter(Boolean);
     if (steps.length >= 2) {
@@ -292,14 +308,28 @@ const SLIDE_SCHEMA = {
   type: 'object',
   properties: {
     title: { type: 'string', description: 'Takeaway title, ≤ 8 words.' },
+    kicker: { type: 'string', description: 'Optional uppercase category/section eyebrow above the title (1-4 words, e.g. «IMPACTO FINANCIERO», «ARQUITECTURA»).' },
     bullets: { type: 'array', items: { type: 'string' }, description: '3-5 bullets of ≤ 14 words. «35% ahorro anual» (figure first) renders as a KPI tile.' },
-    layout: { type: 'string', description: 'Optional. Design mode: bullets | columns | timeline | table | quote | agenda | section | closing (default auto, inferred from the fields). Template mode: the template layout name or index for this slide.' },
+    layout: { type: 'string', description: 'Optional. Design mode: bullets | columns | matrix | timeline | table | quote | agenda | section | closing (default auto, inferred from the fields). Template mode: the template layout name or index for this slide.' },
     role: { type: 'string', enum: ['cover', 'content', 'section', 'closing'], description: 'Template mode: which kind of layout to pick when `layout` is omitted.' },
     subtitle: { type: 'string', description: 'Optional one-line context under the title (template mode: the subtitle placeholder text).' },
+    takeaway: { type: 'string', description: 'Optional bottom executive synthesis callout bar (1 concise sentence, ≤ 18 words).' },
     notes: { type: 'string', description: 'Speaker notes: 1-3 sentences the presenter says on this slide.' },
+    stat: {
+      type: 'object',
+      description: 'Hero metric highlight on the left + supporting bullets on the right: {value: "+42%", caption: "Incremento YoY en margen operativo", source?: "Q4"}.',
+      properties: { value: { type: 'string' }, caption: { type: 'string' }, label: { type: 'string' }, source: { type: 'string' } },
+      required: ['value'],
+      additionalProperties: false,
+    },
     columns: {
       type: 'array',
       description: '2-3 columns to compare options/scenarios: [{title, bullets}].',
+      items: { type: 'object', properties: { title: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['title'], additionalProperties: false },
+    },
+    matrix: {
+      type: 'array',
+      description: '2×2 quadrant / SWOT / FODA grid (up to 4 cards): [{title, bullets}].',
       items: { type: 'object', properties: { title: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['title'], additionalProperties: false },
     },
     steps: {
@@ -486,7 +516,7 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'create_presentation',
       description:
-        'Create a NEW PowerPoint. With `template` (an uploaded .pptx/.potx the user asked to follow: "con este formato", "usa esta plantilla") the deck is BUILT ON that file: its masters, layouts, theme, fonts and logos are kept byte-identical, its sample slides are removed and every outline entry fills one of ITS layouts (optional per-entry `layout` name/index and `role` cover|content|section|closing). Without `template` it starts from scratch with the professional design system (cover, agenda, cards, KPI tiles, comparison columns, process timelines, styled tables, quotes, section dividers, closing slide, footer «NN / TT», speaker notes). Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover. Each entry has a title and ONE of: bullets (3-5, ≤14 words; «35% ahorro» becomes a KPI tile), columns (2-3 {title,bullets} to compare), steps (2-6 {title,description} of a process), table ({headers,rows} ≤14×8), quote ({text,author}), or a native editable `chart`; plus optional `layout`, `subtitle` and speaker `notes`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme; never pass theme or color together with `template`. Without a template the result lists `designWarnings` (dense slides, long titles, missing notes…): fix them and call again with the same filename. Writes /workspace/outputs/<file>.pptx.',
+        'Create a NEW PowerPoint. With `template` (an uploaded .pptx/.potx the user asked to follow: "con este formato", "usa esta plantilla") the deck is BUILT ON that file: its masters, layouts, theme, fonts and logos are kept byte-identical, its sample slides are removed and every outline entry fills one of ITS layouts (optional per-entry `layout` name/index and `role` cover|content|section|closing). Without `template` it starts from scratch with the professional design system (cover, agenda, cards, KPI tiles, hero stat + context, 2×2 matrix/SWOT, comparison columns, process timelines, styled tables, quotes, section dividers, closing slide, takeaway bar, footer «NN / TT», speaker notes). Always adds one title slide before the outline. REQUIRED: pass `outline` with REAL content slides only, excluding the cover. Each entry has a title and ONE of: bullets (3-5, ≤14 words; «35% ahorro» becomes a KPI tile), stat ({value,caption,source} + bullets), columns (2-3 {title,bullets} to compare), matrix (2-4 {title,bullets} 2×2 quadrant/SWOT), steps (2-6 {title,description} of a process), table ({headers,rows} ≤14×8), quote ({text,author}), or a native editable `chart`; plus optional `kicker`, `layout`, `subtitle`, `takeaway`, and speaker `notes`. For N total slides (N >= 2), provide N-1 outline entries. For a single slide or a coverless deck, use execute_python. Preserve requested chart type, all values, series, colors and layout. Use execute_python for unsupported designs; never replace a requested chart with bullets. `color` sets the overall slide background only when requested; series colors belong in chart.series[].color. Omit color for a clean light theme; never pass theme or color together with `template`. Without a template the result lists `designWarnings` (dense slides, long titles, missing notes…): fix them and call again with the same filename. Writes /workspace/outputs/<file>.pptx.',
       parameters: {
         type: 'object',
         properties: {
@@ -507,7 +537,7 @@ const BASE_TOOL_DEFINITIONS = [
           slides: { type: 'integer', description: 'Slide count when no outline is given (2-20).' },
           filename: { type: 'string', description: 'Output filename ending in .pptx' },
           template: { type: 'string', description: 'MANDATORY when the user attached a format/template: path of the uploaded .pptx/.potx (uploads/<name>). The deck is built on it; never pass a SiraGPT theme or color together with it.' },
-          subtitle: { type: 'string', description: 'Cover subtitle (template mode).' },
+          subtitle: { type: 'string', description: 'Optional cover subtitle (one executive line under the cover title).' },
           keep_sample_slides: { type: 'boolean', description: 'Template mode: keep the template\'s own sample slides before the new ones (default false: they are removed).' },
         },
         required: ['topic'],
@@ -520,18 +550,22 @@ const BASE_TOOL_DEFINITIONS = [
     function: {
       name: 'add_slide',
       description:
-        'Add ONE new slide to an EXISTING deck created by SiraGPT (create_presentation or a sira_design restyle), keeping its theme, fonts, cards and footer numbering. Give it REAL content with the same fields as a create_presentation outline entry: title plus bullets, columns, steps, table or quote, optional layout / subtitle / notes. `position` is the 1-based place of the new slide (default: before the closing slide when the deck ends with one, else last). Writes /workspace/outputs/<stem>-v2.pptx (or -v(N+1)). Not for charts (use execute_python) nor for decks made elsewhere (the tool answers ERROR: copy an existing slide\'s format with python-pptx instead). On a deck built from the user\'s template use office_edit ops add_slide / duplicate_slide (they reuse the template layouts). Never rebuild the deck to add a slide.',
+        'Add ONE new slide to an EXISTING deck created by SiraGPT (create_presentation or a sira_design restyle), keeping its theme, fonts, cards and footer numbering. Give it REAL content with the same fields as a create_presentation outline entry: title plus bullets, stat, columns, matrix, steps, table or quote, optional kicker / layout / subtitle / takeaway / notes. `position` is the 1-based place of the new slide (default: before the closing slide when the deck ends with one, else last). Writes /workspace/outputs/<stem>-v2.pptx (or -v(N+1)). Not for charts (use execute_python) nor for decks made elsewhere (the tool answers ERROR: copy an existing slide\'s format with python-pptx instead). On a deck built from the user\'s template use office_edit ops add_slide / duplicate_slide (they reuse the template layouts). Never rebuild the deck to add a slide.',
       parameters: {
         type: 'object',
         properties: {
           description: DESCRIPTION_PARAM,
           path: { type: 'string', description: 'pptx path relative to /workspace (the LAST version of the deck).' },
           title: { type: 'string', description: 'Slide title (≤ 8 words).' },
+          kicker: { type: 'string', description: 'Optional uppercase category eyebrow above the title (1-4 words).' },
           bullets: { type: 'array', items: { type: 'string' } },
-          layout: { type: 'string', description: 'bullets | columns | timeline | table | quote | section | closing (default auto).' },
+          layout: { type: 'string', description: 'bullets | columns | matrix | timeline | table | quote | section | closing (default auto).' },
           subtitle: { type: 'string' },
+          takeaway: { type: 'string', description: 'Optional bottom executive takeaway callout bar (1 sentence).' },
           notes: { type: 'string', description: 'Speaker notes (1-3 sentences).' },
+          stat: { type: 'object', properties: { value: { type: 'string' }, caption: { type: 'string' }, label: { type: 'string' }, source: { type: 'string' } }, required: ['value'], additionalProperties: false },
           columns: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['title'], additionalProperties: false } },
+          matrix: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } } }, required: ['title'], additionalProperties: false } },
           steps: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, description: { type: 'string' } }, required: ['title'], additionalProperties: false } },
           table: { type: 'object', properties: { headers: { type: 'array', items: { type: 'string' } }, rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } } }, required: ['rows'], additionalProperties: false },
           quote: { type: 'object', properties: { text: { type: 'string' }, author: { type: 'string' } }, required: ['text'], additionalProperties: false },
@@ -1095,7 +1129,8 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         const theme = resolveDesignTheme({ prompt: deckPrompt, colorHex: requestedHex, themeId: requestedHex ? null : (args?.theme || null) });
         if (theme && theme.palette) {
           if (!requestedHex) hex = theme.palette.bg;
-          const buffer = await buildThemedDeck({ PptxGenJS, title, topic, plan, theme, colorLocked: Boolean(requestedHex) });
+          const coverSubtitle = typeof args?.subtitle === 'string' && args.subtitle.trim() ? args.subtitle.trim().slice(0, 200) : '';
+          const buffer = await buildThemedDeck({ PptxGenJS, title, topic, subtitle: coverSubtitle, plan, theme, colorLocked: Boolean(requestedHex) });
           const outRel = `outputs/${filename}`;
           await sandbox.writeFile(outRel, buffer);
           const designWarnings = outline.length ? auditDeckPlan(plan) : ['Sin outline: la presentación solo tiene títulos de sección; vuelve a llamar con el contenido real.'];
@@ -1185,8 +1220,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       let item;
       try {
         const [normalized] = normalizeOutline([{
-          title: args?.title, bullets: args?.bullets, layout: args?.layout, subtitle: args?.subtitle, notes: args?.notes,
-          columns: args?.columns, steps: args?.steps, table: args?.table, quote: args?.quote,
+          title: args?.title, kicker: args?.kicker, bullets: args?.bullets, layout: args?.layout,
+          subtitle: args?.subtitle, takeaway: args?.takeaway, notes: args?.notes,
+          stat: args?.stat, columns: args?.columns, matrix: args?.matrix, steps: args?.steps,
+          table: args?.table, quote: args?.quote,
         }]);
         item = normalized;
       } catch (err) {
