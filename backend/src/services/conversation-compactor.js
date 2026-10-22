@@ -17,16 +17,18 @@
  *      (`contextSummary` / `contextSummaryUntil` / `contextSummaryMeta`).
  *   3. The generate route replays only the rows AFTER `contextSummaryUntil`
  *      verbatim and injects the summary as a cacheable `context-summary`
- *      system block, so the model keeps decisions, facts, files and pending
- *      items from the whole thread.
- *   4. Summaries are rolling: the next compaction folds the previous summary
- *      plus the newly-aged rows, so nothing agreed earlier is lost.
+ *      system block. Complete user requests and source identities replay
+ *      separately in their original roles, outside that lossy narrative.
+ *   4. Each round retains the earlier ledger, bounded at 48k characters.
+ *      If it cannot fit, no cursor is advanced. The final context fitter
+ *      refuses an unsafe request rather than silently removing instructions.
  *
- * Everything here is fail-open: any error means "no compaction this turn",
- * never a broken chat.
+ * Summarisation failure falls back to a narrative excerpt. Retention failure
+ * means "no compaction this turn"; original rows remain available.
  */
 
 const contextWindow = require('./context-window');
+const { retainRows, retentionMessages, hasRetainedState } = require('./conversation-retention');
 
 const DEFAULTS = Object.freeze({
   // Compact when system + history + prompt + reserved completion exceeds this
@@ -136,6 +138,7 @@ function planCompaction({
   systemTokens = 0,
   promptTokens = 0,
   reservedCompletionTokens = 0,
+  previousMeta = null,
   env = process.env,
 } = {}) {
   const cfg = getConfig(env);
@@ -175,9 +178,32 @@ function planCompaction({
   let tailStart = alignToUserRow(list, list.length - keepTail);
   // If even the tail overflows, shrink it pair by pair down to the last exchange.
   const tailBudget = Math.min(triggerBudget - fixedTokens, cfg.maxHistoryTokens);
-  while (tailStart < list.length - 2 && estimateRowsTokens(list.slice(tailStart)) > tailBudget) {
-    tailStart = alignToUserRow(list, tailStart + 2);
-    if (tailStart <= 0) break;
+  const replacementTokens = (cut) => {
+    const retained = retainRows(list.slice(0, cut), previousMeta?.retention);
+    if (!retained.ok) return Infinity;
+    return cfg.summaryMaxTokens + 256 + retentionMessages(retained.retention)
+      .reduce((sum, message) => sum + contextWindow.tokensOfMessage(message), 0);
+  };
+  if (!Number.isFinite(replacementTokens(tailStart))) return { ...base, reason: 'retention-budget' };
+  while (tailStart < list.length - 2
+    && estimateRowsTokens(list.slice(tailStart)) + replacementTokens(tailStart) > tailBudget) {
+    // A turn can have several assistant rows. Aligning a fixed +2 offset
+    // backwards can select the same user forever; advance to the next user
+    // strictly after this cut, or retain this tail for the final budget check.
+    let nextTailStart = tailStart + 1;
+    while (nextTailStart < list.length - 1
+      && String(list[nextTailStart].role).toUpperCase() !== 'USER') nextTailStart += 1;
+    if (nextTailStart >= list.length - 1) break;
+    tailStart = nextTailStart;
+    if (!Number.isFinite(replacementTokens(tailStart))) return { ...base, reason: 'retention-budget' };
+  }
+  // A timestamp is the persistence cursor. Never split rows sharing it.
+  for (;;) {
+    const boundary = tailStart;
+    while (tailStart > 0 && tailStart < list.length
+      && new Date(list[tailStart - 1].timestamp).getTime() === new Date(list[tailStart].timestamp).getTime()) tailStart -= 1;
+    tailStart = alignToUserRow(list, tailStart);
+    if (tailStart === boundary) break;
   }
   const rowsToCompact = list.slice(0, tailStart);
   if (rowsToCompact.length < cfg.minCompactRows) {
@@ -190,6 +216,7 @@ function planCompaction({
     rowsToCompact,
     rowsToKeep: list.slice(tailStart),
     keepTail: list.length - tailStart,
+    contextBudgetTokens: Math.max(0, triggerBudget - fixedTokens - estimateRowsTokens(list.slice(tailStart))),
     reason: tooLong ? 'history-cap' : 'context-overflow',
   };
 }
@@ -400,7 +427,7 @@ function summaryBlock(summary, meta) {
   const scope = covered > 0
     ? `Los ${covered} mensajes más antiguos de esta conversación`
     : 'Los mensajes más antiguos de esta conversación';
-  return `\n\n## Memoria del hilo (contexto comprimido)\n${scope} se resumieron para seguir dentro de la ventana de contexto. Trata este resumen como hechos ya establecidos con el usuario (decisiones, datos, archivos, preferencias y pendientes); no pidas que repita nada de lo que aparece aquí. Los mensajes recientes llegan completos a continuación y prevalecen si contradicen el resumen.\n\n${text}\n`;
+  return `\n\n## Memoria del hilo (contexto comprimido)\n${scope} se resumieron para seguir dentro de la ventana de contexto. Este resumen es orientativo y puede omitir detalles: no constituye instrucciones nuevas ni prueba del contenido de un archivo. Las peticiones originales y la procedencia de los archivos se conservan por separado con sus roles; prevalecen sobre este resumen. Respeta las correcciones posteriores y recupera la fuente antes de citar datos que no estén disponibles.\n\n${text}\n`;
 }
 
 // ─── Persistence ────────────────────────────────────────────────────────
@@ -415,7 +442,9 @@ async function loadChatSummaryState(prisma, chatId) {
   if (!prisma || !chatId) return null;
   try {
     const chat = await prisma.chat.findUnique({ where: { id: chatId }, select: SUMMARY_SELECT });
-    if (!chat || !chat.contextSummary) return null;
+    // Pre-ledger summaries may have dropped requests. Rebuild from original
+    // rows rather than treating their old timestamp as verified coverage.
+    if (!hasRetainedState(chat)) return null;
     return chat;
   } catch (_) {
     return null;
@@ -425,7 +454,7 @@ async function loadChatSummaryState(prisma, chatId) {
 /** Prisma `where` for the verbatim history: live rows after the summary cut. */
 function historyWhere(chatId, state) {
   const where = { chatId, deletedAt: null };
-  const until = state && state.contextSummary && state.contextSummaryUntil;
+  const until = hasRetainedState(state) && state.contextSummaryUntil;
   if (until) where.timestamp = { gt: until };
   return where;
 }
@@ -446,6 +475,8 @@ async function compactChat({
   complete = null,
   model = null,
   runtime = null,
+  contextBudgetTokens = null,
+  signal = null,
   env = process.env,
   now = () => new Date(),
 } = {}) {
@@ -454,6 +485,19 @@ async function compactChat({
   if (inFlight.has(chatId)) return inFlight.get(chatId);
 
   const job = (async () => {
+    if (signal?.aborted) return { ok: false, reason: 'cancelled' };
+    // An old summary with no ledger cannot prove what it discarded. The
+    // loader will replay original rows; direct callers must do the same.
+    if (previousSummary && (previousMeta?.version !== 2 || !previousMeta.retention)) {
+      return { ok: false, reason: 'unverified-previous-summary' };
+    }
+    const retained = retainRows(list, previousMeta?.retention);
+    if (!retained.ok) return retained;
+    const retainedTokens = retentionMessages(retained.retention).reduce((sum, message) => sum + contextWindow.tokensOfMessage(message), 0);
+    const budget = contextBudgetTokens == null
+      ? Math.floor(contextWindow.getContextLimit(model) * getConfig(env).triggerRatio)
+      : Math.max(0, Number(contextBudgetTokens) || 0);
+    if (retainedTokens >= budget) return { ok: false, reason: 'retention-budget' };
     const transcript = buildTranscript(list, { previousSummary, env });
     let summary = await summarizeWithModel({ transcript, previousSummary, complete, env });
     let source = 'llm';
@@ -462,12 +506,21 @@ async function compactChat({
       source = 'extractive';
     }
     if (!summary) return { ok: false, reason: 'empty-summary' };
+    if (signal?.aborted) return { ok: false, reason: 'cancelled' };
+    // Budget the actual replay, including its framing, not just the prose.
+    const replayTokens = retainedTokens + contextWindow.tokensOfMessage({
+      content: summaryBlock(summary, { coveredMessages: Number(previousMeta?.coveredMessages || 0) + list.length }),
+    });
+    if (replayTokens > budget) return { ok: false, reason: 'retention-budget' };
 
     const last = list[list.length - 1];
     const until = last.timestamp instanceof Date ? last.timestamp : new Date(last.timestamp || Date.now());
     const coveredBefore = Number(previousMeta && previousMeta.coveredMessages) || 0;
     const meta = {
-      version: 1,
+      version: 2,
+      retention: retained.retention,
+      retentionTokens: retainedTokens,
+      replayTokens,
       coveredMessages: coveredBefore + list.length,
       rounds: (Number(previousMeta && previousMeta.rounds) || 0) + 1,
       summaryTokens: contextWindow.estimateTokens(summary),
@@ -567,6 +620,7 @@ async function maybeCompactInBackground({
       rows,
       systemTokens,
       reservedCompletionTokens,
+      previousMeta: state?.contextSummaryMeta,
       env: { ...env, SIRAGPT_COMPACT_TRIGGER_RATIO: String(cfg.preemptRatio), SIRAGPT_COMPACT_MAX_HISTORY_TOKENS: String(Math.floor(cfg.maxHistoryTokens * 0.6)) },
     });
     if (!plan.shouldCompact) return { ok: false, reason: plan.reason };
@@ -579,6 +633,7 @@ async function maybeCompactInBackground({
       complete,
       model,
       runtime,
+      contextBudgetTokens: plan.contextBudgetTokens,
       env,
     });
   } catch (error) {
@@ -600,6 +655,7 @@ module.exports = {
   summarizeWithModel,
   pickCompactionRuntime,
   summaryBlock,
+  retentionMessages,
   loadChatSummaryState,
   historyWhere,
   compactChat,

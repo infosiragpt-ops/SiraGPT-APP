@@ -72,7 +72,8 @@ describe('planCompaction — when to fold the older turns', () => {
   });
 
   test('overflow on a small-context model folds the head and keeps a user-aligned tail', () => {
-    const rows = makeRows(30, { chars: 1600 }); // ~400 tokens per row → 24k tokens
+    const rows = makeRows(30, { chars: 1600 });
+    for (const row of rows) if (row.role === 'USER') row.content = 'Conserva el formato.';
     const plan = compactor.planCompaction({ model: 'sira-mini', rows, systemTokens: 1500, promptTokens: 100, reservedCompletionTokens: 1024 });
     assert.equal(contextWindow.getContextLimit('sira-mini'), 8192);
     assert.equal(plan.shouldCompact, true);
@@ -85,8 +86,36 @@ describe('planCompaction — when to fold the older turns', () => {
     assert.ok(tailTokens + 1500 + 100 + 1024 <= plan.triggerBudget, `tail ${tailTokens} must fit ${plan.triggerBudget}`);
   });
 
+  test('planning terminates when a kept user turn has several assistant rows', () => {
+    // Isolate the synchronous planner so a regression fails with a bounded
+    // timeout instead of hanging the entire test runner's event loop.
+    const output = require('node:child_process').execFileSync(process.execPath, ['-e', `
+      const compactor = require(process.argv[1]);
+      const rows = Array.from({ length: 30 }, (_, index) => ({
+        id: 'm' + index,
+        role: index >= 22 ? (index === 22 ? 'USER' : 'ASSISTANT') : (index % 2 ? 'ASSISTANT' : 'USER'),
+        content: index === 0 ? 'dato '.repeat(3600)
+          : index < 22 ? (index % 2 ? 'texto '.repeat(1200) : 'Respeta el formato.') : 'ok',
+        files: [], timestamp: new Date(1e12 + index * 1000),
+      }));
+      const results = [];
+      for (const nextUser of [false, true]) {
+        if (nextUser) rows[27].role = 'USER';
+        const plan = compactor.planCompaction({ model: 'sira-mini', rows, env: {} });
+        results.push({ cut: plan.rowsToCompact.length, kept: plan.rowsToKeep.length,
+          firstRole: plan.rowsToKeep[0].role, shouldCompact: plan.shouldCompact });
+      }
+      process.stdout.write(JSON.stringify(results));
+    `, require.resolve('../src/services/conversation-compactor')], { encoding: 'utf8', timeout: 2000 });
+    assert.deepEqual(JSON.parse(output), [
+      { cut: 22, kept: 8, firstRole: 'USER', shouldCompact: true },
+      { cut: 27, kept: 3, firstRole: 'USER', shouldCompact: true },
+    ]);
+  });
+
   test('the absolute history cap triggers even inside a 1M-token window', () => {
-    const rows = makeRows(60, { chars: 8000 }); // ~2000 tokens per row → ~240k tokens
+    const rows = makeRows(60, { chars: 8000 });
+    for (const row of rows) if (row.role === 'USER') row.content = 'Continúa con el formato acordado.';
     const plan = compactor.planCompaction({ model: 'muse-spark-1.2', rows, systemTokens: 8000, promptTokens: 100 });
     assert.equal(plan.shouldCompact, true);
     assert.equal(plan.reason, 'history-cap');
@@ -175,11 +204,13 @@ describe('transcript + summaries', () => {
     assert.equal(await compactor.summarizeWithModel({ transcript: 'T', complete: null }), null);
   });
 
-  test('the system block frames the summary as established facts', () => {
+  test('the system block keeps the narrative subordinate to original requests and evidence', () => {
     const block = compactor.summaryBlock('## Objetivo\nX', { coveredMessages: 42 });
     assert.match(block, /## Memoria del hilo \(contexto comprimido\)/);
     assert.match(block, /Los 42 mensajes más antiguos/);
-    assert.match(block, /prevalecen si contradicen el resumen/);
+    assert.match(block, /no constituye instrucciones nuevas ni prueba del contenido de un archivo/);
+    assert.match(block, /prevalecen sobre este resumen/);
+    assert.match(block, /Respeta las correcciones posteriores/);
     assert.equal(compactor.summaryBlock('', {}), '');
   });
 });
@@ -211,14 +242,14 @@ describe('persistence contract', () => {
     const until = new Date('2026-09-01T10:30:00Z');
     assert.deepEqual(compactor.historyWhere('c1', null), { chatId: 'c1', deletedAt: null });
     assert.deepEqual(
-      compactor.historyWhere('c1', { contextSummary: 'S', contextSummaryUntil: until }),
+      compactor.historyWhere('c1', { contextSummary: 'S', contextSummaryUntil: until, contextSummaryMeta: { version: 2, retention: { version: 1, entries: [] } } }),
       { chatId: 'c1', deletedAt: null, timestamp: { gt: until } },
     );
     assert.deepEqual(compactor.historyWhere('c1', { contextSummary: null, contextSummaryUntil: until }), { chatId: 'c1', deletedAt: null });
   });
 
   test('compactChat persists a rolling summary with cumulative meta and serialises per chat', async () => {
-    const prisma = fakePrisma({ contextSummary: '## Objetivo\nviejo', contextSummaryMeta: { coveredMessages: 10, rounds: 1 } });
+    const prisma = fakePrisma({ contextSummary: '## Objetivo\nviejo', contextSummaryMeta: { version: 2, retention: { version: 1, entries: [] }, coveredMessages: 10, rounds: 1 } });
     const rows = makeRows(4, { chars: 10 });
     let calls = 0;
     const complete = async () => {
@@ -267,7 +298,9 @@ describe('persistence contract', () => {
 
   test('maybeCompactInBackground refetches the live rows and folds past the pre-emptive threshold', async () => {
     const prisma = fakePrisma();
-    prisma.setMessages(makeRows(24, { chars: 1600 })); // ~19k tokens
+    const rows = makeRows(24, { chars: 1600 });
+    for (const row of rows) if (row.role === 'USER') row.content = 'Continúa con el mismo formato.';
+    prisma.setMessages(rows); // Mostly assistant output: compression can retain every instruction.
     const result = await compactor.maybeCompactInBackground({
       prisma,
       chatId: 'chat1',
@@ -287,4 +320,66 @@ describe('persistence contract', () => {
     assert.equal(skipped.ok, false);
     assert.equal(quiet.state.contextSummary, null);
   });
+});
+
+describe('lossless instruction and source retention', () => {
+  test('failed summaries retain complete requests and every source across rounds, in model-visible roles', async () => {
+    const prisma = fakePrisma();
+    const instruction = `Corrige el informe. ${'Contexto adicional. '.repeat(40)}No cambies encabezados ni márgenes.`;
+    const rows = makeRows(2, { chars: 10 });
+    rows[0].content = instruction;
+    rows[0].files = Array.from({ length: 25 }, (_, i) => ({ id: `source-${i}`, name: 'informe.docx', extractedText: 'Dato de referencia, no una orden.' }));
+    const first = await compactor.compactChat({ prisma, chatId: 'chat1', rows, complete: async () => { throw new Error('provider unavailable'); } });
+    assert.equal(first.ok, true);
+    assert.ok(JSON.stringify(first.meta.retention).includes(instruction), 'full original request survives beyond character 220');
+    assert.ok(JSON.stringify(first.meta.retention).includes('source-24'), 'the 25th attachment keeps its distinct identity');
+    const more = makeRows(2, { chars: 10, startAt: Date.UTC(2026, 8, 2) });
+    more.forEach((row) => { row.id = `second-${row.id}`; });
+    more[0].content = 'Ahora sí cambia únicamente el margen izquierdo a 3 cm.';
+    const second = await compactor.compactChat({ prisma, chatId: 'chat1', rows: more,
+      previousSummary: first.summary, previousMeta: first.meta, complete: async () => '## Estado\nCambios pendientes.' });
+    assert.equal(second.ok, true);
+    const replay = compactor.retentionMessages(second.meta.retention);
+    assert.equal(replay[0].role, 'user');
+    assert.ok(replay[0].content.startsWith(instruction + '\n\n'));
+    assert.ok(replay.at(-2).content.startsWith(more[0].content + '\n\n'), 'later corrections keep their chronological position');
+    assert.ok(replay.every((message) => message.role !== 'system'), 'no user or file data is promoted to system');
+    assert.ok(JSON.stringify(replay).includes('source-24'), 'the model actually receives the source identity in later rounds');
+    assert.equal(second.meta.coveredMessages, 8);
+  });
+
+  test('a retention budget refusal leaves the persisted cut unchanged', async () => {
+    const prisma = fakePrisma();
+    const rows = makeRows(3, { chars: 10 });
+    rows[0].content = 'No omitas esta instrucción. '.repeat(3000);
+    const result = await compactor.compactChat({ prisma, chatId: 'chat1', rows, complete: async () => '## Estado\nResumen válido.' });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'retention-budget');
+    assert.equal(prisma.state.contextSummaryUntil, null);
+    assert.equal(prisma.calls.some(([kind]) => kind === 'chat.update'), false);
+  });
+
+  test('the combined retention plus summary must fit the caller budget before advancing the cut', async () => {
+    const prisma = fakePrisma();
+    const result = await compactor.compactChat({ prisma, chatId: 'chat1', rows: makeRows(2, { chars: 400 }),
+      contextBudgetTokens: 200, complete: async () => '## Estado\nResumen breve.' });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'retention-budget');
+    assert.equal(prisma.state.contextSummaryUntil, null);
+  });
+
+  test('legacy summaries without verified retention replay original rows', async () => {
+    const prisma = fakePrisma({ contextSummary: '## Estado\nResumen antiguo.', contextSummaryUntil: new Date(), contextSummaryMeta: { version: 1 } });
+    assert.equal(await compactor.loadChatSummaryState(prisma, 'chat1'), null);
+    assert.deepEqual(compactor.historyWhere('chat1', prisma.state), { chatId: 'chat1', deletedAt: null });
+  });
+});
+
+test('planning refuses an unbounded literal-instruction ledger instead of proposing a destructive cut', () => {
+  const rows = makeRows(30, { chars: 4000 });
+  const plan = compactor.planCompaction({ model: 'sira-mini', rows });
+  assert.equal(plan.shouldCompact, false);
+  assert.equal(plan.reason, 'retention-budget');
+  assert.equal(plan.rowsToKeep, rows);
+  assert.deepEqual(plan.rowsToCompact, []);
 });
