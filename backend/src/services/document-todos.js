@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-todos.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const MARKER_RE = /(?:^|[\s`'"<>(/])\(?\[?(TODO|FIXME|NOTE|HACK|XXX|WIP|BUG|PEND
 const BARE_WIP_RE = /(?:^|[\s`'"<>(\[])(WIP|TBD|TBA|TBC)(?=[\s`'"<>):,;.!?\]]|$)/g;
 
 const KINDS = ['todo', 'fixme', 'note', 'hack', 'xxx', 'wip', 'bug', 'pendiente'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

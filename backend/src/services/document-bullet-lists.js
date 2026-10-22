@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-bullet-lists.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -30,13 +32,6 @@ const MAX_ITEM_LEN = 180;
 const BULLET_RE = /^(\s*)([-*+])\s+(.+)$/;
 const NUMBERED_RE = /^(\s*)(\d+)[.)]\s+(.+)$/;
 const CHECKBOX_RE = /^(\s*)([-*+])\s+\[[\sxX\-/?]\]\s+/;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

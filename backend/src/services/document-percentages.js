@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-percentages.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -37,13 +39,6 @@ const SPANISH_PERCENT_RE = /(?<![\w])([+-]?\d{1,3}(?:[.,]\d+)?)\s+por\s+ciento\b
 // pp / bps
 const PP_RE = /(?<![\w])([+-]?\d{1,3}(?:[.,]\d+)?)\s*(?:pp|percentage\s+points?|puntos?\s+porcentuales?)\b/gi;
 const BPS_RE = /(?<![\w])([+-]?\d{1,3}(?:[.,]\d+)?)\s*(?:bps?|basis\s+points?|puntos?\s+b[áa]sicos?)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipContext(text, idx, len) {
   const start = Math.max(0, idx - 40);

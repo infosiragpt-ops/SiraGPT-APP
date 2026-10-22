@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-jurisdiction-detector.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -89,13 +91,6 @@ const GOVERNING_LAW_PATTERNS = [
   /\b(?:jurisdiction\s+of)\s+(?:the\s+)?(?:courts?\s+of\s+)?([A-Za-zÁÉÍÓÚÑáéíóúñ\s,.-]{2,60})[\.;,]/i,
   /(?:^|[^\p{L}])(?:regida?\s+por\s+|ley\s+aplicable\s+|aplicará\s+la\s+(?:legislación|ley)\s+de\s+|sujet[oa]\s+a\s+las\s+leyes\s+de\s+)([A-Za-zÁÉÍÓÚÑáéíóúñ\s,.-]{2,60})[\.;,]/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = 240) {
   if (!text) return '';

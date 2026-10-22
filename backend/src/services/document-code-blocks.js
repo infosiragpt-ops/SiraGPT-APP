@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-code-blocks.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -33,13 +35,6 @@ const KNOWN_LANGUAGES = new Set([
   'html', 'css', 'scss', 'less', 'markdown', 'md', 'graphql', 'gql', 'mermaid',
   'plantuml', 'tex', 'latex', 'matlab', 'fortran', 'jsx', 'tsx', 'vue', 'svelte',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipLine(line) {
   const s = String(line || '');

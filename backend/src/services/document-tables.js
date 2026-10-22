@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-tables.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,13 +31,6 @@ const MAX_CELL_LEN = 80;
 
 // A markdown table header followed by a separator row (---|---) and ≥ 1 body row.
 const TABLE_RE = /(^|\n)(\|.+\|)\n(\|[-:|\s]+\|)\n((?:\|.+\|(?:\n|$))+)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipCell(text) {
   const s = String(text || '').trim();

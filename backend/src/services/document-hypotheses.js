@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-hypotheses.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -47,13 +49,6 @@ const HYPOTHESIS_KIND = [
     /(?:^|[^\p{L}])(hip[oó]tesis|planteamos\s+que|postulamos\s+que|predecimos\s+que|sostenemos\s+que)(?=[^\p{L}]|$)/iu,
   ] },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

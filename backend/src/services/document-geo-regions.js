@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-geo-regions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -68,13 +70,6 @@ const KNOWN_ISO3 = new Set([
   'ZAF', 'NGA', 'KEN', 'CHL', 'COL', 'PER', 'VEN', 'BOL', 'ECU', 'URY',
   'PRY', 'CRI', 'PAN', 'CUB', 'DOM', 'PRI', 'UKR', 'IRQ', 'IRN', 'AFG',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function emptyTotals() {
   const r = {};

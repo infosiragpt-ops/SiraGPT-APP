@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-coupons.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -29,13 +31,6 @@ const MAX_VALUE_LEN = 40;
 const LABELED_RE = /\b(?:Coupon\s+code|Coupon|Promo\s+code|Promo|Code|Discount\s+code|Discount|Voucher|C[óo]digo(?:\s+de\s+(?:descuento|promoci[óo]n|cup[óo]n))?|Promoci[óo]n|Cup[óo]n|Descuento)\s*[:#]?\s*([A-Z][A-Z0-9_\-]{2,29})/gi;
 // "Use SAVE20 at checkout" / "Apply SAVE20"
 const USE_PHRASE_RE = /\b(?:Use|Apply|Enter|Aplica|Usa|Ingresa)\s+(?:code\s+|c[óo]digo\s+)?([A-Z][A-Z0-9_\-]{2,29})\s+(?:at\s+checkout|on\s+checkout|en\s+el\s+pago|al\s+pagar)?/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

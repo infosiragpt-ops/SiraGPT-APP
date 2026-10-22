@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-numeric-statistics.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +52,6 @@ const STAT_KINDS = [
 
 const VALUE_RE = /(?:[$€£¥]\s?)?(-?\d{1,4}(?:[.,]\d+)?(?:\s?(?:[KkMmBb]|million|billion|millones?|billones?|%))?)/g;
 const UNIT_RE = /\b(seconds?|minutes?|hours?|days?|weeks?|months?|years?|ms|s|kg|lb|cm|m|km|°C|°F|USD|EUR|GBP|MXN|PEN|COP|CLP|BRL|JPY|d[oó]lares?|euros?|pesos?|reales?|soles?)\b/i;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

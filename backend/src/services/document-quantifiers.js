@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-quantifiers.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -38,13 +40,6 @@ const PATTERNS = KINDS.map((kind) => ({
   kind,
   re: new RegExp(`\\b(${QUANTIFIERS[kind].join('|')})\\b`, 'giu'),
 }));
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipContext(text, idx, len) {
   const start = Math.max(0, idx - 30);

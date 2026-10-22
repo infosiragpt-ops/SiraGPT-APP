@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-data-classification.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -66,13 +68,6 @@ const LABELS = [
     /\bTLP[:\s-]+(?:WHITE|CLEAR)\b/i,
   ] },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function getScanWindow(text) {
   if (!text) return '';

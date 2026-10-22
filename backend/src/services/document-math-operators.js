@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-math-operators.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -64,13 +66,6 @@ const OPERATORS = {
 };
 
 const OPERATOR_RE = new RegExp(`(${Object.keys(OPERATORS).map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function extractMathOperators(input) {
   const text = safeText(input);

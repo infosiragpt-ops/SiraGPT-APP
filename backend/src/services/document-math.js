@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-math.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -32,13 +34,6 @@ const DISPLAY_DOLLAR_RE = /\$\$([^]+?)\$\$/g;
 const INLINE_PAREN_RE = /\\\(([^]+?)\\\)/g;
 const DISPLAY_BRACKET_RE = /\\\[([^]+?)\\\]/g;
 const ENV_RE = /\\begin\{(equation|align|gather|multiline|displaymath)\*?\}([^]*?)\\end\{\1\*?\}/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

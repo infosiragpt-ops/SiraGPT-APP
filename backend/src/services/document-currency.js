@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-currency.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -62,13 +64,6 @@ const SYMBOL_PREFIX_RE = /(?:^|[\s`'"<>(])(\$|€|£|¥|₹|₿|₩|R\$|C\$|A\$)
 const ISO_SUFFIX_RE = /(?:^|[\s`'"<>(])(-?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s+([A-Z]{3})\b/g;
 // ISO-prefix amount: USD 1,234.56 / EUR 100
 const ISO_PREFIX_RE = /(?:^|[\s`'"<>(])\b([A-Z]{3})\s+(-?\d{1,3}(?:[,.]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').trim();

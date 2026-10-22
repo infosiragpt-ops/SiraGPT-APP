@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-compliance-matcher.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -68,13 +70,6 @@ const FRAMEWORKS = [
   { key: 'EU AI Act',     re: /\b(EU\s+AI\s+Act|Reglamento\s+(?:Europeo\s+)?de\s+(?:la\s+)?Inteligencia\s+Artificial)\b/i, summary: 'EU AI Act (2024)' },
   { key: 'NIST AI RMF',   re: /\bNIST\s+AI\s+RMF\b/i, summary: 'NIST AI Risk Management Framework (1.0)' },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function countAll(text, re) {
   const flags = re.flags.includes('g') ? re.flags : `${re.flags}g`;

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-key-phrases.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -42,13 +44,6 @@ const STOPWORDS = new Set([
   'su', 'sus', 'mi', 'mis', 'tu', 'tus', 'nuestro', 'nuestra', 'también',
   'pero', 'aunque', 'si', 'sí', 'no', 'más', 'menos',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function tokenize(text) {
   return (text || '')

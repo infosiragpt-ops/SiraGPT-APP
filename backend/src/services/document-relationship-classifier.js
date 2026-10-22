@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-relationship-classifier.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +37,6 @@ const MAX_PAIRS = 18;
 const MAX_BLOCK_CHARS = 3600;
 const VERSION_SUFFIX_RE = /[\s_-]?(v\d+(?:\.\d+)*|version[\s_-]?\d+|rev\d+|r\d+|draft|borrador|final|definitiv[oa]|\d{4}-\d{2}-\d{2})\.?[a-z0-9]{0,5}$/i;
 const STOPWORD_RE = /\b(the|a|an|and|or|of|in|on|to|for|by|el|la|los|las|de|del|y|o|en|por|para|que)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = 220) {
   if (!text) return '';

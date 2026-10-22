@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-identifiers.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +37,6 @@ const ID_PATTERNS = [
   { kind: 'CVE',     re: /\bCVE-\d{4}-\d{4,7}\b/gi },
   { kind: 'RFC',     re: /\bRFC[\s-]?\d{1,5}\b/g },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function unique(arr) {
   const seen = new Set();

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-warranties-extractor.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -55,13 +57,6 @@ const DISCLAIMER_PATTERNS_EN = [
 const DISCLAIMER_PATTERNS_ES = [
   /(?:^|[^\p{L}])(sin\s+garant[ií]a|renuncia\s+a\s+(?:toda|cualquier)\s+garant[ií]a|"?tal\s+cual"?|en\s+su\s+estado\s+actual|sin\s+garant[ií]as\s+expresas\s+o\s+impl[ií]citas)(?=[^\p{L}]|$)/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-cross-numeric.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -56,13 +58,6 @@ const CONCEPT_TAGS = [
 ];
 
 const VALUE_RE = /([$€£¥]\s?)?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?)\s?(%|millones?|billones?|million|billion|[KkMmBb])?/;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function parseNumeric(raw) {
   if (typeof raw !== 'string') return null;

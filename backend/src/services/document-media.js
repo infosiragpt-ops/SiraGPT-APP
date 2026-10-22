@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-media.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -37,13 +39,6 @@ const AUDIO_TAG_RE = /<audio\s+[^>]*src\s*=\s*["']([^"'\n]{1,300})["']/gi;
 const VIDEO_TAG_RE = /<video\s+[^>]*src\s*=\s*["']([^"'\n]{1,300})["']/gi;
 const TIMECODE_RE = /(?:^|[\s`'"<>(\[])(\[?\d{1,3}:\d{2}(?::\d{2})?\]?)(?=[\s`'"<>):,;.!?\]]|$)/g;
 const EPISODE_RE = /\b(Episode\s+\d+|Episodio\s+\d+|S\d+E\d+|Cap[íi]tulo\s+\d+|Ep\.?\s*\d+)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

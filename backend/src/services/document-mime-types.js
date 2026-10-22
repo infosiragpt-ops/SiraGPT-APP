@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-mime-types.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +37,6 @@ const TOP_LEVEL_TYPES = new Set([
 ]);
 
 const MIME_RE = /\b((?:text|application|image|audio|video|multipart|message|model|font)\/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^_.+]{1,80})\b/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

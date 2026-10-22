@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-file-extensions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -40,13 +42,6 @@ for (const [cat, exts] of Object.entries(CATEGORIES)) {
 }
 
 const EXT_RE = /(?:^|[\s`'"<>(\[/,;:])[a-zA-Z0-9_\-]{1,40}\.([a-zA-Z][a-zA-Z0-9]{1,8})(?=[\s`'"<>):,;.!?\]]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function categoryFor(ext) {
   return EXT_TO_CATEGORY[ext.toLowerCase()] || 'other';

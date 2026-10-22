@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-disclosures.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -65,13 +67,6 @@ const DISCLOSURE_KINDS = [
     /(?:^|[^\p{L}])(no\s+constituye\s+asesor[ií]a|no\s+es\s+(?:una\s+)?recomendaci[oó]n|consulte\s+a\s+su\s+asesor|busque\s+asesor[ií]a\s+(?:profesional|financiera|legal))(?=[^\p{L}]|$)/iu,
   ] },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

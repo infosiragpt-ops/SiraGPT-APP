@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-blockquotes.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -28,13 +30,6 @@ const MAX_TEXT_LEN = 280;
 
 const BLOCKQUOTE_RE = /(?:^|\n)((?:>\s.*(?:\n>\s.*)*)+)(?=\n[^>]|\n*$)/g;
 const ATTRIB_RE = /^[—–\-]{1,2}\s*([A-Z][A-Za-zÀ-ÿ ,.'\-]{1,80})$/m;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

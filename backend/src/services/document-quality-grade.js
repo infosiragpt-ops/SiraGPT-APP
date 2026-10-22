@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-quality-grade.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -48,12 +50,6 @@ const WEIGHTS = {
   freshness: 0.10,
   traceability: 0.10,
 };
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clamp(n, lo = 0, hi = 1) {
   if (!Number.isFinite(n)) return lo;

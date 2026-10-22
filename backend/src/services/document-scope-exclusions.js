@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-scope-exclusions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -47,13 +49,6 @@ const EXCLUSION_PATTERNS = [
   /\b(out\s+of\s+scope|excluded|excludes?|excluding|does\s+not\s+(?:cover|include|apply\s+to)|except\s+(?:for|that)|with\s+the\s+exception\s+of)\b[^.\n]{0,140}/i,
   /(?:^|[^\p{L}])(fuera\s+del\s+alcance|excluye[n]?|excluy(?:endo|en)|excluid[oa]s?|no\s+(?:cubre|incluye|aplica\s+a)|excepto|salvo\s+que|excepci[óo]n\s+de|quedan?\s+excluid[oa]s?)(?=[^\p{L}]|$)[^.\n]{0,140}/iu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

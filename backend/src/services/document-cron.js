@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-cron.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +37,6 @@ const CRON_7 = new RegExp(`(?:^|[\\s\\\`'"<>(])((?:${FIELD}\\s+){6}${FIELD})(?=\
 const NAMED_RE = /(?:^|[\s`'"<>(])(@(?:daily|hourly|weekly|monthly|yearly|annually|reboot|midnight))(?=[\s`'"<>):,;.!?]|$)/g;
 // schedule: "0 3 * * *"   (K8s/CRON YAML/JSON)
 const SCHEDULE_LINE_RE = /\bschedule\s*[:=]\s*['"]([^'"\n]+)['"]/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

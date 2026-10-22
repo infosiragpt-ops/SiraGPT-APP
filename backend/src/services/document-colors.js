@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-colors.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -59,13 +61,6 @@ const NAMED_COLORS = new Set([
 
 // Word boundary for named colors, case-insensitive, capturing
 const NAMED_COLOR_RE = /\b([a-z]{3,30})\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function emptyTotals() {
   return { hex: 0, rgb: 0, hsl: 0, named: 0, tailwind: 0 };

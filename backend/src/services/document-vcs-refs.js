@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-vcs-refs.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const REPO_REF_RE = /\b([a-zA-Z0-9][\w-]{0,38}\/[a-zA-Z0-9][\w.\-]{0,99}(?:@[0-9
 const BRANCH_RE = /\b(?:branch|on\s+branch|in\s+branch)\s*[:=]?\s*([a-zA-Z0-9_\-./]{1,60})/gi;
 // "tag: v1.2.3"
 const TAG_RE = /\btag\s*[:=]\s*(v?\d+\.\d+(?:\.\d+)?(?:[-+][\w.\-]+)?|[a-zA-Z][\w.\-]{1,30})/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

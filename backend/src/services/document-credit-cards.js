@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-credit-cards.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -37,13 +39,6 @@ const CARD_PATTERNS = [
 ];
 
 const KINDS = CARD_PATTERNS.map((p) => p.kind);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function luhnValid(digits) {
   // Luhn checksum validation

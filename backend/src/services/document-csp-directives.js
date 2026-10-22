@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-csp-directives.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -38,13 +40,6 @@ const CSP_DIRECTIVES = [
 ];
 
 const DIRECTIVE_RE = new RegExp(`\\b(${CSP_DIRECTIVES.join('|')})\\s+([^;\\n]{1,200})`, 'gi');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

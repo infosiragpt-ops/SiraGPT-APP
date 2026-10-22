@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-section-similarity.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -39,13 +41,6 @@ const HEADING_RES = [
   /^(\d+(?:\.\d+){0,3})\s+([^\n]{3,90})$/gm,
   /^([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ0-9\s,.:;()/-]{4,70})$/gm,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = 80) {
   if (!text) return '';

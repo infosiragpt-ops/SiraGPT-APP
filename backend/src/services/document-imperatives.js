@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-imperatives.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -52,13 +54,6 @@ const ACTION_VERBS_ES = [
 
 const IMPERATIVE_RE_EN = new RegExp(`(?:^|\\n)\\s*(?:[-*+]|\\d+[.)])?\\s*((?:${ACTION_VERBS_EN.join('|')})\\b[^.!?\\n]{4,200}[.!]?)`, 'gim');
 const IMPERATIVE_RE_ES = new RegExp(`(?:^|\\n)\\s*(?:[-*+]|\\d+[.)])?\\s*((?:${ACTION_VERBS_ES.join('|')})\\b[^.!?\\n]{4,200}[.!]?)`, 'gimu');
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipText(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

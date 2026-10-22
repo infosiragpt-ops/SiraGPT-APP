@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-boolean.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -30,13 +32,6 @@ const MAX_KEY_LEN = 60;
 const LABELED_RE = /^[\t ]*([A-Za-zÀ-ÿ][\w\sÀ-ÿ_\-?]{0,60})\s*[:=]\s*(yes|no|true|false|s[íi]|enabled|disabled|on|off|activado|desactivado|habilitado|deshabilitado|activo|inactivo|verdadero|falso)(?![A-Za-zÀ-ÿ0-9_])/gim;
 // Glyph at start of line followed by text
 const GLYPH_RE = /^[\t ]*([✓✗☑☐✘☒])\s+([^\n]{1,80})/gim;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipKey(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

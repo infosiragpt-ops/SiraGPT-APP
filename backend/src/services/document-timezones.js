@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-timezones.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -43,13 +45,6 @@ const UTC_OFFSET_RE = /\b(UTC|GMT)\s*([+-]\d{1,2}(?::\d{2})?)/g;
 const SIMPLE_OFFSET_RE = /(?:^|[\s(`,;])([+-]\d{2}:?\d{2})(?=[\s)`,;.!?]|$)/g;
 const NAMED_TZ_RE = /\b([A-Z]{2,5})\b/g;
 const IANA_TZ_RE = /\b((?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Etc|Europe|Indian|Pacific|US)\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)\b/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

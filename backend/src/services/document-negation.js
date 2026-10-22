@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-negation.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -32,13 +34,6 @@ const NEGATION_WORDS = new Set([
 ]);
 
 const DOUBLE_NEG_RE = /\b(not|never|no|ni)\b[^.!?]*?\b(no|none|nothing|never|ni|nunca|nada|ninguno|ninguna)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function tokenize(text) {
   return text.toLowerCase().match(/[a-záéíóúñüäöß']{2,30}/giu) || [];

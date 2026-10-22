@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-temporal-expressions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -61,13 +63,6 @@ const EXPRESSION_PATTERNS = [
     /(?:^|[^\p{L}])(dentro\s+de\s+\d+\s+(?:d[ií]as?|semanas?|meses?|años?)|en\s+los?\s+pr[oó]xim[oa]s?\s+\d+\s+(?:d[ií]as?|semanas?|meses?|años?)|en\s+un\s+plazo\s+de\s+\d+)(?=[^\p{L}]|$)/iu,
   ] },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

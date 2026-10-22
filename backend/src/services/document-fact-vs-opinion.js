@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-fact-vs-opinion.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +52,6 @@ const NUMBER_RE = /(?<![\w.])\d{1,3}(?:[.,]\d+)?(?![\w])/;
 const PERCENT_RE = /\d{1,3}(?:[.,]\d+)?\s?%/;
 const DATE_RE = /\b\d{4}-\d{2}-\d{2}|\bQ[1-4]\s+\d{4}/;
 const ENTITY_RE = /\b[A-ZÁÉÍÓÚÑ][\p{L}\p{N}'\-]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][\p{L}\p{N}'\-]+){0,3}\b/u;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max = MAX_SENTENCE_LEN) {
   if (!text) return '';

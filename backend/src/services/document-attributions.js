@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-attributions.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -35,13 +37,6 @@ const PHRASES = [
   /\bDe\s+acuerdo\s+con\s+([A-Z][^.,;\n]{2,80})/giu,
   /\bConforme\s+a\s+([A-Z][^.,;\n]{2,80})/giu,
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipSource(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

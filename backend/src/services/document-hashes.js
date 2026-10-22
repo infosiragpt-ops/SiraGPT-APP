@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-hashes.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -41,13 +43,6 @@ const KIND_BY_LEN = {
 
 // Hex with optional preceding label
 const HASH_RE = /(?:^|[\s`'"<>(,;:])((?:MD5|SHA[\s\-]?(?:1|224|256|384|512)|BLAKE2(?:b|s)?|BLAKE3)?\s*[:=]?\s*)([0-9a-fA-F]{32,128})(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function classifyHash(hex, label) {
   const len = hex.length;

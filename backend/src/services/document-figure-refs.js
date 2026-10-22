@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-figure-refs.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -36,13 +38,6 @@ const KIND_PATTERNS = [
 ];
 
 const CAPTION_RE = /^\s*(Figure|Figura|Fig|Table|Tabla|Cuadro|Chart|Gr[áa]fico|Gr[áa]fica|Equation|Ecuaci[oó]n|Eq|Diagram|Diagrama|Appendix|Anexo|Ap[eé]ndice)\s+([A-Z0-9]+(?:[.\-][A-Z0-9]+)?)\s*[:.\-]\s*(.{8,400})$/i;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clip(text, max) {
   if (!text) return '';

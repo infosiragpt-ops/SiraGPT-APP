@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-http-status.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -50,13 +52,6 @@ const PHRASED_RE = /\b([1-5]\d{2})\s+([A-Z][A-Za-z\- ]{1,40})/g;
 // Common bare HTTP codes (well-known so false-positive risk is acceptable in HTTP contexts)
 const COMMON_BARE_RE = /\b(200|201|204|301|302|304|400|401|403|404|405|409|410|418|422|429|500|501|502|503|504)\b/g;
 const COMMON_BARE_SET = new Set([200, 201, 204, 301, 302, 304, 400, 401, 403, 404, 405, 409, 410, 418, 422, 429, 500, 501, 502, 503, 504]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

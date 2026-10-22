@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-citations.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -40,13 +42,6 @@ const PAREN_AUTHOR_RE = /\(([A-Z][a-zA-Z]{1,30}(?:\s+et\s+al\.?|\s+(?:and|y)\s+[
 const ETAL_INLINE_RE = /\b([A-Z][a-zA-Z]{1,30}\s+et\s+al\.?)(?:\s+\(?(\d{4})\)?)?/g;
 // References section header
 const REFERENCES_HEADER_RE = /(?:^|\n)\s*#{1,6}\s+(?:References|Bibliography|Bibliograf[íi]a|Referencias|Works\s+Cited)\s*$/im;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').trim();

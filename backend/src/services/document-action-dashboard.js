@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName } = require('./document-analyzer-common');
+
 /**
  * document-action-dashboard.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -58,11 +60,6 @@ function clip(text, max = 220) {
   if (!text) return '';
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1).trimEnd()}…`;
-}
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
 }
 
 function dedupeBy(arr, keyFn) {

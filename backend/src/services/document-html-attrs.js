@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-html-attrs.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -47,13 +49,6 @@ const ATTR_VALUE_SQ_RE = /\b([a-z][a-zA-Z0-9_-]{1,30})\s*=\s*'([^'\n]{0,200})'/g
 const LABELED_RE = /\b(?:the\s+)?([a-z][a-zA-Z0-9_-]{1,30})\s+attribute\b/g;
 // aria-*, data-* references
 const ARIA_DATA_RE = /\b((?:aria|data)-[a-z][a-zA-Z0-9_-]{0,30})\b/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').trim();

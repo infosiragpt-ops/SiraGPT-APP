@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-toc.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -28,13 +30,6 @@ const MAX_ITEM_LEN = 120;
 
 const TOC_HEADER_RE = /(?:^|\n)\s*#{1,6}\s+(?:Table\s+of\s+Contents|Contents|TOC|[ÍI]ndice|Tabla\s+de\s+contenido(?:s)?|Sumario)\s*$/im;
 const ITEM_RE = /^([\t ]*)(?:[-*+]|\d+[.)])\s+([^\n]{2,160})$/gm;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipItem(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

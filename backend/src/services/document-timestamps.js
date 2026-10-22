@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-timestamps.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -45,13 +47,6 @@ const HTTP_DATE_RE = /\b((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+\d{1,2}\s+(?:Jan|Feb
 const ISO_DURATION_RE = /\b(P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?)\b/g;
 // Human duration (e.g. "5 minutes", "2 days", "30s", "1.5h")
 const HUMAN_DURATION_RE = /\b(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|wks?|w|months?|mos?|years?|yrs?|y)\b/gi;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function contextFor(text, idx, len) {
   const start = Math.max(0, idx - 40);

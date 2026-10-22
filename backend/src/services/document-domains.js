@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-domains.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -44,13 +46,6 @@ const VALID_TLDS = new Set([
 // Optional subdomains + label + tld
 // Allows letters, digits, hyphens; rejects starting/ending with hyphen
 const DOMAIN_RE = /(?:^|[\s`'"<>(,;:])(?<!@)(?<!\/)([a-zA-Z0-9][a-zA-Z0-9\-]{0,62}(?:\.[a-zA-Z0-9][a-zA-Z0-9\-]{0,62})+)(?=[\s`'"<>):,;.!?]|$)/g;
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipDomain(d) {
   const s = String(d || '').toLowerCase();

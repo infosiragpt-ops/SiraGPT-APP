@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-mermaid.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -44,13 +46,6 @@ const TYPE_PATTERNS = [
   { type: 'requirement',re: /^\s*requirementDiagram\b/i },
   { type: 'c4',         re: /^\s*C4(?:Context|Container|Component|Deployment|Dynamic)?\b/i },
 ];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipLine(line) {
   const s = String(line || '');

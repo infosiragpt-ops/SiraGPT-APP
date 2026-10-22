@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-legal-citations.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -43,13 +45,6 @@ const KINDS = PATTERNS.map((p) => p.kind);
 const COMMON_NON_CASE_PAIRS = new Set([
   'David v. Goliath', 'Man v. Machine',
 ]);
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(s) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();

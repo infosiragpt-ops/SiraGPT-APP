@@ -1,5 +1,7 @@
 'use strict';
 
+const { safeFileName, safeText } = require('./document-analyzer-common');
+
 /**
  * document-decision-records.js
  * ─────────────────────────────────────────────────────────────────────────────
@@ -42,13 +44,6 @@ const FIELD_PATTERNS = [
 ];
 
 const FIELDS = ['decision', 'context', 'consequences', 'alternatives', 'tradeoffs', 'rationale'];
-
-function safeText(v) { return typeof v === 'string' ? v : ''; }
-
-function safeFileName(file) {
-  if (!file) return 'attachment';
-  return file.name || file.originalName || file.id || 'attachment';
-}
 
 function clipValue(v) {
   const s = String(v || '').replace(/\s+/g, ' ').trim();
