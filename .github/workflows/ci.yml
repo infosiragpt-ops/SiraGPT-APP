@@ -364,9 +364,10 @@ jobs:
         id: apt-week
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache document validator .deb archives
+      - name: Restore document validator .deb archives
         if: matrix.shard == 1
-        uses: actions/cache@v5
+        id: apt-doc-cache
+        uses: actions/cache/restore@v5
         with:
           path: ~/.cache/apt-doc-validators
           key: apt-doc-validators-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
@@ -382,10 +383,22 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             -o Dir::Cache::Archives="$APT_CACHE" -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
             libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils ffmpeg qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
-          # apt writes the archives as root; the cache action saves them as the runner user.
-          sudo rm -rf "$APT_CACHE/partial" "$APT_CACHE/lock"
-          sudo chown -R "$(id -u):$(id -g)" "$APT_CACHE"
           python -m pip install --disable-pip-version-check --no-cache-dir -r ../infra/doc-validation/requirements-test.txt
+
+      # Saved right after the install, even when it failed or timed out: what
+      # did download is kept, so a stalled mirror cannot keep the cache empty.
+      - name: Save document validator .deb archives
+        if: always() && matrix.shard == 1 && steps.apt-doc-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf "$HOME/.cache/apt-doc-validators/partial" "$HOME/.cache/apt-doc-validators/lock"
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/apt-doc-validators"
+
+      - name: Upload document validator .deb archives to the cache
+        if: always() && matrix.shard == 1 && steps.apt-doc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/apt-doc-validators
+          key: apt-doc-validators-${{ runner.os }}-${{ steps.apt-week.outputs.week }}
 
       - name: Real Word/PDF and MP3/MP4 conversions
         if: matrix.shard == 1
@@ -1117,8 +1130,9 @@ jobs:
         id: e2e-apt-week
         run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache E2E .deb archives
-        uses: actions/cache@v5
+      - name: Restore E2E .deb archives
+        id: apt-e2e-cache
+        uses: actions/cache/restore@v5
         with:
           path: ~/.cache/apt-e2e
           key: apt-e2e-${{ runner.os }}-${{ matrix.desktop_gate && 'desktop' || 'base' }}-${{ steps.e2e-apt-week.outputs.week }}
@@ -1138,11 +1152,21 @@ jobs:
         if: matrix.desktop_gate
         run: sudo apt-get update -qq && sudo apt-get install -y xvfb xdotool imagemagick openbox x11vnc
 
-      # apt wrote the archives as root; the cache action saves them as the runner user.
+      # Saved right after the installs, even when they failed or timed out, so a
+      # stalled mirror cannot keep the cache empty. apt wrote the archives as
+      # root; the cache action uploads them as the runner user.
       - name: Hand the E2E .deb cache back to the runner user
+        if: always() && steps.apt-e2e-cache.outputs.cache-hit != 'true'
         run: |
           sudo rm -rf "$HOME/.cache/apt-e2e/partial" "$HOME/.cache/apt-e2e/lock"
           sudo chown -R "$(id -u):$(id -g)" "$HOME/.cache/apt-e2e"
+
+      - name: Upload E2E .deb archives to the cache
+        if: always() && steps.apt-e2e-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/apt-e2e
+          key: apt-e2e-${{ runner.os }}-${{ matrix.desktop_gate && 'desktop' || 'base' }}-${{ steps.e2e-apt-week.outputs.week }}
 
       # Real Chromium + X11 gate. The only retried failure is Chrome not
       # bringing up its CDP endpoint on a loaded runner (infrastructure, not
