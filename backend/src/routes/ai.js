@@ -7555,6 +7555,7 @@ router.post(
                       : null,
                   userQuery: prompt,
                   history: priorHistory,
+                  protectedMessages: protectedContextMessages.filter((message) => priorHistory.includes(message)),
                   res,
                   signal,
                   maxSteps: Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
@@ -7759,6 +7760,12 @@ router.post(
                 });
               }
             } catch (agenticErr) {
+              if (agenticErr?.retentionFailed) {
+                const message = 'No puedo continuar sin perder instrucciones o referencias del hilo. Reduce el contexto o elige un modelo con mayor capacidad.';
+                streamFailureMessage = message;
+                closeGenerateSseWithError(res, { message, code: 'E_PARAMS', recovered: false, retryable: false });
+                return message;
+              }
               generateLog.warnError('agentic.loop_failed', agenticErr);
               // Fall through to aiService.generateStream below.
             }
@@ -7942,6 +7949,10 @@ router.post(
             return out;
           },
         );
+
+        // A failed required-context preflight already closed the SSE response.
+        // Do not audit, bill or persist its explanatory text as a successful turn.
+        if (streamFailureMessage) return;
 
         // A connection instruction is fixed account UI copy; do not run
         // document repair or LLM response audits over it.
