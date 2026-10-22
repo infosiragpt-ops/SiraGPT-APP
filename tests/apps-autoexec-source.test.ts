@@ -9,7 +9,6 @@ describe("APPS autonomous full-stack wiring", () => {
   it("enables autoExecute on APPS plan + build so agents can work for hours", () => {
     const panel = readFileSync(join(ROOT, "components/codex/codex-agent-panel.tsx"), "utf8")
     const api = readFileSync(join(ROOT, "lib/codex/api/runs.ts"), "utf8")
-    const chat = readFileSync(join(ROOT, "components/code/ai-code-chat-panel.tsx"), "utf8")
 
     assert.match(panel, /autoExecute: surface === "apps"/)
     // APPS durable prompt lives in apps-mode-contract (single source of truth).
@@ -19,11 +18,6 @@ describe("APPS autonomous full-stack wiring", () => {
     assert.match(panel, /surface=\{surface === "apps" \? "apps" : "code"\}/)
     assert.match(api, /opts\?\.autoExecute/)
     assert.match(api, /autoExecute: true/)
-    assert.equal(
-      chat.match(/autoExecute:\s*true/g)?.length,
-      2,
-      "plan and approved build must both remain autonomous",
-    )
 
     const contract = readFileSync(join(ROOT, "lib/code-agent/apps-mode-contract.ts"), "utf8")
     assert.match(contract, /COMPILA TODAS LAS CAPAS/)

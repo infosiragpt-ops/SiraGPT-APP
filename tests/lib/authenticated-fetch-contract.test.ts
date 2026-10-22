@@ -15,8 +15,6 @@ const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/auth/mfa-totp.ts",
   "lib/builder/intake-service.ts",
   "lib/client-logs.ts",
-  "lib/code-agent/subagent.ts",
-  "lib/code-runner/host-runner-service.ts",
   "lib/codex/api/core.ts",
   "lib/codex/run-stream.ts",
   "lib/credits-service.ts",
@@ -26,14 +24,11 @@ const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/github-service.ts",
   "lib/gmail-service.ts",
   "lib/gpts-service.ts",
-  "lib/hosting-service.ts",
   "lib/marco-teorico-service.ts",
-  "lib/opencode/opencode-service.ts",
   "lib/plan-service.ts",
   "lib/project-documents-service.ts",
   "lib/projects-service.ts",
   "lib/settings-context.tsx",
-  "lib/workspace-workflow-service.ts",
 ] as const
 
 type RawFetchAllowance = {
@@ -201,14 +196,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(url, init)" || text === "fetch(next, init)",
   },
   {
-    file: "lib/code-agent/observability.ts",
-    reason: "Same-origin, credential-free best-effort telemetry POST to the observability store; never attaches user auth and any failure is swallowed.",
-    accepts: (text) =>
-      text.startsWith('fetch("/api/code-agent/observability"')
-      && /\bmethod\s*:\s*["']POST["']/.test(text)
-      && isCredentialFreePublicFetch(text),
-  },
-  {
     file: "lib/api.ts",
     reason: "Anonymous quota GET is intentionally unauthenticated.",
     accepts: (text) => text.includes("/ai/anon-quota") && isNonMutatingFetchCall(text),
@@ -222,15 +209,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     file: "lib/auth.ts",
     reason: "Server-side active-session check against the configured SiraGPT backend authority.",
     accepts: (text) => text === "globalThis.fetch(input, init)",
-    required: true,
-  },
-  {
-    file: "lib/code-runner/host-runner-service.ts",
-    reason: "Public host-runner feature-flag health GET.",
-    accepts: (text) =>
-      text.includes("${baseUrl}/health")
-      && isNonMutatingFetchCall(text)
-      && isCredentialFreePublicFetch(text),
     required: true,
   },
   {
@@ -293,15 +271,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text.startsWith("fetch(url,") && isNonMutatingFetchCall(text),
   },
   {
-    file: "lib/opencode/opencode-service.ts",
-    reason: "Public OpenCode feature-flag health GET.",
-    accepts: (text) =>
-      text.includes("${baseUrl}/health")
-      && isNonMutatingFetchCall(text)
-      && isCredentialFreePublicFetch(text),
-    required: true,
-  },
-  {
     file: "lib/plans-service.ts",
     reason: "Public plan catalog GET.",
     accepts: (text) =>
@@ -336,11 +305,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
       text.includes("/share/${shareId}")
       && isNonMutatingFetchCall(text)
       && isCredentialFreePublicFetch(text),
-  },
-  {
-    file: "lib/publishing-console.ts",
-    reason: "External GitHub Actions dispatch with its own server credential.",
-    accepts: (text) => text.startsWith("fetch(url,"),
   },
   {
     file: "lib/use-backend-ready.ts",

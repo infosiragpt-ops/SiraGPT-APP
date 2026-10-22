@@ -9,7 +9,6 @@ const CHROME_FILES = [
   "components/app-sidebar.tsx",
   "components/settings/settings-panel.tsx",
   "components/keyboard-shortcuts.tsx",
-  "components/code/chat-empresa-fab.tsx",
   "components/sidebar/sidebar-folders-dropdown.tsx",
   "app/not-found.tsx",
   "app/code/error.tsx",

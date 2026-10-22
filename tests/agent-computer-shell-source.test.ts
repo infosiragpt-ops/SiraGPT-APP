@@ -6,18 +6,14 @@ import { describe, it } from "node:test"
 const source = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8")
 
 describe("agent computer shell · PensandoBars port", () => {
-  it("ships the shell file and wraps /code mainArea", () => {
+  it("ships the shell file", () => {
     assert.equal(existsSync("components/code/agent-computer-shell.tsx"), true)
     const shell = source("components/code/agent-computer-shell.tsx")
-    const workspace = source("components/code/code-workspace.tsx")
 
     assert.match(shell, /data-testid="agent-computer-shell"/)
     assert.match(shell, /data-testid="agent-computer-chrome"/)
     assert.match(shell, /data-testid="agent-computer-dock-os"/)
     assert.match(shell, /data-testid="agent-computer-routines"/)
-    assert.match(workspace, /import \{ AgentComputerShell \} from "\.\/agent-computer-shell"/)
-    assert.match(workspace, /<AgentComputerShell(?:\s[^>]*)?>/)
-    assert.match(workspace, /<\/AgentComputerShell>/)
   })
 
   it("uses production-main PensandoBars for starting / in-progress", () => {

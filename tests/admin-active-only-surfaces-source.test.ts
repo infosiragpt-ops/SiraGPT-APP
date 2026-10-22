@@ -4,7 +4,6 @@ import { describe, it } from "node:test"
 
 const chatContext = readFileSync("lib/chat-context-integrated.tsx", "utf8")
 const chatInterface = readFileSync("components/chat-interface-enhanced.tsx", "utf8")
-const codePanel = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
 const designComposer = readFileSync("components/design/design-composer.tsx", "utf8")
 
 describe("admin-active model surfaces", () => {
@@ -14,9 +13,7 @@ describe("admin-active model surfaces", () => {
     assert.match(chatContext, /setSelectedModel\(preferred\?\.name \|\| ""\)/)
   })
 
-  it("does not manufacture code or design fallbacks when the catalog is empty", () => {
-    assert.doesNotMatch(codePanel, /policy\?\.fallbackModel/)
-    assert.match(codePanel, /Sin modelos activos/)
+  it("does not manufacture design fallbacks when the catalog is empty", () => {
     assert.doesNotMatch(designComposer, /Absolute fallback/)
     assert.doesNotMatch(designComposer, /useState<string>\(initialModel \|\| "deepseek-v4-flash"\)/)
     assert.match(designComposer, /No hay modelos activos\. Activa uno desde Administración/)
