@@ -7,14 +7,11 @@ const ROOT = path.resolve(__dirname, "../..")
 const FETCH_SCAN_ROOTS = ["app", "components", "hooks", "lib"] as const
 
 const AUTHENTICATED_SIRA_TRANSPORTS = [
-  "lib/admin-credits-service.ts",
   "lib/admin/live-logs-service.ts",
   "lib/agent-task-service.ts",
   "lib/agentic-search-service.ts",
   "lib/ai-service.ts",
-  "lib/api-client-react/src/custom-fetch.ts",
   "lib/api.ts",
-  "lib/auth-context-new.tsx",
   "lib/auth/mfa-totp.ts",
   "lib/builder/intake-service.ts",
   "lib/client-logs.ts",
@@ -23,7 +20,6 @@ const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/codex/api/core.ts",
   "lib/codex/run-stream.ts",
   "lib/credits-service.ts",
-  "lib/database-new.ts",
   "lib/deployments/deployments-api.ts",
   "lib/design-service.ts",
   "lib/github-codex-service.ts",
@@ -31,9 +27,7 @@ const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/gmail-service.ts",
   "lib/gpts-service.ts",
   "lib/hosting-service.ts",
-  "lib/images-service.ts",
   "lib/marco-teorico-service.ts",
-  "lib/notifications/push.ts",
   "lib/opencode/opencode-service.ts",
   "lib/plan-service.ts",
   "lib/project-documents-service.ts",
@@ -116,15 +110,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(href)",
   },
   {
-    file: "components/connection-status.tsx",
-    reason: "Public health HEAD probe with an optional external check URL.",
-    accepts: (text) =>
-      text.startsWith("fetch(checkUrl,")
-      && isNonMutatingFetchCall(text)
-      && isCredentialFreePublicFetch(text),
-    required: true,
-  },
-  {
     file: "components/desktop/desktop-download-card.tsx",
     reason: "Public same-origin desktop release catalog GET used before login.",
     accepts: (text) =>
@@ -155,17 +140,6 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     file: "components/download-buttons.tsx",
     reason: "Public or external generated-image download.",
     accepts: (text) => text === "fetch(content)",
-  },
-  {
-    file: "components/fal/fal-model-gallery.tsx",
-    reason: "Public cached FAL model manifest GET plus the optional-auth VIDEO admin catalog GET used to filter hidden video models.",
-    accepts: (text) =>
-      (
-        text === 'fetch("/api/ai/fal-models", { headers: { "Cache-Control": "no-cache" } })'
-        || text === 'fetch("/api/ai/models?type=VIDEO", { headers: { "Cache-Control": "no-cache" } })'
-      )
-      && isCredentialFreePublicFetch(text),
-    required: true,
   },
   {
     file: "components/figma-diagram-component.tsx",

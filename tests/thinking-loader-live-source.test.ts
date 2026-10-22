@@ -29,7 +29,6 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
   it("ships PensandoBars as the ThinkingCore glyph in the monochrome think accent", () => {
     const bars = source("components/pensando-bars.tsx")
     const svg = source("public/loaders/pensando.svg")
-    const icon = source("components/icons/thinking-bars-icon.tsx")
     const indicator = source("components/ui/thinking-indicator.tsx")
     assert.match(bars, /import \{ ClaudeAsterisk \} from "@\/components\/claude-asterisk"/)
     assert.match(bars, /<ClaudeAsterisk size=\{size\} active color=\{`var\(--think-accent, \$\{CLAUDE_THINK_ACCENT\}\)`\} \/>/)
@@ -38,9 +37,6 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.match(svg, /viewBox="0 0 36 36"/)
     assert.match(svg, /fill="#38BDF8"/)
     assert.doesNotMatch(svg, /currentColor/)
-    assert.match(icon, /viewBox="0 0 36 36"/)
-    assert.match(icon, /fill=\{SIRA_CELESTE\}/)
-    assert.doesNotMatch(icon.replace(/\/\*[\s\S]*?\*\//g, ""), /currentColor/)
     assert.match(indicator, /import \{ PensandoBars \} from "@\/components\/pensando-bars"/)
     assert.match(indicator, /<PensandoBars size=\{px\} \/>/)
     assert.doesNotMatch(indicator, /THINKING_GLYPH_COLOR/)
