@@ -324,6 +324,33 @@ test('shouldUseAgenticChat: reference picture + editable doc with a work request
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'mira esto', files: [img, docx] }), false);
 });
 
+test('office-edit zero-file gate: helpers (reference picture detector, editable doc, exempt reasons)', () => {
+  const { isReferencePictureForDocumentTurn, isEditableDocumentAttachment, officeEditNoFileMessage, OFFICE_EDIT_NO_FILE_EXEMPT_REASONS } = agenticStream._internal;
+  const img = { name: 'a.jpg', mimeType: 'image/jpeg' };
+  const docx = { name: 'informe.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+  const pdf = { name: 'anexo.pdf', mimeType: 'application/pdf' };
+  assert.equal(isEditableDocumentAttachment(docx), true);
+  assert.equal(isEditableDocumentAttachment({ name: 'x.xlsx' }), true);
+  assert.equal(isEditableDocumentAttachment(img), false);
+  assert.equal(isEditableDocumentAttachment(pdf), false, 'a PDF is not an editable office source');
+  const long = 'La foto trae el título nuevo que me dio el docente; el informe tiene que quedar alineado a eso en todas sus secciones.';
+  assert.equal(isReferencePictureForDocumentTurn(long, [img, docx]), true);
+  assert.equal(isReferencePictureForDocumentTurn(long, [docx]), false, 'needs the picture');
+  assert.equal(isReferencePictureForDocumentTurn(long, [img]), false, 'needs the document');
+  assert.equal(isReferencePictureForDocumentTurn(long, [img, pdf]), false, 'PDF is not editable here');
+  assert.equal(isReferencePictureForDocumentTurn('¿qué título aparece en la foto y coincide con el documento?', [img, docx]), false, 'Q&A opener');
+  assert.equal(isReferencePictureForDocumentTurn('mira esto', [img, docx]), false, 'too short');
+  assert.match(officeEditNoFileMessage(['docx']), /documento de Word editado/);
+  assert.match(officeEditNoFileMessage(['pptx']), /la presentación/);
+  assert.match(officeEditNoFileMessage(['docx', 'xlsx']), /el documento editado/);
+  // The gate must step aside when the user has to act first or the failure
+  // is already reported by its own path.
+  for (const r of ['image_edit_clarification_needed', 'github_connection_required', 'source_preserving_document_edit_failed', 'verification_failed:artifact_delivery']) {
+    assert.equal(OFFICE_EDIT_NO_FILE_EXEMPT_REASONS.has(r), true, r);
+  }
+  assert.equal(OFFICE_EDIT_NO_FILE_EXEMPT_REASONS.has('finalized'), false, 'a plain finalize with no file is exactly what the gate catches');
+});
+
 test('isHandledAgenticChatResult keeps a successful Office edit off the plain stream', () => {
   const liveAnswer = 'Listo. Conservé el documento original y apliqué la edición solicitada.';
   assert.equal(agenticStream.isHandledAgenticChatResult({

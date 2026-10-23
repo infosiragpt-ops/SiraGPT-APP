@@ -563,6 +563,34 @@ function officeEditSubstituteMessage(formats = []) {
     + 'El archivo original no se modificó. Vuelve a intentarlo y lo edito sobre la última versión.';
 }
 
+// Edit turn that produced NO file at all (the model answered with prose —
+// prod 2026-09-18: a paragraph of the old doc passed off as the work). The
+// user asked for a changed file; text is not that file.
+function officeEditNoFileMessage(formats = []) {
+  const noun = formats.length === 1
+    ? ({ pptx: 'la presentación', docx: 'el documento de Word', xlsx: 'el libro de Excel' }[formats[0]] || 'el documento')
+    : 'el documento';
+  return `No llegué a entregar ${noun} editado en este turno, así que no lo doy por hecho: el archivo original no se modificó. `
+    + 'Vuelve a pedirlo (puedes indicar las secciones a cambiar) y lo edito sobre la última versión.';
+}
+
+// Reasons where the turn legitimately ends without a file: the user must act
+// first (login, clarification, GitHub connection, cancel) or the failure is
+// already reported honestly by its own path.
+const OFFICE_EDIT_NO_FILE_EXEMPT_REASONS = new Set([
+  'image_edit_clarification_needed',
+  'github_connection_required',
+  'login_handoff_required',
+  'cancelled',
+  'aborted',
+  'source_preserving_document_edit_failed',
+  'source_preserving_document_validation_failed',
+  'verification_failed:artifact_delivery',
+  'generated_artifact_read_failed',
+  'agent_runner_failed',
+  'clarification_needed',
+]);
+
 function sourcePreservingResultValidation(item) {
   return item?.validation || item?.artifact?.validation || null;
 }
@@ -772,7 +800,7 @@ const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicame
 const EDITABLE_DOCUMENT_RE = /\.(docx?|xlsx?|xlsm|pptx?|odt|ods|odp|rtf|md|txt|csv)$/i;
 const EDITABLE_DOCUMENT_MIME_RE = /(wordprocessingml|msword|spreadsheetml|ms-excel|presentationml|ms-powerpoint|opendocument|text\/plain|text\/csv|text\/markdown)/i;
 // Read-only openers: the user asks ABOUT the files, not to work on them.
-const READ_ONLY_OPENER_RE = /^\s*(?:¿|¡)?\s*(?:qu[eé]|cu[aá]l(?:es)?|cu[aá]nt[oa]s?|c[oó]mo|por\s+qu[eé]|d[oó]nde|qui[eé]n(?:es)?|dime|expl[ií]ca|describe|resume|res[uú]me|compara|analiza|revisa|lee|identifica|extrae|traduce|de qu[eé] trata)\b/i;
+const READ_ONLY_OPENER_RE = /^\s*(?:¿|¡)?\s*(?:qu[eé]|cu[aá]l(?:es)?|cu[aá]nt[oa]s?|c[oó]mo|por\s+qu[eé]|d[oó]nde|qui[eé]n(?:es)?|dime|expl[ií]ca(?:me)?|describe|resume|res[uú]me(?:me)?|compara|analiza|revisa|lee|identifica|extrae|traduce|de qu[eé] trata)(?=[\s,:;.!?¿¡]|$)/i;
 
 function isEditableDocumentAttachment(file) {
   if (!file || typeof file !== 'object') return false;
@@ -3447,6 +3475,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             message: substitutes.map((artifact) => artifact.filename).join(', ').slice(0, 300),
           });
         } catch (_) { /* advisory */ }
+      } else if (!delivered && state.artifacts.length === 0
+        && !OFFICE_EDIT_NO_FILE_EXEMPT_REASONS.has(String(stoppedReason || ''))
+        && !/^(?:verification_failed|login_handoff|clarification)/.test(String(stoppedReason || ''))) {
+        // Deliverable gate (code, not prompt): an edit of a Word/Excel/PPT
+        // that ends with prose and zero files is not done. Same honest
+        // failure contract as the substitute case; the original is untouched.
+        finalAnswer = officeEditNoFileMessage(officeEditFormats);
+        stoppedReason = 'source_preserving_document_edit_failed';
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: 'document_edit',
+            reason: 'office_edit_no_file',
+            fatal: true,
+            message: officeEditFormats.join(',').slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
       }
     }
     try {
@@ -4163,6 +4207,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       withWebReadBudget,
       withImageEditGuard,
       buildChatFinalizeProfile,
+      isReferencePictureForDocumentTurn,
+      isEditableDocumentAttachment,
+      officeEditNoFileMessage,
+      OFFICE_EDIT_NO_FILE_EXEMPT_REASONS,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
     },

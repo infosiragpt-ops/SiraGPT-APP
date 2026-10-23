@@ -438,6 +438,45 @@ test('a read-only question about the generated deck is answered in the chat, not
   }
 });
 
+test('Office edit turn ending with prose and ZERO files → honest answer, not the old doc echoed (prod 2026-09-18)', async () => {
+  const { fresh, restore } = loadStream({
+    runner: { shouldRunAgentRunner: () => false, hasConversationArtifacts: async () => false, getConversationArtifactFormat: async () => null },
+    editor: { isSourcePreservingEditRequest: () => false },
+  });
+  // The model never calls a tool: it finalizes with a paragraph of the OLD
+  // document (what prod actually returned). No artifact was produced.
+  const openai = finalizingClient();
+  try {
+    const { res } = fakeRes();
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'grok-4.7',
+      provider: 'xAI',
+      userQuery: 'trabaja en el word adjunto con el título de la imagen de forma profesional y mejora todo lo que tenemos con el nuevo tema',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1', chatId: 'c1', fileIds: ['f1', 'f2'], prisma: {},
+        fileMetadata: [
+          { id: 'f1', name: 'portada-nueva.jpg', mimeType: 'image/jpeg' },
+          { id: 'f2', name: '203 577 COR-F-REC-VAC-05.17_8 - HECTOR CAMPOS CUBAS.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+        ],
+      },
+      toolsOverride: officeEditTools(),
+    });
+    // Two honest nets, either is correct — never the model's prose as if it
+    // were the delivered file: (1) react-agent's required-tool guard
+    // (verification_failed:*), (2) the stream's zero-file office gate.
+    assert.match(result.finalAnswer, /^(?:No llegué a entregar el documento de Word editado|No pude verificar que se haya completado lo solicitado)/);
+    assert.doesNotMatch(result.finalAnswer, /vista previa HTML|script para generar/);
+    assert.ok(/^(?:source_preserving_document_edit_failed|verification_failed)/.test(String(result.stoppedReason)), result.stoppedReason);
+    assert.equal((result.artifacts || []).length, 0);
+    assert.equal(fresh.isHandledAgenticChatResult(result), true);
+  } finally {
+    restore();
+  }
+});
+
 test('«haz un dashboard html con los datos del excel» keeps create_artifact and delivers the html', async () => {
   const { fresh, restore } = loadStream({
     runner: { shouldRunAgentRunner: () => false, hasConversationArtifacts: async () => false, getConversationArtifactFormat: async () => null },
