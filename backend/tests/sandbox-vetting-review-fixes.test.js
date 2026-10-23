@@ -98,11 +98,16 @@ test('ranges and pins are honoured exactly; a yanked pin or a pin that does not 
   assert.equal((await vet('lib', net(), { specifier: '~=1.0' })).evidence.version, '1.4.2');
   assert.equal((await vet('lib', net(), { specifier: '==1.0.*' })).evidence.version, '1.0.0');
   assert.equal((await vet('lib', net(), { specifier: '==2.1.0rc1' })).evidence.version, '2.1.0rc1', 'an explicit pre-release pin is allowed');
-  for (const specifier of ['==1.9.0', '==3.0', '==v1.0.0']) {
+  for (const specifier of ['==1.9.0', '==3.0']) {
     const verdict = await vet('lib', net(), { specifier });
     assert.equal(verdict.ok, false, specifier);
     assert.equal(verdict.reason, 'version_not_found', specifier);
   }
+  // PEP 440 allows a leading «v» (pip installs lib 1.0.0 for «lib==v1.0.0»);
+  // the installer still receives the canonical pin.
+  const spelled = await vet('lib', net(), { specifier: '==v1.0.0' });
+  assert.equal(spelled.evidence.version, '1.0.0');
+  assert.equal(spelled.pin, 'lib==1.0.0');
   assert.equal(vetting.versionMatches('1.4.2', '>=1,<2,!=1.4.1'), true);
   assert.equal(vetting.versionMatches('1.4.2', 'garbage'), false, 'unparsable specifiers never match');
 });

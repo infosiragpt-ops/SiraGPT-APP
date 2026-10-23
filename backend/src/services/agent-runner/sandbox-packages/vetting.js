@@ -149,36 +149,97 @@ function typosquatTarget(name, popular = popularNames()) {
   return null;
 }
 
-// PEP 440 subset: N(.N)*[{a|b|rc}N][.postN][.devN]. Epochs and local
-// versions are left out (null) and fall back to upload order.
+// PEP 440, the grammar pip (packaging) accepts — case-insensitive: optional
+// «v», epoch `N!`, release `N(.N)*`, pre-release (a|alpha, b|beta,
+// rc|c|pre|preview), post-release (.postN, -N, rev, r), dev release and a
+// +local label; separators `-_.` are optional and a missing number is 0.
+// «1.0c1» IS «1.0rc1», «1.0-1» IS «1.0.post1», «0!1.0» IS «1.0». Anything
+// else is not a version pip installs (null).
+const PEP440_RE = /^\s*v?(?:(\d+)!)?(\d+(?:\.\d+)*)(?:[-_.]?(alpha|a|beta|b|preview|pre|c|rc)[-_.]?(\d+)?)?(?:-(\d+)|[-_.]?(post|rev|r)[-_.]?(\d+)?)?(?:[-_.]?(dev)[-_.]?(\d+)?)?(?:\+([a-z0-9]+(?:[-_.][a-z0-9]+)*))?\s*$/i;
+const PRE_KIND = Object.freeze({ a: 0, alpha: 0, b: 1, beta: 1, rc: 2, c: 2, pre: 2, preview: 2 });
+
 function parseVersion(version) {
-  const m = /^(\d+(?:\.\d+)*)(?:(a|b|rc)(\d+))?(?:\.post(\d+))?(?:\.dev(\d+))?$/.exec(String(version || '').toLowerCase());
+  const m = PEP440_RE.exec(String(version == null ? '' : version));
   if (!m) return null;
+  const [, epoch, release, preL, preN, postN1, postL, postN2, devL, devN, local] = m;
   return {
-    release: m[1].split('.').map(Number),
-    pre: m[2] ? [{ a: 0, b: 1, rc: 2 }[m[2]], Number(m[3])] : null,
-    post: m[4] != null ? Number(m[4]) : null,
-    dev: m[5] != null ? Number(m[5]) : null,
+    epoch: epoch ? Number(epoch) : 0,
+    release: release.split('.').map(Number),
+    pre: preL ? [PRE_KIND[preL.toLowerCase()], Number(preN || 0)] : null,
+    post: postN1 != null ? Number(postN1) : (postL ? Number(postN2 || 0) : null),
+    dev: devL ? Number(devN || 0) : null,
+    local: local ? local.toLowerCase().split(/[-_.]/).map((part) => (/^\d+$/.test(part) ? Number(part) : part)) : null,
   };
 }
 
+/** A pre-release in PEP 440's sense: an a/b/rc OR a dev release. */
+function isPrerelease(v) {
+  return Boolean(v) && (v.pre != null || v.dev != null);
+}
+
+/** epoch + release only («1.0rc1.post2+x» → «1.0»). */
+function baseOf(v) {
+  return { epoch: v.epoch, release: v.release, pre: null, post: null, dev: null, local: null };
+}
+
+function compareLocal(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    if (i >= a.length) return -1;
+    if (i >= b.length) return 1;
+    const x = a[i];
+    const y = b[i];
+    const xNumeric = typeof x === 'number';
+    const yNumeric = typeof y === 'number';
+    if (xNumeric !== yNumeric) return xNumeric ? 1 : -1; // a number outranks a word
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * PEP 440 ordering (packaging's sort key): epoch, release (trailing zeros do
+ * not count), then a dev-only release before every pre-release of the same
+ * version, pre-releases (a < b < rc) before the final release, post-releases
+ * after it, dev releases before what they precede, and a local label after
+ * the public version.
+ */
 function compareParsedVersions(a, b) {
+  if (a.epoch !== b.epoch) return a.epoch - b.epoch;
   const len = Math.max(a.release.length, b.release.length);
   for (let i = 0; i < len; i += 1) {
     const d = (a.release[i] || 0) - (b.release[i] || 0);
     if (d) return d;
   }
-  if (a.pre && !b.pre) return -1;
-  if (!a.pre && b.pre) return 1;
-  if (a.pre && b.pre) {
-    const d = a.pre[0] - b.pre[0] || a.pre[1] - b.pre[1];
-    if (d) return d;
-  }
-  const post = (a.post == null ? -1 : a.post) - (b.post == null ? -1 : b.post);
-  if (post) return post;
-  const ad = a.dev == null ? Infinity : a.dev;
-  const bd = b.dev == null ? Infinity : b.dev;
-  return ad === bd ? 0 : (ad < bd ? -1 : 1);
+  const preKey = (v) => (v.pre ? v.pre : [v.post == null && v.dev != null ? -Infinity : Infinity, 0]);
+  const pa = preKey(a);
+  const pb = preKey(b);
+  if (pa[0] !== pb[0]) return pa[0] < pb[0] ? -1 : 1;
+  if (pa[1] !== pb[1]) return pa[1] - pb[1];
+  const post = (v) => (v.post == null ? -Infinity : v.post);
+  if (post(a) !== post(b)) return post(a) < post(b) ? -1 : 1;
+  const dev = (v) => (v.dev == null ? Infinity : v.dev);
+  if (dev(a) !== dev(b)) return dev(a) < dev(b) ? -1 : 1;
+  return compareLocal(a.local, b.local);
+}
+
+/**
+ * The identity of a release under PEP 440: «1.0», «1.0.0», «v1.0» and
+ * «0!1.0» are the SAME release (PyPI files them together and `==1.0` installs
+ * any of them).
+ */
+function canonicalVersionKey(v) {
+  const release = [...v.release];
+  while (release.length > 1 && release[release.length - 1] === 0) release.pop();
+  return [
+    `${v.epoch}!${release.join('.')}`,
+    v.pre ? v.pre.join('.') : '',
+    v.post == null ? '' : v.post,
+    v.dev == null ? '' : v.dev,
+    v.local ? v.local.join('.') : '',
+  ].join('|');
 }
 
 /**
@@ -194,17 +255,36 @@ function highestVersion(versions) {
   return pool.reduce((best, x) => (compareParsedVersions(x.p, best.p) > 0 ? x : best)).v;
 }
 
-// Malicious-code advisories. OpenSSF's feed uses MAL-* ids, but a hijacked
-// popular project can land as an ordinary PYSEC/GHSA entry (ultralytics
-// 8.3.41-46: PYSEC-2024-154 «contained malicious crypto miner software»).
-// Ordinary CVE wording («a malicious user», «execute malicious code») must
-// NOT match, or every package with an open CVE would be refused.
-const MALICIOUS_ADVISORY_RE = /\b(?:malware|backdoor(?:ed|s)?|supply[- ]chain (?:attack|compromise)|crypto ?(?:currency )?miners?|cryptominers?|malicious (?:software|packages?|releases?|versions?|dependenc(?:y|ies)|updates?)|(?:contained|contains|containing|shipped|injected|included) (?:a |an )?malicious|compromised (?:releases?|versions?|packages?|accounts?|maintainers?))\b/i;
-
-// Phrases that describe a compromised PACKAGE, not a flaw exploitable by «a
-// malicious user». Kept narrow: «account takeover», «session hijacking» or
-// «malicious payload» are ordinary vulnerability wording.
-const COMPROMISED_PACKAGE_RE = /\b(?:embedded\s+malicious\s+code|replaced\s+with\s+a\s+malicious|malicious\s+project|(?:pypi|package|project|maintainer)(?:'s)?\s+account\s+(?:was\s+)?(?:compromised|taken\s+over|hijacked)|stealer)\b/i;
+// Malicious-code advisories. OpenSSF's feed uses MAL-* ids and GitHub's
+// malware advisories CWE-506, but a hijacked popular project can land as an
+// ordinary PYSEC/GHSA entry (ultralytics 8.3.41-46: PYSEC-2024-154 «A number
+// of releases of ultralytics contained malicious crypto miner software»).
+//
+// The wording must make the PACKAGE (its releases, versions, wheels, its
+// maintainer's account) the malicious thing. A vulnerability is ABOUT
+// malicious input — «a malicious user», «an archive containing malicious
+// symlinks», «a PDF that contains a malicious font», «a pickle containing
+// malicious code», «allowing malicious updates via MITM», «an attacker with a
+// compromised account», «cookie stealer via stored XSS» — and must not
+// match: such a package would be refused AND reported as malware.
+const MALICIOUS_WORDING = Object.freeze([
+  /\bmalware\b/i,
+  /\bbackdoor(?:ed|s)?\b/i,
+  /\bsupply[- ]chain (?:attack|compromise)\b/i,
+  /\bcrypto ?(?:currency )?miners?\b|\bcryptominers?\b/i,
+  /\b(?:info(?:rmation)?|credentials?|password|token|wallet|crypto(?:currency)?)[- ]?stealer\b/i,
+  // «releases of X contained malicious …», «versions 1.2 and 1.3 contain malicious code»
+  /\b(?:packages?|releases?|versions?|wheels?|distributions?|tarballs?)\b(?:\s+(?:of|and|from)?\s*[\w.+-]+){0,4}?\s+(?:contain(?:s|ed|ing)?|ship(?:s|ped)?|includ(?:e|es|ed|ing)|bundl(?:e|es|ed)|embed(?:s|ded)?|deliver(?:s|ed)?|(?:was|were)\s+injected\s+with)\s+(?:a\s+|an\s+)?malicious\b/i,
+  // «malicious code was injected into release 2.1»
+  /\bmalicious\s+(?:code|software|payloads?|dependenc(?:y|ies)|versions?|releases?|packages?)\s+(?:was|were|has\s+been|have\s+been|had\s+been)\s+(?:injected|inserted|added|introduced|planted|published|uploaded|included|embedded|pushed|released)\b/i,
+  /\bmalicious\s+(?:versions?|releases?)\s+of\b/i,
+  /\bcompromised\s+(?:releases?|versions?|packages?|builds?|wheels?|maintainers?)\b/i,
+  /\bcompromised\s+(?:the\s+)?(?:pypi|maintainer|publisher|developer|owner|project)(?:'s)?\s+(?:accounts?|tokens?|credentials)\b/i,
+  /\b(?:pypi|maintainer|publisher|developer|owner|project|package)(?:'s)?\s+account\s+(?:was\s+|were\s+|has\s+been\s+|had\s+been\s+)?(?:compromised|taken\s+over|hijacked)\b/i,
+  /\breplaced\s+with\s+a\s+malicious\b/i,
+]);
+// GitHub's malware advisory title: «Embedded Malicious Code in ctx».
+const MALICIOUS_TITLE_RE = /^\s*embedded\s+malicious\s+code\s+in\s/i;
 
 function isMaliciousAdvisory(vuln) {
   if (!vuln) return false;
@@ -213,50 +293,149 @@ function isMaliciousAdvisory(vuln) {
   // GitHub's malware advisories carry CWE-506 (Embedded Malicious Code).
   const cwes = vuln.database_specific && Array.isArray(vuln.database_specific.cwe_ids) ? vuln.database_specific.cwe_ids : [];
   if (cwes.map(String).includes('CWE-506')) return true;
+  if (MALICIOUS_TITLE_RE.test(String(vuln.summary || ''))) return true;
   const text = `${vuln.summary || ''}\n${String(vuln.details || '').slice(0, 2000)}`;
-  return MALICIOUS_ADVISORY_RE.test(text) || COMPROMISED_PACKAGE_RE.test(text);
+  return MALICIOUS_WORDING.some((re) => re.test(text));
+}
+
+/** epoch, release parts, then a/b/rc, post and dev as separate parts (packaging's _version_split). */
+function versionComponents(v) {
+  const parts = [String(v.epoch), ...v.release.map(String)];
+  if (v.pre) parts.push(`${['a', 'b', 'rc'][v.pre[0]]}${v.pre[1]}`);
+  if (v.post != null) parts.push(`post${v.post}`);
+  if (v.dev != null) parts.push(`dev${v.dev}`);
+  return parts;
 }
 
 /**
- * PEP 440 specifier check for the operators pip users write: ==, !=, <=, >=,
- * <, >, ~=, === and the `==1.2.*` / `!=1.2.*` wildcards. Unparsable input
- * never matches (fail closed).
+ * `==prefix.*` (PEP 440 prefix matching): the candidate's release is padded
+ * with zeros, then its first parts must equal the prefix's. «1.2.*» matches
+ * 1.2, 1.2.5, 1.2rc1 and 1.2.post1, never 1.20.
  */
-function versionMatches(versionText, specifierText) {
+function prefixMatches(version, prefix) {
+  const spec = versionComponents(prefix);
+  const candidate = versionComponents({ ...version, local: null });
+  const digits = (list) => { let n = 0; while (n < list.length && /^\d+$/.test(list[n])) n += 1; return n; };
+  const candidateDigits = digits(candidate);
+  const padded = [
+    ...candidate.slice(0, candidateDigits),
+    ...Array(Math.max(0, digits(spec) - candidateDigits)).fill('0'),
+    ...candidate.slice(candidateDigits),
+  ];
+  return padded.length >= spec.length && spec.every((part, i) => padded[i] === part);
+}
+
+/** packaging's str(Version): «v1.0.0» → «1.0.0», «1.0-1» → «1.0.post1», «0!1.0» → «1.0». */
+function normalizedVersionString(v) {
+  return [
+    v.epoch ? `${v.epoch}!` : '',
+    v.release.join('.'),
+    v.pre ? `${['a', 'b', 'rc'][v.pre[0]]}${v.pre[1]}` : '',
+    v.post != null ? `.post${v.post}` : '',
+    v.dev != null ? `.dev${v.dev}` : '',
+    v.local ? `+${v.local.join('.')}` : '',
+  ].join('');
+}
+
+/** Same epoch, same release ignoring trailing zeros, same pre-release. */
+function samePreRelease(a, b) {
+  if (a.epoch !== b.epoch) return false;
+  const len = Math.max(a.release.length, b.release.length);
+  for (let i = 0; i < len; i += 1) if ((a.release[i] || 0) !== (b.release[i] || 0)) return false;
+  return (a.pre ? a.pre.join('.') : '') === (b.pre ? b.pre.join('.') : '');
+}
+
+/**
+ * One clause, as packaging 26 (what pip uses) reads it. true / false, or
+ * null for an invalid clause.
+ */
+function clauseMatches(version, versionText, op, target) {
+  // Arbitrary equality compares the version's normalized form as a string.
+  if (op === '===') return normalizedVersionString(version).toLowerCase() === target.toLowerCase();
+  if (op === '==' || op === '!=') {
+    let same;
+    if (target.endsWith('.*')) {
+      const prefix = parseVersion(target.slice(0, -2));
+      // A wildcard follows a release only: never a pre / post / dev part, a
+      // local label, or garbage like «0x10» / «1e3» / «».
+      if (!prefix || prefix.pre || prefix.post != null || prefix.dev != null || prefix.local) return null;
+      same = prefixMatches(version, prefix);
+    } else {
+      const goal = parseVersion(target);
+      if (!goal) return null;
+      // A target without a +local label ignores the candidate's label.
+      same = compareParsedVersions(goal.local ? version : { ...version, local: null }, goal) === 0;
+    }
+    return op === '==' ? same : !same;
+  }
+  const goal = parseVersion(target);
+  // Ordered comparisons take a public version (no +local).
+  if (!goal || goal.local) return null;
+  switch (op) {
+    // <=V admits V's +local builds; >=V everything from V up.
+    case '<=': return compareParsedVersions({ ...version, local: null }, goal) <= 0;
+    case '>=': return compareParsedVersions(version, goal) >= 0;
+    // <V never admits a pre-release of V unless V is one: the bound is
+    // V.dev0 («<2.0» does not install 2.0rc1 or 2.0.dev1; «<1.0.post1» does
+    // install 1.0a1).
+    case '<': {
+      const bound = isPrerelease(goal) ? goal : { ...goal, dev: 0, local: null };
+      return compareParsedVersions(version, bound) < 0;
+    }
+    // >V.devN starts at V.dev(N+1); >V.postN at V.post(N+1).dev0; otherwise
+    // >V excludes V's post family — V itself, V+local, V.postN (same release
+    // and pre-release): «>1.0» does not install 1.0.post1, «>1.0a1» does.
+    case '>': {
+      if (goal.dev != null) return compareParsedVersions(version, { ...goal, dev: goal.dev + 1, local: null }) >= 0;
+      if (goal.post != null) return compareParsedVersions(version, { ...goal, post: goal.post + 1, dev: 0, local: null }) >= 0;
+      return compareParsedVersions(version, goal) > 0 && !samePreRelease(version, goal);
+    }
+    case '~=': {
+      if (goal.release.length < 2) return null;
+      if (compareParsedVersions(version, goal) < 0) return false;
+      return prefixMatches(version, { ...baseOf(goal), release: goal.release.slice(0, -1) });
+    }
+    default: return null;
+  }
+}
+
+/**
+ * PEP 440 specifier check, the way pip reads it: ==, !=, <=, >=, <, >, ~=,
+ * === and the `==1.2.*` / `!=1.2.*` prefix wildcards, with the exclusive
+ * rules of < and >. Unparsable input never matches (fail closed).
+ */
+function evaluateSpecifier(versionText, specifierText) {
   const version = parseVersion(versionText);
-  if (!version) return false;
+  if (!version) return null;
   const clauses = String(specifierText || '').split(',').map((c) => c.trim()).filter(Boolean);
+  let matches = true;
   for (const clause of clauses) {
     const m = /^(===|==|!=|<=|>=|~=|<|>)\s*(\S+)$/.exec(clause);
-    if (!m) return false;
-    const [, op, target] = m;
-    if (op === '===') {
-      if (String(versionText) !== target) return false;
-      continue;
-    }
-    if ((op === '==' || op === '!=') && target.endsWith('.*')) {
-      const prefix = target.slice(0, -2).split('.').map(Number);
-      if (prefix.some((n) => !Number.isInteger(n))) return false;
-      const same = prefix.every((n, i) => (version.release[i] || 0) === n);
-      if ((op === '==') !== same) return false;
-      continue;
-    }
-    const goal = parseVersion(target);
-    if (!goal) return false;
-    const cmp = compareParsedVersions(version, goal);
-    if (op === '==' && cmp !== 0) return false;
-    if (op === '!=' && cmp === 0) return false;
-    if (op === '<=' && cmp > 0) return false;
-    if (op === '>=' && cmp < 0) return false;
-    if (op === '<' && cmp >= 0) return false;
-    if (op === '>' && cmp <= 0) return false;
-    if (op === '~=') {
-      if (goal.release.length < 2 || cmp < 0) return false;
-      const prefix = goal.release.slice(0, -1);
-      if (!prefix.every((n, i) => (version.release[i] || 0) === n)) return false;
-    }
+    if (!m) return null;
+    const result = clauseMatches(version, String(versionText), m[1], m[2]);
+    if (result === null) return null;
+    if (!result) matches = false;
   }
-  return true;
+  return matches;
+}
+
+function versionMatches(versionText, specifierText) {
+  return evaluateSpecifier(versionText, specifierText) === true;
+}
+
+/**
+ * Whether the specifier opts into pre-releases (packaging's rule): a clause
+ * other than `!=` whose version is itself a pre-release or dev release —
+ * «==2.1.0rc1», «>=2.0.dev0». «!=2.0rc1» does not.
+ */
+function specifierAllowsPrereleases(specifierText) {
+  for (const clause of String(specifierText || '').split(',').map((c) => c.trim()).filter(Boolean)) {
+    const m = /^(===|==|!=|<=|>=|~=|<|>)\s*(\S+)$/.exec(clause);
+    if (!m || m[1] === '!=') continue;
+    const target = m[1] === '==' && m[2].endsWith('.*') ? m[2].slice(0, -2) : m[2];
+    if (isPrerelease(parseVersion(target))) return true;
+  }
+  return false;
 }
 
 /** Architecture tag of the sandbox host (the backend runs on the same machine). */
@@ -264,68 +443,93 @@ function hostWheelArch() {
   return process.arch === 'arm64' ? 'aarch64' : 'x86_64';
 }
 
-function pythonTagOk(pyTag, abiTags) {
-  if (/^py3(?:\d+)?$/.test(pyTag)) {
-    const minor = Number(pyTag.slice(3) || '0');
-    return pyTag === 'py3' || minor <= 12;
-  }
-  if (pyTag === 'cp312') return abiTags.some((abi) => abi === 'cp312' || abi === 'abi3' || abi === 'none');
-  const cp = /^cp3(\d+)$/.exec(pyTag);
-  return Boolean(cp) && Number(cp[1]) < 12 && abiTags.includes('abi3');
-}
-
 function platformTagOk(platTag, arch) {
-  if (platTag === 'any' || platTag === `linux_${arch}`) return true;
+  if (platTag === `linux_${arch}`) return true;
   const legacy = /^manylinux(1|2010|2014)_([a-z0-9_]+)$/.exec(platTag);
   if (legacy) return legacy[2] === arch && (arch === 'x86_64' || legacy[1] === '2014');
   const glibc = /^manylinux_2_(\d+)_([a-z0-9_]+)$/.exec(platTag);
   return Boolean(glibc) && glibc[2] === arch && Number(glibc[1]) <= TARGET_GLIBC_MINOR;
 }
 
+/**
+ * One (python, abi, platform) tag, exactly as pip (packaging.tags) lists them
+ * for CPython 3.12: cp312-{cp312,abi3,none}-PLAT, cp3x-abi3-PLAT (x < 12),
+ * py3/py3x-none-PLAT, and cp312-none-any / py3/py3x-none-any. «cp312-cp312-any»,
+ * «cp38-abi3-any», «py3-cp39-…» or «py312-abi3-…» are not installable.
+ */
+function tagSupported(py, abi, plat, arch) {
+  let abiOk = false;
+  if (py === 'cp312') {
+    abiOk = abi === 'cp312' || abi === 'abi3' || abi === 'none';
+  } else if (/^cp3\d+$/.test(py)) {
+    const minor = Number(py.slice(3));
+    abiOk = minor >= 2 && minor < 12 && abi === 'abi3';
+  } else if (/^py3\d*$/.test(py)) {
+    abiOk = Number(py.slice(3) || '0') <= 12 && abi === 'none';
+  }
+  if (!abiOk) return false;
+  if (plat === 'any') return abi === 'none';
+  return platformTagOk(plat, arch);
+}
+
 /** True when pip on the sandbox (CPython 3.12, glibc Linux) could install this wheel. */
 function wheelCompatible(filename, arch = hostWheelArch()) {
   const parts = String(filename || '').replace(/\.whl$/i, '').split('-');
   if (parts.length < 5) return false;
-  const [py, abi, plat] = parts.slice(-3);
-  const abiTags = abi.split('.');
-  return py.split('.').some((tag) => pythonTagOk(tag, abiTags)) && plat.split('.').some((tag) => platformTagOk(tag, arch));
+  // Compressed tag sets («py2.py3-none-any»): any combination may match.
+  const [pys, abis, plats] = parts.slice(-3).map((tag) => tag.split('.'));
+  return pys.some((py) => abis.some((abi) => plats.some((plat) => tagSupported(py, abi, plat, arch))));
 }
 
 /**
  * Installable releases: versions with at least one live, compatible wheel
- * whose requires-python admits the sandbox's Python. `newestUploadAt` is the
- * latest upload among those wheels — a wheel added recently to an old release
- * counts as new.
+ * whose requires-python admits the sandbox's Python (an invalid
+ * requires-python is ignored, as pip does).
+ *
+ * Releases are grouped by their PEP 440 IDENTITY, not by how a file spells
+ * the version: «1.0», «1.0.0» and «0!1.0» are one release on PyPI and to pip
+ * (`==1.0` installs any of them, preferring the most specific wheel tag). A
+ * hijacked account that uploads a fresh «pkg-1.0.0-cp312-….whl» to an old
+ * «1.0» release makes that release new — it must not hide behind the old
+ * spelling's upload date. `newestUploadAt` is the latest upload of any wheel
+ * of the release; a file without an upload time counts as brand new (fail
+ * closed). `version` keeps the spelling of the release's first upload.
  */
 function installableReleases(files, { arch = hostWheelArch() } = {}) {
-  const byVersion = new Map();
+  const byRelease = new Map();
   for (const file of Array.isArray(files) ? files : []) {
     if (!file || file.yanked) continue;
     const filename = String(file.filename || '');
     if (!/\.whl$/i.test(filename) || !wheelCompatible(filename, arch)) continue;
     const version = wheelVersion(filename);
-    if (!version || !parseVersion(version)) continue;
+    const parsed = version ? parseVersion(version) : null;
+    if (!parsed) continue;
     const requires = file['requires-python'];
-    if (requires && !versionMatches(TARGET_PYTHON, String(requires))) continue;
-    const at = Date.parse(file['upload-time']) || 0;
-    const entry = byVersion.get(version) || { version, newestUploadAt: 0 };
+    if (requires && evaluateSpecifier(TARGET_PYTHON, String(requires)) === false) continue;
+    const uploaded = Date.parse(file['upload-time']);
+    const at = Number.isFinite(uploaded) ? uploaded : Infinity;
+    const key = canonicalVersionKey(parsed);
+    const entry = byRelease.get(key) || { version, newestUploadAt: -Infinity, firstUploadAt: Infinity };
+    if (at < entry.firstUploadAt) {
+      entry.firstUploadAt = at;
+      entry.version = version;
+    }
     entry.newestUploadAt = Math.max(entry.newestUploadAt, at);
-    byVersion.set(version, entry);
+    byRelease.set(key, entry);
   }
-  return [...byVersion.values()];
+  return [...byRelease.values()].map(({ version, newestUploadAt }) => ({ version, newestUploadAt }));
 }
 
 /**
- * The release to install: the highest matching the specifier (stable first,
- * pre-releases only when the specifier names one or nothing else exists) that
- * has been public for RELEASE_MIN_AGE_DAYS.
+ * The release to install: the highest matching the specifier — pre-releases
+ * only when the specifier opts in (packaging's rule) or nothing else matches —
+ * among those public for RELEASE_MIN_AGE_DAYS.
  */
 function chooseRelease(releases, { specifier = '', now = Date.now() } = {}) {
   const matching = releases.filter((r) => !specifier || versionMatches(r.version, specifier));
   if (!matching.length) return { release: null, reason: 'no_match' };
-  const wantsPre = /\d(?:a|b|rc|dev)\d/i.test(String(specifier));
-  const stable = matching.filter((r) => { const v = parseVersion(r.version); return v && !v.pre && v.dev == null; });
-  const pool = wantsPre || !stable.length ? matching : stable;
+  const stable = matching.filter((r) => !isPrerelease(parseVersion(r.version)));
+  const pool = specifierAllowsPrereleases(specifier) || !stable.length ? matching : stable;
   const sorted = [...pool].sort((a, b) => compareParsedVersions(parseVersion(b.version), parseVersion(a.version)));
   const oldEnough = sorted.find((r) => now - r.newestUploadAt >= RELEASE_MIN_AGE_DAYS * DAY_MS);
   if (oldEnough) return { release: oldEnough, reason: 'ok' };
@@ -464,10 +668,13 @@ async function vetPackage(rawName, {
   }
   const targetVersion = choice.release.version;
   const ageDays = project.firstUploadAt ? Math.floor((now - project.firstUploadAt) / DAY_MS) : 0;
-  const releaseAgeDays = Math.floor((now - choice.release.newestUploadAt) / DAY_MS);
+  const knownUpload = Number.isFinite(choice.release.newestUploadAt);
+  const releaseAgeDays = knownUpload ? Math.max(0, Math.floor((now - choice.release.newestUploadAt) / DAY_MS)) : null;
   const evidence = { version: targetVersion, ageDays, releaseAgeDays, releases: project.versions };
   if (choice.reason === 'too_new') {
-    return refuse(name, 'release_too_new', `the matching release ${targetVersion} was published ${releaseAgeDays} day(s) ago; releases need ${RELEASE_MIN_AGE_DAYS} days before they are installed`, evidence);
+    return refuse(name, 'release_too_new', knownUpload
+      ? `the matching release ${targetVersion} was published ${releaseAgeDays} day(s) ago; releases need ${RELEASE_MIN_AGE_DAYS} days before they are installed`
+      : `the matching release ${targetVersion} has a file without a publication date; releases need ${RELEASE_MIN_AGE_DAYS} days before they are installed`, evidence);
   }
 
   let malicious;
@@ -574,8 +781,13 @@ module.exports = {
   wheelVersion,
   pinnedVersion,
   parseVersion,
+  compareParsedVersions,
+  canonicalVersionKey,
+  isPrerelease,
   highestVersion,
   versionMatches,
+  evaluateSpecifier,
+  specifierAllowsPrereleases,
   wheelCompatible,
   installableReleases,
   chooseRelease,
