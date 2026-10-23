@@ -303,6 +303,27 @@ test('shouldUseAgenticChat keeps simple doc Q&A / summaries on the reliable plai
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'que dice el documento sobre el presupuesto?', files: [{ id: 'f1' }] }), false);
 });
 
+test('shouldUseAgenticChat: reference picture + editable doc with a work request enters the loop (prod 2026-09-18)', () => {
+  const img = { id: 'i1', name: 'IMG_7788.jpg', mimeType: 'image/jpeg' };
+  const docx = { id: 'd1', name: '203 577 COR-F-REC-VAC-05.17_8 - HECTOR CAMPOS CUBAS.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+  // Verbatim prod message with typos. The plain stream echoed a paragraph of
+  // the OLD doc; this turn must reach document_edit + vision.
+  const real = 'El docente me observó el título y me indicó un nuevo título, Para el informe de suficiencia, Me indicó rectificar la información presentada, Y que esté en torno al título asignado\n\ntraba en el word 203 577 COR-F-REC-VAC-05.17_8 Todas las facultades excepto Arquitectura - HECTOR CAMPOS CUBAS.docx con el itulo de la imagen de forms profeiosnl y avanzada mejroa todo lo que tenmos porfsvor con el nuievbo ema';
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: real, files: [img, docx] }), true, 'img + docx');
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: real, files: [docx] }), true, 'docx only (typo-tolerant edit verbs)');
+  // Picture + doc, substantive non-question message, no explicit verb → still the loop.
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'La foto es la rúbrica del docente para este informe, todo lo que aparece ahí tiene que quedar reflejado en el documento final.',
+    files: [img, docx],
+  }), true, 'rubric picture for the document');
+  // Q&A openers stay on the plain stream even with both attachments.
+  for (const q of ['¿qué dice el documento?', 'resume el archivo', 'cuál es el título de la investigación?', 'dime los colores de las figuras en el archivo adjunto']) {
+    assert.equal(agenticStream.shouldUseAgenticChat({ prompt: q, files: [img, docx] }), false, q);
+  }
+  // Short message → not enough signal to leave the plain stream.
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'mira esto', files: [img, docx] }), false);
+});
+
 test('isHandledAgenticChatResult keeps a successful Office edit off the plain stream', () => {
   const liveAnswer = 'Listo. Conservé el documento original y apliqué la edición solicitada.';
   assert.equal(agenticStream.isHandledAgenticChatResult({

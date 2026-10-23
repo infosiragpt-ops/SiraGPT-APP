@@ -767,6 +767,41 @@ function resolveToolCallMode(provider, model) {
 
 const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
 const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\s*:?[\s\S]{1,120}$/i;
+
+// Editable office/document attachments (not pictures, not raw media).
+const EDITABLE_DOCUMENT_RE = /\.(docx?|xlsx?|xlsm|pptx?|odt|ods|odp|rtf|md|txt|csv)$/i;
+const EDITABLE_DOCUMENT_MIME_RE = /(wordprocessingml|msword|spreadsheetml|ms-excel|presentationml|ms-powerpoint|opendocument|text\/plain|text\/csv|text\/markdown)/i;
+// Read-only openers: the user asks ABOUT the files, not to work on them.
+const READ_ONLY_OPENER_RE = /^\s*(?:¿|¡)?\s*(?:qu[eé]|cu[aá]l(?:es)?|cu[aá]nt[oa]s?|c[oó]mo|por\s+qu[eé]|d[oó]nde|qui[eé]n(?:es)?|dime|expl[ií]ca|describe|resume|res[uú]me|compara|analiza|revisa|lee|identifica|extrae|traduce|de qu[eé] trata)\b/i;
+
+function isEditableDocumentAttachment(file) {
+  if (!file || typeof file !== 'object') return false;
+  const name = String(file.name || file.originalName || file.filename || '');
+  const mime = String(file.mimeType || file.mime || file.type || file.contentType || '');
+  if (/^image\//i.test(mime)) return false;
+  return EDITABLE_DOCUMENT_RE.test(name) || EDITABLE_DOCUMENT_MIME_RE.test(mime);
+}
+
+/**
+ * Picture + editable document in one turn with a substantive, non-question
+ * message ⇒ the picture is a reference for work on the document (new title,
+ * rubric photo, teacher's notes). The plain stream cannot read the pixels
+ * nor edit the file, so this goes to the loop. Pure Q&A openers stay out.
+ */
+function isReferencePictureForDocumentTurn(text, files = []) {
+  const t = String(text || '').trim();
+  if (t.length < 40) return false;
+  if (READ_ONLY_OPENER_RE.test(t)) return false;
+  if (!Array.isArray(files) || files.length < 2) return false;
+  let picture = false;
+  let document = false;
+  try {
+    const { isImageAttachment } = require('./agents/media-intent');
+    picture = files.some(isImageAttachment);
+  } catch (_) { picture = files.some((f) => /^image\//i.test(String((f && (f.mimeType || f.type)) || ''))); }
+  document = files.some(isEditableDocumentAttachment);
+  return picture && document;
+}
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
 // Stop reasons that already delivered a user-facing answer (and often
@@ -909,6 +944,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (isImageMediaRequest(text)) return true;
       } catch (_) { /* detector is best-effort */ }
     }
+    // Reference picture + editable document in the SAME turn («el título de
+    // la imagen va en el Word», «ajusta el informe a la foto del docente»):
+    // the picture carries instructions for the document, so the turn needs
+    // the loop (vision → document_edit). The plain stream can neither read
+    // the pixels nor touch the file; it used to echo a paragraph of the old
+    // doc instead (prod regression, 2026-09-18).
+    if (isReferencePictureForDocumentTurn(text, files)) return true;
     return isArtifactDeliverableRequest(text)
       || isDocumentEditRequest(text)
       || customGptPolicy.requiresSkill;
