@@ -391,7 +391,8 @@ test('promised command-line tools are checked again (cli_missing)', async () => 
   assert.ok(EXPECTED.cli.includes('soffice') && EXPECTED.cli.includes('ffmpeg'));
   const probe = buildRuntimeProbe();
   assert.match(probe, /CLI = json\.loads\(/);
-  assert.match(probe, /shutil\.which\(name\) is None/);
+  // Looked up outside the workspace (round 2: an overlay script cannot stand in).
+  assert.match(probe, /shutil\.which\(name, path=system_path\) is None/);
   const missingTool = { stdout: MARKER + JSON.stringify({
     protocol: 1, ok: false, digest: EXPECTED.digest, checked: EXPECTED.packages,
     missing: 0, mismatched: 0, overlay: 0, cliMissing: 1, reason: 'cli_missing',

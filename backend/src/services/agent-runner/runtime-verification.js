@@ -41,6 +41,7 @@ class SandboxCapabilitiesError extends Error {
     // Mismatches caused only by packages a user installed into the chat
     // (/workspace/.sira-packages), and promised CLI tools not on PATH.
     this.overlay = counts.overlay || 0;
+    this.overlayBroken = counts.overlayBroken || 0;
     this.cliMissing = counts.cliMissing || 0;
   }
 }
@@ -69,7 +70,7 @@ function sandboxTransportError(error = {}) {
  * the latter to sys.path or importing it. This is not a check of module bytes.
  * The image build remains responsible for actual import/format smoke tests.
  */
-function buildRuntimeProbe(expected = EXPECTED, catalogPath = '/opt/sira/capabilities.json') {
+function buildRuntimeProbe(expected = EXPECTED, catalogPath = '/opt/sira/capabilities.json', workspaceRoot = '/workspace') {
   const requirements = Array.isArray(expected?.requirements) ? expected.requirements.map(String) : null;
   const cli = Array.isArray(expected?.cli) ? expected.cli.map(String) : [];
   if (!/^[a-f0-9]{64}$/.test(expected.digest) || !Number.isInteger(expected.packages)
@@ -77,13 +78,14 @@ function buildRuntimeProbe(expected = EXPECTED, catalogPath = '/opt/sira/capabil
     || !requirements || requirements.length !== expected.packages
     || requirements.some((pip) => !pip || pip.length > 200)
     || cli.length > 128 || cli.some((bin) => !SAFE_BIN_RE.test(bin))) throw new Error('invalid runtime expectation');
-  return `import hashlib, importlib.metadata, json, shutil, site, sys
+  return `import hashlib, importlib.metadata, json, os, shutil, site, sys
 EXPECTED = ${JSON.stringify(expected.digest)}
 EXPECTED_COUNT = ${expected.packages}
 REQUIREMENTS = json.loads(${JSON.stringify(JSON.stringify(requirements))})
 CLI = json.loads(${JSON.stringify(JSON.stringify(cli))})
 CATALOG = ${JSON.stringify(catalogPath)}
-report = {"protocol": 1, "ok": False, "digest": "", "checked": 0, "missing": 0, "mismatched": 0, "overlay": 0, "cliMissing": 0, "reason": "probe_unavailable"}
+WORKSPACE = os.path.realpath(${JSON.stringify(String(workspaceRoot))})
+report = {"protocol": 1, "ok": False, "digest": "", "checked": 0, "missing": 0, "mismatched": 0, "overlay": 0, "overlayBroken": 0, "cliMissing": 0, "reason": "probe_unavailable"}
 
 def check():
     try:
@@ -104,11 +106,22 @@ def check():
         # -I excludes the user site from imports, but the normal executor sees
         # the persisted PYTHONUSERBASE set by the driver. Read its metadata
         # directly; never use addsitedir (which would execute .pth files).
+        # An overlay entry whose metadata cannot be read (truncated by a failed
+        # commit, rewritten by a script, not UTF-8) is BROKEN, not a broken
+        # image: it lives in the chat's /workspace/.sira-packages, which the
+        # caller can clear (packages are reinstalled on demand).
         overlays = {}
         for distribution in importlib.metadata.distributions(path=[site.getusersitepackages()]):
-            name = distribution.metadata.get("Name")
-            if name:
-                overlays.setdefault(canonicalize_name(name), []).append(distribution.version)
+            try:
+                name = distribution.metadata.get("Name")
+                overlay_version = distribution.version
+            except Exception:
+                report["overlayBroken"] += 1
+                continue
+            if not name:
+                report["overlayBroken"] += 1
+                continue
+            overlays.setdefault(canonicalize_name(name), []).append(overlay_version)
         for pip in REQUIREMENTS:
             requirement = Requirement(pip)
             if requirement.url or requirement.marker or not requirement.specifier:
@@ -120,26 +133,39 @@ def check():
             except importlib.metadata.PackageNotFoundError:
                 report["missing"] += 1
                 continue
-            overlay_only = False
             try:
                 base_version = Version(version)
-                base_mismatch = not requirement.specifier.contains(base_version)
-                # The installer preserves base-image versions. Even another
-                # in-range overlay can break the image's tested dependency set.
-                overlay_mismatch = any(
-                    Version(overlay) != base_version
-                    for overlay in overlays.get(canonicalize_name(requirement.name), [])
-                )
-                mismatch = base_mismatch or overlay_mismatch
-                overlay_only = overlay_mismatch and not base_mismatch
             except (InvalidVersion, TypeError):
-                mismatch = True
-            if mismatch:
+                # The image's own metadata: not something the chat can fix.
                 report["mismatched"] += 1
-                if overlay_only:
+                continue
+            base_mismatch = not requirement.specifier.contains(base_version)
+            # The installer preserves base-image versions. Even another
+            # in-range overlay can break the image's tested dependency set,
+            # and an overlay with an unreadable version shadows it all the same.
+            overlay_mismatch = False
+            for overlay in overlays.get(canonicalize_name(requirement.name), []):
+                try:
+                    if Version(overlay) != base_version:
+                        overlay_mismatch = True
+                except (InvalidVersion, TypeError):
+                    overlay_mismatch = True
+            if base_mismatch or overlay_mismatch:
+                report["mismatched"] += 1
+                if overlay_mismatch and not base_mismatch:
                     report["overlay"] += 1
-        report["cliMissing"] = sum(1 for name in CLI if shutil.which(name) is None)
-        packages_ok = not (report["missing"] or report["mismatched"])
+        # Promised command-line tools are looked up outside the workspace: a
+        # console script installed into /workspace/.sira-packages/bin (first in
+        # the driver's PATH) must not stand in for a missing system binary.
+        def in_workspace(entry):
+            real = os.path.realpath(entry)
+            return real == WORKSPACE or real.startswith(WORKSPACE + os.sep)
+        system_path = os.pathsep.join(
+            entry for entry in os.environ.get("PATH", os.defpath).split(os.pathsep)
+            if entry and not in_workspace(entry)
+        )
+        report["cliMissing"] = sum(1 for name in CLI if shutil.which(name, path=system_path) is None)
+        packages_ok = not (report["missing"] or report["mismatched"] or report["overlayBroken"])
         report["ok"] = packages_ok and not report["cliMissing"]
         report["reason"] = "verified" if report["ok"] else ("packages_mismatch" if not packages_ok else "cli_missing")
     except (ValueError, KeyError, TypeError):
@@ -176,10 +202,11 @@ function parseRuntimeReport(result, expected = EXPECTED) {
     || !reasons.includes(report.reason)
     || !['checked', 'missing', 'mismatched'].every((key) => Number.isInteger(report[key]) && report[key] >= 0 && report[key] <= expected.packages)
     || report.missing + report.mismatched > report.checked
-    || !optionalCount('overlay', report.mismatched) || !optionalCount('cliMissing', cliCount)) throw new SandboxCapabilitiesError('report_invalid');
+    || !optionalCount('overlay', report.mismatched) || !optionalCount('overlayBroken', 100_000)
+    || !optionalCount('cliMissing', cliCount)) throw new SandboxCapabilitiesError('report_invalid');
   if (!report.ok) throw new SandboxCapabilitiesError(report.reason, report);
   if (result.exitCode !== 0 || report.reason !== 'verified'
-    || report.checked !== expected.packages || report.missing || report.mismatched) {
+    || report.checked !== expected.packages || report.missing || report.mismatched || report.overlayBroken) {
     throw new SandboxCapabilitiesError('report_invalid', report);
   }
   // catalogMatches=false: the image is a newer release that promises more
@@ -214,8 +241,11 @@ async function verifySandboxRuntime(sandbox, { signal } = {}) {
     // at another version shadows it: the image itself is fine. Those
     // installs are re-done on demand, so clear them and check once more
     // instead of failing every document turn of the chat forever.
+    // Unreadable overlay metadata (`overlayBroken`) is the same kind of
+    // chat-local damage: clearing the overlay repairs it.
     const overlayOnly = error instanceof SandboxCapabilitiesError && error.reason === 'packages_mismatch'
-      && error.missing === 0 && error.cliMissing === 0 && error.overlay > 0 && error.overlay === error.mismatched;
+      && error.missing === 0 && error.cliMissing === 0
+      && (error.overlay > 0 || error.overlayBroken > 0) && error.overlay === error.mismatched;
     if (!overlayOnly) throw error;
     try {
       await sandbox.exec('command -p rm -rf -- /workspace/.sira-packages', { timeoutMs: 30_000, signal });

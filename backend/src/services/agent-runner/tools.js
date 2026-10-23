@@ -652,6 +652,27 @@ function pinnedRequirement(parsed, verdict) {
 // pulling in more than this is refused rather than vetted name by name.
 const MAX_VETTED_DEPENDENCIES = 40;
 
+/** POSIX single-quote: nothing inside is expanded by the shell ($, `…`, \). */
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The heredoc terminator for a script: «PY» unless one of the script's own
+ * lines is exactly «PY» (a multi-line string listing country codes, AR / PY /
+ * UY…). Bash would end the heredoc there and run the rest of the Python as
+ * shell commands.
+ */
+function heredocDelimiter(code) {
+  const lines = new Set(String(code).split('\n'));
+  if (!lines.has('PY')) return 'PY';
+  let delimiter;
+  do {
+    delimiter = `SIRA_PY_${require('crypto').randomBytes(6).toString('hex')}`;
+  } while (lines.has(delimiter));
+  return delimiter;
+}
+
 /** The install tool definition for a resolved package policy. */
 function installToolDefinition(policy) {
   return policy && policy.vetting ? VETTED_INSTALL_TOOL_DEFINITION : INSTALL_TOOL_DEFINITION;
@@ -765,10 +786,17 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         return 'the request conflicts with the libraries built into the sandbox image (their versions are fixed so numpy/pandas/lxml/python-pptx keep working); nothing was installed. Drop the version pin or use the installed version.';
       case 'dependency_refused':
         return `the dependencies it needs did not pass vetting (${(result.refusedDependencies || []).map((v) => `«${v.name}»: ${v.detail}`).join('; ')}); nothing was installed. Do not retry; use an installed equivalent or state the missing capability.`;
+      case 'vetting_unavailable':
+        return `the dependencies it needs could not be verified right now (${(result.unverifiedDependencies || []).map((v) => `«${v.name}»: ${v.detail}`).join('; ')}); nothing was installed. This is temporary (the package index or the advisory database did not answer): retry once in a moment, or continue with the installed libraries.`;
       case 'pinned_dependency_conflict':
         return `its dependencies only install at the vetted releases (${(result.pinnedDependencies || []).join(', ')}), and the package requires other versions of them; nothing was installed. Pin a release of the package that accepts those versions, or use an installed equivalent.`;
-      case 'too_many_dependencies':
-        return `it pulls in ${result.dependencyCount} packages outside the curated list (at most ${MAX_VETTED_DEPENDENCIES} are vetted per install); nothing was installed. Use a lighter library or state the missing capability.`;
+      case 'too_many_dependencies': {
+        const limit = Number.isInteger(result.dependencyLimit) ? result.dependencyLimit : MAX_VETTED_DEPENDENCIES;
+        const why = limit < MAX_VETTED_DEPENDENCIES
+          ? `this sandbox installs at most ${limit} of them together with the package`
+          : `at most ${MAX_VETTED_DEPENDENCIES} are vetted per install`;
+        return `it pulls in ${result.dependencyCount} packages outside the curated list (${why}); nothing was installed. Use a lighter library or state the missing capability.`;
+      }
       case 'commit_failed':
         return 'the packages were downloaded but could not be written into the workspace, so the package folder may be incomplete; do not rely on them in this turn.';
       default:
@@ -808,7 +836,8 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       // Compile the user's source separately so future imports and line
       // numbers retain normal stdin semantics instead of receiving a prefix.
       const bootstrap = "import sys; sys.path.insert(0, '/workspace/tmp'); sys.argv[0] = '-'; globals()['__file__'] = '<stdin>'; exec(compile(sys.stdin.read(), '<stdin>', 'exec'))";
-      const wrapped = `python3 -c "${bootstrap}" <<'PY'\n${code}\nPY`;
+      const delimiter = heredocDelimiter(code);
+      const wrapped = `python3 -c "${bootstrap}" <<'${delimiter}'\n${code}\n${delimiter}`;
       const r = await sandbox.exec(wrapped, { timeoutMs: CMD_TIMEOUT_MS, signal: ctx.signal });
       const parts = [];
       if (r.stdout) parts.push(r.stdout);
@@ -892,12 +921,29 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         );
         const refused = verdicts.filter((v) => !v || !v.ok);
         if (refused.length) {
-          for (const v of refused) reportGap({ kind: 'python_package', name: v.name, package: v.name, allowed: false, tool: 'install_sandbox_package' });
-          if (onInstall) {
-            try { onInstall({ requested: parsedOutside.map((r) => r.spec), driver: sandbox.driver || null, ok: false, code: 'vetting_refused', refused: refused.map((v) => ({ name: v.name, reason: v.reason })) }); } catch (_) { /* telemetry never breaks a tool */ }
+          // Stop pressed while vetting: the verdicts read «unavailable», but
+          // the truth is that the user cancelled.
+          if (ctx.signal && ctx.signal.aborted) {
+            installCalls -= 1;
+            return `ERROR: ${explainInstallFailure({ code: 'aborted' })}`;
           }
-          const reasons = refused.map((v) => `«${v.name}»: ${v.detail}`).join('; ');
-          return `ERROR: nothing was installed. Refused by the package vetting: ${reasons}. Do not retry these names; use an installed equivalent or tell the user precisely which capability is missing.`;
+          // An outage (PyPI / OSV unreachable, adoption data missing) is not a
+          // verdict: never a capability gap for the administrator, never
+          // «do not retry», and it does not spend the turn's install budget.
+          const definitive = refused.filter((v) => !v || v.reason !== 'vet_unavailable');
+          const unverified = refused.filter((v) => v && v.reason === 'vet_unavailable');
+          for (const v of definitive) reportGap({ kind: 'python_package', name: v && v.name, package: v && v.name, allowed: false, tool: 'install_sandbox_package' });
+          if (onInstall) {
+            try { onInstall({ requested: parsedOutside.map((r) => r.spec), driver: sandbox.driver || null, ok: false, code: definitive.length ? 'vetting_refused' : 'vetting_unavailable', refused: refused.map((v) => ({ name: v && v.name, reason: v && v.reason })) }); } catch (_) { /* telemetry never breaks a tool */ }
+          }
+          const describe = (list) => list.map((v) => `«${v && v.name}»: ${v && v.detail}`).join('; ');
+          if (!definitive.length) {
+            installCalls -= 1;
+            return `ERROR: nothing was installed. The package vetting could not verify ${describe(unverified)}. This is temporary (the package index or the advisory database did not answer): retry once in a moment, or continue with the installed libraries.`;
+          }
+          const parts = [`ERROR: nothing was installed. Refused by the package vetting: ${describe(definitive)}. Do not retry these names; use an installed equivalent or tell the user precisely which capability is missing.`];
+          if (unverified.length) parts.push(`Could not be verified right now (temporary; may be retried once later): ${describe(unverified)}.`);
+          return parts.join(' ');
         }
         vetted = verdicts;
         for (const v of verdicts) allow.add(v.name);
@@ -926,6 +972,14 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
         }
       };
       let result = await install(policy.timeoutMs);
+      // The retry sends the package AND its pinned dependencies: a driver
+      // that takes a bounded list (the remote sandbox service: 20 entries)
+      // would answer an opaque «400 invalid_install_request» after all the
+      // vetting work. Refuse up front with the real limit instead.
+      const driverCap = Number.isInteger(sandbox.maxInstallRequirements) && sandbox.maxInstallRequirements > 0
+        ? sandbox.maxInstallRequirements
+        : Infinity;
+      const dependencyLimit = Math.max(0, Math.min(MAX_VETTED_DEPENDENCIES, driverCap - requirements.length));
       // pip resolved dependencies outside the list. The installer refused
       // BEFORE streaming anything, so vet exactly those names and try once
       // more with them allowed.
@@ -939,13 +993,19 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
             refusedDependencies: blockedDeps.map((name) => ({ name, detail: 'blocked by the administrator on this server' })),
             notAllowed: blockedDeps,
           };
-        } else if (deps.length > MAX_VETTED_DEPENDENCIES) {
-          result = { ...result, code: 'too_many_dependencies', dependencyCount: deps.length };
+        } else if (deps.length > dependencyLimit) {
+          result = { ...result, code: 'too_many_dependencies', dependencyCount: deps.length, dependencyLimit };
         } else if (deps.length) {
           const verdicts = await vetter.vet(deps.map((name) => ({ name })), { signal: ctx.signal });
           const refusedDeps = verdicts.filter((v) => !v || !v.ok);
-          if (refusedDeps.length) {
-            result = { ...result, code: 'dependency_refused', refusedDependencies: refusedDeps, notAllowed: refusedDeps.map((v) => v.name) };
+          const definitiveDeps = refusedDeps.filter((v) => !v || v.reason !== 'vet_unavailable');
+          if (refusedDeps.length && ctx.signal && ctx.signal.aborted) {
+            result = { ...result, code: 'aborted', notAllowed: [] };
+          } else if (definitiveDeps.length) {
+            result = { ...result, code: 'dependency_refused', refusedDependencies: definitiveDeps, notAllowed: definitiveDeps.map((v) => v && v.name) };
+          } else if (refusedDeps.length) {
+            // Only an outage: no gap is reported and the model may retry.
+            result = { ...result, code: 'vetting_unavailable', unverifiedDependencies: refusedDeps, notAllowed: [] };
           } else {
             vetted = [...vetted, ...verdicts];
             for (const v of verdicts) allow.add(v.name);
@@ -1007,8 +1067,11 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web, office, deck, ca
       if (!pattern) return 'ERROR: pattern is required';
       const rel = String(args?.path || '.').replace(/^\/workspace\/?/, '') || '.';
       const exclude = /^(\.\/)?\.sira-packages/.test(rel) ? '' : "--exclude-dir='.sira-packages*' ";
+      // Single quotes: inside double quotes bash would expand «\$[0-9]+» (a
+      // search for currency amounts) to «\-9+» and run $(…) / `…` in a
+      // pattern. `--` keeps a pattern that starts with «-» a pattern.
       const r = await sandbox.exec(
-        `cd /workspace && grep -rnE --binary-files=without-match ${exclude}-m 50 ${JSON.stringify(pattern)} ${JSON.stringify(rel)} 2>/dev/null | head -200`,
+        `cd /workspace && grep -rnE --binary-files=without-match ${exclude}-m 50 -- ${shQuote(pattern)} ${shQuote(rel)} 2>/dev/null | head -200`,
         { timeoutMs: 30_000, signal: ctx.signal },
       );
       const out = String(r.stdout || '').trim();

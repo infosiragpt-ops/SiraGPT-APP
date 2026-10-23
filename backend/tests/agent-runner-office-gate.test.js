@@ -452,12 +452,20 @@ test('vision ladder: quota errors fail over; "cannot take images" fails over AND
   await client.chat.completions.create({ model: 'ignored', messages: [] });
   assert.deepEqual(seen, ['deepseek-flash'], '402 is transient: DeepSeek is tried again next time');
 
+  // A model that cannot take images fails on every image; a broken image
+  // fails on every model. One 400 is not proof: two different images are.
+  const image = (data) => ({ model: 'ignored', messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } }] }] });
   behaviour['deepseek-flash'] = [Object.assign(new Error('unsupported image'), { status: 400 })];
   seen.length = 0;
-  await client.chat.completions.create({ model: 'ignored', messages: [] });
+  await client.chat.completions.create(image('AAAA'));
   seen.length = 0;
-  await client.chat.completions.create({ model: 'ignored', messages: [] });
-  assert.deepEqual(seen, ['grok-4.6'], 'a 400 on images demotes the candidate (live probe, cached)');
+  await client.chat.completions.create(image('BBBB'));
+  assert.deepEqual(seen, ['deepseek-flash'], 'one image refused is not proof: the next image tries it again');
+  behaviour['deepseek-flash'] = [Object.assign(new Error('unsupported image'), { status: 400 })];
+  await client.chat.completions.create(image('CCCC'));
+  seen.length = 0;
+  await client.chat.completions.create(image('DDDD'));
+  assert.deepEqual(seen, ['grok-4.6'], 'a 400 on two different images demotes the candidate (live probe, cached)');
   ladder.resetVisionDemotions();
 });
 

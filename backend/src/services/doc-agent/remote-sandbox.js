@@ -155,6 +155,10 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey,
     persistent: Boolean(persistKey),
     persistKey,
     root: '/workspace',
+    // The service validates 1-20 requirements per install
+    // (services/sandbox/server.js validateInstallBody): callers that send a
+    // package with its pinned dependencies stay within it.
+    maxInstallRequirements: 20,
     // Allowlisted Python packages: the sandbox host runs the installer
     // container and streams the wheels into this session (same contract as
     // the docker driver; see sandbox-pip.js). The service enforces the
