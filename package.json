@@ -211,7 +211,7 @@
     "diff2html": "^3.4.56",
     "docx": "^8.5.0",
     "docx-preview": "^0.3.7",
-    "dompurify": "^3.4.11",
+    "dompurify": "^3.4.17",
     "dxf-viewer": "^1.0.47",
     "eventsource-parser": "3.0.8",
     "exceljs": "^4.4.0",
@@ -230,7 +230,7 @@
     "monaco-editor": "0.56.0",
     "multer": "^2.3.0",
     "negotiator": "^1.0.0",
-    "next": "15.5.25",
+    "next": "15.5.28",
     "next-auth": "^4.24.15",
     "next-intl": "^4.9.1",
     "next-themes": "latest",
@@ -310,6 +310,7 @@
     "license-checker-rseidelsohn": "^4.4.2"
   },
   "overrides": {
+    "dompurify": "$dompurify",
     "next": {
       "sharp": "$sharp"
     },
