@@ -2434,7 +2434,14 @@ async function runAgentRunnerForDocRoute({
   };
 }
 
-async function loadFilesByIds({ prisma, userId, fileIds }) {
+/**
+ * The user's own files by id, with their bytes.
+ * `maxBytesPerFile` (optional): a file over it is returned as
+ * `{ name, fileId, skipped: 'too_large', size }` WITHOUT reading it — callers
+ * that would drop it anyway (the chat sandbox caps uploads at 64 MB) never
+ * pull a 1 GB video into this process just to throw it away.
+ */
+async function loadFilesByIds({ prisma, userId, fileIds, maxBytesPerFile = null }) {
   if (!prisma?.file || !userId) return [];
   const ids = fileIds.map(String).filter(Boolean);
   if (!ids.length) return [];
@@ -2445,7 +2452,13 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
   const { readSourceBuffer } = require('../source-preserving-document-edit');
   const objectStorage = require('../object-storage');
   const fs = require('fs/promises');
+  const cap = Number(maxBytesPerFile) > 0 ? Number(maxBytesPerFile) : null;
   for (const row of rows) {
+    const declared = Number(row.size);
+    if (cap && Number.isFinite(declared) && declared > cap) {
+      out.push({ name: row.originalName || row.filename, fileId: row.id, skipped: 'too_large', size: declared });
+      continue;
+    }
     try {
       let buffer;
       if (row.path && objectStorage.isRemote && objectStorage.isRemote(row.path)) {
@@ -2456,7 +2469,12 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
         buffer = await fs.readFile(row.path);
       }
       if (Buffer.isBuffer(buffer) && buffer.length) {
-        out.push({ name: row.originalName || row.filename, buffer, fileId: row.id });
+        if (cap && buffer.length > cap) {
+          // The stored size was stale or missing: still report, never deliver.
+          out.push({ name: row.originalName || row.filename, fileId: row.id, skipped: 'too_large', size: buffer.length });
+        } else {
+          out.push({ name: row.originalName || row.filename, buffer, fileId: row.id });
+        }
       }
     } catch (_) { /* skip unreadable */ }
   }

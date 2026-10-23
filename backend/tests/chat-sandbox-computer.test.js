@@ -263,7 +263,11 @@ test('the turn uploads are staged into uploads/ once per turn, owner-checked, wi
     { id: 'f1', userId: 'u1', path: mine, originalName: 'Ventas Q1.csv' },
     { id: 'f2', userId: 'otro', path: mine, originalName: 'ajeno.csv' },
   ]);
-  stubRunner({ ok: true, exitCode: 0, stdout: 'ok', stderr: '', outbox: { files: [], skipped: [] } });
+  // Like the real runner: `staged` lists the uploads once they are in /workspace.
+  stubRunner((opts) => ({
+    ok: true, exitCode: 0, stdout: 'ok', stderr: '', outbox: { files: [], skipped: [] },
+    ...(opts.stage.length ? { staged: opts.stage.map((item) => item.rel), stageSkipped: [] } : {}),
+  }));
   const ctx = { userId: 'u1', chatId: 'c1', fileIds: ['f1', 'f2'], prisma };
   const r1 = await INTERNAL.pythonExec.execute({ source: 'print(1)' }, ctx);
   const r2 = await INTERNAL.bashExec.execute({ source: 'ls uploads' }, ctx);
