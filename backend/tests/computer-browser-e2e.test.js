@@ -9,7 +9,7 @@
  * precios + citas. Todo hermético: sin Docker, sin red, sin BD.
  *
  * Cubre el flujo completo con las piezas REALES:
- *   1. contrato del panel (las 8 computer_* en el esquema con el flag on)
+ *   1. contrato del panel (todas las computer_* en el esquema con el flag on)
  *   2. navigate → observe → extraer 3 precios → respuesta con enlaces
  *   3. formularios: type en campo normal OK; en password REHÚSA sin eco
  *      (la clave la escribe el usuario en el overlay — login-handoff)
@@ -20,9 +20,9 @@
  *   8. techo de pasos: máximo 25 por loop
  *   9. observación acotada (~8KiB) y error de CDP que nunca lanza
  *
- * Fakes: solo el borde Docker/orquestador (`persistent.ensureSession` /
- * `openUrlInChrome`) y el snapshot CDP (inyectable `cdpSnapshot`). Los
- * executors click/type/screenshot son los reales con driver `fake`.
+ * Fakes: solo el borde orquestador/Chrome (`persistent.ensureSession` /
+ * `live-page.navigatePage`) y el snapshot CDP (inyectable `cdpSnapshot`).
+ * Los executors click/type/screenshot son los reales con driver `fake`.
  */
 
 const { test, beforeEach, afterEach } = require('node:test');
@@ -30,6 +30,7 @@ const assert = require('node:assert/strict');
 
 const chatTools = require('../src/services/computer/chat-computer-tools');
 const persistent = require('../src/services/computer/persistent');
+const livePage = require('../src/services/computer/live-page');
 const handoff = require('../src/services/computer/login-handoff');
 const { withRepeatGuard, capControlSteps } = require('../src/services/computer/control-loop');
 const { makeComputerExecutors } = require('../src/services/agent-runner/multimodal/computer');
@@ -47,35 +48,31 @@ const NORTHWIND_TREE = [
 ].join('\n');
 
 const realEnsure = persistent.ensureSession;
-const realOpenUrl = persistent.openUrlInChrome;
-const realPeek = persistent.peekPage;
+const realNavigate = livePage.navigatePage;
 let sessionCalls;
 let openedUrls;
-let peekResult;
+/** Lo que Chrome muestra tras page.goto (page.url()); Error ⇒ goto falló. */
+let landed;
 
 beforeEach(() => {
   handoff.resetTakeoverForTests();
   sessionCalls = 0;
   openedUrls = [];
-  peekResult = { url: NORTHWIND_URL, title: 'Northwind — Plans', text: '' };
+  landed = null;
   persistent.ensureSession = async () => {
     sessionCalls += 1;
-    return { sessionId: 'sess-e2e', userId: 'u1', conversationId: 'chat-northwind' };
+    return { sessionId: 'sess-e2e', sessionKey: 'u1::chat-northwind', userId: 'u1', conversationId: 'chat-northwind' };
   };
-  persistent.openUrlInChrome = async (_session, url) => {
+  livePage.navigatePage = async (_session, url) => {
     openedUrls.push(String(url));
-    return { ok: true, stdout: 'Opening', stderr: '', container: 'sira-ac-user-u1' };
-  };
-  persistent.peekPage = async () => {
-    if (peekResult instanceof Error) throw peekResult;
-    return peekResult;
+    if (landed instanceof Error) throw landed;
+    return { ok: true, url: landed || String(url) };
   };
 });
 
 afterEach(() => {
   persistent.ensureSession = realEnsure;
-  persistent.openUrlInChrome = realOpenUrl;
-  persistent.peekPage = realPeek;
+  livePage.navigatePage = realNavigate;
 });
 
 function chatCtx() {
@@ -93,7 +90,7 @@ function navigateTool() {
 
 /* ── 1. contrato del panel ─────────────────────────────────────────────── */
 
-test('panel: las 8 tools del navegador están en el esquema con el flag on, fuera con off', () => {
+test('panel: todas las tools del navegador están en el esquema con el flag on, fuera con off', () => {
   assert.equal(chatTools.shouldOfferComputerTools({ SIRAGPT_AGENT_COMPUTER: '1' }), true);
   const names = chatTools.offeredComputerToolNames({ SIRAGPT_AGENT_COMPUTER: '1' });
   for (const n of ['computer_screenshot', 'computer_click', 'computer_type', 'computer_navigate']) {
@@ -104,7 +101,8 @@ test('panel: las 8 tools del navegador están en el esquema con el flag on, fuer
     conversationId: 'c1',
     env: { SIRAGPT_AGENT_COMPUTER: '1' },
   });
-  assert.equal(tools.length, 8);
+  assert.equal(tools.length, chatTools.COMPUTER_TOOL_NAMES.length);
+  assert.deepEqual(tools.map((t) => t.name), [...chatTools.COMPUTER_TOOL_NAMES]);
   for (const t of tools) {
     assert.ok(t.description && t.description.length > 20, `${t.name} documenta cuándo usarla`);
     assert.equal(t.parameters.type, 'object');
@@ -266,7 +264,7 @@ test('search-first: el prompt agéntico prohíbe pedir la URL pudiendo buscarla'
 });
 
 test('DNS sin resolver → navigate_failed con fallback a web_search, no callejón', async () => {
-  persistent.openUrlInChrome = async () => { throw new Error('getaddrinfo ENOTFOUND northwind.example'); };
+  landed = new Error('page.goto: net::ERR_NAME_NOT_RESOLVED at https://northwind.example/pricing');
   const out = await navigateTool().execute({ url: 'https://northwind.example/pricing' }, chatCtx());
   assert.equal(out.ok, false);
   assert.equal(out.error, 'navigate_failed');
@@ -275,7 +273,7 @@ test('DNS sin resolver → navigate_failed con fallback a web_search, no callej�
 });
 
 test('fallo no-DNS (timeout) → navigate_failed sin fallback inventado', async () => {
-  persistent.openUrlInChrome = async () => { throw new Error('docker exec timed out after 12000ms'); };
+  landed = new Error('page.goto: Timeout 15000ms exceeded');
   const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
   assert.equal(out.ok, false);
   assert.equal(out.error, 'navigate_failed');
@@ -285,7 +283,7 @@ test('fallo no-DNS (timeout) → navigate_failed sin fallback inventado', async 
 /* ── 11. verificación post-apertura: el "Opening" no basta ─────────────── */
 
 test('verify-after-open: Chrome en página de error → navigate_failed con fallback', async () => {
-  peekResult = { url: 'chrome-error://chromewebdata/', title: 'No se puede acceder a este sitio', text: '' };
+  landed = 'chrome-error://chromewebdata/';
   const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
   assert.equal(out.ok, false);
   assert.equal(out.error, 'navigate_failed');
@@ -294,7 +292,7 @@ test('verify-after-open: Chrome en página de error → navigate_failed con fall
 });
 
 test('verify-after-open: otra URL en pantalla → ok con confirmed:false y nota de verificar', async () => {
-  peekResult = { url: 'https://www.google.com/', title: 'Google', text: '' };
+  landed = 'https://www.google.com/';
   const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
   assert.equal(out.ok, true);
   assert.equal(out.confirmed, false);
@@ -302,12 +300,11 @@ test('verify-after-open: otra URL en pantalla → ok con confirmed:false y nota 
   assert.match(out.note, /computer_screenshot/);
 });
 
-test('verify-after-open: peek roto → ok fail-open con confirmed:false', async () => {
-  peekResult = null;
+test('verify-after-open: redirección a la misma ruta con barra final cuenta como confirmada', async () => {
+  landed = `${NORTHWIND_URL}/`;
   const out = await navigateTool().execute({ url: NORTHWIND_URL }, chatCtx());
   assert.equal(out.ok, true);
-  assert.equal(out.confirmed, false);
-  assert.equal(out.loaded, null);
+  assert.equal(out.confirmed, true);
 });
 
 test('verify-after-open: la descripción documenta loaded/confirmed', () => {
