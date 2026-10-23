@@ -151,7 +151,7 @@ const STRONG_EDIT_VERBS = new RegExp(
 // WEAK edit verbs: also used in chit-chat / Q&A follow-ups ("cambia de tema",
 // "actualízame", "arréglate"), so they only count as a document edit when a
 // document/file noun is also present.
-const WEAK_EDIT_VERBS = /\b(complet\w*|llen[aeo]\w*|rellen\w*|diligenci\w*|cambia\w*|c[aá]mbia\w*|c[aá]mbi[aá]le|actualiz\w*|arregl\w*|p[oó]nle|ponle|mejora\w*|ajusta\w*|update\w*|change\w*|fix the|improve\w*|adjust\w*|uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*)\b/i;
+const WEAK_EDIT_VERBS = /\b(complet\w*|llen[aeo]\w*|rellen\w*|diligenci\w*|cambia\w*|c[aá]mbia\w*|c[aá]mbi[aá]le|actualiz\w*|arregl\w*|p[oó]nle|ponle|mejora\w*|ajusta\w*|update\w*|change\w*|fix the|improve\w*|adjust\w*|uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*|rectific\w*|adapt\w*|reorient\w*|reenfoc\w*|alinea\w*|trabaj[ae](?:r|n|me|lo|la|le)?\s+(?:en|sobre|con)\b|rework\w*|revamp\w*|refocus\w*|realign\w*|retarget\w*)\b/i;
 
 const STYLE_EDIT_VERBS = /\b(uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*|pasa\w*|pon(?:er|ga|le|me|lo|la)?|cambia\w*|haz\w*)\b/i;
 const STYLE_EDIT_NOUNS = /\b(color(?:es)?|fondo|fondos|background|paleta|tipograf\w*)\b/i;
@@ -219,7 +219,10 @@ function isDocumentEditRequest(text) {
 // (explica, resume, qué dice…) never count.
 const FUZZY_EDIT_STEMS = ['agreg', 'anad', 'anhad', 'insert', 'incorpor', 'inclu', 'met', 'pon', 'ponl', 'coloc', 'escrib', 'redact',
   'complet', 'llen', 'rellen', 'marc', 'coment', 'edit', 'modif', 'modific', 'corrig', 'correg', 'cambi', 'reempl',
-  'sustitu', 'actualiz', 'quit', 'borr', 'elimin', 'mejor', 'arregl', 'ajust', 'renombr', 'reescrib', 'traduc', 'parafrase', 'numer'];
+  'sustitu', 'actualiz', 'quit', 'borr', 'elimin', 'mejor', 'arregl', 'ajust', 'renombr', 'reescrib', 'traduc', 'parafrase', 'numer',
+  'rectific', 'adapt', 'reorient', 'reenfoc', 'alinea', 'reformul', 'replante'];
+// «trabaja/traba en el word» is an edit; «trabajo en una empresa» is a noun.
+const FUZZY_WORK_ON_RE = /\b(?:trabaj[ae](?:r|n|me|lo|la|le)?|traba)\s+(?:en|sobre|con)\s+(?:el|la|los|las|mi|este|esta|ese|esa)?\s*(?:word|docx?|documento|archivo|informe|tesis|excel|xlsx|ppt|pptx|presentacion|reporte|texto)\b/;
 const FUZZY_DOC_TARGET_RE = /\b(?:documento|archivo|word|docx|excel|xlsx|hoja|celda|fila|columna|tabla|powerpoint|pptx|presentacion|diapositiva|slide|pdf|titulo|subtitulo|parrafo|seccion|capitulo|pagina|portada|anexo|informe|tesis|introduccion|conclusion(?:es)?|bibliografia|referencias|indice|encabezado|pie de pagina|vinetas?|grafico|observacion(?:es)?|comentarios?|campos?|casillas?|firma|formulario|matriz|ficha|items?|preguntas?|respuestas?|notas?|texto)\b/;
 const FUZZY_READ_ONLY_RE = /^\s*(?:explica|explicame|describe|resume|resumeme|analiza|revisa|que|como|por que|dime|cual|cuales|cuanto|no (?:edites|modifiques|reescribas|cambies))\b/;
 
@@ -238,6 +241,20 @@ function editDistanceAtMostOne(a, b) {
   return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
+// Damerau: one swap of two ADJACENT letters is the most common fast-typing
+// slip («mejroa» → «mejora», «nuievbo» → «nuevo»). Counts as one edit.
+function isAdjacentTransposition(a, b) {
+  if (a.length !== b.length || a.length < 2) return false;
+  let first = -1;
+  for (let k = 0; k < a.length; k += 1) {
+    if (a[k] === b[k]) continue;
+    if (first < 0) { first = k; continue; }
+    if (k !== first + 1) return false;
+    return a[first] === b[k] && a[k] === b[first] && a.slice(k + 1) === b.slice(k + 1);
+  }
+  return false;
+}
+
 // One-edit tolerance only against stems of 5+ letters: shorter stems make
 // ordinary words look like verbs ("comercial" ~ "comen").
 function fuzzyEditVerb(word) {
@@ -247,7 +264,11 @@ function fuzzyEditVerb(word) {
   // Actual color/place verbs still match their exact stems below.
   if (word === 'colores') return false;
   return FUZZY_EDIT_STEMS.some((stem) => word.startsWith(stem)
-    || (word.length >= 6 && stem.length >= 5 && editDistanceAtMostOne(word.slice(0, stem.length), stem)));
+    || (word.length >= 6 && stem.length >= 5 && (
+      editDistanceAtMostOne(word.slice(0, stem.length), stem)
+      || isAdjacentTransposition(word.slice(0, stem.length), stem)
+      || isAdjacentTransposition(word.slice(0, stem.length + 1), stem + word[stem.length])
+    )));
 }
 
 // "genera un documento nuevo de propuesta" creates, it does not edit.
@@ -260,6 +281,7 @@ function isFuzzyDocumentEditRequest(text) {
     .replace(/[^a-z0-9ñ\s]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!t || FUZZY_READ_ONLY_RE.test(t) || !FUZZY_DOC_TARGET_RE.test(t)) return false;
   if (FUZZY_NEW_DOC_RE.test(t) && !STRONG_EDIT_VERBS.test(t)) return false;
+  if (FUZZY_WORK_ON_RE.test(t)) return true;
   return t.split(' ').some(fuzzyEditVerb);
 }
 

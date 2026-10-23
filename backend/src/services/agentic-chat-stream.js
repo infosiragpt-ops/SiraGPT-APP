@@ -563,6 +563,34 @@ function officeEditSubstituteMessage(formats = []) {
     + 'El archivo original no se modificó. Vuelve a intentarlo y lo edito sobre la última versión.';
 }
 
+// Edit turn that produced NO file at all (the model answered with prose —
+// prod 2026-09-18: a paragraph of the old doc passed off as the work). The
+// user asked for a changed file; text is not that file.
+function officeEditNoFileMessage(formats = []) {
+  const noun = formats.length === 1
+    ? ({ pptx: 'la presentación', docx: 'el documento de Word', xlsx: 'el libro de Excel' }[formats[0]] || 'el documento')
+    : 'el documento';
+  return `No llegué a entregar ${noun} editado en este turno, así que no lo doy por hecho: el archivo original no se modificó. `
+    + 'Vuelve a pedirlo (puedes indicar las secciones a cambiar) y lo edito sobre la última versión.';
+}
+
+// Reasons where the turn legitimately ends without a file: the user must act
+// first (login, clarification, GitHub connection, cancel) or the failure is
+// already reported honestly by its own path.
+const OFFICE_EDIT_NO_FILE_EXEMPT_REASONS = new Set([
+  'image_edit_clarification_needed',
+  'github_connection_required',
+  'login_handoff_required',
+  'cancelled',
+  'aborted',
+  'source_preserving_document_edit_failed',
+  'source_preserving_document_validation_failed',
+  'verification_failed:artifact_delivery',
+  'generated_artifact_read_failed',
+  'agent_runner_failed',
+  'clarification_needed',
+]);
+
 function sourcePreservingResultValidation(item) {
   return item?.validation || item?.artifact?.validation || null;
 }
@@ -767,6 +795,41 @@ function resolveToolCallMode(provider, model) {
 
 const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
 const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\s*:?[\s\S]{1,120}$/i;
+
+// Editable office/document attachments (not pictures, not raw media).
+const EDITABLE_DOCUMENT_RE = /\.(docx?|xlsx?|xlsm|pptx?|odt|ods|odp|rtf|md|txt|csv)$/i;
+const EDITABLE_DOCUMENT_MIME_RE = /(wordprocessingml|msword|spreadsheetml|ms-excel|presentationml|ms-powerpoint|opendocument|text\/plain|text\/csv|text\/markdown)/i;
+// Read-only openers: the user asks ABOUT the files, not to work on them.
+const READ_ONLY_OPENER_RE = /^\s*(?:¿|¡)?\s*(?:qu[eé]|cu[aá]l(?:es)?|cu[aá]nt[oa]s?|c[oó]mo|por\s+qu[eé]|d[oó]nde|qui[eé]n(?:es)?|dime|expl[ií]ca(?:me)?|describe|resume|res[uú]me(?:me)?|compara|analiza|revisa|lee|identifica|extrae|traduce|de qu[eé] trata)(?=[\s,:;.!?¿¡]|$)/i;
+
+function isEditableDocumentAttachment(file) {
+  if (!file || typeof file !== 'object') return false;
+  const name = String(file.name || file.originalName || file.filename || '');
+  const mime = String(file.mimeType || file.mime || file.type || file.contentType || '');
+  if (/^image\//i.test(mime)) return false;
+  return EDITABLE_DOCUMENT_RE.test(name) || EDITABLE_DOCUMENT_MIME_RE.test(mime);
+}
+
+/**
+ * Picture + editable document in one turn with a substantive, non-question
+ * message ⇒ the picture is a reference for work on the document (new title,
+ * rubric photo, teacher's notes). The plain stream cannot read the pixels
+ * nor edit the file, so this goes to the loop. Pure Q&A openers stay out.
+ */
+function isReferencePictureForDocumentTurn(text, files = []) {
+  const t = String(text || '').trim();
+  if (t.length < 40) return false;
+  if (READ_ONLY_OPENER_RE.test(t)) return false;
+  if (!Array.isArray(files) || files.length < 2) return false;
+  let picture = false;
+  let document = false;
+  try {
+    const { isImageAttachment } = require('./agents/media-intent');
+    picture = files.some(isImageAttachment);
+  } catch (_) { picture = files.some((f) => /^image\//i.test(String((f && (f.mimeType || f.type)) || ''))); }
+  document = files.some(isEditableDocumentAttachment);
+  return picture && document;
+}
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
 // Stop reasons that already delivered a user-facing answer (and often
@@ -909,6 +972,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (isImageMediaRequest(text)) return true;
       } catch (_) { /* detector is best-effort */ }
     }
+    // Reference picture + editable document in the SAME turn («el título de
+    // la imagen va en el Word», «ajusta el informe a la foto del docente»):
+    // the picture carries instructions for the document, so the turn needs
+    // the loop (vision → document_edit). The plain stream can neither read
+    // the pixels nor touch the file; it used to echo a paragraph of the old
+    // doc instead (prod regression, 2026-09-18).
+    if (isReferencePictureForDocumentTurn(text, files)) return true;
     return isArtifactDeliverableRequest(text)
       || isDocumentEditRequest(text)
       || customGptPolicy.requiresSkill;
@@ -3405,6 +3475,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             message: substitutes.map((artifact) => artifact.filename).join(', ').slice(0, 300),
           });
         } catch (_) { /* advisory */ }
+      } else if (!delivered && state.artifacts.length === 0
+        && !OFFICE_EDIT_NO_FILE_EXEMPT_REASONS.has(String(stoppedReason || ''))
+        && !/^(?:verification_failed|login_handoff|clarification)/.test(String(stoppedReason || ''))) {
+        // Deliverable gate (code, not prompt): an edit of a Word/Excel/PPT
+        // that ends with prose and zero files is not done. Same honest
+        // failure contract as the substitute case; the original is untouched.
+        finalAnswer = officeEditNoFileMessage(officeEditFormats);
+        stoppedReason = 'source_preserving_document_edit_failed';
+        try {
+          require('./observability/turn-failures').noteTurn('tool_failure', {
+            tool: 'document_edit',
+            reason: 'office_edit_no_file',
+            fatal: true,
+            message: officeEditFormats.join(',').slice(0, 300),
+          });
+        } catch (_) { /* advisory */ }
       }
     }
     try {
@@ -4121,6 +4207,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       withWebReadBudget,
       withImageEditGuard,
       buildChatFinalizeProfile,
+      isReferencePictureForDocumentTurn,
+      isEditableDocumentAttachment,
+      officeEditNoFileMessage,
+      OFFICE_EDIT_NO_FILE_EXEMPT_REASONS,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
     },
