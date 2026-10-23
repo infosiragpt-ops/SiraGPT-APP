@@ -37,6 +37,8 @@ export const DESKTOP_RFB_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000]
 type RfbHandle = {
   viewOnly: boolean
   background?: string
+  qualityLevel?: number
+  compressionLevel?: number
   scaleViewport: boolean
   clipViewport: boolean
   resizeSession?: boolean
@@ -88,7 +90,14 @@ export function DesktopScreen({
   neutralRef.current = neutralBackground
   const defaultBackground = React.useRef<string | undefined>(undefined)
   React.useEffect(() => {
-    if (rfbRef.current) rfbRef.current.background = neutralBackground ? "#ffffff" : (defaultBackground.current || "#282828")
+    if (!rfbRef.current) return
+    rfbRef.current.background = neutralBackground ? "#ffffff" : (defaultBackground.current || "#282828")
+    if (neutralBackground) {
+      try {
+        rfbRef.current.qualityLevel = 9
+        rfbRef.current.compressionLevel = 0
+      } catch { /* ignore on read-only transport stubs */ }
+    }
   }, [neutralBackground])
   const [connected, setConnected] = React.useState(false)
   const [status, setStatus] = React.useState<"connecting" | "live" | "error">("connecting")
@@ -154,7 +163,13 @@ export function DesktopScreen({
         rfb = new Ctor(hostRef.current, viewerUrl, { shared: true })
         rfbRef.current = rfb
         defaultBackground.current = rfb.background
-        if (neutralRef.current) rfb.background = "#ffffff"
+        if (neutralRef.current) {
+          rfb.background = "#ffffff"
+          try {
+            rfb.qualityLevel = 9
+            rfb.compressionLevel = 0
+          } catch { /* ignore on read-only transport stubs */ }
+        }
         rfb.viewOnly = Boolean(viewOnly)
         // Scale the full 1920x1080 desktop into the host. clipViewport=true
         // was leaving a black unused half when the overlay aspect ≠ 16:9.
