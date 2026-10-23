@@ -196,7 +196,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `detect-libc` | 2.1.2 | Apache-2.0 | [link](https://github.com/lovell/detect-libc) |
 | `didyoumean` | 1.2.2 | Apache-2.0 | [link](https://github.com/dcporter/didyoumean.js) |
 | `docx-preview` | 0.3.7 | Apache-2.0 | [link](https://github.com/VolodymyrBaydalka/docxjs) |
-| `dompurify` | 3.4.13, 3.4.8 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
+| `dompurify` | 3.4.17 | MPL-2.0 OR Apache-2.0 | [link](https://github.com/cure53/DOMPurify) |
 | `drizzle-orm` | 0.45.2 | Apache-2.0 | [link](https://github.com/drizzle-team/drizzle-orm) |
 | `ecdsa-sig-formatter` | 1.0.11 | Apache-2.0 | [link](https://github.com/Brightspace/node-ecdsa-sig-formatter) |
 | `ejs` | 3.1.10 | Apache-2.0 | [link](https://github.com/mde/ejs) |
@@ -532,7 +532,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@monaco-editor/react` | 4.7.0 | MIT | [link](https://github.com/suren-atoyan/monaco-react) |
 | `@napi-rs/canvas` | 0.1.100, 1.0.8 | MIT | [link](https://github.com/Brooooooklyn/canvas) |
 | `@neondatabase/serverless` | 1.1.0 | MIT | [link](https://github.com/neondatabase/serverless) |
-| `@next/env` | 15.5.25 | MIT | [link](https://github.com/vercel/next.js) |
+| `@next/env` | 15.5.28 | MIT | [link](https://github.com/vercel/next.js) |
 | `@noble/hashes` | 1.8.0 | MIT | [link](https://github.com/paulmillr/noble-hashes) |
 | `@nodable/entities` | 2.1.0 | MIT | [link](https://github.com/nodable/val-parsers) |
 | `@node-saml/node-saml` | 5.1.0 | MIT | [link](https://github.com/node-saml/node-saml) |
@@ -1202,7 +1202,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `nanoid` | 3.3.18, 5.1.16 | MIT | [link](https://github.com/ai/nanoid) |
 | `napi-build-utils` | 2.0.0 | MIT | [link](https://github.com/inspiredware/napi-build-utils) |
 | `negotiator` | 0.6.3, 0.6.4, 1.0.0 | MIT | [link](https://github.com/jshttp/negotiator) |
-| `next` | 15.5.25 | MIT | [link](https://github.com/vercel/next.js) |
+| `next` | 15.5.28 | MIT | [link](https://github.com/vercel/next.js) |
 | `next-intl` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-intl-swc-plugin-extractor` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `next-themes` | 0.4.6 | MIT | [link](https://github.com/pacocoursey/next-themes) |
