@@ -4018,45 +4018,86 @@ summary:focus-visible,
 /* Embedded browser chrome: the live page owns every pixel below this header. */
 .sira-browser-window {
   overflow: hidden;
-  border: 1px solid #dedede;
+  border: 1px solid #dfe2e8;
   border-radius: 12px;
-  box-shadow: 0 1px 5px rgb(0 0 0 / 0.08);
+  box-shadow:
+    0 10px 30px -10px rgb(15 23 42 / 0.1),
+    0 2px 6px -1px rgb(15 23 42 / 0.05),
+    inset 0 1px 0 rgb(255 255 255 / 0.7);
 }
-.sira-browser-toolbar { font-family: Arial, Helvetica, sans-serif; }
+.sira-browser-toolbar {
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+}
+.sira-browser-toolbar[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, hsl(var(--celeste)) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: sira-browser-progress 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: 25;
+}
+@keyframes sira-browser-progress {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
 .sira-browser-tab-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  height: 34px;
+  height: 36px;
   min-width: 0;
-  padding: 3px 4px 1px;
+  padding: 4px 6px 2px;
+  background: linear-gradient(180deg, #f1f5f9 0%, #f8fafc 100%);
+  border-bottom: 1px solid rgb(15 23 42 / 0.05);
 }
-.sira-browser-tab-group { display: flex; align-items: center; gap: 2px; min-width: 0; }
-.sira-browser-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.sira-browser-tab-group { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.sira-browser-tabs { display: flex; align-items: center; gap: 3px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .sira-browser-tabs::-webkit-scrollbar { display: none; }
 .sira-browser-tab {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  max-width: 190px;
-  height: 26px;
-  border-radius: 7px;
+  max-width: 200px;
+  height: 27px;
+  border-radius: 8px;
+  color: #52525b;
+  transition: background-color 140ms ease, box-shadow 140ms ease, color 140ms ease;
 }
-.sira-browser-tab-active { background: #e9e9e9; }
+.sira-browser-tab:hover:not(.sira-browser-tab-active) {
+  background: rgb(15 23 42 / 0.045);
+  color: #18181b;
+}
+.sira-browser-tab-active {
+  background: #ffffff;
+  color: #09090b;
+  box-shadow:
+    0 1px 3px rgb(15 23 42 / 0.08),
+    0 0 0 1px rgb(15 23 42 / 0.06);
+}
 .sira-browser-tab-label {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 26px;
-  padding: 0 3px 0 7px;
-  border-radius: 6px;
-  font-size: 13px;
+  height: 27px;
+  padding: 0 4px 0 8px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   line-height: 1;
   text-align: left;
 }
 .sira-browser-site-icon { width: 14px; height: 14px; flex-shrink: 0; object-fit: contain; }
-.sira-browser-window-controls { display: flex; align-items: center; gap: 0; margin-left: auto; flex-shrink: 0; }
+.sira-browser-window-controls { display: flex; align-items: center; gap: 1px; margin-left: auto; flex-shrink: 0; }
 .sira-browser-button {
   display: inline-flex;
   flex-shrink: 0;
@@ -4064,54 +4105,92 @@ summary:focus-visible,
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 5px;
-  color: #262626;
-  transition: background-color 120ms ease;
+  border-radius: 6px;
+  color: #3f3f46;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-.sira-browser-button > svg { width: 15px; height: 15px; stroke-width: 1.7; }
-.sira-browser-button:hover { background-color: rgb(0 0 0 / 0.055); }
-.sira-browser-button:disabled { pointer-events: none; opacity: 0.4; }
+.sira-browser-button > svg { width: 15px; height: 15px; stroke-width: 1.75; }
+.sira-browser-button:hover { background-color: rgb(15 23 42 / 0.06); color: #09090b; }
+.sira-browser-button:disabled { pointer-events: none; opacity: 0.38; }
 .sira-browser-button:focus-visible, .sira-browser-tab-label:focus-visible { box-shadow: inset 0 0 0 2px hsl(var(--celeste)); }
 .sira-browser-button[aria-label="Anotar página"][aria-pressed="true"] { color: #0284c7; background-color: #e0f2fe; }
-.sira-browser-button.sira-browser-tab-close { width: 24px; height: 24px; margin-right: 1px; }
+.sira-browser-button.sira-browser-tab-close { width: 22px; height: 22px; margin-right: 2px; border-radius: 5px; }
 .sira-browser-tab-close > svg { width: 12px; height: 12px; }
-.sira-browser-navigation { display: flex; align-items: center; gap: 0; height: 34px; padding: 1px 4px 5px; min-width: 0; }
-.sira-browser-navigation > .sira-browser-button { width: 26px; }
-.sira-browser-address-wrap { position: relative; min-width: 0; flex: 1; margin: 0 7px; }
+.sira-browser-navigation { display: flex; align-items: center; gap: 1px; height: 36px; padding: 3px 6px 5px; min-width: 0; background: #ffffff; }
+.sira-browser-navigation > .sira-browser-button { width: 27px; height: 27px; }
+.sira-browser-address-wrap { position: relative; min-width: 0; flex: 1; margin: 0 6px; }
 input.sira-browser-address {
   width: 100%;
   min-width: 0;
-  height: 25px;
-  border: 1px solid #e4e4e4;
-  border-radius: 6px;
-  background: white;
-  padding: 0 27px 0 9px;
+  height: 27px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 0 28px 0 10px;
   outline: none;
-  font: 14px/1 Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1;
+  color: #0f172a;
   text-align: center;
-  box-shadow: 0 0 1px rgb(0 0 0 / 0.03);
+  box-shadow: inset 0 1px 2px rgb(15 23 42 / 0.02);
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
 }
-input.sira-browser-address::placeholder { color: #919191; text-align: left; }
-input.sira-browser-address:focus { text-align: left; }
+input.sira-browser-address:hover:not(:focus):not(:disabled) {
+  border-color: #cbd5e1;
+  background: #f1f5f9;
+}
+input.sira-browser-address::placeholder { color: #94a3b8; text-align: left; }
+input.sira-browser-address:focus { text-align: left; background: #ffffff; }
 input.sira-browser-address:disabled { opacity: 0.6; }
 input.sira-browser-address-display { color: transparent; }
 .sira-browser-address-label {
   position: absolute;
-  inset: 0 27px 0 9px;
+  inset: 0 28px 0 10px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   text-align: center;
-  line-height: 25px;
-  font-size: 14px;
+  line-height: 27px;
+  font-size: 13px;
+  letter-spacing: -0.01em;
   pointer-events: none;
 }
-.sira-browser-button.sira-browser-address-action { position: absolute; right: 2px; top: 1px; width: 23px; height: 23px; }
-.dark .sira-browser-window { border-color: #404040; }
-.dark .sira-browser-tab-active { background: #303030; }
-.dark .sira-browser-button { color: #e5e5e5; }
-.dark .sira-browser-button:hover { background-color: rgb(255 255 255 / 0.08); }
-.dark input.sira-browser-address { background: #18181b; border-color: #404040; }
+.sira-browser-button.sira-browser-address-action { position: absolute; right: 2px; top: 2px; width: 23px; height: 23px; }
+.sira-browser-window [data-testid="desktop-screen-canvas-host"] canvas {
+  display: block;
+  image-rendering: auto;
+}
+.dark .sira-browser-window {
+  border-color: #27272a;
+  box-shadow:
+    0 12px 32px -8px rgb(0 0 0 / 0.55),
+    0 2px 6px rgb(0 0 0 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+.dark .sira-browser-toolbar { background: #121215; }
+.dark .sira-browser-tab-row {
+  background: linear-gradient(180deg, #18181b 0%, #121215 100%);
+  border-bottom-color: rgb(255 255 255 / 0.06);
+}
+.dark .sira-browser-tab { color: #a1a1aa; }
+.dark .sira-browser-tab:hover:not(.sira-browser-tab-active) {
+  background: rgb(255 255 255 / 0.05);
+  color: #f4f4f5;
+}
+.dark .sira-browser-tab-active {
+  background: #27272a;
+  color: #fafafa;
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+.dark .sira-browser-navigation { background: #09090b; }
+.dark .sira-browser-button { color: #d4d4d8; }
+.dark .sira-browser-button:hover { background-color: rgb(255 255 255 / 0.08); color: #ffffff; }
+.dark input.sira-browser-address { background: #18181b; border-color: #27272a; color: #f4f4f5; }
+.dark input.sira-browser-address:hover:not(:focus):not(:disabled) { border-color: #3f3f46; background: #1f1f23; }
+.dark input.sira-browser-address:focus { background: #09090b; }
 @media (pointer: coarse) {
   .sira-browser-tab-row, .sira-browser-navigation { height: 44px; }
   .sira-browser-button, .sira-browser-navigation > .sira-browser-button { width: 36px; height: 36px; }
@@ -4121,7 +4200,10 @@ input.sira-browser-address-display { color: transparent; }
   .sira-browser-button.sira-browser-address-action { height: 32px; }
   .sira-browser-address-wrap { margin: 0 2px; }
 }
-@media (prefers-reduced-motion: reduce) { .sira-browser-button { transition: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .sira-browser-button, .sira-browser-tab, input.sira-browser-address { transition: none; }
+  .sira-browser-toolbar[aria-busy="true"]::after { animation: none; }
+}
 
 /* The address input keeps visible focus in both themes, including when
    the dark default-border utility is emitted after this stylesheet. */

@@ -48,6 +48,13 @@ function isPresentationRepair(action: ComputerBrowserAction | null): boolean {
 
 /** Phases that mean the agent computer is still coming up / working. */
 const IN_PROGRESS_PHASES = new Set(["starting", "loading", "building", "booting", "running"])
+// Explicit, user-clicked destinations only; the empty tab never navigates by itself.
+const QUICK_LINKS = [
+  { label: "Google", url: "https://www.google.com/" },
+  { label: "Wikipedia", url: "https://es.wikipedia.org/" },
+  { label: "YouTube", url: "https://www.youtube.com/" },
+  { label: "GitHub", url: "https://github.com/" },
+] as const
 
 export type AgentComputerLiveStatus = "starting" | "live" | "error" | "idle"
 
@@ -589,10 +596,21 @@ export function AgentComputerShell({
           points={stroke.points.map((point) => `${point.x},${point.y}`).join(" ")} fill="none" stroke={stroke.color}
           strokeWidth={stroke.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" pointerEvents="none"
         />)}</svg> : null}
-        {emptyBrowser ? <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white px-6 text-center dark:bg-zinc-950" data-testid="browser-empty-state">
-          <Globe className="h-7 w-7 text-zinc-400" aria-hidden />
-          <h2 className="text-lg font-medium">Navega con SiraGPT</h2>
-          <p className="max-w-sm text-sm leading-6 text-muted-foreground">Escribe una URL o pídele a SiraGPT que abra un sitio. Puedes navegar desde aquí.</p>
+        {emptyBrowser ? <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-gradient-to-b from-white to-slate-50 px-6 text-center dark:from-zinc-950 dark:to-[#0c0c0e]" data-testid="browser-empty-state">
+          <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-[0_6px_20px_-8px_rgb(15_23_42/0.18)] dark:border-zinc-800 dark:bg-zinc-900" aria-hidden>
+            <Globe className="h-6 w-6 text-sky-500" />
+          </span>
+          <div className="flex flex-col items-center gap-1.5">
+            <h2 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">Navega con SiraGPT</h2>
+            <p className="max-w-sm text-sm leading-6 text-muted-foreground">Escribe una URL o pídele a SiraGPT que abra un sitio. Puedes navegar desde aquí.</p>
+          </div>
+          <div className="flex max-w-md flex-wrap items-center justify-center gap-2" data-testid="browser-quick-links">
+            {QUICK_LINKS.map((link) => <button key={link.url} type="button" disabled={browserBusy || !browserSessionId}
+              className="no-default-focus-ring inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-zinc-700 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-700 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--celeste))] disabled:pointer-events-none disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-sky-700 dark:hover:text-sky-300"
+              onClick={() => { void browserNavigate(link.url).catch(() => undefined) }}>
+              <Globe className="h-3.5 w-3.5 text-zinc-400" aria-hidden />{link.label}
+            </button>)}
+          </div>
         </div> : null}
         {browserVisible && !browserState && !browserError && liveStatus !== "error" ? <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-white text-sm text-muted-foreground dark:bg-zinc-950" role="status"><PensandoBars size={20} />Preparando navegador…</div> : null}
         {isInProgress && !browserVisible ? (

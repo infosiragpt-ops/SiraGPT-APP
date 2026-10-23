@@ -285,7 +285,20 @@ function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, on
       <div className="sira-browser-address-wrap">
         <input ref={inputRef} aria-label="Dirección del navegador" data-testid="integrated-browser-url" placeholder="Escribe una URL" value={draft}
           disabled={!state} readOnly={busy} inputMode="url" autoCapitalize="none" autoCorrect="off" spellCheck={false}
-          onFocus={() => setAddressFocused(true)} onBlur={() => setAddressFocused(false)}
+          onFocus={(event) => {
+            setAddressFocused(true)
+            const field = event.currentTarget
+            requestAnimationFrame(() => { if (document.activeElement === field && !dirty.current) field.select() })
+          }}
+          onBlur={() => setAddressFocused(false)}
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return
+            event.preventDefault()
+            dirty.current = false
+            setLocalError(null)
+            setDraft(visibleAddress(active?.url))
+            event.currentTarget.blur()
+          }}
           onChange={(event) => { dirty.current = true; setDraft(event.target.value) }}
           className={cn("no-default-focus-ring sira-browser-address", addressParts && "sira-browser-address-display")} />
         {addressParts ? <span aria-hidden className="sira-browser-address-label"><span>{addressParts.host}</span><span className="text-zinc-400">{addressParts.tail}</span></span> : null}
