@@ -1573,7 +1573,7 @@ const ActionsDropdown = ({
   return (
     <TooltipProvider>
       <DropdownMenu dir="ltr" open={isOpen} onOpenChange={handleDropdownOpenChange}>
-        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange} delayDuration={300}>
+        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange} delayDuration={300} disableHoverableContent>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1587,7 +1587,7 @@ const ActionsDropdown = ({
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="top">
+          <TooltipContent side="top" className="composer-attach-tooltip">
             <p>Adjuntar archivos y herramientas</p>
           </TooltipContent>
         </Tooltip>

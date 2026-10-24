@@ -150,7 +150,9 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       return rect.width <= 1 && rect.height <= 1
     })).toBe(true)
     const before = await rowGeometry(busyRow)
+    // The attach tooltip must not intercept typing after the picker closes.
     await composer.locator("textarea").click()
+    await expect(composer.locator("textarea")).toBeFocused()
     await page.mouse.move(0, 0)
     await composer.screenshot({ path: testInfo.outputPath(`compact-documents-${viewport.width}.png`), animations: "disabled" })
     state.records.find((record) => record.name === wordName)!.processingStage = "ready"
