@@ -21,6 +21,8 @@
 
 const Ajv = require("ajv");
 const addFormats = require("ajv-formats");
+const { composeAbortSignals, throwIfAborted } = require("../../utils/abort-signals");
+const { raceWithSignal } = require("../../utils/async-guard");
 
 const {
   taskContractSchema,
@@ -186,23 +188,6 @@ function resolverTimeoutMs(explicit) {
 }
 
 /**
- * Resolve `promise`, but reject with a timeout error if it does not settle
- * within `ms`. A non-positive / non-finite `ms` disables the cap. The timer
- * is unref'd so it never keeps the process alive, and always cleared.
- */
-function raceWithTimeout(promise, ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return promise;
-  let timer = null;
-  const timeout = new Promise((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`task-contract-resolver timed out after ${ms}ms`)), ms);
-    if (timer && typeof timer.unref === "function") timer.unref();
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
-
-/**
  * Resolve a TaskContract for a raw user message.
  *
  * @param {object} args
@@ -265,18 +250,34 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
 
   // Try LLM with Structured Outputs first.
   if (effectiveOpenai && typeof effectiveOpenai.chat?.completions?.create === "function" && typeof goal === "string" && goal.trim().length > 0) {
+    // Both response formats share one planning budget. Aborting the same
+    // signal also stops the SDK fetch; racing it keeps compatibility with
+    // shims that do not yet honor cancellation themselves.
+    const deadline = composeAbortSignals([], {
+      timeoutMs: effTimeoutMs,
+      timeoutReason: `task-contract-resolver timed out after ${effTimeoutMs}ms`,
+    });
     try {
-      const request = (responseFormat) => raceWithTimeout(effectiveOpenai.chat.completions.create({
-        model: effectiveModel,
-        temperature: 0,
-        max_tokens: 1400,
-        messages: [
-          { role: "system", content: RESOLVER_SYSTEM_PROMPT },
-          ...fewShotMessages(),
-          { role: "user", content: goal + hint },
-        ],
-        response_format: responseFormat,
-      }), effTimeoutMs);
+      const request = (responseFormat) => {
+        throwIfAborted(deadline.signal);
+        return raceWithSignal(effectiveOpenai.chat.completions.create({
+          model: effectiveModel,
+          temperature: 0,
+          max_tokens: 1400,
+          messages: [
+            { role: "system", content: RESOLVER_SYSTEM_PROMPT },
+            ...fewShotMessages(),
+            { role: "user", content: goal + hint },
+          ],
+          response_format: responseFormat,
+        }, {
+          signal: deadline.signal,
+          // A billing 429 is terminal. Disable opaque SDK retries so the
+          // resolver can record the failure immediately and use its existing
+          // heuristic contract. Only format adaptation is retried below.
+          maxRetries: 0,
+        }), deadline.signal);
+      };
       // OpenAI Structured Outputs (strict json_schema) where the provider
       // takes it; DeepSeek only takes JSON mode (prod 2026-09-29: «400 This
       // response_format type is unavailable now»). Either way ajv validates
@@ -317,6 +318,8 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
         `fail:${effectiveProvider || 'client'}:${status || 'err'}:${String(err?.message || err).slice(0, 80)}`,
         `[task-contract-resolver] LLM resolve failed${effectiveProvider ? ` (${effectiveProvider}:${effectiveModel})` : ''}: ${err?.message || err}`,
       );
+    } finally {
+      deadline.cleanup();
     }
   }
 
@@ -395,7 +398,7 @@ function defaultCreateClient(target, env) {
   if (target.baseURL) opts.baseURL = target.baseURL;
   const timeoutMs = Number.parseInt(env.AGENT_TASK_LLM_TIMEOUT_MS || '', 10);
   opts.timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
-  opts.maxRetries = 1;
+  opts.maxRetries = 0;
   const client = new OpenAI(opts);
   if (target.provider === 'OpenAI') {
     try { return require('../ai/openai-sampling-params').wrapOpenAIChatClient(client); } catch (_) { return client; }

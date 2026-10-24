@@ -193,6 +193,10 @@ describe("enforcePlanQuota — FREE plan daily calls", () => {
     const { statusCode, payload } = res._state();
     assert.equal(statusCode, 429);
     assert.equal(payload.error, "Free daily queries exhausted. Please upgrade to continue.");
+    assert.equal(payload.code, "E_QUOTA");
+    assert.equal(payload.retryable, false);
+    assert.match(payload.message, /diario/i);
+    assert.ok(Number.isFinite(Date.parse(payload.resetAt)));
     assert.equal(payload.plan, "FREE");
     assert.equal(payload.remaining, 0);
     assert.equal(payload.upgradeRequired, true);
@@ -238,6 +242,11 @@ describe("enforcePlanQuota — Paid plan token accounting", () => {
     assert.equal(payload.plan, "PRO");
     assert.equal(payload.kind, "tokens");
     assert.equal(payload.upgradeRequired, false);
+    assert.equal(payload.error, "Plan quota exceeded");
+    assert.equal(payload.code, "E_QUOTA");
+    assert.equal(payload.retryable, false);
+    assert.match(payload.message, /cambiar de modelo no/i);
+    assert.equal(payload.resetAt, undefined, "paid balances have no invented reset date");
   });
 });
 

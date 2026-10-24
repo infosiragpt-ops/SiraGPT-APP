@@ -111,3 +111,138 @@ test('resolver: a fast, valid LLM response goes through the race unharmed (no fa
     restore();
   }
 });
+
+
+// Exercise the real SDK request options rather than a stub that ignores
+// automatic retries and AbortSignal propagation.
+const OpenAI = require('openai');
+const billing = require('../src/services/ai/billing-failover');
+const keyHealth = require('../src/utils/provider-key-health');
+const { __resetResolverForTests } = require('../src/services/agents/task-contract-resolver');
+const TRANSPORT_ENV = { OPENAI_API_KEY: 'resolver-transport-fixture' };
+
+function resetTransportHealth() {
+  billing.__resetForTests();
+  keyHealth.clear();
+  __resetResolverForTests();
+}
+
+function sdkResponse(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'retry-after-ms': '1' },
+  });
+}
+
+function validSdkResponse() {
+  return sdkResponse(200, { choices: [{ message: { content: JSON.stringify(FEW_SHOT_EXAMPLES[2].contract) } }] });
+}
+
+test('resolver transport: an unfunded 429 is sent once even when the caller SDK enables retries', async () => {
+  resetTransportHealth();
+  const payloads = [];
+  const client = new OpenAI({
+    apiKey: TRANSPORT_ENV.OPENAI_API_KEY,
+    maxRetries: 2,
+    fetch: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      return sdkResponse(429, { error: { message: 'You have no credits remaining.', code: 'insufficient_quota' } });
+    },
+  });
+  try {
+    const result = await resolveTaskContract({
+      goal: 'explica una fórmula', openai: client, env: TRANSPORT_ENV,
+      fallback: () => ({ fromHeuristic: true }), timeoutMs: 1000,
+    });
+    assert.equal(result.source, 'fallback');
+    assert.equal(result.contract.fromHeuristic, true);
+    assert.equal(payloads.length, 1, 'the SDK must not retry an unfunded account before the resolver records it');
+    assert.equal(payloads[0].model, 'gpt-4o-mini', 'the requested model stays unchanged');
+    assert.equal(billing.isOutOfCredit('OpenAI', TRANSPORT_ENV), true);
+  } finally { resetTransportHealth(); }
+});
+
+test('resolver transport: deadline aborts the SDK fetch before returning the heuristic contract', async () => {
+  resetTransportHealth();
+  let calls = 0;
+  let aborted = false;
+  let release = () => {};
+  const client = new OpenAI({
+    apiKey: TRANSPORT_ENV.OPENAI_API_KEY,
+    maxRetries: 2,
+    timeout: 2000,
+    fetch: (_url, init) => new Promise((resolve, reject) => {
+      calls += 1;
+      release = () => resolve(validSdkResponse());
+      init.signal.addEventListener('abort', () => {
+        aborted = true;
+        reject(new DOMException('Request aborted', 'AbortError'));
+      }, { once: true });
+    }),
+  });
+  try {
+    const result = await resolveTaskContract({
+      goal: 'explica una fórmula', openai: client, env: TRANSPORT_ENV,
+      fallback: () => ({ fromHeuristic: true }), timeoutMs: 40,
+    });
+    assert.equal(result.source, 'fallback');
+    assert.equal(aborted, true, 'returning a fallback must not leave the provider request running');
+    assert.equal(calls, 1, 'abortion must not trigger SDK retries');
+    assert.equal(billing.isOutOfCredit('OpenAI', TRANSPORT_ENV), false, 'timeouts are not billing failures');
+  } finally { release(); resetTransportHealth(); }
+});
+
+test('resolver transport: JSON adaptation shares the original deadline rather than starting a new budget', async () => {
+  resetTransportHealth();
+  let calls = 0;
+  let secondAborted = false;
+  const payloads = [];
+  const client = new OpenAI({
+    apiKey: TRANSPORT_ENV.OPENAI_API_KEY,
+    maxRetries: 2,
+    fetch: (_url, init) => new Promise((resolve, reject) => {
+      const current = ++calls;
+      payloads.push(JSON.parse(init.body));
+      const timer = setTimeout(() => {
+        init.signal.removeEventListener('abort', abort);
+        resolve(current === 1
+          ? sdkResponse(400, { error: { message: 'response_format json_schema is unsupported' } })
+          : validSdkResponse());
+      }, current === 1 ? 60 : 80);
+      const abort = () => {
+        clearTimeout(timer);
+        if (current === 2) secondAborted = true;
+        reject(new DOMException('Request aborted', 'AbortError'));
+      };
+      init.signal.addEventListener('abort', abort, { once: true });
+    }),
+  });
+  try {
+    const result = await resolveTaskContract({
+      goal: 'explica una fórmula', openai: client, env: TRANSPORT_ENV,
+      fallback: () => ({ fromHeuristic: true }), timeoutMs: 110,
+    });
+    assert.equal(calls, 2, 'the supported JSON adaptation is still attempted');
+    assert.deepEqual(payloads.map(p => p.response_format.type), ['json_schema', 'json_object']);
+    assert.equal(result.source, 'fallback', 'the second format does not receive another full timeout');
+    assert.equal(secondAborted, true);
+    assert.equal(billing.isOutOfCredit('OpenAI', TRANSPORT_ENV), false);
+  } finally { resetTransportHealth(); }
+});
+
+test('resolver transport: a successful request clears the deadline without aborting the completed transport', async () => {
+  resetTransportHealth();
+  let signal;
+  const client = new OpenAI({
+    apiKey: TRANSPORT_ENV.OPENAI_API_KEY,
+    fetch: async (_url, init) => { signal = init.signal; return validSdkResponse(); },
+  });
+  try {
+    const result = await resolveTaskContract({
+      goal: 'explica una fórmula', openai: client, env: TRANSPORT_ENV, timeoutMs: 40,
+    });
+    assert.equal(result.source, 'llm');
+    await new Promise(resolve => setTimeout(resolve, 70));
+    assert.equal(signal.aborted, false, 'successful requests must not retain a live deadline timer');
+  } finally { resetTransportHealth(); }
+});

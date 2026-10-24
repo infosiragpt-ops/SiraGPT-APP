@@ -4476,7 +4476,11 @@ class ApiClient {
     if (!response.ok || !response.body) {
       let details: any = {};
       try { details = await response.json(); } catch { /* non-JSON error body */ }
-      throw new Error(details.message || details.error || `HTTP ${response.status}`);
+      const error = withGenerateFailure(requestError(response.status, details));
+      // This edit may already be running on the server. Surface the failure,
+      // including its plan details, without automatically submitting it twice.
+      error.retryable = false;
+      throw error;
     }
     for await (const event of streamSseJson<DocumentEditStreamEvent>(response.body, { signal })) {
       if (event && typeof event === 'object' && typeof (event as { type?: unknown }).type === 'string') onEvent(event);

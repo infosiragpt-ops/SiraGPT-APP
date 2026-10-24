@@ -321,7 +321,7 @@ test('wiring: /document-edit forwards stage v2 and persists the timeline; the ed
   const route = ai.slice(ai.indexOf("'/document-edit',"), ai.indexOf("router.post('/stop-stream'"));
   assert.match(route, /const frame = \{ \.\.\.stage, type: 'stage' \};/);
   assert.match(route, /editorTrace\.push\(frame\)/);
-  assert.match(route, /null, null, 0, \{ activityTrace \},/);
+  assert.match(route, /null, null, 0, \{ activityTrace, skipUsageMetering \},/);
   const editor = read('src/services/document-editor/chat-document-editor.js');
   assert.match(editor, /deps\.makeVisualVerifier\(\{ pickedModel: llm\.model, env: deps\.env \}\)/);
   assert.match(editor, /\.\.\.\(visualVerify \? \{ visualVerify \} : \{\}\),/);

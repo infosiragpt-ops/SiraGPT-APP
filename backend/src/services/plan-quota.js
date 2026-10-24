@@ -236,6 +236,18 @@ async function fetchUserPlanQuota(userId, prisma) {
   }
 }
 
+// Keep the existing `error` discriminator at each call site while providing
+// a stable code and an actionable message to both chat and task clients.
+function planQuotaErrorDetails(kind) {
+  return {
+    code: 'E_QUOTA',
+    retryable: false,
+    message: kind === 'calls'
+      ? 'Alcanzaste el límite diario de consultas de tu plan gratuito. Espera a que se restablezca o amplía tu plan para continuar.'
+      : 'Alcanzaste el límite de uso de tu plan. Revisa tu consumo y amplía tu plan o solicita saldo adicional para continuar. Cambiar de modelo no restablece este límite.',
+  };
+}
+
 /**
  * checkPaidTokenCap — pure, synchronous "is this paid user over their
  * token cap?" check. This is the single source of truth for the
@@ -279,6 +291,7 @@ function checkPaidTokenCap(user, { message = 'Monthly API limit exceeded' } = {}
       ok: false,
       status: 429,
       body: {
+        ...planQuotaErrorDetails('tokens'),
         error: message,
         usage: { current: user.apiUsage, limit: user.monthlyLimit },
       },
@@ -395,6 +408,7 @@ async function tryConsumePlanQuota({ userId, prisma, user, hasAttachments = fals
         ok: false,
         status: 429,
         body: {
+          ...planQuotaErrorDetails('calls'),
           error: 'Free daily queries exhausted. Please upgrade to continue.',
           remaining: 0,
           dailyLimit: FREE_CALL_LIMIT,
@@ -435,6 +449,7 @@ module.exports = {
   fetchUserPlanQuota,
   tryConsumePlanQuota,
   checkPaidTokenCap,
+  planQuotaErrorDetails,
   recordApiUsage,
   FREE_CALL_LIMIT,
   WARNING_THRESHOLD,

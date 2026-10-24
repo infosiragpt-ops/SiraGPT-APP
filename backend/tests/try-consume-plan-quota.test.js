@@ -86,6 +86,11 @@ describe("tryConsumePlanQuota — FREE plan", () => {
     assert.equal(result.body.dailyLimit, 3);
     assert.equal(result.body.usedToday, 3);
     assert.equal(result.body.upgradeRequired, true);
+    assert.equal(result.body.code, "E_QUOTA");
+    assert.equal(result.body.retryable, false);
+    assert.match(result.body.message, /diario/i);
+    assert.match(result.body.message, /restablezca|restablece/i);
+    assert.ok(Number.isFinite(Date.parse(result.body.resetAt)));
   });
 });
 
