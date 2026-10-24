@@ -7,6 +7,8 @@
  * still dedupe, just with a weaker hash.
  */
 
+import { getAttachmentRelativePath } from './folder-selection'
+
 const FNV_OFFSET_BASIS = 0x811c9dc5
 const FNV_PRIME = 0x01000193
 
@@ -61,7 +63,7 @@ export interface DedupeResult<T extends File> {
   unique: T[]
   /** Files whose hash matched `existingHashes` or an earlier file in the batch. */
   duplicates: T[]
-  /** Content hash for bounded-size inputs (including duplicates). Large files are not hashed. */
+  /** Dedupe key for bounded inputs; folder entries include their relative path. */
   hashes: Map<T, string>
 }
 
@@ -83,7 +85,11 @@ export async function dedupeFiles<T extends File>(
     // Browser SHA requires an entire ArrayBuffer. Large recordings stay
     // file-backed; do not sample-hash and accidentally discard distinct audio.
     if (file.size > 8 * 1024 * 1024) { unique.push(file); continue }
-    const hash = await hashFile(file)
+    const contentHash = await hashFile(file)
+    // Identical templates in different folders are distinct selected documents.
+    // Keep content-only dedupe for ordinary picker/drop/paste attachments.
+    const relativePath = getAttachmentRelativePath(file)
+    const hash = relativePath ? `folder:${JSON.stringify([relativePath, contentHash])}` : contentHash
     hashes.set(file, hash)
     if (seen.has(hash)) {
       duplicates.push(file)

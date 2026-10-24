@@ -1362,13 +1362,18 @@ function buildCiraRuntimePromptBlock(bundle) {
   ].join('\n');
 }
 
-async function loadUserFile(fileRef, userId) {
+async function loadUserFile(fileRef, userId, clientMetadata = null) {
   const id = resolveFileId(fileRef);
   if (!id || !userId) return null;
   const file = await prisma.file.findFirst({
     where: { id, userId }
   });
-  return toProcessedFile(file);
+  const processed = toProcessedFile(file);
+  if (!processed) return null;
+  // Only enrich an owner-authorized record, and only with a validated display
+  // path. Client metadata cannot override names, MIME types or stored paths.
+  const [metadata] = messageAttachments.normalizeClientMetadata(clientMetadata ? [clientMetadata] : [], [id]);
+  return metadata?.relativePath ? { ...processed, relativePath: metadata.relativePath } : processed;
 }
 
 /**
@@ -3599,12 +3604,15 @@ router.post(
       let uploadedFileContextForTurn = '';
       let __attachmentsHandle = null;
       if (isAuth && files && files.length > 0) {
+        const folderMetadataById = new Map(messageAttachments.normalizeClientMetadata(
+          req.body.fileMetadata, files.map(resolveFileId),
+        ).map((file) => [file.id, file]));
         __attachmentsHandle = turnProgress.begin('attachments', turnProgressLib.attachmentsLabel(files, {
           recovered: Boolean(__recoveredFileRefs && __recoveredFileRefs.size > 0),
         }), { tool: 'read_file', kind: 'document', meta: { files: files.length } });
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
-            const processedFile = await loadUserFile(fileRef, userId);
+            const processedFile = await loadUserFile(fileRef, userId, folderMetadataById.get(resolveFileId(fileRef)));
             if (processedFile?.openaiFileId) {
               openaiFiles.push(processedFile.openaiFileId);
             }
@@ -7612,6 +7620,7 @@ router.post(
                     generatedArtifactRefs: __chatGeneratedRefs,
                     fileMetadata: (processedFiles || []).map((file) => ({
                       id: file && (file.id || file.fileId || file.uploadId || file.databaseId),
+                      ...(file?.relativePath ? { relativePath: file.relativePath } : {}),
                       mimeType: file && (file.mimeType || file.type || file.contentType),
                       name: file && (file.originalName || file.name || file.filename || file.path),
                     })).filter((file) => file.id || file.mimeType || file.name),

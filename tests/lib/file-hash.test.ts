@@ -53,6 +53,20 @@ describe('hashFile', () => {
 })
 
 describe('dedupeFiles', () => {
+  it('preserves identical documents in different folders while deduping repeated paths', async () => {
+    const a = makeFile('plantilla idéntica', 'informe.txt')
+    const b = makeFile('plantilla idéntica', 'informe.txt')
+    const again = makeFile('plantilla idéntica', 'informe.txt')
+    Object.defineProperty(a, 'webkitRelativePath', { value: 'Documentos/Legal/informe.txt' })
+    Object.defineProperty(b, 'webkitRelativePath', { value: 'Documentos/Finanzas/informe.txt' })
+    Object.defineProperty(again, 'webkitRelativePath', { value: 'Documentos/Legal/informe.txt' })
+    const result = await dedupeFiles([a, b, again])
+    expect(result.unique).toEqual([a, b])
+    expect(result.duplicates).toEqual([again])
+    const repeated = await dedupeFiles([again], result.hashes.values())
+    expect(repeated.duplicates).toEqual([again])
+  })
+
   it('marks same content with different names as duplicate', async () => {
     const first = makeFile('mismo contenido', 'informe.txt')
     const second = makeFile('mismo contenido', 'informe-copia.txt')

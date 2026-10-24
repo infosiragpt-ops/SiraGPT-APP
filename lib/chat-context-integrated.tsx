@@ -18,7 +18,7 @@ import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { looksLikeExplicitDocumentEdit } from "./document-sandbox-client"
-import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
+import { buildAgentFileMetadata, collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { deriveSmartChatTitle } from "./chat/smart-chat-title"
 import { filterTextCatalogModels, isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
@@ -1464,6 +1464,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         ? collectRecentDocumentContextIds(conversationForRouting)
         : [];
       const requestFileIds = normalizedFileIds.length > 0 ? normalizedFileIds : historicalDocumentFileIds;
+      const folderFileMetadata = buildAgentFileMetadata(displayFiles).flatMap((file) => (
+        file.relativePath ? [{ id: file.id, relativePath: file.relativePath }] : []
+      ));
 
       // Generate/persist the backend turn identity BEFORE the first attempt.
       // Offline/reload retries pass reusePending=true and reuse this exact key
@@ -1494,6 +1497,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             ...(options?.imageProvider ? { imageProvider: options.imageProvider } : {}),
             ...(options?.imageQuality ? { imageQuality: options.imageQuality } : {}),
             reasoningEffort: selectedEffort,
+            ...(folderFileMetadata.length ? { fileMetadata: folderFileMetadata } : {}),
             ...composerGenerateFlags(),
             ...(options?.codingWorkspace ? { codingWorkspace: true } : {}),
             ...(((lightweightTurn && !options?.codingWorkspace) || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),

@@ -2161,7 +2161,9 @@ class ApiClient {
     } = {}
   ): Promise<FileUploadResponse> {
     const formData = new FormData();
-    Array.from(files).forEach((file) => formData.append('files', file));
+    // Directory-picked Files may otherwise serialize webkitRelativePath as the
+    // multipart filename. Keep the original basename; folder paths are metadata.
+    Array.from(files).forEach((file) => formData.append('files', file, file.name));
     if (opts.sourceChannel) formData.append('sourceChannel', opts.sourceChannel);
     if (opts.asyncProcessing) formData.append('asyncProcessing', '1');
 

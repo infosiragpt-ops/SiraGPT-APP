@@ -377,6 +377,15 @@ function normalizeClientLongPasteMeta(file = {}) {
   };
 }
 
+// Display/context metadata only. Never use this value as a filesystem path.
+function normalizeAttachmentRelativePath(value) {
+  if (typeof value !== 'string' || !value || value.length > 1024) return null;
+  if (/[\\\u0000-\u001f\u007f]/.test(value) || value.startsWith('/') || /^[a-z]:/i.test(value)) return null;
+  const segments = value.split('/');
+  if (segments.length < 2 || segments.length > 64 || segments.some(part => !part || part === '.' || part === '..')) return null;
+  return value;
+}
+
 function normalizeClientMetadata(input, fileIds = []) {
   if (!Array.isArray(input)) return [];
   const allowed = new Set((Array.isArray(fileIds) ? fileIds : []).map(String));
@@ -386,8 +395,10 @@ function normalizeClientMetadata(input, fileIds = []) {
       const id = safeText(file.id || file.fileId || file.attachmentId, '');
       if (!id || (allowed.size > 0 && !allowed.has(id))) return null;
       const longPasteMeta = normalizeClientLongPasteMeta(file);
+      const relativePath = normalizeAttachmentRelativePath(file.relativePath);
       return {
         id,
+        ...(relativePath ? { relativePath } : {}),
         name: safeText(file.name, ''),
         originalName: safeText(file.originalName || file.filename, ''),
         filename: safeText(file.filename, ''),
@@ -941,6 +952,7 @@ function serializeAttachmentRows({ ids, rowsById, clientMetadata = [], userId })
     return {
       id,
       name: displayName,
+      ...(meta.relativePath ? { relativePath: meta.relativePath } : {}),
       originalName: displayName,
       filename,
       mimeType: mimeType || null,

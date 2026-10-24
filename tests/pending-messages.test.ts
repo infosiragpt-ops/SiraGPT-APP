@@ -90,6 +90,21 @@ describe("pending-messages · save / clear / get round-trip", () => {
     assert.equal(payload.imageQuality, imagePick.imageQuality)
   })
 
+  it("replays the original folder metadata after reload without borrowing another selection", () => {
+    const metadata = [{ id: "image-1", relativePath: "Referencias/Marca/reference.png" }]
+    const pending = save("analiza esta referencia", "chat-1", ["image-1"], undefined, "folder-turn", {
+      provider: "OpenAI", model: "chat-model", fileMetadata: metadata,
+    })
+    const payload = buildPendingGeneratePayload({
+      pending: getForChat("chat-1"),
+      fallbackEnvelope: { provider: "OpenAI", model: "chat-model", fileMetadata: [{ id: "other", relativePath: "Otra/imagen.png" }] },
+      prompt: pending.content, chatId: pending.chatId, files: pending.fileIds,
+      streamId: "stream", idempotencyKey: pending.idempotencyKey,
+    })
+    assert.deepEqual(payload.fileMetadata, metadata)
+    assert.deepEqual(payload.files, ["image-1"])
+  })
+
   it("saving twice for the same chat REPLACES the previous draft", () => {
     save("first attempt", "chat-1", undefined, undefined, "same-turn")
     save("second attempt", "chat-1", undefined, undefined, "same-turn")
