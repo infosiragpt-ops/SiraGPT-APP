@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test"
 
 /**
  * «+ → Skills» (claude.ai style) on /agentes: the item sits right under
- * «Subir documento», «Modo de voz» is gone, a picked skill shows as a
+ * «Agregar carpeta», after «Subir documento», «Modo de voz» is gone, a picked skill shows as a
  * composer chip and travels as `skills: [name]` on /api/ai/generate.
  * APIs are stubbed so CI never bills.
  */
@@ -130,7 +130,7 @@ async function openComposer(page: Page) {
   return composer
 }
 
-test("the + menu offers Skills under «Subir documento» and no «Modo de voz»", async ({ page }) => {
+test("the + menu offers document and folder uploads before Skills and no «Modo de voz»", async ({ page }) => {
   await mockApi(page, [])
   await openComposer(page)
   await expect(page.getByTestId("chat-computer-badge")).toBeVisible()
@@ -140,7 +140,8 @@ test("the + menu offers Skills under «Subir documento» and no «Modo de voz»"
   const labels = (await items.allInnerTexts()).map((text) => text.split("\n")[0].trim())
   const upload = labels.indexOf("Subir documento")
   expect(upload, labels.join(" | ")).toBeGreaterThanOrEqual(0)
-  expect(labels[upload + 1], labels.join(" | ")).toBe("Skills")
+  expect(labels[upload + 1], labels.join(" | ")).toBe("Agregar carpeta")
+  expect(labels[upload + 2], labels.join(" | ")).toBe("Skills")
   expect(labels.join(" | ")).not.toMatch(/Modo de voz/)
 
   await page.getByTestId("chat-skills-trigger").hover()

@@ -1,5 +1,6 @@
 import { isActiveProcessingStage, type FileProcessingStage } from "../file-processing-vocab"
 import { getLongPasteMetadata, type LongPasteMetadata } from "../long-paste"
+import { getAttachmentRelativePath } from "../attachments/folder-selection"
 
 type ComposerFileRecord = {
   id?: unknown
@@ -25,6 +26,7 @@ type ComposerFileRecord = {
   size?: unknown
   openaiFileId?: unknown
   sourceChannel?: unknown
+  relativePath?: unknown
   isLongPasteDocument?: unknown
   longPasteTitle?: unknown
   longPastePreview?: unknown
@@ -34,6 +36,7 @@ type ComposerFileRecord = {
 
 export type AgentFileMetadata = {
   id: string
+  relativePath?: string
   name: string
   originalName: string
   filename: string
@@ -553,6 +556,7 @@ export function buildAgentFileMetadata(files: readonly unknown[] = []): AgentFil
 
     return [{
       id,
+      ...(getAttachmentRelativePath(candidate) ? { relativePath: getAttachmentRelativePath(candidate)! } : {}),
       name: displayName,
       originalName: displayName,
       filename: String(candidate.filename || candidate.name || displayName),
@@ -584,6 +588,7 @@ export type AttachmentMediaMeta = {
 
 export type MessageFileSnapshot = {
   id: string | null
+  relativePath?: string
   tempId: string | null
   name: string
   originalName: string
@@ -793,6 +798,7 @@ export function snapshotComposerFilesForMessage(files: readonly unknown[] = []):
 
     return [{
       id: resolveUploadFileId(candidate),
+      ...(getAttachmentRelativePath(candidate) ? { relativePath: getAttachmentRelativePath(candidate)! } : {}),
       tempId: optionalString(candidate.tempId),
       name: displayName,
       originalName: String(candidate.originalName || displayName),

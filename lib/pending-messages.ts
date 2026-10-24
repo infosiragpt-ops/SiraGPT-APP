@@ -91,6 +91,8 @@ export interface PendingAIRequestEnvelope {
   pinnedAppIds?: string[]
   /** Agent Skills picked in the composer («+ → Skills») for this turn. */
   skills?: string[]
+  /** Folder paths stay with their original turn across an offline/reload retry. */
+  fileMetadata?: Array<{ id: string; relativePath: string }>
 }
 
 export interface PendingGeneratePayload extends PendingAIRequestEnvelope {

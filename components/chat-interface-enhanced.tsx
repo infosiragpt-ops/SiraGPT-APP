@@ -29,6 +29,7 @@ import {
   Brain,
   File as FileIcon,
   FolderOpen,
+  FolderPlus,
   Chrome,
   AppWindow,
   Network,
@@ -356,6 +357,7 @@ import { analyzePastedContent, type PasteCaptureResult, type PasteCaptureAction 
 import { routePaste } from "@/lib/attachments/paste-router"
 import { htmlToMarkdown } from "@/lib/attachments/html-to-markdown"
 import { dedupeFiles } from "@/lib/attachments/file-hash"
+import { getAttachmentRelativePath, prepareFolderSelection } from "@/lib/attachments/folder-selection"
 import { extractAudioMeta, extractVideoMeta, scheduleMediaMetadata } from "@/lib/attachments/media-meta"
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
@@ -1236,6 +1238,7 @@ const ActionsDropdown = ({
 
 }: any) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const folderInputRef = React.useRef<HTMLInputElement | null>(null);
   const [isOpen, setIsOpen] = React.useState(false);
   const [appsOpen, setAppsOpen] = React.useState(false);
   const [mobileAppsOpen, setMobileAppsOpen] = React.useState(false);
@@ -1264,6 +1267,27 @@ const ActionsDropdown = ({
       handleAndUploadFiles(e.target.files);
       // Clear the input to allow re-uploading the same file
       e.target.value = '';
+      setIsOpen(false);
+    }
+  };
+
+  const handleFolderUpload = (event?: Event | React.SyntheticEvent) => {
+    event?.preventDefault?.();
+    folderInputRef.current?.click();
+  };
+
+  const handleFolderSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selection = prepareFolderSelection(Array.from(e.target.files || []));
+    e.target.value = '';
+    if (selection.skipped > 0) {
+      toast.info(`Se omitieron ${selection.skipped} archivos ocultos, de sistema o con una ruta no válida.`);
+    }
+    if (selection.files.length > 0) {
+      track("chat.file_uploaded", {
+        count: selection.files.length,
+        total_bytes: selection.files.reduce((sum, file) => sum + file.size, 0),
+      });
+      handleAndUploadFiles(filesToFileList(selection.files), 'folder-picker');
       setIsOpen(false);
     }
   };
@@ -1549,7 +1573,7 @@ const ActionsDropdown = ({
   return (
     <TooltipProvider>
       <DropdownMenu dir="ltr" open={isOpen} onOpenChange={handleDropdownOpenChange}>
-        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange} delayDuration={300}>
+        <Tooltip open={tooltipOpen} onOpenChange={handleTooltipOpenChange} delayDuration={300} disableHoverableContent>
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1563,7 +1587,7 @@ const ActionsDropdown = ({
               </Button>
             </DropdownMenuTrigger>
           </TooltipTrigger>
-          <TooltipContent side="top">
+          <TooltipContent side="top" className="composer-attach-tooltip">
             <p>Adjuntar archivos y herramientas</p>
           </TooltipContent>
         </Tooltip>
@@ -1593,6 +1617,22 @@ const ActionsDropdown = ({
               </div>
             </div>
           </DropdownMenuItem>
+          <DropdownMenuItem
+            className="liquid-menu-item"
+            data-testid="composer-add-folder"
+            onSelect={handleFolderUpload}
+            disabled={isUploading || isGeneratingImage}
+          >
+            <div className="flex items-center gap-3 w-full">
+              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-blue-100 dark:bg-blue-900/20 flex items-center justify-center">
+                <FolderPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="liquid-label font-medium text-sm">Agregar carpeta</div>
+                <div className="truncate text-xs text-muted-foreground">Adjunta sus archivos y subcarpetas</div>
+              </div>
+            </div>
+          </DropdownMenuItem>
           {/* No `accept` filter on purpose: the picker offers every file the OS
               can hand us. Size caps, Office lock-file detection and the
               backend byte-level policy still run on every selection. */}
@@ -1604,7 +1644,18 @@ const ActionsDropdown = ({
             data-accepts-any-format="true"
             onChange={handleFilesSelected}
           />
-          {/* Agent Skills (claude.ai style): right under «Subir documento». */}
+          <input
+            ref={(node) => {
+              folderInputRef.current = node;
+              node?.setAttribute('webkitdirectory', '');
+            }}
+            type="file"
+            multiple
+            className="hidden"
+            data-testid="composer-folder-input"
+            onChange={handleFolderSelected}
+          />
+          {/* Agent Skills follow the document and folder upload actions. */}
           {composerSkills ? <SkillsMenu skills={composerSkills} /> : null}
           {/* Web Search */}
           <DropdownMenuItem
@@ -2188,7 +2239,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                   <ComposerDocumentRow
                     name={file.name || file.originalName || "Documento"}
                     mimeType={file.type || file.mimeType}
-                    details={[describeAttachmentKind(file).label, formatChipBytes(file.size)].filter(Boolean).join(" · ")}
+                    details={[getAttachmentRelativePath(file), describeAttachmentKind(file).label, formatChipBytes(file.size)].filter(Boolean).join(" · ")}
                     uploading={isUploading}
                     progress={thumbProgress}
                     canPreview={canPreview}
@@ -9169,6 +9220,7 @@ But first, you need to connect your Spotify account securely using the button be
         preview,
         file,
         sourceChannel,
+        relativePath: getAttachmentRelativePath(file),
         longPasteMeta,
         isLongPasteDocument: Boolean(longPasteMeta),
         mediaMeta: null as null | { durationSeconds?: number; peaks?: number[]; thumbnailDataUrl?: string | null },
@@ -9300,6 +9352,7 @@ But first, you need to connect your Spotify account securely using the button be
               file: chunkTemps[idx]?.file ?? f.file,
               preview: chunkTemps[idx]?.preview ?? f.preview,
               sourceChannel,
+              relativePath: chunkTemps[idx]?.relativePath || null,
               longPasteMeta: chunkTemps[idx]?.longPasteMeta ?? f.longPasteMeta,
               isLongPasteDocument: chunkTemps[idx]?.isLongPasteDocument || Boolean(f.isLongPasteDocument),
               mediaMeta: chunkTemps[idx]?.mediaMeta ?? f.mediaMeta ?? null,
