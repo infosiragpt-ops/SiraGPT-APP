@@ -258,6 +258,12 @@ async function fixture(testContext, options = {}) {
       throw new Error(`Unconfigured route dependency: ${name}`);
     },
   };
+  // The route now resolves IDs while joining folder metadata. Execute its real
+  // helper in this isolated route harness, as it exists in the production module.
+  const fileIdStart = routeSource.indexOf('function resolveFileId(');
+  const fileIdEnd = routeSource.indexOf('\nfunction isImageMime(', fileIdStart);
+  assert.ok(fileIdStart >= 0 && fileIdEnd > fileIdStart);
+  vm.runInNewContext(routeSource.slice(fileIdStart, fileIdEnd), context, { filename: routeFile });
   vm.runInNewContext(routeSource.slice(generateStart, generateEnd), context, { filename: routeFile });
   vm.runInNewContext(routeSource.slice(stopStart, stopEnd), context, { filename: routeFile });
   const app = express();
