@@ -238,6 +238,17 @@ describe("checkPaidTokenCap — paid token cap gate", () => {
     assert.deepEqual(res.body.usage, { current: 500, limit: 500 });
   });
 
+  test("a paid quota rejection carries an actionable stable error without changing the cap", () => {
+    const rejected = checkPaidTokenCap({ apiUsage: 500n, monthlyLimit: 500n });
+    assert.equal(rejected.body.error, "Monthly API limit exceeded", "legacy consumers keep their discriminator");
+    assert.equal(rejected.body.code, "E_QUOTA");
+    assert.equal(rejected.body.retryable, false);
+    assert.match(rejected.body.message, /límite.*plan/i);
+    assert.match(rejected.body.message, /consumo|saldo/i);
+    assert.match(rejected.body.message, /cambiar de modelo no/i);
+    assert.deepEqual(checkPaidTokenCap({ apiUsage: 499n, monthlyLimit: 500n }), { ok: true });
+  });
+
   test("over cap → 429 with usage echoing the raw counters", () => {
     const res = checkPaidTokenCap({ apiUsage: 750, monthlyLimit: 500 });
     assert.equal(res.ok, false);

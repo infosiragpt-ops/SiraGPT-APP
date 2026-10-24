@@ -36,8 +36,10 @@
 
 const {
   getPlanQuotaSnapshot,
+  getFreeDailyWindow,
   countFreeDailyCalls,
   isPlanQuotaExempt,
+  planQuotaErrorDetails,
   WARNING_THRESHOLD,
 } = require('../services/plan-quota');
 const prisma = require('../config/database');
@@ -154,6 +156,8 @@ function enforcePlanQuota(options = {}) {
 
         if (snapshot.exceeded) {
           return res.status(429).json({
+            ...planQuotaErrorDetails(snapshot.kind),
+            ...(snapshot.kind === 'calls' ? { resetAt: getFreeDailyWindow(new Date(), env).end.toISOString() } : {}),
             error: snapshot.plan === 'FREE'
               ? 'Free daily queries exhausted. Please upgrade to continue.'
               : 'Plan quota exceeded',

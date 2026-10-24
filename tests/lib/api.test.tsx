@@ -24,6 +24,22 @@ describe('api client core', () => {
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue(null)
   })
 
+
+  it('preserves document quota details and Spanish guidance without retrying the request', async () => {
+    const body = { error: 'Monthly API limit exceeded', code: 'E_QUOTA', message: 'Alcanzaste el límite de tu plan. Revisa tu consumo.', retryable: false, usage: { current: 100, limit: 100 } }
+    mockFetch.mockResolvedValue(new Response(JSON.stringify(body), { status: 429 }))
+    await expect(api.editDocumentStream({ prompt: 'corrige', chatId: 'chat-1', fileIds: ['doc-1'], model: 'test-model', provider: 'test-provider', streamId: 'stream-1', idempotencyKey: 'turn-1' }, vi.fn()))
+      .rejects.toMatchObject({ message: body.message, code: 'E_QUOTA', status: 429, kind: 'quota', retryable: false, errorData: body })
+    expect(mockFetch).toHaveBeenCalledOnce()
+  })
+
+  it('translates legacy document quota errors without mistaking them for retryable throttling', async () => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ error: 'Monthly API limit exceeded', usage: { current: 100, limit: 100 } }), { status: 429 }))
+    await expect(api.editDocumentStream({ prompt: 'corrige', chatId: 'chat-1', fileIds: ['doc-1'], model: 'test-model', provider: 'test-provider', streamId: 'stream-1', idempotencyKey: 'turn-1' }, vi.fn()))
+      .rejects.toMatchObject({ status: 429, kind: 'quota', retryable: false, message: expect.stringMatching(/plan/) })
+    expect(mockFetch).toHaveBeenCalledOnce()
+  })
+
   it('requests the owned billing portal through a CSRF-aware POST without client customer or return URL', async () => {
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('test-csrf')
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ url: 'https://billing.stripe.com/p/session_example' }), { status: 200 }))

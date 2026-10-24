@@ -10185,7 +10185,7 @@ router.post(
       const { createActivityTraceCollector, createArtifactThumbSaver } = require('../services/agent-runner/activity-trace');
       editorTrace = createActivityTraceCollector({ saveThumb: createArtifactThumbSaver({ userId }) });
     } catch (_) { editorTrace = null; }
-    const persist = async (content, assistantFiles = []) => {
+    const persist = async (content, assistantFiles = [], { skipUsageMetering = false } = {}) => {
       let activityTrace = null;
       try { activityTrace = editorTrace ? editorTrace.toMetadata() : null; } catch (_) { activityTrace = null; }
       try {
@@ -10193,7 +10193,7 @@ router.post(
           userId, chatId, prompt, content, prompt.length + content.length, actualModel,
           processedFiles, assistantFiles, false,
           { idempotencyKey, streamId, source: 'document-editor' }, userPlan,
-          null, null, 0, { activityTrace },
+          null, null, 0, { activityTrace, skipUsageMetering },
         );
         return saved?.assistantMessage?.id || null;
       } catch (saveErr) {
@@ -10223,7 +10223,11 @@ router.post(
       });
       const files = toAssistantFiles(result.artifacts || []);
       const { deliverDocumentEdit } = require('../services/document-editor/deliver-edit');
-      send(await deliverDocumentEdit({ result, files, persist, chatId }));
+      // An unchanged document is a valid answer. Failures still belong in the
+      // conversation, but must not spend the user's successful-use quota.
+      const completed = result.ok === true || result.code === 'NO_CHANGES_NEEDED';
+      const persistResult = (content, savedFiles) => persist(content, savedFiles, { skipUsageMetering: !completed });
+      send(await deliverDocumentEdit({ result, files, persist: persistResult, chatId }));
     } catch (err) {
       const cancelled = !editBudgetExceeded && (controller.signal.aborted || isAbortError(err));
       // The model's provider failed: which model and which cause (sin saldo,
@@ -10256,7 +10260,7 @@ router.post(
       if (editBudgetExceeded) {
         try { turnFailures.noteTurn('provider_failure', { code: 'timeout', message: `document-edit superó ${Math.round(editBudgetMs / 1000)} s` }); } catch (_) { /* tracker optional */ }
       }
-      const assistantMessageId = await persist(content);
+      const assistantMessageId = await persist(content, [], { skipUsageMetering: true });
       send({ type: 'done', ok: false, code: editBudgetExceeded ? 'TIMEOUT' : cancelled ? 'CANCELLED' : 'FAILED', content, files: [], assistantMessageId, chatId });
     } finally {
       clearTimeout(editBudgetTimer);

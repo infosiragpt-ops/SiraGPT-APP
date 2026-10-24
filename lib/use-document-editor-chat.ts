@@ -55,14 +55,14 @@ export function useDocumentEditorChat(options: Options) {
     }
     signal?.throwIfAborted()
     const chatId = chat.id
-    const now = Date.now()
-    const userMessage = { id: `msg-user-doc-${now}`, chatId, role: "USER" as const, content: prompt,
+    const turnId = safeUUID()
+    const userMessage = { id: `msg-user-doc-${turnId}`, chatId, role: "USER" as const, content: prompt,
       timestamp: new Date().toISOString(), files: snapshotComposerFilesForMessage([...attachments]) }
     // One timeline for the whole turn: the editor's stage frames (stage v2 —
     // one row per tool call, thumbnails, detail) feed the activity log that
     // ActivityRail renders; the answer replaces nothing but the empty content.
     let activity: ActivityStep[] = appendActivity([], { label: "Preparando la edición", tool: "document_edit" })
-    const assistantMessage = { id: `msg-ai-doc-${now}`, chatId, role: "ASSISTANT" as const, content: "",
+    const assistantMessage = { id: `msg-ai-doc-${turnId}`, chatId, role: "ASSISTANT" as const, content: "",
       activityLog: activity, activityRail: true, timestamp: new Date().toISOString() }
     latest.current.setCurrentChat((current) => current?.id === chatId
       ? { ...current, messages: [...(current.messages || []), userMessage, assistantMessage] }
@@ -73,6 +73,7 @@ export function useDocumentEditorChat(options: Options) {
     latest.current.markBusy(chatId, run.controller)
     let started = false
     let finished = false
+    let persisted = false
     const settle = (content: string, files?: unknown[], failed = false) => {
       finished = true
       activity = failed
@@ -92,6 +93,7 @@ export function useDocumentEditorChat(options: Options) {
           return
         }
         if (event.type === "done") {
+          persisted = Boolean(event.assistantMessageId)
           // «Ya estaba así» (NO_CHANGES_NEEDED) is an answer, not a failure.
           const failed = !event.ok && event.code !== "CANCELLED" && event.code !== "NO_CHANGES_NEEDED"
           settle(event.content, event.files, failed)
@@ -103,11 +105,11 @@ export function useDocumentEditorChat(options: Options) {
       if (run.controller.signal.aborted) {
         if (!finished) settle(DOCUMENT_EDIT_STOPPED)
       } else if (!started) {
-        // Rejected before the server accepted the edit (permission, plan,
-        // connection): drop the optimistic turn so the composer keeps the draft.
-        latest.current.setCurrentChat((current) => current?.id === chatId
-          ? { ...current, messages: current.messages.filter((message) => message.id !== userMessage.id && message.id !== assistantMessage.id) }
-          : current)
+        // Keep the request and its files visible even when preflight rejects it.
+        // The caller restores the draft and shows one notification; it must not
+        // retry the edit automatically or replace this turn with server history.
+        const message = error instanceof Error && error.message ? error.message : "No se pudo iniciar la edición del documento."
+        settle(message, undefined, true)
         throw error
       } else if (!finished) {
         const message = error instanceof Error && error.message ? error.message : "No se pudo completar la edición del documento."
@@ -119,7 +121,7 @@ export function useDocumentEditorChat(options: Options) {
       latest.current.markIdle(chatId, run.controller)
     }
     // Replace optimistic ids with the persisted turn when it is still on screen.
-    if (latest.current.currentChat?.id === chatId) void latest.current.selectChat(chatId)
+    if (persisted && latest.current.currentChat?.id === chatId) void latest.current.selectChat(chatId)
     return true
   }, [updateMessage])
 
