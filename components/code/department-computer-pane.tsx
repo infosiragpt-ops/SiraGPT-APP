@@ -583,9 +583,9 @@ export function DepartmentComputerPane({
   }, [session?.sessionId, desktopLease?.sessionId, chatId, loading, exhausted, handleViewerConnectionError])
 
   React.useEffect(() => {
-    if (!preferAgentComputer || !session?.sessionId || loading) return
+    if (!preferAgentComputer || browserMode || !session?.sessionId || loading) return
     void focusDesktopApp("chrome", chatId || null).catch(() => undefined)
-  }, [preferAgentComputer, session?.sessionId, loading, chatId])
+  }, [preferAgentComputer, browserMode, session?.sessionId, loading, chatId])
 
   const chooseDock = React.useCallback((next: DepartmentComputerDock) => {
     setDock(next)

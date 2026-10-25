@@ -14893,7 +14893,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   : coworkPanelOpen
                     ? 'clamp(320px, 42vw, 720px)'
                   : (codePanelOpen || computerPanelOpen)
-                    ? 'clamp(320px, 48vw, 880px)'
+                    ? `clamp(320px, ${100 - effectiveSplitRatio}%, 1160px)`
                   : searchActivityPanelOpen
                     ? `clamp(${SEARCH_ACTIVITY_RIGHT_MIN_PX}px, 34vw, ${SEARCH_ACTIVITY_RIGHT_MAX_PX}px)`
                   : `clamp(${SPLIT_RIGHT_MIN_PX}px, ${100 - effectiveSplitRatio}%, 62%)`,

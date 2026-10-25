@@ -4200,6 +4200,96 @@ input.sira-browser-address-display { color: transparent; }
   .sira-browser-button.sira-browser-address-action { height: 32px; }
   .sira-browser-address-wrap { margin: 0 2px; }
 }
+@media (min-width: 640px) and (pointer: fine) {
+  .sira-browser-tab-row {
+    height: 40px;
+    padding: 5px 8px 3px;
+    gap: 5px;
+  }
+  .sira-browser-tab {
+    max-width: 224px;
+    height: 30px;
+    border-radius: 9px;
+  }
+  .sira-browser-tab-label {
+    height: 30px;
+    padding: 0 6px 0 10px;
+    gap: 7px;
+    font-size: 13px;
+  }
+  .sira-browser-site-icon {
+    width: 15px;
+    height: 15px;
+  }
+  .sira-browser-button {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+  }
+  .sira-browser-button > svg {
+    width: 16px;
+    height: 16px;
+  }
+  .sira-browser-button.sira-browser-tab-close {
+    width: 22px;
+    height: 22px;
+    margin-right: 3px;
+    border-radius: 5px;
+  }
+  .sira-browser-tab-close > svg {
+    width: 12px;
+    height: 12px;
+  }
+  .sira-browser-navigation {
+    height: 41px;
+    padding: 4px 8px 6px;
+    gap: 2px;
+  }
+  .sira-browser-navigation > .sira-browser-button {
+    width: 30px;
+    height: 30px;
+  }
+  .sira-browser-address-wrap {
+    margin: 0 7px;
+  }
+  input.sira-browser-address {
+    height: 31px;
+    border-radius: 9px;
+    padding: 0 32px 0 12px;
+    font-size: 13.5px;
+  }
+  .sira-browser-address-label {
+    inset: 0 32px 0 12px;
+    line-height: 31px;
+    font-size: 13.5px;
+  }
+  .sira-browser-button.sira-browser-address-action {
+    right: 3px;
+    top: 3px;
+    width: 25px;
+    height: 25px;
+  }
+}
+@media (min-width: 1024px) and (pointer: fine) {
+  .sidebar-nav-row {
+    height: 2.3125rem;
+    padding-inline: 0.6875rem;
+    font-size: 13.5px;
+    gap: 0.75rem;
+  }
+  .chat-mobile-header {
+    padding: 0.875rem 1.375rem 0;
+  }
+  .chat-header-icon-btn {
+    min-width: 2.375rem;
+    min-height: 2.375rem;
+    border-radius: 0.5625rem;
+  }
+  .chat-header-icon-btn > svg {
+    width: 18.5px;
+    height: 18.5px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .sira-browser-button, .sira-browser-tab, input.sira-browser-address { transition: none; }
   .sira-browser-toolbar[aria-busy="true"]::after { animation: none; }
