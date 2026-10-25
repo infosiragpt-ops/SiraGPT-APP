@@ -26,7 +26,15 @@ describe("chat frontend resilience contracts", () => {
 
   it("makes durable queue hydration observable by the drain effect", () => {
     expect(chatSource).toContain("setQueueHydrationVersion((version) => version + 1)")
-    expect(chatSource).toMatch(/syncQueuedCount,\s*queueHydrationVersion,\s*\]\);/)
+    const drain = chatSource.slice(
+      chatSource.indexOf("  // Drain queued messages when a chat's pipeline goes idle."),
+      chatSource.indexOf("  // Prevent Enter key from adding new line"),
+    )
+    const dependencies = drain.match(/\}, \[([\s\S]*?)\]\);/)?.[1]
+      ?.split(",").map(value => value.trim()) || []
+    expect(dependencies).toEqual(expect.arrayContaining([
+      "syncQueuedCount", "queueHydrationVersion", "isSending", "sendingChatId",
+    ]))
   })
 
   it("keeps queued work durable until its send succeeds", () => {
