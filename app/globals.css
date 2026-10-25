@@ -4290,12 +4290,6 @@ input.sira-browser-address-display { color: transparent; }
     height: 18.5px;
   }
 }
-@media (min-width: 1280px) and (pointer: fine) {
-  .chat-viewport {
-    --content-max: 51rem;
-    --chat-mobile-gutter: 1.5rem;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .sira-browser-button, .sira-browser-tab, input.sira-browser-address { transition: none; }
   .sira-browser-toolbar[aria-busy="true"]::after { animation: none; }

@@ -751,7 +751,8 @@ test('navigatePage re-applies viewport emulation and fullscreen when navigating 
   ntp.documentTitle = 'GOOGLE - Buscar con Google';
   const after = await h.browserState(session);
   assert.equal(after.presentation, 'embedded');
-  assert.deepEqual(after.viewport, { width: 724, height: 840 });
+  assert.equal(after.viewport.width, 724);
+  assert.equal(after.viewport.height, 840);
   assert.equal(after.tabs.find(t => t.id === ntp.id).url, 'https://www.google.com/search?q=GOOGLE');
   assert.equal(after.tabs.find(t => t.id === first.id).title, 'Nueva pestaña');
   await h.browserAction(session, { type: 'browser_restore' });

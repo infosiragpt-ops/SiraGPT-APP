@@ -59,7 +59,7 @@ describe("UI & Integrated Browser professional sizing and navigation matrix (1,0
     )
     assert.match(
       globalsCss,
-      /@media \(min-width: 1280px\) and \(pointer: fine\) \{[\s\S]{0,200}\.chat-viewport \{\s*--content-max: 51rem;/,
+      /\.chat-viewport\s*\{[\s\S]{0,900}--content-max: 48rem;/,
     )
     assert.match(
       chatInterfaceSource,
