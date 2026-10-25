@@ -45,18 +45,20 @@ describe("chat agentic loop routing source contract", () => {
     )
     assert.match(
       deterministicBranch,
-      /await handleAgentTask\(msg, filesToSend, \{ userMessageAlreadyAdded: false \}\);/,
+      /if \(await handleAgentTask\(msg, filesToSend, \{ userMessageAlreadyAdded: false, idempotencyKey \}\)\) markQueuedSendSucceeded\(\);/,
       "the deterministic fast path must start the agent loop directly, before the normal text stream placeholder",
     )
   })
 
   it("reuses existing optimistic messages when async classification chooses the agent route", () => {
     const helper = sliceBetween(
-      "const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {",
+      "const runClassifiedAgentTask = async () => {",
       "switch (intent)",
     )
     assert.match(helper, /userMessageAlreadyAdded: true/)
     assert.match(helper, /assistantMessageId: assistantPlaceholder\.id/)
+    assert.match(helper, /deliverySucceeded = await handleAgentTask/)
+    assert.match(helper, /idempotencyKey,/)
     const handler = sliceBetween(
       "const handleAgentTask = async (",
       "function FeatureRow(",

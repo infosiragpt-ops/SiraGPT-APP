@@ -5,6 +5,7 @@ export type ChatMessageLike = {
   role?: string;
   content?: unknown;
   files?: unknown;
+  metadata?: unknown;
   [key: string]: unknown;
 };
 
@@ -170,7 +171,7 @@ const hasFiles = (value: unknown) => {
  * once the user sees their own text, a later server payload must not erase it.
  */
 const isOptimisticTempId = (id?: unknown) =>
-  typeof id === 'string' && /^msg-(?:user|ai|temp)-/.test(id);
+  typeof id === 'string' && /^msg-(?:user|ai|temp|assistant-processing)-/.test(id);
 
 const sameUserContent = (a: ChatMessageLike, b: ChatMessageLike) => {
   const ta = asText(a?.content).trim();
@@ -192,10 +193,21 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     if (isUserMessage(message)) localUsersByOrdinal.push(message);
   }
 
-  // Pre-index local assistants by ordinal for Pass 1b (below).
+  // A composer placeholder and its streamed answer can coexist locally.
+  // Server persistence collapses them into one message, so assistant ordinals
+  // alone do not identify a turn once the next user prompt has been sent.
   const localAssistantsByOrdinal: TMessage[] = [];
+  const localAssistantsByTurn = new Map<string, TMessage>();
   for (const message of localMessages) {
-    if (message?.role && !isUserMessage(message)) localAssistantsByOrdinal.push(message);
+    if (!message?.role || isUserMessage(message)) continue;
+    localAssistantsByOrdinal.push(message);
+    const turn = turnIdentityKey(message);
+    if (!turn) continue;
+    const key = `${String(message.role).toUpperCase()}:${turn}`;
+    const existing = localAssistantsByTurn.get(key);
+    if (!existing || shouldPreserveLocalAssistantContent(existing.content, message.content)) {
+      localAssistantsByTurn.set(key, message);
+    }
   }
 
   // Pass 1 - preserve content of user messages that survived the server round-trip.
@@ -254,9 +266,20 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     // truncated version of the assistant message.
     if (incoming?.role) {
       asstOrdinal += 1;
-      const localMatch: TMessage | undefined =
-        (incoming.id ? localById.get(incoming.id) : undefined) ||
-        localAssistantsByOrdinal[asstOrdinal];
+      const incomingTurn = turnIdentityKey(incoming);
+      const byId = incoming.id ? localById.get(incoming.id) : undefined;
+      const byTurn = incomingTurn
+        ? localAssistantsByTurn.get(`${String(incoming.role).toUpperCase()}:${incomingTurn}`)
+        : undefined;
+      const byOrdinal = localAssistantsByOrdinal[asstOrdinal];
+      const compatibleTurn = (candidate: TMessage | undefined) => candidate && (
+        !incomingTurn || !turnIdentityKey(candidate) || turnIdentityKey(candidate) === incomingTurn
+      );
+      // Keep legacy ordinal recovery for messages without turn metadata, but
+      // never graft an earlier answer or its files onto a different known turn.
+      const localMatch = (compatibleTurn(byId) ? byId : undefined)
+        || byTurn
+        || (compatibleTurn(byOrdinal) ? byOrdinal : undefined);
       if (!localMatch) return incoming;
 
       const next: TMessage = { ...incoming };
@@ -357,7 +380,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   return preserveOrphanAssistantMessages(result, localMessages);
 }
 
-const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
+const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp|assistant-processing)-/;
 
 function parseTurnMetadata(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -783,6 +806,9 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
       if (idx === -1) return m;
       const localVersion = localAssistants[idx];
       if (!localVersion) return m;
+      const incomingTurn = turnIdentityKey(m);
+      const localTurn = turnIdentityKey(localVersion);
+      if (incomingTurn && localTurn && incomingTurn !== localTurn) return m;
       const incomingText = asText(m.content);
       const localText = asText(localVersion.content);
       // If the local version has substantially more content, use it.

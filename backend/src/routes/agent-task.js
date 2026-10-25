@@ -1691,7 +1691,6 @@ router.post(
     };
     const finishProgressPersistence = async (status) => {
       terminalStatus = status;
-      task.status = status;
       if (persistTimer) {
         clearTimeout(persistTimer);
         persistTimer = null;
@@ -1981,19 +1980,21 @@ router.post(
         emit({ type: 'final_text', markdown: finalMarkdown });
       }
 
-      const doneEvent = applyEvent({
+      const doneEvent = {
         type: 'done',
         stoppedReason,
         stats: { steps: result.steps.length, artifacts: artifacts.length },
-      });
+      };
+      const terminalEvent = enrichAgentTaskEvent(doneEvent, createHonestProgressTracker());
+      const terminalState = reduceAgentState(streamState, terminalEvent);
 
       // Persist the final assistant message with artifacts metadata.
       let dbMessage = null;
-      if (chatId && prisma && (finalMarkdown || streamState.steps.length || artifacts.length)) {
+      if (chatId && prisma) {
         try {
           const data = {
-              content: serializeAgentState(streamState),
-              tokens: Math.ceil((finalMarkdown || serializeAgentState(streamState)).length / 4),
+              content: serializeAgentState(terminalState),
+              tokens: Math.ceil((finalMarkdown || serializeAgentState(terminalState)).length / 4),
               metadata: {
                 source: 'agent-task',
                 taskId,
@@ -2024,13 +2025,19 @@ router.post(
               data: { chatId, role: 'ASSISTANT', timestamp: new Date(), ...data },
             });
           }
-        } catch (e) { /* non-fatal */ }
+        } catch { /* Report a safe persistence error below. */ }
       }
 
-      const outboundDoneEvent = {
+      if (chatId && !dbMessage?.id) {
+        const error = new Error('No pude guardar la respuesta en esta conversación. Reintenta antes de continuar.');
+        error.code = 'E_MESSAGE_PERSISTENCE';
+        throw error;
+      }
+      // Publish completion only after the next turn can read this answer.
+      const outboundDoneEvent = applyEvent({
         ...doneEvent,
         dbMessageId: dbMessage?.id || null,
-      };
+      });
       task.status = terminalStatus;
       task.updatedAt = new Date().toISOString();
       taskStore.markTaskStatus(task, terminalStatus, {
@@ -2079,7 +2086,8 @@ router.post(
       console.error('[agent-task] fatal:', err);
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
       await finishProgressPersistence(controller.signal.aborted ? 'cancelled' : 'error');
-      emit({ type: 'error', message, ...(err.code === 'E_HISTORY_UNAVAILABLE' ? { code: err.code } : {}) });
+      task.status = terminalStatus;
+      emit({ type: 'error', message, ...(['E_HISTORY_UNAVAILABLE', 'E_MESSAGE_PERSISTENCE'].includes(err.code) ? { code: err.code } : {}) });
       taskStore.markTaskStatus(task, task.status, {
         streamState,
         stats: { durationMs: Date.now() - taskStartedAt, error: message },

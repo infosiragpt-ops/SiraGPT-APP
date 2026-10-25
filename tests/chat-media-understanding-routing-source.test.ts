@@ -37,7 +37,7 @@ describe("media-understanding routing (source contract)", () => {
     const voice = send.indexOf("if (isVoiceGenerationActive && !mediaUnderstandingTurn) {")
     const music = send.indexOf("if (isMusicGenerationActive && !mediaUnderstandingTurn) {")
     const agentLoop = send.indexOf("|| mediaUnderstandingTurn")
-    const earlyAgentTask = send.indexOf("await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });", agentLoop)
+    const earlyAgentTask = send.indexOf("await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false, idempotencyKey })", agentLoop)
     const classify = send.indexOf("await aiService.classifyIntent(")
     for (const [name, index] of Object.entries({ freePreview, imagePreflight, videoSticky, voice, music, agentLoop, earlyAgentTask, classify })) {
       assert.ok(index > 0, `missing ${name}`)
@@ -57,7 +57,7 @@ describe("media-understanding routing (source contract)", () => {
     assert.ok(handOff > 0 && toast > handOff, "the media hand-off must run before the image-only toast")
     assert.match(
       guard.slice(handOff, toast),
-      /await handleAgentTask\(msg, filesToSend, \{\s*userMessageAlreadyAdded: true,\s*assistantMessageId: assistantPlaceholder\.id,\s*\}\);\s*markQueuedSendSucceeded\(\);\s*return;/,
+      /if \(await handleAgentTask\(msg, filesToSend, \{\s*userMessageAlreadyAdded: true,\s*assistantMessageId: assistantPlaceholder\.id,\s*idempotencyKey,\s*\}\)\) markQueuedSendSucceeded\(\);\s*return;/,
     )
   })
 

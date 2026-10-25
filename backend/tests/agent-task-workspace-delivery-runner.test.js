@@ -11,18 +11,31 @@ const ARTIFACT = { id: 'abcde01234567890', filename: 'qa.csv', format: 'csv', mi
 const OLD = { ...ARTIFACT, id: '1111101234567890' };
 const QUEUED_AT = '2026-10-03T10:00:00.000Z';
 
-async function workerFixture(t, { deterministic = false, failImport = false, blockImport = false, historyFailure = false } = {}) {
+async function workerFixture(t, { deterministic = false, failImport = false, blockImport = false, historyFailure = false, blockMessagePersist = false, failMessagePersist = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-workspace-runner-'));
   const keys = ['NODE_ENV', 'OPENAI_API_KEY', 'AGENT_TASK_STORE_DIR', 'AGENT_TASK_AGENT_RUNNER', 'AGENT_TASK_MODEL_FAILOVER', 'AGENT_TASK_LLM_RECOVERY', 'ENTERPRISE_EXECUTION_STORE_DIR'];
   const oldEnv = Object.fromEntries(keys.map(k => [k, process.env[k]]));
   Object.assign(process.env, { NODE_ENV: 'test', OPENAI_API_KEY: 'test-openai-key', AGENT_TASK_STORE_DIR: dir, ENTERPRISE_EXECUTION_STORE_DIR: path.join(dir, 'graphs'), AGENT_TASK_AGENT_RUNNER: '1', AGENT_TASK_MODEL_FAILOVER: '0', AGENT_TASK_LLM_RECOVERY: '0' });
-  const imports = [], events = [], captures = [];
+  const imports = [], events = [], captures = [], savedMessages = [], attemptedMessages = [];
+  let messageEntered, releaseMessage;
+  const persisting = new Promise(resolve => { messageEntered = resolve; });
+  const messageWaiting = new Promise(resolve => { releaseMessage = resolve; });
+  const saveMessage = async ({ data }) => {
+    attemptedMessages.push(data);
+    if (['completed', 'failed'].includes(data.metadata?.status)) {
+      messageEntered();
+      if (blockMessagePersist) await messageWaiting;
+      if (failMessagePersist) throw new Error('Bearer private-persistence-token');
+    }
+    savedMessages.push(data);
+    return { id: 'message-a', ...data };
+  };
   let entered, release;
   const importing = new Promise(resolve => { entered = resolve; });
   const waiting = new Promise(resolve => { release = resolve; });
   const prisma = {
     chat: { findFirst: async () => ({ id: 'chat-a', userId: 'user-a', title: 'Synthetic', coworkWorkspaceId: 'workspace-a' }) },
-    message: { create: async ({ data }) => ({ id: 'message-a', ...data }), update: async ({ data }) => ({ id: 'message-a', ...data }) },
+    message: { create: saveMessage, update: saveMessage },
   };
   const persistence = { upsertAgentTask: async () => null, appendAgentTaskEvent: async () => null, persistGeneratedArtifact: async () => null };
   const originalLoad = Module._load;
@@ -65,13 +78,13 @@ async function workerFixture(t, { deterministic = false, failImport = false, blo
   const { runAgentTaskJob } = require(source);
   const taskStore = require(path.join(ROOT, 'src/services/agents/task-store.js'));
   const append = taskStore.appendTaskEvent;
-  taskStore.appendTaskEvent = (task, event) => { events.push(event); return append(task, event); };
+  taskStore.appendTaskEvent = (task, event, ...args) => { events.push(event); return append(task, event, ...args); };
   t.after(() => { taskStore.appendTaskEvent = append; });
   const run = () => runAgentTaskJob({ taskId: deterministic ? 'deterministic-delivery' : 'loop-delivery', createdAt: QUEUED_AT, user: { id: 'user-a' },
     goal: 'Crea un único archivo CSV descargable llamado qa.csv con los registros y guarda el archivo en el workspace.',
     displayGoal: 'Crea un único archivo CSV descargable llamado qa.csv con los registros y guarda el archivo en el workspace.',
     files: [], chatId: 'chat-a', model: 'gpt-4o', documentPolicy: { mode: 'doc_required', format: 'csv', autoGenerate: true }, maxSteps: 4, maxRuntimeMs: 60000 });
-  return { run, imports, events, importing, release, captures, snapshot: () => taskStore.getTaskSnapshotForUser(deterministic ? 'deterministic-delivery' : 'loop-delivery', 'user-a') };
+  return { run, imports, events, importing, release, captures, persisting, releaseMessage, savedMessages, attemptedMessages, snapshot: () => taskStore.getTaskSnapshotForUser(deterministic ? 'deterministic-delivery' : 'loop-delivery', 'user-a') };
 }
 
 for (const deterministic of [false, true]) test(`the ${deterministic ? 'deterministic' : 'loop'} worker awaits workspace delivery before done`, async t => {
@@ -119,3 +132,41 @@ test('missing conversation history fails before the model can substitute invente
   assert.equal(error.code, 'E_HISTORY_UNAVAILABLE');
   assert.match(error.message, /recuperar el contexto/);
 });
+
+for (const deterministic of [false, true]) {
+  test(`the ${deterministic ? 'deterministic' : 'loop'} worker persists conversation history before exposing completion`, async t => {
+    const f = await workerFixture(t, { deterministic, blockMessagePersist: true });
+    const running = f.run();
+    try {
+      const phase = await Promise.race([f.persisting.then(() => 'persist'), running.then(() => 'done')]);
+      assert.equal(phase, 'persist');
+      assert.equal(f.snapshot().status, 'running', 'polling must not unlock a follow-up against stale history');
+      assert.equal(f.snapshot().streamState.done, false);
+      assert.equal(f.events.some(event => event.type === 'done'), false, 'SSE replay must not complete before commit');
+      assert.equal(f.savedMessages.some(message => message.metadata?.status === 'completed'), false);
+    } finally {
+      f.releaseMessage();
+      await running;
+    }
+    assert.equal(f.snapshot().status, 'completed');
+    assert.equal(f.snapshot().streamState.done, true);
+    const message = f.savedMessages.find(item => item.metadata?.status === 'completed');
+    assert.match(message.content, /"done":true/);
+    assert.match(message.content, /"percent":100/);
+    assert.match(message.content, /qa.csv/);
+    assert.equal(f.events.find(event => event.type === 'done').dbMessageId, 'message-a');
+  });
+
+  test(`the ${deterministic ? 'deterministic' : 'loop'} worker fails visibly if final conversation persistence fails`, async t => {
+    const f = await workerFixture(t, { deterministic, failMessagePersist: true });
+    await assert.rejects(f.run(), { code: 'E_MESSAGE_PERSISTENCE' });
+    assert.equal(f.events.some(event => event.type === 'done'), false);
+    assert.equal(f.snapshot().status, 'error');
+    assert.equal(f.attemptedMessages.filter(message => message.metadata?.status === 'completed').length, 1, 'persistence failure must not rerun the model or delivery');
+    if (deterministic) assert.equal(f.captures.some(item => Object.hasOwn(item, 'extraSystem')), false);
+    const error = f.events.find(event => event.type === 'error');
+    assert.equal(error.code, 'E_MESSAGE_PERSISTENCE');
+    assert.match(error.message, /guardar la respuesta/);
+    assert.doesNotMatch(JSON.stringify(f.events), /private-persistence-token/);
+  });
+}

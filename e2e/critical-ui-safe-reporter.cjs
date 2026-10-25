@@ -16,6 +16,7 @@ const SPEC_FILES = Object.freeze([
   'e2e/voice-reference-layout.spec.ts',
   'e2e/chat-media-preview-players.spec.ts',
   'e2e/chat-computer-login-handoff.spec.ts',
+  'e2e/chat-followup-queue.spec.ts',
 ]);
 const RESULT_STATES = Object.freeze(['passed', 'failed', 'timedOut', 'skipped', 'interrupted']);
 const SAFE_PHASES = Object.freeze([

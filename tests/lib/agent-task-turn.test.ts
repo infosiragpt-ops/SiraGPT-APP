@@ -33,3 +33,22 @@ describe("hasUserTurnForGoal (agent-task user bubble)", () => {
     expect(isUserTurn(null)).toBe(false)
   })
 })
+
+
+describe("agent-task queued turn identity", () => {
+  it("does not swallow a new identical prompt behind a previous user turn", () => {
+    const goal = "revisa otra vez"
+    const prior = { ...user(goal), metadata: JSON.stringify({ idempotencyKey: "turn-old" }) }
+    expect(hasUserTurnForGoal([prior, assistant("Listo")], goal, undefined, "turn-new")).toBe(false)
+  })
+
+  it("recognizes only the matching USER identity in either metadata representation", () => {
+    const goal = "agrega el resumen"
+    for (const metadata of [{ idempotencyKey: "turn-new" }, JSON.stringify({ idempotencyKey: "turn-new" })]) {
+      expect(hasUserTurnForGoal([{ ...user(goal), metadata }], goal, undefined, "turn-new")).toBe(true)
+      expect(hasUserTurnForGoal([{ ...assistant(goal), metadata }], goal, undefined, "turn-new")).toBe(false)
+    }
+    expect(hasUserTurnForGoal([{ ...user(goal), metadata: "invalid" }], goal, undefined, "turn-new")).toBe(false)
+    expect(hasUserTurnForGoal([user(goal)], goal, undefined, "turn-new")).toBe(false)
+  })
+})

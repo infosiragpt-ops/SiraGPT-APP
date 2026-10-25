@@ -401,6 +401,9 @@ import {
   createPersistedComposerQueueItem,
   readPersistedComposerQueue,
   writePersistedComposerQueue,
+  projectQueuedComposerMessages,
+  isComposerQueueChatPaused,
+  type QueuedComposerMessage,
   type PersistedComposerQueueItem,
 } from "@/lib/chat/composer-queue"
 import { extractChatDecisionRequestFromMessages } from "@/lib/chat-work-status"
@@ -5097,6 +5100,7 @@ const EMPTY_VOICE_STUDIO_CHAT_FILES: readonly VoiceStudioChatFile[] = Object.fre
 
 type ChatMessageListProps = {
   messages: any[]
+  pendingMessages: QueuedComposerMessage[]
   isStreaming: boolean
   radixViewport: HTMLElement | null
   user: any
@@ -5118,6 +5122,7 @@ type ChatMessageListProps = {
 // streaming state actually change.
 const ChatMessageList = React.memo(function ChatMessageList({
   messages: rawMessages,
+  pendingMessages,
   isStreaming,
   radixViewport,
   user,
@@ -5156,9 +5161,11 @@ const ChatMessageList = React.memo(function ChatMessageList({
   // flash, no iframe/image reload, no lost trace/fold state). The Virtuoso
   // threshold counts the live item too, so the renderer never switches at
   // completion.
+  // Pending rows are display-only: they neither change the model's current
+  // history nor hide its streaming response when another prompt is submitted.
   const renderItems = React.useMemo(
-    () => (streamingMessage ? [...stableMessages, streamingMessage] : stableMessages),
-    [stableMessages, streamingMessage],
+    () => [...stableMessages, ...(streamingMessage ? [streamingMessage] : []), ...pendingMessages],
+    [stableMessages, streamingMessage, pendingMessages],
   )
   const liveMessageId = streamingMessage?.id ?? null
   const imageMessageScrollRef = React.useRef<import('react-virtuoso').VirtuosoHandle>(null)
@@ -5204,9 +5211,10 @@ const ChatMessageList = React.memo(function ChatMessageList({
           <MessageComponent
             message={message}
             user={user}
-            onRegenerate={onRegenerate}
-            onBranch={live ? undefined : onBranch}
-            updateMessageInChat={updateMessageInChat}
+            onRegenerate={message.queued ? () => {} : onRegenerate}
+            onBranch={live || message.queued ? undefined : onBranch}
+            updateMessageInChat={message.queued ? () => {} : updateMessageInChat}
+            readonlyQueued={message.queued === true}
             isStreaming={live}
             onToggleSplitView={onToggleSplitView}
             onDocumentPreview={onDocumentPreview}
@@ -8812,9 +8820,8 @@ But first, you need to connect your Spotify account securely using the button be
             input={input}
             hasAttachment={uploadedFiles.length > 0}
             requiresPromptBeforePrimarySend={requiresPromptBeforePrimarySend}
-            busy={isCurrentChatLocalJobBusy || isUploading}
+            busy={isUploading}
             isStopButtonVisible={isStopButtonVisible}
-            shouldPrioritizeStopButton={shouldPrioritizeStopButton}
             pendingStop={pendingStop}
             isCurrentChatStreaming={isCurrentChatStreaming}
             onSend={() => {
@@ -9925,15 +9932,29 @@ But first, you need to connect your Spotify account securely using the button be
   // this state just drives the visible "N en cola" chip.
   const [queuedCount, setQueuedCount] = React.useState(0);
   const [queueHydrationVersion, setQueueHydrationVersion] = React.useState(0);
+  const queuedDisplayMessages = React.useMemo(() => projectQueuedComposerMessages({
+    items: pendingMsgQueueRef.current,
+    ownerId: queueOwnerId,
+    chatId: currentChat?.id ?? null,
+    messages: currentChat?.messages ?? EMPTY_CHAT_MESSAGES,
+  }), [queueHydrationVersion, queuedCount, currentChat?.messages, currentChat?.id, queueOwnerId]);
   const syncQueuedCount = React.useCallback((chatId?: string | null) => {
     const cid = chatId ?? currentChatIdRef.current ?? null;
     setQueuedCount(pendingMsgQueueRef.current.filter((q) => q.chatId === cid).length);
   }, []);
 
   const persistComposerQueue = React.useCallback(() => {
-    if (!queueOwnerId) return;
-    writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
+    if (!queueOwnerId) return false;
+    return writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
   }, [queueOwnerId]);
+
+  const pauseQueuedMessage = React.useCallback((id: string) => {
+    const entry = pendingMsgQueueRef.current.find(item => item.id === id);
+    if (!entry) return;
+    entry.paused = true;
+    persistComposerQueue();
+    setQueueHydrationVersion(version => version + 1);
+  }, [persistComposerQueue]);
 
   const prevComposerChatIdRef = React.useRef<string | null>(currentChat?.id ?? null);
   React.useEffect(() => {
@@ -9997,6 +10018,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (!item) return;
     persistComposerQueue();
     syncQueuedCount(chatId);
+    setQueueHydrationVersion((version) => version + 1);
     // Merge with what the user is composing right now instead of overwriting
     // it: the queued message goes first, the in-progress draft after it.
     const currentDraft = inputRef.current ?? "";
@@ -10027,6 +10049,7 @@ But first, you need to connect your Spotify account securely using the button be
     pendingMsgQueueRef.current.splice(index, 1);
     persistComposerQueue();
     syncQueuedCount(chatId);
+    setQueueHydrationVersion((version) => version + 1);
     toast.success("Tarea quitada de la cola");
   }, [persistComposerQueue, syncQueuedCount]);
 
@@ -10408,7 +10431,7 @@ But first, you need to connect your Spotify account securely using the button be
         : [...uploadedFiles];
     // Normalize before trim so zero-width chars don't sneak past the
     // "is it empty?" check, and so we can warn on catastrophic pastes.
-    const normalized = normalizeChatInput(queuedSend?.msg ?? input);
+    const normalized = normalizeChatInput(queuedSend?.msg ?? inputRef.current);
     if (shouldWarnUser(normalized)) {
       toast.error(
         `El mensaje supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó al máximo permitido.`,
@@ -10423,13 +10446,17 @@ But first, you need to connect your Spotify account securely using the button be
     // blocks sending here. The per-message idempotency key below handles retry
     // safety once the send payload has been built.
     const sendLatchKey = currentChat?.id ?? '__new__';
+    const isBusy = isCurrentChatStreaming
+      || isCurrentChatLocalJobBusy
+      || isUploading
+      || sendInFlightChatsRef.current.has(sendLatchKey);
 
     // ── Slash-command intercept ────────────────────────────────────────
     // Slash commands use their dedicated backend routes. `/research` owns its
     // chat persistence so new and existing conversations behave identically.
     const slash = parseSlashPrefix(rawMsg);
     if (slash) {
-      setInput("");
+      if (!queuedSend) { inputRef.current = ""; setInput(""); }
       let ok = false;
       try {
         ok = await runSlashCommand(slash);
@@ -10525,7 +10552,8 @@ But first, you need to connect your Spotify account securely using the button be
       .filter(Boolean)
       .sort()
       .join(",");
-    const sendKey = `${currentChat?.id || "new"}:${selectedModel || "model"}:${msg}:${fileKey}`;
+    // A deliberately repeated prompt during another turn is a new message.
+    const sendKey = `${currentChat?.id || "new"}:${selectedModel || "model"}:${msg}:${fileKey}${isBusy ? `:${safeUUID()}` : ""}`;
     const nowForSendKey = Date.now();
     inFlightSendKeysRef.current.forEach((entry, key) => {
       if (nowForSendKey - entry.startedAt > 120_000) inFlightSendKeysRef.current.delete(key);
@@ -10567,6 +10595,66 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    // Capture the user's intent to send BEFORE the busy-queue branch
+    // so queued messages count toward the same funnel as immediately-
+    // sent ones. Properties stay non-PII: only the shape of the
+    // message (length, attachments) and the routing context (model).
+    track("chat.message_sent", {
+      text_length: rawMsg.length,
+      has_text: rawMsg.length > 0,
+      attachment_count: composerFiles.length,
+      model: selectedModel || null,
+    });
+
+    if (isBusy) {
+      // An auto-drained item is still claimed in the durable queue. If the
+      // chat became busy between scheduling and execution, leave that item in
+      // place instead of enqueueing a duplicate with the same idempotency key.
+      if (queuedSend) {
+        queuedSendSucceededRef.current.delete(queuedSend.id);
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
+      // Park the message — we'll drain the queue once the busy flags
+      // flip back to idle (see the useEffect watching busy state).
+      if (pendingMsgQueueRef.current.length >= 50) {
+        toast.error("Hay 50 mensajes pendientes. Espera a que se procesen antes de enviar otro.");
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
+      const queuedItem = createPersistedComposerQueueItem({
+        id: `queued-${safeUUID()}`,
+        ownerId: queueOwnerId || "__session__",
+        chatId: currentChat?.id ?? null,
+        msg,
+        files: composerFiles.length ? composerFiles : snapshotDocumentEditTargets(sandboxDecision.attachments),
+        idempotencyKey,
+      });
+      pendingMsgQueueRef.current.push(queuedItem);
+      if (!persistComposerQueue()) {
+        toast.warning("Mensaje recibido en esta pestaña. Mantén la página abierta hasta que se envíe.");
+      }
+      setQueueHydrationVersion((version) => version + 1);
+      syncQueuedCount(currentChat?.id ?? null);
+      if (!queuedSend) { inputRef.current = ""; setInput(""); }
+      if (!queuedSend) chatDraft.clear();
+      if (!queuedSend) uploadedFilesRef.current = [];
+      if (!queuedSend) setUploadedFiles([]);
+      if (!queuedSend) attachmentHashesRef.current.clear();
+      const now = Date.now();
+      queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
+      queueBurstTimestampsRef.current.push(now);
+      // Only surface the toast when the user actually triggers the
+      // "3+ in 5s" burst condition — otherwise a single queued message
+      // during a long stream would nag them.
+      if (queueBurstTimestampsRef.current.length >= 3 && pendingMsgQueueRef.current.length === 1) {
+        toast.info("Procesando tus mensajes…", { duration: 2500 });
+      }
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+
+    // Accept busy follow-ups before waiting on the image catalog.
     let imageModelForSendOverride: string | undefined;
     if ((isImageGenerationActive || chatType === 'image') && !mediaUnderstandingTurn) {
       const selectedImageModelForSend = selectedImageModel?.trim();
@@ -10592,71 +10680,16 @@ But first, you need to connect your Spotify account securely using the button be
       }
     }
 
-    // Capture the user's intent to send BEFORE the busy-queue branch
-    // so queued messages count toward the same funnel as immediately-
-    // sent ones. Properties stay non-PII: only the shape of the
-    // message (length, attachments) and the routing context (model).
-    track("chat.message_sent", {
-      text_length: rawMsg.length,
-      has_text: rawMsg.length > 0,
-      attachment_count: composerFiles.length,
-      model: selectedModel || null,
-    });
-
-    const isBusy = isCurrentChatStreaming
-      || isCurrentChatLocalJobBusy
-      || isUploading
-      || sendInFlightChatsRef.current.has(sendLatchKey);
-
-    if (isBusy) {
-      // An auto-drained item is still claimed in the durable queue. If the
-      // chat became busy between scheduling and execution, leave that item in
-      // place instead of enqueueing a duplicate with the same idempotency key.
-      if (queuedSend) {
-        inFlightSendKeysRef.current.delete(sendKey);
-        return;
-      }
-      // Park the message — we'll drain the queue once the busy flags
-      // flip back to idle (see the useEffect watching busy state).
-      const queuedItem = createPersistedComposerQueueItem({
-        id: `queued-${safeUUID()}`,
-        ownerId: queueOwnerId || "__session__",
-        chatId: currentChat?.id ?? null,
-        msg,
-        files: composerFiles.length ? composerFiles : snapshotDocumentEditTargets(sandboxDecision.attachments),
-        idempotencyKey,
-      });
-      pendingMsgQueueRef.current.push(queuedItem);
-      persistComposerQueue();
-      syncQueuedCount(currentChat?.id ?? null);
-      setInput("");
-      chatDraft.clear();
-      uploadedFilesRef.current = [];
-      setUploadedFiles([]);
-      attachmentHashesRef.current.clear();
-      const now = Date.now();
-      queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
-      queueBurstTimestampsRef.current.push(now);
-      // Only surface the toast when the user actually triggers the
-      // "3+ in 5s" burst condition — otherwise a single queued message
-      // during a long stream would nag them.
-      if (queueBurstTimestampsRef.current.length >= 3 && pendingMsgQueueRef.current.length === 1) {
-        toast.info("Procesando tus mensajes…", { duration: 2500 });
-      }
-      inFlightSendKeysRef.current.delete(sendKey);
-      return;
-    }
-
     if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
-      setInput("");
+      if (!queuedSend) { inputRef.current = ""; setInput(""); }
       setSelectedMentionIds([]);
       setMentionMenuOpen(false);
       setMentionTrigger(null);
       setMentionSearchQuery("");
-      chatDraft.clear();
-      uploadedFilesRef.current = [];
-      setUploadedFiles([]);
-      attachmentHashesRef.current.clear();
+      if (!queuedSend) chatDraft.clear();
+      if (!queuedSend) uploadedFilesRef.current = [];
+      if (!queuedSend) setUploadedFiles([]);
+      if (!queuedSend) attachmentHashesRef.current.clear();
       const documentPreflight = new AbortController();
       let documentChatId = currentChat?.id || null;
       intentAbortControllerRef.current = documentPreflight;
@@ -10673,11 +10706,10 @@ But first, you need to connect your Spotify account securely using the button be
         if (!documentPreflight.signal.aborted) {
           toast.error(error instanceof Error && error.message ? error.message : "No se pudo iniciar la edición del documento. El original no se modificó.");
         }
-        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+        if (!queuedSend && (currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
           setInput(msg);
           uploadedFilesRef.current = composerFiles;
           setUploadedFiles(composerFiles);
-          if (queuedSend) markQueuedSendSucceeded();
         }
       } finally {
         inFlightSendKeysRef.current.delete(sendKey);
@@ -10694,7 +10726,7 @@ But first, you need to connect your Spotify account securely using the button be
     // Handle rewrite request
     if (selectedWordText) {
       setIsRewriting(true);
-      setInput("");
+      if (!queuedSend) { inputRef.current = ""; setInput(""); }
 
 
       try {
@@ -10769,7 +10801,7 @@ But first, you need to connect your Spotify account securely using the button be
       operation: 'edit' as const,
       selection: { kind: 'box', ...markedImage.editRegion },
     } : undefined;
-    setInput("");
+    if (!queuedSend) { inputRef.current = ""; setInput(""); }
     setSelectedMentionIds([]);
     setMentionMenuOpen(false);
     setMentionTrigger(null);
@@ -10777,10 +10809,10 @@ But first, you need to connect your Spotify account securely using the button be
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
-    chatDraft.clear();
-    uploadedFilesRef.current = [];
-    setUploadedFiles([]);
-    attachmentHashesRef.current.clear();
+    if (!queuedSend) chatDraft.clear();
+    if (!queuedSend) uploadedFilesRef.current = [];
+    if (!queuedSend) setUploadedFiles([]);
+    if (!queuedSend) attachmentHashesRef.current.clear();
 
     let isNewChat = !currentChat;
     let chatToUpdate = currentChat;
@@ -11117,13 +11149,10 @@ But first, you need to connect your Spotify account securely using the button be
           toast.error(error instanceof Error && error.message ? error.message : "No se pudo iniciar la edición del documento. El original no se modificó.");
         }
         // Preserve the user's draft when preflight rejects a model, permission or input.
-        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+        if (!queuedSend && (currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
           setInput(msg);
           uploadedFilesRef.current = filesToSend;
           setUploadedFiles(filesToSend);
-          // Transfer a rejected queued turn back to the visible draft. Leaving
-          // it in the automatic drain would retry an unsupported edit forever.
-          if (queuedSend) markQueuedSendSucceeded();
         }
       } finally {
         inFlightSendKeysRef.current.delete(sendKey);
@@ -11168,8 +11197,7 @@ But first, you need to connect your Spotify account securely using the button be
         if (isLiveComputerUsePrompt(msg)) {
           openComputerPanel({ browser: true, url: browserUrlFromPrompt(msg) });
         }
-        await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
-        markQueuedSendSucceeded();
+        if (await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false, idempotencyKey })) markQueuedSendSucceeded();
       } finally {
         inFlightSendKeysRef.current.delete(sendKey);
       }
@@ -11252,8 +11280,8 @@ But first, you need to connect your Spotify account securely using the button be
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
-          await handleImageGeneration(msg, collectImageUploadFileIds(filesToSend), imageModelForSendOverride, imageEditTarget);
-          markQueuedSendSucceeded();
+          const delivered = await handleImageGeneration(msg, collectImageUploadFileIds(filesToSend), imageModelForSendOverride, imageEditTarget);
+          if (delivered) markQueuedSendSucceeded();
           return;
         }
       }
@@ -11415,11 +11443,11 @@ But first, you need to connect your Spotify account securely using the button be
           // images, so a recording goes to the agent-task media branch
           // instead of being dropped. Only documents still get the toast.
           if (attachmentsBesideImagesAreMedia(filesToSend)) {
-            await handleAgentTask(msg, filesToSend, {
+            if (await handleAgentTask(msg, filesToSend, {
               userMessageAlreadyAdded: true,
               assistantMessageId: assistantPlaceholder.id,
-            });
-            markQueuedSendSucceeded();
+              idempotencyKey,
+            })) markQueuedSendSucceeded();
             return;
           }
           toast.error("Solo se permiten archivos de imagen para esta tarea.");
@@ -11429,6 +11457,7 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }
 
+      let deliverySucceeded = true;
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
         const pins = appPins.pinnedAppIds
         const imageSettings = selectedImageModel ? { imageModel: selectedImageModel, imageProvider: providerForSelectedImageModel(selectedImageModel), imageQuality: selectedImageQuality } : {}
@@ -11447,7 +11476,8 @@ But first, you need to connect your Spotify account securely using the button be
             pinnedAppIds: pins,
           });
         } else {
-          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+          deliverySucceeded = await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+            preserveComposerAttachments: Boolean(queuedSend),
             ...imageSettings,
             ...webSearchSettings,
             ...skillSettings,
@@ -11459,10 +11489,13 @@ But first, you need to connect your Spotify account securely using the button be
         }
       };
 
-      const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
-        userMessageAlreadyAdded: true,
-        assistantMessageId: assistantPlaceholder.id,
-      });
+      const runClassifiedAgentTask = async () => {
+        deliverySucceeded = await handleAgentTask(msg, filesToSend, {
+          userMessageAlreadyAdded: true,
+          assistantMessageId: assistantPlaceholder.id,
+          idempotencyKey,
+        });
+      };
 
       switch (intent) {
         case 'image':
@@ -11476,7 +11509,7 @@ But first, you need to connect your Spotify account securely using the button be
             await runContextPipeline('text');
             break;
           }
-          await handleImageGeneration(msg, collectImageUploadFileIds(filesToSend), undefined, imageEditTarget);
+          deliverySucceeded = await handleImageGeneration(msg, collectImageUploadFileIds(filesToSend), undefined, imageEditTarget);
           break;
         case 'video':
           isGeneratingVideoRef.current = true;
@@ -11503,7 +11536,7 @@ But first, you need to connect your Spotify account securely using the button be
           }
           break;
         case 'webdev':
-          await handleWebDevGeneration(msg);
+          deliverySucceeded = await handleWebDevGeneration(msg, filesToSend);
           break;
         case 'figma':
           // Figma flowchart generation is handled in addMessage; pass the
@@ -11556,7 +11589,7 @@ But first, you need to connect your Spotify account securely using the button be
           }
           break;
       }
-      markQueuedSendSucceeded();
+      if (deliverySucceeded) markQueuedSendSucceeded();
     } catch (err: any) {
       console.error('Send error', err);
       devLog('Error details:', {
@@ -11902,7 +11935,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string, editTarget?: { fileId: string; operation: 'edit'; selection: { kind: string; x: number; y: number; width: number; height: number } }) => {
+  const handleImageGeneration = async (prompt: string, files?: string[], requestedModel?: string, editTarget?: { fileId: string; operation: 'edit'; selection: { kind: string; x: number; y: number; width: number; height: number } }): Promise<boolean> => {
     let imageModelForRequest = (requestedModel || selectedImageModel || '').trim();
     let activeImageModel: any = null;
     try {
@@ -11915,7 +11948,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setIsImageGenerationActive(true);
       setChatType('image');
       toast.error('Activa un modelo de imagen en Admin Models antes de generar.');
-      return;
+      return false;
     }
     imageModelForRequest = activeImageModel.name;
     if (imageModelForRequest !== selectedImageModel) {
@@ -12002,8 +12035,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         payload.referenceFileIds = [...new Set(files)];
       }
       if (editTarget) Object.assign(payload, editTarget);
-      setUploadedFiles([]);
-      attachmentHashesRef.current.clear();
+      // handleSend consumes its attachment snapshot; newer draft files belong to the composer.
       const imageRequestStartedAt = Date.now();
       try {
         await apiClient.generateImage(payload, { signal: controller.signal });
@@ -12031,7 +12063,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             await selectChat(activeChatId);
           }
           toast.error('No se pudo generar la imagen. Inténtalo de nuevo.');
-          return;
+          return false;
         }
         if (outcome !== 'image') {
           throw genError;
@@ -12043,12 +12075,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           await selectChat(activeChatId);
         }
         toast.success('Imagen generada correctamente');
+        return true;
       }
+      return false;
     } catch (error: any) {
       const wasAbort = controller.signal.aborted || error?.name === 'AbortError';
       if (wasAbort) {
         markImageGenerationStopped();
-        return;
+        return false;
       }
 
       const status = error?.status || error?.statusCode;
@@ -12077,7 +12111,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         };
 
         setCurrentChat(updateChatWithInactiveModelError);
-        return;
+        return false;
       }
 
       console.error('Image generation failed:', error)
@@ -12106,7 +12140,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         };
 
         setCurrentChat(updateChatWithLimitError);
-        return;
+        return false;
       }
 
       toast.error(errorMessage);
@@ -12125,6 +12159,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       };
 
       setCurrentChat(updateChatWithError);
+      return false;
     } finally {
       if (imageAbortControllerRef.current === controller) {
         imageAbortControllerRef.current = null;
@@ -12242,12 +12277,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
   }
 
-  const handleWebDevGeneration = async (prompt: string) => {
+  const handleWebDevGeneration = async (prompt: string, filesToSend: any[] = []): Promise<boolean> => {
     // Use dedicated webdev streaming API endpoint
-    const filesToSend = [...uploadedFiles];
     const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
-    setUploadedFiles([]);
-    attachmentHashesRef.current.clear(); // Clear UI immediately
+    // Use the sent snapshot without consuming files from a newer composer draft.
+    let streamFailed = false;
 
     try {
       let newChat = currentChat;
@@ -12337,14 +12371,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           devLog('Web development generation completed');
         },
         (error) => {
+          streamFailed = true;
           console.error('Web development generation error:', error);
           toast.error(error.message || 'Web development generation failed');
         }
       );
-
+      return !streamFailed;
     } catch (error: any) {
       console.error('Web development generation error:', error);
       toast.error(error.message || 'Web development generation failed');
+      return false;
     }
   };
 
@@ -12378,11 +12414,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const queueDrainClaims = queueDrainClaimsRef.current;
 
     const queueChatId = currentChat?.id ?? null;
-    const currentBusy =
-      isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading;
+    const currentBusy = isCurrentChatStreaming || isCurrentChatLocalJobBusy || isUploading
+      || sendInFlightChatsRef.current.has(queueChatId || '__new__');
 
     // 1) Prefer draining the chat the user is looking at (composer path).
-    if (!currentBusy) {
+    if (!currentBusy && !isComposerQueueChatPaused(pendingMsgQueueRef.current, queueChatId)) {
       const nextIndex = pendingMsgQueueRef.current.findIndex(
         (item) => item.chatId === queueChatId && !queueDrainClaims.has(item.id),
       );
@@ -12408,12 +12444,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 persistComposerQueue();
                 syncQueuedCount(queueChatId);
               }
+            } else if (queuedSendSucceededRef.current.get(claimed.id) === false) {
+              pauseQueuedMessage(claimed.id);
+              toast.error("El mensaje sigue pendiente. Usa Editar última para revisarlo y volver a enviarlo.");
             }
           } catch (error) {
+            pauseQueuedMessage(claimed.id);
             console.error("No se pudo procesar la tarea en cola; se conservará para reintentar.", error);
           } finally {
+            const settled = queuedSendSucceededRef.current.has(claimed.id);
             queuedSendSucceededRef.current.delete(claimed.id);
             queueDrainClaims.delete(claimed.id);
+            if (settled) setQueueHydrationVersion((version) => version + 1);
           }
         }, 0);
         return () => {
@@ -12426,6 +12468,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // 2) Background drain for any other idle chat with queued work.
     const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
       if (!item.chatId) return false;
+      if (isComposerQueueChatPaused(pendingMsgQueueRef.current, item.chatId)) return false;
       if (item.chatId === queueChatId) return false;
       if (queueDrainClaims.has(item.id)) return false;
       if (activeStreamingChatIds.includes(item.chatId)) return false;
@@ -12455,9 +12498,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const t = setTimeout(async () => {
       started = true;
       try {
-        await addMessage(bgNext.msg, files, targetChat, false, undefined, {
+        const delivered = await addMessage(bgNext.msg, files, targetChat, false, undefined, {
+          preserveComposerAttachments: true,
           idempotencyKey: bgNext.idempotencyKey,
         });
+        if (!delivered) {
+          pauseQueuedMessage(bgNext.id);
+          return;
+        }
         // Background work stays durable until the chat context confirms the
         // message was accepted. A rejection leaves it in FIFO for retry.
         const completedIndex = pendingMsgQueueRef.current.findIndex((item) => item.id === bgNext.id);
@@ -12467,9 +12515,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           syncQueuedCount(queueChatId);
         }
       } catch (error) {
+        pauseQueuedMessage(bgNext.id);
         console.error("No se pudo procesar la tarea en cola; se conservará para reintentar.", error);
       } finally {
         queueDrainClaims.delete(bgNext.id);
+        setQueueHydrationVersion((version) => version + 1);
       }
     }, 0);
     return () => {
@@ -12487,9 +12537,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeLocalJobChatIds,
     addMessage,
     persistComposerQueue,
+    pauseQueuedMessage,
     setUploadedFiles,
     syncQueuedCount,
     queueHydrationVersion,
+    isSending,
+    sendingChatId,
   ]);
 
   // Prevent Enter key from adding new line when not holding Shift
@@ -12501,11 +12554,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
     // A capture-phase popover (slash menu, @-mention picker) already consumed this key.
     if (e.nativeEvent.defaultPrevented) return
-    // El textarea queda libre durante el streaming (paridad Claude); Enter
-    // no dispara un segundo turno mientras el actual sigue en curso.
+    // Accept follow-ups through the normal send path. Busy work queues them
+    // until the prior response is persisted, preserving its context.
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      if (isCurrentChatLocalJobBusy) return
       handleSend()
     } else if (
       e.key === "ArrowUp" &&
@@ -12679,7 +12731,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isCurrentChatLocalJobBusy ||
     isCurrentChatMediaBusy
   );
-  const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
   // but the prop contract is identical, so centralising it avoids
@@ -14041,16 +14092,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const handleAgentTask = async (
     goalText: string,
     filesToSend: any[] = [],
-    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string; displayGoal?: string } = {},
-  ) => {
+    options: { userMessageAlreadyAdded?: boolean; assistantMessageId?: string; displayGoal?: string; idempotencyKey?: string } = {},
+  ): Promise<boolean> => {
     if (!goalText) {
       toast.error('Please enter a task');
-      return;
+      return false;
     }
     if (isLiveComputerUsePrompt(goalText)) {
       openComputerPanel({ browser: true, url: browserUrlFromPrompt(goalText) });
     }
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
+    const turnIdempotencyKey = options.idempotencyKey?.trim() || undefined;
+    const turnMetadata = turnIdempotencyKey ? JSON.stringify({ idempotencyKey: turnIdempotencyKey }) : undefined;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     // Skills picked in «+ → Skills» ride this task only (claude.ai).
     const turnSkills = composerSkills.selectedNames;
@@ -14075,11 +14128,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         await selectChat(activeChat?.id ?? "");
         if (!activeChat?.id) {
           toast.error('Failed to create chat for the agent task');
-          return;
+          return false;
         }
       } catch (err) {
         toast.error('Failed to create chat for the agent task');
-        return;
+        return false;
       }
     }
 
@@ -14097,7 +14150,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // «Already added» means THIS goal is the latest user turn — a chat with
     // history has plenty of older user messages that must not hide the new
     // request until the server persists it.
-    const liveHasUserTurn = hasUserTurnForGoal(currentChatRef.current?.messages, displayGoal);
+    const liveHasUserTurn = hasUserTurnForGoal(currentChatRef.current?.messages, displayGoal, undefined, turnIdempotencyKey);
 
     try {
       // Graft a USER turn with files after createChat/selectChat even when the
@@ -14111,6 +14164,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           content: displayGoal,
           timestamp: new Date().toISOString(),
           files: snapshotComposerFilesForMessage(filesToSend),
+          metadata: turnMetadata,
         };
         setCurrentChat(prev => {
           const adoptingTemp = shouldAdoptTempOntoReal(prev);
@@ -14118,7 +14172,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           if (prev.id !== activeChat.id && !adoptingTemp) return prev;
           const baseMessages = prev.messages || [];
           const nextChat = adoptingTemp ? { ...activeChat, messages: baseMessages } : prev;
-          if (hasUserTurnForGoal(baseMessages, displayGoal)) return nextChat;
+          if (hasUserTurnForGoal(baseMessages, displayGoal, undefined, turnIdempotencyKey)) return nextChat;
           return { ...nextChat, messages: [...baseMessages, userMessage] };
         });
       }
@@ -14163,12 +14217,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         role: 'ASSISTANT' as const,
         content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',
         timestamp: new Date().toISOString(),
+        metadata: turnMetadata,
       };
       setCurrentChat(prev => {
         const adoptingTemp = shouldAdoptTempOntoReal(prev);
         if (!prev) {
           const seeded = (currentChatRef.current?.messages || []).filter(Boolean);
-          const withUser = hasUserTurnForGoal(seeded, displayGoal)
+          const withUser = hasUserTurnForGoal(seeded, displayGoal, undefined, turnIdempotencyKey)
             ? seeded
             : [...seeded, {
                 id: `msg-user-${Date.now()}`,
@@ -14177,6 +14232,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 content: displayGoal,
                 timestamp: new Date().toISOString(),
                 files: snapshotComposerFilesForMessage(filesToSend),
+                metadata: turnMetadata,
               }];
           return { ...activeChat, messages: [...withUser, aiMessage] } as any;
         }
@@ -14284,6 +14340,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (activeChat?.id && currentChatIdRef.current === activeChat.id) {
         void selectChat(activeChat.id);
       }
+      return !taskWasAborted && !state.error;
     } catch (err: any) {
       console.error('Agent task failed:', err);
       toast.error(err?.message || 'Agent task failed');
@@ -14291,6 +14348,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       setIsWebSearching(false);
       searchAbortControllerRef.current = null;
       currentAgentTaskIdRef.current = null;
+      return false;
     }
   };
 
@@ -14635,6 +14693,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     >
                       <ChatMessageList
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
+                        pendingMessages={queuedDisplayMessages}
                         isStreaming={isCurrentChatStreaming}
                         radixViewport={radixViewport}
                         user={user}

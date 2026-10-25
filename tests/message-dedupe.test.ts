@@ -200,3 +200,16 @@ test('dedupeMessages drops the optimistic twin when the server row is id-only (f
   assert.deepEqual(out.map((m) => m.id), ['clx_user_a3', 'clx_asst_a3']);
   assert.equal((out[0] as { files?: Array<{ id: string }> }).files?.[0]?.id, 'file-3');
 });
+
+
+test('keeps streamed tokens beside their optimistic composer placeholder until the server row arrives', () => {
+  const metadata = { idempotencyKey: 'consecutive-followup' };
+  const placeholder = { id: 'msg-assistant-processing-123', role: 'ASSISTANT', content: '', metadata };
+  const answer = { id: 'msg-ai-chat-123', role: 'ASSISTANT', content: 'Respuesta visible sin esperar sincronización.', metadata };
+
+  const streaming = dedupeMessages([placeholder, answer]);
+  assert.ok(streaming.some(message => message.content === answer.content));
+
+  const persisted = { id: 'server-answer', role: 'ASSISTANT', content: answer.content, metadata };
+  assert.deepEqual(dedupeMessages([placeholder, answer, persisted]), [persisted]);
+});

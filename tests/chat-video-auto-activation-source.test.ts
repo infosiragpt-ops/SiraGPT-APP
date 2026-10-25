@@ -323,7 +323,7 @@ describe("chat video auto-activation source contract", () => {
     )
     // With parallel chats the stop button became per-chat: voice now flows
     // through isCurrentChatMediaBusy (which must keep listing isGeneratingVoice)
-    // into isStopButtonVisible/shouldPrioritizeStopButton. Same guarantee,
+    // into isStopButtonVisible. Same guarantee,
     // per-chat scoped.
     assert.match(
       source,
@@ -336,19 +336,14 @@ describe("chat video auto-activation source contract", () => {
       "Voice generation should force the stop button visible"
     )
     assert.match(
-      source,
-      /const shouldPrioritizeStopButton = isCurrentChatMediaBusy/,
-      "Voice generation should prioritize cancel over queue-send"
-    )
-    assert.match(
       composerSurface,
-      /if \(hasText && !shouldPrioritizeStopButton\)/,
-      "Queue send should be suppressed while Voice generation needs the stop button"
+      /if \(canSend\)/,
+      "A new instruction must be accepted while voice work continues"
     )
     assert.match(
       composerSurface,
       /aria-label="Detener generación"/,
-      "The stop button should remain available even if the composer has text during Voice generation"
+      "The stop button remains available when the composer is empty during Voice generation"
     )
   })
 

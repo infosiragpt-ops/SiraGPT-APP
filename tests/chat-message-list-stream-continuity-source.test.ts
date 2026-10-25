@@ -14,7 +14,7 @@ function block(start: string, length = 2600): string {
 describe("chat message list: streaming continuity, scroll follow and focus", () => {
   it("renders the live answer in the same keyed list so it never remounts at completion", () => {
     const list = block("const renderItems = React.useMemo(", 5200)
-    assert.match(list, /streamingMessage \? \[\.\.\.stableMessages, streamingMessage\] : stableMessages/)
+    assert.match(list, /\[\.\.\.stableMessages, \.\.\.\(streamingMessage \? \[streamingMessage\] : \[\]\), \.\.\.pendingMessages\]/)
     assert.match(list, /<div\s+key=\{message\.id\}\s+className=\{live \? "streaming-message" : undefined\}/)
     assert.match(list, /data=\{renderItems\}/)
     assert.match(list, /renderItems\.length > 40/)
