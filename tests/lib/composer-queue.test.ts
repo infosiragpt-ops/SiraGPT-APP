@@ -4,6 +4,8 @@ import {
   clearPersistedComposerQueues,
   createPersistedComposerQueueItem,
   readPersistedComposerQueue,
+  projectQueuedComposerMessages,
+  isComposerQueueChatPaused,
   serializeComposerQueueFiles,
   writePersistedComposerQueue,
 } from "@/lib/chat/composer-queue"
@@ -83,20 +85,21 @@ describe("durable composer queue", () => {
     expect(readPersistedComposerQueue("user-a")).toEqual([])
   })
 
-  it("bounds localStorage use and keeps the newest queued tasks", () => {
+  it("refuses excess storage without deleting older accepted tasks", () => {
     const items = Array.from({ length: 50 }, (_, index) => queueItem({
       id: `queue-${index}`,
       msg: `${index}:`.padEnd(64 * 1024, "x"),
       idempotencyKey: `send-${index}`,
     }))
 
-    expect(writePersistedComposerQueue("user-a", items)).toBe(true)
+    const accepted = queueItem()
+    expect(writePersistedComposerQueue("user-a", [accepted])).toBe(true)
+    expect(writePersistedComposerQueue("user-a", items)).toBe(false)
     const raw = window.localStorage.getItem("sira:chat-composer-queue:v1:user-a") || ""
     const restored = readPersistedComposerQueue("user-a")
 
     expect(raw.length).toBeLessThanOrEqual(512 * 1024)
-    expect(restored.length).toBeLessThan(50)
-    expect(restored.at(-1)?.id).toBe("queue-49")
+    expect(restored).toEqual([accepted])
   })
 
   it("clears every account queue on logout cleanup", () => {
@@ -109,5 +112,93 @@ describe("durable composer queue", () => {
     expect(readPersistedComposerQueue("user-a")).toEqual([])
     expect(readPersistedComposerQueue("user-b")).toEqual([])
     expect(window.localStorage.getItem("unrelated-setting")).toBe("keep")
+  })
+})
+
+
+describe("queued message display projection", () => {
+  it("shows pending prompts with files and stable identity without changing canonical history", () => {
+    const current = [{ id: "answer", role: "ASSISTANT", content: "Trabajando", metadata: {} }]
+    const pending = queueItem({ files: [{ id: "file-1", name: "informe.docx" }] })
+    const original = JSON.stringify(current)
+    const messages = projectQueuedComposerMessages({ items: [pending], ownerId: "user-a", chatId: "chat-a", messages: current })
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ id: pending.id, role: "USER", content: pending.msg, timestamp: pending.createdAt, queued: true, files: pending.files })
+    expect(JSON.parse(messages[0].metadata)).toMatchObject({ idempotencyKey: pending.idempotencyKey })
+    expect(JSON.stringify(current)).toBe(original)
+  })
+
+  it("filters by owner and chat and keeps separate turns with identical text", () => {
+    const first = queueItem()
+    const second = queueItem({ id: "queue-2", idempotencyKey: "send-2" })
+    const items = [first, queueItem({ id: "other-user", ownerId: "user-b" }), second, queueItem({ id: "other-chat", chatId: "chat-b" })]
+    expect(projectQueuedComposerMessages({ items, ownerId: "user-a", chatId: "chat-a", messages: [] }).map(message => message.id)).toEqual([first.id, second.id])
+    expect(projectQueuedComposerMessages({ items, ownerId: "", chatId: "chat-a", messages: [] })).toEqual([])
+  })
+
+  it("reconciles accepted USER turns only by exact identity, not similar text or assistant placeholders", () => {
+    const first = queueItem()
+    const second = queueItem({ id: "queue-2", idempotencyKey: "send-2" })
+    const third = queueItem({ id: "queue-3", idempotencyKey: "send-3" })
+    const accepted = [
+      { role: "user", content: "edited server text", metadata: JSON.stringify({ idempotencyKey: "send-1" }) },
+      { role: "USER", content: "edited server text", metadata: { idempotencyKey: "send-2" } },
+      { role: "ASSISTANT", metadata: { idempotencyKey: "send-3" } },
+      { role: "USER", content: third.msg, metadata: "not-json" },
+    ]
+    expect(projectQueuedComposerMessages({ items: [first, second, third], ownerId: "user-a", chatId: "chat-a", messages: accepted }).map(message => message.id)).toEqual([third.id])
+  })
+
+  it("shows an unbound prompt only in its matching new conversation", () => {
+    const pending = queueItem({ chatId: null })
+    expect(projectQueuedComposerMessages({ items: [pending], ownerId: "user-a", chatId: null, messages: [] })).toHaveLength(1)
+    expect(projectQueuedComposerMessages({ items: [pending], ownerId: "user-a", chatId: "chat-a", messages: [] })).toEqual([])
+  })
+})
+
+describe("queue loss prevention", () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it("refuses more than fifty items instead of replacing the earliest turn", () => {
+    const accepted = Array.from({ length: 50 }, (_, index) => queueItem({ id: `queue-${index}`, idempotencyKey: `send-${index}` }))
+    expect(writePersistedComposerQueue("user-a", accepted)).toBe(true)
+    expect(writePersistedComposerQueue("user-a", [...accepted, queueItem({ id: "excess" })])).toBe(false)
+    expect(readPersistedComposerQueue("user-a")).toEqual(accepted)
+  })
+
+  it("keeps safe folder paths across queue persistence without retaining local paths", () => {
+    const pending = queueItem({ files: [
+      { id: "legal", name: "informe.docx", relativePath: "Documentos/Legal/informe.docx" },
+      { id: "admin", name: "informe.docx", relativePath: "Documentos/Administracion/informe.docx" },
+      { id: "invalid", name: "informe.docx", relativePath: "../informe.docx" },
+      { id: "local", name: "informe.docx", relativePath: "/Users/luis/informe.docx" },
+    ] })
+    expect(writePersistedComposerQueue("user-a", [pending])).toBe(true)
+    const files = readPersistedComposerQueue("user-a")[0].files
+    expect(files.map(file => file.relativePath)).toEqual(["Documentos/Legal/informe.docx", "Documentos/Administracion/informe.docx", undefined, undefined])
+  })
+})
+
+
+describe("failed queued turns", () => {
+  beforeEach(() => window.localStorage.clear())
+
+  it("preserves the failed turn's pause through reload, without blocking other chats", () => {
+    const failed = queueItem({ paused: true })
+    const next = queueItem({ id: "queue-2", idempotencyKey: "send-2" })
+    const elsewhere = queueItem({ id: "queue-b", chatId: "chat-b", idempotencyKey: "send-b" })
+    expect(writePersistedComposerQueue("user-a", [failed, next, elsewhere])).toBe(true)
+    const restored = readPersistedComposerQueue("user-a")
+    expect(restored).toEqual([failed, next, elsewhere])
+    expect(isComposerQueueChatPaused(restored, "chat-a")).toBe(true)
+    expect(isComposerQueueChatPaused(restored, "chat-b")).toBe(false)
+  })
+
+  it("does not resume the failed first turn when a later pending turn is edited or removed", () => {
+    const failed = queueItem({ paused: true })
+    const later = queueItem({ id: "queue-2", idempotencyKey: "send-2" })
+    const items = [failed, later]
+    expect(isComposerQueueChatPaused(items.filter(item => item.id !== later.id), "chat-a")).toBe(true)
+    expect(isComposerQueueChatPaused(items.filter(item => item.id !== failed.id), "chat-a")).toBe(false)
   })
 })

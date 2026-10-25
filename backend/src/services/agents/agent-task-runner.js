@@ -2573,6 +2573,30 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   tickHeartbeat();
   lockHeartbeatTimer = setInterval(() => { tickHeartbeat(); }, lockHeartbeatIntervalMs);
   if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
+  // A completed task can immediately trigger a follow-up turn. Persist its
+  // answer first so SSE replay and polling cannot expose stale chat history.
+  const persistCompletion = async ({ doneEvent, status, artifactsList, metadata }) => {
+    const terminalEvent = enrichAgentTaskEvent(doneEvent, createHonestProgressTracker());
+    const terminalState = internals.reduceAgentState(streamState, terminalEvent);
+    const dbMessage = await persistAssistantMessage({
+      chatId,
+      userId: user.id,
+      assistantMessageId,
+      streamState: terminalState,
+      task,
+      status,
+      artifacts: artifactsList,
+      metadata,
+    });
+    if (chatId && !dbMessage?.id) {
+      const error = new Error('No pude guardar la respuesta en esta conversación. Reintenta antes de continuar.');
+      error.code = 'E_MESSAGE_PERSISTENCE';
+      throw error;
+    }
+    task.status = status;
+    task.updatedAt = new Date().toISOString();
+    emit({ ...doneEvent, dbMessageId: dbMessage?.id || null });
+  };
   const finishDeterministicTask = async ({
     finalMarkdown,
     stoppedReason,
@@ -2587,23 +2611,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     ({ finalMarkdown, stoppedReason } = delivery);
     metadata = { ...metadata, workspaceDelivery: delivery.workspaceDelivery };
     const status = statusForAgentStopReason(stoppedReason);
-    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
-    const doneEvent = emit({
+    const doneEvent = {
       type: 'done',
       stoppedReason,
       stats: { steps, artifacts: artifactsList.length },
-    });
+    };
 
-    task.updatedAt = new Date().toISOString();
-    const dbMessage = await persistAssistantMessage({
-      chatId,
-      userId: user.id,
-      assistantMessageId,
-      streamState,
-      task,
+    await persistCompletion({
+      doneEvent,
       status,
-      artifacts: artifactsList,
+      artifactsList,
       metadata: {
         documentPolicy,
         runtimeModel: runtimeModelProfile.runtimeModel,
@@ -2626,9 +2644,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         ...metadata,
       },
     });
-    if (dbMessage?.id && doneEvent) {
-      emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
-    }
 
     taskStore.markTaskStatus(task, status, {
       streamState,
@@ -3272,7 +3287,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         };
         return null;
       } catch (agentRunnerErr) {
-        if (controller.signal.aborted || externalSignal?.aborted) throw agentRunnerErr;
+        if (controller.signal.aborted || externalSignal?.aborted || agentRunnerErr?.code === 'E_MESSAGE_PERSISTENCE') throw agentRunnerErr;
         console.warn('[agent-task-runner] agent-runner preloop failed:', agentRunnerErr?.message || agentRunnerErr);
         if (currentStepId) {
           emit({ type: 'step_done', id: currentStepId, ok: false });
@@ -3318,7 +3333,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           if (finished) return finished;
         }
       } catch (agentRunnerErr) {
-        if (controller.signal.aborted || externalSignal?.aborted) throw agentRunnerErr;
+        if (controller.signal.aborted || externalSignal?.aborted || agentRunnerErr?.code === 'E_MESSAGE_PERSISTENCE') throw agentRunnerErr;
         console.warn('[agent-task-runner] agent-runner preloop failed:', agentRunnerErr?.message || agentRunnerErr);
       }
     }
@@ -3525,7 +3540,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
       } catch (err) {
-        if (err && err.__agentRunnerAbort) throw err;
+        if (err && (err.__agentRunnerAbort || err.code === 'E_MESSAGE_PERSISTENCE')) throw err;
         if (err && err.__fallthroughFreshDocument) {
           // Sin archivo base que conservar: cerramos el paso de edición y
           // dejamos que el flujo genere un documento nuevo más abajo en lugar
@@ -3690,23 +3705,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
       const finalMarkdown = transcriptionText || 'No se encontró texto disponible para transcribir en los archivos adjuntos. Por favor, proporciona un archivo legible o más detalles sobre el contenido que deseas transcribir.';
       emit({ type: 'final_text', markdown: finalMarkdown });
-      const doneEvent = emit({
+      const doneEvent = {
         type: 'done',
         stoppedReason: transcriptionText ? 'transcription_finalize' : 'no_transcription_content',
         stats: { steps: 2, artifacts: 0 },
-      });
+      };
 
       const status = 'completed';
-      task.status = status;
-      task.updatedAt = new Date().toISOString();
-      const dbMessage = await persistAssistantMessage({
-        chatId,
-        userId: user.id,
-        assistantMessageId,
-        streamState,
-        task,
+      await persistCompletion({
+        doneEvent,
         status,
-        artifacts,
+        artifactsList: artifacts,
         metadata: {
           documentPolicy,
           runtimeModel: runtimeModelProfile.runtimeModel,
@@ -3715,9 +3724,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           transcriptionFileIds,
         },
       });
-      if (dbMessage?.id && doneEvent) {
-        emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
-      }
 
       taskStore.markTaskStatus(task, status, {
         streamState,
@@ -3849,23 +3855,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       ].join('\n');
 
       emit({ type: 'final_text', markdown: finalMarkdown });
-      const doneEvent = emit({
+      const doneEvent = {
         type: 'done',
         stoppedReason: 'thin_attachment_context',
         stats: { steps: 1, artifacts: 0 },
-      });
+      };
 
       const status = 'completed';
-      task.status = status;
-      task.updatedAt = new Date().toISOString();
-      const dbMessage = await persistAssistantMessage({
-        chatId,
-        userId: user.id,
-        assistantMessageId,
-        streamState,
-        task,
+      await persistCompletion({
+        doneEvent,
         status,
-        artifacts: [],
+        artifactsList: [],
         metadata: {
           documentPolicy,
           runtimeModel: runtimeModelProfile.runtimeModel,
@@ -3874,9 +3874,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           attachmentStats,
         },
       });
-      if (dbMessage?.id && doneEvent) {
-        emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
-      }
 
       taskStore.markTaskStatus(task, status, {
         streamState,
@@ -4650,24 +4647,18 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     });
     ({ finalMarkdown, stoppedReason } = delivery);
     const status = statusForAgentStopReason(stoppedReason);
-    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const completedStepCount = Math.max(result.steps.length, stepIdCounter);
-    const doneEvent = emit({
+    const doneEvent = {
       type: 'done',
       stoppedReason,
       stats: { steps: completedStepCount, artifacts: artifacts.length },
-    });
+    };
 
-    task.updatedAt = new Date().toISOString();
-    const dbMessage = await persistAssistantMessage({
-      chatId,
-      userId: user.id,
-      assistantMessageId,
-      streamState,
-      task,
+    await persistCompletion({
+      doneEvent,
       status,
-      artifacts,
+      artifactsList: artifacts,
       metadata: {
         documentPolicy,
         runtimeModel: runtimeModelProfile.runtimeModel,
@@ -4689,9 +4680,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         maxRuntimeMs,
       },
     });
-    if (dbMessage?.id && doneEvent) {
-      emit({ type: 'checkpoint', label: 'Mensaje persistido', status: 'saved', payload: { dbMessageId: dbMessage.id } });
-    }
 
     taskStore.markTaskStatus(task, status, {
       streamState,
@@ -4756,7 +4744,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     });
     return { taskId, status, artifacts: artifacts.length };
   } catch (err) {
-    if (!controller.signal.aborted && hasAttachedFiles && err?.code !== 'E_HISTORY_UNAVAILABLE') {
+    if (!controller.signal.aborted && hasAttachedFiles && !['E_HISTORY_UNAVAILABLE', 'E_MESSAGE_PERSISTENCE'].includes(err?.code)) {
       const recoveredMarkdown = buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
@@ -4824,9 +4812,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     }
     const errorEvent = controller.signal.aborted
       ? { type: 'error', message: 'Tarea detenida por el usuario.' }
-      : err?.code === 'E_HISTORY_UNAVAILABLE'
-        ? { type: 'error', code: 'E_HISTORY_UNAVAILABLE', message: 'No pude recuperar el contexto de esta conversación. Reintenta antes de generar el archivo.' }
-        : toAgentTaskErrorEvent(err || 'agent task failed');
+      : err?.code === 'E_MESSAGE_PERSISTENCE'
+        ? { type: 'error', code: err.code, message: err.message }
+        : err?.code === 'E_HISTORY_UNAVAILABLE'
+          ? { type: 'error', code: 'E_HISTORY_UNAVAILABLE', message: 'No pude recuperar el contexto de esta conversación. Reintenta antes de generar el archivo.' }
+          : toAgentTaskErrorEvent(err || 'agent task failed');
     const message = errorEvent.message;
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
     emit(errorEvent);

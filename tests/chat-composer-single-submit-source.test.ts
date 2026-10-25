@@ -60,7 +60,7 @@ describe("chat composer single-submit source contract", () => {
 
     assert.match(
       source,
-      /const sendKey = `\$\{currentChat\?\.id \|\| "new"\}[\s\S]{0,160}\$\{fileKey\}`;/,
+      /const sendKey = `\$\{currentChat\?\.id \|\| "new"\}[\s\S]{0,160}\$\{fileKey\}\$\{isBusy[\s\S]{0,70}`;/,
       "the send key must identify the send (chat + model + message + files) so duplicates dedupe but other chats stay unblocked"
     )
 

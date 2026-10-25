@@ -3046,6 +3046,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const selectChat = useCallback(
     async (chatId: string) => {
+      const isChangingChat = currentChatRef.current?.id !== chatId;
+      // Clear once at navigation start, never when an async refresh completes:
+      // new attachments may already belong to the visible conversation's draft.
+      if (isChangingChat) setUploadedFiles([]);
       latestSelectedChatIdRef.current = chatId
       const targetIsStreaming = activeStreamingChatIdsRef.current.has(chatId)
         || bg.get(chatId)?.status === "streaming"
@@ -3084,7 +3088,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           return restored
         })
         try { localStorage.setItem('currentChatId', chatId) } catch { /* storage blocked/full */ }
-        setUploadedFiles([])
         applyChatModelSelection(cachedChat)
       }
 
@@ -3138,7 +3141,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         if (latestSelectedChatIdRef.current === chatId) {
           try { localStorage.setItem('currentChatId', chatId) } catch { /* storage blocked/full */ }
-          setUploadedFiles([])
           applyChatModelSelection(chat)
         }
 

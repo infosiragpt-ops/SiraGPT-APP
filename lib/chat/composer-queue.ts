@@ -1,4 +1,5 @@
 import { resolveUploadFileId } from "./composer-files"
+import { getAttachmentRelativePath } from "../attachments/folder-selection"
 
 const STORAGE_PREFIX = "sira:chat-composer-queue:v1:"
 const MAX_QUEUE_ITEMS = 50
@@ -42,6 +43,55 @@ export interface PersistedComposerQueueItem {
   files: PersistedComposerFile[]
   idempotencyKey: string
   createdAt: string
+  paused?: true
+}
+
+/** Display-only rows. Never append these to the conversation sent to a model. */
+export interface QueuedComposerMessage {
+  id: string
+  chatId: string | null
+  role: "USER"
+  content: string
+  timestamp: string
+  files: PersistedComposerFile[]
+  metadata: string
+  queued: true
+}
+
+/** A failed entry blocks later automatic sends for the same conversation. */
+export function isComposerQueueChatPaused(items: readonly PersistedComposerQueueItem[], chatId: string | null): boolean {
+  return items.some(item => item.chatId === chatId && item.paused === true)
+}
+
+export function projectQueuedComposerMessages({ items, ownerId, chatId, messages }: {
+  items: readonly PersistedComposerQueueItem[]
+  ownerId: string
+  chatId: string | null
+  messages: readonly { role?: unknown; metadata?: unknown }[]
+}): QueuedComposerMessage[] {
+  if (!ownerId.trim()) return []
+  const acceptedKeys = new Set<string>()
+  for (const message of messages) {
+    if (String(message?.role || "").toUpperCase() !== "USER") continue
+    let metadata = message?.metadata
+    if (typeof metadata === "string") {
+      try { metadata = JSON.parse(metadata) } catch { continue }
+    }
+    if (!metadata || typeof metadata !== "object") continue
+    const key = (metadata as Record<string, unknown>).idempotencyKey
+    if (typeof key === "string" && key) acceptedKeys.add(key)
+  }
+  return items.filter(item => item.ownerId === ownerId.trim() && item.chatId === chatId
+    && !acceptedKeys.has(item.idempotencyKey)).map(item => ({
+    id: item.id,
+    chatId: item.chatId,
+    role: "USER",
+    content: item.msg,
+    timestamp: item.createdAt,
+    files: item.files,
+    metadata: JSON.stringify({ idempotencyKey: item.idempotencyKey }),
+    queued: true,
+  }))
 }
 
 function storageKey(ownerId: string): string | null {
@@ -96,6 +146,8 @@ export function serializeComposerQueueFiles(files: unknown[]): PersistedComposer
       const value = truncateStrings(cloneJsonValue(source[field]))
       if (value !== undefined) persisted[field] = value
     }
+    const relativePath = getAttachmentRelativePath(source)
+    if (relativePath) persisted.relativePath = relativePath
     if (!persisted.id && !persisted.fileId && !persisted.attachmentId) persisted.id = uploadFileId
     return encodedBytes(persisted) <= MAX_FILE_BYTES ? [persisted] : []
   })
@@ -138,6 +190,7 @@ export function createPersistedComposerQueueItem(input: {
   files: unknown[]
   idempotencyKey: string
   createdAt?: string
+  paused?: true
 }): PersistedComposerQueueItem {
   return {
     id: input.id,
@@ -147,6 +200,7 @@ export function createPersistedComposerQueueItem(input: {
     files: serializeComposerQueueFiles(input.files),
     idempotencyKey: input.idempotencyKey,
     createdAt: input.createdAt || new Date().toISOString(),
+    ...(input.paused === true ? { paused: true as const } : {}),
   }
 }
 
@@ -178,6 +232,7 @@ function sanitizePersistedQueueItem(
     files: value.files,
     idempotencyKey,
     createdAt: value.createdAt.slice(0, 64),
+    ...(value.paused === true ? { paused: true as const } : {}),
   })
 }
 
@@ -208,18 +263,13 @@ export function writePersistedComposerQueue(
   const safeItems = items
     .map((item) => sanitizePersistedQueueItem(item, normalizedOwner))
     .filter((item): item is PersistedComposerQueueItem => Boolean(item))
-    .slice(-MAX_QUEUE_ITEMS)
+  // Refuse the new state instead of silently evicting accepted prompts. The
+  // caller can keep the unsent draft visible and explain the capacity limit.
+  if (safeItems.length > MAX_QUEUE_ITEMS) return false
   try {
     if (safeItems.length === 0) window.localStorage.removeItem(key)
     else {
-      // Retain newest tasks if storage is under pressure. The queue remains
-      // ordered, bounded and far below common browser localStorage quotas.
-      let boundedItems = safeItems
-      let serialized = JSON.stringify(boundedItems)
-      while (boundedItems.length > 1 && encodedBytes(serialized) > MAX_STORAGE_BYTES) {
-        boundedItems = boundedItems.slice(1)
-        serialized = JSON.stringify(boundedItems)
-      }
+      const serialized = JSON.stringify(safeItems)
       if (encodedBytes(serialized) > MAX_STORAGE_BYTES) return false
       window.localStorage.setItem(key, serialized)
     }

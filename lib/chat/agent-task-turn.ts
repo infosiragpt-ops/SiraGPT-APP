@@ -10,6 +10,7 @@
 type TurnMessageLike = {
   role?: unknown
   content?: unknown
+  metadata?: unknown
 }
 
 const LOOKBACK = 4
@@ -31,9 +32,24 @@ export function hasUserTurnForGoal(
   messages: ReadonlyArray<TurnMessageLike | null | undefined> | null | undefined,
   goal: unknown,
   lookback: number = LOOKBACK,
+  idempotencyKey?: string,
 ): boolean {
   const wanted = normalizeText(goal)
   if (!wanted || !Array.isArray(messages) || messages.length === 0) return false
+  // A queued prompt can intentionally repeat a previous request verbatim.
+  // Once the caller supplies a turn identity, text resemblance is not proof
+  // that this new turn is already displayed.
+  if (idempotencyKey?.trim()) {
+    return messages.some((message) => {
+      if (!isUserTurn(message)) return false
+      let metadata = message?.metadata
+      if (typeof metadata === "string") {
+        try { metadata = JSON.parse(metadata) } catch { return false }
+      }
+      return Boolean(metadata && typeof metadata === "object"
+        && (metadata as Record<string, unknown>).idempotencyKey === idempotencyKey.trim())
+    })
+  }
   const start = Math.max(0, messages.length - Math.max(1, lookback))
   for (let index = messages.length - 1; index >= start; index -= 1) {
     const message = messages[index]

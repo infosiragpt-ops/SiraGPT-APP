@@ -246,3 +246,48 @@ test('replaces empty msg-ai placeholder with persisted cmti row of the same turn
     provider: 'xAI',
   });
 });
+
+
+test('keeps back-to-back streamed answers on their own turns when optimistic placeholders shift ordinals', () => {
+  const first = { idempotencyKey: 'followup-first' };
+  const second = { idempotencyKey: 'followup-second' };
+  const firstAnswer = 'Primer resultado: la reunión trata sobre el presupuesto.';
+  const secondAnswer = 'Seguimiento 2 completado con el contexto anterior.';
+  const local = [
+    { id: 'seed-user', role: 'USER', content: 'Responde en español.' },
+    { id: 'seed-assistant', role: 'ASSISTANT', content: 'Listo para ayudarte.' },
+    { id: 'msg-user-first', role: 'USER', content: 'Explica presupuesto.', metadata: first },
+    { id: 'msg-assistant-processing-first', role: 'ASSISTANT', content: '', metadata: first },
+    { id: 'msg-ai-first', role: 'ASSISTANT', content: firstAnswer, metadata: first, files: [{ id: 'first-artifact' }] },
+    { id: 'msg-user-second', role: 'USER', content: 'Ahora dame un ejemplo.', metadata: second },
+    { id: 'msg-assistant-processing-second', role: 'ASSISTANT', content: '', metadata: second },
+    { id: 'msg-ai-second', role: 'ASSISTANT', content: secondAnswer, metadata: second },
+  ];
+  const incoming = [
+    local[0], local[1],
+    { id: 'server-user-first', role: 'USER', content: 'Explica presupuesto.', metadata: first },
+    { id: 'server-assistant-first', role: 'ASSISTANT', content: firstAnswer, metadata: first },
+    { id: 'server-user-second', role: 'USER', content: 'Ahora dame un ejemplo.', metadata: second },
+    { id: 'server-assistant-second', role: 'ASSISTANT', content: secondAnswer, metadata: second },
+  ];
+
+  const merged = mergeMessagesPreservingUserContent(incoming, local);
+  const secondResult = merged.find(message => message.id === 'server-assistant-second');
+  assert.equal(secondResult?.content, secondAnswer);
+  assert.deepEqual(secondResult?.files ?? [], []);
+
+  // A DB refresh can also arrive before the second answer is persisted.
+  // Find that turn's actual stream content, not its empty composer placeholder.
+  incoming[5].content = '';
+  const pending = mergeMessagesPreservingUserContent(incoming, local);
+  assert.equal(pending.find(message => message.id === 'server-assistant-second')?.content, secondAnswer);
+});
+
+test('does not borrow content or files from another identified turn when its assistant is missing locally', () => {
+  const merged = mergeMessagesPreservingUserContent(
+    [{ id: 'server-assistant-second', role: 'ASSISTANT', content: 'Respuesta nueva.', metadata: { idempotencyKey: 'second' } }],
+    [{ id: 'msg-ai-first', role: 'ASSISTANT', content: 'Respuesta anterior mucho más larga que la respuesta nueva.', metadata: { idempotencyKey: 'first' }, files: [{ id: 'first-artifact' }] }],
+  );
+  assert.equal(merged[0].content, 'Respuesta nueva.');
+  assert.deepEqual(merged[0].files ?? [], []);
+});

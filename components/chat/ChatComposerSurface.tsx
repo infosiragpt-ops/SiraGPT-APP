@@ -107,7 +107,6 @@ export function ChatComposerPrimaryAction({
   requiresPromptBeforePrimarySend,
   busy,
   isStopButtonVisible,
-  shouldPrioritizeStopButton,
   pendingStop,
   isCurrentChatStreaming,
   onSend,
@@ -118,7 +117,6 @@ export function ChatComposerPrimaryAction({
   requiresPromptBeforePrimarySend: boolean
   busy: boolean
   isStopButtonVisible: boolean
-  shouldPrioritizeStopButton: boolean
   pendingStop: boolean
   isCurrentChatStreaming: boolean
   onSend: () => void
@@ -166,14 +164,15 @@ export function ChatComposerPrimaryAction({
     )
   }
 
-  if (hasText && !shouldPrioritizeStopButton) {
+  if (canSend) {
     return (
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             onClick={onSend}
             size="icon"
-            aria-label="Enviar a la cola · se procesa en orden"
+            disabled={busy}
+            aria-label="Enviar mensaje · se procesa en orden"
             className={cn(
               "composer-send-button h-9 w-9 rounded-full p-0 transition-all duration-200",
               "active:scale-[0.96]",
@@ -182,7 +181,7 @@ export function ChatComposerPrimaryAction({
             <ComposerSendArrow className="h-[16px] w-[16px]" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
+        <TooltipContent side="top"><p>Enviar mensaje · se procesa en orden</p></TooltipContent>
       </Tooltip>
     )
   }

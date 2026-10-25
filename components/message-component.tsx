@@ -1451,7 +1451,7 @@ let speechEngineOwner: symbol | null = null;
 // their whole Markdown body behind the thesis card.
 const THESIS_MARKER_RE = /Initializing Thesis Generation|\*\*Searching Academic Sources\*\*|\*\*Generating Thesis Document\*\*|Thesis Generation Completed|\*\*Thesis Generation Error\*\*|Your comprehensive thesis has been generated/i;
 
-const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onImagePreview, onOpenSources, children }: {
+const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, readonlyQueued = false, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onImagePreview, onOpenSources, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
@@ -1460,6 +1460,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     onBranch?: (messageId: string) => void | Promise<void>;
     updateMessageInChat: (messageId: string, newContent: string, files?: any[]) => void;
     isStreaming?: boolean;
+    /** Unaccepted turns use the existing queue edit controls, not server message edits. */
+    readonlyQueued?: boolean;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
@@ -1769,6 +1771,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     };
 
     const handleEditSave = async () => {
+        if (readonlyQueued) return;
         if (editedContent.trim() === message.content || editedContent.trim() === "") {
             setIsEditing(false);
             return;
@@ -3363,6 +3366,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         ? <Check size={14} strokeWidth={2.5} className="text-emerald-500 animate-in zoom-in-50 duration-200" />
                                         : <Copy size={14} />}
                                 </Button>
+                                {!readonlyQueued && (
                                 <Button
                                     variant="ghost"
                                     size="icon"
@@ -3378,6 +3382,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 >
                                     <Pencil size={14} />
                                 </Button>
+                                )}
                             </div>
                         )}
                     </div>
@@ -3662,6 +3667,7 @@ const agentMetadataKey = (value: unknown): string => {
 }
 
 export const areMessagePropsEqual = (prev: any, next: any) => {
+    if (Boolean(prev.readonlyQueued) !== Boolean(next.readonlyQueued)) return false
     const a = prev.message
     const b = next.message
     // Same row object and same live flag: nothing below can differ. This is

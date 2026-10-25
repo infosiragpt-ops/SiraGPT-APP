@@ -18,15 +18,15 @@ describe("agent-task turn keeps the user's request visible", () => {
 
   it("decides «already added» by the goal text, never by «any user message»", () => {
     assert.match(chatInterface, /import \{ hasUserTurnForGoal \} from "@\/lib\/chat\/agent-task-turn"/)
-    assert.match(handler, /const liveHasUserTurn = hasUserTurnForGoal\(currentChatRef\.current\?\.messages, displayGoal\);/)
-    assert.match(handler, /if \(hasUserTurnForGoal\(baseMessages, displayGoal\)\) return nextChat;/)
-    assert.match(handler, /const withUser = hasUserTurnForGoal\(seeded, displayGoal\)/)
+    assert.match(handler, /const liveHasUserTurn = hasUserTurnForGoal\(currentChatRef\.current\?\.messages, displayGoal, undefined, turnIdempotencyKey\);/)
+    assert.match(handler, /if \(hasUserTurnForGoal\(baseMessages, displayGoal, undefined, turnIdempotencyKey\)\) return nextChat;/)
+    assert.match(handler, /const withUser = hasUserTurnForGoal\(seeded, displayGoal, undefined, turnIdempotencyKey\)/)
     assert.doesNotMatch(handler, /baseMessages\.some\(isUserRole\)\) return nextChat/)
     assert.doesNotMatch(handler, /seeded\.some\(isUserRole\)/)
     assert.doesNotMatch(handler, /\.some\(isUserRole\)/)
   })
 
   it("the deterministic agentic path still relies on handleAgentTask to add the bubble", () => {
-    assert.match(chatInterface, /await handleAgentTask\(msg, filesToSend, \{ userMessageAlreadyAdded: false \}\);/)
+    assert.match(chatInterface, /handleAgentTask\(msg, filesToSend, \{[^}]*userMessageAlreadyAdded: false/)
   })
 })
