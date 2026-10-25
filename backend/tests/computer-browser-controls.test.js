@@ -737,3 +737,23 @@ test('a missing desktop container is reported as desktop_unavailable with a user
   h.cdp.relaunchFails(Object.assign(new Error('Command failed: docker exec'), { stderr: 'Error: No such container: sira-ac-user-luis' }));
   await assert.rejects(h.browserState(session), error => error.code === 'desktop_unavailable' && error.status === 503 && /Vuelve a abrir la computadora/.test(error.publicMessage));
 });
+
+test('navigatePage re-applies viewport emulation and fullscreen when navigating a New Tab or after target CDP detach', async () => {
+  const h = harness();
+  const first = h.makePage('about:blank');
+  await h.browserAction(session, { type: 'browser_resize', width: 724, height: 840 });
+  const ntp = h.makePage('chrome://new-tab-page/');
+  ntp.documentTitle = 'New Tab';
+  await ntp.bringToFront();
+  // Simulate window knocked out of fullscreen before navigatePage runs
+  h.windows.set(1, { windowState: 'maximized', left: 0, top: 0, width: 1920, height: 1080 });
+  await h.navigatePage(session, 'https://www.google.com/search?q=GOOGLE', process.env, undefined, { tabId: ntp.id });
+  ntp.documentTitle = 'GOOGLE - Buscar con Google';
+  const after = await h.browserState(session);
+  assert.equal(after.presentation, 'embedded');
+  assert.deepEqual(after.viewport, { width: 724, height: 840 });
+  assert.equal(after.tabs.find(t => t.id === ntp.id).url, 'https://www.google.com/search?q=GOOGLE');
+  assert.equal(after.tabs.find(t => t.id === first.id).title, 'Nueva pestaña');
+  await h.browserAction(session, { type: 'browser_restore' });
+});
+

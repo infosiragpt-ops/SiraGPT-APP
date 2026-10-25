@@ -151,6 +151,14 @@ function visibleAddress(url: string | undefined): string {
   return url && /^https?:\/\//i.test(url) ? url : ""
 }
 
+function displayTabTitle(tab: { title?: string; url?: string } | undefined): string {
+  const raw = tab?.title?.trim() || ""
+  if (!raw || (/^chrome:\/\/(?:newtab|new-tab-page)\b/i.test(tab?.url || "") && /^new tab$/i.test(raw))) {
+    return "Nueva pestaña"
+  }
+  return raw
+}
+
 // Only bundled icons for exact known hosts: no third-party requests revealing
 // which sites are open in the user's remote session.
 function siteIcon(url: string): string | null {
@@ -239,11 +247,13 @@ function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, on
     <div className="sira-browser-tab-row">
       <div className="sira-browser-tab-group">
         <div className="sira-browser-tabs" role="tablist" aria-label="Pestañas del navegador">
-          {state?.tabs.map((tab, index) => <div key={tab.id} className={cn("sira-browser-tab", tab.id === state.activeTabId && "sira-browser-tab-active")}>
+          {state?.tabs.map((tab, index) => {
+            const tabLabel = displayTabTitle(tab)
+            return <div key={tab.id} className={cn("sira-browser-tab", tab.id === state.activeTabId && "sira-browser-tab-active")}>
             <button ref={(element) => { if (element) tabButtons.current.set(tab.id, element); else tabButtons.current.delete(tab.id) }} type="button" role="tab" aria-selected={tab.id === state.activeTabId}
               tabIndex={tab.id === state.activeTabId ? 0 : -1} disabled={busy}
               className="no-default-focus-ring sira-browser-tab-label"
-              title={tab.title || "Nueva pestaña"} onClick={() => action({ type: "browser_tab_select", tabId: tab.id })}
+              title={tabLabel} onClick={() => action({ type: "browser_tab_select", tabId: tab.id })}
               onKeyDown={(event) => {
                 if (!state || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
                 event.preventDefault()
@@ -252,12 +262,13 @@ function BrowserControls({ state, busy, error, onAction, onNavigate, onClose, on
                 action({ type: "browser_tab_select", tabId: state.tabs[next].id })
               }}>
                 {visibleAddress(tab.url) ? (siteIcon(tab.url)
-                  ? <Image src={siteIcon(tab.url)!} alt="" width={14} height={14} className="sira-browser-site-icon" draggable={false} />
+                  ? <Image src={siteIcon(tab.url)!} alt="" width={15} height={15} className="sira-browser-site-icon" draggable={false} />
                   : <Globe className="sira-browser-site-icon" aria-hidden />) : null}
-                <span className="truncate">{tab.title || "Nueva pestaña"}</span>
+                <span className="truncate">{tabLabel}</span>
             </button>
-            <button type="button" disabled={busy} className={cn(button, "sira-browser-tab-close")} aria-label={`Cerrar pestaña ${tab.title || "Nueva pestaña"}`} onClick={() => action({ type: "browser_tab_close", tabId: tab.id })}><X aria-hidden /></button>
-          </div>)}
+            <button type="button" disabled={busy} className={cn(button, "sira-browser-tab-close")} aria-label={`Cerrar pestaña ${tabLabel}`} onClick={() => action({ type: "browser_tab_close", tabId: tab.id })}><X aria-hidden /></button>
+          </div>
+          })}
         </div>
         <button type="button" className={button} disabled={busy || !state} aria-label="Nueva pestaña" title="Nueva pestaña" onClick={() => action({ type: "browser_tab_create" })}><Plus aria-hidden /></button>
       </div>

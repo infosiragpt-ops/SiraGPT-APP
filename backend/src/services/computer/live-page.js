@@ -304,19 +304,31 @@ async function setPageViewport(session, page, viewport, env, signal) {
     await viewportOperation(session, lease, signal, async () => {
       const id = await targetId(page);
       let entry = lease.targets.get(id);
-      if (!entry) {
-        if (lease.targets.size >= MAX_VIEWPORT_TARGETS) throw browserError('browser_presentation_capacity', 503);
+      const attachTarget = async () => {
+        if (!lease.targets.has(id) && lease.targets.size >= MAX_VIEWPORT_TARGETS) throw browserError('browser_presentation_capacity', 503);
         const ownedPage = await selectPage(lease.browser, id);
+        if (!ownedPage) throw browserError('browser_tab_missing', 404);
         const cdp = await ownedPage.context().newCDPSession(ownedPage);
-        entry = { cdp, page: ownedPage, onClose: null };
-        entry.onClose = () => {
-          lease.targets.delete(id);
+        const nextEntry = { cdp, page: ownedPage, onClose: null };
+        nextEntry.onClose = () => {
+          if (lease.targets.get(id) === nextEntry) lease.targets.delete(id);
           void cdp.detach().catch(() => {});
         };
-        ownedPage.once('close', entry.onClose);
-        lease.targets.set(id, entry);
+        ownedPage.once('close', nextEntry.onClose);
+        lease.targets.set(id, nextEntry);
+        return nextEntry;
+      };
+      if (!entry) entry = await attachTarget();
+      try {
+        await entry.cdp.send('Emulation.setDeviceMetricsOverride', { ...viewport, deviceScaleFactor: 1, mobile: false });
+      } catch (err) {
+        if (lease.closed || signal?.aborted) throw err;
+        entry.page?.off?.('close', entry.onClose);
+        lease.targets.delete(id);
+        void entry.cdp.detach().catch(() => {});
+        entry = await attachTarget();
+        await entry.cdp.send('Emulation.setDeviceMetricsOverride', { ...viewport, deviceScaleFactor: 1, mobile: false });
       }
-      await entry.cdp.send('Emulation.setDeviceMetricsOverride', { ...viewport, deviceScaleFactor: 1, mobile: false });
       signal?.throwIfAborted();
       if (lease.closed) throw browserError('browser_viewport_failed', 502);
     });
@@ -450,7 +462,11 @@ async function readBrowserState(session, browser, selected, confirmingViewport =
     try {
       const id = (await cdp.send('Target.getTargetInfo')).targetInfo.targetId;
       const document = await readPageDocument(cdp);
-      tabs.push({ id, title: document.title.slice(0, 300) || 'Nueva pestaña', url: document.url });
+      const rawTitle = document.title.slice(0, 300);
+      const title = !rawTitle || (/^chrome:\/\/(?:newtab|new-tab-page)\b/i.test(document.url) && /^new tab$/i.test(rawTitle.trim()))
+        ? 'Nueva pestaña'
+        : rawTitle;
+      tabs.push({ id, title, url: document.url });
       if (candidate !== page) continue;
       activeTabId = id;
       const history = await cdp.send('Page.getNavigationHistory');
@@ -578,6 +594,9 @@ async function navigatePage(session, url, env = process.env, signal, { tabId } =
     return withLivePage(session, env, signal, async (page) => {
       await page.bringToFront();
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      if (presentationBySession.has(session.sessionId)) await presentPage(session, page);
+      const previousViewport = viewportBySession.get(session.sessionId);
+      if (previousViewport) await setPageViewport(session, page, previousViewport.size, env, signal);
       return { ok: true, url: page.url() };
     }, { createPage: true, tabId });
   });
