@@ -92,6 +92,8 @@ test('OpenAI without credits → Groq transcribes; the next job skips OpenAI (30
   assert.equal(groqRequests[0].language, undefined, 'a short clip is auto-detected, never forced to WHISPER_LANGUAGE');
   assert.equal(openaiCalls, 1);
   assert.equal(audioTranscriber.providerInCooldown({ name: 'openai', key: 'sk-proj-TESTKEY_l2' }), true);
+  const billing = require('../src/services/ai/billing-failover');
+  assert.equal(billing.isOutOfCredit('openai', options.env), true, 'shared billing-failover memo also knows OpenAI has no credits');
 
   const second = await audioTranscriber.transcribe(tempAudio(t, 'otra.ogg'), 'audio/ogg', 'otra.ogg', options);
   assert.equal(second.method, 'whisper');

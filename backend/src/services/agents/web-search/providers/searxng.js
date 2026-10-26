@@ -31,7 +31,17 @@ async function search(query, { maxResults = 5, signal, locale } = {}) {
     signal,
   });
   if (!res.ok) throw new Error(`searxng http ${res.status}`);
-  const body = await res.json();
+  let body = null;
+  if (typeof res.text === 'function') {
+    const raw = await res.text();
+    try {
+      body = JSON.parse(raw);
+    } catch (_) {
+      return parseHtmlResults(raw, maxResults);
+    }
+  } else {
+    body = await res.json();
+  }
   const items = Array.isArray(body?.results) ? body.results : [];
   const out = [];
   for (const it of items) {
@@ -45,10 +55,41 @@ async function search(query, { maxResults = 5, signal, locale } = {}) {
   return out;
 }
 
+function stripTags(html) {
+  return String(html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseHtmlResults(html, maxResults = 5) {
+  const out = [];
+  const blockRe = /<article\b[^>]*class="[^"]*\bresult\b[^"]*"[^>]*>([\s\S]*?)<\/article>/gi;
+  let m;
+  while ((m = blockRe.exec(String(html || ''))) !== null && out.length < maxResults) {
+    const block = m[1];
+    const linkMatch = /<h3\b[^>]*>[\s\S]*?<a\b[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i.exec(block)
+      || /<a\b[^>]*href="(https?:\/\/[^"]+)"[^>]*class="[^"]*\burl_header\b[^"]*"[^>]*>([\s\S]*?)<\/a>/i.exec(block);
+    if (!linkMatch) continue;
+    const url = linkMatch[1].trim();
+    const title = stripTags(linkMatch[2]) || url;
+    const contentMatch = /<p\b[^>]*class="[^"]*\bcontent\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(block);
+    const snippet = contentMatch ? stripTags(contentMatch[1]).slice(0, 600) : '';
+    out.push({ title, url, snippet, source: 'searxng' });
+  }
+  return out;
+}
+
 module.exports = {
   id: 'searxng',
   name: 'SearXNG (public instance)',
   priority: 30,
   enabled: true,
   search,
+  _internal: { parseHtmlResults },
 };

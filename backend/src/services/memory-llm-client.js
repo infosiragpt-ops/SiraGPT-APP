@@ -21,7 +21,7 @@ const DEFAULT_MEMORY_MODEL = 'DeepSeek:deepseek-v4-flash';
 let cached = null;
 let cachedAt = 0;
 const REFRESH_MS = 5 * 60 * 1000; // pick up key changes without a restart
-const WARN_DEBOUNCE_MS = 30 * 60 * 1000;
+const WARN_DEBOUNCE_MS = 6 * 60 * 60 * 1000;
 const warnMemo = new Map();
 
 /**
@@ -31,12 +31,20 @@ const warnMemo = new Map();
  */
 function resolveMemoryLlmCandidates({ env = process.env } = {}) {
   const { resolveDocAgentCandidates } = require('./doc-agent/llm-runtime');
-  const model = String((env && env.SIRAGPT_MEMORY_LLM_MODEL) || '').trim() || DEFAULT_MEMORY_MODEL;
-  return resolveDocAgentCandidates({ model, env }).map((candidate) => (
+  const billing = require('./ai/billing-failover');
+  const explicitModel = String((env && env.SIRAGPT_MEMORY_LLM_MODEL) || '').trim();
+  const model = explicitModel || DEFAULT_MEMORY_MODEL;
+  const list = resolveDocAgentCandidates({ model, env }).map((candidate) => (
     candidate.provider === 'DeepSeek' && /^deepseek-v4/i.test(String(candidate.model || ''))
       ? { ...candidate, extra: { ...(candidate.extra || {}), thinking: { type: 'disabled' } } }
       : candidate
   ));
+  if (!explicitModel && list.length > 1) {
+    const funded = list.filter((c) => !billing.isUnfunded(c.provider, env));
+    const unfunded = list.filter((c) => billing.isUnfunded(c.provider, env));
+    return [...funded, ...unfunded];
+  }
+  return list;
 }
 
 function createMemoryLlmClient({ env = process.env, force = false, createClient = null } = {}) {
@@ -48,8 +56,9 @@ function createMemoryLlmClient({ env = process.env, force = false, createClient 
     if (!candidates.length) { cached = null; cachedAt = now; return null; }
     cached = createFailoverClient(candidates, {
       ...(typeof createClient === 'function' ? { createClient } : {}),
+      env,
       onFailover: (info) => {
-        const key = `${info.from || ''}->${info.to || ''}:${info.status || ''}`;
+        const key = `${info.from || ''}:${info.status || ''}`;
         const t = Date.now();
         if (t - (warnMemo.get(key) || 0) >= WARN_DEBOUNCE_MS) {
           warnMemo.set(key, t);

@@ -343,7 +343,7 @@ function noteLlmProviderFailure(provider, apiKey, err, env = process.env) {
     if (billing.isBillingError(err)) {
       if (!isNoCreditFailure(err) || isReservationSizeError(err)) return;
       if (billing.normProvider(provider) === 'deepseek' && billing.currentKeyFor('OpenRouter', env)) {
-        if (apiKey) keyHealth.markRejected('deepseek', apiKey, err, env, { reason: 'billing' });
+        if (apiKey) keyHealth.markRejected('deepseek', apiKey, err, env, { reason: 'billing', ttlMs: billing.quotaWindowMs(err, env) });
         return;
       }
       billing.markOutOfCredit(provider, err, env);
@@ -418,7 +418,11 @@ function createFailoverClient(candidates, { createClient = defaultCreateClient, 
         }
         const last = order.length === 1 || i === order.length - 1;
         if (!isFailoverError(err) || last || (opts && opts.signal && opts.signal.aborted)) throw err;
-        order.push(order.shift());
+        const idx = order.indexOf(candidate);
+        if (idx >= 0) {
+          order.splice(idx, 1);
+          order.push(candidate);
+        }
         const info = { from: candidate.provider, model: candidate.model, to: order[0].provider, status: errorStatus(err), message: String((err && err.message) || err).slice(0, 160) };
         attemptsLog.push(info);
         try { onFailover(info); } catch (_) { /* observer errors never break the run */ }

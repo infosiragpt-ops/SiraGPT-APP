@@ -23,7 +23,7 @@ const keyHealth = require('../../utils/provider-key-health');
 
 const { fingerprint } = keyHealth;
 
-const DEFAULT_MEMO_MS = 10 * 60 * 1000;
+const DEFAULT_MEMO_MS = 6 * 60 * 60 * 1000;
 // provider (lowercase) → { at, keyFp, ttlMs, status, reason, cause }. cause
 // is 'billing' (no credit: the picker shows «Sin saldo») or 'rate_limit' (a
 // per-minute quota window: the ladders skip the provider for about a minute,

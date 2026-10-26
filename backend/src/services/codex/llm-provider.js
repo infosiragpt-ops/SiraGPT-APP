@@ -35,7 +35,7 @@ const {
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.6';
 const FAILOVER_TTL_MS = 5 * 60 * 1000;
-const BILLING_COOLDOWN_MS = 30 * 60 * 1000;
+const BILLING_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const WARN_DEBOUNCE_MS = 30 * 60 * 1000;
 // Anthropic silently ignores cache breakpoints on prefixes under ~1024 tokens,
 // and each request only gets 4 breakpoints — don't spend one on a system
@@ -43,12 +43,18 @@ const WARN_DEBOUNCE_MS = 30 * 60 * 1000;
 const CACHE_MIN_SYSTEM_CHARS = 1024;
 
 const LADDER = ['deepseek', 'anthropic', 'openrouter', 'cerebras'];
+const INTERNAL_LAST_RESORT_MODELS = Object.freeze([
+  { name: 'xai', model: 'x-ai/grok-4.7' },
+  { name: 'gemini', model: 'gemini-2.5-flash' },
+]);
 
 // provider → epoch-ms until which it is quarantined. Module-level on purpose:
 // one bad key shouldn't be re-probed on every single agent step.
 const quarantine = new Map();
 const billingQuarantine = new Map();
 const billingSnapshot = new Map();
+const billingKeySnapshot = new Map();
+const billingWarnedKey = new Map();
 const warnMemo = new Map();
 
 function isBillingExhaustedError(err) {
@@ -67,6 +73,29 @@ function billingCooldownMs(env = process.env) {
 
 function clean(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function keyForRung(name, env = process.env) {
+  if (!env) return '';
+  if (name === 'deepseek') return clean(env.DEEPSEEK_API_KEY) || clean(env.SIRA_DEEPSEEK_API_KEY);
+  if (name === 'anthropic') return clean(env.ANTHROPIC_API_KEY) || clean(env.SIRA_ANTHROPIC_API_KEY);
+  if (name === 'openrouter') return clean(env.OPENROUTER_API_KEY);
+  if (name === 'cerebras') return clean(env.CEREBRAS_API_KEY);
+  if (name === 'xai') return clean(env.XAI_API_KEY);
+  if (name === 'gemini') return clean(env.GEMINI_API_KEY) || clean(env.GOOGLE_GENERATIVE_AI_API_KEY);
+  return '';
+}
+
+function syncKeyRotation(name, env) {
+  const prevKey = billingKeySnapshot.get(name);
+  if (prevKey !== undefined && prevKey !== keyForRung(name, env)) {
+    quarantine.delete(name);
+    billingQuarantine.delete(name);
+    billingSnapshot.delete(name);
+    billingKeySnapshot.delete(name);
+    billingWarnedKey.delete(name);
+    warnMemo.delete(name);
+  }
 }
 
 function selectedProviderForModel(model) {
@@ -137,7 +166,10 @@ function resolveCandidates({ env = process.env, now = Date.now, exclude = [], mo
   if (forced) {
     return LADDER.includes(forced) && providerConfigured(forced, env) && !skip.has(forced) ? [forced] : [];
   }
-  const configured = LADDER.filter((name) => providerConfigured(name, env) && !skip.has(name));
+  const configured = LADDER.filter((name) => {
+    syncKeyRotation(name, env);
+    return providerConfigured(name, env) && !skip.has(name);
+  });
   const t = now();
   const healthy = configured.filter((name) => (quarantine.get(name) || 0) <= t);
   const sick = configured.filter((name) => (quarantine.get(name) || 0) > t);
@@ -393,6 +425,7 @@ async function chatComplete({
 
   let firstError = null;
   for (const name of candidates) {
+    syncKeyRotation(name, env);
     const tNow = now();
     const hasInjectedClient = Boolean(
       clients && (
@@ -478,6 +511,8 @@ async function chatComplete({
       quarantine.delete(name);
       billingQuarantine.delete(name);
       billingSnapshot.delete(name);
+      billingKeySnapshot.delete(name);
+      billingWarnedKey.delete(name);
       warnMemo.delete(name);
       return out;
     } catch (err) {
@@ -487,23 +522,78 @@ async function chatComplete({
       if (err?.partialResponse) throw err;
       if (!firstError) firstError = err;
       const errNow = now();
-      if (isBillingExhaustedError(err)) {
+      const isBilling = isBillingExhaustedError(err);
+      const currentKey = keyForRung(name, env);
+      if (isBilling) {
         const ttl = billingCooldownMs(env);
         quarantine.set(name, errNow + ttl);
         billingQuarantine.set(name, errNow + ttl);
         billingSnapshot.set(name, err);
+        billingKeySnapshot.set(name, currentKey);
+        if (!hasInjectedClient) {
+          try { require('../ai/billing-failover').markOutOfCredit(name, err, env, { ttlMs: ttl }); } catch (_) { /* advisory */ }
+        }
       } else {
         quarantine.set(name, errNow + FAILOVER_TTL_MS);
       }
       if (env.NODE_ENV !== 'test') {
         const lastWarnAt = warnMemo.get(name) || 0;
-        if (errNow - lastWarnAt >= WARN_DEBOUNCE_MS) {
+        const alreadyWarnedKey = isBilling && billingWarnedKey.has(name) && billingWarnedKey.get(name) === currentKey;
+        if (!alreadyWarnedKey && errNow - lastWarnAt >= WARN_DEBOUNCE_MS) {
           warnMemo.set(name, errNow);
+          if (isBilling) billingWarnedKey.set(name, currentKey);
           console.warn(`[codex llm-provider] ${name} failed (${String(err?.message || err).slice(0, 200)}) — trying next provider`);
         }
       }
     }
   }
+
+  // Last-resort fallback for unselected internal background calls (e.g. proactive
+  // engine) when every primary ladder rung is out of credit: try funded first-party
+  // xAI or Gemini connections if configured in env.
+  const hasAnyInjectedClient = Boolean(clients && Object.keys(clients).length > 0);
+  if (!selected && !clean(env.CODEX_LLM_PROVIDER) && !hasAnyInjectedClient) {
+    const skip = new Set((Array.isArray(exclude) ? exclude : []).map((n) => String(n || '').toLowerCase()));
+    for (const fallback of INTERNAL_LAST_RESORT_MODELS) {
+      if (skip.has(fallback.name)) continue;
+      syncKeyRotation(fallback.name, env);
+      if (!providerConfigured(fallback.name, env)) continue;
+      if ((billingQuarantine.get(fallback.name) || 0) > now()) continue;
+      try {
+        // eslint-disable-next-line global-require
+        const { clientForModel } = require('../ai/structured-generation');
+        const routed = clientForModel(fallback.model, { env });
+        const out = await callOpenAICompatible({
+          messages,
+          temperature,
+          maxTokens: maxTokens || defaultMaxTokensFor(fallback.name),
+          signal,
+          model: routed.model,
+          client: routed.client,
+          providerLabel: routed.provider,
+          onTextDelta,
+          onReasoningDelta,
+          effort,
+        });
+        quarantine.delete(fallback.name);
+        billingQuarantine.delete(fallback.name);
+        billingSnapshot.delete(fallback.name);
+        billingKeySnapshot.delete(fallback.name);
+        billingWarnedKey.delete(fallback.name);
+        return out;
+      } catch (err) {
+        if (signal?.aborted || err?.partialResponse) throw err;
+        if (!firstError) firstError = err;
+        if (isBillingExhaustedError(err)) {
+          const ttl = billingCooldownMs(env);
+          billingQuarantine.set(fallback.name, now() + ttl);
+          billingSnapshot.set(fallback.name, err);
+          billingKeySnapshot.set(fallback.name, keyForRung(fallback.name, env));
+        }
+      }
+    }
+  }
+
   throw firstError || new Error('codex llm-provider: all providers failed');
 }
 
@@ -519,6 +609,8 @@ function resetQuarantine() {
   quarantine.clear();
   billingQuarantine.clear();
   billingSnapshot.clear();
+  billingKeySnapshot.clear();
+  billingWarnedKey.clear();
   warnMemo.clear();
 }
 

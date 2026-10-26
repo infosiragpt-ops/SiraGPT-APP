@@ -185,9 +185,14 @@ test('isBillingExhaustedError classifies credit exhaustion errors and extends qu
   const now = () => t;
   await provider.chatComplete({ messages: [{ role: 'user', content: 'U' }], env, now, clients: { anthropicCtor: UnfundedAnthropic, openrouter: or } });
   t += provider.FAILOVER_TTL_MS + 1;
-  // Still quarantined after 5 min because billing cooldown is 30 min
+  // Still quarantined after 5 min because billing cooldown is 6h
   assert.deepEqual(provider.resolveCandidates({ env, now }), ['openrouter', 'anthropic']);
-  t += provider.BILLING_COOLDOWN_MS;
+  // Rotating the API key clears quarantine immediately
+  assert.deepEqual(provider.resolveCandidates({ env: { ...env, ANTHROPIC_API_KEY: 'k-rotated' }, now }), ['anthropic', 'openrouter']);
+  // Re-quarantine and verify expiry after BILLING_COOLDOWN_MS
+  await provider.chatComplete({ messages: [{ role: 'user', content: 'U' }], env, now, clients: { anthropicCtor: UnfundedAnthropic, openrouter: or } });
+  t += provider.BILLING_COOLDOWN_MS + 1;
   assert.deepEqual(provider.resolveCandidates({ env, now }), ['anthropic', 'openrouter']);
 });
+
 

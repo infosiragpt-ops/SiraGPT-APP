@@ -80,3 +80,15 @@ test('non-DeepSeek rungs of the ladder never get the thinking field', () => {
 test('no configured provider → null (callers keep their no-op)', () => {
   assert.equal(memoryClient.createMemoryLlmClient({ env: {}, force: true }), null);
 });
+
+test('unfunded default DeepSeek is moved behind funded providers on candidate resolution', () => {
+  const billing = require('../src/services/ai/billing-failover');
+  billing.__resetForTests();
+  const env = { DEEPSEEK_API_KEY: 'ds-empty-key', GEMINI_API_KEY: 'gm-funded-key' };
+  const err = Object.assign(new Error('402 Insufficient Balance'), { status: 402 });
+  billing.markOutOfCredit('DeepSeek', err, env);
+  const candidates = memoryClient.resolveMemoryLlmCandidates({ env });
+  assert.equal(candidates[0].provider, 'Gemini', 'funded Gemini leads when default DeepSeek is marked unfunded');
+  billing.__resetForTests();
+});
+
