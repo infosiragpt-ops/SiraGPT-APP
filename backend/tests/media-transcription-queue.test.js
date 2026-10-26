@@ -443,3 +443,57 @@ test('a long chat delivery never holds media recovery: the delivery sweep runs d
   assert.match(src, /const reconcile = createRecoveryTick\(\{/, 'the worker uses the decoupled tick');
   assert.doesNotMatch(src, /await require\('\.\/media-delivery'\)\.sweepPendingDeliveries\(\)/);
 });
+
+
+test('job state reads are owner scoped and find both transcription lanes', async () => {
+  const shortJobs = new Map();
+  const f = fixture([row('long'), row('short')], { getShortQueue: () => ({ getJob: async id => shortJobs.get(id) }) });
+  f.jobs.set(jobIdFor('long', 'u1'), { getState: async () => 'delayed' });
+  shortJobs.set(jobIdFor('short', 'u1'), { getState: async () => 'active' });
+  assert.deepEqual(await f.service.readMediaJobStates({ fileIds: ['long', 'short', 'missing'], userId: 'u1' }),
+    { long: 'delayed', short: 'active', missing: 'missing' });
+  assert.deepEqual(await f.service.readMediaJobStates({ fileIds: ['long', 'short'], userId: 'u2' }),
+    { long: 'missing', short: 'missing' });
+});
+
+test('unavailable, failed and timed out state probes remain unknown, not missing', async () => {
+  for (const getQueue of [() => { throw new Error('unavailable'); },
+    () => ({ getJob: async () => { throw new Error('offline'); } }),
+    () => ({ getJob: () => new Promise(() => {}) })]) {
+    const f = fixture([], { getQueue });
+    assert.deepEqual(await f.service.readMediaJobStates({ fileIds: ['long'], userId: 'u1', timeoutMs: 10 }), { long: 'unknown' });
+  }
+});
+
+
+test('truncated decoded audio retries before a clear terminal failure, never a complete transcript', async () => {
+  const f = fixture([row('long')], { processFile: async () => ({
+    success: false, code: 'audio_decode_incomplete', error: 'Incomplete decoding', extractedText: '',
+  }) });
+  await f.service.enqueueMediaTranscription({ fileId: 'long', userId: 'u1' });
+  const job = f.jobs.get(jobIdFor('long', 'u1'));
+  await assert.rejects(f.service.processMediaJob(job), { code: 'audio_decode_incomplete' });
+  assert.equal(f.rows.get('long').processingStage, 'uploaded');
+  assert.equal(f.calls.discarded.length, 0);
+  job.attemptsMade = 2;
+  await assert.rejects(f.service.processMediaJob(job), { code: 'audio_decode_incomplete' });
+  assert.equal(f.rows.get('long').processingStage, 'failed');
+  assert.match(f.rows.get('long').processingError, /No se pudo leer todo el audio/);
+  assert.equal(f.rows.get('long').extractedText, null);
+});
+
+
+test('a retained terminal job cannot hide live or unknown work in the other lane', async () => {
+  for (const [longState, shortState, expected] of [
+    ['completed', 'active', 'active'], ['failed', 'waiting', 'waiting'],
+    ['throws', 'completed', 'unknown'], ['completed', 'throws', 'unknown'],
+    ['unknown', 'completed', 'unknown'],
+  ]) {
+    const job = state => ({ getState: async () => { if (state === 'throws') throw new Error('offline'); return state; } });
+    const f = fixture([], {
+      getQueue: () => ({ getJob: async () => job(longState) }),
+      getShortQueue: () => ({ getJob: async () => job(shortState) }),
+    });
+    assert.deepEqual(await f.service.readMediaJobStates({ fileIds: ['long'], userId: 'u1' }), { long: expected });
+  }
+});

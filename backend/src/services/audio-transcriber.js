@@ -393,6 +393,7 @@ const MAX_PROMPT_CHARS = 1000;
 const MAX_KEYTERMS = 50;
 const MAX_KEYTERM_CHARS = 80;
 const MANIFEST_VERSION = 1;
+const AUDIO_CLOCK = 'pts-v1';
 const KEYISH_RE = /\bsk-[A-Za-z0-9._-]{3,}\b|\bBearer\s+\S+|OPENAI_API_KEY/i;
 const RATE_LIMIT_TEXT_RE = /rate.?limit|too many requests|try again in|per (?:second|minute|hour|day)|requests per|tokens per|\((?:RPM|RPD|TPM|TPD|ASH|ASD)\)/i;
 
@@ -1989,6 +1990,9 @@ async function cutAndMeasure(filePath, dir, ctx = {}, options = {}) {
     '-i', filePath,
     ...mapArgs(mode.map),
     '-vn', '-sn', '-dn',
+    // Preserve pauses/discontinuities in the recording's timestamps. Without
+    // this, FLAC packs the samples together and silently shifts later speech.
+    '-af', 'aresample=async=1:first_pts=0',
     '-ac', '1', '-ar', SEGMENT_SAMPLE_RATE, '-c:a', 'flac',
     '-f', 'segment',
     ...(cutTimes && cutTimes.length ? ['-segment_times', cutTimes.join(',')] : ['-segment_time', String(S)]),
@@ -2056,17 +2060,20 @@ function planStreamOf(audioStream) {
 /**
  * Identity of a cut: offsets + segment length (+ the audio track of a
  * multi-stream file). Parts are reused only within one plan. The formula for
- * a plan without a track is unchanged: `{ v, s, o }`.
+ * a legacy plan without a track is unchanged: `{ v, s, o }`. New cuts also
+ * name the preserved timestamp clock, since identical boundaries can contain
+ * different audio when pauses were previously removed.
  */
-function planOf(segments, segmentSeconds, audioStream = null) {
+function planOf(segments, segmentSeconds, audioStream = null, clock = null) {
   const offsets = segments.map((s) => Math.round((Number(s.offsetSeconds) || 0) * 1000));
   const fixed = segments.every((s, i) => Math.abs((Number(s.offsetSeconds) || 0) - i * segmentSeconds) <= 0.5);
   const track = planStreamOf(audioStream);
   const identity = track == null
     ? { v: MANIFEST_VERSION, s: segmentSeconds, o: offsets }
     : { v: MANIFEST_VERSION, s: segmentSeconds, o: offsets, a: track };
+  if (clock === AUDIO_CLOCK) identity.clock = clock;
   const hash = crypto.createHash('sha1').update(JSON.stringify(identity)).digest('hex').slice(0, 16);
-  return { kind: fixed ? 'fixed' : 'snapped', hash };
+  return { kind: fixed ? 'fixed' : 'snapped', hash, ...(clock === AUDIO_CLOCK ? { clock } : {}) };
 }
 
 /**
@@ -2140,7 +2147,8 @@ async function loadManifest(manifestPath, { segmentSeconds, sourceSize, audioStr
     const durationSeconds = Number(manifest.durations?.[i]);
     segments.push({ path: full, index: i, offsetSeconds: Number(offsets[i]) || 0, durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null });
   }
-  const plan = planOf(segments, segmentSeconds, recorded);
+  if (manifest.clock != null && manifest.clock !== AUDIO_CLOCK) return null;
+  const plan = planOf(segments, segmentSeconds, recorded, manifest.clock);
   if (manifest.plan?.hash && manifest.plan.hash !== plan.hash) return null;
   return { manifest, segments, plan };
 }
@@ -2149,6 +2157,48 @@ async function writeManifest(manifestPath, manifest) {
   const tmp = `${manifestPath}.${process.pid}.tmp`;
   await fsPromises.writeFile(tmp, JSON.stringify(manifest));
   await fsPromises.rename(tmp, manifestPath);
+}
+
+/**
+ * A decoder may exit successfully after reading only part of a damaged
+ * recording. Successful STT for every emitted piece does not prove that the
+ * whole audio was read. Compare measured pieces with the selected track's
+ * duration before spending any STT calls. Unknown lengths are not evidence
+ * of truncation; in particular, a video's length need not be its audio's.
+ */
+function assertDecodedAudioComplete(segments, expectedSeconds) {
+  const expected = Number(expectedSeconds);
+  if (!(expected > 0) || !Number.isFinite(expected) || !segments.length) return;
+  if (!segments.every(segment => Number.isFinite(segment.durationSeconds) && segment.durationSeconds > 0)) return;
+  const decoded = round3(segments.reduce((sum, segment) => sum + segment.durationSeconds, 0));
+  // Packet boundaries, codec padding and accumulated millisecond rounding.
+  // At ten hours the tolerance is 3.6 s, never an entire missing piece.
+  const tolerance = Math.max(2, expected * 0.0001);
+  if (decoded + tolerance >= expected) return;
+  throw Object.assign(new Error('No se pudo leer todo el audio de la grabación.'), {
+    code: 'audio_decode_incomplete', retryable: true,
+    expectedDurationSeconds: round3(expected), decodedDurationSeconds: decoded,
+  });
+}
+
+/** The duration whose audio was actually selected, not a longer video track. */
+function expectedAudioDuration(intake, sourceDuration, { normalizedMime, fileName }) {
+  const ordinal = intake.audioStream?.streamOrdinal;
+  const stream = intake.probe?.audio?.find(item => item.streamOrdinal === ordinal);
+  const duration = Number(stream?.durationSec);
+  if (Number.isFinite(duration) && duration > 0) {
+    // ffmpeg rebases input timestamps against the container's start. Keep
+    // a late audio track's initial silence when video begins before it.
+    const start = stream?.startTimeSec;
+    const containerStart = intake.probe?.formatStartTimeSec;
+    const lead = Number.isFinite(start) && Number.isFinite(containerStart)
+      ? Math.max(0, start - containerStart) : 0;
+    return duration + lead;
+  }
+  if (intake.probeOk && !intake.probe.hasVideo) return sourceDuration;
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  if (!intake.probeOk && /^audio\//.test(normalizedMime) && SINGLE_TRACK_AUDIO_EXTENSIONS.has(ext)) return sourceDuration;
+  return null;
 }
 
 /**
@@ -2176,6 +2226,7 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
       durationSeconds: Number.isFinite(Number(s.durationSeconds)) && Number(s.durationSeconds) > 0 ? Number(s.durationSeconds) : null,
     }));
     if (!segments.length) throw Object.assign(new Error('no segments'), { code: 'SEGMENT_EMPTY' });
+    assertDecodedAudioComplete(segments, ctx.expectedAudioDurationSeconds);
     const dir = out?.dir || null;
     return {
       dir, persistent: Boolean(dir && checkpointDir && isInside(dir, checkpointDir)), segments, plan: planOf(segments, S),
@@ -2191,9 +2242,19 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
     const manifestPath = path.join(dir, 'manifest.json');
     const reused = await loadManifest(manifestPath, { segmentSeconds: S, sourceSize: ctx.fileSize, audioStream });
     if (reused) {
-      return {
+      const info = cutInfoOfManifest(reused.manifest);
+      let complete = true;
+      try {
+        // An old multi-track manifest cannot prove which audio it contains.
+        const trackKnown = !ctx.audioStream || ctx.audioStream.streams === 1 || info.audioStream;
+        if (!info.streamDropped && trackKnown) assertDecodedAudioComplete(reused.segments, ctx.expectedAudioDurationSeconds);
+      } catch (err) {
+        if (err?.code !== 'audio_decode_incomplete') throw err;
+        complete = false; // Rebuild a shortened cached cut before retrying STT.
+      }
+      if (complete) return {
         dir, persistent: true, segments: reused.segments, plan: reused.plan, manifest: reused.manifest, manifestPath,
-        reused: true, cutInfo: { ...cutInfoOfManifest(reused.manifest), reused: true },
+        reused: true, cutInfo: { ...info, reused: true },
       };
     }
     await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -2201,11 +2262,13 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
     try {
       const report = {};
       const segments = await cutAndMeasure(filePath, dir, cutCtx(report), options);
-      const plan = planOf(segments, S, audioStream);
+      if (!report.streamDropped) assertDecodedAudioComplete(segments, ctx.expectedAudioDurationSeconds);
+      const plan = planOf(segments, S, audioStream, AUDIO_CLOCK);
       const stat = await fsPromises.stat(filePath).catch(() => null);
       const manifest = {
         version: MANIFEST_VERSION,
         format: 'flac',
+        clock: AUDIO_CLOCK,
         segmentSeconds: S,
         // The source is often re-downloaded to a fresh temp path on every
         // attempt, so its mtime changes; the size (and the checkpoint dir,
@@ -2238,8 +2301,9 @@ async function prepareSegments(filePath, options = {}, ctx = {}) {
   try {
     const report = {};
     const segments = await cutAndMeasure(filePath, dir, cutCtx(report), options);
+    if (!report.streamDropped) assertDecodedAudioComplete(segments, ctx.expectedAudioDurationSeconds);
     return {
-      dir, persistent: false, segments, plan: planOf(segments, S, audioStream), manifest: null, manifestPath: null,
+      dir, persistent: false, segments, plan: planOf(segments, S, audioStream, AUDIO_CLOCK), manifest: null, manifestPath: null,
       cutInfo: {
         audioStream,
         decode: report.decode || 'strict',
@@ -3328,7 +3392,7 @@ function kindOfProvider(name) {
 /** A checkpointed part cut by another plan (or a legacy fixed-cut part on a snapped plan). */
 function cutByOtherPlan(part, plan) {
   if (!part || typeof part !== 'object') return false;
-  return part.cutPlan ? part.cutPlan !== plan.hash : plan.kind !== 'fixed';
+  return part.cutPlan ? part.cutPlan !== plan.hash : plan.kind !== 'fixed' || Boolean(plan.clock);
 }
 
 /** A checkpointed part is reused only within the same cut plan and language. */
@@ -3336,8 +3400,8 @@ function partUsable(part, plan, language) {
   if (!part || typeof part !== 'object') return false;
   if (part.cutPlan) {
     if (part.cutPlan !== plan.hash) return false;
-  } else if (plan.kind !== 'fixed') {
-    return false; // a legacy part cut on fixed 10-min boundaries cannot fill a snapped plan
+  } else if (plan.kind !== 'fixed' || plan.clock) {
+    return false; // legacy parts cannot prove matching snapped boundaries or the preserved audio clock
   }
   const partLanguage = normalizeLanguage(part.language);
   if (language && partLanguage && partLanguage !== language) return false;
@@ -3436,7 +3500,8 @@ async function runSegmentedJob(filePath, job) {
   progressEvent(options, 'preparing');
   let prepared;
   try {
-    const cut = { durationSeconds: job.durationSeconds, segmentSeconds: job.segmentSeconds, fileSize: job.fileSize, fileName: job.fileName };
+    const cut = { durationSeconds: job.durationSeconds, segmentSeconds: job.segmentSeconds, fileSize: job.fileSize,
+      fileName: job.fileName, expectedAudioDurationSeconds: job.expectedAudioDurationSeconds };
     if (job.audioStreamInfo) cut.audioStream = job.audioStreamInfo;
     if (Object.prototype.hasOwnProperty.call(job, 'mapOrdinal')) cut.mapOrdinal = job.mapOrdinal;
     prepared = await prepareSegments(filePath, options, cut);
@@ -4419,6 +4484,7 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
   const trackOrdinal = intake.audioStream ? intake.audioStream.streamOrdinal : null;
   const job = {
     options, fileName, normalizedMime, label, language, languageSource, prompt, durationSeconds: duration, fileSize, segmentSeconds,
+    expectedAudioDurationSeconds: expectedAudioDuration(intake, duration, { normalizedMime, fileName }),
     // Track identity (manifest + multi-stream plan hash), what to map on the
     // cut source, and what the local whole-file decode maps.
     audioStreamInfo: intake.audioStreamInfo, mapOrdinal: trackOrdinal, localStreamOrdinal: trackOrdinal,
@@ -4446,7 +4512,7 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
       applyCutInfo(intake, assembled.cutInfo);
       return finalizeSegmentedResult(assembled, job);
     } catch (err) {
-      if (isAbortError(err, job.options.signal) || !err?.segmentationFailed) throw err;
+      if (isAbortError(err, job.options.signal) || err?.code === 'audio_decode_incomplete' || !err?.segmentationFailed) throw err;
       if (INTAKE_FATAL_CODES.has(err.intakeCode)) return intakePlaceholder(err.intakeCode);
       logSafe(`could not cut ${fileName} into segments (${sanitizeProviderError(err)})`);
       // Unknown length and ffmpeg cannot cut it: let the local decoder decide

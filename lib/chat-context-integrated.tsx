@@ -34,7 +34,7 @@ import {
   normalizeComposerEffort,
 } from "./chat/composer-effort"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
-import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
+import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages, parseAgentTaskContent } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
 import {
@@ -3304,14 +3304,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   )
 
 
+  const mediaDeliveryRefreshesRef = useRef(new Set<string>());
+
   const regenerateMessageImpl = async (messageId?: string) => {
     // Per-chat guard (NOT the global isLoading aggregate): regenerating in an
     // idle chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
-    if (!isActiveCatalogSelection(selectedModel, availableModels)) {
-      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
-      return;
-    }
 
     let targetAiMessageIndex = -1;
 
@@ -3330,6 +3328,45 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     if (targetAiMessageIndex === -1) {
       console.warn("No AI message found to regenerate.");
+      return;
+    }
+
+    const targetAssistant = currentChat.messages[targetAiMessageIndex];
+    const targetMetadata = parseMessageMetadata(targetAssistant.metadata);
+    const targetTask = parseAgentTaskContent(targetAssistant.content);
+    const isMediaHandoff = (typeof targetMetadata.mediaDeliveryHandoff === 'string'
+      && targetMetadata.mediaDeliveryHandoff.trim().length > 0)
+      || targetMetadata.stoppedReason === 'media_delivery_handoff'
+      || (targetTask.done && !targetTask.error && targetTask.stoppedReason === 'media_delivery_handoff');
+    if (isMediaHandoff) {
+      // This answer acknowledged a durable job; it was not the transcript.
+      // Deleting it (and later turns) then calling /ai/generate loses the
+      // delivery context and asks a text model to invent a replacement.
+      // Refresh the origin chat instead: the same job owns its final files.
+      const chatId = currentChat.id;
+      if (mediaDeliveryRefreshesRef.current.has(chatId)) return;
+      mediaDeliveryRefreshesRef.current.add(chatId);
+      try {
+        const response = await apiClient.getChat(chatId);
+        if (!response?.chat || response.chat.id !== chatId) throw new Error('chat_refresh_unavailable');
+        const freshChat = response.chat;
+        setCurrentChat(prev => prev?.id === chatId ? mergeChatPreservingUserMessages(freshChat, prev) : prev);
+        setChats(prev => prev.map(chat => chat.id === chatId ? mergeChatPreservingUserMessages(freshChat, chat) : chat));
+        if (currentChatRef.current?.id === chatId) {
+          toast.info('Conversación actualizada. Se conserva la solicitud de transcripción sin reiniciar el trabajo.');
+        }
+      } catch {
+        if (currentChatRef.current?.id === chatId) {
+          toast.error('No se pudo actualizar la conversación. Tu solicitud de transcripción se conserva; puedes volver a intentarlo.');
+        }
+      } finally {
+        mediaDeliveryRefreshesRef.current.delete(chatId);
+      }
+      return;
+    }
+
+    if (!isActiveCatalogSelection(selectedModel, availableModels)) {
+      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
       return;
     }
 

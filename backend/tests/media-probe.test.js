@@ -95,6 +95,59 @@ describe('parseProbeJson · the C1 shape', () => {
     assert.equal(song.audio[0].durationSec, 182.4);
   });
 
+  test('normalizes Matroska end-clock tags without subtracting starts from direct durations', () => {
+    const probe = parseProbeJson({
+      format: { format_name: 'matroska,webm', start_time: '8.000000', duration: '10.000000' },
+      streams: [
+        { index: 0, codec_type: 'audio', start_time: '8.000000', tags: { DURATION: '00:00:10.000000000' } },
+        { index: 1, codec_type: 'audio', start_time: '8.000000', duration: '2.000000', tags: { DURATION: '00:00:10.000000000' } },
+        { index: 2, codec_type: 'video', start_time: '8.000000', tags: { duration: '00:00:10.000000000' } },
+      ],
+    });
+    assert.equal(probe.formatStartTimeSec, 8);
+    assert.equal(probe.durationSec, 10, 'preserve the container duration reported by ffprobe');
+    assert.deepEqual(probe.audio.map((a) => [a.durationSec, a.startTimeSec]), [[2, 8], [2, 8]]);
+    assert.deepEqual([probe.video[0].durationSec, probe.video[0].startTimeSec], [2, 8]);
+    const otherContainer = parseProbeJson({
+      format: { format_name: 'mp3' },
+      streams: [{ index: 0, codec_type: 'audio', start_time: '8', tags: { DURATION: '00:00:10' } }],
+    });
+    assert.equal(otherContainer.audio[0].durationSec, 10, 'other formats keep their tag semantics');
+  });
+
+  test('keeps signed clock starts, treats missing clocks as unknown and rejects impossible tag spans', () => {
+    const probe = parseProbeJson({
+      format: { format_name: 'matroska', start_time: '-0.021333' },
+      streams: [
+        { index: 0, codec_type: 'audio', start_time: '-0.021333', tags: { DURATION: '00:00:02.000000000' } },
+        { index: 1, codec_type: 'audio', start_time: '0', duration: '2' },
+        { index: 2, codec_type: 'audio', start_time: 'N/A', tags: { DURATION: '00:00:02' } },
+        { index: 3, codec_type: 'audio', tags: { DURATION: '00:00:02' } },
+        { index: 4, codec_type: 'audio', start_time: '8', tags: { DURATION: '00:00:02' } },
+        { index: 5, codec_type: 'audio', start_time: null, duration: '2' },
+        { index: 6, codec_type: 'audio', start_time: '', duration: '2' },
+        { index: 7, codec_type: 'audio', start_time: false, duration: '2' },
+      ],
+    });
+    assert.equal(probe.formatStartTimeSec, -0.021);
+    assert.deepEqual(probe.audio.map((a) => a.startTimeSec), [-0.021, 0, null, null, 8, null, null, null]);
+    assert.deepEqual(probe.audio.map((a) => a.durationSec), [2.021, 2, 2, 2, null, 2, 2, 2]);
+    assert.equal(parseProbeJson({ format: { start_time: 'Infinity' } }).formatStartTimeSec, null);
+    assert.equal(parseProbeJson(null).formatStartTimeSec, null);
+  });
+
+  test('retains delayed track end time when no container duration is available', () => {
+    const probe = parseProbeJson({
+      format: { format_name: 'matroska', start_time: '0' },
+      streams: [
+        { index: 0, codec_type: 'video', start_time: '0', tags: { DURATION: '00:00:05' } },
+        { index: 1, codec_type: 'audio', start_time: '8', tags: { DURATION: '00:00:10' } },
+      ],
+    });
+    assert.equal(probe.audio[0].durationSec, 2);
+    assert.equal(probe.durationSec, 10, 'late audio still extends the recording to ten seconds');
+  });
+
   test('garbage never throws', () => {
     assert.deepEqual(parseProbeJson('{not json').reason, 'invalid_json');
     assert.equal(parseProbeJson(null).ok, false);
@@ -461,6 +514,30 @@ test('real ffmpeg fixtures: two audio tracks, a subrip and a mov_text track', { 
     assert.equal(movText.codec, 'mov_text');
     assert.deepEqual(movText.segments.map((s) => [s.start, s.text]), [[0.5, 'Hola mundo'], [2, 'Segunda línea']]);
     assert.equal((await extractSubtitleSegments(mp4, 3)).error, 'stream_not_found');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('real Matroska delayed audio and PTS gaps retain the correct track clock', { skip: HAS_FFMPEG ? false : 'ffmpeg/ffprobe not installed' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-media-probe-clock-'));
+  try {
+    const cases = [
+      { name: 'audio-delayed', inputs: ['-f', 'lavfi', '-i', 'sine=f=440:d=2'], filter: 'asetpts=PTS+8/TB', formatStart: 8, trackStart: 8, duration: 2 },
+      { name: 'av-delayed', inputs: ['-f', 'lavfi', '-i', 'color=c=black:s=16x16:r=1:d=10', '-f', 'lavfi', '-i', 'sine=f=440:d=2'], filter: 'asetpts=PTS+8/TB', formatStart: 0, trackStart: 8, duration: 2 },
+      { name: 'audio-gap', inputs: ['-f', 'lavfi', '-i', 'sine=f=440:d=2'], filter: "asetpts=if(gte(T\\,1)\\,PTS+8/TB\\,PTS)", formatStart: 0, trackStart: 0, duration: 10 },
+    ];
+    for (const fixture of cases) {
+      const file = path.join(dir, `${fixture.name}.mkv`);
+      const made = spawnSync('ffmpeg', ['-v', 'error', '-y', ...fixture.inputs, '-af', fixture.filter, '-c:a', 'flac', '-c:v', 'ffv1', file], { encoding: 'utf8', timeout: 10_000 });
+      assert.equal(made.status, 0, `${fixture.name}: ${made.stderr || ''}`);
+      const probe = await probeMediaStreams(file);
+      assert.equal(probe.ok, true, fixture.name);
+      assert.equal(probe.formatStartTimeSec, fixture.formatStart, fixture.name);
+      assert.equal(probe.audio[0].startTimeSec, fixture.trackStart, fixture.name);
+      assert.equal(probe.audio[0].durationSec, fixture.duration, fixture.name);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

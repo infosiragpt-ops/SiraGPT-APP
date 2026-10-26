@@ -607,8 +607,12 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
       }
       if (step === "sync") {
         const status = await transport.status(activeUploadId(), signal)
+        const previousBytes = confirmedBytes()
         received = new Set((status.received || []).filter((i) => Number.isInteger(i) && i >= 0 && i < plans.length))
-        progressed()
+        // A healthy status endpoint does not mean the failed chunk advanced.
+        // Only newly confirmed bytes (including a lost PUT response) reset
+        // the pause/error budget, otherwise this retry loop can run forever.
+        if (confirmedBytes() > previousBytes) progressed()
         meter.resetBaseline()
         emit("uploading", { force: true })
         step = status.completed ? "complete" : "upload"

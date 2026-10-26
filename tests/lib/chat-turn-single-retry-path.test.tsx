@@ -70,6 +70,7 @@ vi.mock('sonner', () => ({
 import { ChatProvider, useChat } from '@/lib/chat-context-integrated'
 import * as pending from '@/lib/pending-messages'
 import { GENERATE_ERROR_COPY } from '@/lib/generate-retry-policy'
+import { toast } from 'sonner'
 
 const CHAT = { id: 'chat-1', title: 'Chat', messages: [] as any[] }
 
@@ -217,6 +218,98 @@ describe('ChatProvider: one retry path per failed turn', () => {
     await flush(120_000)
     expect(postsFor(key)).toHaveLength(1)
     expect(streamCalls).toHaveLength(2)
+  })
+
+  it.each(['persisted-object', 'persisted-json', 'live-envelope'])(
+    'refreshes a durable transcription handoff (%s) without deleting messages or starting a second job',
+    async (shape) => {
+      await mount()
+      const handoffMetadata = { mediaDeliveryHandoff: 'md_12345678-1234-1234-1234-123456789abc', stoppedReason: 'media_delivery_handoff' }
+      const handoff = {
+        id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT',
+        content: shape === 'live-envelope'
+          ? '```agent-task-state\n' + JSON.stringify({ done: true, stoppedReason: 'media_delivery_handoff', finalText: 'Te aviso aquí.' }) + '\n```\nTe aviso aquí.'
+          : 'Te aviso aquí.',
+        metadata: shape === 'persisted-object' ? handoffMetadata : shape === 'persisted-json' ? JSON.stringify(handoffMetadata) : undefined,
+      }
+      const messages = [
+        { id: 'user-1', chatId: CHAT.id, role: 'USER', content: 'Transcribe ambos videos', files: [{ id: 'video-1' }, { id: 'video-2' }] },
+        handoff,
+        { id: 'user-2', chatId: CHAT.id, role: 'USER', content: 'Conserva las marcas de tiempo' },
+        { id: 'answer-2', chatId: CHAT.id, role: 'ASSISTANT', content: 'De acuerdo.' },
+      ]
+      const draft = [{ id: 'draft-file', name: 'siguiente.docx' }]
+      await act(async () => {
+        probe.ctx.setCurrentChat({ ...CHAT, messages })
+        probe.ctx.setUploadedFiles(draft)
+      })
+      apiClientMock.getChat.mockClear()
+      await act(async () => { await probe.ctx.regenerateMessage(handoff.id) })
+      expect(apiClientMock.getChat).toHaveBeenCalledWith(CHAT.id)
+      expect(apiClientMock.clearMessageById).not.toHaveBeenCalled()
+      expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+      expect(probe.ctx.currentChat.messages).toHaveLength(messages.length)
+      expect(probe.ctx.currentChat.messages).toMatchObject(messages)
+      expect(probe.ctx.uploadedFiles).toEqual(draft)
+    },
+  )
+
+  it('loads the finished transcript from the same chat instead of regenerating its handoff', async () => {
+    await mount()
+    const messages = [
+      { id: 'user-1', chatId: CHAT.id, role: 'USER', content: 'Transcribe el video' },
+      { id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Te aviso aquí.', metadata: { mediaDeliveryHandoff: 'md_delivery' } },
+    ]
+    const delivered = { id: 'delivery-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Transcripción completa.',
+      files: [{ id: 'transcript-1', name: 'transcripcion.txt' }], metadata: { source: 'media-delivery', mediaDelivery: 'md_delivery' } }
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages }) })
+    apiClientMock.getChat.mockResolvedValueOnce({ chat: { ...CHAT, messages: [...messages, delivered] } })
+    await act(async () => { await probe.ctx.regenerateMessage('handoff-1') })
+    expect(probe.ctx.currentChat.messages.map((message: any) => message.id)).toEqual(['user-1', 'handoff-1', 'delivery-1'])
+    expect(probe.ctx.currentChat.messages[2].files).toEqual(delivered.files)
+    expect(apiClientMock.clearMessageById).not.toHaveBeenCalled()
+    expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+  })
+
+  it('keeps the handoff and later turns if its refresh fails', async () => {
+    await mount()
+    const messages = [
+      { id: 'user-1', chatId: CHAT.id, role: 'USER', content: 'Transcribe el video' },
+      { id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Te aviso aquí.', metadata: { mediaDeliveryHandoff: 'md_delivery' } },
+      { id: 'user-2', chatId: CHAT.id, role: 'USER', content: 'Gracias' },
+    ]
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages }) })
+    apiClientMock.getChat.mockRejectedValueOnce(new Error('offline'))
+    await act(async () => { await probe.ctx.regenerateMessage('handoff-1') })
+    expect(probe.ctx.currentChat.messages).toEqual(messages)
+    expect(apiClientMock.clearMessageById).not.toHaveBeenCalled()
+    expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('No se pudo actualizar'))
+  })
+
+  it('coalesces repeated handoff refreshes and never replaces a different selected chat', async () => {
+    await mount()
+    const messages = [
+      { id: 'user-1', chatId: CHAT.id, role: 'USER', content: 'Transcribe el video' },
+      { id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Te aviso aquí.', metadata: { mediaDeliveryHandoff: 'md_delivery' } },
+    ]
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages }) })
+    let release!: (response: any) => void
+    apiClientMock.getChat.mockClear()
+    apiClientMock.getChat.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    let first!: Promise<void>
+    let second!: Promise<void>
+    await act(async () => {
+      first = probe.ctx.regenerateMessage('handoff-1')
+      second = probe.ctx.regenerateMessage('handoff-1')
+    })
+    expect(apiClientMock.getChat).toHaveBeenCalledTimes(1)
+    const otherChat = { id: 'chat-2', title: 'Otro chat', messages: [] }
+    await act(async () => { probe.ctx.setCurrentChat(otherChat) })
+    await act(async () => { release({ chat: { ...CHAT, messages } }); await Promise.all([first, second]) })
+    expect(probe.ctx.currentChat).toEqual(otherChat)
+    expect(apiClientMock.clearMessageById).not.toHaveBeenCalled()
+    expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
   })
 
   it('a replay is skipped when another answer already follows the turn (draft left behind)', async () => {

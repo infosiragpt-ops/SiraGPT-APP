@@ -870,6 +870,45 @@ test('a manifest is reused only for the track it records; an explicit track neve
   }), { message: /re-cut attempted|ffmpeg\/ffprobe called/ });
 });
 
+test('a complete cached cut is reused without decoding the long recording again', async (t) => {
+  const { root } = writeManifest(t);
+  const result = await audio.prepareSegments('/media/clase.mkv', { env: {}, checkpoint: { dir: root }, ...forbiddenIo }, {
+    segmentSeconds: 600, fileSize: 1234, expectedAudioDurationSeconds: 1200,
+  });
+  assert.equal(result.reused, true);
+});
+
+test('a shortened cached cut is rebuilt before it can yield a complete transcript', async (t) => {
+  const { root } = writeManifest(t);
+  const cutter = fakeCutter({ cuts: [{}], pieces: 3 });
+  const result = await audio.prepareSegments('/media/clase.mkv', cutOptions({ checkpoint: { dir: root }, spawnImpl: cutter.spawnImpl }), {
+    segmentSeconds: 600, fileSize: 1234, durationSeconds: 1800, expectedAudioDurationSeconds: 1800,
+  });
+  assert.equal(result.reused, undefined);
+  assert.equal(cutter.segmentCalls.length, 1);
+  assert.equal(result.segments.length, 3);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'audio', 'manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.durations, [600, 600, 600]);
+});
+
+test('an incomplete fresh cut is rejected and never saved as a resumable complete manifest', async (t) => {
+  const root = tempDir(t);
+  const cutter = fakeCutter({ cuts: [{}], pieces: 2 });
+  await assert.rejects(audio.prepareSegments('/media/clase.mkv', cutOptions({ checkpoint: { dir: root }, spawnImpl: cutter.spawnImpl }), {
+    segmentSeconds: 600, fileSize: 1234, durationSeconds: 1800, expectedAudioDurationSeconds: 1800,
+  }), { code: 'audio_decode_incomplete', retryable: true });
+  assert.equal(fs.existsSync(path.join(root, 'audio')), false);
+});
+
+test('legacy multi-track cuts are not compared with an unrecorded selected track', async (t) => {
+  const { root } = writeManifest(t);
+  const result = await audio.prepareSegments('/media/clase.mkv', { env: {}, checkpoint: { dir: root }, ...forbiddenIo }, {
+    segmentSeconds: 600, fileSize: 1234, expectedAudioDurationSeconds: 1800,
+    audioStream: { streamOrdinal: 1, streams: 2, explicit: false },
+  });
+  assert.equal(result.reused, true);
+});
+
 // ── Honest notes, raw uploads, the repair, DRM ──────────────────────────────
 
 const twoTrackMovie = () => probe([{ language: 'es', isDefault: true }, { language: 'en' }], { video: [{ codec: 'h264' }] });

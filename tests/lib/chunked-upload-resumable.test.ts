@@ -6,6 +6,8 @@ import { apiClient as api } from "@/lib/api"
 import { authenticatedFetch, clearAuthRefreshBlock, clearAuthenticatedFetchCsrfCache } from "@/lib/authenticated-fetch"
 import {
   ChunkedUploadPausedError,
+  ChunkedUploadHttpError,
+  runResumableUpload,
   RESUME_STORAGE_KEY,
   createLocalResumeStore,
   createThroughputMeter,
@@ -401,6 +403,90 @@ describe("uploadFileChunked · resumable, parallel, honest", () => {
       .rejects.toThrow(/No hay espacio suficiente/)
     expect(server.deletes).toHaveLength(0)
     expect(window.localStorage.getItem(RESUME_STORAGE_KEY)).not.toBeNull()
+  })
+})
+
+describe("resumable upload failure budgets", () => {
+  async function uploadWithStalledChunk(status: number, serverErrorRetries: number) {
+    let now = 0
+    let attempts = 0
+    let deletes = 0
+    const controller = new AbortController()
+    const received = new Set<number>()
+    const result = runResumableUpload({
+      file: lecture(),
+      chunkBytes: 10,
+      parallel: 1,
+      signal: controller.signal,
+      resumeStore: null,
+      now: () => now,
+      random: () => 0.5,
+      timing: { maxPauseMs: 2_000, retryBaseMs: 1_000, retryMaxMs: 1_000, serverErrorRetries },
+      wait: async (ms) => {
+        now += ms
+        // Bound the regression probe: the old implementation never exhausts
+        // either budget when GET status succeeds without any new bytes.
+        if (now >= 10_000) controller.abort()
+      },
+      transport: {
+        init: async () => ({ uploadId: "stalled-upload", chunkSize: 10, totalChunks: 5 }),
+        status: async () => ({ uploadId: "stalled-upload", size: 45, chunkSize: 10, totalChunks: 5, received: [...received] }),
+        putChunk: async ({ index }) => {
+          if (index === 0) { received.add(index); return }
+          attempts += 1
+          throw new ChunkedUploadHttpError(status, "Synthetic stalled upload")
+        },
+        complete: async () => ({ ok: true }),
+        abort: async () => { deletes += 1 },
+      },
+    }).catch((error: unknown) => error)
+    return { error: await result, attempts, deletes, received: [...received], elapsed: now }
+  }
+
+  it("newly confirmed chunks from lost PUT responses reset the pause budget", async () => {
+    let now = 0
+    const received = new Set<number>()
+    const result = await runResumableUpload({
+      file: lecture(),
+      chunkBytes: 10,
+      parallel: 1,
+      resumeStore: null,
+      now: () => now,
+      random: () => 0.5,
+      timing: { maxPauseMs: 1_500, retryBaseMs: 1_000, retryMaxMs: 1_000 },
+      wait: async (ms) => { now += ms },
+      transport: {
+        init: async () => ({ uploadId: "lost-responses", chunkSize: 10, totalChunks: 5 }),
+        status: async () => ({ uploadId: "lost-responses", size: 45, chunkSize: 10, totalChunks: 5, received: [...received] }),
+        putChunk: async ({ index }) => {
+          received.add(index)
+          throw new ChunkedUploadHttpError(0, "Response lost after storing the chunk")
+        },
+        complete: async () => ({ ok: true }),
+        abort: async () => { throw new Error("A resumable upload must not be deleted") },
+      },
+    })
+    expect(result).toEqual({ ok: true })
+    expect([...received]).toEqual([0, 1, 2, 3, 4])
+    expect(now).toBe(5_000)
+  })
+
+  it("a successful status read without new bytes does not reset the server failure budget", async () => {
+    const result = await uploadWithStalledChunk(500, 1)
+    expect(result.error).toBeInstanceOf(ChunkedUploadPausedError)
+    expect(result.attempts).toBe(2)
+    expect(result.elapsed).toBe(1_000)
+    expect(result.received).toEqual([0])
+    expect(result.deletes).toBe(0)
+  })
+
+  it("a successful status read without new bytes does not reset the network pause budget", async () => {
+    const result = await uploadWithStalledChunk(0, 6)
+    expect(result.error).toBeInstanceOf(ChunkedUploadPausedError)
+    expect(result.attempts).toBe(3)
+    expect(result.elapsed).toBe(2_000)
+    expect(result.received).toEqual([0])
+    expect(result.deletes).toBe(0)
   })
 })
 
