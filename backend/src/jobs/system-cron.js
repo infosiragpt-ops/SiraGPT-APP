@@ -26,6 +26,7 @@
 'use strict';
 
 const { wrapWithRetry } = require('./job-utils');
+const { compactLogJson } = require('../utils/compact-log-json');
 
 const SCRUB_SCHEDULE = process.env.SYSTEM_CRON_SCRUB_SCHEDULE || '30 2 * * *';
 const HARD_DELETE_SCHEDULE = process.env.SYSTEM_CRON_HARD_DELETE_SCHEDULE || '0 3 * * *';
@@ -267,7 +268,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] scrub-deleted-user-content retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] scrub-deleted-user-content done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] scrub-deleted-user-content done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] scrub-deleted-user-content failed: ${err && err.message}`);
@@ -299,7 +300,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] hard-delete-deleted-users retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] hard-delete-deleted-users done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] hard-delete-deleted-users done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] hard-delete-deleted-users failed: ${err && err.message}`);
@@ -331,7 +332,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] prune-api-usage retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] prune-api-usage done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] prune-api-usage done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] prune-api-usage failed: ${err && err.message}`);
@@ -364,7 +365,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] archive-audit-logs retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] archive-audit-logs done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] archive-audit-logs done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] archive-audit-logs failed: ${err && err.message}`);
@@ -397,7 +398,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-expired-sessions retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-expired-sessions done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-expired-sessions done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-expired-sessions failed: ${err && err.message}`);
@@ -430,7 +431,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-expired-verification-tokens retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-expired-verification-tokens done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-expired-verification-tokens done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-expired-verification-tokens failed: ${err && err.message}`);
@@ -464,7 +465,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-expired-announcements retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-expired-announcements done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-expired-announcements done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-expired-announcements failed: ${err && err.message}`);
@@ -498,7 +499,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-expired-api-keys retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-expired-api-keys done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-expired-api-keys done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-expired-api-keys failed: ${err && err.message}`);
@@ -532,7 +533,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] cost-tracker-flush retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] cost-tracker-flush done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] cost-tracker-flush done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] cost-tracker-flush failed: ${err && err.message}`);
@@ -566,7 +567,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] cost-tracker-archive retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] cost-tracker-archive done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] cost-tracker-archive done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] cost-tracker-archive failed: ${err && err.message}`);
@@ -600,7 +601,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-webhook-secret-grace retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-webhook-secret-grace done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-webhook-secret-grace done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-webhook-secret-grace failed: ${err && err.message}`);
@@ -634,7 +635,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-inactive-api-keys retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-inactive-api-keys done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-inactive-api-keys done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-inactive-api-keys failed: ${err && err.message}`);
@@ -668,7 +669,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-old-notifications retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-old-notifications done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-old-notifications done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-old-notifications failed: ${err && err.message}`);
@@ -708,7 +709,7 @@ function start(opts = {}) {
         const issues = await require('../services/observability/system-errors').getStore().sweepExpired({
           retentionDays: Number(process.env.SIRAGPT_SYSTEM_ISSUE_RETENTION_DAYS) || 30,
         }).catch((err) => ({ error: err && err.message }));
-        logger.info?.(`[system-cron] sweep-turn-failures done: ${JSON.stringify({ ...res, systemIssues: issues })}`);
+        logger.info?.(`[system-cron] sweep-turn-failures done: ${compactLogJson({ ...res, systemIssues: issues })}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-turn-failures failed: ${err && err.message}`);
@@ -747,7 +748,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] failed-email-retry retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] failed-email-retry done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] failed-email-retry done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] failed-email-retry failed: ${err && err.message}`);
@@ -786,7 +787,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-expired-partial-sessions retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-expired-partial-sessions done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-expired-partial-sessions done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-expired-partial-sessions failed: ${err && err.message}`);
@@ -825,7 +826,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] detect-idle-orgs retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] detect-idle-orgs done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] detect-idle-orgs done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] detect-idle-orgs failed: ${err && err.message}`);
@@ -864,7 +865,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] detect-idle-users retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] detect-idle-users done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] detect-idle-users done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] detect-idle-users failed: ${err && err.message}`);
@@ -903,7 +904,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] growth-gauges retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] growth-gauges done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] growth-gauges done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] growth-gauges failed: ${err && err.message}`);
@@ -942,7 +943,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-stale-system-settings retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-stale-system-settings done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-stale-system-settings done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-stale-system-settings failed: ${err && err.message}`);
@@ -981,7 +982,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-old-audit-archives retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-old-audit-archives done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-old-audit-archives done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-old-audit-archives failed: ${err && err.message}`);
@@ -1020,7 +1021,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] sweep-expired-pending-transfers retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] sweep-expired-pending-transfers done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] sweep-expired-pending-transfers done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] sweep-expired-pending-transfers failed: ${err && err.message}`);
@@ -1054,7 +1055,7 @@ function start(opts = {}) {
         // eslint-disable-next-line global-require
         const job = require('./run-research-alerts');
         const result = await job.run({ limit: 10 });
-        logger.info?.(`[system-cron] research-saved-search-alerts done: ${JSON.stringify(result)}`);
+        logger.info?.(`[system-cron] research-saved-search-alerts done: ${compactLogJson(result)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] research-saved-search-alerts failed: ${err && err.message}`);
@@ -1086,7 +1087,7 @@ function start(opts = {}) {
         const job = require('./stale-run-watchdog');
         const res = await job.scanStaleRuns({ env: process.env });
         if (res.skipped) logger.info?.(`[system-cron] stale-run-watchdog skipped: ${res.skipped}`);
-        else if (res.alerted > 0 || res.notifiedUsers > 0) logger.warn?.(`[system-cron] stale-run-watchdog: ${JSON.stringify(res)}`);
+        else if (res.alerted > 0 || res.notifiedUsers > 0) logger.warn?.(`[system-cron] stale-run-watchdog: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] stale-run-watchdog failed: ${err && err.message}`);
@@ -1124,6 +1125,8 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] rlhf-phase3 retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
+        // rlhf-phase3 already returns a training summary (summarizeTrainResult);
+        // this guard keeps raw weights out even if a result still carries them.
         const logRes = res && res.train && res.train.model && res.train.model.weights && typeof res.train.model.weights === 'object'
           ? {
             ...res,
@@ -1137,7 +1140,7 @@ function start(opts = {}) {
             },
           }
           : res;
-        logger.info?.(`[system-cron] rlhf-phase3 done: ${JSON.stringify(logRes)}`);
+        logger.info?.(`[system-cron] rlhf-phase3 done: ${compactLogJson(logRes)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] rlhf-phase3 failed: ${err && err.message}`);
@@ -1178,7 +1181,7 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] memory-consolidation retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] memory-consolidation done: ${JSON.stringify(res)}`);
+        logger.info?.(`[system-cron] memory-consolidation done: ${compactLogJson(res)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] memory-consolidation failed: ${err && err.message}`);

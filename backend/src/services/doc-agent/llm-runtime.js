@@ -382,6 +382,14 @@ function describeFailure(candidate, err) {
   };
 }
 
+function acceptSafely(accept, response) {
+  try {
+    return Boolean(accept(response));
+  } catch (_) {
+    return false;
+  }
+}
+
 /**
  * OpenAI-compatible façade (`chat.completions.create`) over an ordered list of
  * candidates. A candidate that fails with a failover-class error is moved to
@@ -399,14 +407,40 @@ function createFailoverClient(candidates, { createClient = defaultCreateClient, 
     return clients.get(candidate.provider);
   };
   const create = async (payload, opts) => {
+    // Optional per-call `accept(response)`, stripped before the SDK sees the
+    // options: an answer the caller cannot use (empty content because a
+    // reasoning model spent its budget thinking, JSON cut off at max_tokens)
+    // moves on to the next candidate for THIS call. The provider is not
+    // demoted (it answered; the next request may suit it). When nobody answers
+    // usably, the first unusable answer is returned so the caller can say why.
+    const accept = opts && typeof opts === 'object' && typeof opts.accept === 'function' ? opts.accept : null;
+    let requestOpts = opts;
+    if (accept) {
+      const { accept: _accept, ...rest } = opts;
+      requestOpts = rest;
+    }
     let lastError = null;
-    for (let i = 0; i < order.length; i += 1) {
-      const candidate = order[0];
+    let unusable = null;
+    const passed = new Set(); // candidates already tried in this call
+    const total = order.length;
+    for (let i = 0; i < total; i += 1) {
+      const candidate = order.find((c) => !passed.has(c));
+      if (!candidate) break;
       try {
         const response = await clientFor(candidate).chat.completions.create(
           payloadForCandidate(payload, candidate),
-          opts,
+          requestOpts,
         );
+        if (accept && !acceptSafely(accept, response)) {
+          if (!unusable) unusable = response;
+          passed.add(candidate);
+          lastFailure = { provider: candidate.provider, status: null, cause: 'unusable' };
+          const next = order.find((c) => !passed.has(c));
+          const info = { from: candidate.provider, model: candidate.model, to: next ? next.provider : null, status: 'unusable', message: 'respuesta sin contenido utilizable' };
+          attemptsLog.push(info);
+          try { onFailover(info); } catch (_) { /* observer errors never break the run */ }
+          continue;
+        }
         lastFailure = null;
         return response;
       } catch (err) {
@@ -416,18 +450,26 @@ function createFailoverClient(candidates, { createClient = defaultCreateClient, 
           noteLlmProviderFailure(candidate.provider, candidate.apiKey, err, env);
           lastFailure = describeFailure(candidate, err);
         }
-        const last = order.length === 1 || i === order.length - 1;
-        if (!isFailoverError(err) || last || (opts && opts.signal && opts.signal.aborted)) throw err;
+        const remaining = order.filter((c) => c !== candidate && !passed.has(c));
+        if (!isFailoverError(err) || (opts && opts.signal && opts.signal.aborted)) throw err;
+        if (!remaining.length) {
+          if (unusable) return unusable;
+          throw err;
+        }
+        // Sticky demotion: the failing candidate (by identity, not whatever is
+        // at the head) goes to the end for the rest of this client's life.
         const idx = order.indexOf(candidate);
         if (idx >= 0) {
           order.splice(idx, 1);
           order.push(candidate);
         }
-        const info = { from: candidate.provider, model: candidate.model, to: order[0].provider, status: errorStatus(err), message: String((err && err.message) || err).slice(0, 160) };
+        passed.add(candidate);
+        const info = { from: candidate.provider, model: candidate.model, to: remaining[0].provider, status: errorStatus(err), message: String((err && err.message) || err).slice(0, 160) };
         attemptsLog.push(info);
         try { onFailover(info); } catch (_) { /* observer errors never break the run */ }
       }
     }
+    if (unusable) return unusable;
     throw lastError || new Error('doc-agent: every LLM provider failed');
   };
   return {

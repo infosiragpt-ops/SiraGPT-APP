@@ -101,6 +101,8 @@ function classifyError(err) {
   const msg = String(err?.message || err || '').toLowerCase();
   if (/timeout/.test(msg)) return 'timeout';
   if (/abort/.test(msg)) return 'aborted';
+  // An anti-bot challenge page instead of results (DuckDuckGo).
+  if (/\bblocked\b/.test(msg)) return 'blocked';
   const httpMatch = msg.match(/http\s*(\d{3})/);
   if (httpMatch) {
     const code = Number(httpMatch[1]);
@@ -111,6 +113,27 @@ function classifyError(err) {
   if (/invalid json|json/.test(msg)) return 'invalid_json';
   if (/network|enotfound|econnrefused|econnreset|fetch failed|getaddrinfo/.test(msg)) return 'network_error';
   return 'unknown_error';
+}
+
+// ── blocked providers rest ───────────────────────────────────────────
+// A provider that answered with an anti-bot page will answer the same way to
+// the next search: asking again only adds its latency to every answer. It is
+// skipped for a while (the attempt says so) and probed again afterwards.
+const BLOCKED_COOLDOWN_MS = 10 * 60 * 1000;
+const blockedUntil = new Map();
+
+function coolingDown(provider, now = Date.now()) {
+  const until = blockedUntil.get(provider.id);
+  if (!until) return false;
+  if (until <= now) {
+    blockedUntil.delete(provider.id);
+    return false;
+  }
+  return true;
+}
+
+function noteProviderError(provider, errorClass) {
+  if (errorClass === 'blocked') blockedUntil.set(provider.id, Date.now() + BLOCKED_COOLDOWN_MS);
 }
 
 // ── tiny LRU+TTL cache ───────────────────────────────────────────────
@@ -224,6 +247,10 @@ async function search(query, opts = {}) {
   );
   for (const p of selected) {
     const start = Date.now();
+    if (coolingDown(p, start)) {
+      attempts.push({ id: p.id, ok: false, ms: 0, error: 'blocked_cooldown' });
+      continue;
+    }
     try {
       const results = await withTimeout(
         (signal) => p.search(q, { maxResults, locale, signal, freshness, includeNews }),
@@ -260,11 +287,13 @@ async function search(query, opts = {}) {
       // full request URL (which contains the user's query string),
       // which would leak the query into audit logs and violate the
       // "queryLen only" rule. Bucket into a small enum instead.
+      const errorClass = classifyError(err);
+      noteProviderError(p, errorClass);
       attempts.push({
         id: p.id,
         ok: false,
         ms: Date.now() - start,
-        error: classifyError(err),
+        error: errorClass,
       });
       // fall through to next provider
     }
@@ -362,8 +391,9 @@ async function searchMany(query, opts = {}) {
   }
 
   // General tier always runs; scientific tier only for research-y queries.
+  // A provider resting after an anti-bot answer is left out of the fan-out.
   const selected = providers.filter(
-    (p) => includeScientific || !SCIENTIFIC_PROVIDER_IDS.has(p.id),
+    (p) => (includeScientific || !SCIENTIFIC_PROVIDER_IDS.has(p.id)) && !coolingDown(p),
   );
   // Ask each provider for a generous page; they self-clamp to their own max
   // (DDG ~15, Wikipedia ~10, OpenAlex/Crossref up to 50-60), which is how the
@@ -396,7 +426,9 @@ async function searchMany(query, opts = {}) {
         attempts.push({ id: p.id, ok: true, ms: Date.now() - start, count: normalised.length, variant: sq !== q || undefined });
         return normalised;
       } catch (err) {
-        attempts.push({ id: p.id, ok: false, ms: Date.now() - start, error: classifyError(err), variant: sq !== q || undefined });
+        const errorClass = classifyError(err);
+        noteProviderError(p, errorClass);
+        attempts.push({ id: p.id, ok: false, ms: Date.now() - start, error: errorClass, variant: sq !== q || undefined });
         return [];
       }
     }),
@@ -452,11 +484,13 @@ function getProviders() {
 
 function resetProviders() {
   providers = sortProviders(builtinProviders);
+  blockedUntil.clear();
 }
 
 function clearCache() {
   cache.clear();
   manyCache.clear();
+  blockedUntil.clear();
   // The fast-search engine caches on top of this adapter; clear it too so a
   // provider swap (tests, admin key change) never serves a stale payload.
   try {
@@ -480,4 +514,6 @@ module.exports = {
   _LruTtlCache: LruTtlCache,
   _withTimeout: withTimeout,
   _classifyError: classifyError,
+  _blockedUntil: blockedUntil,
+  BLOCKED_COOLDOWN_MS,
 };

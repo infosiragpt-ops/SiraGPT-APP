@@ -23,6 +23,13 @@ const MAX_REPORTS = 5;
 const MAX_ENTRIES_PER_PASS = 400;
 const MAX_DROP_RATIO = 0.4;
 const LLM_TIMEOUT_MS = 90000;
+// The reply rewrites every entry it receives, so it grows with the input. The
+// whole vault (up to 400 entries) in one call does not fit a reply: the JSON
+// was cut at max_tokens and every large vault failed nightly with
+// llm_not_json. Each call gets a batch whose reply fits with room to spare.
+const BATCH_MAX_ENTRIES = 60;
+const BATCH_MAX_CHARS = 9000;
+const LLM_MAX_TOKENS = 8000;
 
 const deps = { prisma: null, llm: null, log: console, now: () => Date.now() };
 function setDeps(next = {}) { Object.assign(deps, next); }
@@ -105,6 +112,48 @@ function buildPrompt(entries) {
   ];
 }
 
+/** The reply text; a reasoning model may leave the JSON in its reasoning field. */
+function replyText(response) {
+  const message = response && response.choices && response.choices[0] && response.choices[0].message;
+  if (!message) return '';
+  for (const field of ['content', 'reasoning_content', 'reasoning']) {
+    if (typeof message[field] === 'string' && message[field].trim()) return message[field];
+  }
+  return '';
+}
+
+/**
+ * Batches for the LLM: entries of the same topic together (duplicates and
+ * contradictions live in one topic), a topic bigger than a batch split, and
+ * each batch small enough that its reply fits (BATCH_MAX_ENTRIES /
+ * BATCH_MAX_CHARS of entry text).
+ */
+function batchEntries(entries, { maxEntries = BATCH_MAX_ENTRIES, maxChars = BATCH_MAX_CHARS } = {}) {
+  const byTopic = new Map();
+  for (const e of entries) {
+    const topic = String((e && e.topic) || 'general');
+    if (!byTopic.has(topic)) byTopic.set(topic, []);
+    byTopic.get(topic).push(e);
+  }
+  const batches = [];
+  let current = [];
+  let chars = 0;
+  for (const group of byTopic.values()) {
+    for (const e of group) {
+      const size = String((e && e.text) || '').length + 80;
+      if (current.length && (current.length >= maxEntries || chars + size > maxChars)) {
+        batches.push(current);
+        current = [];
+        chars = 0;
+      }
+      current.push(e);
+      chars += size;
+    }
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
 function extractJson(text) {
   const raw = String(text || '').trim();
   try { return JSON.parse(raw); } catch { /* fall through */ }
@@ -159,27 +208,36 @@ async function proposeWithLlm(entries, { llm, env = process.env, signal } = {}) 
   if (signal) signal.addEventListener('abort', () => ac.abort(), { once: true });
   try {
     const messages = buildPrompt(entries);
-    const res = await client.chat.completions.create({
+    // An empty or cut-off reply is not a proposal: the failover client tries
+    // the next provider for this call instead of handing it back.
+    const accept = (response) => Boolean(extractJson(replyText(response)));
+    let res = await client.chat.completions.create({
       model: env.SIRAGPT_MEMORY_LLM_MODEL || undefined,
       temperature: 0,
-      max_tokens: 8000,
+      max_tokens: LLM_MAX_TOKENS,
       response_format: { type: 'json_object' },
       messages,
-    }, { signal: ac.signal });
-    const msg = res && res.choices && res.choices[0] && res.choices[0].message;
-    const text = (msg && (msg.content || msg.reasoning_content || msg.reasoning)) || '';
-    let parsed = extractJson(text);
+    }, { signal: ac.signal, accept });
+    let parsed = extractJson(replyText(res));
     if (!parsed && !ac.signal.aborted) {
-      const retryRes = await client.chat.completions.create({
+      // Some providers answer json_object mode with an empty body: one more
+      // pass without response_format (same per-provider acceptance).
+      res = await client.chat.completions.create({
         model: env.SIRAGPT_MEMORY_LLM_MODEL || undefined,
         temperature: 0,
-        max_tokens: 8000,
+        max_tokens: LLM_MAX_TOKENS,
         messages,
-      }, { signal: ac.signal });
-      const retryMsg = retryRes && retryRes.choices && retryRes.choices[0] && retryRes.choices[0].message;
-      parsed = extractJson((retryMsg && (retryMsg.content || retryMsg.reasoning_content || retryMsg.reasoning)) || '');
+      }, { signal: ac.signal, accept });
+      parsed = extractJson(replyText(res));
     }
-    if (!parsed) return { ok: false, error: 'llm_not_json' };
+    if (!parsed) {
+      // Content-free diagnosis (never the reply text): which provider, why it
+      // stopped and how much came back.
+      const choice = res && res.choices && res.choices[0];
+      const who = typeof client.describe === 'function' ? (client.describe() || {}).provider : null;
+      deps.log.warn?.(`[memory-consolidation] unusable reply${who ? ` from ${who}` : ''} (finish=${(choice && choice.finish_reason) || 'unknown'}, chars=${replyText(res).length}, entries=${entries.length})`);
+      return { ok: false, error: 'llm_not_json' };
+    }
     return { ok: true, proposal: parsed };
   } catch (err) {
     return { ok: false, error: `llm_failed:${String((err && err.message) || err).slice(0, 120)}` };
@@ -237,16 +295,37 @@ async function consolidateUser(userId, { llm = null, env = process.env, force = 
   const reports = await loadReports(userId);
   const last = reports[0];
   const newest = Math.max(...entries.map((e) => e.updatedAt || 0), 0);
-  if (!force && last && last.at && newest <= new Date(last.at).getTime()) return { ok: true, skipped: 'unchanged_since_last' };
+  // A partial pass (some batch failed) is retried the next night even if
+  // nothing changed since.
+  if (!force && last && last.at && !last.partial && newest <= new Date(last.at).getTime()) return { ok: true, skipped: 'unchanged_since_last' };
 
-  const proposed = await proposeWithLlm(entries, { llm, env, signal });
-  if (!proposed.ok) return { ok: false, error: proposed.error };
-  const plan = validateProposal(proposed.proposal, entries);
-  if (!plan.ok) {
-    deps.log.warn?.(`[memory-consolidation] proposal rejected for ${userId}: ${plan.error}`);
-    return { ok: false, error: `rejected:${plan.error}` };
+  // One LLM call per batch, each proposal validated fail-closed against its
+  // own batch. Batches that fail keep their entries untouched; the valid ones
+  // are applied together, atomically.
+  const accepted = [];
+  const plan = { entries: [], drop: [], notes: [] };
+  const failures = [];
+  for (const batch of batchEntries(entries)) {
+    if (signal && signal.aborted) break;
+    if (batch.length < 2) continue; // nothing to merge in a batch of one
+    const proposed = await proposeWithLlm(batch, { llm, env, signal });
+    if (!proposed.ok) {
+      failures.push(proposed.error);
+      continue;
+    }
+    const checked = validateProposal(proposed.proposal, batch);
+    if (!checked.ok) {
+      deps.log.warn?.(`[memory-consolidation] proposal rejected for ${userId}: ${checked.error}`);
+      failures.push(`rejected:${checked.error}`);
+      continue;
+    }
+    accepted.push(...batch);
+    plan.entries.push(...checked.entries);
+    plan.drop.push(...checked.drop);
+    if (checked.notes) plan.notes.push(checked.notes);
   }
-  const applied = await applyProposal(userId, entries, plan);
+  if (!accepted.length) return { ok: false, error: failures[0] || 'nothing_to_consolidate' };
+  const applied = await applyProposal(userId, accepted, plan);
   if (!applied.ok) return { ok: false, error: applied.error };
   const after = await vault.stats(userId);
   const report = {
@@ -259,12 +338,13 @@ async function consolidateUser(userId, { llm = null, env = process.env, force = 
     rewritten: applied.rewritten,
     dropped: applied.dropped,
     kept: applied.kept,
-    notes: plan.notes,
+    notes: plan.notes.join(' ').slice(0, 400),
+    ...(failures.length ? { partial: true, failedBatches: failures.length, errors: failures.slice(0, 5) } : {}),
     reverted: false,
     snapshot: entries.map((e) => ({ id: e.id, text: e.text, topic: e.topic, importance: e.importance, confidence: e.confidence, source: e.source })),
   };
   await saveReports(userId, [report, ...reports]);
-  deps.log.info?.(`[memory-consolidation] user ${userId}: ${entries.length} → ${after.total} (merged ${applied.merged.length}, refiled ${applied.refiled.length}, dropped ${applied.dropped.length})`);
+  deps.log.info?.(`[memory-consolidation] user ${userId}: ${entries.length} → ${after.total} (merged ${applied.merged.length}, refiled ${applied.refiled.length}, dropped ${applied.dropped.length}${failures.length ? `, ${failures.length} batch(es) left for the next pass` : ""})`);
   return { ok: true, report: summaryReport(report) };
 }
 
@@ -349,6 +429,9 @@ module.exports = {
   validateProposal,
   buildPrompt,
   extractJson,
+  batchEntries,
+  BATCH_MAX_ENTRIES,
+  BATCH_MAX_CHARS,
   setDeps,
   resetForTests,
 };
