@@ -198,32 +198,44 @@ function RemoteChatComputerPanel({
   React.useEffect(() => {
     if (!chatId) return
     let cancelled = false
-    const pullActivity = async () => {
-      try {
-        const res = await authenticatedFetch(
-          `${computerApiBase()}/agent-computer/activity?conversationId=${encodeURIComponent(chatId)}`,
-          { credentials: "include", headers: authHeaders(), signal: AbortSignal.timeout(15_000) },
-        )
-        const body = await res.json().catch(() => ({}))
-        if (cancelled || !res.ok) return
-        setActivity(body.activity || null)
-        setActivityUrl(String(body.url || ""))
-      } catch {
-        /* chip stays quiet without progress */
-      }
-    }
-    let pulling = false
+    let pending: AbortController | null = null
+    let timer: number | undefined
+    const visible = () => document.visibilityState !== "hidden"
+    const isCurrent = (controller: AbortController) =>
+      !cancelled && pending === controller && !controller.signal.aborted && visible()
     const pull = async () => {
-      if (pulling || cancelled) return
-      pulling = true
-      await pullActivity()
+      if (cancelled || !visible() || pending) return
+      const controller = new AbortController()
+      pending = controller
+      const requestOptions = () => ({
+        credentials: "include" as const,
+        headers: authHeaders(),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+      })
       try {
+        try {
+          const res = await authenticatedFetch(
+            `${computerApiBase()}/agent-computer/activity?conversationId=${encodeURIComponent(chatId)}`,
+            requestOptions(),
+          )
+          const body = await res.json().catch(() => ({}))
+          if (!isCurrent(controller)) return
+          if (res.ok) {
+            setActivity(body.activity || null)
+            setActivityUrl(String(body.url || ""))
+          }
+        } catch {
+          /* chip stays quiet without progress */
+        }
+        if (!isCurrent(controller)) return
+        // Automatic refresh honors the server's probe throttle. Explicit user
+        // handoff actions retain their own fresh-verification path.
         const res = await authenticatedFetch(
-          `${computerApiBase()}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}&probe=1`,
-          { credentials: "include", headers: authHeaders(), signal: AbortSignal.timeout(15_000) },
+          `${computerApiBase()}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}`,
+          requestOptions(),
         )
         const body = await res.json().catch(() => ({}))
-        if (cancelled || !res.ok) return
+        if (!isCurrent(controller) || !res.ok) return
         if (body && body.active) {
           setHandoffActive(true)
           setExpanded(true)
@@ -241,14 +253,31 @@ function RemoteChatComputerPanel({
       } catch {
         /* overlay stays usable without the banner */
       } finally {
-        pulling = false
+        // A resumed refresh owns a new controller; a late aborted request
+        // must not clear it or schedule a second polling loop.
+        if (pending === controller) {
+          pending = null
+          if (!cancelled && visible()) timer = window.setTimeout(() => void pull(), 4000)
+        }
       }
     }
+    const onVisibilityChange = () => {
+      window.clearTimeout(timer)
+      if (!visible()) {
+        pending?.abort()
+        pending = null
+      } else {
+        void pull()
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
     void pull()
-    const timer = window.setInterval(() => void pull(), 4000)
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
+      pending?.abort()
+      pending = null
+      document.removeEventListener("visibilitychange", onVisibilityChange)
     }
   }, [chatId])
 

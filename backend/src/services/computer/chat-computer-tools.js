@@ -259,11 +259,11 @@ function buildLiveScreenshotTool(owner) {
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     async execute(args = {}, ctx = {}) {
       try {
-        const out = await liveActions.liveScreenshot(liveContext(owner, args, ctx));
+        const out = await liveActions.liveScreenshot({ ...liveContext(owner, args, ctx), captureImage: false });
         if (!out.ok) return out.result;
         ctx.onEvent?.({ type: 'tool_output', tool: 'computer_screenshot', ok: true, preview: String(out.text || '').slice(0, 160) });
-        // The chat ReAct loop is text-only: expose observed controls, not PNG
-        // base64 as thousands of text tokens. Vision runners use liveScreenshot directly.
+        // The chat ReAct loop consumes only observed text and controls. Avoid
+        // capturing unused desktop pixels; vision runners keep the default.
         const { __f7Image, ...observation } = out;
         return observation;
       } catch (err) {

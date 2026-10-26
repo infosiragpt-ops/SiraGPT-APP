@@ -6,8 +6,11 @@ type ControlledRfb = EventTarget & {
   viewOnly: boolean
   background: string
   resizeSession: boolean
+  qualityLevel: number
+  compressionLevel: number
 }
 const sessions = vi.hoisted(() => [] as ControlledRfb[])
+const defaults = vi.hoisted(() => ({ qualityLevel: 6, compressionLevel: 2 }))
 
 // The installed noVNC RFB emits `connect` after its handshake. It does not
 // emit `framebufferupdate`; the fixture deliberately implements only real
@@ -20,6 +23,8 @@ vi.mock("@/components/desktop/desktop-rfb-client", () => ({
     clipViewport = true
     resizeSession = false
     showDotCursor = false
+    qualityLevel = defaults.qualityLevel
+    compressionLevel = defaults.compressionLevel
     disconnect = vi.fn(() => this.dispatchEvent(new Event("disconnect")))
     constructor(target: HTMLElement) {
       super()
@@ -40,10 +45,11 @@ import {
 
 const sessionProps = { sessionId: "desktop-test-1", wsUrl: "/ws/desktop/desktop-test-1" }
 
-beforeEach(() => { sessions.length = 0 })
+beforeEach(() => { sessions.length = 0; defaults.qualityLevel = 6; defaults.compressionLevel = 2 })
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 async function connectedTransport() {
@@ -52,6 +58,45 @@ async function connectedTransport() {
 }
 
 describe("desktop viewer readiness", () => {
+  it.each([[6, 2], [4, 5]])("preserves crisp compressed browser pixels and restores original quality=%s compression=%s", async (quality, compression) => {
+    defaults.qualityLevel = quality
+    defaults.compressionLevel = compression
+    const view = render(<DesktopScreen {...sessionProps} />)
+    const rfb = await connectedTransport()
+    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([quality, compression])
+    view.rerender(<DesktopScreen {...sessionProps} neutralBackground />)
+    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([9, 2])
+    view.rerender(<DesktopScreen {...sessionProps} />)
+    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([quality, compression])
+    expect(sessions).toHaveLength(1)
+    expect(rfb.disconnect).not.toHaveBeenCalled()
+  })
+
+  it("starts the browser with high quality and compression enabled", async () => {
+    render(<DesktopScreen {...sessionProps} neutralBackground />)
+    const rfb = await connectedTransport()
+    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([9, 2])
+  })
+
+  it("does not broadcast global window resize events for viewport observations", async () => {
+    const observers: Array<() => void> = []
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { observers.push(callback) }
+      observe() {}
+      disconnect() {}
+    })
+    const resized = vi.fn()
+    window.addEventListener("resize", resized)
+    try {
+      render(<DesktopScreen {...sessionProps} />)
+      await connectedTransport()
+      act(() => { for (let i = 0; i < 100; i++) observers.forEach(callback => callback()) })
+      expect(resized).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener("resize", resized)
+    }
+  })
+
   it("uses neutral margins only for the browser opt-in without changing F7 transport defaults", async () => {
     const view = render(<DesktopScreen {...sessionProps} />)
     const rfb = await connectedTransport()

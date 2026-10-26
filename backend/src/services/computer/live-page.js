@@ -11,6 +11,37 @@ const chromeRecoveryBySession = new Map();
 const CHROME_RECOVERY_COOLDOWN_MS = 20_000;
 const CHROME_RECOVERY_WAIT_MS = 8000;
 
+// Target.getTargets is an unordered inventory. Keep only opaque IDs so a poll
+// or a newly opened tab cannot shuffle the strip. Bound retained state even
+// when desktops disappear without an explicit close callback.
+const tabOrderBySession = new Map();
+const TAB_ORDER_IDLE_MS = 30 * 60_000;
+const MAX_TAB_ORDER_SESSIONS = 128;
+const MAX_TAB_ORDER_IDS = 1024;
+
+function stableTabOrder(session, tabs) {
+  const now = Date.now();
+  for (const [id, entry] of tabOrderBySession) {
+    if (now - entry.lastSeen >= TAB_ORDER_IDLE_MS) tabOrderBySession.delete(id);
+  }
+  const previous = tabOrderBySession.get(session.sessionId);
+  tabOrderBySession.delete(session.sessionId);
+  if (!tabs.length) return tabs;
+  // Do not retain an unbounded inventory. Large desktops still get a stable
+  // order on every poll and every tab remains visible.
+  if (tabs.length > MAX_TAB_ORDER_IDS) return tabs.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const remaining = new Map(tabs.map(tab => [tab.id, tab]));
+  const ordered = [];
+  for (const id of previous?.ids || []) {
+    const tab = remaining.get(id);
+    if (tab) { ordered.push(tab); remaining.delete(id); }
+  }
+  ordered.push(...remaining.values());
+  tabOrderBySession.set(session.sessionId, { ids: ordered.map(tab => tab.id), lastSeen: now });
+  while (tabOrderBySession.size > MAX_TAB_ORDER_SESSIONS) tabOrderBySession.delete(tabOrderBySession.keys().next().value);
+  return ordered;
+}
+
 function unavailableError(code, message, cause) {
   const error = new Error(code);
   error.code = code;
@@ -452,23 +483,38 @@ async function navigateHistory(page, delta, signal) {
 
 async function readBrowserState(session, browser, selected, confirmingViewport = false) {
   if (!confirmingViewport) requireConfirmedViewport(session);
-  const pages = browser.contexts().flatMap(context => context.pages());
   const page = selected || await selectPage(browser);
   const tabs = [];
   let activeTabId = null;
   let canGoBack = false, canGoForward = false, viewport = null, presentation = 'desktop';
-  for (const candidate of pages) {
-    const cdp = await candidate.context().newCDPSession(candidate);
+  if (page) {
+    const cdp = await page.context().newCDPSession(page);
     try {
-      const id = (await cdp.send('Target.getTargetInfo')).targetInfo.targetId;
+      activeTabId = (await cdp.send('Target.getTargetInfo')).targetInfo.targetId;
+      // Chrome already publishes background tab metadata. Do not attach to and
+      // evaluate every background renderer on each inventory poll: a suspended
+      // tab must not delay the active browser. The connection is scoped to this
+      // chat's Chrome, and only top-level page targets are included.
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      if (!Array.isArray(targetInfos)) throw browserError('browser_document_unavailable', 502);
       const document = await readPageDocument(cdp);
-      const rawTitle = document.title.slice(0, 300);
-      const title = !rawTitle || (/^chrome:\/\/(?:newtab|new-tab-page)\b/i.test(document.url) && /^new tab$/i.test(rawTitle.trim()))
-        ? 'Nueva pestaña'
-        : rawTitle;
-      tabs.push({ id, title, url: document.url });
-      if (candidate !== page) continue;
-      activeTabId = id;
+      let activeFound = false;
+      for (const target of targetInfos) {
+        if (target.type !== 'page' || target.subtype) continue;
+        if (typeof target.targetId !== 'string' || typeof target.title !== 'string' || typeof target.url !== 'string') {
+          throw browserError('browser_document_unavailable', 502);
+        }
+        const active = target.targetId === activeTabId;
+        activeFound ||= active;
+        // The active document is authoritative across redirects and BFCache;
+        // TargetInfo can lag behind its URL/title while navigation completes.
+        const url = active ? document.url : target.url;
+        const rawTitle = (active ? document.title : target.title).slice(0, 300);
+        const title = !rawTitle || (/^chrome:\/\/(?:newtab|new-tab-page)\b/i.test(url) && /^new tab$/i.test(rawTitle.trim()))
+          ? 'Nueva pestaña' : rawTitle;
+        tabs.push({ id: target.targetId, title, url });
+      }
+      if (!activeFound) throw browserError('browser_tab_missing', 404);
       const history = await cdp.send('Page.getNavigationHistory');
       if (presentationBySession.has(session.sessionId)) {
         const { bounds } = await cdp.send('Browser.getWindowForTarget');
@@ -485,7 +531,7 @@ async function readBrowserState(session, browser, selected, confirmingViewport =
     expected.confirmed = false;
     throw browserError('browser_viewport_failed', 502);
   }
-  return { tabs, activeTabId, canGoBack, canGoForward, viewport, presentation };
+  return { tabs: stableTabOrder(session, tabs), activeTabId, canGoBack, canGoForward, viewport, presentation };
 }
 
 async function browserState(session, env = process.env, signal) {

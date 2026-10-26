@@ -23,22 +23,63 @@ const stop = async child => {
   await ended;
 };
 
-const fixtureHtml = `<!doctype html><html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Viewport RFB local</title><style>
+const fixtureHtml = `<!doctype html><html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Viewport RFB local</title><style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:white}
 .corner{position:fixed;width:24px;height:24px;border:0;padding:0}
 #tl{left:0;top:0;background:#ff0000}#tr{right:0;top:0;background:#00ff00}
 #bl{left:0;bottom:0;background:#0000ff}#br{right:0;bottom:0;background:#ffff00}
 #save{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:180px;height:70px;background:#a020f0;color:white;border:0;font:18px sans-serif}
-</style><button class="corner" id="tl" aria-label="Esquina izquierda superior"></button><button class="corner" id="tr" aria-label="Esquina derecha superior"></button><button class="corner" id="bl" aria-label="Esquina izquierda inferior"></button><button class="corner" id="br" aria-label="Esquina derecha inferior"></button><button id="save">Guardar prueba</button><output></output><script>
+#benchmark{display:none;position:fixed;inset:0;background:#f8fafc;font:16px Arial,sans-serif;color:#172554}
+body.benchmark #benchmark{display:block}
+#benchmark h1{font-size:22px;margin:22px 210px 20px 100px}
+#bench-action{position:absolute;right:24px;top:16px;width:160px;height:48px;border:0;border-radius:8px;background:#172554;color:white;font:16px Arial}
+#bench-status,#bench-scroll-status{position:absolute;top:24px;width:24px;height:24px;background:#7c3aed}
+#bench-status{left:24px}#bench-scroll-status{left:60px;background:#172554}
+#bench-scroll{position:absolute;left:24px;right:24px;top:88px;bottom:24px;overflow:auto;background:white;border:1px solid #cbd5e1;scroll-behavior:auto}
+#bench-hero{height:200px;position:relative;padding:16px;box-sizing:border-box}
+#bench-hero p{max-width:50%;line-height:1.6}#bench-image{position:absolute;right:16px;top:16px;width:320px;height:160px}
+.bench-row{height:88px;box-sizing:border-box;padding:18px 24px;border-top:1px solid #cbd5e1;background:#f1f5f9}
+.bench-row:nth-child(even){background:white}.bench-row strong{display:block;margin-bottom:8px}
+</style><button class="corner" id="tl" aria-label="Esquina izquierda superior"></button><button class="corner" id="tr" aria-label="Esquina derecha superior"></button><button class="corner" id="bl" aria-label="Esquina izquierda inferior"></button><button class="corner" id="br" aria-label="Esquina derecha inferior"></button><button id="save">Guardar prueba</button><output></output><section id="benchmark"><span id="bench-status"></span><span id="bench-scroll-status"></span><h1>Navegador · prueba de contenido</h1><button id="bench-action">Actualizar 0</button><div id="bench-scroll"><div id="bench-hero"><strong>Resultados de búsqueda</strong><p>Una página local con texto, imagen y desplazamiento. Cada acción debe llegar al navegador y aparecer en la pantalla remota.</p><img id="bench-image" alt="Ilustración determinista de prueba"></div><div id="bench-rows"></div></div></section><script>
 document.addEventListener('click',e=>{if(e.target.tagName==='BUTTON')document.querySelector('output').textContent=e.target.id+':'+innerWidth+'x'+innerHeight});
+const palette=['#7c3aed','#16a34a','#2563eb','#db2777'];
+let benchmarkCount=0;
+const scroll=document.querySelector('#bench-scroll');
+for(let i=0;i<18;i++){
+  const row=document.createElement('article');row.className='bench-row';
+  const title=document.createElement('strong');title.textContent='Resultado '+(i+1)+' · Documentación de prueba';
+  const text=document.createElement('span');text.textContent='Contenido local reproducible para comprobar lectura, entrada y desplazamiento.';
+  row.append(title,text);document.querySelector('#bench-rows').append(row);
+}
+const picture=document.createElement('canvas');picture.width=320;picture.height=160;
+const pixels=picture.getContext('2d');
+for(let y=0;y<160;y+=4)for(let x=0;x<320;x+=4){
+  pixels.fillStyle='rgb('+((x*3+y)%256)+','+((x+y*2)%256)+','+((x*2+y*3)%256)+')';pixels.fillRect(x,y,4,4);
+}
+pixels.fillStyle='#ffffff';pixels.fillRect(24,24,116,48);pixels.fillStyle='#172554';pixels.font='bold 22px Arial';pixels.fillText('IMAGEN',32,56);
+document.querySelector('#bench-image').src=picture.toDataURL('image/png');
+document.querySelector('#bench-action').addEventListener('click',()=>{
+  benchmarkCount++;document.querySelector('#bench-action').textContent='Actualizar '+benchmarkCount;
+  document.querySelector('#bench-status').style.background=palette[benchmarkCount%palette.length];
+});
+scroll.addEventListener('scroll',()=>{document.querySelector('#bench-scroll-status').style.background=scroll.scrollTop>0?'#f59e0b':'#172554'});
 // Observe the rendered fixture without a CDP client retaining emulation.
 const fixtureControl=new WebSocket('ws://'+location.host+'/fixture-control');
 fixtureControl.addEventListener('message',event=>{
   const request=JSON.parse(event.data);
-  if(request.type!=='snapshot'||!Number.isSafeInteger(request.id))return;
+  if(!['snapshot','benchmarkReset'].includes(request.type)||!Number.isSafeInteger(request.id))return;
+  if(request.type==='benchmarkReset'){
+    document.body.classList.add('benchmark');benchmarkCount=0;scroll.scrollTop=0;
+    document.querySelector('#bench-action').textContent='Actualizar 0';
+    document.querySelector('#bench-status').style.background=palette[0];
+    document.querySelector('#bench-scroll-status').style.background='#172554';
+  }
   requestAnimationFrame(()=>requestAnimationFrame(()=>fixtureControl.send(JSON.stringify({
     id:request.id,viewport:{width:innerWidth,height:innerHeight},
-    output:document.querySelector('output').textContent,focused:document.hasFocus()
+    output:document.querySelector('output').textContent,focused:document.hasFocus(),
+    benchmark:{count:benchmarkCount,scrollTop:scroll.scrollTop,
+      imageReady:document.querySelector('#bench-image').complete&&document.querySelector('#bench-image').naturalWidth===320,
+      heading:document.querySelector('#bench-hero strong').textContent,rows:document.querySelector('#bench-rows').children.length}
   }))));
 });
 </script></html>`;
@@ -48,10 +89,11 @@ async function verifyLiveViewport({ previousUrl, withPage, navigate, state, resi
   const novncRoot = path.dirname(path.dirname(require.resolve("@novnc/novnc")));
   const connections = new Set();
   const sockets = new Set();
+  const rfbTransfers = new Map();
   let viewerBrowser, viewer, vnc, fixtureControl;
   let nextSnapshot = 0;
   const fixtureReady = Promise.withResolvers();
-  async function fixtureSnapshot(timeoutMs = 5000) {
+  async function fixtureSnapshot(timeoutMs = 5000, type = "snapshot") {
     let timer;
     try {
       await Promise.race([fixtureReady.promise, new Promise((_, reject) => {
@@ -80,7 +122,7 @@ async function verifyLiveViewport({ previousUrl, withPage, navigate, state, resi
         resolve(value);
       };
       fixtureControl.on("message", message); fixtureControl.once("close", closed);
-      fixtureControl.send(JSON.stringify({ type: "snapshot", id }));
+      fixtureControl.send(JSON.stringify({ type, id }));
     });
   }
   async function expectFixtureOutput(output) {
@@ -106,10 +148,15 @@ async function verifyLiveViewport({ previousUrl, withPage, navigate, state, resi
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(fixtureHtml);
     } else if (url.pathname === "/viewer") {
+      const profile = url.searchParams.get("profile");
+      const benchmarkProfile = profile === "9-0" || profile === "9-2";
+      const profileSetup = benchmarkProfile ? `rfb.qualityLevel=9;rfb.compressionLevel=${profile === "9-0" ? 0 : 2};` : "";
+      const rfbPath = benchmarkProfile ? `/rfb?profile=${profile}` : "/rfb";
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(`<!doctype html><html><style>html,body,#screen{width:100%;height:100%;margin:0;overflow:hidden}</style><div id="screen"></div><script type="module">
 import RFB from '/novnc/core/rfb.js';
-const rfb=new RFB(document.querySelector('#screen'),'ws://'+location.host+'/rfb');
+const rfb=new RFB(document.querySelector('#screen'),'ws://'+location.host+'${rfbPath}');
+${profileSetup}
 rfb.scaleViewport=true;rfb.clipViewport=false;rfb.resizeSession=false;rfb.showDotCursor=false;
 rfb.addEventListener('connect',()=>window.rfbConnected=true);
 rfb.addEventListener('disconnect',()=>window.rfbDisconnected=true);
@@ -136,13 +183,17 @@ window.rfb=rfb;
       });
       return;
     }
-    if (req.url !== "/rfb") { socket.destroy(); return; }
+    const upgradeUrl = new URL(req.url, "http://127.0.0.1");
+    if (upgradeUrl.pathname !== "/rfb") { socket.destroy(); return; }
     wsServer.handleUpgrade(req, socket, head, ws => {
       connections.add(ws);
+      const profile = upgradeUrl.searchParams.get("profile") || "viewport";
+      const transfer = { serverBytes: 0, clientBytes: 0 };
+      rfbTransfers.set(profile, transfer);
       const tcp = net.connect(vncPort, "127.0.0.1");
       sockets.add(tcp);
-      ws.on("message", data => tcp.write(data));
-      tcp.on("data", data => { if (ws.readyState === WebSocket.OPEN) ws.send(data); });
+      ws.on("message", data => { transfer.clientBytes += data.length; tcp.write(data); });
+      tcp.on("data", data => { transfer.serverBytes += data.length; if (ws.readyState === WebSocket.OPEN) ws.send(data); });
       tcp.on("error", () => ws.close());
       tcp.on("close", () => { sockets.delete(tcp); ws.close(); });
       ws.on("error", () => tcp.destroy());
@@ -214,6 +265,102 @@ window.rfb=rfb;
       await viewer.screenshot({ path: `/tmp/browser-gate-rfb-${width}x${height}.png` });
       console.log(`PASS real RFB viewport ${width}x${height}: independent requests, disconnected observers, exact framebuffer, four corners, center and edge input`);
     }
+    // Same native page, viewport, image and RFB inputs for each profile.
+    // Fresh viewer connections isolate per-client compression dictionaries.
+    // This is a measured comparison, not a speedup gate on a shared runner.
+    phase = "rfb_benchmark_setup";
+    const dimensions = { width: 1000, height: 800 };
+    expected = dimensions;
+    await resize(dimensions.width, dimensions.height);
+    await viewer.close();
+    const benchmarkResults = [];
+    const marker = (rgb, point = { x: 36, y: 36 }) => viewer.waitForFunction(({ rgb, point }) => {
+      const canvas = document.querySelector("canvas");
+      if (!canvas || canvas.width !== 1000 || canvas.height !== 800) return false;
+      const actual = canvas.getContext("2d").getImageData(point.x, point.y, 1, 1).data;
+      return rgb.every((channel, i) => Math.abs(actual[i] - channel) < 24);
+    }, { rgb, point }, { timeout: 8000 });
+    async function measurePaint(type, rgb, point, act) {
+      await viewer.evaluate(({ type, rgb, point }) => {
+        window.paintMeasurement = null;
+        window.addEventListener(type, () => {
+          const start = performance.now();
+          const inspect = () => {
+            const canvas = document.querySelector("canvas");
+            const actual = canvas.getContext("2d").getImageData(point.x, point.y, 1, 1).data;
+            if (rgb.every((channel, i) => Math.abs(actual[i] - channel) < 24)) {
+              window.paintMeasurement = performance.now() - start;
+            } else if (performance.now() - start < 8000) requestAnimationFrame(inspect);
+          };
+          requestAnimationFrame(inspect);
+        }, { capture: true, once: true });
+      }, { type, rgb, point });
+      await act();
+      await viewer.waitForFunction(() => Number.isFinite(window.paintMeasurement), null, { timeout: 8500 });
+      return Math.round(await viewer.evaluate(() => window.paintMeasurement) * 100) / 100;
+    }
+    for (const compression of [0, 2]) {
+      const profile = `9-${compression}`;
+      phase = `rfb_benchmark_${profile}`;
+      const initial = await fixtureSnapshot(5000, "benchmarkReset");
+      assert.deepEqual(initial.viewport, dimensions);
+      assert.deepEqual(initial.benchmark, { count: 0, scrollTop: 0, imageReady: true,
+        heading: "Resultados de búsqueda", rows: 18 });
+      viewer = await viewerBrowser.newPage({ viewport: dimensions });
+      await viewer.goto(`http://127.0.0.1:${server.address().port}/viewer?profile=${profile}`);
+      await viewer.waitForFunction(() => window.rfbConnected === true);
+      assert.deepEqual(await viewer.evaluate(() => [window.rfb.qualityLevel, window.rfb.compressionLevel]), [9, compression]);
+      await marker([124, 58, 237]);
+      // Inspect received pixels, not the native page DOM: both dense text and
+      // the deterministic raster image must actually cross the RFB channel.
+      await viewer.waitForFunction(() => {
+        const canvas = document.querySelector("canvas");
+        if (!canvas || canvas.width !== 1000 || canvas.height !== 800) return false;
+        const ctx = canvas.getContext("2d");
+        const text = ctx.getImageData(40, 105, 450, 170).data;
+        let dark = 0;
+        for (let i = 0; i < text.length; i += 4) if (text[i] < 100 && text[i + 1] < 100 && text[i + 2] < 150) dark++;
+        const image = ctx.getImageData(642, 106, 310, 150).data;
+        const colors = new Set();
+        for (let i = 0; i < image.length; i += 64) colors.add([image[i] >> 5, image[i + 1] >> 5, image[i + 2] >> 5].join(","));
+        return dark > 300 && colors.size > 60;
+      }, null, { timeout: 8000 });
+      await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${profile}-initial.png` });
+      const actionBytesStart = rfbTransfers.get(profile).serverBytes;
+      const clickToPaintMs = [];
+      for (const rgb of [[22, 163, 74], [37, 99, 235], [219, 39, 119]]) {
+        clickToPaintMs.push(await measurePaint("pointerdown", rgb, { x: 36, y: 36 },
+          () => viewer.locator("canvas").click({ position: { x: 896, y: 40 } })));
+        const snapshot = await fixtureSnapshot();
+        assert.equal(snapshot.benchmark.count, clickToPaintMs.length, "click must update the real page once");
+      }
+      await viewer.mouse.move(500, 500);
+      const scrollToPaintMs = await measurePaint("wheel", [245, 158, 11], { x: 72, y: 36 },
+        () => viewer.mouse.wheel(0, 420));
+      const final = await fixtureSnapshot();
+      assert.ok(final.benchmark.scrollTop > 0, "RFB wheel must scroll the native content");
+      assert.equal(final.benchmark.count, 3);
+      await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${profile}-scrolled.png` });
+      const transfer = rfbTransfers.get(profile);
+      assert.ok(transfer.serverBytes > actionBytesStart && transfer.clientBytes > 0, "both RFB directions must carry real bytes");
+      benchmarkResults.push({ quality: 9, compression, viewport: dimensions,
+        serverBytes: transfer.serverBytes, clientBytes: transfer.clientBytes,
+        actionServerBytes: transfer.serverBytes - actionBytesStart,
+        clickToPaintMs, scrollToPaintMs, clicksConfirmed: final.benchmark.count,
+        scrollConfirmed: final.benchmark.scrollTop > 0, textAndImagePixelsConfirmed: true });
+      await viewer.close();
+      viewer = null;
+    }
+    const report = { schemaVersion: 1, transport: "noVNC-WebSocket-x11vnc-X11-Chrome",
+      workload: "same local text, raster image, three clicks and one scroll",
+      latencyOrigin: "viewer input event to matching received framebuffer pixel",
+      thresholds: "content and input correctness only; no minimum speedup", profiles: benchmarkResults };
+    fs.writeFileSync("/tmp/browser-gate-rfb-metrics.json", JSON.stringify(report, null, 2) + "\n");
+    console.log("PASS real RFB profile comparison " + JSON.stringify(report));
+    // Keep the original restore/framebuffer assertions on a live connection.
+    viewer = await viewerBrowser.newPage({ viewport: dimensions });
+    await viewer.goto(`http://127.0.0.1:${server.address().port}/viewer`);
+    await viewer.waitForFunction(() => window.rfbConnected === true);
     phase = "restore";
     const restored = await restore();
     assert.equal(restored.presentation, "desktop");
