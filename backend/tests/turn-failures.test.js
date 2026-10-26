@@ -908,6 +908,9 @@ describe('httpFailureMiddleware — non-2xx on user endpoints', () => {
     await run({ url: '/api/files/upload', status: 400 });
     await run({ url: '/api/chats/c7', method: 'GET', status: 404 });
     await run({ url: '/api/admin/users', status: 500 });
+    await run({ url: '/api/agent-computer/activity?browser=1', method: 'GET', status: 502, body: { error: 'browser_viewport_failed' } });
+    await run({ url: '/api/agent-computer/navigate', method: 'POST', status: 502, body: { error: 'browser_viewport_failed' } });
+    await run({ url: '/api/desktop/sessions', method: 'POST', status: 503 });
     await run({ url: '/api/ai/generate', status: 500, extra: { _turnTap: {} } });
     assert.equal(prisma.rows.length, 0);
   });

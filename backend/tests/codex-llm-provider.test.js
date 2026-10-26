@@ -159,3 +159,35 @@ test('cerebras keeps its conservative default maxTokens; claude gets more room',
   assert.equal(provider.defaultMaxTokensFor('cerebras'), 2048);
   assert.ok(provider.defaultMaxTokensFor('anthropic') >= 4096);
 });
+
+test('isBillingExhaustedError classifies credit exhaustion errors and extends quarantine TTL', async () => {
+  assert.equal(provider.isBillingExhaustedError({ status: 402, message: '402 Insufficient Balance' }), true);
+  assert.equal(provider.isBillingExhaustedError({ status: 400, message: '400 {"error":{"message":"Your credit balance is too low to access the Anthropic API."}}' }), true);
+  assert.equal(provider.isBillingExhaustedError({ status: 402, message: '402 Insufficient credits' }), true);
+  assert.equal(provider.isBillingExhaustedError({ status: 429, message: '429 rate limit exceeded' }), false);
+  assert.equal(provider.isBillingExhaustedError({ status: 503, message: 'service unavailable' }), false);
+
+  class UnfundedAnthropic {
+    // eslint-disable-next-line class-methods-use-this
+    get messages() {
+      return {
+        create: async () => {
+          const err = new Error('400 {"error":{"message":"Your credit balance is too low to access the Anthropic API."}}');
+          err.status = 400;
+          throw err;
+        },
+      };
+    }
+  }
+  const or = fakeOpenAIStyle('ok');
+  const env = envWith({ ANTHROPIC_API_KEY: 'k', OPENROUTER_API_KEY: 'k' });
+  let t = 1_000_000;
+  const now = () => t;
+  await provider.chatComplete({ messages: [{ role: 'user', content: 'U' }], env, now, clients: { anthropicCtor: UnfundedAnthropic, openrouter: or } });
+  t += provider.FAILOVER_TTL_MS + 1;
+  // Still quarantined after 5 min because billing cooldown is 30 min
+  assert.deepEqual(provider.resolveCandidates({ env, now }), ['openrouter', 'anthropic']);
+  t += provider.BILLING_COOLDOWN_MS;
+  assert.deepEqual(provider.resolveCandidates({ env, now }), ['anthropic', 'openrouter']);
+});
+

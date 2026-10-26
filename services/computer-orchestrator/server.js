@@ -233,7 +233,30 @@ function createOrchestrator(opts = {}) {
         }
         return { ok: true, type, fake: true };
       }
-      const out = await exec(session.container, command, { timeoutMs: 20_000 });
+      let out;
+      try {
+        out = await exec(session.container, command, { timeoutMs: 20_000 });
+      } catch (err) {
+        const isViewportAction = type === 'browser_viewport' || type === 'browser_restore_viewport';
+        if (!isViewportAction || typeof opts.execImpl === 'function') {
+          throw err;
+        }
+        // In persistent desktop containers where no VNC client has connected
+        // to :5901 yet (e.g. user is on the Browser tab rather than Desktop),
+        // x11vnc may still be in wait_for_client or need restarting. Ensure
+        // x11vnc is running, wake :5901 so it attaches to :1, resize the
+        // browser window on :1, and apply the clip best-effort.
+        const w = type === 'browser_viewport' ? Math.max(320, Math.min(1920, Math.round(Number(body.width) || 1280))) : 1920;
+        const h = type === 'browser_viewport' ? Math.max(240, Math.min(1080, Math.round(Number(body.height) || 800))) : 1080;
+        const healCmd = [
+          'pgrep -x x11vnc >/dev/null 2>&1 || (nohup x11vnc -display :1 -forever -shared -rfbport 5901 -nopw -listen 0.0.0.0 -xkb -ncache 0 >/tmp/x11vnc.log 2>&1 & sleep 0.4)',
+          '(exec 3<>/dev/tcp/127.0.0.1/5901 && exec 3>&-) 2>/dev/null || true',
+          `(${command}) >/dev/null 2>&1 || true`,
+          `(xdotool search --onlyvisible --class google-chrome windowmove 0 0 windowsize ${w} ${h} || xdotool search --onlyvisible --class Chromium windowmove 0 0 windowsize ${w} ${h} || xdotool search --onlyvisible --class chromium windowmove 0 0 windowsize ${w} ${h} || true) >/dev/null 2>&1`,
+          'echo recovered',
+        ].join('; ');
+        out = await exec(session.container, healCmd, { timeoutMs: 10_000 });
+      }
       if (type === 'screenshot') {
         const b64 = String(out.stdout || '').trim();
         return { ok: true, type, pngBase64: b64, mime: 'image/png', bytes: Math.floor(b64.length * 0.75) };

@@ -64,6 +64,8 @@ Xvfb :1 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
 sleep 0.4
 
 x11vnc -display :1 -forever -shared -rfbport 5901 -nopw -listen 0.0.0.0 -xkb -ncache 0 &
+sleep 0.3
+(exec 3<>/dev/tcp/127.0.0.1/5901 && exec 3>&-) 2>/dev/null || true
 
 run_as_compuser() {
   su -s /bin/bash compuser -c "export DISPLAY=:1 HOME=$HOME XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR; $*"
@@ -100,7 +102,20 @@ fi
 
 websockify --web="$NOVNC_WEB" 6080 127.0.0.1:5901 &
 
-# Keep the container alive even if one child exits.
+# Keep the container alive and supervise Xvfb, x11vnc, and websockify.
 while true; do
-  sleep 30
+  if ! pgrep -x Xvfb >/dev/null 2>&1; then
+    rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+    Xvfb :1 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+    sleep 0.4
+  fi
+  if ! pgrep -x x11vnc >/dev/null 2>&1; then
+    x11vnc -display :1 -forever -shared -rfbport 5901 -nopw -listen 0.0.0.0 -xkb -ncache 0 &
+    sleep 0.3
+    (exec 3<>/dev/tcp/127.0.0.1/5901 && exec 3>&-) 2>/dev/null || true
+  fi
+  if ! pgrep -f "websockify.*6080" >/dev/null 2>&1; then
+    websockify --web="$NOVNC_WEB" 6080 127.0.0.1:5901 &
+  fi
+  sleep 15
 done
