@@ -802,7 +802,7 @@ function recordBlankImagesIfAny(req, images = [], data = {}) {
 
 // ── Non-2xx on user-facing endpoints ──────────────────────────────────
 
-const HTTP_SKIP_PREFIX_RE = /^\/api\/(admin|health|healthz|telemetry|metrics|version|internal|auth|csrf|webhooks?|stripe|payments\/stripe\/webhook|free-ia\/metrics|codex\/health|status)(\/|$)/;
+const HTTP_SKIP_PREFIX_RE = /^\/api\/(admin|health|healthz|telemetry|metrics|version|internal|auth|csrf|webhooks?|stripe|payments\/stripe\/webhook|free-ia\/metrics|codex\/health|status|agent-computer|desktop)(\/|$)/;
 
 function maskPath(p) {
   return String(p || '')

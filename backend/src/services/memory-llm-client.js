@@ -21,6 +21,8 @@ const DEFAULT_MEMORY_MODEL = 'DeepSeek:deepseek-v4-flash';
 let cached = null;
 let cachedAt = 0;
 const REFRESH_MS = 5 * 60 * 1000; // pick up key changes without a restart
+const WARN_DEBOUNCE_MS = 30 * 60 * 1000;
+const warnMemo = new Map();
 
 /**
  * Ordered memory candidates. Only DeepSeek V4 ids get `thinking: disabled`
@@ -46,7 +48,14 @@ function createMemoryLlmClient({ env = process.env, force = false, createClient 
     if (!candidates.length) { cached = null; cachedAt = now; return null; }
     cached = createFailoverClient(candidates, {
       ...(typeof createClient === 'function' ? { createClient } : {}),
-      onFailover: (info) => console.warn(`[memory-llm] failover ${info.from} → ${info.to} (${info.status || ''} ${info.message || ''})`),
+      onFailover: (info) => {
+        const key = `${info.from || ''}->${info.to || ''}:${info.status || ''}`;
+        const t = Date.now();
+        if (t - (warnMemo.get(key) || 0) >= WARN_DEBOUNCE_MS) {
+          warnMemo.set(key, t);
+          console.warn(`[memory-llm] failover ${info.from} → ${info.to} (${info.status || ''} ${info.message || ''})`);
+        }
+      },
     });
     cachedAt = now;
     return cached;
@@ -58,6 +67,6 @@ function createMemoryLlmClient({ env = process.env, force = false, createClient 
   }
 }
 
-function resetForTests() { cached = null; cachedAt = 0; }
+function resetForTests() { cached = null; cachedAt = 0; warnMemo.clear(); }
 
 module.exports = { createMemoryLlmClient, resolveMemoryLlmCandidates, resetForTests, DEFAULT_MEMORY_MODEL };

@@ -35,6 +35,8 @@ const {
 const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-6';
 const DEFAULT_OPENROUTER_MODEL = 'anthropic/claude-sonnet-4.6';
 const FAILOVER_TTL_MS = 5 * 60 * 1000;
+const BILLING_COOLDOWN_MS = 30 * 60 * 1000;
+const WARN_DEBOUNCE_MS = 30 * 60 * 1000;
 // Anthropic silently ignores cache breakpoints on prefixes under ~1024 tokens,
 // and each request only gets 4 breakpoints — don't spend one on a system
 // prompt too small to ever cache. Codex system prompts are many KB in practice.
@@ -45,6 +47,23 @@ const LADDER = ['deepseek', 'anthropic', 'openrouter', 'cerebras'];
 // provider → epoch-ms until which it is quarantined. Module-level on purpose:
 // one bad key shouldn't be re-probed on every single agent step.
 const quarantine = new Map();
+const billingQuarantine = new Map();
+const billingSnapshot = new Map();
+const warnMemo = new Map();
+
+function isBillingExhaustedError(err) {
+  if (!err) return false;
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status) || 0);
+  if (status === 402) return true;
+  const msg = `${err.code || ''} ${err.message || ''} ${(err.error && err.error.message) || ''}`.toLowerCase();
+  return /insufficient[_ ]balance|credit balance is too low|insufficient[_ ]credits|no credits remaining|payment[_ ]required|insufficient[_ ]quota|billing|quota exceeded/i.test(msg)
+    && !/rate ?limit|too many requests|tokens per minute|requests per minute/i.test(msg);
+}
+
+function billingCooldownMs(env = process.env) {
+  const n = Number(env && env.CODEX_BILLING_COOLDOWN_MS);
+  return Number.isFinite(n) && n >= 1000 ? n : BILLING_COOLDOWN_MS;
+}
 
 function clean(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
@@ -374,6 +393,20 @@ async function chatComplete({
 
   let firstError = null;
   for (const name of candidates) {
+    const tNow = now();
+    const hasInjectedClient = Boolean(
+      clients && (
+        clients[name]
+        || (name === 'anthropic' && clients.anthropicCtor)
+        || clients.openAICtor
+      )
+    );
+    if (!selected && !hasInjectedClient && (billingQuarantine.get(name) || 0) > tNow) {
+      if (!firstError) {
+        firstError = billingSnapshot.get(name) || new Error(`codex llm-provider: ${name} in billing cooldown`);
+      }
+      continue;
+    }
     const effectiveMax = maxTokens || defaultMaxTokensFor(name);
     try {
       let out;
@@ -443,6 +476,9 @@ async function chatComplete({
           onTextDelta, onReasoningDelta, effort });
       }
       quarantine.delete(name);
+      billingQuarantine.delete(name);
+      billingSnapshot.delete(name);
+      warnMemo.delete(name);
       return out;
     } catch (err) {
       if (selected || signal?.aborted) throw err; // an explicit model cannot fail over
@@ -450,9 +486,21 @@ async function chatComplete({
       // another rung and splicing two different answers into one transcript.
       if (err?.partialResponse) throw err;
       if (!firstError) firstError = err;
-      quarantine.set(name, now() + FAILOVER_TTL_MS);
+      const errNow = now();
+      if (isBillingExhaustedError(err)) {
+        const ttl = billingCooldownMs(env);
+        quarantine.set(name, errNow + ttl);
+        billingQuarantine.set(name, errNow + ttl);
+        billingSnapshot.set(name, err);
+      } else {
+        quarantine.set(name, errNow + FAILOVER_TTL_MS);
+      }
       if (env.NODE_ENV !== 'test') {
-        console.warn(`[codex llm-provider] ${name} failed (${String(err?.message || err).slice(0, 200)}) — trying next provider`);
+        const lastWarnAt = warnMemo.get(name) || 0;
+        if (errNow - lastWarnAt >= WARN_DEBOUNCE_MS) {
+          warnMemo.set(name, errNow);
+          console.warn(`[codex llm-provider] ${name} failed (${String(err?.message || err).slice(0, 200)}) — trying next provider`);
+        }
       }
     }
   }
@@ -469,6 +517,9 @@ function describeActiveProvider({ env = process.env, now = Date.now, exclude = [
 /** Test hook: clear the module-level quarantine map. */
 function resetQuarantine() {
   quarantine.clear();
+  billingQuarantine.clear();
+  billingSnapshot.clear();
+  warnMemo.clear();
 }
 
 module.exports = {
@@ -485,6 +536,8 @@ module.exports = {
   callOpenAICompatible,
   toOpenAICompatibleMessages,
   resetQuarantine,
+  isBillingExhaustedError,
   FAILOVER_TTL_MS,
+  BILLING_COOLDOWN_MS,
   LADDER,
 };

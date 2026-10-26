@@ -154,8 +154,10 @@ router.post(
             // Free daily quota is enforced by enforcePlanQuota above. Paid
             // plans still keep the token cap check here for the legacy route.
             if (req.user.plan !== 'FREE' && req.user.apiUsage >= req.user.monthlyLimit) {
+                const { planQuotaErrorDetails } = require('../services/plan-quota');
                 return res.status(429).json({
                     error: 'Monthly API limit exceeded',
+                    ...planQuotaErrorDetails('tokens'),
                     usage: { current: req.user.apiUsage, limit: req.user.monthlyLimit },
                 });
             }

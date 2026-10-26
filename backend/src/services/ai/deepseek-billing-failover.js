@@ -23,7 +23,7 @@
  */
 
 const DEFAULT_MEMO_MS = 5 * 60 * 1000;
-const state = { failedAt: 0, memoMs: DEFAULT_MEMO_MS, lastReason: null };
+const state = { failedAt: 0, memoMs: DEFAULT_MEMO_MS, lastReason: null, lastWarnAt: 0 };
 
 function memoMs(env = process.env) {
   const n = Number(env.SIRAGPT_DEEPSEEK_BILLING_MEMO_MS);
@@ -120,7 +120,7 @@ function toOpenRouterSlug(model) {
 
 function isDirectFailureMemoised(env = process.env) {
   if (!state.failedAt) return false;
-  if (Date.now() - state.failedAt > memoMs(env)) { state.failedAt = 0; state.lastReason = null; return false; }
+  if (Date.now() - state.failedAt > memoMs(env)) { state.failedAt = 0; state.lastReason = null; state.lastWarnAt = 0; return false; }
   return true;
 }
 
@@ -130,7 +130,7 @@ function markDirectFailure(err, env = process.env) {
   state.lastReason = String((err && (err.status || err.statusCode)) || '') + ' ' + String((err && err.message) || '').slice(0, 120);
 }
 
-function resetForTests() { state.failedAt = 0; state.lastReason = null; }
+function resetForTests() { state.failedAt = 0; state.lastReason = null; state.lastWarnAt = 0; }
 
 function snapshot() {
   return { memoised: isDirectFailureMemoised(), failedAt: state.failedAt || null, reason: state.lastReason };
@@ -148,21 +148,29 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
   if (typeof fallbackClientFactory !== 'function') return client;
   const primaryCreate = client.chat.completions.create.bind(client.chat.completions);
 
-  const viaOpenRouter = async (body, options, reason) => {
+  const viaOpenRouter = async (body, options, reason, isMemoised = false) => {
     const fallback = fallbackClientFactory();
     if (!fallback || !fallback.chat || !fallback.chat.completions) throw new Error('openrouter_unavailable');
     const mapped = { ...body, model: toOpenRouterSlug(body && body.model) };
-    log.warn?.(`[deepseek-failover] DeepSeek direct ${reason} → OpenRouter ${mapped.model}`);
+    const now = Date.now();
+    if (!isMemoised || now - state.lastWarnAt > memoMs(env)) {
+      state.lastWarnAt = now;
+      log.warn?.(`[deepseek-failover] DeepSeek direct ${reason} → OpenRouter ${mapped.model}`);
+    }
     return options === undefined ? fallback.chat.completions.create(mapped) : fallback.chat.completions.create(mapped, options);
   };
 
   const create = async (body, options) => {
     if (isDirectFailureMemoised(env)) {
       try {
-        return await viaOpenRouter(body, options, `memoised (${state.lastReason})`);
+        return await viaOpenRouter(body, options, `memoised (${state.lastReason})`, true);
       } catch (fallbackErr) {
         // OpenRouter itself unavailable: give DeepSeek direct a real try.
-        log.warn?.(`[deepseek-failover] OpenRouter fallback failed (${fallbackErr && fallbackErr.message}); trying DeepSeek direct`);
+        const now = Date.now();
+        if (now - state.lastWarnAt > memoMs(env)) {
+          state.lastWarnAt = now;
+          log.warn?.(`[deepseek-failover] OpenRouter fallback failed (${fallbackErr && fallbackErr.message}); trying DeepSeek direct`);
+        }
       }
     }
     const directModel = body && typeof body.model === 'string' && /^deepseek\//i.test(body.model)
@@ -173,11 +181,19 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
       return options === undefined ? await primaryCreate(direct) : await primaryCreate(direct, options);
     } catch (err) {
       if (!isBillingOrAuthError(err)) throw err;
+      const wasAlreadyMemoised = Boolean(state.failedAt && Date.now() - state.failedAt <= memoMs(env));
       markDirectFailure(err, env);
       try {
-        return await viaOpenRouter(body, options, `${err.status || err.statusCode || ''} ${String(err.message || '').slice(0, 80)}`.trim());
+        return await viaOpenRouter(
+          body,
+          options,
+          `${err.status || err.statusCode || ''} ${String(err.message || '').slice(0, 80)}`.trim(),
+          wasAlreadyMemoised
+        );
       } catch (fallbackErr) {
-        log.warn?.(`[deepseek-failover] fallback unavailable: ${fallbackErr && fallbackErr.message}`);
+        if (!wasAlreadyMemoised) {
+          log.warn?.(`[deepseek-failover] fallback unavailable: ${fallbackErr && fallbackErr.message}`);
+        }
         throw err;
       }
     }
