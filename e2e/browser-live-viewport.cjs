@@ -149,8 +149,8 @@ async function verifyLiveViewport({ previousUrl, withPage, navigate, state, resi
       res.end(fixtureHtml);
     } else if (url.pathname === "/viewer") {
       const profile = url.searchParams.get("profile");
-      const benchmarkProfile = profile === "9-0" || profile === "9-2";
-      const profileSetup = benchmarkProfile ? `rfb.qualityLevel=9;rfb.compressionLevel=${profile === "9-0" ? 0 : 2};` : "";
+      const benchmarkProfile = /^9-[012]$/.test(profile || "");
+      const profileSetup = benchmarkProfile ? `rfb.qualityLevel=9;rfb.compressionLevel=${Number(profile.slice(-1))};` : "";
       const rfbPath = benchmarkProfile ? `/rfb?profile=${profile}` : "/rfb";
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(`<!doctype html><html><style>html,body,#screen{width:100%;height:100%;margin:0;overflow:hidden}</style><div id="screen"></div><script type="module">
@@ -274,6 +274,10 @@ window.rfb=rfb;
     await resize(dimensions.width, dimensions.height);
     await viewer.close();
     const benchmarkResults = [];
+    const benchmarkRounds = 5;
+    const benchmarkStartedAt = Date.now();
+    // Rotate which profile runs first to expose order/warmup effects.
+    // No warmup sample is discarded; all runs and their order are reported.
     const marker = (rgb, point = { x: 36, y: 36 }) => viewer.waitForFunction(({ rgb, point }) => {
       const canvas = document.querySelector("canvas");
       if (!canvas || canvas.width !== 1000 || canvas.height !== 800) return false;
@@ -299,62 +303,98 @@ window.rfb=rfb;
       await viewer.waitForFunction(() => Number.isFinite(window.paintMeasurement), null, { timeout: 8500 });
       return Math.round(await viewer.evaluate(() => window.paintMeasurement) * 100) / 100;
     }
-    for (const compression of [0, 2]) {
-      const profile = `9-${compression}`;
-      phase = `rfb_benchmark_${profile}`;
-      const initial = await fixtureSnapshot(5000, "benchmarkReset");
-      assert.deepEqual(initial.viewport, dimensions);
-      assert.deepEqual(initial.benchmark, { count: 0, scrollTop: 0, imageReady: true,
-        heading: "Resultados de búsqueda", rows: 18 });
-      viewer = await viewerBrowser.newPage({ viewport: dimensions });
-      await viewer.goto(`http://127.0.0.1:${server.address().port}/viewer?profile=${profile}`);
-      await viewer.waitForFunction(() => window.rfbConnected === true);
-      assert.deepEqual(await viewer.evaluate(() => [window.rfb.qualityLevel, window.rfb.compressionLevel]), [9, compression]);
-      await marker([124, 58, 237]);
-      // Inspect received pixels, not the native page DOM: both dense text and
-      // the deterministic raster image must actually cross the RFB channel.
-      await viewer.waitForFunction(() => {
-        const canvas = document.querySelector("canvas");
-        if (!canvas || canvas.width !== 1000 || canvas.height !== 800) return false;
-        const ctx = canvas.getContext("2d");
-        const text = ctx.getImageData(40, 105, 450, 170).data;
-        let dark = 0;
-        for (let i = 0; i < text.length; i += 4) if (text[i] < 100 && text[i + 1] < 100 && text[i + 2] < 150) dark++;
-        const image = ctx.getImageData(642, 106, 310, 150).data;
-        const colors = new Set();
-        for (let i = 0; i < image.length; i += 64) colors.add([image[i] >> 5, image[i + 1] >> 5, image[i + 2] >> 5].join(","));
-        return dark > 300 && colors.size > 60;
-      }, null, { timeout: 8000 });
-      await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${profile}-initial.png` });
-      const actionBytesStart = rfbTransfers.get(profile).serverBytes;
-      const clickToPaintMs = [];
-      for (const rgb of [[22, 163, 74], [37, 99, 235], [219, 39, 119]]) {
-        clickToPaintMs.push(await measurePaint("pointerdown", rgb, { x: 36, y: 36 },
-          () => viewer.locator("canvas").click({ position: { x: 896, y: 40 } })));
-        const snapshot = await fixtureSnapshot();
-        assert.equal(snapshot.benchmark.count, clickToPaintMs.length, "click must update the real page once");
+    for (let round = 1; round <= benchmarkRounds; round++) {
+      const offset = (round - 1) % 3;
+      const order = [0, 1, 2].map((_, index) => (index + offset) % 3);
+      for (const compression of order) {
+        const profile = `9-${compression}`;
+        phase = `rfb_benchmark_${profile}_round_${round}`;
+        const capture = round === 1 ? profile : `${profile}-round-${round}`;
+        const initial = await fixtureSnapshot(5000, "benchmarkReset");
+        assert.deepEqual(initial.viewport, dimensions);
+        assert.deepEqual(initial.benchmark, { count: 0, scrollTop: 0, imageReady: true,
+          heading: "Resultados de búsqueda", rows: 18 });
+        viewer = await viewerBrowser.newPage({ viewport: dimensions });
+        await viewer.goto(`http://127.0.0.1:${server.address().port}/viewer?profile=${profile}`);
+        await viewer.waitForFunction(() => window.rfbConnected === true);
+        assert.deepEqual(await viewer.evaluate(() => [window.rfb.qualityLevel, window.rfb.compressionLevel]), [9, compression]);
+        await marker([124, 58, 237]);
+        // Inspect received pixels, not the native page DOM: both dense text and
+        // the deterministic raster image must actually cross the RFB channel.
+        await viewer.waitForFunction(() => {
+          const canvas = document.querySelector("canvas");
+          if (!canvas || canvas.width !== 1000 || canvas.height !== 800) return false;
+          const ctx = canvas.getContext("2d");
+          const text = ctx.getImageData(40, 105, 450, 170).data;
+          let dark = 0;
+          for (let i = 0; i < text.length; i += 4) if (text[i] < 100 && text[i + 1] < 100 && text[i + 2] < 150) dark++;
+          const image = ctx.getImageData(642, 106, 310, 150).data;
+          const colors = new Set();
+          for (let i = 0; i < image.length; i += 64) colors.add([image[i] >> 5, image[i + 1] >> 5, image[i + 2] >> 5].join(","));
+          return dark > 300 && colors.size > 60;
+        }, null, { timeout: 8000 });
+        await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${capture}-initial.png` });
+        const actionBytesStart = rfbTransfers.get(profile).serverBytes;
+        const clickToPaintMs = [];
+        for (const rgb of [[22, 163, 74], [37, 99, 235], [219, 39, 119]]) {
+          clickToPaintMs.push(await measurePaint("pointerdown", rgb, { x: 36, y: 36 },
+            () => viewer.locator("canvas").click({ position: { x: 896, y: 40 } })));
+          const snapshot = await fixtureSnapshot();
+          assert.equal(snapshot.benchmark.count, clickToPaintMs.length, "click must update the real page once");
+        }
+        await viewer.mouse.move(500, 500);
+        const scrollToPaintMs = await measurePaint("wheel", [245, 158, 11], { x: 72, y: 36 },
+          () => viewer.mouse.wheel(0, 420));
+        const final = await fixtureSnapshot();
+        assert.ok(final.benchmark.scrollTop > 0, "RFB wheel must scroll the native content");
+        assert.equal(final.benchmark.count, 3);
+        await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${capture}-scrolled.png` });
+        const transfer = rfbTransfers.get(profile);
+        assert.ok(transfer.serverBytes > actionBytesStart && transfer.clientBytes > 0, "both RFB directions must carry real bytes");
+        benchmarkResults.push({ round, order: order.indexOf(compression) + 1, quality: 9, compression, viewport: dimensions,
+          serverBytes: transfer.serverBytes, clientBytes: transfer.clientBytes,
+          actionServerBytes: transfer.serverBytes - actionBytesStart,
+          clickToPaintMs, scrollToPaintMs, clicksConfirmed: final.benchmark.count,
+          scrollConfirmed: final.benchmark.scrollTop > 0, textAndImagePixelsConfirmed: true });
+        await viewer.close();
+        viewer = null;
       }
-      await viewer.mouse.move(500, 500);
-      const scrollToPaintMs = await measurePaint("wheel", [245, 158, 11], { x: 72, y: 36 },
-        () => viewer.mouse.wheel(0, 420));
-      const final = await fixtureSnapshot();
-      assert.ok(final.benchmark.scrollTop > 0, "RFB wheel must scroll the native content");
-      assert.equal(final.benchmark.count, 3);
-      await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${profile}-scrolled.png` });
-      const transfer = rfbTransfers.get(profile);
-      assert.ok(transfer.serverBytes > actionBytesStart && transfer.clientBytes > 0, "both RFB directions must carry real bytes");
-      benchmarkResults.push({ quality: 9, compression, viewport: dimensions,
-        serverBytes: transfer.serverBytes, clientBytes: transfer.clientBytes,
-        actionServerBytes: transfer.serverBytes - actionBytesStart,
-        clickToPaintMs, scrollToPaintMs, clicksConfirmed: final.benchmark.count,
-        scrollConfirmed: final.benchmark.scrollTop > 0, textAndImagePixelsConfirmed: true });
-      await viewer.close();
-      viewer = null;
     }
-    const report = { schemaVersion: 1, transport: "noVNC-WebSocket-x11vnc-X11-Chrome",
+    const distribution = values => {
+      assert.ok(values.length > 0 && values.every(Number.isFinite), "measurements must be finite");
+      const sorted = values.slice().sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+      return { count: sorted.length, median: Math.round(median * 100) / 100,
+        p95: sorted[Math.ceil(sorted.length * 0.95) - 1] };
+    };
+    const profiles = [0, 1, 2].map(compression => {
+      const samples = benchmarkResults.filter(sample => sample.compression === compression);
+      assert.equal(samples.length, benchmarkRounds, "every profile must finish all five rounds");
+      return { quality: 9, compression, samples, summary: {
+        clickToPaintMs: distribution(samples.flatMap(sample => sample.clickToPaintMs)),
+        scrollToPaintMs: distribution(samples.map(sample => sample.scrollToPaintMs)),
+        serverBytes: distribution(samples.map(sample => sample.serverBytes)),
+        clientBytes: distribution(samples.map(sample => sample.clientBytes)),
+        actionServerBytes: distribution(samples.map(sample => sample.actionServerBytes)),
+      } };
+    });
+    const pairedScrollDeltaMs = profiles.slice(1).flatMap(profile =>
+      Array.from({ length: benchmarkRounds }, (_, index) => {
+        const baseline = profiles[0].samples[index], candidate = profile.samples[index];
+        assert.equal(baseline.round, candidate.round);
+        return { compression: profile.compression, round: baseline.round,
+          candidateMinusBaseline: Math.round((candidate.scrollToPaintMs - baseline.scrollToPaintMs) * 100) / 100 };
+      }));
+    const report = { schemaVersion: 2, transport: "noVNC-WebSocket-x11vnc-X11-Chrome",
       workload: "same local text, raster image, three clicks and one scroll",
       latencyOrigin: "viewer input event to matching received framebuffer pixel",
-      thresholds: "content and input correctness only; no minimum speedup", profiles: benchmarkResults };
+      roundsPerProfile: benchmarkRounds, elapsedMs: Date.now() - benchmarkStartedAt,
+      sampling: "five rounds; fresh connection each sample; order rotates 0,1,2 then 1,2,0 then 2,0,1; all samples retained",
+      percentile: "nearest-rank p95; median averages the middle pair for even sample counts",
+      thresholds: "content and input correctness only; no minimum speedup", profiles, pairedScrollDeltaMs };
+    // CI logs retain all measurements even when success artifacts are not
+    // uploaded; /tmp captures are also available for a failed gate's evidence.
     fs.writeFileSync("/tmp/browser-gate-rfb-metrics.json", JSON.stringify(report, null, 2) + "\n");
     console.log("PASS real RFB profile comparison " + JSON.stringify(report));
     // Keep the original restore/framebuffer assertions on a live connection.
