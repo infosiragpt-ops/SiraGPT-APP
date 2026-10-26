@@ -901,12 +901,25 @@ function providerCooldownMs(options = {}) {
   return Number.isFinite(raw) && raw >= 1000 ? raw : DEFAULT_PROVIDER_COOLDOWN_MS;
 }
 
-/** Remember a dead key / empty balance so the next audio job skips the rung. */
+/** Remember a dead key / empty balance so the next audio job and LLM ladders skip the rung. */
 function rememberProviderRejection(provider, err, options = {}) {
   if (!provider || !provider.key) return;
+  const ttlMs = providerCooldownMs(options);
+  const env = envOf(options);
   keyHealth.markRejected(`${COOLDOWN_NAMESPACE}${provider.name}`, provider.key, err, {
-    SIRAGPT_KEY_REJECT_MEMO_MS: String(providerCooldownMs(options)),
+    ...env,
+    SIRAGPT_KEY_REJECT_MEMO_MS: String(ttlMs),
   });
+  try {
+    if (isBillingError(err)) {
+      // eslint-disable-next-line global-require
+      const billing = require('./ai/billing-failover');
+      billing.markOutOfCredit(provider.name, err, { ...env, [provider.envName || 'OPENAI_API_KEY']: provider.key }, { ttlMs });
+      keyHealth.markRejected(provider.name, provider.key, err, env, { reason: 'billing', ttlMs });
+    } else if (isInvalidKeyError(err)) {
+      keyHealth.markRejected(provider.name, provider.key, err, env, { reason: 'auth', ttlMs });
+    }
+  } catch (_) { /* advisory */ }
 }
 
 function providerInCooldown(provider) {
@@ -914,7 +927,14 @@ function providerInCooldown(provider) {
 }
 
 function clearTranscriptionCooldowns() {
-  for (const name of COOLDOWN_PROVIDERS) keyHealth.clear(`${COOLDOWN_NAMESPACE}${name}`);
+  for (const name of COOLDOWN_PROVIDERS) {
+    keyHealth.clear(`${COOLDOWN_NAMESPACE}${name}`);
+    keyHealth.clear(name);
+    try {
+      // eslint-disable-next-line global-require
+      require('./ai/billing-failover').clear(name);
+    } catch (_) { /* optional */ }
+  }
 }
 
 /** Short ladder token for the summary log line: «openai(429 billing)». */

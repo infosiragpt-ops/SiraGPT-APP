@@ -1124,7 +1124,20 @@ function start(opts = {}) {
             logger.warn?.(`[system-cron] rlhf-phase3 retry ${attempt} in ${delayMs}ms (${reason})`),
         });
         const res = await runWithRetry();
-        logger.info?.(`[system-cron] rlhf-phase3 done: ${JSON.stringify(res)}`);
+        const logRes = res && res.train && res.train.model && res.train.model.weights && typeof res.train.model.weights === 'object'
+          ? {
+            ...res,
+            train: {
+              ...res.train,
+              model: {
+                ...res.train.model,
+                weights: undefined,
+                weightsCount: Object.keys(res.train.model.weights).length,
+              },
+            },
+          }
+          : res;
+        logger.info?.(`[system-cron] rlhf-phase3 done: ${JSON.stringify(logRes)}`);
       } catch (err) {
         runErr = err;
         logger.error?.(`[system-cron] rlhf-phase3 failed: ${err && err.message}`);

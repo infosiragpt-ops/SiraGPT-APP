@@ -158,15 +158,27 @@ async function proposeWithLlm(entries, { llm, env = process.env, signal } = {}) 
   const timer = setTimeout(() => ac.abort(), LLM_TIMEOUT_MS);
   if (signal) signal.addEventListener('abort', () => ac.abort(), { once: true });
   try {
+    const messages = buildPrompt(entries);
     const res = await client.chat.completions.create({
       model: env.SIRAGPT_MEMORY_LLM_MODEL || undefined,
       temperature: 0,
-      max_tokens: 4000,
+      max_tokens: 8000,
       response_format: { type: 'json_object' },
-      messages: buildPrompt(entries),
+      messages,
     }, { signal: ac.signal });
-    const text = res && res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.content;
-    const parsed = extractJson(text);
+    const msg = res && res.choices && res.choices[0] && res.choices[0].message;
+    const text = (msg && (msg.content || msg.reasoning_content || msg.reasoning)) || '';
+    let parsed = extractJson(text);
+    if (!parsed && !ac.signal.aborted) {
+      const retryRes = await client.chat.completions.create({
+        model: env.SIRAGPT_MEMORY_LLM_MODEL || undefined,
+        temperature: 0,
+        max_tokens: 8000,
+        messages,
+      }, { signal: ac.signal });
+      const retryMsg = retryRes && retryRes.choices && retryRes.choices[0] && retryRes.choices[0].message;
+      parsed = extractJson((retryMsg && (retryMsg.content || retryMsg.reasoning_content || retryMsg.reasoning)) || '');
+    }
     if (!parsed) return { ok: false, error: 'llm_not_json' };
     return { ok: true, proposal: parsed };
   } catch (err) {

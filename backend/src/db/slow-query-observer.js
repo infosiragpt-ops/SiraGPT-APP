@@ -23,6 +23,7 @@
 // ──────────────────────────────────────────────────────────────
 
 const DEFAULT_SLOW_QUERY_MS = 500;
+const DEFAULT_RAW_MAINTENANCE_SLOW_QUERY_MS = 5_000;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_FINGERPRINTS = 1_000;
 const MODEL_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
@@ -45,10 +46,11 @@ function fingerprintOf(model, action) {
 }
 
 /**
- * First application frame of a stack, as `src/…:line`. The path is anchored
- * on the LAST `/backend/src/` (any checkout, even one under a `src/` folder)
- * or on the production image's `/app/src/`; frames in node_modules, the DB
- * layer and the shared client are skipped.
+ * First application frame of a stack, as `src/…:line` or `dist/…:line`. The
+ * path is anchored on the LAST `/backend/src/` or `/backend/dist/` (any
+ * checkout, even one under a `src/` folder) or on the production image's
+ * `/app/src/` or `/app/dist/`; frames in node_modules, the DB layer, the
+ * shared client and transaction span wrappers are skipped.
  */
 function callerSite(stack) {
   for (const line of String(stack || '').split('\n').slice(1)) {
@@ -56,15 +58,34 @@ function callerSite(stack) {
     if (!m) continue;
     const file = m[1].replace(/\\/g, '/');
     if (file.includes('/node_modules/')) continue;
-    const anchor = file.lastIndexOf('/backend/src/');
+    const srcAnchor = file.lastIndexOf('/backend/src/');
+    const distAnchor = file.lastIndexOf('/backend/dist/');
     let rel = null;
-    if (anchor >= 0) rel = file.slice(anchor + '/backend/'.length);
-    else if (file.startsWith('/app/src/')) rel = file.slice('/app/'.length);
+    if (srcAnchor >= 0) rel = file.slice(srcAnchor + '/backend/'.length);
+    else if (distAnchor >= 0) rel = file.slice(distAnchor + '/backend/'.length);
+    else if (file.startsWith('/app/src/') || file.startsWith('/app/dist/')) rel = file.slice('/app/'.length);
     if (!rel) continue;
-    if (rel.startsWith('src/db/') || rel === 'src/config/database.js') continue;
+    if (
+      rel.startsWith('src/db/')
+      || rel === 'src/config/database.js'
+      || rel === 'src/utils/otel-spans.js'
+      || rel === 'src/services/db/database-guard.js'
+    ) continue;
     return `${rel}:${m[2]}`.slice(0, 120);
   }
   return null;
+}
+
+function isBackgroundMaintenanceRawPoll(key, site) {
+  if (key !== 'raw.$queryRaw' && key !== 'raw.$executeRaw') return false;
+  if (!site) return true;
+  return (
+    site.startsWith('dist/doc-sandbox/')
+    || site.startsWith('src/modules/doc-sandbox/')
+    || site.startsWith('src/health/')
+    || site.startsWith('src/services/observability/health-check.js')
+    || site.startsWith('src/services/stripe-webhook-recovery.js')
+  );
 }
 
 function createSlowQueryObserver({
@@ -74,6 +95,7 @@ function createSlowQueryObserver({
   captureSite = true,
 } = {}) {
   const thresholdMs = readInt(env.SIRAGPT_SLOW_QUERY_MS, DEFAULT_SLOW_QUERY_MS, 0, 600_000);
+  const hasExplicitThreshold = env.SIRAGPT_SLOW_QUERY_MS !== undefined && env.SIRAGPT_SLOW_QUERY_MS !== null && String(env.SIRAGPT_SLOW_QUERY_MS).trim() !== '';
   const cooldownMs = readInt(env.SIRAGPT_SLOW_QUERY_LOG_COOLDOWN_MS, DEFAULT_COOLDOWN_MS, 1_000, 3_600_000);
   const buckets = new Map();
   const stats = { slow: 0, logged: 0, suppressed: 0 };
@@ -82,8 +104,17 @@ function createSlowQueryObserver({
     if (thresholdMs <= 0 || !event) return;
     const ms = Number(event.ms);
     if (!(ms >= thresholdMs)) return;
-    stats.slow += 1;
     const key = fingerprintOf(event.model, event.action);
+    const site = captureSite ? callerSite(event.stack || new Error().stack) : null;
+    const effectiveThresholdMs = (
+      !hasExplicitThreshold
+      && !event.error
+      && isBackgroundMaintenanceRawPoll(key, site)
+    )
+      ? Math.max(thresholdMs, DEFAULT_RAW_MAINTENANCE_SLOW_QUERY_MS)
+      : thresholdMs;
+    if (!(ms >= effectiveThresholdMs)) return;
+    stats.slow += 1;
     const t = now();
     const bucket = buckets.get(key);
     if (bucket && t - bucket.at < cooldownMs) {
@@ -106,9 +137,8 @@ function createSlowQueryObserver({
       // caller and deliberately demoted in config/database.js, so it is named
       // without its code to keep it out of that inbox.
       const failure = code === 'P2034' ? ' failed write_conflict' : ` failed${code ? ` code=${code}` : ''}`;
-      const site = captureSite ? callerSite(new Error().stack) : null;
       sink.warn(
-        `[slow-query] ${key} ${Math.round(ms)}ms threshold=${thresholdMs}ms`
+        `[slow-query] ${key} ${Math.round(ms)}ms threshold=${effectiveThresholdMs}ms`
         + (site ? ` site=${site}` : '')
         + (err ? failure : '')
         + (suppressed ? ` suppressed=${suppressed} maxMs=${Math.round(maxMs)}` : ''),

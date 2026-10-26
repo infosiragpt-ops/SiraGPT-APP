@@ -173,6 +173,24 @@ test('callerSite names the first application frame outside the DB layer and depe
     '    at async getChat (/home/u/src/SiraGPT-APP/backend/src/routes/chats.js:9:3)',
   ].join('\n')), 'src/routes/chats.js:9');
   assert.equal(callerSite('Error\n    at x (C:\\work\\SiraGPT-APP\\backend\\src\\routes\\a.js:7:2)'), 'src/routes/a.js:7');
+  // Skips otel-spans / database-guard wrappers and resolves compiled dist/ frames.
+  assert.equal(callerSite([
+    'Error',
+    '    at observe (/app/src/db/slow-query-observer.js:80:20)',
+    '    at withDbTransactionSpan (/app/src/utils/otel-spans.js:108:12)',
+    '    at PrismaDocSandboxQueueRepository.reconcile (/app/dist/doc-sandbox/queue/repository.js:419:16)',
+  ].join('\n')), 'dist/doc-sandbox/queue/repository.js:419');
+});
+
+test('background maintenance raw.$queryRaw polls below 5s are suppressed unless an explicit threshold or error is present', () => {
+  const { createSlowQueryObserver } = require('../src/db/slow-query-observer');
+  const lines = [];
+  const obs = createSlowQueryObserver({ env: {}, sink: { warn: (l) => lines.push(l) }, captureSite: false });
+  obs.observe({ model: undefined, action: '$queryRaw', ms: 2_900, error: null });
+  assert.equal(lines.length, 0, 'routine 2-3s WAL checkpoint pause on background raw.$queryRaw is not logged as slow-query');
+  obs.observe({ model: undefined, action: '$queryRaw', ms: 5_100, error: null });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^\[slow-query\] raw\.\$queryRaw 5100ms threshold=5000ms/);
 });
 
 test('a retried P2034 write conflict is named without its code (stays out of «Errores del sistema»)', () => {
@@ -184,3 +202,4 @@ test('a retried P2034 write conflict is named without its code (stays out of «E
   assert.match(lines[0], / failed write_conflict$/);
   assert.doesNotMatch(lines[0], /\bP[12]\d{3}\b/);
 });
+
