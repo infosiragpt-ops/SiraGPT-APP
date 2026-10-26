@@ -77,10 +77,10 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(css, /prefers-reduced-motion: reduce/)
   })
 
-  it("keeps 3–4 primary message actions and hides the rest under a more menu", () => {
+  it("keeps primary message actions visible and secondary actions under a more menu", () => {
     const rail = source("components/MessageActionRail.tsx")
     assert.match(rail, /label="Copiar"/)
-    assert.match(rail, /Regenerar respuesta/)
+    assert.match(rail, /Reintentar respuesta/)
     assert.match(rail, /Me gusta/)
     assert.match(rail, /No me gusta/)
     assert.match(rail, /Más acciones/)
