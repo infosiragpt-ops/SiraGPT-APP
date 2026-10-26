@@ -52,11 +52,12 @@ type RfbPresentation = Pick<RfbHandle, "background" | "qualityLevel" | "compress
 
 function applyPresentation(rfb: RfbHandle, browser: boolean, original: RfbPresentation) {
   rfb.background = browser ? "#ffffff" : (original.background || "#282828")
-  // Keep browser text crisp without disabling the transport's compression.
+  // Keep crisp browser text and the measured lower-latency transport profile.
+  // Real RFB comparisons found that levels 1 and 2 delayed scrolling.
   // Returning to the desktop restores this connection's own defaults.
   if (browser) {
     rfb.qualityLevel = 9
-    rfb.compressionLevel = 2
+    rfb.compressionLevel = 0
   } else {
     if (original.qualityLevel !== undefined) rfb.qualityLevel = original.qualityLevel
     if (original.compressionLevel !== undefined) rfb.compressionLevel = original.compressionLevel

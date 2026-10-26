@@ -58,24 +58,24 @@ async function connectedTransport() {
 }
 
 describe("desktop viewer readiness", () => {
-  it.each([[6, 2], [4, 5]])("preserves crisp compressed browser pixels and restores original quality=%s compression=%s", async (quality, compression) => {
+  it.each([[6, 2], [4, 5]])("preserves crisp browser pixels and restores original quality=%s compression=%s", async (quality, compression) => {
     defaults.qualityLevel = quality
     defaults.compressionLevel = compression
     const view = render(<DesktopScreen {...sessionProps} />)
     const rfb = await connectedTransport()
     expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([quality, compression])
     view.rerender(<DesktopScreen {...sessionProps} neutralBackground />)
-    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([9, 2])
+    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([9, 0])
     view.rerender(<DesktopScreen {...sessionProps} />)
     expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([quality, compression])
     expect(sessions).toHaveLength(1)
     expect(rfb.disconnect).not.toHaveBeenCalled()
   })
 
-  it("starts the browser with high quality and compression enabled", async () => {
+  it("starts the browser with the measured low-latency profile", async () => {
     render(<DesktopScreen {...sessionProps} neutralBackground />)
     const rfb = await connectedTransport()
-    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([9, 2])
+    expect([rfb.qualityLevel, rfb.compressionLevel]).toEqual([9, 0])
   })
 
   it("does not broadcast global window resize events for viewport observations", async () => {

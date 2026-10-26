@@ -1,5 +1,4 @@
 0022f46109e56cffd83d508fa28a0ce91ed3e55306fe93ac8df7ffe31b07b98c  lib/use-document-editor-chat.ts
-006749c3668fd7739cb4ee471db131c3a5a85f5240961eee8889d772de484915  components/desktop/DesktopScreen.tsx
 00f94b5d3ccebbbc626164fdcd0c40398f0becedaefc3ece02a353c63f77c38c  lib/computer-navigate.ts
 0139f78d66665d19a17a47013ddf71e1f79993ca71161f5b0bcec03358c13cd1  lib/chat/use-composer-skills.ts
 0220ac571a18a30bce9173976f86d8cbeef91f3dc94b7076f1376c21fca69968  components/agentes/coding-preview-pane.tsx
@@ -150,6 +149,7 @@
 2cdf8d9570dff1d84623172eb8338656fa3a945e65761354186c3c76e021b742  lib/use-office-draft.ts
 2d5b0cb5e1bc247bda4fd90f0a4859edb5dc7470f5f140b79201246b1e3a9428  lib/agent-task-ai-sdk-bridge.ts
 2d61644be4ba5d9dfb4d7fafa88109c2838325426cd0ef3b8448798884c01049  lib/api-types.ts
+2d782ffe68ead245bfbbf23f8975f3cbb010011f2fe34cf2506f41e2b67428bc  components/desktop/DesktopScreen.tsx
 2d7bd98d633a31f97e0b5db287f61c21f77e361f748492119c537541081a5d8a  lib/plan-service.ts
 2d9ae2e7ab39b603af5dc8f24ad7d9473f5d3dcbfee9f7bdbd1115aad08ca7ae  components/chat/composer-context-menu.tsx
 2daec1b6ba04dd779a1778f841a8cde11c3c0f81b23fcf76835e16d78ff41c10  app/orgs/invitation/[token]/error.tsx
