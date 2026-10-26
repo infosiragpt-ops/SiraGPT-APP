@@ -13057,7 +13057,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       try {
         const api = getSameOriginApiBaseUrl().replace(/\/+$/, "");
         const res = await authenticatedFetch(
-          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen && !computerProjectPreview ? "&probe=1" : ""}`,
+          // Background refresh shares the server probe budget with the panel;
+          // only an explicit user handoff action should force a fresh probe.
+          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}`,
           { credentials: "include", signal: AbortSignal.timeout(12_000) },
         );
         const body = await res.json().catch(() => ({}));

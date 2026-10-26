@@ -374,7 +374,8 @@ describe("computer login handoff · overlay opens when takeover becomes active",
     assert.match(stream, /filterModelPasswordPaste/)
     assert.match(stream, /chatMessage/)
     assert.match(route, /ensureTakeoverFromLivePage/)
-    assert.match(panel, /probe=1/)
+    assert.doesNotMatch(panel, /probe=1/, "automatic panel polling must honor the server probe throttle")
+    assert.doesNotMatch(chat, /agent-computer\/login-handoff\?[^`\n]*probe=1/, "automatic chat polling must honor the server probe throttle")
     assert.match(dept, /login_handoff_required|loginHandoff/)
     const consumed = consumeLoginHandoffSse({
       type: LOGIN_HANDOFF_EVENT,
@@ -472,7 +473,8 @@ describe("computer login handoff · source & Spanish chrome", () => {
     assert.match(stream, /chatMessage/)
     assert.match(route, /login-handoff/)
     assert.match(route, /ensureTakeoverFromLivePage/)
-    assert.match(panel, /probe=1/)
+    assert.doesNotMatch(panel, /probe=1/, "automatic panel polling must honor the server probe throttle")
+    assert.doesNotMatch(chat, /agent-computer\/login-handoff\?[^`\n]*probe=1/, "automatic chat polling must honor the server probe throttle")
     assert.equal(es.codex.panel.agentComputer.loginHandoff.title, LOGIN_HANDOFF_COPY.title)
     assert.equal(es.codex.panel.agentComputer.loginHandoff.neverSees, LOGIN_HANDOFF_COPY.neverSees)
     assert.equal(es.codex.panel.agentComputer.loginHandoff.ready, LOGIN_HANDOFF_COPY.ready)

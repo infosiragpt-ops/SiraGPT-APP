@@ -32,7 +32,7 @@ describe("UI & Integrated Browser professional sizing and navigation matrix (1,0
   it("normalizes Chrome New Tab titles to Spanish 'Nueva pestaña' in both backend and frontend", () => {
     assert.match(
       livePageSource,
-      /\^chrome:\\\/\\\/\(\?:newtab\|new-tab-page\)\\b\/i\.test\(document\.url\)\s*&&\s*\/\^new tab\$\/i\.test\(rawTitle\.trim\(\)\)/,
+      /\^chrome:\\\/\\\/\(\?:newtab\|new-tab-page\)\\b\/i\.test\(url\)\s*&&\s*\/\^new tab\$\/i\.test\(rawTitle\.trim\(\)\)/,
     )
     assert.match(
       browserBarSource,

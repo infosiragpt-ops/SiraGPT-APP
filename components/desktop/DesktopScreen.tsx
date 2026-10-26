@@ -48,6 +48,22 @@ type RfbHandle = {
   disconnect: () => void
 }
 
+type RfbPresentation = Pick<RfbHandle, "background" | "qualityLevel" | "compressionLevel">
+
+function applyPresentation(rfb: RfbHandle, browser: boolean, original: RfbPresentation) {
+  rfb.background = browser ? "#ffffff" : (original.background || "#282828")
+  // Keep crisp browser text and the measured lower-latency transport profile.
+  // Real RFB comparisons found that levels 1 and 2 delayed scrolling.
+  // Returning to the desktop restores this connection's own defaults.
+  if (browser) {
+    rfb.qualityLevel = 9
+    rfb.compressionLevel = 0
+  } else {
+    if (original.qualityLevel !== undefined) rfb.qualityLevel = original.qualityLevel
+    if (original.compressionLevel !== undefined) rfb.compressionLevel = original.compressionLevel
+  }
+}
+
 function sameOriginDesktopWsUrl(wsUrl?: string | null, viewerToken?: string | null): string {
   const token = String(viewerToken || "").trim()
   const raw = String(wsUrl || "").trim()
@@ -88,16 +104,9 @@ export function DesktopScreen({
   const rfbRef = React.useRef<RfbHandle | null>(null)
   const neutralRef = React.useRef(neutralBackground)
   neutralRef.current = neutralBackground
-  const defaultBackground = React.useRef<string | undefined>(undefined)
+  const originalPresentation = React.useRef<RfbPresentation>({})
   React.useEffect(() => {
-    if (!rfbRef.current) return
-    rfbRef.current.background = neutralBackground ? "#ffffff" : (defaultBackground.current || "#282828")
-    if (neutralBackground) {
-      try {
-        rfbRef.current.qualityLevel = 9
-        rfbRef.current.compressionLevel = 0
-      } catch { /* ignore on read-only transport stubs */ }
-    }
+    if (rfbRef.current) applyPresentation(rfbRef.current, neutralBackground, originalPresentation.current)
   }, [neutralBackground])
   const [connected, setConnected] = React.useState(false)
   const [status, setStatus] = React.useState<"connecting" | "live" | "error">("connecting")
@@ -126,7 +135,6 @@ export function DesktopScreen({
 
     let cancelled = false
     let rfb: RfbHandle | null = null
-    let resizeObserver: ResizeObserver | null = null
     const markConnected = () => {
       if (cancelled || connectedRef.current) return
       connectedRef.current = true
@@ -162,14 +170,12 @@ export function DesktopScreen({
         const Ctor = RFB as new (target: HTMLElement, url: string, opts?: Record<string, unknown>) => RfbHandle
         rfb = new Ctor(hostRef.current, viewerUrl, { shared: true })
         rfbRef.current = rfb
-        defaultBackground.current = rfb.background
-        if (neutralRef.current) {
-          rfb.background = "#ffffff"
-          try {
-            rfb.qualityLevel = 9
-            rfb.compressionLevel = 0
-          } catch { /* ignore on read-only transport stubs */ }
+        originalPresentation.current = {
+          background: rfb.background,
+          qualityLevel: rfb.qualityLevel,
+          compressionLevel: rfb.compressionLevel,
         }
+        applyPresentation(rfb, neutralRef.current, originalPresentation.current)
         rfb.viewOnly = Boolean(viewOnly)
         // Scale the full 1920x1080 desktop into the host. clipViewport=true
         // was leaving a black unused half when the overlay aspect ≠ 16:9.
@@ -191,12 +197,8 @@ export function DesktopScreen({
           }
           scheduleRetry()
         })
-        if (typeof ResizeObserver === "function" && hostRef.current) {
-          resizeObserver = new ResizeObserver(() => {
-            try { window.dispatchEvent(new Event("resize")) } catch { /* ignore */ }
-          })
-          resizeObserver.observe(hostRef.current)
-        }
+        // noVNC observes its own screen and updates canvas scaling. Broadcasting
+        // window resize here repeats layout work throughout the entire chat.
       } catch {
         if (cancelled) return
         // Import/constructor failure behaves like a dead channel.
@@ -214,7 +216,6 @@ export function DesktopScreen({
         clearTimeout(retryTimerRef.current)
         retryTimerRef.current = null
       }
-      try { resizeObserver?.disconnect() } catch { /* already gone */ }
       if (rfbRef.current === rfb) rfbRef.current = null
       try { rfb?.disconnect() } catch { /* already gone */ }
     }

@@ -59,7 +59,8 @@ describe("department computer pane API base + errors", () => {
     assert.match(screen, /\/ws\/desktop/)
     assert.match(screen, /scaleViewport = true/)
     assert.match(screen, /clipViewport = false/)
-    assert.match(screen, /ResizeObserver/)
+    // noVNC owns canvas resizing; the wrapper must not fan it out to the chat.
+    assert.doesNotMatch(screen, /window\.dispatchEvent\(new Event\("resize"\)\)/)
     assert.match(screen, /data-novnc-chrome="hidden"/)
     assert.match(screen, /Pantalla de SiraGPT/)
     assert.doesNotMatch(screen, /api\.siragpt\.com/)

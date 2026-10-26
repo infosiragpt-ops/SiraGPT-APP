@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
-function harness({ abortSignal = AbortSignal } = {}) {
+function harness({ abortSignal = AbortSignal, targetInfoTransform = targets => targets, now = () => Date.now() } = {}) {
   const calls = [];
   const pages = [];
   const windows = new Map([[1, { windowState: 'maximized', left: 0, top: 0, width: 1280, height: 900 }]]);
@@ -30,6 +30,7 @@ function harness({ abortSignal = AbortSignal } = {}) {
         if (failCommand === method) throw new Error('private diagnostic must not become success');
         if (failCommand === 'hang:' + method || (failCommand === 'hang-owner:' + method && owner === hangOwner)) return new Promise((resolve, reject) => pending.add({ owner, reject }));
         if (method === 'Target.getTargetInfo') return { targetInfo: { targetId: page.id } };
+        if (method === 'Target.getTargets') return { targetInfos: targetInfoTransform(pages.map(p => ({ type: 'page', targetId: p.id, title: p.targetTitle ?? p.documentTitle, url: p.targetUrl ?? p.url() }))) };
         if (method === 'Emulation.setDeviceMetricsOverride') {
           if (failCommand !== 'metrics-noop') { page.viewport = { width: args.width, height: args.height }; page.viewportOwner = cdp; }
           return {};
@@ -106,7 +107,7 @@ function harness({ abortSignal = AbortSignal } = {}) {
       if (cdpDown > 0) { cdpDown -= 1; return { ok: false, status: 502, json: async () => ({}) }; }
       return { ok: true, json: async () => ({ webSocketDebuggerUrl: 'ws://test.invalid/browser' }) };
     },
-    Date,
+    Date: class extends Date { static now() { return now(); } },
     require: name => {
       if (name === 'node:timers/promises') return require(name);
       if (name === './persistent') return { dockerExec: async (sessionArg, command, options) => { relaunches.push({ session: sessionArg, command, options }); if (relaunchError) throw relaunchError; cdpDown = 0; return { ok: true }; } };
@@ -758,3 +759,115 @@ test('navigatePage re-applies viewport emulation and fullscreen when navigating 
   await h.browserAction(session, { type: 'browser_restore' });
 });
 
+
+
+test('tab inventory reads background metadata with a constant number of protocol commands', async () => {
+  const counts = [];
+  for (const total of [1, 10, 50]) {
+    const h = harness();
+    const active = h.makePage('https://example.com/active');
+    for (let i = 1; i < total; i++) h.makePage(`https://example.com/background-${i}`);
+    const state = await h.browserState(session);
+    assert.equal(state.tabs.length, total);
+    assert.equal(state.activeTabId, active.id);
+    assert.equal(state.tabs.at(-1).url, total === 1 ? active.url() : `https://example.com/background-${total - 1}`);
+    counts.push(h.calls.filter(call => call?.method).length);
+  }
+  assert.deepEqual(counts, [counts[0], counts[0], counts[0]], 'more background tabs must not trigger more protocol requests');
+});
+
+test('active tab URL and title are verified against the live document even when target metadata is stale', async () => {
+  const h = harness();
+  const active = h.makePage('https://example.com/current-document');
+  active.documentTitle = 'Current document';
+  active.targetTitle = 'Old target title';
+  active.targetUrl = 'https://example.com/before-redirect';
+  const state = await h.browserState(session);
+  assert.equal(state.tabs[0].title, 'Current document');
+  assert.equal(state.tabs[0].url, 'https://example.com/current-document');
+});
+
+
+test('inventory excludes frames, service workers and prerender targets', async () => {
+  const h = harness({ targetInfoTransform: targets => [...targets,
+    { type: 'iframe', targetId: 'frame', title: 'Frame', url: 'https://example.com/frame' },
+    { type: 'service_worker', targetId: 'worker', title: 'Worker', url: 'https://example.com/worker' },
+    { type: 'page', subtype: 'prerender', targetId: 'prerender', title: 'Future', url: 'https://example.com/future' },
+  ] });
+  const active = h.makePage('https://example.com/current');
+  const state = await h.browserState(session);
+  assert.equal(state.tabs.length, 1);
+  assert.equal(state.activeTabId, active.id);
+});
+
+test('invalid or disappearing active target metadata fails closed and disconnects', async () => {
+  for (const [transform, code] of [
+    [() => null, 'browser_document_unavailable'],
+    [targets => targets.map(target => ({ ...target, title: null })), 'browser_document_unavailable'],
+    [() => [], 'browser_tab_missing'],
+  ]) {
+    const h = harness({ targetInfoTransform: transform });
+    h.makePage('https://example.com/current');
+    await assert.rejects(h.browserState(session), error => error.code === code);
+    assert.equal(h.calls.at(-1), 'disconnect');
+  }
+});
+
+test('tab order survives reordered metadata, appends new tabs and drops closed tabs without extra protocol requests', async () => {
+  let reverse = false;
+  const h = harness({ targetInfoTransform: targets => reverse ? targets.reverse() : targets });
+  const first = h.makePage('https://example.com/one');
+  const second = h.makePage('https://example.com/two');
+  const third = h.makePage('https://example.com/three');
+  const initial = await h.browserState(session);
+  reverse = true;
+  assert.deepEqual((await h.browserState(session)).tabs.map(tab => tab.id), initial.tabs.map(tab => tab.id));
+  const fourth = h.makePage('https://example.com/four');
+  await second.close();
+  h.calls.length = 0;
+  const changed = await h.browserState(session);
+  assert.deepEqual(Array.from(changed.tabs, tab => tab.id), [first.id, third.id, fourth.id]);
+  assert.equal(h.calls.filter(call => call?.method).length, 5);
+});
+
+test('observed tab order is isolated by desktop session, even when target IDs match', async () => {
+  let reverse = false;
+  const h = harness({ targetInfoTransform: targets => reverse ? targets.reverse() : targets });
+  const first = h.makePage('https://example.com/one');
+  const second = h.makePage('https://example.com/two');
+  await h.browserState(session);
+  reverse = true;
+  const other = await h.browserState({ sessionId: 'other-desktop' });
+  assert.deepEqual(Array.from(other.tabs, tab => tab.id), [second.id, first.id]);
+  assert.deepEqual(Array.from((await h.browserState(session)).tabs, tab => tab.id), [first.id, second.id]);
+});
+
+test('idle tab order expires and session inventory storage is bounded by least-recent use', async () => {
+  let reverse = false;
+  let now = 1000;
+  const h = harness({ targetInfoTransform: targets => reverse ? targets.reverse() : targets, now: () => now });
+  const first = h.makePage('https://example.com/one');
+  const second = h.makePage('https://example.com/two');
+  await h.browserState(session);
+  now += 31 * 60_000;
+  reverse = true;
+  assert.deepEqual(Array.from((await h.browserState(session)).tabs, tab => tab.id), [second.id, first.id]);
+  reverse = false;
+  for (let i = 0; i < 127; i++) await h.browserState({ sessionId: `warm-desktop-${i}` });
+  assert.deepEqual(Array.from((await h.browserState(session)).tabs, tab => tab.id), [second.id, first.id]);
+  await h.browserState({ sessionId: 'warm-desktop-127' });
+  assert.deepEqual(Array.from((await h.browserState(session)).tabs, tab => tab.id), [second.id, first.id]);
+  for (let i = 0; i < 128; i++) await h.browserState({ sessionId: `desktop-${i}` });
+  assert.deepEqual(Array.from((await h.browserState(session)).tabs, tab => tab.id), [first.id, second.id]);
+});
+
+test('oversized tab inventories remain deterministic without retaining an unbounded session order', async () => {
+  let reverse = false;
+  const h = harness({ targetInfoTransform: targets => reverse ? targets.reverse() : targets });
+  for (let i = 0; i < 1025; i++) h.makePage(`https://example.com/${i}`);
+  const initial = await h.browserState(session);
+  reverse = true;
+  const changed = await h.browserState(session);
+  assert.deepEqual(changed.tabs.map(tab => tab.id), initial.tabs.map(tab => tab.id));
+  assert.equal(changed.tabs.length, 1025);
+});

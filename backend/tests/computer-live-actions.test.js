@@ -57,11 +57,9 @@ test('real screenshot envelope pngBase64 is retained; chat consumes text coordin
   assert.equal(result.__f7Image, undefined);
   assert.ok(!JSON.stringify(result).includes(PNG));
 });
-test('empty screenshots fail rather than report fake success', async () => {
+test('empty screenshots still fail for callers that consume vision pixels', async () => {
   shot = '';
-  const result = await tool('computer_screenshot').execute();
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'browser_screenshot_missing');
+  await assert.rejects(live.liveScreenshot(owner()), { code: 'browser_screenshot_missing' });
 });
 test('scroll targets observed page center, supports horizontal and vertical wheel', async () => {
   await tool('computer_scroll').execute({ direction: 'right', amount: 640 });
@@ -93,6 +91,7 @@ test('active human takeover prevents reads and writes until explicit release', a
   livePage.observePage = async () => { throw new Error('must not observe during takeover'); };
   try {
     assert.equal((await live.liveScreenshot(owner())).refused, true);
+    assert.match(JSON.stringify(await tool('computer_screenshot').execute()), /loginHandoff/);
     assert.equal((await live.liveAct({ ...owner(), toolName: 'computer_click', action: { type: 'click', x: 1, y: 2 } })).refused, true);
     assert.equal(commands.length + pageActions.length, 0);
   } finally { livePage.observePage = async () => page; }
@@ -135,5 +134,23 @@ test('malformed input is refused before mutation', async () => {
   assert.equal((await tool('computer_type').execute({ text: '' })).ok, false);
   assert.throws(() => live.scrollAction({ direction: 'diagonal' }));
   assert.throws(() => live.keypressAction({}));
+  assert.equal(commands.length + pageActions.length, 0);
+});
+
+
+test('text-only chat observation does not request or depend on unused desktop pixels', async () => {
+  shot = '';
+  const result = await tool('computer_screenshot').execute();
+  assert.equal(result.ok, true);
+  assert.match(result.text, /Ciudad.*50,150/);
+  assert.equal(result.__f7Image, undefined);
+  assert.equal(commands.length, 0, 'text-only observation must not execute a screenshot command');
+});
+
+test('text-only chat observation detects a new password handoff before returning page content', async () => {
+  page = { ...page, focused: { type: 'password' }, text: 'Inicia sesión. Contraseña. Private fixture value' };
+  const result = await tool('computer_screenshot').execute();
+  assert.match(JSON.stringify(result), /loginHandoff/);
+  assert.ok(!JSON.stringify(result).includes('Private fixture value'));
   assert.equal(commands.length + pageActions.length, 0);
 });
