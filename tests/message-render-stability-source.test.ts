@@ -87,7 +87,7 @@ describe("message render stability · source contracts", () => {
   it("keeps the dislike state neutral and spaces the more-actions menu items", () => {
     const rail = source("components/MessageActionRail.tsx")
     assert.doesNotMatch(rail, /destructive/)
-    assert.equal(rail.match(/className="gap-2\.5"/g)?.length, 4)
+    assert.equal(rail.match(/className="gap-2\.5"/g)?.length, 3)
   })
 
   it("loads docx lazily from the table download helpers", () => {

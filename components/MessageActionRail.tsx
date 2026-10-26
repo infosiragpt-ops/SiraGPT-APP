@@ -4,7 +4,7 @@ import * as React from "react"
 import {
   BrainCircuit,
   Check,
-  Clipboard,
+  Copy,
   GitBranch,
   MoreHorizontal,
   RefreshCw,
@@ -12,7 +12,7 @@ import {
   ThumbsDown,
   ThumbsUp,
   Volume2,
-  VolumeX,
+  Pause,
 } from "lucide-react"
 import {
   DropdownMenu,
@@ -156,16 +156,16 @@ export function formatRelativeTimeEs(iso?: string | null, now: number = Date.now
   return `hace ${days} d`
 }
 
-/**
- * Single icon button used by the rail. All sizing/state styling lives
- * here so every action looks identical and the rail is self-consistent.
- *
- * The visual language is intentionally "futuristic glass": a soft layered
- * gradient + inset hairline ring on hover, an accent glow when active, and
- * a crisp tactile press. It reads as professional on both light and dark
- * surfaces because every colour is derived from design-system tokens
- * (foreground / border / ring) rather than hard-coded hues.
- */
+// Shared sizing keeps the primary actions and overflow control aligned.
+// Touch targets remain generous while desktop controls stay compact.
+const ACTION_BUTTON_CLASS_NAME = cn(
+  "relative inline-flex h-11 w-11 shrink-0 cursor-pointer touch-manipulation items-center justify-center rounded-lg sm:h-8 sm:w-8 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11",
+  "text-muted-foreground transition-colors duration-150 motion-reduce:transition-none",
+  "hover:bg-muted hover:text-foreground active:bg-muted/80",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+  "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+)
+
 function RailButton({
   label,
   icon,
@@ -196,16 +196,11 @@ function RailButton({
           aria-label={label}
           title={label}
           aria-pressed={pressed}
+          aria-busy={loading || undefined}
           disabled={disabled || loading}
           onClick={onClick}
           className={cn(
-            // Quiet 28px tile (h-7 w-7), claude.ai-style: flat hover tint,
-            // no glass gradient. Icons are 14px via the callers.
-            "group/rb relative inline-flex h-7 w-7 items-center justify-center rounded-md",
-            "text-muted-foreground/70 transition-colors duration-150 ease-out",
-            "hover:bg-muted hover:text-foreground",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-            "disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-muted-foreground/70",
+            ACTION_BUTTON_CLASS_NAME,
             pressed && "bg-muted text-foreground",
             glow === "accent" && "text-sky-500 dark:text-sky-400",
             pulse === "success" && "text-emerald-500 dark:text-emerald-400",
@@ -286,7 +281,7 @@ export function MessageActionRail({
   // hidden; the other four now match.
   const isLive = isStreaming
   const showCopy = canCopy && hasText && !hasError && !isLive
-  const showSpeak = canVoice && hasText && !hasError && !isLive
+  const showSpeak = canVoice && !!onSpeak && hasText && !hasError && !isLive
   const showFeedback = canFeedback && hasText && !hasError && !isLive
   const showRegenerate = canRegenerate && !isLive && (hasText || hasError)
   const showShare = canShare && hasText && !hasError && !isLive
@@ -453,133 +448,130 @@ export function MessageActionRail({
         // used to sit glued to the last line). -ml-1 aligns the first
         // icon's optical center with the text edge above.
         className={cn(
-          "mt-3 -ml-1 inline-flex items-center gap-1",
+          "mt-3 -ml-1 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1",
         )}
       >
-        {showCopy && (
-          <RailButton
-            label="Copiar"
-            disabled={allDisabled}
-            loading={isCopying}
-            pulse={copyPulse}
-            onClick={handleCopy}
-            icon={copyPulse === "success" ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
-          />
-        )}
-        {showRegenerate && (
-          <RailButton
-            label={regenerationBadge ? `Regenerar respuesta · versión ${regenerationBadge}` : "Regenerar respuesta"}
-            disabled={allDisabled}
-            onClick={handleRegenerateClick}
-            icon={
-              <span className="relative inline-flex h-4 w-4 items-center justify-center">
-                <RefreshCw className="h-3.5 w-3.5" />
-                {regenerationBadge && (
-                  <span
-                    aria-hidden="true"
-                    className={cn(
-                      "absolute -right-2 -top-2 inline-flex min-w-[13px] h-[13px] items-center justify-center rounded-full px-[3px]",
-                      "bg-foreground text-background text-[8px] font-semibold leading-none tabular-nums",
-                      "shadow-[0_1px_2px_rgba(0,0,0,0.14)]",
-                    )}
-                  >
-                    {regenerationBadge}
-                  </span>
-                )}
-              </span>
-            }
-          />
-        )}
-        {showFeedback && (
-          <>
+        <div className="inline-flex shrink-0 items-center gap-0 sm:gap-1 [@media(pointer:coarse)]:gap-0">
+          {showCopy && (
             <RailButton
-              label={localFeedback === "liked" ? "Quitar me gusta" : "Me gusta"}
+              label="Copiar"
               disabled={allDisabled}
-              loading={isSubmittingFeedback === "liked"}
-              pressed={localFeedback === "liked"}
-              onClick={() => handleFeedbackClick("liked")}
-              icon={<ThumbsUp className="h-3.5 w-3.5" strokeWidth={localFeedback === "liked" ? 2.5 : 1.75} />}
+              loading={isCopying}
+              pulse={copyPulse}
+              onClick={handleCopy}
+              icon={copyPulse === "success" ? <Check className="h-[18px] w-[18px]" strokeWidth={1.75} /> : <Copy className="h-[18px] w-[18px]" strokeWidth={1.75} />}
             />
+          )}
+          {showSpeak && (
             <RailButton
-              label={localFeedback === "disliked" ? "Quitar valoración negativa" : "No me gusta"}
+              label={isLoadingAudio ? "Preparando lectura" : isSpeaking ? "Pausar lectura" : "Leer en voz alta"}
               disabled={allDisabled}
-              loading={isSubmittingFeedback === "disliked"}
-              pressed={localFeedback === "disliked"}
-              onClick={() => handleFeedbackClick("disliked")}
-              icon={<ThumbsDown className="h-3.5 w-3.5" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
+              loading={isLoadingAudio}
+              pressed={isSpeaking}
+              onClick={handleSpeakClick}
+              icon={isSpeaking
+                ? <Pause className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                : <Volume2 className="h-[18px] w-[18px]" strokeWidth={1.75} />}
             />
-          </>
-        )}
-        {(showSpeak || showShare || showBranch || showRemember) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label="Más acciones"
-                title="Más acciones"
+          )}
+          {showFeedback && (
+            <>
+              <RailButton
+                label={localFeedback === "liked" ? "Quitar me gusta" : "Me gusta"}
                 disabled={allDisabled}
-                className={cn(
-                  "inline-flex h-7 w-7 items-center justify-center rounded-md",
-                  "text-muted-foreground/70 hover:bg-muted hover:text-foreground",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                  allDisabled && "opacity-40 cursor-not-allowed",
+                loading={isSubmittingFeedback === "liked"}
+                pressed={localFeedback === "liked"}
+                onClick={() => handleFeedbackClick("liked")}
+                icon={<ThumbsUp className="h-[18px] w-[18px]" strokeWidth={localFeedback === "liked" ? 2.5 : 1.75} />}
+              />
+              <RailButton
+                label={localFeedback === "disliked" ? "Quitar valoración negativa" : "No me gusta"}
+                disabled={allDisabled}
+                loading={isSubmittingFeedback === "disliked"}
+                pressed={localFeedback === "disliked"}
+                onClick={() => handleFeedbackClick("disliked")}
+                icon={<ThumbsDown className="h-[18px] w-[18px]" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
+              />
+            </>
+          )}
+          {showRegenerate && (
+            <RailButton
+              label={regenerationBadge ? `Reintentar respuesta · versión ${regenerationBadge}` : "Reintentar respuesta"}
+              disabled={allDisabled}
+              onClick={handleRegenerateClick}
+              icon={
+                <span className="relative inline-flex h-[18px] w-[18px] items-center justify-center">
+                  <RefreshCw className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                  {regenerationBadge && (
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "absolute -right-2 -top-2 inline-flex min-w-[13px] h-[13px] items-center justify-center rounded-full px-[3px]",
+                        "bg-foreground text-background text-[8px] font-semibold leading-none tabular-nums",
+                        "shadow-[0_1px_2px_rgba(0,0,0,0.14)]",
+                      )}
+                    >
+                      {regenerationBadge}
+                    </span>
+                  )}
+                </span>
+              }
+            />
+          )}
+          {(showShare || showBranch || showRemember) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Más acciones"
+                  title="Más acciones"
+                  disabled={allDisabled}
+                  className={ACTION_BUTTON_CLASS_NAME}
+                >
+                  <MoreHorizontal className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-[12rem]">
+                {showShare && (
+                  <DropdownMenuItem
+                    disabled={allDisabled || isSharing}
+                    onClick={handleShareClick}
+                    className="gap-2.5"
+                    aria-label="Copiar enlace al mensaje"
+                    title="Copiar enlace al mensaje"
+                  >
+                    {sharePulse === "success" ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+                    Copiar enlace al mensaje
+                  </DropdownMenuItem>
                 )}
-              >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="min-w-[12rem]">
-              {showSpeak && (
-                <DropdownMenuItem
-                  disabled={allDisabled || isLoadingAudio}
-                  onClick={handleSpeakClick}
-                  className="gap-2.5"
-                  aria-label={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
-                  title={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
-                >
-                  {isSpeaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                  {isSpeaking ? "Detener lectura" : "Leer en voz alta"}
-                </DropdownMenuItem>
-              )}
-              {showShare && (
-                <DropdownMenuItem
-                  disabled={allDisabled || isSharing}
-                  onClick={handleShareClick}
-                  className="gap-2.5"
-                  aria-label="Copiar enlace al mensaje"
-                  title="Copiar enlace al mensaje"
-                >
-                  {sharePulse === "success" ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
-                  Copiar enlace al mensaje
-                </DropdownMenuItem>
-              )}
-              {showBranch && (
-                <DropdownMenuItem
-                  disabled={allDisabled || isBranching}
-                  onClick={handleBranchClick}
-                  className="gap-2.5"
-                  aria-label="Bifurcar conversación"
-                  title="Bifurcar conversación"
-                >
-                  <GitBranch className="h-4 w-4" />
-                  Bifurcar conversación
-                </DropdownMenuItem>
-              )}
-              {showRemember && (
-                <DropdownMenuItem
-                  disabled={allDisabled || isRemembering}
-                  onClick={handleRememberClick}
-                  className="gap-2.5"
-                  aria-label={remembered ? "Guardado en memoria" : "Recordar esto"}
-                  title={remembered ? "Guardado en memoria" : "Recordar esto"}
-                >
-                  <BrainCircuit className="h-4 w-4" />
-                  {remembered ? "Guardado en memoria" : "Recordar esto"}
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+                {showBranch && (
+                  <DropdownMenuItem
+                    disabled={allDisabled || isBranching}
+                    onClick={handleBranchClick}
+                    className="gap-2.5"
+                    aria-label="Bifurcar conversación"
+                    title="Bifurcar conversación"
+                  >
+                    <GitBranch className="h-4 w-4" />
+                    Bifurcar conversación
+                  </DropdownMenuItem>
+                )}
+                {showRemember && (
+                  <DropdownMenuItem
+                    disabled={allDisabled || isRemembering}
+                    onClick={handleRememberClick}
+                    className="gap-2.5"
+                    aria-label={remembered ? "Guardado en memoria" : "Recordar esto"}
+                    title={remembered ? "Guardado en memoria" : "Recordar esto"}
+                  >
+                    <BrainCircuit className="h-4 w-4" />
+                    {remembered ? "Guardado en memoria" : "Recordar esto"}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
         {showModelBadge && (
           // #99 — Modelo respondedor. Pill no interactiva, color muy
           // suave para no competir con las acciones. Tooltip muestra

@@ -25,7 +25,7 @@ describe("/agentes premium finish", () => {
 
   it("the action rail breathes below the answer instead of sitting glued to it", () => {
     const rail = source("components/MessageActionRail.tsx")
-    assert.match(rail, /"mt-3 -ml-1 inline-flex items-center gap-1"/)
+    assert.match(rail, /"mt-3 -ml-1 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1"/)
     const message = source("components/message-component.tsx")
     assert.match(message, /className="msg-actions-row flex flex-wrap items-center gap-2"/)
     // 2026-10-02 (claude.ai density): the user row sits 6px under the bubble
