@@ -77,6 +77,7 @@ async function harness(t, { files = [], chats = ['chat1'], transcripts = {}, env
       return ids.map(id => state.files.get(id)).filter(row => row && row.userId === userId && !row.deletedAt).map(row => ({ ...row }));
     },
     loadTranscript: async (_prisma, { fileId }) => transcripts[fileId] || null,
+    readJobStates: async ({ fileIds }) => Object.fromEntries(fileIds.map(id => [id, 'missing'])),
     buildArtifacts: async ({ rows }) => {
       state.built++;
       return [{ filename: 'clase-transcripcion.txt', base64: Buffer.from(rows.map(r => r.extractedText || '').join('\n')).toString('base64'), mime: 'text/plain' }];
@@ -583,7 +584,7 @@ test('a translation covers the transcript asked for, never only the moment asked
   assert.deepEqual(labelled[1], { start: 600, end: 1200 });
 });
 
-test('files still pending past the ceiling are delivered as pending', async (t) => {
+test('orphaned files past the ceiling are honestly reported as pending', async (t) => {
   const { service, state, clock } = await harness(t, { files: [ready('a'), fileRow('b')] });
   const record = await service.createDelivery(newDelivery({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
   assert.equal((await service.deliverOne(record.id)).status, 'waiting');
@@ -593,6 +594,38 @@ test('files still pending past the ceiling are delivered as pending', async (t) 
   assert.match(content, /1 completo, 1 pendiente/);
   assert.match(content, /«b\.mp4»: sigue en la cola/);
   assert.match(content, /continúa transcribiéndose/);
+});
+
+test('a queued ten-hour recording still delivers after more than a day and only once', async (t) => {
+  for (const jobState of ['waiting', 'active', 'delayed', 'paused', 'prioritized', 'waiting-children']) {
+    const reads = [];
+    const h = await harness(t, { files: [ready('a'), fileRow('b')], overrides: {
+      readJobStates: async args => { reads.push(args); return { b: jobState }; },
+    } });
+    const record = await h.service.createDelivery(newDelivery({ fileIds: ['a', 'b'] }));
+    h.clock.t += 48 * 60 * MIN;
+    assert.equal((await h.service.deliverOne(record.id)).status, 'waiting', jobState);
+    assert.equal(h.state.messages.length, 0);
+    assert.equal((await h.store.get(record.id)).status, 'pending');
+    assert.deepEqual(reads[0], { fileIds: ['b'], userId: 'u1' });
+    h.state.files.set('b', ready('b'));
+    await h.service.onMediaTerminal({ fileId: 'b', userId: 'u1' });
+    assert.equal(h.state.messages.length, 1);
+    assert.equal(h.state.messages[0].metadata.mediaBatch.ready, 2);
+    await h.service.onMediaTerminal({ fileId: 'b', userId: 'u1' });
+    assert.equal(h.state.messages.length, 1);
+  }
+});
+
+test('a temporarily unreachable queue never expires an overdue delivery', async (t) => {
+  for (const readJobStates of [async () => ({ clase: 'unknown' }), async () => { throw new Error('Redis unavailable'); }]) {
+    const h = await harness(t, { files: [fileRow('clase')], overrides: { readJobStates } });
+    const record = await h.service.createDelivery(newDelivery());
+    h.clock.t += 48 * 60 * MIN;
+    assert.equal((await h.service.deliverOne(record.id)).status, 'waiting');
+    assert.equal(h.state.messages.length, 0);
+    assert.equal((await h.store.get(record.id)).status, 'pending');
+  }
 });
 
 test('onMediaTerminal only touches the owner\'s deliveries and rejects bad ids', async (t) => {

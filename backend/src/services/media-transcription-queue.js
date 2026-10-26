@@ -996,6 +996,7 @@ function publicFailureMessage(err) {
     case 'drm_protected': return 'Este archivo está protegido contra copia (DRM) y su audio no se puede leer.';
     case 'file_empty': return 'Este archivo está vacío.';
     case 'file_unavailable': case 'ENOENT': return 'No se pudo recuperar el archivo. Vuelve a subirlo.';
+    case 'audio_decode_incomplete': return 'No se pudo leer todo el audio de la grabación. Puedes reintentar el archivo; los tramos ya transcritos se conservan.';
     case 'audio_decode_failed': case 'invalid_media': return 'No se pudo leer el audio. Comprueba que el archivo no esté dañado.';
     case 'media_timeout': return 'La transcripción superó el tiempo permitido. Puedes reintentar este archivo.';
     case 'low_coverage': return 'Demasiados tramos no se pudieron transcribir. Reintentar recupera solo los tramos que faltan; lo ya transcrito se conserva.';
@@ -1013,7 +1014,7 @@ function isTransientMediaError(err) {
   if (status === 429 || status === 408 || status >= 500 && status <= 599) return true;
   // low_coverage: too many segments failed on every engine this time; a
   // retry re-runs only those segments (the others are checkpointed).
-  if (/^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENETUNREACH|P1001|P1002|P1008|P1017|P2024|P2034|media_timeout|media_shutdown|media_busy|transcription_timeout|provider_timeout|local_unavailable|low_coverage)$/i.test(String(err?.code || ''))) return true;
+  if (/^(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENETUNREACH|P1001|P1002|P1008|P1017|P2024|P2034|media_timeout|media_shutdown|media_busy|transcription_timeout|provider_timeout|local_unavailable|low_coverage|audio_decode_incomplete)$/i.test(String(err?.code || ''))) return true;
   return /rate.?limit|temporar(?:y|ily)|service unavailable|socket hang up|fetch failed|timed? out|timeout|\b429\b|\b50[234]\b/i.test(String(err?.message || ''));
 }
 
@@ -2016,7 +2017,46 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     return out;
   }
 
-  return { enqueueMediaTranscription, enqueueRefine, processMediaJob, reconcilePendingMedia, readMediaProgress,
+  // Delivery must distinguish an absent job from a temporarily unreachable
+  // queue. Progress alone cannot do that: a waiting job has no progress yet.
+  async function readMediaJobStates({ fileIds = [], userId, timeoutMs: readTimeoutMs = 1500 } = {}) {
+    const ids = [...new Set(fileIds)];
+    if (!userId || !ids.length) return {};
+    const unknown = () => Object.fromEntries(ids.map(id => [id, 'unknown']));
+    let queues;
+    try {
+      queues = [getQueue()];
+      if (typeof getShortQueue === 'function') {
+        const short = getShortQueue();
+        if (short) queues.push(short);
+      }
+    } catch { return unknown(); }
+    const read = Promise.all(ids.map(async fileId => {
+      let uncertain = false;
+      let terminal = 'missing';
+      for (const queue of queues) {
+        try {
+          const job = await queue.getJob(jobIdFor(fileId, userId));
+          if (!job) continue;
+          const state = await job.getState() || 'unknown';
+          if (state === 'unknown') uncertain = true;
+          else if (state !== 'completed' && state !== 'failed') return [fileId, state];
+          else terminal = state;
+        } catch { uncertain = true; }
+      }
+      // A retained terminal job in one lane says nothing about work in the
+      // other lane (its estimate may have changed when it was re-queued).
+      return [fileId, uncertain ? 'unknown' : terminal];
+    })).then(entries => Object.fromEntries(entries));
+    let timer;
+    try {
+      return await Promise.race([read, new Promise(resolve => {
+        timer = setTimeout(() => resolve(unknown()), Math.max(1, Number(readTimeoutMs) || 1500));
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+
+  return { enqueueMediaTranscription, enqueueRefine, processMediaJob, reconcilePendingMedia, readMediaProgress, readMediaJobStates,
     abortActive: () => {
       const count = activeControllers.size;
       for (const controller of activeControllers) controller.abort(failure('media_shutdown', 'La transcripción se reanudará después del reinicio.'));
@@ -2234,6 +2274,7 @@ module.exports = {
   keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
   createDiskCheckpoint, createStagedCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
   readMediaProgress: payload => getService().readMediaProgress(payload),
+  readMediaJobStates: payload => getService().readMediaJobStates(payload),
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   enqueueRefine: payload => getService().enqueueRefine(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),

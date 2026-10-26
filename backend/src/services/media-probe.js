@@ -3,7 +3,7 @@
 /**
  * media-probe — what a media file carries, in ONE ffprobe call.
  *
- *   probeMediaStreams(filePath, opts) → { ok, durationSec, formatName,
+ *   probeMediaStreams(filePath, opts) → { ok, durationSec, formatName, formatStartTimeSec,
  *     audio[], subtitles[], video[], hasAudio, hasVideo, hasTextSubtitles }
  *   chooseAudioStream(probe, { language }) → { streamOrdinal, index, reason } | null
  *   extractSubtitleSegments(filePath, streamOrdinal, opts)
@@ -102,6 +102,15 @@ function finitePositive(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// A missing start is unknown, not zero. Negative starts occur with codec
+// priming and must remain signed so callers can align tracks to the container.
+function finiteStartTime(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && !value.trim()) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? round3(n) : null;
+}
+
 function round3(n) {
   return Math.round(n * 1000) / 1000;
 }
@@ -122,11 +131,17 @@ function clockToSeconds(value) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
-function streamDuration(stream) {
+function streamDuration(stream, isMatroska) {
   const direct = finitePositive(stream && stream.duration);
   if (direct) return round3(direct);
   const tagged = clockToSeconds(tagOf(stream, 'DURATION'));
-  return tagged ? round3(tagged) : null;
+  if (!tagged) return null;
+  // FFmpeg's Matroska DURATION tag is the last packet's end timestamp.
+  // An audio track starting at 8s and ending at 10s spans 2s, not 10s.
+  // Direct stream.duration is already a span and is never offset again.
+  const start = isMatroska ? finiteStartTime(stream && stream.start_time) : null;
+  const duration = tagged - (start ?? 0);
+  return duration > 0 ? round3(duration) : null;
 }
 
 function flag(stream, key) {
@@ -162,6 +177,7 @@ function emptyProbe(reason) {
     reason: reason || 'probe_failed',
     durationSec: null,
     formatName: null,
+    formatStartTimeSec: null,
     audio: [],
     subtitles: [],
     video: [],
@@ -180,6 +196,9 @@ function parseProbeJson(json) {
   if (!data || typeof data !== 'object') return emptyProbe('invalid_json');
   const streams = Array.isArray(data.streams) ? data.streams : [];
   const format = data.format && typeof data.format === 'object' ? data.format : {};
+  const formatName = format.format_name ? String(format.format_name).slice(0, 80) : null;
+  const isMatroska = Boolean(formatName && formatName.split(',').some((name) => /^(?:matroska|webm)$/i.test(name.trim())));
+  const formatStartTimeSec = finiteStartTime(format.start_time);
   const audio = [];
   const subtitles = [];
   const video = [];
@@ -212,7 +231,8 @@ function parseProbeJson(json) {
           || Boolean(title && DESCRIPTION_TITLE_RE.test(title)),
         isHearingImpaired: flag(stream, 'hearing_impaired'),
         isMusic: flag(stream, 'karaoke') || Boolean(title && MUSIC_TITLE_RE.test(title)),
-        durationSec: streamDuration(stream),
+        durationSec: streamDuration(stream, isMatroska),
+        startTimeSec: finiteStartTime(stream.start_time),
       });
     } else if (type === 'subtitle') {
       subtitles.push({
@@ -236,17 +256,24 @@ function parseProbeJson(json) {
         height: intOrNull(stream.height),
         attachedPic: flag(stream, 'attached_pic') || flag(stream, 'still_image'),
         fps: parseRate(stream.avg_frame_rate) || parseRate(stream.r_frame_rate),
-        durationSec: streamDuration(stream),
+        durationSec: streamDuration(stream, isMatroska),
+        startTimeSec: finiteStartTime(stream.start_time),
       });
     }
   }
   const formatDuration = finitePositive(format.duration);
-  const streamMax = [...audio, ...video].reduce((max, s) => Math.max(max, s.durationSec || 0), 0);
+  const streamMax = [...audio, ...video].reduce((max, stream) => {
+    if (!stream.durationSec) return max;
+    const offset = stream.startTimeSec != null && formatStartTimeSec != null
+      ? Math.max(0, stream.startTimeSec - formatStartTimeSec) : 0;
+    return Math.max(max, round3(stream.durationSec + offset));
+  }, 0);
   const durationSec = formatDuration ? round3(formatDuration) : (streamMax > 0 ? streamMax : null);
   return {
     ok: true,
     durationSec,
-    formatName: format.format_name ? String(format.format_name).slice(0, 80) : null,
+    formatName,
+    formatStartTimeSec,
     audio,
     subtitles,
     video,

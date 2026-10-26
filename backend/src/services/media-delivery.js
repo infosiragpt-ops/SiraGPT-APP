@@ -43,8 +43,8 @@ const PARTIAL_RE = /^\s*parcial\b/i;
 // delivery and must never count as the delivered transcript.
 const DELIVERY_SOURCE = 'media-delivery';
 const DEFAULT_INLINE_WAIT_MS = 240000;
-// Files still pending after this long are reported as pending instead of
-// holding the delivery forever (a media job may take 3 attempts × 12 h).
+// Only orphaned files may expire here. A queued/active job can legitimately
+// outlive a day (a batch, or up to 3 attempts × 12 h) and must still deliver.
 const PENDING_CEILING_MS = 24 * 60 * 60 * 1000;
 const SWEEP_OLD_INTERVAL_MS = 60 * 60 * 1000;
 // A refine whose outcome report never arrived (a crash between the sidecar
@@ -1317,6 +1317,7 @@ function createGate(limit) {
  * @param {object} [deps.store]   media-delivery-store instance (default: one rooted at UPLOAD_DIR).
  * @param {string} [deps.root]    Store root when `store` is not given.
  * @param {(userId, fileIds, {includeText}) => Promise<object[]>} [deps.loadFiles]
+ * @param {({fileIds, userId}) => Promise<object>} [deps.readJobStates]  owner-scoped durable queue states.
  * @param {(prisma, {userId, fileId}) => Promise<object|null>} [deps.loadTranscript]
  * @param {({rows, transcripts, delivery}) => Promise<{filename, base64, mime}[]>} [deps.buildArtifacts]
  * @param {({filename, base64, mime, ownerUserId, chatId}) => object} [deps.saveArtifact]
@@ -1348,6 +1349,7 @@ function createMediaDeliveryService(deps = {}) {
 
   const loadFiles = deps.loadFiles || ((userId, fileIds, opts) => defaultLoadFiles(getPrisma(), userId, fileIds, opts));
   const loadTranscript = deps.loadTranscript || defaultLoadTranscript;
+  const readJobStates = deps.readJobStates || (args => require('./media-transcription-queue').readMediaJobStates(args));
   const transcriptPrisma = () => (deps.loadTranscript ? (deps.prisma || null) : getPrisma());
   const buildArtifacts = deps.buildArtifacts || professionalBuildArtifacts;
   const saveArtifact = deps.saveArtifact || (args => require('./agents/task-tools').saveArtifact(args));
@@ -1428,10 +1430,21 @@ function createMediaDeliveryService(deps = {}) {
   async function probePending(record) {
     const light = alignRows(record.fileIds, await loadFiles(record.userId, record.fileIds, { includeText: false }), record);
     const createdAt = Date.parse(record.createdAt || '');
+    const pending = light.filter(row => !isTerminalRow(row));
+    let overdue = Number.isFinite(createdAt) && now() - createdAt >= pendingCeilingMs;
+    if (overdue && pending.length) {
+      // An age limit is not evidence that transcription has stopped. Keep
+      // its delivery attached while work exists, including delayed retries
+      // and deployments. Failed probes are unknown, never proof of absence.
+      try {
+        const states = await readJobStates({ fileIds: pending.map(row => row.id), userId: record.userId });
+        if (pending.some(row => !['missing', 'completed', 'failed'].includes(states[row.id] || 'unknown'))) overdue = false;
+      } catch { overdue = false; }
+    }
     return {
-      pending: light.filter(row => !isTerminalRow(row)).length,
+      pending: pending.length,
       awaitingRefine: awaitingRefineOutcome(record, light[0], now(), refineGraceMs),
-      overdue: Number.isFinite(createdAt) && now() - createdAt >= pendingCeilingMs,
+      overdue,
     };
   }
 

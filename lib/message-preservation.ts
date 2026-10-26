@@ -41,6 +41,7 @@ export type AgentTaskContentInfo = {
   done: boolean;
   error: boolean;
   taskId?: string;
+  stoppedReason?: string;
   finalTextLength: number;
   trailingTextLength: number;
   visibleTextLength: number;
@@ -90,6 +91,7 @@ export const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
     done,
     error,
     taskId,
+    ...(typeof state?.stoppedReason === 'string' ? { stoppedReason: state.stoppedReason } : {}),
     finalTextLength: finalText.length,
     trailingTextLength: trailingText.length,
     visibleTextLength: visibleText.length,

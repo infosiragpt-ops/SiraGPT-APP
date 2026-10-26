@@ -322,6 +322,7 @@ async function harness(t, { files = [], transcripts = {}, overrides = {} } = {})
     env: ENABLED, now, prisma, store, logger: { info() {}, warn() {} },
     loadFiles: async (userId, ids) => ids.map((id) => state.files.get(id)).filter((r) => r && r.userId === userId).map((r) => ({ ...r })),
     loadTranscript: async (_p, { fileId }) => transcripts[fileId] || null,
+    readJobStates: async ({ fileIds }) => Object.fromEntries(fileIds.map(id => [id, 'missing'])),
     buildArtifacts: async ({ rows, delivery: rec }) => {
       state.built.push({ ids: rows.map((r) => r.id), range: rec.range });
       return [{ filename: 'clase (transcripción).txt', base64: Buffer.from('full').toString('base64'), mime: 'text/plain' }];
@@ -497,7 +498,7 @@ test('a missed outcome report: after the grace the rewritten file is posted with
   assert.match(idle.state.messages[0].content, /No pude corregir el tramo .*\n\nMotivo: la corrección no terminó a tiempo\./);
 });
 
-test('a refine whose file is still being transcribed at the ceiling says so, never «no está disponible»', async (t) => {
+test('a refine whose file has no job at the ceiling says it is unfinished, never «no está disponible»', async (t) => {
   const { service, state, clock } = await harness(t, { files: [row('clase', { processingStage: 'transcribing', extractedText: null,
     processingStageAt: new Date(T0 - 60 * MIN) })], transcripts: {} });
   await service.createDelivery(refineRecord());
@@ -510,6 +511,18 @@ test('a refine whose file is still being transcribed at the ceiling says so, nev
   const failed = refineMessage({ delivery: { kind: 'refine', fileNames: ['clase.mp4'], range: { start: 720, end: 900 } },
     rows: [row('clase', { processingStage: 'failed', extractedText: null, processingError: 'El audio está dañado.' })], outcome: { status: 'ok' } });
   assert.match(failed, /Motivo: El audio está dañado\./);
+});
+
+test('a refine waiting on an active original transcription keeps waiting beyond the ceiling', async (t) => {
+  const { service, state, clock, store } = await harness(t, {
+    files: [row('clase', { processingStage: 'extracting', extractedText: null })],
+    overrides: { readJobStates: async () => ({ clase: 'active' }) },
+  });
+  const record = await service.createDelivery(refineRecord());
+  clock.t = T0 + 48 * 60 * MIN;
+  assert.equal((await service.deliverOne(record.id)).status, 'waiting');
+  assert.equal(state.messages.length, 0);
+  assert.equal((await store.get(record.id)).status, 'pending');
 });
 
 test('a refine of a deleted file is answered at once, honestly', async (t) => {
