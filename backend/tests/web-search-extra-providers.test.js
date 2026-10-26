@@ -161,3 +161,26 @@ test('discovery providers carry expected tier metadata', () => {
     assert.equal(typeof p.search, 'function');
   }
 });
+
+test('searxng: falls back to HTML parsing or empty array when public instance returns HTML instead of JSON', async () => {
+  const searxng = require('../src/services/agents/web-search/providers/searxng');
+  fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => '<article class="result"><h3><a href="https://example.org/post">Example Post</a></h3><p class="content">Snippet text</p></article>',
+  });
+  const parsed = await searxng.search('example', { maxResults: 5 });
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].url, 'https://example.org/post');
+  assert.equal(parsed[0].title, 'Example Post');
+  assert.equal(parsed[0].snippet, 'Snippet text');
+
+  fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => '<!DOCTYPE html><html><body>Security check</body></html>',
+  });
+  const empty = await searxng.search('example', { maxResults: 5 });
+  assert.deepEqual(empty, []);
+});
+
