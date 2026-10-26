@@ -35,12 +35,13 @@ body.benchmark #benchmark{display:block}
 #bench-action{position:absolute;right:24px;top:16px;width:160px;height:48px;border:0;border-radius:8px;background:#172554;color:white;font:16px Arial}
 #bench-status,#bench-scroll-status{position:absolute;top:24px;width:24px;height:24px;background:#7c3aed}
 #bench-status{left:24px}#bench-scroll-status{left:60px;background:#172554}
+#bench-scroll-end{position:absolute;left:24px;top:60px;width:24px;height:12px;background:#f8fafc}
 #bench-scroll{position:absolute;left:24px;right:24px;top:88px;bottom:24px;overflow:auto;background:white;border:1px solid #cbd5e1;scroll-behavior:auto}
 #bench-hero{height:200px;position:relative;padding:16px;box-sizing:border-box}
 #bench-hero p{max-width:50%;line-height:1.6}#bench-image{position:absolute;right:16px;top:16px;width:320px;height:160px}
 .bench-row{height:88px;box-sizing:border-box;padding:18px 24px;border-top:1px solid #cbd5e1;background:#f1f5f9}
 .bench-row:nth-child(even){background:white}.bench-row strong{display:block;margin-bottom:8px}
-</style><button class="corner" id="tl" aria-label="Esquina izquierda superior"></button><button class="corner" id="tr" aria-label="Esquina derecha superior"></button><button class="corner" id="bl" aria-label="Esquina izquierda inferior"></button><button class="corner" id="br" aria-label="Esquina derecha inferior"></button><button id="save">Guardar prueba</button><output></output><section id="benchmark"><span id="bench-status"></span><span id="bench-scroll-status"></span><h1>Navegador · prueba de contenido</h1><button id="bench-action">Actualizar 0</button><div id="bench-scroll"><div id="bench-hero"><strong>Resultados de búsqueda</strong><p>Una página local con texto, imagen y desplazamiento. Cada acción debe llegar al navegador y aparecer en la pantalla remota.</p><img id="bench-image" alt="Ilustración determinista de prueba"></div><div id="bench-rows"></div></div></section><script>
+</style><button class="corner" id="tl" aria-label="Esquina izquierda superior"></button><button class="corner" id="tr" aria-label="Esquina derecha superior"></button><button class="corner" id="bl" aria-label="Esquina izquierda inferior"></button><button class="corner" id="br" aria-label="Esquina derecha inferior"></button><button id="save">Guardar prueba</button><output></output><section id="benchmark"><span id="bench-status"></span><span id="bench-scroll-status"></span><span id="bench-scroll-end"></span><h1>Navegador · prueba de contenido</h1><button id="bench-action">Actualizar 0</button><div id="bench-scroll"><div id="bench-hero"><strong>Resultados de búsqueda</strong><p>Una página local con texto, imagen y desplazamiento. Cada acción debe llegar al navegador y aparecer en la pantalla remota.</p><img id="bench-image" alt="Ilustración determinista de prueba"></div><div id="bench-rows"></div></div></section><script>
 document.addEventListener('click',e=>{if(e.target.tagName==='BUTTON')document.querySelector('output').textContent=e.target.id+':'+innerWidth+'x'+innerHeight});
 const palette=['#7c3aed','#16a34a','#2563eb','#db2777'];
 let benchmarkCount=0;
@@ -62,18 +63,34 @@ document.querySelector('#bench-action').addEventListener('click',()=>{
   benchmarkCount++;document.querySelector('#bench-action').textContent='Actualizar '+benchmarkCount;
   document.querySelector('#bench-status').style.background=palette[benchmarkCount%palette.length];
 });
-scroll.addEventListener('scroll',()=>{document.querySelector('#bench-scroll-status').style.background=scroll.scrollTop>0?'#f59e0b':'#172554'});
+let scrolling=false;
+const scrollWaiters=new Set();
+scroll.addEventListener('scroll',()=>{
+  scrolling=true;
+  document.querySelector('#bench-scroll-status').style.background=scroll.scrollTop>0?'#f59e0b':'#172554';
+  document.querySelector('#bench-scroll-end').style.background='#f8fafc';
+});
+scroll.addEventListener('scrollend',()=>{
+  scrolling=false;
+  document.querySelector('#bench-scroll-end').style.background=scroll.scrollTop>0?'#0f766e':'#f8fafc';
+  for(const resolve of scrollWaiters)resolve();
+  scrollWaiters.clear();
+});
 // Observe the rendered fixture without a CDP client retaining emulation.
 const fixtureControl=new WebSocket('ws://'+location.host+'/fixture-control');
-fixtureControl.addEventListener('message',event=>{
+fixtureControl.addEventListener('message',async event=>{
   const request=JSON.parse(event.data);
-  if(!['snapshot','benchmarkReset'].includes(request.type)||!Number.isSafeInteger(request.id))return;
+  if(!['snapshot','benchmarkReset','benchmarkSettled'].includes(request.type)||!Number.isSafeInteger(request.id))return;
   if(request.type==='benchmarkReset'){
     document.body.classList.add('benchmark');benchmarkCount=0;scroll.scrollTop=0;
     document.querySelector('#bench-action').textContent='Actualizar 0';
     document.querySelector('#bench-status').style.background=palette[0];
     document.querySelector('#bench-scroll-status').style.background='#172554';
+    document.querySelector('#bench-scroll-end').style.background='#f8fafc';
   }
+  // Two animation frames can still be inside a native smooth scroll. Resetting
+  // then races its compositor and leaves a nonzero offset in the next sample.
+  if(request.type==='benchmarkSettled'&&scrolling)await new Promise(resolve=>scrollWaiters.add(resolve));
   requestAnimationFrame(()=>requestAnimationFrame(()=>fixtureControl.send(JSON.stringify({
     id:request.id,viewport:{width:innerWidth,height:innerHeight},
     output:document.querySelector('output').textContent,focused:document.hasFocus(),
@@ -278,12 +295,12 @@ window.rfb=rfb;
     const benchmarkStartedAt = Date.now();
     // Rotate which profile runs first to expose order/warmup effects.
     // No warmup sample is discarded; all runs and their order are reported.
-    const marker = (rgb, point = { x: 36, y: 36 }) => viewer.waitForFunction(({ rgb, point }) => {
+    const marker = (rgb, point = { x: 36, y: 36 }, timeout = 8000) => viewer.waitForFunction(({ rgb, point }) => {
       const canvas = document.querySelector("canvas");
       if (!canvas || canvas.width !== 1000 || canvas.height !== 800) return false;
       const actual = canvas.getContext("2d").getImageData(point.x, point.y, 1, 1).data;
       return rgb.every((channel, i) => Math.abs(actual[i] - channel) < 24);
-    }, { rgb, point }, { timeout: 8000 });
+    }, { rgb, point }, { timeout });
     async function measurePaint(type, rgb, point, act) {
       await viewer.evaluate(({ type, rgb, point }) => {
         window.paintMeasurement = null;
@@ -345,7 +362,12 @@ window.rfb=rfb;
         await viewer.mouse.move(500, 500);
         const scrollToPaintMs = await measurePaint("wheel", [245, 158, 11], { x: 72, y: 36 },
           () => viewer.mouse.wheel(0, 420));
-        const final = await fixtureSnapshot();
+        // Preserve first-paint latency above, but finish this gesture before
+        // measuring total bytes or closing/resetting the next connection.
+        // The second marker proves that scrollend itself reached the viewer.
+        const scrollDeadline = Date.now() + 5000;
+        const final = await fixtureSnapshot(5000, "benchmarkSettled");
+        await marker([15, 118, 110], { x: 36, y: 66 }, Math.max(1, scrollDeadline - Date.now()));
         assert.ok(final.benchmark.scrollTop > 0, "RFB wheel must scroll the native content");
         assert.equal(final.benchmark.count, 3);
         await viewer.screenshot({ path: `/tmp/browser-gate-rfb-profile-${capture}-scrolled.png` });
@@ -386,9 +408,10 @@ window.rfb=rfb;
         return { compression: profile.compression, round: baseline.round,
           candidateMinusBaseline: Math.round((candidate.scrollToPaintMs - baseline.scrollToPaintMs) * 100) / 100 };
       }));
-    const report = { schemaVersion: 2, transport: "noVNC-WebSocket-x11vnc-X11-Chrome",
+    const report = { schemaVersion: 3, transport: "noVNC-WebSocket-x11vnc-X11-Chrome",
       workload: "same local text, raster image, three clicks and one scroll",
-      latencyOrigin: "viewer input event to matching received framebuffer pixel",
+      latencyOrigin: "viewer input event to first matching received framebuffer pixel",
+      transferBoundary: "after native scrollend and its matching received framebuffer pixel; not comparable to schema 2 first-paint byte totals",
       roundsPerProfile: benchmarkRounds, elapsedMs: Date.now() - benchmarkStartedAt,
       sampling: "five rounds; fresh connection each sample; order rotates 0,1,2 then 1,2,0 then 2,0,1; all samples retained",
       percentile: "nearest-rank p95; median averages the middle pair for even sample counts",
@@ -422,7 +445,13 @@ window.rfb=rfb;
     // Closed numeric diagnostics from THIS inert fixture only. No exception
     // message, URL, headers, request body, input values or raw stack is emitted
     // into GitHub annotations. These can be reviewed without CI log access.
-    const chrome = fixtureControl?.readyState === WebSocket.OPEN ? await fixtureSnapshot().then(snapshot => ({ ...snapshot.viewport, focused: snapshot.focused })).catch(() => null) : null;
+    const chrome = fixtureControl?.readyState === WebSocket.OPEN ? await fixtureSnapshot().then(snapshot => ({
+      ...snapshot.viewport, focused: snapshot.focused,
+      benchmark: snapshot.benchmark ? {
+        count: snapshot.benchmark.count, scrollTop: snapshot.benchmark.scrollTop,
+        imageReady: snapshot.benchmark.imageReady, rows: snapshot.benchmark.rows,
+      } : null,
+    })).catch(() => null) : null;
     const framebuffer = viewer ? await viewer.evaluate(() => {
       const canvas = document.querySelector("canvas");
       if (!canvas) return null;

@@ -25,7 +25,7 @@ The user reported a heavy integrated browser on `/agentes` and requested a real 
 
 The existing Linux X11 gate compares quality/compression 9/0, 9/1 and 9/2 in five rounds per profile, rotating their order with fresh real noVNC connections. Every sample displays the same local text and raster fixture, receives three clicks and a scroll, and verifies received framebuffer pixels plus page effects. Existing viewport, corner, pointer and restoration checks remain.
 
-CI run 40379746834 completed all 21 checks. Its real RFB results were:
+Exploratory CI run 40379746834 completed all 21 checks. Its real RFB results, before adding a complete-scroll barrier between samples, were:
 
 | Compression | Click median / p95 (ms) | Scroll median / p95 (ms) | Median observed server bytes |
 | --- | --- | --- | --- |
@@ -34,6 +34,8 @@ CI run 40379746834 completed all 21 checks. Its real RFB results were:
 | 2 | 47.1 / 96.8 | 233.4 / 266.5 | 1,128,153 |
 
 Levels 1 and 2 reduced traffic but regressed scroll response in this scenario. The final runtime therefore retains compression 0; only restoration of the original desktop presentation settings changes. The independent polling, observation and inventory optimizations remain.
+
+The subsequent run 40381655209 exposed a fixture isolation race: reset could run while native smooth scrolling continued. The pre-fix sequence reproduced in 12/12 local Chromium smooth-scroll cycles; waiting for native `scrollend` passed 24/24 wheel/smooth cycles. The final gate also waits for the scrollend marker to reach the RFB viewer before bytes, screenshots, close and reset, with the same five-second snapshot budget and no retries. Its schema 3 records this boundary; byte totals are not directly comparable to the exploratory schema 2 values above. All fifteen samples, first-paint timing and correctness assertions remain.
 
 These are loopback measurements on a shared runner, not production WAN latency. Scroll timing measures the first matching received marker, not completion of the entire repaint. Each profile has five scroll samples and fifteen clicks; nearest-rank p95 is the maximum with these small samples. Bytes are observed during the scenario, not a guaranteed page size. The benchmark writes `/tmp/browser-gate-rfb-metrics.json` and screenshot files and retains all measurements in CI logs. Success screenshots are not uploaded by the existing workflow.
 
