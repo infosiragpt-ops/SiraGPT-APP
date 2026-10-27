@@ -140,10 +140,13 @@ function snapshot() {
  * @param {object} client                 OpenAI-compatible DeepSeek client
  * @param {object} opts
  * @param {() => object} opts.fallbackClientFactory  returns the OpenRouter client (may throw when unavailable)
+ * @param {boolean} [opts.allowFallback=true]  false for a model the user picked: it runs on DeepSeek's
+ *   own API and a billing/auth error surfaces (E_PROVIDER) instead of the same model via OpenRouter
+ *   (AGENTS.md §13). The failure still feeds the memo for internal callers.
  * @param {object} [opts.env]
  * @param {object} [opts.log]
  */
-function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, log = console } = {}) {
+function wrapDeepSeekClient(client, { fallbackClientFactory, allowFallback = true, env = process.env, log = console } = {}) {
   if (!client || !client.chat || !client.chat.completions || typeof client.chat.completions.create !== 'function') return client;
   if (typeof fallbackClientFactory !== 'function') return client;
   const primaryCreate = client.chat.completions.create.bind(client.chat.completions);
@@ -161,7 +164,7 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
   };
 
   const create = async (body, options) => {
-    if (isDirectFailureMemoised(env)) {
+    if (allowFallback && isDirectFailureMemoised(env)) {
       try {
         return await viaOpenRouter(body, options, `memoised (${state.lastReason})`, true);
       } catch (fallbackErr) {
@@ -183,6 +186,7 @@ function wrapDeepSeekClient(client, { fallbackClientFactory, env = process.env, 
       if (!isBillingOrAuthError(err)) throw err;
       const wasAlreadyMemoised = Boolean(state.failedAt && Date.now() - state.failedAt <= memoMs(env));
       markDirectFailure(err, env);
+      if (!allowFallback) throw err;
       try {
         return await viaOpenRouter(
           body,

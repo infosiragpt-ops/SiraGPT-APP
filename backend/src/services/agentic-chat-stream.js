@@ -1180,6 +1180,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       selection = null,
       toolCallMode = 'native',
       provider = null,
+      // The user picked `model`: tools that write visible text (self_rag_answer,
+      // describe_image…) run on it and never switch provider (AGENTS.md §13).
+      modelPinned = false,
       // Composer "Esfuerzo" level forwarded to every loop step (see
       // react-agent thinkingLevel).
       thinkingLevel = null,
@@ -3142,6 +3145,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ctx: {
           ...toolContext,
           documentEditLlm: { client: openai, model, provider, toolCallMode },
+          // The loop's model and its client, for tools that generate text the
+          // user reads. `openai` in toolContext stays the RAG helpers' client
+          // (embeddings): for a Claude pick it is an OpenAI client.
+          model,
+          llm: openai,
+          modelPinned: modelPinned === true,
           signal,
           provider,
           onEvent,

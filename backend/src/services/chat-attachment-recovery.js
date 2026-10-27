@@ -11,6 +11,7 @@ const {
 } = require('./agents/agent-task-runner');
 const { evaluateResponse } = require('./quality-guard');
 const imageAttachmentVision = require('./image-attachment-vision');
+const { modelSupportsVision } = require('./ai/vision-runtime');
 
 const FILE_READ_FAILURE_RE = /\b(?:no\s+pude\s+leer\w*|no\s+puedo\s+leer\w*|recib[ií]\s+tu\s+archivo.{0,80}no\s+pude\s+leer|no\s+(?:pude|puedo)\s+(?:procesar|abrir|analizar|acceder\s+al\s+contenido\s+de(?:l)?|acceder\s+a|ver)\s+(?:tu\s+)?(?:archivo|adjunto|documento|file)|no\s+encontr[eé]\s+texto|binary file|content not available|file content could not be extracted|no\s+tengo\s+acceso\s+al\s+(?:archivo|adjunto|documento)|cannot\s+(?:read|access)\s+(?:the\s+)?(?:file|attachment)|unable\s+to\s+(?:read|access))\b/i;
 const OPERATIONAL_DISCLOSURE_RE = /nota operativa|runtime principal|respuesta segura/i;
@@ -309,6 +310,9 @@ async function recoverImageAttachmentResponse({
   provider = '',
   model = '',
   visionAnswerer = null,
+  // The user picked `model`: when it can see, it is the only reader (owner
+  // policy, AGENTS.md §13).
+  pinned = false,
 }) {
   const ocrHint = (imageFiles || [])
     .map((file) => String(file?.extractedText || '').trim())
@@ -320,11 +324,15 @@ async function recoverImageAttachmentResponse({
     const answerer = typeof visionAnswerer === 'function'
       ? visionAnswerer
       : (files, text, opts) => require('./ai-service').answerImagesWithVision(files, text, opts);
-    answer = String(await answerer(imageFiles, prompt, { provider, model, ocrHint }) || '').trim();
+    answer = String(await answerer(imageFiles, prompt, { provider, model, ocrHint, pinned }) || '').trim();
   } catch (_) {
     answer = '';
   }
   if (answer && !imageAttachmentVision.isNoTextFallback(answer)) return answer;
+  // A picked model that can see did not answer: its own failure (E_PROVIDER,
+  // the exact cause) stays the reply. The generic «vision unavailable» copy
+  // would hide it — the caller replaces the turn with any long answer.
+  if (pinned === true && provider && model && modelSupportsVision(provider, model)) return '';
   return imageAttachmentVision.buildImageVisionUnavailableAnswer();
 }
 
@@ -338,10 +346,11 @@ async function recoverChatAttachmentResponse({
   provider = '',
   model = '',
   visionAnswerer = null,
+  pinned = false,
 }) {
   const imageFiles = (processedFiles || []).filter(isImageAttachment);
   if (imageFiles.length > 0 && imageFiles.length === (processedFiles || []).length) {
-    return recoverImageAttachmentResponse({ prompt, imageFiles, provider, model, visionAnswerer });
+    return recoverImageAttachmentResponse({ prompt, imageFiles, provider, model, pinned, visionAnswerer });
   }
   const context = uploadedFileContext
     || await buildChatUploadedFileContext(prisma, { userId, processedFiles, prompt })
@@ -395,7 +404,7 @@ async function recoverChatAttachmentResponse({
   // Mixed turn (document + image): the «no text» document copy is only valid
   // when there is no text AND no vision path. With an image attached, read it.
   if (imageFiles.length > 0 && (!answer?.trim() || imageAttachmentVision.isNoTextFallback(answer))) {
-    return recoverImageAttachmentResponse({ prompt, imageFiles, provider, model, visionAnswerer });
+    return recoverImageAttachmentResponse({ prompt, imageFiles, provider, model, pinned, visionAnswerer });
   }
 
   return answer;
