@@ -3142,3 +3142,59 @@ fiable necesita `BRAVE_SEARCH_API_KEY` o un SearXNG propio en `SEARXNG_BASE_URL`
 `/api/.env`, `…/proc/self/environ` o `/api/graphql` son escáneres de bots (la respuesta es
 correcta). Los `[slow-query] raw.$queryRaw` de ~2,5–3 s (sondas `SELECT 1`, esporádicos tras
 inactividad) apuntan a latencia de conexión con la base de datos; hay que mirar el servidor.
+
+## Fidelidad al modelo elegido — tareas agénticas (added 2026-10-27)
+
+Pedido de Luis: el modelo que elige el usuario ejecuta todo el proceso visible, sin sustitutos
+silenciosos (AGENTS.md §13, I12). Una investigación encontró 23 puntos donde otra parte del pedido
+corría con otro modelo; se corrigen por PRs según severidad. Decisión de Luis: memoria, compactación
+y jueces de intención quedan como procesos internos; la respuesta, las herramientas, los documentos
+y las imágenes usan el modelo elegido. Este PR cubre las tareas agénticas
+(`agents/agent-task-runner.js`, `agents/task-contract-resolver.js`, `ai-service.js`).
+- **Detección del proveedor** (`detectAgentRuntimeProvider`): para un id pelado usa primero la
+  inferencia del chat (`ai/provider-inference.js`):
+  - `claude-*` → Anthropic, con el cliente que usan el chat y el doc-agent
+    (`createAnthropicStreamingClient`). Antes no se detectaba y un Claude elegido corría en
+    DeepSeek (prod 2026-10-07).
+  - `gpt-oss-*` y `llama-3.*` → Cerebras (FlashGPT). `gpt-oss-120b` se tomaba por OpenAI.
+  - `*-versatile` → Groq.
+  - Los slugs siguen yendo a OpenRouter.
+  - Mistral, Custom (SiraGPT Mini) y los ids desconocidos no tienen runtime de tareas.
+- **Un modelo elegido nunca corre con un sustituto.** `resolveAgentRuntimeClient(profile,
+  { pinned: true })` no recorre la escalera DeepSeek → OpenRouter → OpenAI. Si no hay conexión
+  (`unavailable: 'no_key'` o `'unsupported'`), la tarea termina al inicio del run:
+  - Mensaje de `billing-failover.buildFailureMessage({ reason: 'unconfigured' })`: «… su conexión
+    no está configurada. No cambié de modelo…».
+  - `stoppedReason` `model_error: E_PROVIDER <causa>`, estado `failed`, ningún modelo llamado.
+  - Los llamadores internos (sin `modelPinned`: telegram, batch, codex-runs) conservan el
+    sustituto y la escalera.
+- **El contrato de la tarea lo resuelve el modelo elegido.** `resolveTaskContract({ model,
+  provider, pinned: true })` y `pickResolverRuntime` usan exactamente ese cliente y ese modelo:
+  Pro sigue siendo Pro y no hay escalera OpenAI/DeepSeek/Cerebras/Gemini. Sin cliente se usa el
+  contrato heurístico, que es código local.
+- **La respuesta de rescate sobre un adjunto la escribe el modelo elegido**
+  (`buildLlmAttachmentRecoveryAnswer({ pinnedRuntime })`), no gpt-4o-mini → Gemini → OpenRouter.
+  Los opt-outs `AGENT_TASK_LLM_RECOVERY` siguen igual.
+- **Imágenes:**
+  - `describeAttachedImages(files, text, { provider, model, pinned, detailed })`: si el modelo
+    elegido ve imágenes, las describe él.
+  - Un modelo solo-texto no puede leer píxeles: las lee un modelo de visión y la línea de tiempo
+    lo dice con el texto del chat, «X no ve imágenes: las lee Y» (`visionSwitchLabel`, checkpoint
+    `vision_switch`). Lo mismo en la ruta de imagen sola.
+- Tests: `backend/tests/agent-task-model-fidelity.test.js` (4) y
+  `agent-task-pinned-model.test.js` (+4: E_PROVIDER sin sustituto con id no soportado y sin clave,
+  llamadores internos conservan el sustituto, el contrato se resuelve con el modelo elegido). Los
+  9 tests de comportamiento nuevo fallan con el código anterior. Actualizados
+  `agent-task-runner-classify` y `agent-task-runner-remapped-runner-spec` (usaban Claude como «id
+  sin runtime»).
+- Pendiente (PRs siguientes):
+  - Pasos secundarios del chat: rama de artefactos (gpt-4o-mini), contexto de herramientas
+    (`self_rag_answer`, `describe_image`, RAG), recuperación de adjuntos sin `pinned` y
+    DeepSeek → OpenRouter silencioso.
+  - Documentos: redactores del pipeline, edición source-preserving, vision ladder. El AgentRunner
+    (`doc-agent/llm-runtime.js` LADDER) no acepta Cerebras/Groq como modelo fijado: una tarea de
+    documento con FlashGPT `llama-3.*` termina con un `E_PROVIDER` honesto, donde antes corría en
+    DeepSeek en silencio (`gpt-oss-120b` ya fallaba antes, porque iba a OpenAI).
+  - figma y gráficos: el front debe enviar el modelo (`lib/chat-context-integrated.tsx`, UI-lock
+    autorizado por Luis).
+  - Sub-agentes de codex: heredar `run.model`.

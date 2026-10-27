@@ -33,7 +33,7 @@ function clearAgentModules() {
 
 async function withTaskEnv(label, reactRun, fn) {
   const restoreEnv = rememberEnv([
-    'OPENROUTER_API_KEY', 'CEREBRAS_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY',
+    'OPENROUTER_API_KEY', 'CEREBRAS_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'XAI_API_KEY',
     'AGENT_TASK_STORE_DIR', 'AGENT_TASK_MODEL_FAILOVER', 'AGENT_TASK_AGENT_RUNNER', 'AGENT_TASK_LLM_RECOVERY', 'NODE_ENV',
   ]);
   const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), `siragpt-pinned-${label}-`));
@@ -64,12 +64,16 @@ async function withTaskEnv(label, reactRun, fn) {
   persistence.upsertAgentTask = async () => null;
   persistence.appendAgentTaskEvent = async () => null;
   persistence.persistGeneratedArtifact = async () => null;
-  taskContractResolver.resolveTaskContract = async ({ fallback }) => ({ contract: fallback(), source: 'test-fallback' });
+  const resolverCalls = [];
+  taskContractResolver.resolveTaskContract = async (args) => {
+    resolverCalls.push({ model: args.model, provider: args.provider, pinned: args.pinned });
+    return { contract: args.fallback(), source: 'test-fallback' };
+  };
   reactAgent.run = reactRun;
   try {
     const { runAgentTaskJob } = require('../src/services/agents/agent-task-runner');
     const taskStore = require('../src/services/agents/task-store');
-    await fn({ runAgentTaskJob, taskStore, billing });
+    await fn({ runAgentTaskJob, taskStore, billing, resolverCalls });
   } finally {
     persistence.upsertAgentTask = original.upsert;
     persistence.appendAgentTaskEvent = original.append;
@@ -154,20 +158,61 @@ test('internal callers without modelPinned keep the cross-provider ladder', asyn
   });
 });
 
-test('a remapped stand-in (the runner cannot run the pick) still uses the ladder', async () => {
+test('a pick the task runtime cannot drive ends with E_PROVIDER: no stand-in model, no ladder', async () => {
+  const models = [];
+  await withTaskEnv('undrivable', async (_client, args) => {
+    models.push(args.model);
+    return { finalAnswer: 'Respuesta de otro modelo.', steps: [], stoppedReason: 'completed' };
+  }, async ({ runAgentTaskJob, taskStore }) => {
+    const result = await runAgentTaskJob(payload('task-pinned-undrivable-1', { model: 'totally-unknown-model-x9', modelPinned: true }));
+    const snapshot = taskStore.getTaskSnapshotForUser('task-pinned-undrivable-1', 'user-task-pinned-undrivable-1');
+    assert.deepEqual(models, [], 'no model ran: neither a stand-in nor the ladder');
+    assert.equal(result.status, 'failed');
+    assert.match(snapshot.streamState.finalText, /no pudo responder: su conexión no está configurada\./);
+    assert.match(snapshot.streamState.finalText, /No cambié de modelo/);
+    assert.doesNotMatch(snapshot.streamState.finalText, /totally-unknown-model-x9/, 'never the raw id');
+    assert.match(String(snapshot.streamState.stoppedReason), /^model_error: E_PROVIDER unsupported/);
+  });
+});
+
+test('a picked provider without its key ends with E_PROVIDER instead of running on another provider', async () => {
+  const models = [];
+  await withTaskEnv('nokey', async (_client, args) => {
+    models.push(args.model);
+    return { finalAnswer: 'Respuesta de otro proveedor.', steps: [], stoppedReason: 'completed' };
+  }, async ({ runAgentTaskJob, taskStore }) => {
+    // No xAI key (withTaskEnv restores it); OpenAI, Gemini and Cerebras keys exist.
+    delete process.env.XAI_API_KEY;
+    const result = await runAgentTaskJob(payload('task-pinned-nokey-1', { model: 'grok-4.7', modelPinned: true }));
+    const snapshot = taskStore.getTaskSnapshotForUser('task-pinned-nokey-1', 'user-task-pinned-nokey-1');
+    assert.deepEqual(models, [], 'never gpt-4o-mini or any other stand-in');
+    assert.equal(result.status, 'failed');
+    assert.match(snapshot.streamState.finalText, /su conexión no está configurada\. No cambié de modelo/);
+    assert.match(String(snapshot.streamState.stoppedReason), /^model_error: E_PROVIDER no_key/);
+  });
+});
+
+test('internal callers (no pick) still get a stand-in for a model the runtime cannot drive', async () => {
   const models = [];
   await withTaskEnv('remapped', async (_client, args) => {
     models.push(args.model);
-    if (models.length === 1) return NO_CREDIT;
     return { finalAnswer: 'Respuesta del respaldo.', steps: [], stoppedReason: 'completed' };
   }, async ({ runAgentTaskJob }) => {
     const { normalizeAgentRuntimeModel } = require('../src/services/agents/agent-task-runner');
-    if (typeof normalizeAgentRuntimeModel === 'function') {
-      assert.equal(normalizeAgentRuntimeModel('totally-unknown-model-x9').remapped, true);
-    }
-    const result = await runAgentTaskJob(payload('task-pinned-remapped-1', { model: 'totally-unknown-model-x9', modelPinned: true }));
+    assert.equal(normalizeAgentRuntimeModel('totally-unknown-model-x9').remapped, true);
+    const result = await runAgentTaskJob(payload('task-pinned-remapped-1', { model: 'totally-unknown-model-x9' }));
     assert.equal(result.status, 'completed');
-    assert.equal(models.length, 2);
+    assert.deepEqual(models, ['gpt-4o-mini']);
+  });
+});
+
+test('the picked model resolves the task contract itself (its model and provider, pinned)', async () => {
+  await withTaskEnv('contract', async () => ({ finalAnswer: 'Listo.', steps: [], stoppedReason: 'completed' }), async ({ runAgentTaskJob, resolverCalls }) => {
+    await runAgentTaskJob(payload('task-pinned-contract-1', { model: 'gpt-4o', modelPinned: true }));
+    assert.deepEqual(resolverCalls, [{ model: 'gpt-4o', provider: 'OpenAI', pinned: true }]);
+    resolverCalls.length = 0;
+    await runAgentTaskJob(payload('task-pinned-contract-2', { model: 'gpt-4o' }));
+    assert.deepEqual(resolverCalls, [{ model: undefined, provider: undefined, pinned: undefined }], 'internal callers keep the resolver defaults');
   });
 });
 

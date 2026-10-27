@@ -1062,12 +1062,17 @@ function resolveAttachmentFallbackMarkdown({ goal, uploadedFileContext, reason =
   );
 }
 
-function pickAttachmentRecoveryRuntime(env = process.env) {
+function attachmentRecoveryEnabled(env = process.env) {
   const flag = String(env.AGENT_TASK_LLM_RECOVERY || '').trim();
-  if (flag === '0') return null;
+  if (flag === '0') return false;
   // Determinismo en tests: sin opt-in explícito no se hace ninguna llamada
   // de red (los shards de CI exportan keys dummy que aquí harían requests).
-  if (String(env.NODE_ENV) === 'test' && flag !== '1') return null;
+  if (String(env.NODE_ENV) === 'test' && flag !== '1') return false;
+  return true;
+}
+
+function pickAttachmentRecoveryRuntime(env = process.env) {
+  if (!attachmentRecoveryEnabled(env)) return null;
   if (env.OPENAI_API_KEY) return { provider: 'OpenAI', model: env.AGENT_TASK_RECOVERY_MODEL || 'gpt-4o-mini' };
   if (env.GEMINI_API_KEY) return { provider: 'Gemini', model: env.GEMINI_VISION_MODEL || 'gemini-2.5-flash' };
   if (env.OPENROUTER_API_KEY) return { provider: 'OpenRouter', model: 'openai/gpt-4o-mini' };
@@ -1081,16 +1086,25 @@ function pickAttachmentRecoveryRuntime(env = process.env) {
  * antes de degradar al volcado mecánico de fragmentos — que responde con
  * estadísticas sueltas e ignora la pregunta concreta del usuario.
  * Devuelve markdown o null (sin proveedor, error o respuesta vacía).
+ *
+ * `pinnedRuntime` ({ client, model, provider }): el modelo que eligió el
+ * usuario. Con él, la respuesta de rescate la escribe ese mismo modelo —
+ * nunca otro proveedor (owner policy, AGENTS.md §13).
  */
-async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env = process.env, clientFactory = null }) {
+async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env = process.env, clientFactory = null, pinnedRuntime = null }) {
   const question = String(goal || '').trim();
   const material = stripScaffolding(uploadedFileContext);
   if (!question || !material || countUsefulWords(uploadedFileContext) < 8) return null;
-  const runtime = pickAttachmentRecoveryRuntime(env);
+  const pinned = Boolean(pinnedRuntime && pinnedRuntime.client && pinnedRuntime.model);
+  const runtime = pinned
+    ? (attachmentRecoveryEnabled(env) ? { provider: pinnedRuntime.provider || null, model: pinnedRuntime.model } : null)
+    : pickAttachmentRecoveryRuntime(env);
   if (!runtime) return null;
   try {
     const aiService = require('../ai-service');
-    const client = clientFactory ? clientFactory(runtime.provider) : aiService.getClient(runtime.provider);
+    const client = pinned
+      ? pinnedRuntime.client
+      : (clientFactory ? clientFactory(runtime.provider) : aiService.getClient(runtime.provider));
     const completion = await client.chat.completions.create({
       model: runtime.model,
       stream: false,
@@ -1374,6 +1388,31 @@ function buildAttachmentUnavailableFallbackAnswer({ goal = '', uploadedFileConte
 function detectAgentRuntimeProvider(modelId) {
   const id = String(modelId || '').trim();
   if (!id) return null;
+  // Bare ids the chat itself maps to a first-party family the runner can
+  // drive (provider-inference.js). Checked first: the FlashGPT id
+  // gpt-oss-120b starts with «gpt-» but is Cerebras, not OpenAI, and a bare
+  // claude-* id used to be undetected, so a picked Claude ran on DeepSeek
+  // (prod 2026-10-07).
+  if (!id.includes('/')) {
+    let inferred = null;
+    try { inferred = require('../ai/provider-inference').inferProviderFromModelId(id); } catch (_) { inferred = null; }
+    if (inferred === 'Cerebras') {
+      return { provider: 'Cerebras', apiKeyEnv: 'CEREBRAS_API_KEY', baseURL: process.env.CEREBRAS_BASE_URL || 'https://api.cerebras.ai/v1' };
+    }
+    if (inferred === 'Anthropic') {
+      // First-party Messages API through the OpenAI-shaped client the chat and
+      // the document agent use (first-party-chat-clients).
+      return {
+        provider: 'Anthropic',
+        // Either name holds the Anthropic key (the chat reads both).
+        apiKeyEnv: ['ANTHROPIC', 'SIRA_ANTHROPIC'].map((prefix) => `${prefix}_API_KEY`).find((name) => process.env[name]) || 'ANTHROPIC_API_KEY',
+        baseURL: null,
+      };
+    }
+    if (inferred === 'Groq') {
+      return { provider: 'Groq', apiKeyEnv: 'GROQ_API_KEY', baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1' };
+    }
+  }
   // Bare OpenAI-native ids (NO aggregator slug): gpt-4o, o1, chatgpt-*, fine-tunes.
   // A slug form like `openai/gpt-5.5` is NOT native OpenAI — it routes through
   // OpenRouter (see the slug branch below), which is how the main chat flow
@@ -1456,6 +1495,12 @@ function buildOpenAICompatibleClient(target, env = process.env) {
   opts.timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60_000;
   const maxRetries = Number.parseInt(process.env.AGENT_TASK_LLM_MAX_RETRIES || '', 10);
   opts.maxRetries = Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 2;
+  if (target.provider === 'Anthropic') {
+    // Claude speaks the Messages API: the same OpenAI-shaped client (tool
+    // calls translated) the chat builds for an Anthropic pick.
+    const { createAnthropicStreamingClient } = require('../ai/first-party-chat-clients');
+    return createAnthropicStreamingClient({ apiKey, timeout: opts.timeout, maxRetries: opts.maxRetries });
+  }
   const client = new OpenAI(opts);
   // First-party OpenAI only (OpenRouter keeps `temperature` for openai/*
   // slugs): reasoning-class models reject sampling knobs with a 400.
@@ -1669,6 +1714,28 @@ function pinnedModelLabel(profile) {
   return modelLabel;
 }
 
+/** Same provider and model id (case-insensitive, vendor slug ignored). */
+function sameRuntime(providerA, modelA, providerB, modelB) {
+  const bare = (value) => String(value || '').trim().toLowerCase().replace(/^[a-z0-9-]+\//, '');
+  return String(providerA || '').toLowerCase() === String(providerB || '').toLowerCase()
+    && bare(modelA) === bare(modelB);
+}
+
+/**
+ * «X no ve imágenes: las lee Y», the chat's wording (turn-progress
+ * `vision_switch`) for a picked text-only model whose images a vision model
+ * read. Display names only, never raw ids.
+ */
+function visionSwitchLabel(profile, provider, model) {
+  const from = pinnedModelLabel(profile) || 'El modelo elegido';
+  let to = '';
+  try { to = require('../turn-progress').displayNameFor(model, provider) || ''; } catch (_) { to = ''; }
+  if (!to) {
+    try { to = require('../ai/billing-failover').publicModelLabel(model, provider) || ''; } catch (_) { to = ''; }
+  }
+  return to ? `${from} no ve imágenes: las lee ${to}` : `${from} no ve imágenes: las lee un modelo con visión`;
+}
+
 /**
  * The picked model failed for a cause we cannot name (a 400, a dropped
  * connection…): still name the model and say it was not switched, instead
@@ -1688,10 +1755,12 @@ function isUnrecoveredModelFailure(reason) {
 }
 
 // Resolve the OpenAI-compatible client the agent runtime should drive.
-// Tries the user's selected provider first; if that provider has no API
-// key configured, walks a small fallback list so we never hand the
-// runtime null on a host that has at least one key set.
-function resolveAgentRuntimeClient(profile) {
+// Tries the user's selected provider first. A model the user picked
+// (`pinned`) is never replaced (owner policy, AGENTS.md §13): without its own
+// connection the result has no client and the task ends with that cause.
+// Internal callers (no pick) walk a small fallback list so the runtime is
+// never null on a host that has at least one key set.
+function resolveAgentRuntimeClient(profile, { pinned = false } = {}) {
   const tried = new Set();
   const tryTarget = (target) => {
     if (!target) return null;
@@ -1704,6 +1773,16 @@ function resolveAgentRuntimeClient(profile) {
   let primary = tryTarget(profile?.detected);
   if (primary) {
     return { client: primary, model: profile.runtimeModel, provider: profile.detected.provider };
+  }
+  if (pinned) {
+    return {
+      client: null,
+      model: profile?.runtimeModel || '',
+      provider: profile?.detected?.provider || 'unconfigured',
+      // no_key: the picked provider has no connection here; unsupported: the
+      // task runtime cannot drive that provider at all.
+      unavailable: profile?.detected ? 'no_key' : 'unsupported',
+    };
   }
 
   // The user's selected provider has no usable key. Walk a small fallback
@@ -2088,9 +2167,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // DEEPSEEK_API_KEY, we drive DeepSeek directly — without this, every
   // non-OpenAI selection used to be silently remapped to gpt-4o-mini and
   // would hard-fail whenever OPENAI_API_KEY was rate-limited.
-  const runtimeClientResolution = resolveAgentRuntimeClient(runtimeModelProfile);
+  const runtimeClientResolution = resolveAgentRuntimeClient(runtimeModelProfile, { pinned: modelPinned === true });
   const openai = runtimeClientResolution.client;
   applyAgentRuntimeResolution(runtimeModelProfile, runtimeClientResolution);
+  // The picked model has no connection the task runtime can use: the task
+  // ends with that cause before any other model is involved (see the start
+  // of the run below).
+  const pickedModelUnavailable = modelPinned === true && !openai;
   const deterministicAttachmentAnswer = shouldUseDeterministicAttachmentAnswer({
     goal: displayGoal || goal,
     documentPolicy,
@@ -2101,6 +2184,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const resolved = await resolveTaskContract({
         goal,
         openai,
+        // A picked model resolves its own contract (no remap, no ladder of
+        // other providers); internal callers keep the resolver's defaults.
+        ...(modelPinned === true
+          ? { model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.detected?.provider || null, pinned: true }
+          : {}),
         fileIds: files,
         fallback: () => deriveLegacyTaskContract(universalTaskContract),
       });
@@ -2424,7 +2512,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   const imageOnlyAnalysisTurn = imageOnlyAttachmentTurn
     && !(documentPolicy?.autoGenerate || documentPolicy?.mode === 'doc_required');
   if (!mediaBatchRows && !wantsSourcePreservingEdit && prisma && Array.isArray(files) && files.length > 0
-    && !imageOnlyAnalysisTurn
+    && !imageOnlyAnalysisTurn && !pickedModelUnavailable
     && countUsefulWords(uploadedFileContext) < DEFAULT_THIN_THRESHOLD) {
     try {
       const fileRows = await prisma.file.findMany({
@@ -2442,10 +2530,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         .filter(Boolean);
       if (imageFiles.length > 0) {
         const aiService = require('../ai-service');
-        const visualDescription = await aiService.describeAttachedImages(
+        // A picked model that can see describes its own images; a text-only
+        // pick cannot, and the timeline says which model read them.
+        const described = await aiService.describeAttachedImages(
           imageFiles,
           displayGoal || goal,
+          {
+            provider: runtimeModelProfile.detected?.provider || '',
+            model: runtimeModelProfile.displayModel || model || '',
+            pinned: modelPinned === true,
+            detailed: true,
+          },
         );
+        const visualDescription = described && typeof described === 'object' ? described.text : described;
+        if (visualDescription && modelPinned === true && described && typeof described === 'object' && described.picked !== true) {
+          emit({
+            type: 'checkpoint',
+            label: visionSwitchLabel(runtimeModelProfile, described.provider, described.model),
+            status: 'warning',
+            payload: { reason: 'vision_switch', modelKept: true },
+          });
+        }
         if (visualDescription) {
           uploadedFileContext = [
             uploadedFileContext,
@@ -2704,6 +2809,31 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   };
 
   try {
+    // A picked model the task runtime cannot reach here (no connection for
+    // its provider, or a provider the runtime does not drive) ends the task
+    // with that cause: never a stand-in model (owner policy, AGENTS.md §13).
+    if (pickedModelUnavailable) {
+      emit({
+        type: 'checkpoint',
+        label: 'El modelo elegido no está disponible',
+        status: 'warning',
+        payload: { reason: runtimeClientResolution.unavailable || 'unconfigured', modelKept: true },
+      });
+      let unavailableMessage = null;
+      try {
+        unavailableMessage = require('../ai/billing-failover').buildFailureMessage({
+          modelLabel: pinnedModelLabel(runtimeModelProfile),
+          reason: 'unconfigured',
+        });
+      } catch (_) { unavailableMessage = null; }
+      return await finishDeterministicTask({
+        finalMarkdown: unavailableMessage || pinnedModelGenericFailureMessage(runtimeModelProfile),
+        stoppedReason: `model_error: E_PROVIDER ${runtimeClientResolution.unavailable || 'unconfigured'}`,
+        steps: 0,
+        artifactsList: [],
+        metadata: { pickedModelUnavailable: true, errorCode: 'E_PROVIDER' },
+      });
+    }
     if (mediaBatchRows) {
       // The same persistent File jobs serve uploads, refreshes and chat turns.
       // Do not send an empty transcript or the first few seconds to the LLM
@@ -3048,6 +3178,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         );
         visionAnswer = String((vision && typeof vision === 'object' ? vision.text : vision) || '').trim();
+        // A text-only pick cannot read the pixels: a vision model answered,
+        // and the timeline names it (as the chat does).
+        if (visionAnswer && modelPinned === true && vision && typeof vision === 'object' && vision.pickedOnly !== true
+          && !sameRuntime(vision.provider, vision.model, runtimeModelProfile.detected?.provider, runtimeModelProfile.displayModel)) {
+          emit({
+            type: 'checkpoint',
+            label: visionSwitchLabel(runtimeModelProfile, vision.provider, vision.model),
+            status: 'warning',
+            payload: { reason: 'vision_switch', modelKept: true },
+          });
+        }
         if (!visionAnswer && vision && typeof vision === 'object' && vision.pickedOnly) {
           const err = vision.error || null;
           const failed = err
@@ -4387,6 +4528,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const llmRecoveredMarkdown = await buildLlmAttachmentRecoveryAnswer({
         goal: displayGoal || goal,
         uploadedFileContext: recoveryUploadedFileContext,
+        // The picked model writes its own rescue answer; internal callers
+        // keep the recovery ladder.
+        pinnedRuntime: pickedModelKept && openai
+          ? { client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.detected?.provider || null }
+          : null,
       });
       const recoveredMarkdown = llmRecoveredMarkdown || buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
@@ -4897,6 +5043,7 @@ module.exports = {
   buildAttachmentUnavailableFallbackAnswer,
   buildLlmAttachmentRecoveryAnswer,
   pickAttachmentRecoveryRuntime,
+  visionSwitchLabel,
   agentModelFailoverEnabled,
   resolveAgentModelFailoverRuntime,
   resolveAgentModelFailoverRuntimes,

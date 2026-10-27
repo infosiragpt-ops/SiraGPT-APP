@@ -667,12 +667,32 @@ class AIService {
      * @param {Array<{path: string, mimeType: string}>} imageFiles
      * @param {string} userText - pregunta original del usuario (contexto)
      */
-    async describeAttachedImages(imageFiles, userText) {
-        const runtime = selectVisionRuntime('', '');
-        if (!runtime.switched) {
-            console.warn('[vision-describe] sin proveedor de visión configurado — no se pueden describir imágenes');
-            return null;
+    async describeAttachedImages(imageFiles, userText, opts = {}) {
+        // `pinned`: the user picked the model. When it can see, it describes
+        // the images itself (owner policy: a picked model is not replaced);
+        // a text-only pick cannot read pixels, so a vision runtime does, and
+        // `detailed` tells the caller which one so it can say so.
+        let runtime = null;
+        let pickedProvider = String(opts.provider || '');
+        let pickedModel = String(opts.model || '');
+        try {
+            if (pickedProvider || pickedModel) {
+                pickedProvider = normalizeChatProvider(pickedProvider, pickedModel);
+                pickedModel = normalizeModelForProvider(pickedProvider, pickedModel);
+            }
+        } catch (_) { /* keep raw ids */ }
+        if (opts.pinned === true && pickedProvider && pickedModel && modelSupportsVision(pickedProvider, pickedModel)) {
+            runtime = { provider: pickedProvider, model: pickedModel, switched: false, picked: true };
+        } else {
+            runtime = selectVisionRuntime('', '');
+            if (!runtime.switched) {
+                console.warn('[vision-describe] sin proveedor de visión configurado — no se pueden describir imágenes');
+                return null;
+            }
         }
+        const finish = (text) => (opts.detailed === true
+            ? { text: text || null, provider: runtime.provider, model: runtime.model, picked: runtime.picked === true }
+            : (text || null));
         try {
             const client = this.getClient(runtime.provider);
             const contentArray = [{
@@ -687,7 +707,7 @@ class AIService {
                 const img = await this.prepareImageForVision(f.path, f.mimeType);
                 if (img) contentArray.push(img);
             }
-            if (contentArray.length === 1) return null;
+            if (contentArray.length === 1) return finish(null);
             const completion = await client.chat.completions.create({
                 model: runtime.model,
                 messages: [{ role: 'user', content: contentArray }],
@@ -695,10 +715,10 @@ class AIService {
                 temperature: 0.2,
             });
             const text = completion?.choices?.[0]?.message?.content || '';
-            return typeof text === 'string' && text.trim() ? text.trim() : null;
+            return finish(typeof text === 'string' && text.trim() ? text.trim() : null);
         } catch (err) {
             console.error('[vision-describe] fallo describiendo imágenes:', err?.message || err);
-            return null;
+            return finish(null);
         }
     }
 
