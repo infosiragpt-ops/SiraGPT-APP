@@ -21,16 +21,29 @@ const INSTANT_ANSWER_ENDPOINT = 'https://api.duckduckgo.com/';
 const HTML_ENDPOINT = 'https://html.duckduckgo.com/html/';
 const USER_AGENT = 'SiraGPT-WebSearch/1.0 (+https://siragpt.com; contact: hello@siragpt.com)';
 
+// DDG answers a client it considers a bot with an anti-bot challenge page —
+// often HTTP 202, sometimes 200 — instead of results. Parsed as results it is
+// simply «0 hits», so production searches came back empty with ok:true and
+// nobody could tell DDG had stopped serving this server.
+const CHALLENGE_RE = /anomaly-modal|challenge-form|anomaly\.js|bots use DuckDuckGo|unfortunately,? bots/i;
+
 async function search(query, { maxResults = 5, signal, locale } = {}) {
   const limit = Math.max(1, Math.min(Number(maxResults) || 5, 15));
   const out = await searchInstantAnswer(query, { maxResults: limit, signal, locale });
   if (out.length >= limit) return uniqueResults(out, limit);
 
-  const htmlResults = await searchHtml(query, {
-    maxResults: limit - out.length,
-    signal,
-    locale,
-  });
+  let htmlResults;
+  try {
+    htmlResults = await searchHtml(query, {
+      maxResults: limit - out.length,
+      signal,
+      locale,
+    });
+  } catch (err) {
+    // Blocked HTML search: the instant answers already found still count.
+    if (out.length && /blocked/.test(String(err && err.message))) return uniqueResults(out, limit);
+    throw err;
+  }
   return uniqueResults([...out, ...htmlResults], limit);
 }
 
@@ -48,18 +61,30 @@ async function searchInstantAnswer(query, { maxResults = 5, signal, locale } = {
 async function searchHtml(query, { maxResults = 5, signal, locale } = {}) {
   const params = buildParams(query, locale);
   const url = `${HTML_ENDPOINT}?${params.toString()}`;
-  const html = await fetchText(url, { signal, accept: 'text/html' });
-  return parseHtmlResults(html, maxResults);
+  const { status, text: html } = await fetchPage(url, { signal, accept: 'text/html' });
+  const results = parseHtmlResults(html, maxResults);
+  if (!results.length && isChallengePage(status, html)) {
+    throw new Error('duckduckgo blocked (anti-bot challenge)');
+  }
+  return results;
 }
 
-async function fetchText(url, { signal, accept }) {
+function isChallengePage(status, html) {
+  return status === 202 || CHALLENGE_RE.test(String(html || ''));
+}
+
+async function fetchPage(url, { signal, accept }) {
   const res = await fetch(url, {
     method: 'GET',
     headers: { 'User-Agent': USER_AGENT, Accept: accept || '*/*' },
     signal,
   });
   if (!res.ok) throw new Error(`duckduckgo http ${res.status}`);
-  return res.text();
+  return { status: res.status, text: await res.text() };
+}
+
+async function fetchText(url, opts) {
+  return (await fetchPage(url, opts)).text;
 }
 
 function buildParams(query, locale) {
@@ -228,5 +253,6 @@ module.exports = {
     parseInstantAnswer,
     unwrapDuckDuckGoUrl,
     decodeHtml,
+    isChallengePage,
   },
 };

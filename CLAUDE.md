@@ -3071,3 +3071,42 @@ Hallazgos verificados en el código (cada uno con un test que falla sin la corre
 - **Selector de herramientas**: podía quitar `install_sandbox_package` y dejar `python_exec`, cuyo consejo ante `ModuleNotFoundError` es llamarla (`unknown_tool`). Ahora se queda siempre que quede `python_exec` o `bash_exec`, y `bash_exec`/`install_sandbox_package`/`describe_image` cuentan como código.
 - **Timeout del arnés sin freno**: perder la carrera contra `timeoutMs` no detenía la herramienta: seguía, entregaba archivos tarde y un reintento corría a la vez. Las herramientas con `abortOnTimeout: true` (`python_exec`, `bash_exec`, `install_sandbox_package`, `describe_image`) reciben `ctx.callSignal`, que se aborta en su timeout y en Detener. `ctx.signal` sigue siendo la señal del turno (el estado por turno se indexa con ella).
 - Tests (registrados): `chat-sandbox-review-round2.test.js` (14; los 14 fallan contra el código anterior). Ajustados `chat-sandbox-computer.test.js` y `chat-sandbox-review-fixes.test.js` (el stub devuelve `staged` como el runner real; los fixtures de PNG/ZIP son archivos completos).
+
+## Errores del registro de producción (added 2026-10-26)
+
+Triage del log de producción del 2026-10-26, reconciliado con #1103/#1104 (otra sesión sobre el
+mismo log). `backend/tests/production-log-errors.test.js`: 8 tests; los 7 de arreglos fallan contra
+`production-main` y el 8.º es la guarda de lo que ya hizo #1103.
+- **Log con el modelo entero**: «rlhf-phase3 done» imprimía el reward model completo (1536 pesos).
+  `jobs/rlhf-phase3.js` devuelve un resumen del entrenamiento (`summarizeTrainResult`: métricas,
+  versión, `model.dim`). Todas las líneas `[system-cron] … done:` pasan por
+  `utils/compact-log-json.js`: los resultados chicos quedan idénticos a `JSON.stringify` y los arrays
+  largos, objetos anchos y textos largos se resumen, con la línea ≤ 2000 caracteres. La guarda de
+  pesos que agregó #1103 en `system-cron` se conserva antes de compactar.
+- **Consolidación nocturna de memoria `llm_not_json`**: mandaba toda la bóveda (hasta 400 entradas)
+  en UNA llamada y el JSON salía cortado. Ahora va por tandas del mismo tema (`batchEntries`: ≤ 60
+  entradas y ≤ 9000 caracteres; `max_tokens` 8000, el valor de #1103). Cada propuesta se valida
+  fail-closed contra su tanda; una tanda fallida no toca sus entradas y la pasada queda `partial`,
+  así que se reintenta la noche siguiente aunque nada cambie. Se conserva lo de #1103: reintento sin
+  `response_format` y lectura de `reasoning_content`/`reasoning` (`replyText`). El diagnóstico de una
+  respuesta inservible registra proveedor, `finish_reason` y tamaño, nunca el texto.
+- **Respuesta inservible = siguiente proveedor**: `createFailoverClient`
+  (`doc-agent/llm-runtime.js`) acepta `accept(response)` por llamada (no llega al SDK). Una respuesta
+  vacía o cortada pasa al siguiente candidato sin degradar al que respondió; si ninguno sirve,
+  devuelve la primera para diagnosticar. La degradación saca al candidato que falló por identidad
+  (la corrección de #1103).
+- **Búsqueda web en 0**: DuckDuckGo responde a la IP del servidor con su página anti-bots (a menudo
+  HTTP 202) y se leía como «0 resultados, ok». Ahora es `blocked` (se conservan las respuestas
+  instantáneas si las hubo), y un proveedor bloqueado descansa 10 min (`blocked_cooldown` en
+  `attempts`) en lugar de sumar su latencia a cada búsqueda.
+- **Ya resuelto por #1103/#1104, sin cambios aquí**: modelo de memoria por defecto sin saldo
+  (`memory-llm-client`: primero los proveedores con saldo), SearXNG (parsea el HTML de una instancia
+  pública; la página «Security check» da `[]`) y las líneas de Codex sin saldo (pausa de 6 h y un
+  aviso por clave).
+
+Lo que NO es código (requiere a Luis): sin saldo en DeepSeek, Anthropic, OpenRouter, Cerebras y
+OpenAI; «Billing verification failed» en el proveedor Meta; solo xAI respondió. La búsqueda web
+fiable necesita `BRAVE_SEARCH_API_KEY` o un SearXNG propio en `SEARXNG_BASE_URL`. Los 404 a
+`/api/.env`, `…/proc/self/environ` o `/api/graphql` son escáneres de bots (la respuesta es
+correcta). Los `[slow-query] raw.$queryRaw` de ~2,5–3 s (sondas `SELECT 1`, esporádicos tras
+inactividad) apuntan a latencia de conexión con la base de datos; hay que mirar el servidor.

@@ -21,7 +21,7 @@ async function run(opts = {}) {
 
   const { backfill } = require('../services/rlhf/backfill');
   const backfillResult = await backfill({ prisma, embedder, limit: opts.limit || 500 });
-  logger.info?.(`[rlhf-phase3] backfill ${JSON.stringify(backfillResult)}`);
+  logger.info?.(`[rlhf-phase3] backfill ${require('../utils/compact-log-json').compactLogJson(backfillResult)}`);
 
   let trainResult = { ok: false, reason: 'skipped' };
   try {
@@ -39,13 +39,29 @@ async function run(opts = {}) {
     logger.warn?.(`[rlhf-phase3] train skipped: ${err.message}`);
   }
 
-  return { backfill: backfillResult, train: trainResult };
+  return { backfill: backfillResult, train: summarizeTrainResult(trainResult) };
+}
+
+/**
+ * What a run reports about training: outcome, version and metrics — never
+ * the model itself. trainer.train() returns the reward model (a 1536-weight
+ * vector), and the cron printed it whole in every «rlhf-phase3 done» line.
+ * The trained model stays active in the trainer and persisted in its
+ * snapshot table; nobody reads it from this result.
+ */
+function summarizeTrainResult(result) {
+  if (!result || typeof result !== 'object') return result;
+  const { model, ...rest } = result;
+  if (!model || typeof model !== 'object') return rest;
+  const dim = Number(model.dim);
+  const weightCount = model.weights && typeof model.weights === 'object' ? Object.keys(model.weights).length : null;
+  return { ...rest, model: { dim: Number.isFinite(dim) ? dim : weightCount } };
 }
 
 if (require.main === module) {
   run()
     .then((res) => {
-      console.log('[rlhf-phase3] result:', JSON.stringify(res));
+      console.log('[rlhf-phase3] result:', require('../utils/compact-log-json').compactLogJson(res));
       process.exit(0);
     })
     .catch((err) => {
@@ -54,4 +70,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { run };
+module.exports = { run, summarizeTrainResult };
