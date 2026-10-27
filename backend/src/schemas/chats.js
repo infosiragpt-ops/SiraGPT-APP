@@ -59,7 +59,7 @@ const MessageResponseSchema = z
     tokens: z.number().int().nonnegative().nullable().optional(),
     timestamp: z.union([z.string(), z.date()]).optional(),
     files: z.union([z.array(z.any()), z.string()]).nullable().optional(),
-    metadata: z.union([z.record(z.any()), z.string()]).nullable().optional(),
+    metadata: z.union([z.record(z.string(), z.any()), z.string()]).nullable().optional(),
     feedback: z.string().nullable().optional(),
   })
   .passthrough();
@@ -89,7 +89,7 @@ const SendMessageRequestSchema = z
     role: MessageRoleSchema,
     tokens: z.number().int().nonnegative().optional(),
     files: z.array(z.any()).optional(),
-    metadata: z.union([z.record(z.any()), z.string()]).optional(),
+    metadata: z.union([z.record(z.string(), z.any()), z.string()]).optional(),
     idempotencyKey: IdempotencyKeySchema.optional(),
   });
 

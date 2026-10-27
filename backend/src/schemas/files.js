@@ -25,7 +25,7 @@ const FileMetadataSchema = z
     storageKey: z.string().nullable().optional(),
     url: z.string().nullable().optional(),
     error: z.string().nullable().optional(),
-    metadata: z.record(z.any()).nullable().optional(),
+    metadata: z.record(z.string(), z.any()).nullable().optional(),
     createdAt: z.union([z.string(), z.date()]).optional(),
     updatedAt: z.union([z.string(), z.date()]).optional(),
   })
@@ -43,7 +43,7 @@ const FileUploadResponseSchema = z
       )
       .optional(),
     batchId: z.string().optional(),
-    intent: z.record(z.any()).nullable().optional(),
+    intent: z.record(z.string(), z.any()).nullable().optional(),
   })
   .passthrough();
 

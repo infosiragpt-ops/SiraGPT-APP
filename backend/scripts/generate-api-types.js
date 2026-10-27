@@ -7,9 +7,10 @@
  *   We considered `zod-to-ts`, but it isn't in our dep tree and pulling it
  *   in for a one-shot codegen step doesn't earn its weight. Our schemas are
  *   intentionally narrow (auth / chats / files / payments) and use a small
- *   subset of Zod, so a ~150-LOC walker is enough — and we already ship
- *   `zod-to-json-schema`, so we lean on that as the source of truth and
- *   then convert the JSON Schema → TS string.
+ *   subset of Zod, so a ~150-LOC walker is enough — the JSON Schema comes
+ *   from `src/utils/zod-json-schema.js` (z.toJSONSchema in the shape
+ *   zod-to-json-schema produced under zod 3) and is then converted to a TS
+ *   string.
  *
  * Usage:
  *   node backend/scripts/generate-api-types.js [--check]
@@ -21,7 +22,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { zodToJsonSchema } = require('zod-to-json-schema');
+// Same JSON Schema shape zod-to-json-schema produced under zod 3 (it cannot
+// read zod 4 schemas), so lib/api-types.ts does not change with the upgrade.
+const { zodToLegacyJsonSchema } = require('../src/utils/zod-json-schema');
 
 const OUT_PATH = path.join(__dirname, '..', '..', 'lib', 'api-types.ts');
 const SCHEMA_INDEX = path.join(__dirname, '..', 'src', 'schemas', 'index.js');
@@ -110,7 +113,7 @@ function buildOutput(schemas) {
     const schema = schemas[name];
     let json;
     try {
-      json = zodToJsonSchema(schema, { name, $refStrategy: 'none' });
+      json = zodToLegacyJsonSchema(schema);
     } catch (err) {
       blocks.push(`// FAILED to convert ${name}: ${err.message}`);
       blocks.push(`export type ${typeNameFor(name)} = unknown;`);

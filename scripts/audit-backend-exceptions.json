@@ -1,14 +1,4 @@
 {
   "policy": "Time-boxed backend npm-audit exceptions, read only by scripts/audit-backend-production.cjs (never by the root/frontend gate). Each entry names one exact advisory, its package and the exact installed copies; severity high only, never critical; at most 14 days; it blocks again by itself when it expires. Adding or renewing an entry needs the owner's explicit approval.",
-  "exceptions": [
-    {
-      "url": "https://github.com/advisories/GHSA-mrhx-c7xc-m3w5",
-      "package": "zod",
-      "nodes": ["node_modules/zod"],
-      "approvedBy": "Luis Carrera",
-      "createdOn": "2026-10-26",
-      "expiresOn": "2026-11-09",
-      "reason": "The backend still uses zod 3 (about 40 files and 1000 schema calls). The fix for this memory-exhaustion advisory exists only in zod >= 4.6.6; the zod/v3 subpath is not patched. Every other copy of zod (root app and nested backend copies) is already 4.6.7. The backend migration to zod 4 removes this entry before it expires."
-    }
-  ]
+  "exceptions": []
 }
