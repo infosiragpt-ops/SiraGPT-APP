@@ -1,7 +1,7 @@
 'use strict';
 
 const { z } = require('zod');
-const { zodToJsonSchema } = require('zod-to-json-schema');
+const { zodToLegacyJsonSchema } = require('../../utils/zod-json-schema');
 
 const CONTRACT_REGISTRY_VERSION = 'sira-contracts-2026-05';
 
@@ -140,7 +140,7 @@ const queueBoardStatusResponseSchema = z.object({
     basePath: z.string(),
     status: z.enum(['disabled', 'ready', 'degraded', 'unhealthy']),
     reason: z.string().optional(),
-    counts: z.union([z.record(z.any()), z.null()]).optional(),
+    counts: z.union([z.record(z.string(), z.any()), z.null()]).optional(),
   }).passthrough(),
 }).passthrough();
 
@@ -482,7 +482,7 @@ function stripJsonSchemaMeta(schema) {
 }
 
 function toJsonSchema(schema) {
-  return stripJsonSchemaMeta(zodToJsonSchema(schema, { $refStrategy: 'none', target: 'openApi3' }));
+  return stripJsonSchemaMeta(zodToLegacyJsonSchema(schema, { target: 'openApi3' }));
 }
 
 function getMcpToolContract(name) {
@@ -617,10 +617,11 @@ function buildJsonSchemaRegistry() {
   return {
     version: CONTRACT_REGISTRY_VERSION,
     protocol: {
-      jsonSchemaGenerator: 'zod-to-json-schema',
-      zodMajor: 3,
+      // z.toJSONSchema normalised to the zod-to-json-schema document shape
+      // (utils/zod-json-schema.js), so the contracts did not change with zod 4.
+      jsonSchemaGenerator: 'zod.toJSONSchema (zod-to-json-schema shape)',
+      zodMajor: 4,
       openApiGeneratedInternally: true,
-      zodToOpenApiSkipped: '@asteasolutions/zod-to-openapi@8.5.0 requires zod@^4; backend remains on zod@3 for compatibility',
     },
     tools: Object.fromEntries(mcpToolContracts.map((contract) => [contract.name, serializeToolContract(contract)])),
     routes: Object.fromEntries(routeContracts.map((contract) => [contract.id, serializeRouteContract(contract)])),

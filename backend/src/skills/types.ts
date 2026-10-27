@@ -19,7 +19,7 @@ export const SkillToolSchema = z.object({
     .string()
     .regex(/^[a-z][a-z0-9_]*$/, 'tool name must be lowercase snake_case'),
   description: z.string().min(1).max(500),
-  paramsSchema: z.record(z.unknown()).optional(),
+  paramsSchema: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const SkillManifestSchema = z.object({
@@ -31,7 +31,7 @@ export const SkillManifestSchema = z.object({
   scopes: z.array(SkillScopeSchema).default([]),
   entry: z.string().default('index'),
   source: z.enum(['module', 'instructions']).default('module'),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
   instructions: z.string().optional(),
 });
 

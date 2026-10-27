@@ -1558,7 +1558,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yocto-queue` | 1.2.2 | MIT | [link](https://github.com/sindresorhus/yocto-queue) |
 | `zip-stream` | 4.1.1 | MIT | [link](https://github.com/archiverjs/node-zip-stream) |
 | `zlibjs` | 0.3.1 | MIT | [link](https://github.com/imaya/zlib.js) |
-| `zod` | 3.25.76, 4.6.7 | MIT | [link](https://github.com/colinhacks/zod) |
+| `zod` | 4.6.7 | MIT | [link](https://github.com/colinhacks/zod) |
 | `zwitch` | 2.0.4 | MIT | [link](https://github.com/wooorm/zwitch) |
 
 ## MPL-2.0 (2)

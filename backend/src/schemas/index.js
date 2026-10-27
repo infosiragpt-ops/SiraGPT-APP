@@ -18,7 +18,9 @@ const chatMessageSchema = z.object({
 });
 
 const inlineFileSchema = z.object({
-  id: z.string().uuid().optional(),
+  // guid(): any 8-4-4-4-12 hex id, what zod 3's uuid() accepted. zod 4's
+  // uuid() also checks the RFC version/variant bits.
+  id: z.string().guid().optional(),
   name: z.string().max(500),
   mimeType: z.string()
     .max(200)
@@ -40,7 +42,7 @@ const aiGenerateRequestSchema = z.object({
   files: z.array(inlineFileSchema).optional(),
   cacheBypass: z.boolean().optional(),
   sessionId: z.string().max(200).optional(),
-  projectId: z.string().uuid().optional(),
+  projectId: z.string().guid().optional(),
 });
 
 const fileUploadSchema = z.object({
@@ -52,8 +54,8 @@ const fileUploadSchema = z.object({
     size: z.number().max(100 * 1024 * 1024),
     buffer: z.instanceof(Buffer).optional(),
   })).min(1).max(50),
-  projectId: z.string().uuid().optional(),
-  metadata: z.record(z.unknown()).optional(),
+  projectId: z.string().guid().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const promptInjectionPatterns = [

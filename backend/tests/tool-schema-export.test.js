@@ -27,8 +27,8 @@ describe('tool schema export registry', () => {
   test('exports MCP tool schemas from the contract registry without drift', () => {
     const registry = buildJsonSchemaRegistry();
     assert.equal(registry.version, CONTRACT_REGISTRY_VERSION);
-    assert.equal(registry.protocol.jsonSchemaGenerator, 'zod-to-json-schema');
-    assert.match(registry.protocol.zodToOpenApiSkipped, /zod@\^4/);
+    assert.equal(registry.protocol.jsonSchemaGenerator, 'zod.toJSONSchema (zod-to-json-schema shape)');
+    assert.equal(registry.protocol.zodMajor, 4);
 
     const mcpRegistry = createMcpToolRegistry({
       env: {},

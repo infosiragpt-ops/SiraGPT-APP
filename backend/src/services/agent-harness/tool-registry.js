@@ -27,7 +27,7 @@
  */
 
 const { z } = require('zod');
-const { zodToJsonSchema } = require('zod-to-json-schema');
+const { zodToLegacyJsonSchema } = require('../../utils/zod-json-schema');
 
 const VALID_TIERS = new Set(['auto', 'confirm']);
 
@@ -46,10 +46,15 @@ const DEFAULT_TIER_OVERRIDES = Object.freeze({
 });
 
 function jsonSchemaFromZod(schema, name) {
-  const json = zodToJsonSchema(schema, { $refStrategy: 'none', name: undefined });
-  // AJV (react-agent arg validation) compiles tool.parameters directly; the
-  // $schema meta key is noise there and in the OpenAI payload.
-  if (json && typeof json === 'object') delete json.$schema;
+  // Same document zod-to-json-schema produced under zod 3 (it cannot read zod
+  // 4 schemas), without the $schema meta key: AJV (react-agent arg validation)
+  // compiles tool.parameters directly and it is noise in the OpenAI payload.
+  let json = null;
+  try {
+    json = zodToLegacyJsonSchema(schema);
+  } catch (err) {
+    throw new Error(`tool ${name}: inputSchema could not be converted (${String((err && err.message) || err).slice(0, 160)})`);
+  }
   if (!json || json.type !== 'object') {
     throw new Error(`tool ${name}: inputSchema must be a Zod object schema`);
   }
