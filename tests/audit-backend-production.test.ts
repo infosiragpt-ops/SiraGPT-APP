@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 const gate = require(path.join(process.cwd(), 'scripts/audit-backend-production.cjs'))
 const { PATCHES } = require(path.join(process.cwd(), 'backend/scripts/image-size-security-patch.cjs'))
+const { isTransientAuditError } = require(path.join(process.cwd(), 'scripts/lib/npm-audit-retry.cjs'))
 const clone = (value: any) => structuredClone(value)
 const advisory = (name = 'image-size', severity = 'high', url = gate.ALLOWED_URLS[0]) => ({
   source: 12345, name, dependency: name, severity, url, title: 'Synthetic advisory fixture',
@@ -27,14 +30,42 @@ function patchEvidence() {
     advisories: gate.ALLOWED_URLS.map((url: string) => url.split('/').pop()),
     copies: [{ path: 'image-size', version: '1.2.1', files: PATCHES.map((patch: any) => ({ file: patch.file, sha256: patch.afterSha256 })) }] }
 }
-function invoke(report: any, { status = 1, patch = patchEvidence(), patchStatus = 0, patchError = undefined }: any = {}) {
+function invoke(report: any, { status = 1, patch = patchEvidence(), patchStatus = 0, patchError = undefined, exceptions = [], now = Date.now() }: any = {}) {
   const commands: any[] = []; const output: string[] = []
-  const result = gate.runBackendAuditGate({ print: (text: string) => output.push(text), run: (command: string, args: string[]) => {
+  const result = gate.runBackendAuditGate({ exceptions, now, print: (text: string) => output.push(text), run: (command: string, args: string[]) => {
     commands.push({ command, args })
     if (command === 'npm') return { status, stdout: JSON.stringify(report) }
     return { status: patchStatus, error: patchError, stdout: typeof patch === 'string' ? patch : JSON.stringify(patch) }
   } })
   return { result, commands, output }
+}
+
+// Time-boxed exception fixtures: the backend's zod 3 advisory and the packages
+// npm lists only "via zod" (openai -> zod, @llamaindex/openai -> openai).
+const ZOD_URL = 'https://github.com/advisories/GHSA-mrhx-c7xc-m3w5'
+const NOW = Date.parse('2026-10-27T12:00:00.000Z')
+const DAY_MS = 24 * 60 * 60 * 1000
+function zodException(overrides: any = {}) {
+  return { url: ZOD_URL, package: 'zod', nodes: ['node_modules/zod'], approvedBy: 'Owner',
+    reason: 'No patched zod 3 release exists; the zod 4 migration lands before this expires.',
+    createdOn: '2026-10-26', expiresOn: '2026-11-09', ...overrides }
+}
+function zodReport({ level = 'high', url = ZOD_URL, nodes = ['node_modules/zod'] }: any = {}) {
+  return reportFor({
+    zod: { ...packageEntry('zod', [advisory('zod', level, url)], level), nodes },
+    openai: packageEntry('openai', ['zod'], level),
+    '@llamaindex/openai': packageEntry('@llamaindex/openai', ['openai'], level),
+  })
+}
+function runWithExceptions(report: any, exceptions: any[], now = NOW) {
+  const output: string[] = []
+  try {
+    const result = gate.runBackendAuditGate({ exceptions, now, print: (text: string) => output.push(text),
+      run: (command: string) => command === 'npm'
+        ? { status: 1, stdout: JSON.stringify(report) }
+        : { status: 0, stdout: JSON.stringify(patchEvidence()) } })
+    return { result, output, error: null as any }
+  } catch (error) { return { result: null as any, output, error: error as any } }
 }
 
 test('exact image advisories resolve through transitive strings only with verified installed hashes', () => {
@@ -151,4 +182,85 @@ test('npm low metavulnerability over moderate leaves retains raw findings withou
     assert.throws(() => invoke(hidden), /severity does not match/)
   }
   assert.throws(() => invoke(reportFor({ direct: packageEntry('direct', [advisory('direct', 'moderate')], 'low') })), /severity does not match/)
+})
+
+test('an approved, unexpired exception covers its exact advisory, named copies and the packages that only reach it', () => {
+  const report = zodReport(); const original = clone(report)
+  const classified = gate.classifyAuditReport(report, { exceptions: [zodException()], now: NOW })
+  assert.deepEqual(classified.blocked, [])
+  assert.deepEqual(classified.excepted.map((item: any) => item.package).sort(), ['@llamaindex/openai', 'openai', 'zod'])
+  assert.ok(classified.excepted.every((item: any) => item.advisoryPackage === 'zod' && item.url === ZOD_URL && item.expiresOn === '2026-11-09'))
+  const { result, output, error } = runWithExceptions(report, [zodException()])
+  assert.equal(error, null); assert.equal(result.ok, true)
+  assert.deepEqual(JSON.parse(output[0]), original, 'the raw npm report is still printed first, untouched')
+  assert.match(output.join(''), /::warning title=Backend audit exception::zod \S+ is NOT fixed; excepted until 2026-11-09/)
+  assert.match(output.join(''), /passed with 1 time-boxed exception/)
+  // The image-size patch attestation still runs alongside an exception.
+  const mixed = runWithExceptions(reportFor({ ...imageReport().vulnerabilities, ...zodReport().vulnerabilities }), [zodException()])
+  assert.equal(mixed.error, null); assert.equal(mixed.result.patchedAndVerified.length, 2)
+})
+
+test('the exception blocks again by itself at expiry and never covers critical, other advisories, packages or new copies', () => {
+  const lastMoment = Date.parse('2026-11-09T23:59:59.999Z')
+  assert.deepEqual(gate.classifyAuditReport(zodReport(), { exceptions: [zodException()], now: lastMoment }).blocked, [])
+  const expired = runWithExceptions(zodReport(), [zodException()], lastMoment + 1)
+  assert.match(String(expired.error?.message), /Unpatched high\/critical backend advisories/)
+  assert.match(expired.output.join(''), /exception EXPIRED on 2026-11-09/)
+  const cases: Array<[any, any]> = [
+    [zodReport({ level: 'critical' }), zodException()],
+    [zodReport({ url: 'https://github.com/advisories/GHSA-2222-3333-4444' }), zodException()],
+    [zodReport(), zodException({ package: 'openai', nodes: ['node_modules/openai'] })],
+    [zodReport({ nodes: ['node_modules/zod', 'node_modules/new-dep/node_modules/zod'] }), zodException()],
+  ]
+  for (const [report, exception] of cases) {
+    const { blocked } = gate.classifyAuditReport(report, { exceptions: [exception], now: NOW })
+    assert.equal(blocked.length, 3, JSON.stringify(blocked))
+  }
+  const unused = runWithExceptions(imageReport(), [zodException()])
+  assert.equal(unused.error, null)
+  assert.match(unused.output.join(''), /exception no longer needed .* remove it: zod/)
+})
+
+test('malformed, over-long, future-dated or unscoped exceptions fail closed instead of being ignored', () => {
+  assert.equal(gate.MAX_EXCEPTION_DAYS, 14)
+  for (const bad of [
+    null, [], {},
+    zodException({ url: `${ZOD_URL}#fragment` }), zodException({ url: 'https://evil.test/advisories/GHSA-mrhx-c7xc-m3w5' }),
+    zodException({ package: '../zod' }),
+    zodException({ nodes: [] }), zodException({ nodes: undefined }), zodException({ nodes: ['node_modules/zodiac'] }),
+    zodException({ nodes: ['node_modules/../zod'] }), zodException({ nodes: ['node_modules/zod', 'node_modules/zod'] }),
+    zodException({ approvedBy: '' }), zodException({ reason: 'because' }), zodException({ reason: undefined }),
+    zodException({ expiresOn: '2026-11-10' }), // 15 days
+    zodException({ expiresOn: '2026-10-26' }), // 0 days
+    zodException({ expiresOn: '2026-10-20' }), // ends before it starts
+    zodException({ createdOn: '2026-02-30', expiresOn: '2026-03-05' }), // not a calendar date
+    zodException({ expiresOn: 'soon' }),
+    zodException({ createdOn: '2026-12-01', expiresOn: '2026-12-10' }), // starts in the future: would stretch the window
+  ]) {
+    assert.throws(() => gate.validateException(bad, { now: NOW }), /exception/i, JSON.stringify(bad))
+    assert.throws(() => gate.classifyAuditReport(zodReport(), { exceptions: [bad], now: NOW }), /exception/i)
+    const viaGate = runWithExceptions(zodReport(), [bad])
+    assert.equal(viaGate.result, null)
+    assert.match(String(viaGate.error?.message), /exception/i)
+  }
+  assert.throws(() => gate.classifyAuditReport(zodReport(), { exceptions: 'zod', now: NOW }), /exceptions/i)
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'audit-exceptions-'))
+  const broken = path.join(dir, 'broken.json'); writeFileSync(broken, '{ not json')
+  assert.throws(() => gate.loadExceptions(broken, { now: NOW }),
+    (error: any) => /not valid JSON/.test(error.message) && !isTransientAuditError(error), 'a broken policy file is not retried as an npm transport failure')
+  const duplicate = path.join(dir, 'duplicate.json'); writeFileSync(duplicate, JSON.stringify({ exceptions: [zodException(), zodException()] }))
+  assert.throws(() => gate.loadExceptions(duplicate, { now: NOW }), /Duplicate/)
+  const shapeless = path.join(dir, 'shapeless.json'); writeFileSync(shapeless, JSON.stringify([zodException()]))
+  assert.throws(() => gate.loadExceptions(shapeless, { now: NOW }), /exceptions file/)
+  assert.deepEqual(gate.loadExceptions(path.join(dir, 'absent.json'), { now: NOW }), [])
+})
+
+test('the root gate never inherits backend exceptions; the recorded file stays valid and bounded', () => {
+  // scripts/audit-production-allowlist.js calls classifyAuditReport(report) with no options.
+  assert.equal(gate.classifyAuditReport(zodReport()).blocked.length, 3)
+  for (const e of gate.loadExceptions()) {
+    assert.ok((Date.parse(e.expiresOn) - Date.parse(e.createdOn)) / DAY_MS <= 14, `${e.package} lasts at most 14 days`)
+    assert.ok(e.nodes.every((node: string) => node === `node_modules/${e.package}` || node.endsWith(`/node_modules/${e.package}`)))
+    assert.ok(e.reason.length >= 20 && e.approvedBy.length >= 2)
+  }
 })

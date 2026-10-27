@@ -2441,6 +2441,36 @@ bloqueaban todo PR que tocara `package.json`. Parche en el PR de presentaciones 
 - `THIRD_PARTY_LICENSES.md` se editó a mano (sin `node_modules` aquí); si el job Licenses
   marca drift, aplicar el diff que imprime y ya.
 
+## Parche de dependencias — audits del 26-oct-2026 + excepción temporal de zod (added 2026-10-26)
+
+Avisos nuevos (multer, undici, body-parser, zod) bloqueaban todo PR que tocara dependencias.
+- Raíz: `multer` ^2.5.0, `zod` ^4.6.7 (único uso en el front: `lib/attachments/registry.ts`,
+  compatible) y `undici` 7.30.1 / 6.29.1 (transitivos). zod 4 exige dos argumentos en
+  `z.record` → `z.record(z.string(), …)` en `server/intelligence/ports/common.ts` y
+  `server/schemas/{orchestration.ts,ai.ts,ai-schemas.js}`.
+- Backend: `multer` ^2.5.0, `undici` ^7.30.1, `puppeteer` 25.16.0 (pin exacto; su
+  `chromium-bidi` ya no arrastra el zod vulnerable; el contenedor sigue usando el Chromium del
+  sistema), `body-parser` 1.20.9 (express 4) y 2.4.0 (express 5 del MCP SDK), y las copias
+  anidadas de zod 4 (openai, MCP SDK, llamaindex) deduplicadas a 4.6.7.
+- **Excepción temporal aprobada por Luis** — GHSA-mrhx-c7xc-m3w5 (zod < 4.6.6, agotamiento de
+  memoria) solo tiene arreglo en zod 4 (el subpath `zod/v3` NO está parcheado) y el backend
+  sigue en zod 3 (~40 archivos). `scripts/audit-backend-exceptions.json` registra URL exacta +
+  paquete + copias instaladas exactas (`nodes`) + quién aprobó + motivo + `createdOn`/`expiresOn`:
+  máximo 14 días, nunca critical; una copia vulnerable nueva (otro `nodes`) bloquea. Solo la lee
+  `scripts/audit-backend-production.cjs`; el gate raíz llama `classifyAuditReport(report)` sin
+  opciones y nunca hereda excepciones. Una excepción inválida (fecha futura, más de 14 días, sin
+  `nodes`, JSON roto) hace fallar el gate en vez de ignorarse, y un cambio al JSON vuelve a correr
+  la auditoría en el PR (filtro `deps` de `ci.yml`).
+- **Vence el 2026-11-09**: desde el día siguiente el gate vuelve a bloquear solo (nightly, pushes a
+  `production-main` y PRs con dependencias). La migración del backend a zod 4 debe aterrizar
+  antes y borrar la entrada.
+- `THIRD_PARTY_LICENSES.md` regenerado como el job: worktree limpio + `npm ci` (raíz y backend)
+  + `npm run licenses:report`.
+- Pendiente (moderado, por debajo del gate): `qs` 6.15.2 (override `^6.15.2`) tiene
+  GHSA-x5fp-wj9c-mxmx y GHSA-4mjr-xmp4-gh2g; body-parser 1.20.9 declara `qs ~6.16.0`.
+- Tests: `tests/audit-backend-production.test.ts` (+4: alcance exacto, vencimiento, fallo
+  cerrado, gate raíz sin excepciones) y `tests/ci-speed-gates.test.ts` (filtro de CI).
+
 ## Diez mejoras de alto impacto — backend + frontend (added 2026-10-08)
 
 Pedido de Jorge: «Aplica 10 mejoras de alto impacto en frontend y backend». Auditoría con

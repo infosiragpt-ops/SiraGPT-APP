@@ -119,6 +119,9 @@ describe("fast CI layout", () => {
       assert.match(job, /if \[ "\$\{\{ github\.event_name \}\}" != "pull_request" \]; then\n\s+echo "changed=true"/,
         `${id}: every non-PR event audits`)
       assert.match(job, /package-lock\.json backend\/package\.json backend\/package-lock\.json/)
+      // Adding or renewing a time-boxed backend exception must re-run the audit.
+      assert.match(job, /git diff --quiet HEAD\^1 HEAD -- [^;]*scripts\/audit-backend-exceptions\.json[^;]*; then/,
+        `${id}: a change to the backend audit exceptions re-runs the audit`)
       const audits = job.match(/if: steps\.deps\.outputs\.changed == 'true'/g) || []
       assert.ok(audits.length >= 2, `${id}: audit steps are gated on the deps check`)
     }
