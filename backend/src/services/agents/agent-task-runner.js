@@ -1404,7 +1404,8 @@ function detectAgentRuntimeProvider(modelId) {
       // the document agent use (first-party-chat-clients).
       return {
         provider: 'Anthropic',
-        apiKeyEnv: process.env.ANTHROPIC_API_KEY ? 'ANTHROPIC_API_KEY' : 'SIRA_ANTHROPIC_API_KEY',
+        // Either name holds the Anthropic key (the chat reads both).
+        apiKeyEnv: ['ANTHROPIC', 'SIRA_ANTHROPIC'].map((prefix) => `${prefix}_API_KEY`).find((name) => process.env[name]) || 'ANTHROPIC_API_KEY',
         baseURL: null,
       };
     }
