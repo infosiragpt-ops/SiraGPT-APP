@@ -194,6 +194,9 @@ function resolverTimeoutMs(explicit) {
  * @param {string} args.goal — the user message / task goal
  * @param {OpenAI} [args.openai] — OpenAI client (optional; without it we fall back)
  * @param {string} [args.model="gpt-4o-mini"]
+ * @param {string} [args.provider] — provider behind `openai` (picked models)
+ * @param {boolean} [args.pinned=false] — the user picked `model`: use exactly
+ *   (openai, model), never a remap or another provider
  * @param {string[]} [args.fileIds] — ids of already-uploaded files (passed as hint)
  * @param {function} [args.fallback] — ({goal, fileIds}) => TaskContract
  *
@@ -204,7 +207,7 @@ function resolverTimeoutMs(explicit) {
  *   durationMs: number,
  * }>}
  */
-async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileIds, fallback, timeoutMs, env = process.env, deps = {} }) {
+async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", provider = null, pinned = false, fileIds, fallback, timeoutMs, env = process.env, deps = {} }) {
   const t0 = Date.now();
   const effTimeoutMs = resolverTimeoutMs(timeoutMs);
   const hint = Array.isArray(fileIds) && fileIds.length > 0
@@ -236,7 +239,7 @@ async function resolveTaskContract({ goal, openai, model = "gpt-4o-mini", fileId
   let effectiveProvider = null;
   let effectiveKey = '';
   try {
-    const picked = pickResolverRuntime({ openai, model, env, deps });
+    const picked = pickResolverRuntime({ openai, model, provider, pinned, env, deps });
     effectiveOpenai = picked.client;
     effectiveModel = picked.model;
     effectiveProvider = picked.provider;
@@ -426,8 +429,30 @@ function providerBlockedReason(target, env, { keyHealth, billing }) {
   return null;
 }
 
-function pickResolverRuntime({ openai, model, env = process.env, deps = {} } = {}) {
+// Key behind a picked provider's client, for the dead-key / no-credit memo.
+const PINNED_PROVIDER_KEY_ENV = Object.freeze({
+  OpenAI: 'OPENAI_API_KEY',
+  DeepSeek: 'DEEPSEEK_API_KEY',
+  Gemini: 'GEMINI_API_KEY',
+  xAI: 'XAI_API_KEY',
+  OpenRouter: 'OPENROUTER_API_KEY',
+  Anthropic: 'ANTHROPIC_API_KEY',
+  Cerebras: 'CEREBRAS_API_KEY',
+  Groq: 'GROQ_API_KEY',
+});
+
+function pickResolverRuntime({ openai, model, provider = null, pinned = false, env = process.env, deps = {} } = {}) {
   const d = resolverDeps(deps);
+  if (pinned) {
+    // The user's picked model resolves its own task contract: no remap (a Pro
+    // pick stays Pro) and no ladder of other providers (owner policy,
+    // AGENTS.md §13). Without its client the heuristic contract is used —
+    // local code, not another model.
+    const keyEnv = provider ? PINNED_PROVIDER_KEY_ENV[String(provider)] : null;
+    return openai
+      ? { client: openai, model, provider: provider || null, key: keyEnv ? String(env[keyEnv] || '').trim() : '', skipped: null }
+      : { client: null, model, provider: provider || null, key: '', skipped: 'picked model unavailable' };
+  }
   const baseURL = openai?.baseURL || openai?.client?.baseURL || openai?._options?.baseURL || '';
   const isDeepseek = /(^|\.)deepseek\.com/i.test(String(baseURL));
   const isOpenAINative = Boolean(openai) && (!baseURL || /(^|\.)openai\.com/i.test(String(baseURL)));

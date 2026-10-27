@@ -1,7 +1,7 @@
 'use strict';
 
 // Production 2026-10-07 22:39Z: a document task picked «Claude Sonnet 5.5».
-// The task worker has no runtime for a bare `claude-*` id, so it remapped the
+// The task worker had no runtime for a bare `claude-*` id, so it remapped the
 // run to DeepSeek (`runtimeModel=deepseek-v4-flash runtimeProvider=DeepSeek`,
 // `modelRemapped=true`) — and then handed the AgentRunner the spec
 // «Unresolved:deepseek-v4-flash» (original provider + fallback model), which
@@ -9,6 +9,10 @@
 // category=candidate_unavailable` → E_PROVIDER «El modelo seleccionado no está
 // disponible» 7 s after the task started. The runner must follow the runtime
 // the task already runs on.
+//
+// A bare claude-* id now runs on Anthropic itself, and a picked model is never
+// remapped (agent-task-pinned-model.test.js). The remap below still serves
+// internal callers (no pick) whose model id the task runtime cannot drive.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -42,10 +46,10 @@ function withDeepSeekOnly(fn) {
 const taskRunner = require('../src/services/agents/agent-task-runner');
 const agentRunner = require('../src/services/agent-runner');
 
-test('a bare claude-* pick remapped to DeepSeek hands the runner the DeepSeek runtime, not «Unresolved:<fallback>»', () => {
+test('an id the runtime cannot drive, remapped to DeepSeek, hands the runner the DeepSeek runtime, not «Unresolved:<fallback>»', () => {
   withDeepSeekOnly(() => {
-    const profile = taskRunner.normalizeAgentRuntimeModel('claude-sonnet-5-5');
-    assert.equal(profile.detected, null, 'the task worker has no runtime for a bare claude id');
+    const profile = taskRunner.normalizeAgentRuntimeModel('totally-unknown-model-x9');
+    assert.equal(profile.detected, null, 'the task worker has no runtime for this id');
     const resolution = taskRunner.resolveAgentRuntimeClient(profile);
     assert.ok(resolution.client, 'DeepSeek is configured: the task runs on it');
     assert.equal(resolution.provider, 'DeepSeek');
@@ -65,6 +69,21 @@ test('a bare claude-* pick remapped to DeepSeek hands the runner the DeepSeek ru
   });
 });
 
+test('a bare claude-* pick runs on Anthropic and the runner follows it', () => {
+  withDeepSeekOnly(() => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-unit-0001';
+    const profile = taskRunner.normalizeAgentRuntimeModel('claude-sonnet-5-5');
+    assert.equal(profile.detected && profile.detected.provider, 'Anthropic');
+    const resolution = taskRunner.resolveAgentRuntimeClient(profile, { pinned: true });
+    assert.equal(resolution.provider, 'Anthropic');
+    assert.equal(resolution.model, 'claude-sonnet-5-5');
+    assert.equal(typeof resolution.client.chat.completions.create, 'function');
+    taskRunner.applyAgentRuntimeResolution(profile, resolution);
+    assert.equal(profile.remapped, false);
+    assert.equal(taskRunner.runnerPickedModelSpec(profile, agentRunner), 'Anthropic:claude-sonnet-5-5');
+  });
+});
+
 test('a pick the task worker drives natively keeps the picker provider and model', () => {
   withDeepSeekOnly(() => {
     const profile = taskRunner.normalizeAgentRuntimeModel('deepseek-v4-pro');
@@ -80,7 +99,7 @@ test('with no client at all the spec stays honest: the runner reports the picked
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.NODE_ENV = 'test';
   try {
-    const profile = taskRunner.normalizeAgentRuntimeModel('claude-sonnet-5-5');
+    const profile = taskRunner.normalizeAgentRuntimeModel('totally-unknown-model-x9');
     const resolution = taskRunner.resolveAgentRuntimeClient(profile);
     assert.equal(resolution.client, null);
     assert.equal(resolution.provider, 'unconfigured');

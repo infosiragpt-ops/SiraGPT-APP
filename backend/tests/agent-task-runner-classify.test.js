@@ -271,16 +271,23 @@ test('normalizeAgentRuntimeModel: Gemini models keep their provider', () => {
 });
 
 test('normalizeAgentRuntimeModel: unknown bare names fall back to OpenAI default', () => {
-  const result = normalizeAgentRuntimeModel('claude-sonnet-4');
-  assert.equal(result.displayModel, 'claude-sonnet-4');
+  const result = normalizeAgentRuntimeModel('totally-unknown-model-x9');
+  assert.equal(result.displayModel, 'totally-unknown-model-x9');
   assert.ok(result.runtimeModel.includes('gpt-4o-mini'));
   assert.equal(result.runtimeProvider, 'openai-fallback');
   assert.equal(result.remapped, true);
 });
 
+test('normalizeAgentRuntimeModel: a bare claude-* id runs on Anthropic, never remapped', () => {
+  const result = normalizeAgentRuntimeModel('claude-sonnet-4');
+  assert.equal(result.runtimeModel, 'claude-sonnet-4');
+  assert.equal(result.runtimeProvider, 'selected-anthropic');
+  assert.equal(result.remapped, false);
+});
+
 test('normalizeAgentRuntimeModel: respects AGENT_TASK_RUNTIME_MODEL env override for unknown names', () => {
   process.env.AGENT_TASK_RUNTIME_MODEL = 'gpt-4.1-nano';
-  const result = normalizeAgentRuntimeModel('claude-opus');
+  const result = normalizeAgentRuntimeModel('totally-unknown-model-x9');
   assert.equal(result.runtimeModel, 'gpt-4.1-nano');
   delete process.env.AGENT_TASK_RUNTIME_MODEL;
 });
