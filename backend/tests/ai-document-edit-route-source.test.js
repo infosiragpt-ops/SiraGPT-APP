@@ -31,7 +31,8 @@ test('the picked model is resolved exactly like /generate and drives the editor 
   assert.match(route, /providerConnectionReady\(actualProvider\)/);
   assert.match(route, /modelRouter\.isPlanEligible\(catalogEntry\.plans, userPlan\)/);
   assert.match(route, /tryConsumePlanQuota\(/);
-  assert.match(route, /createProviderClientForRequest\(actualProvider, req, \{ customConnection, model: actualModel \}\)/);
+  // pinned: the picked model's own API — no same-model provider swap (AGENTS.md §13).
+  assert.match(route, /createProviderClientForRequest\(actualProvider, req, \{ customConnection, model: actualModel, pinned: true \}\)/);
   assert.match(route, /llm: \{ client, model: actualModel, provider: actualProvider, toolCallMode \}/);
 });
 

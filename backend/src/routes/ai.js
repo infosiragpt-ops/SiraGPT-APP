@@ -379,6 +379,10 @@ function createProviderClient(provider, opts = {}) {
       baseURL: "https://api.deepseek.com",
     }), {
       fallbackClientFactory: () => createProviderClient('OpenRouter'),
+      // A picked DeepSeek model runs on DeepSeek's own API: a billing/auth
+      // error surfaces (E_PROVIDER) instead of the same model via OpenRouter
+      // (AGENTS.md §13). Internal calls (compaction…) keep the fallback.
+      allowFallback: opts.pinned !== true,
     });
   }
 
@@ -3453,7 +3457,7 @@ router.post(
           failureReason: 'unconfigured',
         });
       }
-      let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
+      let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection, pinned: true });
       let openai = _providerResolution.client;
 
       // Plan gating — premium models are catalogued in model-router with an
@@ -4054,7 +4058,7 @@ router.post(
       }
 
       // ✅ Re-initialize OpenAI client with actualProvider
-      _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
+      _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection, pinned: true });
       openai = _providerResolution.client;
       if (_providerResolution.via === 'gateway') {
         generateLog.info('routing.gateway_selected', { success: true });
@@ -7067,7 +7071,11 @@ router.post(
       // visualization instead. Falls through to the normal stream on
       // refusal or error so the user never sees a blank reply.
       let artifactHandled = false;
-      if (!verifiedCodingWorkspace && artifactGenerator.isArtifactRequest(prompt)) {
+      // The visualization is written by the picked model; a text-only pick
+      // cannot read attached images, so that turn takes the normal stream
+      // (which reads them with a vision model and says so).
+      const __artifactHasImages = processedFiles.some((f) => f && f.mimeType && f.mimeType.startsWith('image/'));
+      if (!verifiedCodingWorkspace && artifactGenerator.isArtifactRequest(prompt) && (!__artifactHasImages || nativeVisionForTurn)) {
         turnProgress.settleAll();
         const __artifactHandle = turnProgress.begin('artifact', 'Diseñando la visualización interactiva', { tool: 'plan', kind: 'edit' });
         try {
@@ -7089,11 +7097,14 @@ router.post(
               generateLog.warnError('artifacts.vision_image_read_failed', readErr);
             }
           }
-          // Vision-capable model only when provider is OpenAI; gpt-4o
-          // is the reliable default for the visual understanding step.
-          const artifactOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+          // The model the user picked, on its own client (AGENTS.md §13). It
+          // used to be OpenAI gpt-4o-mini (gpt-4o with images) whatever the
+          // pick. A refusal or an error falls through to the normal stream,
+          // which runs on the pick too.
+          const artifactClient = createProviderClient(actualProvider, { customConnection, pinned: true });
           const art = await artifactGenerator.generate({
-            openai: artifactOpenai,
+            openai: artifactClient,
+            model: actualModel,
             userRequest: prompt,
             imageDataUrls,
             maxHtmlChars: 80000,
@@ -7439,7 +7450,7 @@ router.post(
                 // no silent substitution of a stronger model underneath. The
                 // chosen provider/model drives every step (plan → tools →
                 // finalize) in its own tool-call mode.
-                const agenticClient = createProviderClient(actualProvider, { customConnection });
+                const agenticClient = createProviderClient(actualProvider, { customConnection, pinned: true });
                 // Direct Claude: createProviderClient returns the first-party
                 // Anthropic client, which translates tools / tool_calls /
                 // role:'tool' to native tool_use blocks (first-party-chat-clients
@@ -7510,6 +7521,9 @@ router.post(
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
+                  // The user picked this model: tools that write visible text
+                  // use it too, and none of them switches provider.
+                  modelPinned: true,
                   progress: turnProgress,
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
@@ -8002,6 +8016,7 @@ router.post(
               reason: 'chat_attachment_recovery',
               provider: actualProvider,
               model: actualModel,
+              pinned: true,
             });
             const cleanRecovered = (recovered || '').trim();
             // A vision answer for an image turn can legitimately be short
@@ -8439,6 +8454,7 @@ router.post(
               reason: apiError?.message || 'stream_failed',
               provider: actualProvider,
               model: actualModel,
+              pinned: true,
             });
             const cleanRecovered = (recovered || '').trim();
             // A vision answer for an image turn can legitimately be short
@@ -10145,7 +10161,7 @@ router.post(
 
     let client;
     try {
-      client = createProviderClientForRequest(actualProvider, req, { customConnection, model: actualModel }).client;
+      client = createProviderClientForRequest(actualProvider, req, { customConnection, model: actualModel, pinned: true }).client;
     } catch (clientErr) {
       const classified = classifyGenerateError(clientErr);
       return res.status(503).json({ error: classified.code, message: classified.message });

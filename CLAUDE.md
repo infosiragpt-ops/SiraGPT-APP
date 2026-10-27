@@ -3198,3 +3198,37 @@ y las imágenes usan el modelo elegido. Este PR cubre las tareas agénticas
   - figma y gráficos: el front debe enviar el modelo (`lib/chat-context-integrated.tsx`, UI-lock
     autorizado por Luis).
   - Sub-agentes de codex: heredar `run.model`.
+## Fidelidad al modelo elegido — pasos secundarios del chat (added 2026-10-27)
+
+Segundo PR de fidelidad (AGENTS.md §13, I12): los pasos del chat alrededor del stream principal
+usan el modelo elegido. Memoria, compactación y jueces de intención siguen siendo internos, por
+decisión de Luis.
+- **DeepSeek sin cambio silencioso de proveedor.** `createProviderClient(provider, { pinned: true })`
+  pasa `allowFallback: false` a `wrapDeepSeekClient` (`ai/deepseek-billing-failover.js`):
+  - El wrapper sigue preparando las peticiones con herramientas para DeepSeek directo.
+  - Un error de saldo o de clave se propaga (`E_PROVIDER`) en vez de reintentar el mismo modelo
+    por OpenRouter, y sigue alimentando el memo.
+  - Llevan `pinned: true` el cliente del turno de `/generate` (las 2 llamadas), el loop agéntico
+    y la edición de documentos. La compactación (interna) conserva el respaldo.
+- **Rama de artefactos** («grafica…», «visualiza…»): la escribe el modelo elegido
+  (`createProviderClient(actualProvider, { customConnection, pinned: true })` + `model:
+  actualModel`). Antes era OpenAI `gpt-4o-mini`, o `gpt-4o` con imágenes, eligiera lo que
+  eligiera el usuario.
+  - Con imágenes adjuntas y un modelo elegido sin visión (`!nativeVisionForTurn`), el turno va por
+    el stream normal, que lee las imágenes con un modelo de visión y lo dice.
+  - Un rechazo o error del modelo elegido cae al stream normal, que también corre en él.
+- **Herramientas del loop agéntico:**
+  - `runAgenticChat({ modelPinned })` agrega al `ctx` `model`, `llm` (el cliente del modelo
+    elegido) y `modelPinned`. `ctx.openai` sigue siendo el cliente de RAG para embeddings; para un
+    Claude es un cliente OpenAI.
+  - `self_rag_answer` escribe con `ctx.llm`. Con `ctx.modelPinned` no recurre a la escalera de
+    memoria: el error vuelve como resultado de la herramienta.
+  - `describe_image` recibe el modelo elegido vía `ctx.model`.
+- **Recuperación de imágenes del chat** (`chat-attachment-recovery.js`, `pinned: true` desde
+  `ai.js`):
+  - Si el modelo elegido ve imágenes, es el único lector. Si falla, devuelve `''` para que el
+    error original (`E_PROVIDER`, con su causa) quede como respuesta y no lo tape el texto genérico
+    «visión no disponible».
+  - Un modelo elegido solo-texto sigue pasando la imagen a un modelo de visión.
+- Tests: `backend/tests/chat-model-fidelity.test.js` (6; los 6 fallan con el código anterior).
+  Actualizado `ai-document-edit-route-source` (contrato con `pinned: true`).

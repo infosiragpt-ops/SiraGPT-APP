@@ -2068,13 +2068,16 @@ const selfRagAnswer = {
       });
       // The picked model rides its own client first (feature engines follow
       // the picker). A hard-coded `gpt-4o-mini` on a non-OpenAI client was
-      // «404 The requested model was not found» in production. On a provider
-      // error the answer moves to the failover ladder instead of failing the
-      // step.
+      // «404 The requested model was not found» in production. `ctx.llm` is
+      // the loop model's client (`ctx.openai` is the RAG helpers' client: an
+      // OpenAI one for a Claude pick). A model the user picked answers or
+      // fails visibly (AGENTS.md §13); only unpicked runs move to the
+      // failover ladder on a provider error.
       let out;
       try {
-        out = await runWith(ctx.openai, ctx.model || 'gpt-4o-mini');
+        out = await runWith(ctx.llm || ctx.openai, ctx.model || 'gpt-4o-mini');
       } catch (primaryErr) {
+        if (ctx.modelPinned === true) throw primaryErr;
         const fallback = selfRagFailoverClient();
         if (!fallback || !isSelfRagProviderError(primaryErr)) throw primaryErr;
         ctx.onEvent?.({ type: 'tool_call', tool: 'self_rag_answer', preview: `Reintentando con otro proveedor (${previewText(primaryErr.message, 80)})` });
