@@ -15,7 +15,7 @@ export const AIGenerateRequestSchema = z.object({
   searchWeb: z.boolean().optional(),
   includeMemory: z.boolean().optional(),
   includeRag: z.boolean().optional(),
-  context: z.record(z.any()).optional(),
+  context: z.record(z.string(), z.any()).optional(),
 }).strict();
 
 export const AIStopStreamRequestSchema = z.object({

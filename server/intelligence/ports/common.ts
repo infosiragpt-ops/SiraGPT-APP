@@ -139,7 +139,7 @@ export const RequestEnvelopeSchema = z.object({
   /** Feature surface (e.g. "chat", "builder", "research"). Drives prompt layers. */
   feature: z.string().optional(),
   /** Opaque caller metadata, forwarded to telemetry. */
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type RequestEnvelope = z.infer<typeof RequestEnvelopeSchema>;
 

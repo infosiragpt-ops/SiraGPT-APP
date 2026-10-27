@@ -20,7 +20,7 @@ const generateRequestSchema = z.object({
 
 const intentRequestSchema = z.object({
   text: z.string().min(1).max(10000),
-  context: z.record(z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
 });
 
 const stopStreamSchema = z.object({

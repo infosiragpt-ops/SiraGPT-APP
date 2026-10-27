@@ -698,7 +698,7 @@ jobs:
           fi
           if git diff --quiet HEAD^1 HEAD -- package.json package-lock.json backend/package.json backend/package-lock.json \
               scripts/audit-production-allowlist.js scripts/audit-production-allowlist.json scripts/audit-backend-production.cjs \
-              scripts/lib/npm-audit-retry.cjs backend/scripts/image-size-security-patch.cjs; then
+              scripts/lib/npm-audit-retry.cjs backend/scripts/image-size-security-patch.cjs scripts/audit-backend-exceptions.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::No dependency or audit-policy change in this PR — npm audit runs on production-main pushes and nightly."
           else
@@ -1011,7 +1011,7 @@ jobs:
           fi
           if git diff --quiet HEAD^1 HEAD -- package.json package-lock.json backend/package.json backend/package-lock.json \
               scripts/audit-production-allowlist.js scripts/audit-production-allowlist.json scripts/audit-backend-production.cjs \
-              scripts/lib/npm-audit-retry.cjs backend/scripts/image-size-security-patch.cjs; then
+              scripts/lib/npm-audit-retry.cjs backend/scripts/image-size-security-patch.cjs scripts/audit-backend-exceptions.json; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "::notice::No dependency or audit-policy change in this PR — npm audit runs on production-main pushes and nightly."
           else

@@ -30,7 +30,7 @@ export const MemoryStoreRequestSchema = z.object({
   content: z.string().min(1).max(4096),
   category: z.string().max(128).optional(),
   importance: z.number().min(0).max(1).optional(),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 }).strict();
 
 export const WebSearchRequestSchema = z.object({
@@ -47,7 +47,7 @@ export const LangGraphRunRequestSchema = z.object({
     taskType: TaskTypeSchema.optional(),
   }),
   userId: z.string().max(128),
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 }).strict();
 
 export const MultiAgentTeamRequestSchema = z.object({
