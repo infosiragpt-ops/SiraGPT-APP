@@ -124,7 +124,7 @@ async function fixture(testContext, options = {}) {
         input.res.write(`data: ${JSON.stringify({ content: result.finalAnswer })}\n\n`);
         return result;
       },
-      isHandledAgenticChatResult: (result) => result.stoppedReason === 'finalized',
+      isHandledAgenticChatResult: require('../src/services/agentic-chat-stream').isHandledAgenticChatResult,
     },
     '../services/ai/picked-model-label': { resolvePickedModelLabel: async () => 'Modelo elegido' },
     '../services/ai/agentic-degrade-policy': agenticDegradePolicy,
@@ -309,6 +309,90 @@ async function fixture(testContext, options = {}) {
   };
   return { request, calls, events, projects, workspaceResolutions, agenticRuns, artifactRuns, plainRuns, nativeVisionRequests, persistedTurns, warnings, streamControllers, quotaEntered, quotaReleased };
 }
+
+test('a deferred link transcript keeps its delivery identity and empty-artifact state through route persistence', async (testContext) => {
+  const deliveryId = 'md_23ea207b-6170-482a-8022-62bca67b57a1';
+  const content = 'Recibí el audio. La transcripción sigue trabajando y se entregará aquí.';
+  const persistedContent = `\`\`\`agent-task-state\n${JSON.stringify({ steps: [], artifacts: [], done: true,
+    stoppedReason: 'media_delivery_handoff', finalText: content })}\n\`\`\`\n\n${content}`;
+  const harness = await fixture(testContext, { stopAfterReady: false, agenticResult: {
+    finalAnswer: content, persistedContent, artifacts: [], stoppedReason: 'media_delivery_handoff',
+    mediaDeliveryHandoff: deliveryId, transcriptionFileIds: ['audio-file-1'],
+  } });
+  const response = await harness.request({ prompt: 'Transcribe este enlace https://youtu.be/abc12345678' });
+  assert.equal(response.status, 200, response.text);
+  assert.equal(harness.agenticRuns.length, 1);
+  assert.equal(harness.plainRuns.length, 0, 'a durable handoff must never be regenerated as plain text');
+  assert.equal(harness.persistedTurns.length, 1);
+  const saved = harness.persistedTurns[0];
+  assert.equal(saved[3], persistedContent, 'reload retains the handoff state even with no completed artifacts');
+  assert.equal(saved[9].mediaDeliveryHandoff, deliveryId);
+  assert.deepEqual(Array.from(saved[9].transcriptionFileIds), ['audio-file-1']);
+  assert.equal(saved[9].stoppedReason, 'media_delivery_handoff');
+  assert.equal(saved[9].servedBy, 'media_batch', 'same-chat follow-ups can resolve the pending linked media');
+  assert.equal(saved[5], 'fixture-model', 'the selected model stays unchanged');
+  const ids = await require('../src/services/media-batch').resolveChatMediaFileIds({
+    chat: { findFirst: async ({ where }) => where.id === 'chat-first' && where.userId === 'owner' ? { id: where.id } : null },
+    message: {
+      findFirst: async ({ where }) => where.chatId === 'chat-first' && where.role === 'ASSISTANT'
+        && where.metadata.equals === saved[9].servedBy ? { metadata: saved[9], timestamp: new Date() } : null,
+      findMany: async () => [],
+    },
+    file: { findMany: async ({ where }) => where.userId === 'owner' && where.id.in.includes('audio-file-1')
+      ? [{ id: 'audio-file-1', userId: 'owner', mimeType: 'audio/mp4', originalName: 'linked.m4a', processingStage: 'extracting' }] : [] },
+  }, { userId: 'owner', chatId: 'chat-first' });
+  assert.deepEqual(Array.from(ids), ['audio-file-1'], 'pending linked media is discoverable before final delivery');
+});
+
+test('plain or malformed agent responses cannot manufacture a pending transcript identity', async (testContext) => {
+  for (const result of [
+    { stoppedReason: 'finalized' },
+    { stoppedReason: 'media_delivery_handoff', mediaDeliveryHandoff: 'invalid/delivery', transcriptionFileIds: ['audio-file-1'] },
+    { stoppedReason: 'media_delivery_handoff', mediaDeliveryHandoff: 'md-valid-looking', transcriptionFileIds: [] },
+    { stoppedReason: 'media_delivery_handoff', mediaDeliveryHandoff: 'md-valid-looking', transcriptionFileIds: ['../foreign-file'] },
+  ]) {
+    const harness = await fixture(testContext, { stopAfterReady: false, agenticResult: {
+      finalAnswer: 'La transcripción está pendiente según el texto recibido.', ...result,
+    } });
+    await harness.request({ prompt: 'Transcribe este enlace https://youtu.be/abc12345678' });
+    assert.equal(harness.persistedTurns.length, 1);
+    const metadata = harness.persistedTurns[0][9];
+    assert.equal(metadata.mediaDeliveryHandoff, undefined);
+    assert.equal(metadata.transcriptionFileIds, undefined);
+    assert.equal(metadata.servedBy, undefined);
+  }
+});
+
+test('mixed requests preserve accepted transcript jobs without replacing their real finalization outcome', async (testContext) => {
+  for (const stoppedReason of ['finalized', 'verification_failed:2/3', 'runtime_budget_exhausted']) {
+    const deliveryId = 'md_9bbc30c5-fd06-4d37-84ad-249f19d18b6e';
+    const content = stoppedReason === 'finalized'
+      ? 'La transcripción sigue en curso. El análisis solicitado necesita su texto completo.'
+      : 'La transcripción sigue en curso. No pude completar la verificación del análisis solicitado.';
+    const persistedContent = `\`\`\`agent-task-state\n${JSON.stringify({ steps: [], artifacts: [], done: true,
+      stoppedReason, error: stoppedReason !== 'finalized', finalText: content })}\n\`\`\`\n\n${content}`;
+    const harness = await fixture(testContext, { stopAfterReady: false, agenticResult: {
+      finalAnswer: content, persistedContent, artifacts: [], stoppedReason,
+      mediaDeliveryHandoff: deliveryId, transcriptionFileIds: ['mixed-audio-1'],
+    } });
+    const response = await harness.request({ prompt: 'Transcribe este enlace https://youtu.be/abc12345678 y analiza su contenido.' });
+    assert.equal(response.status, 200, response.text);
+    assert.equal(harness.agenticRuns.length, 1);
+    assert.equal(harness.plainRuns.length, 0);
+    assert.equal(harness.persistedTurns.length, 1);
+    const saved = harness.persistedTurns[0];
+    assert.equal(saved[9].mediaDeliveryHandoff, deliveryId, stoppedReason);
+    assert.deepEqual(Array.from(saved[9].transcriptionFileIds), ['mixed-audio-1']);
+    assert.equal(saved[9].stoppedReason, stoppedReason, 'a deferred subtask cannot report the whole request complete');
+    assert.equal(saved[9].servedBy, 'media_batch');
+    if (stoppedReason === 'runtime_budget_exhausted') {
+      assert.match(saved[3], /agotó el tiempo disponible/, 'keep the route\'s honest failure copy');
+      assert.ok(harness.events.some(event => event.code === 'E_TIMEOUT'));
+    } else {
+      assert.equal(saved[3], persistedContent, 'retain the real outcome and its pending delivery on reload');
+    }
+  }
+});
 
 test('first chat coding prompt provisions only after provider and quota preflight, then emits the bound workspace', async (testContext) => {
   const harness = await fixture(testContext);

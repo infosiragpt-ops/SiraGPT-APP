@@ -72,6 +72,7 @@ import { safeUUID } from "./safe-uuid"
 import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
 import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
+import { pendingMediaDeliveryRefreshKey } from "./media-delivery-refresh"
 import { awaitCancellableChatStep } from "./chat/turn-cancellation"
 import { mentionPayloadForGenerate } from "./apps-mentions"
 
@@ -1032,6 +1033,75 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     currentUserIdRef.current = user?.id ? String(user.id) : null
   }, [user?.id])
+
+  const pendingMediaDeliveryKey = useMemo(
+    () => pendingMediaDeliveryRefreshKey(currentChat?.messages), [currentChat?.messages],
+  )
+  const currentChatIsStreaming = Boolean(currentChat?.id && activeStreamingChatIds.includes(currentChat.id))
+  useEffect(() => {
+    const chatId = currentChat?.id
+    const ownerId = user?.id ? String(user.id) : null
+    if (!chatId || !ownerId || !isAuthenticated || !pendingMediaDeliveryKey || currentChatIsStreaming) return
+
+    let disposed = false
+    let poll: SerializedPreviewPollController | null = null
+    const ownsChat = () => !disposed && providerMountedRef.current
+      && currentUserIdRef.current === ownerId && currentChatRef.current?.id === chatId
+      && !activeStreamingChatIdsRef.current.has(chatId) && document.visibilityState !== 'hidden'
+    const stop = () => { poll?.stop(); poll = null }
+    const start = () => {
+      stop()
+      if (!ownsChat()) return
+      let consecutiveErrors = 0
+      // Long recordings may take hours. Keep checking durable results while
+      // this chat is visible, without starting another model turn or task.
+      poll = startSerializedPreviewPoll({
+        intervalMs: 30_000,
+        read: async (signal) => {
+          const response = await apiClient.getChat(chatId, { signal })
+          if (!response?.chat || response.chat.id !== chatId || !Array.isArray(response.chat.messages)) {
+            throw new Error('Invalid chat refresh response')
+          }
+          return response
+        },
+        isCurrent: ownsChat,
+        onValue: (response) => {
+          consecutiveErrors = 0
+          const freshChat = response.chat
+          const localChat = currentChatRef.current
+          if (!localChat || !ownsChat()) return false
+          const merged = mergeChatPreservingUserMessages(freshChat, localChat)
+          setCurrentChat(prev => prev?.id === chatId ? mergeChatPreservingUserMessages(freshChat, prev) : prev)
+          setChats(prev => prev.map(chat => chat.id === chatId ? mergeChatPreservingUserMessages(freshChat, chat) : chat))
+          return Boolean(pendingMediaDeliveryRefreshKey(merged.messages))
+        },
+        onError: (error: any) => {
+          const status = error?.status ?? error?.statusCode ?? error?.response?.status
+          if (error?.name === 'AbortError' || [401, 403, 404, 410].includes(status)) return false
+          // Back off failed reads without abandoning a durable result or
+          // retrying its work. Focus/connectivity recovery can resume sooner.
+          consecutiveErrors += 1
+          return true
+        },
+        schedule: (callback, delayMs) => setTimeout(callback, consecutiveErrors > 0
+          ? Math.min(120_000, 30_000 * (2 ** Math.min(3, consecutiveErrors - 1)))
+          : delayMs),
+        clear: (timer) => clearTimeout(timer),
+      })
+    }
+    const onVisibility = () => { if (document.visibilityState === 'hidden') stop(); else start() }
+    start()
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('focus', start)
+    window.addEventListener('online', start)
+    return () => {
+      disposed = true
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', start)
+      window.removeEventListener('online', start)
+    }
+  }, [currentChat?.id, user?.id, isAuthenticated, pendingMediaDeliveryKey, currentChatIsStreaming])
 
   const syncActiveStreamingState = useCallback(() => {
     const ids = Array.from(activeStreamingChatIdsRef.current)

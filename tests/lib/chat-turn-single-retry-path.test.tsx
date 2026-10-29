@@ -23,6 +23,11 @@ const streamBehaviour = vi.hoisted(() => ({
 }))
 
 const probe = vi.hoisted(() => ({ ctx: null as any }))
+const authState = vi.hoisted(() => ({
+  user: { id: 'user-1', name: 'Ana', email: 'ana@example.com' },
+  token: 'token-1',
+  isAuthenticated: true,
+}))
 
 // Any apiClient method the provider touches resolves to {} unless a test
 // sets it explicitly below.
@@ -34,11 +39,7 @@ const apiClientMock = vi.hoisted(() => new Proxy({} as Record<string, any>, {
 }))
 
 vi.mock('@/lib/auth-context-integrated', () => ({
-  useAuth: () => ({
-    user: { id: 'user-1', name: 'Ana', email: 'ana@example.com' },
-    token: 'token-1',
-    isAuthenticated: true,
-  }),
+  useAuth: () => authState,
 }))
 
 vi.mock('@/lib/api', () => ({ apiClient: apiClientMock }))
@@ -95,7 +96,7 @@ async function flush(ms = 0) {
 }
 
 async function mount() {
-  render(
+  const view = render(
     <ChatProvider>
       <Probe />
     </ChatProvider>,
@@ -105,7 +106,16 @@ async function mount() {
     probe.ctx.setCurrentChat({ ...CHAT, messages: [] })
   })
   await flush(10)
+  return view
 }
+
+const MEDIA_HANDOFF = { id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Te aviso aquí.', metadata: {
+  mediaDeliveryHandoff: 'md_delivery', transcriptionFileIds: ['video-1'], stoppedReason: 'media_delivery_handoff',
+} }
+const MEDIA_DELIVERED = { id: 'delivery-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Transcripción completa.', metadata: {
+  source: 'media-delivery', mediaDelivery: 'md_delivery', transcriptionFileIds: ['video-1'], artifacts: [{ filename: 'transcripcion.txt' }],
+} }
+const mediaReads = () => apiClientMock.getChat.mock.calls.filter((args: any[]) => args[1]?.signal)
 
 function postsFor(key: string): StreamCall[] {
   return streamCalls.filter((call) => call.data.idempotencyKey === key)
@@ -118,6 +128,7 @@ describe('ChatProvider: one retry path per failed turn', () => {
     streamCalls.length = 0
     streamBehaviour.next = []
     probe.ctx = null
+    authState.isAuthenticated = true
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -269,6 +280,184 @@ describe('ChatProvider: one retry path per failed turn', () => {
     expect(probe.ctx.currentChat.messages[2].files).toEqual(delivered.files)
     expect(apiClientMock.clearMessageById).not.toHaveBeenCalled()
     expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+  })
+
+  it.each(['persisted-object', 'persisted-json', 'live-envelope'] as const)(
+    'automatically receives a durable transcript after the stream has closed (%s)',
+    async (shape) => {
+      await mount()
+      const handoffMetadata = { mediaDeliveryHandoff: 'md_delivery', transcriptionFileIds: ['video-1'], stoppedReason: 'media_delivery_handoff' }
+      const messages = [
+        { id: 'user-1', chatId: CHAT.id, role: 'USER', content: 'Transcribe el video' },
+        { id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT', content: shape === 'live-envelope'
+          ? '```agent-task-state\n' + JSON.stringify({ done: true, ...handoffMetadata, finalText: 'Te aviso aquí.' }) + '\n```\nTe aviso aquí.'
+          : 'Te aviso aquí.', metadata: shape === 'live-envelope' ? undefined
+            : shape === 'persisted-json' ? JSON.stringify(handoffMetadata) : handoffMetadata },
+      ]
+      // Real media-delivery messages keep artifacts in metadata, not files.
+      const delivered = { id: 'delivery-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Transcripción completa.', metadata: {
+        source: 'media-delivery', mediaDelivery: 'md_delivery', transcriptionFileIds: ['video-1'],
+        artifacts: [{ id: 'transcript-1', filename: 'transcripcion.txt', url: '/api/artifacts/transcript-1' }],
+      } }
+      const optimistic = { id: 'msg-user-followup', chatId: CHAT.id, role: 'USER', content: 'Conserva las marcas de tiempo' }
+      const draft = [{ id: 'draft-file', name: 'siguiente.docx' }]
+      await act(async () => {
+        probe.ctx.setCurrentChat({ ...CHAT, messages: [...messages, optimistic] })
+        probe.ctx.setUploadedFiles(draft)
+      })
+      apiClientMock.getChat.mockClear()
+      apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages } })
+      await flush(30_000)
+      expect(apiClientMock.getChat).toHaveBeenCalledTimes(1)
+      apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [...messages, delivered] } })
+      await flush(30_000)
+      expect(probe.ctx.currentChat.messages).toEqual(expect.arrayContaining([delivered, optimistic]))
+      expect(probe.ctx.uploadedFiles).toEqual(draft)
+      expect(apiClientMock.clearMessageById).not.toHaveBeenCalled()
+      expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+      apiClientMock.getChat.mockClear()
+      await flush(120_000)
+      expect(apiClientMock.getChat).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps refreshing a batch until every transcription file has a terminal delivery', async () => {
+    await mount()
+    const messages = [
+      { id: 'user-1', chatId: CHAT.id, role: 'USER', content: 'Transcribe ambos videos' },
+      { id: 'handoff-1', chatId: CHAT.id, role: 'ASSISTANT', content: 'Te aviso aquí.', metadata: {
+        mediaDeliveryHandoff: 'md_first', transcriptionFileIds: ['video-1', 'video-2'], stoppedReason: 'media_delivery_handoff',
+      } },
+    ]
+    const delivered = (id: string, fileId: string, reason: string) => ({ id, chatId: CHAT.id, role: 'ASSISTANT', content: reason,
+      metadata: { source: 'media-delivery', mediaDelivery: id, transcriptionFileIds: [fileId], stoppedReason: reason } })
+    const first = delivered('md_first', 'video-1', 'transcription_completed')
+    const second = delivered('md_second', 'video-2', 'transcription_failed')
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages }) })
+    apiClientMock.getChat.mockClear()
+    apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [...messages, first] } })
+    await flush(30_000)
+    expect(probe.ctx.currentChat.messages).toContainEqual(first)
+    apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [...messages, first, second] } })
+    await flush(30_000)
+    expect(apiClientMock.getChat).toHaveBeenCalledTimes(2)
+    expect(probe.ctx.currentChat.messages).toContainEqual(second)
+    apiClientMock.getChat.mockClear()
+    await flush(120_000)
+    expect(apiClientMock.getChat).not.toHaveBeenCalled()
+  })
+
+  it('pauses hidden chats, ignores the cancelled response and resumes when visible', async () => {
+    await mount()
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages: [MEDIA_HANDOFF] }) })
+    await flush(60_000)
+    expect(mediaReads()).toHaveLength(0)
+    visibility.mockReturnValue('visible')
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    let release!: (response: any) => void
+    apiClientMock.getChat.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    await flush(30_000)
+    expect(mediaReads()).toHaveLength(1)
+    await flush(90_000)
+    expect(mediaReads()).toHaveLength(1) // A slow read never overlaps another.
+    visibility.mockReturnValue('hidden')
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(mediaReads()[0][1].signal.aborted).toBe(true)
+    await act(async () => { release({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } }) })
+    expect(probe.ctx.currentChat.messages).toEqual([MEDIA_HANDOFF])
+    visibility.mockReturnValue('visible')
+    apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } })
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    await flush(30_000)
+    expect(probe.ctx.currentChat.messages).toContainEqual(MEDIA_DELIVERED)
+  })
+
+  it.each(['navigate', 'logout', 'unmount'] as const)('cancels media refresh ownership on %s', async (action) => {
+    const view = await mount()
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages: [MEDIA_HANDOFF] }) })
+    let release!: (response: any) => void
+    apiClientMock.getChat.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    await flush(30_000)
+    const signal = mediaReads()[0][1].signal
+    const other = { id: 'other-chat', title: 'Otro', messages: [] }
+    await act(async () => {
+      if (action === 'navigate') probe.ctx.setCurrentChat(other)
+      if (action === 'logout') {
+        authState.isAuthenticated = false
+        view.rerender(<ChatProvider><Probe /></ChatProvider>)
+      }
+      if (action === 'unmount') view.unmount()
+    })
+    expect(signal.aborted).toBe(true)
+    await act(async () => { release({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } }) })
+    await flush(120_000)
+    expect(mediaReads()).toHaveLength(1)
+    if (action === 'navigate') expect(probe.ctx.currentChat).toEqual(other)
+    if (action === 'logout') expect(probe.ctx.currentChat?.messages || []).not.toContainEqual(MEDIA_DELIVERED)
+  })
+
+  it('does not let a late refresh interrupt a new streamed reply, and resumes after it closes', async () => {
+    await mount()
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages: [MEDIA_HANDOFF] }) })
+    let release!: (response: any) => void
+    apiClientMock.getChat.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    await flush(30_000)
+    const signal = mediaReads()[0][1].signal
+    let finish!: () => Promise<void>
+    apiClientMock.generateAIStream.mockImplementationOnce(async (_data: any, onData: any, onClose: any) => new Promise<void>(resolve => {
+      finish = async () => { onData('Respuesta nueva'); await onClose(); resolve() }
+    }))
+    let turn!: Promise<void>
+    await act(async () => { turn = probe.ctx.addMessage('También conserva las marcas', [], probe.ctx.currentChat, false, 'text') })
+    expect(signal.aborted).toBe(true)
+    await act(async () => { release({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } }) })
+    await flush(60_000)
+    expect(mediaReads()).toHaveLength(1)
+    expect(probe.ctx.currentChat.messages).not.toContainEqual(MEDIA_DELIVERED)
+    expect(probe.ctx.currentChat.messages.some((message: any) => message.content === 'También conserva las marcas')).toBe(true)
+    await act(async () => { await finish(); await turn })
+    apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } })
+    await flush(30_000)
+    expect(probe.ctx.currentChat.messages).toContainEqual(MEDIA_DELIVERED)
+    expect(probe.ctx.currentChat.messages.some((message: any) => message.content === 'También conserva las marcas')).toBe(true)
+    expect(probe.ctx.currentChat.messages.some((message: any) => message.content === 'Respuesta nueva')).toBe(true)
+  })
+
+  it('waits through hours of legitimate processing without resubmitting a transcription', async () => {
+    await mount()
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages: [MEDIA_HANDOFF] }) })
+    await flush(3 * 60 * 60_000)
+    expect(mediaReads()).toHaveLength(360)
+    expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+    apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } })
+    await flush(30_000)
+    expect(probe.ctx.currentChat.messages).toContainEqual(MEDIA_DELIVERED)
+  })
+
+  it.each(['server-error', 'invalid-shape'] as const)('backs off %s and recovers without requiring user activity', async (failure) => {
+    await mount()
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages: [MEDIA_HANDOFF] }) })
+    if (failure === 'server-error') apiClientMock.getChat.mockRejectedValue(Object.assign(new Error('offline'), { status: 500 }))
+    else apiClientMock.getChat.mockResolvedValue({ chat: { id: 'unexpected-chat', messages: [] } })
+    await flush(30_000)
+    expect(mediaReads()).toHaveLength(1)
+    await flush(60_000)
+    expect(mediaReads()).toHaveLength(2)
+    await flush(270_000)
+    expect(mediaReads()).toHaveLength(5)
+    apiClientMock.getChat.mockResolvedValue({ chat: { ...CHAT, messages: [MEDIA_HANDOFF, MEDIA_DELIVERED] } })
+    await flush(120_000)
+    expect(probe.ctx.currentChat.messages).toContainEqual(MEDIA_DELIVERED)
+    expect(apiClientMock.generateAIStream).not.toHaveBeenCalled()
+  })
+
+  it.each([401, 403, 404, 410])('stops automatic refresh after a terminal HTTP %s response', async (status) => {
+    await mount()
+    await act(async () => { probe.ctx.setCurrentChat({ ...CHAT, messages: [MEDIA_HANDOFF] }) })
+    apiClientMock.getChat.mockRejectedValue(Object.assign(new Error('unavailable'), { status }))
+    await flush(5 * 60_000)
+    expect(mediaReads()).toHaveLength(1)
   })
 
   it('keeps the handoff and later turns if its refresh fails', async () => {

@@ -776,6 +776,7 @@ const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|
 // "No puedo crear la presentación debido a limitaciones técnicas".
 const HANDLED_AGENTIC_STOP_REASONS = new Set([
   'finalized',
+  'media_delivery_handoff',
   'plain_text_finalize',
   'finalized_last_step_guard_override',
   'source_preserving_document_edit',
@@ -1072,11 +1073,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   function buildPersistedContent(state, finalAnswer) {
     const answer = String(finalAnswer || '').trim();
     const artifacts = Array.isArray(state?.artifacts) ? state.artifacts : [];
-    if (artifacts.length === 0) return answer;
+    if (artifacts.length === 0 && !state?.meta?.mediaDeliveryHandoff) return answer;
 
     // The live sentinel contains the complete, frequently-updated timeline.
     // History already hydrates that timeline from agent_metadata, so persist
-    // only the deliverables required to rebuild preview/download cards after a
+    // only the deliverables and pending delivery references required after a
     // reload. This keeps the message compact and avoids billing UI state as
     // model output tokens.
     const persistedState = {
@@ -3159,6 +3160,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           checkToolBudget: (name, usage) => checkWebToolBudget(name, usage, { searches: webLookupLimit, reads: webReadLimit }),
         },
         finalizeGuard: composedFinalizeGuard,
+        resolveToolCompletion: !codingWorkspace && !artifactDeliveryContract.active
+          ? require('./agents/media-delivery-handoff').createMediaDeliveryCompletionPolicy({
+            prompt: userQuery, history, files: preloopFileIds,
+            requiredTools: executionProfile.requiredTools, requestBrief,
+          })
+          : null,
         onBeforeStep: async (step) => {
           if (githubHandoff.pending) return { stop: true, reason: 'github_connection_required' };
           return __coworkRun ? beforeCoworkStep(step) : null;
@@ -3247,6 +3254,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         // Walk the actions in reverse and attach status to the most-recent
         // matching running step so an output lines up with its start.
         const actions = Array.isArray(stepRec?.actions) ? stepRec.actions : [];
+        // Tracking a real background job is independent of finishing this
+        // turn: mixed requests keep their normal guards and failure state.
+        Object.assign(state.meta, require('./agents/media-delivery-handoff').collectMediaDeliveryReferences({
+          ...(state.meta.mediaDeliveryHandoff ? {
+            mediaDeliveryHandoff: state.meta.mediaDeliveryHandoff,
+            transcriptionFileIds: state.meta.transcriptionFileIds,
+          } : {}),
+        }, actions));
         for (const action of actions) await githubHandoff.observe(action?.tool, action?.observation);
         for (let i = actions.length - 1; i >= 0; i--) {
           const a = actions[i];
@@ -3515,6 +3530,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       finalAnswer,
       persistedContent: buildPersistedContent(state, finalAnswer),
       stoppedReason,
+      ...(state.meta.mediaDeliveryHandoff ? {
+        mediaDeliveryHandoff: state.meta.mediaDeliveryHandoff,
+        transcriptionFileIds: state.meta.transcriptionFileIds,
+      } : {}),
       steps: result?.steps || [],
       artifacts: state.artifacts,
       agentRun,

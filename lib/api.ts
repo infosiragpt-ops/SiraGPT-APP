@@ -1978,8 +1978,8 @@ class ApiClient {
     });
   }
 
-  async getChat(id: string): Promise<any> {
-    return this.request(`/chats/${id}`);
+  async getChat(id: string, options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request(`/chats/${id}`, { signal: options?.signal });
   }
 
   /**

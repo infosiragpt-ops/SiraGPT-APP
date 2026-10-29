@@ -984,6 +984,10 @@ async function run(openai, opts) {
     model = 'gpt-4o',
     extraSystem = '',
     finalizeGuard = null,
+    // Trusted caller policy may finish a turn from an executed tool result
+    // (e.g. a durable job acknowledgement), without asking the model to invent
+    // a final answer for work that will complete asynchronously.
+    resolveToolCompletion = null,
     initialToolChoice = null,
     toolCallMode = 'native',
     // Capability-gated: when true the native payload carries
@@ -1163,6 +1167,7 @@ async function run(openai, opts) {
 
   const steps = [];
   let finalAnswer = null;
+  let completionMetadata = null;
   let stoppedReason = 'max_steps';
   let startedAt = Date.now();
 
@@ -2108,6 +2113,25 @@ async function run(openai, opts) {
       });
       if (verificationStopped) break;
 
+      if (!toolFailed && toolName !== 'finalize' && typeof resolveToolCompletion === 'function' && !ctx?.signal?.aborted) {
+        let completion = null;
+        try {
+          completion = await resolveToolCompletion({
+            toolName, result: observation, ctx,
+            steps: steps.concat([stepRecord]),
+            remainingToolNames: toolCalls.slice(toolCalls.indexOf(call) + 1).map(item => item.function?.name),
+          });
+        } catch { /* No trusted completion: retain the normal verification path. */ }
+        if (!ctx?.signal?.aborted && typeof completion?.finalAnswer === 'string' && completion.finalAnswer.trim()
+            && typeof completion.stoppedReason === 'string' && completion.stoppedReason) {
+          finalAnswer = completion.finalAnswer;
+          stoppedReason = completion.stoppedReason;
+          completionMetadata = completion.metadata || null;
+          finalized = true;
+          break;
+        }
+      }
+
       // Remember successful read-only results so an identical repeat can be
       // served from cache (see the duplicate short-circuit above).
       if (!toolFailed && toolName !== 'finalize' && isCacheableTool(toolName, registry)
@@ -2200,7 +2224,8 @@ async function run(openai, opts) {
     };
   }
 
-  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft, modelError };
+  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools), unverifiedDraft, modelError,
+    ...(completionMetadata ? { completionMetadata } : {}) };
 }
 
 module.exports = {

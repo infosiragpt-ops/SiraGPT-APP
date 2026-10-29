@@ -42,6 +42,8 @@ export type AgentTaskContentInfo = {
   error: boolean;
   taskId?: string;
   stoppedReason?: string;
+  mediaDeliveryHandoff?: string;
+  transcriptionFileIds?: string[];
   finalTextLength: number;
   trailingTextLength: number;
   visibleTextLength: number;
@@ -92,6 +94,12 @@ export const parseAgentTaskContent = (value: unknown): AgentTaskContentInfo => {
     error,
     taskId,
     ...(typeof state?.stoppedReason === 'string' ? { stoppedReason: state.stoppedReason } : {}),
+    ...(typeof (state?.mediaDeliveryHandoff ?? meta?.mediaDeliveryHandoff) === 'string'
+      ? { mediaDeliveryHandoff: (state?.mediaDeliveryHandoff ?? meta?.mediaDeliveryHandoff) as string } : {}),
+    ...(Array.isArray(state?.transcriptionFileIds ?? meta?.transcriptionFileIds)
+      ? { transcriptionFileIds: ((state?.transcriptionFileIds ?? meta?.transcriptionFileIds) as unknown[])
+        .filter((id): id is string => typeof id === 'string') }
+      : {}),
     finalTextLength: finalText.length,
     trailingTextLength: trailingText.length,
     visibleTextLength: visibleText.length,
@@ -183,6 +191,12 @@ const sameUserContent = (a: ChatMessageLike, b: ChatMessageLike) => {
   return ta.replace(/\s+/g, ' ') === tb.replace(/\s+/g, ' ');
 };
 
+const mediaDeliveryKey = (message: ChatMessageLike) => {
+  const metadata = parseTurnMetadata(message.metadata);
+  return metadata.source === 'media-delivery'
+    ? String(metadata.mediaDelivery || message.id || 'media-delivery') : '';
+};
+
 export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageLike>(
   incomingMessages: TMessage[] = [],
   localMessages: TMessage[] = [],
@@ -202,7 +216,7 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
   const localAssistantsByTurn = new Map<string, TMessage>();
   for (const message of localMessages) {
     if (!message?.role || isUserMessage(message)) continue;
-    localAssistantsByOrdinal.push(message);
+    if (!mediaDeliveryKey(message)) localAssistantsByOrdinal.push(message);
     const turn = turnIdentityKey(message);
     if (!turn) continue;
     const key = `${String(message.role).toUpperCase()}:${turn}`;
@@ -267,20 +281,21 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
     // guards against partial saves where the server returns a
     // truncated version of the assistant message.
     if (incoming?.role) {
-      asstOrdinal += 1;
+      const incomingDelivery = mediaDeliveryKey(incoming);
+      if (!incomingDelivery) asstOrdinal += 1;
       const incomingTurn = turnIdentityKey(incoming);
       const byId = incoming.id ? localById.get(incoming.id) : undefined;
       const byTurn = incomingTurn
         ? localAssistantsByTurn.get(`${String(incoming.role).toUpperCase()}:${incomingTurn}`)
         : undefined;
-      const byOrdinal = localAssistantsByOrdinal[asstOrdinal];
-      const compatibleTurn = (candidate: TMessage | undefined) => candidate && (
-        !incomingTurn || !turnIdentityKey(candidate) || turnIdentityKey(candidate) === incomingTurn
-      );
+      const byOrdinal = incomingDelivery ? undefined : localAssistantsByOrdinal[asstOrdinal];
+      const compatibleTurn = (candidate: TMessage | undefined) => candidate
+        && incomingDelivery === mediaDeliveryKey(candidate)
+        && (!incomingTurn || !turnIdentityKey(candidate) || turnIdentityKey(candidate) === incomingTurn);
       // Keep legacy ordinal recovery for messages without turn metadata, but
       // never graft an earlier answer or its files onto a different known turn.
       const localMatch = (compatibleTurn(byId) ? byId : undefined)
-        || byTurn
+        || (compatibleTurn(byTurn) ? byTurn : undefined)
         || (compatibleTurn(byOrdinal) ? byOrdinal : undefined);
       if (!localMatch) return incoming;
 
@@ -788,10 +803,39 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
 ): TMessage[] {
   if (!localMessages.length) return enriched;
 
-  const incomingAssistantCount = enriched.filter(m => m?.role && !isUserMessage(m)).length;
+  // A slower GET can still omit a durable delivery already shown locally.
+  // Restore only its explicit service identity, before the next surviving
+  // local row, so it cannot disappear or start its handoff polling again.
+  const visibleById = new Map(enriched.filter(m => m.id).map(m => [m.id, m]));
+  const visibleDeliveries = new Map(enriched.filter(m => mediaDeliveryKey(m))
+    .map(m => [mediaDeliveryKey(m), m]));
+  let nextVisible: TMessage | undefined;
+  let restoredDelivery = false;
+  for (let index = localMessages.length - 1; index >= 0; index--) {
+    const local = localMessages[index];
+    const deliveryKey = mediaDeliveryKey(local);
+    const visible = (local.id ? visibleById.get(local.id) : undefined)
+      || (deliveryKey ? visibleDeliveries.get(deliveryKey) : undefined);
+    if (visible) {
+      nextVisible = visible;
+    } else if (deliveryKey) {
+      if (!restoredDelivery) enriched = [...enriched];
+      restoredDelivery = true;
+      const at = nextVisible ? enriched.indexOf(nextVisible) : -1;
+      enriched.splice(at >= 0 ? at : enriched.length, 0, local);
+      visibleDeliveries.set(deliveryKey, local);
+      if (local.id) visibleById.set(local.id, local);
+      nextVisible = local;
+    }
+  }
+
+  // Durable media messages arrive independently of normal reply ordinals.
+  // Counting them as replies would discard a newer optimistic answer.
+  const isTurnAssistant = (m: TMessage) => m?.role && !isUserMessage(m) && !mediaDeliveryKey(m);
+  const incomingAssistantCount = enriched.filter(isTurnAssistant).length;
   const localAssistants: TMessage[] = [];
   for (const m of localMessages) {
-    if (m?.role && !isUserMessage(m)) localAssistants.push(m);
+    if (isTurnAssistant(m)) localAssistants.push(m);
   }
 
   // Pass 3a: If the server returned the same number of assistant messages
@@ -800,10 +844,10 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
   // the race where the backend saved a partial/stub assistant message
   // (e.g. just the first few tokens) while the client has the full stream.
   if (localAssistants.length === incomingAssistantCount && incomingAssistantCount > 0) {
-    const incomingAssistants = enriched.filter(m => m?.role && !isUserMessage(m));
+    const incomingAssistants = enriched.filter(isTurnAssistant);
     let patched = false;
     const patchedEnriched = enriched.map((m) => {
-      if (!m?.role || isUserMessage(m)) return m;
+      if (!isTurnAssistant(m)) return m;
       const idx = incomingAssistants.indexOf(m);
       if (idx === -1) return m;
       const localVersion = localAssistants[idx];
