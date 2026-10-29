@@ -900,9 +900,20 @@ export function buildIntentAttributionGraph(
 const LIGHTWEIGHT_CHAT_RE =
   /^(hola|hello|hi|hey|buenas|buenos dias|buenos días|buenas tardes|buenas noches|que tal|qué tal|como estas|cómo estás|gracias|ok|okay|vale|si|sí|no)[\s.!?¿¡]*$/i
 
+// Same bounded predicate as backend/services/media-link-context. The server
+// resolves the actual source from user turns; the client must not disable tools
+// merely because "Transcribir este enlace" contains only three words.
+export function isLinkTranscriptionRequest(prompt: string): boolean {
+  const text = String(prompt || '').slice(0, 8000).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  return /\b(?:transcri\w*|transcirb\w*|trascri\w*|trasncri\w*|subtitul\w*)\b/.test(text)
+    && /\b(?:enlace|link|url|youtube|youtu)\b|https?:\/\//.test(text)
+    && !/\b(?:como\s+(?:(?:puedo|se)\s+)?(?:transcri|trascri|subtitul)|no\s+(?:(?:quiero|lo|la)\s+)?(?:transcri|trascri|subtitul))/.test(text)
+}
+
 export function isLightweightConversationalPrompt(prompt: string): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return true
+  if (isLinkTranscriptionRequest(prompt)) return false
   if (LIGHTWEIGHT_CHAT_RE.test(normalized)) return true
 
   const words = normalized.split(/\s+/).filter(Boolean)
@@ -1150,6 +1161,7 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (isGeneratedArtifactReadRequest(prompt)) return 'agent_task'
 
   if (GOAL_COMMAND_RE.test(prompt)) return 'agent_task'
+  if (isLinkTranscriptionRequest(prompt)) return 'web_search'
 
   // Ambiguous comes first — under-specified prompts route to the
   // clarifying-question contract rather than being guessed at as 'text'.

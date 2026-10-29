@@ -139,6 +139,116 @@ test('a missing or throttled yt-dlp still reaches the browser rungs', async () =
   assert.ok(tool.DISCOVERY_ELIGIBLE.has('ytdlp_missing'));
 });
 
+test('captured audio survives asynchronous capture, conversion and transcription on every fallback path', async (t) => {
+  const stream = 'https://cdn.class.com/v/capture-fixture.m3u8';
+  const routes = [
+    ['browser', {}],
+    ['computer', { computer: {
+      available: async () => true,
+      discover: async () => ({ session: { id: 'capture-test' }, disc: { reason: 'no_media_found', candidates: [], loginWall: false } }),
+    } }],
+    ['download failure', { runner: { probeOk: new Set([PAGE]), download: false } }],
+    ['stream failure', { discoverMedia: async () => ({ candidates: [{ url: stream, kind: 'hls' }], loginWall: false }) }],
+  ];
+  for (const [route, options] of routes) await t.test(route, async (t) => {
+    const d = deps(options);
+    t.after(() => fs.promises.rm(d.deps.tmpDir, { recursive: true, force: true }));
+    const events = [];
+    let captures = 0;
+    let cleanupStarted = false;
+    d.deps.fs = { ...fs, promises: { ...fs.promises, rm: async (...args) => {
+      cleanupStarted = true;
+      events.push('cleanup');
+      return fs.promises.rm(...args);
+    } } };
+    d.deps.capture = async (_url, _ctx, opts) => {
+      captures++;
+      await new Promise(setImmediate);
+      assert.equal(cleanupStarted, false, 'capture must finish before cleanup');
+      await fs.promises.writeFile(opts.outPath, 'captured audio');
+      events.push('capture');
+      return { ok: true, seconds: 60, stopped: 'range_end', browser: route === 'computer' ? 'computer' : 'browser' };
+    };
+    const originalRun = d.deps.runCommand;
+    d.deps.runCommand = async (bin, args, opts) => {
+      if (bin !== 'ffmpeg') return originalRun(bin, args, opts);
+      if (args.includes('-headers')) return { code: 1, stderr: 'Server returned 403 Forbidden', stdout: '' };
+      await new Promise(setImmediate);
+      assert.equal(cleanupStarted, false, 'conversion must finish before cleanup');
+      assert.equal(await fs.promises.readFile(args[args.indexOf('-i') + 1], 'utf8'), 'captured audio');
+      await fs.promises.writeFile(args.at(-1), 'converted audio');
+      events.push('conversion');
+      return { code: 0, stderr: '', stdout: '' };
+    };
+    d.deps.transcribe = async (file) => {
+      await new Promise(setImmediate);
+      assert.equal(cleanupStarted, false, 'transcription must finish before cleanup');
+      assert.equal(await fs.promises.readFile(file, 'utf8'), 'converted audio');
+      events.push('transcription');
+      return { ok: true, language: 'es', transcript: 'La grabación explica el análisis de costos.', segments: [] };
+    };
+    const result = await tool.executeTranscribeUrl({ url: PAGE, start: 0, end: 60 }, { userId: 'u1', chatId: 'c1' }, d.deps);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.match(result.via, /\+capture$/);
+    assert.equal(captures, 1, 'the fallback must not recapture');
+    assert.deepEqual(events, ['capture', 'conversion', 'transcription', 'cleanup']);
+    assert.deepEqual(fs.readdirSync(d.deps.tmpDir), []);
+  });
+});
+
+test('cancelling capture or its transcription preserves AbortError and cleans only after the consumer stops', { timeout: 5000 }, async (t) => {
+  for (const stage of ['capture', 'transcription']) await t.test(stage, async (t) => {
+    const d = deps({ runner: { probeOk: new Set([PAGE]), download: false } });
+    t.after(() => fs.promises.rm(d.deps.tmpDir, { recursive: true, force: true }));
+    const controller = new AbortController();
+    const cancellation = Object.assign(new Error('test cancellation'), { name: 'AbortError', code: 'ABORT_ERR' });
+    let notifyStarted;
+    const started = new Promise((resolve) => { notifyStarted = resolve; });
+    let consumerStopped = false;
+    let prematureCleanup = false;
+    let cleanupCalls = 0;
+    let captures = 0;
+    let deliveries = 0;
+    d.deps.fs = { ...fs, promises: { ...fs.promises, rm: async (...args) => {
+      cleanupCalls++;
+      prematureCleanup ||= !consumerStopped;
+      return fs.promises.rm(...args);
+    } } };
+    const waitForCancellation = async (file, signal) => {
+      assert.equal(signal, controller.signal);
+      try {
+        await new Promise((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          notifyStarted();
+        });
+      } finally {
+        await new Promise(setImmediate);
+        assert.ok((await fs.promises.readFile(file)).length, 'the cancelled consumer still owns its input until it stops');
+        consumerStopped = true;
+      }
+    };
+    d.deps.capture = async (_url, _ctx, opts) => {
+      captures++;
+      await fs.promises.writeFile(opts.outPath, 'captured audio');
+      if (stage === 'capture') await waitForCancellation(opts.outPath, opts.signal);
+      return { ok: true, seconds: 60, stopped: 'range_end', browser: 'browser' };
+    };
+    d.deps.transcribe = async (file, _mime, _name, opts) => waitForCancellation(file, opts.signal);
+    d.deps.saveArtifact = () => { deliveries++; throw new Error('cancelled work must not deliver an artifact'); };
+    const result = tool.executeTranscribeUrl({ url: PAGE, start: 0, end: 60 }, { signal: controller.signal }, d.deps);
+    const rejected = assert.rejects(result, (err) => err === cancellation);
+    await started;
+    controller.abort(cancellation);
+    await rejected;
+    assert.equal(consumerStopped, true);
+    assert.equal(prematureCleanup, false);
+    assert.equal(cleanupCalls, 1);
+    assert.equal(captures, 1, 'cancellation must not start a second capture');
+    assert.equal(deliveries, 0);
+    assert.deepEqual(fs.readdirSync(d.deps.tmpDir), []);
+  });
+});
+
 test('capture rate: real time when it fits the budget, up to the cap, null beyond it', () => {
   assert.equal(capture.pickCaptureRate(600, 20 * 60_000), 1);
   assert.equal(capture.pickCaptureRate(1800, 20 * 60_000), 1.5);
