@@ -1,6 +1,6 @@
 'use strict';
 
-const { isLinkTranscriptionRequest, resolveMediaLinkContext } = require('../media-link-context');
+const { isLinkTranscriptionRequest, extractMediaLinkSources, resolveMediaLinkContext } = require('../media-link-context');
 
 // This is permission to stop, not an intent router. Recognize only a complete,
 // simple transcription request; unfamiliar wording keeps normal verification.
@@ -19,16 +19,10 @@ function createMediaDeliveryCompletionPolicy({ prompt, history = [], files = [],
   if ((Array.isArray(files) && files.length) || requiredTools.some(name => name !== 'transcribe_url')
       || (requestBrief?.deliverable?.kind && requestBrief.deliverable.kind !== 'transcription')
       || !isLinkTranscriptionRequest(prompt)) return null;
-  const urls = [];
-  let invalidUrl = false;
-  const remaining = String(prompt || '').replace(/(?:https?:\/\/|(?:(?:www\.|m\.)?youtube\.com|youtu\.be)\/)[^\s<>"'`\]]+/gi, raw => {
-    const source = resolveMediaLinkContext({ prompt: `Transcribir ${raw}` });
-    if (!source) invalidUrl = true;
-    else urls.push(source.url);
-    return ' enlace ';
-  });
-  if (invalidUrl) return null;
+  const { urls, remaining, invalid, truncated, seen } = extractMediaLinkSources(prompt);
+  if (invalid || truncated) return null;
   if (!urls.length) {
+    if (seen) return null;
     const source = resolveMediaLinkContext({ prompt, history, files });
     if (!source) return null;
     urls.push(source.url);

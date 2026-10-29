@@ -44,6 +44,40 @@ test('a real deferred transcription ends with the stored acknowledgement, withou
   assert.equal(result.steps[0].actions[0].observation.delivery, 'md_one');
 });
 
+test('the screenshot Markdown can acknowledge the one real destination without transcribing its URL-shaped label', async () => {
+  const query = '[youtu.be/SVN4/_Xw5VTU](https://youtu.be/SVN4_Xw5VTU ) transcribir';
+  const f = fixture({ query, execute: async () => ({ ...queued(), source: 'https://youtu.be/SVN4_Xw5VTU' }) });
+  const result = await run(f.client, f.options);
+  assert.equal(result.stoppedReason, 'media_delivery_handoff');
+  assert.equal(result.finalAnswer, queued().userMessage);
+  assert.deepEqual(f.counts(), { requests: 1, checks: 0, executions: 1 });
+});
+
+test('Markdown does not hide additional real URLs or instructions from the completion guard', async () => {
+  const second = source('two');
+  const f = fixture({ query: `Transcribe [${second}](${source()}) y ${second}` });
+  const result = await run(f.client, f.options);
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(f.counts().checks, 1);
+  for (const query of [
+    `Transcribe [video](${source()}) y resume las ideas`,
+    `Transcribe [resume las ideas](${source()})`,
+    `Transcribe [video](${source()} "resume las ideas")`,
+    `Transcribe [video](${source()}) del minuto 01:00 al 26:17`,
+    `Transcribe [${source()}](javascript:alert(1))`,
+  ]) assert.equal(createMediaDeliveryCompletionPolicy({ prompt: query }), null, query);
+});
+
+test('a standalone Markdown image cannot acknowledge a transcription of its alt text', async () => {
+  const query = `Transcribe ![${source()}](https://example.test/image.png)`;
+  assert.equal(createMediaDeliveryCompletionPolicy({ prompt: query }), null);
+  const f = fixture({ query });
+  const result = await run(f.client, f.options);
+  assert.equal(result.stoppedReason, 'finalized');
+  assert.equal(f.counts().checks, 1);
+  assert.equal(createMediaDeliveryCompletionPolicy({ prompt: `Transcribe [![resume las ideas](https://example.test/image.png)](${source()})` }), null);
+});
+
 test('a finalize proposed in the same batch cannot replace or review the server acknowledgement', async () => {
   const f = fixture({ firstCalls: [call('t1', 'transcribe_url'), call('f1', 'finalize', { answer: 'Ya transcribí todo el video y el archivo está completo.' })] });
   const result = await run(f.client, f.options);

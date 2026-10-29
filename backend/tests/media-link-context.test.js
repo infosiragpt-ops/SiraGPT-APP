@@ -4,13 +4,81 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const brief = require('../src/services/request-brief');
 const { shouldUseAgenticChat } = require('../src/services/agentic-chat-stream');
-const { resolveMediaLinkContext, isLinkTranscriptionRequest } = require('../src/services/media-link-context');
+const { resolveMediaLinkContext, isLinkTranscriptionRequest, extractMediaLinkSources } = require('../src/services/media-link-context');
 
 const original = 'https://youtu.be/AbCdef12345?si=ShareToken&t=90';
 const history = [
   { role: 'user', content: original },
   { role: 'assistant', content: '¿Qué quieres hacer con este enlace?' },
 ];
+
+test('the screenshot Markdown uses its destination instead of its different URL-shaped label', () => {
+  const prompt = '[youtu.be/SVN4/_Xw5VTU](https://youtu.be/SVN4_Xw5VTU ) transcribir';
+  assert.deepEqual(resolveMediaLinkContext({ prompt }), { url: 'https://youtu.be/SVN4_Xw5VTU', source: 'explicit' });
+  const request = brief.buildRequestBrief({ prompt });
+  assert.equal(request.target.kind, 'url');
+  assert.equal(request.deliverable.kind, 'transcription');
+  assert.equal(request.mediaLink.url, 'https://youtu.be/SVN4_Xw5VTU');
+});
+
+test('Markdown titles, escapes and nested formatting preserve the exact href', () => {
+  const url = 'https://media.example/Clip_(One).mp4?source=AbC#chapter';
+  for (const markup of [
+    `[video](${url})`,
+    `**[https://label.example/wrong](${url})**`,
+    `[video](<${url}> "Título descriptivo")`,
+    `[video \\[capítulo\\]](${url} )`,
+  ]) assert.deepEqual(resolveMediaLinkContext({ prompt: `${markup} transcribir` }), { url, source: 'explicit' }, markup);
+});
+
+test('Markdown hrefs share one source list with plain links and never invent a second source from labels', () => {
+  const first = 'https://youtu.be/FirstVideo';
+  const second = 'https://youtu.be/SecondVideo';
+  assert.deepEqual(extractMediaLinkSources(`Transcribe [${second}](${first}) y ${second}`).urls, [first, second]);
+  assert.equal(resolveMediaLinkContext({ prompt: `Transcribe [${second}](${first}) y ${second}` }), null);
+  assert.deepEqual(extractMediaLinkSources(`Transcribe [uno](${first}) y [dos](${second})`).urls, [first, second]);
+  assert.deepEqual(resolveMediaLinkContext({ prompt: `Transcribe [${second}](${first}) y ${first}` }), { url: first, source: 'explicit' });
+  assert.deepEqual(resolveMediaLinkContext({ prompt: 'Transcribe este enlace', history: [{ role: 'user', content: `[${second}](${first})` }] }), { url: first, source: 'history' });
+});
+
+test('invalid Markdown destinations never use the URL label or a previous user link', () => {
+  for (const destination of ['javascript:alert(1)', 'data:text/plain,audio', '../recording.mp4', '//example.test/video', 'https://', 'https://user:password@youtu.be/Video']) {
+    const prompt = `[youtu.be/Label](${destination}) transcribir`;
+    assert.equal(resolveMediaLinkContext({ prompt, history }), null, destination);
+    const extracted = extractMediaLinkSources(prompt);
+    assert.equal(extracted.invalid, true, destination);
+    assert.deepEqual(extracted.urls, [], destination);
+  }
+  assert.equal(resolveMediaLinkContext({ prompt: 'Transcribe [youtu.be/Label](https://', history }), null);
+  assert.equal(resolveMediaLinkContext({ prompt: `Transcribe [${original}](https://user:password@example.test/video) y ${original}`, history }), null);
+});
+
+test('standalone Markdown images never promote alt text or image URLs to transcription sources', () => {
+  for (const prompt of [
+    `Transcribe ![${original}](https://example.test/image.png)`,
+    `Transcribe ![foto](${original})`,
+    `Transcribe **![${original}](https://example.test/image.png)**`,
+    `Transcribe ![${original}](https://example.test/image.png) y ${original}`,
+  ]) {
+    assert.equal(extractMediaLinkSources(prompt).invalid, true, prompt);
+    assert.equal(resolveMediaLinkContext({ prompt, history }), null, prompt);
+  }
+  assert.deepEqual(extractMediaLinkSources(`Transcribe ![${original}](https://example.test/image.png)`).urls, []);
+  assert.equal(resolveMediaLinkContext({ prompt: 'Transcribe este enlace', history: [{ role: 'user', content: `![${original}](https://example.test/image.png)` }] }), null);
+});
+
+test('a linked Markdown image keeps only the outer link as its explicit source', () => {
+  const destination = 'https://youtu.be/OuterVideo';
+  const prompt = `Transcribe [![${original}](https://example.test/image.png)](${destination})`;
+  assert.deepEqual(extractMediaLinkSources(prompt).urls, [destination]);
+  assert.deepEqual(resolveMediaLinkContext({ prompt }), { url: destination, source: 'explicit' });
+});
+
+test('the bounded source scan does not accept a partial list when the prompt is truncated', () => {
+  const prompt = `Transcribe ${original} ${' '.repeat(16000)} https://youtu.be/SecondVideo`;
+  assert.equal(extractMediaLinkSources(prompt).truncated, true);
+  assert.equal(resolveMediaLinkContext({ prompt }), null);
+});
 
 for (const link of [original, 'https://www.youtube.com/watch?v=AbCdef12345&t=90', 'youtu.be/AbCdef12345?si=ShareToken&t=90', 'www.youtube.com/watch?v=AbCdef12345&t=90']) {
   test(`link transcription reaches tools with its own source: ${link}`, () => {
