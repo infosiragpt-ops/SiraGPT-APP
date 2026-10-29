@@ -814,7 +814,8 @@ jobs:
     # run in the critical gate — keep it off PRs so it doesn't hold a runner
     # slot while real gates queue. It still runs on every production-main push.
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    # Playwright 1.60 cannot install Chromium on ubuntu-latest (26.04).
+    runs-on: ubuntu-24.04
     # The suite is informational, but it still needs enough wall-clock to
     # finish on cold GitHub runners so the visible workflow can stay green.
     timeout-minutes: 30
@@ -899,7 +900,8 @@ jobs:
 
   visual-regression-check:
     name: Visual regression · pixel-perfect snapshots
-    runs-on: ubuntu-latest
+    # Playwright 1.60 cannot install Chromium on ubuntu-latest (26.04).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -1071,7 +1073,8 @@ jobs:
   # real hang still stops well before the hosted-runner limit.
   e2e-critical:
     name: E2E · critical UI gate (${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
+    # Playwright 1.60 cannot install Chromium on ubuntu-latest (26.04).
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     strategy:
       fail-fast: false
