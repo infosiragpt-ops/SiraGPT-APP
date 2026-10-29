@@ -7637,6 +7637,23 @@ router.post(
                 // AgentRunner turns: the stage timeline persisted with the
                 // assistant row (messages.agent_metadata.activityTrace).
                 req._agentActivityTrace = agenticResult?.agentActivityTrace || null;
+                // A confirmed background transcription keeps its identity even
+                // when another part of this turn fails verification or times out.
+                // These references come from executed tools, never model prose.
+                const deliveryFileIds = agenticResult?.transcriptionFileIds;
+                const hasMediaDelivery = typeof agenticResult?.mediaDeliveryHandoff === 'string'
+                  && /^[A-Za-z0-9_-]{1,160}$/.test(agenticResult.mediaDeliveryHandoff)
+                  && Array.isArray(deliveryFileIds) && deliveryFileIds.length > 0 && deliveryFileIds.length <= 50
+                  && deliveryFileIds.every((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(id));
+                if (hasMediaDelivery) {
+                  req._mediaDeliveryMetadata = {
+                    ...(typeof agenticResult.stoppedReason === 'string'
+                      ? { stoppedReason: agenticResult.stoppedReason.slice(0, 160) } : {}),
+                    mediaDeliveryHandoff: agenticResult.mediaDeliveryHandoff,
+                    transcriptionFileIds: [...new Set(deliveryFileIds)],
+                    servedBy: 'media_batch',
+                  };
+                }
                 const __agenticDurationMs = Number.isFinite(req._agentRun?.durationMs) && req._agentRun.durationMs >= 0
                   ? req._agentRun.durationMs
                   : Date.now() - __generateStartedAt;
@@ -7730,9 +7747,10 @@ router.post(
                   // The live stream already contains artifact cards. Keep the
                   // compact persistence envelope separately from the model
                   // answer so post-processing and token accounting continue to
-                  // operate on real model text only.
-                  req._agentPersistedContent = Array.isArray(agenticResult.artifacts)
-                    && agenticResult.artifacts.length > 0
+                  // operate on real model text only. A pending delivery keeps
+                  // its state too, even though its artifacts do not exist yet.
+                  req._agentPersistedContent = (hasMediaDelivery || (Array.isArray(agenticResult.artifacts)
+                    && agenticResult.artifacts.length > 0))
                     && typeof agenticResult.persistedContent === 'string'
                     ? agenticResult.persistedContent
                     : null;
@@ -8869,6 +8887,7 @@ router.post(
           : null;
         const assistantMeta = {
           ...(codexMeta || {}),
+          ...(req._mediaDeliveryMetadata || {}),
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
