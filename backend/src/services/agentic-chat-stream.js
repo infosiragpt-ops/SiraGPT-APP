@@ -52,6 +52,7 @@
   const { statusForAgentStopReason } = require('./agents/react-run-outcome');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
   const { isAgenticActionRequest, isArtifactDeliverableRequest, isDocumentEditRequest } = require('./agents/agentic-trigger');
+  const { resolveMediaLinkContext, mediaLinkContextBlock } = require('./media-link-context');
   const { detectMediaIntent, detectMediaIntents, buildMediaIntentsHint } = require('./agents/media-intent');
   const {
     buildExecutionProfile,
@@ -868,6 +869,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (isTrivialChatTurn(text, { attachments: files, chip })) return false;
   } catch (_) { /* optional at load */ }
   if (DIRECT_ONLY_PROMPT.test(text)) return false;
+  if (resolveMediaLinkContext({ prompt: text, history, files })) return true;
   try {
     const { shouldRunAgentRunner } = require('./agent-runner');
     if (shouldRunAgentRunner({ files, text, hasPriorArtifacts })) return true;
@@ -1285,6 +1287,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const preloopFileIds = Array.isArray(toolContext.fileIds)
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
+    const mediaLink = resolveMediaLinkContext({ prompt: userQuery, history, files: preloopFileIds });
     const explicitGithubConnectRequest = preloopFileIds.length === 0 && githubHandoffModule.isGithubConnectRequest(userQuery);
     const generatedArtifactRefs = !codingWorkspace && preloopFileIds.length === 0
       ? await require('./agents/generated-artifact-followup').resolveChatGeneratedArtifactFollowup(
@@ -1316,7 +1319,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }))
       : history;
     if (
-      !codingWorkspace && preloopFileIds.length === 0 && generatedArtifactRefs.length === 0
+      !codingWorkspace && !mediaLink && preloopFileIds.length === 0 && generatedArtifactRefs.length === 0
       && toolContext.prisma
       && toolContext.userId
       && toolContext.chatId
@@ -2510,7 +2513,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // A pasted link + «transcribe…»: transcribe_url downloads (or plays and
     // records) the recording and transcribes it, which can take as long as the
     // class itself — give the turn the tool's own budget plus room to answer.
-    const isLinkTranscription = /https?:\/\/\S+/i.test(userQuery) && /\b(?:transcri|trascri|transcir|subt[ií]tul|qu[eé] dice|qu[eé] dicen)/i.test(userQuery);
+    const isLinkTranscription = Boolean(mediaLink) || (/https?:\/\/\S+/i.test(userQuery) && /\b(?:transcri|trascri|transcir|subt[ií]tul|qu[eé] dice|qu[eé] dicen)/i.test(userQuery));
     let maxRuntimeOverride = isAutonomous ? Math.max(maxRuntimeMs, 15 * 60 * 1000) : maxRuntimeMs;
     if (isLinkTranscription) {
       const transcribeBudget = require('./agent-harness/tools/transcribe-url-tool').toolTimeoutMs(process.env);
@@ -2642,6 +2645,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       __coworkMemoryBlock,
       __appsBlock,
       buildThreadWorkContext(safeHistory, userQuery, { includeTranscript: false }),
+      mediaLinkContextBlock(mediaLink),
       'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
       'Estándar de calidad (nivel experto): en tareas difíciles piensa antes de actuar (descompón el problema, explicita supuestos y casos límite, verifica cada paso); responde con la conclusión primero; distingue lo que SABES de lo que INFIERES de lo que NO SABES y NUNCA inventes datos, cifras, citas, fuentes ni APIs; cuando dudes, verifica con una herramienta en vez de adivinar; admite y corrige tus errores directamente, sin adular.',
       'Si el usuario dice "todavía no funciona", "sigue", "arregla", "no sirve", o similar, revisa TODO el historial del hilo para entender qué se pidió antes, qué se hizo, qué falló, y continúa desde donde se quedó. No empieces de cero.',

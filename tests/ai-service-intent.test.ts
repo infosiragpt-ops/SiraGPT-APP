@@ -21,9 +21,27 @@ import {
   shouldAnswerFromExistingDocument,
   shouldEditExistingDocument,
   shouldUseExistingDocumentFileContext,
+  isLightweightConversationalPrompt,
+  isLinkTranscriptionRequest,
 } from "../lib/ai-service"
 
 describe("ai-service · deterministic intent routing", () => {
+  it("keeps explicit link transcription out of the plain conversation shortcut", () => {
+    for (const prompt of [
+      "Transcribir este enlace",
+      "Transcribir este enlace youtu.be/AbCdef12345",
+      "Transcribir este enlace www.youtube.com/watch?v=AbCdef12345",
+      "Transcribir este enlace https://youtu.be/AbCdef12345",
+    ]) {
+      assert.equal(isLightweightConversationalPrompt(prompt), false, prompt)
+      assert.equal(classifyIntentFastPath(prompt), "web_search", prompt)
+    }
+    assert.equal(isLightweightConversationalPrompt("hola"), true)
+    assert.equal(isLightweightConversationalPrompt("gracias"), true)
+    for (const prompt of ["hola", "listo", "¿Cómo transcribir este enlace?", "No quiero transcribir este enlace", "Transcribe esta imagen", "Transcribe el audio adjunto"]) {
+      assert.equal(isLinkTranscriptionRequest(prompt), false, prompt)
+    }
+  })
   it("keeps semantic routing outside the user's three-second critical path", () => {
     assert.ok(SEMANTIC_INTENT_BUDGET_MS <= 750)
   })

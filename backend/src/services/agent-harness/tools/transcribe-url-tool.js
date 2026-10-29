@@ -199,6 +199,7 @@ const USER_MESSAGES = Object.freeze({
   media_rate_limited: 'La plataforma del enlace limitó las descargas por ahora. Intenta en unos minutos o adjunta el archivo.',
   media_too_long: 'El contenido supera el máximo por llamada. Dime el rango que necesitas (de tal minuto a tal minuto) y lo transcribo por partes.',
   media_timeout: 'La descarga o la transcripción tardó más del tiempo máximo. Prueba con un rango más corto.',
+  media_incomplete_download: 'El audio descargado está incompleto o no pude verificar que estuviera completo. No lo transcribí para evitar omitir partes. Puedes volver a intentar con el enlace o adjuntar el archivo de audio o video.',
   media_download_failed: 'No pude descargar el audio del enlace. Si es un video público, pásame el enlace directo; si es privado, adjunta el archivo.',
   ytdlp_missing: 'El servidor no tiene instalado el descargador de medios (yt-dlp); avisa al administrador.',
   ffmpeg_failed: 'No pude recortar o convertir el audio descargado.',
@@ -1311,7 +1312,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     };
     const captureOr = async (why, failure) => {
       const clip = await tryCapture(why);
-      if (clip) return finish(clip);
+      if (clip) return await finish(clip);
       if (failure && discovery) failure.discovery = discovery;
       return failure;
     };
@@ -1361,7 +1362,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
           disc = cdisc;
           viaBrowser = 'computer';
         } else if (comp && comp.session && !cdisc.loginWall && cdisc.reason === 'no_media_found' && (clip = await tryCapture('no_stream_in_computer'))) {
-          return finish(clip);
+          return await finish(clip);
         } else if (comp && comp.session && cdisc.reason !== 'computer_unavailable' && cdisc.reason !== 'browser_unavailable'
           && (cdisc.loginWall || !lastCapture || lastCapture.reason === 'login_wall')) {
           // Show the page in the computer panel so the user can sign in there.
@@ -1391,10 +1392,10 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       } else if (disc.loginWall) {
         return errorResult('media_login_required', disc.detail || 'login wall after browser discovery', { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) });
       } else {
-        return captureOr('no_stream_found', errorResult(probe.code === 'media_download_failed' && disc.reason === 'no_media_found' ? 'media_unsupported_url' : probe.code, probe.detail, { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) }));
+        return await captureOr('no_stream_found', errorResult(probe.code === 'media_download_failed' && disc.reason === 'no_media_found' ? 'media_unsupported_url' : probe.code, probe.detail, { discovery, ...(cookiesInfo ? { cookies: cookiesInfo } : {}) }));
       }
     } else if (!probe.ok) {
-      return captureOr('ytdlp_failed', errorResult(probe.code, probe.detail, cookiesInfo ? { cookies: cookiesInfo } : {}));
+      return await captureOr('ytdlp_failed', errorResult(probe.code, probe.detail, cookiesInfo ? { cookies: cookiesInfo } : {}));
     }
 
     const info = probe.info;
@@ -1423,6 +1424,7 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
     // 3. Download the section as audio, then trim precisely.
     const clipPath = path.join(workDir, 'clip.m4a');
     const sectioned = start != null || end != null;
+    let verifyFailedDownload = false;
     if (target.direct) {
       // ffmpeg straight from the discovered stream, with the page's headers and
       // the session cookies that apply to that host. One pass: seek + encode.
@@ -1436,16 +1438,16 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       ffArgs.push('-t', String(limit), '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'aac', '-b:a', '64k', clipPath);
       try {
         const ff = await run(ffmpeg, ffArgs, { signal, timeoutMs, cwd: workDir });
-        if (ff.code !== 0) return captureOr('stream_unreadable', errorResult('media_download_failed', lastLine(ff.stderr), { title, discovery }));
+        if (ff.code !== 0) return await captureOr('stream_unreadable', errorResult('media_download_failed', lastLine(ff.stderr), { title, discovery }));
       } catch (err) {
         if (err && err.name === 'AbortError') throw err;
-        return captureOr('stream_unreadable', errorResult(err && err.code === 'ENOENT' ? 'ffmpeg_failed' : 'media_download_failed', err && err.message, { title, discovery }));
+        return await captureOr('stream_unreadable', errorResult(err && err.code === 'ENOENT' ? 'ffmpeg_failed' : 'media_download_failed', err && err.message, { title, discovery }));
       }
     } else {
       const rawTemplate = path.join(workDir, 'source.%(ext)s');
       // `--fixup never`: we re-encode right after, so yt-dlp's own ffmpeg
       // remux pass (FixupM3u8 etc.) is wasted work and one more way to fail.
-      const dlArgs = [...ytBase(), ...headerArgs(target), '--no-progress', '--quiet', '--fixup', 'never', '-f', 'bestaudio/best', '-o', rawTemplate];
+      const dlArgs = [...ytBase(), ...headerArgs(target), '--no-progress', '--quiet', '--abort-on-unavailable-fragments', '--fixup', 'never', '-f', 'bestaudio/best', '-o', rawTemplate];
       if (sectioned && rangeEnd != null) dlArgs.push('--download-sections', `*${rangeStart}-${rangeEnd}`, '--force-keyframes-at-cuts');
       dlArgs.push('--', target.href);
       const sourceFiles = async () => (await fsImpl.promises.readdir(workDir)).filter((f) => f.startsWith('source.') && !/\.(part|ytdl)$/i.test(f));
@@ -1466,15 +1468,16 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
           dl = retry;
           if (retry.code === 0 || (await sourceFiles()).length) { cutBySections = false; discovery = { ...(discovery || {}), fullDownloadFallback: sectionedError }; }
         }
-        // A non-zero exit AFTER the media landed (a post-processing hiccup) is
-        // not a download failure: the file is what we need.
-        if (dl.code !== 0 && !(await sourceFiles()).length) return captureOr('download_failed', errorResult(classifyDownloadFailure(dl.stderr), lastLine(dl.stderr), { title, discovery }));
+        // A decodable file can still be a truncated download. Preserve recovery
+        // from post-processing failures only after checking the actual audio.
+        if (dl.code !== 0 && !(await sourceFiles()).length) return await captureOr('download_failed', errorResult(classifyDownloadFailure(dl.stderr), lastLine(dl.stderr), { title, discovery }));
+        verifyFailedDownload = dl.code !== 0;
       } catch (err) {
         if (err && err.name === 'AbortError') throw err;
-        return captureOr('download_failed', errorResult(classifyDownloadFailure('', err), err && err.message, { title, discovery }));
+        return await captureOr('download_failed', errorResult(classifyDownloadFailure('', err), err && err.message, { title, discovery }));
       }
       const files = await sourceFiles();
-      if (!files.length) return captureOr('download_failed', errorResult('media_download_failed', 'yt-dlp produced no file', { title, discovery }));
+      if (!files.length) return await captureOr('download_failed', errorResult('media_download_failed', 'yt-dlp produced no file', { title, discovery }));
       const sourcePath = path.join(workDir, files[0]);
       // With --download-sections the file already starts at rangeStart: trim
       // relative to the clip; otherwise trim absolute times.
@@ -1495,7 +1498,24 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
       }
     }
 
-    return finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via, cappedEnd });
+    if (verifyFailedDownload) {
+      // Container decoding alone does not prove completeness. Missing fragments
+      // can occur anywhere, so don't call the surviving bytes a timed prefix.
+      let measured = 0;
+      try { measured = Number(await probeDuration(clipPath, { signal })); } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+      }
+      const expected = !cappedEnd && rangeEnd != null ? rangeEnd - rangeStart : null;
+      // Allow encoder/container rounding, never a percentage of a long class.
+      const tolerance = expected > 0 ? Math.max(0.25, Math.min(2, expected * 0.01)) : 0;
+      if (!(expected > 0) || !Number.isFinite(measured) || measured <= 0 || Math.abs(expected - measured) > tolerance) {
+        return errorResult('media_incomplete_download', 'failed download did not produce a verified complete audio range', {
+          title, expectedSeconds: expected, downloadedSeconds: Number.isFinite(measured) && measured > 0 ? measured : null,
+        });
+      }
+    }
+    // Await every asynchronous consumer before finally removes its source audio.
+    return await finish({ clipPath, title, rangeStart, rangeEnd, duration, sectioned, via: target.via, cappedEnd });
   } finally {
     await cleanup();
   }

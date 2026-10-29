@@ -30,6 +30,8 @@
  * free tier is configured); SIRAGPT_REQUEST_BRIEF_LLM_TIMEOUT_MS (900).
  */
 
+const { resolveMediaLinkContext, mediaLinkContextBlock } = require('./media-link-context');
+
 const ACTIONS = Object.freeze([
   'create', 'edit', 'answer', 'analyze', 'transform', 'search', 'visualize', 'code', 'continue', 'converse',
 ]);
@@ -1258,7 +1260,11 @@ function buildRequestBrief(input = {}) {
   const prevAnswerHasData = Boolean(lastAssistant) && /\d|\|\s*-{3}/.test(String(lastAssistant.text || lastAssistant.content || '').slice(0, 20000));
   let action = text ? pickAction(text, { deliverables, hasAttachments: attachments.length > 0, hasPrevAssistant, isQuestion, words, constraints, priorArtifact, dataAttachment, deicticDrawIsData: prevAnswerHasData || docAttachment }) : 'converse';
   if (templateIntent && ['edit', 'transform', 'answer', 'analyze'].includes(action)) action = 'create';
-  const target = resolveTarget(text, { attachments, priorArtifact, hasPrevAssistant, action, coreference: input.coreference || null, deliverables, raw });
+  const mediaLink = resolveMediaLinkContext({ prompt: raw, history: recentTurns, files: attachments });
+  if (mediaLink) action = 'transform';
+  const target = mediaLink
+    ? { kind: 'url', name: new URL(mediaLink.url).hostname.replace(/^www\./, ''), format: null, source: mediaLink.source }
+    : resolveTarget(text, { attachments, priorArtifact, hasPrevAssistant, action, coreference: input.coreference || null, deliverables, raw });
   const deliverable = pickDeliverable(text, action, deliverables, formats, target);
   if (templateIntent) {
     const kindByFormat = { pptx: 'presentation', docx: 'document', xlsx: 'spreadsheet' };
@@ -1301,7 +1307,8 @@ function buildRequestBrief(input = {}) {
     // Internal (not in the public payload): no earlier answer to act on, and
     // a pasted link (the material may be behind it).
     firstTurn: !hasPrevAssistant,
-    hasLink: URL_RE.test(raw) || /\bwww\.\S/i.test(raw),
+    hasLink: Boolean(mediaLink) || URL_RE.test(raw) || /\bwww\.\S/i.test(raw),
+    mediaLink,
   };
   brief.confidence = confidenceFor(brief, signals);
   brief.summary = buildSummary(brief);
@@ -1369,6 +1376,7 @@ function buildRequestBriefPromptBlock(brief) {
       break;
     case 'url':
       lines.push(`- Objeto: el enlace que pegó el usuario (${brief.target.name || 'web'}). ${brief.deliverable.kind === 'transcription' ? 'Transcríbelo con la herramienta `transcribe_url` (start/end según el rango pedido); no digas que no puedes sin haberla llamado.' : 'Léelo con la herramienta adecuada antes de responder.'}`);
+      if (brief.mediaLink) lines.push(`- ${mediaLinkContextBlock(brief.mediaLink)}`);
       break;
     case 'previous_answer':
       if (['create', 'visualize', 'code'].includes(brief.action) || (brief.action === 'transform' && brief.deliverable.kind !== 'translation')) {

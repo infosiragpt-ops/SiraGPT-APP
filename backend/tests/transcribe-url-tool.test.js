@@ -11,7 +11,7 @@ const tool = require('../src/services/agent-harness/tools/transcribe-url-tool');
 const URL = 'https://www.youtube.com/watch?v=abc123';
 
 /** Fake yt-dlp / ffmpeg: records every call, writes the files the real ones would. */
-function fakeRunner({ probe = { duration: 1200, title: 'Clase 3 · Fotosíntesis' }, probeFail = null, downloadFail = null, ffmpegFail = null } = {}) {
+function fakeRunner({ probe = { duration: 1200, title: 'Clase 3 · Fotosíntesis' }, probeFail = null, downloadFail = null, downloadExit = 0, ffmpegFail = null } = {}) {
   const calls = [];
   const runCommand = async (bin, args, { cwd } = {}) => {
     calls.push({ bin, args });
@@ -22,7 +22,7 @@ function fakeRunner({ probe = { duration: 1200, title: 'Clase 3 · Fotosíntesis
     if (bin === 'yt-dlp') {
       if (downloadFail) return { code: 1, stdout: '', stderr: downloadFail };
       fs.writeFileSync(path.join(cwd, 'source.webm'), 'audio-bytes');
-      return { code: 0, stdout: '', stderr: '' };
+      return { code: downloadExit, stdout: '', stderr: downloadExit ? 'post-processing failed' : '' };
     }
     if (bin === 'ffmpeg') {
       if (ffmpegFail) return { code: 1, stdout: '', stderr: ffmpegFail };
@@ -241,4 +241,97 @@ test('the harness registers transcribe_url, the loop labels it and the selector 
   const dockerfile = fs.readFileSync(path.join(__dirname, '../Dockerfile'), 'utf8');
   assert.match(dockerfile, /pip3 install --no-cache-dir --break-system-packages "yt-dlp\[default\]>=2026\.8"/, 'yt-dlp with the EJS extra from PyPI');
   assert.doesNotMatch(dockerfile, /^\s+yt-dlp \\$/m, 'no stale apk yt-dlp');
+});
+
+
+test('a failed download with a decodable but truncated file is never delivered as a full transcription', async () => {
+  const d = deps({ runner: { probe: { duration: 60, title: 'Short link' }, downloadExit: 1 } });
+  const measured = [];
+  d.deps.probeDuration = async (file) => { measured.push(file); return 10; };
+  const result = await tool.executeTranscribeUrl({ url: 'https://youtu.be/jNQXAC9IVRw' }, {}, d.deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'media_incomplete_download');
+  assert.match(result.userMessage, /incompleto/);
+  assert.equal(measured.length, 1);
+  assert.equal(d.transcribed.length, 0);
+  assert.equal(d.saved.length, 0);
+  assert.deepEqual(fs.readdirSync(d.deps.tmpDir), []);
+});
+
+test('failed post-processing can still deliver a measured complete section with original timestamps', async () => {
+  const d = deps({ runner: { downloadExit: 1 } });
+  d.deps.probeDuration = async () => 59.95;
+  const result = await tool.executeTranscribeUrl({ url: URL, start: 90, end: 150 }, {}, d.deps);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.deepEqual(result.range, { start: 90, end: 150, label: '01:30 → 02:30' });
+  assert.match(result.text, /^\[01:30\]/);
+  assert.equal(d.transcribed.length, 1);
+});
+
+test('a failed download with unverified duration cannot reach transcription or the durable queue', async () => {
+  for (const measured of [0, NaN, Infinity, 60]) {
+    const d = deps({ runner: { probe: { title: 'Unknown duration' }, downloadExit: 1 },
+      env: { TRANSCRIBE_URL_DURABLE: '1' } });
+    d.deps.probeDuration = async () => measured;
+    d.deps.durableHandoff = async () => assert.fail('unverified audio must not be queued');
+    const result = await tool.executeTranscribeUrl({ url: URL }, { userId: 'test-user', chatId: 'test-chat' }, d.deps);
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'media_incomplete_download');
+    assert.equal(d.transcribed.length, 0);
+  }
+});
+
+test('duration verification preserves cancellation and cleans temporary files', async () => {
+  const d = deps({ runner: { downloadExit: 1 } });
+  d.deps.probeDuration = async () => { throw Object.assign(new Error('cancelled'), { name: 'AbortError' }); };
+  await assert.rejects(tool.executeTranscribeUrl({ url: URL }, {}, d.deps), { name: 'AbortError' });
+  assert.deepEqual(fs.readdirSync(d.deps.tmpDir), []);
+});
+
+test('fragment downloads stop on missing fragments instead of silently omitting audio', async () => {
+  const d = deps();
+  await tool.executeTranscribeUrl({ url: URL }, {}, d.deps);
+  assert.ok(d.calls.find((call) => call.args.includes('--no-progress')).args.includes('--abort-on-unavailable-fragments'));
+});
+
+
+test('temporary audio survives asynchronous transcription and is cleaned after delivery', async () => {
+  const d = deps();
+  let cleanupStarted = false;
+  d.deps.fs = { ...fs, promises: { ...fs.promises, rm: async (...args) => {
+    cleanupStarted = true;
+    return fs.promises.rm(...args);
+  } } };
+  d.deps.transcribe = async (file) => {
+    await new Promise(setImmediate);
+    assert.equal(cleanupStarted, false, 'cleanup must wait for the consumer');
+    assert.ok((await fs.promises.readFile(file)).length);
+    return { ok: true, language: 'en', transcript: 'The elephants have long trunks.', segments: [] };
+  };
+  const result = await tool.executeTranscribeUrl({ url: URL }, {}, d.deps);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(d.saved.length, 1);
+  assert.equal(cleanupStarted, true);
+  assert.deepEqual(fs.readdirSync(d.deps.tmpDir), []);
+});
+
+test('temporary audio survives asynchronous durable hand-off', async () => {
+  const d = deps({ runner: { probe: { duration: 7200, title: 'Class' } } });
+  let cleanupStarted = false;
+  d.deps.fs = { ...fs, promises: { ...fs.promises, rm: async (...args) => {
+    cleanupStarted = true;
+    return fs.promises.rm(...args);
+  } } };
+  d.deps.durableHandoff = async ({ clipPath }) => {
+    await new Promise(setImmediate);
+    assert.equal(cleanupStarted, false);
+    assert.ok((await fs.promises.readFile(clipPath)).length);
+    return { ok: true, fileId: 'test-file', deliveryId: 'test-delivery', message: 'Procesando' };
+  };
+  const result = await tool.executeTranscribeUrl({ url: URL }, {userId:'test-user',chatId:'test-chat'}, d.deps);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.deferred, true);
+  assert.equal(d.transcribed.length, 0);
+  assert.equal(cleanupStarted, true);
+  assert.deepEqual(fs.readdirSync(d.deps.tmpDir), []);
 });
