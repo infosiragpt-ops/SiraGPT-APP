@@ -1460,7 +1460,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `swagger-ui-express` | 5.0.1 | MIT | [link](https://github.com/scottie1984/swagger-ui-express) |
 | `swr` | 2.4.1 | MIT | [link](https://github.com/vercel/swr) |
 | `symbol-tree` | 3.2.4 | MIT | [link](https://github.com/jsdom/js-symbol-tree) |
-| `systeminformation` | 5.31.11 | MIT | [link](https://github.com/sebhildebrandt/systeminformation) |
+| `systeminformation` | 5.33.16 | MIT | [link](https://github.com/sebhildebrandt/systeminformation) |
 | `tailwind-merge` | 2.6.1 | MIT | [link](https://github.com/dcastil/tailwind-merge) |
 | `tailwind-scrollbar` | 3.1.0 | MIT | [link](https://github.com/adoxography/tailwind-scrollbar) |
 | `tailwindcss` | 3.4.19 | MIT | [link](https://github.com/tailwindlabs/tailwindcss.git#v3) |
