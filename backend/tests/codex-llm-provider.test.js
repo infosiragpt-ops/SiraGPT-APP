@@ -4,6 +4,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const provider = require('../src/services/codex/llm-provider');
+const billing = require('../src/services/ai/billing-failover');
+const keyHealth = require('../src/utils/provider-key-health');
 
 function envWith(overrides = {}) {
   return { NODE_ENV: 'test', ...overrides };
@@ -24,7 +26,8 @@ function fakeOpenAIStyle(reply = 'hola', usage = { prompt_tokens: 10, completion
   };
 }
 
-test.beforeEach(() => provider.resetQuarantine());
+test.beforeEach(() => { provider.resetQuarantine(); billing.__resetForTests(); });
+test.afterEach(() => billing.__resetForTests());
 
 test('ladder: anthropic wins when its key is set', () => {
   const env = envWith({ ANTHROPIC_API_KEY: 'k1', OPENROUTER_API_KEY: 'k2', CEREBRAS_API_KEY: 'k3' });
@@ -196,3 +199,136 @@ test('isBillingExhaustedError classifies credit exhaustion errors and extends qu
 });
 
 
+
+
+test('internal selection skips a shared billing memo and reports the eligible provider', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant', OPENROUTER_API_KEY: 'test-or' });
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+  let anthropicCalls = 0;
+  class Anthropic { messages = { create: async () => { anthropicCalls += 1; throw new Error('must skip unfunded key'); } }; }
+  const openrouter = fakeOpenAIStyle('eligible response');
+  const out = await provider.chatComplete({ messages: [], env, clients: { anthropicCtor: Anthropic, openrouter } });
+  assert.equal(anthropicCalls, 0);
+  assert.equal(out.content, 'eligible response');
+  assert.deepEqual(provider.describeActiveProvider({ env }), { provider: 'openrouter', model: 'anthropic/claude-sonnet-4.6' });
+});
+
+test('an internal call with only a memoized provider returns its cause without transport', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant' });
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+  let calls = 0;
+  class Anthropic { messages = { create: async () => { calls += 1; throw new Error('transport must not run'); } }; }
+  await assert.rejects(provider.chatComplete({ messages: [], env, clients: { anthropicCtor: Anthropic } }), { code: billing.UNFUNDED_MEMO_CODE });
+  assert.equal(calls, 0);
+  assert.deepEqual(provider.describeActiveProvider({ env }), { provider: null, model: null });
+});
+
+test('internal key-health gating skips a rejected 401 but preserves generic 403 compatibility', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant', OPENROUTER_API_KEY: 'test-or' });
+  let calls = 0;
+  class Anthropic { messages = { create: async () => { calls += 1; return { content: [{ type: 'text', text: 'accepted' }] }; } }; }
+  keyHealth.markRejected('anthropic', env.ANTHROPIC_API_KEY, { status: 401 }, env);
+  await provider.chatComplete({ messages: [], env, clients: { anthropicCtor: Anthropic, openrouter: fakeOpenAIStyle() } });
+  assert.equal(calls, 0);
+  keyHealth.markRejected('anthropic', env.ANTHROPIC_API_KEY, { status: 403 }, env);
+  const out = await provider.chatComplete({ messages: [], env, clients: { anthropicCtor: Anthropic } });
+  assert.equal(calls, 1);
+  assert.equal(out.content, 'accepted');
+});
+
+test('a rotated key or expired shared memo makes an internal provider eligible again', async (t) => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-old' });
+  const start = Date.now();
+  t.mock.method(Date, 'now', () => start);
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env, { ttlMs: 1000 });
+  assert.deepEqual(provider.describeActiveProvider({ env }), { provider: null, model: null });
+  t.mock.method(Date, 'now', () => start + 1001);
+  assert.equal(provider.describeActiveProvider({ env }).provider, 'anthropic');
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+  assert.equal(provider.describeActiveProvider({ env: { ...env, ANTHROPIC_API_KEY: 'test-new' } }).provider, 'anthropic');
+});
+
+test('a selected model still probes its own key and clears shared billing only after a real answer', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant', OPENROUTER_API_KEY: 'test-or' });
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+  let calls = 0;
+  class Anthropic { messages = { create: async () => { calls += 1; return { content: [{ type: 'text', text: 'recovered answer' }] }; } }; }
+  const openrouter = fakeOpenAIStyle();
+  const out = await provider.chatComplete({ messages: [], model: 'claude-sonnet-4-6', env, clients: { anthropicCtor: Anthropic, openrouter } });
+  assert.equal(out.content, 'recovered answer');
+  assert.equal(calls, 1);
+  assert.equal(openrouter.calls.length, 0);
+  assert.equal(billing.isOutOfCredit('anthropic', env), false);
+  assert.equal(keyHealth.isRejected('anthropic', env.ANTHROPIC_API_KEY), false);
+});
+
+test('an empty selected response does not erase billing evidence', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant' });
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+  class Anthropic { messages = { create: async () => ({ content: [] }) }; }
+  await provider.chatComplete({ messages: [], model: 'claude-sonnet-4-6', env, clients: { anthropicCtor: Anthropic } });
+  assert.equal(billing.isOutOfCredit('anthropic', env), true);
+});
+
+test('a selected response keeps an unrelated key-health auth rejection', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant' });
+  keyHealth.markRejected('anthropic', env.ANTHROPIC_API_KEY, { status: 401 }, env);
+  class Anthropic { messages = { create: async () => ({ content: [{ type: 'text', text: 'accepted' }] }) }; }
+  await provider.chatComplete({ messages: [], model: 'claude-sonnet-4-6', env, clients: { anthropicCtor: Anthropic } });
+  assert.equal(keyHealth.rejectionReason('anthropic', env.ANTHROPIC_API_KEY), 'auth');
+});
+
+test('an old-key answer cannot clear a new-key billing memo', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-old' });
+  class Anthropic { messages = { create: async () => {
+    env.ANTHROPIC_API_KEY = 'test-new';
+    billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+    return { content: [{ type: 'text', text: 'old-key answer' }] };
+  } }; }
+  await provider.chatComplete({ messages: [], model: 'claude-sonnet-4-6', env, clients: { anthropicCtor: Anthropic } });
+  assert.equal(billing.isOutOfCredit('anthropic', env), true);
+  assert.equal(keyHealth.isRejected('anthropic', env.ANTHROPIC_API_KEY), true);
+});
+
+
+test('internal last-resort candidates also respect the shared memo', async (t) => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant', XAI_API_KEY: 'test-xai', GEMINI_API_KEY: 'test-gemini' });
+  billing.markOutOfCredit('anthropic', { status: 400, message: 'credit balance is too low' }, env);
+  billing.markOutOfCredit('xai', { status: 402, message: 'insufficient credits' }, env);
+  const structured = require('../src/services/ai/structured-generation');
+  const routed = [];
+  t.mock.method(structured, 'clientForModel', (model) => {
+    routed.push(model);
+    return { model, provider: 'Gemini', client: fakeOpenAIStyle('funded answer') };
+  });
+  const result = await provider.chatComplete({ messages: [], env });
+  assert.deepEqual(routed, ['gemini-2.5-flash']);
+  assert.equal(result.content, 'funded answer');
+});
+
+test('a selected provider failure keeps the original error and shared evidence', async () => {
+  const env = envWith({ ANTHROPIC_API_KEY: 'test-ant', OPENROUTER_API_KEY: 'test-or' });
+  const failure = Object.assign(new Error('credit balance is too low'), { status: 400 });
+  billing.markOutOfCredit('anthropic', failure, env);
+  let calls = 0;
+  class Anthropic { messages = { create: async () => { calls += 1; throw failure; } }; }
+  const openrouter = fakeOpenAIStyle();
+  await assert.rejects(provider.chatComplete({ messages: [], model: 'claude-sonnet-4-6', env,
+    clients: { anthropicCtor: Anthropic, openrouter } }), (error) => error === failure);
+  assert.equal(calls, 1);
+  assert.equal(openrouter.calls.length, 0);
+  assert.equal(billing.isOutOfCredit('anthropic', env), true);
+});
+
+
+test('a selected first-party answer cannot clear a replacement key outside the internal ladder', async () => {
+  const env = envWith({ OPENAI_API_KEY: 'test-old' });
+  class OpenAI { chat = { completions: { create: async () => {
+    env.OPENAI_API_KEY = 'test-new';
+    billing.markOutOfCredit('openai', { status: 402, message: 'insufficient credits' }, env);
+    return { choices: [{ message: { content: 'old-key answer' } }] };
+  } } }; }
+  await provider.chatComplete({ messages: [], model: 'gpt-6', env, clients: { openAICtor: OpenAI } });
+  assert.equal(billing.isOutOfCredit('openai', env), true);
+  assert.equal(keyHealth.isRejected('openai', env.OPENAI_API_KEY), true);
+});

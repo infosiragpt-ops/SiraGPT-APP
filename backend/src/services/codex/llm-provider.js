@@ -23,6 +23,7 @@
 const { inferProviderFromModelId, providerConnectionReady, PROVIDER_UNAVAILABLE_MESSAGE } = require('../ai/provider-inference');
 const { stripVendorPrefix } = require('../ai/first-party-chat-clients');
 const { stripUnsupportedSampling } = require('../ai/openai-sampling-params');
+const billingFailover = require('../ai/billing-failover');
 const { getCerebrasConfig, createCerebrasClient } = require('../ai/cerebras-client');
 const { toAnthropicMessages, cacheStableTranscriptPrefix, cacheEnabled } = require('./anthropic-turn');
 const {
@@ -83,7 +84,7 @@ function keyForRung(name, env = process.env) {
   if (name === 'cerebras') return clean(env.CEREBRAS_API_KEY);
   if (name === 'xai') return clean(env.XAI_API_KEY);
   if (name === 'gemini') return clean(env.GEMINI_API_KEY) || clean(env.GOOGLE_GENERATIVE_AI_API_KEY);
-  return '';
+  return billingFailover.currentKeyFor(name, env);
 }
 
 function syncKeyRotation(name, env) {
@@ -427,6 +428,8 @@ async function chatComplete({
   for (const name of candidates) {
     syncKeyRotation(name, env);
     const tNow = now();
+    const requestKey = keyForRung(name, env);
+    const sharedMemoReason = !selected && billingFailover.unfundedReason(name, env);
     const hasInjectedClient = Boolean(
       clients && (
         clients[name]
@@ -434,9 +437,11 @@ async function chatComplete({
         || clients.openAICtor
       )
     );
-    if (!selected && !hasInjectedClient && (billingQuarantine.get(name) || 0) > tNow) {
+    if (!selected && (sharedMemoReason || (!hasInjectedClient && (billingQuarantine.get(name) || 0) > tNow))) {
       if (!firstError) {
-        firstError = billingSnapshot.get(name) || new Error(`codex llm-provider: ${name} in billing cooldown`);
+        firstError = billingSnapshot.get(name) || (sharedMemoReason
+          ? billingFailover.unfundedMemoError(name)
+          : new Error(`codex llm-provider: ${name} in billing cooldown`));
       }
       continue;
     }
@@ -514,6 +519,11 @@ async function chatComplete({
       billingKeySnapshot.delete(name);
       billingWarnedKey.delete(name);
       warnMemo.delete(name);
+      // A real answer can prove a top-up. Never clear a replacement key's
+      // evidence when an older request finishes after a credential rotation.
+      if (clean(out.content) && keyForRung(name, env) === requestKey) {
+        billingFailover.noteProviderAnswered(name, env);
+      }
       return out;
     } catch (err) {
       if (selected || signal?.aborted) throw err; // an explicit model cannot fail over
@@ -558,7 +568,9 @@ async function chatComplete({
       if (skip.has(fallback.name)) continue;
       syncKeyRotation(fallback.name, env);
       if (!providerConfigured(fallback.name, env)) continue;
-      if ((billingQuarantine.get(fallback.name) || 0) > now()) continue;
+      if ((billingQuarantine.get(fallback.name) || 0) > now()
+        || billingFailover.unfundedReason(fallback.name, env)) continue;
+      const requestKey = keyForRung(fallback.name, env);
       try {
         // eslint-disable-next-line global-require
         const { clientForModel } = require('../ai/structured-generation');
@@ -580,6 +592,9 @@ async function chatComplete({
         billingSnapshot.delete(fallback.name);
         billingKeySnapshot.delete(fallback.name);
         billingWarnedKey.delete(fallback.name);
+        if (clean(out.content) && keyForRung(fallback.name, env) === requestKey) {
+          billingFailover.noteProviderAnswered(fallback.name, env);
+        }
         return out;
       } catch (err) {
         if (signal?.aborted || err?.partialResponse) throw err;
@@ -599,7 +614,8 @@ async function chatComplete({
 
 /** For health/telemetry: which provider+model would serve the next call. */
 function describeActiveProvider({ env = process.env, now = Date.now, exclude = [] } = {}) {
-  const candidates = resolveCandidates({ env, now, exclude });
+  const candidates = resolveCandidates({ env, now, exclude }).filter((name) =>
+    (billingQuarantine.get(name) || 0) <= now() && !billingFailover.unfundedReason(name, env));
   if (candidates.length === 0) return { provider: null, model: null };
   return { provider: candidates[0], model: modelFor(candidates[0], env) };
 }

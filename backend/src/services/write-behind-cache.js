@@ -10,17 +10,16 @@
  *   - Numeric fields with __increment marker accumulate.
  *   - Flush every `flushIntervalMs` (default 5s) OR when queue size
  *     reaches `flushThreshold` (default 100).
- *   - Per-flush groups by model and dispatches batched updates via
- *     `updateMany` when the where is a simple single-key filter, or
- *     per-item `update` otherwise.
+ *   - Pure User.lastActiveAt writes use bounded, parameterized SQL batches.
+ *     Other writes retain their per-entry updateMany/update semantics.
  *   - SIGTERM-safe: `shutdown()` waits for any active flush, drains bounded
  *     retries, and rejects if writes remain so the shutdown registry can
  *     report data-loss risk before exit.
  *
  * Lost-update protection:
  *   - For monotonic timestamp fields (lastActiveAt), we only persist if
- *     the queued value is newer than what's already in the row by virtue
- *     of using `gte` filters when batching. For counters we use Prisma's
+ *     the queued value is newer than what's already in the row, checked
+ *     atomically by the UPDATE. For counters we use Prisma's
  *     `{ increment: n }` atomic op so concurrent writers add cleanly.
  *   - `getPending(model, where)` lets read paths see the not-yet-flushed
  *     value so users don't observe a stale "last seen" right after the
@@ -32,6 +31,31 @@
  *     boot the consumer can rehydrate via `hydrateFromRedis()`.
  *   - When Redis isn't configured we operate purely in memory.
  */
+
+const ACTIVITY_BATCH_SIZE = 100;
+
+// Only the auth telemetry shape is eligible. In particular, do not widen
+// compound filters or fold counters/settings into a raw SQL update. ISO text
+// is accepted for entries restored from Redis; invalid dates stay on the
+// existing Prisma validation/error path and cannot poison a valid SQL batch.
+function activityTimestamp(entry) {
+  if (entry.model !== 'user' || Object.keys(entry.where).length !== 1
+      || typeof entry.where.id !== 'string' || !entry.where.id
+      || Object.keys(entry.data).length !== 1 || !('lastActiveAt' in entry.data)) return null;
+  const value = entry.data.lastActiveAt;
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null;
+  if (typeof value !== 'string') return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === value ? date : null;
+}
+
+function activityWhere(entry, timestamp) {
+  return {
+    ...entry.where,
+    deletedAt: null,
+    OR: [{ lastActiveAt: null }, { lastActiveAt: { lt: timestamp } }],
+  };
+}
 
 function stableStringify(value, seen = new WeakSet()) {
   if (value === null || value === undefined) return 'null';
@@ -142,9 +166,13 @@ function createWriteBehindCache(opts = {}) {
     validateData(entry.data);
     const existing = queue.get(k);
     if (existing) {
-      existing.data = incomingWins
-        ? mergeData(existing.data, entry.data)
-        : mergeData(entry.data, existing.data);
+      const previousActivity = activityTimestamp(existing);
+      const incomingActivity = activityTimestamp(entry);
+      existing.data = previousActivity && incomingActivity
+        ? { lastActiveAt: new Date(Math.max(previousActivity.getTime(), incomingActivity.getTime())) }
+        : incomingWins
+          ? mergeData(existing.data, entry.data)
+          : mergeData(entry.data, existing.data);
       existing.retryCount = Math.max(existing.retryCount || 0, entry.retryCount || 0);
       existing.addedAt = Math.min(existing.addedAt || now(), entry.addedAt || now());
     } else {
@@ -170,6 +198,14 @@ function createWriteBehindCache(opts = {}) {
 
   startTimer();
 
+  function mirrorEntry(k) {
+    if (!redis) return;
+    const { model, where, data } = queue.get(k);
+    const payload = JSON.stringify({ model, where, data });
+    Promise.resolve().then(() => redis.hset(`${redisPrefix}pending`, k, payload))
+      .catch((e) => reportError('redis_mirror', e));
+  }
+
   function queueWrite(model, where, data) {
     if (shuttingDown) {
       const error = new Error('write-behind-cache is shutting down');
@@ -183,11 +219,7 @@ function createWriteBehindCache(opts = {}) {
     const k = keyFor(model, where);
     mergeQueueEntry(k, { model, where, data, addedAt: now(), retryCount: 0 });
     // Mirror to redis (fire-and-forget; failures don't block).
-    if (redis) {
-      const payload = JSON.stringify({ model, where, data: queue.get(k).data });
-      Promise.resolve().then(() => redis.hset(`${redisPrefix}pending`, k, payload))
-        .catch((e) => reportError('redis_mirror', e));
-    }
+    mirrorEntry(k);
     if (queue.size >= flushThreshold) {
       // Yield to the next tick so the caller isn't blocked on the flush.
       Promise.resolve().then(() => flushNow().catch((e) => reportError('threshold', e)));
@@ -215,6 +247,62 @@ function createWriteBehindCache(opts = {}) {
     let dropped = 0;
     let batchCount = 0;
     const redisClearFields = [];
+
+    function handleWriteError(entry, err) {
+      const fieldKey = keyFor(entry.model, entry.where);
+      if (err && err.code === 'P2025') {
+        redisClearFields.push(fieldKey);
+        return;
+      }
+      reportError('flush_update', err);
+      const retryCount = (entry.retryCount || 0) + 1;
+      // Shutdown must report residual writes rather than discard them.
+      if (retryCount <= maxRetries || shuttingDown) {
+        retried += 1;
+        totalRetried += 1;
+        mergeQueueEntry(fieldKey, { ...entry, retryCount }, { incomingWins: false });
+        // A later-arriving, older event may already have replaced the mirror
+        // while SQL was in flight. Persist the merged maximum before retry.
+        if (activityTimestamp(queue.get(fieldKey))) mirrorEntry(fieldKey);
+      } else {
+        dropped += 1;
+        totalDropped += 1;
+        redisClearFields.push(fieldKey);
+        reportError('retry_exhausted', err);
+      }
+    }
+
+    async function flushActivityBatch(entries) {
+      // All identifiers are fixed SQL and all values are bound parameters.
+      // Preserve Prisma's @updatedAt behavior only for rows actually updated.
+      const values = [new Date(now())];
+      const tuples = entries.map((entry, index) => {
+        values.push(entry.where.id, activityTimestamp(entry));
+        return `($${index * 2 + 2}::text, $${index * 2 + 3}::timestamp)`;
+      });
+      const sql = `
+        UPDATE "users" AS target
+        SET "lastActiveAt" = activity."lastActiveAt", "updatedAt" = $1::timestamp
+        FROM (VALUES ${tuples.join(', ')}) AS activity("id", "lastActiveAt")
+        WHERE target."id" = activity."id"
+          AND target."deletedAt" IS NULL
+          AND (target."lastActiveAt" IS NULL OR target."lastActiveAt" < activity."lastActiveAt")
+        RETURNING target."id" AS "id"
+      `;
+      const rows = await prisma.$queryRawUnsafe(sql, ...values);
+      const expected = new Set(entries.map(entry => entry.where.id));
+      if (!Array.isArray(rows) || rows.some(row => !expected.has(row?.id))
+          || new Set(rows.map(row => row.id)).size !== rows.length) {
+        const error = new Error('Invalid activity batch result');
+        error.code = 'WRITE_BEHIND_INVALID_BATCH_RESULT';
+        throw error;
+      }
+      // Missing, deleted, equal or newer rows are terminal no-ops, just like
+      // updateMany(count=0). Count only the IDs actually returned by Postgres.
+      flushed += rows.length;
+      redisClearFields.push(...entries.map(entry => keyFor(entry.model, entry.where)));
+    }
+
     try {
       for (const [model, entries] of batches.entries()) {
         batchCount += 1;
@@ -227,7 +315,19 @@ function createWriteBehindCache(opts = {}) {
           redisClearFields.push(...entries.map((e) => keyFor(e.model, e.where)));
           continue;
         }
-        for (const entry of entries) {
+        for (let index = 0; index < entries.length;) {
+          const entry = entries[index];
+          const timestamp = activityTimestamp(entry);
+          if (timestamp && typeof prisma.$queryRawUnsafe === 'function') {
+            const activityBatch = [];
+            // Keep ordering relative to other update shapes for the same user.
+            while (index < entries.length && activityBatch.length < ACTIVITY_BATCH_SIZE
+                && activityTimestamp(entries[index])) activityBatch.push(entries[index++]);
+            try { await flushActivityBatch(activityBatch); }
+            catch (err) { for (const failed of activityBatch) handleWriteError(failed, err); }
+            continue;
+          }
+          index += 1;
           const fieldKey = keyFor(entry.model, entry.where);
           try {
             const delegate = prisma[model];
@@ -237,9 +337,10 @@ function createWriteBehindCache(opts = {}) {
             // the same non-fatal semantics. Test doubles and older delegates
             // without updateMany retain the prior update() fallback.
             const usedUpdateMany = typeof delegate.updateMany === 'function';
+            const where = timestamp ? activityWhere(entry, timestamp) : entry.where;
             const result = usedUpdateMany
-              ? await delegate.updateMany({ where: entry.where, data: toPrismaData(entry.data) })
-              : await delegate.update({ where: entry.where, data: toPrismaData(entry.data) });
+              ? await delegate.updateMany({ where, data: toPrismaData(entry.data) })
+              : await delegate.update({ where, data: toPrismaData(entry.data) });
             if (usedUpdateMany && Number(result?.count) === 0) {
               redisClearFields.push(fieldKey);
               continue;
@@ -247,35 +348,19 @@ function createWriteBehindCache(opts = {}) {
             flushed += 1;
             redisClearFields.push(fieldKey);
           } catch (err) {
-            // P2025 — record not found — is non-fatal: the row was
-            // deleted between queue + flush. Other errors are reported.
-            const code = err && err.code;
-            if (code === 'P2025') {
-              redisClearFields.push(fieldKey);
-              continue;
-            }
-            reportError('flush_update', err);
-            const retryCount = (entry.retryCount || 0) + 1;
-            // During shutdown, retain even exhausted entries so bounded
-            // draining reports residual writes instead of silently dropping
-            // data just before process exit.
-            if (retryCount <= maxRetries || shuttingDown) {
-              retried += 1;
-              totalRetried += 1;
-              mergeQueueEntry(fieldKey, { ...entry, retryCount }, { incomingWins: false });
-            } else {
-              dropped += 1;
-              totalDropped += 1;
-              redisClearFields.push(fieldKey);
-              reportError('retry_exhausted', err);
-            }
+            handleWriteError(entry, err);
           }
         }
       }
       if (redis && redisClearFields.length > 0) {
-        const fields = Array.from(new Set(redisClearFields));
-        await Promise.resolve().then(() => redis.hdel(`${redisPrefix}pending`, ...fields))
-          .catch((e) => reportError('redis_clear', e));
+        // A newer write may have arrived while the database batch was in
+        // flight. Do not erase its durable mirror. Issue hdel synchronously
+        // before yielding so later queueWrite/hset calls keep command order.
+        const fields = Array.from(new Set(redisClearFields)).filter(key => !queue.has(key));
+        if (fields.length) {
+          try { await redis.hdel(`${redisPrefix}pending`, ...fields); }
+          catch (error) { reportError('redis_clear', error); }
+        }
       }
       totalFlushed += flushed;
       lastFlushAt = now();
@@ -400,6 +485,7 @@ function createWriteBehindCache(opts = {}) {
 }
 
 module.exports = {
+  ACTIVITY_BATCH_SIZE,
   createWriteBehindCache,
   keyFor,
   mergeData,

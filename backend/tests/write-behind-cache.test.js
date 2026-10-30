@@ -11,7 +11,268 @@ const {
   stableStringify,
   keyFor,
   toPrismaData,
+  ACTIVITY_BATCH_SIZE,
 } = require('../src/services/write-behind-cache');
+
+function activityBatchPrisma(execute) {
+  const rawCalls = [];
+  const delegateCalls = [];
+  const prisma = {
+    user: {
+      update: async () => { throw new Error('Unexpected update fallback'); },
+      updateMany: async args => { delegateCalls.push(args); return { count: 1 }; },
+    },
+    async $queryRawUnsafe(sql, ...values) {
+      rawCalls.push({ sql, values });
+      // This is only a transport spy, not an SQL interpreter. Tests assert
+      // binding, dispatch, and queue behavior independently of database SQL.
+      return execute ? execute(sql, values) : values.filter((_, index) => index % 2 === 1).map(id => ({ id }));
+    },
+  };
+  return { prisma, rawCalls, delegateCalls };
+}
+
+test('100 pure activity writes use one bound query, not 100 delegate updates', async () => {
+  const { prisma, rawCalls, delegateCalls } = activityBatchPrisma();
+  const timestamp = new Date('2026-10-30T12:00:00.000Z');
+  const writtenAt = new Date('2026-10-30T12:01:00.000Z');
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, flushThreshold: 1000, now: () => +writtenAt });
+  const maliciousId = "user'); DROP TABLE users; --";
+  for (let index = 0; index < 100; index++) {
+    wbc.queueWrite('user', { id: index === 0 ? maliciousId : `user-${index}` }, { lastActiveAt: timestamp });
+  }
+  const result = await wbc.flushNow();
+  assert.deepEqual(result, { flushed: 100, batches: 1, retried: 0, dropped: 0 });
+  assert.equal(delegateCalls.length, 0);
+  assert.equal(rawCalls.length, 1);
+  const { sql, values } = rawCalls[0];
+  assert.equal(values.length, 201);
+  assert.deepEqual(values[0], writtenAt);
+  assert.equal(values[1], maliciousId);
+  assert.deepEqual(values[2], timestamp);
+  assert.equal(sql.includes(maliciousId), false);
+  assert.equal(sql.includes(timestamp.toISOString()), false);
+  assert.match(sql, /UPDATE "users" AS target/);
+  assert.match(sql, /"updatedAt" = \$1::timestamp/);
+  assert.match(sql, /target\."deletedAt" IS NULL/);
+  assert.match(sql, /target\."lastActiveAt" IS NULL OR target\."lastActiveAt" < activity\."lastActiveAt"/);
+  assert.match(sql, /RETURNING target\."id" AS "id"/);
+  assert.match(sql, /\(\$200::text, \$201::timestamp\)/);
+});
+
+test('activity statements remain bounded above the batch size', async () => {
+  const { prisma, rawCalls, delegateCalls } = activityBatchPrisma();
+  const count = ACTIVITY_BATCH_SIZE * 2 + 17;
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, flushThreshold: count + 1 });
+  for (let index = 0; index < count; index++) {
+    wbc.queueWrite('user', { id: `user-${index}` }, { lastActiveAt: new Date(index * 1000) });
+  }
+  assert.equal((await wbc.flushNow()).flushed, count);
+  assert.deepEqual(rawCalls.map(call => (call.values.length - 1) / 2), [ACTIVITY_BATCH_SIZE, ACTIVITY_BATCH_SIZE, 17]);
+  assert.equal(delegateCalls.length, 0);
+  assert.equal(wbc.size(), 0);
+});
+
+test('older activity arriving later cannot replace newer queued activity, including Redis ISO values', async () => {
+  const { prisma, rawCalls } = activityBatchPrisma();
+  const latest = new Date('2026-10-30T12:00:00.000Z');
+  const older = new Date('2026-10-30T11:00:00.000Z');
+  const where = { id: 'monotonic' };
+  const redis = {
+    hgetall: async () => ({ [keyFor('user', where)]: JSON.stringify({ model: 'user', where, data: { lastActiveAt: older } }) }),
+    hset: async () => {}, hdel: async () => {},
+  };
+  const wbc = createWriteBehindCache({ prisma, redis, flushIntervalMs: 0 });
+  wbc.queueWrite('user', where, { lastActiveAt: latest });
+  wbc.queueWrite('user', where, { lastActiveAt: older });
+  assert.deepEqual(wbc.getPending('user', where), { lastActiveAt: latest });
+  await wbc.hydrateFromRedis();
+  assert.deepEqual(wbc.getPending('user', where), { lastActiveAt: latest });
+  assert.equal((await wbc.flushNow()).flushed, 1);
+  assert.deepEqual(rawCalls[0].values[2], latest);
+});
+
+test('compound filters and mixed fields retain delegate semantics and ordering', async () => {
+  const order = [];
+  const { prisma, rawCalls, delegateCalls } = activityBatchPrisma((sql, values) => {
+    order.push(['batch', values[1]]);
+    return [{ id: values[1] }];
+  });
+  prisma.user.updateMany = async args => { delegateCalls.push(args); order.push(['delegate', args.where.id]); return { count: 1 }; };
+  const date = new Date('2026-10-30T12:00:00.000Z');
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0 });
+  wbc.queueWrite('user', { id: 'first' }, { lastActiveAt: date });
+  wbc.queueWrite('user', { id: 'compound', plan: 'PRO' }, { lastActiveAt: date });
+  wbc.queueWrite('user', { id: 'mixed' }, { lastActiveAt: date, apiUsage: { __increment: 3 } });
+  wbc.queueWrite('user', { id: 'last' }, { lastActiveAt: date });
+  assert.equal((await wbc.flushNow()).flushed, 4);
+  assert.deepEqual(order, [['batch', 'first'], ['delegate', 'compound'], ['delegate', 'mixed'], ['batch', 'last']]);
+  assert.equal(rawCalls.length, 2);
+  assert.deepEqual(delegateCalls, [
+    { where: { id: 'compound', plan: 'PRO' }, data: { lastActiveAt: date } },
+    { where: { id: 'mixed' }, data: { lastActiveAt: date, apiUsage: { increment: 3 } } },
+  ]);
+});
+
+test('invalid activity dates follow delegate validation without poisoning a valid batch', async () => {
+  const { prisma, rawCalls, delegateCalls } = activityBatchPrisma();
+  prisma.user.updateMany = async args => {
+    delegateCalls.push(args);
+    assert.equal(Number.isNaN(args.data.lastActiveAt.getTime()), true);
+    throw new TypeError('Invalid Date');
+  };
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, maxRetries: 0 });
+  wbc.queueWrite('user', { id: 'invalid' }, { lastActiveAt: new Date(NaN) });
+  wbc.queueWrite('user', { id: 'valid' }, { lastActiveAt: new Date('2026-10-30T12:00:00.000Z') });
+  assert.deepEqual(await wbc.flushNow(), { flushed: 1, batches: 1, retried: 0, dropped: 1 });
+  assert.equal(delegateCalls.length, 1);
+  assert.equal(rawCalls.length, 1);
+  assert.equal(rawCalls[0].values[1], 'valid');
+});
+
+test('activity fallback carries the same atomic newer-only and soft-delete guards', async () => {
+  let actual;
+  const timestamp = new Date('2026-10-30T12:00:00.000Z');
+  const prisma = { user: { update: async () => {}, updateMany: async args => { actual = args; return { count: 0 }; } } };
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0 });
+  wbc.queueWrite('user', { id: 'guarded' }, { lastActiveAt: timestamp });
+  assert.equal((await wbc.flushNow()).flushed, 0);
+  assert.deepEqual(actual, {
+    where: { id: 'guarded', deletedAt: null, OR: [{ lastActiveAt: null }, { lastActiveAt: { lt: timestamp } }] },
+    data: { lastActiveAt: timestamp },
+  });
+});
+
+test('activity result count records only returned rows while settling absent or newer rows', async () => {
+  const { prisma } = activityBatchPrisma(() => [{ id: 'updated' }]);
+  const cleared = [];
+  const redis = { hset: async () => {}, hdel: async (_key, ...fields) => { cleared.push(...fields); } };
+  const wbc = createWriteBehindCache({ prisma, redis, flushIntervalMs: 0 });
+  for (const id of ['updated', 'missing', 'newer', 'deleted']) {
+    wbc.queueWrite('user', { id }, { lastActiveAt: new Date() });
+  }
+  assert.deepEqual(await wbc.flushNow(), { flushed: 1, batches: 1, retried: 0, dropped: 0 });
+  assert.equal(wbc.stats().totalFlushed, 1);
+  assert.equal(wbc.size(), 0);
+  assert.equal(cleared.length, 4);
+});
+
+test('failed activity batches requeue every write and preserve latest activity arriving during flush', { timeout: 1000 }, async () => {
+  let release;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  let fail = true;
+  const { prisma, rawCalls } = activityBatchPrisma(async (_sql, values) => {
+    if (fail) { markStarted(); await gate; throw new Error('temporary database outage'); }
+    return values.filter((_, index) => index % 2 === 1).map(id => ({ id }));
+  });
+  const latest = new Date('2026-10-30T12:00:00.000Z');
+  const older = new Date('2026-10-30T11:00:00.000Z');
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, maxRetries: 1 });
+  wbc.queueWrite('user', { id: 'reverse' }, { lastActiveAt: latest });
+  wbc.queueWrite('user', { id: 'forward' }, { lastActiveAt: older });
+  const flushing = wbc.flushNow();
+  await started;
+  wbc.queueWrite('user', { id: 'reverse' }, { lastActiveAt: older });
+  wbc.queueWrite('user', { id: 'forward' }, { lastActiveAt: latest });
+  assert.equal((await wbc.flushNow()).skipped, true);
+  release();
+  assert.deepEqual(await flushing, { flushed: 0, batches: 1, retried: 2, dropped: 0 });
+  for (const id of ['reverse', 'forward']) assert.deepEqual(wbc.getPending('user', { id }), { lastActiveAt: latest });
+  fail = false;
+  assert.equal((await wbc.flushNow()).flushed, 2);
+  assert.equal(rawCalls.length, 2);
+  assert.equal(wbc.size(), 0);
+});
+
+test('an activity result with invalid or duplicate IDs is never acknowledged as persisted', async () => {
+  for (const response of [undefined, 1, [{ id: 'other' }], [{ id: 'a' }, { id: 'a' }]]) {
+    const { prisma } = activityBatchPrisma(() => response);
+    const errors = [];
+    const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, onError: (_stage, error) => errors.push(error.code) });
+    wbc.queueWrite('user', { id: 'a' }, { lastActiveAt: new Date() });
+    assert.equal((await wbc.flushNow()).retried, 1);
+    assert.equal(wbc.size(), 1);
+    assert.deepEqual(errors, ['WRITE_BEHIND_INVALID_BATCH_RESULT']);
+  }
+});
+
+test('successful activity flush retains the Redis mirror for a newer pending event', { timeout: 1000 }, async () => {
+  let release;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const { prisma } = activityBatchPrisma(async (_sql, values) => { markStarted(); await gate; return [{ id: values[1] }]; });
+  const mirrors = new Map();
+  const redis = {
+    hset: async (_key, field, payload) => { mirrors.set(field, payload); },
+    hdel: async (_key, ...fields) => { for (const field of fields) mirrors.delete(field); },
+  };
+  const where = { id: 'live' };
+  const latest = new Date('2026-10-30T12:00:00.000Z');
+  const wbc = createWriteBehindCache({ prisma, redis, flushIntervalMs: 0 });
+  wbc.queueWrite('user', where, { lastActiveAt: new Date('2026-10-30T11:00:00.000Z') });
+  const flushing = wbc.flushNow();
+  await started;
+  wbc.queueWrite('user', where, { lastActiveAt: latest });
+  release();
+  assert.equal((await flushing).flushed, 1);
+  assert.deepEqual(wbc.getPending('user', where), { lastActiveAt: latest });
+  assert.equal(JSON.parse(mirrors.get(keyFor('user', where))).data.lastActiveAt, latest.toISOString());
+  assert.equal((await wbc.flushNow()).flushed, 1);
+  assert.equal(mirrors.size, 0);
+});
+
+test('failed activity batch remirrors the merged timestamp before recovery from Redis', { timeout: 1000 }, async () => {
+  let release;
+  let markStarted;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { markStarted = resolve; });
+  const { prisma } = activityBatchPrisma(async () => {
+    markStarted();
+    await gate;
+    throw new Error('database unavailable');
+  });
+  const mirrors = new Map();
+  const redis = {
+    hset: async (_key, field, payload) => { mirrors.set(field, payload); },
+    hdel: async (_key, ...fields) => { for (const field of fields) mirrors.delete(field); },
+    hgetall: async () => Object.fromEntries(mirrors),
+  };
+  const where = { id: 'retry-recover' };
+  const latest = new Date('2026-10-30T12:00:00.000Z');
+  const wbc = createWriteBehindCache({ prisma, redis, flushIntervalMs: 0 });
+  wbc.queueWrite('user', where, { lastActiveAt: latest });
+  const flushing = wbc.flushNow();
+  await started;
+  wbc.queueWrite('user', where, { lastActiveAt: new Date('2026-10-30T11:00:00.000Z') });
+  release();
+  assert.equal((await flushing).retried, 1);
+  assert.deepEqual(wbc.getPending('user', where), { lastActiveAt: latest });
+  assert.equal(JSON.parse(mirrors.get(keyFor('user', where))).data.lastActiveAt, latest.toISOString());
+  const replacement = createWriteBehindCache({ prisma, redis, flushIntervalMs: 0 });
+  assert.equal((await replacement.hydrateFromRedis()).hydrated, 1);
+  assert.equal(replacement.getPending('user', where).lastActiveAt, latest.toISOString());
+});
+
+test('one failed activity batch does not discard or block later batches and exhausts bounded retries', async () => {
+  const { prisma } = activityBatchPrisma((_sql, values) => {
+    if (values[1] === 'user-0') throw new Error('first batch unavailable');
+    return values.filter((_, index) => index % 2 === 1).map(id => ({ id }));
+  });
+  const wbc = createWriteBehindCache({ prisma, flushIntervalMs: 0, flushThreshold: 1000, maxRetries: 1 });
+  for (let index = 0; index < ACTIVITY_BATCH_SIZE + 17; index++) {
+    wbc.queueWrite('user', { id: `user-${index}` }, { lastActiveAt: new Date('2026-10-30T12:00:00Z') });
+  }
+  assert.deepEqual(await wbc.flushNow(), { flushed: 17, batches: 1, retried: 100, dropped: 0 });
+  assert.equal(wbc.size(), 100);
+  assert.deepEqual(await wbc.flushNow(), { flushed: 0, batches: 1, retried: 0, dropped: 100 });
+  assert.equal(wbc.size(), 0);
+  assert.equal(wbc.stats().totalRetried, 100);
+  assert.equal(wbc.stats().totalDropped, 100);
+  assert.equal(wbc.stats().totalFlushed, 17);
+});
 
 function loadFreshAuthWithWriteBehindFactory(factory) {
   const authPath = require.resolve('../src/middleware/auth');
