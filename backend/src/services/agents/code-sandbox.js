@@ -274,6 +274,19 @@ async function run(opts) {
       await fs.writeFile(resolved, body, 'utf8');
     }
 
+    // Abort events are not replayed to listeners added later. Preparation
+    // awaits filesystem I/O, so Stop may have arrived before a child exists.
+    if (abortSignal?.aborted) {
+      await releaseDir();
+      return {
+        ok: false, exitCode: null, signal: 'SIGABRT',
+        stdout: '', stderr: 'aborted',
+        durationMs: 0, timedOut: false, truncated: false,
+        language,
+        aborted: true,
+      };
+    }
+
     const start = Date.now();
     child = spawn(cfg.interpreter, cfg.args(mainFile), {
       cwd: dir,
