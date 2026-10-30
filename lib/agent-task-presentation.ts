@@ -97,16 +97,20 @@ export function professionalStepLabel(step: AgentTaskState["steps"][number]): st
 }
 
 export function summarizeAgentActivity(state: AgentTaskState): AgentActivitySummary {
+  // Persisted delivery snapshots omit optional live-run arrays.
+  const steps = Array.isArray(state.steps) ? state.steps : []
+  const repairs = Array.isArray(state.repairs) ? state.repairs : []
+  const gates = Array.isArray(state.qualityGates) ? state.qualityGates : []
   const tools = new Set<string>()
-  for (const step of state.steps || []) {
+  for (const step of steps) {
     for (const call of step.toolCalls || []) {
       if (call.tool) tools.add(call.tool)
     }
   }
 
-  const validationTotal = state.qualityGates?.length || 0
-  const validationPassed = (state.qualityGates || []).filter((gate) => gate.passed).length
-  const latestRepair = (state.repairs || [])[state.repairs.length - 1]
+  const validationTotal = gates.length
+  const validationPassed = gates.filter((gate) => gate.passed).length
+  const latestRepair = repairs[repairs.length - 1]
 
   let status: AgentActivityStatus = "idle"
   if (state.error === "aborted" || state.queue?.status === "cancelled") {
@@ -117,11 +121,11 @@ export function summarizeAgentActivity(state: AgentTaskState): AgentActivitySumm
     status = "completed"
   } else if (latestRepair && latestRepair.status !== "completed") {
     status = "repairing"
-  } else if ((state.qualityGates?.length || 0) > 0 && state.steps.some((step) => step.status === "running")) {
+  } else if (gates.length > 0 && steps.some((step) => step.status === "running")) {
     status = "verifying"
   } else if (state.queue?.status === "queued") {
     status = "queued"
-  } else if (state.queue?.status === "running" || state.steps.some((step) => step.status === "running")) {
+  } else if (state.queue?.status === "running" || steps.some((step) => step.status === "running")) {
     status = "running"
   }
 
@@ -140,7 +144,7 @@ export function summarizeAgentActivity(state: AgentTaskState): AgentActivitySumm
     status,
     label: statusText[status].label,
     description: statusText[status].description,
-    stepCount: Math.max(state.steps?.length || 0, state.checkpoints?.length || 0),
+    stepCount: Math.max(steps.length, state.checkpoints?.length || 0),
     toolCount: tools.size,
     validationPassed,
     validationTotal,

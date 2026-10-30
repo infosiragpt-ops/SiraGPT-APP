@@ -2280,8 +2280,8 @@ class ApiClient {
     });
   }
 
-  async getFilesProcessingStatus(ids: string[]): Promise<any> {
-    return this.request(`/files/processing-status?ids=${encodeURIComponent(ids.join(','))}`, { timeoutMs: 20_000, maxRetries: 0 });
+  async getFilesProcessingStatus(ids: string[], options: { signal?: AbortSignal } = {}): Promise<any> {
+    return this.request(`/files/processing-status?ids=${encodeURIComponent(ids.join(','))}`, { timeoutMs: 20_000, maxRetries: 0, signal: options.signal });
   }
 
   async retryFileProcessing(id: string): Promise<any> {
