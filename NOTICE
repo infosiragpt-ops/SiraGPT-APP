@@ -51,3 +51,13 @@ SiraGPT and SiraCode are not affiliated with, endorsed by, or
 sponsored by OpenCode or Anomaly.
 
 Third-party architecture notes also live in THIRD_PARTY_NOTICES.md.
+
+Source Serif 4 font files
+-------------------------
+Copyright 2014 The Source Serif 4 Project Authors
+https://github.com/adobe-fonts/source-serif
+Unmodified Google Fonts v15 WOFF2 subsets under SIL Open Font License 1.1.
+License, source URLs, source revision and checksums:
+public/fonts/source-serif-4/OFL.txt and provenance.json.
+These are the same family, normal style and weights previously downloaded
+by next/font/google; they are bundled so builds do not require Google Fonts.

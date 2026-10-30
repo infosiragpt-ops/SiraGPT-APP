@@ -1,0 +1,60 @@
+{
+  "family": "Source Serif 4",
+  "license": "OFL-1.1",
+  "licenseSource": "https://raw.githubusercontent.com/google/fonts/6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec/ofl/sourceserif4/OFL.txt",
+  "licenseSha256": "5f94c3fd3a23131a417ab5a0c8452de57e70c3cfb9f604d88241f7065ebf9fd9",
+  "sourceRepository": "https://github.com/adobe-fonts/source-serif",
+  "stylesheetSource": "https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600;700&display=swap",
+  "stylesheetSha256": "683d7bd580846d3ec463d9c9a49814ce2d0a5366ff3ccab70f33eb1eef6459a2",
+  "googleFontsRevision": "6c1dbe27dcf7d817d4b62cec033ba77fa8e2a5ec",
+  "weights": [
+    400,
+    600,
+    700
+  ],
+  "style": "normal",
+  "assets": [
+    {
+      "subset": "cyrillic-ext",
+      "file": "cyrillic-ext-da49e14ae1d4.woff2",
+      "source": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kAHr4cXk.woff2",
+      "sha256": "da49e14ae1d459f3d04cf4555fb954f6e54b247b708f8cfe2d8e7e4ee3c6829b",
+      "bytes": 18112
+    },
+    {
+      "subset": "cyrillic",
+      "file": "cyrillic-a81082707b85.woff2",
+      "source": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kCXr4cXk.woff2",
+      "sha256": "a81082707b85203d7f2ae33833f7ae0bf832db167c8710f92f805a9808fb051a",
+      "bytes": 36508
+    },
+    {
+      "subset": "greek",
+      "file": "greek-54c4728aa0fd.woff2",
+      "source": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kDnr4cXk.woff2",
+      "sha256": "54c4728aa0fd97d59b89b6d89b230065794b4c088c55efe71abc9ce882cfa853",
+      "bytes": 20184
+    },
+    {
+      "subset": "vietnamese",
+      "file": "vietnamese-c3de01b5144e.woff2",
+      "source": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kAnr4cXk.woff2",
+      "sha256": "c3de01b5144e1a2d7e70eeaf66ab92afdedcc4424ed1d7ffc1993a657d1c762a",
+      "bytes": 13508
+    },
+    {
+      "subset": "latin-ext",
+      "file": "latin-ext-d10ccbbd0dc4.woff2",
+      "source": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kA3r4cXk.woff2",
+      "sha256": "d10ccbbd0dc4ebae2938958dc1f622a53460fe297e9c958564742dd684309c3f",
+      "bytes": 42212
+    },
+    {
+      "subset": "latin",
+      "file": "latin-382475f38242.woff2",
+      "source": "https://fonts.gstatic.com/s/sourceserif4/v15/vEFF2_tTDB4M7-auWDN0ahZJW3IX2ih5nk3AucvUHf6kDXr4.woff2",
+      "sha256": "382475f38242c52d42a3e5ff8dc69b5d73f10d0d21e4550b5fe232984688779a",
+      "bytes": 50936
+    }
+  ]
+}
