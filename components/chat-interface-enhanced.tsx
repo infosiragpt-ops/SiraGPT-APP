@@ -223,6 +223,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
+import { useMediaDeliveryProgress } from "@/hooks/use-media-delivery-progress"
 import { imageAssetsFromMessages, type WorkspaceImage } from '@/lib/image-workspace'
 const ImageWorkspace = dynamic(() => import('./images/ImageWorkspace'), { ssr: false })
 import { ErrorBoundary } from "./error-boundary"
@@ -5099,6 +5100,7 @@ type VoiceStudioChatFile = { id: string; name: string; mimeType: string | null; 
 const EMPTY_VOICE_STUDIO_CHAT_FILES: readonly VoiceStudioChatFile[] = Object.freeze([])
 
 type ChatMessageListProps = {
+  chatId: string | null
   messages: any[]
   pendingMessages: QueuedComposerMessage[]
   isStreaming: boolean
@@ -5121,6 +5123,7 @@ type ChatMessageListProps = {
 // stable callback props lets React skip that entire subtree until messages or
 // streaming state actually change.
 const ChatMessageList = React.memo(function ChatMessageList({
+  chatId,
   messages: rawMessages,
   pendingMessages,
   isStreaming,
@@ -5136,6 +5139,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
   focusImageMessage,
   onOpenSources,
 }: ChatMessageListProps) {
+  const cloudProgress = useMediaDeliveryProgress({ chatId, ownerId: user?.id ?? null, messages: rawMessages })
   const { stableMessages, streamingMessage } = React.useMemo(() => {
     // Two passes are deliberate: the first collapses optimistic/server twins;
     // the second catches duplicates that become adjacent after hidden tool and
@@ -5215,6 +5219,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
             onBranch={live || message.queued ? undefined : onBranch}
             updateMessageInChat={message.queued ? () => {} : updateMessageInChat}
             readonlyQueued={message.queued === true}
+            cloudProgress={cloudProgress[message.id]}
             isStreaming={live}
             onToggleSplitView={onToggleSplitView}
             onDocumentPreview={onDocumentPreview}
@@ -14694,6 +14699,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       className="chat-log chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full"
                     >
                       <ChatMessageList
+                        chatId={currentChat?.id ?? null}
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
                         pendingMessages={queuedDisplayMessages}
                         isStreaming={isCurrentChatStreaming}

@@ -14,13 +14,16 @@ const idsOf = (value: unknown): string[] => Array.isArray(value)
   ? [...new Set(value.map(idOf).filter(Boolean))].sort()
   : [];
 
+export type MediaDeliveryMessage = Pick<ChatMessageLike, 'id' | 'role' | 'content' | 'metadata'>;
+export type PendingMediaDelivery = { messageId: string; deliveryId: string; fileIds: string[]; sourceFileIds: string[] };
+
 /**
  * A handoff ends the streamed turn, not its durable transcription. Only the
  * service's delivered messages settle it; unrelated replies and generated
  * files are not delivery evidence. Batch handoffs expose one primary delivery
  * id, so every source file must be accounted for before polling stops.
  */
-export function pendingMediaDeliveryRefreshKey(messages: Array<Pick<ChatMessageLike, 'id' | 'role' | 'content' | 'metadata'>> = []): string {
+export function pendingMediaDeliveries(messages: readonly MediaDeliveryMessage[] = []): PendingMediaDelivery[] {
   const assistants = messages.flatMap((message, index) => String(message.role).toUpperCase() === 'ASSISTANT'
     ? [{ message, index, metadata: metadataOf(message.metadata) }]
     : []);
@@ -48,7 +51,15 @@ export function pendingMediaDeliveryRefreshKey(messages: Array<Pick<ChatMessageL
       ? matchingDeliveries.some(delivery => idOf(delivery.metadata.mediaDelivery) === deliveryId)
       : matchingDeliveries.length > 0;
     const settled = hasExpectedDelivery && remainingFiles.length === 0;
-    return settled ? [] : [[message.id || index, deliveryId, remainingFiles]];
+    // Progress still belongs to this request's sources even if another
+    // delivery for the same file appeared later. Only its own delivery id
+    // can settle this work; coverage remains separate for the refresh key.
+    return settled ? [] : [{ messageId: String(message.id || index), deliveryId, fileIds: remainingFiles, sourceFileIds: fileIds }];
   });
-  return pending.length ? JSON.stringify(pending) : '';
+  return pending;
+}
+
+export function pendingMediaDeliveryRefreshKey(messages: readonly MediaDeliveryMessage[] = []): string {
+  const pending = pendingMediaDeliveries(messages);
+  return pending.length ? JSON.stringify(pending.map(({ messageId, deliveryId, fileIds }) => [messageId, deliveryId, fileIds])) : '';
 }

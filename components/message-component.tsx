@@ -92,6 +92,7 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import type { MediaDeliveryProgress } from "@/hooks/use-media-delivery-progress"
 import { activityDurationMs, activitySignature, activityToPlaceholderSteps, hasPairedActivity, hydrateActivityTrace } from "@/lib/chat/activity-log";
 import { OWNED_ELSEWHERE_PHASES } from "@/lib/chat/live-progress";
 import ActivityRail from "./activity-rail"
@@ -1451,7 +1452,7 @@ let speechEngineOwner: symbol | null = null;
 // their whole Markdown body behind the thesis card.
 const THESIS_MARKER_RE = /Initializing Thesis Generation|\*\*Searching Academic Sources\*\*|\*\*Generating Thesis Document\*\*|Thesis Generation Completed|\*\*Thesis Generation Error\*\*|Your comprehensive thesis has been generated/i;
 
-const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, readonlyQueued = false, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onImagePreview, onOpenSources, children }: {
+const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, readonlyQueued = false, cloudProgress, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onImagePreview, onOpenSources, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
@@ -1462,6 +1463,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     isStreaming?: boolean;
     /** Unaccepted turns use the existing queue edit controls, not server message edits. */
     readonlyQueued?: boolean;
+    cloudProgress?: MediaDeliveryProgress;
     onToggleSplitView?: (content: any) => void;
     isGeneratingImage?: boolean;
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
@@ -3417,6 +3419,12 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 answer={{ streaming: Boolean(isStreaming), text: message.content || "" }}
                             />
                         ) : null}
+                        {cloudProgress && !isStreaming && !message.error ? (
+                            <div role="status" aria-live="polite" className="flex items-center gap-2 py-2 text-sm text-muted-foreground" data-cloud-task-status>
+                                <ThinkingStatusLoader state="cargando-general" hideLabel density="glyph" announce={false} silent as="span" />
+                                <span>{cloudProgress.label}</span>
+                            </div>
+                        ) : null}
                         {requestBriefView && !isThinking && !message.error ? (
                             <RequestBriefLine brief={requestBriefView} live={Boolean(isStreaming)} />
                         ) : null}
@@ -3668,6 +3676,9 @@ const agentMetadataKey = (value: unknown): string => {
 
 export const areMessagePropsEqual = (prev: any, next: any) => {
     if (Boolean(prev.readonlyQueued) !== Boolean(next.readonlyQueued)) return false
+    if (prev.cloudProgress?.label !== next.cloudProgress?.label) return false
+    if (prev.cloudProgress?.stage !== next.cloudProgress?.stage) return false
+    if (prev.cloudProgress?.percent !== next.cloudProgress?.percent) return false
     const a = prev.message
     const b = next.message
     // Same row object and same live flag: nothing below can differ. This is

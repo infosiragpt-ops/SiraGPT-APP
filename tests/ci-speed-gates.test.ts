@@ -30,6 +30,7 @@ const CRITICAL_SPECS = [
   "e2e/codex-preview-cors.spec.ts",
   "e2e/chat-media-preview-players.spec.ts",
   "e2e/chat-followup-queue.spec.ts",
+  "e2e/chat-media-cloud-reload.spec.ts",
 ]
 
 describe("fast CI layout", () => {
