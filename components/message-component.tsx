@@ -92,7 +92,6 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
-import { ThinkingIndicator } from "./ui/thinking-indicator"
 import type { MediaDeliveryProgress } from "@/hooks/use-media-delivery-progress"
 import { activityDurationMs, activitySignature, activityToPlaceholderSteps, hasPairedActivity, hydrateActivityTrace } from "@/lib/chat/activity-log";
 import { OWNED_ELSEWHERE_PHASES } from "@/lib/chat/live-progress";
@@ -3422,7 +3421,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         ) : null}
                         {cloudProgress && !isStreaming && !message.error ? (
                             <div role="status" aria-live="polite" className="flex items-center gap-2 py-2 text-sm text-muted-foreground" data-cloud-task-status>
-                                <span aria-hidden="true"><ThinkingIndicator size="sm" /></span>
+                                <ThinkingStatusLoader state="cargando-general" hideLabel density="glyph" announce={false} silent as="span" />
                                 <span>{cloudProgress.label}</span>
                             </div>
                         ) : null}
