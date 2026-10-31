@@ -542,7 +542,12 @@ class FileProcessor {
       };
     } catch (error) {
       if (audioTranscriber.isAbortError(error, options.signal)) throw error;
-      console.error('File processing error:', error);
+      const expectedMediaOutcome = new Set(['file_empty', 'no_speech', 'no_audio_track', 'truncated_container', 'drm_protected']);
+      if (expectedMediaOutcome.has(String(error?.code || ''))) {
+        console.warn(`[fileProcessor] media extraction skipped (${error.code}): ${error.message}`);
+      } else {
+        console.error('File processing error:', error);
+      }
       return {
         success: false,
         code: error.code || 'extraction_failed',

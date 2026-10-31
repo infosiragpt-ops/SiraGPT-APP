@@ -449,6 +449,12 @@ function pickResolverRuntime({ openai, model, provider = null, pinned = false, e
     // AGENTS.md §13). Without its client the heuristic contract is used —
     // local code, not another model.
     const keyEnv = provider ? PINNED_PROVIDER_KEY_ENV[String(provider)] : null;
+    if (provider && keyEnv) {
+      const blockedReason = providerBlockedReason({ provider: String(provider), apiKeyEnv: keyEnv }, env, d);
+      if (blockedReason && blockedReason !== 'no_key') {
+        return { client: null, model, provider: String(provider), key: '', skipped: `${provider}:${blockedReason}` };
+      }
+    }
     return openai
       ? { client: openai, model, provider: provider || null, key: keyEnv ? String(env[keyEnv] || '').trim() : '', skipped: null }
       : { client: null, model, provider: provider || null, key: '', skipped: 'picked model unavailable' };

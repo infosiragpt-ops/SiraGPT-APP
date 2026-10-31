@@ -296,8 +296,13 @@ function errorToResponse(err, req, { exposeStack = false } = {}) {
 function isClientAbortedBody(err, req) {
   if (!err) return false;
   if (err.type === 'request.aborted') return true;
-  if (err.type !== 'stream.not.readable') return false;
-  return Boolean(req && (req.destroyed || req.aborted || req.readableAborted || (req.socket && req.socket.destroyed)));
+  const msg = String(err.message || '');
+  if (/^request aborted$/i.test(msg)) return true;
+  const reqGone = Boolean(req && (req.destroyed || req.aborted || req.readableAborted || (req.socket && req.socket.destroyed)));
+  if (!reqGone) return false;
+  if (err.type === 'stream.not.readable') return true;
+  if (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ECONNABORTED') return true;
+  return /request aborted|premature close|unexpected end of form/i.test(msg);
 }
 
 function globalErrorHandler({ logger = defaultLogger, captureException = null, stdout = null } = {}) {
@@ -310,7 +315,7 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
         method: req.method || '',
         path: redactPreviewUrl((req.originalUrl || req.url || '').split('?')[0]),
         reqId: getRequestId(req) || '',
-        reason: err.type,
+        reason: err.type || err.code || 'request.aborted',
       }, 'request_aborted');
       try {
         if (!res.writableEnded && !(res.socket && res.socket.destroyed)) {

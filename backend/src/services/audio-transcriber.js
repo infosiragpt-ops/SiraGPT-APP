@@ -923,7 +923,14 @@ function rememberProviderRejection(provider, err, options = {}) {
 }
 
 function providerInCooldown(provider) {
-  return Boolean(provider && provider.key && keyHealth.isRejected(`${COOLDOWN_NAMESPACE}${provider.name}`, provider.key));
+  if (!provider || !provider.key) return false;
+  if (keyHealth.isRejected(`${COOLDOWN_NAMESPACE}${provider.name}`, provider.key)) return true;
+  if (provider.key !== 'injected') {
+    try {
+      if (keyHealth.isRejected(provider.name, provider.key)) return true;
+    } catch (_) { /* advisory */ }
+  }
+  return false;
 }
 
 function clearTranscriptionCooldowns() {
@@ -953,7 +960,10 @@ function sanitizeProviderError(err) {
   const raw = String(err?.message || err || '');
   const redacted = redactString(raw);
   if (KEYISH_RE.test(raw) || KEYISH_RE.test(redacted) || isInvalidKeyError(err)) {
-    return 'error de proveedor';
+    // The text may echo the key: never logged. The status is safe and tells
+    // a dead key (401) from a key without access to this model (403).
+    const status = statusOf(err);
+    return status ? `error de proveedor, HTTP ${status}` : 'error de proveedor';
   }
   return redacted.slice(0, 180);
 }
