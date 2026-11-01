@@ -114,13 +114,14 @@ function serializeUser(user) {
 function serializeMessage(message) {
   if (!message) return message;
   
-  return {
+  const serialized = {
     ...message,
-    content: typeof message.content === 'string'
-      ? normalizeAgentTaskStateContent(message.content)
-      : message.content,
     tokens: message.tokens ? Number(message.tokens) : null
   };
+  if (typeof message.content === 'string') {
+    serialized.content = normalizeAgentTaskStateContent(message.content);
+  }
+  return serialized;
 }
 
 /**
