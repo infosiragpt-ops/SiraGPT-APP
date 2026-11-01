@@ -1180,7 +1180,7 @@ async function defaultPostMessage(prisma, { userId, chatId, content, metadata = 
   // Same envelope the agent-task runner persists, so the chat renders the
   // download cards; the plain answer follows the fenced state.
   const body = list.length
-    ? `\`\`\`agent-task-state\n${JSON.stringify({ steps: [], artifacts: list, finalText: content, done: true,
+    ? `\`\`\`agent-task-state\n${JSON.stringify({ steps: [], artifacts: list, approvals: [], qualityGates: [], repairs: [], finalText: content, done: true,
       stoppedReason: metadata.stoppedReason, checkpoints: [] })}\n\`\`\`\n\n${content}`
     : content;
   const message = await prisma.message.create({

@@ -18,7 +18,7 @@
  */
 
 const { EventEmitter } = require('events');
-const { levelRank, LEVEL_RANK } = require('./classify');
+const { levelRank, LEVEL_RANK, reclassifyStoredEvent } = require('./classify');
 
 const DEFAULTS = Object.freeze({
   prefix: 'siragpt:logs:',
@@ -387,7 +387,7 @@ class LiveLogStore {
           const e = JSON.parse(fields[i + 1]);
           if (e && typeof e === 'object') {
             if (!e.id) e.id = entry[0];
-            out.push(e);
+            out.push(reclassifyStoredEvent(e));
           }
         } catch (_) { /* skip corrupt entry */ }
       }

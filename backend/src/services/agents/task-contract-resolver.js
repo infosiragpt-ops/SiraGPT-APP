@@ -455,9 +455,12 @@ function pickResolverRuntime({ openai, model, provider = null, pinned = false, e
         return { client: null, model, provider: String(provider), key: '', skipped: `${provider}:${blockedReason}` };
       }
     }
+    const resolvedModel = /^deepseek$/i.test(String(provider || ''))
+      ? (String(model || '').replace(/^deepseek\//i, '') || model)
+      : model;
     return openai
-      ? { client: openai, model, provider: provider || null, key: keyEnv ? String(env[keyEnv] || '').trim() : '', skipped: null }
-      : { client: null, model, provider: provider || null, key: '', skipped: 'picked model unavailable' };
+      ? { client: openai, model: resolvedModel, provider: provider || null, key: keyEnv ? String(env[keyEnv] || '').trim() : '', skipped: null }
+      : { client: null, model: resolvedModel, provider: provider || null, key: '', skipped: 'picked model unavailable' };
   }
   const baseURL = openai?.baseURL || openai?.client?.baseURL || openai?._options?.baseURL || '';
   const isDeepseek = /(^|\.)deepseek\.com/i.test(String(baseURL));

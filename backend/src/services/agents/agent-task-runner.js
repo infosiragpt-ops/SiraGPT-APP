@@ -1422,11 +1422,11 @@ function detectAgentRuntimeProvider(modelId) {
   if (!id.includes('/') && /^(gpt-|o\d|chatgpt-|ft:gpt-|ft:o)/i.test(id)) {
     return { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null };
   }
-  // Direct DeepSeek API only for bare `deepseek-v*/chat/reasoner` ids. The
-  // slug form `deepseek/...` is an OpenRouter aggregator id and is handled
-  // by the slug branch below (matches isDirectDeepSeekModel in
-  // provider-inference.js).
-  if (/^deepseek-(v\d|chat|reasoner)/i.test(id)) {
+  // Direct DeepSeek API for bare `deepseek-v*/chat/reasoner` ids and the
+  // picker's canonical `deepseek/deepseek-v4-*` rows (visible-model-catalog
+  // declares provider: 'DeepSeek' for `deepseek/deepseek-v4-pro`). Other
+  // aggregator slugs (`deepseek/deepseek-chat`) stay on OpenRouter below.
+  if (/^(?:deepseek-(?:v\d|chat|reasoner)|deepseek\/deepseek-v4-(?:pro|flash))/i.test(id)) {
     return { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com' };
   }
   // Google Gemini family (bare gemini-*/imagen-* ids, no slug).
@@ -1502,6 +1502,9 @@ function buildOpenAICompatibleClient(target, env = process.env) {
     return createAnthropicStreamingClient({ apiKey, timeout: opts.timeout, maxRetries: opts.maxRetries });
   }
   const client = new OpenAI(opts);
+  if (target.provider === 'DeepSeek') {
+    try { return require('../ai/deepseek-billing-failover').withDeepSeekDirectModelIds(client); } catch (_) { return client; }
+  }
   // First-party OpenAI only (OpenRouter keeps `temperature` for openai/*
   // slugs): reasoning-class models reject sampling knobs with a 400.
   if (!target.baseURL || /(^|\.)openai\.com/i.test(String(target.baseURL))) {

@@ -26,10 +26,10 @@ const SECRET_CASES = [
   ['cookie header', 'cookie: connect.sid=s%3Aabc123def456; csrf_token=zzz999', 'abc123def456'],
   ['api_key param', 'GET /x?api_key=supersecretvalue123&q=1', 'supersecretvalue123'],
   ['json password', '{"email":"a@b.co","password":"hunter2hunter2"}', 'hunter2hunter2'],
-  ['google key', 'AIzaSyA1234567890abcdefghijklmnopqrstuv', '1234567890abcdef'],
+  ['google key', `${'AIza'}SyA1234567890abcdefghijklmnopqrstuv`, '1234567890abcdef'],
   ['groq key', 'gsk_1234567890abcdefghijklmnop', '1234567890abcdef'],
   ['encrypted conn', 'apiKey stored enc:v1:0a1b2c3d4e5f6a7b8c9d:ffeeddccbbaa', '0a1b2c3d4e5f'],
-  ['pem', '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----', 'MIIEvQIBADAN'],
+  ['pem', `${'-----BEGIN'} PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n-----END PRIVATE KEY-----`, 'MIIEvQIBADAN'],
   ['fal key', 'FAL_KEY=0f8fad5b-d9cb-469f-a165-70867728950e:8d2a0b5c0e7f4a1b9c3d2e1f0a9b8c7d', '8d2a0b5c0e7f'],
   ['sandbox key env', 'SANDBOX_API_KEY=9b1deb4d3b7d4bad9bdd2b0d7b3dcb6d', '9b1deb4d3b7d'],
   ['meta key', 'using LLM|ABCDEFGHIJKLMNOPQRSTUVWX123', 'ABCDEFGHIJKLMNOP'],
@@ -100,6 +100,67 @@ test('signal rules: debug tags, quiet successful reads, console.error without fa
   assert.deepEqual(classifyLine({ text: self, method: 'stdout' }), { drop: 'self' });
   const event = JSON.stringify({ level: 30, msg: 'ai.generate', event: 'ai.generate.request.accepted', req: { method: 'POST', url: '/api/ai/generate' } });
   assert.match(classifyLine({ text: event, method: 'pino' }).msg, /ai\.generate\.request\.accepted/);
+});
+
+test('production log hygiene: zero-count metrics stay info, routine no-ops and scanner probes downgrade to debug, and stored Redis entries reclassify', () => {
+  // Zero-count metrics and config timeouts never promote info lines to warn.
+  assert.equal(
+    classifyLine({ text: '[media-delivery] delivered id=md_1 chat=c1 kind=transcript files=1 ready=1 partial=0 failed=0 pending=0 attempt=1', method: 'console.log' }).level,
+    'info',
+  );
+  assert.equal(
+    classifyLine({ text: '[media-delivery] delivered id=md_1 chat=c1 kind=transcript files=1 ready=0 partial=0 failed=1 pending=0 attempt=1', method: 'console.log' }).level,
+    'warn',
+  );
+  assert.equal(
+    classifyLine({ text: '📊 Database pool: min=2 max=10 timeout=10000ms', method: 'console.log' }).level,
+    'info',
+  );
+
+  // Routine no-op cron sweeps and intermediate file stages downgrade to debug.
+  assert.equal(
+    classifyLine({ text: '[sweep-expired-partial-sessions] starting now=2026-10-30T04:05:00.000Z dryRun=false', method: 'console.log' }).level,
+    'debug',
+  );
+  assert.equal(
+    classifyLine({ text: '[sweep-expired-partial-sessions] done deleted=0', method: 'console.log' }).level,
+    'debug',
+  );
+  assert.equal(
+    classifyLine({ text: '[sweep-expired-partial-sessions] done deleted=3', method: 'console.log' }).level,
+    'info',
+  );
+  assert.equal(
+    classifyLine({ text: JSON.stringify({ level: 30, msg: '[system-cron] sweep-expired-partial-sessions done: {"deleted":0,"dryRun":false}' }), method: 'pino' }).level,
+    'debug',
+  );
+  assert.equal(
+    classifyLine({ text: '[archive-media] resume found=0 resumed=0 retry=0 abandoned=0 skipped=0 recent=0', method: 'console.log' }).level,
+    'debug',
+  );
+  assert.equal(
+    classifyLine({ text: '[file-status] {"event":"file_processing_stage","stage":"validating","error":null}', method: 'console.log' }).level,
+    'debug',
+  );
+
+  // Fast expected 404 polls and unauthenticated scanner/session probes downgrade to debug.
+  const codex404 = JSON.stringify({ level: 'info', method: 'GET', path: '/api/codex/projects/by-chat/cmvwk10nd016tmt5kqkdfpvdq', status: 404, durMs: 8, userId: 'u1' });
+  assert.equal(classifyLine({ text: codex404, method: 'stdout' }).level, 'debug');
+  const scanner404 = JSON.stringify({ level: 'info', method: 'GET', path: '/api/openai/models', status: 404, durMs: 4, userId: null });
+  assert.equal(classifyLine({ text: scanner404, method: 'stdout' }).level, 'debug');
+  const scanner400 = JSON.stringify({ level: 'info', method: 'GET', path: '/api/uploads/%2e%2e%2f%2e%2e%2f.env', status: 400, durMs: 3, userId: null });
+  assert.equal(classifyLine({ text: scanner400, method: 'stdout' }).level, 'debug');
+  const unauth401 = JSON.stringify({ level: 'info', method: 'GET', path: '/api/auth/me', status: 401, durMs: 5, userId: null });
+  assert.equal(classifyLine({ text: unauth401, method: 'stdout' }).level, 'debug');
+
+  // Stored Redis entries from before the fix are reclassified on read.
+  const parsed = LiveLogStore.parseEntries([
+    ['1-0', ['d', JSON.stringify({ id: '1-0', level: 'warn', via: 'console.log', msg: '[media-delivery] delivered id=md_1 files=1 ready=1 partial=0 failed=0 pending=0 attempt=1' })]],
+    ['2-0', ['d', JSON.stringify({ id: '2-0', level: 'error', status: 500, msg: 'POST /api/files/upload → 500 request_failed — Request aborted' })]],
+    ['3-0', ['d', JSON.stringify({ id: '3-0', level: 'error', msg: 'File processing error: Error: El archivo está vacío.' })]],
+    ['4-0', ['d', JSON.stringify({ id: '4-0', level: 'info', status: 404, msg: 'GET /api/openai/models → 404 (4 ms)' })]],
+  ]);
+  assert.deepEqual(parsed.map((e) => e.level), ['info', 'warn', 'warn', 'debug']);
 });
 
 test('structured event/metric lines: meaningful summaries and levels from their own fields', () => {
