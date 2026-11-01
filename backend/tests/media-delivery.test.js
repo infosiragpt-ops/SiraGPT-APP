@@ -664,6 +664,9 @@ test('default chat + message writers: ownership check, agent-task envelope, chat
   assert.match(msg.content, /^```agent-task-state\n/);
   const envelope = JSON.parse(msg.content.split('\n')[1]);
   assert.equal(envelope.done, true);
+  assert.deepEqual(envelope.approvals, []);
+  assert.deepEqual(envelope.qualityGates, []);
+  assert.deepEqual(envelope.repairs, []);
   assert.equal(envelope.artifacts[0].id, 'art1');
   assert.match(envelope.finalText, /Tu transcripción de «clase\.mp4» está lista/);
   assert.equal(msg.metadata.source, 'media-delivery');

@@ -40,6 +40,15 @@ const STACK_RE = /\n\s+at\s+(?:async\s+)?[^\s]+.*(?:\(|:\d+:\d+)/;
 const ERROR_WORD_RE = /(?:^|[\s[(:'"])(?:[A-Z][A-Za-z]{2,}Error|Error|Exception)(?::|\s(?=[A-Z]))|\bERR(?:_[A-Z_]+)?\b|\bE(?:CONNREFUSED|CONNRESET|CONNABORTED|TIMEDOUT|AI_AGAIN|NOENT|ACCES|PIPE|HOSTUNREACH)\b|\bworker error\b|\bPrisma\w*Error\b|\bInvalid `prisma\./;
 // Soft signals: something went wrong but the process handled it.
 const WARN_WORD_RE = /\b(?:failed|failure|fail(?:s|ing)?|fatal|crash(?:ed)?|panic|cannot|could not|unable to|no se pudo|fall[oó]|rechaz\w*|timed? ?out|timeout|aborted|denied|refused|invalid|unauthori[sz]ed|forbidden|not found|rate[- ]?limited|quota|insufficient|degraded|fallback|retry(?:ing)?|reintent\w*)\b/i;
+// Zero-count metrics (`failed=0`, `retry=0`) and config summaries (`timeout=10000ms`)
+// are normal telemetry, not failure signals.
+const BENIGN_WARN_KV_RE = /\b(?:failed|failure|fails?|errors?|retry|retries|reintentos?|abandoned|denied|refused|invalid|aborted|degraded|fallback|timed?_?out)=(?:0|false|null|none)\b|\btimeout=\d+(?:ms|s|m)?\b/gi;
+const QUIET_404_PATH_RE = /^\/api\/codex\/projects\/by-chat\//;
+const ROUTINE_SWEEP_START_RE = /^\[(?:sweep-[a-z0-9-]+|system-cron)\]\s+starting\b/i;
+const ROUTINE_SWEEP_DONE_RE = /^(?:\[(?:sweep-[a-z0-9-]+|system-cron)\]\s+.*?\bdone\b|\[archive-media\]\s+resume\b)/i;
+const NONZERO_SWEEP_COUNTER_RE = /\b(?:deleted|appshotsNotices|due|completed|executed|failed|errors|newPapers|detected|requeued|cleared|resumed|retry|abandoned)=[1-9]|"(?:deleted|appshotsNotices|due|completed|executed|failed|errors|newPapers|detected|requeued|cleared|resumed|retry|abandoned)"\s*:\s*[1-9]/i;
+const ROUTINE_BOOT_PLUGIN_RE = /^plugin (?:loaded|enabled|registered)\b/i;
+const ROUTINE_FILE_STAGE_RE = /^\[file-status\]\s+\{.*"stage"\s*:\s*"(?:validating|uploaded|extracting|analyzing)".*"error"\s*:\s*null/i;
 
 const ERROR_EMOJI_RE = /[❌✖🚨⛔💥]/u;
 // Diagnostic tags ([models-dbg], [perf], [timing]…) are debug noise, not failures.
@@ -238,25 +247,41 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
     if (reqPath && SELF_PATH_RE.test(reqPath) && (status == null || status < 500)) return { drop: 'self' };
     const reqMethod = firstString(obj.method, obj.req && obj.req.method).toUpperCase();
     const dur = Number(obj.durMs ?? obj.responseTime);
-    if (!hasErr && reqPath && QUIET_METHODS.has(reqMethod) && status != null && status < 400
-      && Number.isFinite(dur) && dur < QUIET_MAX_MS && (level === 'info' || level === 'debug')) {
-      // A fast, successful read (polls, catalog/credits refreshes): kept and
-      // searchable, but out of the default «info y superior» view.
+    const hasUser = Boolean(firstString(obj.userId, obj.user_id, ctx && ctx.userId));
+    const isFast = Number.isFinite(dur) && dur < QUIET_MAX_MS;
+    const isQuietRead = QUIET_METHODS.has(reqMethod) && status != null && status < 400 && isFast;
+    const isQuietExpected404 = QUIET_METHODS.has(reqMethod) && status === 404 && QUIET_404_PATH_RE.test(reqPath) && isFast;
+    const isUnauthProbe = !hasUser && isFast && (
+      status === 401
+      || ((status === 404 || status === 400) && QUIET_METHODS.has(reqMethod))
+    );
+    if (!hasErr && reqPath && (isQuietRead || isQuietExpected404 || isUnauthProbe)
+      && (level === 'info' || level === 'debug' || (isUnauthProbe && level === 'warn'))) {
+      // Fast successful reads, expected status polls, and unauthenticated
+      // scanner/session probes: kept and searchable under «Todos», but out of
+      // the default «Info y superior» view.
       level = 'debug';
     }
     msg = summarizeJson(obj);
     body = raw.trim().slice(0, JSON_BODY_MAX);
+    if (!hasErr && level === 'info' && isRoutineBackgroundNoise(msg, raw)) {
+      level = 'debug';
+    }
   } else {
     ({ msg, body } = splitMessage(raw));
-    const strong = FATAL_RE.test(raw) || STACK_RE.test(raw) || ERROR_WORD_RE.test(raw) || ERROR_EMOJI_RE.test(msg);
-    const soft = WARN_WORD_RE.test(msg);
+    const isExpectedEmptyFile = /^File processing error: Error: El archivo est[aá] vac[ií]o\./i.test(msg);
+    const strong = !isExpectedEmptyFile && (FATAL_RE.test(raw) || STACK_RE.test(raw) || ERROR_WORD_RE.test(raw) || ERROR_EMOJI_RE.test(msg));
+    const soft = isExpectedEmptyFile || WARN_WORD_RE.test(msg.replace(BENIGN_WARN_KV_RE, ''));
     if (FATAL_RE.test(raw)) level = maxLevel(level, 'fatal');
     else if (strong) level = maxLevel(level, 'error');
-    else if (soft) level = maxLevel(level, 'warn');
+    else if (soft) level = isExpectedEmptyFile ? 'warn' : maxLevel(level, 'warn');
     // console.error with nothing that reads like a failure is a notice, not a red error.
     if (method === 'console.error' && !strong && !soft) level = 'warn';
     const lineTag = inferTag(raw, null);
     if (lineTag && DEBUG_TAG_RE.test(lineTag) && !strong) level = 'debug';
+    if (!strong && !soft && level === 'info' && isRoutineBackgroundNoise(msg, raw)) {
+      level = 'debug';
+    }
   }
 
   const tag = inferTag(raw, obj);
@@ -267,12 +292,93 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
   return { level, source, tag: tag || null, msg: msg || '(vacío)', body, status, jsonCtx: jsonContext(obj) };
 }
 
+function isRoutineBackgroundNoise(msg, raw = '') {
+  const m = String(msg || '').trim();
+  const r = String(raw || m).trim();
+  if (!m) return false;
+  if (ROUTINE_BOOT_PLUGIN_RE.test(m)) return true;
+  if (ROUTINE_FILE_STAGE_RE.test(m) || ROUTINE_FILE_STAGE_RE.test(r)) return true;
+  if (ROUTINE_SWEEP_START_RE.test(m)) return true;
+  if (ROUTINE_SWEEP_DONE_RE.test(m) && !NONZERO_SWEEP_COUNTER_RE.test(r) && !NONZERO_SWEEP_COUNTER_RE.test(m)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Re-apply classification hygiene to events already persisted in Redis so
+ * legacy false-positive warnings (`failed=0`, `retry=0`, `timeout=10000ms`),
+ * client-aborted upload 500s, and routine cron/scanner noise do not pollute
+ * «Info y superior» or «Avisos y errores» on backfill/search.
+ */
+function reclassifyStoredEvent(event) {
+  if (!event || typeof event !== 'object') return event;
+  const msg = String(event.msg || '');
+  const body = String(event.body || '');
+  const combined = body ? `${msg}\n${body}` : msg;
+
+  if (event.level === 'error') {
+    if (/^File processing error: Error: El archivo est[aá] vac[ií]o\./i.test(msg)) {
+      event.level = 'warn';
+      return event;
+    }
+    if (
+      /\brequest_failed — Request aborted\b/i.test(msg)
+      || (event.status === 500 && /"errMessage"\s*:\s*"Request aborted"|"message"\s*:\s*"Request aborted"/i.test(body))
+    ) {
+      event.level = 'warn';
+      return event;
+    }
+  }
+
+  if (event.level === 'warn') {
+    const via = String(event.via || '');
+    if (
+      (via === 'console.log' || via === 'console.info' || via === 'stdout' || !via)
+      && BENIGN_WARN_KV_RE.test(msg)
+    ) {
+      BENIGN_WARN_KV_RE.lastIndex = 0;
+      const stripped = msg.replace(BENIGN_WARN_KV_RE, '');
+      if (!WARN_WORD_RE.test(stripped) && !ERROR_WORD_RE.test(msg) && !ERROR_EMOJI_RE.test(msg)) {
+        event.level = isRoutineBackgroundNoise(msg, combined) ? 'debug' : 'info';
+        return event;
+      }
+    }
+    BENIGN_WARN_KV_RE.lastIndex = 0;
+    if (event.status === 400 && !event.userId && !event.email && /^(?:GET|HEAD|OPTIONS)\s+\//.test(msg)) {
+      event.level = 'debug';
+      return event;
+    }
+  }
+
+  if (event.level === 'info') {
+    if (isRoutineBackgroundNoise(msg, combined)) {
+      event.level = 'debug';
+      return event;
+    }
+    if (/^(?:GET|HEAD|OPTIONS)\s+\/api\/codex\/projects\/by-chat\/\S+\s+→\s+404\b/.test(msg)) {
+      event.level = 'debug';
+      return event;
+    }
+    if (!event.userId && !event.email && (event.status === 401 || event.status === 404 || event.status === 400)) {
+      if (event.status === 401 || /^(?:GET|HEAD|OPTIONS)\s+\//.test(msg)) {
+        event.level = 'debug';
+        return event;
+      }
+    }
+  }
+
+  return event;
+}
+
 function levelRank(level) {
   return LEVEL_RANK[level] ?? LEVEL_RANK.info;
 }
 
 module.exports = {
   classifyLine,
+  reclassifyStoredEvent,
+  isRoutineBackgroundNoise,
   levelRank,
   maxLevel,
   normalizeLevelValue,

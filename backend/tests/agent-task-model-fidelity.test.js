@@ -56,6 +56,8 @@ test('picked ids run on their own API: Claude on Anthropic, FlashGPT on Cerebras
   // Unchanged families.
   assert.equal(provider('gpt-4o'), 'OpenAI');
   assert.equal(provider('deepseek-v4-pro'), 'DeepSeek');
+  assert.equal(provider('deepseek/deepseek-v4-pro'), 'DeepSeek', 'canonical picker row for DeepSeek V4 Pro routes to DeepSeek direct');
+  assert.equal(provider('deepseek/deepseek-v4-flash'), 'DeepSeek');
   assert.equal(provider('grok-4.7'), 'xAI');
   assert.equal(provider('openai/gpt-5.5'), 'OpenRouter');
   // Families the task runtime does not drive stay undetected.
@@ -94,6 +96,8 @@ test('the task contract of a picked model is resolved by that model: no remap, n
   assert.equal(pickedFlash.model, 'deepseek-v4-flash');
   const pickedPro = pickResolverRuntime({ openai: deepseek, model: 'deepseek-v4-pro', provider: 'DeepSeek', pinned: true, env, deps });
   assert.equal(pickedPro.model, 'deepseek-v4-pro', 'a Pro pick stays Pro');
+  const pickedProSlug = pickResolverRuntime({ openai: deepseek, model: 'deepseek/deepseek-v4-pro', provider: 'DeepSeek', pinned: true, env, deps });
+  assert.equal(pickedProSlug.model, 'deepseek-v4-pro', 'picker slug stripped for DeepSeek direct');
 
   const unavailable = pickResolverRuntime({ openai: null, model: 'grok-4.7', provider: 'xAI', pinned: true, env, deps });
   assert.equal(unavailable.client, null, 'the heuristic contract, never another model');
