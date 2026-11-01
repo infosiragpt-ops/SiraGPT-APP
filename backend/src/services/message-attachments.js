@@ -133,7 +133,7 @@ function isSpreadsheetFile(row = {}) {
   );
 }
 
-const TRANSCRIPTION_RE = /\b(transcrib(?:e|ir|eme|irme|iendo|irlo|irla|elo|ela)?|transcripci[oó]n|transcripcion|transcribe|transcript|transcription)\b/i;
+const TRANSCRIPTION_RE = /\b(tran?s?cr[ií]b\w*|tran?s?cr[ií]p(?:ci[oó]n|cion|t\w*)?|trnadscr\w*|trnasc\w*|transcirb\w*|trasncri\w*|transcip\w*|trancip\w*|transcrb\w*|trascr[ií](?:b|p)\w*|transcript(?:ion)?)\b/i;
 
 // A transcription that must land IN A FILE («transcribir en un documento
 // word», «transcribe esto a pdf», «exporta la transcripción a excel») is a
@@ -535,8 +535,9 @@ function countDocumentWords(value) {
 }
 
 function isExactDocumentExtractionQuestion(query) {
-  return /\b(transcrib|transcripcion|copia|copiar|literal|textual|verbatim|exact[oa]|primera palabra|primer parrafo|primer p[aá]rrafo|extrae el texto|extraer el texto|texto completo)\b/i.test(
-    String(query || '')
+  const raw = String(query || '');
+  return TRANSCRIPTION_RE.test(raw) || /\b(transcrib|transcripcion|copia|copiar|literal|textual|verbatim|exact[oa]|primera palabra|primer parrafo|primer p[aá]rrafo|extrae el texto|extraer el texto|texto completo)\b/i.test(
+    raw
   );
 }
 
@@ -1457,19 +1458,32 @@ async function backfillUserMessageFilesForTranscription(prisma, {
   return true;
 }
 
-async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], maxChars = 120000 } = {}) {
+async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], maxChars = 120000, visionByFileId = null } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return '';
 
   const rows = await loadFileRows(prisma, userId, ids);
   const ocrRows = await mapWithLimit(rows, (row) => ensureImageOcr(prisma, row, userId));
   const enrichedRows = await mapWithLimit(ocrRows, (row) => ensureDocumentAnalysis(prisma, row, userId));
+  const readVision = (id) => {
+    if (!visionByFileId || !id) return '';
+    if (visionByFileId instanceof Map) return safeText(visionByFileId.get(id), '');
+    if (typeof visionByFileId === 'object') return safeText(visionByFileId[id], '');
+    return '';
+  };
   const withText = enrichedRows
-    .map((row) => ({
-      id: row.id,
-      name: safeText(row.originalName || row.filename || row.id, 'Archivo'),
-      text: documentTextForRow(row, maxChars),
-    }))
+    .map((row) => {
+      const extracted = documentTextForRow(row, maxChars);
+      const visionText = readVision(row.id);
+      const text = hasUsefulExtractedText(extracted)
+        ? (visionText && isImageFile(row) ? `${extracted}\n\n${visionText}` : extracted)
+        : visionText;
+      return {
+        id: row.id,
+        name: safeText(row.originalName || row.filename || row.id, 'Archivo'),
+        text,
+      };
+    })
     .filter((row) => hasUsefulExtractedText(row.text));
 
   if (withText.length === 0) return '';

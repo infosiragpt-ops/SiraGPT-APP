@@ -243,6 +243,31 @@ async function refreshProcessedFileExtracts(prisma, processedFiles = [], opts = 
     // ~77 s on a small PNG and raced the R2 offload (prod 2026-09-26).
     if (isImageAttachment(file)) return file;
     const fileName = String(file.originalName || file.name || '').slice(0, 120);
+    // Audio/video files are transcribed by the shared media-transcription-queue
+    // worker. Wait on the durable File row instead of starting a second
+    // in-process transcription when a mixed chat turn reaches /generate.
+    let isMedia = false;
+    try { isMedia = require('./media-transcription-queue').isMediaFile(file); } catch (_) { isMedia = false; }
+    if (isMedia && file.id && prisma?.file?.findMany) {
+      progress({ type: 'extract_wait', file: fileName });
+      try {
+        const mediaBatch = opts.mediaBatch || require('./media-batch');
+        const batch = await mediaBatch.waitForMediaBatch({
+          prisma,
+          userId: file.userId,
+          rows: [file],
+          timeoutMs: Math.min(Math.max(waitMs || 30000, 5000), 60000),
+        });
+        const readyRow = batch?.rows?.[0];
+        if (readyRow && hasUsableExtract(readyRow.extractedText)) {
+          progressExtracted(fileName, readyRow.extractedText);
+          return { ...file, extractedText: readyRow.extractedText };
+        }
+        return file;
+      } catch (_) {
+        return file;
+      }
+    }
     // The upload pipeline is still extracting this file: never start a second
     // extraction of the same bytes — wait (bounded) for its result instead.
     const pipeline = await extractionSingleflight.pipelineStatus(prisma, file.id);

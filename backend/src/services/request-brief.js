@@ -80,8 +80,8 @@ const DELIVERABLE_RES = [
   ['media', /\b(?:videos?|audios?|cancion(?:es)?|musica|voz|locucion|podcast|animacion)\b/],
   ['code', /\b(?:codigo|script|funcion|programa|api|endpoint|componente|aplicacion|app|pagina web|landing|sitio web|web app|html|css|javascript|typescript|python|sql|regex|consulta sql|algoritmo|clase|modulo|test unitario|tests?)\b/],
   ['translation', /\b(?:traduc\w*|translat\w*)\b/],
-  // Typo-tolerant: «transcirbir», «trascribir», «trasncribir», «transcipcion».
-  ['transcription', /\b(?:transcri\w*|transcirb\w*|trascri\w*|trasncri\w*|transcip\w*|transcrip\w*|subtitul\w*|subtitle\w*|pasa(?:lo|la)? a texto|audio a texto|voz a texto)\b/],
+  // Typo-tolerant: «transcirbir», «trascribir», «trasncribir», «transcipcion», «trnadscririrbi».
+  ['transcription', /\b(?:transcri\w*|trancr\w*|trnadscr\w*|trnasc\w*|transcirb\w*|trascri\w*|trasncri\w*|transcip\w*|trancip\w*|transcrb\w*|transcrip\w*|subtitul\w*|subtitle\w*|pasa(?:lo|la)? a texto|audio a texto|voz a texto)\b/],
   ['summary', /\b(?:resum\w*|sintesis|sintetiza\w*|summar\w*|tl;?dr|abstract|resumen ejecutivo)\b/],
 ];
 

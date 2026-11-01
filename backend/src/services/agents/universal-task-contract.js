@@ -544,7 +544,7 @@ function hasTextOnlyDirective(raw) {
 }
 
 const TRANSCRIPTION_REQUEST_RE =
-  /\b(transcrib(?:e|ir|eme|irme|elo|alo|irlo)?|transcripci[oó]n|transcripcion|transcript|transcribe)\b/i;
+  /\b(tran?s?cr[ií]b\w*|tran?s?cr[ií]p(?:ci[oó]n|cion|t\w*)?|trnadscr\w*|trnasc\w*|transcirb\w*|trasncri\w*|transcip\w*|trancip\w*|transcrb\w*|trascr[ií](?:b|p)\w*|transcript(?:ion)?)\b/i;
 
 const EXPLICIT_TRANSCRIPTION_ARTIFACT_RE =
   /\b(?:en|como|a|formato)\s+(?:un|una|el|la)?\s*(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|md|html|archivo|documento)\b|\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|exporta(?:r|me)?|descarga(?:r|me)?|prepara(?:r|me)?)\b.*\b(?:word|docx|pdf|excel|xlsx|pptx|power\s*point|powerpoint|csv|markdown|md|html)\b/i;

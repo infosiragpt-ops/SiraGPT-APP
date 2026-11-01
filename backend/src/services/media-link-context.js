@@ -4,7 +4,7 @@
 // Keep the small request predicate aligned with lib/ai-service.ts.
 function isLinkTranscriptionRequest(prompt) {
   const text = String(prompt || '').slice(0, 8000).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return /\b(?:transcri\w*|transcirb\w*|trascri\w*|trasncri\w*|subtitul\w*)\b/.test(text)
+  return /\b(?:transcri\w*|trancr\w*|trnadscr\w*|trnasc\w*|transcirb\w*|trascri\w*|trasncri\w*|transcip\w*|trancip\w*|transcrb\w*|subtitul\w*)\b/.test(text)
     && /\b(?:enlace|link|url|youtube|youtu)\b|https?:\/\//.test(text)
     && !/\b(?:como\s+(?:(?:puedo|se)\s+)?(?:transcri|trascri|subtitul)|no\s+(?:(?:quiero|lo|la)\s+)?(?:transcri|trascri|subtitul))/.test(text);
 }

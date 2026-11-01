@@ -1351,3 +1351,97 @@ test('a refine\'s language stays with the refine: never the batch jobs, the deli
   assert.equal(retryWaits[0].retryFailed, true);
   assert.equal(retryWaits[0].language, null, 'a bare «reintenta» never forces the refine\'s language on the whole recording');
 });
+
+test('loadMixedAttachmentBatch partitions mixed audio/video + image/document turns while keeping pure batches separate', async () => {
+  const mixedRows = [
+    { id: 'vid1', userId: 'u', originalName: 'WhatsApp Video.mp4', mimeType: 'video/mp4', deletedAt: null, processingStage: 'uploaded', extractedText: null },
+    { id: 'img1', userId: 'u', originalName: 'pizarra.png', mimeType: 'image/png', deletedAt: null, processingStage: 'ready', extractedText: 'Fórmula de costos' },
+    { id: 'doc1', userId: 'u', originalName: 'acta.pdf', mimeType: 'application/pdf', deletedAt: null, processingStage: 'ready', extractedText: 'Acuerdo 1: presupuesto aprobado.' },
+  ];
+  const prisma = {
+    file: {
+      findMany: async ({ where }) => mixedRows.filter(
+        row => row.userId === where.userId && row.deletedAt === null && where.id.in.includes(row.id)
+      ),
+    },
+  };
+  assert.equal(await batch.loadMediaBatch(prisma, { userId: 'u', fileIds: ['vid1', 'img1'] }), null, 'loadMediaBatch still returns null on mixed files');
+  const partitioned = await batch.loadMixedAttachmentBatch(prisma, { userId: 'u', fileIds: ['vid1', 'img1', 'doc1'] });
+  assert.ok(partitioned);
+  assert.deepEqual(partitioned.mediaRows.map(r => r.id), ['vid1']);
+  assert.deepEqual(partitioned.companionRows.map(r => r.id), ['img1', 'doc1']);
+  assert.equal(await batch.loadMixedAttachmentBatch(prisma, { userId: 'u', fileIds: ['vid1'] }), null, 'pure media is not a mixed batch');
+  assert.equal(await batch.loadMixedAttachmentBatch(prisma, { userId: 'u', fileIds: ['img1', 'doc1'] }), null, 'pure non-media is not a mixed batch');
+});
+
+test('mixed audio + image and audio + document with «trnadscririrbi» transcribes the audio, includes the companion attachment and analyzes the user request across all files', async () => {
+  const { isPlainTranscriptionRequest } = require('../src/services/message-attachments');
+  const realArtifacts = require('../src/services/media-transcript-artifacts');
+  for (const [displayGoal, companion] of [
+    ['trnadscririrbi', { id: 'img1', name: 'captura.png', kind: 'image', mimeType: 'image/png', text: 'Tabla en pizarra: Meta Q4 = 120 unidades.' }],
+    ['transcribir porfavor', { id: 'doc1', name: 'informe.pdf', kind: 'document', mimeType: 'application/pdf', text: 'Informe técnico: el lote inicial consta de 120 unidades.' }],
+  ]) {
+    assert.equal(isPlainTranscriptionRequest(displayGoal), true, `recognizes transcription intent for: ${displayGoal}`);
+    const rows = [readyRow('aud1', 'nota-voz.mp4', { extractedText: '[00:00:05] Confirmamos que la meta del cuarto trimestre es de 120 unidades.' })];
+    const backfilled = [];
+    const synthesisInputs = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows,
+      displayGoal,
+      goal: displayGoal,
+      mediaBatch: {
+        ...batch,
+        waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+      },
+      prisma: {},
+      user: { id: 'owner' },
+      taskId: 'task-mixed',
+      chatId: 'chat-mixed',
+      fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async (_prisma, args) => { backfilled.push(args.fileIds); },
+      emit() {},
+      controller: new AbortController(),
+      runtimeBudgetMs: 60 * 60_000,
+      startedAt: Date.now(),
+      Buffer,
+      saveArtifact: (artifact) => ({ id: 'txt1', filename: artifact.filename }),
+      artifacts: [],
+      persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: isPlainTranscriptionRequest(displayGoal),
+      openai: { chat: { completions: { create: async () => ({}) } } },
+      task: { companionAttachments: [companion] },
+      documentPolicy: {},
+      require: (name) => {
+        if (name === '../media-transcript-artifacts') return realArtifacts;
+        if (name === '../media-analysis-runtime') {
+          return {
+            createMediaAnalysisCompletion: () => ({
+              usage: null,
+              complete: async (messages, _signal, isFinal) => {
+                const payload = JSON.parse(messages[1].content);
+                if (isFinal) {
+                  synthesisInputs.push(payload);
+                  return `Tanto el audio («nota-voz.mp4») como el adjunto («${companion.name}») coinciden en la meta de 120 unidades.`;
+                }
+                return `Meta mencionada en audio: 120 unidades [00:00:05].`;
+              },
+            }),
+          };
+        }
+        return require(name);
+      },
+      ...mediaBranchHelpers(),
+      throwIfAborted: (signal) => signal.throwIfAborted(),
+      finishDeterministicTask: async (value) => value,
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(backfilled[0])), ['aud1', companion.id], 'both audio and companion attachment stay on the user turn');
+    assert.equal(synthesisInputs.length, 1, 'runs combined analysis across audio and companion attachment');
+    assert.equal(synthesisInputs[0].companionAttachments.length, 1);
+    assert.equal(synthesisInputs[0].companionAttachments[0].name, companion.name);
+    assert.match(result.finalMarkdown, /Confirmamos que la meta del cuarto trimestre es de 120 unidades/, 'includes audio transcript');
+    assert.match(result.finalMarkdown, /120 unidades/, 'includes companion content and combined analysis');
+    assert.match(result.finalMarkdown, /Análisis de la solicitud/, 'includes request analysis section');
+    assert.deepEqual(JSON.parse(JSON.stringify(result.metadata.companionFileIds)), [companion.id]);
+    assert.equal(result.stoppedReason, 'transcription_finalize');
+  }
+});
