@@ -829,8 +829,12 @@ async function executeTranscribeUrl(args = {}, ctx = {}, deps = {}) {
   // 1. URL
   let url;
   try {
-    url = assertSafeUrl(args.url);
-    if (typeof url !== 'object') url = new URL(String(args.url));
+    const rawUrlInput = String(args.url ?? '').trim();
+    const normalizedUrlInput = !/^https?:\/\//i.test(rawUrlInput) && /^(?:(?:www\.|m\.)?youtube\.com|youtu\.be)\//i.test(rawUrlInput)
+      ? `https://${rawUrlInput}`
+      : rawUrlInput;
+    url = assertSafeUrl(normalizedUrlInput);
+    if (typeof url !== 'object') url = new URL(String(normalizedUrlInput));
   } catch (err) {
     return errorResult('invalid_url', err && err.message);
   }

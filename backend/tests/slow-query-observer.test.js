@@ -188,6 +188,8 @@ test('background maintenance raw.$queryRaw polls below 5s are suppressed unless 
   const obs = createSlowQueryObserver({ env: {}, sink: { warn: (l) => lines.push(l) }, captureSite: false });
   obs.observe({ model: undefined, action: '$queryRaw', ms: 2_900, error: null });
   assert.equal(lines.length, 0, 'routine 2-3s WAL checkpoint pause on background raw.$queryRaw is not logged as slow-query');
+  obs.observe({ model: 'AgentTaskEvent', action: 'upsert', ms: 780, error: null });
+  assert.equal(lines.length, 0, 'sub-second AgentTaskEvent.upsert telemetry under heavy media load is not logged as slow-query');
   obs.observe({ model: undefined, action: '$queryRaw', ms: 5_100, error: null });
   assert.equal(lines.length, 1);
   assert.match(lines[0], /^\[slow-query\] raw\.\$queryRaw 5100ms threshold=5000ms/);

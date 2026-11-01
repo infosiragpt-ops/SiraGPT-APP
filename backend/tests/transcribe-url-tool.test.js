@@ -294,6 +294,15 @@ test('fragment downloads stop on missing fragments instead of silently omitting 
   assert.ok(d.calls.find((call) => call.args.includes('--no-progress')).args.includes('--abort-on-unavailable-fragments'));
 });
 
+test('scheme-less youtu.be and youtube.com URLs are normalized to https before validation', async () => {
+  for (const rawUrl of ['youtu.be/AbCdef12345?si=ShareToken&t=90', 'www.youtube.com/watch?v=AbCdef12345']) {
+    const d = deps();
+    const res = await tool.executeTranscribeUrl({ url: rawUrl }, {}, d.deps);
+    assert.equal(res.ok, true, `${rawUrl}: ${JSON.stringify(res)}`);
+    assert.equal(d.transcribed.length, 1);
+  }
+});
+
 
 test('temporary audio survives asynchronous transcription and is cleaned after delivery', async () => {
   const d = deps();

@@ -256,6 +256,16 @@ describe('client aborts while the body is read', () => {
     assert.equal(events[0].level, 'error');
     assert.equal(events[0].message, 'request_failed');
   });
+
+  test('multer "Request aborted" on /api/files/upload is logged as request_aborted (499, warn), never as 500', () => {
+    const multerAbort = new Error('Request aborted');
+    const { res, events, stdout } = abortCase(multerAbort, { url: '/api/files/upload', originalUrl: '/api/files/upload' });
+    assert.equal(res.statusCode, 499);
+    assert.deepEqual(events.map((e) => [e.level, e.message]), [['warn', 'request_aborted']]);
+    assert.equal(events[0].payload.reason, 'request.aborted');
+    assert.equal(events[0].payload.path, '/api/files/upload');
+    assert.equal(stdout.length, 0);
+  });
 });
 
 // Prod 2026-09-27: a rejected Origin answered 403 correctly and still showed

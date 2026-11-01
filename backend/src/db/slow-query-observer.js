@@ -77,6 +77,15 @@ function callerSite(stack) {
 }
 
 function isBackgroundMaintenanceRawPoll(key, site) {
+  if (key === 'AgentTaskEvent.upsert' || key === 'AgentTask.upsert') {
+    return !site || site.startsWith('src/services/agents/agent-task-persistence.js');
+  }
+  if (key === 'User.updateMany' && site && site.startsWith('src/services/write-behind-cache.js')) {
+    return true;
+  }
+  if (key === 'SystemSettings.findUnique' && site && site.startsWith('src/services/rbac-permission-version.js')) {
+    return true;
+  }
   if (key !== 'raw.$queryRaw' && key !== 'raw.$executeRaw') return false;
   if (!site) return true;
   return (
