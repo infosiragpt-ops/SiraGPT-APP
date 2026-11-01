@@ -10,6 +10,34 @@ function replaceBigInt(key, value) {
   return value;
 }
 
+const AGENT_TASK_STATE_BLOCK_RE = /```agent-task-state\s*\n([\s\S]*?)\n```/g;
+
+function normalizeAgentTaskStateContent(content) {
+  if (typeof content !== 'string' || !content.includes('```agent-task-state')) {
+    return content;
+  }
+  return content.replace(AGENT_TASK_STATE_BLOCK_RE, (fullMatch, jsonText) => {
+    try {
+      const parsed = JSON.parse(jsonText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return fullMatch;
+      }
+      let changed = false;
+      const normalized = { ...parsed };
+      for (const field of ['steps', 'artifacts', 'approvals', 'qualityGates', 'repairs']) {
+        if (!Array.isArray(normalized[field])) {
+          normalized[field] = [];
+          changed = true;
+        }
+      }
+      if (!changed) return fullMatch;
+      return `\`\`\`agent-task-state\n${JSON.stringify(normalized)}\n\`\`\``;
+    } catch {
+      return fullMatch;
+    }
+  });
+}
+
 /**
  * Convert BigInt fields to strings in an object recursively
  */
@@ -29,6 +57,8 @@ function serializeBigIntFields(obj) {
         serialized[key] = Number(value); // Convert to number for smaller values
       } else if (typeof value === 'object') {
         serialized[key] = serializeBigIntFields(value);
+      } else if (key === 'content' && typeof value === 'string') {
+        serialized[key] = normalizeAgentTaskStateContent(value);
       } else {
         serialized[key] = value;
       }
@@ -86,6 +116,9 @@ function serializeMessage(message) {
   
   return {
     ...message,
+    content: typeof message.content === 'string'
+      ? normalizeAgentTaskStateContent(message.content)
+      : message.content,
     tokens: message.tokens ? Number(message.tokens) : null
   };
 }

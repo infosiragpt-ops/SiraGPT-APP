@@ -128,6 +128,7 @@ class LiveLogStore {
     this.pendingIndex = new Map(); // id → event still waiting for Redis
     this.lastMs = 0;
     this.seq = 0;
+    this.bootedAt = this.now();
     this.bus = new EventEmitter();
     this.bus.setMaxListeners(200);
     this.client = null;
@@ -152,6 +153,7 @@ class LiveLogStore {
   push(input) {
     try {
       const ts = Number.isFinite(input.ts) ? input.ts : this.now();
+      if (ts < this.bootedAt) this.bootedAt = ts;
       const last = this.lastEvent;
       if (
         last
@@ -236,8 +238,13 @@ class LiveLogStore {
       this.client = null;
     }
     if (!this.client) return;
+    const shouldTrimPreBoot = this.env.SIRAGPT_LIVE_LOGS_KEEP_PREVIOUS_DEPLOY !== '1'
+      && Boolean(this.env.NODE_ENV === 'production' || this.env.GIT_COMMIT || this.env.SOURCE_COMMIT || this.env.SIRAGPT_VERSION || this.env.COMMIT_SHA);
     if (typeof this.client.on === 'function') {
-      this.client.on('ready', () => { this.redisReady = true; });
+      this.client.on('ready', () => {
+        this.redisReady = true;
+        if (shouldTrimPreBoot) this.trimPreBootStreams().catch(() => {});
+      });
       this.client.on('end', () => { this.redisReady = false; });
       this.client.on('close', () => { this.redisReady = false; });
       this.client.on('error', (err) => {
@@ -247,6 +254,7 @@ class LiveLogStore {
       });
     } else {
       this.redisReady = true;
+      if (shouldTrimPreBoot) this.trimPreBootStreams().catch(() => {});
     }
     // Events captured before the client existed (boot logs) go to Redis too.
     const early = this.recent({}, { limit: this.opts.flushBatch * 2 });
@@ -368,6 +376,13 @@ class LiveLogStore {
       this.internalNote('resumed: redis memory back to normal');
     }
     return { used, max, ratio, paused: this.paused };
+  }
+
+  async trimPreBootStreams() {
+    if (!this.client || !this.redisReady || typeof this.client.xtrim !== 'function') return;
+    const minId = `${this.bootedAt}-0`;
+    try { await this.client.xtrim(this.keys.all, 'MINID', minId); } catch (_) { /* ignore */ }
+    try { await this.client.xtrim(this.keys.err, 'MINID', minId); } catch (_) { /* ignore */ }
   }
 
   async trimErrors() {
