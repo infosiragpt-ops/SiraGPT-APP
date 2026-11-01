@@ -317,9 +317,59 @@ test('transcription-to-file detection tolerates one typo in the format word', ()
     assert.equal(ma.isPlainTranscriptionRequest(prompt), false, prompt);
   }
   // The attachment is the SOURCE here, not the output → plain transcription.
-  for (const prompt of ['transcribe el archivo', 'transcribe este documento', 'transcribe el word adjunto', 'transcripción literal del audio']) {
+  for (const prompt of [
+    'transcribe el archivo',
+    'transcribe este documento',
+    'transcribe el word adjunto',
+    'transcripción literal del audio',
+    'trnadscririrbi',
+    'trnadscribir este audio y la imagen',
+    'trnascribir por favor',
+    'trancribir el documento',
+    'transcirbir todo',
+    'trasncribir',
+    'trascribir',
+  ]) {
     assert.equal(ma.transcriptionFileOutputFormat(prompt), null, prompt);
     assert.equal(ma.isPlainTranscriptionRequest(prompt), true, prompt);
   }
   assert.equal(ma.isTranscriptionToFileRequest('hazme un word con el resumen'), false, 'not a transcription at all');
+});
+
+test('buildTranscriptionTextFromFiles combines document text with vision grounding for mixed image + document attachments', async () => {
+  const ma = require('../src/services/message-attachments');
+  const rows = [
+    {
+      id: 'doc-1',
+      userId: 'u1',
+      originalName: 'contrato.pdf',
+      filename: 'contrato.pdf',
+      mimeType: 'application/pdf',
+      extractedText: 'Cláusula primera: el servicio inicia el 1 de noviembre con soporte completo.',
+    },
+    {
+      id: 'img-1',
+      userId: 'u1',
+      originalName: 'firma-anexo.png',
+      filename: 'firma-anexo.png',
+      mimeType: 'image/png',
+      extractedText: '',
+    },
+  ];
+  const prisma = {
+    file: {
+      findMany: async ({ where }) => rows.filter(r => r.userId === where.userId && where.id.in.includes(r.id)),
+    },
+  };
+  const combined = await ma.buildTranscriptionTextFromFiles(prisma, {
+    userId: 'u1',
+    fileIds: ['doc-1', 'img-1'],
+    visionByFileId: {
+      'img-1': 'Anexo visual firmado con sello de aprobación y fecha 1 de noviembre.',
+    },
+  });
+  assert.match(combined, /contrato\.pdf/);
+  assert.match(combined, /Cláusula primera/);
+  assert.match(combined, /firma-anexo\.png/);
+  assert.match(combined, /Anexo visual firmado con sello de aprobación/);
 });
