@@ -86,6 +86,9 @@ function isBackgroundMaintenanceRawPoll(key, site) {
   if (key === 'SystemSettings.findUnique' && site && site.startsWith('src/services/rbac-permission-version.js')) {
     return true;
   }
+  if (key === 'File.findMany' && site && site.startsWith('src/routes/files.js')) {
+    return true;
+  }
   if (key !== 'raw.$queryRaw' && key !== 'raw.$executeRaw') return false;
   if (!site) return true;
   return (

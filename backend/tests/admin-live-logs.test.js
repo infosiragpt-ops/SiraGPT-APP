@@ -640,3 +640,121 @@ test('instrumented engine/tool never change results and log failures', async () 
   assert.ok(seen.some((s) => s.startsWith('[generation] music falló')));
   assert.ok(seen.some((s) => s.startsWith('[generation] speech falló') && s.includes('tts down')));
 });
+
+test('classifyLine and reclassifyStoredEvent downgrade optional boot warnings, cron sweeps, self badge polling, and POST probes to debug', () => {
+  const { reclassifyStoredEvent } = require('../src/services/observability/live-logs/classify');
+  const optionalBootWarns = [
+    '[config-validator] 1 warning(s) for env=production:',
+    '  - SENTRY_DSN is not set in production (error reporting disabled)',
+    '[startup-validator] [WARNING] MCP is deny-all in production because MCP_ALLOWED_SERVERS is empty or unset',
+    '[startup-validator] [WARNING] SENTRY_DSN is not set — production errors will not be reported to Sentry',
+    '[startup-validator] 2 warning(s) — review before production deploy',
+    '⚠️ Email service not configured (missing SMTP_HOST, SMTP_USER, or SMTP_PASS)',
+  ];
+  for (const text of optionalBootWarns) {
+    const cls = classifyLine({ text, method: 'console.warn' });
+    assert.equal(cls.level, 'debug', `expected debug for optional boot notice: ${text}`);
+    const recls = reclassifyStoredEvent({ level: 'warn', msg: text, raw: text, tag: 'backend' });
+    assert.equal(recls.level, 'debug', `expected retroactive debug for optional boot notice: ${text}`);
+  }
+
+  const cronSweeps = [
+    '[detect-idle-orgs] Starting idle org detection sweep',
+    '[detect-idle-orgs] Sweep complete: 0 flagged, 0 skipped',
+    '[detect-idle-users] Starting idle user detection sweep',
+    '[detect-idle-users] Sweep complete: 0 flagged, 0 skipped',
+    '[growth-gauges] Gauges updated: DAU=2, WAU=3, MAU=16, MRR=$0',
+    '[failed-email-retry] skip pass — SMTP not configured',
+    '[rlhf-phase3] backfill: 0 signal(s) written from 20 feedback rows',
+  ];
+  for (const text of cronSweeps) {
+    const cls = classifyLine({ text, method: 'console.log' });
+    assert.equal(cls.level, 'debug', `expected debug for routine sweep: ${text}`);
+  }
+
+  const selfBadgePoll = JSON.stringify({
+    level: 'info',
+    method: 'GET',
+    path: '/api/admin/system-issues/recent',
+    status: 200,
+    durMs: 8,
+    userId: 'admin-1',
+    reqId: 'req-self-1',
+  });
+  assert.deepEqual(classifyLine({ text: selfBadgePoll, method: 'stdout' }), { drop: 'self' });
+
+  const postProbe = JSON.stringify({
+    level: 'info',
+    method: 'POST',
+    path: '/api/graphql',
+    status: 404,
+    durMs: 4,
+    userId: null,
+    reqId: 'req-probe-1',
+  });
+  const clsProbe = classifyLine({ text: postProbe, method: 'stdout' });
+  assert.equal(clsProbe.level, 'debug');
+  const reclsProbe = reclassifyStoredEvent({
+    level: 'info',
+    tag: 'http',
+    msg: 'POST /api/graphql → 404 (4 ms)',
+    raw: postProbe,
+    status: 404,
+    durMs: 4,
+    userId: null,
+    route: 'POST /api/graphql',
+  });
+  assert.equal(reclsProbe.level, 'debug');
+});
+
+test('LiveLogStore trims pre-boot Redis streams on production/deploy boot and live SSE bounds Redis backfill to bootedAt', async () => {
+  const trimmed = [];
+  const fakeRedis = new EventEmitter();
+  fakeRedis.xtrim = async (...args) => {
+    trimmed.push(args);
+    return 0;
+  };
+  fakeRedis.xrevrange = async () => [
+    ['1700000000000-0', ['d', JSON.stringify(ev({ id: '1700000000000-0', ts: 1700000000000, msg: 'stale october log', level: 'info' }))]],
+    ['1800000005000-0', ['d', JSON.stringify(ev({ id: '1800000005000-0', ts: 1800000005000, msg: 'fresh boot log', level: 'info' }))]],
+  ];
+  const store = new LiveLogStore({
+    now: () => 1800000000000,
+    env: { GIT_COMMIT: 'deadbeef' },
+    redisFactory: () => fakeRedis,
+  });
+  store.start();
+  fakeRedis.emit('ready');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(trimmed.length, 2);
+  assert.deepEqual(trimmed[0], ['siragpt:logs:all', 'MINID', '1800000000000-0']);
+  assert.deepEqual(trimmed[1], ['siragpt:logs:err', 'MINID', '1800000000000-0']);
+
+  const fromResults = await store.search({ level: 'info', from: store.bootedAt }, { limit: 50 });
+  assert.deepEqual(fromResults.lines.map((l) => l.msg), ['fresh boot log']);
+});
+
+test('serializeMessage and serializeBigIntFields normalize legacy agent-task-state blocks', () => {
+  const { serializeMessage, serializeBigIntFields } = require('../src/utils/bigint-serializer');
+  const legacyBlock = [
+    'Aquí tienes el resultado.',
+    '```agent-task-state',
+    JSON.stringify({ taskId: 't-1', status: 'completed', summary: 'Listo' }),
+    '```',
+  ].join('\n');
+  const msg = serializeMessage({ id: 'm-1', content: legacyBlock, tokens: 42n });
+  assert.equal(msg.tokens, 42);
+  const match = /```agent-task-state\n([\s\S]*?)\n```/.exec(msg.content);
+  assert.ok(match);
+  const parsed = JSON.parse(match[1]);
+  assert.deepEqual(parsed.steps, []);
+  assert.deepEqual(parsed.artifacts, []);
+  assert.deepEqual(parsed.approvals, []);
+  assert.deepEqual(parsed.qualityGates, []);
+  assert.deepEqual(parsed.repairs, []);
+
+  const payload = serializeBigIntFields({ messages: [{ id: 'm-2', content: legacyBlock }] });
+  const match2 = /```agent-task-state\n([\s\S]*?)\n```/.exec(payload.messages[0].content);
+  assert.ok(match2);
+  assert.deepEqual(JSON.parse(match2[1]).approvals, []);
+});

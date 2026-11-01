@@ -44,11 +44,13 @@ const WARN_WORD_RE = /\b(?:failed|failure|fail(?:s|ing)?|fatal|crash(?:ed)?|pani
 // are normal telemetry, not failure signals.
 const BENIGN_WARN_KV_RE = /\b(?:failed|failure|fails?|errors?|retry|retries|reintentos?|abandoned|denied|refused|invalid|aborted|degraded|fallback|timed?_?out)=(?:0|false|null|none)\b|\btimeout=\d+(?:ms|s|m)?\b/gi;
 const QUIET_404_PATH_RE = /^\/api\/codex\/projects\/by-chat\//;
-const ROUTINE_SWEEP_START_RE = /^\[(?:sweep-[a-z0-9-]+|system-cron)\]\s+starting\b/i;
-const ROUTINE_SWEEP_DONE_RE = /^(?:\[(?:sweep-[a-z0-9-]+|system-cron)\]\s+.*?\bdone\b|\[archive-media\]\s+resume\b)/i;
-const NONZERO_SWEEP_COUNTER_RE = /\b(?:deleted|appshotsNotices|due|completed|executed|failed|errors|newPapers|detected|requeued|cleared|resumed|retry|abandoned)=[1-9]|"(?:deleted|appshotsNotices|due|completed|executed|failed|errors|newPapers|detected|requeued|cleared|resumed|retry|abandoned)"\s*:\s*[1-9]/i;
-const ROUTINE_BOOT_PLUGIN_RE = /^plugin (?:loaded|enabled|registered)\b/i;
+const ROUTINE_SWEEP_START_RE = /^\[(?:sweep-[a-z0-9-]+|system-cron|detect-idle-(?:orgs|users)|growth-gauges)\]\s+starting\b/i;
+const ROUTINE_SWEEP_DONE_RE = /^(?:\[(?:sweep-[a-z0-9-]+|system-cron|detect-idle-(?:orgs|users)|growth-gauges)\]\s+.*?\b(?:done|complete|updated)\b|\[archive-media\]\s+resume\b|\[failed-email-retry\]\s+skip pass\b|\[rlhf-phase3\]\s+backfill\b)/i;
+const NONZERO_SWEEP_COUNTER_RE = /\b(?:deleted|appshotsNotices|due|completed|executed|failed|errors|newPapers|detected|requeued|cleared|resumed|retry|abandoned|orphaned|recovered|stalled|flagged)=[1-9]|\b[1-9]\d*\s+flagged\b|\b[1-9]\d*\s+signal\(s\)\s+written\b|"(?:deleted|appshotsNotices|due|completed|executed|failed|errors|newPapers|detected|requeued|cleared|resumed|retry|abandoned|orphaned|recovered|stalled)"\s*:\s*[1-9]/i;
+const ROUTINE_BOOT_PLUGIN_RE = /^(?:plugin (?:loaded|enabled|registered)\b|(?:performance-tracer|structured-logger|provider-registry|bulkhead|sub-agent-orchestrator|agent-system) initialised\b|built-in provider stubs ready\b|shutdown_step_ok\b)/i;
+const ROUTINE_BOOT_NOOP_RE = /^(?:agent_task_boot_recovery_noop|goal_cleanup_boot_noop|goal_recovery_boot_noop|codex_swarm_recovery_complete)\b/i;
 const ROUTINE_FILE_STAGE_RE = /^\[file-status\]\s+\{.*"stage"\s*:\s*"(?:validating|uploaded|extracting|analyzing)".*"error"\s*:\s*null/i;
+const OPTIONAL_BOOT_WARN_RE = /^\s*(?:\[config-validator\]\s+\d+\s+warning\(s\)\s+for\s+env=|-\s+SENTRY_DSN is not set in production\b|\[startup-validator\]\s+(?:\[WARNING\]\s+(?:MCP is deny-all|SENTRY_DSN is not set)|\d+\s+warning\(s\)\s+—\s+review before production deploy)|(?:⚠️\s*)?Email service not configured\s+\(missing SMTP_HOST|\[failed-email-retry\]\s+skip pass\b)/i;
 
 const ERROR_EMOJI_RE = /[❌✖🚨⛔💥]/u;
 // Diagnostic tags ([models-dbg], [perf], [timing]…) are debug noise, not failures.
@@ -56,7 +58,7 @@ const DEBUG_TAG_RE = /(?:^|[-_:\s])(?:dbg|debug|trace|timing|perf|bench|verbose)
 // pino-http's per-request completion line duplicates middleware/request-logger
 // (which also carries the user); the admin log console's own requests are noise.
 const PINO_HTTP_DONE_RE = /^request (?:completed|aborted)$/;
-const SELF_PATH_RE = /^\/api\/admin\/logs\//;
+const SELF_PATH_RE = /^\/api\/admin\/(?:logs\/|(?:system-issues|turn-failures)\/recent\b)/;
 const QUIET_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const QUIET_MAX_MS = 1500;
 
@@ -251,10 +253,7 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
     const isFast = Number.isFinite(dur) && dur < QUIET_MAX_MS;
     const isQuietRead = QUIET_METHODS.has(reqMethod) && status != null && status < 400 && isFast;
     const isQuietExpected404 = QUIET_METHODS.has(reqMethod) && status === 404 && QUIET_404_PATH_RE.test(reqPath) && isFast;
-    const isUnauthProbe = !hasUser && isFast && (
-      status === 401
-      || ((status === 404 || status === 400) && QUIET_METHODS.has(reqMethod))
-    );
+    const isUnauthProbe = !hasUser && isFast && (status === 401 || status === 404 || status === 400);
     if (!hasErr && reqPath && (isQuietRead || isQuietExpected404 || isUnauthProbe)
       && (level === 'info' || level === 'debug' || (isUnauthProbe && level === 'warn'))) {
       // Fast successful reads, expected status polls, and unauthenticated
@@ -264,7 +263,9 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
     }
     msg = summarizeJson(obj);
     body = raw.trim().slice(0, JSON_BODY_MAX);
-    if (!hasErr && level === 'info' && isRoutineBackgroundNoise(msg, raw)) {
+    if (!hasErr && level === 'warn' && OPTIONAL_BOOT_WARN_RE.test(msg)) {
+      level = 'debug';
+    } else if (!hasErr && level === 'info' && isRoutineBackgroundNoise(msg, raw)) {
       level = 'debug';
     }
   } else {
@@ -279,7 +280,9 @@ function classifyLine({ text, method = 'stdout', ctx = null } = {}) {
     if (method === 'console.error' && !strong && !soft) level = 'warn';
     const lineTag = inferTag(raw, null);
     if (lineTag && DEBUG_TAG_RE.test(lineTag) && !strong) level = 'debug';
-    if (!strong && !soft && level === 'info' && isRoutineBackgroundNoise(msg, raw)) {
+    if (!strong && level === 'warn' && OPTIONAL_BOOT_WARN_RE.test(msg)) {
+      level = 'debug';
+    } else if (!strong && !soft && level === 'info' && isRoutineBackgroundNoise(msg, raw)) {
       level = 'debug';
     }
   }
@@ -299,7 +302,11 @@ function isRoutineBackgroundNoise(msg, raw = '') {
   if (ROUTINE_BOOT_PLUGIN_RE.test(m)) return true;
   if (ROUTINE_FILE_STAGE_RE.test(m) || ROUTINE_FILE_STAGE_RE.test(r)) return true;
   if (ROUTINE_SWEEP_START_RE.test(m)) return true;
-  if (ROUTINE_SWEEP_DONE_RE.test(m) && !NONZERO_SWEEP_COUNTER_RE.test(r) && !NONZERO_SWEEP_COUNTER_RE.test(m)) {
+  if (
+    (ROUTINE_SWEEP_DONE_RE.test(m) || ROUTINE_BOOT_NOOP_RE.test(m))
+    && !NONZERO_SWEEP_COUNTER_RE.test(r)
+    && !NONZERO_SWEEP_COUNTER_RE.test(m)
+  ) {
     return true;
   }
   return false;
@@ -332,6 +339,10 @@ function reclassifyStoredEvent(event) {
   }
 
   if (event.level === 'warn') {
+    if (OPTIONAL_BOOT_WARN_RE.test(msg)) {
+      event.level = 'debug';
+      return event;
+    }
     const via = String(event.via || '');
     if (
       (via === 'console.log' || via === 'console.info' || via === 'stdout' || !via)
@@ -345,7 +356,7 @@ function reclassifyStoredEvent(event) {
       }
     }
     BENIGN_WARN_KV_RE.lastIndex = 0;
-    if (event.status === 400 && !event.userId && !event.email && /^(?:GET|HEAD|OPTIONS)\s+\//.test(msg)) {
+    if (event.status === 400 && !event.userId && !event.email) {
       event.level = 'debug';
       return event;
     }
@@ -361,10 +372,8 @@ function reclassifyStoredEvent(event) {
       return event;
     }
     if (!event.userId && !event.email && (event.status === 401 || event.status === 404 || event.status === 400)) {
-      if (event.status === 401 || /^(?:GET|HEAD|OPTIONS)\s+\//.test(msg)) {
-        event.level = 'debug';
-        return event;
-      }
+      event.level = 'debug';
+      return event;
     }
   }
 

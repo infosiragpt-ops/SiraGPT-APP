@@ -167,7 +167,8 @@ async function live(req, res) {
     : store.recent(filter, { limit: backfill });
   if (!after && initial.length < backfill) {
     try {
-      const hist = await store.search(filter, { limit: backfill });
+      const backfillFilter = filter.from ? filter : { ...filter, from: store.bootedAt };
+      const hist = await store.search(backfillFilter, { limit: backfill });
       const seen = new Set(initial.map((l) => l.id));
       const older = hist.lines.filter((l) => !seen.has(l.id)).reverse();
       initial = [...older, ...initial].slice(-backfill);

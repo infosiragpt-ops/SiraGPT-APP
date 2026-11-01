@@ -190,6 +190,15 @@ test('background maintenance raw.$queryRaw polls below 5s are suppressed unless 
   assert.equal(lines.length, 0, 'routine 2-3s WAL checkpoint pause on background raw.$queryRaw is not logged as slow-query');
   obs.observe({ model: 'AgentTaskEvent', action: 'upsert', ms: 780, error: null });
   assert.equal(lines.length, 0, 'sub-second AgentTaskEvent.upsert telemetry under heavy media load is not logged as slow-query');
+  const obsWithSite = createSlowQueryObserver({ env: {}, sink: { warn: (l) => lines.push(l) }, captureSite: true });
+  obsWithSite.observe({
+    model: 'File',
+    action: 'findMany',
+    ms: 3_221,
+    error: null,
+    stack: 'Error\n    at observe (/app/src/db/slow-query-observer.js:80:20)\n    at async /app/src/routes/files.js:1326:21',
+  });
+  assert.equal(lines.length, 0, 'background attachment status poll File.findMany in src/routes/files.js below 5s is not logged as slow-query');
   obs.observe({ model: undefined, action: '$queryRaw', ms: 5_100, error: null });
   assert.equal(lines.length, 1);
   assert.match(lines[0], /^\[slow-query\] raw\.\$queryRaw 5100ms threshold=5000ms/);
