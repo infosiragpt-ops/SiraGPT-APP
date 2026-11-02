@@ -160,7 +160,21 @@ async function live(req, res) {
   store.bus.on('line', onLine);
   store.bus.on('repeat', onRepeat);
 
-  write('hello', { now: Date.now(), stats: store.snapshot(), filter });
+  const afterMs = after && /^\d+-\d+$/.test(after) ? Number(after.split('-')[0]) : null;
+  const isPreBootCursor = afterMs != null && Number.isFinite(afterMs) && afterMs < store.bootedAt;
+
+  write('hello', { now: Date.now(), bootedAt: store.bootedAt, stats: store.snapshot(), filter });
+
+  if (isPreBootCursor && process.env.SIRAGPT_LIVE_LOGS_KEEP_PREVIOUS_DEPLOY !== '1') {
+    const nowMs = Date.now();
+    const staleReloadMarker = { [`ChunkLoadError_${store.bootedAt}`]: 1 };
+    write('backfill', [
+      { id: '1-0', ts: nowMs, level: 'info', source: 'backend', msg: 'Actualizando consola…', commit: staleReloadMarker },
+      { id: `${nowMs}-9999`, ts: nowMs, level: 'info', source: 'backend', msg: 'Actualizando consola…', commit: staleReloadMarker },
+    ]);
+    write('ready', { count: 2 });
+    return undefined;
+  }
 
   let initial = after
     ? store.recent(filter, { limit: 2000, afterId: after })

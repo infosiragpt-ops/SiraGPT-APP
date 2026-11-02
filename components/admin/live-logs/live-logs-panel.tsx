@@ -148,6 +148,7 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
     let connCtrl: AbortController | null = null
     let lastSeenAt = Date.now()
     let resumeAfter: string | null = null
+    let serverBootedAt: number | null = null
     setLines([])
     pendingRef.current = []
     setPendingCount(0)
@@ -178,6 +179,15 @@ export function LiveLogsPanel({ onNewErrors, openStream = openLiveLogStream }: P
                   attempt = 0
                   setConn("live")
                   setConnError(null)
+                  if (typeof ev.data?.bootedAt === "number" && ev.data.bootedAt > 0) {
+                    if (serverBootedAt !== null && ev.data.bootedAt !== serverBootedAt) {
+                      resumeAfter = null
+                      pendingRef.current = []
+                      setPendingCount(0)
+                      setLines([])
+                    }
+                    serverBootedAt = ev.data.bootedAt
+                  }
                   if (ev.data?.stats) setStats(ev.data.stats)
                   break
                 case "backfill":

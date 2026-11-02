@@ -56,7 +56,7 @@ export type LiveLogStats = {
 }
 
 export type LiveLogStreamEvent =
-  | { event: "hello"; data: { now: number; stats?: LiveLogStats } }
+  | { event: "hello"; data: { now: number; bootedAt?: number; stats?: LiveLogStats } }
   | { event: "backfill"; data: LiveLogLine[] }
   | { event: "ready"; data: { count: number } }
   | { event: "lines"; data: LiveLogLine[] }
@@ -153,6 +153,7 @@ export async function openLiveLogStream(options: {
   const url = `${apiBase()}/admin/logs/live${buildLogsQuery(options.filter, {
     after: options.after || undefined,
     backfill: options.backfill ?? 300,
+    v: 2,
   })}`
   const response = await authenticatedFetch(url, {
     method: "GET",

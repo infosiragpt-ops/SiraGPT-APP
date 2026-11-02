@@ -188,7 +188,20 @@ export default function AdminLogsPage() {
   useEffect(() => {
     try {
       const wanted = new URLSearchParams(window.location.search).get("tab")
-      if (wanted && /^[a-z0-9-]{2,40}$/.test(wanted)) setTab(wanted)
+      if (wanted && /^[a-z0-9-]{2,40}$/.test(wanted)) {
+        setTab(wanted)
+        return
+      }
+      for (let i = 0; i < window.sessionStorage.length; i += 1) {
+        const k = window.sessionStorage.key(i)
+        if (k && k.startsWith("__siragpt_stale_reload__") && k.includes("ChunkLoadError")) {
+          const ts = Number(window.sessionStorage.getItem(k) || 0)
+          if (Number.isFinite(ts) && Date.now() - ts < 60_000) {
+            setTab("vivo")
+            break
+          }
+        }
+      }
     } catch { /* ignore */ }
   }, [])
   const [showWarnings, setShowWarnings] = useState(false)

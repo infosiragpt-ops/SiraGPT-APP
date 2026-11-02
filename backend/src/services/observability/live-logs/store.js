@@ -153,7 +153,7 @@ class LiveLogStore {
   push(input) {
     try {
       const ts = Number.isFinite(input.ts) ? input.ts : this.now();
-      if (ts < this.bootedAt) this.bootedAt = ts;
+      if (!this.client && ts < this.bootedAt) this.bootedAt = ts;
       const last = this.lastEvent;
       if (
         last
@@ -240,6 +240,7 @@ class LiveLogStore {
     if (!this.client) return;
     const shouldTrimPreBoot = this.env.SIRAGPT_LIVE_LOGS_KEEP_PREVIOUS_DEPLOY !== '1'
       && Boolean(this.env.NODE_ENV === 'production' || this.env.GIT_COMMIT || this.env.SOURCE_COMMIT || this.env.SIRAGPT_VERSION || this.env.COMMIT_SHA);
+    this.shouldTrimPreBoot = shouldTrimPreBoot;
     if (typeof this.client.on === 'function') {
       this.client.on('ready', () => {
         this.redisReady = true;
@@ -416,6 +417,7 @@ class LiveLogStore {
    */
   async search(filter = {}, { limit = 200, before = null, maxScan = 30_000 } = {}) {
     const nf = normalizeFilter(filter);
+    if (!nf.from && this.shouldTrimPreBoot) nf.from = this.bootedAt;
     const cap = Math.max(1, Math.min(Number(limit) || 200, 1000));
     const useErr = nf.minRank != null && nf.minRank >= LEVEL_RANK.warn;
     if (!this.client || !this.redisReady || typeof this.client.xrevrange !== 'function') {
