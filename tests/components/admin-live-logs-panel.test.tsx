@@ -143,4 +143,21 @@ describe("LiveLogsPanel", () => {
     expect(within(detail).getByTestId("live-log-request-trail")).toBeTruthy()
     expect(within(detail).getByText(/at x \(a\.js:1:1\)/)).toBeTruthy()
   })
+
+  it("clears pre-deploy lines automatically when hello reports a new server bootedAt", async () => {
+    const s = fakeStream()
+    render(<LiveLogsPanel openStream={s.openStream as any} />)
+    await waitFor(() => expect(s.openStream).toHaveBeenCalled())
+    s.emit({ event: "hello", data: { now: 1000, bootedAt: 1000 } })
+    s.emit({ event: "backfill", data: [mk("1-0", { msg: "stale oct 30 line" }), mk("2-0", { level: "error", msg: "stale oct 30 error" })] })
+    expect(await screen.findByText("stale oct 30 line")).toBeTruthy()
+    expect(screen.getByTestId("live-logs-counts").textContent).toMatch(/2 líneas · 1 errores/)
+
+    // Simulate reconnect to a newly deployed backend process (new bootedAt)
+    s.emit({ event: "hello", data: { now: 5000, bootedAt: 5000 } })
+    s.emit({ event: "backfill", data: [mk("10-0", { msg: "fresh deploy line" })] })
+    expect(await screen.findByText("fresh deploy line")).toBeTruthy()
+    expect(screen.queryByText("stale oct 30 line")).toBeNull()
+    expect(screen.getByTestId("live-logs-counts").textContent).toMatch(/1 líneas · 0 errores/)
+  })
 })

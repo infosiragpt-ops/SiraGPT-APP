@@ -730,8 +730,27 @@ test('LiveLogStore trims pre-boot Redis streams on production/deploy boot and li
   assert.deepEqual(trimmed[0], ['siragpt:logs:all', 'MINID', '1800000000000-0']);
   assert.deepEqual(trimmed[1], ['siragpt:logs:err', 'MINID', '1800000000000-0']);
 
-  const fromResults = await store.search({ level: 'info', from: store.bootedAt }, { limit: 50 });
+  const fromResults = await store.search({ level: 'info' }, { limit: 50 });
   assert.deepEqual(fromResults.lines.map((l) => l.msg), ['fresh boot log']);
+
+  const routes = require('../src/routes/admin-live-logs');
+  const liveLogs = require('../src/services/observability/live-logs');
+  const singleton = liveLogs.getStore();
+  const prevBootedAt = singleton.bootedAt;
+  singleton.bootedAt = 1800000000000;
+  try {
+    const legacy = fakeSse({ after: '1790000000000-0', backfill: '50' });
+    await routes.live(legacy.req, legacy.res);
+    const legacyEvents = sseEvents(legacy.res);
+    assert.equal(legacyEvents[0].event, 'hello');
+    assert.equal(legacyEvents[0].data.bootedAt, 1800000000000);
+    const legacyBackfill = legacyEvents.find((e) => e.event === 'backfill');
+    assert.ok(legacyBackfill);
+    assert.deepEqual(legacyBackfill.data[0].commit, { ChunkLoadError_1800000000000: 1 });
+    legacy.req.emit('close');
+  } finally {
+    singleton.bootedAt = prevBootedAt;
+  }
 });
 
 test('serializeMessage and serializeBigIntFields normalize legacy agent-task-state blocks', () => {
