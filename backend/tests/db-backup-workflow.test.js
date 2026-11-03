@@ -50,14 +50,16 @@ test('db backup workflow verifies the dump and skips S3 upload when backup secre
   assert.match(workflow, /-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY/);
 });
 
-test('restore drill workflow exists and runs monthly against the VPS', () => {
+test('restore drill workflow runs monthly on the Lenovo runner, not the legacy VPS', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/db-restore-drill.yml'), 'utf8');
   assert.match(workflow, /cron: '30 5 1 \* \*'/);
   assert.match(workflow, /workflow_dispatch/);
-  assert.match(workflow, /appleboy\/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17/);
-  assert.match(workflow, /secrets\.VPS_HOST/);
+  assert.match(workflow, /runs-on: \[self-hosted, linux, siragpt-lenovo\]/);
+  assert.doesNotMatch(workflow, /secrets\.VPS_HOST/);
+  assert.doesNotMatch(workflow, /cd \/opt\/siragpt/);
   assert.match(workflow, /secrets\.BACKUP_BUCKET/);
   assert.match(workflow, /concurrency:\n {2}group: db-restore-drill/);
+  assert.match(workflow, /bash scripts\/restore-db\.sh/);
 });
 
 test('restore drill never touches the live database', () => {
@@ -70,6 +72,37 @@ test('restore drill never touches the live database', () => {
   assert.doesNotMatch(workflow, /restart[^\n]*(backend|db|frontend)/i);
   // No hard-coded production DB names (the db-snapshot.yml smell).
   assert.doesNotMatch(script, /siraGPTNew|siragpt_new/);
+  // Restores into a throwaway, network-less container from the live db image;
+  // psql only ever reaches that container's own loopback.
+  assert.match(workflow, /--network none --memory 2g --cpus 1/);
+  assert.match(workflow, /\{\{\.Config\.Image\}\}/);
+  assert.match(workflow, /exec docker exec -i "\$\{DRILL_CONTAINER:\?\}" psql "\$@"/);
+  assert.match(workflow, /DATABASE_URL='postgresql:\/\/postgres:scratch@127\.0\.0\.1:5432\/postgres'/);
+  assert.doesNotMatch(workflow, /exec -T db|docker exec [^\n]*\$db_id/);
+  assert.match(workflow, /if: always\(\)[\s\S]*docker rm -f -v "\$DRILL_CONTAINER"/);
+});
+
+test('restore drill rejects a stale newest backup', () => {
+  const script = fs.readFileSync(path.join(root, 'scripts/restore-db.sh'), 'utf8');
+  assert.match(script, /MAX_AGE_HOURS="\$\{DRILL_MAX_AGE_HOURS:-48\}"/);
+  const ageIdx = script.indexOf('AGE_HOURS > MAX_AGE_HOURS');
+  const downloadIdx = script.indexOf('s3 cp "s3://${BACKUP_BUCKET}/${LATEST_KEY}"');
+  assert.ok(ageIdx !== -1 && downloadIdx !== -1 && ageIdx < downloadIdx, 'freshness gate must run before download');
+});
+
+test('volumes backup archives the live Lenovo backend volumes, never the database volume', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github/workflows/volumes-backup.yml'), 'utf8');
+  assert.match(workflow, /runs-on: \[self-hosted, linux, siragpt-lenovo\]/);
+  assert.doesNotMatch(workflow, /secrets\.VPS_HOST/);
+  assert.doesNotMatch(workflow, /\/opt\/siragpt/);
+  assert.match(workflow, /docker compose -p iliagpt -f "\$DEPLOY\/compose\.yaml" --env-file "\$DEPLOY\/\.env"/);
+  assert.match(workflow, /ps -q backend\)/);
+  assert.doesNotMatch(workflow, /ps -q db\)/);
+  assert.doesNotMatch(workflow, /pgdata/);
+  assert.match(workflow, /-v "\$\{volume\}:\/src:ro"/);
+  assert.match(workflow, /--network none/);
+  assert.match(workflow, /gzip -t "\$out"/);
+  assert.match(workflow, /BACKUP_BUCKET \/ BACKUP_ACCESS_KEY_ID \/ BACKUP_SECRET_ACCESS_KEY are not fully configured/);
 });
 
 test('restore drill reads credentials from runtime and verifies before restoring', () => {

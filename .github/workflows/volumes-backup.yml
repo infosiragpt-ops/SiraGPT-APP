@@ -1,14 +1,27 @@
 name: Volumes backup · weekly tar → S3
 
-# Weekly tar of the user-data Docker volumes (uploads, projects,
-# published sites) uploaded to the same S3-compatible bucket as the DB
-# backup workflow. Runs Sundays 04:00 UTC, after the daily DB backup.
+# Weekly tar of the user-data Docker volumes of the live backend (uploads,
+# and any other named volume the iliagpt backend mounts) uploaded to the same
+# S3-compatible bucket as the DB backup. Runs Sundays 04:00 UTC, after the
+# daily DB backup, on the self-hosted Lenovo runner next to production.
+#
+# Volumes are discovered from the single running `backend` container of
+# compose project `iliagpt`, so renamed or added volumes are picked up
+# without editing this file. The database volume is never tarred here: a
+# live data directory copy is not consistent; db-backup.yml covers it with
+# pg_dump.
+#
+# Previously this job SSHed to the legacy VPS deployment and archived
+# that host's volumes, not production's.
 #
 # Manual replay: trigger via the Actions tab (workflow_dispatch).
 on:
   schedule:
     - cron: '0 4 * * 0'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 # Only one volumes backup run at a time — avoids racing on bandwidth
 # and double-writing to S3.
@@ -19,67 +32,93 @@ concurrency:
 jobs:
   backup-volumes:
     name: tar volumes → S3
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, siragpt-lenovo]
     timeout-minutes: 60
+    env:
+      DEPLOY: /home/user/deployments/iliagpt
     steps:
-      - name: Tar volumes on VPS and upload to S3
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          timeout: 60s
-          command_timeout: 45m
-          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION
-          script: |
-            set -euo pipefail
+      - name: Tar the live backend volumes
+        id: tar
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          [[ -d "$DEPLOY" && ! -L "$DEPLOY" && -f "$DEPLOY/compose.yaml" && -f "$DEPLOY/.env" ]] \
+            || { echo '::error::Unexpected Lenovo deployment paths.'; exit 1; }
+          COMPOSE=(docker compose -p iliagpt -f "$DEPLOY/compose.yaml" --env-file "$DEPLOY/.env")
+          backend_id="$("${COMPOSE[@]}" ps -q backend)"
+          [[ -n "$backend_id" && "$backend_id" != *$'\n'* ]] \
+            || { echo '::error::Could not identify the single live iliagpt backend container.'; exit 1; }
 
-            if ! command -v aws >/dev/null 2>&1; then
-              echo "Installing awscli…"
-              apt-get update -y && apt-get install -y --no-install-recommends awscli
+          mapfile -t volumes < <(docker inspect \
+            --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{"\n"}}{{end}}{{end}}' "$backend_id" \
+            | grep -vE '^$|^[0-9a-f]{64}$' | sort -u)
+          (( ${#volumes[@]} > 0 )) || { echo '::error::The live backend mounts no named volumes.'; exit 1; }
+
+          STAMP="$(date -u +%Y%m%d)"
+          OUT_DIR="$DEPLOY/backups/volumes"
+          mkdir -p "$OUT_DIR"
+          for volume in "${volumes[@]}"; do
+            [[ "$volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || { echo "::error::Unexpected volume name."; exit 1; }
+            name="siraGPT_${volume}_${STAMP}.tar.gz"
+            out="$OUT_DIR/$name"
+            echo "Taring volume ${volume} -> ${name}"
+            # Read-only mount, no network; the archive is written by the
+            # runner user on the host side of the pipe.
+            if ! docker run --rm --network none -v "${volume}:/src:ro" alpine:3.20 \
+                 tar -C /src -czf - . > "$out"; then
+              rm -f "$out"
+              echo "::error::tar failed for ${volume}"
+              exit 1
             fi
+            gzip -t "$out"
+            (cd "$OUT_DIR" && sha256sum "$name" > "$name.sha256")
+            test -s "$out.sha256"
+            echo "  $(du -h "$out" | cut -f1)"
+          done
 
-            if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
-              echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; skipping volumes upload."
-              exit 0
-            fi
+          # Keep one week of local copies.
+          find "$OUT_DIR" -name 'siraGPT_*' -type f -mtime +7 -delete || true
+          {
+            echo "dir=$OUT_DIR"
+            echo "stamp=$STAMP"
+          } >> "$GITHUB_OUTPUT"
 
-            export AWS_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY_ID}"
-            export AWS_SECRET_ACCESS_KEY="${BACKUP_SECRET_ACCESS_KEY}"
-            AWS_ARGS=()
-            if [[ -n "${BACKUP_S3_ENDPOINT:-}" ]]; then
-              AWS_ARGS+=(--endpoint-url "${BACKUP_S3_ENDPOINT}")
-            fi
-            if [[ -n "${BACKUP_S3_REGION:-}" ]]; then
-              AWS_ARGS+=(--region "${BACKUP_S3_REGION}")
-            fi
+      - name: Upload to S3-compatible storage
+        shell: bash
+        env:
+          OUT_DIR: ${{ steps.tar.outputs.dir }}
+          STAMP: ${{ steps.tar.outputs.stamp }}
+          BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
+          BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_ACCESS_KEY_ID }}
+          BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
+          BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; skipping volumes upload."
+            exit 0
+          fi
 
-            STAMP="$(date -u +%Y%m%d)"
-            OUT_DIR=/opt/siragpt/backups/volumes
-            mkdir -p "${OUT_DIR}"
+          export AWS_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY_ID}"
+          export AWS_SECRET_ACCESS_KEY="${BACKUP_SECRET_ACCESS_KEY}"
+          AWS_ARGS=()
+          [[ -n "${BACKUP_S3_ENDPOINT:-}" ]] && AWS_ARGS+=(--endpoint-url "${BACKUP_S3_ENDPOINT}")
+          [[ -n "${BACKUP_S3_REGION:-}" ]] && AWS_ARGS+=(--region "${BACKUP_S3_REGION}")
 
-            tar_volume() {
-              local volume="$1"
-              local label="$2"
-              local out="${OUT_DIR}/siraGPT_${label}_${STAMP}.tar.gz"
-              echo "Taring volume ${volume} -> ${out}"
-              docker run --rm -v "${volume}:/src:ro" -v "${OUT_DIR}:/dst" alpine \
-                sh -c "cd /src && tar czf /dst/$(basename "${out}") ."
-              gzip -t "${out}"
-              sha256sum "${out}" > "${out}.sha256"
-              test -s "${out}.sha256"
-            }
+          # Prefer a host aws CLI; otherwise the official image. Credentials
+          # are passed by variable name only, never on the command line.
+          if command -v aws > /dev/null 2>&1; then
+            AWS=(aws)
+            SRC="$OUT_DIR"
+          else
+            AWS=(docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY
+                 -v "$OUT_DIR:/backups:ro" amazon/aws-cli:2.22.35)
+            SRC=/backups
+          fi
 
-            tar_volume siragpt_uploads_data uploads
-            tar_volume siragpt_projects_data projects
-            tar_volume siragpt_published_sites published
-
-            aws "${AWS_ARGS[@]}" s3 cp "${OUT_DIR}/" "s3://${BACKUP_BUCKET}/volumes/" \
-              --recursive --exclude "*" --include "siraGPT_*_${STAMP}.tar.gz" --include "siraGPT_*_${STAMP}.tar.gz.sha256" \
-              --only-show-errors
-
-            # Keep one week of local copies.
-            find "${OUT_DIR}" -name 'siraGPT_*' -type f -mtime +7 -delete
-
-            echo "Volumes backup uploaded: s3://${BACKUP_BUCKET}/volumes/ (stamp ${STAMP})"
+          "${AWS[@]}" "${AWS_ARGS[@]}" s3 cp "$SRC/" "s3://${BACKUP_BUCKET}/volumes/" \
+            --recursive --exclude "*" --include "siraGPT_*_${STAMP}.tar.gz" --include "siraGPT_*_${STAMP}.tar.gz.sha256" \
+            --only-show-errors
+          echo "Volumes backup uploaded to volumes/ (stamp ${STAMP})"
