@@ -231,7 +231,7 @@
       "pdfjs-dist": "6.2.108"
     },
     "uuid": "$uuid",
-    "qs": "^6.15.2",
+    "qs": "^6.16.1",
     "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0",
     "@langchain/langgraph-sdk": {
       "uuid": "^13.0.0"
@@ -239,6 +239,7 @@
     "@opentelemetry/resource-detector-aws": "2.17.0",
     "openai": {
       "zod": "$zod"
-    }
+    },
+    "follow-redirects": "^1.16.2"
   }
 }

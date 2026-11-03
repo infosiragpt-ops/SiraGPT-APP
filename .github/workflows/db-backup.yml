@@ -1,15 +1,30 @@
 name: DB backup · pg_dump → S3
 
-# Runs daily at 03:00 UTC. SSHes to the VPS, executes
-# backend/scripts/backup-db.sh which produces a gzipped dump in
-# /opt/siragpt/backups/, then uploads it to S3-compatible
-# storage configured via the BACKUP_* secrets.
+# Runs daily at 03:00 UTC on the self-hosted Lenovo runner, next to the live
+# production database: the `db` service of compose project `iliagpt`
+# (/home/user/deployments/iliagpt). This is the same database and the same
+# dump path `deploy/iliagpt/publish-reviewed.sh` uses for its pre-release
+# snapshot, so no credentials are read, printed or guessed: pg_dump runs
+# inside the db container with that container's own POSTGRES_USER/POSTGRES_DB.
+#
+# Previously this job SSHed to the legacy VPS (/opt/siragpt) and picked the
+# first container labelled `backend`; that container has been stuck
+# restarting there, so every run failed before pg_dump and production had no
+# off-site daily backup.
+#
+# Produces backups/daily-db/siraGPT_<daily|weekly>_<ts>.sql.gz (+ .sha256),
+# verifies gzip integrity and the pg_dump completion trailer, keeps 7 daily
+# and 4 weekly copies locally and uploads to S3-compatible storage when the
+# BACKUP_* secrets are configured.
 #
 # Manual replay: trigger via the Actions tab (workflow_dispatch).
 on:
   schedule:
     - cron: '0 3 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 # Only one backup run at a time — avoids racing on the same retention
 # window and double-writing to S3.
@@ -20,142 +35,136 @@ concurrency:
 jobs:
   backup:
     name: pg_dump → gzip → S3
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: [self-hosted, linux, siragpt-lenovo]
+    timeout-minutes: 30
+    env:
+      DEPLOY: /home/user/deployments/iliagpt
+      PUBLISH_LOCK: /tmp/siragpt-publish.lock
     steps:
-      - name: Run backup on VPS and upload to S3
-        uses: appleboy/ssh-action@v1.2.5
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          timeout: 60s
-          command_timeout: 15m
-          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION,BACKUP_ENV_AGE_RECIPIENT
-          script: |
-            set -euo pipefail
-            cd /opt/siragpt
+      - name: Dump the live iliagpt database
+        id: dump
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          [[ -d "$DEPLOY" && ! -L "$DEPLOY" && -f "$DEPLOY/compose.yaml" && -f "$DEPLOY/.env" ]] \
+            || { echo '::error::Unexpected Lenovo deployment paths.'; exit 1; }
+          COMPOSE=(docker compose -p iliagpt -f "$DEPLOY/compose.yaml" --env-file "$DEPLOY/.env")
 
-            # Read the already-resolved runtime value without executing .env as shell.
-            # Production env files may contain application values that are not valid
-            # Bash assignments, and sourcing them can abort before pg_dump starts.
-            BACKEND_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=backend' --format '{{.Names}}' | head -n 1 || true)"
-            if [[ -z "${BACKEND_CONTAINER}" ]]; then
-              BACKEND_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])backend([-_]|$)' | head -n 1 || true)"
-            fi
-            if [[ -z "${BACKEND_CONTAINER}" ]]; then
-              echo "::error::No running backend container was found; refusing to guess database credentials." >&2
-              exit 1
-            fi
-            DATABASE_URL="$(docker exec "${BACKEND_CONTAINER}" sh -lc 'printf "%s" "${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"')"
-            if [[ -z "${DATABASE_URL:-}" ]]; then
-              echo "::error::The running backend has no DATABASE_URL/PRISMA_DATABASE_URL." >&2
-              exit 1
-            fi
-            DATABASE_URL="${DATABASE_URL//@db:5432/@127.0.0.1:5432}"
-            export DATABASE_URL
+          # Never take the publication lock (publish refuses to start while it
+          # exists); only wait for an in-flight publication to finish.
+          for ((i = 0; i < 60; i++)); do
+            [[ -e "$PUBLISH_LOCK" ]] || break
+            sleep 10
+          done
+          [[ ! -e "$PUBLISH_LOCK" ]] || { echo '::error::A publication still holds the lock after 10 minutes.'; exit 1; }
 
-            if ! command -v pg_dump >/dev/null 2>&1; then
-              DB_CONTAINER="${POSTGRES_CONTAINER:-}"
-              if [[ -z "${DB_CONTAINER}" ]]; then
-                DB_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=db' --format '{{.Names}}' | head -n 1 || true)"
-              fi
-              if [[ -z "${DB_CONTAINER}" ]]; then
-                DB_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])db([-_]|$)|postgres' | head -n 1 || true)"
-              fi
-              if [[ -z "${DB_CONTAINER}" ]]; then
-                echo "::error::pg_dump is missing on the VPS and no Postgres Docker container was found." >&2
-                exit 1
-              fi
-              if ! docker exec "${DB_CONTAINER}" sh -lc 'command -v pg_dump >/dev/null 2>&1'; then
-                echo "::error::pg_dump is missing in detected Postgres container: ${DB_CONTAINER}" >&2
-                exit 1
-              fi
+          db_id="$("${COMPOSE[@]}" ps -q db)"
+          [[ -n "$db_id" && "$db_id" != *$'\n'* ]] \
+            || { echo '::error::Could not identify the single live iliagpt db container.'; exit 1; }
+          state="$(docker inspect --format '{{.State.Status}}' "$db_id")"
+          [[ "$state" == running ]] \
+            || { echo "::error::The iliagpt db container is ${state}, not running."; exit 1; }
 
-              export SIRAGPT_DB_CONTAINER="${DB_CONTAINER}"
-              cat >/tmp/siragpt-pg-dump <<'EOF'
-            #!/usr/bin/env bash
-            set -euo pipefail
-            exec docker exec -i "${SIRAGPT_DB_CONTAINER:?}" pg_dump "$@"
-            EOF
-              chmod +x /tmp/siragpt-pg-dump
-              export PG_DUMP_BIN=/tmp/siragpt-pg-dump
-              echo "Using pg_dump from Docker container: ${DB_CONTAINER}"
-            fi
+          BACKUP_DIR="$DEPLOY/backups/daily-db"
+          mkdir -p "$BACKUP_DIR"
+          TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          KIND=daily
+          [[ "$(date -u +%u)" == 7 ]] && KIND=weekly
+          NAME="siraGPT_${KIND}_${TIMESTAMP}.sql.gz"
+          LATEST="$BACKUP_DIR/$NAME"
 
-            # 1. Run the backup script. Produces a fresh .sql.gz under ./backups/.
-            bash backend/scripts/backup-db.sh
+          # Plain SQL keeps the S3 objects compatible with scripts/restore-db.sh.
+          if ! "${COMPOSE[@]}" exec -T db sh -c 'exec pg_dump --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+               | gzip -9 > "$LATEST"; then
+            rm -f "$LATEST"
+            echo '::error::pg_dump | gzip failed.'
+            exit 1
+          fi
+          if ! gzip -t "${LATEST}"; then
+            rm -f "$LATEST"
+            echo "::error::Backup gzip integrity check failed: ${NAME}"
+            exit 1
+          fi
+          trailer="$(gzip -dc "$LATEST" | tail -c 4096)"
+          if [[ "$trailer" != *'PostgreSQL database dump complete'* ]]; then
+            rm -f "$LATEST"
+            echo '::error::pg_dump output is truncated (no completion trailer).'
+            exit 1
+          fi
+          SIZE="$(wc -c < "$LATEST" | tr -d ' ')"
+          (( SIZE >= 200 )) || { rm -f "$LATEST"; echo "::error::Dump looks empty (${SIZE} bytes)."; exit 1; }
+          (cd "$BACKUP_DIR" && sha256sum "$NAME" > "$NAME.sha256")
+          test -s "${LATEST}.sha256"
+          echo "Backup OK: ${NAME} (${SIZE} bytes)"
 
-            # 2. Pick the newest backup file we just produced.
-            LATEST="$(ls -1t backups/siraGPT_*.sql.gz 2>/dev/null | head -n 1 || true)"
-            if [[ -z "${LATEST}" ]]; then
-              echo "::error::No backup file produced — aborting upload." >&2
-              exit 1
-            fi
-            if ! gzip -t "${LATEST}"; then
-              echo "::error::Backup gzip integrity check failed: ${LATEST}" >&2
-              exit 1
-            fi
-            sha256sum "${LATEST}" > "${LATEST}.sha256"
-            test -s "${LATEST}.sha256"
+          find "$BACKUP_DIR" -type f -name 'siraGPT_daily_*.sql.gz*' -mtime +7 -delete || true
+          find "$BACKUP_DIR" -type f -name 'siraGPT_weekly_*.sql.gz*' -mtime +28 -delete || true
 
-            # 2b. Encrypted copy of the production .env into the same bucket
-            #     (age public-key encryption; private key is held offsite).
-            if [[ -f /opt/siragpt/.env && -n "${BACKUP_ENV_AGE_RECIPIENT:-}" ]] && command -v age >/dev/null 2>&1; then
-              ENV_ENC="backups/env/siraGPT_env_$(date -u +%Y%m%dT%H%M%SZ).age"
-              mkdir -p "$(dirname "${ENV_ENC}")"
-              age -r "${BACKUP_ENV_AGE_RECIPIENT}" -o "${ENV_ENC}" /opt/siragpt/.env
-              test -s "${ENV_ENC}"
-            else
-              ENV_ENC=""
-              echo "::notice::Skipping .env backup (missing file, recipient, or age binary)."
-            fi
+          # Encrypted copy of the production .env (age public-key encryption;
+          # the private key is held offsite). Never stored or uploaded in clear.
+          ENV_ENC=""
+          if [[ -n "${BACKUP_ENV_AGE_RECIPIENT:-}" ]] && command -v age > /dev/null 2>&1; then
+            ENV_ENC="$BACKUP_DIR/siraGPT_env_${TIMESTAMP}.age"
+            age -r "${BACKUP_ENV_AGE_RECIPIENT}" -o "$ENV_ENC" "$DEPLOY/.env"
+            test -s "$ENV_ENC"
+          else
+            echo '::notice::Skipping encrypted .env backup (missing recipient or age binary).'
+          fi
+          find "$BACKUP_DIR" -type f -name 'siraGPT_env_*.age' -mtime +28 -delete || true
 
-            if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
-              echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
-              echo "Backup and checksum retained locally: ${LATEST}"
-              exit 0
-            fi
-
-            echo "Uploading ${LATEST} to s3://${BACKUP_BUCKET}/"
-
-            # 3. Upload via aws CLI (works for AWS S3 and S3-compatible
-            #    targets like Backblaze B2, R2, MinIO, etc.). Endpoint /
-            #    region are optional and only set when provided.
-            if ! command -v aws >/dev/null 2>&1; then
-              echo "Installing awscli…"
-              apt-get update -y && apt-get install -y --no-install-recommends awscli
-            fi
-
-            export AWS_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY_ID}"
-            export AWS_SECRET_ACCESS_KEY="${BACKUP_SECRET_ACCESS_KEY}"
-            AWS_ARGS=()
-            if [[ -n "${BACKUP_S3_ENDPOINT:-}" ]]; then
-              AWS_ARGS+=(--endpoint-url "${BACKUP_S3_ENDPOINT}")
-            fi
-            if [[ -n "${BACKUP_S3_REGION:-}" ]]; then
-              AWS_ARGS+=(--region "${BACKUP_S3_REGION}")
-            fi
-
-            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}")" \
-              --only-show-errors
-            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}.sha256" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}.sha256")" \
-              --only-show-errors
-
-            if [[ -n "${ENV_ENC:-}" ]]; then
-              aws "${AWS_ARGS[@]}" s3 cp "${ENV_ENC}" "s3://${BACKUP_BUCKET}/$(basename "${ENV_ENC}")" \
-                --only-show-errors
-              echo "Encrypted .env uploaded: $(basename "${ENV_ENC}")"
-            fi
-
-            echo "Backup and checksum uploaded: $(basename "${LATEST}")"
+          {
+            echo "dir=$BACKUP_DIR"
+            echo "latest=$NAME"
+            echo "env_enc=$(basename "${ENV_ENC:-}")"
+          } >> "$GITHUB_OUTPUT"
         env:
-          # These are passed THROUGH to the remote shell via the `envs:`
-          # field above. They never appear in logs.
+          BACKUP_ENV_AGE_RECIPIENT: ${{ secrets.BACKUP_ENV_AGE_RECIPIENT }}
+
+      - name: Upload to S3-compatible storage
+        shell: bash
+        env:
+          BACKUP_DIR: ${{ steps.dump.outputs.dir }}
+          LATEST: ${{ steps.dump.outputs.latest }}
+          ENV_ENC: ${{ steps.dump.outputs.env_enc }}
           BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
           BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_ACCESS_KEY_ID }}
           BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
           BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
           BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
-          BACKUP_ENV_AGE_RECIPIENT: ${{ secrets.BACKUP_ENV_AGE_RECIPIENT }}
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
+            echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
+            echo "Backup and checksum retained locally: ${LATEST}"
+            exit 0
+          fi
+
+          export AWS_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY_ID}"
+          export AWS_SECRET_ACCESS_KEY="${BACKUP_SECRET_ACCESS_KEY}"
+          AWS_ARGS=()
+          [[ -n "${BACKUP_S3_ENDPOINT:-}" ]] && AWS_ARGS+=(--endpoint-url "${BACKUP_S3_ENDPOINT}")
+          [[ -n "${BACKUP_S3_REGION:-}" ]] && AWS_ARGS+=(--region "${BACKUP_S3_REGION}")
+
+          # Prefer a host aws CLI; otherwise the official image. Credentials
+          # are passed by variable name only, never on the command line.
+          if command -v aws > /dev/null 2>&1; then
+            AWS=(aws)
+            SRC="$BACKUP_DIR"
+          else
+            AWS=(docker run --rm -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY
+                 -v "$BACKUP_DIR:/backups:ro" amazon/aws-cli:2.22.35)
+            SRC=/backups
+          fi
+          s3_put() {
+            "${AWS[@]}" "${AWS_ARGS[@]}" s3 cp "$SRC/$1" "s3://${BACKUP_BUCKET}/$1" --only-show-errors
+          }
+
+          echo "Uploading ${LATEST} to s3://${BACKUP_BUCKET}/"
+          s3_put "${LATEST}"
+          s3_put "${LATEST}.sha256"
+          if [[ -n "${ENV_ENC:-}" ]]; then
+            s3_put "${ENV_ENC}"
+            echo "Encrypted .env uploaded: ${ENV_ENC}"
+          fi
+          echo "Backup and checksum uploaded: ${LATEST}"

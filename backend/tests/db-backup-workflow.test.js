@@ -13,28 +13,41 @@ test('backup script falls back to PRISMA_DATABASE_URL', () => {
   assert.match(script, /DATABASE_URL="\$\{DATABASE_URL:-\$\{PRISMA_DATABASE_URL:-\}\}"/);
 });
 
-test('db backup workflow reads the resolved runtime database URL without sourcing env files', () => {
+test('db backup workflow dumps the live Lenovo iliagpt database, not the legacy VPS', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/db-backup.yml'), 'utf8');
-  assert.match(workflow, /cd \/opt\/siragpt/);
+  // Runs next to production, on the same runner as the publish workflow.
+  assert.match(workflow, /runs-on: \[self-hosted, linux, siragpt-lenovo\]/);
+  // The legacy VPS path picked the first `backend`-labelled container, which
+  // is stuck restarting there, so every run failed before pg_dump.
+  assert.doesNotMatch(workflow, /secrets\.VPS_HOST/);
+  assert.doesNotMatch(workflow, /cd \/opt\/siragpt/);
+  assert.doesNotMatch(workflow, /com\.docker\.compose\.service=backend/);
   assert.doesNotMatch(workflow, /\/root\/siraNew\/siraGPT/);
-  assert.doesNotMatch(workflow, /(?:^|[;\s])\.\s+(?:backend\/)?\.env/m);
-  assert.doesNotMatch(workflow, /source\s+(?:backend\/)?\.env/);
-  assert.match(workflow, /com\.docker\.compose\.service=backend/);
-  assert.match(workflow, /docker exec "\$\{BACKEND_CONTAINER\}"/);
-  assert.match(workflow, /refusing to guess database credentials/);
-  assert.match(workflow, /DATABASE_URL\/PRISMA_DATABASE_URL/);
-  assert.match(workflow, /PRISMA_DATABASE_URL/);
-  assert.match(workflow, /127\.0\.0\.1:5432/);
-  assert.match(workflow, /DATABASE_URL="\$\{DATABASE_URL\/\/@db:5432\/@127\.0\.0\.1:5432\}"/);
+  // Same compose project and in-container credentials as publish-reviewed.sh.
+  assert.match(workflow, /docker compose -p iliagpt -f "\$DEPLOY\/compose\.yaml" --env-file "\$DEPLOY\/\.env"/);
+  assert.match(workflow, /ps -q db/);
+  assert.match(workflow, /\{\{\.State\.Status\}\}/);
+  assert.match(workflow, /exec -T db sh -c 'exec pg_dump --no-owner --no-acl -U "\$POSTGRES_USER" -d "\$POSTGRES_DB"'/);
+  // Never reads, sources or prints connection strings.
+  assert.doesNotMatch(workflow, /DATABASE_URL/);
+  assert.doesNotMatch(workflow, /(?:^|[;\s])\.\s+(?:\S*\/)?\.env/m);
+  assert.doesNotMatch(workflow, /source\s+\S*\.env/);
+  assert.doesNotMatch(workflow, /cat\s+"?\$DEPLOY\/\.env/);
+  // Never takes the publication lock (publish refuses to start while it exists).
+  assert.doesNotMatch(workflow, /mkdir\s+"?\$PUBLISH_LOCK/);
 });
 
-test('db backup workflow skips S3 upload when backup secrets are absent', () => {
+test('db backup workflow verifies the dump and skips S3 upload when backup secrets are absent', () => {
   const workflow = fs.readFileSync(path.join(root, '.github/workflows/db-backup.yml'), 'utf8');
   assert.match(workflow, /gzip -t "\$\{LATEST\}"/);
-  assert.match(workflow, /sha256sum "\$\{LATEST\}" > "\$\{LATEST\}\.sha256"/);
-  assert.match(workflow, /s3 cp "\$\{LATEST\}\.sha256"/);
+  assert.match(workflow, /PostgreSQL database dump complete/);
+  assert.match(workflow, /sha256sum "\$NAME" > "\$NAME\.sha256"/);
+  assert.match(workflow, /s3_put "\$\{LATEST\}\.sha256"/);
+  assert.match(workflow, /siraGPT_\$\{KIND\}_\$\{TIMESTAMP\}\.sql\.gz/);
   assert.match(workflow, /BACKUP_BUCKET \/ BACKUP_ACCESS_KEY_ID \/ BACKUP_SECRET_ACCESS_KEY are not fully configured/);
   assert.match(workflow, /exit 0/);
+  // Credentials reach the aws container by variable name only.
+  assert.match(workflow, /-e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY/);
 });
 
 test('restore drill workflow exists and runs monthly against the VPS', () => {
