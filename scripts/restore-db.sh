@@ -26,6 +26,8 @@
 #   DRILL_CORE_TABLES     comma-separated tables that must exist AND have >0 rows
 #                         (default: "users,chats,messages").
 #   DRILL_KEEP_SCRATCH_DB set to 1 to keep the scratch database for inspection.
+#   DRILL_MAX_AGE_HOURS   maximum age of the newest S3 backup (default: 48).
+#                         Only applies when downloading from S3.
 #   PG_RESTORE_BIN        optional. Defaults to `psql` on PATH.
 #   AWS_BIN               optional. Defaults to `aws` on PATH.
 #
@@ -49,6 +51,7 @@ AWS_BIN="${AWS_BIN:-aws}"
 MIN_TABLES="${DRILL_MIN_TABLES:-100}"
 CORE_TABLES="${DRILL_CORE_TABLES:-users,chats,messages}"
 KEEP_SCRATCH="${DRILL_KEEP_SCRATCH_DB:-0}"
+MAX_AGE_HOURS="${DRILL_MAX_AGE_HOURS:-48}"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/siragpt-restore-drill.XXXXXX")"
 
 db_url_part() {
@@ -132,6 +135,21 @@ else
     exit 2
   fi
   echo "[restore-db] Latest backup in S3: ${LATEST_KEY}"
+
+  # Freshness gate: a restorable but stale backup still means the daily job
+  # is broken. The key carries its UTC timestamp (siraGPT_<kind>_<ts>.sql.gz).
+  KEY_TS="$(printf '%s' "${LATEST_KEY}" | sed -E 's/^siraGPT_[a-z]+_([0-9]{8})T([0-9]{2})([0-9]{2})([0-9]{2})Z\.sql\.gz$/\1 \2:\3:\4/')"
+  KEY_EPOCH="$(date -u -d "${KEY_TS}" +%s 2>/dev/null || date -u -j -f '%Y%m%d %H:%M:%S' "${KEY_TS}" +%s 2>/dev/null || echo '')"
+  if [[ -z "${KEY_EPOCH}" ]]; then
+    echo "[restore-db] ERROR: could not parse the timestamp of ${LATEST_KEY}" >&2
+    exit 2
+  fi
+  AGE_HOURS=$(( ( $(date -u +%s) - KEY_EPOCH ) / 3600 ))
+  echo "[restore-db] Latest backup age: ${AGE_HOURS}h (maximum: ${MAX_AGE_HOURS}h)"
+  if (( AGE_HOURS > MAX_AGE_HOURS )); then
+    echo "[restore-db] ERROR: latest backup is ${AGE_HOURS}h old (> ${MAX_AGE_HOURS}h); the daily DB backup is not running" >&2
+    exit 2
+  fi
 
   "${AWS_BIN}" ${AWS_EXPAND[@]+"${AWS_EXPAND[@]}"} s3 cp "s3://${BACKUP_BUCKET}/${LATEST_KEY}" "${WORK_DIR}/${LATEST_KEY}" --only-show-errors
   "${AWS_BIN}" ${AWS_EXPAND[@]+"${AWS_EXPAND[@]}"} s3 cp "s3://${BACKUP_BUCKET}/${LATEST_KEY}.sha256" "${WORK_DIR}/${LATEST_KEY}.sha256" --only-show-errors 2>/dev/null || true
