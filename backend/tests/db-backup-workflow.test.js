@@ -80,6 +80,11 @@ test('restore drill never touches the live database', () => {
   assert.match(workflow, /DATABASE_URL='postgresql:\/\/postgres:scratch@127\.0\.0\.1:5432\/postgres'/);
   assert.doesNotMatch(workflow, /exec -T db|docker exec [^\n]*\$db_id/);
   assert.match(workflow, /if: always\(\)[\s\S]*docker rm -f -v "\$DRILL_CONTAINER"/);
+  // The Lenovo runner is a container sharing only /home/user 1:1 with the
+  // Docker host: paths bind-mounted into sibling containers (the aws CLI
+  // download dir) must live there, not under the runner-only $RUNNER_TEMP.
+  assert.doesNotMatch(workflow, /RUNNER_TEMP/);
+  assert.match(workflow, /WORK="\$DEPLOY\/backups\/restore-drill"/);
 });
 
 test('restore drill rejects a stale newest backup', () => {

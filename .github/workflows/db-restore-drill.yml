@@ -94,7 +94,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
-          WORK="$RUNNER_TEMP/restore-drill"
+          # The runner is itself a container that only shares /home/user 1:1
+          # with the Docker host (deploy/lenovo-runner), so anything bind-
+          # mounted into sibling containers must live under /home/user.
+          # The runner-local temp dir does not exist on the host.
+          WORK="$DEPLOY/backups/restore-drill"
           rm -rf "$WORK" && mkdir -p "$WORK/tmp"
 
           # psql runs inside the scratch container; restore-db.sh only ever
@@ -130,7 +134,7 @@ jobs:
         shell: bash
         run: |
           docker rm -f -v "$DRILL_CONTAINER" > /dev/null 2>&1 || true
-          rm -rf "$RUNNER_TEMP/restore-drill"
+          rm -rf "$DEPLOY/backups/restore-drill"
 
       - name: Notify Slack
         if: always()
