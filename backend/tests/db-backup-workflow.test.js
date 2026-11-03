@@ -122,3 +122,55 @@ test('restore drill reads credentials from runtime and verifies before restoring
   assert.match(script, /DRILL_CORE_TABLES:-users,chats,messages/);
   assert.match(script, /information_schema\.tables/);
 });
+
+test('restore drill picks the newest backup by timestamp, not by daily/weekly name', (t) => {
+  const { spawnSync } = require('node:child_process');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'restore-drill-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  const stamp = (d) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  const freshDaily = `siraGPT_daily_${stamp(new Date())}.sql.gz`;
+  const oldWeekly = `siraGPT_weekly_${stamp(new Date(Date.now() - 60 * 24 * 3600 * 1000))}.sql.gz`;
+
+  const src = path.join(dir, 'src.sql.gz');
+  fs.writeFileSync(src, require('node:zlib').gzipSync('-- dump\n'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  // `s3 ls` lists both keys (old weekly sorts last by name); `s3 cp` records
+  // which key was fetched and serves the local dump (no .sha256 sidecar).
+  fs.writeFileSync(path.join(bin, 'aws'), `#!/usr/bin/env bash
+if [[ "$*" == *"s3 ls"* ]]; then
+  echo "2026-01-01 00:00:00 10 ${freshDaily}"
+  echo "2026-01-01 00:00:00 10 ${oldWeekly}"
+  exit 0
+fi
+src=""; out=""; take=0
+for a in "$@"; do if [[ $take == 1 ]]; then out="$a"; break; fi; [[ "$a" == s3://* ]] && { src="$a"; take=1; }; done
+[[ "$src" == *.sha256 ]] && exit 1
+echo "\${src##*/}" >> "${dir}/fetched"
+cp "${src}" "$out"
+`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'psql'), `#!/usr/bin/env bash
+cat > /dev/null
+if [[ "$*" == *information_schema* ]]; then echo 150; elif [[ "$*" == *"SELECT count(*)"* ]]; then echo 3; fi
+`, { mode: 0o755 });
+
+  const result = spawnSync('bash', [path.join(root, 'scripts/restore-db.sh')], {
+    encoding: 'utf8',
+    input: '',
+    env: {
+      PATH: process.env.PATH,
+      TMPDIR: dir,
+      AWS_BIN: path.join(bin, 'aws'),
+      PG_RESTORE_BIN: path.join(bin, 'psql'),
+      DATABASE_URL: 'postgresql://postgres:scratch@127.0.0.1:5432/postgres',
+      BACKUP_BUCKET: 'bucket',
+      BACKUP_ACCESS_KEY_ID: 'id',
+      BACKUP_SECRET_ACCESS_KEY: 'secret',
+    },
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, new RegExp(`Latest backup in S3: ${freshDaily.replace(/\./g, '\\.')}`));
+  assert.equal(fs.readFileSync(path.join(dir, 'fetched'), 'utf8').trim(), freshDaily);
+});
