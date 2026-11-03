@@ -127,9 +127,12 @@ else
   [[ ${#AWS_ARGS[@]} -gt 0 ]] && AWS_EXPAND=( "${AWS_ARGS[@]}" )
 
   echo "[restore-db] Listing s3://${BACKUP_BUCKET}/ …"
+  # Newest by the UTC timestamp in the key, not by the whole name: a plain
+  # sort ranks every siraGPT_weekly_* after every siraGPT_daily_*, so an old
+  # weekly dump would shadow today's daily one.
   LATEST_KEY="$("${AWS_BIN}" ${AWS_EXPAND[@]+"${AWS_EXPAND[@]}"} s3 ls "s3://${BACKUP_BUCKET}/" \
-    | awk '$4 ~ /^siraGPT_(daily|weekly)_[0-9]{8}T[0-9]{6}Z\.sql\.gz$/ {print $4}' \
-    | sort | tail -n 1 || true)"
+    | awk '$4 ~ /^siraGPT_(daily|weekly)_[0-9]{8}T[0-9]{6}Z\.sql\.gz$/ {key=$4; ts=key; sub(/^siraGPT_[a-z]+_/, "", ts); print ts, key}' \
+    | sort | tail -n 1 | awk '{print $2}' || true)"
   if [[ -z "${LATEST_KEY}" ]]; then
     echo "[restore-db] ERROR: no siraGPT_*.sql.gz backups found in s3://${BACKUP_BUCKET}/" >&2
     exit 2
