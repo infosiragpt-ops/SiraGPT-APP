@@ -289,7 +289,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `nth-check` | 2.1.1 | BSD-2-Clause | [link](https://github.com/fb55/nth-check) |
 | `option` | 0.2.4 | BSD-2-Clause | [link](https://github.com/mwilliamson/node-options) |
 | `protobufjs` | 7.6.5 | BSD-3-Clause | [link](https://github.com/protobufjs/protobuf.js) |
-| `qs` | 6.15.2 | BSD-3-Clause | [link](https://github.com/ljharb/qs) |
+| `qs` | 6.17.1 | BSD-3-Clause | [link](https://github.com/ljharb/qs) |
 | `roarr` | 2.15.4 | BSD-3-Clause | [link](https://github.com/gajus/roarr) |
 | `robot3` | 0.4.1 | BSD-2-Clause | [link](https://github.com/matthewp/robot) |
 | `rw` | 1.3.3 | BSD-3-Clause | [link](https://github.com/mbostock/rw) |
@@ -971,7 +971,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `file-type` | 22.0.1 | MIT | [link](https://github.com/sindresorhus/file-type) |
 | `fill-range` | 7.1.1 | MIT | [link](https://github.com/jonschlinkert/fill-range) |
 | `finalhandler` | 1.3.1, 2.1.1 | MIT | [link](https://github.com/pillarjs/finalhandler) |
-| `follow-redirects` | 1.16.1 | MIT | [link](https://github.com/follow-redirects/follow-redirects) |
+| `follow-redirects` | 1.16.2 | MIT | [link](https://github.com/follow-redirects/follow-redirects) |
 | `fontkit` | 2.0.4 | MIT | [link](https://github.com/foliojs/fontkit) |
 | `form-data` | 3.0.5, 4.0.6 | MIT | [link](https://github.com/form-data/form-data) |
 | `format` | 0.2.2 | MIT | [link](https://github.com/samsonjs/format) |
@@ -1419,8 +1419,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `shebang-command` | 2.0.0 | MIT | [link](https://github.com/kevva/shebang-command) |
 | `shebang-regex` | 3.0.0 | MIT | [link](https://github.com/sindresorhus/shebang-regex) |
 | `shiki` | 1.29.2 | MIT | [link](https://github.com/shikijs/shiki) |
-| `side-channel` | 1.1.0 | MIT | [link](https://github.com/ljharb/side-channel) |
-| `side-channel-list` | 1.0.0, 1.0.1 | MIT | [link](https://github.com/ljharb/side-channel-list) |
+| `side-channel` | 1.1.1 | MIT | [link](https://github.com/ljharb/side-channel) |
+| `side-channel-list` | 1.0.1 | MIT | [link](https://github.com/ljharb/side-channel-list) |
 | `side-channel-map` | 1.0.1 | MIT | [link](https://github.com/ljharb/side-channel-map) |
 | `side-channel-weakmap` | 1.0.2 | MIT | [link](https://github.com/ljharb/side-channel-weakmap) |
 | `simple-concat` | 1.0.1 | MIT | [link](https://github.com/feross/simple-concat) |
