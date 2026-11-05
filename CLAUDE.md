@@ -3317,8 +3317,12 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   copia de pista (`copy`) no mide silencio; la de AAC escribe con `fastStart: false` (con
   «in-memory» el muxer retenía los buffers de lectura de la fuente: ≈ el video entero en RAM).
   La duración de la fuente sale solo de los metadatos (calcularla lee el archivo entero); sin
-  ella, la regla de 20 min usa la duración leída de la salida. El sondeo se cancela al instante
-  (✕ libera la entrada). Abort real, también durante `Conversion.init`. Gate
+  ella, la regla de 20 min usa la duración leída de la salida, y la conversión no usa el
+  `onProgress` de mediabunny (que la calcularía leyendo el archivo entero antes de convertir): el
+  progreso es la parte del archivo leída (`followReads`, eventos `read` de la fuente, cada 1 % y
+  al menos una vez por segundo, así el vigilante de 60 s la ve viva). El sondeo se cancela al
+  instante (✕ libera la entrada), y la conversión también: el ✕ la cancela y libera la entrada,
+  lo que rechaza las lecturas en vuelo. Abort real, también durante `Conversion.init`. Gate
   puro `planAudioExtraction` (video ≥ 100 MB, audio ≥ 32 MB); el interruptor
   `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` se lee con un acceso literal (`BUILD_ENV`): Next solo
   inyecta así las `NEXT_PUBLIC_*` en el navegador. `extractedFileName` («Clase 3.mp4» →
@@ -3358,22 +3362,27 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   `POST /upload/chunked/init` (viaja en la sesión, `chunked-upload-store`) y en `POST /upload`
   (por índice; el mapa por nombre solo para pestañas viejas) y lo guarda en
   `DocumentAnalysis.metadata.clientExtracted` con `archiveMediaExpander.mergeAnalysisMetadata`.
-  El trabajo de transcripción marca `sourceMedia: 'video'` y `sourceName` (el nombre del video)
-  cuando la fuente era video (`readMediaAnalysisInfo` + `isExtractedFromVideo`: por el tipo, o por
+  El trabajo de transcripción guarda `sourceName` (el nombre de lo que subió el usuario) de todo
+  audio extraído, también de un audio re-codificado («Entrevista.mp3»), y marca `sourceMedia:
+  'video'` cuando la fuente era video (`readMediaAnalysisInfo` + `isExtractedFromVideo`: por el tipo, o por
   la extensión cuando el navegador no dio tipo, como un `.mkv` vacío o `application/octet-stream`;
   un tipo `audio/*` gana), también en una corrección de tramo
   (`spliceRefinedRange` los conserva); `isVideoRow` lo respeta (los subtítulos automáticos
-  siguen) y los entregables llevan el nombre del video, no «Clase 3.audio.ogg». Si ese audio no
+  siguen) y los entregables llevan el nombre de la fuente, no «Clase 3.audio.ogg»: la
+  transcripción y también la traducción y el análisis (`mediaRowsForAnalysis` renombra las filas
+  con o sin tramo; la entrega durable lo llama siempre). Si el audio de un video no
   tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
   pantalla quedaron en el video; «vuelve a adjuntar el mismo video: esta vez se sube completo»).
   Las herramientas de cuadros sobre un video del que solo se subió el audio dicen eso y el mismo
   remedio (`MEDIA_ORIGINAL_NOT_UPLOADED`) en vez de «no encontrado».
   La entrega durable admite 500 archivos (`MAX_FILES`; antes 50, por debajo del lote de 100), y
   el seguimiento del compositor reconoce el lote de 100 (`resolveMediaFollowupFiles`).
-- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (13),
+- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (14),
   `tests/lib/prepare-upload-media.test.ts` (7), `tests/lib/extracted-source-memory.test.ts` (4),
   `tests/chat-fast-upload-source.test.ts` (6), `tests/attachment-ingest.test.ts` (100/101),
-  `backend/tests/client-extracted-metadata.test.js`, `backend/tests/package-test-script-paths.test.js`
+  `backend/tests/client-extracted-metadata.test.js`, `backend/tests/client-extracted-names.test.js`
+  (6: nombres en la transcripción guardada, sus archivos, la traducción y el análisis; silencio de
+  un audio que no es video), `backend/tests/package-test-script-paths.test.js`
   (cada ruta del script `npm test` existe), casos nuevos en `media-transcript-artifacts`,
   `media-transcript-store`, `media-delivery-store`, `chunked-upload-resumable` y
   `chat-composer-files`.

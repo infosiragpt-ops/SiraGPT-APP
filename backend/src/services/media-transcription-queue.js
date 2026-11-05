@@ -1364,16 +1364,19 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const out = { ...(media.language ? { language: media.language } : {}), ...(media.hints || {}) };
     return Object.keys(out).length ? out : null;
   };
-  // Audio the browser extracted from a video (DocumentAnalysis.metadata
-  // .clientExtracted) stays that video for the deliverables: its name and
-  // the automatic SRT/VTT. { sourceMedia: 'video', sourceName } or null.
+  // Audio the browser extracted (DocumentAnalysis.metadata.clientExtracted)
+  // keeps the name of what the user uploaded in the deliverables, and one
+  // extracted from a video stays that video (the automatic SRT/VTT).
+  // { sourceMedia?: 'video', sourceName? } or null.
   async function sourceMediaOf(row) {
     if (typeof transcriptStore?.readMediaAnalysisInfo !== 'function') return null;
     try {
       const info = await transcriptStore.readMediaAnalysisInfo(prisma, { fileId: row.id, userId: row.userId });
       const extracted = info?.clientExtracted;
-      if (!require('./client-extracted-metadata').isExtractedFromVideo(extracted)) return null;
-      return { sourceMedia: 'video', ...(extracted.sourceName ? { sourceName: String(extracted.sourceName).slice(0, 255) } : {}) };
+      const video = require('./client-extracted-metadata').isExtractedFromVideo(extracted);
+      const sourceName = extracted?.sourceName ? String(extracted.sourceName).slice(0, 255) : '';
+      if (!video && !sourceName) return null;
+      return { ...(video ? { sourceMedia: 'video' } : {}), ...(sourceName ? { sourceName } : {}) };
     } catch (_) {
       return null;
     }
@@ -1822,7 +1825,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         // Only the audio of a video reached the server (extracted in the
         // browser): its subtitles and on-screen text stayed in the video.
         const source = await sourceMediaOf(row);
-        if (source) throw failure('extracted_audio_no_speech', `Solo se subió el audio de «${source.sourceName || row.originalName || 'el video'}» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla, vuelve a adjuntar el mismo video: esta vez se sube completo.`);
+        if (source?.sourceMedia === 'video') throw failure('extracted_audio_no_speech', `Solo se subió el audio de «${source.sourceName || row.originalName || 'el video'}» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla, vuelve a adjuntar el mismo video: esta vez se sube completo.`);
       }
       if (!fallback) throw engineError;
       return { transcription: fallback, plain: fallback.transcript };

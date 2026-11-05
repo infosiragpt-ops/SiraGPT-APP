@@ -94,15 +94,21 @@ function totalProgressDuration(batch = {}) {
 }
 
 /**
- * Rows for the analysis step. With a time range the model reads only that
- * window (timestamped), never the whole recording.
+ * Rows for the analysis and translation steps. Audio extracted in the
+ * browser keeps the name of what the user uploaded («Clase 3.mp4», never
+ * «Clase 3.audio.ogg»). With a time range the model reads only that window
+ * (timestamped), never the whole recording.
  */
 function mediaRowsForAnalysis(rows = [], transcripts = new Map(), range = null, { formatter = null } = {}) {
-  if (!range) return rows;
+  const named = rows.map((row) => {
+    const sourceName = transcripts?.get?.(row?.id)?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName } : row;
+  });
+  if (!range) return named;
   let fmt = formatter;
-  try { fmt = fmt || require('./media-transcript-format'); } catch (_) { return rows; }
+  try { fmt = fmt || require('./media-transcript-format'); } catch (_) { return named; }
   const { transcriptResultFor } = require('./media-transcript-artifacts');
-  return rows.map((row) => {
+  return named.map((row) => {
     const result = transcriptResultFor(row, transcripts.get(row.id));
     if (!result.segments.length) return row;
     try {

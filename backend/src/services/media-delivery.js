@@ -1342,11 +1342,12 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     client: resolution.client, model: resolution.model, provider: resolution.provider,
     userId: delivery.userId, chatId: delivery.deliveryChatId || delivery.chatId, prisma,
   });
+  // The recordings' own names (audio extracted in the browser) and, with a
+  // range, only that window.
   const rowsIn = (range) => {
-    if (!range) return rows;
     try {
       const transcripts = new Map(Object.entries(delivery.transcripts || {}));
-      return require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range);
+      return require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range || null);
     } catch (_) { return rows; }
   };
   // A requested range («del minuto 30 al 45») or moment is analysed alone.
