@@ -23,10 +23,17 @@
  *     Retry-After (15 s without a hint, never more than 30 min); each minute
  *     of clean traffic gives one slot back, up to the configured cap.
  *
- * Permits are FIFO per provider and abortable (the job's signal). `capacity()`
- * tells the engine's scheduler whether a provider can take a piece NOW, so a
- * saturated or paused provider is skipped for the next healthy one instead of
- * queueing behind it. Nothing here knows API keys, file names or text.
+ * Permits are FIFO per provider (a `priority` lets an interactive request —
+ * dictation, a link clip someone waits for — go before queued batch pieces)
+ * and abortable (the job's signal). A caller bounds its wait with
+ * `maxWaitMs`: a provider paused for longer than that rejects at once
+ * (`governor_paused`), `maxWaitMs: 0` rejects whenever a slot is not free
+ * (`governor_busy`), and a wait that outlives its bound rejects
+ * (`governor_wait_timeout`) — the engine then moves the piece to the next
+ * rung instead of holding it. `capacity()` tells the engine's scheduler
+ * whether a provider can take a piece NOW, so a saturated or paused provider
+ * is skipped for the next healthy one instead of queueing behind it. Nothing
+ * here knows API keys, file names or text.
  *
  * `now`/`sleep` are injectable: a job that runs with a fake clock (tests) gets
  * a governor on the same clock, and a wake-up that fires before the clock
@@ -61,6 +68,28 @@ const AUDIO_WINDOW_MS = 3_600_000;
 
 function abortError() {
   return Object.assign(new Error('aborted by user'), { name: 'AbortError', code: 'ABORT_ERR' });
+}
+
+/**
+ * The governor refused or gave up a wait. Never shaped like an abort (name,
+ * code or message): the engine's abort classifier must not mistake it for the
+ * user's cancellation.
+ */
+function governorError(code, provider, retryAfterMs = null) {
+  const err = new Error(code === 'governor_paused'
+    ? `${provider} is paused by the transcription governor for ${Math.round((retryAfterMs || 0) / 1000)} s`
+    : code === 'governor_wait_timeout'
+      ? `the wait for a ${provider} slot outlived its bound`
+      : `${provider} has no free slot right now`);
+  err.name = 'GovernorError';
+  err.code = code;
+  err.provider = provider;
+  if (retryAfterMs != null) err.retryAfterMs = Math.max(0, Math.round(retryAfterMs));
+  return err;
+}
+
+function isGovernorError(err) {
+  return Boolean(err) && err.name === 'GovernorError';
 }
 
 function throwIfAborted(signal) {
@@ -202,10 +231,32 @@ function createTranscriptionGovernor({ env = process.env, now = Date.now, sleep 
     else if (reason === 'audio') state.audio.shift();
   }
 
+  /** Reject the waiters whose bound has passed (their piece moves to the next rung). */
+  function expireWaiters(state, at) {
+    for (let i = 0; i < state.waiters.length;) {
+      const waiter = state.waiters[i];
+      if (waiter.deadlineAt <= at) {
+        state.waiters.splice(i, 1);
+        waiter.cleanup();
+        waiter.reject(governorError('governor_wait_timeout', state.name));
+        continue;
+      }
+      i++;
+    }
+  }
+
+  function earliestDeadline(state) {
+    let earliest = Infinity;
+    for (const waiter of state.waiters) if (waiter.deadlineAt < earliest) earliest = waiter.deadlineAt;
+    return earliest;
+  }
+
   function pump(state) {
     for (;;) {
       if (!state.waiters.length) return;
       const at = now();
+      expireWaiters(state, at);
+      if (!state.waiters.length) return;
       const reason = blocker(state, at);
       if (!reason) {
         const waiter = state.waiters.shift();
@@ -213,9 +264,13 @@ function createTranscriptionGovernor({ env = process.env, now = Date.now, sleep 
         waiter.resolve(take(state, waiter.audioSeconds));
         continue;
       }
-      if (reason === 'in_flight') return; // a release() pumps again
-      const wakeAt = nextChangeAt(state, reason, at);
-      if (wakeAt == null) return;
+      // When the blocker clears by itself (a pause end, a window entry
+      // expiring) or the earliest bound passes, whichever comes first. A
+      // full in-flight cap clears on release(), which pumps again.
+      const change = nextChangeAt(state, reason, at);
+      const deadline = earliestDeadline(state);
+      const wakeAt = Math.min(change == null ? Infinity : change, deadline);
+      if (!Number.isFinite(wakeAt)) return;
       if (state.wakePending) return;
       state.wakePending = true;
       state.wakeAt = wakeAt;
@@ -223,19 +278,31 @@ function createTranscriptionGovernor({ env = process.env, now = Date.now, sleep 
       Promise.resolve(sleep(wait)).catch(() => {}).then(() => {
         state.wakePending = false;
         // A fake clock did not move: the sleep still counts as the wait served.
-        if (now() < state.wakeAt && blocker(state, now()) === reason) expire(state, reason);
+        if (now() < state.wakeAt && change != null && wakeAt === change && blocker(state, now()) === reason) expire(state, reason);
         pump(state);
       });
       return;
     }
   }
 
-  function acquire(provider, { signal = null, audioSeconds = 0 } = {}) {
+  /**
+   * One permit for one request. Waits (FIFO among equal `priority`, higher
+   * first) until the provider can take it, at most `maxWaitMs`; see the
+   * header for the three refusals.
+   */
+  function acquire(provider, { signal = null, audioSeconds = 0, maxWaitMs = Infinity, priority = 0 } = {}) {
     const state = stateFor(provider);
     throwIfAborted(signal);
-    if (!state.waiters.length && !blocker(state, now())) return Promise.resolve(take(state, audioSeconds));
+    const at = now();
+    const bound = Number.isFinite(Number(maxWaitMs)) ? Math.max(0, Number(maxWaitMs)) : Infinity;
+    const reason = blocker(state, at);
+    if (!state.waiters.length && !reason) return Promise.resolve(take(state, audioSeconds));
+    if (reason === 'paused' && state.pausedUntil - at > bound) {
+      return Promise.reject(governorError('governor_paused', state.name, state.pausedUntil - at));
+    }
+    if (bound === 0) return Promise.reject(governorError('governor_busy', state.name, reason === 'paused' ? state.pausedUntil - at : null));
     return new Promise((resolve, reject) => {
-      const waiter = { audioSeconds, resolve, reject, cleanup: () => {} };
+      const waiter = { audioSeconds, priority: Number(priority) || 0, deadlineAt: at + bound, resolve, reject, cleanup: () => {} };
       if (signal) {
         const onAbort = () => {
           const index = state.waiters.indexOf(waiter);
@@ -245,7 +312,10 @@ function createTranscriptionGovernor({ env = process.env, now = Date.now, sleep 
         signal.addEventListener('abort', onAbort, { once: true });
         waiter.cleanup = () => signal.removeEventListener('abort', onAbort);
       }
-      state.waiters.push(waiter);
+      // Behind every waiter of the same or higher priority, ahead of lower ones.
+      let index = state.waiters.length;
+      while (index > 0 && state.waiters[index - 1].priority < waiter.priority) index--;
+      state.waiters.splice(index, 0, waiter);
       pump(state);
     });
   }
@@ -336,6 +406,7 @@ module.exports = {
   createTranscriptionGovernor,
   getTranscriptionGovernor,
   resetTranscriptionGovernor,
+  isGovernorError,
   limitsFor,
   DEFAULT_LIMITS,
   DEFAULT_PAUSE_MS,

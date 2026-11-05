@@ -133,7 +133,9 @@ const PROVIDER_PROBE = Object.freeze({
   // transcripts (limit 1) is the lightweight key check. Deepgram uses the
   // `Token` scheme; listing projects proves the key.
   assemblyai: { url: 'https://api.assemblyai.com/v2/transcript?limit=1',             auth: (k) => ({ authorization: k }) },
-  deepgram:   { url: 'https://api.deepgram.com/v1/projects',                         auth: (k) => ({ Authorization: `Token ${k}` }) },
+  // /v1/auth/token answers for any valid key, including a transcription-only
+  // (usage:write) key that /v1/projects would refuse with 403.
+  deepgram:   { url: 'https://api.deepgram.com/v1/auth/token',                       auth: (k) => ({ Authorization: `Token ${k}` }) },
   // MiniMax and the Suno gateway expose no verified lightweight key-check
   // endpoint, so they are intentionally unprobed: the write path fail-open
   // accepts them and reconcile reports them as present-but-unprobed.

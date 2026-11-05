@@ -3240,8 +3240,8 @@ extracción de audio en el navegador son el PR2; los entregables por lote, el PR
   (`/v2/upload` → `/v2/transcript` → sondeo con backoff; ms → s; `utterances` con hablante) y
   `stt-providers/deepgram.js` (`/v1/listen` con `diarize`, `utterances`, `smart_format`,
   `mip_opt_out=true`, detección o `multi`); ambos devuelven errores con `status` + `headers`
-  para los clasificadores del motor. Mistral Voxtral por la superficie OpenAI
-  (`timestamp_granularities=segment` con `json`, caps `segmentTimestamps`). Claves nuevas en
+  para los clasificadores del motor. Mistral Voxtral por `stt-providers/mistral.js` (multipart
+  propio; ver ronda 2). Claves nuevas en
   Admin → Conexiones (backend: `assemblyai`, `deepgram` en `PROVIDER_ENV_MAP`, sondas y
   etiquetas; el desplegable del front sigue bajo UI lock).
 - **Cola** (`media-transcription-queue.js`): `SIRAGPT_MEDIA_CONCURRENCY` (piso 2) y
@@ -3257,8 +3257,39 @@ extracción de audio en el navegador son el PR2; los entregables por lote, el PR
   `audio-transcriber`, `attachments-transcription-image-fallback` (orden), `audio-transcriber-
   quality-loop` (scribe_v2), `audio-transcriber-rate-limit` (tras agotar reintentos, el
   siguiente tramo espera la pausa del gobernador), `media-batch` (101/100).
-- **Decisiones de Luis pendientes**: financiar/pegar claves (ElevenLabs STT ya en prod;
+- **Ronda 2 (revisión adversarial con 3 lentes + verificadores)**: (1) el permiso del
+  gobernador se toma en `transcribeCloudFile`, el único punto por el que pasa TODA petición de
+  nube (tramos, segundas opiniones, clips cortos, dictado, clips de enlaces,
+  `transcribeCloud`): antes los clips cortos y la ruta de un solo proveedor saltaban el
+  gobernador y no reportaban sus 429. (2) Esperas acotadas: `acquire(provider, { maxWaitMs,
+  priority })` → `GovernorError` (`governor_busy` / `governor_paused` /
+  `governor_wait_timeout`, `isGovernorError`, nunca con forma de abort); el ladder usa
+  `slotWaitMs` (= `TRANSCRIBE_RATE_LIMIT_MAX_WAIT_MS`; plaza corta 60 s, interactiva 10 s) salvo
+  el último peldaño vivo (`Infinity`) y trata «busy» como democión sin contar fallo; antes un
+  proveedor pausado 30 min por otro trabajo retenía cada tramo 30 min. Una segunda opinión
+  (`obtainHypothesis`) pide `maxWaitMs: 0` → `skipped`. Prioridad por plaza interactiva 2 ·
+  corta 1 · lote 0. (3) `reviewPlan` considera segunda opinión también los peldaños ANTES del
+  productor (spread pudo saltarlos por ocupados); `rungOrderFor` sin ningún peldaño con plaza
+  devuelve el orden configurado. (4) Admisión: una plaza reservada (corta/interactiva) antes
+  que el pool de nube; `localWholeFileAnswer` toma los permisos compartidos de whisper.cpp
+  (salvo plazas reservadas; se libera en `finally`). (5) `cloudUsable()` (clave sin cuarentena y
+  sin pausa; un pool lleno con nuestro tráfico cuenta) alimenta el autoescalado, no
+  `cloudCapacityAvailable`. (6) Dictado de pago / gratis con nube: `dictationLadderOptions`
+  devuelve el orden compartido SIN `elevenlabs` (la ruta ya probó Scribe con su
+  sub-presupuesto). (7) Adaptadores: `stt-providers/http-shared.js` `boundedSignal` → un tope
+  agotado es `ETIMEDOUT` (no «aborted», que el motor leía como cancelación del usuario);
+  `stt-providers/mistral.js` (multipart documentado por Mistral, en vez del SDK de OpenAI;
+  `TRANSCRIBE_MISTRAL_DIARIZE`); AssemblyAI sondea con reintento transitorio (nunca re-sube) y
+  usa la pista de idioma en clips < 50 s; `cloudSegmentTimeoutMs` honra
+  `TRANSCRIBE_CLOUD_TIMEOUT_MS` explícito para todos y `rung.requestTimeoutMs` (AssemblyAI
+  máx(300 s, 90 s + 1 s/s)). (8) ElevenLabs: keyterms saneados al contrato de la API; un 401
+  `quota_exceeded` es saldo, no clave. Sonda de Deepgram en `/v1/auth/token`. Tests: +7 en
+  `transcription-provider-pool` (14), +2 en `transcription-governor` (8), +4 en `stt-providers`
+  (10); `transcription-capabilities` actualizado (dictado sin Scribe).
+- **Decisiones de Luis pendientes**: financiar/pegar claves (ElevenLabs STT ya en prod — y con
+  ella Scribe v2 pasa a ser la primera pasada de PAGO de toda grabación, ≈ $0,22/h;
   AssemblyAI, Deepgram, Mistral nuevas); si no quiere gastar aún, `TRANSCRIBE_PROVIDERS=openai,
   groq,xai,local` restaura el comportamiento previo. GPU en la Lenovo (RTX 4070/5070 Ti 16 GB)
   para un peldaño local Parakeet-TDT que sí alcance 1 000 h/día sin nube. Benchmark propio de
-  2–3 h de audio LatAm antes de fijar el orden definitivo.
+  2–3 h de audio LatAm antes de fijar el orden definitivo. El compositor sigue en 50 medios por
+  mensaje (UI lock) hasta el PR de la carga rápida.

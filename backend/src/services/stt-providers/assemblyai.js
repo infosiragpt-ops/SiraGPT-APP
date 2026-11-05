@@ -14,10 +14,12 @@
  */
 
 const fs = require('fs');
+const { boundedSignal, headersObject, round3 } = require('./http-shared');
 
 const DEFAULT_ASSEMBLYAI_BASE_URL = 'https://api.assemblyai.com/v2';
 const DEFAULT_POLL_MS = 2_500;
 const MAX_POLL_MS = 10_000;
+const MAX_POLL_FAILURES = 4;
 
 function cleanBaseUrl(raw) {
   const value = String(raw || '').trim().replace(/\/+$/, '');
@@ -37,25 +39,12 @@ function abortError() {
   return Object.assign(new Error('aborted by user'), { name: 'AbortError', code: 'ABORT_ERR' });
 }
 
-function headersObject(headers) {
-  const out = {};
-  try {
-    if (headers && typeof headers.forEach === 'function') headers.forEach((value, key) => { out[String(key).toLowerCase()] = value; });
-    else if (headers && typeof headers === 'object') for (const [key, value] of Object.entries(headers)) out[String(key).toLowerCase()] = value;
-  } catch { /* advisory */ }
-  return out;
-}
-
 function httpError(status, message, headers = null) {
   const err = new Error(message);
   err.status = status;
   err.provider = 'assemblyai';
   if (headers) err.headers = headers;
   return err;
-}
-
-function round3(n) {
-  return Math.round(Number(n) * 1000) / 1000;
 }
 
 function msToSec(value) {
@@ -100,22 +89,30 @@ async function readJson(response) {
   try { return await response.json(); } catch { return null; }
 }
 
-function withTimeout(signal, timeoutMs) {
-  const signals = [AbortSignal.timeout(timeoutMs)];
-  if (signal) signals.push(signal);
-  return AbortSignal.any(signals);
-}
-
 async function request(fetchImpl, url, init, { signal, timeoutMs }) {
   if (signal?.aborted) throw abortError();
-  const response = await fetchImpl(url, { ...init, signal: withTimeout(signal, timeoutMs) });
-  const headers = headersObject(response.headers);
-  const payload = await readJson(response);
-  if (!response.ok) {
-    const message = payload?.error || payload?.message || `AssemblyAI HTTP ${response.status}`;
-    throw httpError(response.status, String(message), headers);
+  // A budget overrun is a TIMEOUT (transient to the engine), never an abort.
+  const bounded = boundedSignal(signal, timeoutMs, 'assemblyai');
+  try {
+    const response = await fetchImpl(url, { ...init, signal: bounded.signal });
+    const headers = headersObject(response.headers);
+    const payload = await readJson(response);
+    if (!response.ok) {
+      const message = payload?.error || payload?.message || `AssemblyAI HTTP ${response.status}`;
+      throw httpError(response.status, String(message), headers);
+    }
+    return payload;
+  } finally {
+    bounded.dispose();
   }
-  return payload;
+}
+
+/** A poll that failed for a reason the next poll may not see (5xx, 429, network): worth another poll, not a new transcript. */
+function isTransientPollError(err) {
+  const status = Number(err?.status || 0);
+  if (status === 429 || (status >= 500 && status <= 599)) return true;
+  if (status) return false;
+  return /^(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|UND_ERR_[A-Z_]+)$/.test(String(err?.code || '')) || /fetch failed|network/i.test(String(err?.message || ''));
 }
 
 /**
@@ -169,12 +166,23 @@ async function transcribeAssemblyAiFile({ filePath, mimeType, language, signal, 
     signal?.addEventListener?.('abort', onAbort, { once: true });
   }));
   let interval = Math.max(250, Number(pollMs) || DEFAULT_POLL_MS);
+  let pollFailures = 0;
   for (;;) {
     if (Date.now() - startedAt >= budget) {
       throw Object.assign(new Error(`AssemblyAI transcript ${id} timed out after ${Math.round(budget / 1000)} s`), { code: 'ETIMEDOUT', provider: 'assemblyai' });
     }
     await wait(interval, signal);
-    const status = await request(fetchImpl, `${base}/transcript/${encodeURIComponent(id)}`, { method: 'GET', headers: authHeaders }, { signal, timeoutMs: remaining() });
+    let status;
+    try {
+      status = await request(fetchImpl, `${base}/transcript/${encodeURIComponent(id)}`, { method: 'GET', headers: authHeaders }, { signal, timeoutMs: remaining() });
+    } catch (err) {
+      // The transcript keeps running on their side: a failed poll is polled
+      // again (bounded), never a re-upload that bills a second transcript.
+      if (signal?.aborted || !isTransientPollError(err) || pollFailures >= MAX_POLL_FAILURES) throw err;
+      pollFailures++;
+      interval = Math.min(MAX_POLL_MS, Math.round(interval * 1.5));
+      continue;
+    }
     const state = String(status?.status || '').toLowerCase();
     if (state === 'completed') {
       const segments = segmentsFromAssemblyAi(status);

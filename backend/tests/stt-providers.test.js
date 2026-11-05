@@ -1,9 +1,10 @@
 'use strict';
 
-// Deepgram Nova-3 and AssemblyAI Universal adapters of the transcription
-// pool: request shape (auth, parameters, body), response mapping (speakers,
-// seconds, language, duration) and error surfaces the engine classifies
-// (status + headers). Offline: fetch is injected.
+// Deepgram Nova-3, AssemblyAI Universal and Mistral Voxtral adapters of the
+// transcription pool: request shape (auth, parameters, body), response
+// mapping (speakers, seconds, language, duration), error surfaces the engine
+// classifies (status + headers) and the shared request bound (a budget
+// overrun is a TIMEOUT, never the user's abort). Offline: fetch is injected.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,6 +14,8 @@ const path = require('node:path');
 
 const deepgram = require('../src/services/stt-providers/deepgram');
 const assembly = require('../src/services/stt-providers/assemblyai');
+const mistral = require('../src/services/stt-providers/mistral');
+const { boundedSignal } = require('../src/services/stt-providers/http-shared');
 
 function tempFile(t, name = 'seg-0001.flac', bytes = 'flac-bytes-0001') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-stt-'));
@@ -214,4 +217,109 @@ test('AssemblyAI: HTTP errors keep status + headers; a transcript that errors is
   await assert.rejects(assembly.transcribeAssemblyAiFile({ filePath: file, timeoutMs: 5, env: { ASSEMBLYAI_API_KEY: 'k' }, fetchImpl: server.fetchImpl, sleep: async () => {} }),
     { code: 'ETIMEDOUT' });
   await assert.rejects(assembly.transcribeAssemblyAiFile({ filePath: file, env: {}, fetchImpl: server.fetchImpl }), { code: 'assemblyai_key_required', status: 401 });
+});
+
+test('Deepgram: the reported language is the forced one, else DEEPGRAM_LANGUAGE (unless multi), else the detected one', async (t) => {
+  const file = tempFile(t);
+  const payload = { results: { channels: [{ detected_language: 'pt-BR', alternatives: [{ transcript: 'Olá a todos.', words: [] }] }] } };
+  const fetchImpl = async () => response(200, payload);
+  assert.equal((await deepgram.transcribeDeepgramFile({ filePath: file, language: 'es', env: { DEEPGRAM_API_KEY: 'k', DEEPGRAM_LANGUAGE: 'en' }, fetchImpl })).language, 'es');
+  assert.equal((await deepgram.transcribeDeepgramFile({ filePath: file, env: { DEEPGRAM_API_KEY: 'k', DEEPGRAM_LANGUAGE: 'en-US' }, fetchImpl })).language, 'en');
+  assert.equal((await deepgram.transcribeDeepgramFile({ filePath: file, env: { DEEPGRAM_API_KEY: 'k', DEEPGRAM_LANGUAGE: 'multi' }, fetchImpl })).language, 'pt');
+  assert.equal((await deepgram.transcribeDeepgramFile({ filePath: file, env: { DEEPGRAM_API_KEY: 'k' }, fetchImpl })).language, 'pt');
+});
+
+test('AssemblyAI: a poll that fails transiently (503) is polled again with backoff — never a second upload; too many failed polls surface the error', async (t) => {
+  const file = tempFile(t);
+  const server = assemblyServer({ pollsBeforeDone: 0 });
+  let failures = 0;
+  const flaky = async (url, init) => {
+    if (new URL(url).pathname === '/v2/transcript/t1' && failures < 2) { failures++; return response(503, { error: 'upstream' }); }
+    return server.fetchImpl(url, init);
+  };
+  const sleeps = [];
+  const out = await assembly.transcribeAssemblyAiFile({ filePath: file, env: { ASSEMBLYAI_API_KEY: 'k' }, fetchImpl: flaky, sleep: async (ms) => { sleeps.push(ms); }, pollMs: 1000 });
+  assert.equal(out.text, 'Hola a todos. Empezamos la clase.');
+  assert.equal(server.calls.filter((c) => c.url.pathname === '/v2/upload').length, 1, 'one upload');
+  assert.equal(server.calls.filter((c) => c.url.pathname === '/v2/transcript' && c.init.method === 'POST').length, 1, 'one transcript (a second one would bill twice)');
+  assert.deepEqual(sleeps, [1000, 1500, 2250], 'the interval backs off after each failed poll');
+  const dead = async (url, init) => (new URL(url).pathname === '/v2/transcript/t1' ? response(503, { error: 'down' }) : server.fetchImpl(url, init));
+  await assert.rejects(assembly.transcribeAssemblyAiFile({ filePath: file, env: { ASSEMBLYAI_API_KEY: 'k' }, fetchImpl: dead, sleep: async () => {}, pollMs: 1000 }), { status: 503 });
+});
+
+// ── Mistral Voxtral ─────────────────────────────────────────────────────────
+
+test('Mistral Voxtral: multipart as Mistral documents it (model, file, language, ONE timestamp_granularities field, diarize opt-in), Bearer auth; segments in seconds; errors keep status + headers', async (t) => {
+  const file = tempFile(t, 'seg-0002.flac', 'flac-bytes-0002');
+  const calls = [];
+  const payload = { model: 'voxtral-mini-2507', text: 'Hola a todos. Empezamos la clase.', language: 'es', segments: [{ text: 'Hola a todos.', start: 0.5, end: 2.1 }, { text: 'Empezamos la clase.', start: 2.6, end: 4 }] };
+  const fetchImpl = async (url, init) => { calls.push({ url: String(url), init }); return response(200, payload); };
+  const out = await mistral.transcribeMistralFile({ filePath: file, mimeType: 'audio/flac', fileName: 'seg-0002.flac', language: 'es', timeoutMs: 60_000, env: { MISTRAL_API_KEY: 'mi-secret' }, fetchImpl });
+  assert.equal(calls.length, 1);
+  const { url, init } = calls[0];
+  assert.equal(url, 'https://api.mistral.ai/v1/audio/transcriptions');
+  assert.equal(init.method, 'POST');
+  assert.equal(init.headers.Authorization, 'Bearer mi-secret');
+  assert.ok(init.body instanceof FormData, 'multipart, not JSON');
+  assert.equal(init.body.get('model'), 'voxtral-mini-latest');
+  assert.equal(init.body.get('language'), 'es');
+  assert.deepEqual(init.body.getAll('timestamp_granularities'), ['segment'], 'one field per granularity (the OpenAI SDK would send timestamp_granularities[])');
+  assert.equal(init.body.has('diarize'), false);
+  assert.equal(init.body.has('prompt'), false);
+  const blob = init.body.get('file');
+  assert.equal(blob.name, 'seg-0002.flac');
+  assert.equal(blob.type, 'audio/flac');
+  assert.equal(await blob.text(), 'flac-bytes-0002');
+  assert.ok(init.signal instanceof AbortSignal);
+  assert.equal(out.provider, 'mistral');
+  assert.equal(out.model, 'voxtral-mini-2507');
+  assert.equal(out.language, 'es');
+  assert.equal(out.text, 'Hola a todos. Empezamos la clase.');
+  assert.deepEqual(out.segments, [{ start: 0.5, end: 2.1, text: 'Hola a todos.' }, { start: 2.6, end: 4, text: 'Empezamos la clase.' }]);
+  // Detection + speakers on request, a custom base URL and model.
+  const detected = await mistral.transcribeMistralFile({ filePath: file, diarize: true, env: { MISTRAL_API_KEY: 'k', MISTRAL_BASE_URL: 'https://proxy.example/v1/', MISTRAL_TRANSCRIBE_MODEL: 'voxtral-mini-2507' }, fetchImpl });
+  assert.equal(calls[1].url, 'https://proxy.example/v1/audio/transcriptions');
+  assert.equal(calls[1].init.body.get('model'), 'voxtral-mini-2507');
+  assert.equal(calls[1].init.body.has('language'), false);
+  assert.equal(calls[1].init.body.get('diarize'), 'true');
+  assert.equal(detected.language, 'es');
+  const limited = async () => response(429, { message: 'Rate limit exceeded', type: 'rate_limited' }, { 'retry-after': '20' });
+  await assert.rejects(mistral.transcribeMistralFile({ filePath: file, env: { MISTRAL_API_KEY: 'k' }, fetchImpl: limited }),
+    (err) => err.status === 429 && err.headers['retry-after'] === '20' && err.code === 'rate_limited' && /Rate limit exceeded/.test(err.message));
+  await assert.rejects(mistral.transcribeMistralFile({ filePath: file, env: {}, fetchImpl }), { code: 'mistral_key_required', status: 401 });
+  assert.equal(mistral.mistralTranscribeModel({}), 'voxtral-mini-latest');
+});
+
+// ── the shared request bound ────────────────────────────────────────────────
+
+test('a request that outlives its budget fails as a TIMEOUT (ETIMEDOUT, no «aborted» wording) on every adapter; the user\'s own abort stays an AbortError', async (t) => {
+  const file = tempFile(t);
+  // A fetch that settles only when its signal aborts, with the signal's reason — as undici does.
+  const hanging = (_url, init) => new Promise((_resolve, reject) => {
+    if (init.signal.aborted) { reject(init.signal.reason); return; }
+    init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+  });
+  const isTimeout = (err) => err.code === 'ETIMEDOUT' && err.name !== 'AbortError' && !/abort/i.test(err.message);
+  // The bound's timer is unref'd (a real request keeps the loop alive; this fake does not): hold the loop open for the test.
+  const keepAlive = setTimeout(() => {}, 10_000);
+  t.after(() => clearTimeout(keepAlive));
+  await assert.rejects(deepgram.transcribeDeepgramFile({ filePath: file, timeoutMs: 5, env: { DEEPGRAM_API_KEY: 'k' }, fetchImpl: hanging }), isTimeout);
+  await assert.rejects(mistral.transcribeMistralFile({ filePath: file, timeoutMs: 5, env: { MISTRAL_API_KEY: 'k' }, fetchImpl: hanging }), isTimeout);
+  // AssemblyAI gives every HTTP step at least 1 s of its budget.
+  await assert.rejects(assembly.transcribeAssemblyAiFile({ filePath: file, timeoutMs: 5, env: { ASSEMBLYAI_API_KEY: 'k' }, fetchImpl: hanging, sleep: async () => {} }), isTimeout);
+  const ctrl = new AbortController();
+  const pending = assert.rejects(mistral.transcribeMistralFile({ filePath: file, timeoutMs: 60_000, env: { MISTRAL_API_KEY: 'k' }, fetchImpl: hanging, signal: ctrl.signal }), { name: 'AbortError' });
+  ctrl.abort();
+  await pending;
+  const bound = boundedSignal(null, 1, 'x');
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(bound.timedOut(), true);
+  assert.equal(bound.signal.reason.code, 'ETIMEDOUT');
+  bound.dispose();
+  const user = new AbortController();
+  const forwarded = boundedSignal(user.signal, 60_000, 'y');
+  user.abort();
+  assert.equal(forwarded.signal.aborted, true);
+  assert.equal(forwarded.timedOut(), false);
+  forwarded.dispose();
 });

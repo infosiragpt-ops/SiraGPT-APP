@@ -170,9 +170,24 @@ function dictationLadderOptions(env = process.env, { paid = false } = {}) {
   // The operator's list bounds the free ladder: TRANSCRIBE_ESCALATION_PROVIDERS
   // (enabled for media) must not send a free dictation to a paid rung.
   if (explicit) return { providers: explicit, ...(paid ? {} : { escalationProviders: [] }), policy: 'env' };
-  if (paid) return { policy: 'shared' };
-  if (envFlag(e.SIRAGPT_DICTATION_FREE_CLOUD)) return { policy: 'shared' };
+  if (paid) return { providers: sharedOrderWithoutScribe(e), policy: 'shared' };
+  if (envFlag(e.SIRAGPT_DICTATION_FREE_CLOUD)) return { providers: sharedOrderWithoutScribe(e), policy: 'shared' };
   return { providers: DICTATION_FREE_PROVIDERS.slice(), escalationProviders: [], policy: 'on_host' };
+}
+
+/**
+ * The shared TRANSCRIBE_PROVIDERS order minus ElevenLabs: a paid dictation
+ * already tried Scribe itself under its own sub-budget and cooldown (the
+ * route), and a free dictation that opted into the cloud must not bill it.
+ */
+function sharedOrderWithoutScribe(env) {
+  let order = null;
+  try {
+    const at = require('./audio-transcriber');
+    order = typeof at.providerOrder === 'function' ? at.providerOrder({ env }) : null;
+  } catch { order = null; }
+  const list = Array.isArray(order) && order.length ? order : parseDictationProviders(env.TRANSCRIBE_PROVIDERS) || ['openai', 'groq', 'xai', 'meta', 'local'];
+  return list.filter((name) => name !== 'elevenlabs');
 }
 
 // ── Probes ──────────────────────────────────────────────────────────────────

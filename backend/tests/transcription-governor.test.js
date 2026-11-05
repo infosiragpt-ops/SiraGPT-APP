@@ -143,3 +143,54 @@ test('one process-wide governor; reset drops it (and rejects what still waits)',
   held.release('ok');
   gov.resetTranscriptionGovernor();
 });
+
+test('bounded waits: maxWaitMs 0 refuses a full cap at once, a pause beyond the bound refuses at once, a bounded waiter expires; refusals are GovernorErrors, never abort-shaped', async () => {
+  const c = fakeClock();
+  const g = gov.createTranscriptionGovernor({ env: { TRANSCRIBE_GROQ_IN_FLIGHT: '1' }, now: c.now, sleep: c.sleep });
+  const held = await g.acquire('groq');
+  await assert.rejects(g.acquire('groq', { maxWaitMs: 0 }), (err) => gov.isGovernorError(err) && err.code === 'governor_busy' && err.name === 'GovernorError'
+    && err.provider === 'groq' && !/abort/i.test(err.message) && err.code !== 'ABORT_ERR');
+  assert.equal(c.sleeps.length, 0, 'a refusal never sleeps');
+  // A bounded waiter: the clock passes its deadline → wait timeout; the line is empty again.
+  await assert.rejects(g.acquire('groq', { maxWaitMs: 1000 }), { code: 'governor_wait_timeout' });
+  assert.deepEqual(c.sleeps, [1000]);
+  assert.equal(g.capacity('groq').waiting, 0);
+  held.release('ok');
+  // Paused for longer than the bound: refused at once, with the remaining pause.
+  g.noteRateLimited('groq', 20_000);
+  await assert.rejects(g.acquire('groq', { maxWaitMs: 5_000 }), (err) => err.code === 'governor_paused' && err.retryAfterMs === 20_000);
+  // Paused within the bound: the waiter sleeps the pause out and is admitted.
+  const permit = await g.acquire('groq', { maxWaitMs: 60_000 });
+  assert.deepEqual(c.sleeps, [1000, 20_000]);
+  permit.release('ok');
+  assert.equal(gov.isGovernorError(new Error('x')), false);
+  assert.equal(gov.isGovernorError(null), false);
+  // An unbounded waiter (the default) keeps its place.
+  const other = await g.acquire('groq');
+  const waiting = g.acquire('groq');
+  await flush();
+  assert.equal(g.capacity('groq').waiting, 1);
+  other.release('ok');
+  (await waiting).release('ok');
+});
+
+test('priority: an interactive request enters the line ahead of batch waiters and behind equal priority', async () => {
+  const c = fakeClock();
+  const g = gov.createTranscriptionGovernor({ env: { TRANSCRIBE_OPENAI_IN_FLIGHT: '1' }, now: c.now, sleep: c.sleep });
+  const held = await g.acquire('openai');
+  const order = [];
+  const a = g.acquire('openai', { priority: 0 }).then((p) => { order.push('a'); return p; });
+  const b = g.acquire('openai', { priority: 0 }).then((p) => { order.push('b'); return p; });
+  const c2 = g.acquire('openai', { priority: 2 }).then((p) => { order.push('c'); return p; });
+  const d = g.acquire('openai', { priority: 2 }).then((p) => { order.push('d'); return p; });
+  const e = g.acquire('openai', { priority: 1 }).then((p) => { order.push('e'); return p; });
+  await flush();
+  assert.equal(g.capacity('openai').waiting, 5);
+  held.release('ok');
+  (await c2).release('ok');
+  (await d).release('ok');
+  (await e).release('ok');
+  (await a).release('ok');
+  (await b).release('ok');
+  assert.deepEqual(order, ['c', 'd', 'e', 'a', 'b']);
+});

@@ -172,11 +172,12 @@ function getMediaAutoscalerConfig(env = process.env) {
 
 /**
  * Next long-lane concurrency (pure). Grows by `scaleUpStep` while at least
- * `scaleUpThreshold` recordings wait AND a cloud provider can take work
- * (`cloudReady`), never above the ceiling. Without cloud capacity (every key
- * in cooldown, local engines only) it returns to the floor at once: whisper.cpp
- * is CPU-bound and the engine's shared slots already bound it. With nothing
- * waiting it returns to the floor after `scaleDownAfterMs` of quiet.
+ * `scaleUpThreshold` recordings wait AND a cloud provider is usable
+ * (`cloudReady`: a key not in cooldown and not paused — a pool merely full
+ * with our own traffic still counts), never above the ceiling. Without a
+ * usable cloud provider (local engines only) it returns to the floor at once:
+ * whisper.cpp is CPU-bound and the engine's shared slots already bound it.
+ * With nothing waiting it returns to the floor after `scaleDownAfterMs` of quiet.
  */
 function nextMediaAutoscalerTarget({ depth, current, busySinceMs, now, config, cloudReady }) {
   const floor = config.floor;
@@ -2223,7 +2224,9 @@ function startMediaAutoscaler({ env = process.env, log = console, cloudReady = n
   if (!worker || autoscalerTimer) return null;
   const config = getMediaAutoscalerConfig(env);
   if (!config.enabled) return null;
-  const isCloudReady = typeof cloudReady === 'function' ? cloudReady : () => require('./audio-transcriber').cloudCapacityAvailable();
+  // «Usable» (a key not in cooldown, not paused), not «free this instant»: a
+  // pool full with the batch's own requests must not read as «no cloud».
+  const isCloudReady = typeof cloudReady === 'function' ? cloudReady : () => require('./audio-transcriber').cloudUsable();
   autoscalerState = { busySinceMs: null, current: worker.concurrency };
   const tick = createMediaAutoscalerTick({ worker, getQueue: getMediaQueue, config, cloudReady: isCloudReady, state: autoscalerState, log });
   autoscalerTimer = setInterval(() => { void tick(); }, config.intervalMs);

@@ -88,9 +88,10 @@ test('report reads every engine detection and never carries a key', async () => 
   assert.deepEqual(report.stt.ladder.map((r) => [r.name, r.cooldown]), [['openai', true], ['groq', false], ['local', false]]);
   assert.deepEqual(report.stt.escalation, [{ name: 'elevenlabs', model: 'scribe_v1', cooldown: false }]);
   assert.equal(report.stt.dictation.scribeForPaidPlans, true);
-  // Free dictation stays on-host by default; paid uses the shared order after Scribe.
+  // Free dictation stays on-host by default; paid uses the shared order WITHOUT Scribe
+  // (the route already tried Scribe under its own sub-budget; the ladder never bills it twice).
   assert.deepEqual(report.stt.dictation.free, { providers: 'local,voicestudio', policy: 'on_host' });
-  assert.deepEqual(report.stt.dictation.paid, { providers: 'ladder', policy: 'shared' });
+  assert.deepEqual(report.stt.dictation.paid, { providers: 'assemblyai,openai,groq,deepgram,xai,meta,local', policy: 'shared' });
   assert.equal(report.local.ok, true);
   assert.equal(report.local.threads, 4);
   assert.deepEqual(calls.whisperHelp, ['/usr/local/bin/whisper-cli']);
@@ -313,8 +314,11 @@ test('index.js mounts the report before the fail-closed /api/admin router and lo
 
 test('dictation ladder policy: free on-host by default, opt-in cloud, operator list for every plan', async () => {
   assert.deepEqual(caps.dictationLadderOptions({}), { providers: ['local', 'voicestudio'], escalationProviders: [], policy: 'on_host' });
-  assert.deepEqual(caps.dictationLadderOptions({}, { paid: true }), { policy: 'shared' });
-  assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_FREE_CLOUD: '1' }), { policy: 'shared' });
+  const sharedWithoutScribe = ['assemblyai', 'openai', 'groq', 'deepgram', 'xai', 'meta', 'local'];
+  assert.deepEqual(caps.dictationLadderOptions({}, { paid: true }), { providers: sharedWithoutScribe, policy: 'shared' });
+  assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_FREE_CLOUD: '1' }), { providers: sharedWithoutScribe, policy: 'shared' });
+  // The operator's shared order, minus ElevenLabs: a dictation never re-runs Scribe through the ladder.
+  assert.deepEqual(caps.dictationLadderOptions({ TRANSCRIBE_PROVIDERS: 'elevenlabs,groq,local' }, { paid: true }), { providers: ['groq', 'local'], policy: 'shared' });
   assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_FREE_CLOUD: '0' }).providers, ['local', 'voicestudio']);
   // The operator's list bounds a free dictation: no inherited paid escalation rung.
   assert.deepEqual(caps.dictationLadderOptions({ SIRAGPT_DICTATION_PROVIDERS: 'GROQ, local,groq' }), { providers: ['groq', 'local'], escalationProviders: [], policy: 'env' });
@@ -327,8 +331,8 @@ test('dictation ladder policy: free on-host by default, opt-in cloud, operator l
 
   const { modules } = fakeModules();
   const report = await caps.collectTranscriptionCapabilities({ env: { SIRAGPT_DICTATION_FREE_CLOUD: '1' }, modules });
-  assert.deepEqual(report.stt.dictation.free, { providers: 'ladder', policy: 'shared' });
-  assert.match(caps.summarizeCapabilities(report), / dictation_free=ladder /);
+  assert.deepEqual(report.stt.dictation.free, { providers: 'assemblyai,openai,groq,deepgram,xai,meta,local', policy: 'shared' });
+  assert.match(caps.summarizeCapabilities(report), / dictation_free=assemblyai,openai,groq,deepgram,xai,meta,local /);
 });
 
 test('Sira Voz listed after whisper.cpp: the report says short clips read whisper.cpp first', async () => {

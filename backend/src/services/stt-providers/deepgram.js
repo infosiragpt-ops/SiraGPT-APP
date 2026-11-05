@@ -12,6 +12,7 @@
  */
 
 const fs = require('fs');
+const { boundedSignal, headersObject, round3 } = require('./http-shared');
 
 const DEFAULT_DEEPGRAM_BASE_URL = 'https://api.deepgram.com/v1';
 const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
@@ -41,19 +42,6 @@ function httpError(status, message, headers = null, body = null) {
     else if (body.error) err.code = String(body.error).slice(0, 60);
   }
   return err;
-}
-
-function headersObject(headers) {
-  const out = {};
-  try {
-    if (headers && typeof headers.forEach === 'function') headers.forEach((value, key) => { out[String(key).toLowerCase()] = value; });
-    else if (headers && typeof headers === 'object') for (const [key, value] of Object.entries(headers)) out[String(key).toLowerCase()] = value;
-  } catch { /* advisory */ }
-  return out;
-}
-
-function round3(n) {
-  return Math.round(Number(n) * 1000) / 1000;
 }
 
 /** Utterances (speaker turns) → engine segments; words → segments when there are none. */
@@ -137,25 +125,34 @@ async function transcribeDeepgramFile({ filePath, mimeType, language, signal, ti
   const url = `${cleanBaseUrl(env.DEEPGRAM_BASE_URL)}/listen?${params.toString()}`;
   const body = await fs.promises.readFile(filePath);
   if (signal?.aborted) throw Object.assign(new Error('aborted by user'), { name: 'AbortError', code: 'ABORT_ERR' });
-  const budget = Number(timeoutMs) > 0 ? Number(timeoutMs) : 120_000;
-  const signals = [AbortSignal.timeout(budget)];
-  if (signal) signals.push(signal);
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers: { Authorization: `Token ${key}`, 'Content-Type': mimeType || 'audio/flac', Accept: 'application/json' },
-    body,
-    signal: AbortSignal.any(signals),
-  });
-  const headers = headersObject(response.headers);
+  // A budget overrun is a TIMEOUT (transient to the engine), never an abort.
+  const bounded = boundedSignal(signal, Number(timeoutMs) > 0 ? Number(timeoutMs) : 120_000, 'deepgram');
   let payload = null;
-  try { payload = await response.json(); } catch { payload = null; }
-  if (!response.ok) {
-    const message = payload?.err_msg || payload?.message || payload?.error || `Deepgram HTTP ${response.status}`;
-    throw httpError(response.status, String(message), headers, payload);
+  let headers = null;
+  let status = 200;
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { Authorization: `Token ${key}`, 'Content-Type': mimeType || 'audio/flac', Accept: 'application/json' },
+      body,
+      signal: bounded.signal,
+    });
+    status = response.status;
+    headers = headersObject(response.headers);
+    try { payload = await response.json(); } catch { payload = null; }
+    if (!response.ok) {
+      const message = payload?.err_msg || payload?.message || payload?.error || `Deepgram HTTP ${response.status}`;
+      throw httpError(response.status, String(message), headers, payload);
+    }
+  } finally {
+    bounded.dispose();
   }
   const segments = segmentsFromDeepgram(payload);
   const text = transcriptFromDeepgram(payload, segments);
   const duration = Number(payload?.metadata?.duration);
+  // A language the operator fixed (DEEPGRAM_LANGUAGE) is the recording's
+  // language too; `multi` (code-switching) reports what Deepgram detected.
+  const configuredLanguage = configured && configured !== 'multi' ? configured.split('-')[0] : null;
   return {
     provider: 'deepgram',
     model: payload?.metadata?.models?.length && payload?.metadata?.model_info
@@ -163,7 +160,8 @@ async function transcribeDeepgramFile({ filePath, mimeType, language, signal, ti
       : chosenModel,
     text,
     segments,
-    language: forced || detectedLanguage(payload),
+    language: forced || configuredLanguage || detectedLanguage(payload),
+    status,
     ...(Number.isFinite(duration) && duration > 0 ? { durationSec: round3(duration) } : {}),
   };
 }

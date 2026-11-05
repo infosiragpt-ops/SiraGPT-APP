@@ -273,7 +273,6 @@ const SUCCESS_METHODS = new Set(['whisper', 'local-whisper']);
 // opt-in (list `mistral` in TRANSCRIBE_PROVIDERS).
 const DEFAULT_PROVIDER_ORDER = ['elevenlabs', 'assemblyai', 'openai', 'groq', 'deepgram', 'xai', 'meta', 'local'];
 const DEFAULT_MISTRAL_TRANSCRIBE_MODEL = 'voxtral-mini-latest';
-const DEFAULT_MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 // How a piece picks its rung when several providers are configured: `spread`
 // skips a provider with no free capacity NOW for the next healthy one;
 // `ladder` always waits for the first.
@@ -283,6 +282,13 @@ const DEFAULT_SCHEDULING = 'spread';
 // shared/cloud job together are bounded by TRANSCRIBE_LOCAL_PARALLEL_TOTAL.
 const DEFAULT_CLOUD_POOL_CONCURRENCY = 6;
 const DEFAULT_LOCAL_PARALLEL_TOTAL = 2;
+// AssemblyAI's automatic language detection needs a minimum of speech.
+const ASSEMBLYAI_DETECT_MIN_SECONDS = 50;
+// Bounded waits for a provider slot before a piece moves to the next rung:
+// a person waiting in a chat turn (interactive) or a voice note (short lane)
+// gets a short bound; batch pieces use the ladder's rate-limit wait.
+const INTERACTIVE_SLOT_WAIT_MS = 10_000;
+const SHORT_LANE_SLOT_WAIT_MS = 60_000;
 const DEFAULT_XAI_STT_MODEL = 'grok-stt';
 const DEFAULT_GROQ_TRANSCRIBE_MODEL = 'whisper-large-v3-turbo';
 const DEFAULT_GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
@@ -804,8 +810,6 @@ const PLAIN_JSON_CAPS = Object.freeze({ responseFormat: 'json', timestamps: fals
 // Rungs with their own adapter (AssemblyAI, Deepgram): timed segments with
 // speakers, key terms instead of a free-text prompt.
 const ADAPTER_CAPS = Object.freeze({ responseFormat: 'json', timestamps: true, prompt: false, maxSegmentSeconds: DEFAULT_SEGMENT_SECONDS });
-// Mistral Voxtral on the OpenAI audio surface: json + segment timestamps.
-const MISTRAL_CAPS = Object.freeze({ responseFormat: 'json', timestamps: true, prompt: false, segmentTimestamps: true, maxSegmentSeconds: DEFAULT_SEGMENT_SECONDS });
 
 function hasOpenAiKey(options = {}) {
   if (options.openai) return true;
@@ -833,10 +837,16 @@ function isAbortError(err, signal) {
     || /abort(ed)? by user|aborted|The operation was aborted/i.test(message);
 }
 
+// ElevenLabs answers an exhausted quota with HTTP 401 and `quota_exceeded`
+// in the body: no credits, not a rejected key (the dictation route already
+// reads it that way).
+const ELEVENLABS_QUOTA_RE = /quota_exceeded|exceeds your quota/i;
+
 function isInvalidKeyError(err) {
   const status = statusOf(err);
   const code = String(err?.code || err?.error?.code || '');
   const message = messageOf(err);
+  if (status === 401 && ELEVENLABS_QUOTA_RE.test(`${message} ${detailOf(err)}`)) return false;
   return status === 401
     || status === 403
     || code === 'invalid_api_key'
@@ -850,11 +860,20 @@ function isInvalidKeyError(err) {
  * Upgrade … /settings/billing»): that used to park Groq for 30 min for every
  * user mid-file.
  */
+function detailOf(err) {
+  try {
+    const body = err?.body ?? err?.response?.data ?? err?.error;
+    if (!body) return '';
+    return typeof body === 'string' ? body.slice(0, 500) : JSON.stringify(body).slice(0, 500);
+  } catch { return ''; }
+}
+
 function isBillingError(err) {
   const status = statusOf(err);
   const code = String(err?.code || err?.error?.code || '').toLowerCase();
   const message = messageOf(err);
   if (status === 402 || code === 'insufficient_quota' || code === 'billing_hard_limit_reached') return true;
+  if (status === 401 && ELEVENLABS_QUOTA_RE.test(`${message} ${detailOf(err)}`)) return true;
   if (status !== 429) return false;
   if (RATE_LIMIT_TEXT_RE.test(message)) return false;
   return /credit|billing|quota|insufficient|balance|payment|no funds|plan/i.test(message);
@@ -1227,9 +1246,17 @@ function cloudProviders(options = {}) {
         verbose: false,
         key: assemblyAiKey(options) || 'injected',
         envName: 'ASSEMBLYAI_API_KEY',
+        // An async job (upload → queue → poll): more time per piece than a
+        // synchronous request, whatever the piece's length.
+        requestTimeoutMs: (seconds) => Math.max(300_000, Math.ceil(90_000 + 1000 * seconds)),
         transcribeFile: options.assemblyaiTranscribe || ((filePath, mimeType, _fileName, language, _prompt, extra = {}) => assembly.transcribeAssemblyAiFile({
-          filePath, mimeType, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
+          filePath, mimeType,
+          // Automatic language detection wants a minimum of audio; a clip
+          // shorter than that goes with the configured hint (es by default).
+          language: language || (Number(extra.durationSeconds) > 0 && Number(extra.durationSeconds) < ASSEMBLYAI_DETECT_MIN_SECONDS ? languageHint(options) || null : null),
+          signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
           keyterms: keytermsEnabled(options, 'assemblyai') ? promptTerms(options) : [], env,
+          ...(typeof options.sttFetch === 'function' ? { fetchImpl: options.sttFetch } : {}),
         })),
       });
     } else if (name === 'deepgram' && (deepgramKey(options) || options.deepgramTranscribe) && String(env.TRANSCRIBE_DEEPGRAM_DISABLED || '') !== '1') {
@@ -1246,23 +1273,27 @@ function cloudProviders(options = {}) {
         transcribeFile: options.deepgramTranscribe || ((filePath, mimeType, _fileName, language, _prompt, extra = {}) => deepgram.transcribeDeepgramFile({
           filePath, mimeType, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
           keyterms: keytermsEnabled(options, 'deepgram') ? promptTerms(options) : [], env,
+          ...(typeof options.sttFetch === 'function' ? { fetchImpl: options.sttFetch } : {}),
         })),
       });
-    } else if (name === 'mistral' && (mistralApiKey(options) || options.mistralClient) && String(env.TRANSCRIBE_MISTRAL_DISABLED || '') !== '1') {
-      // Voxtral speaks the OpenAI audio surface (json + segment timestamps).
+    } else if (name === 'mistral' && (mistralApiKey(options) || options.mistralTranscribe) && String(env.TRANSCRIBE_MISTRAL_DISABLED || '') !== '1') {
+      // Voxtral through its own multipart adapter (Mistral's documented
+      // field shape), never the OpenAI SDK's array encoding.
+      const mistral = require('./stt-providers/mistral');
       out.push({
         name: 'mistral',
         kind: 'cloud',
         method: 'whisper',
-        model: env.MISTRAL_TRANSCRIBE_MODEL || DEFAULT_MISTRAL_TRANSCRIBE_MODEL,
-        caps: MISTRAL_CAPS,
+        model: mistral.mistralTranscribeModel(env),
+        caps: ADAPTER_CAPS,
         verbose: false,
         key: mistralApiKey(options) || 'injected',
         envName: 'MISTRAL_API_KEY',
-        client: () => options.mistralClient || (() => {
-          const OpenAI = require('openai');
-          return new OpenAI({ apiKey: mistralApiKey(options), baseURL: env.MISTRAL_BASE_URL || DEFAULT_MISTRAL_BASE_URL });
-        })(),
+        transcribeFile: options.mistralTranscribe || ((filePath, mimeType, fileName, language, _prompt, extra = {}) => mistral.transcribeMistralFile({
+          filePath, mimeType, fileName, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
+          diarize: String(env.TRANSCRIBE_MISTRAL_DIARIZE || '') === '1', env,
+          ...(typeof options.sttFetch === 'function' ? { fetchImpl: options.sttFetch } : {}),
+        })),
       });
     }
   }
@@ -1322,7 +1353,7 @@ async function transcribeWithElevenLabs({ filePath, mimeType, language, signal, 
   const file = new Blob([buffer], { type: mimeType || CLIP_MASTER_MIME });
   // Speakers come with Scribe at no extra cost (TRANSCRIBE_ELEVENLABS_DIARIZE=0
   // turns them off); key terms are a paid surcharge, so they are opt-in.
-  const keyterms = keytermsEnabled(options, 'elevenlabs') ? promptTerms(options).slice(0, 100) : [];
+  const keyterms = keytermsEnabled(options, 'elevenlabs') ? sanitizeElevenLabsKeyterms(promptTerms(options)) : [];
   const request = {
     file,
     modelId: model,
@@ -1347,6 +1378,26 @@ async function transcribeWithElevenLabs({ filePath, mimeType, language, signal, 
     model,
     language: normalizeLanguage(body?.languageCode ?? body?.language_code) || null,
   };
+}
+
+/**
+ * Key terms as the Scribe API accepts them: shorter than 50 characters, at
+ * most 5 words, none of < > { } [ ] \, at most 100 of them (the SDK's
+ * contract); anything else makes the whole request fail.
+ */
+function sanitizeElevenLabsKeyterms(terms) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(terms) ? terms : []) {
+    const term = String(raw || '').replace(/[<>{}[\]\\]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!term || term.length >= 50 || term.split(' ').length > 5) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(term);
+    if (out.length >= 100) break;
+  }
+  return out;
 }
 
 /**
@@ -1505,6 +1556,18 @@ function cloudCapacityAvailable(options = {}) {
   } catch { return false; }
 }
 
+/**
+ * Whether at least one configured cloud rung is USABLE: a key not in
+ * cooldown and not paused by a rate limit. A pool merely full with our own
+ * traffic is still usable (the queue's autoscaler asks this, not «free now»).
+ */
+function cloudUsable(options = {}) {
+  try {
+    const governor = governorFor(options);
+    return cloudProviders(options).some((rung) => !providerInCooldown(rung) && !governor.capacity(rung.name).paused);
+  } catch { return false; }
+}
+
 /** The governor's public numbers per provider (the capabilities report). */
 function governorSnapshot(options = {}) {
   try { return governorFor(options).snapshot(); } catch { return {}; }
@@ -1528,13 +1591,28 @@ function ladderLimits(options = {}) {
 /** Request timeout for one cloud segment (a 10-min FLAC upload + inference). */
 function cloudSegmentTimeoutMs(rung, seconds, options = {}) {
   const env = envOf(options);
+  const explicit = Number(env.TRANSCRIBE_CLOUD_TIMEOUT_MS);
+  if (Number.isFinite(explicit) && explicit >= 1000) return explicit;
+  if (typeof rung.requestTimeoutMs === 'function') return rung.requestTimeoutMs(seconds, env);
   if (typeof rung.transcribeFile === 'function') {
     const floor = Number(env.XAI_AUDIO_TIMEOUT_MS || env.GROK_VOICE_TIMEOUT_MS) || 45_000;
     return Math.max(floor, Math.ceil(60_000 + 200 * seconds));
   }
-  const explicit = Number(env.TRANSCRIBE_CLOUD_TIMEOUT_MS);
-  if (Number.isFinite(explicit) && explicit >= 1000) return explicit;
   return Math.max(120_000, Math.ceil(400 * seconds));
+}
+
+/** Governor priority of a request: interactive callers first, then the short lane, then batch pieces. */
+function slotPriority(lane) {
+  return lane === 'interactive' ? 2 : lane === 'short' ? 1 : 0;
+}
+
+/** How long a piece may wait for a provider slot before it moves to the next rung. */
+function slotWaitMs(options = {}) {
+  const limits = ladderLimits(options);
+  const lane = normalizeLane(options.lane);
+  if (lane === 'interactive') return Math.min(limits.rateLimitMaxWaitMs, INTERACTIVE_SLOT_WAIT_MS);
+  if (lane === 'short') return Math.min(limits.rateLimitMaxWaitMs, SHORT_LANE_SLOT_WAIT_MS);
+  return limits.rateLimitMaxWaitMs;
 }
 
 // ── ffmpeg / ffprobe ────────────────────────────────────────────────────────
@@ -2536,9 +2614,48 @@ async function rememberManifestLanguage(prepared, language) {
  * signal, a per-request timeout, SDK retries (0: the ladder retries) and the
  * ordered-dispatch lock that keeps request start order = segment order.
  */
+/**
+ * One request to one cloud provider — whole clip or one piece. The
+ * process-wide permit for that provider is taken HERE, so every caller
+ * (segmented pieces, second opinions, short clips, dictation, link clips,
+ * the single-provider path) counts toward the same in-flight cap, honours
+ * the same pause and reports its 429s to the same ledger. `call.maxWaitMs`
+ * bounds the wait for a slot (default: the caller's lane); a refusal
+ * surfaces as a GovernorError (isGovernorError), which callers treat as
+ * «busy: try the next rung», never as a failure of the provider.
+ */
 async function transcribeCloudFile(provider, filePath, mimeType, fileName, options, language, prompt, call = {}) {
   const signal = call.signal || options.signal;
   throwIfAborted(signal);
+  const governor = call.governor || governorFor(options);
+  const now = typeof call.now === 'function' ? call.now : (typeof options.now === 'function' ? options.now : Date.now);
+  const permit = await governor.acquire(provider.name, {
+    signal,
+    audioSeconds: Number(call.durationSeconds) || Number(options.durationSeconds) || 0,
+    maxWaitMs: call.maxWaitMs == null ? slotWaitMs(options) : call.maxWaitMs,
+    priority: slotPriority(normalizeLane(options.lane)),
+  });
+  let outcome = 'error';
+  try {
+    const out = await transcribeCloudFileUnguarded(provider, filePath, mimeType, fileName, options, language, prompt, call, signal);
+    outcome = 'ok';
+    return out;
+  } catch (err) {
+    // xAI answers 200 with no text for a silent piece: an answer, not a failure.
+    if (err?.code === 'xai_stt_empty_transcript') outcome = 'ok';
+    else if (isAbortError(err, signal)) outcome = 'aborted';
+    else if (isRateLimitError(err)) {
+      outcome = 'rate_limit';
+      // Every job's traffic to this provider slows down, not only this caller's.
+      governor.noteRateLimited(provider.name, parseRetryAfterMs(err, now()));
+    }
+    throw err;
+  } finally {
+    permit.release(outcome);
+  }
+}
+
+async function transcribeCloudFileUnguarded(provider, filePath, mimeType, fileName, options, language, prompt, call, signal) {
   if (typeof provider.transcribeFile === 'function') {
     const start = () => {
       // Cancellation can arrive while this request waits for its dispatch turn.
@@ -2566,7 +2683,7 @@ async function transcribeCloudFile(provider, filePath, mimeType, fileName, optio
       ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
       : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
     const request = { model: provider.model, file: blob, response_format: caps.responseFormat };
-    if (caps.responseFormat === 'verbose_json' || caps.segmentTimestamps) request.timestamp_granularities = ['segment'];
+    if (caps.responseFormat === 'verbose_json') request.timestamp_granularities = ['segment'];
     if (caps.chunkingStrategy) request.chunking_strategy = caps.chunkingStrategy;
     if (language) request.language = language;
     if (prompt && caps.prompt !== false) request.prompt = prompt;
@@ -2772,7 +2889,7 @@ function partFromOutput(out, rung, language) {
  * (local) }. `segment.streamOrdinal` maps a track of an ORIGINAL file (short
  * clips without a master); FLAC pieces hold one stream and carry none.
  */
-async function callRung(rung, segment, jc, language, strategy = null) {
+async function callRung(rung, segment, jc, language, strategy = null, wait = {}) {
   const { options, signal } = jc;
   const seconds = Number(segment.durationSeconds) || jc.segmentSeconds;
   const prompt = strategy?.noPrompt ? undefined : jc.prompt;
@@ -2810,32 +2927,26 @@ async function callRung(rung, segment, jc, language, strategy = null) {
       jc.localPermits.release();
     }
   }
-  // The process-wide permit for this provider: every job's requests to it
-  // share one in-flight cap, one rate-limit pause and one quota window.
-  const permit = await jc.governor.acquire(rung.name, { signal, audioSeconds: seconds });
   let out;
-  let outcome = 'error';
   try {
+    // transcribeCloudFile takes the provider's process-wide permit (bounded
+    // by `wait.maxWaitMs`: the ladder's budget, or 0 for a second opinion).
     out = await transcribeCloudFile(rung, segment.path, segment.mime, segment.name, options, language, prompt, {
       signal,
       timeoutMs: cloudSegmentTimeoutMs(rung, seconds, options),
       maxRetries: 0,
       dispatch: jc.dispatch,
       durationSeconds: seconds,
+      governor: jc.governor,
+      now: jc.now,
+      ...(wait.maxWaitMs != null ? { maxWaitMs: wait.maxWaitMs } : {}),
     });
-    outcome = 'ok';
   } catch (err) {
     // xAI answers 200 with no text for a silent piece (waiting room, break)
     // and its client throws. That is a no-speech answer, as on every other
     // rung (then reviewed like one), not a failure that counts toward the streak.
-    if (err?.code !== 'xai_stt_empty_transcript') {
-      outcome = isAbortError(err, signal) ? 'aborted' : (isRateLimitError(err) ? 'rate_limit' : 'error');
-      throw err;
-    }
-    outcome = 'ok';
+    if (err?.code !== 'xai_stt_empty_transcript') throw err;
     out = { text: '', segments: [], model: rung.model };
-  } finally {
-    permit.release(outcome);
   }
   return partFromOutput(out, rung, language);
 }
@@ -2921,7 +3032,9 @@ function rungOrderFor(jc) {
   }
   if (!saturated.length) return indices;
   const firstReadyCloud = rest.findIndex((i) => jc.rungs[i].kind === 'cloud' && rungAvailable(jc.rungs[i], jc, { peek: true }));
-  if (firstReadyCloud < 0) return [...saturated, ...rest];
+  // No cloud rung can take it now: the configured order stands (the first
+  // one waits, bounded by the ladder's slot budget, then the piece moves on).
+  if (firstReadyCloud < 0) return indices;
   return [...rest.slice(0, firstReadyCloud + 1), ...saturated, ...rest.slice(firstReadyCloud + 1)];
 }
 
@@ -2948,7 +3061,11 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
       const pause = state.pausedUntil - jc.now();
       if (pause > 0) await jc.sleep(pause, jc.signal);
       try {
-        const part = await callRung(rung, segment, jc, lang);
+        // The last rung left waits for its slot however long it takes (a gap
+        // is worse); any other rung waits the lane's budget, then the piece
+        // moves on and comes back to this rung only through the ladder.
+        const wait = { maxWaitMs: isLastLiveRung(jc, index, order) ? Infinity : slotWaitMs(jc.options) };
+        const part = await callRung(rung, segment, jc, lang, null, wait);
         state.consecutiveFailures = 0;
         state.revivals = 0;
         return { part: { ...part, provider: rung.name, method: rung.method, kind: rung.kind }, rungIndex: index };
@@ -2956,6 +3073,12 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
         // Only the job's own signal cancels the job: a dropped socket reports
         // «Error: aborted» (ECONNRESET) and must stay a transient failure.
         if (jc.signal.aborted) throw err;
+        if (transcriptionGovernor.isGovernorError(err)) {
+          // No slot within the budget (a pause, a full cap): not the rung's
+          // failure, not a streak; the next rung takes this piece.
+          noteOutcome(jc, rung, err.code === 'governor_paused' ? 'paused' : 'busy');
+          break;
+        }
         lastError = err;
         const verdict = classifyRungError(rung, err);
         const token = describeRungError(rung, err);
@@ -2981,9 +3104,9 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
           continue;
         }
         if (verdict === 'rate_limit') {
+          // (transcribeCloudFile already told the governor: every job's
+          // traffic to this provider slows down, not only this piece's.)
           const hinted = parseRetryAfterMs(err, jc.now());
-          // Every job's traffic to this provider slows down, not only this piece's.
-          if (rung.kind === 'cloud' && jc.governor) jc.governor.noteRateLimited(rung.name, hinted);
           if (hinted != null && hinted > jc.limits.rateLimitMaxWaitMs) {
             // «try again in 5h»: a quota for the day, not a throttle. Pause the
             // rung until then; never start the «no credits» cooldown.
@@ -3236,7 +3359,12 @@ function qualityState(options, { mediaSeconds = 0, pieces = 1 } = {}) {
  */
 async function reviewPlan(jc, producerIndex, mode) {
   const producer = producerIndex >= 0 ? jc.rungs[producerIndex] : null;
-  const others = jc.rungs.slice(Math.max(0, producerIndex + 1)).filter((rung) => !producer || rung.name !== producer.name);
+  // The rungs after the producer (ladder order) first, then the ones before it:
+  // under spread scheduling a healthy rung may sit before the producer only
+  // because it was busy when the piece was picked, and it is still a second opinion.
+  const after = jc.rungs.slice(Math.max(0, producerIndex + 1));
+  const before = producerIndex > 0 ? jc.rungs.slice(0, producerIndex) : [];
+  const others = [...after, ...before].filter((rung) => !producer || rung.name !== producer.name);
   const escalation = (jc.escalationRungs || []).filter((rung) => !producer || rung.name !== producer.name);
   const variants = producer ? await availableVariants(jc) : [];
   const enhanced = producer ? variants.map((variant) => ({ rung: producer, variant, noPrompt: mode === 'echo' })) : [];
@@ -3295,11 +3423,16 @@ async function obtainHypothesis(step, segment, jc, language) {
   try {
     for (;;) {
       try {
-        const part = await callRung(rung, target, jc, language, strategy);
+        // A second opinion never queues for a provider slot: busy → skipped.
+        const part = await callRung(rung, target, jc, language, strategy, { maxWaitMs: 0 });
         rungState(jc, rung).consecutiveFailures = 0;
         return { part: { ...part, provider: rung.name, method: rung.method, kind: rung.kind, ...(step.variant ? { variant: step.variant } : {}) } };
       } catch (err) {
         if (jc.signal.aborted) throw err;
+        if (transcriptionGovernor.isGovernorError(err)) {
+          noteOutcome(jc, rung, 'review busy');
+          return { skipped: true };
+        }
         const verdict = classifyRungError(rung, err);
         const token = describeRungError(rung, err);
         if (verdict === 'transient' && retried < transientRetries) {
@@ -4175,6 +4308,18 @@ function singleRequestFields(durationSeconds, provider, engine) {
 async function localWholeFileAnswer(filePath, job, tried) {
   const { options, fileName, label, normalizedMime, language, prompt } = job;
   const impl = options.localTranscribe || localWhisper.transcribeLocal;
+  // Same cap as the pieces' whisper.cpp (never for the reserved lanes).
+  const shared = normalizeLane(options.lane) ? null : sharedLocalPermits(options);
+  if (shared) await shared.acquire(options.signal);
+  try {
+    return await localWholeFileAttempt(impl, filePath, job, tried);
+  } finally {
+    if (shared) shared.release();
+  }
+}
+
+async function localWholeFileAttempt(impl, filePath, job, tried) {
+  const { options, fileName, label, normalizedMime, language, prompt } = job;
   try {
     const local = await impl(filePath, {
       ...options,
@@ -4888,6 +5033,12 @@ async function transcribeWithIntake(filePath, meta, initialOptions, intake, clip
         first = { text: '', segments: [], model: provider.model, language: normalizeLanguage(language) || null, provider: provider.name, method: 'whisper', kind: 'cloud' };
         break;
       }
+      if (transcriptionGovernor.isGovernorError(err)) {
+        // No slot within the lane's budget (a pause, a full cap): the next
+        // provider takes the clip; nothing is held against this one.
+        tried.push(`${provider.name}(${err.code === 'governor_paused' ? 'paused' : 'busy'})`);
+        continue;
+      }
       const safe = sanitizeProviderError(err);
       tried.push(`${provider.name}(${describeProviderError(err)})`);
       if (isInvalidKeyError(err)) {
@@ -5121,9 +5272,11 @@ function drainTranscriptions() {
     }
     let pool = null;
     if (activeTranscriptions < sharedConcurrency()) pool = 'shared';
-    else if (job.cloud && activeCloudPool < cloudPoolConcurrency()) pool = 'cloud';
+    // A lane's reserved slot before the cloud pool: the slot is what keeps a
+    // voice note or a dictation off the batch's resources.
     else if (job.lane === 'short' && activeShortLane < shortLaneConcurrency()) pool = 'short';
     else if (job.lane === 'interactive' && activeInteractiveLane < interactiveLaneConcurrency()) pool = 'interactive';
+    else if (job.cloud && activeCloudPool < cloudPoolConcurrency()) pool = 'cloud';
     if (!pool) {
       // FIFO among long work; a short-lane job further back may still have its slot.
       i++;
@@ -5208,6 +5361,8 @@ module.exports = {
   cloudPoolConcurrency,
   cloudCapable,
   cloudCapacityAvailable,
+  cloudUsable,
+  slotWaitMs,
   governorFor,
   governorSnapshot,
   schedulingMode,
