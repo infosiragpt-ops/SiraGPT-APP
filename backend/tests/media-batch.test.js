@@ -1446,3 +1446,95 @@ test('mixed audio + image and audio + document with «trnadscririrbi» transcrib
     assert.equal(result.stoppedReason, 'transcription_finalize');
   }
 });
+
+// ── a follow-up while the transcription runs in the background ─────────────
+
+function pendingDeliveryFake({ outcome = 'amended', changes = ['translation'], onAmend = () => {}, onCancelJobs = () => {} } = {}) {
+  const real = require('../src/services/media-delivery');
+  const calls = { amends: [], created: 0, cancelJobs: [] };
+  return {
+    calls,
+    delivery: {
+      isMediaDeliveryEnabled: () => true,
+      estimateTranscriptionSeconds: () => 60,
+      findOpenDelivery: async ({ fileIds }) => ({ id: 'md_open', fileIds, status: 'pending', kind: 'transcript' }),
+      amendDelivery: async (id, { amendment }) => {
+        calls.amends.push({ id, amendment });
+        onAmend(amendment);
+        return { outcome, changes, record: { fileIds: ['clase'], output: { translationTarget: amendment.translationTarget, documentFormat: amendment.documentFormat } } };
+      },
+      amendedMessage: (args) => real.amendedMessage(args),
+      stillRunningMessage: (args) => real.stillRunningMessage(args),
+      createDelivery: async () => { calls.created += 1; return { id: 'md_second' }; },
+      handOffMessage: () => 'Te aviso aquí.',
+      cancelUnneededMediaJobs: async (args) => { calls.cancelJobs.push(args); onCancelJobs(args); return { stopped: 1 }; },
+    },
+  };
+}
+
+function followupContext({ goal, delivery, waitForMediaBatch, task = {}, plain = false }) {
+  const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+  return {
+    mediaBatchRows: rows,
+    mediaBatch: { ...batch, waitForMediaBatch },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: goal, goal,
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => { throw new Error('no artifacts'); },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: plain, openai: {}, task, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  };
+}
+
+test('«y tradúcelo al inglés» while it still transcribes joins the pending delivery at once (no wait, no second delivery)', async () => {
+  const { delivery, calls } = pendingDeliveryFake();
+  const result = await runMediaBranch(followupContext({ goal: 'y tradúcelo al inglés', delivery,
+    waitForMediaBatch: async () => { throw new Error('no inline wait for a follow-up'); } }));
+  assert.equal(result.stoppedReason, 'media_delivery_amended');
+  assert.equal(result.metadata.mediaDeliveryAmended, 'md_open');
+  assert.equal(result.metadata.mediaDeliveryHandoff, undefined, 'the first turn keeps the only live status');
+  assert.equal(calls.created, 0);
+  assert.equal(calls.amends.length, 1);
+  assert.equal(calls.amends[0].amendment.translationTarget, 'en');
+  assert.equal(calls.amends[0].amendment.wantsAnalysis, false, 'a translation alone is not a summary');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.amends[0].amendment.model)), { id: 'deepseek-v4-flash', provider: 'DeepSeek' });
+  assert.match(result.finalMarkdown, /^Anotado: cuando termine la transcripción te la entrego traducida al inglés\./);
+});
+
+test('«en Word» adds the document without an analysis; an instruction the rules do not name becomes the analysis', async () => {
+  const word = pendingDeliveryFake({ changes: ['document'] });
+  await runMediaBranch(followupContext({ goal: 'ponlo en word', delivery: word.delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+  assert.equal(word.calls.amends[0].amendment.documentFormat, 'docx');
+  assert.equal(word.calls.amends[0].amendment.wantsAnalysis, false);
+
+  const vague = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+  await runMediaBranch(followupContext({ goal: 'enfócate solo en lo que dice el profesor', delivery: vague.delivery,
+    waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+  assert.equal(vague.calls.amends.length, 2, 'retried as an analysis instruction');
+  assert.equal(vague.calls.amends[1].amendment.wantsAnalysis, true);
+  assert.equal(vague.calls.amends[1].amendment.goal, '', 'the goal is appended once');
+
+  const thanks = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+  const result = await runMediaBranch(followupContext({ goal: 'gracias', delivery: thanks.delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+  assert.equal(thanks.calls.amends.length, 1, 'a courtesy is no instruction');
+  assert.match(result.finalMarkdown, /^Ya estoy transcribiendo «clase\.mp4»/);
+});
+
+test('«Detener» during the inline wait stops the recordings\' jobs too', async () => {
+  const { delivery, calls } = pendingDeliveryFake();
+  delivery.findOpenDelivery = async () => null;
+  const task = { cancelClaimed: true };
+  await assert.rejects(runMediaBranch(followupContext({ goal: 'transcribe este video', delivery, task, plain: true,
+    waitForMediaBatch: async () => { const err = new Error('aborted'); err.name = 'AbortError'; throw err; } })), /aborted/);
+  assert.equal(calls.cancelJobs.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.cancelJobs[0].fileIds)), ['clase']);
+  // A deploy or the runtime cap (no user cancel) never stops them.
+  const other = pendingDeliveryFake();
+  other.delivery.findOpenDelivery = async () => null;
+  await assert.rejects(runMediaBranch(followupContext({ goal: 'transcribe este video', delivery: other.delivery, task: {}, plain: true,
+    waitForMediaBatch: async () => { throw new Error('shutdown'); } })), /shutdown/);
+  assert.equal(other.calls.cancelJobs.length, 0);
+});

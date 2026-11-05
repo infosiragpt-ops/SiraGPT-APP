@@ -357,6 +357,17 @@ function translationLanguageIn(word) {
   return hit ? { code: hit.code, name: hit.name } : null;
 }
 
+/**
+ * «ya no la traduzcas», «sin traducción», «no hace falta traducirlo»: the
+ * follow-up takes a pending translation back. A fresh, non-global regex
+ * (NEGATED_TRANSLATE_RE is /g and keeps lastIndex between calls).
+ */
+function negatesTranslation(goal) {
+  const folded = String(goal || '').toLowerCase();
+  return new RegExp(NEGATED_TRANSLATE_RE.source, 'i').test(folded)
+    || /\bsin\s+(?:la\s+)?traducci[oó]n\b/.test(folded);
+}
+
 /** A translation target from its code («en»), as detectTranslationTarget returns it, or null. */
 function translationTargetByCode(code) {
   const hit = TRANSLATION_LANGUAGES.find(language => language.code === String(code || '').trim().toLowerCase());
@@ -1694,7 +1705,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };

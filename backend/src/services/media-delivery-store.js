@@ -187,6 +187,13 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   next.mode = mode;
 
   const target = normalizeTranslationTarget(value.translationTarget);
+  // «ya no la traduzcas»: back to what the first request asked for.
+  if (!target && value.removeTranslation === true && mode === 'translation') {
+    next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
+    next.output.alsoAnalysis = false;
+    delete next.output.translationTarget;
+    changes.push('no_translation');
+  }
   if (target) {
     if (mode !== 'translation') {
       next.mode = 'translation';
@@ -204,6 +211,11 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     next.output.translationTarget = target;
   }
 
+  // «sin resumen»: the summary is dropped (a translation stays a translation).
+  if (value.removeAnalysis === true && value.wantsAnalysis !== true) {
+    if (next.mode === 'analysis') { next.mode = 'transcript'; changes.push('no_analysis'); }
+    else if (next.mode === 'translation' && next.output.alsoAnalysis) { next.output.alsoAnalysis = false; changes.push('no_analysis'); }
+  }
   if (value.wantsAnalysis === true) {
     if (next.mode === 'translation') {
       if (!next.output.alsoAnalysis) { next.output.alsoAnalysis = true; changes.push('analysis'); }
@@ -255,6 +267,10 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   }
   next.formats = FORMATS.filter(format => formats.has(format));
   next.goal = joinGoals(record.goal, value.goal);
+  // The model picked on the follow-up turn writes the delivery's analysis
+  // or translation (the user's pick runs the whole process).
+  const model = normalizeModel(value.model);
+  if (model && changes.length) next.model = model;
   return { record: next, changes };
 }
 
@@ -638,10 +654,12 @@ function createMediaDeliveryStore({
   }
 
   /** Write the terminal 'cancelled' copy and drop the active one (lock held). */
-  async function closeCancelled(id, token, record, marker = null) {
+  async function closeCancelled(id, token, record, marker = null, settle = null) {
     const at = isoAt(now());
     const next = { ...record, status: 'cancelled', cancelledAt: marker?.at || at, updatedAt: at,
-      cancelReason: clipString(marker?.reason, 40) || 'user', nextAttemptAt: null };
+      cancelReason: clipString(marker?.reason, 40) || 'user', nextAttemptAt: null,
+      ...(settle?.messageId ? { deliveredMessageId: clipString(settle.messageId, 200) } : {}),
+      ...(settle?.chatId ? { deliveryChatId: clipString(settle.chatId, 200) } : {}) };
     await writeAtomic(donePath(id), next);
     await fsp.unlink(activePath(id)).catch(() => {});
     await fsp.unlink(cancelPath(id)).catch(() => {});
@@ -676,7 +694,7 @@ function createMediaDeliveryStore({
    * 'cancel_requested', 'already_cancelled', 'already_terminal' or
    * 'missing'.
    */
-  async function cancel(id, { userId = null, reason = 'user', tries = 5, waitMs = 150 } = {}) {
+  async function cancel(id, { userId = null, reason = 'user', tries = 5, waitMs = 150, beforeClose = null } = {}) {
     assertDeliveryId(id);
     const terminal = async () => {
       const done = await readRecord(donePath(id), id);
@@ -694,8 +712,15 @@ function createMediaDeliveryStore({
         try {
           const fresh = await readActive(id);
           if (!fresh) return terminal();
-          closed = await closeCancelled(id, token, fresh, { at: isoAt(now()), reason });
-          return { outcome: 'cancelled', record: closed };
+          // The chat line that settles the turn goes first, under the lock:
+          // a crash before the close leaves a record whose next attempt finds
+          // that line (findDeliveredMessage) and posts nothing else.
+          let settle = null;
+          if (typeof beforeClose === 'function') {
+            try { settle = await beforeClose(fresh); } catch (err) { settle = { error: err?.code || 'settle_failed' }; }
+          }
+          closed = await closeCancelled(id, token, fresh, { at: isoAt(now()), reason }, settle);
+          return { outcome: 'cancelled', record: closed, settle };
         } finally {
           if (!closed) await removeLockIfOwned(id, token).catch(() => {});
         }

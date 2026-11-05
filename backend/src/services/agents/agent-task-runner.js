@@ -3019,33 +3019,56 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
       // A follow-up sent while these recordings are still transcribing in the
       // background («y tradúcelo al inglés», «en Word», «resúmelo», a
-      // question) joins that pending delivery at once: never a second
-      // transcription of the same files, a second delivery or a 4-min wait.
-      const pendingService = !retryRequested && chatId ? loadMediaDeliveryService() : null;
+      // question, «está en inglés») joins that pending delivery at once:
+      // never a second transcription of the same files, a second delivery or
+      // a 4-minute wait. Not for a refine or a turn with other attachments
+      // (those keep their own path), nor once every recording is done.
+      const pendingService = chatId && !refineNotice && followupIntent?.kind !== 'refine' && !hasCompanionAttachments
+        && mediaBatchRows.some(row => mediaBatch.stateOf(row) === 'pending' || (retryRequested && mediaBatch.stateOf(row) === 'failed'))
+        ? loadMediaDeliveryService() : null;
       const openDelivery = pendingService?.isMediaDeliveryEnabled?.(process.env) && typeof pendingService.findOpenDelivery === 'function'
         && typeof pendingService.amendDelivery === 'function'
         ? await pendingService.findOpenDelivery({ userId: user.id, chatId, fileIds: ids }).catch(() => null) : null;
       if (openDelivery) {
-        const amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: {
+        // «reintenta» re-queues the failed recordings; the same delivery waits for them.
+        if (retryRequested) {
+          await mediaBatch.waitForMediaBatch({ prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
+            retryFailed: true, language: batchLanguage, hints: jobHints.hints, timeoutMs: 0, readProgress: null }).catch(() => null);
+        }
+        const explicitAnalysis = Boolean(lookupWindow) || mediaBatch.wantsSummaryWithTranslation(mediaGoal);
+        const courtesy = /^\s*(?:ok(?:ay)?|vale|gracias|muchas gracias|perfecto|listo|genial|dale|bien|de acuerdo|thanks|thank you)[\s.!¡👍🙏]*$/iu.test(mediaGoal);
+        const amendment = {
           goal: mediaGoal,
           translationTarget: translationTarget?.code || null,
+          removeTranslation: !translationTarget && typeof mediaBatch.negatesTranslation === 'function' && mediaBatch.negatesTranslation(mediaGoal),
+          removeAnalysis: explicitNoAnalysis,
           // Only an explicit deliverable or a question about the recording
           // adds an analysis (the default would run one for «en Word»).
-          wantsAnalysis: Boolean(lookupWindow) || mediaBatch.wantsSummaryWithTranslation(mediaGoal),
+          wantsAnalysis: explicitAnalysis,
           documentFormat: mediaOutput.documentFormat || null,
           wantsSubtitles: mediaOutput.wantsSubtitles === true,
           range: outputRange || null,
           analysisRange: lookupWindow || null,
           language: jobHints.language || null,
           hints: jobHints.hints || null,
-        } });
+          model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
+        };
+        let amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment }).catch(() => null);
+        // An instruction the rules do not name («solo lo que dice el
+        // profesor») is still an instruction about the recording: the
+        // analysis answers it, as a second delivery would have. A repeated
+        // «transcribe», «reintenta» or a courtesy is not.
+        if (amended?.outcome === 'unchanged' && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
+          amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true } })
+            .catch(() => null) || amended;
+        }
         if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged') {
           const names = mediaBatchRows.map(row => row.originalName || row.filename || row.id);
-          const text = amended.outcome === 'amended'
-            ? pendingService.amendedMessage({ changes: amended.changes || [], record: amended.record })
+          const text = amended.outcome === 'amended' && amended.changes?.length
+            ? pendingService.amendedMessage({ changes: amended.changes, record: amended.record })
             : pendingService.stillRunningMessage({ fileNames: names });
           return await finishDeterministicTask({
-            finalMarkdown: [refineNotice, text].filter(Boolean).join('\n\n'),
+            finalMarkdown: text,
             stoppedReason: 'media_delivery_amended',
             steps: 1, artifactsList: artifacts,
             // Not a hand-off: the first turn keeps the live status.
@@ -3072,8 +3095,24 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           label: mediaBatch.describeBatchProgress(progress),
           status: 'saved', payload: { mediaBatch: progress } }),
       };
-      let batch = await mediaBatch.waitForMediaBatch({ ...waitOptions, rows: mediaBatchRows, timeoutMs: inlineWaitMs,
-        shouldStop: deliveryEnabled ? progress => shouldHandOffMediaWait(progress, { inlineWaitMs, delivery: mediaDeliveryService }) : null });
+      // «Detener» during the inline wait stops these recordings' jobs too:
+      // nothing would deliver them afterwards, and the providers keep billing.
+      // claimTaskCancel (agent-task-cancel.js) latches cancelClaimed on this
+      // same record before aborting its controller: a Stop, never the
+      // runtime timeout or a shutdown (those leave the jobs running).
+      const stopJobsIfUserCancelled = async () => {
+        if (!(task?.cancelClaimed || task?.cancelRequestedAt)) return;
+        if (typeof mediaDeliveryService?.cancelUnneededMediaJobs !== 'function') return;
+        await mediaDeliveryService.cancelUnneededMediaJobs({ userId: user.id, fileIds: ids }).catch(() => null);
+      };
+      let batch;
+      try {
+        batch = await mediaBatch.waitForMediaBatch({ ...waitOptions, rows: mediaBatchRows, timeoutMs: inlineWaitMs,
+          shouldStop: deliveryEnabled ? progress => shouldHandOffMediaWait(progress, { inlineWaitMs, delivery: mediaDeliveryService }) : null });
+      } catch (err) {
+        await stopJobsIfUserCancelled();
+        throw err;
+      }
       if (deliveryEnabled && batch.pending > 0) {
         let deliveryRecord = null;
         try {
@@ -3096,7 +3135,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // mode also delivers the transcript files and the summary asked for.
             output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
               includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
-              analysisRange: lookupWindow || null },
+              analysisRange: lookupWindow || null, translationTarget: translationTarget?.code || null },
             model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
           });
         } catch (error) {
@@ -3122,8 +3161,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           });
         }
         // Delivery unavailable: keep the previous behaviour and wait inline.
-        batch = await mediaBatch.waitForMediaBatch({ ...waitOptions, rows: batch.rows,
-          timeoutMs: Math.max(0, mediaWaitBudgetMs - inlineWaitMs) });
+        try {
+          batch = await mediaBatch.waitForMediaBatch({ ...waitOptions, rows: batch.rows,
+            timeoutMs: Math.max(0, mediaWaitBudgetMs - inlineWaitMs) });
+        } catch (err) {
+          await stopJobsIfUserCancelled();
+          throw err;
+        }
       }
       emit({ type: 'step_done', id: 'media_transcription', ok: batch.ready > 0 });
       const readyRows = batch.rows.filter(row => mediaBatch.stateOf(row) === 'ready');

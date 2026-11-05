@@ -1747,7 +1747,7 @@ function createMediaDeliveryService(deps = {}) {
         if (!existing?.id) {
           await postMessage({ userId: failed.userId, chatId, artifacts: [], content: copy.body,
             metadata: { source: DELIVERY_SOURCE, mediaDelivery: id, transcriptionFileIds: failed.fileIds || [],
-              servedBy: 'media_batch', taskId: failed.taskId || null, deliveryMode: failed.mode,
+              taskId: failed.taskId || null, deliveryMode: failed.mode,
               deliveryKind: 'failed', stoppedReason: 'media_delivery_failed' } });
         }
       } catch (postErr) {
@@ -1953,6 +1953,40 @@ function createMediaDeliveryService(deps = {}) {
    * scoped; never throws. Returns { id, outcome, stoppedFiles, messageId,
    * chatId }.
    */
+  /**
+   * Stop the transcription of the recordings no other open request of the
+   * user still waits on (another chat's delivery keeps its files going).
+   * Never throws; returns { stopped }.
+   */
+  async function cancelUnneededMediaJobs({ userId = null, fileIds = [], exceptDeliveryId = null } = {}) {
+    const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean))];
+    if (!userId || !ids.length) return { stopped: 0 };
+    try {
+      const others = (await getStore().listActive()).filter(other => other.id !== exceptDeliveryId && other.userId === userId);
+      const needed = new Set(others.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
+      const free = ids.filter(fileId => !needed.has(fileId));
+      if (!free.length) return { stopped: 0 };
+      return { stopped: Number((await cancelMediaJobs({ fileIds: free, userId }))?.stopped) || 0 };
+    } catch (err) {
+      logger.warn(`[media-delivery] stopping the transcription failed code=${err?.code || 'stop_error'}`);
+      return { stopped: 0 };
+    }
+  }
+
+  /** The chat line that settles a stopped transcription (never a delivery: no servedBy). */
+  async function postCancelNote(record, userId) {
+    const chatId = record.deliveryChatId || record.chatId || null;
+    if (!chatId) return null;
+    const existing = await findDeliveredMessage(chatId, record.id);
+    if (existing?.id) return { messageId: existing.id, chatId: existing.chatId || chatId };
+    const posted = await postMessage({ userId, chatId, artifacts: [],
+      content: cancelledMessage({ fileNames: record.fileNames }),
+      metadata: { source: DELIVERY_SOURCE, mediaDelivery: record.id, transcriptionFileIds: record.fileIds || [],
+        taskId: record.taskId || null, deliveryMode: record.mode,
+        deliveryKind: 'cancelled', stoppedReason: 'media_delivery_cancelled' } });
+    return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
+  }
+
   async function cancelDelivery(id, { userId = null, waitMs = 10_000 } = {}) {
     const empty = outcome => ({ id, outcome, stoppedFiles: 0, messageId: null, chatId: null });
     if (!userId || !isValidDeliveryId(String(id || ''))) return empty('missing');
@@ -1960,13 +1994,18 @@ function createMediaDeliveryService(deps = {}) {
     if (typeof store.cancel !== 'function') return empty('unsupported');
     let result;
     try {
-      result = await store.cancel(id, { userId, reason: 'user' });
+      result = await store.cancel(id, { userId, reason: 'user',
+        beforeClose: record => postCancelNote(record, userId).catch((err) => {
+          logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+          return null;
+        }) });
     } catch (err) {
       logger.warn(`[media-delivery] cancel failed id=${id} code=${err?.code || 'cancel_error'}`);
       return empty('error');
     }
     let record = result?.record || null;
     let outcome = result?.outcome || 'missing';
+    let settle = result?.settle || null;
     if (outcome === 'cancel_requested') {
       // A holder is delivering right now: give it a moment to honour the
       // Stop (or to finish, in which case the result is already in the chat).
@@ -1977,40 +2016,21 @@ function createMediaDeliveryService(deps = {}) {
         if (!current || current.status === 'cancelled') { outcome = 'cancelled'; record = current || record; break; }
         if (current.status === 'delivered' || current.status === 'failed') { outcome = 'already_terminal'; record = current; break; }
       }
+      // Cancelled by the holder, or still running (it honours the Stop before
+      // posting anything): the settle line comes from here.
+      if (outcome === 'cancelled' || outcome === 'cancel_requested') {
+        settle = await postCancelNote(record, userId).catch((err) => {
+          logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+          return null;
+        });
+      }
     }
     if (!record || (outcome !== 'cancelled' && outcome !== 'cancel_requested')) {
       return { ...empty(outcome), chatId: record?.deliveryChatId || record?.chatId || null };
     }
-    // Recordings another open request still waits on keep transcribing.
-    let stoppedFiles = 0;
-    try {
-      const others = (await store.listActive()).filter(other => other.id !== id && other.userId === userId);
-      const needed = new Set(others.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
-      const fileIds = (record.fileIds || []).filter(fileId => !needed.has(fileId));
-      if (fileIds.length) stoppedFiles = Number((await cancelMediaJobs({ fileIds, userId }))?.stopped) || 0;
-    } catch (err) {
-      logger.warn(`[media-delivery] stopping the transcription failed id=${id} code=${err?.code || 'stop_error'}`);
-    }
-    const chatId = record.deliveryChatId || record.chatId || null;
-    let messageId = null;
-    if (chatId) {
-      try {
-        const existing = await findDeliveredMessage(chatId, id);
-        if (existing?.id) messageId = existing.id;
-        else {
-          const posted = await postMessage({ userId, chatId, artifacts: [],
-            content: cancelledMessage({ fileNames: record.fileNames }),
-            metadata: { source: DELIVERY_SOURCE, mediaDelivery: id, transcriptionFileIds: record.fileIds || [],
-              servedBy: 'media_batch', taskId: record.taskId || null, deliveryMode: record.mode,
-              deliveryKind: 'cancelled', stoppedReason: 'media_delivery_cancelled' } });
-          messageId = posted?.messageId || posted?.id || null;
-        }
-      } catch (err) {
-        logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
-      }
-    }
+    const { stopped: stoppedFiles } = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id });
     logger.info(`[media-delivery] cancelled id=${id} files=${(record.fileIds || []).length} stopped=${stoppedFiles} outcome=${outcome}`);
-    return { id, outcome, stoppedFiles, messageId, chatId };
+    return { id, outcome, stoppedFiles, messageId: settle?.messageId || null, chatId: settle?.chatId || record.deliveryChatId || record.chatId || null };
   }
 
   /** «Detener» for every transcription a chat is still waiting on (or the ids given). */
@@ -2111,6 +2131,7 @@ function createMediaDeliveryService(deps = {}) {
     deliverOne,
     cancelDelivery,
     cancelChatDeliveries,
+    cancelUnneededMediaJobs,
     findOpenDelivery,
     amendDelivery,
     close,
@@ -2147,6 +2168,8 @@ module.exports = {
   cancelChatDeliveries: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().cancelChatDeliveries(options)
     : Promise.resolve({ cancelled: 0, results: [], error: 'disabled' })),
   findOpenDelivery: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().findOpenDelivery(options) : Promise.resolve(null)),
+  // Also with the delivery switched off: Stop during an inline wait still stops the jobs.
+  cancelUnneededMediaJobs: options => getMediaDeliveryService().cancelUnneededMediaJobs(options),
   amendDelivery: (id, options) => (isMediaDeliveryEnabled() ? getMediaDeliveryService().amendDelivery(id, options)
     : Promise.resolve({ outcome: 'disabled', record: null, changes: [] })),
   // Pure helpers

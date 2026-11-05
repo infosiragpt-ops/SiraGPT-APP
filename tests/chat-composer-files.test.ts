@@ -104,6 +104,29 @@ describe("historical media batch follow-ups", () => {
     assert.deepEqual(resolveMediaFollowupFiles("transcribe todos", [{ role: "USER", files: JSON.stringify(tooMany) }]), [])
   })
 
+  it("while a batch transcribes in the background, short instructions about its result reach it", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }, { id: "v2", name: "taller.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Recibí 2 archivos…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1", "v2"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["en Word", "y en pdf", "mejor con subtítulos", "está en inglés", "el audio está en portugués",
+      "los nombres son Huamán y Quispe", "son 3 hablantes", "ya no la traduzcas", "sin resumen", "¿de qué hablan?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // Nothing pending: the same words are a new request.
+    assert.deepEqual(resolveMediaFollowupFiles("en Word", [pendingChat[0]]), [])
+    // Settled by its delivery: not pending any more.
+    const delivered = [...pendingChat, { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"] } }]
+    assert.deepEqual(resolveMediaFollowupFiles("en Word", delivered), [])
+    // Ambiguous or unrelated words stay unrouted.
+    for (const prompt of ["en inglés", "hola", "¿qué hora es?", "en word el informe del documento"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+    // A later chat never hides the pending batch from a follow-up about it.
+    const chatty = [...pendingChat, ...Array.from({ length: 6 }, (_, i) => ({ role: "USER", content: `otra cosa ${i}` }))]
+    assert.deepEqual(resolveMediaFollowupFiles("resume la clase", chatty), batch)
+    assert.deepEqual(resolveMediaFollowupFiles("resume la clase", [pendingChat[0], ...chatty.slice(2)]), [], "not pending: the usual reach")
+  })
+
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {
     assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", [
       ...history, { role: "USER", files: [{ id: "new-doc", name: "brief.pdf" }] },

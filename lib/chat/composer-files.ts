@@ -2,6 +2,7 @@ import { isActiveProcessingStage, type FileProcessingStage } from "../file-proce
 import { getLongPasteMetadata, type LongPasteMetadata } from "../long-paste"
 import { getAttachmentRelativePath } from "../attachments/folder-selection"
 import { MAX_MEDIA_FILES_PER_MESSAGE } from "../attachment-ingest"
+import { pendingMediaDeliveryFileIds } from "../media-delivery-refresh"
 
 type ComposerFileRecord = {
   id?: unknown
@@ -416,6 +417,29 @@ export function classifyMediaFollowupPrompt(prompt: string): MediaFollowupKind |
   return null
 }
 
+// While this chat's batch still transcribes in the background, a short
+// instruction about its result («en Word», «está en inglés», «los nombres
+// son…», «son 3 hablantes», «sin resumen», «¿de qué hablan?») is about that
+// batch too: it joins the pending delivery instead of a new task. A closed
+// vocabulary, ≤ 10 words, no link; a bare «en inglés» stays unrouted (it
+// could be a translation or the recording's language).
+const LANGUAGE_WORD = "(?:ingles|espanol|frances|portugues|aleman|italiano|chino|japones|coreano|ruso|arabe|quechua)"
+const PENDING_DELIVERY_AMEND_RE = anyOf([
+  /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
+  new RegExp(`^(?:(?:y|ah|ojo|por cierto)\\s+)?(?:(?:el|la|los|las) (?:audio|audios|video|videos|grabacion|grabaciones|clase|clases|reunion|reuniones)\\s+)?(?:esta|estan|es|son|habla|hablan)\\s+en\\s+${LANGUAGE_WORD}\\b`),
+  /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nombres|apellidos|terminos)\s+(?:son|seran|correctos son)\b/,
+  /^(?:(?:y|ah|ojo)\s+)?(?:son|hay|habla|hablan)\s+(?:\d+|dos|tres|cuatro|cinco|seis|siete|ocho)\s+(?:hablantes|personas|voces|participantes)\b/,
+  /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|analic\w*)\b/,
+  /^(?:y\s+)?(?:de\s+)?(?:que|quien|quienes|cuando|donde|como|cual|cuales|cuanto)\b(?:\s+\w+){0,5}\s+(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|mencion\w*|explic\w*|cuenta|cuentan|conto)\b/,
+])
+
+/** A short instruction about a batch that is still transcribing (see PENDING_DELIVERY_AMEND_RE). */
+export function isPendingDeliveryAmendPrompt(prompt: string): boolean {
+  const text = normalizeRoutingPrompt(prompt)
+  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text)) return false
+  return PENDING_DELIVERY_AMEND_RE.test(text)
+}
+
 /** Only media follow-ups, never a generic new request that happens to follow an upload. */
 export function isMediaFollowupPrompt(prompt: string): boolean {
   return classifyMediaFollowupPrompt(prompt) !== null
@@ -428,20 +452,40 @@ const MEDIA_FOLLOWUP_MAX_LATER_TURNS: Record<MediaFollowupKind, number> = {
   immediate: 0,
 }
 
-/** Reuse only this chat's latest attached USER batch; an intervening document stops lookup. */
+// How far back a follow-up looks for the batch a background delivery still waits on.
+const PENDING_BATCH_MAX_LATER_TURNS = 30
+
+/**
+ * Reuse only this chat's latest attached USER batch; an intervening document
+ * stops lookup. A batch whose transcription still runs in the background
+ * (pendingMediaDeliveries of these messages) is a target for any follow-up
+ * however many turns ago it was sent, and also for the short instructions
+ * of PENDING_DELIVERY_AMEND_RE: they join that pending delivery.
+ */
 export function resolveMediaFollowupFiles(prompt: string, messages: readonly unknown[] = []): unknown[] {
-  const kind = classifyMediaFollowupPrompt(prompt)
+  let kind = classifyMediaFollowupPrompt(prompt)
+  const pending = kind || isPendingDeliveryAmendPrompt(prompt)
+    ? pendingMediaDeliveryFileIds(messages as Parameters<typeof pendingMediaDeliveryFileIds>[0]) : new Set<string>()
+  const pendingOnly = !kind && pending.size > 0 && isPendingDeliveryAmendPrompt(prompt)
+  if (pendingOnly) kind = "immediate"
   if (!kind) return []
   let laterUserTurns = 0
+  let beyondLimit = false
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as { role?: unknown; files?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() !== "user") continue
     const files = parseMessageFiles(message.files).filter((file) => Boolean(resolveUploadFileId(file)))
     if (!files.length) {
       laterUserTurns += 1
-      if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) return []
+      if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) {
+        // Only the batch still transcribing may lie beyond the usual reach.
+        if (!pending.size || laterUserTurns > PENDING_BATCH_MAX_LATER_TURNS) return []
+        beyondLimit = true
+      }
       continue
     }
+    const pendingBatch = pending.size > 0 && files.every((file) => pending.has(String(resolveUploadFileId(file))))
+    if ((beyondLimit || pendingOnly) && !pendingBatch) return []
     // The whole batch the composer accepts (100 recordings) is one follow-up target.
     return files.length <= MAX_MEDIA_FILES_PER_MESSAGE && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
   }

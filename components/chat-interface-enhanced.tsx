@@ -5318,6 +5318,8 @@ function ChatInterfaceContent() {
   // True when Stop has nothing to stop but that background transcription.
   const backgroundDeliveryStopRef = React.useRef(false)
   const cancellingDeliveriesRef = React.useRef<Set<string>>(new Set())
+  // The Stop disc shows its existing spinner while the cancel request runs.
+  const [cancellingDeliveryChatId, setCancellingDeliveryChatId] = React.useState<string | null>(null)
   const chatDecisionRequest = React.useMemo(
     () => extractChatDecisionRequestFromMessages(currentChat?.messages),
     [currentChat?.messages],
@@ -6771,6 +6773,7 @@ function ChatInterfaceContent() {
     if (!pending.length) return;
     const deliveryIds = [...new Set(pending.map((delivery) => delivery.deliveryId).filter(Boolean))];
     cancellingDeliveriesRef.current.add(chatId);
+    setCancellingDeliveryChatId(chatId);
     try {
       const result = await apiClient.cancelMediaDeliveries(chatId, deliveryIds);
       const stopped = Number(result?.cancelled) || 0;
@@ -6782,6 +6785,7 @@ function ChatInterfaceContent() {
       toast.error('No se pudo detener la transcripción. Vuelve a intentarlo.');
     } finally {
       cancellingDeliveriesRef.current.delete(chatId);
+      setCancellingDeliveryChatId(current => (current === chatId ? null : current));
     }
   }, [selectChat]);
 
@@ -8872,7 +8876,7 @@ But first, you need to connect your Spotify account securely using the button be
             requiresPromptBeforePrimarySend={requiresPromptBeforePrimarySend}
             busy={isUploading}
             isStopButtonVisible={isStopButtonVisible}
-            pendingStop={pendingStop}
+            pendingStop={pendingStop || (Boolean(currentChatId) && cancellingDeliveryChatId === currentChatId)}
             isCurrentChatStreaming={isCurrentChatStreaming}
             onSend={() => {
               void handleSend();

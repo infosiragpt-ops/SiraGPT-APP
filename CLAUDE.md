@@ -3397,24 +3397,44 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   `pendingMediaDeliveries`, no se recalcula durante un stream) mantiene `isStopButtonVisible`;
   `isForegroundWorkRunning` (lo mismo sin la entrega) alimenta el ícono de la computadora. Si solo
   queda la entrega, Detener llama `apiClient.cancelMediaDeliveries` y vuelve a leer el chat. Enviar
-  no se encola por la entrega (`isBusy` no la incluye). Toasts: «Sigo transcribiendo…» para un
-  hand-off, «Anotado…» para un seguimiento.
+  no se encola por la entrega (`isBusy` no la incluye). Mientras corre la cancelación, el disco de
+  Detener muestra su spinner (`cancellingDeliveryChatId` → `pendingStop`). Toasts: «Sigo
+  transcribiendo…» para un hand-off, «Anotado…» para un seguimiento.
 - **Servidor**: `POST /api/media-deliveries/cancel` `{ chatId, deliveryIds? }` (auth + CSRF, solo
   entregas del usuario). Store: estado `cancelled`; `cancel` cierra bajo el lock y, si un holder está
   entregando, deja `md_<id>.cancel`, que el holder honra antes de publicar y que `claim` cierra;
   `amend` solo con `pending`; `listActiveForChat`; `mergeDeliveryAmendment` puro; `MAX_FILES` 500.
-  `cancelDelivery` detiene los trabajos de los archivos que ninguna otra entrega abierta necesita y
-  publica una línea `source: 'media-delivery'` + `mediaDelivery` + `deliveryKind: 'cancelled'` que
-  cierra el pendiente, también tras recargar. Un fallo definitivo publica otra (`'failed'`).
+  `cancelDelivery` publica la línea que cierra el pendiente (`source: 'media-delivery'` +
+  `mediaDelivery` + `deliveryKind: 'cancelled'`, sin `servedBy`) ANTES de cerrar el registro, bajo
+  el lock (`beforeClose`): un corte entre ambos pasos deja un registro cuyo siguiente intento
+  encuentra esa línea y no publica nada más. Luego detiene los trabajos de los archivos que ninguna
+  otra entrega abierta necesita (`cancelUnneededMediaJobs`). Un fallo definitivo publica otra
+  línea (`'failed'`).
 - **Cola**: `cancelMediaTranscription` quita el trabajo en espera y aborta el que corre
   (`media_cancelled`, sin reintento, conserva checkpoints); otro proceso lo ve en su chequeo de
   propiedad. La fila queda `failed` + `CANCELLED_NOTE`: la recuperación de 60 s no la toca y
-  `waitForMediaBatch` la reencola cuando se pide de nuevo (`isUserCancelledRow`).
+  `waitForMediaBatch` la reencola cuando se pide de nuevo (`isUserCancelledRow`). Un trabajo que
+  llega a una fila detenida no corre. Detener durante la espera en línea del turno (antes del
+  hand-off) también detiene esos trabajos: `claimTaskCancel` marca `cancelClaimed` en el registro
+  de la tarea, así un vencimiento o un apagado no los toca.
 - **Seguimientos** (`agent-task-runner.js`, antes de `step_start media_transcription`): con una
   entrega abierta que cubre esos archivos, `amendDelivery` suma traducción
   (`output.translationTarget` gana sobre el objetivo leído del goal), resumen o pregunta (solo
-  entregable explícito), Word/PDF, subtítulos, rango, idioma y nombres. Responde
+  entregable explícito), Word/PDF, subtítulos, rango, idioma y nombres, y también quita
+  («ya no la traduzcas» → `no_translation`, «sin resumen» → `no_analysis`). «reintenta» reencola
+  lo fallido y la misma entrega lo espera. Una instrucción que ninguna regla nombra («solo lo que
+  dice el profesor») pide el análisis, que la responde; un «gracias» o un «transcribe» repetido
+  no. El modelo del turno del seguimiento escribe el análisis o la traducción. Responde
   `amendedMessage`/`stillRunningMessage` con `stoppedReason: 'media_delivery_amended'`
-  (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre.
-- Tests: `backend/tests/media-delivery-stop-and-followup.test.js`,
-  `tests/chat-background-transcription-stop-source.test.ts`.
+  (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre. No aplica
+  a una corrección de tramo ni a un turno con otros adjuntos.
+- **Compositor** (`lib/chat/composer-files.ts`): mientras el lote se transcribe, una instrucción
+  corta sobre su resultado («en Word», «está en inglés», «los nombres son…», «son 3 hablantes»,
+  «sin resumen», «¿de qué hablan?») va a ese lote (`isPendingDeliveryAmendPrompt`: vocabulario
+  cerrado, ≤ 10 palabras, sin enlace) aunque haya pasado varios turnos (hasta 30); un «en inglés»
+  a secas no se enruta. `pendingMediaDeliveries` se memoiza por arreglo de mensajes
+  (`pendingMediaDeliveryFileIds`).
+- Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
+  `tests/chat-background-transcription-stop-source.test.ts` (5), casos nuevos en
+  `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y
+  `tests/chat-composer-files.test.ts` (enrutado al lote pendiente).

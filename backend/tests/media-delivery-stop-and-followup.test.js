@@ -429,3 +429,54 @@ test('a transcription running here is aborted at once and keeps its checkpoints'
   assert.equal(job.discarded, true, 'the queue does not retry a Stop');
   assert.deepEqual(cleared, [], 'its finished segments stay for the resume');
 });
+
+test('a job that starts on a stopped recording never transcribes it', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'failed', processingError: CANCELLED_NOTE, path: '/tmp/a.mp4', mimeType: 'audio/mpeg' })]]);
+  const prisma = { file: {
+    async findFirst({ where }) { const row = rows.get(where.id); return row && row.userId === where.userId ? { ...row } : null; },
+    async updateMany({ where, data }) { const row = rows.get(where.id); if (!row) return { count: 0 }; Object.assign(row, data); return { count: 1 }; },
+  } };
+  let transcribed = 0;
+  const service = createMediaTranscriptionService({ prisma, getQueue: () => ({ getJob: async () => null, add: async () => ({}) }),
+    now: () => T0, validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }), logger: { info() {}, warn() {} },
+    processFile: async () => { transcribed += 1; return { success: true, extractedText: 'texto' }; } });
+  const job = { data: { fileId: 'a', userId: 'u1' }, opts: { attempts: 3 }, attemptsMade: 0, discard() { this.discarded = true; } };
+  await assert.rejects(service.processMediaJob(job), { code: 'media_cancelled' });
+  assert.equal(transcribed, 0);
+  assert.equal(job.discarded, true);
+  assert.equal(rows.get('a').processingError, CANCELLED_NOTE);
+});
+
+test('a follow-up can take a translation or a summary back, and its model writes the delivery', () => {
+  const translated = mergeDeliveryAmendment(normalizeNewRecord(request(), T0), { translationTarget: 'en' }).record;
+  const back = mergeDeliveryAmendment(translated, { goal: 'ya no la traduzcas', removeTranslation: true });
+  assert.deepEqual(back.changes, ['no_translation']);
+  assert.equal(back.record.mode, 'transcript');
+  assert.equal(back.record.output.translationTarget, undefined);
+  const summary = mergeDeliveryAmendment(normalizeNewRecord(request({ mode: 'analysis' }), T0), { goal: 'sin resumen', removeAnalysis: true });
+  assert.deepEqual(summary.changes, ['no_analysis']);
+  assert.equal(summary.record.mode, 'transcript');
+  const model = { id: 'gpt-6-sol', provider: 'OpenAI' };
+  assert.deepEqual(mergeDeliveryAmendment(normalizeNewRecord(request(), T0), { documentFormat: 'docx', model }).record.model, model);
+  const record = normalizeNewRecord(request({ model: { id: 'deepseek-v4-flash', provider: 'DeepSeek' } }), T0);
+  assert.equal(mergeDeliveryAmendment(record, { goal: 'transcribir', model }).record.model.id, 'deepseek-v4-flash', 'no change, no model switch');
+});
+
+test('Stop posts the chat line under the lock before it closes the delivery (a crash in between posts nothing else)', async (t) => {
+  const { service, state, store } = await harness(t, { files: [fileRow('a')] });
+  const record = await service.createDelivery(request({ fileIds: ['a'], fileNames: ['a.mp4'] }));
+  const order = [];
+  const original = store.cancel.bind(store);
+  store.cancel = async (id, options) => original(id, { ...options, beforeClose: async (fresh) => {
+    order.push(`post:${(await store.get(id)).status}`);
+    return options.beforeClose(fresh);
+  } });
+  const out = await service.cancelDelivery(record.id, { userId: 'u1' });
+  assert.equal(out.outcome, 'cancelled');
+  assert.deepEqual(order, ['post:pending'], 'the line exists while the record is still open');
+  const done = await store.get(record.id);
+  assert.equal(done.status, 'cancelled');
+  assert.equal(done.deliveredMessageId, state.messages[0].id);
+  assert.equal(state.messages[0].metadata.servedBy, undefined, 'a cancel note is no delivery for the follow-up resolver');
+});

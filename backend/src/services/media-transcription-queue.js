@@ -1863,6 +1863,9 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const jobStartedAt = now();
     try {
       const row = await loadOwned(fileId, userId);
+      // Stopped («Detener») after this job was queued, or on another worker
+      // while it was being removed: it never runs. Asking again re-queues it.
+      if (isUserCancelledRow(row)) throw failure('media_cancelled', CANCELLED_NOTE);
       // The row, not the job, says whether gaps are being retried: a replayed
       // gap retry of a file that is already ready is a cache hit, and any job
       // that meets the retry marker runs the gap retry.
