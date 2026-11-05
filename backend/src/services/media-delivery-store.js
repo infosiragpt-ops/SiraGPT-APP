@@ -123,13 +123,16 @@ function normalizeModel(model) {
  * `alsoAnalysis` adds the requested summary («resume y tradúcelo»).
  * `analysisRange` is the moment the user asked about («qué dice en el
  * minuto 30»), on the recording clock: only the analysis reads it; the
- * transcript files follow `range`. Kept only when valid (closed, start < end).
+ * transcript files follow `range`. `translationRange` is the window a
+ * follow-up asked to translate («traduce lo que dice en el minuto 30»):
+ * only the translation reads it. Kept only when valid (closed, start < end).
  */
 function normalizeOutput(output) {
   const value = output && typeof output === 'object' ? output : {};
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
   const offset = Number(value.timeOffsetSec);
   const analysisRange = normalizeRefineRange(value.analysisRange);
+  const translationRange = normalizeRefineRange(value.translationRange);
   const translationTarget = normalizeTranslationTarget(value.translationTarget);
   return {
     documentFormat,
@@ -138,6 +141,7 @@ function normalizeOutput(output) {
     includeTranscript: value.includeTranscript === true,
     alsoAnalysis: value.alsoAnalysis === true,
     ...(analysisRange ? { analysisRange } : {}),
+    ...(translationRange ? { translationRange } : {}),
     // Set when a follow-up changed the language («mejor al francés»): it
     // wins over the target read from the goal, which keeps every request.
     ...(translationTarget ? { translationTarget } : {}),
@@ -168,14 +172,18 @@ function joinGoals(previous, addition) {
  * inglés», «en Word», «resúmelo», «solo del minuto 10 al 20», «son 3
  * hablantes») joins that request instead of starting a second
  * transcription. Pure. `amendment`:
- *   { goal, translationTarget, wantsAnalysis, documentFormat, wantsSubtitles,
- *     range, analysisRange, language, hints }
- * Returns { record, changes }: `changes` names what the follow-up added
- * ('translation', 'translation_target', 'analysis', 'analysis_range',
- * 'document', 'subtitles', 'range', 'language', 'hints'); empty when the
- * request already covered it. The transcript the user first asked for is
+ *   { goal, translationTarget, removeTranslation, wantsAnalysis, removeAnalysis,
+ *     documentFormat, removeDocument, wantsSubtitles, removeSubtitles, range,
+ *     analysisRange, translationRange, language, hints, model }
+ * Returns { record, changes }: `changes` names what the follow-up changed
+ * ('translation', 'translation_target', 'translation_range', 'analysis',
+ * 'analysis_range', 'document', 'subtitles', 'range', 'language', 'hints',
+ * 'no_translation', 'no_analysis', 'no_document', 'no_subtitles'); empty
+ * when the request already covered it. The transcript the user first asked for is
  * never dropped: turning a transcript into a translation keeps its files.
  */
+const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'analysis', 'analysis_range']);
+
 function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const value = amendment && typeof amendment === 'object' ? amendment : {};
   const out = normalizeOutput(record.output);
@@ -224,10 +232,41 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
       changes.push('analysis');
     }
   }
+  // A question about a moment reads that window. A second one about another
+  // moment reads both (their span), never only the latest; one with no
+  // window after a windowed one reads the whole recording.
   const analysisRange = normalizeRefineRange(value.analysisRange);
-  if (analysisRange && JSON.stringify(analysisRange) !== JSON.stringify(out.analysisRange || null)) {
-    next.output.analysisRange = analysisRange;
+  const currentAnalysis = out.analysisRange || null;
+  if (analysisRange) {
+    const span = currentAnalysis
+      ? { start: Math.min(currentAnalysis.start, analysisRange.start), end: Math.max(currentAnalysis.end, analysisRange.end) }
+      : analysisRange;
+    if (JSON.stringify(span) !== JSON.stringify(currentAnalysis)) {
+      next.output.analysisRange = span;
+      changes.push('analysis_range');
+    }
+  } else if (value.wantsAnalysis === true && currentAnalysis) {
+    delete next.output.analysisRange;
     changes.push('analysis_range');
+  }
+  const translationRange = normalizeRefineRange(value.translationRange);
+  if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
+    next.output.translationRange = translationRange;
+    changes.push('translation_range');
+  }
+
+  // «no lo quiero en Word», «sin subtítulos»: a format turned down goes.
+  const removeDocuments = Array.isArray(value.removeDocument) ? value.removeDocument : [];
+  if (out.documentFormat && removeDocuments.includes(out.documentFormat)) {
+    delete next.output.documentFormat;
+    formats.delete(out.documentFormat);
+    changes.push('no_document');
+  }
+  if (value.removeSubtitles === true && out.wantsSubtitles) {
+    next.output.wantsSubtitles = false;
+    formats.delete('srt');
+    formats.delete('vtt');
+    changes.push('no_subtitles');
   }
 
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
@@ -268,9 +307,11 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   next.formats = FORMATS.filter(format => formats.has(format));
   next.goal = joinGoals(record.goal, value.goal);
   // The model picked on the follow-up turn writes the delivery's analysis
-  // or translation (the user's pick runs the whole process).
+  // or translation when the follow-up asks for that work (the user's pick
+  // runs it). «en Word» or the names never swap the model that a turn
+  // asked to write a summary (AGENTS.md section 13).
   const model = normalizeModel(value.model);
-  if (model && changes.length) next.model = model;
+  if (model && changes.some(change => MODEL_WORK_CHANGES.has(change))) next.model = model;
   return { record: next, changes };
 }
 

@@ -155,7 +155,8 @@ test('the ordinary words of a transcript request never run a paid analysis; a de
     'transcribe la clase de análisis matemático', 'transcribe la reunión, quién dijo qué', 'transcribe y compártelo',
     // Words of the asks below, without their asking verb.
     'transcribe y dime cuando termines', 'transcribe y dime que lo recibiste', 'transcribe la clase de temas selectos de física',
-    'transcribe las preguntas del examen que dicta', 'transcribe el tema 3 y el tema 4', 'transcribe, son preguntas de una entrevista']) {
+    'transcribe las preguntas del examen que dicta', 'transcribe el tema 3 y el tema 4', 'transcribe, son preguntas de una entrevista',
+    'transcribe las notas de voz', 'transcribe la clase, son mis notas']) {
     assert.equal(batch.wantsMediaAnalysis(goal), false, goal);
   }
   for (const goal of ['transcribe y dame el acta', 'transcribe la reunión y extrae las decisiones', 'transcribe las dos clases y compáralas',
@@ -163,7 +164,10 @@ test('the ordinary words of a transcript request never run a paid analysis; a de
     // The topics, study questions and what it says, asked outright.
     'transcribe la clase y dime los temas', 'transcribe y dame los 3 temas principales', 'transcribe y los temas que se tocan',
     'transcribe la clase y hazme 5 preguntas', 'transcríbelo y genérame unas preguntas',
-    'transcribe y dime de qué trata', 'transcribe y dime de que habla', 'transcribe y cuéntame qué dijo el profesor']) {
+    'transcribe y dime de qué trata', 'transcribe y dime de que habla', 'transcribe y cuéntame qué dijo el profesor',
+    // Ending in an accented letter («habló»), study notes, insights, answers to its questions.
+    'transcribe la reunión y dime quién habló más', 'transcribe y dime qué pasó', 'transcribe la clase y hazme notas de clase',
+    'transcribe la entrevista y dame los insights', 'transcribe el audio y responde las preguntas del profesor']) {
     assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
   }
   // A request about the recording itself keeps the broad reading, accented «qué» included.
@@ -1561,4 +1565,53 @@ test('«Detener» during the inline wait stops the recordings\' jobs too', async
   await assert.rejects(runMediaBranch(followupContext({ goal: 'transcribe este video', delivery: other.delivery, task: {}, plain: true,
     waitForMediaBatch: async () => { throw new Error('shutdown'); } })), /shutdown/);
   assert.equal(other.calls.cancelJobs.length, 0);
+});
+
+test('a follow-up with a window reads it alone; the transcript files stay whole unless that part of the transcript is asked for', async () => {
+  const sent = async (goal) => {
+    const fake = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery: fake.delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    assert.equal(fake.calls.amends.length, 1, `${goal}: a recognised follow-up is never retried as a catch-all analysis`);
+    return JSON.parse(JSON.stringify(fake.calls.amends[0].amendment));
+  };
+  const question = await sent('¿qué dice del minuto 10 al 20?');
+  assert.equal(question.range, null, 'a question never cuts the transcript files');
+  assert.deepEqual(question.analysisRange, { start: 600, end: 1200 });
+  assert.equal(question.wantsAnalysis, true);
+  const summary = await sent('y resume del minuto 10 al 20');
+  assert.equal(summary.range, null);
+  assert.deepEqual(summary.analysisRange, { start: 600, end: 1200 });
+  for (const goal of ['solo del minuto 10 al 20', 'del minuto 10 al 20']) {
+    const cut = await sent(goal);
+    assert.deepEqual(cut.range, { start: 600, end: 1200 }, `${goal}: that part of the transcript`);
+    assert.equal(cut.analysisRange, null);
+  }
+  const moment = await sent('traduce al inglés lo que dice en el minuto 30');
+  assert.equal(moment.range, null);
+  assert.deepEqual(moment.translationRange, { start: 1740, end: 2040 });
+  assert.equal(moment.wantsAnalysis, false, 'a translation of the moment adds no summary');
+  const window = await sent('traduce al inglés del minuto 10 al 20');
+  assert.equal(window.range, null);
+  assert.deepEqual(window.translationRange, { start: 600, end: 1200 });
+});
+
+test('«no lo analices», «no lo quiero en Word» and «sin subtítulos» take things back, never add them', async () => {
+  const sent = async (goal) => {
+    const fake = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery: fake.delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    assert.equal(fake.calls.amends.length, 1, goal);
+    return JSON.parse(JSON.stringify(fake.calls.amends[0].amendment));
+  };
+  for (const goal of ['no lo analices', 'no la analices', 'no analices nada']) {
+    const out = await sent(goal);
+    assert.equal(out.removeAnalysis, true, goal);
+    assert.equal(out.wantsAnalysis, false, goal);
+  }
+  const word = await sent('no lo quiero en Word');
+  assert.equal(word.documentFormat, null);
+  assert.deepEqual(word.removeDocument, ['docx']);
+  const subs = await sent('sin subtítulos');
+  assert.equal(subs.wantsSubtitles, false);
+  assert.equal(subs.removeSubtitles, true);
+  assert.equal(batch.wantsMediaAnalysis('transcribe la clase y no la analices'), false);
 });

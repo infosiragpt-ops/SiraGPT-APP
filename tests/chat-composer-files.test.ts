@@ -125,6 +125,33 @@ describe("historical media batch follow-ups", () => {
     const chatty = [...pendingChat, ...Array.from({ length: 6 }, (_, i) => ({ role: "USER", content: `otra cosa ${i}` }))]
     assert.deepEqual(resolveMediaFollowupFiles("resume la clase", chatty), batch)
     assert.deepEqual(resolveMediaFollowupFiles("resume la clase", [pendingChat[0], ...chatty.slice(2)]), [], "not pending: the usual reach")
+    // A fact about the recording reaches it too; a wish about the result does not.
+    for (const prompt of ["está en inglés", "los nombres son Huamán y Quispe", "son 3 hablantes"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, chatty), batch, prompt)
+    }
+  })
+
+  it("while a batch transcribes, the chat's own questions and requests stay with the chat", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
+    // Questions about anything else, asked right after the hand-off.
+    for (const prompt of ["¿Cómo se explica la fotosíntesis?", "¿Qué dice la ley sobre el despido injustificado?",
+      "¿Dónde se habla quechua?", "hay 3 personas en mi equipo, ¿cómo divido las tareas?", "¿es en inglés el examen de mañana?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+    // «tradúcelo», «resúmelo», «ponlo en Word» about an answer written after the hand-off.
+    const emailed = [...pendingChat, { role: "USER", content: "escríbeme un correo para mi jefe" }, { role: "ASSISTANT", content: "Estimado jefe…" }]
+    for (const prompt of ["tradúcelo al inglés", "resúmelo", "ponlo en word", "pásalo a PDF", "en word", "sin resumen", "¿de qué hablan?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, emailed), [], prompt)
+    }
+    // Right after the hand-off they are about the batch.
+    for (const prompt of ["tradúcelo al inglés", "en word", "¿de qué hablan?", "¿qué dijo?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // An amendment's message carries the batch: the next one chains on it.
+    const amended = [...pendingChat, { role: "USER", content: "está en inglés", files: JSON.stringify(batch) }, { role: "ASSISTANT", content: "Anotado…", metadata: { mediaDeliveryAmended: "md_1" } }]
+    assert.deepEqual(resolveMediaFollowupFiles("en Word", amended), batch)
   })
 
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {

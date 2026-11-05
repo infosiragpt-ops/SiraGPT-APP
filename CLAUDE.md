@@ -3442,7 +3442,20 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   lo fallido y la misma entrega lo espera. Una instrucción que ninguna regla nombra («solo lo que
   dice el profesor») pide el análisis, que la responde; un «gracias», un «transcribe» repetido o
   una instrucción que las reglas sí leyeron y que ya estaba así («en Word» dos veces, «sin
-  traducción» sin traducción pendiente) no. El idioma se confirma con su nombre («al catalán»). El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
+  traducción» sin traducción pendiente) no. El idioma se confirma con su nombre («al catalán»).
+  Un tramo en el seguimiento recorta los archivos de la transcripción solo si pide esa parte
+  («solo del minuto 10 al 20», «transcribe del 10 al 20», un tramo a secas). Una pregunta o un
+  resumen de un tramo lo leen solo (`output.analysisRange`; dos preguntas sobre dos momentos
+  leen ambos, su extensión; una sin tramo después de una con tramo lee toda la grabación). Una
+  traducción de un momento o de un tramo lo traduce solo (`output.translationRange`), y la
+  traducción de un momento no suma resumen. «no lo analices» (también con «c»), «no lo quiero
+  en Word» o «sin subtítulos» quitan, nunca agregan (`negatedTranscriptFormats` en
+  `resolveTranscriptOutput`: también en un primer pedido). El modelo de la entrega cambia solo si
+  el seguimiento pide trabajo del modelo (traducción, resumen, su tramo): «en Word» o los nombres
+  no cambian el modelo que debía escribir un resumen (AGENTS.md sección 13). «Regenerar» sobre
+  un «Anotado» vuelve a leer el chat como en un hand-off. Un «Detener» que el almacén no pudo
+  registrar responde 500 (`cancel_failed`, nunca «ya había terminado») y detiene igual los
+  trabajos. El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
   resuelve fijado (`defaultAnalyze`, `pinned: true`): sin conexión falla con «X no pudo responder:
   su conexión no está configurada. No cambié de modelo…» en vez de pasar en silencio a DeepSeek
   u otro proveedor. Una entrega sin modelo registrado (enlaces, notas de voz) conserva la escalera. Responde
@@ -3459,10 +3472,15 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   «dime de qué trata», «cuéntame qué dijo»); «dime cuando termines» o «del tema 3» no. En los demás
   pedidos sigue la lectura amplia, ahora con «qué» acentuado.
 - **Compositor** (`lib/chat/composer-files.ts`): mientras el lote se transcribe, una instrucción
-  corta sobre su resultado («en Word», «está en inglés», «los nombres son…», «son 3 hablantes»,
-  «sin resumen», «¿de qué hablan?») va a ese lote (`isPendingDeliveryAmendPrompt`: vocabulario
-  cerrado, ≤ 10 palabras, sin enlace) aunque haya pasado varios turnos (hasta 30); un «en inglés»
-  a secas no se enruta. `pendingMediaDeliveries` se memoiza por arreglo de mensajes
+  corta sobre su resultado va a ese lote (`isPendingDeliveryAmendPrompt`: vocabulario cerrado,
+  ≤ 10 palabras, sin enlace). Un hecho de la grabación («está en inglés», «los nombres son…»,
+  «son 3 hablantes») la alcanza aunque haya pasado varios turnos (hasta 30), igual que un pedido
+  que nombra la grabación. Un deseo sobre el resultado («en Word», «sin resumen») o un
+  «tradúcelo» solo justo después del lote o de otra enmienda (cuyo mensaje lleva el lote): pueden
+  ser sobre la respuesta de arriba (un correo escrito mientras tanto). Una pregunta solo si es
+  corta y sin nada después del verbo («¿de qué hablan?», «¿qué dijo?»); «¿cómo se explica la
+  fotosíntesis?» o «hay 3 personas en mi equipo, ¿cómo…?» quedan en el chat. Un «en inglés» a
+  secas no se enruta. `pendingMediaDeliveries` se memoiza por arreglo de mensajes
   (`pendingMediaDeliveryFileIds`).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),

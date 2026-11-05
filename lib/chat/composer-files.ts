@@ -418,26 +418,46 @@ export function classifyMediaFollowupPrompt(prompt: string): MediaFollowupKind |
 }
 
 // While this chat's batch still transcribes in the background, a short
-// instruction about its result («en Word», «está en inglés», «los nombres
-// son…», «son 3 hablantes», «sin resumen», «¿de qué hablan?») is about that
-// batch too: it joins the pending delivery instead of a new task. A closed
-// vocabulary, ≤ 10 words, no link; a bare «en inglés» stays unrouted (it
-// could be a translation or the recording's language).
+// instruction about its result is about that batch too: it joins the
+// pending delivery instead of a new task. A closed vocabulary, ≤ 10 words,
+// no link; a bare «en inglés» stays unrouted (it could be a translation or
+// the recording's language). Three kinds:
+//   - a fact about the recording itself («está en inglés», «los nombres
+//     son…», «son 3 hablantes»): nothing else in the chat has it, so it
+//     reaches the pending batch however many turns ago it was sent;
+//   - a wish about the result («en Word», «sin resumen», «no la traduzcas»)
+//     and a bare question («¿de qué hablan?», «¿qué dijo?»): they may be
+//     about the answer just above, so they reach the batch only right after
+//     it (or after another amendment, whose message carries the batch).
+// A question with anything after its verb («¿cómo se explica la
+// fotosíntesis?», «¿qué dice la ley sobre…?») is a question for the chat.
 const LANGUAGE_WORD = "(?:ingles|espanol|frances|portugues|aleman|italiano|chino|japones|coreano|ruso|arabe|quechua)"
-const PENDING_DELIVERY_AMEND_RE = anyOf([
-  /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
-  new RegExp(`^(?:(?:y|ah|ojo|por cierto)\\s+)?(?:(?:el|la|los|las) (?:audio|audios|video|videos|grabacion|grabaciones|clase|clases|reunion|reuniones)\\s+)?(?:esta|estan|es|son|habla|hablan)\\s+en\\s+${LANGUAGE_WORD}\\b`),
+const RECORDING_WORD = "(?:audio|audios|video|videos|grabacion|grabaciones|clase|clases|reunion|reuniones)"
+const PENDING_FACT_RE = anyOf([
+  new RegExp(`^(?:(?:y|ah|ojo|por cierto)\\s+)?(?:(?:el|la|los|las) ${RECORDING_WORD}\\s+)?(?:esta|estan|es|son|habla|hablan)\\s+en\\s+${LANGUAGE_WORD}(?:\\s+(?:casi\\s+)?(?:todo|todos|todas|completo|completa))?$`),
   /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nombres|apellidos|terminos)\s+(?:son|seran|correctos son)\b/,
-  /^(?:(?:y|ah|ojo)\s+)?(?:son|hay|habla|hablan)\s+(?:\d+|dos|tres|cuatro|cinco|seis|siete|ocho)\s+(?:hablantes|personas|voces|participantes)\b/,
-  /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|analic\w*)\b/,
-  /^(?:y\s+)?(?:de\s+)?(?:que|quien|quienes|cuando|donde|como|cual|cuales|cuanto)\b(?:\s+\w+){0,5}\s+(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|mencion\w*|explic\w*|cuenta|cuentan|conto)\b/,
+  new RegExp(`^(?:(?:y|ah|ojo)\\s+)?(?:son|hay|habla|hablan)\\s+(?:\\d+|dos|tres|cuatro|cinco|seis|siete|ocho)\\s+(?:hablantes|personas|voces|participantes)(?:\\s+(?:en (?:el|la|los|las) ${RECORDING_WORD}|hablando))?$`),
+])
+const PENDING_OUTPUT_RE = anyOf([
+  /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
+  /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
+  // A bare question: nothing after its verb but «ahí» or the recording.
+  new RegExp(`^(?:y\\s+)?(?:de\\s+)?(?:que|quien|quienes|como|cual|cuales)\\s+(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|cuenta|cuentan|conto|contaron|explica|explican|explico|explicaron)(?:\\s+(?:ahi|alli|aqui|en (?:el|la|los|las) ${RECORDING_WORD}))?$`),
 ])
 
-/** A short instruction about a batch that is still transcribing (see PENDING_DELIVERY_AMEND_RE). */
-export function isPendingDeliveryAmendPrompt(prompt: string): boolean {
+type PendingAmendKind = "fact" | "output"
+
+function pendingDeliveryAmendKind(prompt: string): PendingAmendKind | null {
   const text = normalizeRoutingPrompt(prompt)
-  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text)) return false
-  return PENDING_DELIVERY_AMEND_RE.test(text)
+  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text)) return null
+  if (PENDING_FACT_RE.test(text)) return "fact"
+  if (PENDING_OUTPUT_RE.test(text)) return "output"
+  return null
+}
+
+/** A short instruction about a batch that is still transcribing (see PENDING_FACT_RE / PENDING_OUTPUT_RE). */
+export function isPendingDeliveryAmendPrompt(prompt: string): boolean {
+  return pendingDeliveryAmendKind(prompt) !== null
 }
 
 /** Only media follow-ups, never a generic new request that happens to follow an upload. */
@@ -464,9 +484,14 @@ const PENDING_BATCH_MAX_LATER_TURNS = 30
  */
 export function resolveMediaFollowupFiles(prompt: string, messages: readonly unknown[] = []): unknown[] {
   let kind = classifyMediaFollowupPrompt(prompt)
-  const pending = kind || isPendingDeliveryAmendPrompt(prompt)
+  const amendKind = kind ? null : pendingDeliveryAmendKind(prompt)
+  const pending = kind || amendKind
     ? pendingMediaDeliveryFileIds(messages as Parameters<typeof pendingMediaDeliveryFileIds>[0]) : new Set<string>()
-  const pendingOnly = !kind && pending.size > 0 && isPendingDeliveryAmendPrompt(prompt)
+  const pendingOnly = !kind && pending.size > 0 && amendKind !== null
+  // Only a request that names the recording, or a fact about it, reaches a
+  // pending batch beyond the usual reach: «tradúcelo» or «en Word» may be
+  // about the answer just above (an email written meanwhile).
+  const extendedReach = pending.size > 0 && (kind === "explicit" || kind === "contextual" || amendKind === "fact")
   if (pendingOnly) kind = "immediate"
   if (!kind) return []
   let laterUserTurns = 0
@@ -479,7 +504,7 @@ export function resolveMediaFollowupFiles(prompt: string, messages: readonly unk
       laterUserTurns += 1
       if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) {
         // Only the batch still transcribing may lie beyond the usual reach.
-        if (!pending.size || laterUserTurns > PENDING_BATCH_MAX_LATER_TURNS) return []
+        if (!extendedReach || laterUserTurns > PENDING_BATCH_MAX_LATER_TURNS) return []
         beyondLimit = true
       }
       continue

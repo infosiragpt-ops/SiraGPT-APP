@@ -51,9 +51,29 @@ function stripAccentsLower(value) {
 function defaultFormatter() { return require('./media-transcript-format'); }
 function defaultStore() { return require('./media-transcript-store'); }
 
+// A format turned down: «sin Word», «sin subtítulos», «no lo quiero en
+// Word», «ya no lo pases a PDF». The negation governs the format itself, so
+// «no, mejor en Word» still asks for one.
+const NEGATED_FORMAT_RE = /\b(?:sin\s+(?:el\s+|la\s+|los\s+|las\s+|un\s+|una\s+)?|(?:ya\s+)?no\s+(?:(?:lo|la|los|las|me|te|se|nos)\s+){0,2}(?:(?:quiero|necesito|hagas|pases|mandes|envies|des|pongas)\s+)?(?:(?:lo|la|los|las)\s+)?(?:en|a|como|con)\s+(?:un\s+|una\s+|formato\s+)?)(word|docx|pdf|subtitul\w*|srt|vtt)\b/g;
+
+/** The document formats and subtitles a goal turns down: { documents: ['docx'|'pdf'], subtitles }. */
+function negatedTranscriptFormats(goal) {
+  const text = stripAccentsLower(goal);
+  const documents = new Set();
+  let subtitles = false;
+  for (const match of text.matchAll(NEGATED_FORMAT_RE)) {
+    const word = match[1];
+    if (word === 'pdf') documents.add('pdf');
+    else if (word === 'word' || word === 'docx') documents.add('docx');
+    else subtitles = true;
+  }
+  return { documents: [...documents], subtitles };
+}
+
 /** What the user asked for: document format, subtitles and an optional time range. */
 function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null } = {}) {
   const text = stripAccentsLower(goal);
+  const negated = negatedTranscriptFormats(goal);
   let documentFormat = null;
   try {
     documentFormat = require('./message-attachments').transcriptionFileOutputFormat(goal);
@@ -65,7 +85,13 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
   const policyFormat = String(documentPolicy?.format || '').toLowerCase();
   if (!documentFormat && documentPolicy?.autoGenerate && (policyFormat === 'docx' || policyFormat === 'pdf')) documentFormat = policyFormat;
   if (documentFormat && documentFormat !== 'docx' && documentFormat !== 'pdf') documentFormat = null;
-  const wantsSubtitles = /\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text);
+  // Turned down: the other format if the goal asks for it («no en Word, en PDF»).
+  if (documentFormat && negated.documents.includes(documentFormat)) {
+    const other = documentFormat === 'docx' ? 'pdf' : 'docx';
+    const mentionsOther = other === 'pdf' ? /\bpdf\b/.test(text) : /\b(word|docx)\b/.test(text);
+    documentFormat = mentionsOther && !negated.documents.includes(other) ? other : null;
+  }
+  const wantsSubtitles = !negated.subtitles && (/\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text));
   let range = null;
   try {
     const parsed = (formatter || defaultFormatter()).parseTimeRange?.(goal);
@@ -797,6 +823,7 @@ async function loadTranscripts(prisma, { userId, rows = [], store = null } = {})
 module.exports = {
   resolveTranscriptOutput,
   buildMediaTranscriptArtifacts,
+  negatedTranscriptFormats,
   buildTranscriptChatPreview,
   buildTranslationArtifacts,
   escapeChatMarkdown,

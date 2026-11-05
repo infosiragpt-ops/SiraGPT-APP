@@ -2919,7 +2919,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const hasCompanionAttachments = companionAttachments.length > 0;
       const mediaGoal = String(displayGoal || goal || '');
       const retryRequested = /reintent|retry/i.test(mediaGoal);
-      const explicitNoAnalysis = /\b(?:sin|no|ni|without|never)\s+(?:(?:me|nos|lo|la)\s+)?(?:(?:hagas?|incluyas?|quiero)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m\w*|anal[ií]z\w*|an[aá]lisis)\b/i.test(mediaGoal);
+      const explicitNoAnalysis = /\b(?:sin|no|ni|without|never)\s+(?:(?:me|nos|lo|la)\s+)?(?:(?:hagas?|incluyas?|quiero)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m\w*|anal[ií][zc]\w*|an[aá]lisis)\b/i.test(mediaGoal);
       // «tradúcelo al inglés» is a full translation, never a summary: next
       // to it only an explicit deliverable («resúmelo», «el acta») or a
       // question about the recording runs the analysis too.
@@ -3035,7 +3035,19 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           await mediaBatch.waitForMediaBatch({ prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
             retryFailed: true, language: batchLanguage, hints: jobHints.hints, timeoutMs: 0, readProgress: null }).catch(() => null);
         }
-        const explicitAnalysis = Boolean(lookupWindow) || mediaBatch.wantsSummaryWithTranslation(mediaGoal);
+        // A translation of the moment is the answer itself: no summary
+        // unless one is asked for (as on a first request).
+        const explicitAnalysis = Boolean(lookupWindow && !translatesMoment) || mediaBatch.wantsSummaryWithTranslation(mediaGoal);
+        // A window in a follow-up cuts the transcript files only when it asks
+        // for that part of the transcript («solo del minuto 10 al 20»,
+        // «transcribe del 10 al 20»). A question or a summary of a window
+        // reads it alone, and a translation of one translates it alone: the
+        // transcript the first request asked for stays whole.
+        const onlyWord = /\b(?:solo|s[oó]lo|[uú]nicamente|nada\s+m[aá]s)\b/i.test(mediaGoal);
+        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMoment
+          && (plainTranscriptionRequest || (onlyWord && !translationTarget) || (!explicitAnalysis && !translationTarget));
+        const turnedDown = typeof mediaArtifacts.negatedTranscriptFormats === 'function'
+          ? mediaArtifacts.negatedTranscriptFormats(mediaGoal) : { documents: [], subtitles: false };
         const courtesy = /^\s*(?:ok(?:ay)?|vale|gracias|muchas gracias|perfecto|listo|genial|dale|bien|de acuerdo|thanks|thank you)[\s.!¡👍🙏]*$/iu.test(mediaGoal);
         const amendment = {
           goal: mediaGoal,
@@ -3046,9 +3058,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           // adds an analysis (the default would run one for «en Word»).
           wantsAnalysis: explicitAnalysis,
           documentFormat: mediaOutput.documentFormat || null,
+          removeDocument: turnedDown.documents,
           wantsSubtitles: mediaOutput.wantsSubtitles === true,
-          range: outputRange || null,
-          analysisRange: lookupWindow || null,
+          removeSubtitles: turnedDown.subtitles === true,
+          range: cutsTranscript ? mediaOutput.range : null,
+          analysisRange: (lookupWindow && !translatesMoment ? lookupWindow : null)
+            || (!cutsTranscript && explicitAnalysis && mediaOutput.range && mediaOutput.range.end != null ? mediaOutput.range : null),
+          translationRange: translatesMoment ? lookupWindow
+            : (!cutsTranscript && translationTarget && mediaOutput.range && mediaOutput.range.end != null ? mediaOutput.range : null),
           language: jobHints.language || null,
           hints: jobHints.hints || null,
           model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
@@ -3067,8 +3084,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         const saysHints = Boolean(ownHints.hints && typeof ownHints.hints === 'object'
           && Object.values(ownHints.hints).some(value => (Array.isArray(value) ? value.length > 0 : value != null && value !== false && value !== '')));
         const recognised = Boolean(amendment.translationTarget || amendment.removeTranslation || amendment.removeAnalysis
-          || amendment.wantsAnalysis || amendment.documentFormat || amendment.wantsSubtitles || amendment.range
-          || amendment.analysisRange || ownHints.language || saysHints);
+          || amendment.wantsAnalysis || amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
+          || amendment.removeSubtitles || amendment.range || amendment.analysisRange || amendment.translationRange
+          || ownHints.language || saysHints);
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
           amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true } })
             .catch(() => null) || amended;

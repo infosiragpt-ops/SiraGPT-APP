@@ -58,6 +58,14 @@ describe("Stop during a background transcription (source contract)", () => {
     assert.ok(handoff > 0 && amended > handoff && done > amended)
   })
 
+  it("Regenerar on an «Anotado» reply refreshes the chat instead of asking a text model with no transcript", () => {
+    const context = fs.readFileSync(path.join(process.cwd(), "lib", "chat-context-integrated.tsx"), "utf8")
+    const guard = between(context, "const isMediaHandoff = ", "if (isMediaHandoff) {")
+    assert.match(guard, /targetMetadata\.mediaDeliveryAmended/)
+    assert.match(guard, /targetMetadata\.stoppedReason === 'media_delivery_amended'/)
+    assert.match(guard, /targetTask\.stoppedReason === 'media_delivery_amended'/)
+  })
+
   it("the API client posts the cancel for the chat", () => {
     const method = between(api, "async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = [], fileIds: string[] = [])", "\n  }\n")
     assert.match(method, /this\.request\('\/media-deliveries\/cancel', \{\s*method: 'POST',/)

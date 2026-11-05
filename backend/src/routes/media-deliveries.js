@@ -59,6 +59,12 @@ function createMediaDeliveriesRouter({ delivery = null, auth = authenticateToken
       const results = (Array.isArray(out?.results) ? out.results : []).map(result => ({
         id: result.id, outcome: result.outcome, messageId: result.messageId || null,
       }));
+      // A Stop the store could not record is no «ya había terminado»: the
+      // client says it failed and the user tries again.
+      if (results.some(result => result.outcome === 'error')) {
+        return res.status(500).json({ ok: false, error: 'No se pudo detener la transcripción. Vuelve a intentarlo.', code: 'cancel_failed',
+          cancelled: Number(out?.cancelled) || 0, results });
+      }
       return res.json({ ok: true, cancelled: Number(out?.cancelled) || 0, results });
     } catch (err) {
       try { console.warn('[media-deliveries] cancel failed:', err?.code || err?.message || 'cancel_error'); } catch (_) { /* noop */ }

@@ -247,7 +247,7 @@ function transcriptMarkdown(rows) {
 // that clause's action so a separate positive task ("sin resumen, pero
 // analiza las decisiones") still runs after the literal transcription.
 function stripNegatedAnalysis(goal) {
-  return String(goal).replace(/\b(?:sin|no|ni|without|never|don[’']?t|do\s+not)\s+(?:(?:me|nos|te|se|lo|la|los|las|le|les)\s+){0,2}(?:(?:hagas?|hacer|incluyas?|incluir|quiero|queremos|necesito)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m[a-záéíóúñ]*|anal[ií]z[a-záéíóúñ]*|an[aá]lisis|summar\w*|analy[sz]\w*)\b/gi, '');
+  return String(goal).replace(/\b(?:sin|no|ni|without|never|don[’']?t|do\s+not)\s+(?:(?:me|nos|te|se|lo|la|los|las|le|les)\s+){0,2}(?:(?:hagas?|hacer|incluyas?|incluir|quiero|queremos|necesito)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m[a-záéíóúñ]*|anal[ií][zc][a-záéíóúñ]*|an[aá]lisis|summar\w*|analy[sz]\w*)\b/gi, '');
 }
 
 // The transcript itself is asked for: «transcribe…», «la transcripción…»,
@@ -265,7 +265,10 @@ const TRANSCRIPT_EXTRA_DELIVERABLE_RE = new RegExp([
   /\b(?:dime|di|dame|lista|enumera|identifica|menciona|saca|se[nñ]ala|ind[ií]ca(?:me)?|resalta|cu[aá]les\s+son)\s+(?:(?:los|las|sus|cu[aá]les|qu[eé]|son|principales|\d+)\s+){0,2}temas\b/.source,
   /\btemas\s+(?:principales|centrales|clave|tratados|que\s+(?:se\s+)?(?:tocan?|tratan?|trat[oó]|habla|hablan|hablaron|ven|vieron|explica))\b/.source,
   /\b(?:hazme|haz|genera|gen[eé]rame|crea|cr[eé]ame|prepara|prep[aá]rame|dame|escribe|redacta|formula|arma|plantea|plant[eé]ame)\s+(?:(?:unas?|algunas|las|\d+|varias|un\s+par\s+de)\s+)?preguntas\b/.source,
-  /\b(?:dime|di|cu[eé]ntame|expl[ií]came|ind[ií]came|resume(?:me)?)\s+(?:de\s+)?(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]l(?:es)?)\s+(?:se\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|habl[oó]|hablaron|trata|tratan|trat[oó]|cuenta|cuentan|explica|explican|explic[oó]|plantea|propone|propuso|opina|opinan|concluye|concluyen|pas[oó]|pasa|temas?|ideas?)\b/.source,
+  // The verb list ends in accented letters («habló»): `\b` is ASCII-only,
+  // so a lookahead marks the end of the word instead.
+  /\b(?:dime|di|cu[eé]ntame|expl[ií]came|ind[ií]came|resume(?:me)?)\s+(?:de\s+)?(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]l(?:es)?)\s+(?:se\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|habl[oó]|hablaron|trata|tratan|trat[oó]|cuenta|cuentan|explica|explican|explic[oó]|plantea|propone|propuso|opina|opinan|concluye|concluyen|pas[oó]|pasa|temas?|ideas?)(?![a-záéíóúñ])/.source,
+  /\bnotas de (?:la |las )?clases?\b|\binsights?\b|\b(?:responde|resp[oó]ndeme|contesta|cont[eé]stame)\s+(?:a\s+)?(?:(?:las|los|la|el|esta|estas|sus|mis)\s+)?preguntas?\b/.source,
 ].join('|'), 'i');
 
 function wantsMediaAnalysis(goal) {

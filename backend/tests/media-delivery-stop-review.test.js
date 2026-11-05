@@ -376,3 +376,79 @@ test('a follow-up the rules read and that was already so adds no analysis', () =
   assert.deepEqual(own('solo lo que dice el profesor'), { language: null, hints: null }, 'an unnamed instruction says no hint');
   assert.equal(own('está en inglés').language, 'en');
 });
+
+// ── the second round: follow-ups after the runner and frontend review ─────
+
+test('two questions about two moments read both windows; a question with no window reads the whole recording', () => {
+  const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
+  const record = normalizeNewRecord(request({ fileIds: ['a'], fileNames: ['a.mp4'] }), T0);
+  const first = mergeDeliveryAmendment(record, { goal: '¿qué dijo en el minuto 30?', wantsAnalysis: true, analysisRange: { start: 1740, end: 2040 } }).record;
+  assert.deepEqual(first.output.analysisRange, { start: 1740, end: 2040 });
+  const second = mergeDeliveryAmendment(first, { goal: '¿y en el minuto 50?', wantsAnalysis: true, analysisRange: { start: 2940, end: 3240 } });
+  assert.deepEqual(second.record.output.analysisRange, { start: 1740, end: 3240 }, 'their span, never only the latest');
+  const whole = mergeDeliveryAmendment(second.record, { goal: '¿y quién es el profesor?', wantsAnalysis: true });
+  assert.equal(whole.record.output.analysisRange, undefined);
+  assert.ok(whole.changes.includes('analysis_range'));
+});
+
+test('a translation of a moment is stored apart: the transcript keeps its whole range', () => {
+  const { mergeDeliveryAmendment, normalizeNewRecord, normalizeOutput } = require('../src/services/media-delivery-store');
+  const record = normalizeNewRecord(request(), T0);
+  const { record: next, changes } = mergeDeliveryAmendment(record, { goal: 'traduce al inglés lo que dice en el minuto 30', translationTarget: 'en',
+    translationRange: { start: 1740, end: 2040 } });
+  assert.ok(changes.includes('translation'));
+  assert.ok(changes.includes('translation_range'));
+  assert.deepEqual(next.output.translationRange, { start: 1740, end: 2040 });
+  assert.equal(next.range, null, 'the transcript files are not cut');
+  if (typeof normalizeOutput === 'function') assert.deepEqual(normalizeOutput(next.output).translationRange, { start: 1740, end: 2040 });
+  assert.match(amendedMessage({ changes, record: next }), /traducida al inglés \(la traducción, solo del tramo que indicaste\)/);
+  const source = require('node:fs').readFileSync(path.join(__dirname, '..', 'src', 'services', 'media-delivery.js'), 'utf8');
+  assert.match(source, /const range = rangeOf\(delivery\) \|\| translationRangeOf\(delivery\);/, 'the translation reads that window');
+});
+
+test('a turned-down format goes; the model changes only for model work', () => {
+  const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
+  const pro = { id: 'deepseek-v4-pro', provider: 'DeepSeek' };
+  const flash = { id: 'deepseek-v4-flash', provider: 'DeepSeek' };
+  const record = normalizeNewRecord(request({ mode: 'analysis', model: pro, formats: ['txt', 'docx', 'srt', 'vtt'],
+    output: { documentFormat: 'docx', wantsSubtitles: true } }), T0);
+  const word = mergeDeliveryAmendment(record, { goal: 'no lo quiero en Word', removeDocument: ['docx'], model: flash });
+  assert.ok(word.changes.includes('no_document'));
+  assert.equal(word.record.output.documentFormat, undefined);
+  assert.ok(!word.record.formats.includes('docx'));
+  assert.deepEqual(word.record.model, pro, 'the summary Pro was asked to write stays with Pro');
+  assert.match(amendedMessage({ changes: word.changes, record: word.record }), /sin el documento que habías pedido/);
+  const subs = mergeDeliveryAmendment(record, { goal: 'sin subtítulos', removeSubtitles: true, model: flash });
+  assert.ok(subs.changes.includes('no_subtitles'));
+  assert.equal(subs.record.output.wantsSubtitles, false);
+  assert.ok(!subs.record.formats.includes('srt') && !subs.record.formats.includes('vtt'));
+  const names = mergeDeliveryAmendment(record, { goal: 'los nombres son Huamán y Quispe', hints: { terms: ['Huamán', 'Quispe'] }, model: flash });
+  assert.deepEqual(names.record.model, pro);
+  const ask = mergeDeliveryAmendment(record, { goal: 'y tradúcelo al inglés', translationTarget: 'en', model: flash });
+  assert.deepEqual(ask.record.model, flash, 'new model work runs on the model picked for it');
+});
+
+test('a Stop the store cannot record answers 500 and still stops the jobs', async (t) => {
+  const { service, state, store } = await harness(t, { files: [fileRow('a')] });
+  const record = await service.createDelivery(request());
+  store.cancel = async () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); };
+  const out = await service.cancelDelivery(record.id, { userId: 'u1' });
+  assert.equal(out.outcome, 'error');
+  assert.ok(state.stopped.some(args => (args.fileIds || []).includes('a')), 'the user said stop: the jobs stop');
+  const express = require('express');
+  const { createMediaDeliveriesRouter } = require('../src/routes/media-deliveries');
+  const app = express();
+  app.use(express.json());
+  app.use('/api/media-deliveries', createMediaDeliveriesRouter({
+    delivery: { cancelChatDeliveries: async () => ({ cancelled: 0, results: [{ id: record.id, outcome: 'error' }] }) },
+    auth: (req, _res, next) => { req.user = { id: 'u1' }; next(); } }));
+  const server = app.listen(0);
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/media-deliveries/cancel`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ chatId: 'chat1' }) });
+    assert.equal(res.status, 500, 'never «ya había terminado»');
+    assert.equal((await res.json()).code, 'cancel_failed');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});

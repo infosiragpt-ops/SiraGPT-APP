@@ -3404,10 +3404,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const targetAssistant = currentChat.messages[targetAiMessageIndex];
     const targetMetadata = parseMessageMetadata(targetAssistant.metadata);
     const targetTask = parseAgentTaskContent(targetAssistant.content);
+    // A follow-up folded into that job («Anotado: …») acknowledged it too:
+    // regenerating would ask a text model to answer it with no transcript.
     const isMediaHandoff = (typeof targetMetadata.mediaDeliveryHandoff === 'string'
       && targetMetadata.mediaDeliveryHandoff.trim().length > 0)
+      || (typeof targetMetadata.mediaDeliveryAmended === 'string' && targetMetadata.mediaDeliveryAmended.trim().length > 0)
       || targetMetadata.stoppedReason === 'media_delivery_handoff'
-      || (targetTask.done && !targetTask.error && targetTask.stoppedReason === 'media_delivery_handoff');
+      || targetMetadata.stoppedReason === 'media_delivery_amended'
+      || (targetTask.done && !targetTask.error
+        && (targetTask.stoppedReason === 'media_delivery_handoff' || targetTask.stoppedReason === 'media_delivery_amended'));
     if (isMediaHandoff) {
       // This answer acknowledged a durable job; it was not the transcript.
       // Deleting it (and later turns) then calling /ai/generate loses the

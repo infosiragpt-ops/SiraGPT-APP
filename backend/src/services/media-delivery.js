@@ -270,10 +270,14 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   const target = record?.output?.translationTarget || null;
   const language = target ? translationName(target) : null;
   const translated = many ? 'traducidas' : 'traducida';
-  if (list.includes('translation') || list.includes('translation_target')) parts.push(language ? `${translated} al ${language}` : translated);
+  const window = list.includes('translation_range') ? ' (la traducción, solo del tramo que indicaste)' : '';
+  if (list.includes('translation') || list.includes('translation_target')) parts.push(`${language ? `${translated} al ${language}` : translated}${window}`);
+  else if (window) parts.push('con la traducción del tramo que indicaste');
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   if (list.includes('document')) parts.push(record?.output?.documentFormat === 'pdf' ? 'en PDF' : 'en Word');
+  if (list.includes('no_document')) parts.push('sin el documento que habías pedido');
   if (list.includes('subtitles')) parts.push('con subtítulos SRT y VTT');
+  if (list.includes('no_subtitles')) parts.push('sin subtítulos');
   if (list.includes('range')) parts.push('solo del tramo que indicaste');
   const subject = many ? 'las transcripciones' : 'la transcripción';
   const extras = [];
@@ -1289,6 +1293,14 @@ function defaultNotify(prisma, { userId, title, body, actionUrl, type, metadata 
  * transcript files, the chat view and a translation follow `delivery.range`
  * only (rangeOf).
  */
+function translationRangeOf(delivery) {
+  const asked = delivery?.output?.translationRange;
+  if (!asked || typeof asked !== 'object') return null;
+  const start = Number(asked.start);
+  const end = Number(asked.end);
+  return Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start ? { start, end } : null;
+}
+
 function analysisRangeOf(delivery) {
   const asked = delivery?.output?.analysisRange;
   if (asked && typeof asked === 'object') {
@@ -1341,7 +1353,9 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     // The translation is of the transcript the user asked for (their range,
     // or the whole recording), never cut to the moment they asked about: that
     // moment only shapes the summary that comes with it.
-    const range = rangeOf(delivery);
+    // A follow-up's «traduce lo que dice en el minuto 30» reads that window;
+    // the transcript files stay whole.
+    const range = rangeOf(delivery) || translationRangeOf(delivery);
     const translationRows = rowsIn(range);
     const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete, signal });
     // «resume y tradúcelo»: the summary too, with the same model. Its failure
@@ -2083,6 +2097,12 @@ function createMediaDeliveryService(deps = {}) {
         }) });
     } catch (err) {
       logger.warn(`[media-delivery] cancel failed id=${id} code=${err?.code || 'cancel_error'}`);
+      // The record could not be closed (a full disk), but the user said stop:
+      // the jobs stop anyway (best-effort), and the client reports the error.
+      const known = await readRecordQuietly(id);
+      if (known && known.userId === userId) {
+        await cancelUnneededMediaJobs({ userId, fileIds: known.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(known) });
+      }
       return empty('error');
     }
     let record = result?.record || null;
