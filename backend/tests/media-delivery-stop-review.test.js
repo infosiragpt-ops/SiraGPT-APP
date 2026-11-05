@@ -199,9 +199,22 @@ test('a Catalan follow-up is confirmed with the language name', () => {
 
 // ── the media queue ─────────────────────────────────────────────────────
 
+// The where clauses the queue writes with, evaluated like PostgreSQL: a
+// `{ not: v }` never matches NULL.
+function matchesClause(row, clause) {
+  return Object.entries(clause).every(([key, value]) => {
+    if (value === null) return row[key] == null;
+    if (value && typeof value === 'object' && 'not' in value) return row[key] != null && row[key] !== value.not;
+    return row[key] === value;
+  });
+}
+function matchesExtras(row, where) {
+  return !Array.isArray(where.OR) || where.OR.some(clause => matchesClause(row, clause));
+}
+
 function queueHarness({ rows, jobs = {}, honourNot = false } = {}) {
   const files = new Map(rows.map(row => [row.id, { ...row }]));
-  const excluded = (row, where) => honourNot && where.NOT && Object.entries(where.NOT).every(([key, value]) => row[key] === value);
+  const excluded = (row, where) => honourNot && !matchesExtras(row, where);
   const prisma = { file: {
     async findFirst({ where }) { const row = files.get(where.id); return row && row.userId === where.userId && !row.deletedAt ? { ...row } : null; },
     async updateMany({ where, data }) {
@@ -307,7 +320,7 @@ test('a retry or a deploy park on another worker never erases a Stop', async () 
       findFirst: async ({ where }) => { const row = files.get(where.id); return row ? { ...row } : null; },
       updateMany: async (args) => {
         const row = files.get(args.where.id);
-        if (args.where.NOT && Object.entries(args.where.NOT).every(([key, value]) => row[key] === value)) return { count: 0 };
+        if (!matchesExtras(row, args.where)) return { count: 0 };
         Object.assign(row, args.data);
         return { count: 1 };
       },
@@ -325,6 +338,29 @@ test('a retry or a deploy park on another worker never erases a Stop', async () 
   assert.equal(files.get('a').processingError, CANCELLED_NOTE, 'the next attempt reads the stop note and ends');
   assert.equal(files.get('a').processingStage, 'failed');
   void service;
+  // The where clause still matches an ordinary row: NULL stage or error.
+  assert.equal(matchesExtras({ processingStage: 'extracting', processingError: null }, { OR: [{ processingStage: null }, { processingStage: { not: 'failed' } }, { processingError: null }, { processingError: { not: CANCELLED_NOTE } }] }), true);
+  assert.equal(matchesExtras({ processingStage: null, processingError: null }, { OR: [{ processingStage: null }, { processingStage: { not: 'failed' } }, { processingError: null }, { processingError: { not: CANCELLED_NOTE } }] }), true);
+  assert.equal(matchesExtras({ processingStage: 'failed', processingError: 'DRM' }, { OR: [{ processingStage: null }, { processingStage: { not: 'failed' } }, { processingError: null }, { processingError: { not: CANCELLED_NOTE } }] }), true);
+  assert.equal(matchesExtras({ processingStage: 'failed', processingError: CANCELLED_NOTE }, { OR: [{ processingStage: null }, { processingStage: { not: 'failed' } }, { processingError: null }, { processingError: { not: CANCELLED_NOTE } }] }), false);
+});
+
+test('a transient retry on an ordinary row still resets it for the next attempt', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'extracting', path: '/tmp/a.mp4', mimeType: 'audio/mpeg' })]]);
+  const service = createMediaTranscriptionService({
+    prisma: { file: {
+      findFirst: async ({ where }) => { const row = rows.get(where.id); return row ? { ...row } : null; },
+      updateMany: async (args) => { const row = rows.get(args.where.id); if (!matchesExtras(row, args.where)) return { count: 0 }; Object.assign(row, args.data); return { count: 1 }; },
+    } },
+    getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }), logger: { info() {}, warn() {} },
+    processFile: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); },
+  });
+  const job = { data: { fileId: 'a', userId: 'u1' }, opts: { attempts: 3 }, attemptsMade: 0, discard() {} };
+  await assert.rejects(service.processMediaJob(job), { code: 'ETIMEDOUT' });
+  assert.equal(rows.get('a').processingStage, 'uploaded');
+  assert.equal(rows.get('a').processingError, null);
 });
 
 test('a follow-up the rules read and that was already so adds no analysis', () => {
@@ -332,4 +368,11 @@ test('a follow-up the rules read and that was already so adds no analysis', () =
   const branch = source.slice(source.indexOf("let amended = await pendingService.amendDelivery("), source.indexOf("if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged')"));
   assert.match(branch, /const recognised = Boolean\(amendment\.translationTarget \|\| amendment\.removeTranslation \|\| amendment\.removeAnalysis/);
   assert.match(branch, /amended\?\.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest/);
+  // Names or a language from earlier turns say nothing about this message.
+  assert.match(branch, /mediaBatch\.extractTranscriptionHints\(mediaGoal, \[\]\)/);
+  assert.doesNotMatch(branch.slice(branch.indexOf('const recognised')), /amendment\.language|amendment\.hints/);
+  const mediaBatch = require('../src/services/media-batch');
+  const own = goal => mediaBatch.hintsForJob(mediaBatch.extractTranscriptionHints(goal, []));
+  assert.deepEqual(own('solo lo que dice el profesor'), { language: null, hints: null }, 'an unnamed instruction says no hint');
+  assert.equal(own('está en inglés').language, 'en');
 });

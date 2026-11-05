@@ -1408,10 +1408,12 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     throw failure('media_busy', 'El archivo se está procesando; se reintentará en unos segundos.');
   }
   // A reset that must never undo «Detener» (written by another worker):
-  // one conditional write, nothing written when the row reads as stopped.
+  // one conditional write, nothing written when the row reads as stopped
+  // (failed + CANCELLED_NOTE). Spelled as an OR so a NULL stage or error
+  // matches: a bare `not` on a nullable column excludes NULL (SQL `<>`).
   const writeUnlessStopped = async (fileId, userId, data) => {
     const result = await prisma.file.updateMany({ where: { id: fileId, userId, deletedAt: null,
-      NOT: { processingStage: 'failed', processingError: CANCELLED_NOTE } }, data });
+      OR: [{ processingStage: null }, { processingStage: { not: 'failed' } }, { processingError: null }, { processingError: { not: CANCELLED_NOTE } }] }, data });
     return result.count === 1;
   };
   const loadOwned = async (fileId, userId) => {

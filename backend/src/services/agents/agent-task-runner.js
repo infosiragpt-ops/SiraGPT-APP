@@ -3060,11 +3060,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // «transcribe», «reintenta» or a courtesy is not, and neither is one
         // the rules did read and that was already so («en Word» twice, «sin
         // traducción» with nothing to translate): it changes nothing.
-        const hasHints = Boolean(amendment.hints && typeof amendment.hints === 'object'
-          && Object.values(amendment.hints).some(value => (Array.isArray(value) ? value.length > 0 : value != null && value !== false && value !== '')));
+        // What THIS message says: the job hints also carry names and a
+        // language read from earlier turns, which say nothing about it.
+        const ownHints = typeof mediaBatch.extractTranscriptionHints === 'function' && typeof mediaBatch.hintsForJob === 'function'
+          ? mediaBatch.hintsForJob(mediaBatch.extractTranscriptionHints(mediaGoal, [])) : { language: null, hints: null };
+        const saysHints = Boolean(ownHints.hints && typeof ownHints.hints === 'object'
+          && Object.values(ownHints.hints).some(value => (Array.isArray(value) ? value.length > 0 : value != null && value !== false && value !== '')));
         const recognised = Boolean(amendment.translationTarget || amendment.removeTranslation || amendment.removeAnalysis
           || amendment.wantsAnalysis || amendment.documentFormat || amendment.wantsSubtitles || amendment.range
-          || amendment.analysisRange || amendment.language || hasHints);
+          || amendment.analysisRange || ownHints.language || saysHints);
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
           amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true } })
             .catch(() => null) || amended;
