@@ -488,6 +488,15 @@ describe("resumable upload failure budgets", () => {
     expect(result.received).toEqual([0])
     expect(result.deletes).toBe(0)
   })
+
+  it("without a resume store (extracted audio) a pause never promises to continue where it stopped", async () => {
+    for (const status of [0, 500, 401]) {
+      const result = await uploadWithStalledChunk(status, 0)
+      expect(result.error).toBeInstanceOf(ChunkedUploadPausedError)
+      expect(String((result.error as Error).message)).not.toMatch(/donde quedó/)
+      expect(String((result.error as Error).message)).toMatch(/adjunt/)
+    }
+  })
 })
 
 describe("resumable upload helpers", () => {

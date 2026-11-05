@@ -405,6 +405,15 @@ const MESSAGES = {
   missing: "El servidor no recibió todas las partes del archivo. Vuelve a adjuntarlo.",
 }
 
+// Without a resume store (audio re-extracted in the browser: a new encode
+// never joins an older session) attaching the file again starts over, so
+// the pause never promises «continuará donde quedó».
+const RESTART_MESSAGES = {
+  paused: "La conexión no volvió en 45 minutos. Vuelve a adjuntar el archivo para subirlo de nuevo.",
+  auth: "Tu sesión expiró durante la subida. Inicia sesión de nuevo y vuelve a adjuntar el archivo.",
+  server: "El servidor no pudo guardar una parte del archivo. Vuelve a adjuntarlo más tarde.",
+}
+
 function backoffMs(attempt: number, timing: ResumableTiming, retryAfterMs: number | null, random: () => number): number {
   const exp = Math.min(timing.retryMaxMs, timing.retryBaseMs * 2 ** Math.min(attempt, 16))
   const jittered = Math.round(exp * (0.8 + 0.4 * random()))
@@ -426,6 +435,7 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
   const random = opts.random ?? Math.random
   const parallel = Math.max(1, Math.min(6, Math.floor(opts.parallel ?? 3)))
   const resumeStore = opts.resumeStore === undefined ? createLocalResumeStore() : opts.resumeStore
+  const pauseCopy = resumeStore ? MESSAGES : { ...MESSAGES, ...RESTART_MESSAGES }
   const total = file.size
   const fingerprint = fingerprintFile(file)
   const saved = fingerprint && resumeStore ? resumeStore.get(fingerprint) : null
@@ -644,7 +654,7 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
         if (kind === "server") serverErrors += 1
         if (!outage) outage = { since: now(), attempt: 0 }
         if (now() - outage.since >= timing.maxPauseMs) {
-          throw new ChunkedUploadPausedError(MESSAGES.paused, err.status)
+          throw new ChunkedUploadPausedError(pauseCopy.paused, err.status)
         }
         const delay = backoffMs(outage.attempt, timing, err.retryAfterMs, random)
         outage.attempt += 1
@@ -663,8 +673,8 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
         if (step === "upload") step = "sync"
         continue
       }
-      if (kind === "server") throw new ChunkedUploadPausedError(MESSAGES.server, err.status)
-      if (kind === "auth") throw new ChunkedUploadPausedError(MESSAGES.auth, err.status)
+      if (kind === "server") throw new ChunkedUploadPausedError(pauseCopy.server, err.status)
+      if (kind === "auth") throw new ChunkedUploadPausedError(pauseCopy.auth, err.status)
       if (kind === "storage") throw new ChunkedUploadPausedError(err.message || MESSAGES.storage, err.status)
       if (kind === "completed") {
         step = "complete"

@@ -3326,8 +3326,10 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   `chunkAbort`). El archivo extraído viaja por el camino de siempre (chunked ≥ 32 MB o
   multipart) con `clientExtracted` (init del chunked; en el multipart un arreglo alineado con
   las partes, así dos archivos con el mismo nombre no se cruzan). El audio extraído no se
-  reanuda tras recargar (`resume: false`: otra codificación tiene otros números de serie Ogg).
-  El progreso de la extracción llega a React solo cuando sube un punto entero.
+  reanuda tras recargar (`resume: false`: otra codificación tiene otros números de serie Ogg), y
+  sin almacén de reanudación una pausa dice «vuelve a adjuntar el archivo» sin prometer que
+  «continuará donde quedó» (`RESTART_MESSAGES`). El progreso de la extracción llega a React solo
+  cuando sube un punto entero.
 - **Tope**: `MAX_MEDIA_FILES_PER_MESSAGE = 100` (`lib/attachment-ingest.ts`), igual que
   `SIRAGPT_MEDIA_BATCH_MAX`.
 - **Backend**: `services/client-extracted-metadata.js` (normalizador estricto: tier, nombre,
