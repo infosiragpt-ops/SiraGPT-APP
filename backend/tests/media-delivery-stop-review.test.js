@@ -452,3 +452,309 @@ test('a Stop the store cannot record answers 500 and still stops the jobs', asyn
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+// ── the third round: who may stop what, and a Stop that survives faults ───
+
+test('a Stop from another account never touches a delivery this process is delivering', async (t) => {
+  let chunks = 0;
+  let started;
+  const running = new Promise(resolve => { started = resolve; });
+  const { service, state, store } = await harness(t, {
+    files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })],
+    overrides: {
+      analyze: async ({ signal }) => {
+        started();
+        for (let i = 0; i < 40; i++) {
+          signal?.throwIfAborted();
+          await new Promise(resolve => setTimeout(resolve, 5));
+          chunks += 1;
+        }
+        return 'resumen';
+      },
+    },
+  });
+  const record = await service.createDelivery(request({ mode: 'analysis', goal: 'resúmelo' }));
+  const delivering = service.deliverOne(record.id);
+  await running;
+  // Its hand-off was copied into another account's chat (a saved share).
+  const out = await service.cancelChatDeliveries({ userId: 'u2', chatId: 'chat2', deliveryIds: [record.id], fileIds: ['a'] });
+  assert.deepEqual(out.results.map(result => result.outcome), ['missing']);
+  assert.equal(out.cancelled, 0);
+  const result = await delivering;
+  assert.equal(result.status, 'delivered', 'the owner still gets the result');
+  assert.equal(chunks, 40, 'its analysis ran to the end');
+  assert.equal((await store.get(record.id)).status, 'delivered');
+  assert.equal(state.stopped.length, 0, 'no job of the owner stopped');
+  assert.ok(state.messages.every(message => message.chatId === 'chat1' && message.metadata.deliveryKind !== 'cancelled'));
+  // Even called with the delivery id alone, another account cannot stop it.
+  const again = await service.createDelivery(request());
+  assert.equal((await service.cancelDelivery(again.id, { userId: 'u2' })).outcome, 'missing');
+  assert.equal((await store.get(again.id)).status, 'pending');
+});
+
+test('Stop in a branch of the chat never stops the original chat\'s transcription', async (t) => {
+  const { service, state, store } = await harness(t, { files: [fileRow('a')] });
+  const record = await service.createDelivery(request());
+  // The branch copied the hand-off (an older bundle, before copies were marked).
+  const out = await service.cancelChatDeliveries({ userId: 'u1', chatId: 'branch1', deliveryIds: [record.id], fileIds: ['a'] });
+  assert.deepEqual(out.results.map(result => result.outcome), ['missing']);
+  assert.equal(out.cancelled, 0);
+  assert.equal((await store.get(record.id)).status, 'pending', 'the original request keeps going');
+  assert.equal(state.messages.length, 0, 'nothing posted into the original chat');
+  assert.equal(state.stopped.length, 0);
+  // The same Stop in the chat that asked for it stops it.
+  assert.equal((await service.cancelChatDeliveries({ userId: 'u1', chatId: 'chat1', deliveryIds: [record.id] })).cancelled, 1);
+});
+
+test('a Stop line that cannot be posted keeps the request open: the next Stop or the sweep posts it', async (t) => {
+  let down = true;
+  const posted = [];
+  const { service, state, store } = await harness(t, {
+    files: [fileRow('a'), fileRow('b')],
+    overrides: {
+      postMessage: async ({ userId, chatId, content, metadata }) => {
+        if (down && metadata.mediaDelivery === secondId) throw Object.assign(new Error('db'), { code: 'P1001' });
+        const message = { id: `msg${posted.length + 1}`, userId, chatId, content, metadata };
+        posted.push(message);
+        state.messages.push(message);
+        return { messageId: message.id, chatId };
+      },
+    },
+  });
+  // Two links handed off in one turn: the hand-off names only the first.
+  const first = await service.createDelivery(request({ taskId: null, fileIds: ['a'], fileNames: ['a.mp4'] }));
+  const second = await service.createDelivery(request({ taskId: null, fileIds: ['b'], fileNames: ['b.mp4'] }));
+  var secondId = second.id; // eslint-disable-line no-var
+  const out = await service.cancelChatDeliveries({ userId: 'u1', chatId: 'chat1', deliveryIds: [first.id], fileIds: ['a', 'b'] });
+  assert.equal(out.cancelled, 2, 'both are stopped');
+  assert.equal((await store.get(first.id)).status, 'cancelled');
+  assert.equal((await store.get(second.id)).status, 'pending', 'its line is missing: the request stays open');
+  assert.equal(await store.isCancelRequested(second.id), true, 'and stopped');
+  assert.ok(state.stopped.some(args => (args.fileIds || []).includes('b')), 'its jobs stop now');
+  // A follow-up meanwhile is not taken: the request is stopped.
+  assert.equal((await store.amend(second.id, { userId: 'u1', amendment: { goal: 'y tradúcelo', translationTarget: 'en' } })).outcome, 'cancelled');
+  // The sweep posts the line once the chat is reachable again, then closes it.
+  down = false;
+  const run = await service.deliverOne(second.id);
+  assert.equal(run.status, 'cancelled');
+  assert.equal((await store.get(second.id)).status, 'cancelled');
+  assert.equal(posted.filter(message => message.metadata.mediaDelivery === second.id).length, 1);
+  assert.equal(posted.find(message => message.metadata.mediaDelivery === second.id).metadata.deliveryKind, 'cancelled');
+  // A deleted chat has nothing to settle: that Stop closes at once.
+  const gone = await harness(t, { files: [fileRow('c')], overrides: {
+    postMessage: async () => { throw Object.assign(new Error('gone'), { code: 'chat_unavailable' }); } } });
+  const lone = await gone.service.createDelivery(request({ fileIds: ['c'], fileNames: ['c.mp4'] }));
+  assert.equal((await gone.service.cancelDelivery(lone.id, { userId: 'u1' })).outcome, 'cancelled');
+  assert.equal((await gone.store.get(lone.id)).status, 'cancelled');
+});
+
+test('a Stop line that keeps failing closes the request after the retry window', async (t) => {
+  const root = await tempRoot(t);
+  let clock = T0;
+  const store = createMediaDeliveryStore({ root, now: () => clock, cancelSettleRetryMs: 60_000 });
+  const record = await store.create(request());
+  const failing = async () => ({ error: 'P1001' });
+  assert.equal((await store.cancel(record.id, { userId: 'u1', beforeClose: failing })).outcome, 'cancel_requested');
+  clock += 30_000;
+  assert.equal((await store.cancel(record.id, { userId: 'u1', beforeClose: failing })).outcome, 'cancel_requested',
+    'a repeated Stop keeps the first time');
+  clock += 31_000;
+  const closed = await store.cancel(record.id, { userId: 'u1', beforeClose: failing });
+  assert.equal(closed.outcome, 'cancelled');
+  assert.equal((await store.get(record.id)).status, 'cancelled');
+  assert.equal((await store.get(record.id)).cancelledAt, new Date(T0).toISOString(), 'stamped with the Stop itself');
+});
+
+test('a restart in the middle of a Stop leaves its lock: the sweep still stops the jobs, nothing is delivered', async (t) => {
+  const { service, state, store } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })] });
+  const record = await service.createDelivery(request());
+  // The process that pressed Stop died holding the lock, after the marker.
+  await store.claim(record.id);
+  assert.equal((await store.cancel(record.id, { userId: 'u1', tries: 1, waitMs: 1 })).outcome, 'cancel_requested');
+  const run = await service.deliverOne(record.id);
+  assert.equal(run.status, 'cancelling');
+  assert.ok(state.stopped.some(args => (args.fileIds || []).includes('a')), 'the jobs stop: no more billing');
+  assert.equal(state.messages.length, 0, 'no transcript is posted after the Stop');
+  assert.notEqual((await store.get(record.id)).status, 'delivered');
+});
+
+test('a refine stopped with its request does not run later, unless another open request wants the same window', async (t) => {
+  const { service, store } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })] });
+  const refine = { kind: 'refine', range: { start: 720, end: 900 }, language: 'en', hints: null };
+  const stopped = await service.createDelivery(request(refine));
+  assert.equal(await service.isRefineJobWanted({ deliveryId: stopped.id, fileId: 'a', userId: 'u1' }), true);
+  await service.cancelDelivery(stopped.id, { userId: 'u1' });
+  assert.equal((await store.get(stopped.id)).status, 'cancelled');
+  assert.equal(await service.isRefineJobWanted({ deliveryId: stopped.id, fileId: 'a', userId: 'u1' }), false);
+  // The same window asked again in another request shares the job: it runs.
+  const twin = await service.createDelivery(request({ ...refine, taskId: 'task2' }));
+  assert.equal(await service.isRefineJobWanted({ deliveryId: stopped.id, fileId: 'a', userId: 'u1' }), true);
+  await service.cancelDelivery(twin.id, { userId: 'u1' });
+  // Another window does not.
+  await service.createDelivery(request({ ...refine, taskId: 'task3', range: { start: 0, end: 60 } }));
+  assert.equal(await service.isRefineJobWanted({ deliveryId: stopped.id, fileId: 'a', userId: 'u1' }), false);
+  // Unknown or someone else's: the job runs.
+  assert.equal(await service.isRefineJobWanted({ deliveryId: 'md_unknown', fileId: 'a', userId: 'u1' }), true);
+  assert.equal(await service.isRefineJobWanted({ deliveryId: stopped.id, fileId: 'a', userId: 'u2' }), true);
+});
+
+// The ownership check runs on an unref'd interval: a test waiting on it keeps
+// the event loop alive with a timer of its own, bounded.
+async function settledWithin(promise, ms = 3000) {
+  let timer;
+  const limit = new Promise(resolve => { timer = setTimeout(() => resolve({ timedOut: true }), ms); });
+  try {
+    return await Promise.race([promise.then(value => ({ value }), error => ({ error })), limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function refineQueue({ isRefineWanted, ownershipCheckMs = 0, onEngine = null }) {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT, path: '/tmp/a.mp4', mimeType: 'audio/mpeg' })]]);
+  const prisma = { file: {
+    async findFirst({ where }) { const row = rows.get(where.id); return row && row.userId === where.userId && !row.deletedAt ? { ...row } : null; },
+    async updateMany({ where, data }) { const row = rows.get(where.id); if (!row) return { count: 0 }; Object.assign(row, data); return { count: 1 }; },
+  } };
+  let materialized = 0;
+  const service = createMediaTranscriptionService({ prisma, getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async (source) => { materialized += 1; return { path: source, cleanup: async () => {} }; },
+    createCheckpoint: () => ({ clear: async () => {}, dir: '/ckpt/a' }),
+    logger: { info() {}, warn() {} }, ownershipCheckMs, isRefineWanted,
+    processFile: (_file, { signal }) => new Promise((_resolve, reject) => {
+      onEngine?.();
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+  const job = { data: { fileId: 'a', userId: 'u1', refine: true, range: { start: 0, end: 60 }, deliveryId: 'md_stopped' }, opts: { attempts: 1 }, attemptsMade: 0, discard() {} };
+  return { service, rows, job, materialized: () => materialized };
+}
+
+test('a refine job that survived a Stop ends before any provider call; one already running stops at its next check', async () => {
+  const queued = refineQueue({ isRefineWanted: async () => false });
+  const first = await settledWithin(queued.service.processMediaJob(queued.job), 1000);
+  queued.service.abortActive();
+  assert.equal(first.error?.code, 'media_cancelled');
+  assert.equal(queued.materialized(), 0, 'nothing downloaded, nothing sent to a provider');
+  assert.equal(queued.rows.get('a').extractedText, TRANSCRIPT, 'the transcript is untouched');
+  assert.equal(queued.rows.get('a').processingStage, 'ready');
+  // Running on another worker when the Stop lands: its periodic check ends it.
+  let wanted = true;
+  let engine;
+  const inEngine = new Promise(resolve => { engine = resolve; });
+  const live = refineQueue({ isRefineWanted: async () => wanted, ownershipCheckMs: 20, onEngine: () => engine() });
+  const running = live.service.processMediaJob(live.job);
+  await inEngine;
+  wanted = false;
+  const ended = await settledWithin(running);
+  assert.equal(ended.error?.code, 'media_cancelled');
+  assert.equal(live.rows.get('a').extractedText, TRANSCRIPT);
+  assert.equal(live.rows.get('a').processingStage, 'ready');
+  // A lookup that fails lets the refine run.
+  let reached;
+  const reachedEngine = new Promise(resolve => { reached = resolve; });
+  const blipRun = refineQueue({ isRefineWanted: async () => { throw new Error('store down'); }, onEngine: () => reached(true) });
+  const pending = blipRun.service.processMediaJob(blipRun.job);
+  assert.equal((await settledWithin(reachedEngine)).value, true, 'the engine runs when the Stop cannot be read');
+  blipRun.service.abortActive();
+  assert.ok((await settledWithin(pending)).error);
+});
+
+test('asked again after Stop while the stopped job stays active elsewhere: the note is cleared at once, no wait', async () => {
+  const { service, files, added } = queueHarness({
+    rows: [fileRow('a', { processingStage: 'failed', processingError: CANCELLED_NOTE, mimeType: 'audio/mpeg' })],
+    // Stalled after a deploy, or running on another worker: no abort here.
+    jobs: { [jobIdFor('a', 'u1')]: { state: 'active', data: { fileId: 'a', userId: 'u1' } } },
+  });
+  const startedAt = Date.now();
+  const out = await service.enqueueMediaTranscription({ fileId: 'a', userId: 'u1', retry: true });
+  assert.ok(Date.now() - startedAt < 1000, 'no 5 s wait per file');
+  assert.equal(out.queued, true);
+  assert.equal(files.get('a').processingStage, 'uploaded');
+  assert.equal(files.get('a').processingError, null, 'the surviving job carries on instead of ending on the note');
+  assert.equal(added.length, 0, 'the same job, not a second one');
+});
+
+test('a job that ended on a Stop after the recording was asked for again runs again on recovery', async () => {
+  let retried = 0;
+  const { service, files } = queueHarness({
+    rows: [fileRow('a', { processingStage: 'uploaded', processingError: null, mimeType: 'audio/mpeg' })],
+    jobs: { [jobIdFor('a', 'u1')]: { state: 'failed', failedReason: CANCELLED_NOTE, data: { fileId: 'a', userId: 'u1' },
+      retry: async () => { retried += 1; } } },
+  });
+  // The recovery pass calls without retry.
+  const out = await service.enqueueMediaTranscription({ fileId: 'a', userId: 'u1' });
+  assert.equal(out.queued, true);
+  assert.equal(retried, 1, 'the stopped job runs again');
+  assert.equal(files.get('a').processingStage, 'uploaded');
+  assert.equal(files.get('a').processingError, null, 'never «se interrumpió»');
+});
+
+test('a job stopped from another process leaves a row asked for again alone; a Stop here still writes its note', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'extracting', path: '/tmp/a.mp4', mimeType: 'audio/mpeg' })]]);
+  const prisma = { file: {
+    async findFirst({ where }) { const row = rows.get(where.id); return row && row.userId === where.userId && !row.deletedAt ? { ...row } : null; },
+    async updateMany({ where, data }) { const row = rows.get(where.id); if (!row) return { count: 0 }; Object.assign(row, data); return { count: 1 }; },
+  } };
+  let engine;
+  const inEngine = new Promise(resolve => { engine = resolve; });
+  const service = createMediaTranscriptionService({ prisma, getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }),
+    createCheckpoint: () => ({ clear: async () => {}, dir: '/ckpt/a' }),
+    logger: { info() {}, warn() {} }, ownershipCheckMs: 20,
+    processFile: (_file, { signal }) => new Promise((_resolve, reject) => {
+      engine();
+      signal.addEventListener('abort', () => {
+        // The user asked again right after the other process's Stop.
+        rows.get('a').processingStage = 'uploaded';
+        rows.get('a').processingError = null;
+        reject(signal.reason);
+      }, { once: true });
+    }),
+  });
+  const running = service.processMediaJob({ data: { fileId: 'a', userId: 'u1' }, opts: { attempts: 3 }, attemptsMade: 0, discard() {} });
+  await inEngine;
+  rows.get('a').processingStage = 'failed';
+  rows.get('a').processingError = CANCELLED_NOTE;
+  assert.equal((await settledWithin(running)).error?.code, 'media_cancelled');
+  assert.equal(rows.get('a').processingStage, 'uploaded', 'the new request is not overwritten by the old Stop');
+  assert.equal(rows.get('a').processingError, null);
+
+  // Stopped here: the job writes the note itself.
+  rows.set('b', fileRow('b', { processingStage: 'extracting', path: '/tmp/b.mp4', mimeType: 'audio/mpeg' }));
+  let engineB;
+  const inEngineB = new Promise(resolve => { engineB = resolve; });
+  const local = createMediaTranscriptionService({ prisma, getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }),
+    createCheckpoint: () => ({ clear: async () => {}, dir: '/ckpt/b' }),
+    logger: { info() {}, warn() {} }, ownershipCheckMs: 0,
+    processFile: (_file, { signal }) => new Promise((_resolve, reject) => {
+      engineB();
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+  const runningB = local.processMediaJob({ data: { fileId: 'b', userId: 'u1' }, opts: { attempts: 3 }, attemptsMade: 0, discard() {} });
+  await inEngineB;
+  await local.cancelMediaTranscription({ fileIds: ['b'], userId: 'u1' });
+  await assert.rejects(runningB, { code: 'media_cancelled' });
+  assert.equal(rows.get('b').processingStage, 'failed');
+  assert.equal(rows.get('b').processingError, CANCELLED_NOTE);
+});
+
+test('a copy of a hand-off saved from a share keeps its words, not the sharer\'s transcription', () => {
+  const { withoutMediaDeliveryState } = require('../src/utils/copied-message-metadata');
+  const handoff = { stoppedReason: 'media_delivery_handoff', mediaDeliveryHandoff: 'md_1', transcriptionFileIds: ['a'], servedBy: 'media_batch' };
+  assert.deepEqual(withoutMediaDeliveryState(handoff), { transcriptionFileIds: ['a'], servedBy: 'media_batch', mediaDeliveryCopy: true });
+  assert.equal(withoutMediaDeliveryState(JSON.stringify({ mediaDeliveryAmended: 'md_2', stoppedReason: 'media_delivery_amended' })),
+    JSON.stringify({ mediaDeliveryCopy: true }));
+  const plain = { model: 'x' };
+  assert.equal(withoutMediaDeliveryState(plain), plain, 'other metadata is untouched');
+  assert.equal(withoutMediaDeliveryState(null), null);
+  assert.equal(withoutMediaDeliveryState('not json'), 'not json');
+  const route = require('node:fs').readFileSync(path.join(__dirname, '..', 'src', 'routes', 'chats.js'), 'utf8');
+  const save = route.slice(route.indexOf("router.post('/save-shared'"), route.indexOf('// Return the new chat with its messages'));
+  assert.equal((save.match(/metadata: withoutMediaDeliveryState\(/g) || []).length, 3, 'message, reply and whole-chat copies');
+});

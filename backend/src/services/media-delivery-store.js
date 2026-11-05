@@ -47,6 +47,9 @@ const MIN_STALE_MS = 30 * 1000;
 const RETRY_BACKOFF_MS = Object.freeze([1, 5, 15, 60, 120].map(minutes => minutes * 60 * 1000));
 const MAX_ATTEMPTS = 5;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// A Stop whose chat line keeps failing to post (see cancel) stays open this
+// long, retried by every sweep; then it closes without its line.
+const CANCEL_SETTLE_RETRY_MS = 6 * 60 * 60 * 1000;
 const ORPHAN_TMP_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_SCAN = 1000;
 
@@ -420,6 +423,7 @@ function createMediaDeliveryStore({
   now = () => Date.now(),
   staleMs = null,
   maxScan = DEFAULT_MAX_SCAN,
+  cancelSettleRetryMs = CANCEL_SETTLE_RETRY_MS,
   fsp = fs.promises,
   pid = process.pid,
   host = os.hostname(),
@@ -695,6 +699,15 @@ function createMediaDeliveryStore({
     return info && typeof info === 'object' ? info : null;
   }
 
+  /** Write (or keep) the Stop marker; a repeated Stop keeps the first time. */
+  async function markCancel(id, reason) {
+    const previous = await readCancelMarker(id);
+    const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
+      reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user' };
+    await writeAtomic(cancelPath(id), marker);
+    return marker;
+  }
+
   /** Write the terminal 'cancelled' copy and drop the active one (lock held). */
   async function closeCancelled(id, token, record, marker = null, settle = null) {
     const at = isoAt(now());
@@ -757,7 +770,7 @@ function createMediaDeliveryStore({
           // The Stop is durable before anything is posted: a crash after the
           // chat line leaves a marker that a follow-up (amend), the next
           // claim and the delivery sweep all honour, never an open record.
-          await writeAtomic(cancelPath(id), { at: isoAt(now()), reason: clipString(reason, 40) || 'user' });
+          const marker = await markCancel(id, reason);
           // The chat line that settles the turn goes first, under the lock:
           // a crash before the close leaves a record whose next attempt finds
           // that line (findDeliveredMessage) and posts nothing else.
@@ -765,7 +778,14 @@ function createMediaDeliveryStore({
           if (typeof beforeClose === 'function') {
             try { settle = await beforeClose(fresh); } catch (err) { settle = { error: err?.code || 'settle_failed' }; }
           }
-          closed = await closeCancelled(id, token, fresh, { at: isoAt(now()), reason }, settle);
+          // The line did not reach the chat (a DB blip): the record stays
+          // open with its marker, so the next Stop finds it among the chat's
+          // open ones and the sweep posts the line, for a while.
+          const markedAt = Date.parse(marker.at);
+          if (settle?.error && !(Number.isFinite(markedAt) && now() - markedAt >= cancelSettleRetryMs)) {
+            return { outcome: 'cancel_requested', record: fresh, settle, settleFailed: true };
+          }
+          closed = await closeCancelled(id, token, fresh, marker, settle?.error ? null : settle);
           return { outcome: 'cancelled', record: closed, settle };
         } finally {
           if (!closed) await removeLockIfOwned(id, token).catch(() => {});
@@ -773,7 +793,7 @@ function createMediaDeliveryStore({
       }
       if (attempt < tries - 1) await pause(waitMs);
     }
-    await writeAtomic(cancelPath(id), { at: isoAt(now()), reason: clipString(reason, 40) || 'user' });
+    await markCancel(id, reason);
     // The holder may have finished between the last try and the marker.
     const still = await readActive(id);
     if (!still) {

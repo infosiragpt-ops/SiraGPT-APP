@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { pendingMediaDeliveryRefreshKey } from '@/lib/media-delivery-refresh'
+import { pendingHandoffKey, pendingMediaDeliveries, pendingMediaDeliveryRefreshKey } from '@/lib/media-delivery-refresh'
+import { serializeBranchedMessageMetadata } from '@/lib/chat/branch-metadata'
 import { mergeChatPreservingUserMessages } from '@/lib/message-preservation'
 
 const handoff = (deliveryId = 'md_current', fileIds = ['audio-1']) => ({
@@ -63,6 +64,40 @@ describe('durable transcription refresh identity', () => {
       stoppedReason: 'media_batch_failed', mediaBatch: { total: 1, failed: 1, ready: 0, partial: 0, pending: 0 }, artifacts: [],
     } }
     expect(pendingMediaDeliveryRefreshKey([handoff(), failed])).toBe('')
+  })
+})
+
+describe('a copy of a hand-off in another chat', () => {
+  const copy = <T extends { metadata: unknown }>(message: T) => ({ ...message, metadata: serializeBranchedMessageMetadata(message.metadata) })
+
+  it('a branch keeps the words but never waits on the original chat\'s transcription', () => {
+    expect(pendingMediaDeliveries([handoff()])).toHaveLength(1)
+    const branched = copy(handoff())
+    expect(JSON.parse(String(branched.metadata))).toEqual({ transcriptionFileIds: ['audio-1'], mediaDeliveryCopy: true })
+    expect(branched.content).toBe('Te aviso aquí.')
+    expect(pendingMediaDeliveries([branched])).toEqual([])
+    expect(pendingMediaDeliveryRefreshKey([branched])).toBe('')
+  })
+
+  it('a copied task envelope that says it was handed off is not pending either', () => {
+    const envelope = {
+      id: 'task-handoff', role: 'ASSISTANT',
+      content: '```agent-task-state\n' + JSON.stringify({ steps: [], artifacts: [], done: true, stoppedReason: 'media_delivery_handoff',
+        mediaDeliveryHandoff: 'md_task', transcriptionFileIds: ['audio-1'] }) + '\n```\n\nTe aviso aquí.',
+      metadata: { transcriptionFileIds: ['audio-1'], mediaDeliveryHandoff: 'md_task' },
+    }
+    expect(pendingMediaDeliveries([envelope])).toHaveLength(1)
+    expect(pendingMediaDeliveries([copy(envelope)])).toEqual([])
+  })
+
+  it('other replies are copied as they were', () => {
+    const reply = { id: 'r1', role: 'ASSISTANT', content: 'Hola', metadata: { model: 'deepseek-v4-flash', idempotencyKey: 'k' } }
+    expect(JSON.parse(String(copy(reply).metadata))).toEqual({ model: 'deepseek-v4-flash' })
+  })
+
+  it('names each pending hand-off by its delivery, or by its message when it names none', () => {
+    expect(pendingHandoffKey({ deliveryId: 'md_1', messageId: 'm1' })).toBe('md_1')
+    expect(pendingHandoffKey({ deliveryId: '', messageId: 'm2' })).toBe('msg:m2')
   })
 })
 

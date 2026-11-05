@@ -224,7 +224,7 @@ import {
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
 import { useMediaDeliveryProgress } from "@/hooks/use-media-delivery-progress"
-import { pendingMediaDeliveries } from "@/lib/media-delivery-refresh"
+import { pendingMediaDeliveries, pendingHandoffKey as handoffKeyOf } from "@/lib/media-delivery-refresh"
 import { imageAssetsFromMessages, type WorkspaceImage } from '@/lib/image-workspace'
 const ImageWorkspace = dynamic(() => import('./images/ImageWorkspace'), { ssr: false })
 import { ErrorBoundary } from "./error-boundary"
@@ -5310,10 +5310,15 @@ function ChatInterfaceContent() {
   // A transcription handed off to the background («te aviso aquí cuando
   // termine») is still work of this chat: Stop stays available for it. Not
   // recomputed per frame while a stream is running (Stop shows then anyway).
+  // Hand-offs a Stop found nothing open for (its line never posted, a record
+  // long gone): Stop no longer shows for them in this tab.
+  const [settledHandoffKeys, setSettledHandoffKeys] = React.useState<ReadonlySet<string>>(() => new Set())
+  const settledHandoffKeysRef = React.useRef(settledHandoffKeys)
+  settledHandoffKeysRef.current = settledHandoffKeys
   const hasPendingMediaDelivery = React.useMemo(
     () => Boolean(currentChatId) && !isCurrentChatStreaming
-      && pendingMediaDeliveries(currentChat?.messages || []).length > 0,
-    [currentChatId, isCurrentChatStreaming, currentChat?.messages],
+      && pendingMediaDeliveries(currentChat?.messages || []).some((delivery) => !settledHandoffKeys.has(handoffKeyOf(delivery))),
+    [currentChatId, isCurrentChatStreaming, currentChat?.messages, settledHandoffKeys],
   )
   // True when Stop has nothing to stop but that background transcription.
   const backgroundDeliveryStopRef = React.useRef(false)
@@ -6769,7 +6774,8 @@ function ChatInterfaceContent() {
   // the turn; the chat is re-read so the spinner stops at once.
   const cancelPendingMediaDeliveries = React.useCallback(async (chatId: string) => {
     if (cancellingDeliveriesRef.current.has(chatId)) return;
-    const pending = pendingMediaDeliveries(currentChatRef.current?.messages || []);
+    const pending = pendingMediaDeliveries(currentChatRef.current?.messages || [])
+      .filter((delivery) => !settledHandoffKeysRef.current.has(handoffKeyOf(delivery)));
     if (!pending.length) return;
     const deliveryIds = [...new Set(pending.map((delivery) => delivery.deliveryId).filter(Boolean))];
     // Their recordings too: two links handed off in one turn are two
@@ -6781,7 +6787,11 @@ function ChatInterfaceContent() {
       const result = await apiClient.cancelMediaDeliveries(chatId, deliveryIds, fileIds);
       const stopped = Number(result?.cancelled) || 0;
       if (stopped > 0) toast.info(stopped > 1 ? 'Transcripciones detenidas' : 'Transcripción detenida');
-      else toast.info('La transcripción ya había terminado');
+      else {
+        toast.info('La transcripción ya había terminado');
+        // Nothing of these hand-offs is open on the server: Stop stops showing.
+        setSettledHandoffKeys((current) => new Set([...current, ...pending.map(handoffKeyOf)]));
+      }
       if (currentChatIdRef.current === chatId) await selectChat(chatId);
     } catch (err) {
       console.warn('Failed to stop the background transcription:', err);

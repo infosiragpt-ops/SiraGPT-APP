@@ -3483,10 +3483,30 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   fotosíntesis?» o «hay 3 personas en mi equipo, ¿cómo…?» quedan en el chat. Un «en inglés» a
   secas no se enruta. `pendingMediaDeliveries` se memoiza por arreglo de mensajes
   (`pendingMediaDeliveryFileIds`).
+- **Quién detiene qué** (tercera revisión): el aborto en el mismo proceso es solo del dueño
+  (`stops` guarda `{ stopper, userId }`); un id pedido que no está abierto en el chat se reporta
+  `missing` sin efectos (una rama o un compartido guardado copian el hand-off). Las copias se marcan:
+  `withoutMediaDeliveryState` (`lib/chat/branch-metadata.ts` y `backend/src/utils/copied-message-metadata.js`
+  en `/chats/save-shared`) quita `mediaDeliveryHandoff`/`mediaDeliveryAmended` y el `stoppedReason`
+  de entrega y deja `mediaDeliveryCopy: true`, que `pendingMediaDeliveries` y la guarda de «Regenerar»
+  ignoran. Un «Detener» que no encuentra nada abierto oculta Detener para esos hand-offs en la pestaña
+  (`settledHandoffKeys`, `pendingHandoffKey`).
+- **Detener ante fallos**: si la línea no se pudo publicar (`settleFailure`: un `chat_unavailable`
+  cierra; lo demás no), `store.cancel` deja el registro abierto con su marca (`settleFailed`,
+  `cancel_requested`) hasta 6 h (`cancelSettleRetryMs`; la marca conserva la hora del primer Detener):
+  el siguiente Detener lo encuentra entre los abiertos del chat y el barrido publica la línea. Con la
+  marca, el barrido detiene los trabajos aunque `cancel` no consiga el lock (un proceso que murió a
+  mitad) y no entrega nada (`cancelling`). Una corrección de tramo que sobrevivió al Detener termina
+  antes de llamar a un proveedor y la que corre en otro worker se detiene en su chequeo
+  (`isRefineJobWanted` → `isRefineWanted` en la cola; otra entrega abierta con la misma clave de
+  trabajo la mantiene). Pedirla de nuevo con el trabajo detenido aún `active` sin abort local
+  (atascado tras un despliegue, otro worker) borra la nota sin esperar; un trabajo que terminó por la
+  nota de otro proceso no reescribe la fila (`localStop` marca el abort local), y la recuperación lo
+  vuelve a correr (`askedAgain`: `failedReason` = nota y fila sin nota).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
-  `backend/tests/media-delivery-stop-review.test.js` (12: un hallazgo de la revisión adversarial por
-  prueba; las 12 fallan sin el arreglo), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
-  `tests/chat-background-transcription-stop-source.test.ts` (5), casos nuevos en
+  `backend/tests/media-delivery-stop-review.test.js` (28: un hallazgo de la revisión adversarial por
+  prueba; las 28 fallan sin el arreglo), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
+  `tests/lib/media-delivery-refresh.test.ts` (copias), `tests/chat-background-transcription-stop-source.test.ts` (7), casos nuevos en
   `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y
   `tests/chat-composer-files.test.ts` (enrutado al lote pendiente).

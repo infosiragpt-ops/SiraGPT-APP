@@ -39,6 +39,11 @@ export function pendingMediaDeliveries(messages: readonly MediaDeliveryMessage[]
   return result
 }
 
+/** One key per pending hand-off: its delivery id, or its message when it names none. */
+export function pendingHandoffKey(delivery: Pick<PendingMediaDelivery, 'deliveryId' | 'messageId'>): string {
+  return delivery.deliveryId || `msg:${delivery.messageId}`
+}
+
 /** The source recordings of the deliveries a chat still waits on. */
 export function pendingMediaDeliveryFileIds(messages: readonly MediaDeliveryMessage[] = []): Set<string> {
   return new Set(pendingMediaDeliveries(messages).flatMap((delivery) => delivery.sourceFileIds))
@@ -57,7 +62,8 @@ function scanPendingMediaDeliveries(messages: readonly MediaDeliveryMessage[]): 
       ? idsOf(metadata.transcriptionFileIds) : idsOf(task.transcriptionFileIds);
     const isHandoff = Boolean(deliveryId) || metadata.stoppedReason === 'media_delivery_handoff'
       || (task.done && !task.error && task.stoppedReason === 'media_delivery_handoff');
-    if (!isHandoff || metadata.source === 'media-delivery') return [];
+    // A copy (a branch, a saved share) never waits on the original chat's work.
+    if (!isHandoff || metadata.source === 'media-delivery' || metadata.mediaDeliveryCopy === true) return [];
 
     // A later request can reuse the same audio. Its older transcript must not
     // settle new work. An exact delivery id also handles fast jobs whose

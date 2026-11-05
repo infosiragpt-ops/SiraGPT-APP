@@ -1466,7 +1466,8 @@ function createMediaDeliveryService(deps = {}) {
 
   const inflight = new Map();
   const held = new Map();
-  // The abort of each delivery this process holds (see runDelivery).
+  // The abort of each delivery this process holds, with its owner: only the
+  // owner's Stop may trip it (see runDelivery, cancelDelivery).
   const stops = new Map();
   let closing = false;
   let sweeping = false;
@@ -1831,12 +1832,17 @@ function createMediaDeliveryService(deps = {}) {
     // finish it here, with its chat line and the jobs it stops.
     if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(id).catch(() => false)) {
       const closed = await store.cancel(id, { userId: record.userId, reason: 'user',
-        beforeClose: rec => postCancelNote(rec, rec.userId).catch(() => null) }).catch(() => null);
-      if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') {
-        await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
-          refines: refineSpecsOf(record) });
-        return { id, status: 'cancelled' };
-      }
+        beforeClose: rec => postCancelNote(rec, rec.userId).catch(err => settleFailure(err, id)) }).catch(() => null);
+      if (closed?.outcome === 'already_terminal') return { id, status: closed.record?.status || 'delivered' };
+      if (closed?.outcome === 'missing') return { id, status: 'missing' };
+      // Once its marker exists the Stop is durable: the jobs stop whatever
+      // the store answered (the lock of a process that died mid-Stop, a line
+      // still to post, a holder elsewhere honouring it). A later sweep
+      // closes the record; nothing is claimed or delivered meanwhile.
+      await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+        refines: refineSpecsOf(record) });
+      if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') return { id, status: 'cancelled' };
+      return { id, status: 'cancelling' };
     }
     const asOf = Number.isFinite(at) ? at : now();
     const nextAt = Date.parse(record.nextAttemptAt || '');
@@ -1866,7 +1872,8 @@ function createMediaDeliveryService(deps = {}) {
     // flight stops at once (it would keep paying for every chunk and hold
     // the delivery gate), whether the Stop came from here or left a marker.
     const stopper = new AbortController();
-    stops.set(id, stopper);
+    const stopEntry = { stopper, userId: claimed.record.userId };
+    stops.set(id, stopEntry);
     const refreshEvery = Math.max(1000, Math.floor(store.staleMs / 3));
     const timer = setInterval(() => { store.refresh(id, token).catch(() => {}); }, refreshEvery);
     timer.unref?.();
@@ -1882,7 +1889,7 @@ function createMediaDeliveryService(deps = {}) {
       clearInterval(timer);
       if (watch) clearInterval(watch);
       held.delete(id);
-      if (stops.get(id) === stopper) stops.delete(id);
+      if (stops.get(id) === stopEntry) stops.delete(id);
     }
   }
 
@@ -2066,6 +2073,17 @@ function createMediaDeliveryService(deps = {}) {
     return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
   }
 
+  /**
+   * The Stop line could not be posted. A deleted chat has nothing left to
+   * settle (null: the record closes); anything else (a DB blip) leaves the
+   * record open with its marker, so the next Stop or sweep posts it.
+   */
+  function settleFailure(err, id) {
+    if (err?.code === 'chat_unavailable') return null;
+    logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+    return { error: err?.code || 'post_error' };
+  }
+
   /** The chat line that settles a stopped transcription (never a delivery: no servedBy). */
   async function postCancelNote(record, userId) {
     const chatId = record.deliveryChatId || record.chatId || null;
@@ -2087,14 +2105,17 @@ function createMediaDeliveryService(deps = {}) {
     if (typeof store.cancel !== 'function') return empty('unsupported');
     // Delivered by this process right now: its analysis stops before the
     // store even tries the lock (the holder then closes it as cancelled).
-    if (held.has(id)) stops.get(id)?.abort();
+    // Only for its owner: a copied hand-off (a shared chat saved by someone
+    // else) carries the id, never the right to stop it.
+    const ownStop = () => {
+      const entry = held.has(id) ? stops.get(id) : null;
+      if (entry && entry.userId === userId) entry.stopper.abort();
+    };
+    ownStop();
     let result;
     try {
       result = await store.cancel(id, { userId, reason: 'user',
-        beforeClose: record => postCancelNote(record, userId).catch((err) => {
-          logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
-          return null;
-        }) });
+        beforeClose: record => postCancelNote(record, userId).catch(err => settleFailure(err, id)) });
     } catch (err) {
       logger.warn(`[media-delivery] cancel failed id=${id} code=${err?.code || 'cancel_error'}`);
       // The record could not be closed (a full disk), but the user said stop:
@@ -2108,8 +2129,17 @@ function createMediaDeliveryService(deps = {}) {
     let record = result?.record || null;
     let outcome = result?.outcome || 'missing';
     let settle = result?.settle || null;
+    // Its line did not reach the chat: the record stays open with its marker
+    // (found by the next Stop and the sweep, which post it); no holder to
+    // wait for. The jobs stop now.
+    if (result?.settleFailed && record) {
+      const { stopped } = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+        refines: refineSpecsOf(record) });
+      return { id, outcome: 'cancel_requested', stoppedFiles: stopped, messageId: null,
+        chatId: record.deliveryChatId || record.chatId || null };
+    }
     // Held by this process: its analysis stops now, not at the next checkpoint.
-    if (outcome === 'cancel_requested') stops.get(id)?.abort();
+    if (outcome === 'cancel_requested') ownStop();
     // Closed earlier without its chat line (the post failed, or a restart
     // cut the Stop short): the chat would wait forever. Settle it now.
     if ((outcome === 'already_cancelled' || outcome === 'already_terminal') && record && record.userId === userId) {
@@ -2161,6 +2191,30 @@ function createMediaDeliveryService(deps = {}) {
   }
 
   /**
+   * May a refine job still run? No when the request it was queued for was
+   * stopped («Detener») and no other open refine of the user wants the same
+   * job (same window, language and hints: refineJobKeyOf). Unknown (no id,
+   * a record long gone, the store down) lets it run.
+   */
+  async function isRefineJobWanted({ deliveryId = null, fileId = null, userId = null } = {}) {
+    if (!enabled() || !isValidDeliveryId(String(deliveryId || ''))) return true;
+    const store = getStore();
+    const asked = await readRecordQuietly(deliveryId);
+    if (!isRefineRecord(asked) || (userId && asked.userId !== userId)) return true;
+    const stopped = asked.status === 'cancelled'
+      || (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(asked.id).catch(() => false));
+    if (!stopped) return true;
+    const key = refineJobKeyOf(asked);
+    const file = String(fileId || (asked.fileIds || [])[0] || '');
+    try {
+      const open = typeof store.findPendingByFile === 'function' ? await store.findPendingByFile(file, { userId: asked.userId }) : [];
+      return open.some(record => record.id !== asked.id && isRefineRecord(record) && refineJobKeyOf(record) === key);
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /**
    * «Detener» for every transcription a chat is still waiting on, or for the
    * ids given and every other open delivery of the same request: one with
    * the same task, or one for the same recordings (`fileIds`, the pending
@@ -2189,12 +2243,19 @@ function createMediaDeliveryService(deps = {}) {
     }
     const results = [];
     for (const record of targets) results.push(await cancelDelivery(record.id, { userId }));
-    // Ids asked for that are no longer open: what they became, and the chat
-    // line they never got is posted now (cancelDelivery settles them).
+    // Ids asked for that are no longer open: what they became. One of this
+    // chat that never got its chat line is settled now (cancelDelivery); one
+    // of another chat (a branch or a saved share copies the hand-off) is
+    // only reported: a Stop here never stops or posts into another chat.
     if (wanted) {
       for (const id of wanted) {
         if (targets.some(record => record.id === id)) continue;
-        results.push(await cancelDelivery(id, { userId }));
+        const known = await readRecordQuietly(id);
+        if (known && known.userId === userId && (known.chatId === chatId || known.deliveryChatId === chatId)) {
+          results.push(await cancelDelivery(id, { userId }));
+          continue;
+        }
+        results.push({ id, outcome: 'missing', stoppedFiles: 0, messageId: null, chatId: null });
       }
     }
     return { cancelled: results.filter(result => result.outcome === 'cancelled' || result.outcome === 'cancel_requested').length, results };
@@ -2271,6 +2332,7 @@ function createMediaDeliveryService(deps = {}) {
     cancelDelivery,
     cancelChatDeliveries,
     cancelUnneededMediaJobs,
+    isRefineJobWanted,
     findOpenDelivery,
     amendDelivery,
     close,
@@ -2311,6 +2373,7 @@ module.exports = {
   cancelUnneededMediaJobs: options => getMediaDeliveryService().cancelUnneededMediaJobs(options),
   amendDelivery: (id, options) => (isMediaDeliveryEnabled() ? getMediaDeliveryService().amendDelivery(id, options)
     : Promise.resolve({ outcome: 'disabled', record: null, changes: [] })),
+  isRefineJobWanted: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().isRefineJobWanted(options) : Promise.resolve(true)),
   // Pure helpers
   isMediaDeliveryEnabled,
   inlineWaitMs,
