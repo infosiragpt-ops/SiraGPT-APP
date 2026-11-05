@@ -1353,7 +1353,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     try {
       const info = await transcriptStore.readMediaAnalysisInfo(prisma, { fileId: row.id, userId: row.userId });
       const extracted = info?.clientExtracted;
-      if (!/^video\//i.test(String(extracted?.sourceType || ''))) return null;
+      if (!require('./client-extracted-metadata').isExtractedFromVideo(extracted)) return null;
       return { sourceMedia: 'video', ...(extracted.sourceName ? { sourceName: String(extracted.sourceName).slice(0, 255) } : {}) };
     } catch (_) {
       return null;

@@ -60,6 +60,23 @@ function normalizeClientExtracted(value) {
   };
 }
 
+// The extension of a video container, as the composer reads it.
+const VIDEO_NAME_RE = /\.(?:mp4|m4v|mov|qt|mkv|webm|avi|wmv|flv|3gp|3g2|ts|mts|m2ts|mpg|mpeg|ogv|vob|divx)$/i;
+
+/**
+ * Whether an extracted audio came from a video: by the source's type, or by
+ * its name when the browser reported none (a .mkv often arrives as "" or
+ * application/octet-stream). An audio type wins, as in the composer: an
+ * audio-only .webm is not a video.
+ */
+function isExtractedFromVideo(meta) {
+  if (!meta || typeof meta !== 'object') return false;
+  const type = String(meta.sourceType || '').toLowerCase();
+  if (type.startsWith('video/')) return true;
+  if (type.startsWith('audio/')) return false;
+  return VIDEO_NAME_RE.test(String(meta.sourceName || ''));
+}
+
 const MAX_FIELD_CHARS = 64 * 1024;
 const MAX_ENTRIES = 500;
 
@@ -99,6 +116,7 @@ function parseClientExtractedMap(raw) {
 }
 
 module.exports = {
+  isExtractedFromVideo,
   normalizeClientExtracted,
   parseClientExtracted,
   parseClientExtractedField,

@@ -73,6 +73,10 @@ test('frames of a video whose audio alone was uploaded fail with an explicit rea
   await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
     // The remedy it names is one the composer honours (extracted-source-memory).
     (err) => err.code === 'MEDIA_ORIGINAL_NOT_UPLOADED' && /Clase 3\.mp4/.test(err.message) && /attaching the same video again uploads it whole/.test(err.message));
+  // A .mkv whose browser reported no type is a video too.
+  prisma.documentAnalysis.findMany = async () => [{ metadata: { clientExtracted: { tier: 'opus', sourceName: 'Grabacion OBS.mkv', sourceSize: 3e8, sourceType: '' } } }];
+  await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
+    (err) => err.code === 'MEDIA_ORIGINAL_NOT_UPLOADED' && /Grabacion OBS\.mkv/.test(err.message));
   // A plain audio upload keeps the usual answer.
   prisma.documentAnalysis.findMany = async () => [];
   await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
@@ -91,4 +95,15 @@ test('a refine keeps the video provenance of its transcript; silent extracted au
   assert.equal(queue.isTransientMediaError({ code: 'extracted_audio_no_speech' }), false);
   const told = queue.publicFailureMessage({ code: 'extracted_audio_no_speech', message: 'Solo se subió el audio de «Clase.mp4» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla, vuelve a adjuntar el mismo video: esta vez se sube completo.' });
   assert.match(told, /vuelve a adjuntar el mismo video: esta vez se sube completo/);
+});
+
+test('an extracted audio came from a video by its type, or by its name when the browser reported no type', () => {
+  const { isExtractedFromVideo } = require('../src/services/client-extracted-metadata');
+  assert.equal(isExtractedFromVideo({ sourceType: 'video/mp4', sourceName: 'Clase.mp4' }), true);
+  assert.equal(isExtractedFromVideo({ sourceType: '', sourceName: 'Clase.mkv' }), true);
+  assert.equal(isExtractedFromVideo({ sourceType: null, sourceName: 'Clase.MKV' }), true);
+  assert.equal(isExtractedFromVideo({ sourceType: 'application/octet-stream', sourceName: 'Clase.mkv' }), true);
+  assert.equal(isExtractedFromVideo({ sourceType: 'audio/webm', sourceName: 'nota.webm' }), false, 'an audio type wins, as in the composer');
+  assert.equal(isExtractedFromVideo({ sourceType: '', sourceName: 'podcast.m4a' }), false);
+  assert.equal(isExtractedFromVideo(null), false);
 });

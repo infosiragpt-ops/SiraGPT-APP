@@ -87,10 +87,10 @@ async function findExtractedVideoSource(prisma, ids, userId) {
       where: { fileId: { in: ids }, userId: String(userId) },
       select: { metadata: true },
     });
-    const { normalizeClientExtracted } = require('../client-extracted-metadata');
+    const { normalizeClientExtracted, isExtractedFromVideo } = require('../client-extracted-metadata');
     for (const row of rows || []) {
       const extracted = normalizeClientExtracted(row?.metadata && typeof row.metadata === 'object' ? row.metadata.clientExtracted : null);
-      if (extracted && /^video\//.test(extracted.sourceType || '')) return extracted.sourceName;
+      if (isExtractedFromVideo(extracted)) return extracted.sourceName;
     }
   } catch (_) { /* best effort: the usual «not found» follows */ }
   return null;

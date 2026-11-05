@@ -3359,7 +3359,9 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   (por índice; el mapa por nombre solo para pestañas viejas) y lo guarda en
   `DocumentAnalysis.metadata.clientExtracted` con `archiveMediaExpander.mergeAnalysisMetadata`.
   El trabajo de transcripción marca `sourceMedia: 'video'` y `sourceName` (el nombre del video)
-  cuando la fuente era video (`readMediaAnalysisInfo`), también en una corrección de tramo
+  cuando la fuente era video (`readMediaAnalysisInfo` + `isExtractedFromVideo`: por el tipo, o por
+  la extensión cuando el navegador no dio tipo, como un `.mkv` vacío o `application/octet-stream`;
+  un tipo `audio/*` gana), también en una corrección de tramo
   (`spliceRefinedRange` los conserva); `isVideoRow` lo respeta (los subtítulos automáticos
   siguen) y los entregables llevan el nombre del video, no «Clase 3.audio.ogg». Si ese audio no
   tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
