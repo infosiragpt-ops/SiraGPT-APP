@@ -9,7 +9,9 @@
 // dot-directories are never served by the /uploads static handler):
 //   md_<uuid>.json        active record (pending | delivering)
 //   md_<uuid>.lock        claim lock, opened with 'wx' (one holder at a time)
-//   done/md_<uuid>.json   terminal record (delivered | failed), kept 30 days
+//   md_<uuid>.cancel      Stop pressed while a holder was delivering: the
+//                         holder (or the next claim) closes the record
+//   done/md_<uuid>.json   terminal record (delivered | failed | cancelled), kept 30 days
 // Every write is tmp + rename, so a crash never leaves half a record. The
 // pending scan reads only the active directory, which holds the few
 // deliveries still waiting, never the 30-day history.
@@ -34,7 +36,7 @@ const REFINE_STATUSES = Object.freeze(['ok', 'failed']);
 // A refine window is at most a week of recording clock, like a clip offset.
 const MAX_REFINE_END_SEC = 7 * 24 * 3600;
 const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
-const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
+const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed', 'cancelled']);
 // The chat batches up to SIRAGPT_MEDIA_BATCH_MAX recordings (100 by
 // default, 500 at most); one delivery must hold the whole batch.
 const MAX_FILES = 500;
@@ -128,6 +130,7 @@ function normalizeOutput(output) {
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
   const offset = Number(value.timeOffsetSec);
   const analysisRange = normalizeRefineRange(value.analysisRange);
+  const translationTarget = normalizeTranslationTarget(value.translationTarget);
   return {
     documentFormat,
     wantsSubtitles: value.wantsSubtitles === true,
@@ -135,7 +138,124 @@ function normalizeOutput(output) {
     includeTranscript: value.includeTranscript === true,
     alsoAnalysis: value.alsoAnalysis === true,
     ...(analysisRange ? { analysisRange } : {}),
+    // Set when a follow-up changed the language («mejor al francés»): it
+    // wins over the target read from the goal, which keeps every request.
+    ...(translationTarget ? { translationTarget } : {}),
   };
+}
+
+/** A translation target as a language code («en», «pt»), or null. */
+function normalizeTranslationTarget(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[a-z]{2,3}$/.test(text) ? text : null;
+}
+
+const GOAL_MAX = 4000;
+const AMENDMENTS_KEPT = 20;
+
+/** The request so far plus the follow-up, the follow-up always whole (bounded). */
+function joinGoals(previous, addition) {
+  const before = String(previous || '').trim();
+  const add = String(addition || '').trim().slice(0, GOAL_MAX / 2);
+  if (!add) return before.slice(0, GOAL_MAX);
+  if (!before) return add;
+  if (before.split(/\n{2,}/).some(part => part.trim() === add)) return before.slice(0, GOAL_MAX);
+  return `${before.slice(0, GOAL_MAX - add.length - 2)}\n\n${add}`;
+}
+
+/**
+ * A follow-up sent while a delivery waits on its recordings («y tradúcelo al
+ * inglés», «en Word», «resúmelo», «solo del minuto 10 al 20», «son 3
+ * hablantes») joins that request instead of starting a second
+ * transcription. Pure. `amendment`:
+ *   { goal, translationTarget, wantsAnalysis, documentFormat, wantsSubtitles,
+ *     range, analysisRange, language, hints }
+ * Returns { record, changes }: `changes` names what the follow-up added
+ * ('translation', 'translation_target', 'analysis', 'analysis_range',
+ * 'document', 'subtitles', 'range', 'language', 'hints'); empty when the
+ * request already covered it. The transcript the user first asked for is
+ * never dropped: turning a transcript into a translation keeps its files.
+ */
+function mergeDeliveryAmendment(record = {}, amendment = {}) {
+  const value = amendment && typeof amendment === 'object' ? amendment : {};
+  const out = normalizeOutput(record.output);
+  const next = { ...record, output: { ...out } };
+  const changes = [];
+  const formats = new Set(['txt', ...(Array.isArray(record.formats) ? record.formats : [])
+    .filter(format => FORMATS.includes(format))]);
+  const mode = MODES.includes(record.mode) ? record.mode : 'transcript';
+  next.mode = mode;
+
+  const target = normalizeTranslationTarget(value.translationTarget);
+  if (target) {
+    if (mode !== 'translation') {
+      next.mode = 'translation';
+      // What the first request delivered stays: the transcript files, and
+      // the summary when it was an analysis.
+      next.output.includeTranscript = true;
+      next.output.alsoAnalysis = out.alsoAnalysis || mode === 'analysis';
+      changes.push('translation');
+    } else if (out.translationTarget && out.translationTarget !== target) {
+      changes.push('translation_target');
+    } else if (!out.translationTarget) {
+      // Same mode: the goal already named a target; only a different one is news.
+      changes.push('translation_target');
+    }
+    next.output.translationTarget = target;
+  }
+
+  if (value.wantsAnalysis === true) {
+    if (next.mode === 'translation') {
+      if (!next.output.alsoAnalysis) { next.output.alsoAnalysis = true; changes.push('analysis'); }
+    } else if (next.mode !== 'analysis') {
+      next.mode = 'analysis';
+      changes.push('analysis');
+    }
+  }
+  const analysisRange = normalizeRefineRange(value.analysisRange);
+  if (analysisRange && JSON.stringify(analysisRange) !== JSON.stringify(out.analysisRange || null)) {
+    next.output.analysisRange = analysisRange;
+    changes.push('analysis_range');
+  }
+
+  const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
+  if (documentFormat && documentFormat !== out.documentFormat) {
+    next.output.documentFormat = documentFormat;
+    changes.push('document');
+  }
+  if (documentFormat) formats.add(documentFormat);
+  if (value.wantsSubtitles === true) {
+    if (!out.wantsSubtitles) changes.push('subtitles');
+    next.output.wantsSubtitles = true;
+    formats.add('srt');
+    formats.add('vtt');
+  }
+  const range = normalizeRange(value.range);
+  if (range && JSON.stringify(range) !== JSON.stringify(normalizeRange(record.range))) {
+    next.range = range;
+    changes.push('range');
+  }
+  const language = normalizeLanguage(value.language);
+  if (language && language !== record.language) {
+    next.language = language;
+    changes.push('language');
+  }
+  const hints = normalizeHints(value.hints);
+  if (hints) {
+    // Names add up; the latest speaker count and «literal» win.
+    const merged = normalizeHints({
+      ...(record.hints || {}),
+      ...hints,
+      terms: [...new Set([...(record.hints?.terms || []), ...(hints.terms || [])])],
+    });
+    if (JSON.stringify(merged) !== JSON.stringify(record.hints || null)) {
+      next.hints = merged;
+      changes.push('hints');
+    }
+  }
+  next.formats = FORMATS.filter(format => formats.has(format));
+  next.goal = joinGoals(record.goal, value.goal);
+  return { record: next, changes };
 }
 
 /** Where a link clip came from (shown in the delivered message). */
@@ -254,6 +374,8 @@ function createMediaDeliveryStore({
   const activePath = id => path.join(baseDir, `${assertDeliveryId(id)}.json`);
   const donePath = id => path.join(doneDir, `${assertDeliveryId(id)}.json`);
   const lockPath = id => path.join(baseDir, `${assertDeliveryId(id)}.lock`);
+  const cancelPath = id => path.join(baseDir, `${assertDeliveryId(id)}.cancel`);
+  const pause = ms => new Promise((resolve) => { setTimeout(resolve, Math.max(0, ms)); });
 
   async function writeAtomic(target, value) {
     await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -425,6 +547,11 @@ function createMediaDeliveryStore({
         await removeLockIfOwned(id, token);
         return null;
       }
+      // Stop was pressed while another holder had it: close it here.
+      if (await exists(cancelPath(id))) {
+        await closeCancelled(id, token, fresh, await readCancelMarker(id));
+        return null;
+      }
       const at = isoAt(now());
       const record = { ...fresh, status: 'delivering', claimedAt: at, updatedAt: at };
       await writeAtomic(activePath(id), record);
@@ -503,6 +630,137 @@ function createMediaDeliveryStore({
     }
     await removeLockIfOwned(id, token);
     return next;
+  }
+
+  async function readCancelMarker(id) {
+    const info = await readJson(cancelPath(id)).catch(() => null);
+    return info && typeof info === 'object' ? info : null;
+  }
+
+  /** Write the terminal 'cancelled' copy and drop the active one (lock held). */
+  async function closeCancelled(id, token, record, marker = null) {
+    const at = isoAt(now());
+    const next = { ...record, status: 'cancelled', cancelledAt: marker?.at || at, updatedAt: at,
+      cancelReason: clipString(marker?.reason, 40) || 'user', nextAttemptAt: null };
+    await writeAtomic(donePath(id), next);
+    await fsp.unlink(activePath(id)).catch(() => {});
+    await fsp.unlink(cancelPath(id)).catch(() => {});
+    await removeLockIfOwned(id, token);
+    return next;
+  }
+
+  /** Stop pressed while this process holds the delivery (see cancel). */
+  async function isCancelRequested(id) {
+    assertDeliveryId(id);
+    return exists(cancelPath(id));
+  }
+
+  /** The holder honours a Stop it found at a checkpoint. */
+  async function markCancelled(id, token) {
+    assertDeliveryId(id);
+    if (!(await holds(id, token))) return null;
+    const record = await readActive(id);
+    if (!record) {
+      await removeLockIfOwned(id, token);
+      return null;
+    }
+    return closeCancelled(id, token, record, await readCancelMarker(id));
+  }
+
+  /**
+   * Stop («Detener») on a delivery still waiting on its recordings. Owner
+   * scoped. A free record is closed now ('cancelled'); one a holder is
+   * delivering at this very moment gets a marker that holder honours at its
+   * next checkpoint (or the next claim does), so nothing is posted after
+   * the user said stop. Returns { outcome, record }: 'cancelled',
+   * 'cancel_requested', 'already_cancelled', 'already_terminal' or
+   * 'missing'.
+   */
+  async function cancel(id, { userId = null, reason = 'user', tries = 5, waitMs = 150 } = {}) {
+    assertDeliveryId(id);
+    const terminal = async () => {
+      const done = await readRecord(donePath(id), id);
+      if (!done || (userId && done.userId !== userId)) return { outcome: 'missing', record: null };
+      return { outcome: done.status === 'cancelled' ? 'already_cancelled' : 'already_terminal', record: done };
+    };
+    const before = await readActive(id);
+    if (!before) return terminal();
+    if (userId && before.userId !== userId) return { outcome: 'missing', record: null };
+    if (before.status !== 'pending' && before.status !== 'delivering') return terminal();
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        let closed = null;
+        try {
+          const fresh = await readActive(id);
+          if (!fresh) return terminal();
+          closed = await closeCancelled(id, token, fresh, { at: isoAt(now()), reason });
+          return { outcome: 'cancelled', record: closed };
+        } finally {
+          if (!closed) await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (attempt < tries - 1) await pause(waitMs);
+    }
+    await writeAtomic(cancelPath(id), { at: isoAt(now()), reason: clipString(reason, 40) || 'user' });
+    // The holder may have finished between the last try and the marker.
+    const still = await readActive(id);
+    if (!still) {
+      await fsp.unlink(cancelPath(id)).catch(() => {});
+      return terminal();
+    }
+    return { outcome: 'cancel_requested', record: still };
+  }
+
+  /**
+   * Fold a follow-up into a delivery still waiting on its recordings (see
+   * mergeDeliveryAmendment). Taken under the claim lock so it never races a
+   * holder's read-modify-write; a holder that is only probing is waited out
+   * briefly. Returns { outcome, record, changes }: 'amended', 'unchanged',
+   * 'too_late' (already being delivered), 'cancelled', 'unsupported'
+   * (a refine), 'busy' or 'missing'.
+   */
+  async function amend(id, { userId = null, amendment = {}, tries = 8, waitMs = 150 } = {}) {
+    assertDeliveryId(id);
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const last = attempt >= Math.max(1, tries) - 1;
+      const before = await readActive(id);
+      if (!before || (userId && before.userId !== userId)) return { outcome: 'missing', record: null, changes: [] };
+      if (before.kind === 'refine') return { outcome: 'unsupported', record: before, changes: [] };
+      if (await exists(cancelPath(id))) return { outcome: 'cancelled', record: before, changes: [] };
+      if (before.status !== 'pending') {
+        // A claim that finds the files still pending hands it back at once.
+        if (!last) { await pause(waitMs); continue; }
+        return { outcome: 'too_late', record: before, changes: [] };
+      }
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        try {
+          const fresh = await readActive(id);
+          if (!fresh) return { outcome: 'missing', record: null, changes: [] };
+          if (fresh.status !== 'pending') return { outcome: 'too_late', record: fresh, changes: [] };
+          const { record: merged, changes } = mergeDeliveryAmendment(fresh, amendment);
+          if (!changes.length && merged.goal === fresh.goal) return { outcome: 'unchanged', record: fresh, changes };
+          const at = isoAt(now());
+          const history = Array.isArray(fresh.amendments) ? fresh.amendments : [];
+          const next = { ...merged, amendments: [...history, { at, changes }].slice(-AMENDMENTS_KEPT), updatedAt: at };
+          await writeAtomic(activePath(id), next);
+          return { outcome: changes.length ? 'amended' : 'unchanged', record: next, changes };
+        } finally {
+          await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (!last) await pause(waitMs);
+    }
+    return { outcome: 'busy', record: null, changes: [] };
+  }
+
+  /** The user's deliveries still open for a chat (its own or its replacement). */
+  async function listActiveForChat(chatId, { userId = null, limit } = {}) {
+    if (typeof chatId !== 'string' || !chatId) return [];
+    const records = await listActive({ limit });
+    return records.filter(record => (record.chatId === chatId || record.deliveryChatId === chatId)
+      && (!userId || record.userId === userId));
   }
 
   /**
@@ -589,7 +847,7 @@ function createMediaDeliveryStore({
     const names = await fsp.readdir(baseDir).catch(() => []);
     for (const name of names) {
       const full = path.join(baseDir, name);
-      const lockId = /^(md_[0-9a-f-]{36})\.lock$/.exec(name)?.[1];
+      const lockId = /^(md_[0-9a-f-]{36})\.(?:lock|cancel)$/.exec(name)?.[1];
       const leftover = /\.tmp$/.test(name) || /\.lock\.reap-[0-9a-f-]{36}$/.test(name);
       if (!leftover && !(lockId && isValidDeliveryId(lockId))) continue;
       const stat = await fsp.stat(full).catch(() => null);
@@ -609,8 +867,13 @@ function createMediaDeliveryStore({
     create,
     get,
     listActive,
+    listActiveForChat,
     findPendingByFile,
     claim,
+    cancel,
+    isCancelRequested,
+    markCancelled,
+    amend,
     holds,
     refresh,
     patch,
@@ -625,6 +888,8 @@ function createMediaDeliveryStore({
 module.exports = {
   createMediaDeliveryStore,
   normalizeNewRecord,
+  mergeDeliveryAmendment,
+  normalizeTranslationTarget,
   normalizeRefineOutcome,
   normalizeRefineRange,
   isValidDeliveryId,

@@ -3,7 +3,7 @@
 // File rows are the durable source of truth. A chat waits on the shared media
 // worker; it never starts a second transcriber or keeps the only copy in SSE.
 const { setTimeout: delay } = require('node:timers/promises');
-const { isMediaFile, hasTranscript, enqueueMediaTranscription, isPartialTranscript, isReprocessingPartial } = require('./media-transcription-queue');
+const { isMediaFile, hasTranscript, enqueueMediaTranscription, isPartialTranscript, isReprocessingPartial, isUserCancelledRow } = require('./media-transcription-queue');
 const { throwIfAborted } = require('../utils/abort-signals');
 // Recordings per batch (one chat turn or one delivery). 100 lets a drop of
 // 100 lecture videos travel as ONE batch; SIRAGPT_MEDIA_BATCH_MAX tunes it.
@@ -129,7 +129,8 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
   for (const row of rows) {
     throwIfAborted(signal);
     // «reintenta» also re-runs the missing segments of a partial transcript.
-    const retryThis = retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row));
+    // A recording the user stopped («Detener») resumes when asked again.
+    const retryThis = (retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row))) || isUserCancelledRow(row);
     if (stateOf(row) !== 'pending' && !retryThis) continue;
     try {
       const result = await enqueue({ fileId: row.id, userId, retry: retryThis, ...media });
@@ -353,6 +354,12 @@ function nounTranslationTarget(text) {
 
 function translationLanguageIn(word) {
   const hit = TRANSLATION_LANGUAGES.find(language => language.re.test(String(word || '')));
+  return hit ? { code: hit.code, name: hit.name } : null;
+}
+
+/** A translation target from its code («en»), as detectTranslationTarget returns it, or null. */
+function translationTargetByCode(code) {
+  const hit = TRANSLATION_LANGUAGES.find(language => language.code === String(code || '').trim().toLowerCase());
   return hit ? { code: hit.code, name: hit.name } : null;
 }
 
@@ -1687,7 +1694,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };

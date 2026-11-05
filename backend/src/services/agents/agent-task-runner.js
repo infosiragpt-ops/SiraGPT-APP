@@ -3017,6 +3017,43 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           });
         }
       }
+      // A follow-up sent while these recordings are still transcribing in the
+      // background («y tradúcelo al inglés», «en Word», «resúmelo», a
+      // question) joins that pending delivery at once: never a second
+      // transcription of the same files, a second delivery or a 4-min wait.
+      const pendingService = !retryRequested && chatId ? loadMediaDeliveryService() : null;
+      const openDelivery = pendingService?.isMediaDeliveryEnabled?.(process.env) && typeof pendingService.findOpenDelivery === 'function'
+        && typeof pendingService.amendDelivery === 'function'
+        ? await pendingService.findOpenDelivery({ userId: user.id, chatId, fileIds: ids }).catch(() => null) : null;
+      if (openDelivery) {
+        const amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: {
+          goal: mediaGoal,
+          translationTarget: translationTarget?.code || null,
+          // Only an explicit deliverable or a question about the recording
+          // adds an analysis (the default would run one for «en Word»).
+          wantsAnalysis: Boolean(lookupWindow) || mediaBatch.wantsSummaryWithTranslation(mediaGoal),
+          documentFormat: mediaOutput.documentFormat || null,
+          wantsSubtitles: mediaOutput.wantsSubtitles === true,
+          range: outputRange || null,
+          analysisRange: lookupWindow || null,
+          language: jobHints.language || null,
+          hints: jobHints.hints || null,
+        } });
+        if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged') {
+          const names = mediaBatchRows.map(row => row.originalName || row.filename || row.id);
+          const text = amended.outcome === 'amended'
+            ? pendingService.amendedMessage({ changes: amended.changes || [], record: amended.record })
+            : pendingService.stillRunningMessage({ fileNames: names });
+          return await finishDeterministicTask({
+            finalMarkdown: [refineNotice, text].filter(Boolean).join('\n\n'),
+            stoppedReason: 'media_delivery_amended',
+            steps: 1, artifactsList: artifacts,
+            // Not a hand-off: the first turn keeps the live status.
+            metadata: { transcriptionFileIds: ids, mediaDeliveryAmended: openDelivery.id, mediaDeliveryChanges: amended.changes || [] },
+          });
+        }
+        // Being delivered right now, cancelled, or busy: the usual path below.
+      }
       emit({ type: 'step_start', id: 'media_transcription',
         label: ids.length === 1 ? `Transcribiendo «${mediaBatchRows[0].originalName || mediaBatchRows[0].filename || 'el archivo'}»` : `Transcribiendo ${ids.length} archivos`,
         icon: 'file-text' });

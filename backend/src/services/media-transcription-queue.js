@@ -408,6 +408,15 @@ function hasTranscript(file) {
 // retry re-runs only the missing segments (the checkpoints are kept).
 const PARTIAL_PREFIX = 'Parcial:';
 const RETRYING_PARTIAL = 'Reintentando los tramos sin transcribir…';
+// «Detener» on a handed-off transcription. The row reads `failed` with this
+// note: nothing re-queues it on its own, and asking for it again resumes
+// from its checkpoints (media-batch treats it as retryable).
+const CANCELLED_NOTE = 'Transcripción detenida. Pídela de nuevo para retomarla donde quedó.';
+
+/** The user stopped this recording's transcription («Detener»). */
+function isUserCancelledRow(row) {
+  return Boolean(row && row.processingStage === 'failed' && row.processingError === CANCELLED_NOTE);
+}
 // Below this length a timestamped layout is noise («[00:00] hola»); a voice
 // note keeps its plain text.
 const TIMESTAMPED_TEXT_MIN_SECONDS = 120;
@@ -1084,6 +1093,7 @@ function publicFailureMessage(err) {
   if (unread && err?.code === 'no_audio_track') return `Este video no tiene pista de audio y ${unread}. Puedes reintentar este archivo.`;
   switch (err?.code) {
     case 'extracted_audio_no_speech': return String(err?.message || 'No se detectó voz en este archivo.');
+    case 'media_cancelled': return CANCELLED_NOTE;
     case 'no_speech': return err?.videoChecked
       ? 'No se detectó voz ni texto legible en pantalla en este video.'
       : 'No se detectó voz en este archivo.';
@@ -1107,7 +1117,7 @@ function isTransientMediaError(err) {
   // A video whose text could not be read (OCR/ffmpeg down, no frame decoded)
   // is retried: the verdict about its voice stands, the reading did not happen.
   if (err?.textUnread && err?.retryable === true && /^(no_speech|no_audio_track)$/.test(String(err?.code || ''))) return true;
-  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required|extracted_audio_no_speech)$/i.test(String(err?.code || ''))) return false;
+  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required|extracted_audio_no_speech|media_cancelled)$/i.test(String(err?.code || ''))) return false;
   if (typeof err?.retryable === 'boolean') return err.retryable;
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
   if (status === 429 || status === 408 || status >= 500 && status <= 599) return true;
@@ -1262,6 +1272,8 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
   // audio is removed), so a refine re-transcribes one piece, not the file.
   keepPartsAfterSuccess = false }) {
   const activeControllers = new Set();
+  // The controllers of the jobs running here, by file («Detener» aborts them).
+  const runningByFile = new Map();
   // Files with a job running in this process (a refine and a gap retry of the
   // same recording share its checkpoints and its sidecar).
   const busyFiles = new Set();
@@ -1800,13 +1812,22 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
   function openJobContext(fileId, userId) {
     const controller = new AbortController();
     activeControllers.add(controller);
+    if (fileId) {
+      if (!runningByFile.has(fileId)) runningByFile.set(fileId, new Set());
+      runningByFile.get(fileId).add(controller);
+    }
     const timer = setTimeout(() => controller.abort(failure('media_timeout', 'La transcripción superó el tiempo permitido.')), timeoutMs);
     timer.unref?.();
     let ownershipTimer = null;
     if (ownershipCheckMs > 0 && fileId && userId) {
       ownershipTimer = setInterval(() => {
-        void prisma.file.findFirst({ where: { id: fileId, userId, deletedAt: null }, select: { id: true } })
-          .then(found => { if (!found && !controller.signal.aborted) controller.abort(failure('media_not_found', 'El archivo se eliminó durante la transcripción.')); })
+        void prisma.file.findFirst({ where: { id: fileId, userId, deletedAt: null }, select: { id: true, processingError: true } })
+          .then(found => {
+            if (controller.signal.aborted) return;
+            if (!found) controller.abort(failure('media_not_found', 'El archivo se eliminó durante la transcripción.'));
+            // Stopped from another process: its note is on the row.
+            else if (found.processingError === CANCELLED_NOTE) controller.abort(failure('media_cancelled', CANCELLED_NOTE));
+          })
           .catch(() => { /* a DB blip never aborts a transcription */ });
       }, ownershipCheckMs);
       ownershipTimer.unref?.();
@@ -1817,6 +1838,11 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         clearTimeout(timer);
         if (ownershipTimer) clearInterval(ownershipTimer);
         activeControllers.delete(controller);
+        const running = fileId ? runningByFile.get(fileId) : null;
+        if (running) {
+          running.delete(controller);
+          if (!running.size) runningByFile.delete(fileId);
+        }
       },
     };
   }
@@ -2179,7 +2205,63 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     } finally { clearTimeout(timer); }
   }
 
+  /**
+   * «Detener»: stop these recordings' transcription. A queued job is
+   * removed; one running here is aborted at once, one running on another
+   * worker at its next ownership check (the row's note tells it). A row that
+   * already has its text keeps it, and a gap retry keeps its partial text.
+   * A stopped row reads `failed` with CANCELLED_NOTE: the 60 s recovery
+   * leaves it alone, and asking for it again resumes from its checkpoints.
+   * Owner-scoped; never throws. Returns { stopped, results }.
+   */
+  async function cancelMediaTranscription({ fileIds = [], userId } = {}) {
+    const ids = [...new Set((Array.isArray(fileIds) ? fileIds : [])
+      .filter(id => typeof id === 'string' && id && id.length <= 200))].slice(0, 500);
+    if (!userId || !ids.length) return { stopped: 0, results: [] };
+    let lanes = [];
+    try { lanes = laneQueues(); } catch (_) { lanes = []; }
+    const results = [];
+    for (const fileId of ids) {
+      try {
+        const row = await loadOwned(fileId, userId);
+        if (hasTranscript(row) && !isReprocessingPartial(row)) {
+          results.push({ id: fileId, outcome: 'ready' });
+          continue;
+        }
+        let removed = false;
+        const found = lanes.length ? await findJob(jobIdFor(fileId, userId), lanes).catch(() => null) : null;
+        if (found) {
+          const state = await found.job.getState().catch(() => 'unknown');
+          if (['waiting', 'delayed', 'prioritized', 'waiting-children', 'paused'].includes(state)) {
+            removed = await found.job.remove().then(() => true, () => false);
+          }
+        }
+        const running = runningByFile.get(fileId);
+        if (running?.size) {
+          // The job's own failure path writes the row (and keeps a gap
+          // retry's partial text).
+          for (const controller of running) controller.abort(failure('media_cancelled', CANCELLED_NOTE));
+          results.push({ id: fileId, outcome: 'aborted' });
+          continue;
+        }
+        if (isReprocessingPartial(row)) {
+          await writeOwned(fileId, userId, { processingStage: 'ready', processingStageAt: new Date(now()),
+            processingError: `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.` });
+        } else {
+          await stage(fileId, userId, 'failed', CANCELLED_NOTE);
+        }
+        results.push({ id: fileId, outcome: removed ? 'removed' : 'stopped' });
+      } catch (err) {
+        results.push({ id: fileId, outcome: 'error', code: err?.code || null });
+      }
+    }
+    const stopped = results.filter(result => ['aborted', 'removed', 'stopped'].includes(result.outcome)).length;
+    logger?.info?.(`[media-transcription-queue] stopped files=${stopped}/${ids.length}`);
+    return { stopped, results };
+  }
+
   return { enqueueMediaTranscription, enqueueRefine, processMediaJob, reconcilePendingMedia, readMediaProgress, readMediaJobStates,
+    cancelMediaTranscription,
     abortActive: () => {
       const count = activeControllers.size;
       for (const controller of activeControllers) controller.abort(failure('media_shutdown', 'La transcripción se reanudará después del reinicio.'));
@@ -2458,12 +2540,13 @@ async function closeMediaTranscriptionQueue() {
 
 module.exports = {
   isMediaFile, hasTranscript, isPartialTranscript, isReprocessingPartial, partialFailureMessage, transcriptTextFor, onRecordingClock, createRecoveryTick,
-  keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, publicFailureMessage, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
+  keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, CANCELLED_NOTE, isUserCancelledRow, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, publicFailureMessage, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
   createDiskCheckpoint, createStagedCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
   readMediaProgress: payload => getService().readMediaProgress(payload),
   readMediaJobStates: payload => getService().readMediaJobStates(payload),
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   enqueueRefine: payload => getService().enqueueRefine(payload),
+  cancelMediaTranscription: payload => getService().cancelMediaTranscription(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
   startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere,
   // lanes, hints, refine and video fallbacks (contract C5)

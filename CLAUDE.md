@@ -3388,3 +3388,33 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   pero sin voz, o al que luego se le piden cuadros, necesita el original: se consigue
   re-adjuntándolo. Una opción visible por archivo («subir el original») o subir el video en
   segundo plano tras el audio es UI, decisión de Luis.
+
+## Detener y seguimientos durante una transcripción en segundo plano (added 2026-11-05)
+
+Pedido de Luis con captura: tras «te aviso aquí cuando termine», Detener quedaba gris y un mensaje
+nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
+- **Detener** (`components/chat-interface-enhanced.tsx`): `hasPendingMediaDelivery` (memo de
+  `pendingMediaDeliveries`, no se recalcula durante un stream) mantiene `isStopButtonVisible`;
+  `isForegroundWorkRunning` (lo mismo sin la entrega) alimenta el ícono de la computadora. Si solo
+  queda la entrega, Detener llama `apiClient.cancelMediaDeliveries` y vuelve a leer el chat. Enviar
+  no se encola por la entrega (`isBusy` no la incluye). Toasts: «Sigo transcribiendo…» para un
+  hand-off, «Anotado…» para un seguimiento.
+- **Servidor**: `POST /api/media-deliveries/cancel` `{ chatId, deliveryIds? }` (auth + CSRF, solo
+  entregas del usuario). Store: estado `cancelled`; `cancel` cierra bajo el lock y, si un holder está
+  entregando, deja `md_<id>.cancel`, que el holder honra antes de publicar y que `claim` cierra;
+  `amend` solo con `pending`; `listActiveForChat`; `mergeDeliveryAmendment` puro; `MAX_FILES` 500.
+  `cancelDelivery` detiene los trabajos de los archivos que ninguna otra entrega abierta necesita y
+  publica una línea `source: 'media-delivery'` + `mediaDelivery` + `deliveryKind: 'cancelled'` que
+  cierra el pendiente, también tras recargar. Un fallo definitivo publica otra (`'failed'`).
+- **Cola**: `cancelMediaTranscription` quita el trabajo en espera y aborta el que corre
+  (`media_cancelled`, sin reintento, conserva checkpoints); otro proceso lo ve en su chequeo de
+  propiedad. La fila queda `failed` + `CANCELLED_NOTE`: la recuperación de 60 s no la toca y
+  `waitForMediaBatch` la reencola cuando se pide de nuevo (`isUserCancelledRow`).
+- **Seguimientos** (`agent-task-runner.js`, antes de `step_start media_transcription`): con una
+  entrega abierta que cubre esos archivos, `amendDelivery` suma traducción
+  (`output.translationTarget` gana sobre el objetivo leído del goal), resumen o pregunta (solo
+  entregable explícito), Word/PDF, subtítulos, rango, idioma y nombres. Responde
+  `amendedMessage`/`stillRunningMessage` con `stoppedReason: 'media_delivery_amended'`
+  (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre.
+- Tests: `backend/tests/media-delivery-stop-and-followup.test.js`,
+  `tests/chat-background-transcription-stop-source.test.ts`.

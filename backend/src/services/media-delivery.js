@@ -251,6 +251,54 @@ function handOffMessage({ fileNames = [], durationSec = null, etaSeconds = null 
   return `${received} ${timing}; te aviso aquí y en notificaciones cuando ${many ? 'terminen' : 'termine'}. Puedes seguir usando el chat.`;
 }
 
+/** The chat line left by «Detener» on a handed-off transcription. */
+function cancelledMessage({ fileNames = [] } = {}) {
+  const names = (Array.isArray(fileNames) ? fileNames : []).filter(name => typeof name === 'string' && name.trim());
+  const many = names.length > 1;
+  const what = !names.length ? 'la transcripción'
+    : many ? `la transcripción de ${names.length} archivos (${listNames(names)})` : `la transcripción de ${quoteName(names[0])}`;
+  return `Detuve ${what}. Si la necesitas, pídemela de nuevo y retomo donde quedó.`;
+}
+
+/** What a follow-up added to a pending delivery, in the user's words. */
+function amendedMessage({ changes = [], record = {} } = {}) {
+  const list = Array.isArray(changes) ? changes : [];
+  const many = (Array.isArray(record.fileIds) ? record.fileIds.length : 0) > 1;
+  const parts = [];
+  const target = record?.output?.translationTarget || null;
+  const language = target ? (TRANSLATION_NAMES[target] || target) : null;
+  const translated = many ? 'traducidas' : 'traducida';
+  if (list.includes('translation') || list.includes('translation_target')) parts.push(language ? `${translated} al ${language}` : translated);
+  if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
+  if (list.includes('document')) parts.push(record?.output?.documentFormat === 'pdf' ? 'en PDF' : 'en Word');
+  if (list.includes('subtitles')) parts.push('con subtítulos SRT y VTT');
+  if (list.includes('range')) parts.push('solo del tramo que indicaste');
+  const subject = many ? 'las transcripciones' : 'la transcripción';
+  const extras = [];
+  if (list.includes('language')) extras.push('Tomo en cuenta el idioma que indicaste.');
+  if (list.includes('hints')) extras.push('Tomo en cuenta los nombres y datos que diste.');
+  const lead = parts.length
+    ? `Anotado: cuando ${many ? 'terminen' : 'termine'} ${subject} te ${many ? 'las' : 'la'} entrego ${joinList(parts)}.`
+    : `Anotado: lo tengo en cuenta para ${subject} en curso.`;
+  return [lead, ...extras, 'Sigo trabajando; te aviso aquí cuando esté listo.'].join(' ');
+}
+
+/** A repeated request for recordings still being transcribed. */
+function stillRunningMessage({ fileNames = [] } = {}) {
+  const names = (Array.isArray(fileNames) ? fileNames : []).filter(name => typeof name === 'string' && name.trim());
+  const many = names.length > 1;
+  const what = !names.length ? 'la grabación' : many ? `${names.length} archivos (${listNames(names)})` : quoteName(names[0]);
+  return `Ya estoy transcribiendo ${what}; te aviso aquí cuando ${many ? 'terminen' : 'termine'}. Puedes seguir usando el chat.`;
+}
+
+const TRANSLATION_NAMES = Object.freeze({ en: 'inglés', es: 'español', pt: 'portugués', fr: 'francés', it: 'italiano',
+  de: 'alemán', zh: 'chino', ja: 'japonés', ko: 'coreano', ru: 'ruso', ar: 'árabe', qu: 'quechua' });
+
+function joinList(items) {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} y ${items[items.length - 1]}`;
+}
+
 // ── file states ────────────────────────────────────────────────────────
 
 function hasUsableTranscript(row) {
@@ -1250,7 +1298,9 @@ async function defaultAnalyze({ rows, delivery, prisma }) {
   // A requested range («del minuto 30 al 45») or moment is analysed alone.
   const analysisRows = rowsIn(analysisRangeOf(delivery));
   const mediaBatch = require('./media-batch');
-  const target = delivery?.mode === 'translation' ? mediaBatch.detectTranslationTarget(delivery.goal) : null;
+  const target = delivery?.mode === 'translation'
+    ? (mediaBatch.translationTargetByCode?.(delivery.output?.translationTarget) || mediaBatch.detectTranslationTarget(delivery.goal))
+    : null;
   if (target) {
     // The translation is of the transcript the user asked for (their range,
     // or the whole recording), never cut to the moment they asked about: that
@@ -1359,6 +1409,7 @@ function createMediaDeliveryService(deps = {}) {
   const notify = deps.notify || (args => defaultNotify(getPrisma(), args));
   const analyze = deps.analyze === undefined ? (args => defaultAnalyze({ ...args, prisma: getPrisma() })) : deps.analyze;
   const recordHints = deps.recordHints || (args => require('./media-transcript-store').recordMediaHints(deps.prisma || getPrisma(), args));
+  const cancelMediaJobs = deps.cancelMediaJobs || (args => require('./media-transcription-queue').cancelMediaTranscription(args));
 
   const inflight = new Map();
   const held = new Map();
@@ -1369,6 +1420,15 @@ function createMediaDeliveryService(deps = {}) {
 
   const enabled = () => isMediaDeliveryEnabled(env);
   const checkpoint = () => { if (closing) throw shutdownError(); };
+  // «Detener» pressed while this process delivers: stop before posting.
+  async function stopIfCancelled(id) {
+    const store = getStore();
+    if (typeof store.isCancelRequested !== 'function') return;
+    if (!(await store.isCancelRequested(id).catch(() => false))) return;
+    const err = new Error('delivery_cancelled');
+    err.code = 'delivery_cancelled';
+    throw err;
+  }
 
   async function createDelivery(record) {
     if (!enabled()) return null;
@@ -1473,6 +1533,7 @@ function createMediaDeliveryService(deps = {}) {
       }
     }
 
+    await stopIfCancelled(id);
     const rows = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
       .map(row => ({ ...row, deliveryState: classifyFileRow(row) }));
     checkpoint();
@@ -1533,6 +1594,7 @@ function createMediaDeliveryService(deps = {}) {
         }
       }
       checkpoint();
+      await stopIfCancelled(id);
     }
 
     // A translation alone does not re-send the transcript files, unless the
@@ -1610,6 +1672,7 @@ function createMediaDeliveryService(deps = {}) {
       err.code = 'lock_lost';
       throw err;
     }
+    await stopIfCancelled(id);
     const metadata = {
       source: DELIVERY_SOURCE,
       mediaDelivery: id,
@@ -1650,6 +1713,11 @@ function createMediaDeliveryService(deps = {}) {
       await store.release(id, token).catch(() => null);
       return { id, status: 'closing' };
     }
+    if (err?.code === 'delivery_cancelled' && typeof store.markCancelled === 'function') {
+      await store.markCancelled(id, token).catch(() => null);
+      logger.info(`[media-delivery] cancelled mid-delivery id=${id}`);
+      return { id, status: 'cancelled' };
+    }
     const failed = await store.markFailed(id, token, err, { maxAttempts, backoffMs }).catch(() => null);
     const code = err?.code || 'delivery_error';
     if (!failed) {
@@ -1671,6 +1739,21 @@ function createMediaDeliveryService(deps = {}) {
     } catch (notifyErr) {
       logger.warn(`[media-delivery] notification failed id=${id} code=${notifyErr?.code || 'notify_error'}`);
     }
+    // The chat's live «Transcribiendo…» ends too: one line that carries the
+    // delivery id settles the turn (best-effort; the chat may be gone).
+    if (chatId) {
+      try {
+        const existing = await findDeliveredMessage(chatId, id);
+        if (!existing?.id) {
+          await postMessage({ userId: failed.userId, chatId, artifacts: [], content: copy.body,
+            metadata: { source: DELIVERY_SOURCE, mediaDelivery: id, transcriptionFileIds: failed.fileIds || [],
+              servedBy: 'media_batch', taskId: failed.taskId || null, deliveryMode: failed.mode,
+              deliveryKind: 'failed', stoppedReason: 'media_delivery_failed' } });
+        }
+      } catch (postErr) {
+        logger.warn(`[media-delivery] failure note not posted id=${id} code=${postErr?.code || 'post_error'}`);
+      }
+    }
     return { id, status: 'failed', attempts: failed.attempts };
   }
 
@@ -1684,7 +1767,12 @@ function createMediaDeliveryService(deps = {}) {
       return { id, status: 'error' };
     }
     if (!record) return { id, status: 'missing' };
-    if (record.status === 'delivered' || record.status === 'failed') return { id, status: record.status };
+    if (record.status === 'delivered' || record.status === 'failed' || record.status === 'cancelled') return { id, status: record.status };
+    // A Stop left for a holder that went away: honour it before anything else.
+    if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(id).catch(() => false)) {
+      const closed = await store.cancel(id, { userId: record.userId }).catch(() => null);
+      if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') return { id, status: 'cancelled' };
+    }
     const asOf = Number.isFinite(at) ? at : now();
     const nextAt = Date.parse(record.nextAttemptAt || '');
     if (!force && Number.isFinite(nextAt) && nextAt > asOf) return { id, status: 'backoff', nextAttemptAt: record.nextAttemptAt };
@@ -1857,6 +1945,150 @@ function createMediaDeliveryService(deps = {}) {
   }
 
   /**
+   * «Detener» on a transcription the chat handed off. Closes the delivery
+   * (nothing is posted for it afterwards), stops the transcription of its
+   * recordings unless another open request of the user still waits on them,
+   * and leaves one short line in the chat. That line carries the delivery
+   * id, so the chat — and a reload — sees the turn as finished. Owner
+   * scoped; never throws. Returns { id, outcome, stoppedFiles, messageId,
+   * chatId }.
+   */
+  async function cancelDelivery(id, { userId = null, waitMs = 10_000 } = {}) {
+    const empty = outcome => ({ id, outcome, stoppedFiles: 0, messageId: null, chatId: null });
+    if (!userId || !isValidDeliveryId(String(id || ''))) return empty('missing');
+    const store = getStore();
+    if (typeof store.cancel !== 'function') return empty('unsupported');
+    let result;
+    try {
+      result = await store.cancel(id, { userId, reason: 'user' });
+    } catch (err) {
+      logger.warn(`[media-delivery] cancel failed id=${id} code=${err?.code || 'cancel_error'}`);
+      return empty('error');
+    }
+    let record = result?.record || null;
+    let outcome = result?.outcome || 'missing';
+    if (outcome === 'cancel_requested') {
+      // A holder is delivering right now: give it a moment to honour the
+      // Stop (or to finish, in which case the result is already in the chat).
+      const deadline = now() + Math.max(0, waitMs);
+      while (now() < deadline) {
+        await delay(250);
+        const current = await readRecordQuietly(id);
+        if (!current || current.status === 'cancelled') { outcome = 'cancelled'; record = current || record; break; }
+        if (current.status === 'delivered' || current.status === 'failed') { outcome = 'already_terminal'; record = current; break; }
+      }
+    }
+    if (!record || (outcome !== 'cancelled' && outcome !== 'cancel_requested')) {
+      return { ...empty(outcome), chatId: record?.deliveryChatId || record?.chatId || null };
+    }
+    // Recordings another open request still waits on keep transcribing.
+    let stoppedFiles = 0;
+    try {
+      const others = (await store.listActive()).filter(other => other.id !== id && other.userId === userId);
+      const needed = new Set(others.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
+      const fileIds = (record.fileIds || []).filter(fileId => !needed.has(fileId));
+      if (fileIds.length) stoppedFiles = Number((await cancelMediaJobs({ fileIds, userId }))?.stopped) || 0;
+    } catch (err) {
+      logger.warn(`[media-delivery] stopping the transcription failed id=${id} code=${err?.code || 'stop_error'}`);
+    }
+    const chatId = record.deliveryChatId || record.chatId || null;
+    let messageId = null;
+    if (chatId) {
+      try {
+        const existing = await findDeliveredMessage(chatId, id);
+        if (existing?.id) messageId = existing.id;
+        else {
+          const posted = await postMessage({ userId, chatId, artifacts: [],
+            content: cancelledMessage({ fileNames: record.fileNames }),
+            metadata: { source: DELIVERY_SOURCE, mediaDelivery: id, transcriptionFileIds: record.fileIds || [],
+              servedBy: 'media_batch', taskId: record.taskId || null, deliveryMode: record.mode,
+              deliveryKind: 'cancelled', stoppedReason: 'media_delivery_cancelled' } });
+          messageId = posted?.messageId || posted?.id || null;
+        }
+      } catch (err) {
+        logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+      }
+    }
+    logger.info(`[media-delivery] cancelled id=${id} files=${(record.fileIds || []).length} stopped=${stoppedFiles} outcome=${outcome}`);
+    return { id, outcome, stoppedFiles, messageId, chatId };
+  }
+
+  /** «Detener» for every transcription a chat is still waiting on (or the ids given). */
+  async function cancelChatDeliveries({ userId = null, chatId = null, deliveryIds = null } = {}) {
+    if (!userId || !chatId) return { cancelled: 0, results: [] };
+    const store = getStore();
+    let records = [];
+    try {
+      records = typeof store.listActiveForChat === 'function' ? await store.listActiveForChat(chatId, { userId }) : [];
+    } catch (err) {
+      logger.warn(`[media-delivery] chat listing failed code=${err?.code || 'list_error'}`);
+      return { cancelled: 0, results: [], error: 'unavailable' };
+    }
+    const wanted = Array.isArray(deliveryIds) && deliveryIds.length
+      ? new Set(deliveryIds.filter(value => isValidDeliveryId(String(value || '')))) : null;
+    const targets = wanted ? records.filter(record => wanted.has(record.id)) : records;
+    const results = [];
+    for (const record of targets) results.push(await cancelDelivery(record.id, { userId }));
+    // Ids asked for that are no longer open: report what they became.
+    if (wanted) {
+      for (const id of wanted) {
+        if (targets.some(record => record.id === id)) continue;
+        const known = await readRecordQuietly(id);
+        results.push({ id, outcome: known && known.userId === userId ? (known.status === 'cancelled' ? 'already_cancelled' : 'already_terminal') : 'missing',
+          stoppedFiles: 0, messageId: null, chatId: known && known.userId === userId ? (known.deliveryChatId || known.chatId || null) : null });
+      }
+    }
+    return { cancelled: results.filter(result => result.outcome === 'cancelled' || result.outcome === 'cancel_requested').length, results };
+  }
+
+  /**
+   * The open (still waiting) transcript delivery of this chat that covers
+   * these recordings, newest first, or null. A follow-up joins it instead of
+   * starting a second transcription.
+   */
+  async function findOpenDelivery({ userId = null, chatId = null, fileIds = [] } = {}) {
+    if (!enabled() || !userId || !chatId) return null;
+    const store = getStore();
+    if (typeof store.listActiveForChat !== 'function') return null;
+    const ids = (Array.isArray(fileIds) ? fileIds : []).filter(Boolean);
+    try {
+      const records = await store.listActiveForChat(chatId, { userId });
+      const matches = records.filter(record => record.kind !== 'refine'
+        && (!ids.length || ids.every(fileId => (record.fileIds || []).includes(fileId))));
+      matches.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      return matches[0] || null;
+    } catch (err) {
+      logger.warn(`[media-delivery] open delivery lookup failed code=${err?.code || 'lookup_error'}`);
+      return null;
+    }
+  }
+
+  /**
+   * Fold a follow-up into a pending delivery (store.amend). New language or
+   * names also reach the jobs that have not started. Never throws.
+   */
+  async function amendDelivery(id, { userId = null, amendment = {} } = {}) {
+    if (!enabled() || !userId || !isValidDeliveryId(String(id || ''))) return { outcome: 'missing', record: null, changes: [] };
+    const store = getStore();
+    if (typeof store.amend !== 'function') return { outcome: 'unsupported', record: null, changes: [] };
+    let result;
+    try {
+      result = await store.amend(id, { userId, amendment });
+    } catch (err) {
+      logger.warn(`[media-delivery] amend failed id=${id} code=${err?.code || 'amend_error'}`);
+      return { outcome: 'error', record: null, changes: [] };
+    }
+    if (result?.outcome === 'amended' && result.record
+      && (result.changes.includes('language') || result.changes.includes('hints'))) {
+      await rememberHints(result.record);
+    }
+    if (result?.outcome === 'amended') {
+      logger.info(`[media-delivery] amended id=${id} changes=${result.changes.join(',') || 'goal'}`);
+    }
+    return result || { outcome: 'missing', record: null, changes: [] };
+  }
+
+  /**
    * Shutdown: stop new claims, give in-flight deliveries `graceMs`, then
    * hand every still-held record back as pending (no attempt is spent) so
    * the next process picks it up immediately instead of after the stale window.
@@ -1877,6 +2109,10 @@ function createMediaDeliveryService(deps = {}) {
     onMediaTerminal,
     sweepPendingDeliveries,
     deliverOne,
+    cancelDelivery,
+    cancelChatDeliveries,
+    findOpenDelivery,
+    amendDelivery,
     close,
     get store() { return getStore(); },
   };
@@ -1908,6 +2144,11 @@ module.exports = {
   sweepPendingDeliveries: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().sweepPendingDeliveries(options)
     : Promise.resolve({ status: 'disabled' })),
   closeMediaDelivery: options => (defaultService ? defaultService.close(options) : Promise.resolve({ released: 0 })),
+  cancelChatDeliveries: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().cancelChatDeliveries(options)
+    : Promise.resolve({ cancelled: 0, results: [], error: 'disabled' })),
+  findOpenDelivery: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().findOpenDelivery(options) : Promise.resolve(null)),
+  amendDelivery: (id, options) => (isMediaDeliveryEnabled() ? getMediaDeliveryService().amendDelivery(id, options)
+    : Promise.resolve({ outcome: 'disabled', record: null, changes: [] })),
   // Pure helpers
   isMediaDeliveryEnabled,
   inlineWaitMs,
@@ -1915,6 +2156,9 @@ module.exports = {
   estimateBatchEtaSeconds,
   shouldHandOff,
   handOffMessage,
+  cancelledMessage,
+  amendedMessage,
+  stillRunningMessage,
   deliveryMessage,
   refineMessage,
   refineHandOffMessage,

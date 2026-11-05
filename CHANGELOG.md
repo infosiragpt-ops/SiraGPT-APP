@@ -8,6 +8,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- The chat stays live while a transcription runs in the background («te aviso aquí cuando termine»).
+  - **Stop really stops it.** The Stop button stays available while the chat waits on a handed-off transcription. Pressing it closes the pending delivery, stops the transcription jobs of those recordings (unless another open request still needs them) and leaves one line in the chat: «Detuve la transcripción de…». Asking for it again resumes from where it stopped.
+  - **A follow-up joins the work in progress.** A message sent while it transcribes («y tradúcelo al inglés», «en Word», «resúmelo», «con subtítulos», «solo del minuto 10 al 20», a question about the recording, names or the language) is folded into the pending delivery and answered at once with «Anotado: …». Before, it waited up to four minutes and then created a second delivery, so the user got two results.
+  - A delivery that fails for good now leaves a line in the chat too, so the live status never spins forever. One delivery holds a whole batch of up to 500 recordings (it stopped at 50).
+
 - Transcription at scale: a pool of speech-to-text providers for batches of long recordings (100 videos of 10 hours).
   - **One ledger per provider, process-wide** (`transcription-governor`): every request of every job takes a permit (in-flight cap per provider, optional requests per minute and audio seconds per hour). A 429 seen by one job pauses that provider for every job and halves its effective cap; clean traffic earns the slots back.
   - **Spread scheduling:** a piece skips a provider that has no free slot right now for the next healthy one, so a batch flows across every configured provider instead of queueing behind the first; `TRANSCRIBE_SCHEDULING=ladder` restores the strict order.
