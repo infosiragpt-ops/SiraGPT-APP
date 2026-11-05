@@ -2071,6 +2071,9 @@ function createMediaDeliveryService(deps = {}) {
     if (!userId || !isValidDeliveryId(String(id || ''))) return empty('missing');
     const store = getStore();
     if (typeof store.cancel !== 'function') return empty('unsupported');
+    // Delivered by this process right now: its analysis stops before the
+    // store even tries the lock (the holder then closes it as cancelled).
+    if (held.has(id)) stops.get(id)?.abort();
     let result;
     try {
       result = await store.cancel(id, { userId, reason: 'user',

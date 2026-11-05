@@ -103,10 +103,10 @@ test('Stop during the analysis stops its calls at once and closes the delivery a
       analyze: async ({ signal }) => {
         sawSignal = Boolean(signal);
         started();
-        // 40 paid chunk calls, as a long batch's translation would make.
-        for (let i = 0; i < 40; i++) {
+        // 400 paid chunk calls, as a long batch's translation would make.
+        for (let i = 0; i < 400; i++) {
           signal?.throwIfAborted();
-          await new Promise(resolve => setTimeout(resolve, 20));
+          await new Promise(resolve => setTimeout(resolve, 10));
           chunks += 1;
         }
         return 'resumen';
@@ -119,7 +119,7 @@ test('Stop during the analysis stops its calls at once and closes the delivery a
   const out = await service.cancelDelivery(record.id, { userId: 'u1' });
   const result = await delivering;
   assert.equal(sawSignal, true, 'the analysis hears the Stop');
-  assert.ok(chunks < 40, `the calls stop at once (${chunks} of 40 ran)`);
+  assert.ok(chunks < 400, `the calls stop at once (${chunks} of 400 ran)`);
   assert.equal(result.status, 'cancelled');
   assert.equal(out.outcome, 'cancelled');
   assert.equal((await store.get(record.id)).status, 'cancelled');
