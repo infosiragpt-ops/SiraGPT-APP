@@ -25,9 +25,10 @@ test('50 uploaded files retain user order; database access is owner/deletion sco
   await assert.rejects(batch.loadMediaBatch(prisma, { userId: 'u', fileIds: [...rows.map(row => row.id), 'not-owned'] }), /cuenta/);
 });
 
-test('51 media files produce explicit limit; mixed documents retain their own workflow', async () => {
-  const { rows, prisma } = fixture(51);
-  await assert.rejects(batch.loadMediaBatch(prisma, { userId: 'u', fileIds: rows.map(row => row.id) }), /50/);
+test('101 media files produce explicit limit (a batch holds 100); mixed documents retain their own workflow', async () => {
+  assert.equal(batch.MAX_MEDIA_FILES, 100);
+  const { rows, prisma } = fixture(101);
+  await assert.rejects(batch.loadMediaBatch(prisma, { userId: 'u', fileIds: rows.map(row => row.id) }), /100/);
   rows[0].mimeType = 'application/pdf';
   rows[0].originalName = 'documento.pdf';
   assert.equal(await batch.loadMediaBatch(prisma, { userId: 'u', fileIds: rows.map(row => row.id) }), null);

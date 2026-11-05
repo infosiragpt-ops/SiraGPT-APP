@@ -166,7 +166,11 @@ test('without a hint the waits grow; after TRANSCRIBE_RATE_LIMIT_RETRIES the seg
     groqClient: groq, createFile, segmentAudio: segmenter(t, 2), sleep: clock.sleep, now: clock.now,
     async localTranscribe() { return { text: 'local 0' }; },
   });
-  assert.deepEqual(clock.sleeps, [15_000, 30_000]);
+  // 15 s, then 30 s for piece 0; the third 429 demotes it to whisper.cpp and
+  // pauses Groq process-wide (transcription-governor) for the default 15 s,
+  // so piece 1 waits that pause out instead of hammering Groq at once.
+  assert.deepEqual(clock.sleeps, [15_000, 30_000, 15_000]);
+  assert.deepEqual(groq.requests, [0, 0, 0, 1]);
   assert.equal(result.transcript, 'local 0\n\ngroq 1');
   assert.equal(audio.providerInCooldown({ name: 'groq', key: 'gsk_backoff' }), false);
 });

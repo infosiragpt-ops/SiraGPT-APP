@@ -43,7 +43,7 @@ test("agent runner: pictures never claim a document turn; «gracias» is not wor
 });
 
 test("transcription ladder: openai → groq → xai → meta (flag) → local; xai rung uses the multipart /stt helper", async () => {
-  assert.deepEqual(transcriber.providerOrder({ env: {} }), ["openai", "groq", "xai", "meta", "local"]);
+  assert.deepEqual(transcriber.providerOrder({ env: {} }), ["elevenlabs", "assemblyai", "openai", "groq", "deepgram", "xai", "meta", "local"]);
   const env = { XAI_API_KEY: "xai-test", TRANSCRIBE_PROVIDERS: "openai,xai,meta,local" };
   const names = transcriber.cloudProviders({ env }).map((p) => p.name);
   assert.deepEqual(names, ["xai"], "without OpenAI/Meta keys only the xAI rung is usable");

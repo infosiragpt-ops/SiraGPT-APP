@@ -155,6 +155,7 @@ const execFileAsync = promisify(execFile);
 const localWhisper = require('./local-whisper-engine');
 const quality = require('./audio-quality');
 const keyHealth = require('../utils/provider-key-health');
+const transcriptionGovernor = require('./transcription-governor');
 const voiceStudioClient = (options = {}) => options.voiceStudio || require('./ai/voicestudio-client');
 
 const DEFAULT_AUDIO_MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -264,8 +265,24 @@ const SUCCESS_METHODS = new Set(['whisper', 'local-whisper']);
 // xAI Grok STT (`/v1/stt`, see xai-audio.js), then Meta's transcription model
 // (OpenAI-compatible `audio/transcriptions`), then the local whisper.cpp
 // engine which has no size limit. An invalid key on one rung never blocks
-// the next: every rung is tried in order.
-const DEFAULT_PROVIDER_ORDER = ['openai', 'groq', 'xai', 'meta', 'local'];
+// the next: every rung is tried in order. The order is by published Spanish
+// accuracy: ElevenLabs Scribe v2 and AssemblyAI Universal (≈ 3.2–3.9 % WER,
+// diarization included) lead; whisper-1 / Groq turbo follow; Deepgram Nova-3
+// (the fastest, weaker in Spanish) before xAI. Only rungs WITH a key run, so
+// an installation with one key behaves exactly as before. Mistral Voxtral is
+// opt-in (list `mistral` in TRANSCRIBE_PROVIDERS).
+const DEFAULT_PROVIDER_ORDER = ['elevenlabs', 'assemblyai', 'openai', 'groq', 'deepgram', 'xai', 'meta', 'local'];
+const DEFAULT_MISTRAL_TRANSCRIBE_MODEL = 'voxtral-mini-latest';
+const DEFAULT_MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
+// How a piece picks its rung when several providers are configured: `spread`
+// skips a provider with no free capacity NOW for the next healthy one;
+// `ladder` always waits for the first.
+const DEFAULT_SCHEDULING = 'spread';
+// Admission: jobs with a usable cloud rung may use this pool on top of the
+// shared CPU slots (their work is off-host); whisper.cpp processes of every
+// shared/cloud job together are bounded by TRANSCRIBE_LOCAL_PARALLEL_TOTAL.
+const DEFAULT_CLOUD_POOL_CONCURRENCY = 6;
+const DEFAULT_LOCAL_PARALLEL_TOTAL = 2;
 const DEFAULT_XAI_STT_MODEL = 'grok-stt';
 const DEFAULT_GROQ_TRANSCRIBE_MODEL = 'whisper-large-v3-turbo';
 const DEFAULT_GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
@@ -274,7 +291,7 @@ const DEFAULT_META_BASE_URL = 'https://api.meta.ai/v1';
 // A rejected key / empty balance is remembered this long (provider-key-health).
 const DEFAULT_PROVIDER_COOLDOWN_MS = 30 * 60 * 1000;
 const COOLDOWN_NAMESPACE = 'transcribe:';
-const COOLDOWN_PROVIDERS = ['openai', 'groq', 'xai', 'meta', 'elevenlabs'];
+const COOLDOWN_PROVIDERS = ['openai', 'groq', 'xai', 'meta', 'elevenlabs', 'assemblyai', 'deepgram', 'mistral'];
 // Cloud providers cap request bodies (25 MB on Whisper). Longer recordings
 // are cut into ≤ 10-minute FLAC 16 kHz mono segments (≈ 10 MB each).
 const DEFAULT_SEGMENT_SECONDS = 600;
@@ -383,7 +400,7 @@ const VARIANT_FILTERS = Object.freeze({
   loudnorm: Object.freeze({ filter: 'highpass=f=70,loudnorm=I=-20:TP=-2:LRA=11', needs: Object.freeze(['highpass', 'loudnorm']) }),
 });
 const ESCALATION_PROVIDER_NAMES = new Set(['voicestudio', 'elevenlabs']);
-const DEFAULT_ELEVENLABS_STT_MODEL = 'scribe_v1';
+const DEFAULT_ELEVENLABS_STT_MODEL = 'scribe_v2';
 // Language detection runs on the first segments, one at a time, until the
 // detections decide a language (decideLanguage); the rest of the job uses it.
 const LANGUAGE_DETECT_MAX_SEGMENTS = 3;
@@ -784,6 +801,11 @@ function transcriptionModelCaps(model) {
 }
 
 const PLAIN_JSON_CAPS = Object.freeze({ responseFormat: 'json', timestamps: false, prompt: true, maxSegmentSeconds: DEFAULT_SEGMENT_SECONDS });
+// Rungs with their own adapter (AssemblyAI, Deepgram): timed segments with
+// speakers, key terms instead of a free-text prompt.
+const ADAPTER_CAPS = Object.freeze({ responseFormat: 'json', timestamps: true, prompt: false, maxSegmentSeconds: DEFAULT_SEGMENT_SECONDS });
+// Mistral Voxtral on the OpenAI audio surface: json + segment timestamps.
+const MISTRAL_CAPS = Object.freeze({ responseFormat: 'json', timestamps: true, prompt: false, segmentTimestamps: true, maxSegmentSeconds: DEFAULT_SEGMENT_SECONDS });
 
 function hasOpenAiKey(options = {}) {
   if (options.openai) return true;
@@ -1073,6 +1095,23 @@ function groqApiKey(options = {}) {
   return String(envOf(options).GROQ_API_KEY || '').trim();
 }
 
+function mistralApiKey(options = {}) {
+  return String(envOf(options).MISTRAL_API_KEY || '').trim();
+}
+
+function assemblyAiKey(options = {}) {
+  return String(envOf(options).ASSEMBLYAI_API_KEY || '').trim();
+}
+
+function deepgramKey(options = {}) {
+  return String(envOf(options).DEEPGRAM_API_KEY || '').trim();
+}
+
+/** TRANSCRIBE_<PROVIDER>_KEYTERMS=1: send the job's key terms (names, jargon) to a rung whose vocabulary biasing is paid or language-gated. */
+function keytermsEnabled(options, provider) {
+  return String(envOf(options)[`TRANSCRIBE_${String(provider).toUpperCase()}_KEYTERMS`] || '') === '1';
+}
+
 /**
  * Meta's API has no speech-to-text endpoint (prod: 404 on every audio), so
  * the rung is opt-in: SIRAGPT_META_TRANSCRIPTION=1, or an operator listing
@@ -1172,6 +1211,59 @@ function cloudProviders(options = {}) {
           return new OpenAI({ apiKey: metaApiKey(options), baseURL: env.META_BASE_URL || DEFAULT_META_BASE_URL });
         })(),
       });
+    } else if (name === 'elevenlabs' && String(env.TRANSCRIBE_ELEVENLABS_DISABLED || '') !== '1') {
+      // Scribe as a FIRST-PASS rung (speakers included): listed in the order,
+      // it reads every piece; escalationRungs() then never repeats it.
+      const rung = elevenLabsRung(options, { escalation: false });
+      if (rung) out.push(rung);
+    } else if (name === 'assemblyai' && (assemblyAiKey(options) || options.assemblyaiTranscribe) && String(env.TRANSCRIBE_ASSEMBLYAI_DISABLED || '') !== '1') {
+      const assembly = require('./stt-providers/assemblyai');
+      out.push({
+        name: 'assemblyai',
+        kind: 'cloud',
+        method: 'whisper',
+        model: assembly.assemblyAiSpeechModel(env) || 'universal',
+        caps: ADAPTER_CAPS,
+        verbose: false,
+        key: assemblyAiKey(options) || 'injected',
+        envName: 'ASSEMBLYAI_API_KEY',
+        transcribeFile: options.assemblyaiTranscribe || ((filePath, mimeType, _fileName, language, _prompt, extra = {}) => assembly.transcribeAssemblyAiFile({
+          filePath, mimeType, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
+          keyterms: keytermsEnabled(options, 'assemblyai') ? promptTerms(options) : [], env,
+        })),
+      });
+    } else if (name === 'deepgram' && (deepgramKey(options) || options.deepgramTranscribe) && String(env.TRANSCRIBE_DEEPGRAM_DISABLED || '') !== '1') {
+      const deepgram = require('./stt-providers/deepgram');
+      out.push({
+        name: 'deepgram',
+        kind: 'cloud',
+        method: 'whisper',
+        model: deepgram.deepgramModel(env),
+        caps: ADAPTER_CAPS,
+        verbose: false,
+        key: deepgramKey(options) || 'injected',
+        envName: 'DEEPGRAM_API_KEY',
+        transcribeFile: options.deepgramTranscribe || ((filePath, mimeType, _fileName, language, _prompt, extra = {}) => deepgram.transcribeDeepgramFile({
+          filePath, mimeType, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
+          keyterms: keytermsEnabled(options, 'deepgram') ? promptTerms(options) : [], env,
+        })),
+      });
+    } else if (name === 'mistral' && (mistralApiKey(options) || options.mistralClient) && String(env.TRANSCRIBE_MISTRAL_DISABLED || '') !== '1') {
+      // Voxtral speaks the OpenAI audio surface (json + segment timestamps).
+      out.push({
+        name: 'mistral',
+        kind: 'cloud',
+        method: 'whisper',
+        model: env.MISTRAL_TRANSCRIBE_MODEL || DEFAULT_MISTRAL_TRANSCRIBE_MODEL,
+        caps: MISTRAL_CAPS,
+        verbose: false,
+        key: mistralApiKey(options) || 'injected',
+        envName: 'MISTRAL_API_KEY',
+        client: () => options.mistralClient || (() => {
+          const OpenAI = require('openai');
+          return new OpenAI({ apiKey: mistralApiKey(options), baseURL: env.MISTRAL_BASE_URL || DEFAULT_MISTRAL_BASE_URL });
+        })(),
+      });
     }
   }
   return out;
@@ -1228,13 +1320,17 @@ async function transcribeWithElevenLabs({ filePath, mimeType, language, signal, 
   })();
   const buffer = await fsPromises.readFile(filePath);
   const file = new Blob([buffer], { type: mimeType || CLIP_MASTER_MIME });
+  // Speakers come with Scribe at no extra cost (TRANSCRIBE_ELEVENLABS_DIARIZE=0
+  // turns them off); key terms are a paid surcharge, so they are opt-in.
+  const keyterms = keytermsEnabled(options, 'elevenlabs') ? promptTerms(options).slice(0, 100) : [];
   const request = {
     file,
     modelId: model,
     tagAudioEvents: true,
     timestampsGranularity: 'word',
-    diarize: false,
+    diarize: String(envOf(options).TRANSCRIBE_ELEVENLABS_DIARIZE || '') !== '0',
     ...(language ? { languageCode: language } : {}),
+    ...(keyterms.length ? { keyterms } : {}),
   };
   const body = await client.speechToText.convert(request, {
     ...(signal ? { abortSignal: signal } : {}),
@@ -1253,8 +1349,11 @@ async function transcribeWithElevenLabs({ filePath, mimeType, language, signal, 
   };
 }
 
-/** Opt-in ElevenLabs Scribe rung (paid): never in the first-pass ladder. */
-function elevenLabsRung(options = {}) {
+/**
+ * ElevenLabs Scribe rung (paid). In the provider order it is a first-pass
+ * rung; otherwise it is the opt-in escalation rung (flagged pieces only).
+ */
+function elevenLabsRung(options = {}, { escalation = true } = {}) {
   const env = envOf(options);
   if (String(env.TRANSCRIBE_ELEVENLABS_DISABLED || '') === '1') return null;
   const key = elevenLabsApiKey(options);
@@ -1265,10 +1364,11 @@ function elevenLabsRung(options = {}) {
     kind: 'cloud',
     method: 'whisper',
     model,
-    caps: PLAIN_JSON_CAPS,
+    caps: ADAPTER_CAPS,
     verbose: false,
     key: key || 'injected',
-    escalation: true,
+    envName: 'ELEVENLABS_API_KEY',
+    ...(escalation ? { escalation: true } : {}),
     transcribeFile: (filePath, mimeType, _fileName, language, _prompt, extra = {}) => transcribeWithElevenLabs({
       filePath, mimeType, language, signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs, model, options,
     }),
@@ -1340,12 +1440,74 @@ function effectiveSegmentSeconds(options = {}, providers = []) {
 
 function cloudParallel(options = {}) {
   const explicit = Number.parseInt(options.parallel, 10);
-  if (Number.isFinite(explicit) && explicit >= 1) return Math.min(8, explicit);
-  return envNumber(options, 'TRANSCRIBE_CLOUD_PARALLEL', DEFAULT_CLOUD_PARALLEL, { min: 1, max: 8 });
+  if (Number.isFinite(explicit) && explicit >= 1) return Math.min(16, explicit);
+  return envNumber(options, 'TRANSCRIBE_CLOUD_PARALLEL', DEFAULT_CLOUD_PARALLEL, { min: 1, max: 16 });
 }
 
 function localParallel(options = {}) {
   return envNumber(options, 'TRANSCRIBE_LOCAL_PARALLEL', DEFAULT_LOCAL_PARALLEL, { min: 1, max: 4 });
+}
+
+/** TRANSCRIBE_SCHEDULING: `spread` (default) or `ladder`. */
+function schedulingMode(options = {}) {
+  const raw = String(options.scheduling || envOf(options).TRANSCRIBE_SCHEDULING || '').trim().toLowerCase();
+  return raw === 'ladder' ? 'ladder' : DEFAULT_SCHEDULING;
+}
+
+// One governor per process (process.env). A job with an injected env (tests,
+// embedders) gets a governor of its own on its clock, keyed by that env
+// object, so jobs that share an env share the ledger.
+const governorByEnv = new WeakMap();
+function governorFor(options = {}) {
+  if (options.governor) return options.governor;
+  const env = options.env;
+  if (!env || typeof env !== 'object' || env === process.env) return transcriptionGovernor.getTranscriptionGovernor();
+  let governor = governorByEnv.get(env);
+  if (!governor) {
+    governor = transcriptionGovernor.createTranscriptionGovernor({
+      env,
+      ...(typeof options.now === 'function' ? { now: options.now } : {}),
+      ...(typeof options.sleep === 'function' ? { sleep: options.sleep } : {}),
+    });
+    governorByEnv.set(env, governor);
+  }
+  return governor;
+}
+
+// whisper.cpp processes of every shared/cloud-pool job together: a batch of
+// recordings whose cloud rungs all died must not start one per job.
+let sharedLocalSemaphore = null;
+const sharedLocalByEnv = new WeakMap();
+function sharedLocalPermits(options = {}) {
+  const limit = Math.max(localParallel(options), envNumber(options, 'TRANSCRIBE_LOCAL_PARALLEL_TOTAL', DEFAULT_LOCAL_PARALLEL_TOTAL, { min: 1, max: 16 }));
+  const env = options.env;
+  if (env && typeof env === 'object' && env !== process.env) {
+    let semaphore = sharedLocalByEnv.get(env);
+    if (!semaphore) { semaphore = createSemaphore(limit); sharedLocalByEnv.set(env, semaphore); }
+    return semaphore;
+  }
+  if (!sharedLocalSemaphore) sharedLocalSemaphore = createSemaphore(limit);
+  return sharedLocalSemaphore;
+}
+
+/** Whether at least one configured cloud rung is usable (a key not in cooldown). */
+function cloudCapable(options = {}) {
+  try {
+    return cloudProviders(options).some((rung) => !providerInCooldown(rung));
+  } catch { return false; }
+}
+
+/** Whether a configured cloud rung could take a piece NOW (usable and with free capacity). */
+function cloudCapacityAvailable(options = {}) {
+  try {
+    const governor = governorFor(options);
+    return cloudProviders(options).some((rung) => !providerInCooldown(rung) && governor.capacity(rung.name).free > 0);
+  } catch { return false; }
+}
+
+/** The governor's public numbers per provider (the capabilities report). */
+function governorSnapshot(options = {}) {
+  try { return governorFor(options).snapshot(); } catch { return {}; }
 }
 
 function minCoverage(options = {}) {
@@ -2404,7 +2566,7 @@ async function transcribeCloudFile(provider, filePath, mimeType, fileName, optio
       ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
       : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
     const request = { model: provider.model, file: blob, response_format: caps.responseFormat };
-    if (caps.responseFormat === 'verbose_json') request.timestamp_granularities = ['segment'];
+    if (caps.responseFormat === 'verbose_json' || caps.segmentTimestamps) request.timestamp_granularities = ['segment'];
     if (caps.chunkingStrategy) request.chunking_strategy = caps.chunkingStrategy;
     if (language) request.language = language;
     if (prompt && caps.prompt !== false) request.prompt = prompt;
@@ -2616,7 +2778,12 @@ async function callRung(rung, segment, jc, language, strategy = null) {
   const prompt = strategy?.noPrompt ? undefined : jc.prompt;
   if (rung.kind === 'local') {
     await jc.localPermits.acquire(signal);
+    let sharedHeld = false;
     try {
+      if (jc.localPermitsShared) {
+        await jc.localPermitsShared.acquire(signal);
+        sharedHeld = true;
+      }
       throwIfAborted(signal);
       if (rung.name === 'local') {
         const impl = options.localTranscribe || localWhisper.transcribeLocal;
@@ -2639,10 +2806,15 @@ async function callRung(rung, segment, jc, language, strategy = null) {
       const out = await rung.transcribeFile(segment.path, segment.mime, segment.name, language, prompt, { signal, durationSeconds: seconds });
       return partFromOutput(out, rung, language);
     } finally {
+      if (sharedHeld) jc.localPermitsShared.release();
       jc.localPermits.release();
     }
   }
+  // The process-wide permit for this provider: every job's requests to it
+  // share one in-flight cap, one rate-limit pause and one quota window.
+  const permit = await jc.governor.acquire(rung.name, { signal, audioSeconds: seconds });
   let out;
+  let outcome = 'error';
   try {
     out = await transcribeCloudFile(rung, segment.path, segment.mime, segment.name, options, language, prompt, {
       signal,
@@ -2651,12 +2823,19 @@ async function callRung(rung, segment, jc, language, strategy = null) {
       dispatch: jc.dispatch,
       durationSeconds: seconds,
     });
+    outcome = 'ok';
   } catch (err) {
     // xAI answers 200 with no text for a silent piece (waiting room, break)
     // and its client throws. That is a no-speech answer, as on every other
     // rung (then reviewed like one), not a failure that counts toward the streak.
-    if (err?.code !== 'xai_stt_empty_transcript') throw err;
+    if (err?.code !== 'xai_stt_empty_transcript') {
+      outcome = isAbortError(err, signal) ? 'aborted' : (isRateLimitError(err) ? 'rate_limit' : 'error');
+      throw err;
+    }
+    outcome = 'ok';
     out = { text: '', segments: [], model: rung.model };
+  } finally {
+    permit.release(outcome);
   }
   return partFromOutput(out, rung, language);
 }
@@ -2709,12 +2888,41 @@ function revivalDelayMs(state) {
   return delay;
 }
 
-/** No rung after `index` can take this piece: `index` is the last one left. */
-function isLastLiveRung(jc, index) {
-  for (let i = index + 1; i < jc.rungs.length; i++) {
-    if (rungAvailable(jc.rungs[i], jc, { peek: true })) return false;
+/** No rung after `index` (in this piece's order) can take it: `index` is the last one left. */
+function isLastLiveRung(jc, index, order = null) {
+  const sequence = order || jc.rungs.map((_, i) => i);
+  const position = sequence.indexOf(index);
+  for (let p = position + 1; p < sequence.length; p++) {
+    if (rungAvailable(jc.rungs[sequence[p]], jc, { peek: true })) return false;
   }
   return true;
+}
+
+/**
+ * The rungs a piece tries, in order. `ladder`: the configured order. `spread`
+ * (default): the same order, except that a usable cloud rung with no free
+ * capacity NOW (its in-flight cap, a rate-limit pause, an exhausted quota)
+ * is tried right after the next cloud rung that has capacity, so a batch of
+ * long recordings flows across every configured provider instead of queueing
+ * behind the first. With free capacity on the first rung the two modes are
+ * identical; with every cloud rung saturated the piece waits for the first,
+ * as in `ladder`. On-host rungs keep their place: a paid provider that is
+ * merely busy is still tried before whisper.cpp.
+ */
+function rungOrderFor(jc) {
+  const indices = jc.rungs.map((_, i) => i);
+  if (jc.scheduling !== 'spread' || !jc.governor) return indices;
+  const saturated = [];
+  const rest = [];
+  for (const i of indices) {
+    const rung = jc.rungs[i];
+    if (rung.kind === 'cloud' && rungAvailable(rung, jc, { peek: true }) && jc.governor.capacity(rung.name).free <= 0) saturated.push(i);
+    else rest.push(i);
+  }
+  if (!saturated.length) return indices;
+  const firstReadyCloud = rest.findIndex((i) => jc.rungs[i].kind === 'cloud' && rungAvailable(jc.rungs[i], jc, { peek: true }));
+  if (firstReadyCloud < 0) return [...saturated, ...rest];
+  return [...rest.slice(0, firstReadyCloud + 1), ...saturated, ...rest.slice(firstReadyCloud + 1)];
 }
 
 /**
@@ -2723,7 +2931,9 @@ function isLastLiveRung(jc, index) {
  */
 async function transcribeSegmentWithLadder(segment, jc, language) {
   let lastError = null;
-  for (let index = 0; index < jc.rungs.length; index++) {
+  const order = rungOrderFor(jc);
+  for (let position = 0; position < order.length; position++) {
+    const index = order[position];
     const rung = jc.rungs[index];
     if (!rungAvailable(rung, jc)) continue;
     const state = rungState(jc, rung);
@@ -2772,6 +2982,8 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
         }
         if (verdict === 'rate_limit') {
           const hinted = parseRetryAfterMs(err, jc.now());
+          // Every job's traffic to this provider slows down, not only this piece's.
+          if (rung.kind === 'cloud' && jc.governor) jc.governor.noteRateLimited(rung.name, hinted);
           if (hinted != null && hinted > jc.limits.rateLimitMaxWaitMs) {
             // «try again in 5h»: a quota for the day, not a throttle. Pause the
             // rung until then; never start the «no credits» cooldown.
@@ -2801,7 +3013,7 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
           // repeated OOM kill on the same piece is deterministic: no more.
           const wait = LAST_RUNG_BACKOFF_MS[backoffs];
           if (wait != null && (verdict !== 'oom' || oomKills < OOM_REPEAT_LIMIT)
-            && isLastLiveRung(jc, index) && jc.waitBudget.remainingMs >= wait) {
+            && isLastLiveRung(jc, index, order) && jc.waitBudget.remainingMs >= wait) {
             backoffs++;
             jc.waitBudget.remainingMs -= wait;
             noteOutcome(jc, rung, `${token} backoff`);
@@ -2815,7 +3027,7 @@ async function transcribeSegmentWithLadder(segment, jc, language) {
         state.consecutiveFailures++;
         // The streak pauses a rung — never the last one left (it would turn
         // every remaining piece of a 5-hour job into a gap).
-        if (state.consecutiveFailures >= RUNG_MAX_CONSECUTIVE_FAILURES && !isLastLiveRung(jc, index)) {
+        if (state.consecutiveFailures >= RUNG_MAX_CONSECUTIVE_FAILURES && !isLastLiveRung(jc, index, order)) {
           const delay = revivalDelayMs(state);
           pauseRung(jc, rung, `${token}×${state.consecutiveFailures}`, jc.now() + delay);
           logOncePerJob(jc, `streak:${rung.name}:${state.revivals}`, `${rung.name} transcription failed on ${state.consecutiveFailures} segments in a row (${sanitizeProviderError(err)}); pausing it for ${Math.round(delay / 60000)} min`);
@@ -3502,6 +3714,11 @@ function createJobContext({ options, signal, rungs, prompt, mediaDurationSeconds
     now: now || Date.now,
     limits: ladderLimits(options),
     localPermits: createSemaphore(localParallel(options)),
+    // Short-lane and interactive jobs keep their own on-host permits (their
+    // slot was reserved for them); shared/cloud-pool jobs share one cap.
+    localPermitsShared: normalizeLane(options.lane) ? null : sharedLocalPermits(options),
+    governor: governorFor(options),
+    scheduling: schedulingMode(options),
     dispatch: createDispatchLock(),
     outcomes: new Map(),
     logged: new Set(),
@@ -4832,7 +5049,19 @@ async function reviewShortClip(firstPart, ctx) {
 
 // Shared admission control also covers uploads and agent-task recovery calls.
 // Do not fan out fifty whisper processes (or fifty paid requests) at once.
+// TRANSCRIBE_CONCURRENCY raises the shared slots (CPU-bound work); jobs with a
+// usable cloud rung may also use the cloud pool below (their work is
+// off-host and bounded per provider by the governor).
 const TRANSCRIPTION_CONCURRENCY = 2;
+function sharedConcurrency() {
+  const n = Number.parseInt(process.env.TRANSCRIBE_CONCURRENCY || '', 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(32, n) : TRANSCRIPTION_CONCURRENCY;
+}
+let activeCloudPool = 0;
+function cloudPoolConcurrency() {
+  const n = Number.parseInt(process.env.TRANSCRIBE_CLOUD_CONCURRENCY || '', 10);
+  return Number.isFinite(n) && n >= 0 ? Math.min(32, n) : DEFAULT_CLOUD_POOL_CONCURRENCY;
+}
 let activeTranscriptions = 0;
 const transcriptionQueue = [];
 const inFlight = new Map();
@@ -4870,10 +5099,12 @@ function normalizeLane(lane) {
 function startTranscription(job, pool) {
   if (pool === 'short') activeShortLane++;
   else if (pool === 'interactive') activeInteractiveLane++;
+  else if (pool === 'cloud') activeCloudPool++;
   else activeTranscriptions++;
   Promise.resolve().then(job.run).then(job.resolve, job.reject).finally(() => {
     if (pool === 'short') activeShortLane--;
     else if (pool === 'interactive') activeInteractiveLane--;
+    else if (pool === 'cloud') activeCloudPool--;
     else activeTranscriptions--;
     drainTranscriptions();
   });
@@ -4889,7 +5120,8 @@ function drainTranscriptions() {
       continue;
     }
     let pool = null;
-    if (activeTranscriptions < TRANSCRIPTION_CONCURRENCY) pool = 'shared';
+    if (activeTranscriptions < sharedConcurrency()) pool = 'shared';
+    else if (job.cloud && activeCloudPool < cloudPoolConcurrency()) pool = 'cloud';
     else if (job.lane === 'short' && activeShortLane < shortLaneConcurrency()) pool = 'short';
     else if (job.lane === 'interactive' && activeInteractiveLane < interactiveLaneConcurrency()) pool = 'interactive';
     if (!pool) {
@@ -4903,9 +5135,9 @@ function drainTranscriptions() {
   }
 }
 
-function enqueueTranscription(run, signal, lane = null) {
+function enqueueTranscription(run, signal, lane = null, { cloud = false } = {}) {
   return new Promise((resolve, reject) => {
-    const job = { run, signal, resolve, reject, lane: normalizeLane(lane) };
+    const job = { run, signal, resolve, reject, lane: normalizeLane(lane), cloud: Boolean(cloud) };
     job.onAbort = () => {
       const index = transcriptionQueue.indexOf(job);
       if (index >= 0) transcriptionQueue.splice(index, 1);
@@ -4923,7 +5155,8 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
   // Explicitly cancellable jobs own their signal and durable claim. Do not
   // couple independently cancelled jobs through single-flight; unsignalled
   // legacy upload calls still share work below.
-  if (options.signal) return enqueueTranscription(() => transcribeUnqueued(filePath, mimeType, originalName, options), options.signal, options.lane);
+  const admission = { cloud: cloudCapable(options) };
+  if (options.signal) return enqueueTranscription(() => transcribeUnqueued(filePath, mimeType, originalName, options), options.signal, options.lane, admission);
   const stat = await fsPromises.stat(filePath).catch(() => null);
   throwIfAborted(options.signal);
   // Include configuration identity as well as file revision. Never share a
@@ -4951,7 +5184,7 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
     entry.promise = enqueueTranscription(() => transcribeUnqueued(filePath, mimeType, originalName, {
       ...options, signal: current.controller.signal,
       onProgress: (event) => { for (const subscriber of current.subscribers) emitProgress(subscriber.options, event); },
-    }), entry.controller.signal, options.lane);
+    }), entry.controller.signal, options.lane, admission);
     const cleanup = () => { if (inFlight.get(key) === current) inFlight.delete(key); };
     entry.promise.then(cleanup, cleanup);
   }
@@ -4971,6 +5204,17 @@ module.exports = {
   probeAudioDuration,
   parseProgressDuration,
   TRANSCRIPTION_CONCURRENCY,
+  sharedConcurrency,
+  cloudPoolConcurrency,
+  cloudCapable,
+  cloudCapacityAvailable,
+  governorFor,
+  governorSnapshot,
+  schedulingMode,
+  rungOrderFor,
+  DEFAULT_ELEVENLABS_STT_MODEL,
+  DEFAULT_MISTRAL_TRANSCRIBE_MODEL,
+  DEFAULT_PROVIDER_ORDER,
   cloudProviders,
   providerOrder,
   segmentForCloud,

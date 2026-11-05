@@ -217,6 +217,26 @@ function probeStt(resolve, env) {
     } catch { escalation = []; }
   }
   const requestedEscalation = fnOf(at, 'escalationProviderNames') ? at.escalationProviderNames(options) : [];
+  // The provider pool: how pieces pick a rung and what each provider may take
+  // at once (transcription-governor numbers; never a key).
+  let pool = null;
+  try {
+    const scheduling = fnOf(at, 'schedulingMode') ? at.schedulingMode(options) : null;
+    const snapshot = fnOf(at, 'governorSnapshot') ? at.governorSnapshot(options) : null;
+    const governor = fnOf(at, 'governorFor') ? at.governorFor(options) : null;
+    const providers = {};
+    for (const rung of cloud) {
+      const limits = governor && typeof governor.limits === 'function' ? governor.limits(rung.name) : null;
+      const live = snapshot && snapshot[rung.name] ? snapshot[rung.name] : null;
+      providers[oneLine(rung.name, 40)] = {
+        inFlightCap: limits ? limits.inFlight : null,
+        rpm: limits ? limits.rpm : null,
+        audioSecondsPerHour: limits ? limits.audioSecondsPerHour : null,
+        ...(live ? { inFlight: live.inFlight, waiting: live.waiting, effectiveCap: live.effectiveCap, pausedMs: live.pausedMs, completed: live.completed, rateLimits: live.rateLimits } : {}),
+      };
+    }
+    if (scheduling || Object.keys(providers).length) pool = { scheduling, providers };
+  } catch { pool = null; }
   const elevenlabsKey = Boolean(String(env.ELEVENLABS_API_KEY || '').trim());
   const ladderLabel = (opts) => (opts.providers ? opts.providers.join(',') : 'ladder');
   const free = dictationLadderOptions(env, { paid: false });
@@ -226,6 +246,7 @@ function probeStt(resolve, env) {
     ladder,
     escalation,
     escalationRequested: requestedEscalation.map((name) => oneLine(name, 40)),
+    pool,
     voiceStudio: { configured: voiceStudioConfigured, inLadder: order.includes('voicestudio'), shortClips },
     dictation: {
       scribeForPaidPlans: elevenlabsKey,

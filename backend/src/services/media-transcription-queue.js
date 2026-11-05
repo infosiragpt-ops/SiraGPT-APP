@@ -18,7 +18,17 @@ const transcriptFormat = require('./media-transcript-format');
 const QUEUE_NAME = 'siragpt-media-transcription';
 const SHORT_QUEUE_NAME = 'siragpt-media-transcription-short';
 const ATTEMPTS = 3;
-const CONCURRENCY = 2;
+// Long-lane concurrency per process: the floor the autoscaler starts from
+// (SIRAGPT_MEDIA_CONCURRENCY) and the ceiling it may grow to while recordings
+// wait and a cloud provider has free capacity (SIRAGPT_MEDIA_MAX_CONCURRENCY).
+// The engine admits those extra jobs through its cloud pool
+// (TRANSCRIBE_CLOUD_CONCURRENCY); its two shared CPU slots do not grow.
+const CONCURRENCY = clampInt(process.env.SIRAGPT_MEDIA_CONCURRENCY, 2, 1, 16);
+const MAX_CONCURRENCY = Math.max(CONCURRENCY, clampInt(process.env.SIRAGPT_MEDIA_MAX_CONCURRENCY, 8, 1, 32));
+const AUTOSCALE_DEFAULTS = Object.freeze({ queueDepth: 1, step: 2, scaleDownMs: 120_000, intervalMs: 15_000 });
+// Remote (R2) recordings are downloaded to scratch before the cut. Stale
+// scratch (a crash mid-download) older than this is removed at worker start.
+const SCRATCH_STALE_MS = 24 * 3600 * 1000;
 const SHORT_CONCURRENCY = Math.min(4, Math.max(1, positiveMs(process.env.SIRAGPT_MEDIA_SHORT_CONCURRENCY, 1)));
 const SHORT_LANE_MAX_SEC = positiveMs(process.env.SIRAGPT_MEDIA_SHORT_LANE_MAX_SEC, 15 * 60);
 // The enqueue-time duration probe is a format header read (ffprobe, no
@@ -138,6 +148,90 @@ function pendingMediaWhere(nowMs, graceMs = 120000) {
 function positiveMs(value, fallback) {
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function clampInt(value, fallback, min, max) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+function getMediaAutoscalerConfig(env = process.env) {
+  const floor = clampInt(env.SIRAGPT_MEDIA_CONCURRENCY, 2, 1, 16);
+  const ceiling = Math.max(floor, clampInt(env.SIRAGPT_MEDIA_MAX_CONCURRENCY, 8, 1, 32));
+  return {
+    enabled: ceiling > floor && String(env.SIRAGPT_MEDIA_AUTOSCALE || '') !== '0',
+    floor,
+    ceiling,
+    scaleUpThreshold: clampInt(env.SIRAGPT_MEDIA_AUTOSCALE_QUEUE_DEPTH, AUTOSCALE_DEFAULTS.queueDepth, 1, 1000),
+    scaleUpStep: clampInt(env.SIRAGPT_MEDIA_AUTOSCALE_STEP, AUTOSCALE_DEFAULTS.step, 1, 16),
+    scaleDownAfterMs: positiveMs(env.SIRAGPT_MEDIA_AUTOSCALE_SCALE_DOWN_MS, AUTOSCALE_DEFAULTS.scaleDownMs),
+    intervalMs: Math.max(5_000, positiveMs(env.SIRAGPT_MEDIA_AUTOSCALE_INTERVAL_MS, AUTOSCALE_DEFAULTS.intervalMs)),
+  };
+}
+
+/**
+ * Next long-lane concurrency (pure). Grows by `scaleUpStep` while at least
+ * `scaleUpThreshold` recordings wait AND a cloud provider can take work
+ * (`cloudReady`), never above the ceiling. Without cloud capacity (every key
+ * in cooldown, local engines only) it returns to the floor at once: whisper.cpp
+ * is CPU-bound and the engine's shared slots already bound it. With nothing
+ * waiting it returns to the floor after `scaleDownAfterMs` of quiet.
+ */
+function nextMediaAutoscalerTarget({ depth, current, busySinceMs, now, config, cloudReady }) {
+  const floor = config.floor;
+  if (!cloudReady) {
+    return { target: floor, changed: current !== floor, busySinceMs: depth > 0 ? now : busySinceMs };
+  }
+  if (depth >= config.scaleUpThreshold) {
+    const target = Math.min(config.ceiling, Math.max(floor, current + config.scaleUpStep));
+    return { target, changed: target !== current, busySinceMs: now };
+  }
+  if (depth > 0) return { target: current, changed: false, busySinceMs: now };
+  const quietForMs = busySinceMs == null ? Infinity : now - busySinceMs;
+  if (current > floor && quietForMs >= config.scaleDownAfterMs) {
+    return { target: floor, changed: true, busySinceMs: null };
+  }
+  return { target: current, changed: false, busySinceMs };
+}
+
+/**
+ * Where remote recordings are downloaded before the cut: SIRAGPT_MEDIA_SCRATCH_DIR,
+ * else `<UPLOAD_DIR>/.media-scratch` (the data volume, never served: a
+ * dot-prefixed path), else the OS temp dir.
+ */
+function mediaScratchRoot(env = process.env) {
+  const explicit = String(env.SIRAGPT_MEDIA_SCRATCH_DIR || '').trim();
+  if (explicit) return explicit;
+  const uploads = String(env.UPLOAD_DIR || '').trim();
+  return uploads ? path.join(uploads, '.media-scratch') : os.tmpdir();
+}
+
+async function ensureScratchRoot(root) {
+  try {
+    await fs.promises.mkdir(root, { recursive: true });
+    return root;
+  } catch (_) {
+    return os.tmpdir();
+  }
+}
+
+/** Remove `sira-media-*` scratch directories older than SCRATCH_STALE_MS (a crash mid-download). Best-effort. */
+async function sweepMediaScratch({ root = mediaScratchRoot(), now = Date.now(), staleMs = SCRATCH_STALE_MS } = {}) {
+  let removed = 0;
+  let entries = [];
+  try { entries = await fs.promises.readdir(root, { withFileTypes: true }); } catch (_) { return removed; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith('sira-media-')) continue;
+    const full = path.join(root, entry.name);
+    try {
+      const stat = await fs.promises.stat(full);
+      if (now - stat.mtimeMs < staleMs) continue;
+      await fs.promises.rm(full, { recursive: true, force: true });
+      removed++;
+    } catch (_) { /* best-effort */ }
+  }
+  return removed;
 }
 
 function checkpointRoot(env = process.env) {
@@ -1020,9 +1114,10 @@ function isTransientMediaError(err) {
 
 // Unlike an unbounded toLocalTemp download, this stream is abortable and its
 // scratch directory is removed on every exit, including a failed R2 download.
-async function materializeMedia(ref, { signal, storage = require('./object-storage') } = {}) {
+async function materializeMedia(ref, { signal, storage = require('./object-storage'), scratchRoot = null } = {}) {
   if (!storage.isRemote(ref)) return { path: ref, cleanup: async () => {} };
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sira-media-'));
+  const root = await ensureScratchRoot(scratchRoot || mediaScratchRoot());
+  const dir = await fs.promises.mkdtemp(path.join(root, 'sira-media-'));
   const target = path.join(dir, `source${path.extname(storage.keyFromRef(ref))}`);
   const cleanup = () => fs.promises.rm(dir, { recursive: true, force: true });
   try {
@@ -2086,6 +2181,61 @@ function createRecoveryTick({ reconcileMedia, sweepDeliveries, warn = (...args) 
 }
 
 let queue, shortQueue, queueConnection, worker, shortWorker, workerConnection, shortWorkerConnection, service, recoveryTimer;
+let autoscalerTimer = null;
+let autoscalerState = null;
+
+/**
+ * Long-lane autoscaler: every `intervalMs` reads the waiting depth and the
+ * engine's cloud capacity and moves the queue-wide cap and this worker's
+ * concurrency between the floor and the ceiling (nextMediaAutoscalerTarget).
+ */
+/**
+ * One autoscaler step, bound to a worker and its queue (injectable for tests):
+ * reads the waiting depth and the engine's cloud capacity, moves the
+ * queue-wide cap and the worker's concurrency when the target changes.
+ */
+function createMediaAutoscalerTick({ worker: target, getQueue, config, cloudReady, state, log = console, now = () => Date.now() }) {
+  return async () => {
+    if (!target) return null;
+    try {
+      const laneQueue = getQueue();
+      const depth = await laneQueue.getWaitingCount();
+      let ready = false;
+      try { ready = Boolean(cloudReady()); } catch (_) { ready = false; }
+      const next = nextMediaAutoscalerTarget({ depth, current: state.current, busySinceMs: state.busySinceMs, now: now(), config, cloudReady: ready });
+      state.busySinceMs = next.busySinceMs;
+      if (next.changed) {
+        // The queue-wide cap first (it bounds every replica), then this worker.
+        await configureMediaQueue(laneQueue, next.target);
+        target.concurrency = next.target;
+        state.current = next.target;
+        log.info?.(`[media-transcription-worker] autoscaler concurrency ${next.target} (waiting=${depth} cloud=${ready ? 'ready' : 'none'})`);
+      }
+      return { depth, cloudReady: ready, target: state.current, changed: next.changed };
+    } catch (err) {
+      log.warn?.(`[media-transcription-worker] autoscaler tick failed: ${err?.code || err?.message || 'autoscale_error'}`);
+      return null;
+    }
+  };
+}
+
+function startMediaAutoscaler({ env = process.env, log = console, cloudReady = null } = {}) {
+  if (!worker || autoscalerTimer) return null;
+  const config = getMediaAutoscalerConfig(env);
+  if (!config.enabled) return null;
+  const isCloudReady = typeof cloudReady === 'function' ? cloudReady : () => require('./audio-transcriber').cloudCapacityAvailable();
+  autoscalerState = { busySinceMs: null, current: worker.concurrency };
+  const tick = createMediaAutoscalerTick({ worker, getQueue: getMediaQueue, config, cloudReady: isCloudReady, state: autoscalerState, log });
+  autoscalerTimer = setInterval(() => { void tick(); }, config.intervalMs);
+  autoscalerTimer.unref?.();
+  return { config, tick };
+}
+
+function stopMediaAutoscaler() {
+  if (autoscalerTimer) clearInterval(autoscalerTimer);
+  autoscalerTimer = null;
+  autoscalerState = null;
+}
 function mediaQueueUnavailable() {
   return failure('media_queue_unavailable', 'La cola de transcripción no está disponible. El archivo permanece guardado.');
 }
@@ -2210,7 +2360,7 @@ function startMediaTranscriptionWorker() {
     });
   }
   const lanes = () => [
-    { current: worker, getQueue: getMediaQueue, concurrency: CONCURRENCY },
+    { current: worker, getQueue: getMediaQueue, concurrency: autoscalerState?.current ?? CONCURRENCY },
     ...(shortWorker ? [{ current: shortWorker, getQueue: getShortMediaQueue, concurrency: SHORT_CONCURRENCY }] : []),
   ];
   let starting = false;
@@ -2239,7 +2389,13 @@ function startMediaTranscriptionWorker() {
     reconcileMedia: () => getService().reconcilePendingMedia(),
     sweepDeliveries: () => require('./media-delivery').sweepPendingDeliveries(),
   });
-  worker.on('ready', () => { void ensureRunning(); void reconcile(); void sweepStaleCheckpoints().catch(() => {}); });
+  worker.on('ready', () => {
+    void ensureRunning();
+    void reconcile();
+    void sweepStaleCheckpoints().catch(() => {});
+    void sweepMediaScratch().catch(() => {});
+    startMediaAutoscaler();
+  });
   if (shortWorker) shortWorker.on('ready', () => { void ensureRunning(); });
   recoveryTimer = setInterval(() => { void ensureRunning(); void reconcile(); }, RECONCILE_INTERVAL_MS);
   recoveryTimer.unref?.();
@@ -2249,6 +2405,7 @@ function startMediaTranscriptionWorker() {
 async function closeMediaTranscriptionQueue() {
   clearInterval(recoveryTimer);
   recoveryTimer = null;
+  stopMediaAutoscaler();
   // Give aborted jobs a moment to park themselves (moveToDelayed) before
   // the connection is force-closed; they resume from checkpoints.
   if (service?.abortActive()) await new Promise(resolve => setTimeout(resolve, 1500));
@@ -2283,6 +2440,9 @@ module.exports = {
   keytermsFor, cleanTranscription, spliceRefinedRange, refineSpliceWindow, refineLosesText, refineHeardNothing, normalizeRange, refineJobIdFor, requestMedia, pickSubtitleTrack,
   subtitleTranscription, onScreenTranscription, estimateDurationFromSize, laneForDuration, shortLaneEnabled,
   createEnqueueDurationProbe, isVideoLike, getShortMediaQueue,
+  // long-lane autoscaler + scratch (batches of long recordings)
+  getMediaAutoscalerConfig, nextMediaAutoscalerTarget, createMediaAutoscalerTick, startMediaAutoscaler, stopMediaAutoscaler,
+  mediaScratchRoot, sweepMediaScratch, MAX_CONCURRENCY,
   QUEUE_NAME, SHORT_QUEUE_NAME, CONCURRENCY, SHORT_CONCURRENCY, SHORT_LANE_MAX_SEC, ATTEMPTS, PROCESS_TIMEOUT_MS, MAX_STALLED_COUNT, OWNERSHIP_CHECK_MS,
   RECONCILE_INTERVAL_MS, RECONCILE_MAX_ROWS, RECONCILE_PAGE_SIZE, RECONCILE_SELECT, MEDIA_MIME_FILTER,
 };

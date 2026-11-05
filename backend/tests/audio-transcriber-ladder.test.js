@@ -39,7 +39,10 @@ test.beforeEach(() => audioTranscriber.clearTranscriptionCooldowns());
 test.afterEach(() => audioTranscriber.clearTranscriptionCooldowns());
 
 test('Groq sits right after OpenAI and speaks the OpenAI audio surface', () => {
-  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'groq', 'xai', 'meta', 'local']);
+  // The default order leads with the Spanish-accuracy leaders (ElevenLabs
+  // Scribe, AssemblyAI); only rungs WITH a key run, so openai → groq is the
+  // ladder of an installation with those two keys.
+  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['elevenlabs', 'assemblyai', 'openai', 'groq', 'deepgram', 'xai', 'meta', 'local']);
   const providers = audioTranscriber.cloudProviders({ env: { OPENAI_API_KEY: 'sk-proj-TESTKEY_l1', GROQ_API_KEY: 'gsk_test' } });
   assert.deepEqual(providers.map((p) => p.name), ['openai', 'groq']);
   const groq = providers[1];

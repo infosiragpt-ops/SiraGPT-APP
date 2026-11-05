@@ -138,6 +138,9 @@ const KNOWN_PROVIDERS = new Set([
   'elevenlabs',
   'minimax',
   'suno',
+  // Speech-to-text providers of the transcription pool.
+  'assemblyai',
+  'deepgram',
   // Web search engines for the agents' Búsqueda rápida.
   'perplexity',
   'brave',
@@ -167,6 +170,8 @@ const DEFAULT_PROVIDER_LABELS = {
   typesafe: 'TypeSafe AI API (Jev, decisiones)',
   fal: 'fal.ai Video API',
   elevenlabs: 'ElevenLabs API (voz + música)',
+  assemblyai: 'AssemblyAI API (transcripción)',
+  deepgram: 'Deepgram API (transcripción)',
   minimax: 'MiniMax API (música)',
   suno: 'Suno Gateway API (música)',
   perplexity: 'Perplexity Search API (búsqueda rápida)',

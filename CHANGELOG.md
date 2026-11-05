@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Transcription at scale: a pool of speech-to-text providers for batches of long recordings (100 videos of 10 hours).
+  - **One ledger per provider, process-wide** (`transcription-governor`): every request of every job takes a permit (in-flight cap per provider, optional requests per minute and audio seconds per hour). A 429 seen by one job pauses that provider for every job and halves its effective cap; clean traffic earns the slots back.
+  - **Spread scheduling:** a piece skips a provider that has no free slot right now for the next healthy one, so a batch flows across every configured provider instead of queueing behind the first; `TRANSCRIBE_SCHEDULING=ladder` restores the strict order.
+  - **New rungs:** ElevenLabs Scribe v2 as a first-pass engine with speakers, AssemblyAI Universal and Deepgram Nova-3 (both with speakers), Mistral Voxtral opt-in. Every rung is key-gated; the default order leads with the Spanish-accuracy leaders.
+  - **Concurrency that follows the cloud:** the engine admits cloud-capable jobs through a pool on top of its two CPU slots, whisper.cpp processes of all long jobs share one cap, and the media queue grows from 2 to 8 concurrent recordings while work waits and a provider has capacity (back to 2 at once when none has).
+  - Batches of 100 recordings; R2 downloads land on the data volume (`.media-scratch`) and stale scratch is swept.
+
 - The document sandbox is now a complete offline workstation, so the agent can deliver almost any file, not just Office documents.
   - **What's installed:**
     - Python: ezdxf (DXF plans), matplotlib/seaborn/plotly (charts), reportlab, fpdf2 and WeasyPrint (PDF), scipy/statsmodels/scikit-learn/sympy, trimesh/numpy-stl (3D), simplekml/gpxpy (maps), ebooklib (EPUB), odfpy (OpenDocument), qrcode/python-barcode, icalendar, fastparquet, pydub/mido (audio and MIDI) and more.
