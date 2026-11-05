@@ -932,6 +932,7 @@ las entregas en `<UPLOAD_DIR>/.transcription-deliveries/`.
 | `SIRAGPT_CHUNKED_UPLOAD_STALE_MS` | `172800000` (48 h; 10 min – 30 días) | Cuánto se conserva una subida por partes sin terminar (se puede reanudar). Un barrido global cada 30 min libera las vencidas |
 | `NEXT_PUBLIC_CHUNKED_MEDIA_THRESHOLD_MB` | `32` | Audio/video desde este tamaño se suben por partes, reanudables |
 | `NEXT_PUBLIC_CHUNKED_UPLOAD_PARALLEL` | `3` (1–4) | Partes en vuelo a la vez durante una subida grande |
+| `NEXT_PUBLIC_CHUNKED_UPLOAD_TOTAL_PARTS` | `4` (1–12) | Partes en vuelo sumando todas las subidas de la pestaña: en HTTP/1.1 deja sockets libres para el chat, su stream y los sondeos |
 
 ## Robustez — tiempos máximos y retención (added 2026-10-15)
 
@@ -1123,9 +1124,10 @@ Todas son variables públicas del build del frontend (`NEXT_PUBLIC_*`).
 |---|---|---|
 | `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` | on | `0` / `off` desactiva la extracción: todo se sube como antes (se lee en el build) |
 | `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB` | `100` | Videos desde este tamaño se extraen. Debajo el ahorro es poco y el original conserva todo lo que el servidor hace con el video (cuadros, subtítulos incrustados, referencia de video) |
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MINUTES` | `20` | Un video más corto conserva el original sea cual sea su tamaño: un clip se mira tanto como se escucha (cuadros, texto en pantalla). Las clases y reuniones largas se extraen |
 | `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_AUDIO_MB` | `32` | Audios desde este tamaño se recodifican a Opus (un MP3 de 320 kbps baja ≈ 13×); los pequeños no valen una decodificación |
 | `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MAX_COPY_GB` | `4` | La copia de pista (`copy`) se queda en memoria: no se intenta sobre fuentes mayores |
-| `NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS` | `2` (1–6) | Sub-tandas de subida a la vez (cada archivo grande ya lleva 3 partes en vuelo) |
+| `NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS` | `2` (1–6) | Sub-tandas de subida a la vez (solo red: las extracciones en el navegador las acota un limitador compartido, 1 o 2 según los núcleos) |
 | `NEXT_PUBLIC_COMPOSER_MAX_FILES` | `400` | Archivos por mensaje (existente); los audios/videos tienen además el tope fijo de 100 |
 
 ## Chat attachments — any format (optional)

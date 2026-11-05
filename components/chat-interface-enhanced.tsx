@@ -369,6 +369,8 @@ import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
 import { DEFAULT_PARALLEL_UPLOADS, runUploadQueue, uploadConcurrencyFor } from "@/lib/composer/upload-scheduler"
 import { EXTRACTION_PROGRESS_SHARE, prepareMediaForUpload } from "@/lib/media/prepare-upload-media"
+import { mediaKindOf } from "@/lib/media/client-audio-extract"
+import { extractedSourceMemory } from "@/lib/media/extracted-source-memory"
 import { shouldUseChunkedUpload } from "@/lib/composer/chunked-upload"
 import {
   isAssistantMessage,
@@ -9318,9 +9320,10 @@ But first, you need to connect your Spotify account securely using the button be
           // mediabunny reports progress once per decoded sample (≈ 47 per
           // second of media): only a higher whole percentage reaches React.
           const extractionPct = new Map<number, number>();
+          // Extractions at once in the whole tab are bounded by the shared
+          // limiter (prepare-upload-media), whatever the upload width.
           const prepared = await prepareMediaForUpload(chunk.files, {
             signal: chunkAbort.signal,
-            concurrency: 1,
             onProgress: (index, fraction) => {
               const tf = chunkTemps[index];
               if (!tf) return;
@@ -9391,6 +9394,13 @@ But first, you need to connect your Spotify account securely using the button be
             return next;
           });
           const failedServerFiles = response.files.filter((f: any) => f?.success === false);
+          // A video whose audio alone reached the server: attaching it again
+          // uploads it whole (frames, subtitles, on-screen text need it).
+          files.forEach((file, idx) => {
+            if (isExtracted(file) && response.files[idx]?.success !== false && mediaKindOf(chunk.files[idx]) === 'video') {
+              extractedSourceMemory().remember(chunk.files[idx]);
+            }
+          });
           if (failedServerFiles.length > 0) {
             failedChunkCount += 1;
             const grouped: Record<string, number> = {};

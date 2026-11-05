@@ -22,6 +22,27 @@
  */
 
 import { chunkedUploadPercent, planChunks, type ChunkPlan } from "./chunked-upload"
+import { createSlotLimiter, type SlotLimiter } from "./upload-scheduler"
+
+/**
+ * Chunk PUTs in flight across every upload of the tab. Two recordings at
+ * three parts each would take all six HTTP/1.1 sockets of the origin (local
+ * dev, proxies that downgrade to HTTP/1.1), and the chat, its stream and the
+ * status polls would wait behind 16 MB parts. On HTTP/2 the uplink, not the
+ * count, is the limit.
+ */
+export const CHUNKED_UPLOAD_TOTAL_PARTS = (() => {
+  const n = Math.floor(Number(process.env.NEXT_PUBLIC_CHUNKED_UPLOAD_TOTAL_PARTS))
+  return Number.isFinite(n) && n > 0 ? Math.min(12, n) : 4
+})()
+
+let sharedPartSlots: SlotLimiter | null = null
+
+/** The tab's part slots: every chunked upload takes one per PUT. */
+export function sharedChunkPartSlots(): SlotLimiter {
+  if (!sharedPartSlots) sharedPartSlots = createSlotLimiter(CHUNKED_UPLOAD_TOTAL_PARTS)
+  return sharedPartSlots
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
@@ -390,6 +411,8 @@ export type RunResumableUploadOptions<TResult> = {
   clientExtracted?: Record<string, unknown> | null
   /** null disables resume across reloads (the in-call pause/resume still works). */
   resumeStore?: ResumeStore | null
+  /** PUTs in flight across uploads (default: the tab's shared slots); null = only `parallel` bounds them. */
+  partSlots?: SlotLimiter | null
   timing?: Partial<ResumableTiming>
   now?: () => number
   wait?: (ms: number, signal?: AbortSignal) => Promise<unknown>
@@ -436,6 +459,7 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
   const parallel = Math.max(1, Math.min(6, Math.floor(opts.parallel ?? 3)))
   const resumeStore = opts.resumeStore === undefined ? createLocalResumeStore() : opts.resumeStore
   const pauseCopy = resumeStore ? MESSAGES : { ...MESSAGES, ...RESTART_MESSAGES }
+  const partSlots = opts.partSlots === undefined ? sharedChunkPartSlots() : opts.partSlots
   const total = file.size
   const fingerprint = fingerprintFile(file)
   const saved = fingerprint && resumeStore ? resumeStore.get(fingerprint) : null
@@ -540,29 +564,42 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
           failure = abortError()
           return
         }
-        const plan = pending[next]
-        next += 1
-        inflight.set(plan.index, 0)
+        let release: (() => void) | null = null
         try {
-          await transport.putChunk({
-            uploadId,
-            index: plan.index,
-            body: file.slice(plan.start, plan.end),
-            signal: run.signal,
-            onLoaded: (loaded) => {
-              if (!inflight.has(plan.index)) return
-              inflight.set(plan.index, Math.max(0, Math.min(plan.bytes, loaded)))
-              emit("uploading")
-            },
-          })
-          inflight.delete(plan.index)
-          received.add(plan.index)
-          progressed()
-          emit("uploading")
+          release = partSlots ? await partSlots.acquire(run.signal) : null
         } catch (err) {
-          inflight.delete(plan.index)
-          if (failure === null) failure = err
+          if (failure === null) failure = isAbortLike(err) && signal?.aborted ? abortError() : err
           return
+        }
+        try {
+          // Another part failed, or the last one was taken, while this waited.
+          if (failure !== null || next >= pending.length) return
+          const plan = pending[next]
+          next += 1
+          inflight.set(plan.index, 0)
+          try {
+            await transport.putChunk({
+              uploadId,
+              index: plan.index,
+              body: file.slice(plan.start, plan.end),
+              signal: run.signal,
+              onLoaded: (loaded) => {
+                if (!inflight.has(plan.index)) return
+                inflight.set(plan.index, Math.max(0, Math.min(plan.bytes, loaded)))
+                emit("uploading")
+              },
+            })
+            inflight.delete(plan.index)
+            received.add(plan.index)
+            progressed()
+            emit("uploading")
+          } catch (err) {
+            inflight.delete(plan.index)
+            if (failure === null) failure = err
+            return
+          }
+        } finally {
+          release?.()
         }
       }
     }

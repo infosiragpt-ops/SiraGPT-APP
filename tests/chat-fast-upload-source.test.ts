@@ -34,6 +34,15 @@ describe("fast upload wiring (composer + transport + server)", () => {
     assert.doesNotMatch(chatInterface, /apiClient\.uploadFileChunked\(chunk\.files\[0\]/, "never the original once an extraction replaced it")
   })
 
+  it("remembers a video only once its extracted audio uploaded, so attaching it again uploads it whole", () => {
+    assert.match(chatInterface, /import \{ extractedSourceMemory \} from "@\/lib\/media\/extracted-source-memory"/)
+    const success = chatInterface.indexOf("const failedServerFiles = response.files.filter((f: any) => f?.success === false);")
+    const failed = chatInterface.indexOf("toast.error('La subida falló. Toca el ícono de reintento en el archivo.');")
+    const remember = chatInterface.indexOf("extractedSourceMemory().remember(chunk.files[idx]);")
+    assert.ok(failed > 0 && success > failed && remember > success, "after the server answered with files, never before the upload")
+    assert.match(chatInterface, /if \(isExtracted\(file\) && response\.files\[idx\]\?\.success !== false && mediaKindOf\(chunk\.files\[idx\]\) === 'video'\) \{/)
+  })
+
   it("runs the upload sub-batches through the bounded parallel queue instead of a serial loop", () => {
     assert.match(chatInterface, /import \{ DEFAULT_PARALLEL_UPLOADS, runUploadQueue, uploadConcurrencyFor \} from "@\/lib\/composer\/upload-scheduler"/)
     assert.match(chatInterface, /await runUploadQueue\(\s*\n\s*uploadChunks\.map\(\(chunk, chunkIndex\) => \(\{ id: String\(chunkIndex\), run: \(signal: AbortSignal\) => processChunk\(chunk, chunkIndex, signal\) \}\)\),\s*\n\s*\{ concurrency: uploadConcurrencyFor\(uploadChunks\.length, DEFAULT_PARALLEL_UPLOADS\) \},\s*\n\s*\)\.done;/)

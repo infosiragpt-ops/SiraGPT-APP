@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { isAbortLike, runUploadQueue, uploadConcurrencyFor, type UploadJob } from "@/lib/composer/upload-scheduler"
+import { createSlotLimiter, isAbortLike, runUploadQueue, uploadConcurrencyFor, type UploadJob } from "@/lib/composer/upload-scheduler"
 
 /**
  * The composer's parallel upload scheduler: a FIFO of upload jobs with a
@@ -133,5 +133,32 @@ describe("runUploadQueue", () => {
     expect(uploadConcurrencyFor(100, 99)).toBe(6)
     expect(uploadConcurrencyFor(100, 0)).toBe(1)
     expect(uploadConcurrencyFor(0, 3)).toBe(1)
+  })
+})
+
+describe("createSlotLimiter", () => {
+  it("grants slots in arrival order, frees a waiter that aborts and never double-releases", async () => {
+    const limiter = createSlotLimiter(1)
+    const order: string[] = []
+    const first = await limiter.acquire()
+    const leaving = new AbortController()
+    const b = limiter.acquire(leaving.signal).then((release) => { order.push("b"); return release })
+    const c = limiter.acquire().then((release) => { order.push("c"); return release })
+    leaving.abort()
+    await expect(b).rejects.toMatchObject({ name: "AbortError" })
+    first()
+    first()
+    const releaseC = await c
+    expect(order).toEqual(["c"])
+    // The double release above did not create a second slot.
+    let granted = false
+    const d = limiter.acquire().then((release) => { granted = true; return release })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(granted).toBe(false)
+    releaseC()
+    ;(await d)()
+    expect(granted).toBe(true)
+    await expect(limiter.acquire(AbortSignal.abort())).rejects.toMatchObject({ name: "AbortError" })
+    expect(createSlotLimiter(0).size).toBe(1)
   })
 })

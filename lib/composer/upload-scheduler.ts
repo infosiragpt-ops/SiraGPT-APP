@@ -55,6 +55,58 @@ export const DEFAULT_PARALLEL_UPLOADS = Math.min(
   Math.max(1, envInt(process.env.NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS, 2)),
 )
 
+function slotAbortError(): Error {
+  try {
+    return new DOMException("Waiting for a slot was aborted.", "AbortError")
+  } catch {
+    return Object.assign(new Error("Waiting for a slot was aborted."), { name: "AbortError" })
+  }
+}
+
+/** A FIFO counting semaphore; a waiter whose signal aborts leaves the line without a slot. */
+export type SlotLimiter = { readonly size: number; acquire(signal?: AbortSignal): Promise<() => void> }
+
+export function createSlotLimiter(size: number): SlotLimiter {
+  const max = Math.max(1, Math.floor(Number(size)) || 1)
+  let active = 0
+  const waiting: Array<() => void> = []
+  const pump = () => {
+    while (active < max && waiting.length) {
+      active += 1
+      waiting.shift()!()
+    }
+  }
+  return {
+    size: max,
+    acquire(signal) {
+      if (signal?.aborted) return Promise.reject(slotAbortError())
+      return new Promise<() => void>((resolve, reject) => {
+        let released = false
+        const release = () => {
+          if (released) return
+          released = true
+          active -= 1
+          pump()
+        }
+        const grant = () => {
+          signal?.removeEventListener("abort", onAbort)
+          resolve(release)
+        }
+        const onAbort = () => {
+          const at = waiting.indexOf(grant)
+          if (at >= 0) {
+            waiting.splice(at, 1)
+            reject(slotAbortError())
+          }
+        }
+        signal?.addEventListener("abort", onAbort, { once: true })
+        waiting.push(grant)
+        pump()
+      })
+    },
+  }
+}
+
 export function isAbortLike(err: unknown): boolean {
   if (!err || typeof err !== "object") return false
   const e = err as { name?: unknown; code?: unknown; message?: unknown }

@@ -71,7 +71,8 @@ test('frames of a video whose audio alone was uploaded fail with an explicit rea
     },
   };
   await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
-    (err) => err.code === 'MEDIA_ORIGINAL_NOT_UPLOADED' && /Clase 3\.mp4/.test(err.message));
+    // The remedy it names is one the composer honours (extracted-source-memory).
+    (err) => err.code === 'MEDIA_ORIGINAL_NOT_UPLOADED' && /Clase 3\.mp4/.test(err.message) && /attaching the same video again uploads it whole/.test(err.message));
   // A plain audio upload keeps the usual answer.
   prisma.documentAnalysis.findMany = async () => [];
   await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
@@ -88,4 +89,6 @@ test('a refine keeps the video provenance of its transcript; silent extracted au
   assert.equal(out.sourceMedia, 'video');
   assert.equal(out.sourceName, 'Clase.mp4');
   assert.equal(queue.isTransientMediaError({ code: 'extracted_audio_no_speech' }), false);
+  const told = queue.publicFailureMessage({ code: 'extracted_audio_no_speech', message: 'Solo se subió el audio de «Clase.mp4» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla, vuelve a adjuntar el mismo video: esta vez se sube completo.' });
+  assert.match(told, /vuelve a adjuntar el mismo video: esta vez se sube completo/);
 });

@@ -3308,14 +3308,32 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   (± 1,5 s / 0,5 %). Solo la pista de audio principal (`tracks: 'primary'`). Sube el original
   si el audio empieza > 0,1 s después del video (`audio_offset`) o si la pista es silencio
   (pico < −50 dBFS medido en `process`, `silent_audio`: el servidor necesita el video para
-  subtítulos y texto en pantalla). Abort real, también durante `Conversion.init`. Gate puro
-  `planAudioExtraction` (video ≥ 100 MB, audio ≥ 32 MB); el interruptor
+  subtítulos y texto en pantalla). Un video de menos de 20 min conserva el original sea cual sea
+  su tamaño (`short_video`, `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MINUTES`): un clip se mira
+  tanto como se escucha, y las clases y reuniones largas, el objetivo, quedan muy por encima. La
+  copia de pista (`copy`) no mide silencio; la de AAC escribe con `fastStart: false` (con
+  «in-memory» el muxer retenía los buffers de lectura de la fuente: ≈ el video entero en RAM).
+  La duración de la fuente sale solo de los metadatos (calcularla lee el archivo entero); sin
+  ella, la regla de 20 min usa la duración leída de la salida. El sondeo se cancela al instante
+  (✕ libera la entrada). Abort real, también durante `Conversion.init`. Gate
+  puro `planAudioExtraction` (video ≥ 100 MB, audio ≥ 32 MB); el interruptor
   `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` se lee con un acceso literal (`BUILD_ENV`): Next solo
   inyecta así las `NEXT_PUBLIC_*` en el navegador. `extractedFileName` («Clase 3.mp4» →
   «Clase 3.audio.ogg»), `clientExtractedMetadata`. Seam `loadMediabunny` para tests.
 - **`lib/media/prepare-upload-media.ts`**: orquestación pura por sub-tanda (extractor inyectable,
-  concurrencia 1–2 según núcleos, señal por archivo, progreso 0–1, outcome por índice); lo que
-  falla o se cancela se sube original; la alineación archivo ↔ chip nunca cambia.
+  señal por archivo, progreso 0–1, outcome por índice); lo que falla o se cancela se sube
+  original; la alineación archivo ↔ chip nunca cambia. Un limitador para toda la pestaña
+  (`sharedExtractionLimiter`, 1–2 según núcleos) acota las extracciones de todas las sub-tandas,
+  drops y reintentos. Un vigilante abandona una extracción sin progreso en 60 s (`stalled`: se
+  sube el original) y una cancelada que no se detiene suelta su lugar a los 5 s.
+- **Partes en vuelo** (`lib/composer/resumable-upload.ts`): como mucho 4 sumando todas las subidas
+  (`CHUNKED_UPLOAD_TOTAL_PARTS`, semáforo `createSlotLimiter` de `upload-scheduler.ts`): en
+  HTTP/1.1 dos archivos × 3 partes ocupaban los 6 sockets del origen y el chat esperaba.
+- **`lib/media/extracted-source-memory.ts`**: los videos cuyo audio extraído ya se subió
+  (`name|size|lastModified`, 24 h, máx. 200, en `localStorage` y en memoria si está bloqueado).
+  Re-adjuntar uno sube el video completo (`reattached_original`): es el remedio que dan los
+  mensajes del servidor. El compositor lo recuerda solo cuando la subida del audio terminó bien,
+  así quitar un chip y volver a ponerlo antes sigue extrayendo.
 - **`lib/composer/upload-scheduler.ts`**: cola FIFO con N en vuelo (`runUploadQueue`,
   `NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS` = 2), cancel por trabajo (pendiente nunca arranca,
   en curso se aborta y se da por cancelado al instante) y global, resultados en orden de entrada.
@@ -3342,16 +3360,18 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   (`spliceRefinedRange` los conserva); `isVideoRow` lo respeta (los subtítulos automáticos
   siguen) y los entregables llevan el nombre del video, no «Clase 3.audio.ogg». Si ese audio no
   tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
-  pantalla quedaron en el video, hace falta subir el original). Las herramientas de cuadros
-  sobre un video del que solo se subió el audio dicen eso (`MEDIA_ORIGINAL_NOT_UPLOADED`) en vez
-  de «no encontrado».
+  pantalla quedaron en el video; «vuelve a adjuntar el mismo video: esta vez se sube completo»).
+  Las herramientas de cuadros sobre un video del que solo se subió el audio dicen eso y el mismo
+  remedio (`MEDIA_ORIGINAL_NOT_UPLOADED`) en vez de «no encontrado».
   La entrega durable admite 500 archivos (`MAX_FILES`; antes 50, por debajo del lote de 100), y
   el seguimiento del compositor reconoce el lote de 100 (`resolveMediaFollowupFiles`).
-- Tests: `tests/lib/upload-scheduler.test.ts` (5), `tests/lib/client-audio-extract.test.ts` (5),
-  `tests/lib/prepare-upload-media.test.ts` (3), `tests/chat-fast-upload-source.test.ts` (5),
-  `tests/attachment-ingest.test.ts` (100/101), `backend/tests/client-extracted-metadata.test.js`,
-  casos nuevos en `media-transcript-artifacts`, `media-transcript-store`, `media-delivery-store`
-  y `chat-composer-files`.
+- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (12),
+  `tests/lib/prepare-upload-media.test.ts` (7), `tests/lib/extracted-source-memory.test.ts` (4),
+  `tests/chat-fast-upload-source.test.ts` (6), `tests/attachment-ingest.test.ts` (100/101),
+  `backend/tests/client-extracted-metadata.test.js`, `backend/tests/package-test-script-paths.test.js`
+  (cada ruta del script `npm test` existe), casos nuevos en `media-transcript-artifacts`,
+  `media-transcript-store`, `media-delivery-store`, `chunked-upload-resumable` y
+  `chat-composer-files`.
 - **Pendiente (PR2b, requiere R2 en producción)**: multipart directo a R2 desde el navegador
   (`createR2MultipartTransport` sobre `ResumableUploadTransport`, firmante con
   `requestChecksumCalculation: 'WHEN_REQUIRED'`, CORS con `ExposeHeaders: ETag`, lifecycle
@@ -3359,6 +3379,7 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   pasa `R2_*` al backend. También: validación real en Safari/Firefox (WebCodecs Opus), cola de
   extracción persistente entre recargas (IndexedDB). mediabunny no lee pistas de subtítulos de
   entrada, así que un video ≥ 100 MB con subtítulos incrustados pierde su contraste de
-  subtítulos (los videos con pista en silencio sí suben originales). Un video ≥ 100 MB con
-  música pero sin voz, o al que luego se le piden cuadros, necesita el original: hoy no hay
-  opción por archivo para «subir el original» (UI, decisión de Luis).
+  subtítulos (los videos con pista en silencio sí suben originales). Un video largo con música
+  pero sin voz, o al que luego se le piden cuadros, necesita el original: se consigue
+  re-adjuntándolo. Una opción visible por archivo («subir el original») o subir el video en
+  segundo plano tras el audio es UI, decisión de Luis.

@@ -132,7 +132,7 @@ async function resolveOwnedMediaSource(options = {}, ctx = {}) {
     // in the browser to transcribe it fast): say so instead of «not found».
     const extracted = await findExtractedVideoSource(prisma, ids, ctx.userId);
     if (extracted) {
-      throw mediaError(`only the audio of «${extracted}» was uploaded (extracted in the browser for transcription); frames, captures and clips need the original video attached again`, 'MEDIA_ORIGINAL_NOT_UPLOADED');
+      throw mediaError(`only the audio of «${extracted}» was uploaded (extracted in the browser for transcription); attaching the same video again uploads it whole, which frames, captures and clips need`, 'MEDIA_ORIGINAL_NOT_UPLOADED');
     }
   }
 

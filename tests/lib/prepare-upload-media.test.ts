@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { defaultExtractionConcurrency, extractionFraction, prepareMediaForUpload } from "@/lib/media/prepare-upload-media"
+import { createExtractionLimiter, defaultExtractionConcurrency, extractionFraction, prepareMediaForUpload } from "@/lib/media/prepare-upload-media"
 import type { ExtractionOutcome } from "@/lib/media/client-audio-extract"
 
 /**
@@ -27,6 +27,56 @@ const extractedOutcome = (source: File, name: string): ExtractionOutcome => ({
 })
 
 describe("prepareMediaForUpload", () => {
+  it("one limiter bounds the extractions of every batch, drop and retry together", async () => {
+    const limiter = createExtractionLimiter(1)
+    let active = 0
+    let peak = 0
+    const extract = async (f: File) => {
+      peak = Math.max(peak, ++active)
+      await new Promise((r) => setTimeout(r, 5))
+      active -= 1
+      return extractedOutcome(f, f.name.replace(/\.\w+$/, ".audio.ogg"))
+    }
+    const batches = await Promise.all([
+      prepareMediaForUpload([file("a.mp4", "video/mp4", 500 * MB), file("b.mp4", "video/mp4", 500 * MB)], { limiter, extract, concurrency: 2 }),
+      prepareMediaForUpload([file("c.mp4", "video/mp4", 500 * MB)], { limiter, extract }),
+    ])
+    expect(peak).toBe(1)
+    expect(batches.map((b) => b.extracted)).toEqual([2, 1])
+  })
+
+  it("a stuck extraction is abandoned for the original and gives its slot back, even when it ignores the abort", async () => {
+    const limiter = createExtractionLimiter(1)
+    const deaf = () => new Promise<ExtractionOutcome>(() => {})
+    const stuck = await prepareMediaForUpload([file("a.mp4", "video/mp4", 500 * MB)], { limiter, extract: deaf, stallMs: 30, graceMs: 20 })
+    expect(stuck.files[0].name).toBe("a.mp4")
+    expect(stuck.skipped).toBe(1)
+    // One that honours the abort stops at once and is reported the same way.
+    const outcomes: string[] = []
+    const listening = (f: File, opts: { signal?: AbortSignal }) => new Promise<ExtractionOutcome>((_resolve, reject) => {
+      opts.signal?.addEventListener("abort", () => reject(new DOMException("x", "AbortError")), { once: true })
+    })
+    const second = await prepareMediaForUpload([file("b.mp4", "video/mp4", 500 * MB)], { limiter, extract: listening, stallMs: 30, graceMs: 5_000, onOutcome: (_i, o) => outcomes.push("reason" in o ? o.reason : o.tier) })
+    expect(second.files[0].name).toBe("b.mp4")
+    expect(outcomes).toEqual(["stalled"])
+    // The slot is free again: the next extraction runs.
+    const third = await prepareMediaForUpload([file("c.mp4", "video/mp4", 500 * MB)], { limiter, extract: async (f) => extractedOutcome(f, "c.audio.ogg") })
+    expect(third.extracted).toBe(1)
+  })
+
+  it("a cancelled extraction that ignores its signal frees the slot after the grace period", async () => {
+    const limiter = createExtractionLimiter(1)
+    const chip = new AbortController()
+    const first = prepareMediaForUpload([file("a.mp4", "video/mp4", 500 * MB)], { limiter, extract: () => new Promise<ExtractionOutcome>(() => {}), signal: chip.signal, graceMs: 20 })
+    await tick()
+    chip.abort()
+    expect((await first).cancelled).toBe(1)
+    const started = Date.now()
+    const next = await prepareMediaForUpload([file("b.mp4", "video/mp4", 500 * MB)], { limiter, extract: async (f) => extractedOutcome(f, "b.audio.ogg") })
+    expect(next.extracted).toBe(1)
+    expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
   it("extracts eligible recordings with bounded concurrency, replaces them in place and keeps the rest untouched", async () => {
     const files = [file("a.mp4", "video/mp4", 500 * MB), file("notas.pdf", "application/pdf", 1 * MB), file("b.mkv", "video/x-matroska", 900 * MB), file("c.mp3", "audio/mpeg", 100 * MB)]
     const started: string[] = []
@@ -42,7 +92,7 @@ describe("prepareMediaForUpload", () => {
     })
     const progress: Array<[number, number]> = []
     const outcomes: Array<[number, string]> = []
-    const pending = prepareMediaForUpload(files, { extract, concurrency: 2, onProgress: (i, p) => progress.push([i, p]), onOutcome: (i, o) => outcomes.push([i, o.tier]) })
+    const pending = prepareMediaForUpload(files, { limiter: createExtractionLimiter(8), extract, concurrency: 2, onProgress: (i, p) => progress.push([i, p]), onOutcome: (i, o) => outcomes.push([i, o.tier]) })
     await tick()
     expect(started).toEqual(["a.mp4", "b.mkv"], "two at a time, in order; the PDF is never considered")
     gates.get("a.mp4")!()
@@ -63,6 +113,19 @@ describe("prepareMediaForUpload", () => {
     expect(outcomes.sort()).toEqual([[0, "opus"], [2, "opus"], [3, "none"]])
   })
 
+  it("a video whose audio alone was uploaded before is uploaded whole when attached again; audio files are still extracted", async () => {
+    const video = file("Clase.mp4", "video/mp4", 500 * MB)
+    const podcast = file("Podcast.mp3", "audio/mpeg", 100 * MB)
+    const remembered = new Set<unknown>([video, podcast])
+    const memory = { has: (f: unknown) => remembered.has(f), remember: () => {} }
+    const started: string[] = []
+    const extract = async (f: File) => { started.push(f.name); return extractedOutcome(f, f.name.replace(/\.\w+$/, ".audio.ogg")) }
+    const prepared = await prepareMediaForUpload([video, podcast], { limiter: createExtractionLimiter(8), extract, memory })
+    expect(started).toEqual(["Podcast.mp3"])
+    expect(prepared.files[0]).toBe(video)
+    expect(prepared.files[1].name).toBe("Podcast.audio.ogg")
+  })
+
   it("a failed or cancelled extraction uploads the original; the per-file signal and the global signal both cancel", async () => {
     const files = [file("a.mp4", "video/mp4", 500 * MB), file("b.mp4", "video/mp4", 500 * MB), file("c.mp4", "video/mp4", 500 * MB)]
     const chip = new AbortController()
@@ -72,7 +135,7 @@ describe("prepareMediaForUpload", () => {
       if (f.name === "c.mp4") setTimeout(() => resolve(extractedOutcome(f, "c.audio.ogg")), 5)
     })
     const outcomes: string[] = []
-    const pending = prepareMediaForUpload(files, { extract, concurrency: 3, signalFor: (i) => (i === 1 ? chip.signal : undefined), onOutcome: (i, o) => outcomes.push(`${i}:${o.tier}:${"reason" in o ? o.reason : ""}`) })
+    const pending = prepareMediaForUpload(files, { limiter: createExtractionLimiter(8), extract, concurrency: 3, signalFor: (i) => (i === 1 ? chip.signal : undefined), onOutcome: (i, o) => outcomes.push(`${i}:${o.tier}:${"reason" in o ? o.reason : ""}`) })
     await tick()
     chip.abort()
     const prepared = await pending
@@ -84,7 +147,7 @@ describe("prepareMediaForUpload", () => {
 
     const all = new AbortController()
     const never = () => new Promise<ExtractionOutcome>(() => {})
-    const p2 = prepareMediaForUpload([file("x.mp4", "video/mp4", 500 * MB)], { extract: never, signal: all.signal })
+    const p2 = prepareMediaForUpload([file("x.mp4", "video/mp4", 500 * MB)], { limiter: createExtractionLimiter(8), graceMs: 10, extract: never, signal: all.signal })
     await tick()
     all.abort()
     const r2 = await p2

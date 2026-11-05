@@ -1769,7 +1769,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         // Only the audio of a video reached the server (extracted in the
         // browser): its subtitles and on-screen text stayed in the video.
         const source = await sourceMediaOf(row);
-        if (source) throw failure('extracted_audio_no_speech', `Solo se subió el audio de «${source.sourceName || row.originalName || 'el video'}» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla hace falta el video original.`);
+        if (source) throw failure('extracted_audio_no_speech', `Solo se subió el audio de «${source.sourceName || row.originalName || 'el video'}» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla, vuelve a adjuntar el mismo video: esta vez se sube completo.`);
       }
       if (!fallback) throw engineError;
       return { transcription: fallback, plain: fallback.transcript };
@@ -2458,7 +2458,7 @@ async function closeMediaTranscriptionQueue() {
 
 module.exports = {
   isMediaFile, hasTranscript, isPartialTranscript, isReprocessingPartial, partialFailureMessage, transcriptTextFor, onRecordingClock, createRecoveryTick,
-  keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
+  keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, publicFailureMessage, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
   createDiskCheckpoint, createStagedCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
   readMediaProgress: payload => getService().readMediaProgress(payload),
   readMediaJobStates: payload => getService().readMediaJobStates(payload),

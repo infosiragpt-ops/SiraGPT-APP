@@ -85,6 +85,8 @@ export type ExtractOptions = {
   maxCopySourceBytes?: number
   /** Below this fraction of bytes saved the original is uploaded instead. */
   minSavingsRatio?: number
+  /** A video shorter than this many seconds keeps the original (default CLIENT_AUDIO_EXTRACT_MIN_VIDEO_SECONDS). */
+  minVideoSeconds?: number
 }
 
 function envInt(value: string | undefined, fallback: number): number {
@@ -103,9 +105,15 @@ export const OPUS_TARGET = Object.freeze({ codec: "opus" as const, numberOfChann
  * every video feature on the server.
  */
 export const CLIENT_AUDIO_EXTRACT_MIN_VIDEO_BYTES = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB, 100) * MB
+/**
+ * Videos shorter than this keep the original whatever their size: a clip is
+ * watched as much as heard (frames, subtitles, on-screen text), while the
+ * lectures and meetings this is for last far longer.
+ */
+export const CLIENT_AUDIO_EXTRACT_MIN_VIDEO_SECONDS = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MINUTES, 20) * 60
 /** Audio files from this size on are re-encoded (a 320 kbps MP3 shrinks ≈ 13×); small ones are not worth a decode. */
 export const CLIENT_AUDIO_EXTRACT_MIN_AUDIO_BYTES = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_AUDIO_MB, 32) * MB
-/** A track copy keeps the whole output in memory: bound the source it is tried on. */
+/** The extracted audio sits in memory until it is uploaded: bound the source a track copy is tried on. */
 export const DEFAULT_MAX_COPY_SOURCE_BYTES = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MAX_COPY_GB, 4) * 1024 * MB
 export const DEFAULT_MIN_SAVINGS_RATIO = 0.1
 /** The extracted duration may differ from the source by this much (container rounding, priming samples). */
@@ -185,7 +193,10 @@ type CopyContainer = { make: (mb: MediabunnyModule) => InstanceType<MediabunnyMo
 export function copyContainerFor(codec: string | null): CopyContainer | null {
   switch (codec) {
     case "aac":
-      return { make: (mb) => new mb.Mp4OutputFormat({ fastStart: "in-memory" }), extension: "m4a", mimeType: "audio/mp4" }
+      // Not "in-memory": that muxer keeps every copied packet until the end,
+      // and each one is a view into the source's read buffers (≈ the whole
+      // video stays in RAM). Without it each chunk is written and released.
+      return { make: (mb) => new mb.Mp4OutputFormat({ fastStart: false }), extension: "m4a", mimeType: "audio/mp4" }
     case "mp3":
       return { make: (mb) => new mb.Mp3OutputFormat(), extension: "mp3", mimeType: "audio/mpeg" }
     case "opus":
@@ -259,26 +270,36 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
   emit({ phase: "probing", progress: 0 })
 
   const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS })
+  // ✕ during the probe: disposing the input rejects its pending reads at once.
+  const onProbeAbort = () => { try { input.dispose() } catch { /* already disposed */ } }
+  signal?.addEventListener("abort", onProbeAbort, { once: true })
   try {
     try {
       await input.getFormat()
     } catch {
+      throwIfAborted()
       return skip("unreadable")
     }
     const track = await input.getPrimaryAudioTrack().catch(() => null)
+    throwIfAborted()
     if (!track) return skip("no_audio_track")
     const codec = track.codec ?? null
-    const sourceDuration = (await input.getDurationFromMetadata().catch(() => null))
-      ?? (await input.computeDuration().catch(() => null))
+    // From the container's metadata only: computing it reads the whole file
+    // (a MediaRecorder WebM has none), and the conversion reads it again.
+    // The read-back duration of the small output stands in when it is missing.
+    const sourceDuration = await input.getDurationFromMetadata().catch(() => null)
     // Audio that starts after the video: dropping the video would rebase it to
     // 0 and shift every timestamp early. The server keeps that lead.
     const firstAll = await input.getFirstTimestamp().catch(() => null)
     const firstAudio = await input.getFirstTimestamp([track]).catch(() => null)
     if (firstAll != null && firstAudio != null && firstAudio - firstAll > MAX_AUDIO_LEAD_SECONDS) return skip("audio_offset")
+    const kind = mediaKindOf(file)
+    const minVideoSeconds = options.minVideoSeconds ?? CLIENT_AUDIO_EXTRACT_MIN_VIDEO_SECONDS
+    if (kind === "video" && sourceDuration != null && sourceDuration < minVideoSeconds) return skip("short_video")
     throwIfAborted()
+    signal?.removeEventListener("abort", onProbeAbort)
     emit({ phase: "probing", progress: 1 })
 
-    const kind = mediaKindOf(file)
     const canDecode = await track.canDecode().catch(() => false)
     const canOpus = canDecode && (await mb.canEncodeAudio("opus", { numberOfChannels: OPUS_TARGET.numberOfChannels, sampleRate: OPUS_TARGET.sampleRate, bitrate: OPUS_TARGET.bitrate }).catch(() => false))
 
@@ -382,6 +403,8 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
         lastReason = "duration_mismatch"
         continue
       }
+      // No duration in the source's metadata: the short-video rule uses the output's.
+      if (kind === "video" && sourceDuration == null && extractedDuration < minVideoSeconds) return skip("short_video")
       emit({ phase: "verifying", progress: 1 })
       return {
         ...source,
@@ -395,6 +418,7 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
     }
     return skip(lastReason)
   } finally {
+    signal?.removeEventListener("abort", onProbeAbort)
     input.dispose()
   }
 }

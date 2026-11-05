@@ -17,6 +17,7 @@ import {
   formatRateEs,
   type ChunkedUploadStats,
 } from "@/lib/composer/resumable-upload"
+import { createSlotLimiter } from "@/lib/composer/upload-scheduler"
 
 /**
  * uploadFileChunked against an in-memory chunked-upload server: the real
@@ -442,6 +443,22 @@ describe("resumable upload failure budgets", () => {
     }).catch((error: unknown) => error)
     return { error: await result, attempts, deletes, received: [...received], elapsed: now }
   }
+
+  it("parts in flight are bounded across uploads, so other requests to the origin keep a socket", async () => {
+    const slots = createSlotLimiter(4)
+    let inFlight = 0
+    let peak = 0
+    const transport = (id: string) => ({
+      init: async () => ({ uploadId: id, chunkSize: 10, totalChunks: 5 }),
+      status: async () => ({ uploadId: id, size: 45, chunkSize: 10, totalChunks: 5, received: [] }),
+      putChunk: async () => { peak = Math.max(peak, ++inFlight); await new Promise((r) => setTimeout(r, 5)); inFlight -= 1 },
+      complete: async () => ({ ok: id }),
+      abort: async () => {},
+    })
+    const results = await Promise.all(["a", "b"].map((id) => runResumableUpload({ file: lecture(), chunkBytes: 10, parallel: 3, resumeStore: null, partSlots: slots, transport: transport(id) })))
+    expect(results).toEqual([{ ok: "a" }, { ok: "b" }])
+    expect(peak).toBe(4)
+  })
 
   it("newly confirmed chunks from lost PUT responses reset the pause budget", async () => {
     let now = 0

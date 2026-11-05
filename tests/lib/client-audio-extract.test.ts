@@ -45,10 +45,14 @@ type FakeOptions = {
   readBackNoAudio?: boolean
   /** Conversion.init resolves only when this promise does. */
   initGate?: Promise<void>
+  /** What the source's container metadata says (default: sourceDuration); computing reads the whole file. */
+  metadataDuration?: number | null
+  /** getFormat never resolves; disposing the input rejects it (like mediabunny's pending reads). */
+  probeHang?: boolean
 }
 
 function fakeMediabunny(opts: FakeOptions = {}) {
-  const calls: { conversions: any[]; cancels: number; disposed: number; readBacks: number; executed: number } = { conversions: [], cancels: 0, disposed: 0, readBacks: 0, executed: 0 }
+  const calls: { conversions: any[]; cancels: number; disposed: number; readBacks: number; executed: number; sourceComputes: number } = { conversions: [], cancels: 0, disposed: 0, readBacks: 0, executed: 0, sourceComputes: 0 }
   let inputs = 0
   class BlobSource { constructor(public blob: Blob) {} }
   class BufferTarget { buffer: ArrayBuffer | null = null }
@@ -62,7 +66,12 @@ function fakeMediabunny(opts: FakeOptions = {}) {
       this.isReadBack = inputs > 0
       inputs += 1
     }
-    async getFormat() { if (opts.unreadable && !this.isReadBack) throw new Error("unreadable"); return {} }
+    private rejectProbe: ((err: Error) => void) | null = null
+    async getFormat() {
+      if (opts.unreadable && !this.isReadBack) throw new Error("unreadable")
+      if (opts.probeHang && !this.isReadBack) return new Promise((_resolve, reject) => { this.rejectProbe = reject })
+      return {}
+    }
     async getPrimaryAudioTrack() {
       if (this.isReadBack) return opts.readBackNoAudio ? null : { id: 1, codec: "opus" }
       if (opts.noAudioTrack) return null
@@ -73,10 +82,14 @@ function fakeMediabunny(opts: FakeOptions = {}) {
     }
     async getDurationFromMetadata() {
       if (this.isReadBack) { calls.readBacks += 1; return opts.extractedDuration === undefined ? (opts.sourceDuration === undefined ? 3600 : opts.sourceDuration) : opts.extractedDuration }
+      if (opts.metadataDuration !== undefined) return opts.metadataDuration
       return opts.sourceDuration === undefined ? 3600 : opts.sourceDuration
     }
-    async computeDuration() { return this.getDurationFromMetadata() }
-    dispose() { calls.disposed += 1 }
+    async computeDuration() {
+      if (!this.isReadBack) { calls.sourceComputes += 1; return opts.sourceDuration === undefined ? 3600 : opts.sourceDuration }
+      return this.getDurationFromMetadata()
+    }
+    dispose() { calls.disposed += 1; this.rejectProbe?.(new Error("InputDisposedError")) }
   }
   class Output { constructor(public options: { format: any; target: BufferTarget }) {} get target() { return this.options.target } }
   class Conversion {
@@ -192,14 +205,14 @@ describe("extractAudioForTranscription", () => {
     expect(clientExtractedMetadata(out)).toEqual({ tier: "opus", sourceName: "Clase 3 (final).mp4", sourceSize: 3 * 1024 * MB, sourceType: "video/mp4", codec: "aac", durationSeconds: 36_000 })
   })
 
-  it("copy tier when the browser cannot encode Opus: the AAC track goes into an audio-only MP4 (fastStart in-memory); an audio-only source without an encoder is left alone", async () => {
+  it("copy tier when the browser cannot encode Opus: the AAC track goes into an audio-only MP4 written as it goes; an audio-only source without an encoder is left alone", async () => {
     const fake = fakeMediabunny({ codec: "aac", canOpus: false, sourceDuration: 3600, outputBytes: { copy: 50 * MB } })
     const out = await extractAudioForTranscription(withSize(video(), 600 * MB), { loadMediabunny: fake.load })
     expect(out.tier).toBe("copy")
     if (out.tier !== "copy") return
     expect(fake.calls.conversions[0].audio({ id: 2 })).toEqual({})
     expect(fake.calls.conversions[0].output.options.format.name).toBe("mp4")
-    expect(fake.calls.conversions[0].output.options.format.options).toEqual({ fastStart: "in-memory" })
+    expect(fake.calls.conversions[0].output.options.format.options).toEqual({ fastStart: false })
     expect(out.file.name).toBe("Clase 3 (final).audio.m4a")
     expect(out.file.type).toBe("audio/mp4")
 
@@ -250,6 +263,36 @@ describe("extractAudioForTranscription", () => {
     expect(late.calls.conversions).toHaveLength(0)
     const tiny = fakeMediabunny({ codec: "aac", firstTimestamp: 0, audioFirstTimestamp: 0.04 })
     expect((await extractAudioForTranscription(withSize(video(), 300 * MB), { loadMediabunny: tiny.load })).tier).toBe("opus")
+  })
+
+  it("a video shorter than 20 minutes keeps the original whatever its size; long ones and audio files are extracted", async () => {
+    const clip = fakeMediabunny({ codec: "aac", sourceDuration: 8 * 60 })
+    expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: clip.load })).toMatchObject({ tier: "none", reason: "short_video" })
+    expect(clip.calls.conversions).toHaveLength(0)
+    const lecture = fakeMediabunny({ codec: "aac", sourceDuration: 20 * 60 })
+    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: lecture.load })).tier).toBe("opus")
+    const tuned = fakeMediabunny({ codec: "aac", sourceDuration: 8 * 60 })
+    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: tuned.load, minVideoSeconds: 60 })).tier).toBe("opus")
+    const song = fakeMediabunny({ codec: "aac", sourceDuration: 8 * 60 })
+    expect((await extractAudioForTranscription(withSize(video(100 * MB, "Canción.wav", "audio/wav"), 100 * MB), { loadMediabunny: song.load })).tier).toBe("opus")
+  })
+
+  it("the source duration comes from metadata only: without it the whole file is never read twice, and the output's duration decides", async () => {
+    const live = fakeMediabunny({ codec: "aac", metadataDuration: null, sourceDuration: 3600 })
+    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: live.load })).tier).toBe("opus")
+    expect(live.calls.sourceComputes).toBe(0)
+    const shortLive = fakeMediabunny({ codec: "aac", metadataDuration: null, extractedDuration: 5 * 60 })
+    expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: shortLive.load })).toMatchObject({ tier: "none", reason: "short_video" })
+  })
+
+  it("✕ during the probe disposes the input and rejects at once", async () => {
+    const fake = fakeMediabunny({ probeHang: true })
+    const controller = new AbortController()
+    const pending = extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: fake.load, signal: controller.signal })
+    await new Promise((r) => setTimeout(r, 0))
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(fake.calls.conversions).toHaveLength(0)
   })
 
   it("an abort that lands while the conversion is being prepared cancels it before it runs", async () => {
