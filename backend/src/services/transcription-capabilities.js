@@ -138,8 +138,9 @@ function basename(p) {
 //   - Otherwise FREE plans stay on-host (whisper.cpp, then Sira Voz): free
 //     dictation never spends paid STT credit or sends audio off the host,
 //     unless an operator opts in with SIRAGPT_DICTATION_FREE_CLOUD=1 (then the
-//     shared TRANSCRIBE_PROVIDERS order).
-//   - PAID plans use the shared TRANSCRIBE_PROVIDERS order after Scribe.
+//     shared TRANSCRIBE_PROVIDERS order without ElevenLabs).
+//   - PAID plans use the shared TRANSCRIBE_PROVIDERS order after Scribe,
+//     without ElevenLabs (the route already tried Scribe under its own budget).
 // `escalationProviders: []` keeps an operator-enabled paid escalation rung
 // (TRANSCRIBE_ESCALATION_PROVIDERS) off the on-host free path too.
 const DICTATION_FREE_PROVIDERS = Object.freeze(['local', 'voicestudio']);
@@ -160,9 +161,8 @@ function parseDictationProviders(raw) {
 }
 
 /**
- * Ladder restriction for one dictation: { providers?: string[],
- * escalationProviders?: string[], policy }. No `providers` → the shared
- * TRANSCRIBE_PROVIDERS order. Pure; never throws.
+ * Ladder restriction for one dictation: { providers: string[],
+ * escalationProviders?: string[], policy }. Pure; never throws.
  */
 function dictationLadderOptions(env = process.env, { paid = false } = {}) {
   const e = env || {};

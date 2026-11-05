@@ -37,7 +37,10 @@ describe("Sira Voz (VoiceStudio) — free local voice studio in /agentes", () =>
     assert.match(elevenRoute, /const ladder = dictationLadderOptions\(env, \{ paid \}\);/)
     assert.match(elevenRoute, /audioTranscriber\.transcribe\(filePath, mimeType, originalName, \{[\s\S]{0,120}lane: 'interactive'/)
     assert.match(capabilities, /const DICTATION_FREE_PROVIDERS = Object\.freeze\(\['local', 'voicestudio'\]\);/)
-    assert.match(capabilities, /if \(paid\) return \{ policy: 'shared' \};/)
+    // Paid plans (and SIRAGPT_DICTATION_FREE_CLOUD=1) use the shared order WITHOUT
+    // Scribe: the route already tried it under its own sub-budget, never twice.
+    assert.match(capabilities, /if \(paid\) return \{ providers: sharedOrderWithoutScribe\(e\), policy: 'shared' \};/)
+    assert.match(capabilities, /return list\.filter\(\(name\) => name !== 'elevenlabs'\);/)
     assert.match(capabilities, /return \{ providers: DICTATION_FREE_PROVIDERS\.slice\(\), escalationProviders: \[\], policy: 'on_host' \};/)
     assert.match(elevenRoute, /'\.m4b'/, "audiobooks (.m4b) must be servable by the audio route")
   })
