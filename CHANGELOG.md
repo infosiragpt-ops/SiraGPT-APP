@@ -6,6 +6,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Fixed
+
+- Building a Word file of several long transcripts no longer freezes the server. A styling pass after pandoc searched for a run shape pandoc never writes, so it never changed a byte, but its nested scans took ~40 s for 10 recordings of 10 hours (minutes for more), blocking the API process and the media worker that shares it. It is removed; the remaining passes are linear (12 ms for 10 recordings, 49 ms for 50). pandoc now has a wall clock (`SIRAGPT_PANDOC_TIMEOUT_MS`, 2 min), and the reference document is written once per process to a content-addressed path, so concurrent conversions never read a half-written file.
+
 ### Added
 
 - The chat stays live while a transcription runs in the background («te aviso aquí cuando termine»).

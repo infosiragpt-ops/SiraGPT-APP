@@ -1,4 +1,5 @@
 const fs = require('fs').promises;
+const crypto = require('crypto');
 const path = require('path');
 const mime = require('mime-types');
 const { execFile, execSync } = require('child_process');
@@ -300,30 +301,8 @@ async function createDocx(filePath, content) {
     const tempMarkdownPath = filePath + '.md';
     await fs.writeFile(tempMarkdownPath, cleanedContent);
 
-    // --- Step 4: Create reference doc for Calibri font and nice base styles ---
-    const referenceDoc = new Document({
-        sections: [{
-            properties: {
-                page: {
-                    size: { width: 12240, height: 15840 },
-                    margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
-                },
-            },
-            children: [new Paragraph({ text: "Reference Document", heading: HeadingLevel.HEADING_1 })]
-        }],
-        styles: {
-            default: {
-                document: {
-                    run: { font: "Calibri", size: 22 },
-                    paragraph: { spacing: { line: 276, before: 10, after: 10 } }
-                }
-            }
-        }
-    });
-    const referenceDocPath = path.join(__dirname, '../../uploads/temp', 'reference.docx');
-    await fs.mkdir(path.dirname(referenceDocPath), { recursive: true });
-    const referenceBuffer = await Packer.toBuffer(referenceDoc);
-    await fs.writeFile(referenceDocPath, referenceBuffer);
+    // --- Step 4: Reference doc for Calibri font and nice base styles ---
+    const referenceDocPath = await ensureReferenceDoc(tempDir);
 
     // --- Step 5: Pandoc Convert ---
     // For DOCX, Pandoc converts LaTeX math to native Word OMML.
@@ -352,8 +331,11 @@ async function createDocx(filePath, content) {
     // re-enabled, populate it in Step 2.
     const imageFiles = [];
 
+    const timeoutMs = pandocTimeoutMs();
     await new Promise((resolve, reject) => {
-        execFile('pandoc', pandocArgs, { maxBuffer: 15 * 1024 * 1024 }, async (error, stdout, stderr) => {
+        // Bounded: a pandoc that never ends (or a document too large for this
+        // host) is killed instead of holding the request and its memory.
+        execFile('pandoc', pandocArgs, { maxBuffer: 15 * 1024 * 1024, timeout: timeoutMs, killSignal: 'SIGKILL' }, async (error, stdout, stderr) => {
             // Clean up temporary files
             try {
                 await fs.unlink(tempMarkdownPath);
@@ -369,6 +351,12 @@ async function createDocx(filePath, content) {
                 console.error("Temporary markdown file could not be deleted:", unlinkErr);
             }
             if (error) {
+                if (error.killed) {
+                    console.error(`Pandoc did not finish within ${timeoutMs} ms; killed`);
+                    const timedOut = new Error(`pandoc did not finish within ${timeoutMs} ms`);
+                    timedOut.code = 'pandoc_timeout';
+                    return reject(timedOut);
+                }
                 console.error(`Pandoc command execution error: ${error.message}`);
                 console.error(`Pandoc stderr: ${stderr}`);
                 return reject(error);
@@ -385,11 +373,27 @@ async function createDocx(filePath, content) {
     // --- Step 6: Modify All Table Styles in XML for Beautiful Styling ---
     const docxBuffer = await fs.readFile(filePath);
     const zip = new PizZip(docxBuffer);
-    let documentXml = zip.file('word/document.xml').asText();
+    const documentXml = styleDocxTables(zip.file('word/document.xml').asText());
+
+    // Write back modified docx with all style updates
+    zip.file('word/document.xml', documentXml);
+    const modifiedBuffer = zip.generate({ type: 'nodebuffer' });
+    await fs.writeFile(filePath, modifiedBuffer);
+}
+
+/**
+ * Borders, cell margins and a header fill for the tables pandoc wrote. Every
+ * pass is linear in the document. (A former pass made header text bold and
+ * white: it searched for a bare <w:t>, which pandoc never writes, so it never
+ * changed a byte, and its nested lazy scans took 40 s on a 10-recording
+ * transcript, blocking the whole API process.)
+ */
+function styleDocxTables(documentXml) {
+    let xml = documentXml;
 
     // Enhance table, header, cell and border styles in the document XML
     // Inject: borders, cell margin, vertical/horizontal alignment for best look
-    documentXml = documentXml.replace(
+    xml = xml.replace(
         /<w:tblPr>/g,
         `<w:tblPr>
             <w:tblBorders>
@@ -412,7 +416,7 @@ async function createDocx(filePath, content) {
 
     // Add blue background and bold formatting for table headers
     // (apply blue background to the first row of each table)
-    documentXml = documentXml.replace(
+    xml = xml.replace(
         /(<w:tr>)(\s*<w:tc>)/g,
         (match, p1, p2, offset, string) => {
             // Only apply to header row (first w:tr after a w:tbl element)
@@ -432,22 +436,8 @@ async function createDocx(filePath, content) {
         }
     );
 
-    // Make header row text bold and white
-    documentXml = documentXml.replace(
-        /(<w:tr>[\s\S]*?<w:tbl>[\s\S]*?<w:tc>[\s\S]*?<w:t>)/g,
-        (match) => {
-            // Check if this is a header row
-            const slice = match.substring(Math.max(0, match.length - 500));
-            if (slice.includes('<w:tbl>')) {
-                // Add bold formatting to text runs in header cells
-                return match.replace(/<w:r>/g, '<w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/></w:rPr>');
-            }
-            return match;
-        }
-    );
-
     // For all cell props, ensure some horizontal/vertical margin and fixed height for aesthetics
-    documentXml = documentXml.replace(
+    xml = xml.replace(
         /<w:tcPr>/g,
         `<w:tcPr>
             <w:tcMar>
@@ -460,10 +450,57 @@ async function createDocx(filePath, content) {
         `
     );
 
-    // Write back modified docx with all style updates
-    zip.file('word/document.xml', documentXml);
-    const modifiedBuffer = zip.generate({ type: 'nodebuffer' });
-    await fs.writeFile(filePath, modifiedBuffer);
+    return xml;
+}
+
+// pandoc's wall clock (SIRAGPT_PANDOC_TIMEOUT_MS, default 2 min, 5 s – 10 min).
+function pandocTimeoutMs(env = process.env) {
+    const value = Number(env.SIRAGPT_PANDOC_TIMEOUT_MS);
+    if (!Number.isFinite(value) || value <= 0) return 120000;
+    return Math.min(600000, Math.max(5000, Math.round(value)));
+}
+
+let referenceDocBuffer = null;
+
+/**
+ * The reference document (Calibri, base spacing) pandoc styles Word files
+ * with. Built once per process and written once to a content-addressed path:
+ * concurrent conversions never read a file another one is rewriting.
+ */
+async function ensureReferenceDoc(dir) {
+    if (!referenceDocBuffer) {
+        referenceDocBuffer = Packer.toBuffer(new Document({
+            sections: [{
+                properties: {
+                    page: {
+                        size: { width: 12240, height: 15840 },
+                        margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 },
+                    },
+                },
+                children: [new Paragraph({ text: "Reference Document", heading: HeadingLevel.HEADING_1 })]
+            }],
+            styles: {
+                default: {
+                    document: {
+                        run: { font: "Calibri", size: 22 },
+                        paragraph: { spacing: { line: 276, before: 10, after: 10 } }
+                    }
+                }
+            }
+        })).catch((err) => { referenceDocBuffer = null; throw err; });
+    }
+    const buffer = await referenceDocBuffer;
+    const digest = crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 16);
+    const target = path.join(dir, `reference-${digest}.docx`);
+    try {
+        await fs.access(target);
+        return target;
+    } catch (_) { /* first conversion here, or a temp sweep removed it */ }
+    await fs.mkdir(dir, { recursive: true });
+    const partial = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await fs.writeFile(partial, buffer);
+    await fs.rename(partial, target);
+    return target;
 }
 
 async function createPdf(filePath, content) {
@@ -785,4 +822,5 @@ async function createDocument(userId, filename, content) {
 
 module.exports = {
     createDocument,
+    _internals: { styleDocxTables, pandocTimeoutMs, ensureReferenceDoc },
 };

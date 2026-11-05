@@ -945,6 +945,7 @@ undici) y estado en memoria que crecía hasta el próximo reinicio.
 | `APPS_AI_TIMEOUT_MS` | `30000` (máx. `120000`) | Tiempo total de una llamada a `/api/apps-ai/chat` (IA de las apps generadas). Al vencer: `504 ai_timeout`, o el evento SSE `{"error":"ai_timeout"}` si el stream ya empezó. Si la app cierra la conexión, la llamada al proveedor se cancela |
 | `SIRAGPT_THESIS_SESSION_TTL_MS` | `86400000` (mín. `60000`) | Una sesión de tesis terminada (completada o con error) se olvida tras este tiempo sin cambios. Una sesión en curso nunca se olvida |
 | `SIRAGPT_THESIS_SESSION_MAX` | `500` | Tope de sesiones de tesis en memoria; al superarlo se olvidan primero las terminadas más antiguas |
+| `SIRAGPT_PANDOC_TIMEOUT_MS` | `120000` (5 s – 10 min) | Tiempo máximo de pandoc al crear un Word (`document-service.createDocx`). Al vencer, pandoc se mata (`SIGKILL`) y la creación falla con `pandoc_timeout`: la entrega dice que no pudo generar el Word y conserva el TXT |
 
 ## Transcripción que nunca falla — audio, video y texto borroso (added 2026-10-16)
 
