@@ -187,6 +187,8 @@ function sidecarExtras(result, meta = normalizeTranscriptResult(result)) {
   if (audioStream) out.audioStream = audioStream;
   const hints = normalizeStoredHints(r.hints);
   if (hints) out.hints = hints;
+  // Audio the browser extracted from a video: still a video for the deliverables.
+  if (r.sourceMedia === 'video') out.sourceMedia = 'video';
   if (meta.embeddedSubtitles) {
     out.embeddedSubtitles = {
       language: meta.embeddedSubtitles.language,
@@ -401,6 +403,7 @@ function normalizedSidecarExtras(sidecar) {
   if (audioStream) out.audioStream = audioStream;
   const hints = normalizeStoredHints(sidecar.hints);
   if (hints) out.hints = hints;
+  if (sidecar.sourceMedia === 'video') out.sourceMedia = 'video';
   const embedded = normalizeEmbeddedSubtitles(sidecar.embeddedSubtitles);
   if (embedded) out.embeddedSubtitles = embedded;
   const onScreenText = normalizeTimedTextList(sidecar.onScreenText);
@@ -633,7 +636,7 @@ async function recordMediaHints(prisma, { fileId, userId, language = null, hints
  * the recording's duration. Never throws: { mediaHints, durationSec }.
  */
 async function readMediaAnalysisInfo(prisma, { fileId, userId } = {}) {
-  const empty = { mediaHints: null, durationSec: null };
+  const empty = { mediaHints: null, durationSec: null, clientExtracted: null };
   if (!userId || !isValidFileId(fileId) || !prisma || !prisma.documentAnalysis
     || typeof prisma.documentAnalysis.findUnique !== 'function') return empty;
   try {
@@ -644,6 +647,8 @@ async function readMediaAnalysisInfo(prisma, { fileId, userId } = {}) {
     return {
       mediaHints: normalizeMediaHintsRecord(metadata.mediaHints),
       durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+      // What the browser extracted this audio from (routes/files.js).
+      clientExtracted: require('./client-extracted-metadata').normalizeClientExtracted(metadata.clientExtracted),
     };
   } catch (_) {
     return empty;

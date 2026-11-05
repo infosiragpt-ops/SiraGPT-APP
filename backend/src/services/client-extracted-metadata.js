@@ -60,29 +60,47 @@ function normalizeClientExtracted(value) {
   };
 }
 
+const MAX_FIELD_CHARS = 64 * 1024;
+const MAX_ENTRIES = 500;
+
+function parseField(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'string') return raw;
+  if (raw.length > MAX_FIELD_CHARS) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
 /**
- * A multipart upload carries one JSON map { "<file name>": metadata } for
- * the files of the request. Returns a Map by file name (only valid entries).
+ * The multipart `clientExtracted` field. The composer sends an array aligned
+ * with the request's `files` parts (one entry per file, null when it was not
+ * extracted), so two files with the same name never swap their metadata. A
+ * tab still on the previous bundle sends a map { "<file name>": metadata }.
+ * Returns { byIndex: Array<object|null> | null, byName: Map }.
  */
+function parseClientExtractedField(raw) {
+  const value = parseField(raw);
+  const byName = new Map();
+  if (Array.isArray(value)) {
+    return { byIndex: value.slice(0, MAX_ENTRIES).map(meta => normalizeClientExtracted(meta)), byName };
+  }
+  if (value && typeof value === 'object') {
+    for (const [name, meta] of Object.entries(value).slice(0, MAX_ENTRIES)) {
+      const normalized = normalizeClientExtracted(meta);
+      const key = cleanText(name, MAX_NAME);
+      if (normalized && key) byName.set(key, normalized);
+    }
+  }
+  return { byIndex: null, byName };
+}
+
+/** The name-keyed form only (see parseClientExtractedField). */
 function parseClientExtractedMap(raw) {
-  const out = new Map();
-  if (raw === undefined || raw === null || raw === '') return out;
-  let value = raw;
-  if (typeof raw === 'string') {
-    if (raw.length > 64 * 1024) return out;
-    try { value = JSON.parse(raw); } catch { return out; }
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
-  for (const [name, meta] of Object.entries(value).slice(0, 500)) {
-    const normalized = normalizeClientExtracted(meta);
-    const key = cleanText(name, MAX_NAME);
-    if (normalized && key) out.set(key, normalized);
-  }
-  return out;
+  return parseClientExtractedField(raw).byName;
 }
 
 module.exports = {
   normalizeClientExtracted,
   parseClientExtracted,
+  parseClientExtractedField,
   parseClientExtractedMap,
 };

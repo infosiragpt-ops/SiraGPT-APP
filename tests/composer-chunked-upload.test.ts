@@ -117,7 +117,10 @@ describe("chunked upload wiring (source contract)", () => {
   it("the composer isolates large media and sends it through the chunked transport with the same response handling", () => {
     assert.match(composer, /import \{ shouldUseChunkedUpload \} from "@\/lib\/composer\/chunked-upload"/)
     assert.match(composer, /isolate: shouldUseChunkedUpload,/)
-    assert.match(composer, /chunk\.isolated && chunk\.files\.length === 1 && shouldUseChunkedUpload\(chunk\.files\[0\]\)\s*\? await apiClient\.uploadFileChunked\(chunk\.files\[0\], \{/)
+    // A sub-batch uploads what the browser prepared (the extracted audio when
+    // there is one), so the chunked branch reads the prepared files.
+    assert.match(composer, /const files = prepared\.files;/)
+    assert.match(composer, /chunk\.isolated && files\.length === 1 && shouldUseChunkedUpload\(files\[0\]\)\s*\? await apiClient\.uploadFileChunked\(files\[0\], \{/)
     assert.match(composer, /Hasta 1 GB por documento; audio y video hasta 10 GB \(unas 10 horas por archivo\)\./)
   })
 

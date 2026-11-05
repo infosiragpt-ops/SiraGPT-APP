@@ -36,3 +36,23 @@ test('parseClientExtracted accepts an object or a JSON string; parseClientExtrac
   assert.equal(m.parseClientExtractedMap('[1,2]').size, 0);
   assert.equal(m.parseClientExtractedMap({ 'a.ogg': { tier: 'copy', sourceName: 'a.mkv', sourceSize: 5 } }).size, 1);
 });
+
+test('parseClientExtractedField: an array aligned with the files wins (same names never swap); the map form stays for older tabs', () => {
+  const field = m.parseClientExtractedField(JSON.stringify([
+    { tier: 'opus', sourceName: 'Semana 1/Clase.mp4', sourceSize: 100 },
+    null,
+    { tier: 'opus', sourceName: 'Semana 2/Clase.mp4', sourceSize: 200 },
+    { tier: 'nope' },
+  ]));
+  assert.equal(field.byIndex.length, 4);
+  assert.equal(field.byIndex[0].sourceName, 'Semana 1/Clase.mp4');
+  assert.equal(field.byIndex[1], null);
+  assert.equal(field.byIndex[2].sourceSize, 200);
+  assert.equal(field.byIndex[3], null, 'an invalid entry is null, never shifted');
+  assert.equal(field.byName.size, 0);
+  const legacy = m.parseClientExtractedField({ 'a.ogg': { tier: 'copy', sourceName: 'a.mkv', sourceSize: 5 } });
+  assert.equal(legacy.byIndex, null);
+  assert.equal(legacy.byName.get('a.ogg').sourceName, 'a.mkv');
+  assert.deepEqual(m.parseClientExtractedField('{bad'), { byIndex: null, byName: new Map() });
+  assert.equal(m.parseClientExtractedField(JSON.stringify(Array.from({ length: 900 }, () => null))).byIndex.length, 500);
+});

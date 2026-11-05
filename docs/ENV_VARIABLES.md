@@ -1107,8 +1107,12 @@ mediabunny 1.65.2 MPL-2.0 importado bajo demanda, WebCodecs): un video de 10 h (
 viaja como ≈ 108 MB de Opus mono 16 kHz; 100 videos pasan de ≈ 300 GB a ≈ 11 GB. Si el
 navegador no codifica Opus (Safari antiguo) copia la pista de audio tal cual a un contenedor
 solo-audio (`copy`, ≈ 5×); si nada sirve (sin pista de audio, archivo ilegible, duración que no
-coincide, sin ganancia) sube el ORIGINAL, como antes. Cada resultado se verifica (legible y
-misma duración ± 1,5 s / 0,5 %) antes de reemplazar al original. Las sub-tandas de subida
+coincide, sin ganancia) sube el ORIGINAL, como antes. Cada resultado se verifica (con pista de
+audio legible y misma duración ± 1,5 s / 0,5 %) antes de reemplazar al original. Solo se convierte
+la pista de audio principal. También sube el original cuando el audio empieza después del video
+(el servidor conserva ese desfase en las marcas de tiempo) y cuando la pista no tiene sonido (el
+servidor lee los subtítulos o el texto en pantalla, que necesitan el video). Un video extraído
+sigue contando como video para los subtítulos automáticos (`sourceMedia` en la transcripción). Las sub-tandas de subida
 corren en una cola paralela acotada (`lib/composer/upload-scheduler.ts`) en vez de una tras
 otra, y el tope del compositor sube a 100 medios por mensaje. El servidor guarda lo que el audio
 representa en `DocumentAnalysis.metadata.clientExtracted` (`{ tier, sourceName, sourceSize,
@@ -1117,8 +1121,8 @@ Todas son variables públicas del build del frontend (`NEXT_PUBLIC_*`).
 
 | Variable | Default | Qué hace |
 |---|---|---|
-| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` | on | `0` / `off` desactiva la extracción: todo se sube como antes |
-| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB` | `8` | Videos desde este tamaño se extraen (el ahorro es la pista de video) |
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` | on | `0` / `off` desactiva la extracción: todo se sube como antes (se lee en el build) |
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB` | `100` | Videos desde este tamaño se extraen. Debajo el ahorro es poco y el original conserva todo lo que el servidor hace con el video (cuadros, subtítulos incrustados, referencia de video) |
 | `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_AUDIO_MB` | `32` | Audios desde este tamaño se recodifican a Opus (un MP3 de 320 kbps baja ≈ 13×); los pequeños no valen una decodificación |
 | `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MAX_COPY_GB` | `4` | La copia de pista (`copy`) se queda en memoria: no se intenta sobre fuentes mayores |
 | `NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS` | `2` (1–6) | Sub-tandas de subida a la vez (cada archivo grande ya lleva 3 partes en vuelo) |

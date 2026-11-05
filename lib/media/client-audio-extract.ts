@@ -19,9 +19,17 @@
  *     before. Extraction never loses a recording.
  *
  * Every outcome is verified before it replaces the original: the extracted
- * file must be readable and its duration must match the source's.
+ * file must hold an audio track whose duration matches the source's. The
+ * original also goes as it is when its audio starts after the video (the
+ * server keeps that lead on the transcript clock), when the track is silent
+ * (the server falls back to subtitles and on-screen text, which need the
+ * video), and while a video tool is open (the caller does not prepare then).
+ * Only the primary audio track is converted. Below the video threshold
+ * (100 MB) the original is uploaded: the saving is small there and the server
+ * keeps every video feature (frames, embedded subtitles, video references).
  */
 
+import type { AudioSample, InputAudioTrack } from "mediabunny"
 import { isMediaUpload } from "../attachment-ingest"
 
 export type ExtractionTier = "opus" | "copy" | "none"
@@ -89,8 +97,12 @@ const MB = 1024 * 1024
 /** Opus for speech: mono, 16 kHz (what every STT engine resamples to anyway), 24 kbps. */
 export const OPUS_TARGET = Object.freeze({ codec: "opus" as const, numberOfChannels: 1, sampleRate: 16_000, bitrate: 24_000 })
 
-/** Videos from this size on are worth extracting (the saving is the video track itself). */
-export const CLIENT_AUDIO_EXTRACT_MIN_VIDEO_BYTES = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB, 8) * MB
+/**
+ * Videos from this size on are worth extracting (the saving is the video
+ * track itself). Below it the upload is short anyway and the original keeps
+ * every video feature on the server.
+ */
+export const CLIENT_AUDIO_EXTRACT_MIN_VIDEO_BYTES = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB, 100) * MB
 /** Audio files from this size on are re-encoded (a 320 kbps MP3 shrinks ≈ 13×); small ones are not worth a decode. */
 export const CLIENT_AUDIO_EXTRACT_MIN_AUDIO_BYTES = envInt(process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_AUDIO_MB, 32) * MB
 /** A track copy keeps the whole output in memory: bound the source it is tried on. */
@@ -99,11 +111,22 @@ export const DEFAULT_MIN_SAVINGS_RATIO = 0.1
 /** The extracted duration may differ from the source by this much (container rounding, priming samples). */
 export const DURATION_TOLERANCE_SECONDS = 1.5
 export const DURATION_TOLERANCE_RATIO = 0.005
+/** Audio that starts this much after the video keeps the original (its lead is on the transcript clock). */
+export const MAX_AUDIO_LEAD_SECONDS = 0.1
+/** A track whose peak never reaches this level (≈ −50 dBFS) is silent: the original goes, for the video fallbacks. */
+export const SILENCE_PEAK = 10 ** (-50 / 20)
+
+// Next inlines only literal `process.env.NEXT_PUBLIC_*` member reads into the
+// browser bundle (there, `process.env` itself is an empty shim): the kill
+// switch is read once, here, so NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT=0 works.
+const BUILD_ENV: Readonly<Record<string, string | undefined>> = Object.freeze({
+  NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT: process.env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT,
+})
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|mkv|webm|avi|wmv|flv|mpe?g|ts|m2ts|3gp|ogv)$/i
 const AUDIO_EXT = /\.(mp3|m4a|m4b|aac|wav|flac|ogg|oga|opus|wma|aiff?|amr|caf|weba)$/i
 
-export function isClientAudioExtractionEnabled(env: Record<string, string | undefined> = process.env): boolean {
+export function isClientAudioExtractionEnabled(env: Readonly<Record<string, string | undefined>> = BUILD_ENV): boolean {
   const flag = String(env.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT ?? "").trim().toLowerCase()
   return !(flag === "0" || flag === "false" || flag === "off")
 }
@@ -125,7 +148,7 @@ export type ExtractionPlan = { eligible: boolean; kind: MediaKind; reason: strin
 /** Pure gate: which files are worth a client-side extraction at all. */
 export function planAudioExtraction(
   file: { name?: string | null; type?: string | null; size?: number | null },
-  env: Record<string, string | undefined> = process.env,
+  env: Readonly<Record<string, string | undefined>> = BUILD_ENV,
 ): ExtractionPlan {
   const kind = mediaKindOf(file)
   const size = Number(file?.size) || 0
@@ -185,16 +208,21 @@ function abortError(): Error {
   }
 }
 
+/** `extracted` must be known: an output whose duration cannot be read back is not trusted. */
 function durationsMatch(source: number | null, extracted: number | null): boolean {
-  if (source == null || extracted == null) return true
-  if (!(source > 0) || !(extracted > 0)) return false
+  if (extracted == null || !(extracted > 0)) return false
+  if (source == null) return true
+  if (!(source > 0)) return false
   const tolerance = Math.max(DURATION_TOLERANCE_SECONDS, source * DURATION_TOLERANCE_RATIO)
   return Math.abs(source - extracted) <= tolerance
 }
 
+/** The read-back duration of the extracted file, or null when it holds no readable audio track. */
 async function readDuration(mb: MediabunnyModule, blob: Blob): Promise<number | null> {
   const input = new mb.Input({ source: new mb.BlobSource(blob), formats: mb.ALL_FORMATS })
   try {
+    const audio = await input.getPrimaryAudioTrack().catch(() => null)
+    if (!audio) return null
     const fromMetadata = await input.getDurationFromMetadata().catch(() => null)
     if (fromMetadata != null && fromMetadata > 0) return fromMetadata
     const computed = await input.computeDuration().catch(() => null)
@@ -242,6 +270,11 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
     const codec = track.codec ?? null
     const sourceDuration = (await input.getDurationFromMetadata().catch(() => null))
       ?? (await input.computeDuration().catch(() => null))
+    // Audio that starts after the video: dropping the video would rebase it to
+    // 0 and shift every timestamp early. The server keeps that lead.
+    const firstAll = await input.getFirstTimestamp().catch(() => null)
+    const firstAudio = await input.getFirstTimestamp([track]).catch(() => null)
+    if (firstAll != null && firstAudio != null && firstAudio - firstAll > MAX_AUDIO_LEAD_SECONDS) return skip("audio_offset")
     throwIfAborted()
     emit({ phase: "probing", progress: 1 })
 
@@ -263,13 +296,36 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
     for (const attempt of attempts) {
       throwIfAborted()
       const output = new mb.Output({ format: attempt.format, target: new mb.BufferTarget() })
+      // The decoded (mono 16 kHz) samples tell whether the track is silent;
+      // the measuring stops at the first audible sample, so it costs nothing
+      // on speech. A copy is never decoded: its level is unknown.
+      let peak = 0
+      const measure = (sample: AudioSample) => {
+        if (peak >= SILENCE_PEAK) return sample
+        try {
+          const frames = new Float32Array(sample.numberOfFrames)
+          sample.copyTo(frames, { planeIndex: 0, format: "f32-planar" })
+          for (let i = 0; i < frames.length; i += 1) {
+            const level = Math.abs(frames[i])
+            if (level > peak) peak = level
+            if (peak >= SILENCE_PEAK) break
+          }
+        } catch {
+          peak = SILENCE_PEAK // unmeasurable: never call it silent
+        }
+        return sample
+      }
+      const audioOptions = attempt.tier === "opus" ? { ...attempt.audio, process: measure } : attempt.audio
       let conversion: MediabunnyConversion
       try {
         conversion = await mb.Conversion.init({
           input,
           output,
+          // The primary audio track only: the others (commentary, dubs) would
+          // reach the server as extra streams with no language or default flag.
+          tracks: "primary",
           video: { discard: true },
-          audio: attempt.audio,
+          audio: (candidate: InputAudioTrack) => (candidate.id === track.id ? audioOptions : { discard: true }),
           tags: () => ({}),
           showWarnings: false,
         })
@@ -284,6 +340,12 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
       conversion.onProgress = (progress: number, processedTime: number) => emit({ phase: "converting", progress, processedSeconds: processedTime })
       const onAbort = () => { void conversion.cancel() }
       signal?.addEventListener("abort", onAbort, { once: true })
+      if (signal?.aborted) {
+        // Aborted while init was pending: the listener never fires for it.
+        signal.removeEventListener("abort", onAbort)
+        await conversion.cancel().catch(() => {})
+        throw abortError()
+      }
       try {
         await conversion.execute()
       } catch (err) {
@@ -299,6 +361,11 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
         lastReason = `${attempt.tier}_empty`
         continue
       }
+      if (attempt.tier === "opus" && peak < SILENCE_PEAK) {
+        // Nothing audible: a slide or screen recording. The server reads its
+        // embedded subtitles or the text on screen, which need the video.
+        return skip("silent_audio")
+      }
       const extracted = new File([buffer], extractedFileName(file.name, attempt.extension), { type: attempt.mimeType, lastModified: file.lastModified })
       const minSavings = options.minSavingsRatio ?? DEFAULT_MIN_SAVINGS_RATIO
       if (file.size - extracted.size < file.size * minSavings) {
@@ -307,6 +374,10 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
       }
       emit({ phase: "verifying", progress: 0 })
       const extractedDuration = await readDuration(mb, extracted).catch(() => null)
+      if (extractedDuration == null) {
+        lastReason = `${attempt.tier}_unverifiable`
+        continue
+      }
       if (!durationsMatch(sourceDuration, extractedDuration)) {
         lastReason = "duration_mismatch"
         continue

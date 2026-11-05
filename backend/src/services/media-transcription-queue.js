@@ -1341,6 +1341,17 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const out = { ...(media.language ? { language: media.language } : {}), ...(media.hints || {}) };
     return Object.keys(out).length ? out : null;
   };
+  // Audio the browser extracted from a video (DocumentAnalysis.metadata
+  // .clientExtracted) stays a video for the deliverables: automatic SRT/VTT.
+  async function sourceMediaOf(row) {
+    if (typeof transcriptStore?.readMediaAnalysisInfo !== 'function') return null;
+    try {
+      const info = await transcriptStore.readMediaAnalysisInfo(prisma, { fileId: row.id, userId: row.userId });
+      return /^video\//i.test(String(info?.clientExtracted?.sourceType || '')) ? 'video' : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   // ── checkpoints after the result is durable ─────────────────────────────
   async function rememberCheckpoint(checkpoint, row) {
@@ -1757,7 +1768,9 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         if (embedded) transcription = { ...transcription, embeddedSubtitles: embedded };
       }
       const hints = storedHints(media);
-      transcription = { ...transcription, source: transcription.source || 'asr', ...(hints ? { hints } : {}) };
+      const sourceMedia = extra.range ? null : await sourceMediaOf(row);
+      transcription = { ...transcription, source: transcription.source || 'asr', ...(hints ? { hints } : {}),
+        ...(sourceMedia ? { sourceMedia } : {}) };
     }
     return { transcription, plain };
   }

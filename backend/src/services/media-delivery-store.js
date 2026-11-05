@@ -35,7 +35,9 @@ const REFINE_STATUSES = Object.freeze(['ok', 'failed']);
 const MAX_REFINE_END_SEC = 7 * 24 * 3600;
 const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
 const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
-const MAX_FILES = 50;
+// The chat batches up to SIRAGPT_MEDIA_BATCH_MAX recordings (100 by
+// default, 500 at most); one delivery must hold the whole batch.
+const MAX_FILES = 500;
 const DEFAULT_STALE_MS = 15 * 60 * 1000;
 const MIN_STALE_MS = 30 * 1000;
 // Delay before attempt n+1 after attempt n failed (index n-1). With the

@@ -202,3 +202,15 @@ test('a transcript stored already on the recording clock is not shifted again by
   assert.equal(fresh.shifted, true);
   assert.equal(kept.shifted, false);
 });
+
+test('audio the browser extracted from a short video still gets the automatic SRT/VTT of a video', async () => {
+  const short = { language: 'es', durationSec: 300, segments: [{ start: 0, end: 300, text: 'Clase corta grabada con el teléfono.' }] };
+  const extracted = row('clip', { originalName: 'clip.audio.ogg', mimeType: 'audio/ogg' });
+  const asAudio = await artifacts.buildMediaTranscriptArtifacts({ rows: [extracted], transcripts: new Map([['clip', short]]),
+    output: artifacts.resolveTranscriptOutput('transcribe'), userId: 'u1' });
+  assert.deepEqual(asAudio.artifacts.map(a => a.format), ['txt'], 'a 5-minute audio gets its TXT only');
+  const fromVideo = await artifacts.buildMediaTranscriptArtifacts({ rows: [extracted],
+    transcripts: new Map([['clip', { ...short, sourceMedia: 'video' }]]),
+    output: artifacts.resolveTranscriptOutput('transcribe'), userId: 'u1' });
+  assert.deepEqual(fromVideo.artifacts.map(a => a.format), ['txt', 'srt', 'vtt']);
+});

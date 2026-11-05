@@ -1206,11 +1206,17 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
     }
 
     // Audio extracted in the browser from a larger source: the composer sends
-    // one JSON map { "<file name>": metadata } for the files of this request.
-    const extractedByName = clientExtractedMetadata.parseClientExtractedMap(req.body?.clientExtracted);
-    if (extractedByName.size > 0) {
+    // one entry per file, aligned with the `files` parts (an older tab sends
+    // a map by file name).
+    const extracted = clientExtractedMetadata.parseClientExtractedField(req.body?.clientExtracted);
+    if (extracted.byIndex) {
+      req.files.forEach((file, index) => {
+        const meta = extracted.byIndex[index];
+        if (meta) file.clientExtracted = meta;
+      });
+    } else if (extracted.byName.size > 0) {
       for (const file of req.files) {
-        const meta = extractedByName.get(file.originalname) || extractedByName.get(upload.fixLatin1Filename(String(file.originalname || '')));
+        const meta = extracted.byName.get(file.originalname) || extracted.byName.get(upload.fixLatin1Filename(String(file.originalname || '')));
         if (meta) file.clientExtracted = meta;
       }
     }

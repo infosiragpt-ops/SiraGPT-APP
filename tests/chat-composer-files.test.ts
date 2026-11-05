@@ -97,6 +97,13 @@ describe("historical media batch follow-ups", () => {
     ]), files)
   })
 
+  it("a batch of 100 recordings (the composer cap) is one follow-up target; 101 is not", () => {
+    const hundred = Array.from({ length: 100 }, (_, index) => ({ id: `rec-${index}`, name: `${index}.mp4`, mimeType: "video/mp4" }))
+    assert.deepEqual(resolveMediaFollowupFiles("transcribe todos", [{ role: "USER", files: JSON.stringify(hundred) }]), hundred)
+    const tooMany = [...hundred, { id: "rec-100", name: "100.mp4", mimeType: "video/mp4" }]
+    assert.deepEqual(resolveMediaFollowupFiles("transcribe todos", [{ role: "USER", files: JSON.stringify(tooMany) }]), [])
+  })
+
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {
     assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", [
       ...history, { role: "USER", files: [{ id: "new-doc", name: "brief.pdf" }] },

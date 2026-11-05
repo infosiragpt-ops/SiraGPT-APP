@@ -2159,7 +2159,11 @@ class ApiClient {
       onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
       signal?: AbortSignal
       /** Per uploaded file name: the source it was extracted from in the browser (lib/media/client-audio-extract). */
-      clientExtracted?: Record<string, Record<string, unknown>>
+      /**
+       * What the browser extracted, aligned with `files` (null for a file it
+       * sent as it is). See lib/media/client-audio-extract.
+       */
+      clientExtracted?: Array<Record<string, unknown> | null>
     } = {}
   ): Promise<FileUploadResponse> {
     const formData = new FormData();
@@ -2168,7 +2172,7 @@ class ApiClient {
     Array.from(files).forEach((file) => formData.append('files', file, file.name));
     if (opts.sourceChannel) formData.append('sourceChannel', opts.sourceChannel);
     if (opts.asyncProcessing) formData.append('asyncProcessing', '1');
-    if (opts.clientExtracted && Object.keys(opts.clientExtracted).length > 0) formData.append('clientExtracted', JSON.stringify(opts.clientExtracted));
+    if (opts.clientExtracted && opts.clientExtracted.some(Boolean)) formData.append('clientExtracted', JSON.stringify(opts.clientExtracted));
 
     const url = `${this.baseURL}/files/upload`;
     const prepared = await prepareAuthenticatedRequest(url, {

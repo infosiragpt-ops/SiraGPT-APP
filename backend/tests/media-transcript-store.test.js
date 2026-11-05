@@ -481,6 +481,7 @@ test('the C5 fields round-trip through the sidecar, which stays version 1', asyn
   assert.deepEqual(back.embeddedSubtitles.segments, [{ start: 1, end: 2, text: 'Hello.' }]);
   assert.deepEqual(back.onScreenText, [{ start: 3, end: 30, text: 'Tema 3', confidence: 0.91 }]);
   assert.equal(back.cleanup.echoes, 1);
+  assert.equal(back.sourceMedia, undefined, 'only audio extracted from a video says so');
   // The formatter accepts the loaded shape directly.
   assert.match(fmt.renderText(back, { now: NOW }), /\nCalidad: media\n/);
 });
@@ -539,4 +540,23 @@ test('purgeMediaTranscript also removes the checkpoint directory its pointer nam
   fs.writeFileSync(path.join(root, 'f6.ckpt.json'), JSON.stringify({ version: 1, fileId: 'f6', userId: 'u1', dir: '../../etc' }));
   assert.deepEqual(await store.purgeMediaTranscript('f6', { root, checkpointRoot: ckptRoot }), { sidecar: false, clip: false });
   assert.equal(fs.existsSync(path.join(root, 'f6.ckpt.json')), false, 'the bad pointer itself is removed');
+});
+
+test('audio the browser extracted from a video keeps sourceMedia: video through the sidecar', async (t) => {
+  const root = tmpRoot(t);
+  const { sidecar } = await store.writeSidecar({ fileId: 'f9', userId: 'u1', result: { ...RESULT, sourceMedia: 'video' } }, { root, now: NOW });
+  assert.equal(sidecar.sourceMedia, 'video');
+  assert.equal(store.normalizeSidecar(await store.readSidecar('f9', { root })).sourceMedia, 'video');
+  const { sidecar: other } = await store.writeSidecar({ fileId: 'f8', userId: 'u1', result: { ...RESULT, sourceMedia: 'cassette' } }, { root, now: NOW });
+  assert.equal(other.sourceMedia, undefined);
+});
+
+test('readMediaAnalysisInfo returns the normalized clientExtracted of the file', async () => {
+  const prisma = { documentAnalysis: { findUnique: async () => ({ userId: 'u1', metadata: { durationSec: 600,
+    clientExtracted: { tier: 'opus', sourceName: 'clase.mp4', sourceSize: 900, sourceType: 'VIDEO/MP4', codec: 'aac', durationSeconds: 600 } } }) } };
+  const info = await store.readMediaAnalysisInfo(prisma, { fileId: 'f1', userId: 'u1' });
+  assert.equal(info.clientExtracted.sourceType, 'video/mp4');
+  assert.equal(info.durationSec, 600);
+  const foreign = await store.readMediaAnalysisInfo(prisma, { fileId: 'f1', userId: 'u2' });
+  assert.equal(foreign.clientExtracted, null);
 });

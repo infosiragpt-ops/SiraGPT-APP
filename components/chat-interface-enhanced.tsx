@@ -9315,6 +9315,9 @@ But first, you need to connect your Spotify account securely using the button be
           // the first EXTRACTION_PROGRESS_SHARE % of the chip's progress; the
           // original is uploaded whenever nothing usable comes out, and the
           // chip's ✕ (chunkAbort) cancels the extraction like the upload.
+          // mediabunny reports progress once per decoded sample (≈ 47 per
+          // second of media): only a higher whole percentage reaches React.
+          const extractionPct = new Map<number, number>();
           const prepared = await prepareMediaForUpload(chunk.files, {
             signal: chunkAbort.signal,
             concurrency: 1,
@@ -9322,11 +9325,16 @@ But first, you need to connect your Spotify account securely using the button be
               const tf = chunkTemps[index];
               if (!tf) return;
               const pct = Math.round(fraction * EXTRACTION_PROGRESS_SHARE);
-              setUploadProgress(prev => ({ ...prev, [tf.tempId]: Math.max(prev[tf.tempId] || 0, pct) }));
+              if (pct <= (extractionPct.get(index) ?? -1)) return;
+              extractionPct.set(index, pct);
+              setUploadProgress(prev => (pct > (prev[tf.tempId] || 0) ? { ...prev, [tf.tempId]: pct } : prev));
             },
           });
           const files = prepared.files;
           const isExtracted = (file: File) => prepared.clientExtracted.has(file);
+          // A file whose extraction ran but came back empty-handed uploads the
+          // original: its upload fills the rest of the bar, it never restarts.
+          const spentExtraction = (idx: number) => isExtracted(files[idx]) || extractionPct.has(idx);
           if (chunkAbort.signal.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
 
           // Real upload progress via XHR (see lib/api.ts uploadFiles).
@@ -9337,19 +9345,24 @@ But first, you need to connect your Spotify account securely using the button be
             setUploadProgress(prev => {
               const next = { ...prev };
               chunkTemps.forEach((tf, idx) => {
-                const shifted = isExtracted(files[idx]) ? Math.round(EXTRACTION_PROGRESS_SHARE + (pct * (100 - EXTRACTION_PROGRESS_SHARE)) / 100) : pct;
+                const shifted = spentExtraction(idx) ? Math.round(EXTRACTION_PROGRESS_SHARE + (pct * (100 - EXTRACTION_PROGRESS_SHARE)) / 100) : pct;
                 next[tf.tempId] = Math.max(next[tf.tempId] || 0, shifted);
               });
               return next;
             });
           };
-          const extractedByName = Object.fromEntries(files.filter(isExtracted).map((f) => [f.name, prepared.clientExtracted.get(f) as Record<string, unknown>]));
+          // Aligned with the multipart parts (one entry per file, null when it
+          // was not extracted): two files with the same name never swap it.
+          const extractedByIndex = files.map((f) => (prepared.clientExtracted.get(f) as Record<string, unknown> | undefined) ?? null);
           const response: any = chunk.isolated && files.length === 1 && shouldUseChunkedUpload(files[0])
             ? await apiClient.uploadFileChunked(files[0], {
               sourceChannel,
               signal: chunkAbort.signal,
               onProgress: reportChunkProgress,
               clientExtracted: prepared.clientExtracted.get(files[0]) ?? null,
+              // A re-extraction is a different encode (new Ogg serials) of the
+              // same size and date: never join it to an older session's parts.
+              ...(isExtracted(files[0]) ? { resume: false } : {}),
             })
             : await apiClient.uploadFiles(filesToFileList(files), {
               sourceChannel,
@@ -9357,7 +9370,7 @@ But first, you need to connect your Spotify account securely using the button be
               asyncProcessing: true,
               signal: chunkAbort.signal,
               onProgress: reportChunkProgress,
-              ...(Object.keys(extractedByName).length > 0 ? { clientExtracted: extractedByName } : {}),
+              ...(extractedByIndex.some(Boolean) ? { clientExtracted: extractedByIndex } : {}),
             });
 
           if (!response.files) {
@@ -14435,7 +14448,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              Cualquier formato: PDF, Office, código, datos, correos, comprimidos, CAD, imágenes, audio y video; hasta 50 audios o vídeos por mensaje. Hasta 1 GB por documento; audio y video hasta 10 GB (unas 10 horas por archivo). Se conserva el orden en que los sueltes.
+              Cualquier formato: PDF, Office, código, datos, correos, comprimidos, CAD, imágenes, audio y video; hasta 100 audios o vídeos por mensaje. Hasta 1 GB por documento; audio y video hasta 10 GB (unas 10 horas por archivo). Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>
