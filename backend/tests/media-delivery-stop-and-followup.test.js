@@ -381,7 +381,10 @@ test('POST /api/media-deliveries/cancel is owner-scoped and validates its input'
     const res = await post({ chatId: 'chat1', deliveryIds: ['md_x', 42, '../y'] });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { ok: true, cancelled: 1, results: [{ id: 'md_x', outcome: 'cancelled', messageId: 'm1' }] });
-    assert.deepEqual(calls, [{ userId: 'u1', chatId: 'chat1', deliveryIds: ['md_x'] }]);
+    assert.deepEqual(calls, [{ userId: 'u1', chatId: 'chat1', deliveryIds: ['md_x'], fileIds: null }]);
+    // The pending recordings: valid, unique ids only.
+    assert.equal((await post({ chatId: 'chat1', deliveryIds: ['md_x'], fileIds: ['a', 7, '../z', 'a', 'b'] })).status, 200);
+    assert.deepEqual(calls[1], { userId: 'u1', chatId: 'chat1', deliveryIds: ['md_x'], fileIds: ['a', 'b'] });
   } finally {
     await new Promise(resolve => server.close(resolve));
   }

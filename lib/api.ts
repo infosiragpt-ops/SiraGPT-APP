@@ -1997,14 +1997,14 @@ class ApiClient {
    * unless another open request needs them, and leaves one line in the chat
    * that settles the pending turn.
    */
-  async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = []): Promise<{
+  async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = [], fileIds: string[] = []): Promise<{
     ok: boolean
     cancelled: number
     results: Array<{ id: string; outcome: string; messageId?: string | null }>
   }> {
     return this.request('/media-deliveries/cancel', {
       method: 'POST',
-      body: JSON.stringify({ chatId, ...(deliveryIds.length ? { deliveryIds } : {}) }),
+      body: JSON.stringify({ chatId, ...(deliveryIds.length ? { deliveryIds } : {}), ...(fileIds.length ? { fileIds } : {}) }),
     });
   }
 

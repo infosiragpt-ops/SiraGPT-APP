@@ -3057,8 +3057,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // An instruction the rules do not name («solo lo que dice el
         // profesor») is still an instruction about the recording: the
         // analysis answers it, as a second delivery would have. A repeated
-        // «transcribe», «reintenta» or a courtesy is not.
-        if (amended?.outcome === 'unchanged' && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
+        // «transcribe», «reintenta» or a courtesy is not, and neither is one
+        // the rules did read and that was already so («en Word» twice, «sin
+        // traducción» with nothing to translate): it changes nothing.
+        const hasHints = Boolean(amendment.hints && typeof amendment.hints === 'object'
+          && Object.values(amendment.hints).some(value => (Array.isArray(value) ? value.length > 0 : value != null && value !== false && value !== '')));
+        const recognised = Boolean(amendment.translationTarget || amendment.removeTranslation || amendment.removeAnalysis
+          || amendment.wantsAnalysis || amendment.documentFormat || amendment.wantsSubtitles || amendment.range
+          || amendment.analysisRange || amendment.language || hasHints);
+        if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
           amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true } })
             .catch(() => null) || amended;
         }

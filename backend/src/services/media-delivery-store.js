@@ -712,6 +712,10 @@ function createMediaDeliveryStore({
         try {
           const fresh = await readActive(id);
           if (!fresh) return terminal();
+          // The Stop is durable before anything is posted: a crash after the
+          // chat line leaves a marker that a follow-up (amend), the next
+          // claim and the delivery sweep all honour, never an open record.
+          await writeAtomic(cancelPath(id), { at: isoAt(now()), reason: clipString(reason, 40) || 'user' });
           // The chat line that settles the turn goes first, under the lock:
           // a crash before the close leaves a record whose next attempt finds
           // that line (findDeliveredMessage) and posts nothing else.

@@ -256,7 +256,17 @@ const ASKS_TRANSCRIPT_RE = /tran?s?cr[ií]|trnadscr|trnasc|transcirb|trasncri|tr
 // Next to a transcript request, deliverables beyond those of a translation:
 // «compara las dos clases», «extrae los nombres», «explícame», «las
 // decisiones», «los acuerdos», «las tareas pendientes», «próximos pasos».
-const TRANSCRIPT_EXTRA_DELIVERABLE_RE = /\bcomp[aá]ra|\bextra[eé]|\bexpl[ií]ca|\bdecisiones\b|\bacuerdos\b|\btareas pendientes\b|\bpr[oó]ximos pasos\b|\baction items\b/i;
+// Also asked outright: the topics («dime los temas», «los temas
+// principales»), questions to study with («hazme 5 preguntas») and what it
+// says («dime de qué trata», «cuéntame qué dijo»). Each needs its asking
+// verb: «del tema 3» or «dime cuando termines» run nothing.
+const TRANSCRIPT_EXTRA_DELIVERABLE_RE = new RegExp([
+  /\bcomp[aá]ra|\bextra[eé]|\bexpl[ií]ca|\bdecisiones\b|\bacuerdos\b|\btareas pendientes\b|\bpr[oó]ximos pasos\b|\baction items\b/.source,
+  /\b(?:dime|di|dame|lista|enumera|identifica|menciona|saca|se[nñ]ala|ind[ií]ca(?:me)?|resalta|cu[aá]les\s+son)\s+(?:(?:los|las|sus|cu[aá]les|qu[eé]|son|principales|\d+)\s+){0,2}temas\b/.source,
+  /\btemas\s+(?:principales|centrales|clave|tratados|que\s+(?:se\s+)?(?:tocan?|tratan?|trat[oó]|habla|hablan|hablaron|ven|vieron|explica))\b/.source,
+  /\b(?:hazme|haz|genera|gen[eé]rame|crea|cr[eé]ame|prepara|prep[aá]rame|dame|escribe|redacta|formula|arma|plantea|plant[eé]ame)\s+(?:(?:unas?|algunas|las|\d+|varias|un\s+par\s+de)\s+)?preguntas\b/.source,
+  /\b(?:dime|di|cu[eé]ntame|expl[ií]came|ind[ií]came|resume(?:me)?)\s+(?:de\s+)?(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]l(?:es)?)\s+(?:se\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|habl[oó]|hablaron|trata|tratan|trat[oó]|cuenta|cuentan|explica|explican|explic[oó]|plantea|propone|propuso|opina|opinan|concluye|concluyen|pas[oó]|pasa|temas?|ideas?)\b/.source,
+].join('|'), 'i');
 
 function wantsMediaAnalysis(goal) {
   const text = String(goal || '');

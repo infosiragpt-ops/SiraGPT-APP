@@ -37,7 +37,9 @@ describe("Stop during a background transcription (source contract)", () => {
     assert.match(stop, /void cancelPendingMediaDeliveries\(targetChatId\);\s*return;/)
     const cancel = between(source, "const cancelPendingMediaDeliveries = React.useCallback(async (chatId: string) => {", "const stopActiveGeneration = React.useCallback")
     assert.match(cancel, /pendingMediaDeliveries\(currentChatRef\.current\?\.messages \|\| \[\]\)/)
-    assert.match(cancel, /await apiClient\.cancelMediaDeliveries\(chatId, deliveryIds\)/)
+    assert.match(cancel, /await apiClient\.cancelMediaDeliveries\(chatId, deliveryIds, fileIds\)/)
+    // The pending recordings go too: two links in one turn are two deliveries.
+    assert.match(cancel, /pending\.flatMap\(\(delivery\) => delivery\.sourceFileIds\)/)
     // The chat is re-read so the settle line appears and the spinner stops.
     assert.match(cancel, /if \(currentChatIdRef\.current === chatId\) await selectChat\(chatId\);/)
     assert.match(cancel, /cancellingDeliveriesRef\.current\.has\(chatId\)/, "a double click sends one request")
@@ -57,8 +59,8 @@ describe("Stop during a background transcription (source contract)", () => {
   })
 
   it("the API client posts the cancel for the chat", () => {
-    const method = between(api, "async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = [])", "\n  }\n")
+    const method = between(api, "async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = [], fileIds: string[] = [])", "\n  }\n")
     assert.match(method, /this\.request\('\/media-deliveries\/cancel', \{\s*method: 'POST',/)
-    assert.match(method, /JSON\.stringify\(\{ chatId, \.\.\.\(deliveryIds\.length \? \{ deliveryIds \} : \{\}\) \}\)/)
+    assert.match(method, /JSON\.stringify\(\{ chatId, \.\.\.\(deliveryIds\.length \? \{ deliveryIds \} : \{\}\), \.\.\.\(fileIds\.length \? \{ fileIds \} : \{\}\) \}\)/)
   })
 })

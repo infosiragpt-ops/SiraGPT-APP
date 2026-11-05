@@ -6772,10 +6772,13 @@ function ChatInterfaceContent() {
     const pending = pendingMediaDeliveries(currentChatRef.current?.messages || []);
     if (!pending.length) return;
     const deliveryIds = [...new Set(pending.map((delivery) => delivery.deliveryId).filter(Boolean))];
+    // Their recordings too: two links handed off in one turn are two
+    // deliveries, and the hand-off names only the first.
+    const fileIds = [...new Set(pending.flatMap((delivery) => delivery.sourceFileIds).filter(Boolean))];
     cancellingDeliveriesRef.current.add(chatId);
     setCancellingDeliveryChatId(chatId);
     try {
-      const result = await apiClient.cancelMediaDeliveries(chatId, deliveryIds);
+      const result = await apiClient.cancelMediaDeliveries(chatId, deliveryIds, fileIds);
       const stopped = Number(result?.cancelled) || 0;
       if (stopped > 0) toast.info(stopped > 1 ? 'Transcripciones detenidas' : 'Transcripción detenida');
       else toast.info('La transcripción ya había terminado');

@@ -4,7 +4,7 @@
  * /api/media-deliveries — the transcriptions a chat handed off to the
  * background («te aviso aquí cuando termine»), seen from that chat.
  *
- *   POST /cancel  { chatId, deliveryIds? } → { ok, cancelled, results }
+ *   POST /cancel  { chatId, deliveryIds?, fileIds? } → { ok, cancelled, results }
  *        «Detener»: closes those deliveries (all the chat's open ones when no
  *        ids are given), stops their recordings' transcription unless
  *        another open request of the user still needs them, and leaves one
@@ -19,6 +19,8 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 
 const MAX_IDS = 50;
+// A batch of 100 recordings per message, a few messages pending.
+const MAX_FILE_IDS = 500;
 const ID_RE = /^[A-Za-z0-9_-]{1,200}$/;
 
 function userIdOf(req) {
@@ -40,8 +42,14 @@ function createMediaDeliveriesRouter({ delivery = null, auth = authenticateToken
     const deliveryIds = rawIds
       ? [...new Set(rawIds.filter(id => typeof id === 'string' && ID_RE.test(id)))].slice(0, MAX_IDS)
       : null;
+    // The pending hand-offs' recordings: every open delivery for them stops
+    // too (two links in one turn are two deliveries; the hand-off names one).
+    const rawFiles = Array.isArray(req.body?.fileIds) ? req.body.fileIds : null;
+    const fileIds = rawFiles
+      ? [...new Set(rawFiles.filter(id => typeof id === 'string' && ID_RE.test(id)))].slice(0, MAX_FILE_IDS)
+      : null;
     try {
-      const out = await service().cancelChatDeliveries({ userId: String(userId), chatId, deliveryIds });
+      const out = await service().cancelChatDeliveries({ userId: String(userId), chatId, deliveryIds, fileIds });
       if (out?.error === 'disabled') {
         return res.status(409).json({ ok: false, error: 'Las entregas en segundo plano están desactivadas.', code: 'delivery_disabled' });
       }

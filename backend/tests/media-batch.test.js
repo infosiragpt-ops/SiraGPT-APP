@@ -152,11 +152,18 @@ test('negated analysis does not suppress a separate positive task', () => {
 test('the ordinary words of a transcript request never run a paid analysis; a deliverable or a real question does', () => {
   for (const goal of ['transcribe estos 100 videos de la clase de sistemas operativos', 'transcribe todo lo que dicen',
     'transcribe las clases del tema 3', 'transcribe este audio, es para una tarea', 'transcríbeme cómo lo dijo el profesor',
-    'transcribe la clase de análisis matemático', 'transcribe la reunión, quién dijo qué', 'transcribe y compártelo']) {
+    'transcribe la clase de análisis matemático', 'transcribe la reunión, quién dijo qué', 'transcribe y compártelo',
+    // Words of the asks below, without their asking verb.
+    'transcribe y dime cuando termines', 'transcribe y dime que lo recibiste', 'transcribe la clase de temas selectos de física',
+    'transcribe las preguntas del examen que dicta', 'transcribe el tema 3 y el tema 4', 'transcribe, son preguntas de una entrevista']) {
     assert.equal(batch.wantsMediaAnalysis(goal), false, goal);
   }
   for (const goal of ['transcribe y dame el acta', 'transcribe la reunión y extrae las decisiones', 'transcribe las dos clases y compáralas',
-    'transcribe, ¿y de qué habla?', 'transcribe y explícame la parte difícil', 'transcribe y lista los próximos pasos']) {
+    'transcribe, ¿y de qué habla?', 'transcribe y explícame la parte difícil', 'transcribe y lista los próximos pasos',
+    // The topics, study questions and what it says, asked outright.
+    'transcribe la clase y dime los temas', 'transcribe y dame los 3 temas principales', 'transcribe y los temas que se tocan',
+    'transcribe la clase y hazme 5 preguntas', 'transcríbelo y genérame unas preguntas',
+    'transcribe y dime de qué trata', 'transcribe y dime de que habla', 'transcribe y cuéntame qué dijo el profesor']) {
     assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
   }
   // A request about the recording itself keeps the broad reading, accented «qué» included.

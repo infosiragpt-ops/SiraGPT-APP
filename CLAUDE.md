@@ -3400,8 +3400,10 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   no se encola por la entrega (`isBusy` no la incluye). Mientras corre la cancelación, el disco de
   Detener muestra su spinner (`cancellingDeliveryChatId` → `pendingStop`). Toasts: «Sigo
   transcribiendo…» para un hand-off, «Anotado…» para un seguimiento.
-- **Servidor**: `POST /api/media-deliveries/cancel` `{ chatId, deliveryIds? }` (auth + CSRF, solo
-  entregas del usuario). Store: estado `cancelled`; `cancel` cierra bajo el lock y, si un holder está
+- **Servidor**: `POST /api/media-deliveries/cancel` `{ chatId, deliveryIds?, fileIds? }` (auth + CSRF,
+  solo entregas del usuario). Con ids, detiene también toda entrega abierta del chat con la misma
+  tarea o los mismos archivos: dos enlaces en un turno son dos entregas y el hand-off nombra solo la
+  primera (el compositor manda los `sourceFileIds` de los pendientes). Store: estado `cancelled`; `cancel` cierra bajo el lock y, si un holder está
   entregando, deja `md_<id>.cancel`, que el holder honra antes de publicar y que `claim` cierra;
   `amend` solo con `pending`; `listActiveForChat`; `mergeDeliveryAmendment` puro; `MAX_FILES` 500.
   `cancelDelivery` publica la línea que cierra el pendiente (`source: 'media-delivery'` +
@@ -3409,12 +3411,27 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   el lock (`beforeClose`): un corte entre ambos pasos deja un registro cuyo siguiente intento
   encuentra esa línea y no publica nada más. Luego detiene los trabajos de los archivos que ninguna
   otra entrega abierta necesita (`cancelUnneededMediaJobs`). Un fallo definitivo publica otra
-  línea (`'failed'`).
+  línea (`'failed'`). La marca `.cancel` se escribe bajo el lock antes de la línea: un reinicio
+  entre la línea y el cierre deja una entrega detenida (el seguimiento recibe `cancelled`, y el
+  barrido la cierra con su línea y detiene los trabajos), nunca una abierta. Un «Detener» sobre una
+  entrega ya cerrada sin línea en el chat (un post fallido, o un fallo de antes de que hubiera
+  línea) la publica ahora y el pendiente se cierra. El holder de una entrega vigila la marca cada
+  2 s y aborta el análisis o la traducción en curso (`signal` en `analyze` → `translateMediaBatch`
+  / `analyzeMediaBatch`): «Detener» no sigue pagando cada fragmento ni retiene la compuerta de
+  entregas. Una corrección de tramo detenida detiene su trabajo (`refines` en
+  `cancelMediaTranscription`: el job `refineJobIdFor` en espera se quita y el que corre se aborta;
+  la transcripción guardada no cambia).
 - **Cola**: `cancelMediaTranscription` quita el trabajo en espera y aborta el que corre
   (`media_cancelled`, sin reintento, conserva checkpoints); otro proceso lo ve en su chequeo de
   propiedad. La fila queda `failed` + `CANCELLED_NOTE`: la recuperación de 60 s no la toca y
   `waitForMediaBatch` la reencola cuando se pide de nuevo (`isUserCancelledRow`). Un trabajo que
-  llega a una fila detenida no corre. Detener durante la espera en línea del turno (antes del
+  llega a una fila detenida no corre. Una fila que ya había fallado (DRM, sin audio) conserva su
+  motivo y no se reencola. Un reintento transitorio o un apagado en otro worker nunca borra la
+  nota de Detener (`writeUnlessStopped`, escritura condicional). Pedirla de nuevo reemplaza un
+  trabajo detenido que sobrevivió (un corte de Redis). Abortar solo una corrección de tramo deja
+  la fila escrita (un reintento de huecos que esperaba detrás vuelve a `ready` + nota parcial).
+  El chip muestra «Transcripción detenida» sin guardarlo como terminal y lo vuelve a leer cada
+  15 s: al pedirla de nuevo, todos los chips de la grabación lo siguen. Detener durante la espera en línea del turno (antes del
   hand-off) también detiene esos trabajos: `claimTaskCancel` marca `cancelClaimed` en el registro
   de la tarea, así un vencimiento o un apagado no los toca.
 - **Seguimientos** (`agent-task-runner.js`, antes de `step_start media_transcription`): con una
@@ -3423,8 +3440,9 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   entregable explícito), Word/PDF, subtítulos, rango, idioma y nombres, y también quita
   («ya no la traduzcas» → `no_translation`, «sin resumen» → `no_analysis`). «reintenta» reencola
   lo fallido y la misma entrega lo espera. Una instrucción que ninguna regla nombra («solo lo que
-  dice el profesor») pide el análisis, que la responde; un «gracias» o un «transcribe» repetido
-  no. El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
+  dice el profesor») pide el análisis, que la responde; un «gracias», un «transcribe» repetido o
+  una instrucción que las reglas sí leyeron y que ya estaba así («en Word» dos veces, «sin
+  traducción» sin traducción pendiente) no. El idioma se confirma con su nombre («al catalán»). El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
   resuelve fijado (`defaultAnalyze`, `pinned: true`): sin conexión falla con «X no pudo responder:
   su conexión no está configurada. No cambié de modelo…» en vez de pasar en silencio a DeepSeek
   u otro proveedor. Una entrega sin modelo registrado (enlaces, notas de voz) conserva la escalera. Responde
@@ -3436,8 +3454,10 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   capítulos, puntos clave, comparar, extraer, decisiones, próximos pasos…) o una pregunta real sobre la
   grabación. Antes «todo lo que dicen», «del tema 3», «es para una tarea» o «sistemas operativos» («tema»
   dentro de la palabra) disparaban un análisis pagado de todo el lote; en 100 × 10 h topaba con el límite
-  de llamadas y terminaba en «No pude terminar el análisis que pediste». En los demás pedidos sigue la
-  lectura amplia, ahora con «qué» acentuado.
+  de llamadas y terminaba en «No pude terminar el análisis que pediste». También cuentan los temas,
+  preguntas para estudiar y lo que dice, pedidos con su verbo («dime los temas», «hazme 5 preguntas»,
+  «dime de qué trata», «cuéntame qué dijo»); «dime cuando termines» o «del tema 3» no. En los demás
+  pedidos sigue la lectura amplia, ahora con «qué» acentuado.
 - **Compositor** (`lib/chat/composer-files.ts`): mientras el lote se transcribe, una instrucción
   corta sobre su resultado («en Word», «está en inglés», «los nombres son…», «son 3 hablantes»,
   «sin resumen», «¿de qué hablan?») va a ese lote (`isPendingDeliveryAmendPrompt`: vocabulario
@@ -3446,6 +3466,8 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   (`pendingMediaDeliveryFileIds`).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
+  `backend/tests/media-delivery-stop-review.test.js` (12: un hallazgo de la revisión adversarial por
+  prueba; las 12 fallan sin el arreglo), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
   `tests/chat-background-transcription-stop-source.test.ts` (5), casos nuevos en
   `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y
   `tests/chat-composer-files.test.ts` (enrutado al lote pendiente).
