@@ -659,7 +659,7 @@ function qualitySuffix(report) {
  * (gaps for partial files, reasons for failures), the quality report, the
  * analysis or a preview, the downloads and the retry hint.
  */
-function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false,
+function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false, analysisFailureReason = null,
   analysisNotes = [], translationFailed = [], summaryText = '', summaryFailed = false, transcriptFilesAttached = null } = {}) {
   const list = Array.isArray(rows) ? rows : [];
   // The report may point at a section of the transcript files only when they are attached.
@@ -747,7 +747,12 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
   const usable = list.filter(isUsableRow);
   const translating = delivery?.mode === 'translation';
   const hasAnalysis = Boolean(analysisText && String(analysisText).trim());
-  const analysisFailedCopy = 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.';
+  // Why it failed, when the cause is known («X no pudo responder: su conexión
+  // no está configurada. No cambié de modelo…»), else the generic line.
+  const failureReason = typeof analysisFailureReason === 'string' && analysisFailureReason.trim() ? `${analysisFailureReason.trim()} ` : '';
+  const analysisFailedCopy = failureReason
+    ? `${failureReason}La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.`
+    : 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.';
   // «resume y tradúcelo»: the summary leads, the translation follows.
   if (summaryText && String(summaryText).trim()) blocks.push(`### Análisis\n\n${String(summaryText).trim()}`);
   else if (summaryFailed && usable.length) blocks.push(analysisFailedCopy);
@@ -755,7 +760,9 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
     blocks.push(`### ${translating ? 'Traducción' : 'Análisis'}\n\n${String(analysisText).trim()}`);
   } else if (analysisFailed && usable.length) {
     blocks.push(translating
-      ? 'No pude terminar la traducción que pediste. La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.'
+      ? (failureReason
+        ? `${failureReason}La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.`
+        : 'No pude terminar la traducción que pediste. La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.')
       : analysisFailedCopy);
   }
   const untranslated = (Array.isArray(translationFailed) ? translationFailed : [])
@@ -1278,10 +1285,20 @@ function analysisRangeOf(delivery) {
 async function defaultAnalyze({ rows, delivery, prisma }) {
   const runner = require('./agents/agent-task-runner');
   const profile = runner.normalizeAgentRuntimeModel(delivery?.model?.id || '');
-  const resolution = runner.resolveAgentRuntimeClient(profile);
+  // The model the user picked writes the analysis, or nobody does (AGENTS.md
+  // section 13): never a silent substitute. A delivery created without a
+  // model (a link, a voice note) keeps the internal ladder.
+  const pinned = Boolean(delivery?.model?.id);
+  const resolution = runner.resolveAgentRuntimeClient(profile, { pinned });
   if (!resolution?.client) {
     const err = new Error('selected_model_unavailable');
     err.code = 'selected_model_unavailable';
+    if (pinned) {
+      try {
+        const label = typeof runner.pinnedModelLabel === 'function' ? runner.pinnedModelLabel(profile) : '';
+        err.userMessage = require('./ai/billing-failover').buildFailureMessage({ modelLabel: label, reason: 'unconfigured' }) || null;
+      } catch (_) { err.userMessage = null; }
+    }
     throw err;
   }
   const completion = require('./media-analysis-runtime').createMediaAnalysisCompletion({
@@ -1564,6 +1581,7 @@ function createMediaDeliveryService(deps = {}) {
     const alsoAnalysis = translating && record.output?.alsoAnalysis === true;
     let analysisText = '';
     let analysisFailed = false;
+    let analysisFailureReason = null;
     let analysisArtifacts = [];
     let analysisNotes = [];
     let translationFailed = [];
@@ -1590,6 +1608,7 @@ function createMediaDeliveryService(deps = {}) {
         } catch (err) {
           analysisFailed = true;
           summaryFailed = alsoAnalysis;
+          if (typeof err?.userMessage === 'string' && err.userMessage.trim()) analysisFailureReason = err.userMessage.trim();
           logger.warn(`[media-delivery] analysis unavailable id=${id} code=${err?.code || 'analysis_error'}`);
         }
       }
@@ -1614,7 +1633,7 @@ function createMediaDeliveryService(deps = {}) {
     checkpoint();
 
     const counts = summarizeStates(rows);
-    const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed,
+    const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed, analysisFailureReason,
       analysisNotes, translationFailed, summaryText, summaryFailed,
       transcriptFilesAttached: saved.some(artifact => artifact?.role === 'transcript') });
     return postAndFinish({ record, token, rows, counts, content, saved, targetChatId,
@@ -2186,6 +2205,8 @@ module.exports = {
   refineMessage,
   refineHandOffMessage,
   analysisRangeOf,
+  // Test seam: the analysis on the picked model (pinned) or an explained failure.
+  defaultAnalyze,
   resolveRefineOutcome,
   awaitingRefineOutcome,
   refineJobKeyOf,

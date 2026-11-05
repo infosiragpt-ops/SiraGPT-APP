@@ -3424,7 +3424,10 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   («ya no la traduzcas» → `no_translation`, «sin resumen» → `no_analysis`). «reintenta» reencola
   lo fallido y la misma entrega lo espera. Una instrucción que ninguna regla nombra («solo lo que
   dice el profesor») pide el análisis, que la responde; un «gracias» o un «transcribe» repetido
-  no. El modelo del turno del seguimiento escribe el análisis o la traducción. Responde
+  no. El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
+  resuelve fijado (`defaultAnalyze`, `pinned: true`): sin conexión falla con «X no pudo responder:
+  su conexión no está configurada. No cambié de modelo…» en vez de pasar en silencio a DeepSeek
+  u otro proveedor. Una entrega sin modelo registrado (enlaces, notas de voz) conserva la escalera. Responde
   `amendedMessage`/`stillRunningMessage` con `stoppedReason: 'media_delivery_amended'`
   (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre. No aplica
   a una corrección de tramo ni a un turno con otros adjuntos.
@@ -3435,6 +3438,7 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   a secas no se enruta. `pendingMediaDeliveries` se memoiza por arreglo de mensajes
   (`pendingMediaDeliveryFileIds`).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
+  `backend/tests/media-delivery-pinned-model.test.js` (2),
   `tests/chat-background-transcription-stop-source.test.ts` (5), casos nuevos en
   `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y
   `tests/chat-composer-files.test.ts` (enrutado al lote pendiente).

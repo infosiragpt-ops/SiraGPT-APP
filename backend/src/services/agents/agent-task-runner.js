@@ -5269,6 +5269,7 @@ module.exports = {
   presentTaskError,
   toAgentTaskErrorEvent,
   normalizeAgentRuntimeModel,
+  pinnedModelLabel,
   applyAgentRuntimeResolution,
   runnerPickedModelSpec,
   resolveAgentRuntimeClient,
