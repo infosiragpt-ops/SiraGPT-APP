@@ -138,8 +138,9 @@ function basename(p) {
 //   - Otherwise FREE plans stay on-host (whisper.cpp, then Sira Voz): free
 //     dictation never spends paid STT credit or sends audio off the host,
 //     unless an operator opts in with SIRAGPT_DICTATION_FREE_CLOUD=1 (then the
-//     shared TRANSCRIBE_PROVIDERS order).
-//   - PAID plans use the shared TRANSCRIBE_PROVIDERS order after Scribe.
+//     shared TRANSCRIBE_PROVIDERS order without ElevenLabs).
+//   - PAID plans use the shared TRANSCRIBE_PROVIDERS order after Scribe,
+//     without ElevenLabs (the route already tried Scribe under its own budget).
 // `escalationProviders: []` keeps an operator-enabled paid escalation rung
 // (TRANSCRIBE_ESCALATION_PROVIDERS) off the on-host free path too.
 const DICTATION_FREE_PROVIDERS = Object.freeze(['local', 'voicestudio']);
@@ -160,9 +161,8 @@ function parseDictationProviders(raw) {
 }
 
 /**
- * Ladder restriction for one dictation: { providers?: string[],
- * escalationProviders?: string[], policy }. No `providers` → the shared
- * TRANSCRIBE_PROVIDERS order. Pure; never throws.
+ * Ladder restriction for one dictation: { providers: string[],
+ * escalationProviders?: string[], policy }. Pure; never throws.
  */
 function dictationLadderOptions(env = process.env, { paid = false } = {}) {
   const e = env || {};
@@ -170,9 +170,24 @@ function dictationLadderOptions(env = process.env, { paid = false } = {}) {
   // The operator's list bounds the free ladder: TRANSCRIBE_ESCALATION_PROVIDERS
   // (enabled for media) must not send a free dictation to a paid rung.
   if (explicit) return { providers: explicit, ...(paid ? {} : { escalationProviders: [] }), policy: 'env' };
-  if (paid) return { policy: 'shared' };
-  if (envFlag(e.SIRAGPT_DICTATION_FREE_CLOUD)) return { policy: 'shared' };
+  if (paid) return { providers: sharedOrderWithoutScribe(e), policy: 'shared' };
+  if (envFlag(e.SIRAGPT_DICTATION_FREE_CLOUD)) return { providers: sharedOrderWithoutScribe(e), policy: 'shared' };
   return { providers: DICTATION_FREE_PROVIDERS.slice(), escalationProviders: [], policy: 'on_host' };
+}
+
+/**
+ * The shared TRANSCRIBE_PROVIDERS order minus ElevenLabs: a paid dictation
+ * already tried Scribe itself under its own sub-budget and cooldown (the
+ * route), and a free dictation that opted into the cloud must not bill it.
+ */
+function sharedOrderWithoutScribe(env) {
+  let order = null;
+  try {
+    const at = require('./audio-transcriber');
+    order = typeof at.providerOrder === 'function' ? at.providerOrder({ env }) : null;
+  } catch { order = null; }
+  const list = Array.isArray(order) && order.length ? order : parseDictationProviders(env.TRANSCRIBE_PROVIDERS) || ['openai', 'groq', 'xai', 'meta', 'local'];
+  return list.filter((name) => name !== 'elevenlabs');
 }
 
 // ── Probes ──────────────────────────────────────────────────────────────────
@@ -217,6 +232,26 @@ function probeStt(resolve, env) {
     } catch { escalation = []; }
   }
   const requestedEscalation = fnOf(at, 'escalationProviderNames') ? at.escalationProviderNames(options) : [];
+  // The provider pool: how pieces pick a rung and what each provider may take
+  // at once (transcription-governor numbers; never a key).
+  let pool = null;
+  try {
+    const scheduling = fnOf(at, 'schedulingMode') ? at.schedulingMode(options) : null;
+    const snapshot = fnOf(at, 'governorSnapshot') ? at.governorSnapshot(options) : null;
+    const governor = fnOf(at, 'governorFor') ? at.governorFor(options) : null;
+    const providers = {};
+    for (const rung of cloud) {
+      const limits = governor && typeof governor.limits === 'function' ? governor.limits(rung.name) : null;
+      const live = snapshot && snapshot[rung.name] ? snapshot[rung.name] : null;
+      providers[oneLine(rung.name, 40)] = {
+        inFlightCap: limits ? limits.inFlight : null,
+        rpm: limits ? limits.rpm : null,
+        audioSecondsPerHour: limits ? limits.audioSecondsPerHour : null,
+        ...(live ? { inFlight: live.inFlight, waiting: live.waiting, effectiveCap: live.effectiveCap, pausedMs: live.pausedMs, completed: live.completed, rateLimits: live.rateLimits } : {}),
+      };
+    }
+    if (scheduling || Object.keys(providers).length) pool = { scheduling, providers };
+  } catch { pool = null; }
   const elevenlabsKey = Boolean(String(env.ELEVENLABS_API_KEY || '').trim());
   const ladderLabel = (opts) => (opts.providers ? opts.providers.join(',') : 'ladder');
   const free = dictationLadderOptions(env, { paid: false });
@@ -226,6 +261,7 @@ function probeStt(resolve, env) {
     ladder,
     escalation,
     escalationRequested: requestedEscalation.map((name) => oneLine(name, 40)),
+    pool,
     voiceStudio: { configured: voiceStudioConfigured, inLadder: order.includes('voicestudio'), shortClips },
     dictation: {
       scribeForPaidPlans: elevenlabsKey,

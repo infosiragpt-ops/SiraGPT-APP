@@ -858,8 +858,11 @@ cae al host en silencio. `verify_artifact` (script propio, no del modelo) sigue 
 
 ## Transcripción de audio (escalera)
 
-`backend/src/services/audio-transcriber.js`. Orden por defecto: OpenAI → Groq →
-xAI → (Meta solo opt-in) → Whisper local (`whisper.cpp`, sin clave). Un
+`backend/src/services/audio-transcriber.js`. Orden por defecto desde 2026-11-05:
+ElevenLabs Scribe v2 → AssemblyAI → OpenAI → Groq → Deepgram → xAI → (Meta solo
+opt-in) → Whisper local (`whisper.cpp`, sin clave); Mistral Voxtral solo si se
+lista. Solo corren los peldaños CON clave: una instalación con una sola clave se
+comporta como antes. Un
 proveedor que rechaza la clave (401/403) o no tiene saldo (402 / 429 de
 facturación) se salta durante `TRANSCRIBE_PROVIDER_COOLDOWN_MS`; la línea final
 del log resume la escalera (`providers tried: openai(429 billing) groq(ok)
@@ -869,7 +872,7 @@ WARN `[local-whisper] unavailable: <motivo>` si el motor local no puede correr
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `TRANSCRIBE_PROVIDERS` | `openai,groq,xai,meta,local` | Orden de la escalera (`voicestudio` opcional; listar `meta` aquí también la habilita). En clips cortos se respeta el orden entre `local` y `voicestudio`: listado después de `local`, Sira Voz solo es el respaldo y la segunda opinión de whisper.cpp (el reporte de capacidades muestra `voicestudio_short=after_local`) |
+| `TRANSCRIBE_PROVIDERS` | `elevenlabs,assemblyai,openai,groq,deepgram,xai,meta,local` | Orden de la escalera (`voicestudio` y `mistral` opcionales; listar `meta` aquí también la habilita). En clips cortos se respeta el orden entre `local` y `voicestudio`: listado después de `local`, Sira Voz solo es el respaldo y la segunda opinión de whisper.cpp (el reporte de capacidades muestra `voicestudio_short=after_local`) |
 | `GROQ_API_KEY` | — | Activa el peldaño Groq (`/openai/v1/audio/transcriptions`) |
 | `GROQ_TRANSCRIBE_MODEL` | `whisper-large-v3-turbo` | Modelo STT de Groq |
 | `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` | Base OpenAI-compatible de Groq |
@@ -879,14 +882,14 @@ WARN `[local-whisper] unavailable: <motivo>` si el motor local no puede correr
 | `WHISPER_CPP_BIN` / `WHISPER_CPP_MODEL` | `/usr/local/bin/whisper-cli` / `/usr/local/share/whisper/ggml-base.bin` | Motor local; el modelo debe ser legible por `appuser` (uid 100): la imagen lo deja en `0644` |
 | `WHISPER_LANGUAGE` | (vacío; la imagen pone `es`) | Desde 2026-10-16 solo es la pista que fija el idioma de las grabaciones largas segmentadas: los clips cortos y los de duración desconocida detectan el idioma. Un idioma detectado que la contradice necesita un segundo tramo que coincida |
 | `WHISPER_CPP_BEAM_SIZE` | `5` hasta 10 min, `2` más | Ancho del beam de whisper.cpp |
-| `TRANSCRIBE_CLOUD_PARALLEL` | `3` (1–8) | Tramos en vuelo a la vez por trabajo en proveedores de nube |
+| `TRANSCRIBE_CLOUD_PARALLEL` | `3` (1–16) | Tramos en vuelo a la vez por trabajo en proveedores de nube (el gobernador por proveedor acota la suma de todos los trabajos) |
 | `TRANSCRIBE_LOCAL_PARALLEL` | `1` (1–4) | Procesos whisper.cpp a la vez por trabajo |
 | `TRANSCRIBE_MIN_COVERAGE` | `0.8` | Por debajo de esta cobertura (tramos transcritos / total) el trabajo falla con `low_coverage` y se reintenta solo lo que falta; por encima se entrega parcial con los huecos marcados |
 | `TRANSCRIBE_RATE_LIMIT_MAX_WAIT_MS` | `300000` | Espera máxima por un límite de uso (429 / Retry-After) antes de reintentar el mismo proveedor; una espera mayor (cuota diaria) salta ese proveedor en este trabajo. Un 429 de límite de uso ya NO activa la cuarentena de 30 min de «sin saldo» |
 | `TRANSCRIBE_RATE_LIMIT_RETRIES` | `5` | Esperas por límite de uso por tramo y proveedor |
 | `TRANSCRIBE_SEGMENT_RETRIES` | `2` | Reintentos de un tramo ante 5xx / timeout de nube antes de pasar ese tramo al siguiente proveedor |
 | `TRANSCRIBE_LOCAL_RETRIES` | `0` | Reintentos de un tramo en whisper.cpp |
-| `TRANSCRIBE_CLOUD_TIMEOUT_MS` | máx(120 s, 0,4 s por segundo de audio) | Tope por petición de un tramo en la nube |
+| `TRANSCRIBE_CLOUD_TIMEOUT_MS` | máx(120 s, 0,4 s por segundo de audio); adaptadores HTTP (ElevenLabs, AssemblyAI, Deepgram, Mistral, xAI) máx(45 s, 60 s + 0,2 s por segundo de audio); AssemblyAI (trabajo asíncrono: subida → cola → sondeo) máx(300 s, 90 s + 1 s por segundo de audio) | Tope por petición de un tramo en la nube. Fijado explícitamente manda para TODOS los peldaños. Un tope agotado es un timeout (`ETIMEDOUT`, transitorio: reintento y luego el siguiente peldaño), nunca la cancelación del usuario |
 | `TRANSCRIBE_SILENCE_SNAP` | on | `0` corta los tramos en tiempos fijos en vez de alinearlos a silencios |
 
 ## Barrido de recuperación de transcripciones (`media-transcription-queue.js`)
@@ -1031,6 +1034,69 @@ Un error de plan o cuota ya no devuelve un texto de «éxito» falso, y el dicta
 - La imagen agrega `libheif-tools` y los idiomas de Tesseract `por`, `fra`, `ita` y `deu`.
 - `GET /api/admin/transcription-capabilities` (superadmin) informa: rungs de STT configurados, modelo local, flags de whisper, filtros de ffmpeg, idiomas de Tesseract, HEIF, GLM-OCR y runtimes de visión.
 - Al arrancar se escribe una línea de resumen. `SIRAGPT_TRANSCRIPTION_CAPABILITIES_LOG=0` la apaga.
+
+## Transcripción masiva — pool de proveedores STT (added 2026-11-05)
+
+`backend/src/services/transcription-governor.js` (admisión por proveedor para todo el
+proceso), `stt-providers/{assemblyai,deepgram,mistral}.js` (adaptadores nuevos, con
+`http-shared.js` como tope de petición común) y los cambios en `audio-transcriber.js` /
+`media-transcription-queue.js`. Objetivo: 100 videos de 10 h fluyen por TODOS los
+proveedores configurados sin que ninguno vea más peticiones que las que su plan permite,
+y un 429 visto por un trabajo frena el tráfico de todos.
+
+> **Con `ELEVENLABS_API_KEY` ya presente (producción), Scribe v2 pasa a ser la PRIMERA
+> pasada de PAGO de toda grabación** (antes solo era escalada opt-in en tramos dudosos):
+> ≈ $0,22 por hora de audio, hablantes incluidos. Para no gastar todavía,
+> `TRANSCRIBE_PROVIDERS=openai,groq,xai,local` restaura el orden anterior. El resumen de
+> arranque (`[transcription-capabilities]`) dice qué peldaño va primero.
+
+**Dónde se toma el permiso.** TODA petición de nube pasa por un solo punto
+(`transcribeCloudFile`): tramos de grabaciones largas, segundas opiniones de la revisión,
+clips cortos, dictado (plaza interactiva), clips de enlaces y `transcribe_audio`. Un 429
+de cualquiera de ellos pausa al proveedor para todos. Un tramo espera una plaza como
+mucho `TRANSCRIBE_RATE_LIMIT_MAX_WAIT_MS` (5 min; una nota de voz de la plaza corta 60 s,
+un dictado 10 s) y pasa al SIGUIENTE peldaño sin contar un fallo del proveedor; solo el
+último peldaño vivo espera lo que haga falta (un hueco es peor). Una segunda opinión
+nunca espera una plaza: si el proveedor está lleno, se omite. Los dictados entran en la
+fila por delante de los tramos del lote (prioridad por plaza: interactiva > corta > lote).
+
+**Pool y reparto** (`audio-transcriber.js`)
+
+| Variable | Default | Qué hace |
+|---|---|---|
+| `TRANSCRIBE_SCHEDULING` | `spread` | Cómo elige peldaño cada tramo. `spread`: un proveedor de nube sin plaza libre AHORA (tope en vuelo, pausa por 429, cuota agotada) se intenta después del siguiente con plaza; con plaza libre en el primero es idéntico a la escalera; sin ningún proveedor con plaza, el orden configurado se mantiene (el primero espera su presupuesto de plaza y el tramo sigue). `ladder`: siempre el orden configurado (con la misma espera acotada por plaza) |
+| `TRANSCRIBE_<PROVEEDOR>_IN_FLIGHT` | elevenlabs 8 · assemblyai 32 · deepgram 24 · openai 12 · groq 8 · xai 8 · mistral 8 · meta 4 · otros 6 (1–200) | Peticiones en vuelo a la vez a ese proveedor sumando todos los trabajos del proceso (concurrencia publicada de los planes de pago por uso; ElevenLabs la fija por plan: Free 8 … Scale 60) |
+| `TRANSCRIBE_<PROVEEDOR>_RPM` | (sin límite) | Peticiones por minuto (ventana deslizante) |
+| `TRANSCRIBE_<PROVEEDOR>_AUDIO_SECONDS_PER_HOUR` | (sin límite) | Segundos de audio por hora (ventana deslizante). Groq publica 7 200 (Free) y 400 000 (Developer); sin fijarlo, el 429 decide |
+| — | — | Adaptación automática: un 429 pausa al proveedor el Retry-After (15 s sin pista, nunca más de 30 min) para TODOS los trabajos y parte a la mitad su tope efectivo (una vez por ráfaga); cada minuto de tráfico limpio devuelve una plaza |
+| `TRANSCRIBE_CONCURRENCY` | `2` (1–32) | Plazas compartidas del motor (trabajo en CPU) |
+| `TRANSCRIBE_CLOUD_CONCURRENCY` | `6` (0–32) | Plazas extra para trabajos con un peldaño de nube usable (clave sin cuarentena): su trabajo pesado va fuera del host. Un trabajo de la plaza corta o interactiva toma su plaza reservada ANTES que una del pool: el pool queda para el lote |
+| `TRANSCRIBE_LOCAL_PARALLEL_TOTAL` | `2` (1–16, nunca menos que `TRANSCRIBE_LOCAL_PARALLEL`) | Procesos whisper.cpp sumando todos los trabajos largos y las lecturas de archivo entero de clips cortos (una tanda cuyos peldaños de nube murieron no arranca uno por trabajo). Las plazas corta e interactiva conservan las suyas |
+
+**Peldaños nuevos** (todos solo con clave; `TRANSCRIBE_<PROVEEDOR>_DISABLED=1` apaga uno sin quitarla)
+
+| Variable | Default | Qué hace |
+|---|---|---|
+| `ELEVENLABS_STT_MODEL` | `scribe_v2` | Scribe en PRIMERA pasada cuando está en el orden (antes solo escalada opt-in). Hablantes incluidos (`TRANSCRIBE_ELEVENLABS_DIARIZE=0` los quita); `TRANSCRIBE_ELEVENLABS_KEYTERMS=1` envía los términos del trabajo (recargo del 20 %; se sanean al contrato de la API: < 50 caracteres, ≤ 5 palabras, sin `<>{}[]\`, máx. 100). Un 401 `quota_exceeded` de ElevenLabs es «sin saldo» (cuarentena de saldo), no una clave rechazada. El dictado de pago, que ya probó Scribe con su propio sub-presupuesto, sigue con el orden compartido SIN `elevenlabs` (igual que un dictado gratis con `SIRAGPT_DICTATION_FREE_CLOUD=1`) |
+| `ASSEMBLYAI_API_KEY` | — | Activa AssemblyAI Universal (`/v2/upload` → `/v2/transcript` → sondeo). `ASSEMBLYAI_SPEECH_MODEL` (vacío = el modelo por defecto de la cuenta), `ASSEMBLYAI_BASE_URL`, `TRANSCRIBE_ASSEMBLYAI_DIARIZE` (on), `TRANSCRIBE_ASSEMBLYAI_KEYTERMS` (off → `keyterms_prompt`) |
+| `DEEPGRAM_API_KEY` | — | Activa Deepgram Nova-3 (`/v1/listen`, el más rápido: ≈ 550× tiempo real; más débil en español). `DEEPGRAM_MODEL` (`nova-3`), `DEEPGRAM_LANGUAGE` (vacío = detección; `multi` = cambio de idioma), `DEEPGRAM_BASE_URL`, `TRANSCRIBE_DEEPGRAM_DIARIZE` (on), `TRANSCRIBE_DEEPGRAM_KEYTERMS` (off). Siempre `mip_opt_out=true`. La sonda de Admin → Conexiones usa `GET /v1/auth/token` (válida también para una clave solo de transcripción) |
+| `ASSEMBLYAI_API_KEY` (detalle) | — | La detección automática de idioma exige ≥ 50 s de audio: un clip más corto va con la pista configurada (`WHISPER_LANGUAGE` / `es`). Un sondeo que falla de forma transitoria (5xx, 429, red) se repite con backoff (máx. 4), nunca se vuelve a subir el audio (facturaría dos veces) |
+| `MISTRAL_TRANSCRIBE_MODEL` | `voxtral-mini-latest` | Voxtral por su propio adaptador multipart (`POST /v1/audio/transcriptions`: `model`, `file`, `language`, un campo `timestamp_granularities=segment`; nunca el SDK de OpenAI, cuya codificación de arrays Mistral no documenta); usa `MISTRAL_API_KEY`, `MISTRAL_BASE_URL`. Opt-in: listar `mistral` en `TRANSCRIBE_PROVIDERS` |
+| `TRANSCRIBE_MISTRAL_DIARIZE` | off | `1` pide hablantes a Voxtral (`diarize=true`, Voxtral Transcribe 2) |
+
+**Cola larga** (`media-transcription-queue.js`)
+
+| Variable | Default | Qué hace |
+|---|---|---|
+| `SIRAGPT_MEDIA_CONCURRENCY` | `2` (1–16) | Concurrencia inicial (piso) de la cola larga por proceso |
+| `SIRAGPT_MEDIA_MAX_CONCURRENCY` | `8` (≥ piso, ≤ 32) | Techo del autoescalado. Igual al piso = sin autoescalado |
+| `SIRAGPT_MEDIA_AUTOSCALE` | on | `0` apaga el autoescalado |
+| `SIRAGPT_MEDIA_AUTOSCALE_QUEUE_DEPTH` | `1` | Grabaciones en espera a partir de las cuales crece (si algún proveedor de nube es USABLE: clave sin cuarentena y sin pausa por 429; un pool lleno con nuestro propio tráfico sigue contando) |
+| `SIRAGPT_MEDIA_AUTOSCALE_STEP` | `2` | Cuánto crece por tick |
+| `SIRAGPT_MEDIA_AUTOSCALE_SCALE_DOWN_MS` | `120000` | Silencio antes de volver al piso. Sin proveedor de nube usable (claves en cuarentena o todos pausados por 429) vuelve al piso de inmediato: whisper.cpp es CPU |
+| `SIRAGPT_MEDIA_AUTOSCALE_INTERVAL_MS` | `15000` (mín. 5000) | Cadencia del tick (lee la cola y la capacidad de nube; sube primero el tope global de la cola y luego la concurrencia del worker) |
+| `SIRAGPT_MEDIA_SCRATCH_DIR` | `<UPLOAD_DIR>/.media-scratch` (sin `UPLOAD_DIR`: temp del SO) | Dónde se descargan las grabaciones remotas (R2) antes del corte: el volumen de datos, nunca servido (ruta con punto). Los `sira-media-*` de más de 24 h se barren al arrancar |
+| `SIRAGPT_MEDIA_BATCH_MAX` | `100` (1–500) | Grabaciones por lote (turno del chat / entrega). `GET /api/files/processing-status` acepta hasta 200 ids por consulta. El compositor de `/agentes` todavía limita a 50 medios por mensaje (`lib/attachment-ingest.ts`, bajo UI lock): el tope de 100 se levanta en el PR de la carga rápida |
 
 ## Chat attachments — any format (optional)
 

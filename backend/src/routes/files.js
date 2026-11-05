@@ -51,6 +51,8 @@ const {
 // Never advertise a batch maxCount larger than multer actually accepts, else
 // over-limit uploads fail with LIMIT_FILE_COUNT instead of the route's contract.
 const UPLOAD_BATCH_MAX = Math.min(MAX_SIMULTANEOUS_DOCUMENTS, upload.filesLimit || MAX_SIMULTANEOUS_DOCUMENTS);
+// GET /processing-status: ids per poll (a batch of 100 recordings + their documents).
+const PROCESSING_STATUS_MAX_IDS = 200;
 const {
   contentDispositionHeader,
   safeDownloadFilename,
@@ -1319,8 +1321,9 @@ function scheduleCrossDocumentAnalysis(processedFiles, userId) {
  */
 router.get('/processing-status', authenticateToken, async (req, res) => {
   const ids = [...new Set(String(req.query.ids || '').split(',').filter(Boolean))];
-  if (!ids.length || ids.length > 50 || ids.some(id => id.length > 160)) {
-    return res.status(400).json({ error: 'Consulta entre 1 y 50 archivos.' });
+  // 200: a batch of 100 recordings plus its images and documents in one poll.
+  if (!ids.length || ids.length > PROCESSING_STATUS_MAX_IDS || ids.some(id => id.length > 160)) {
+    return res.status(400).json({ error: `Consulta entre 1 y ${PROCESSING_STATUS_MAX_IDS} archivos.` });
   }
   try {
     const files = await prisma.file.findMany({

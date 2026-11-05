@@ -218,15 +218,20 @@ describe('dictation: shared ladder, Scribe for paid plans, typed errors', () => 
     await assertUploadsCleaned();
   });
 
-  it('free plan: SIRAGPT_DICTATION_FREE_CLOUD=1 opts into the shared order; paid plans use it after Scribe', async () => {
+  // The shared TRANSCRIBE_PROVIDERS order minus ElevenLabs: a dictation never bills Scribe
+  // through the ladder (the paid route already tried it under its own sub-budget).
+  const sharedWithoutScribe = (options) => Array.isArray(options.providers) && options.providers.length > 0
+    && !options.providers.includes('elevenlabs') && options.providers.includes('local');
+
+  it('free plan: SIRAGPT_DICTATION_FREE_CLOUD=1 opts into the shared order (without Scribe); paid plans use it after Scribe', async () => {
     process.env.SIRAGPT_DICTATION_FREE_CLOUD = '1';
     await post().expect(200);
-    assert.ok(!('providers' in state.transcribeCalls[0].options), 'shared TRANSCRIBE_PROVIDERS order');
+    assert.ok(sharedWithoutScribe(state.transcribeCalls[0].options), 'shared TRANSCRIBE_PROVIDERS order without elevenlabs');
     assert.ok(!('escalationProviders' in state.transcribeCalls[0].options));
     delete process.env.SIRAGPT_DICTATION_FREE_CLOUD;
-    // Paid without an ElevenLabs key: straight to the shared ladder.
+    // Paid without an ElevenLabs key: straight to the shared ladder (without Scribe).
     await post({ plan: 'paid' }).expect(200);
-    assert.ok(!('providers' in state.transcribeCalls[1].options));
+    assert.ok(sharedWithoutScribe(state.transcribeCalls[1].options));
     assert.ok(!('escalationProviders' in state.transcribeCalls[1].options));
     await assertUploadsCleaned();
   });
@@ -277,7 +282,7 @@ describe('dictation: shared ladder, Scribe for paid plans, typed errors', () => 
     assert.ok(!('fallback' in res.body), '`fallback` makes the composer drop the text');
     assert.ok(!('note' in res.body));
     assert.equal(state.transcribeCalls.length, 1);
-    assert.ok(!('providers' in state.transcribeCalls[0].options), 'paid fallback: the shared ladder');
+    assert.ok(sharedWithoutScribe(state.transcribeCalls[0].options), 'paid fallback: the shared ladder, never Scribe a second time');
     assert.equal(state.usage.length, 0, 'no fake usage row for a rejected Scribe call');
     assert.ok(logged.some((l) => /\[dictation\] scribe failed \(quota 401\); using the transcription ladder/.test(l)));
     assert.ok(!logged.join('\n').includes('This request exceeds your quota'), 'provider text is not logged');
@@ -506,11 +511,13 @@ describe('dictation: shared ladder, Scribe for paid plans, typed errors', () => 
     assert.equal(d.voiceStudioTimeoutMs(25_000), 15_000);
     assert.equal(d.voiceStudioTimeoutMs(1_000), 600);
     assert.deepEqual(d.dictationProviders({}), ['local', 'voicestudio']);
-    assert.equal(d.dictationProviders({}, { paid: true }), undefined);
-    assert.equal(d.dictationProviders({ SIRAGPT_DICTATION_FREE_CLOUD: '1' }), undefined);
+    const paidList = d.dictationProviders({}, { paid: true });
+    assert.ok(Array.isArray(paidList) && paidList.includes('local') && !paidList.includes('elevenlabs'), 'paid: the shared order without Scribe');
+    assert.deepEqual(d.dictationProviders({ SIRAGPT_DICTATION_FREE_CLOUD: '1' }), paidList);
+    assert.deepEqual(d.dictationProviders({ TRANSCRIBE_PROVIDERS: 'elevenlabs,groq,local' }, { paid: true }), ['groq', 'local']);
     assert.deepEqual(d.dictationProviders({ SIRAGPT_DICTATION_PROVIDERS: 'Local,,bad name!,groq,local' }), ['local', 'groq']);
     assert.deepEqual(d.dictationLadderOptions({}), { providers: ['local', 'voicestudio'], escalationProviders: [] });
-    assert.deepEqual(d.dictationLadderOptions({}, { paid: true }), {});
+    assert.deepEqual(d.dictationLadderOptions({}, { paid: true }), { providers: paidList });
   });
 
   it('source: no fake success sentence, no transcript or full result in logs/responses', () => {

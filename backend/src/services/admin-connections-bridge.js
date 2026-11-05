@@ -57,6 +57,11 @@ const PROVIDER_ENV_MAP = Object.freeze({
   elevenlabs: 'ELEVENLABS_API_KEY',
   minimax: 'MINIMAX_API_KEY',
   suno: 'SUNO_API_KEY',
+  // Speech-to-text providers of the transcription pool (audio-transcriber
+  // cloudProviders reads these lazily per job, so a key pasted in
+  // Admin → Conexiones is live on the next recording).
+  assemblyai: 'ASSEMBLYAI_API_KEY',
+  deepgram: 'DEEPGRAM_API_KEY',
   // Web search engines (Búsqueda rápida ladder in agents/web-search/
   // fast-search.js). Read lazily per search call, so a key pasted in
   // Admin → Conexiones is live on the next query.
@@ -124,6 +129,13 @@ const PROVIDER_PROBE = Object.freeze({
   // a lightweight key check — it lists TTS models, not music, but a 200
   // proves the key is valid for the account that also serves Music.
   elevenlabs: { url: 'https://api.elevenlabs.io/v1/models',                         auth: (k) => ({ 'xi-api-key': k }) },
+  // AssemblyAI authenticates with a bare `authorization` header; listing
+  // transcripts (limit 1) is the lightweight key check. Deepgram uses the
+  // `Token` scheme; listing projects proves the key.
+  assemblyai: { url: 'https://api.assemblyai.com/v2/transcript?limit=1',             auth: (k) => ({ authorization: k }) },
+  // /v1/auth/token answers for any valid key, including a transcription-only
+  // (usage:write) key that /v1/projects would refuse with 403.
+  deepgram:   { url: 'https://api.deepgram.com/v1/auth/token',                       auth: (k) => ({ Authorization: `Token ${k}` }) },
   // MiniMax and the Suno gateway expose no verified lightweight key-check
   // endpoint, so they are intentionally unprobed: the write path fail-open
   // accepts them and reconcile reports them as present-but-unprobed.

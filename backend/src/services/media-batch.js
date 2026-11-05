@@ -5,7 +5,13 @@
 const { setTimeout: delay } = require('node:timers/promises');
 const { isMediaFile, hasTranscript, enqueueMediaTranscription, isPartialTranscript, isReprocessingPartial } = require('./media-transcription-queue');
 const { throwIfAborted } = require('../utils/abort-signals');
-const MAX_MEDIA_FILES = 50;
+// Recordings per batch (one chat turn or one delivery). 100 lets a drop of
+// 100 lecture videos travel as ONE batch; SIRAGPT_MEDIA_BATCH_MAX tunes it.
+const MAX_MEDIA_FILES = (() => {
+  const n = Number.parseInt(process.env.SIRAGPT_MEDIA_BATCH_MAX || '', 10);
+  return Number.isFinite(n) && n >= 1 ? Math.min(500, n) : 100;
+})();
+const MEDIA_BATCH_LIMIT_MESSAGE = `Puedes transcribir y analizar hasta ${MAX_MEDIA_FILES} audios por lote.`;
 // A chat turn may wait on a 10-hour recording. It keeps waiting while the
 // job advances (up to this ceiling) and gives up early only when nothing has
 // moved for STALL_MS, so a wedged queue never pins an agent slot for hours.
@@ -29,7 +35,7 @@ async function loadMediaBatch(prisma, { userId, fileIds = [] }) {
   // use client MIME metadata to authorize a row or silently drop missing IDs.
   if (!rows.length || !rows.every(isMediaFile)) return null;
   if (rows.length !== ids.length) throw new Error('Uno de los archivos no está disponible en tu cuenta.');
-  if (ids.length > MAX_MEDIA_FILES) throw new Error('Puedes transcribir y analizar hasta 50 audios por lote.');
+  if (ids.length > MAX_MEDIA_FILES) throw new Error(MEDIA_BATCH_LIMIT_MESSAGE);
   const byId = new Map(rows.map(row => [row.id, row]));
   return ids.map(id => byId.get(id));
 }
@@ -50,7 +56,7 @@ async function loadMixedAttachmentBatch(prisma, { userId, fileIds = [] }) {
   const mediaRows = ordered.filter(isMediaFile);
   const companionRows = ordered.filter(row => !isMediaFile(row));
   if (!mediaRows.length || !companionRows.length) return null;
-  if (mediaRows.length > MAX_MEDIA_FILES) throw new Error('Puedes transcribir y analizar hasta 50 audios por lote.');
+  if (mediaRows.length > MAX_MEDIA_FILES) throw new Error(MEDIA_BATCH_LIMIT_MESSAGE);
   return { mediaRows, companionRows };
 }
 

@@ -582,10 +582,10 @@ test('an opt-in escalation rung (ElevenLabs Scribe) reads ONLY the flagged piece
   });
   assert.equal(eleven.calls.length, 1, 'only the under-transcribed piece');
   // A 10-min piece gets the scaled per-request timeout (60 s + 0.2 s per audio second).
-  assert.deepEqual(eleven.calls[0], { modelId: 'scribe_v1', languageCode: 'es', granularity: 'word', timeout: 180, retries: 0 });
+  assert.deepEqual(eleven.calls[0], { modelId: 'scribe_v2', languageCode: 'es', granularity: 'word', timeout: 180, retries: 0 });
   assert.deepEqual(result.providers, { groq: 2, elevenlabs: 1 });
   assert.ok(!result.transcript.includes('(risas)'), 'audio events are not words');
-  assert.ok(result.quality.enginesUsed.includes('elevenlabs:scribe_v1'));
+  assert.ok(result.quality.enginesUsed.includes('elevenlabs:scribe_v2'));
   assert.equal(result.quality.escalations, 1);
   assert.ok(!result.quality.lowConfidence.some((s) => s.reason === 'under_transcribed'), 'repaired, not doubtful');
 
