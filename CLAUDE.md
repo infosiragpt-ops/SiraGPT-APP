@@ -3431,6 +3431,13 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   `amendedMessage`/`stillRunningMessage` con `stoppedReason: 'media_delivery_amended'`
   (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre. No aplica
   a una corrección de tramo ni a un turno con otros adjuntos.
+- **Análisis no pedido** (`media-batch.wantsMediaAnalysis`): un pedido de transcripción («transcribe…»,
+  «la transcripción», «subtítulos») solo suma un análisis con un entregable explícito (resumen, acta,
+  capítulos, puntos clave, comparar, extraer, decisiones, próximos pasos…) o una pregunta real sobre la
+  grabación. Antes «todo lo que dicen», «del tema 3», «es para una tarea» o «sistemas operativos» («tema»
+  dentro de la palabra) disparaban un análisis pagado de todo el lote; en 100 × 10 h topaba con el límite
+  de llamadas y terminaba en «No pude terminar el análisis que pediste». En los demás pedidos sigue la
+  lectura amplia, ahora con «qué» acentuado.
 - **Compositor** (`lib/chat/composer-files.ts`): mientras el lote se transcribe, una instrucción
   corta sobre su resultado («en Word», «está en inglés», «los nombres son…», «son 3 hablantes»,
   «sin resumen», «¿de qué hablan?») va a ese lote (`isPendingDeliveryAmendPrompt`: vocabulario

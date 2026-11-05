@@ -250,10 +250,27 @@ function stripNegatedAnalysis(goal) {
   return String(goal).replace(/\b(?:sin|no|ni|without|never|don[’']?t|do\s+not)\s+(?:(?:me|nos|te|se|lo|la|los|las|le|les)\s+){0,2}(?:(?:hagas?|hacer|incluyas?|incluir|quiero|queremos|necesito)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m[a-záéíóúñ]*|anal[ií]z[a-záéíóúñ]*|an[aá]lisis|summar\w*|analy[sz]\w*)\b/gi, '');
 }
 
+// The transcript itself is asked for: «transcribe…», «la transcripción…»,
+// «con subtítulos» (typos included, as in the runner).
+const ASKS_TRANSCRIPT_RE = /tran?s?cr[ií]|trnadscr|trnasc|transcirb|trasncri|transcip|trancip|transcrb|trascr[ií]|subt[ií]tul|\bsrt\b|\bvtt\b/i;
+// Next to a transcript request, deliverables beyond those of a translation:
+// «compara las dos clases», «extrae los nombres», «explícame», «las
+// decisiones», «los acuerdos», «las tareas pendientes», «próximos pasos».
+const TRANSCRIPT_EXTRA_DELIVERABLE_RE = /\bcomp[aá]ra|\bextra[eé]|\bexpl[ií]ca|\bdecisiones\b|\bacuerdos\b|\btareas pendientes\b|\bpr[oó]ximos pasos\b|\baction items\b/i;
+
 function wantsMediaAnalysis(goal) {
-  const requested = stripNegatedAnalysis(goal);
+  const text = String(goal || '');
+  // A transcript request runs an analysis only for an explicit deliverable or
+  // a real question about the recording. Its ordinary words («todo lo que
+  // dicen», «la clase de sistemas operativos», «es para una tarea», «del tema
+  // 3») are not one, and a paid analysis of a 100-file batch is not something
+  // to run by accident.
+  if (ASKS_TRANSCRIPT_RE.test(text)) {
+    return wantsSummaryWithTranslation(text) || TRANSCRIPT_EXTRA_DELIVERABLE_RE.test(stripNegatedAnalysis(text.toLowerCase()));
+  }
+  const requested = stripNegatedAnalysis(text);
   // «resúmelo» carries an accent: «res[uú]m».
-  return /anal[ií]z|an[aá]lisis|res[uú]m|compar|sinteti|s[ií]ntesis|conclu|extrae|pregunta|qu[eé]\b|c[oó]mo\b|qui[eé]n\b|explica|tema|decisi|tarea|insight|\bacta\b|minuta|cap[ií]tulo|[ií]ndice|puntos? clave|ideas? (?:principal|clave)|acuerdo|apunte|notas de (?:la )?clase|esquema|mapa conceptual|cuestionario|preguntas de examen|flashcard/i.test(requested);
+  return /anal[ií]z|an[aá]lisis|res[uú]m|compar|sinteti|s[ií]ntesis|conclu|extrae|pregunta|qu[eé](?![a-záéíóúñ])|c[oó]mo\b|qui[eé]n\b|explica|\btema|decisi|tarea|insight|\bacta\b|minuta|cap[ií]tulo|[ií]ndice|puntos? clave|ideas? (?:principal|clave)|acuerdo|apunte|notas de (?:la )?clase|esquema|mapa conceptual|cuestionario|preguntas de examen|flashcard/i.test(requested);
 }
 
 // Next to a translation only an explicit deliverable asks for an analysis

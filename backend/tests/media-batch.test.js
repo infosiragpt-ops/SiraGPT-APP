@@ -149,6 +149,23 @@ test('negated analysis does not suppress a separate positive task', () => {
   ]) assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
 });
 
+test('the ordinary words of a transcript request never run a paid analysis; a deliverable or a real question does', () => {
+  for (const goal of ['transcribe estos 100 videos de la clase de sistemas operativos', 'transcribe todo lo que dicen',
+    'transcribe las clases del tema 3', 'transcribe este audio, es para una tarea', 'transcríbeme cómo lo dijo el profesor',
+    'transcribe la clase de análisis matemático', 'transcribe la reunión, quién dijo qué', 'transcribe y compártelo']) {
+    assert.equal(batch.wantsMediaAnalysis(goal), false, goal);
+  }
+  for (const goal of ['transcribe y dame el acta', 'transcribe la reunión y extrae las decisiones', 'transcribe las dos clases y compáralas',
+    'transcribe, ¿y de qué habla?', 'transcribe y explícame la parte difícil', 'transcribe y lista los próximos pasos']) {
+    assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
+  }
+  // A request about the recording itself keeps the broad reading, accented «qué» included.
+  for (const goal of ['¿de qué habla el audio?', 'qué dice el profesor sobre el tema 3', 'analiza este audio']) {
+    assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
+  }
+  assert.equal(batch.wantsMediaAnalysis('lo de sistemas operativos'), false, '«tema» inside «sistemas» is not a cue');
+});
+
 // Free variables of the media branch that the runner module provides.
 function mediaBranchHelpers(overrides = {}) {
   const handoff = require('../src/services/media-handoff');
