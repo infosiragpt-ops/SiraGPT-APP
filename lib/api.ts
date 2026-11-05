@@ -2158,6 +2158,8 @@ class ApiClient {
       asyncProcessing?: boolean
       onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
       signal?: AbortSignal
+      /** Per uploaded file name: the source it was extracted from in the browser (lib/media/client-audio-extract). */
+      clientExtracted?: Record<string, Record<string, unknown>>
     } = {}
   ): Promise<FileUploadResponse> {
     const formData = new FormData();
@@ -2166,6 +2168,7 @@ class ApiClient {
     Array.from(files).forEach((file) => formData.append('files', file, file.name));
     if (opts.sourceChannel) formData.append('sourceChannel', opts.sourceChannel);
     if (opts.asyncProcessing) formData.append('asyncProcessing', '1');
+    if (opts.clientExtracted && Object.keys(opts.clientExtracted).length > 0) formData.append('clientExtracted', JSON.stringify(opts.clientExtracted));
 
     const url = `${this.baseURL}/files/upload`;
     const prepared = await prepareAuthenticatedRequest(url, {
@@ -2249,6 +2252,8 @@ class ApiClient {
       resume?: boolean
       /** Backoff / pause budget overrides (tests, diagnostics). */
       timing?: Partial<ResumableTiming>
+      /** The audio was extracted in the browser from this source (lib/media/client-audio-extract). */
+      clientExtracted?: Record<string, unknown> | null
     } = {}
   ): Promise<FileUploadResponse> {
     const [{ CHUNKED_UPLOAD_CHUNK_BYTES, CHUNKED_UPLOAD_PARALLEL }, engine] = await Promise.all([
@@ -2272,6 +2277,7 @@ class ApiClient {
       signal: opts.signal,
       onProgress: opts.onProgress,
       sourceChannel: opts.sourceChannel ?? null,
+      clientExtracted: opts.clientExtracted ?? null,
       resumeStore: opts.resume === false ? null : undefined,
       timing: {
         ...(opts.maxRetries !== undefined ? { serverErrorRetries: Math.max(0, opts.maxRetries) } : {}),

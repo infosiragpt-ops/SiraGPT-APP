@@ -9,6 +9,7 @@ const fileProcessingStatus = require('../services/file-processing-status');
 const mediaTranscription = require('../services/media-transcription-queue');
 const mediaTranscriptStore = require('../services/media-transcript-store');
 const archiveMediaExpander = require('../services/archive-media-expander');
+const clientExtractedMetadata = require('../services/client-extracted-metadata');
 const fileProcessor = require('../services/fileProcessor');
 const extractionSingleflight = require('../services/file-extraction-singleflight');
 const documentRenderer = require('../services/documentRenderer');
@@ -926,6 +927,13 @@ async function processFilesForAsyncPreview(files, userId, prismaClient) {
           });
         }
 
+        if (file.clientExtracted && typeof file.clientExtracted === 'object') {
+          // Best-effort: the transcript deliverables name the source video,
+          // and the admin can tell an extracted audio from an original upload.
+          await archiveMediaExpander.mergeAnalysisMetadata(prismaClient, {
+            fileId: fileRecord.id, userId, patch: { clientExtracted: file.clientExtracted }, mimeType: file.mimetype,
+          });
+        }
         await fileProcessingStatus.setStage(prismaClient, fileRecord.id, mediaTranscription.isMediaFile(fileRecord) ? 'uploaded' : 'extracting', { userId });
         scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord);
         return uploadResponseForFile(file, fileRecord, {
@@ -1052,6 +1060,10 @@ function sendChunkedError(res, err) {
 router.post('/upload/chunked/init', authenticateToken, requireScope('files:write'), enforceOrgRateLimitSafe, async (req, res) => {
   try {
     const { name, size, mimeType, chunkSize } = req.body || {};
+    // The browser may have extracted this audio from a larger video
+    // (lib/media/client-audio-extract): the validated source metadata travels
+    // with the session and lands in DocumentAnalysis.metadata.clientExtracted.
+    const clientExtracted = clientExtractedMetadata.parseClientExtracted(req.body?.clientExtracted);
     const originalName = upload.fixLatin1Filename(String(name || '').trim());
     if (!originalName) return res.status(400).json({ error: 'Falta el nombre del archivo.', code: 'bad_name' });
     const declared = { originalname: originalName, mimetype: String(mimeType || '').toLowerCase() || 'application/octet-stream' };
@@ -1072,6 +1084,7 @@ router.post('/upload/chunked/init', authenticateToken, requireScope('files:write
       // 507 up front when the disk cannot hold size × 1.1, instead of an
       // ENOSPC at chunk N of a multi-gigabyte lecture.
       checkFreeSpace: true,
+      clientExtracted,
     });
     return res.status(201).json({ ...session, maxChunkBytes: chunkedUploads.MAX_CHUNK_BYTES });
   } catch (err) {
@@ -1190,6 +1203,16 @@ router.post('/upload', authenticateToken, requireScope('files:write'), upload.ar
         counts: batchPolicy.counts,
         familyLimits: batchPolicy.familyLimits,
       });
+    }
+
+    // Audio extracted in the browser from a larger source: the composer sends
+    // one JSON map { "<file name>": metadata } for the files of this request.
+    const extractedByName = clientExtractedMetadata.parseClientExtractedMap(req.body?.clientExtracted);
+    if (extractedByName.size > 0) {
+      for (const file of req.files) {
+        const meta = extractedByName.get(file.originalname) || extractedByName.get(upload.fixLatin1Filename(String(file.originalname || '')));
+        if (meta) file.clientExtracted = meta;
+      }
     }
 
     const asyncProcessing = isAsyncUploadRequest(req) || req.files.some(file => mediaTranscription.isMediaFile({

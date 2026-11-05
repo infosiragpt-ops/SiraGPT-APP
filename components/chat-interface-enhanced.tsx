@@ -367,6 +367,8 @@ import { hasUserTurnForGoal } from "@/lib/chat/agent-task-turn"
 import { useMemoryStatus } from "@/lib/chat/use-memory-status"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
+import { DEFAULT_PARALLEL_UPLOADS, runUploadQueue, uploadConcurrencyFor } from "@/lib/composer/upload-scheduler"
+import { EXTRACTION_PROGRESS_SHARE, prepareMediaForUpload } from "@/lib/media/prepare-upload-media"
 import { shouldUseChunkedUpload } from "@/lib/composer/chunked-upload"
 import {
   isAssistantMessage,
@@ -9289,39 +9291,73 @@ But first, you need to connect your Spotify account securely using the button be
       });
       let failedChunkCount = 0;
 
-      for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
-        const chunk = uploadChunks[chunkIndex];
+      // One sub-batch (a multipart request of small files, or ONE large media
+      // file on the chunked transport). Sub-batches run through a bounded
+      // parallel queue below: 100 recordings no longer wait for each other
+      // one by one, and each one still keeps its own cancel and progress.
+      const processChunk = async (chunk: (typeof uploadChunks)[number], chunkIndex: number, queueSignal?: AbortSignal) => {
         const chunkTemps = chunk.temps;
         const chunkTempIds = new Set(chunkTemps.map(tf => tf.tempId));
         // Every chip of this sub-batch was removed before it started: skip it.
-        if (chunkTemps.length > 0 && chunkTemps.every(tf => cancelledTempIdsRef.current.has(tf.tempId))) continue;
+        if (chunkTemps.length > 0 && chunkTemps.every(tf => cancelledTempIdsRef.current.has(tf.tempId))) return;
         const chunkAbort = new AbortController();
+        if (queueSignal) {
+          if (queueSignal.aborted) return;
+          queueSignal.addEventListener('abort', () => chunkAbort.abort(), { once: true });
+        }
         const chunkAbortEntry = { controller: chunkAbort, tempIds: chunkTemps.map(tf => tf.tempId) };
         chunkTemps.forEach(tf => uploadAbortByTempRef.current.set(tf.tempId, chunkAbortEntry));
 
         try {
+          // Recordings worth it travel as audio extracted in the browser
+          // (Opus 16 kHz mono: a 10 h video becomes ≈ 108 MB) — what makes an
+          // upload feel instant is not sending the video. The extraction is
+          // the first EXTRACTION_PROGRESS_SHARE % of the chip's progress; the
+          // original is uploaded whenever nothing usable comes out, and the
+          // chip's ✕ (chunkAbort) cancels the extraction like the upload.
+          const prepared = await prepareMediaForUpload(chunk.files, {
+            signal: chunkAbort.signal,
+            concurrency: 1,
+            onProgress: (index, fraction) => {
+              const tf = chunkTemps[index];
+              if (!tf) return;
+              const pct = Math.round(fraction * EXTRACTION_PROGRESS_SHARE);
+              setUploadProgress(prev => ({ ...prev, [tf.tempId]: Math.max(prev[tf.tempId] || 0, pct) }));
+            },
+          });
+          const files = prepared.files;
+          const isExtracted = (file: File) => prepared.clientExtracted.has(file);
+          if (chunkAbort.signal.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
+
           // Real upload progress via XHR (see lib/api.ts uploadFiles).
           // Large selections are split into bounded multipart requests so
-          // 400 documents do not exceed the edge/body-size guard.
+          // 400 documents do not exceed the edge/body-size guard. An extracted
+          // recording already spent its first share on the extraction.
           const reportChunkProgress = (pct: number) => {
             setUploadProgress(prev => {
               const next = { ...prev };
-              chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
+              chunkTemps.forEach((tf, idx) => {
+                const shifted = isExtracted(files[idx]) ? Math.round(EXTRACTION_PROGRESS_SHARE + (pct * (100 - EXTRACTION_PROGRESS_SHARE)) / 100) : pct;
+                next[tf.tempId] = Math.max(next[tf.tempId] || 0, shifted);
+              });
               return next;
             });
           };
-          const response: any = chunk.isolated && chunk.files.length === 1 && shouldUseChunkedUpload(chunk.files[0])
-            ? await apiClient.uploadFileChunked(chunk.files[0], {
+          const extractedByName = Object.fromEntries(files.filter(isExtracted).map((f) => [f.name, prepared.clientExtracted.get(f) as Record<string, unknown>]));
+          const response: any = chunk.isolated && files.length === 1 && shouldUseChunkedUpload(files[0])
+            ? await apiClient.uploadFileChunked(files[0], {
               sourceChannel,
               signal: chunkAbort.signal,
               onProgress: reportChunkProgress,
+              clientExtracted: prepared.clientExtracted.get(files[0]) ?? null,
             })
-            : await apiClient.uploadFiles(filesToFileList(chunk.files), {
+            : await apiClient.uploadFiles(filesToFileList(files), {
               sourceChannel,
               idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
               asyncProcessing: true,
               signal: chunkAbort.signal,
               onProgress: reportChunkProgress,
+              ...(Object.keys(extractedByName).length > 0 ? { clientExtracted: extractedByName } : {}),
             });
 
           if (!response.files) {
@@ -9332,7 +9368,7 @@ But first, you need to connect your Spotify account securely using the button be
               return next;
             });
             toast.error('La subida falló. Toca el ícono de reintento en el archivo.');
-            continue;
+            return;
           }
 
           // Snap this sub-batch to 100% and swap temps for server entries.
@@ -9437,7 +9473,7 @@ But first, you need to connect your Spotify account securely using the button be
         } catch (chunkError: any) {
           // Cancelled by the user (every chip removed): no failure toast, the
           // chips are already gone.
-          if (chunkError?.name === 'AbortError' && chunkTemps.every(tf => cancelledTempIdsRef.current.has(tf.tempId))) continue;
+          if (chunkError?.name === 'AbortError' && chunkTemps.every(tf => cancelledTempIdsRef.current.has(tf.tempId))) return;
           failedChunkCount += 1;
           console.error('File upload chunk failed:', chunkError);
           const reason = chunkError?.message || 'Error de subida';
@@ -9450,7 +9486,15 @@ But first, you need to connect your Spotify account securely using the button be
         } finally {
           chunkTemps.forEach(tf => uploadAbortByTempRef.current.delete(tf.tempId));
         }
-      }
+      };
+
+      // Sub-batches in input order, DEFAULT_PARALLEL_UPLOADS at a time (each
+      // large file already keeps several parts in flight). processChunk
+      // settles every failure itself, so the queue only sequences the work.
+      await runUploadQueue(
+        uploadChunks.map((chunk, chunkIndex) => ({ id: String(chunkIndex), run: (signal: AbortSignal) => processChunk(chunk, chunkIndex, signal) })),
+        { concurrency: uploadConcurrencyFor(uploadChunks.length, DEFAULT_PARALLEL_UPLOADS) },
+      ).done;
 
       if (filesToUpload.length >= 25 && failedChunkCount === 0) {
         toast.success(`${filesToUpload.length} archivos recibidos. SiraGPT los analizará en segundo plano.`);

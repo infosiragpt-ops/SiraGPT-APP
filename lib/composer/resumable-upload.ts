@@ -76,7 +76,7 @@ export type ChunkPutInput = {
 }
 
 export interface ResumableUploadTransport<TResult = unknown> {
-  init(input: { name: string; size: number; mimeType: string; chunkSize: number; sourceChannel?: string | null }, signal?: AbortSignal): Promise<ChunkedUploadSession>
+  init(input: { name: string; size: number; mimeType: string; chunkSize: number; sourceChannel?: string | null; clientExtracted?: Record<string, unknown> | null }, signal?: AbortSignal): Promise<ChunkedUploadSession>
   status(uploadId: string, signal?: AbortSignal): Promise<ChunkedUploadStatus>
   putChunk(input: ChunkPutInput): Promise<void>
   complete(uploadId: string, signal?: AbortSignal): Promise<TResult>
@@ -386,6 +386,8 @@ export type RunResumableUploadOptions<TResult> = {
   signal?: AbortSignal
   onProgress?: ChunkedUploadProgressCallback
   sourceChannel?: string | null
+  /** The audio was extracted in the browser from this source (lib/media/client-audio-extract). */
+  clientExtracted?: Record<string, unknown> | null
   /** null disables resume across reloads (the in-call pause/resume still works). */
   resumeStore?: ResumeStore | null
   timing?: Partial<ResumableTiming>
@@ -598,6 +600,7 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
           mimeType: file.type || "application/octet-stream",
           chunkSize: opts.chunkBytes,
           sourceChannel: opts.sourceChannel ?? null,
+          ...(opts.clientExtracted ? { clientExtracted: opts.clientExtracted } : {}),
         }, signal)
         adopt(created)
         remember()

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { blobToFile, DEFAULT_MAX_MEDIA_BYTES, isMediaUpload, validateFile, validateBatch } from "../lib/attachment-ingest"
+import { blobToFile, DEFAULT_MAX_MEDIA_BYTES, isMediaUpload, MAX_MEDIA_FILES_PER_MESSAGE, validateFile, validateBatch } from "../lib/attachment-ingest"
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const XLS_MIME = "application/vnd.ms-excel"
@@ -61,13 +61,14 @@ test("audio and video are capped at 10 GB while documents get a 1 GB cap", () =>
   assert.equal(isMediaUpload({ name: "app.ts", type: "video/mp2t", size: 4096 } as unknown as File), false)
 })
 
-test("supports 50 recordings with a clear 51st rejection and MIME-less formats", () => {
-  const files = Array.from({length: 51}, (_, index) => makeFile(`${index}.flac`, ""))
+test("supports 100 recordings (one batch of SIRAGPT_MEDIA_BATCH_MAX) with a clear 101st rejection and MIME-less formats", () => {
+  const files = Array.from({length: 101}, (_, index) => makeFile(`${index}.flac`, ""))
   const result = validateBatch(files)
-  assert.equal(result.accepted.length, 50)
+  assert.equal(MAX_MEDIA_FILES_PER_MESSAGE, 100)
+  assert.equal(result.accepted.length, 100)
   assert.equal(result.rejected.length, 1)
-  assert.match(result.rejected[0].reason, /50 audios/)
-  assert.equal(validateBatch(files.slice(0, 2), { existingMediaCount: 49 }).accepted.length, 1)
+  assert.match(result.rejected[0].reason, /100 audios/)
+  assert.equal(validateBatch(files.slice(0, 2), { existingMediaCount: 99 }).accepted.length, 1)
   for (const ext of ["flac", "aac", "wma", "aif", "aiff"]) {
     assert.equal(validateFile({name: `lecture.${ext}`, type: "", size: 200 * 1024 * 1024} as File).ok, true)
   }

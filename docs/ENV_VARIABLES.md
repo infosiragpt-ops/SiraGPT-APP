@@ -1096,7 +1096,33 @@ fila por delante de los tramos del lote (prioridad por plaza: interactiva > cort
 | `SIRAGPT_MEDIA_AUTOSCALE_SCALE_DOWN_MS` | `120000` | Silencio antes de volver al piso. Sin proveedor de nube usable (claves en cuarentena o todos pausados por 429) vuelve al piso de inmediato: whisper.cpp es CPU |
 | `SIRAGPT_MEDIA_AUTOSCALE_INTERVAL_MS` | `15000` (mín. 5000) | Cadencia del tick (lee la cola y la capacidad de nube; sube primero el tope global de la cola y luego la concurrencia del worker) |
 | `SIRAGPT_MEDIA_SCRATCH_DIR` | `<UPLOAD_DIR>/.media-scratch` (sin `UPLOAD_DIR`: temp del SO) | Dónde se descargan las grabaciones remotas (R2) antes del corte: el volumen de datos, nunca servido (ruta con punto). Los `sira-media-*` de más de 24 h se barren al arrancar |
-| `SIRAGPT_MEDIA_BATCH_MAX` | `100` (1–500) | Grabaciones por lote (turno del chat / entrega). `GET /api/files/processing-status` acepta hasta 200 ids por consulta. El compositor de `/agentes` todavía limita a 50 medios por mensaje (`lib/attachment-ingest.ts`, bajo UI lock): el tope de 100 se levanta en el PR de la carga rápida |
+| `SIRAGPT_MEDIA_BATCH_MAX` | `100` (1–500) | Grabaciones por lote (turno del chat / entrega). `GET /api/files/processing-status` acepta hasta 200 ids por consulta. El compositor de `/agentes` acepta los mismos 100 medios por mensaje (`MAX_MEDIA_FILES_PER_MESSAGE` en `lib/attachment-ingest.ts`) |
+
+## Carga rápida del compositor — audio extraído en el navegador + subidas en paralelo (added 2026-11-05)
+
+Lo que hace que WhatsApp «suba en segundos» no es una red más rápida: no sube el video.
+Para transcribir solo hace falta el audio, así que el compositor de `/agentes` extrae el audio
+de cada grabación EN EL NAVEGADOR antes de subirla (`lib/media/client-audio-extract.ts`,
+mediabunny 1.65.2 MPL-2.0 importado bajo demanda, WebCodecs): un video de 10 h (≈ 3 GB)
+viaja como ≈ 108 MB de Opus mono 16 kHz; 100 videos pasan de ≈ 300 GB a ≈ 11 GB. Si el
+navegador no codifica Opus (Safari antiguo) copia la pista de audio tal cual a un contenedor
+solo-audio (`copy`, ≈ 5×); si nada sirve (sin pista de audio, archivo ilegible, duración que no
+coincide, sin ganancia) sube el ORIGINAL, como antes. Cada resultado se verifica (legible y
+misma duración ± 1,5 s / 0,5 %) antes de reemplazar al original. Las sub-tandas de subida
+corren en una cola paralela acotada (`lib/composer/upload-scheduler.ts`) en vez de una tras
+otra, y el tope del compositor sube a 100 medios por mensaje. El servidor guarda lo que el audio
+representa en `DocumentAnalysis.metadata.clientExtracted` (`{ tier, sourceName, sourceSize,
+sourceType, codec, durationSeconds }`, validado por `services/client-extracted-metadata.js`).
+Todas son variables públicas del build del frontend (`NEXT_PUBLIC_*`).
+
+| Variable | Default | Qué hace |
+|---|---|---|
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` | on | `0` / `off` desactiva la extracción: todo se sube como antes |
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MB` | `8` | Videos desde este tamaño se extraen (el ahorro es la pista de video) |
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_AUDIO_MB` | `32` | Audios desde este tamaño se recodifican a Opus (un MP3 de 320 kbps baja ≈ 13×); los pequeños no valen una decodificación |
+| `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MAX_COPY_GB` | `4` | La copia de pista (`copy`) se queda en memoria: no se intenta sobre fuentes mayores |
+| `NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS` | `2` (1–6) | Sub-tandas de subida a la vez (cada archivo grande ya lleva 3 partes en vuelo) |
+| `NEXT_PUBLIC_COMPOSER_MAX_FILES` | `400` | Archivos por mensaje (existente); los audios/videos tienen además el tope fijo de 100 |
 
 ## Chat attachments — any format (optional)
 

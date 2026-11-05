@@ -3291,5 +3291,50 @@ extracción de audio en el navegador son el PR2; los entregables por lote, el PR
   AssemblyAI, Deepgram, Mistral nuevas); si no quiere gastar aún, `TRANSCRIBE_PROVIDERS=openai,
   groq,xai,local` restaura el comportamiento previo. GPU en la Lenovo (RTX 4070/5070 Ti 16 GB)
   para un peldaño local Parakeet-TDT que sí alcance 1 000 h/día sin nube. Benchmark propio de
-  2–3 h de audio LatAm antes de fijar el orden definitivo. El compositor sigue en 50 medios por
-  mensaje (UI lock) hasta el PR de la carga rápida.
+  2–3 h de audio LatAm antes de fijar el orden definitivo.
+
+## Carga rápida — audio extraído en el navegador + subidas en paralelo (added 2026-11-05)
+
+PR2 del pedido «carga extremadamente rápida, como WhatsApp». Lo que hace instantánea una subida
+no es la red: es no subir el video. Solo lógica (UI lock re-baselineado para los archivos de
+lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `lib/api.ts`,
+`lib/attachment-ingest.ts`, `lib/composer/resumable-upload.ts`); sin cambios visuales.
+- **`lib/media/client-audio-extract.ts`**: extracción en el navegador con mediabunny 1.65.2
+  (MPL-2.0, permitida por `scripts/oss-license-policy.js`; `import("mediabunny")` dinámico, nada
+  se carga hasta adjuntar un medio). Tiers: `opus` (WebCodecs → Opus 16 kHz mono 24 kbps en Ogg;
+  10 h ≈ 108 MB), `copy` (sin codificador Opus: la pista de audio tal cual a m4a/mp3/ogg/flac/wav/
+  mka, descartando el video) y `none` (se sube el original). Verificación antes de reemplazar:
+  salida legible, ganancia ≥ 10 %, duración igual a la fuente (± 1,5 s / 0,5 %). Abort real
+  (`conversion.cancel`). `planAudioExtraction` (gate puro: video ≥ 8 MB, audio ≥ 32 MB,
+  `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT`), `extractedFileName` («Clase 3.mp4» → «Clase 3.audio.ogg»),
+  `clientExtractedMetadata`. Seam `loadMediabunny` para tests (fake del módulo).
+- **`lib/media/prepare-upload-media.ts`**: orquestación pura por sub-tanda (extractor inyectable,
+  concurrencia 1–2 según núcleos, señal por archivo, progreso 0–1, outcome por índice); lo que
+  falla o se cancela se sube original; la alineación archivo ↔ chip nunca cambia.
+- **`lib/composer/upload-scheduler.ts`**: cola FIFO con N en vuelo (`runUploadQueue`,
+  `NEXT_PUBLIC_COMPOSER_PARALLEL_UPLOADS` = 2), cancel por trabajo (pendiente nunca arranca,
+  en curso se aborta y se da por cancelado al instante) y global, resultados en orden de entrada.
+- **Compositor** (`handleAndUploadFiles`): el bucle serial `for (chunkIndex…)` pasa a
+  `processChunk` + `runUploadQueue`; dentro de cada sub-tanda, `prepareMediaForUpload` extrae
+  antes de subir (la extracción ocupa el primer 40 % del progreso del chip,
+  `EXTRACTION_PROGRESS_SHARE`; el ✕ del chip aborta extracción y subida con el mismo
+  `chunkAbort`). El archivo extraído viaja por el camino de siempre (chunked ≥ 32 MB o
+  multipart) con `clientExtracted` (init del chunked; campo JSON por nombre en el multipart).
+- **Tope**: `MAX_MEDIA_FILES_PER_MESSAGE = 100` (`lib/attachment-ingest.ts`), igual que
+  `SIRAGPT_MEDIA_BATCH_MAX`.
+- **Backend**: `services/client-extracted-metadata.js` (normalizador estricto: tier, nombre,
+  tamaño, tipo, códec, duración acotados; nunca lanza); `routes/files.js` lo lee en
+  `POST /upload/chunked/init` (viaja en la sesión, `chunked-upload-store`) y en `POST /upload`
+  (mapa por nombre) y lo guarda en `DocumentAnalysis.metadata.clientExtracted` con
+  `archiveMediaExpander.mergeAnalysisMetadata` (la fila nace `pending`, como las de medios).
+  Los entregables de PR3 usarán `sourceName` para nombrar el video original.
+- Tests: `tests/lib/upload-scheduler.test.ts` (5), `tests/lib/client-audio-extract.test.ts` (5),
+  `tests/lib/prepare-upload-media.test.ts` (3), `tests/chat-fast-upload-source.test.ts` (5),
+  `tests/attachment-ingest.test.ts` (100/101), `backend/tests/client-extracted-metadata.test.js` (2).
+- **Pendiente (PR2b, requiere R2 en producción)**: multipart directo a R2 desde el navegador
+  (`createR2MultipartTransport` sobre `ResumableUploadTransport`, firmante con
+  `requestChecksumCalculation: 'WHEN_REQUIRED'`, CORS con `ExposeHeaders: ETag`, lifecycle
+  `AbortIncompleteMultipartUpload` 1 día) y lectura por rangos en el worker. Hoy producción no
+  pasa `R2_*` al backend. También: validación real en Safari/Firefox (WebCodecs Opus), cola de
+  extracción persistente entre recargas (IndexedDB) y re-subida del original cuando un video sin
+  voz necesite subtítulos incrustados o texto en pantalla.
