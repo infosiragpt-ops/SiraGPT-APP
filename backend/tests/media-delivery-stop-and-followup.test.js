@@ -461,6 +461,8 @@ test('a follow-up can take a translation or a summary back, and its model writes
   assert.deepEqual(summary.changes, ['no_analysis']);
   assert.equal(summary.record.mode, 'transcript');
   const model = { id: 'gpt-6-sol', provider: 'OpenAI' };
+  // A delivery with no model yet takes the follow-up's (one with a model
+  // keeps it unless the follow-up asks for model work: media-delivery-stop-review).
   assert.deepEqual(mergeDeliveryAmendment(normalizeNewRecord(request(), T0), { documentFormat: 'docx', model }).record.model, model);
   const record = normalizeNewRecord(request({ model: { id: 'deepseek-v4-flash', provider: 'DeepSeek' } }), T0);
   assert.equal(mergeDeliveryAmendment(record, { goal: 'transcribir', model }).record.model.id, 'deepseek-v4-flash', 'no change, no model switch');

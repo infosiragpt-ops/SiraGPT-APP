@@ -308,10 +308,11 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   next.goal = joinGoals(record.goal, value.goal);
   // The model picked on the follow-up turn writes the delivery's analysis
   // or translation when the follow-up asks for that work (the user's pick
-  // runs it). «en Word» or the names never swap the model that a turn
-  // asked to write a summary (AGENTS.md section 13).
+  // runs it), or when the delivery had none (the internal ladder otherwise).
+  // «en Word» or the names never swap the model that a turn asked to write
+  // a summary (AGENTS.md section 13).
   const model = normalizeModel(value.model);
-  if (model && changes.some(change => MODEL_WORK_CHANGES.has(change))) next.model = model;
+  if (model && changes.length && (changes.some(change => MODEL_WORK_CHANGES.has(change)) || !normalizeModel(record.model))) next.model = model;
   return { record: next, changes };
 }
 

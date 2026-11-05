@@ -3451,8 +3451,9 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   traducción de un momento no suma resumen. «no lo analices» (también con «c»), «no lo quiero
   en Word» o «sin subtítulos» quitan, nunca agregan (`negatedTranscriptFormats` en
   `resolveTranscriptOutput`: también en un primer pedido). El modelo de la entrega cambia solo si
-  el seguimiento pide trabajo del modelo (traducción, resumen, su tramo): «en Word» o los nombres
-  no cambian el modelo que debía escribir un resumen (AGENTS.md sección 13). «Regenerar» sobre
+  el seguimiento pide trabajo del modelo (traducción, resumen, su tramo) o si la entrega no tenía
+  ninguno: «en Word» o los nombres no cambian el modelo que debía escribir un resumen (AGENTS.md
+  sección 13). «Regenerar» sobre
   un «Anotado» vuelve a leer el chat como en un hand-off. Un «Detener» que el almacén no pudo
   registrar responde 500 (`cancel_failed`, nunca «ya había terminado») y detiene igual los
   trabajos. El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
