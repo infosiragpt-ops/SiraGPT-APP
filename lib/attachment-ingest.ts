@@ -363,6 +363,12 @@ export function sanitizeHtml(input: string): string {
 }
 
 /**
+ * Audio/video files per message. Matches the backend batch cap
+ * (SIRAGPT_MEDIA_BATCH_MAX, 100): a batch of 100 recordings is one message.
+ */
+export const MAX_MEDIA_FILES_PER_MESSAGE = 100
+
+/**
  * Run a list of files through validation, splitting into accepted vs
  * rejected. Caller can present the rejected ones in a single toast
  * batch instead of per-file noise.
@@ -378,8 +384,8 @@ export function validateBatch(
   let mediaCount = opts.existingMediaCount ?? 0
 
   for (const f of files) {
-    if (isMediaUpload(f) && mediaCount >= 50) {
-      rejected.push({ file: f, reason: "Máximo 50 audios o vídeos por mensaje", code: "count_exceeded" })
+    if (isMediaUpload(f) && mediaCount >= MAX_MEDIA_FILES_PER_MESSAGE) {
+      rejected.push({ file: f, reason: `Máximo ${MAX_MEDIA_FILES_PER_MESSAGE} audios o vídeos por mensaje`, code: "count_exceeded" })
       continue
     }
     if (accepted.length + existing >= maxCount) {

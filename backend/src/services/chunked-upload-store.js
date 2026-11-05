@@ -234,6 +234,8 @@ function multerFileFor(userDir, meta, filename) {
     filename,
     path: path.join(userDir, filename),
     chunked: true,
+    // The browser extracted this audio from a larger source (validated at init).
+    clientExtracted: meta.clientExtracted || null,
   };
 }
 
@@ -248,7 +250,7 @@ function multerFileFor(userDir, meta, filename) {
  * @param {boolean} [opts.checkFreeSpace] refuse with 507 when the disk cannot hold size × 1.1
  * @param {Function} [opts.statfs] injectable `fs.promises.statfs` (tests)
  */
-async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, maxBytes, checkFreeSpace = false, statfs } = {}) {
+async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, maxBytes, checkFreeSpace = false, statfs, clientExtracted = null } = {}) {
   const total = Number(size);
   if (!userDir) throw new ChunkedUploadError(400, 'bad_owner', 'Propietario de la subida inválido.');
   if (!Number.isFinite(total) || total <= 0) throw new ChunkedUploadError(400, 'bad_size', 'Tamaño de archivo inválido.');
@@ -269,6 +271,9 @@ async function initChunkedUpload({ userDir, name, size, mimeType, chunkSize, max
     received: [],
     createdAt: nowIso,
     updatedAt: nowIso,
+    // Already validated by the route (client-extracted-metadata); kept with the
+    // session so the assembled file carries it into the processing pipeline.
+    ...(clientExtracted && typeof clientExtracted === 'object' ? { clientExtracted } : {}),
   };
   await withStorageErrors(() => fsPromises.mkdir(partsDirFor(userDir), { recursive: true }));
   if (checkFreeSpace) await assertFreeSpace({ dir: userDir, size: total, statfs });

@@ -21,7 +21,8 @@ describe("chat composer input robustness", () => {
 
   it("aborts an in-flight upload when its chip is removed", () => {
     assert.match(source, /uploadAbortByTempRef = React\.useRef\(new Map/)
-    assert.match(source, /uploadFileChunked\(chunk\.files\[0\], \{\s*sourceChannel,\s*signal: chunkAbort\.signal,/)
+    // The sub-batch uploads what the browser prepared (`files`, the extracted audio when there is one).
+    assert.match(source, /uploadFileChunked\(files\[0\], \{\s*sourceChannel,\s*signal: chunkAbort\.signal,/)
     assert.match(source, /asyncProcessing: true,\s*signal: chunkAbort\.signal,/)
     assert.match(source, /inflight\.tempIds\.every\(id => cancelledTempIdsRef\.current\.has\(id\)\)\) inflight\.controller\.abort\(\)/)
     assert.match(source, /chunkError\?\.name === 'AbortError' && chunkTemps\.every/)

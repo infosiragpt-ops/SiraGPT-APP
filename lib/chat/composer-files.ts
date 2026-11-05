@@ -1,6 +1,7 @@
 import { isActiveProcessingStage, type FileProcessingStage } from "../file-processing-vocab"
 import { getLongPasteMetadata, type LongPasteMetadata } from "../long-paste"
 import { getAttachmentRelativePath } from "../attachments/folder-selection"
+import { MAX_MEDIA_FILES_PER_MESSAGE } from "../attachment-ingest"
 
 type ComposerFileRecord = {
   id?: unknown
@@ -441,7 +442,8 @@ export function resolveMediaFollowupFiles(prompt: string, messages: readonly unk
       if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) return []
       continue
     }
-    return files.length <= 50 && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
+    // The whole batch the composer accepts (100 recordings) is one follow-up target.
+    return files.length <= MAX_MEDIA_FILES_PER_MESSAGE && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
   }
   return []
 }

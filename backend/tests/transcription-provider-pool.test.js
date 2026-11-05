@@ -209,7 +209,11 @@ test('whisper.cpp processes of concurrent long jobs share one cap (TRANSCRIBE_LO
       env, language: 'es', durationSeconds: 1200, segmentAudio: segmenter(t, 2),
       async localTranscribe() {
         peak = Math.max(peak, ++active);
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Each piece waits until all four could be running (or 300 ms): the
+        // peak then shows the cap, never how the two jobs happened to
+        // interleave on a busy machine.
+        const until = Date.now() + 300;
+        while (active < 4 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 5));
         active--;
         return { text: 'Hola a todos, empezamos la clase de hoy con el tema pendiente.' };
       },

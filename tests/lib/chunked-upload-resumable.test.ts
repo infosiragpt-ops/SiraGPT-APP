@@ -17,6 +17,7 @@ import {
   formatRateEs,
   type ChunkedUploadStats,
 } from "@/lib/composer/resumable-upload"
+import { createSlotLimiter } from "@/lib/composer/upload-scheduler"
 
 /**
  * uploadFileChunked against an in-memory chunked-upload server: the real
@@ -443,6 +444,22 @@ describe("resumable upload failure budgets", () => {
     return { error: await result, attempts, deletes, received: [...received], elapsed: now }
   }
 
+  it("parts in flight are bounded across uploads, so other requests to the origin keep a socket", async () => {
+    const slots = createSlotLimiter(4)
+    let inFlight = 0
+    let peak = 0
+    const transport = (id: string) => ({
+      init: async () => ({ uploadId: id, chunkSize: 10, totalChunks: 5 }),
+      status: async () => ({ uploadId: id, size: 45, chunkSize: 10, totalChunks: 5, received: [] }),
+      putChunk: async () => { peak = Math.max(peak, ++inFlight); await new Promise((r) => setTimeout(r, 5)); inFlight -= 1 },
+      complete: async () => ({ ok: id }),
+      abort: async () => {},
+    })
+    const results = await Promise.all(["a", "b"].map((id) => runResumableUpload({ file: lecture(), chunkBytes: 10, parallel: 3, resumeStore: null, partSlots: slots, transport: transport(id) })))
+    expect(results).toEqual([{ ok: "a" }, { ok: "b" }])
+    expect(peak).toBe(4)
+  })
+
   it("newly confirmed chunks from lost PUT responses reset the pause budget", async () => {
     let now = 0
     const received = new Set<number>()
@@ -487,6 +504,15 @@ describe("resumable upload failure budgets", () => {
     expect(result.elapsed).toBe(2_000)
     expect(result.received).toEqual([0])
     expect(result.deletes).toBe(0)
+  })
+
+  it("without a resume store (extracted audio) a pause never promises to continue where it stopped", async () => {
+    for (const status of [0, 500, 401]) {
+      const result = await uploadWithStalledChunk(status, 0)
+      expect(result.error).toBeInstanceOf(ChunkedUploadPausedError)
+      expect(String((result.error as Error).message)).not.toMatch(/donde quedó/)
+      expect(String((result.error as Error).message)).toMatch(/adjunt/)
+    }
   })
 })
 

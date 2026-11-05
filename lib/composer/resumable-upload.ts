@@ -22,6 +22,27 @@
  */
 
 import { chunkedUploadPercent, planChunks, type ChunkPlan } from "./chunked-upload"
+import { createSlotLimiter, type SlotLimiter } from "./upload-scheduler"
+
+/**
+ * Chunk PUTs in flight across every upload of the tab. Two recordings at
+ * three parts each would take all six HTTP/1.1 sockets of the origin (local
+ * dev, proxies that downgrade to HTTP/1.1), and the chat, its stream and the
+ * status polls would wait behind 16 MB parts. On HTTP/2 the uplink, not the
+ * count, is the limit.
+ */
+export const CHUNKED_UPLOAD_TOTAL_PARTS = (() => {
+  const n = Math.floor(Number(process.env.NEXT_PUBLIC_CHUNKED_UPLOAD_TOTAL_PARTS))
+  return Number.isFinite(n) && n > 0 ? Math.min(12, n) : 4
+})()
+
+let sharedPartSlots: SlotLimiter | null = null
+
+/** The tab's part slots: every chunked upload takes one per PUT. */
+export function sharedChunkPartSlots(): SlotLimiter {
+  if (!sharedPartSlots) sharedPartSlots = createSlotLimiter(CHUNKED_UPLOAD_TOTAL_PARTS)
+  return sharedPartSlots
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────
 
@@ -76,7 +97,7 @@ export type ChunkPutInput = {
 }
 
 export interface ResumableUploadTransport<TResult = unknown> {
-  init(input: { name: string; size: number; mimeType: string; chunkSize: number; sourceChannel?: string | null }, signal?: AbortSignal): Promise<ChunkedUploadSession>
+  init(input: { name: string; size: number; mimeType: string; chunkSize: number; sourceChannel?: string | null; clientExtracted?: Record<string, unknown> | null }, signal?: AbortSignal): Promise<ChunkedUploadSession>
   status(uploadId: string, signal?: AbortSignal): Promise<ChunkedUploadStatus>
   putChunk(input: ChunkPutInput): Promise<void>
   complete(uploadId: string, signal?: AbortSignal): Promise<TResult>
@@ -386,8 +407,12 @@ export type RunResumableUploadOptions<TResult> = {
   signal?: AbortSignal
   onProgress?: ChunkedUploadProgressCallback
   sourceChannel?: string | null
+  /** The audio was extracted in the browser from this source (lib/media/client-audio-extract). */
+  clientExtracted?: Record<string, unknown> | null
   /** null disables resume across reloads (the in-call pause/resume still works). */
   resumeStore?: ResumeStore | null
+  /** PUTs in flight across uploads (default: the tab's shared slots); null = only `parallel` bounds them. */
+  partSlots?: SlotLimiter | null
   timing?: Partial<ResumableTiming>
   now?: () => number
   wait?: (ms: number, signal?: AbortSignal) => Promise<unknown>
@@ -401,6 +426,15 @@ const MESSAGES = {
   server: "El servidor no pudo guardar una parte del archivo. Vuelve a adjuntarlo más tarde: continuará donde quedó.",
   gone: "La subida caducó en el servidor. Vuelve a adjuntar el archivo.",
   missing: "El servidor no recibió todas las partes del archivo. Vuelve a adjuntarlo.",
+}
+
+// Without a resume store (audio re-extracted in the browser: a new encode
+// never joins an older session) attaching the file again starts over, so
+// the pause never promises «continuará donde quedó».
+const RESTART_MESSAGES = {
+  paused: "La conexión no volvió en 45 minutos. Vuelve a adjuntar el archivo para subirlo de nuevo.",
+  auth: "Tu sesión expiró durante la subida. Inicia sesión de nuevo y vuelve a adjuntar el archivo.",
+  server: "El servidor no pudo guardar una parte del archivo. Vuelve a adjuntarlo más tarde.",
 }
 
 function backoffMs(attempt: number, timing: ResumableTiming, retryAfterMs: number | null, random: () => number): number {
@@ -424,6 +458,8 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
   const random = opts.random ?? Math.random
   const parallel = Math.max(1, Math.min(6, Math.floor(opts.parallel ?? 3)))
   const resumeStore = opts.resumeStore === undefined ? createLocalResumeStore() : opts.resumeStore
+  const pauseCopy = resumeStore ? MESSAGES : { ...MESSAGES, ...RESTART_MESSAGES }
+  const partSlots = opts.partSlots === undefined ? sharedChunkPartSlots() : opts.partSlots
   const total = file.size
   const fingerprint = fingerprintFile(file)
   const saved = fingerprint && resumeStore ? resumeStore.get(fingerprint) : null
@@ -528,29 +564,42 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
           failure = abortError()
           return
         }
-        const plan = pending[next]
-        next += 1
-        inflight.set(plan.index, 0)
+        let release: (() => void) | null = null
         try {
-          await transport.putChunk({
-            uploadId,
-            index: plan.index,
-            body: file.slice(plan.start, plan.end),
-            signal: run.signal,
-            onLoaded: (loaded) => {
-              if (!inflight.has(plan.index)) return
-              inflight.set(plan.index, Math.max(0, Math.min(plan.bytes, loaded)))
-              emit("uploading")
-            },
-          })
-          inflight.delete(plan.index)
-          received.add(plan.index)
-          progressed()
-          emit("uploading")
+          release = partSlots ? await partSlots.acquire(run.signal) : null
         } catch (err) {
-          inflight.delete(plan.index)
-          if (failure === null) failure = err
+          if (failure === null) failure = isAbortLike(err) && signal?.aborted ? abortError() : err
           return
+        }
+        try {
+          // Another part failed, or the last one was taken, while this waited.
+          if (failure !== null || next >= pending.length) return
+          const plan = pending[next]
+          next += 1
+          inflight.set(plan.index, 0)
+          try {
+            await transport.putChunk({
+              uploadId,
+              index: plan.index,
+              body: file.slice(plan.start, plan.end),
+              signal: run.signal,
+              onLoaded: (loaded) => {
+                if (!inflight.has(plan.index)) return
+                inflight.set(plan.index, Math.max(0, Math.min(plan.bytes, loaded)))
+                emit("uploading")
+              },
+            })
+            inflight.delete(plan.index)
+            received.add(plan.index)
+            progressed()
+            emit("uploading")
+          } catch (err) {
+            inflight.delete(plan.index)
+            if (failure === null) failure = err
+            return
+          }
+        } finally {
+          release?.()
         }
       }
     }
@@ -598,6 +647,7 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
           mimeType: file.type || "application/octet-stream",
           chunkSize: opts.chunkBytes,
           sourceChannel: opts.sourceChannel ?? null,
+          ...(opts.clientExtracted ? { clientExtracted: opts.clientExtracted } : {}),
         }, signal)
         adopt(created)
         remember()
@@ -641,7 +691,7 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
         if (kind === "server") serverErrors += 1
         if (!outage) outage = { since: now(), attempt: 0 }
         if (now() - outage.since >= timing.maxPauseMs) {
-          throw new ChunkedUploadPausedError(MESSAGES.paused, err.status)
+          throw new ChunkedUploadPausedError(pauseCopy.paused, err.status)
         }
         const delay = backoffMs(outage.attempt, timing, err.retryAfterMs, random)
         outage.attempt += 1
@@ -660,8 +710,8 @@ export async function runResumableUpload<TResult>(opts: RunResumableUploadOption
         if (step === "upload") step = "sync"
         continue
       }
-      if (kind === "server") throw new ChunkedUploadPausedError(MESSAGES.server, err.status)
-      if (kind === "auth") throw new ChunkedUploadPausedError(MESSAGES.auth, err.status)
+      if (kind === "server") throw new ChunkedUploadPausedError(pauseCopy.server, err.status)
+      if (kind === "auth") throw new ChunkedUploadPausedError(pauseCopy.auth, err.status)
       if (kind === "storage") throw new ChunkedUploadPausedError(err.message || MESSAGES.storage, err.status)
       if (kind === "completed") {
         step = "complete"

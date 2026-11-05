@@ -91,7 +91,9 @@ function rowName(row) {
   return String(row?.originalName || row?.filename || row?.id || 'archivo');
 }
 
-function isVideoRow(row) {
+function isVideoRow(row, transcript = null) {
+  // Audio the browser extracted from a video is still that video.
+  if (transcript?.sourceMedia === 'video') return true;
   return /^video\//i.test(String(row?.mimeType || '')) || /\.(mp4|mov|mkv|webm|avi|m4v|mpe?g|ts)$/i.test(rowName(row));
 }
 
@@ -540,7 +542,12 @@ async function renderDocument({ userId, filename, markdown, format, createDocume
 async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(), output = {}, userId,
   formatter = null, createDocument = null, logger = console } = {}) {
   const fmt = formatter || defaultFormatter();
-  const ready = rows.filter((row) => String(row?.extractedText || '').trim());
+  // Audio extracted in the browser carries its video's name («Clase 3.mp4»):
+  // the files are named after what the user uploaded, not «Clase 3.audio.ogg».
+  const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
+    const sourceName = transcripts.get(row.id)?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName } : row;
+  });
   const notes = [];
   if (!ready.length) return { artifacts: [], notes, formats: [] };
   const entries = ready.map((row) => {
@@ -555,7 +562,7 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
   const wantsPdf = output.documentFormat === 'pdf';
   const single = entries.length === 1;
   const timed = (entry) => entry.result.segments.length > 0;
-  const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row) || long);
+  const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row, transcripts.get(entries[0].row.id)) || long);
   const subtitleEntries = output.wantsSubtitles ? entries.filter(timed) : autoSubtitles ? entries : [];
   if (output.wantsSubtitles && entries.some((entry) => !timed(entry))) {
     notes.push('Algunas transcripciones no tienen marcas de tiempo, así que no se pudieron generar sus subtítulos.');

@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1502**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1505**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -454,7 +454,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1, 22.0.0 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1102)
+## MIT (1104)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -735,6 +735,8 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@types/d3-transition` | 3.0.9 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/d3-zoom` | 3.0.8 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/debug` | 4.1.13 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/dom-mediacapture-transform` | 0.1.12 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/dom-webcodecs` | 0.1.13 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/estree` | 1.0.8, 1.0.9 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/estree-jsx` | 1.0.5 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/express` | 5.0.6 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
@@ -1561,12 +1563,13 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `zod` | 4.6.7 | MIT | [link](https://github.com/colinhacks/zod) |
 | `zwitch` | 2.0.4 | MIT | [link](https://github.com/wooorm/zwitch) |
 
-## MPL-2.0 (2)
+## MPL-2.0 (3)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
 | `@novnc/novnc` | 1.7.0 | MPL-2.0 | [link](https://github.com/novnc/noVNC) |
 | `dxf-viewer` | 1.0.47 | MPL-2.0 | [link](https://github.com/vagran/dxf-viewer) |
+| `mediabunny` | 1.65.2 | MPL-2.0 | [link](https://github.com/Vanilagy/mediabunny) |
 
 ## Public Domain (4)
 

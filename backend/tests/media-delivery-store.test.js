@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const {
   createMediaDeliveryStore, normalizeNewRecord, isValidDeliveryId, assertDeliveryId, deliveryRoot, staleMsFrom,
-  RETRY_BACKOFF_MS, MAX_ATTEMPTS, DEFAULT_STALE_MS,
+  RETRY_BACKOFF_MS, MAX_ATTEMPTS, DEFAULT_STALE_MS, MAX_FILES,
 } = require('../src/services/media-delivery-store');
 
 const T0 = Date.parse('2026-10-15T10:00:00Z');
@@ -57,7 +57,8 @@ test('create normalizes the record and writes it atomically', async (t) => {
 test('invalid records are rejected', () => {
   assert.throws(() => normalizeNewRecord({ fileIds: ['f1'] }), { code: 'invalid_record' });
   assert.throws(() => normalizeNewRecord({ userId: 'u1', fileIds: [] }), { code: 'invalid_record' });
-  assert.throws(() => normalizeNewRecord({ userId: 'u1', fileIds: Array.from({ length: 51 }, (_, i) => `f${i}`) }), { code: 'invalid_record' });
+  // One delivery holds a whole batch (up to SIRAGPT_MEDIA_BATCH_MAX, 500 at most).
+  assert.throws(() => normalizeNewRecord({ userId: 'u1', fileIds: Array.from({ length: MAX_FILES + 1 }, (_, i) => `f${i}`) }), { code: 'invalid_record' });
   const record = normalizeNewRecord({ userId: 'u1', fileIds: ['f1', 'f1', '', 42, 'f2'], range: { start: 10, end: 5 }, language: '../x' });
   assert.deepEqual(record.fileIds, ['f1', 'f2']);
   assert.equal(record.range, null);
