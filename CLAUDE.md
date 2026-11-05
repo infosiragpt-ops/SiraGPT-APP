@@ -3310,7 +3310,10 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   (pico < −50 dBFS medido en `process`, `silent_audio`: el servidor necesita el video para
   subtítulos y texto en pantalla). Un video de menos de 20 min conserva el original sea cual sea
   su tamaño (`short_video`, `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT_MIN_VIDEO_MINUTES`): un clip se mira
-  tanto como se escucha, y las clases y reuniones largas, el objetivo, quedan muy por encima. La
+  tanto como se escucha, y las clases y reuniones largas, el objetivo, quedan muy por encima.
+  Varias pistas cuya elección importa (idiomas distintos, comentario, audiodescripción) también
+  suben el original (`multiple_audio_tracks`): el servidor elige con la pista de idioma que da el
+  usuario; pistas sin idioma (micrófono + escritorio de OBS) sí se extraen. La
   copia de pista (`copy`) no mide silencio; la de AAC escribe con `fastStart: false` (con
   «in-memory» el muxer retenía los buffers de lectura de la fuente: ≈ el video entero en RAM).
   La duración de la fuente sale solo de los metadatos (calcularla lee el archivo entero); sin
@@ -3365,7 +3368,7 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   remedio (`MEDIA_ORIGINAL_NOT_UPLOADED`) en vez de «no encontrado».
   La entrega durable admite 500 archivos (`MAX_FILES`; antes 50, por debajo del lote de 100), y
   el seguimiento del compositor reconoce el lote de 100 (`resolveMediaFollowupFiles`).
-- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (12),
+- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (13),
   `tests/lib/prepare-upload-media.test.ts` (7), `tests/lib/extracted-source-memory.test.ts` (4),
   `tests/chat-fast-upload-source.test.ts` (6), `tests/attachment-ingest.test.ts` (100/101),
   `backend/tests/client-extracted-metadata.test.js`, `backend/tests/package-test-script-paths.test.js`

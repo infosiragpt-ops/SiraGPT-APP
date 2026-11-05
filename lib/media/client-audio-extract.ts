@@ -245,6 +245,38 @@ async function readDuration(mb: MediabunnyModule, blob: Blob): Promise<number | 
 
 const defaultLoader = (): Promise<MediabunnyModule> => import("mediabunny")
 
+const COMMENTARY_NAME_RE = /comment|comentari|director|audiodescrip|audio descrip|descriptive|descripci[oó]n/i
+
+/**
+ * True when the choice of audio track matters: the tracks are in different
+ * languages (dubs), or one is commentary or audio description. The server
+ * picks with what it knows (the language the user named, the titles), so it
+ * gets the video. Untagged tracks (OBS mic + desktop) do not count.
+ */
+async function audioChoiceMatters(input: { getAudioTracks(): Promise<InputAudioTrack[]> }): Promise<boolean> {
+  let tracks: InputAudioTrack[] = []
+  try {
+    tracks = await input.getAudioTracks()
+  } catch {
+    return false
+  }
+  if (!Array.isArray(tracks) || tracks.length < 2) return false
+  const languages = new Set<string>()
+  for (const candidate of tracks) {
+    try {
+      const language = String((await candidate.getLanguageCode()) || "und").toLowerCase()
+      if (language !== "und") languages.add(language)
+      const disposition = await candidate.getDisposition()
+      if (disposition?.commentary || disposition?.visuallyImpaired) return true
+      const name = await candidate.getName()
+      if (name && COMMENTARY_NAME_RE.test(name)) return true
+    } catch {
+      /* unreadable metadata: not a reason by itself */
+    }
+  }
+  return languages.size > 1
+}
+
 /**
  * Extract the audio of `file` for transcription. Resolves with the extracted
  * file (`opus` / `copy`) or with `tier: "none"` and the reason: the caller
@@ -283,6 +315,8 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
     const track = await input.getPrimaryAudioTrack().catch(() => null)
     throwIfAborted()
     if (!track) return skip("no_audio_track")
+    if (mediaKindOf(file) === "video" && (await audioChoiceMatters(input))) return skip("multiple_audio_tracks")
+    throwIfAborted()
     const codec = track.codec ?? null
     // From the container's metadata only: computing it reads the whole file
     // (a MediaRecorder WebM has none), and the conversion reads it again.

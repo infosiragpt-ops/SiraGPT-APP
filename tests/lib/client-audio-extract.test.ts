@@ -49,6 +49,8 @@ type FakeOptions = {
   metadataDuration?: number | null
   /** getFormat never resolves; disposing the input rejects it (like mediabunny's pending reads). */
   probeHang?: boolean
+  /** Every audio track of the source (default: the primary alone). */
+  audioTracks?: Array<{ language?: string; name?: string | null; commentary?: boolean; visuallyImpaired?: boolean }>
 }
 
 function fakeMediabunny(opts: FakeOptions = {}) {
@@ -76,6 +78,15 @@ function fakeMediabunny(opts: FakeOptions = {}) {
       if (this.isReadBack) return opts.readBackNoAudio ? null : { id: 1, codec: "opus" }
       if (opts.noAudioTrack) return null
       return PRIMARY
+    }
+    async getAudioTracks() {
+      const list = this.isReadBack ? [{}] : (opts.audioTracks ?? [{}])
+      return list.map((meta, index) => ({
+        id: index === 0 ? PRIMARY.id : 100 + index,
+        getLanguageCode: async () => meta.language ?? "und",
+        getName: async () => meta.name ?? null,
+        getDisposition: async () => ({ default: index === 0, primary: index === 0, forced: false, original: false, commentary: Boolean(meta.commentary), hearingImpaired: false, visuallyImpaired: Boolean(meta.visuallyImpaired) }),
+      }))
     }
     async getFirstTimestamp(tracks?: unknown[]) {
       return tracks ? (opts.audioFirstTimestamp ?? opts.firstTimestamp ?? 0) : (opts.firstTimestamp ?? 0)
@@ -283,6 +294,19 @@ describe("extractAudioForTranscription", () => {
     expect(live.calls.sourceComputes).toBe(0)
     const shortLive = fakeMediabunny({ codec: "aac", metadataDuration: null, extractedDuration: 5 * 60 })
     expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: shortLive.load })).toMatchObject({ tier: "none", reason: "short_video" })
+  })
+
+  it("several audio tracks whose choice matters (dubs, commentary, description) keep the original; OBS-style untagged tracks are extracted", async () => {
+    const dub = fakeMediabunny({ codec: "aac", audioTracks: [{ language: "spa" }, { language: "eng" }] })
+    expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: dub.load })).toMatchObject({ tier: "none", reason: "multiple_audio_tracks" })
+    const commentary = fakeMediabunny({ codec: "aac", audioTracks: [{ language: "spa" }, { language: "spa", name: "Comentarios del director" }] })
+    expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: commentary.load })).toMatchObject({ reason: "multiple_audio_tracks" })
+    const described = fakeMediabunny({ codec: "aac", audioTracks: [{}, { visuallyImpaired: true }] })
+    expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: described.load })).toMatchObject({ reason: "multiple_audio_tracks" })
+    const obs = fakeMediabunny({ codec: "aac", audioTracks: [{}, {}] })
+    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: obs.load })).tier).toBe("opus")
+    const sameLanguage = fakeMediabunny({ codec: "aac", audioTracks: [{ language: "spa" }, { language: "spa" }] })
+    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: sameLanguage.load })).tier).toBe("opus")
   })
 
   it("✕ during the probe disposes the input and rejects at once", async () => {
