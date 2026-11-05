@@ -214,3 +214,12 @@ test('audio the browser extracted from a short video still gets the automatic SR
     output: artifacts.resolveTranscriptOutput('transcribe'), userId: 'u1' });
   assert.deepEqual(fromVideo.artifacts.map(a => a.format), ['txt', 'srt', 'vtt']);
 });
+
+test('the files of an extracted video carry the video\'s name, not «.audio.ogg»', async () => {
+  const short = { language: 'es', durationSec: 300, sourceMedia: 'video', sourceName: 'Clase 3 (final).mp4',
+    segments: [{ start: 0, end: 300, text: 'Clase corta.' }] };
+  const built = await artifacts.buildMediaTranscriptArtifacts({ rows: [row('clip', { originalName: 'Clase 3 (final).audio.ogg', mimeType: 'audio/ogg' })],
+    transcripts: new Map([['clip', short]]), output: artifacts.resolveTranscriptOutput('transcribe'), userId: 'u1' });
+  assert.deepEqual(built.artifacts.map(a => a.filename), ['Clase 3 (final) (transcripción).txt', 'Clase 3 (final) (transcripción).srt', 'Clase 3 (final) (transcripción).vtt']);
+  assert.match(decode(built.artifacts[0]), /Clase 3 \(final\)\.mp4/);
+});

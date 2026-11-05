@@ -544,9 +544,12 @@ test('purgeMediaTranscript also removes the checkpoint directory its pointer nam
 
 test('audio the browser extracted from a video keeps sourceMedia: video through the sidecar', async (t) => {
   const root = tmpRoot(t);
-  const { sidecar } = await store.writeSidecar({ fileId: 'f9', userId: 'u1', result: { ...RESULT, sourceMedia: 'video' } }, { root, now: NOW });
+  const { sidecar } = await store.writeSidecar({ fileId: 'f9', userId: 'u1', result: { ...RESULT, sourceMedia: 'video', sourceName: 'Clase\u0000 3.mp4' } }, { root, now: NOW });
   assert.equal(sidecar.sourceMedia, 'video');
-  assert.equal(store.normalizeSidecar(await store.readSidecar('f9', { root })).sourceMedia, 'video');
+  assert.equal(sidecar.sourceName, 'Clase 3.mp4');
+  const back = store.normalizeSidecar(await store.readSidecar('f9', { root }));
+  assert.equal(back.sourceMedia, 'video');
+  assert.equal(back.sourceName, 'Clase 3.mp4');
   const { sidecar: other } = await store.writeSidecar({ fileId: 'f8', userId: 'u1', result: { ...RESULT, sourceMedia: 'cassette' } }, { root, now: NOW });
   assert.equal(other.sourceMedia, undefined);
 });

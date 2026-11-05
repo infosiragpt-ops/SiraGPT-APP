@@ -3335,8 +3335,14 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   `POST /upload/chunked/init` (viaja en la sesión, `chunked-upload-store`) y en `POST /upload`
   (por índice; el mapa por nombre solo para pestañas viejas) y lo guarda en
   `DocumentAnalysis.metadata.clientExtracted` con `archiveMediaExpander.mergeAnalysisMetadata`.
-  El trabajo de transcripción marca `sourceMedia: 'video'` cuando la fuente era video
-  (`readMediaAnalysisInfo`), y `isVideoRow` lo respeta: los subtítulos automáticos siguen.
+  El trabajo de transcripción marca `sourceMedia: 'video'` y `sourceName` (el nombre del video)
+  cuando la fuente era video (`readMediaAnalysisInfo`), también en una corrección de tramo
+  (`spliceRefinedRange` los conserva); `isVideoRow` lo respeta (los subtítulos automáticos
+  siguen) y los entregables llevan el nombre del video, no «Clase 3.audio.ogg». Si ese audio no
+  tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
+  pantalla quedaron en el video, hace falta subir el original). Las herramientas de cuadros
+  sobre un video del que solo se subió el audio dicen eso (`MEDIA_ORIGINAL_NOT_UPLOADED`) en vez
+  de «no encontrado».
   La entrega durable admite 500 archivos (`MAX_FILES`; antes 50, por debajo del lote de 100), y
   el seguimiento del compositor reconoce el lote de 100 (`resolveMediaFollowupFiles`).
 - Tests: `tests/lib/upload-scheduler.test.ts` (5), `tests/lib/client-audio-extract.test.ts` (5),
@@ -3351,4 +3357,6 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   pasa `R2_*` al backend. También: validación real en Safari/Firefox (WebCodecs Opus), cola de
   extracción persistente entre recargas (IndexedDB). mediabunny no lee pistas de subtítulos de
   entrada, así que un video ≥ 100 MB con subtítulos incrustados pierde su contraste de
-  subtítulos (los videos sin voz sí suben originales).
+  subtítulos (los videos con pista en silencio sí suben originales). Un video ≥ 100 MB con
+  música pero sin voz, o al que luego se le piden cuadros, necesita el original: hoy no hay
+  opción por archivo para «subir el original» (UI, decisión de Luis).

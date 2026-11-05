@@ -880,6 +880,9 @@ function spliceRefinedRange(previous, refined, range) {
     const value = key === 'embeddedSubtitles' ? pickObject(previous[key], refined[key]) : pickObject(refined[key], previous[key]);
     if (value) out[key] = value;
   }
+  // Audio extracted from a video stays that video (name, automatic SRT/VTT).
+  if (previous.sourceMedia === 'video' || refined.sourceMedia === 'video') out.sourceMedia = 'video';
+  if (previous.sourceName || refined.sourceName) out.sourceName = previous.sourceName || refined.sourceName;
   // The refine's names count for the whole file; its language does not (the
   // stored one stays), unless the window is the whole recording.
   const windowHints = pickObject(refined.hints, null);
@@ -1080,6 +1083,7 @@ function publicFailureMessage(err) {
   if (unread && err?.code === 'no_speech') return `No se detectó voz en este video y ${unread}. Puedes reintentar este archivo.`;
   if (unread && err?.code === 'no_audio_track') return `Este video no tiene pista de audio y ${unread}. Puedes reintentar este archivo.`;
   switch (err?.code) {
+    case 'extracted_audio_no_speech': return String(err?.message || 'No se detectó voz en este archivo.');
     case 'no_speech': return err?.videoChecked
       ? 'No se detectó voz ni texto legible en pantalla en este video.'
       : 'No se detectó voz en este archivo.';
@@ -1103,7 +1107,7 @@ function isTransientMediaError(err) {
   // A video whose text could not be read (OCR/ffmpeg down, no frame decoded)
   // is retried: the verdict about its voice stands, the reading did not happen.
   if (err?.textUnread && err?.retryable === true && /^(no_speech|no_audio_track)$/.test(String(err?.code || ''))) return true;
-  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required)$/i.test(String(err?.code || ''))) return false;
+  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required|extracted_audio_no_speech)$/i.test(String(err?.code || ''))) return false;
   if (typeof err?.retryable === 'boolean') return err.retryable;
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
   if (status === 429 || status === 408 || status >= 500 && status <= 599) return true;
@@ -1342,12 +1346,15 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     return Object.keys(out).length ? out : null;
   };
   // Audio the browser extracted from a video (DocumentAnalysis.metadata
-  // .clientExtracted) stays a video for the deliverables: automatic SRT/VTT.
+  // .clientExtracted) stays that video for the deliverables: its name and
+  // the automatic SRT/VTT. { sourceMedia: 'video', sourceName } or null.
   async function sourceMediaOf(row) {
     if (typeof transcriptStore?.readMediaAnalysisInfo !== 'function') return null;
     try {
       const info = await transcriptStore.readMediaAnalysisInfo(prisma, { fileId: row.id, userId: row.userId });
-      return /^video\//i.test(String(info?.clientExtracted?.sourceType || '')) ? 'video' : null;
+      const extracted = info?.clientExtracted;
+      if (!/^video\//i.test(String(extracted?.sourceType || ''))) return null;
+      return { sourceMedia: 'video', ...(extracted.sourceName ? { sourceName: String(extracted.sourceName).slice(0, 255) } : {}) };
     } catch (_) {
       return null;
     }
@@ -1758,6 +1765,12 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       const fallback = extra.range ? null
         : (await videoFallback(engineError, { local, row, mimeType, probe, media, checkpoint, signal })
           || await linkCaptionsFallback(engineError, { row, offsetSec, probe }));
+      if (!fallback && !extra.range && /^(?:no_speech|no_audio_track)$/.test(String(engineError?.code || ''))) {
+        // Only the audio of a video reached the server (extracted in the
+        // browser): its subtitles and on-screen text stayed in the video.
+        const source = await sourceMediaOf(row);
+        if (source) throw failure('extracted_audio_no_speech', `Solo se subió el audio de «${source.sourceName || row.originalName || 'el video'}» y no se detecta voz en él. Para leer sus subtítulos o el texto en pantalla hace falta el video original.`);
+      }
       if (!fallback) throw engineError;
       return { transcription: fallback, plain: fallback.transcript };
     }
@@ -1768,9 +1781,10 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         if (embedded) transcription = { ...transcription, embeddedSubtitles: embedded };
       }
       const hints = storedHints(media);
-      const sourceMedia = extra.range ? null : await sourceMediaOf(row);
+      // A refine too: its spliced result is the stored transcript afterwards.
+      const source = await sourceMediaOf(row);
       transcription = { ...transcription, source: transcription.source || 'asr', ...(hints ? { hints } : {}),
-        ...(sourceMedia ? { sourceMedia } : {}) };
+        ...(source || {}) };
     }
     return { transcription, plain };
   }

@@ -76,6 +76,26 @@ async function findOwnedRecord(prisma, ids, userId, explicit) {
   return ids.map((id) => byId.get(id)).find(Boolean) || null;
 }
 
+/**
+ * The original name of a video whose audio alone was uploaded (clientExtracted
+ * in DocumentAnalysis.metadata), among these owned file ids, or null.
+ */
+async function findExtractedVideoSource(prisma, ids, userId) {
+  if (!prisma?.documentAnalysis?.findMany || !ids.length) return null;
+  try {
+    const rows = await prisma.documentAnalysis.findMany({
+      where: { fileId: { in: ids }, userId: String(userId) },
+      select: { metadata: true },
+    });
+    const { normalizeClientExtracted } = require('../client-extracted-metadata');
+    for (const row of rows || []) {
+      const extracted = normalizeClientExtracted(row?.metadata && typeof row.metadata === 'object' ? row.metadata.clientExtracted : null);
+      if (extracted && /^video\//.test(extracted.sourceType || '')) return extracted.sourceName;
+    }
+  } catch (_) { /* best effort: the usual «not found» follows */ }
+  return null;
+}
+
 async function resolveOwnedMediaSource(options = {}, ctx = {}) {
   throwIfAborted(ctx.signal);
   if (!ctx.userId) {
@@ -105,12 +125,21 @@ async function resolveOwnedMediaSource(options = {}, ctx = {}) {
       .find((entry) => entry && [...mediaKindsFor(entry)].some((kind) => allowedKinds.has(kind)));
   }
 
+  const allowedKinds = new Set(options.allowedKinds || ['audio', 'video']);
+  const kinds = record ? mediaKindsFor(record) : new Set();
+  if (allowedKinds.has('video') && !allowedKinds.has('audio') && (!record || !kinds.has('video'))) {
+    // The composer may have sent only the audio of a large video (extracted
+    // in the browser to transcribe it fast): say so instead of «not found».
+    const extracted = await findExtractedVideoSource(prisma, ids, ctx.userId);
+    if (extracted) {
+      throw mediaError(`only the audio of «${extracted}» was uploaded (extracted in the browser for transcription); frames, captures and clips need the original video attached again`, 'MEDIA_ORIGINAL_NOT_UPLOADED');
+    }
+  }
+
   if (!record || !record.path) {
     throw mediaError('the requested media file was not found', 'MEDIA_FILE_NOT_FOUND');
   }
 
-  const allowedKinds = new Set(options.allowedKinds || ['audio', 'video']);
-  const kinds = mediaKindsFor(record);
   if (![...kinds].some((kind) => allowedKinds.has(kind))) {
     throw mediaError('the selected file is not a supported media type', 'MEDIA_TYPE_UNSUPPORTED');
   }

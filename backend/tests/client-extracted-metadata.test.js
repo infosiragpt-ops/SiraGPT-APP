@@ -56,3 +56,36 @@ test('parseClientExtractedField: an array aligned with the files wins (same name
   assert.deepEqual(m.parseClientExtractedField('{bad'), { byIndex: null, byName: new Map() });
   assert.equal(m.parseClientExtractedField(JSON.stringify(Array.from({ length: 900 }, () => null))).byIndex.length, 500);
 });
+
+test('frames of a video whose audio alone was uploaded fail with an explicit reason, not «not found»', async () => {
+  const runtime = require('../src/services/agents/media-inspection-runtime');
+  const rows = [{ id: 'f1', userId: 'u1', originalName: 'Clase 3.audio.ogg', mimeType: 'audio/ogg', path: '/tmp/x.ogg', deletedAt: null }];
+  const prisma = {
+    file: {
+      findFirst: async ({ where }) => rows.find(row => row.id === where.id && row.userId === where.userId) || null,
+      findMany: async ({ where }) => rows.filter(row => where.id.in.includes(row.id) && row.userId === where.userId),
+    },
+    documentAnalysis: {
+      findMany: async ({ where }) => (where.fileId.in.includes('f1') && where.userId === 'u1'
+        ? [{ metadata: { clientExtracted: { tier: 'opus', sourceName: 'Clase 3.mp4', sourceSize: 9e8, sourceType: 'video/mp4' } } }] : []),
+    },
+  };
+  await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
+    (err) => err.code === 'MEDIA_ORIGINAL_NOT_UPLOADED' && /Clase 3\.mp4/.test(err.message));
+  // A plain audio upload keeps the usual answer.
+  prisma.documentAnalysis.findMany = async () => [];
+  await assert.rejects(runtime.resolveOwnedMediaSource({ allowedKinds: ['video'] }, { userId: 'u1', fileIds: ['f1'], prisma }),
+    (err) => err.code === 'MEDIA_FILE_NOT_FOUND');
+});
+
+test('a refine keeps the video provenance of its transcript; silent extracted audio is a final, explained failure', () => {
+  const queue = require('../src/services/media-transcription-queue');
+  const previous = { segments: [{ start: 0, end: 10, text: 'uno' }, { start: 10, end: 20, text: 'dos' }, { start: 20, end: 30, text: 'tres' }],
+    durationSec: 30, coverage: 1, gaps: [], providers: { local: 3 }, engine: 'local', sourceMedia: 'video', sourceName: 'Clase.mp4' };
+  const refined = { segments: [{ start: 10, end: 20, text: 'dos corregido' }], durationSec: 30, coverage: 1, gaps: [], providers: { local: 1 }, engine: 'local',
+    refineSpans: [{ start: 10, end: 20 }] };
+  const out = queue.spliceRefinedRange(previous, refined, { start: 10, end: 20 });
+  assert.equal(out.sourceMedia, 'video');
+  assert.equal(out.sourceName, 'Clase.mp4');
+  assert.equal(queue.isTransientMediaError({ code: 'extracted_audio_no_speech' }), false);
+});

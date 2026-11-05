@@ -542,7 +542,12 @@ async function renderDocument({ userId, filename, markdown, format, createDocume
 async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(), output = {}, userId,
   formatter = null, createDocument = null, logger = console } = {}) {
   const fmt = formatter || defaultFormatter();
-  const ready = rows.filter((row) => String(row?.extractedText || '').trim());
+  // Audio extracted in the browser carries its video's name («Clase 3.mp4»):
+  // the files are named after what the user uploaded, not «Clase 3.audio.ogg».
+  const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
+    const sourceName = transcripts.get(row.id)?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName } : row;
+  });
   const notes = [];
   if (!ready.length) return { artifacts: [], notes, formats: [] };
   const entries = ready.map((row) => {
