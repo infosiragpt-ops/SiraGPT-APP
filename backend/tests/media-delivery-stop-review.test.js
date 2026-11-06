@@ -320,10 +320,19 @@ test('a refine running while a gap retry waits: Stop settles the row, so recover
   assert.ok(!jobs.has(jobIdFor('a', 'u1')), 'the parked gap retry is gone');
 });
 
+// SQL's three-valued NOT over an AND of equalities: a NULL column makes the
+// comparison unknown, and NOT unknown matches nothing (PostgreSQL).
+function sqlNot(row, clause) {
+  const values = Object.entries(clause).map(([key, value]) => (row[key] == null ? null : row[key] === value));
+  const and = values.includes(false) ? false : values.includes(null) ? null : true;
+  return and === null ? false : !and;
+}
+
 // A prisma fake that honours the filters the queue's guarded writes use.
 function strictFilePrisma(rows, { staleReads = new Map() } = {}) {
   const fits = (row, where) => Object.entries(where).every(([key, value]) => {
     if (key === 'OR') return value.some(clause => fits(row, clause));
+    if (key === 'NOT') return sqlNot(row, value);
     if (value === null) return row[key] == null;
     if (value && typeof value === 'object' && 'in' in value) return value.in.includes(row[key]);
     if (value && typeof value === 'object' && 'not' in value) return row[key] != null && row[key] !== value.not;
@@ -397,6 +406,23 @@ test('the recovery pass never erases a Stop that landed after it read the row, n
   const asked = await service.enqueueMediaTranscription({ fileId: 'a', userId: 'u1', retry: true });
   assert.equal(asked.queued, true);
   assert.equal(added.length, 1);
+});
+
+test('the stop guard matches rows with NULL columns as PostgreSQL does: a legacy row is still reset and queued', async () => {
+  // NOT (stage = 'failed' AND error = note) is unknown for (NULL, NULL) and (failed, NULL) in SQL.
+  for (const extra of [{ processingStage: null, processingError: null }, { processingStage: 'uploaded', processingError: null },
+    { processingStage: null, processingError: CANCELLED_NOTE }]) {
+    const rows = new Map([['a', fileRow('a', { ...extra, mimeType: 'audio/mpeg' })]]);
+    const added = [];
+    const service = createMediaTranscriptionService({ prisma: strictFilePrisma(rows), now: () => T0, processFile: async () => ({}),
+      logger: { info() {}, warn() {} }, getQueue: () => ({ getJob: async () => null, add: async (name, data) => { added.push(data); return {}; } }) });
+    const out = await service.enqueueMediaTranscription({ fileId: 'a', userId: 'u1' });
+    assert.equal(out.queued, true, JSON.stringify(extra));
+    assert.equal(added.length, 1, JSON.stringify(extra));
+    assert.equal(rows.get('a').processingStage, 'uploaded');
+  }
+  assert.equal(sqlNot({ processingStage: 'failed', processingError: null }, { processingStage: 'failed', processingError: CANCELLED_NOTE }), false,
+    'the fake reads NOT as SQL does');
 });
 
 test('asked again after Stop, a stopped job that survived is replaced and the recording transcribes', async () => {

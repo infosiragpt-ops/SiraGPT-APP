@@ -96,6 +96,14 @@ describe("useFileProcessingStatus · shared polling", () => {
     expect(transport.fetch).toHaveBeenCalledTimes(4)
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
     expect(transport.fetch).toHaveBeenCalledTimes(5)
+    // A new chip (the message that asks for it again) reads it at once, not at the end of the back-off.
+    transport.fetch.mockImplementation(async () => indexing("f10"))
+    const asked = renderHook(() => useFileProcessingStatus("f10"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(transport.fetch).toHaveBeenCalledTimes(6)
+    expect(asked.result.current.stage).toBe("indexing")
+    expect(idle.result.current.stage).toBe("indexing")
+    asked.unmount()
     idle.unmount()
   })
 

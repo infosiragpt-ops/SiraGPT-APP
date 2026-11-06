@@ -135,7 +135,7 @@ describe("historical media batch follow-ups", () => {
     const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
     const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
-    for (const prompt of ["sin subtítulos", "no quiero subtítulos", "no necesito el Word", "quita los subtítulos", "nada de PDF",
+    for (const prompt of ["sin subtítulos", "no quiero subtítulos", "no necesito el Word", "quita los subtítulos", "nada de PDF", "no lo conviertas a Word", "no me des el PDF",
       "sin Word ni PDF", "no quiero que lo resumas", "no hace falta resumir", "Word no, PDF sí", "sin subtítulos por favor"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
     }

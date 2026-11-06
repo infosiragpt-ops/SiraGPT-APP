@@ -1799,6 +1799,35 @@ test('a whole translation after a moment translates it all, and says so', () => 
   assert.match(require('../src/services/media-delivery').amendedMessage(whole), /la traducción, completa/);
 });
 
+test('a moment of a recording already translated whole keeps the whole translation', () => {
+  const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
+  const record = normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe y tradúcelo al inglés',
+    mode: 'translation', formats: ['txt'], output: { translationTarget: 'en' } }, Date.now());
+  const moment = mergeDeliveryAmendment(record, { goal: 'traduce al inglés lo que dice en el minuto 30', translationTarget: 'en',
+    translationRange: { start: 1740, end: 2040 } });
+  assert.equal(moment.record.output.translationRange, undefined, 'never narrowed to five minutes');
+  assert.deepEqual(moment.changes, ['translation_moment_covered']);
+  assert.match(require('../src/services/media-delivery').amendedMessage(moment), /traducida al inglés, completa \(incluye ese momento\)/);
+  // Another language is a new translation of that moment.
+  const other = mergeDeliveryAmendment(record, { goal: 'traduce al francés lo del minuto 30', translationTarget: 'fr', translationRange: { start: 1740, end: 2040 } });
+  assert.deepEqual(other.record.output.translationRange, { start: 1740, end: 2040 });
+});
+
+test('an option the delivery already has next to a question still asks for the analysis', async () => {
+  for (const goal of ['en Word y dime de qué trata la clase', 'en word y hazme 5 preguntas', 'en Word, y dime los temas de la clase',
+    'no lo traduzcas, solo dime qué dice el profesor']) {
+    const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    assert.equal(calls.amends[0].amendment.wantsAnalysis, true, goal);
+  }
+  // The option alone stays an option.
+  for (const goal of ['en Word', 'en Word, gracias', 'no lo traduzcas', 'sin subtítulos']) {
+    const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    assert.ok(calls.amends.every(call => call.amendment.wantsAnalysis !== true), goal);
+  }
+});
+
 test('after a Stop, a summary or a question about the ready recordings never restarts the stopped ones', async () => {
   const stopped = (id) => ({ ...readyRow(id, `${id}.mp4`), processingStage: 'failed', extractedText: null,
     processingError: require('../src/services/media-transcription-queue').CANCELLED_NOTE });

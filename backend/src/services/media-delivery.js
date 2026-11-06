@@ -275,6 +275,9 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   if (list.includes('translation') || list.includes('translation_target') || list.includes('translation_whole')) {
     parts.push(`${language ? `${translated} al ${language}` : translated}${window}`);
   } else if (window) parts.push('con la traducción del tramo que indicaste');
+  else if (list.includes('translation_moment_covered')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated}, ${many ? 'completas' : 'completa'} (incluye ese momento)`);
+  }
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   if (list.includes('document')) parts.push(record?.output?.documentFormat === 'pdf' ? 'en PDF' : 'en Word');
   if (list.includes('no_document')) parts.push('sin el documento que habías pedido');

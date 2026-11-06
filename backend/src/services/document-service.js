@@ -377,8 +377,17 @@ async function createDocx(filePath, content) {
 
     // Write back modified docx with all style updates
     zip.file('word/document.xml', documentXml);
-    const modifiedBuffer = zip.generate({ type: 'nodebuffer' });
+    const modifiedBuffer = rezipDocx(zip);
     await fs.writeFile(filePath, modifiedBuffer);
+}
+
+/**
+ * The Word file back as a buffer. PizZip stores entries uncompressed by
+ * default: a Word of 30 recordings of 10 h went from pandoc's 3.9 MB to
+ * 41.6 MB. Level 1 keeps it near pandoc's size for about half a second more.
+ */
+function rezipDocx(zip) {
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 1 } });
 }
 
 /**
@@ -822,5 +831,5 @@ async function createDocument(userId, filename, content) {
 
 module.exports = {
     createDocument,
-    _internals: { styleDocxTables, pandocTimeoutMs, ensureReferenceDoc },
+    _internals: { styleDocxTables, pandocTimeoutMs, ensureReferenceDoc, rezipDocx },
 };

@@ -14,7 +14,7 @@ const os = require('node:os');
 const path = require('node:path');
 const PizZip = require('pizzip');
 
-const { styleDocxTables, pandocTimeoutMs, ensureReferenceDoc } = require('../src/services/document-service')._internals;
+const { styleDocxTables, pandocTimeoutMs, ensureReferenceDoc, rezipDocx } = require('../src/services/document-service')._internals;
 
 // What pandoc writes: every run's text carries xml:space="preserve".
 function run(text) {
@@ -140,4 +140,16 @@ test('a pandoc that does not finish is killed and reported as such', async () =>
     else delete require.cache[resolved];
     await fsp.rm(path.join(__dirname, '../uploads/documents', userId), { recursive: true, force: true });
   }
+});
+
+test('the styled Word is written back compressed, close to what pandoc wrote', () => {
+  // A long transcript: many timestamped paragraphs, highly repetitive XML.
+  const body = Array.from({ length: 4000 }, (_, i) => `<w:p>${run(`[00:${String(i % 60).padStart(2, '0')}:00] El profesor explica la mitocondria y la célula.`)}</w:p>`).join('');
+  const zip = new PizZip();
+  zip.file('[Content_Types].xml', '<Types/>');
+  zip.file('word/document.xml', `<w:document><w:body>${body}</w:body></w:document>`);
+  const stored = zip.generate({ type: 'nodebuffer' });
+  const written = rezipDocx(zip);
+  assert.ok(written.length * 5 < stored.length, `${written.length} vs ${stored.length} stored`);
+  assert.equal(new PizZip(written).file('word/document.xml').asText(), zip.file('word/document.xml').asText());
 });

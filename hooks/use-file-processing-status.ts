@@ -311,6 +311,13 @@ function subscribeToFileStatus(fileId: string, subscriber: Subscriber): () => vo
     pollers.set(fileId, poller)
     // Kick off the first read immediately; subsequent reads are paced.
     void tick(poller)
+  } else if ((poller.stoppedRechecks ?? 0) > 0 && poller.timer && !poller.stopped) {
+    // A new chip for a recording shown as stopped (the message that asks
+    // for it again): read it now, not at the end of a back-off of up to 2 min.
+    clearTimeout(poller.timer)
+    poller.timer = null
+    poller.stoppedRechecks = 0
+    void tick(poller)
   }
   poller.subscribers.add(subscriber)
   if (!poller.last.pending) subscriber(poller.last)

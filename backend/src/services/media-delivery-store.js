@@ -260,7 +260,14 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     changes.push('analysis_range');
   }
   const translationRange = normalizeRefineRange(value.translationRange);
-  if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
+  // A moment of a recording this delivery already translates whole, to the
+  // same language: the whole translation stays (it includes that moment),
+  // never narrowed to five minutes.
+  const translatesWhole = mode === 'translation' && !out.translationRange && Boolean(out.translationTarget)
+    && (!target || target === out.translationTarget);
+  if (translationRange && translatesWhole) {
+    changes.push('translation_moment_covered');
+  } else if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
     next.output.translationRange = translationRange;
     changes.push('translation_range');
   } else if (!translationRange && target && out.translationRange) {

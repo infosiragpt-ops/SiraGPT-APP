@@ -3098,6 +3098,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           hints: jobHints.hints || null,
           model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
         };
+        // An option the delivery may already have («en Word», «no lo
+        // traduzcas») next to a deliverable or a question («… y dime de qué
+        // trata la clase», «… y hazme 5 preguntas»): that ask is the analysis.
+        // The option alone would mark the message as read (see recognised).
+        const saysOption = Boolean(amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
+          || amendment.removeSubtitles || amendment.removeTranslation);
+        if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !translationTarget && mediaBatch.wantsMediaAnalysis(mediaGoal)) {
+          amendment.wantsAnalysis = true;
+          if (askedWindow && !amendment.range && !amendment.analysisRange) amendment.analysisRange = askedWindow;
+        }
         let amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment }).catch(() => null);
         // An instruction the rules do not name («solo lo que dice el
         // profesor») is still an instruction about the recording: the
