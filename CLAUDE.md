@@ -3507,7 +3507,10 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
   después de esa línea; «continúa» a secas sigue en el chat) y el runner las lee como transcripción,
   sin análisis pagado. «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
-  transcripción ya terminó o se detuvo». Una corrección de tramo que sobrevivió al Detener termina
+  transcripción ya terminó o se detuvo». Un Detener que el dueño honró a mitad del análisis y cuya
+  línea no se publicó cuenta como detenido (`cancel_requested`, nunca «ya había terminado»): el
+  hand-off conserva Detener y el siguiente lo publica. El manejador `failed` de BullMQ no reescribe
+  la nota de un trabajo detenido (`media_cancelled`): la fila ya la tiene o se volvió a pedir. Una corrección de tramo que sobrevivió al Detener termina
   antes de llamar a un proveedor y la que corre en otro worker se detiene en su chequeo
   (`isRefineJobWanted` → `isRefineWanted` en la cola; otra entrega abierta con la misma clave de
   trabajo la mantiene). Pedirla de nuevo con el trabajo detenido aún `active` sin abort local

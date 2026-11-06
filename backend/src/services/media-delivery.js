@@ -2177,10 +2177,15 @@ function createMediaDeliveryService(deps = {}) {
     if ((outcome === 'already_cancelled' || outcome === 'already_terminal') && record && record.userId === userId) {
       const chatId = record.deliveryChatId || record.chatId || null;
       const existing = chatId ? await findDeliveredMessage(chatId, id).catch(() => null) : null;
+      let lineMissing = false;
       if (chatId && !existing?.id) {
         if (record.status === 'cancelled') {
-          settle = await postCancelNote(record, userId).catch(() => null);
+          settle = await postCancelNote(record, userId).catch((err) => {
+            logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+            return null;
+          });
           if (settle?.messageId) outcome = 'cancelled';
+          else lineMissing = true;
         } else if (record.status === 'failed') {
           settle = await postFailureNote(record).catch(() => null);
         }
@@ -2188,6 +2193,10 @@ function createMediaDeliveryService(deps = {}) {
       if (record.status === 'cancelled') {
         await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(record) });
       }
+      // Stopped (the holder honoured it mid-analysis), but its line did not
+      // reach the chat: still a Stop to report, never «ya había terminado»,
+      // and the hand-off keeps Stop so the next press posts the line.
+      if (lineMissing) return { ...empty('cancel_requested'), chatId };
       if (outcome !== 'cancelled') {
         return { ...empty(outcome), messageId: settle?.messageId || null, chatId: settle?.chatId || chatId };
       }

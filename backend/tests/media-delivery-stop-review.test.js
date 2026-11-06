@@ -154,6 +154,30 @@ test('a Stop whose line was never posted is settled by the next Stop; a delivery
   assert.equal(line?.metadata.deliveryKind, 'failed');
 });
 
+test('a Stop the holder honoured mid-analysis whose line fails is still reported as a Stop; the next press posts it', async (t) => {
+  let down = true;
+  const { service, state, store } = await harness(t, { files: [fileRow('a')], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      const message = { id: `msg${state.messages.length + 1}`, userId, chatId, content, metadata };
+      state.messages.push(message);
+      return { messageId: message.id, chatId };
+    } } });
+  const record = await service.createDelivery(request());
+  // The holder (analysing a 10-hour translation) honoured the Stop and closed it: no line yet.
+  const held = await store.claim(record.id);
+  await store.markCancelled(record.id, held.token);
+  assert.equal((await store.get(record.id)).status, 'cancelled');
+  const first = await service.cancelChatDeliveries({ userId: 'u1', chatId: 'chat1', deliveryIds: [record.id] });
+  assert.equal(first.results[0].outcome, 'cancel_requested');
+  assert.equal(first.cancelled, 1, 'reported as stopped, never «ya había terminado» (which hides Stop)');
+  assert.equal(state.messages.length, 0);
+  down = false;
+  const second = await service.cancelChatDeliveries({ userId: 'u1', chatId: 'chat1', deliveryIds: [record.id] });
+  assert.equal(second.results[0].outcome, 'cancelled');
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind === 'cancelled').length, 1);
+});
+
 test('the Stop marker is written before the chat line: a restart in between leaves a Stop, never an open request', async (t) => {
   const { service, state, store } = await harness(t, { files: [fileRow('a')] });
   const record = await service.createDelivery(request());
@@ -658,6 +682,32 @@ test('Stop of a refine in one chat leaves the job another chat\'s open refine of
   await other.service.cancelDelivery(one.id, { userId: 'u1' });
   assert.ok(other.state.stopped.flatMap(args => args.refines || []).some(spec => spec.deliveryId === one.id));
   assert.equal(await other.service.isRefineJobWanted({ deliveryId: one.id, fileId: 'b', userId: 'u1' }), false);
+});
+
+test('the worker\'s failed handler never writes the Stop note over a recording asked for again', async () => {
+  const dbPath = require.resolve('../src/config/database');
+  const previous = require.cache[dbPath];
+  const rows = new Map([['a', fileRow('a', { processingStage: 'uploaded', processingError: null })],
+    ['b', fileRow('b', { processingStage: 'extracting', processingError: null })]]);
+  const writes = [];
+  require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: { file: {
+    findFirst: async ({ where }) => ({ ...rows.get(where.id) }),
+    updateMany: async ({ where, data }) => { writes.push([where.id, data]); return { count: 1 }; },
+  } } };
+  const { onWorkerFailed } = require('../src/services/media-transcription-queue');
+  const job = fileId => ({ data: { fileId, userId: 'u1' }, getState: async () => 'failed' });
+  const settle = () => new Promise(resolve => setTimeout(resolve, 50));
+  try {
+    onWorkerFailed(job('a'), Object.assign(new Error(CANCELLED_NOTE), { code: 'media_cancelled' }));
+    await settle();
+    assert.deepEqual(writes, [], 'the row asked for again stays as it is');
+    // Any other terminal failure still persists, so a chip never shows «extrayendo» forever.
+    onWorkerFailed(job('b'), Object.assign(new Error('boom'), { code: 'provider_error' }));
+    await settle();
+    assert.deepEqual(writes.map(([id, data]) => [id, data.processingStage]), [['b', 'failed']]);
+  } finally {
+    if (previous) require.cache[dbPath] = previous; else delete require.cache[dbPath];
+  }
 });
 
 // The ownership check runs on an unref'd interval: a test waiting on it keeps

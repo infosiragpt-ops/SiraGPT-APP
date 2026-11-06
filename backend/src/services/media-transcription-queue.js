@@ -2556,9 +2556,15 @@ function onWorkerFailed(job, err) {
       return;
     }
     if (!row || hasTranscript(row)) return;
-    await prisma.file.updateMany({ where: { id: row.id, userId: row.userId, deletedAt: null }, data: {
-      processingStage: 'failed', processingStageAt: new Date(), processingError: publicFailureMessage(err),
-    } });
+    // A job that ended on a Stop: the processor already settled the row (a
+    // local Stop wrote the note; otherwise the row says so, or the user
+    // asked for the recording again since). Writing the note here would
+    // undo that request.
+    if (err?.code !== 'media_cancelled') {
+      await prisma.file.updateMany({ where: { id: row.id, userId: row.userId, deletedAt: null }, data: {
+        processingStage: 'failed', processingStageAt: new Date(), processingError: publicFailureMessage(err),
+      } });
+    }
     // The chat that waits for this file learns about it through delivery.
     await Promise.resolve(require('./media-delivery').onMediaTerminal({ fileId: row.id, userId: row.userId, stage: 'failed' }))
       .catch(() => console.warn('[media-transcription-worker] delivery hook pending recovery'));
@@ -2664,7 +2670,7 @@ module.exports = {
   enqueueRefine: payload => getService().enqueueRefine(payload),
   cancelMediaTranscription: payload => getService().cancelMediaTranscription(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
-  startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere,
+  startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere, onWorkerFailed,
   // lanes, hints, refine and video fallbacks (contract C5)
   keytermsFor, cleanTranscription, spliceRefinedRange, refineSpliceWindow, refineLosesText, refineHeardNothing, normalizeRange, refineJobIdFor, requestMedia, pickSubtitleTrack,
   subtitleTranscription, onScreenTranscription, estimateDurationFromSize, laneForDuration, shortLaneEnabled,
