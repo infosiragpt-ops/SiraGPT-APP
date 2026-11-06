@@ -110,7 +110,8 @@ describe("historical media batch follow-ups", () => {
     const pendingChat = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff]
     for (const prompt of ["en Word", "y en pdf", "mejor con subtítulos", "está en inglés", "el audio está en portugués",
       "los nombres son Huamán y Quispe", "son 3 hablantes", "ya no la traduzcas", "sin resumen", "¿de qué hablan?",
-      "¿de qué trata?", "dime los temas", "hazme 5 preguntas", "dime de qué trata", "dame las ideas principales", "sácame las conclusiones"]) {
+      "¿de qué trata?", "dime los temas", "hazme 5 preguntas", "dime de qué trata", "dame las ideas principales", "sácame las conclusiones",
+      "¿de qué se habla?", "¿quién habla más?", "¿de qué hablan? 🤔", "¿qué dice acerca del trabajo final?"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
     }
     // Nothing pending: the same words are a new request.

@@ -1850,12 +1850,14 @@ test('after a Stop, a summary or a question about the ready recordings never res
     }).catch(() => null);
     return waits.map(args => Boolean(args.resumeStopped));
   };
-  for (const goal of ['resume las clases que ya están transcritas', '¿qué dijo el profesor en el minuto 10?', 'en Word']) {
+  for (const goal of ['resume las clases que ya están transcritas', '¿qué dijo el profesor en el minuto 10?', 'en Word',
+    'resume la transcripción de la clase 1', '¿qué dice la transcripción en el minuto 10?', 'tradúceme la transcripción de la clase 1',
+    'pásalo a Word']) {
     const waits = await run(goal);
     assert.ok(waits.length > 0, goal);
     assert.ok(waits.every(resume => resume === false), goal);
   }
-  for (const goal of ['transcribe las clases', 'retómala', 'reintenta']) {
+  for (const goal of ['transcribe las clases', 'dame la transcripción', 'retómala', 'reintenta']) {
     const waits = await run(goal);
     assert.ok(waits.length > 0 && waits.every(resume => resume === true), goal);
   }
@@ -1932,4 +1934,70 @@ test('an extracted recording is named after what the user uploaded in the hand-o
   assert.equal(titles[0], 'Transcripción: Clase 3.mp4');
   assert.doesNotMatch(JSON.stringify(notified), /\.audio\.ogg/);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+
+test('first requests keep the analysis they ask for; a format alone or ordinary words never start one', () => {
+  const mb = require('../src/services/media-batch');
+  for (const goal of ['transcríbelo y resúmemelo', 'transcribe la clase y me la resumes', 'transcribe el audio y luego me lo resumes por favor',
+    'transcribe la clase y dime cuáles son los temas', 'transcribe la clase y menciona los acuerdos', 'transcribe la clase y compárala con la anterior',
+    'transcribe la clase y dime qué decisiones se tomaron']) {
+    assert.equal(mb.wantsMediaAnalysis(goal), true, goal);
+  }
+  assert.equal(mb.wantsSummaryWithTranslation('tradúcelo al inglés y resúmemelo'), true);
+  // More than the transcript in a format: a report or «lo más importante».
+  for (const goal of ['convierte este audio en un documento con los puntos más importantes', 'pasa la reunión a un informe en Word',
+    'pásalo a Word con lo más importante']) {
+    assert.equal(mb.isTranscriptGoal(goal), false, goal);
+  }
+  for (const goal of ['pásalo a Word', 'ponlo en PDF', 'dámelo en Word', 'lo quiero en Word', 'pasa estos audios a texto']) {
+    assert.equal(mb.isTranscriptGoal(goal), true, goal);
+  }
+  for (const goal of ['lo quiero en Word, que es más fácil de editar', 'en Word porque lo tengo que editar', 'pásalo a PDF para que lo pueda imprimir',
+    'ponlo en word que lo necesito para mañana', 'en Word, de acuerdo', 'no lo traduzcas, que lo quiero en español', 'es para mi tarea']) {
+    assert.equal(mb.asksForDeliverable(goal), false, goal);
+  }
+  for (const goal of ['en Word y dime de qué trata la clase', 'no lo traduzcas, solo dime qué dice el profesor', 'hazme 5 preguntas', 'resúmelo']) {
+    assert.equal(mb.asksForDeliverable(goal), true, goal);
+  }
+  for (const goal of ['no la traduzcas porfa', 'mejor no la traduzcas por ahora', 'no lo traduzcas aún', 'ya no la traduzcas pls', 'no lo traduzcas entonces']) {
+    assert.equal(mb.negatesTranslation(goal), true, goal);
+  }
+  assert.equal(mb.negatesTranslation('no traduzcas los nombres propios'), false, 'a condition keeps the translation');
+  assert.equal(mb.refusesTranslationWord('no traduzcas los nombres propios'), true);
+});
+
+test('follow-ups: ordinary words next to an option, take-backs, conditions, moments and windows', async () => {
+  const amendOf = async (goal, outcome = 'unchanged') => {
+    const { delivery, calls } = pendingDeliveryFake({ outcome, changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery, plain: /^(?:transcribe|dame la transcripci)/.test(goal),
+      waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    return calls.amends.map(call => JSON.parse(JSON.stringify(call.amendment)));
+  };
+  for (const goal of ['lo quiero en Word, que es más fácil de editar', 'en Word porque lo tengo que editar', 'pásalo a PDF para que lo pueda imprimir',
+    'en Word, de acuerdo', 'no la traduzcas porfa', 'mejor no la traduzcas por ahora', 'no lo traduzcas aún', 'no traduzcas los nombres propios',
+    'no traduzcas las siglas']) {
+    const amends = await amendOf(goal);
+    assert.ok(amends.every(amendment => amendment.wantsAnalysis !== true), `${goal}: no paid analysis`);
+  }
+  assert.equal((await amendOf('no la traduzcas porfa'))[0].removeTranslation, true);
+  assert.equal((await amendOf('no traduzcas los nombres propios'))[0].removeTranslation, false, 'a condition keeps the translation');
+  // A moment the catch-all reads, not the window of an earlier question.
+  const moment = (await amendOf('¿y en el minuto 45?')).find(amendment => amendment.wantsAnalysis === true);
+  assert.deepEqual(moment.analysisRange, { start: 2640, end: 2940 });
+  assert.equal(moment.keepWindow, undefined);
+  const plain = (await amendOf('explícamelo mejor')).find(amendment => amendment.wantsAnalysis === true);
+  assert.equal(plain.keepWindow, true);
+  // Windows.
+  const translated = (await amendOf('traduce al inglés lo que dice del minuto 10 al 20', 'amended'))[0];
+  assert.equal(translated.wantsAnalysis, false, 'the translation of a stretch adds no summary');
+  assert.deepEqual(translated.translationRange, { start: 600, end: 1200 });
+  const stretch = (await amendOf('transcribe lo que dice el profesor del minuto 10 al 20', 'amended'))[0];
+  assert.deepEqual(stretch.range, { start: 600, end: 1200 }, 'the transcript of that stretch');
+  assert.equal(stretch.wantsAnalysis, false);
+  for (const goal of ['transcribe del minuto 10 al 20 y dime de qué trata', 'dame la transcripción del minuto 10 al 20 y resúmela']) {
+    const amendment = (await amendOf(goal, 'amended'))[0];
+    assert.deepEqual(amendment.range, { start: 600, end: 1200 }, `${goal}: cut`);
+    assert.equal(amendment.wantsAnalysis, true, `${goal}: and analysed`);
+  }
 });

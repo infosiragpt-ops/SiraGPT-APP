@@ -2950,8 +2950,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // a question reads from («¿qué dice la transcripción en el minuto 30?»,
       // «según la transcripción…», «… de la transcripción»): one mention
       // outside such a reading cue is enough.
-      const asksTranscript = /\b(?:tran?s?cr[ií]b|trnadscr\w*|trnasc\w*|transcirb\w*|trasncri\w*|transcip\w*|trancip\w*|transcrb\w*|trascr[ií](?:b|p)\w*|subt[ií]t[uú]l(?:a|ar|al[oa]s?|ame|e|en)\b)|\bsrt\b|\bvtt\b/i.test(mediaGoal)
-        || /\b(?:dame|d[eé]jame|quiero|quisiera|necesito|p[aá]same\w*|p[aá]sal[oa]|p[aá]ses|env[ií]a\w*|env[ií]es|manda\w*|mandes|hazme|genera\w*|saca\w*|exporta\w*|descarga\w*|adjunta\w*|incluye\w*|con|give|send)\s+(?:\S+\s+){0,3}?(?:tran?s?cr[ií](?:pci|t)|trnadscr\w*|trnasc\w*|transcip\w*|trascr[ií]pci|transcript|subt[ií]t[uú]l)/i.test(mediaGoal)
+      // A request verb for the transcript («transcribe…», «dame la
+      // transcripción…»), never just naming it («resume la transcripción»).
+      const asksTranscriptByRequest = /\b(?:tran?s?cr[ií]b|trnadscr\w*|trnasc\w*|transcirb\w*|trasncri\w*|transcip\w*|trancip\w*|transcrb\w*|trascr[ií](?:b|p)\w*|subt[ií]t[uú]l(?:a|ar|al[oa]s?|ame|e|en)\b)|\bsrt\b|\bvtt\b/i.test(mediaGoal)
+        || /\b(?:dame|d[eé]jame|quiero|quisiera|necesito|p[aá]same\w*|p[aá]sal[oa]|p[aá]ses|env[ií]a\w*|env[ií]es|manda\w*|mandes|hazme|genera\w*|saca\w*|exporta\w*|descarga\w*|adjunta\w*|incluye\w*|con|give|send)\s+(?:\S+\s+){0,3}?(?:tran?s?cr[ií](?:pci|t)|trnadscr\w*|trnasc\w*|transcip\w*|trascr[ií]pci|transcript|subt[ií]t[uú]l)/i.test(mediaGoal);
+      const asksTranscript = asksTranscriptByRequest
         || /(?<!\b(?:dice|dicen|dec[ií]a|dijo|sale|salen|aparece|pone|seg[uú]n|en|de|del|in|from|does|says)\s+(?:(?:la|el|los|las|mi|tu|su|esa|ese|esta|este|esas|esos|estas|estos|the|my|your|this)\s+)?(?:texto\s+)?)(?:tran?s?cr[ií](?:pci|t)|trnadscr\w*|trnasc\w*|transcip\w*|trascr[ií]pci|transcript|subt[ií]t[uú]l)(?!\S*\s+(?:qu[eé]\s+)?(?:dice|dicen|dec[ií]a|dijo|pone|says?)\b)/i.test(mediaGoal);
       const mediaArtifacts = require('../media-transcript-artifacts');
       const mediaOutput = mediaArtifacts.resolveTranscriptOutput(mediaGoal, { documentPolicy });
@@ -3059,14 +3062,23 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         const asksLookup = followupIntent?.kind === 'lookup';
         // A translation of the moment is the answer itself: no summary
         // unless one is asked for (as on a first request).
-        const explicitAnalysis = Boolean((lookupWindow || asksLookup) && !translatesMoment) || mediaBatch.wantsSummaryWithTranslation(mediaGoal);
+        // A question about a stretch next to a translation is the
+        // translation's window, and «transcribe lo que dice del 10 al 20» asks
+        // for that transcript: neither is an analysis. A transcript asked for
+        // with a deliverable («transcribe del 10 al 20 y dime de qué trata»)
+        // is.
+        const explicitAnalysis = Boolean((lookupWindow || (asksLookup && !translationTarget && !asksTranscriptByRequest)) && !translatesMoment)
+          || mediaBatch.wantsSummaryWithTranslation(mediaGoal)
+          || (asksTranscriptByRequest && (typeof mediaBatch.asksForDeliverable === 'function'
+            ? mediaBatch.asksForDeliverable(mediaGoal) : mediaBatch.wantsMediaAnalysis(mediaGoal)));
         // A window in a follow-up cuts the transcript files only when it asks
         // for that part of the transcript («solo del minuto 10 al 20»,
         // «transcribe del 10 al 20», «la transcripción del 10 al 20»). A
         // question or a summary of a window reads it alone, and a translation
         // of one translates it alone: the transcript the first request asked
         // for stays whole.
-        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMoment && !explicitAnalysis && !translationTarget;
+        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMoment && !translationTarget
+          && (!explicitAnalysis || asksTranscriptByRequest);
         // «desde el minuto 90», «a partir del minuto 100»: an open window runs
         // to the end of the recording (bounded like a refine's).
         const OPEN_WINDOW_END_SEC = 7 * 24 * 3600;
@@ -3115,7 +3127,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         const saysOption = Boolean(amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
           || amendment.removeSubtitles || amendment.removeTranslation || amendment.range || mediaOutput.range
           || ownHints.language || saysHints || saysTxt || plainTranscriptionRequest || transcriptRequest);
-        if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !translationTarget && mediaBatch.wantsMediaAnalysis(mediaGoal)) {
+        const asksBesides = typeof mediaBatch.asksForDeliverable === 'function' ? mediaBatch.asksForDeliverable(mediaGoal) : false;
+        if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !translationTarget && asksBesides) {
           amendment.wantsAnalysis = true;
           if (askedWindow && !amendment.range && !amendment.analysisRange) amendment.analysisRange = askedWindow;
         }
@@ -3129,11 +3142,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         const recognised = Boolean(amendment.translationTarget || amendment.removeTranslation || amendment.removeAnalysis
           || amendment.wantsAnalysis || amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
           || amendment.removeSubtitles || amendment.range || amendment.analysisRange || amendment.translationRange
-          || ownHints.language || saysHints || saysTxt);
+          || ownHints.language || saysHints || saysTxt
+          || (typeof mediaBatch.refusesTranslationWord === 'function' && mediaBatch.refusesTranslationWord(mediaGoal)));
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
-          // The window an earlier question asked about stays: this is not a
-          // question without one («explícamelo mejor», «¿y en el 45?»).
-          amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true, keepWindow: true } })
+          // A moment it names («¿y en el minuto 45?») is read too; the window
+          // an earlier question asked about stays when it names none
+          // («explícamelo mejor»).
+          const moment = typeof mediaBatch.parseTimePoint === 'function' ? mediaBatch.parseTimePoint(mediaGoal) : null;
+          const momentWindow = Number.isFinite(moment) ? { start: Math.max(0, moment - 60), end: moment + 240 } : null;
+          amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id,
+            amendment: { ...amendment, goal: '', wantsAnalysis: true, ...(momentWindow ? { analysisRange: momentWindow } : { keepWindow: true }) } })
             .catch(() => null) || amended;
         }
         if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged') {
@@ -3165,9 +3183,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const waitOptions = {
         prisma, userId: user.id, signal: controller.signal, retryFailed: retryRequested,
         // Recordings stopped with «Detener» resume only when the transcript
-        // is asked for again: «resume las clases ya transcritas» or a
-        // question about one of them never restarts (and bills) the rest.
-        resumeStopped: Boolean(retryRequested || transcriptRequest),
+        // is asked for again («transcribe…», «dame la transcripción»,
+        // «retómala», «reintenta»): «resume la transcripción de la clase 1»,
+        // a question or «pásalo a Word» never restarts (and bills) the rest.
+        resumeStopped: Boolean(retryRequested || asksTranscriptByRequest
+          || (typeof mediaBatch.isResumeGoal === 'function' && mediaBatch.isResumeGoal(mediaGoal))),
         language: batchLanguage, hints: jobHints.hints, names: presentedNames,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),

@@ -3525,7 +3525,16 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   después de esa línea; «continúa» a secas sigue en el chat) y el runner las lee como transcripción,
   sin análisis pagado. Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
   clase», «no lo traduzcas, solo dime qué dice el profesor»; también junto a «transcribe…», un tramo,
-  el idioma o nombres) pide el análisis: la opción sola ya no marca el mensaje como leído. «ponlo en
+  el idioma o nombres) pide el análisis solo con un entregable o una pregunta real
+  (`asksForDeliverable`: «que es más fácil de editar», «porque…», «de acuerdo» no lo son); la opción
+  sola ya no marca el mensaje como leído. «no la traduzcas porfa / por ahora / aún» retira la
+  traducción, y una condición («no traduzcas los nombres propios») cuenta como leída, nunca como
+  análisis de reserva. «¿y en el minuto 45?» lee ese momento, no la ventana anterior. «traduce lo
+  que dice del 10 al 20» no agrega resumen, «transcribe lo que dice del 10 al 20» recorta, y
+  «transcribe del 10 al 20 y dime de qué trata» recorta y analiza. En el primer pedido, un formato
+  solo («ponlo en Word», `EXPORT_FORMAT_RE`) es transcripción y uno con informe o «lo más
+  importante» no; «resúmemelo», «me la resumes», «menciona los acuerdos» y «compárala» piden su
+  análisis. «ponlo en
   txt» ya es así (el TXT siempre va) y nunca dispara el análisis de reserva. Recién hecho el aviso, un
   pedido suelto («¿de qué trata?», «dime los temas», «hazme 5 preguntas») llega al lote pendiente. Un momento de una grabación que la entrega ya traduce completa al
   mismo idioma no estrecha la traducción (`translation_moment_covered`: «completa (incluye ese
@@ -3537,7 +3546,9 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   grabación detenida solo se reanuda cuando se vuelve a pedir la transcripción
   (`waitForMediaBatch({ resumeStopped })`: el runner lo pasa con un pedido de transcripción,
   «retómala» o «reintenta»); un resumen o una pregunta sobre las listas no reinicia (ni cobra) las
-  demás. Detener escribe el estado detenido él mismo (`settleStoppedRow`, solo sobre una fila aún
+  demás; nombrar «la transcripción» («resume la transcripción de la clase 1») o «pásalo a Word» no es
+  pedirla de nuevo: solo un verbo de pedido («transcribe…», «dame la transcripción»), `isResumeGoal`
+  o «reintenta». Detener escribe el estado detenido él mismo (`settleStoppedRow`, solo sobre una fila aún
   pendiente: una que terminó entretanto conserva su transcripción), y el barrido de recuperación
   (sin `retry`) nunca borra una nota escrita después de leer la fila (`writeUnlessStopped`). Una corrección de tramo que sobrevivió al Detener termina
   antes de llamar a un proveedor y la que corre en otro worker se detiene en su chequeo
