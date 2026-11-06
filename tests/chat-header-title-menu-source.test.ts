@@ -19,7 +19,8 @@ describe("/agentes header · chat title menu (claude.ai style)", () => {
   it("puts a claude.ai-style laptop before the title that opens this chat's computer", () => {
     const badge = source("components/chat/chat-computer-badge.tsx")
     assert.match(chatInterface, /import \{ ChatComputerBadge \} from "@\/components\/chat\/chat-computer-badge"/)
-    assert.match(chatInterface, /<ChatComputerBadge working=\{isStopButtonVisible\}[^>]*onOpen=\{toggleComputerPanel\} \/>\s*<ChatTitleMenu/)
+    // Foreground work only: a transcription running in the background is not the computer working.
+    assert.match(chatInterface, /<ChatComputerBadge working=\{isForegroundWorkRunning\}[^>]*onOpen=\{toggleComputerPanel\} \/>\s*<ChatTitleMenu/)
     assert.match(chatInterface, /const toggleComputerPanel = React\.useCallback\(\(\) => \{[\s\S]{0,160}openComputerPanel\(\)/)
     assert.match(badge, /<Laptop /)
     assert.match(badge, /data-testid="chat-computer-badge"/)

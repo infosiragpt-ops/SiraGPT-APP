@@ -277,6 +277,35 @@ async function audioChoiceMatters(input: { getAudioTracks(): Promise<InputAudioT
   return languages.size > 1
 }
 
+type ReadEvents = { on?: (event: "read", listener: (range: { start: number; end: number }) => unknown) => unknown }
+
+/**
+ * Progress from the share of the file read so far. Reported every 1 % and
+ * at least once a second while reads flow, so the caller's stall watchdog
+ * sees a long conversion as alive. Returns the unsubscribe.
+ */
+export function followReads(source: unknown, size: number, now: () => number, report: (fraction: number) => void): () => void {
+  const emitter = source as ReadEvents | null
+  if (!emitter || typeof emitter.on !== "function" || !(size > 0)) return () => {}
+  let furthest = 0
+  let reported = -1
+  let reportedAt = Number.NEGATIVE_INFINITY
+  const off = emitter.on("read", (range) => {
+    const end = Number(range?.end)
+    if (Number.isFinite(end) && end > furthest) furthest = Math.min(end, size)
+    const fraction = furthest / size
+    const at = now()
+    if (fraction - reported < 0.01 && at - reportedAt < 1000) return
+    reported = fraction
+    reportedAt = at
+    try { report(fraction) } catch { /* observers never break the extraction */ }
+  })
+  return () => {
+    if (typeof off !== "function") return
+    try { off() } catch { /* already gone */ }
+  }
+}
+
 /**
  * Extract the audio of `file` for transcription. Resolves with the extracted
  * file (`opus` / `copy`) or with `tier: "none"` and the reason: the caller
@@ -301,7 +330,8 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
   throwIfAborted()
   emit({ phase: "probing", progress: 0 })
 
-  const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS })
+  const blobSource = new mb.BlobSource(file)
+  const input = new mb.Input({ source: blobSource, formats: mb.ALL_FORMATS })
   // ✕ during the probe: disposing the input rejects its pending reads at once.
   const onProbeAbort = () => { try { input.dispose() } catch { /* already disposed */ } }
   signal?.addEventListener("abort", onProbeAbort, { once: true })
@@ -392,24 +422,38 @@ export async function extractAudioForTranscription(file: File, options: ExtractO
         lastReason = `${attempt.tier}_invalid`
         continue
       }
-      conversion.onProgress = (progress: number, processedTime: number) => emit({ phase: "converting", progress, processedSeconds: processedTime })
-      const onAbort = () => { void conversion.cancel() }
-      signal?.addEventListener("abort", onAbort, { once: true })
-      if (signal?.aborted) {
-        // Aborted while init was pending: the listener never fires for it.
-        signal.removeEventListener("abort", onAbort)
-        await conversion.cancel().catch(() => {})
-        throw abortError()
+      // mediabunny reports progress against the total duration. With none in
+      // the metadata (a MediaRecorder WebM, a cut-off OBS recording) it would
+      // first read the whole file to compute it: twice the reads, and no
+      // progress meanwhile. The share of the file read stands in then.
+      let stopReadProgress = () => {}
+      if (sourceDuration != null) {
+        conversion.onProgress = (progress: number, processedTime: number) => emit({ phase: "converting", progress, processedSeconds: processedTime })
+      } else {
+        stopReadProgress = followReads(blobSource, file.size, now, (progress) => emit({ phase: "converting", progress }))
       }
+      // Cancelling winds the pumps down; disposing the input also rejects
+      // the reads in flight, so ✕ stops at once.
+      const onAbort = () => {
+        void conversion.cancel()
+        try { input.dispose() } catch { /* already disposed */ }
+      }
+      signal?.addEventListener("abort", onAbort, { once: true })
       try {
+        if (signal?.aborted) {
+          // Aborted while init was pending: the listener never fires for it.
+          await conversion.cancel().catch(() => {})
+          throw abortError()
+        }
         await conversion.execute()
       } catch (err) {
-        signal?.removeEventListener("abort", onAbort)
         if (signal?.aborted) throw abortError()
         lastReason = `${attempt.tier}_failed`
         continue
+      } finally {
+        signal?.removeEventListener("abort", onAbort)
+        stopReadProgress()
       }
-      signal?.removeEventListener("abort", onAbort)
       throwIfAborted()
       const buffer = output.target.buffer
       if (!buffer || buffer.byteLength === 0) {

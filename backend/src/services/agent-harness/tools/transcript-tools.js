@@ -146,9 +146,24 @@ async function candidateMediaRows(ctx = {}, d = deps()) {
  * The recording `file` names (id or name), or the only one in context.
  * Returns { row } or a structured failure (several candidates, none, unknown).
  */
+/**
+ * Audio the browser extracted answers to, and is named after, what the user
+ * uploaded («Clase 3.mp4», never «Clase 3.audio.ogg»): in the names the
+ * model relays, the refine's hand-off and its delivery. Never throws.
+ */
+async function presentedRows(rows, ctx, d) {
+  try {
+    if (typeof d.mediaBatch?.loadPresentedNames !== 'function' || typeof d.mediaBatch?.presentRows !== 'function') return rows;
+    const names = await d.mediaBatch.loadPresentedNames(ctx.prisma, { userId: ctx.userId, rows });
+    return d.mediaBatch.presentRows(rows, names);
+  } catch (_) {
+    return rows;
+  }
+}
+
 async function resolveMediaRow(file, ctx = {}, d = deps()) {
   if (!ctx.prisma || !ctx.userId) return { error: fail('transcripts_unavailable', 'No puedo leer transcripciones en este contexto.') };
-  const rows = await candidateMediaRows(ctx, d);
+  const rows = await presentedRows(await candidateMediaRows(ctx, d), ctx, d);
   const wanted = typeof file === 'string' ? file.trim() : '';
   if (wanted) {
     const byId = rows.find(row => row.id === wanted);
@@ -157,7 +172,7 @@ async function resolveMediaRow(file, ctx = {}, d = deps()) {
     if (/^[A-Za-z0-9_-]{8,64}$/.test(wanted) && typeof ctx.prisma.file.findFirst === 'function') {
       try {
         const own = await ctx.prisma.file.findFirst({ where: { id: wanted, userId: ctx.userId, deletedAt: null }, select: ROW_SELECT });
-        if (own && own.userId === ctx.userId && d.queue.isMediaFile(own)) return { row: own };
+        if (own && own.userId === ctx.userId && d.queue.isMediaFile(own)) return { row: (await presentedRows([own], ctx, d))[0] };
       } catch (_) { /* fall through to name matching */ }
     }
     // One recording in context: a slightly different name still means it.

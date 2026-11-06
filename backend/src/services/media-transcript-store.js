@@ -193,10 +193,11 @@ function sidecarExtras(result, meta = normalizeTranscriptResult(result)) {
   if (audioStream) out.audioStream = audioStream;
   const hints = normalizeStoredHints(r.hints);
   if (hints) out.hints = hints;
-  // Audio the browser extracted from a video: still that video for the deliverables.
+  // Audio the browser extracted: the deliverables keep the name of what the
+  // user uploaded, and one extracted from a video stays that video.
   if (r.sourceMedia === 'video') out.sourceMedia = 'video';
   const sourceName = cleanSourceName(r.sourceName);
-  if (sourceName && out.sourceMedia) out.sourceName = sourceName;
+  if (sourceName) out.sourceName = sourceName;
   if (meta.embeddedSubtitles) {
     out.embeddedSubtitles = {
       language: meta.embeddedSubtitles.language,
@@ -411,11 +412,9 @@ function normalizedSidecarExtras(sidecar) {
   if (audioStream) out.audioStream = audioStream;
   const hints = normalizeStoredHints(sidecar.hints);
   if (hints) out.hints = hints;
-  if (sidecar.sourceMedia === 'video') {
-    out.sourceMedia = 'video';
-    const sourceName = cleanSourceName(sidecar.sourceName);
-    if (sourceName) out.sourceName = sourceName;
-  }
+  if (sidecar.sourceMedia === 'video') out.sourceMedia = 'video';
+  const sourceName = cleanSourceName(sidecar.sourceName);
+  if (sourceName) out.sourceName = sourceName;
   const embedded = normalizeEmbeddedSubtitles(sidecar.embeddedSubtitles);
   if (embedded) out.embeddedSubtitles = embedded;
   const onScreenText = normalizeTimedTextList(sidecar.onScreenText);

@@ -15,6 +15,8 @@ import {
   isComposerFileUploadPending,
   parseMessageFiles,
   isMediaFollowupPrompt,
+  isPendingDeliveryAmendPrompt,
+  mayReachMediaBatch,
   resolveMediaFollowupFiles,
   shouldWaitForDocumentProcessing,
 } from "../lib/chat/composer-files"
@@ -102,6 +104,189 @@ describe("historical media batch follow-ups", () => {
     assert.deepEqual(resolveMediaFollowupFiles("transcribe todos", [{ role: "USER", files: JSON.stringify(hundred) }]), hundred)
     const tooMany = [...hundred, { id: "rec-100", name: "100.mp4", mimeType: "video/mp4" }]
     assert.deepEqual(resolveMediaFollowupFiles("transcribe todos", [{ role: "USER", files: JSON.stringify(tooMany) }]), [])
+  })
+
+  it("while a batch transcribes in the background, short instructions about its result reach it", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }, { id: "v2", name: "taller.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Recibí 2 archivos…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1", "v2"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["en Word", "y en pdf", "mejor con subtítulos", "está en inglés", "el audio está en portugués",
+      "los nombres son Huamán y Quispe", "son 3 hablantes", "ya no la traduzcas", "sin resumen", "¿de qué hablan?",
+      "¿de qué trata?", "dime los temas", "hazme 5 preguntas", "dime de qué trata", "dame las ideas principales", "sácame las conclusiones",
+      "¿de qué se habla?", "¿quién habla más?", "¿de qué hablan? 🤔", "¿qué dice acerca del trabajo final?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // Nothing pending: the same words are a new request.
+    assert.deepEqual(resolveMediaFollowupFiles("en Word", [pendingChat[0]]), [])
+    // Settled by its delivery: not pending any more.
+    const delivered = [...pendingChat, { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"] } }]
+    assert.deepEqual(resolveMediaFollowupFiles("en Word", delivered), [])
+    // A bare ask reaches it only right after the hand-off; after another turn it is the chat's.
+    assert.deepEqual(resolveMediaFollowupFiles("hazme 5 preguntas", [...pendingChat, { role: "USER", content: "¿qué es una célula?" }, { role: "ASSISTANT", content: "…" }]), [])
+    // Ambiguous or unrelated words stay unrouted.
+    for (const prompt of ["en inglés", "hola", "¿qué hora es?", "en word el informe del documento"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+    // A later chat never hides the pending batch from a follow-up about it.
+    const chatty = [...pendingChat, ...Array.from({ length: 6 }, (_, i) => ({ role: "USER", content: `otra cosa ${i}` }))]
+    assert.deepEqual(resolveMediaFollowupFiles("resume la clase", chatty), batch)
+    assert.deepEqual(resolveMediaFollowupFiles("resume la clase", [pendingChat[0], ...chatty.slice(2)]), [], "not pending: the usual reach")
+    // A fact about the recording reaches it too; a wish about the result does not.
+    for (const prompt of ["está en inglés", "los nombres son Huamán y Quispe", "son 3 hablantes"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, chatty), batch, prompt)
+    }
+  })
+
+  it("while a batch transcribes, a refusal about its result reaches it", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["sin subtítulos", "no quiero subtítulos", "no necesito el Word", "quita los subtítulos", "nada de PDF", "no lo conviertas a Word", "no me des el PDF",
+      "sin Word ni PDF", "no quiero que lo resumas", "no hace falta resumir", "Word no, PDF sí", "sin subtítulos por favor"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // Nothing pending: the same words are not about a recording.
+    assert.deepEqual(resolveMediaFollowupFiles("no quiero subtítulos", [pendingChat[0], { role: "ASSISTANT", content: "Listo",
+      metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1"] } }]), [])
+    // Another source stays another source.
+    assert.deepEqual(resolveMediaFollowupFiles("la transcripción del pdf", pendingChat), [])
+  })
+
+  it("a fact with words after it, a question about a moment, and a courtesy in between still reach the batch", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
+    const later = [...pendingChat, ...Array.from({ length: 12 }, (_, i) => ({ role: "USER", content: `otra cosa ${i}` }))]
+    for (const prompt of ["los audios están en inglés, gracias", "está en inglés 🙏", "esta en ingles porfa", "son 2 hablantes: Juan y María",
+      "el audio está en inglés y son tres hablantes", "está en inglés, tradúcelo al español", "los nombres son Huamán y Quispe"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, later), batch, prompt)
+    }
+    for (const prompt of ["¿qué dice sobre el examen?", "¿y qué dice al final?", "¿qué más dice?", "¿qué es lo que dice?",
+      "¿quién habla primero?", "¿dónde lo dice?", "¿cuándo habla de la guerra?", "¿qué explica de la mitosis?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // A courtesy or a status ping in between is no answer to be about.
+    const acked = [...pendingChat, { role: "USER", content: "ok gracias" }, { role: "ASSISTANT", content: "¡De nada!" },
+      { role: "USER", content: "¿cuánto falta?" }, { role: "ASSISTANT", content: "Sigue transcribiendo." }]
+    for (const prompt of ["mejor sin resumen", "tradúcelo al inglés", "con subtítulos", "en pdf"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, acked), batch, prompt)
+    }
+    // A question or a lowercase opinion is never a fact about the recording.
+    for (const prompt of ["los términos son confusos, ¿me los explicas?", "¿los nombres son importantes en una marca?", "los términos son confusos"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, later), [], prompt)
+    }
+  })
+
+  it("while a batch transcribes, the chat's own questions and requests stay with the chat", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
+    // Questions about anything else, asked right after the hand-off.
+    for (const prompt of ["¿Cómo se explica la fotosíntesis?", "¿Qué dice la ley sobre el despido injustificado?",
+      "¿Dónde se habla quechua?", "hay 3 personas en mi equipo, ¿cómo divido las tareas?", "¿es en inglés el examen de mañana?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+    // «tradúcelo», «resúmelo», «ponlo en Word» about an answer written after the hand-off.
+    const emailed = [...pendingChat, { role: "USER", content: "escríbeme un correo para mi jefe" }, { role: "ASSISTANT", content: "Estimado jefe…" }]
+    for (const prompt of ["tradúcelo al inglés", "resúmelo", "ponlo en word", "pásalo a PDF", "en word", "sin resumen", "¿de qué hablan?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, emailed), [], prompt)
+    }
+    // Right after the hand-off they are about the batch.
+    for (const prompt of ["tradúcelo al inglés", "en word", "¿de qué hablan?", "¿qué dijo?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // An amendment's message carries the batch: the next one chains on it.
+    const amended = [...pendingChat, { role: "USER", content: "está en inglés", files: JSON.stringify(batch) }, { role: "ASSISTANT", content: "Anotado…", metadata: { mediaDeliveryAmended: "md_1" } }]
+    assert.deepEqual(resolveMediaFollowupFiles("en Word", amended), batch)
+  })
+
+  it("after «Detener», the resume the stop line invites reaches the recordings; elsewhere it stays with the chat", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }, { id: "v2", name: "taller.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Recibí 2 archivos…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1", "v2"], stoppedReason: "media_delivery_handoff" } }
+    const stopLine = { role: "ASSISTANT", content: "Detuve la transcripción de 2 archivos (clase.mp4 y taller.mp4). Si la necesitas, pídemela de nuevo y retomo donde quedó.",
+      metadata: JSON.stringify({ source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"], deliveryKind: "cancelled", stoppedReason: "media_delivery_cancelled" }) }
+    const stopped = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff, stopLine]
+    for (const prompt of ["retómala", "sí, retómala", "Sí, retómala, por favor", "reanúdala", "continúala", "retoma la transcripción",
+      "reanuda la transcripción", "continúa con la transcripción", "sigue con la transcripción", "sigue transcribiendo las clases",
+      "retoma los audios", "ok, reanuda las grabaciones", "¿puedes retomar la transcripción?", "¿puedes retomarla?",
+      "por favor continúa con la transcripción", "quiero que sigas transcribiendo"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), batch, prompt)
+    }
+    // A few turns later the explicit forms still reach it.
+    const later = [...stopped, { role: "USER", content: "¿qué es la fotosíntesis?" }, { role: "ASSISTANT", content: "…" }]
+    assert.deepEqual(resolveMediaFollowupFiles("retoma la transcripción", later), batch)
+    // Bare «continúa» / «sigue» continue the chat; so does any resume without a stop.
+    for (const prompt of ["continúa", "sigue", "continúa por favor", "sigue con la receta"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), [], prompt)
+    }
+    const delivered = [stopped[0], { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"] } }]
+    for (const prompt of ["continúalo", "retómala", "sigue con la transcripción del documento"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, delivered), [], prompt)
+    }
+    // A stop that came before the latest recordings belongs to another batch.
+    const newer = [...stopped, { role: "USER", content: "y este", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) },
+      { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_2", transcriptionFileIds: ["v3"] } }]
+    assert.deepEqual(resolveMediaFollowupFiles("retómala", newer), [])
+  })
+
+  it("after «Detener», a pronoun or a class word answers the stop line only right after it", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }, { id: "v2", name: "taller.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Recibí 2 archivos…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1", "v2"], stoppedReason: "media_delivery_handoff" } }
+    const stopLine = { role: "ASSISTANT", content: "Detuve la transcripción de 2 archivos (clase.mp4 y taller.mp4). Si la necesitas, pídemela de nuevo y retomo donde quedó.",
+      metadata: JSON.stringify({ source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"], deliveryKind: "cancelled", stoppedReason: "media_delivery_cancelled" }) }
+    const stopped = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff, stopLine]
+    // Another request in between: «continúalo» continues that answer, never the recordings.
+    const essay = [...stopped, { role: "USER", content: "escríbeme un ensayo sobre la revolución francesa" }, { role: "ASSISTANT", content: "La Revolución…" }]
+    for (const prompt of ["continúalo", "retómala", "continúa la clase", "sigue profe", "continúa con la sesión", "continúa con la entrevista que me preparabas"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, essay), [], prompt)
+    }
+    // Right after the stop line they answer it; a courtesy in between is no other request.
+    for (const prompt of ["continúa la clase", "retómala", "continúalo", "sigue con la sesión", "retoma todas las clases"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), batch, prompt)
+    }
+    // The recording must be what is resumed, not a word anywhere in the message.
+    for (const prompt of ["sigue explicando la clase", "continúa con la explicación de la clase", "sigue con el tema de la clase", "sigue profe",
+      "sigue explicando el audio"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), [], prompt)
+    }
+    const thanked = [...stopped, { role: "USER", content: "ok gracias" }, { role: "ASSISTANT", content: "De nada" }]
+    assert.deepEqual(resolveMediaFollowupFiles("retómala", thanked), batch)
+    // Naming the transcript reaches them a few turns later, never forever.
+    const far = [...stopped, ...[1, 2, 3, 4, 5].flatMap((n) => [{ role: "USER", content: `pregunta ${n} sobre biología` }, { role: "ASSISTANT", content: "…" }])]
+    assert.deepEqual(resolveMediaFollowupFiles("retoma la transcripción", far), [])
+    // A follow-up routed to the recordings carries them: the stop line stays in reach.
+    const summarised = [...stopped, { role: "USER", content: "resume la clase que ya está lista", files: JSON.stringify(batch) }, { role: "ASSISTANT", content: "Resumen…" }]
+    for (const prompt of ["retoma la transcripción", "ok, retómala", "¿puedes retomar la transcripción?", "sigue transcribiendo las clases"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, summarised), batch, prompt)
+    }
+    // «continúalo» there may be the summary just given.
+    assert.deepEqual(resolveMediaFollowupFiles("continúalo", summarised), [])
+    // Other recordings sent since: that stop line is no longer the one answered.
+    const other = [...stopped, { role: "USER", content: "y este", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) }]
+    assert.deepEqual(resolveMediaFollowupFiles("retoma la transcripción", other), [])
+    // Even when the message that brought them only said thanks.
+    const thanksWithFiles = [...stopped, { role: "USER", content: "ok gracias", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) }]
+    assert.deepEqual(resolveMediaFollowupFiles("retómala", thanksWithFiles), [])
+  })
+
+  it("a fact after a lead-in or a colon reaches a pending batch; one about two languages stays in the chat", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["Por cierto, está en inglés", "Ah, el audio está en inglés", "Ojo, son 3 hablantes", "Ojo: son 3 hablantes",
+      "Los nombres son: Juan Pérez y María López", "los apellidos son: Huamán, Quispe", "Ojo, los nombres son Huamán y Quispe",
+      "Los nombres son – Huamán y Quispe"]) {
+      assert.equal(isPendingDeliveryAmendPrompt(prompt), true, prompt)
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    for (const prompt of ["el audio está en inglés y español", "habla en español y quechua", "los audios están en español y en inglés", "está en inglés e italiano"]) {
+      assert.equal(isPendingDeliveryAmendPrompt(prompt), false, prompt)
+    }
+    // A second clause after «y» is still cut off: the fact stays a fact.
+    assert.equal(isPendingDeliveryAmendPrompt("el audio está en inglés y son tres hablantes"), true)
+    assert.equal(mayReachMediaBatch("retómala"), true)
+    assert.equal(mayReachMediaBatch("en Word"), true)
+    assert.equal(mayReachMediaBatch("escríbeme un poema"), false)
   })
 
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {

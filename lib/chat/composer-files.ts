@@ -2,6 +2,7 @@ import { isActiveProcessingStage, type FileProcessingStage } from "../file-proce
 import { getLongPasteMetadata, type LongPasteMetadata } from "../long-paste"
 import { getAttachmentRelativePath } from "../attachments/folder-selection"
 import { MAX_MEDIA_FILES_PER_MESSAGE } from "../attachment-ingest"
+import { pendingMediaDeliveryFileIds } from "../media-delivery-refresh"
 
 type ComposerFileRecord = {
   id?: unknown
@@ -342,9 +343,10 @@ const PRONOUN_FOLLOWUP_RE = new RegExp(
   `^${FOLLOWUP_LEAD_IN.source}(?:(?:resum|traduc|transcrib|analiz|sintetiz|subtitul|explic)\\w*(?:lo|la|los|las)|ponle subtitulos)\\b`,
 )
 const LINK_RE = /https?:\/\/|\bwww\.|\b(?:youtube|youtu|tiktok|vimeo|instagram|facebook|twitch|spotify)\b/
-// «la transcripción del documento», «subtítulos para mi app»: another source.
+// «la transcripción del documento», «subtítulos para mi app»: another source
+// («nada de PDF» refuses a format instead).
 const FOREIGN_SOURCE_RE =
-  /\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
+  /(?<!\bnada )\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
 // A bare request about the answer just given: «transcribe y resume», «hazme
 // el acta», «dame un resumen con los puntos clave», «traduce al inglés». Any
 // other word («analiza las ventas de hoy») makes it a new task.
@@ -416,9 +418,108 @@ export function classifyMediaFollowupPrompt(prompt: string): MediaFollowupKind |
   return null
 }
 
+// While this chat's batch still transcribes in the background, a short
+// instruction about its result is about that batch too: it joins the
+// pending delivery instead of a new task. A closed vocabulary, ≤ 10 words,
+// no link; a bare «en inglés» stays unrouted (it could be a translation or
+// the recording's language). Three kinds:
+//   - a fact about the recording itself («está en inglés», «los nombres
+//     son…», «son 3 hablantes»): nothing else in the chat has it, so it
+//     reaches the pending batch however many turns ago it was sent;
+//   - a wish about the result («en Word», «sin resumen», «no la traduzcas»)
+//     and a bare question («¿de qué hablan?», «¿qué dijo?»): they may be
+//     about the answer just above, so they reach the batch only right after
+//     it (or after another amendment, whose message carries the batch).
+// A question with anything after its verb («¿cómo se explica la
+// fotosíntesis?», «¿qué dice la ley sobre…?») is a question for the chat.
+const LANGUAGE_WORD = "(?:ingles|espanol|frances|portugues|aleman|italiano|chino|japones|coreano|ruso|arabe|quechua)"
+const RECORDING_WORD = "(?:audio|audios|video|videos|grabacion|grabaciones|clase|clases|reunion|reuniones)"
+const PENDING_FACT_RE = anyOf([
+  new RegExp(`^(?:(?:y|ah|ojo|por cierto)\\s+)?(?:(?:el|la|los|las) ${RECORDING_WORD}\\s+)?(?:esta|estan|es|son|habla|hablan)\\s+en\\s+${LANGUAGE_WORD}(?:\\s+(?:casi\\s+)?(?:todo|todos|todas|completo|completa))?$`),
+  new RegExp(`^(?:(?:y|ah|ojo)\\s+)?(?:son|hay|habla|hablan)\\s+(?:\\d+|dos|tres|cuatro|cinco|seis|siete|ocho)\\s+(?:hablantes|personas|voces|participantes)(?:\\s+(?:en (?:el|la|los|las) ${RECORDING_WORD}|hablando))?$`),
+])
+// «los nombres son Huamán y Quispe», «los términos correctos son…»: the
+// names themselves follow (capitalized, quoted, or announced as correct).
+// «los términos son confusos» is about something else.
+const NAMES_FACT_RE = /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nombres|apellidos|terminos)\s+(?:son|seran|correctos son)\b/
+
+function namesListed(prompt: string): boolean {
+  if (/\bcorrect[oa]s\s+son\b/.test(foldRoutingPrompt(prompt))) return true
+  // «los nombres son: Juan Pérez y María López» too.
+  const after = String(prompt || "").match(/\b(?:son|ser[aá]n)\s*[:\-–—]?\s*(\S)/i)
+  return Boolean(after && /[A-ZÁÉÍÓÚÑÜ"'“«]/.test(after[1]))
+}
+
+// A fact reads only the first clause: «está en inglés, gracias», «son 2
+// hablantes: Juan y María», «el audio está en inglés y son tres hablantes»,
+// «está en inglés 🙏». A question is never a fact («¿los nombres son
+// importantes en una marca?»).
+// «y» before another language belongs to the fact: «el audio está en inglés y
+// español» states two languages and is no single-language fact.
+const FACT_CLAUSE_END_RE = new RegExp(
+  `[,;:]|\\s(?:y|e)\\b(?!\\s+(?:en\\s+)?${LANGUAGE_WORD}\\b)|\\s(?:pero|gracias|porfa|por favor|ok|ojo)\\b|[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}]`,
+  "u",
+)
+// «Por cierto, está en inglés», «Ojo: son 3 hablantes», «Ah, y el audio…».
+const FACT_LEAD_IN_RE = /^(?:(?:y|ah|ojo|oye|por cierto)\s*[,:;]?\s+)+/
+
+function factClause(prompt: string): string {
+  return normalizeRoutingPrompt(foldRoutingPrompt(prompt).replace(FACT_LEAD_IN_RE, "").split(FACT_CLAUSE_END_RE)[0] || "")
+}
+const PENDING_OUTPUT_RE = anyOf([
+  /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
+  /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
+  // A refusal of a format or of the summary: «sin subtítulos», «no quiero
+  // subtítulos», «no necesito el Word», «nada de PDF», «sin Word ni PDF»,
+  // «quita los subtítulos», «no quiero que lo resumas», «no hace falta
+  // resumir», «Word no, PDF sí».
+  /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas|conviertas|exportes|saques|des|entregues))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
+  /^(?:word|pdf|subtitulos)\s+no\b/,
+  // A bare question about the recording: after its verb only a pointer
+  // («al final», «ahí», «en la clase») or a topic opened by a preposition
+  // («¿qué dice sobre el examen?», «¿cuándo habla de la guerra?»). A subject
+  // after the verb («¿qué dice la ley sobre…?») or «se» before it («¿cómo se
+  // explica la fotosíntesis?») is a question for the chat.
+  new RegExp(`^(?:y\\s+)?(?:de\\s+)?(?:que|quien|quienes|como|cual|cuales|cuando|donde)\\s+(?:(?:mas|lo|le|es lo que)\\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|cuenta|cuentan|conto|contaron|explica|explican|explico|explicaron|menciona|mencionan|menciono)(?:\\s+(?:ahi|alli|aqui|eso|mas|al final|al principio|al inicio|primero|despues|en (?:el|la|los|las) ${RECORDING_WORD}|(?:sobre|de|del|acerca de|acerca del|respecto (?:a|al|de|del))\\s+.+))?$`),
+  // «¿de qué se habla?», «¿qué se dice?»: «se» only with nothing after the
+  // verb («¿cómo se explica la fotosíntesis?» is a question for the chat).
+  /^(?:y\s+)?(?:de\s+)?que\s+(?:mas\s+)?se\s+(?:dice|dicen|habla|hablan|cuenta|cuentan|explica|explican|menciona|mencionan)$/,
+  // A bare ask about what was said, right after the hand-off: «¿de qué
+  // trata?», «dime los temas», «hazme 5 preguntas», «dame las ideas
+  // principales», «sácame las conclusiones». Nothing else in the message.
+  /^(?:y\s+)?de que (?:trata|tratan|va|van)$/,
+  /^(?:(?:y|e|ok|ahora|tambien|ademas|porfa|por favor|luego)\s+)*(?:dime|dame|damelos|damelas|hazme|haz|sacame|saca|preparame|prepara|generame|genera)\s+(?:(?:los|las|el|la|un|una|unos|unas|\d+|tres|cinco|diez)\s+)?(?:temas(?: principales)?|ideas(?: principales| clave)?|puntos clave|conclusiones|acuerdos|tareas|pendientes|preguntas(?: de repaso| de examen)?|cuestionario|examen|de que (?:trata|tratan|va|habla|hablan))(?:\s+(?:porfa|por favor|gracias))?$/,
+])
+
+type PendingAmendKind = "fact" | "output"
+
+function pendingDeliveryAmendKind(prompt: string): PendingAmendKind | null {
+  // An emoji at the end («¿de qué hablan? 🤔») is no word of the request.
+  const text = normalizeRoutingPrompt(prompt).replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, " ").replace(/\s+/g, " ").trim()
+  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text)) return null
+  const clause = factClause(prompt)
+  if (!/[¿?]/.test(String(prompt || "")) && (PENDING_FACT_RE.test(clause) || (NAMES_FACT_RE.test(clause) && namesListed(prompt)))) return "fact"
+  if (PENDING_OUTPUT_RE.test(text)) return "output"
+  return null
+}
+
+/** A short instruction about a batch that is still transcribing (see PENDING_FACT_RE / PENDING_OUTPUT_RE). */
+export function isPendingDeliveryAmendPrompt(prompt: string): boolean {
+  return pendingDeliveryAmendKind(prompt) !== null
+}
+
 /** Only media follow-ups, never a generic new request that happens to follow an upload. */
 export function isMediaFollowupPrompt(prompt: string): boolean {
   return classifyMediaFollowupPrompt(prompt) !== null
+}
+
+/**
+ * Could reach a chat's recordings with no file of its own: a media follow-up,
+ * a short instruction for a batch still transcribing, or a resume after
+ * «Detuve…» (whether it does depends on the chat; see resolveMediaFollowupFiles).
+ */
+export function mayReachMediaBatch(prompt: string): boolean {
+  return isMediaFollowupPrompt(prompt) || isPendingDeliveryAmendPrompt(prompt) || isResumePrompt(prompt) !== null
 }
 
 // User turns allowed between the media batch and the follow-up, per kind.
@@ -428,20 +529,142 @@ const MEDIA_FOLLOWUP_MAX_LATER_TURNS: Record<MediaFollowupKind, number> = {
   immediate: 0,
 }
 
-/** Reuse only this chat's latest attached USER batch; an intervening document stops lookup. */
+// How far back a follow-up looks for the batch a background delivery still waits on.
+const PENDING_BATCH_MAX_LATER_TURNS = 30
+// While a batch transcribes, a courtesy or a status ping in between («ok
+// gracias», «¿cuánto falta?») is no answer the next message could be about.
+const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|genial|dale|bien|de acuerdo|entendido|excelente|super|thanks|thank you)\s*)+$|^(?:y\s+)?(?:cuanto (?:falta|tarda|demora|le falta|te falta)|ya (?:termino|terminaste|esta|acabo|acabaste|casi)|como vas?|en que vas?)$/
+
+/**
+ * Reuse only this chat's latest attached USER batch; an intervening document
+ * stops lookup. A batch whose transcription still runs in the background
+ * (pendingMediaDeliveries of these messages) is a target for any follow-up
+ * however many turns ago it was sent, and also for the short instructions
+ * of PENDING_DELIVERY_AMEND_RE: they join that pending delivery.
+ */
+// The answer to «Detuve la transcripción… pídemela de nuevo y retomo donde
+// quedó»: «retómala», «sí, reanúdala», «retoma la transcripción», «sigue
+// transcribiendo las clases», «continúa con los audios». A pronoun
+// («continúalo») or a word that only fits a class («continúa la clase»,
+// «sigue profe») answers the stop line only right after it: elsewhere it
+// continues the answer just given. One that names the transcript or the
+// recordings reaches them a few turns later too (RESUME_MAX_LATER_TURNS).
+const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro) )*`
+const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*?(lo|la|los|las)\\b`)
+const RESUME_VERB = "(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|segui(?:r)?)"
+// The recording is the verb's object, as on the server (RESUME_TRANSCRIPT_RE
+// in media-batch.js): «continúa la clase», «sigue con los audios», «sigue
+// transcribiendo»; never «sigue explicando la clase» or «continúa con la
+// explicación de la clase».
+const RESUME_DETERMINER = "(?:(?:(?:todas|todos) )?(?:la|las|el|los|mi|mis|tu|tus|su|sus|esa|esas|ese|esos|esta|estas|este|estos) |todas |todos )?"
+const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RESUME_DETERMINER}(?:transcri\\w*|trascri\\w*|audios?|videos?|grabaciones|grabacion|notas? de voz|podcasts?|clips?|archivos?)\\b`)
+const RESUME_CONTEXT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RESUME_DETERMINER}(?:clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|seminarios?|talleres|taller|episodios?)\\b`)
+
+const RESUME_MAX_LATER_TURNS = 4
+
+type ResumeKind = "transcript" | "context" | "her" | "him"
+
+// «retómala» (la transcripción, la grabación) still answers the stop line
+// after a follow-up about those recordings; «continúalo» may be the summary
+// just given, so only right after the line.
+function isResumePrompt(prompt: string): ResumeKind | null {
+  const text = normalizeRoutingPrompt(prompt)
+  if (!text || text.length > 160 || LINK_RE.test(text)) return null
+  if (!FOREIGN_SOURCE_RE.test(text)) {
+    if (RESUME_TRANSCRIPT_RE.test(text)) return "transcript"
+    if (RESUME_CONTEXT_RE.test(text)) return "context"
+  }
+  const pronoun = RESUME_PRONOUN_RE.exec(text)?.[1]
+  return pronoun ? (pronoun.startsWith("la") ? "her" : "him") : null
+}
+
+/** A resume prompt answers the stop line `turns` after it (see turnsSinceStop). */
+function resumeAnswersStop(kind: ResumeKind, turns: { all: number; unrelated: number }): boolean {
+  if (kind === "transcript") return turns.unrelated <= RESUME_MAX_LATER_TURNS
+  if (kind === "her") return turns.unrelated === 0
+  return turns.all === 0
+}
+
+function messageMetadata(value: unknown): Record<string, unknown> {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * The user turns since the latest «Detuve la transcripción…» line (`all`),
+ * and those about something else (`unrelated`), or null when there is no
+ * such line since the latest recordings. A turn that carries those same
+ * recordings (a follow-up routed to them) is no other request and never ends
+ * the search; a courtesy («ok gracias») counts for neither.
+ */
+function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated: number } | null {
+  let stopAt = -1
+  let stopped = new Set<string>()
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; metadata?: unknown } | null
+    if (!message || String(message.role || "").toLowerCase() === "user") continue
+    const metadata = messageMetadata(message.metadata)
+    if (metadata.source === "media-delivery" && (metadata.deliveryKind === "cancelled" || metadata.stoppedReason === "media_delivery_cancelled")) {
+      stopAt = index
+      stopped = new Set((Array.isArray(metadata.transcriptionFileIds) ? metadata.transcriptionFileIds : []).map((id) => String(id)))
+      break
+    }
+  }
+  if (stopAt < 0) return null
+  const turns = { all: 0, unrelated: 0 }
+  for (let index = stopAt + 1; index < messages.length; index += 1) {
+    const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
+    if (!message || String(message.role || "").toLowerCase() !== "user") continue
+    const ids = parseMessageFiles(message.files).map((file) => resolveUploadFileId(file)).filter(Boolean).map((id) => String(id))
+    if (ids.length && !ids.every((id) => stopped.has(id))) return null
+    if (ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
+    turns.all += 1
+    if (!ids.length) turns.unrelated += 1
+  }
+  return turns
+}
+
 export function resolveMediaFollowupFiles(prompt: string, messages: readonly unknown[] = []): unknown[] {
-  const kind = classifyMediaFollowupPrompt(prompt)
+  let kind = classifyMediaFollowupPrompt(prompt)
+  if (!kind) {
+    const resume = isResumePrompt(prompt)
+    const since = resume ? turnsSinceStop(messages) : null
+    // The stop line anchors the batch: once it answers that line, the
+    // recordings are reached however long ago they were sent.
+    if (resume && since && resumeAnswersStop(resume, since)) kind = "explicit"
+  }
+  const amendKind = kind ? null : pendingDeliveryAmendKind(prompt)
+  const pending = kind || amendKind
+    ? pendingMediaDeliveryFileIds(messages as Parameters<typeof pendingMediaDeliveryFileIds>[0]) : new Set<string>()
+  const pendingOnly = !kind && pending.size > 0 && amendKind !== null
+  // Only a request that names the recording, or a fact about it, reaches a
+  // pending batch beyond the usual reach: «tradúcelo» or «en Word» may be
+  // about the answer just above (an email written meanwhile).
+  const extendedReach = pending.size > 0 && (kind === "explicit" || kind === "contextual" || amendKind === "fact")
+  if (pendingOnly) kind = "immediate"
   if (!kind) return []
   let laterUserTurns = 0
+  let beyondLimit = false
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: unknown; files?: unknown } | null
+    const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() !== "user") continue
     const files = parseMessageFiles(message.files).filter((file) => Boolean(resolveUploadFileId(file)))
     if (!files.length) {
+      if (pending.size > 0 && ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
       laterUserTurns += 1
-      if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) return []
+      if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) {
+        // Only the batch still transcribing may lie beyond the usual reach.
+        if (!extendedReach || laterUserTurns > PENDING_BATCH_MAX_LATER_TURNS) return []
+        beyondLimit = true
+      }
       continue
     }
+    const pendingBatch = pending.size > 0 && files.every((file) => pending.has(String(resolveUploadFileId(file))))
+    if ((beyondLimit || pendingOnly) && !pendingBatch) return []
     // The whole batch the composer accepts (100 recordings) is one follow-up target.
     return files.length <= MAX_MEDIA_FILES_PER_MESSAGE && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
   }

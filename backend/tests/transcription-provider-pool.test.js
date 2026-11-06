@@ -202,17 +202,18 @@ test('cloudCapable: a configured key not in cooldown; cloudCapacityAvailable als
 });
 
 test('whisper.cpp processes of concurrent long jobs share one cap (TRANSCRIBE_LOCAL_PARALLEL_TOTAL, never below the per-job value)', async (t) => {
-  const run = async (env) => {
+  // Each piece waits until all four could be running: the peak then shows
+  // the cap, never how the two jobs happened to interleave on a busy machine.
+  // Under a cap of two the wait is short (two is the right answer anyway);
+  // under a cap of four it lasts until the other job's pieces arrive.
+  const run = async (env, waitMs) => {
     let active = 0;
     let peak = 0;
     const opts = () => ({
       env, language: 'es', durationSeconds: 1200, segmentAudio: segmenter(t, 2),
       async localTranscribe() {
         peak = Math.max(peak, ++active);
-        // Each piece waits until all four could be running (or 300 ms): the
-        // peak then shows the cap, never how the two jobs happened to
-        // interleave on a busy machine.
-        const until = Date.now() + 300;
+        const until = Date.now() + waitMs;
         while (active < 4 && Date.now() < until) await new Promise((resolve) => setTimeout(resolve, 5));
         active--;
         return { text: 'Hola a todos, empezamos la clase de hoy con el tema pendiente.' };
@@ -224,8 +225,8 @@ test('whisper.cpp processes of concurrent long jobs share one cap (TRANSCRIBE_LO
     ]);
     return peak;
   };
-  assert.equal(await run({ TRANSCRIBE_PROVIDERS: 'local', TRANSCRIBE_LOCAL_PARALLEL: '2' }), 2, 'two jobs × two per job would be four; the shared cap keeps two');
-  assert.equal(await run({ TRANSCRIBE_PROVIDERS: 'local', TRANSCRIBE_LOCAL_PARALLEL: '2', TRANSCRIBE_LOCAL_PARALLEL_TOTAL: '4' }), 4);
+  assert.equal(await run({ TRANSCRIBE_PROVIDERS: 'local', TRANSCRIBE_LOCAL_PARALLEL: '2' }, 300), 2, 'two jobs × two per job would be four; the shared cap keeps two');
+  assert.equal(await run({ TRANSCRIBE_PROVIDERS: 'local', TRANSCRIBE_LOCAL_PARALLEL: '2', TRANSCRIBE_LOCAL_PARALLEL_TOTAL: '4' }, 10_000), 4);
 });
 
 test('the pool rungs: ElevenLabs first pass, AssemblyAI, Deepgram in the default order, Mistral opt-in; every one key-gated and switchable', () => {

@@ -9,7 +9,9 @@
 // dot-directories are never served by the /uploads static handler):
 //   md_<uuid>.json        active record (pending | delivering)
 //   md_<uuid>.lock        claim lock, opened with 'wx' (one holder at a time)
-//   done/md_<uuid>.json   terminal record (delivered | failed), kept 30 days
+//   md_<uuid>.cancel      Stop pressed while a holder was delivering: the
+//                         holder (or the next claim) closes the record
+//   done/md_<uuid>.json   terminal record (delivered | failed | cancelled), kept 30 days
 // Every write is tmp + rename, so a crash never leaves half a record. The
 // pending scan reads only the active directory, which holds the few
 // deliveries still waiting, never the 30-day history.
@@ -34,7 +36,7 @@ const REFINE_STATUSES = Object.freeze(['ok', 'failed']);
 // A refine window is at most a week of recording clock, like a clip offset.
 const MAX_REFINE_END_SEC = 7 * 24 * 3600;
 const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
-const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
+const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed', 'cancelled']);
 // The chat batches up to SIRAGPT_MEDIA_BATCH_MAX recordings (100 by
 // default, 500 at most); one delivery must hold the whole batch.
 const MAX_FILES = 500;
@@ -45,6 +47,9 @@ const MIN_STALE_MS = 30 * 1000;
 const RETRY_BACKOFF_MS = Object.freeze([1, 5, 15, 60, 120].map(minutes => minutes * 60 * 1000));
 const MAX_ATTEMPTS = 5;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// A Stop whose chat line keeps failing to post (see cancel) stays open this
+// long, retried by every sweep; then it closes without its line.
+const CANCEL_SETTLE_RETRY_MS = 6 * 60 * 60 * 1000;
 const ORPHAN_TMP_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_SCAN = 1000;
 
@@ -121,13 +126,18 @@ function normalizeModel(model) {
  * `alsoAnalysis` adds the requested summary («resume y tradúcelo»).
  * `analysisRange` is the moment the user asked about («qué dice en el
  * minuto 30»), on the recording clock: only the analysis reads it; the
- * transcript files follow `range`. Kept only when valid (closed, start < end).
+ * transcript files follow `range`. `translationRange` is the window a
+ * follow-up asked to translate («traduce lo que dice en el minuto 30»):
+ * only the translation reads it. Kept only when valid (closed, start < end).
  */
 function normalizeOutput(output) {
   const value = output && typeof output === 'object' ? output : {};
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
   const offset = Number(value.timeOffsetSec);
   const analysisRange = normalizeRefineRange(value.analysisRange);
+  const translationRange = normalizeRefineRange(value.translationRange);
+  const translationTarget = normalizeTranslationTarget(value.translationTarget);
+  const declinedDocuments = ['docx', 'pdf'].filter(format => Array.isArray(value.declinedDocuments) && value.declinedDocuments.includes(format));
   return {
     documentFormat,
     wantsSubtitles: value.wantsSubtitles === true,
@@ -135,7 +145,229 @@ function normalizeOutput(output) {
     includeTranscript: value.includeTranscript === true,
     alsoAnalysis: value.alsoAnalysis === true,
     ...(analysisRange ? { analysisRange } : {}),
+    ...(translationRange ? { translationRange } : {}),
+    // Set when a follow-up changed the language («mejor al francés»): it
+    // wins over the target read from the goal, which keeps every request.
+    ...(translationTarget ? { translationTarget } : {}),
+    // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
+    ...(declinedDocuments.length ? { declinedDocuments } : {}),
+    ...(value.declinedSubtitles === true ? { declinedSubtitles: true } : {}),
   };
+}
+
+/** A translation target as a language code («en», «pt»), or null. */
+function normalizeTranslationTarget(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[a-z]{2,3}$/.test(text) ? text : null;
+}
+
+const GOAL_MAX = 4000;
+const AMENDMENTS_KEPT = 20;
+
+/** The request so far plus the follow-up, the follow-up always whole (bounded). */
+function joinGoals(previous, addition) {
+  const before = String(previous || '').trim();
+  const add = String(addition || '').trim().slice(0, GOAL_MAX / 2);
+  if (!add) return before.slice(0, GOAL_MAX);
+  if (!before) return add;
+  if (before.split(/\n{2,}/).some(part => part.trim() === add)) return before.slice(0, GOAL_MAX);
+  return `${before.slice(0, GOAL_MAX - add.length - 2)}\n\n${add}`;
+}
+
+/**
+ * A follow-up sent while a delivery waits on its recordings («y tradúcelo al
+ * inglés», «en Word», «resúmelo», «solo del minuto 10 al 20», «son 3
+ * hablantes») joins that request instead of starting a second
+ * transcription. Pure. `amendment`:
+ *   { goal, translationTarget, removeTranslation, wantsAnalysis, removeAnalysis,
+ *     documentFormat, removeDocument, wantsSubtitles, removeSubtitles, range,
+ *     analysisRange, translationRange, translationWhole, language, hints, model }
+ * Returns { record, changes }: `changes` names what the follow-up changed
+ * ('translation', 'translation_target', 'translation_range', 'translation_range_added',
+ * 'translation_moment_included', 'translation_moment_covered', 'translation_whole', 'translation_range_kept', 'analysis',
+ * 'analysis_range', 'document', 'subtitles', 'range', 'language', 'hints',
+ * 'no_translation', 'no_analysis', 'no_document', 'no_subtitles'); empty
+ * when the request already covered it. The transcript the user first asked for is
+ * never dropped: turning a transcript into a translation keeps its files.
+ */
+const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'translation_range_added', 'translation_whole',
+  'analysis', 'analysis_range']);
+
+function mergeDeliveryAmendment(record = {}, amendment = {}) {
+  const value = amendment && typeof amendment === 'object' ? amendment : {};
+  const out = normalizeOutput(record.output);
+  const next = { ...record, output: { ...out } };
+  const changes = [];
+  const formats = new Set(['txt', ...(Array.isArray(record.formats) ? record.formats : [])
+    .filter(format => FORMATS.includes(format))]);
+  const mode = MODES.includes(record.mode) ? record.mode : 'transcript';
+  next.mode = mode;
+
+  const target = normalizeTranslationTarget(value.translationTarget);
+  // «ya no la traduzcas»: back to what the first request asked for.
+  if (!target && value.removeTranslation === true && mode === 'translation') {
+    next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
+    next.output.alsoAnalysis = false;
+    delete next.output.translationTarget;
+    changes.push('no_translation');
+  }
+  if (target) {
+    if (mode !== 'translation') {
+      next.mode = 'translation';
+      // What the first request delivered stays: the transcript files, and
+      // the summary when it was an analysis.
+      next.output.includeTranscript = true;
+      next.output.alsoAnalysis = out.alsoAnalysis || mode === 'analysis';
+      changes.push('translation');
+    } else if (out.translationTarget && out.translationTarget !== target) {
+      changes.push('translation_target');
+    } else if (!out.translationTarget) {
+      // Same mode: the goal already named a target; only a different one is news.
+      changes.push('translation_target');
+    }
+    next.output.translationTarget = target;
+  }
+
+  // «sin resumen»: the summary is dropped (a translation stays a translation).
+  if (value.removeAnalysis === true && value.wantsAnalysis !== true) {
+    if (next.mode === 'analysis') { next.mode = 'transcript'; changes.push('no_analysis'); }
+    else if (next.mode === 'translation' && next.output.alsoAnalysis) { next.output.alsoAnalysis = false; changes.push('no_analysis'); }
+  }
+  if (value.wantsAnalysis === true) {
+    if (next.mode === 'translation') {
+      if (!next.output.alsoAnalysis) { next.output.alsoAnalysis = true; changes.push('analysis'); }
+    } else if (next.mode !== 'analysis') {
+      next.mode = 'analysis';
+      changes.push('analysis');
+    }
+  }
+  // A question about a moment reads that window. A second one about another
+  // moment reads both (their span), never only the latest; one with no
+  // window after a windowed one reads the whole recording.
+  const analysisRange = normalizeRefineRange(value.analysisRange);
+  const currentAnalysis = out.analysisRange || null;
+  if (analysisRange) {
+    const span = currentAnalysis
+      ? { start: Math.min(currentAnalysis.start, analysisRange.start), end: Math.max(currentAnalysis.end, analysisRange.end) }
+      : analysisRange;
+    if (JSON.stringify(span) !== JSON.stringify(currentAnalysis)) {
+      next.output.analysisRange = span;
+      changes.push('analysis_range');
+    }
+  } else if (value.wantsAnalysis === true && value.keepWindow !== true && currentAnalysis) {
+    // A question of its own with no window: the whole recording. The
+    // runner's catch-all for words no rule reads («¿y en el 45?»,
+    // «explícamelo mejor») keeps the window (keepWindow).
+    delete next.output.analysisRange;
+    changes.push('analysis_range');
+  }
+  const translationRange = normalizeRefineRange(value.translationRange);
+  // A moment of a recording this delivery already translates to the same
+  // language: the window it reads (its own moments, else the transcript's
+  // range, else the whole recording) is never narrowed. A moment inside it
+  // changes nothing; one outside it widens it to the span of both, as a
+  // second question widens the analysis window.
+  const translatesAlready = mode === 'translation' && Boolean(out.translationTarget) && (!target || target === out.translationTarget);
+  if (translationRange && translatesAlready) {
+    const current = out.translationRange || normalizeRange(record.range);
+    const currentEnd = current ? (current.end == null ? MAX_REFINE_END_SEC : current.end) : null;
+    if (!current) {
+      changes.push('translation_moment_covered');
+    } else if (current.start <= translationRange.start && currentEnd >= translationRange.end) {
+      changes.push('translation_moment_included');
+    } else {
+      next.output.translationRange = { start: Math.min(current.start, translationRange.start), end: Math.max(currentEnd, translationRange.end) };
+      changes.push('translation_range_added');
+    }
+  } else if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
+    next.output.translationRange = translationRange;
+    changes.push('translation_range');
+  } else if (!translationRange && value.translationWhole === true && out.translationRange) {
+    // «tradúcela completa al inglés» after a moment: the whole translation.
+    delete next.output.translationRange;
+    changes.push('translation_whole');
+  } else if (!translationRange && target && target === out.translationTarget && out.translationRange) {
+    // Only said: «tradúcelo al inglés en Word» keeps the moment (and says how to get it all).
+    changes.push('translation_range_kept');
+  }
+
+  // «no lo quiero en Word», «sin subtítulos»: a format turned down goes, and
+  // so does the automatic one a long recording or a video would get. The
+  // refusal is kept so the delivery never brings it back.
+  const removeDocuments = (Array.isArray(value.removeDocument) ? value.removeDocument : []).filter(format => format === 'docx' || format === 'pdf');
+  const declined = new Set(out.declinedDocuments || []);
+  for (const format of removeDocuments) {
+    if (out.documentFormat === format) {
+      delete next.output.documentFormat;
+      changes.push('no_document');
+    } else if (format === 'docx' && !declined.has('docx') && !out.documentFormat) {
+      changes.push('no_auto_document');
+    }
+    // Also a format a switch left behind (an older record): never delivered.
+    formats.delete(format);
+    declined.add(format);
+  }
+  if (value.removeSubtitles === true) {
+    if (out.wantsSubtitles || out.declinedSubtitles !== true) changes.push('no_subtitles');
+    next.output.wantsSubtitles = false;
+    next.output.declinedSubtitles = true;
+    formats.delete('srt');
+    formats.delete('vtt');
+  }
+
+  const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
+  if (documentFormat && documentFormat !== out.documentFormat) {
+    // «mejor en PDF»: the PDF replaces the Word, never both.
+    if (out.documentFormat) formats.delete(out.documentFormat);
+    next.output.documentFormat = documentFormat;
+    changes.push('document');
+  }
+  if (documentFormat) {
+    formats.add(documentFormat);
+    declined.delete(documentFormat);
+  }
+  if (declined.size) next.output.declinedDocuments = ['docx', 'pdf'].filter(format => declined.has(format));
+  else delete next.output.declinedDocuments;
+  if (value.wantsSubtitles === true) {
+    if (!out.wantsSubtitles) changes.push('subtitles');
+    next.output.wantsSubtitles = true;
+    delete next.output.declinedSubtitles;
+    formats.add('srt');
+    formats.add('vtt');
+  }
+  const range = normalizeRange(value.range);
+  if (range && JSON.stringify(range) !== JSON.stringify(normalizeRange(record.range))) {
+    next.range = range;
+    changes.push('range');
+  }
+  const language = normalizeLanguage(value.language);
+  if (language && language !== record.language) {
+    next.language = language;
+    changes.push('language');
+  }
+  const hints = normalizeHints(value.hints);
+  if (hints) {
+    // Names add up; the latest speaker count and «literal» win.
+    const merged = normalizeHints({
+      ...(record.hints || {}),
+      ...hints,
+      terms: [...new Set([...(record.hints?.terms || []), ...(hints.terms || [])])],
+    });
+    if (JSON.stringify(merged) !== JSON.stringify(record.hints || null)) {
+      next.hints = merged;
+      changes.push('hints');
+    }
+  }
+  next.formats = FORMATS.filter(format => formats.has(format));
+  next.goal = joinGoals(record.goal, value.goal);
+  // The model picked on the follow-up turn writes the delivery's analysis
+  // or translation when the follow-up asks for that work (the user's pick
+  // runs it), or when the delivery had none (the internal ladder otherwise).
+  // «en Word» or the names never swap the model that a turn asked to write
+  // a summary (AGENTS.md section 13).
+  const model = normalizeModel(value.model);
+  if (model && changes.length && (changes.some(change => MODEL_WORK_CHANGES.has(change)) || !normalizeModel(record.model))) next.model = model;
+  return { record: next, changes };
 }
 
 /** Where a link clip came from (shown in the delivered message). */
@@ -242,6 +474,7 @@ function createMediaDeliveryStore({
   now = () => Date.now(),
   staleMs = null,
   maxScan = DEFAULT_MAX_SCAN,
+  cancelSettleRetryMs = CANCEL_SETTLE_RETRY_MS,
   fsp = fs.promises,
   pid = process.pid,
   host = os.hostname(),
@@ -254,6 +487,8 @@ function createMediaDeliveryStore({
   const activePath = id => path.join(baseDir, `${assertDeliveryId(id)}.json`);
   const donePath = id => path.join(doneDir, `${assertDeliveryId(id)}.json`);
   const lockPath = id => path.join(baseDir, `${assertDeliveryId(id)}.lock`);
+  const cancelPath = id => path.join(baseDir, `${assertDeliveryId(id)}.cancel`);
+  const pause = ms => new Promise((resolve) => { setTimeout(resolve, Math.max(0, ms)); });
 
   async function writeAtomic(target, value) {
     await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -425,6 +660,11 @@ function createMediaDeliveryStore({
         await removeLockIfOwned(id, token);
         return null;
       }
+      // Stop was pressed while another holder had it: close it here.
+      if (await exists(cancelPath(id))) {
+        await closeCancelled(id, token, fresh, await readCancelMarker(id));
+        return null;
+      }
       const at = isoAt(now());
       const record = { ...fresh, status: 'delivering', claimedAt: at, updatedAt: at };
       await writeAtomic(activePath(id), record);
@@ -503,6 +743,189 @@ function createMediaDeliveryStore({
     }
     await removeLockIfOwned(id, token);
     return next;
+  }
+
+  async function readCancelMarker(id) {
+    const info = await readJson(cancelPath(id)).catch(() => null);
+    return info && typeof info === 'object' ? info : null;
+  }
+
+  /** Write (or keep) the Stop marker; a repeated Stop keeps the first time. */
+  async function markCancel(id, reason) {
+    const previous = await readCancelMarker(id);
+    const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
+      reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user',
+      ...(previous?.jobsStopped === true ? { jobsStopped: true } : {}) };
+    await writeAtomic(cancelPath(id), marker);
+    return marker;
+  }
+
+  /** The Stop marker of a record still open, or null. */
+  async function cancelMarker(id) {
+    assertDeliveryId(id);
+    return readCancelMarker(id);
+  }
+
+  /**
+   * This Stop's jobs were stopped. A record left open by its line (a DB
+   * blip, or the lock of a process that died mid-Stop) is retried by the
+   * sweep, which must not stop them again: by then the user may have asked
+   * for the recording again. No lock (a dead holder's lock may still be
+   * fresh): only while the record is open, and a marker left behind a record
+   * closed meanwhile is never read (every reader reads the record first).
+   */
+  async function noteJobsStopped(id) {
+    assertDeliveryId(id);
+    const previous = await readCancelMarker(id);
+    if (!previous || !(await readActive(id))) return false;
+    if (previous.jobsStopped !== true) await writeAtomic(cancelPath(id), { ...previous, jobsStopped: true });
+    return true;
+  }
+
+  /** Write the terminal 'cancelled' copy and drop the active one (lock held). */
+  async function closeCancelled(id, token, record, marker = null, settle = null) {
+    const at = isoAt(now());
+    const next = { ...record, status: 'cancelled', cancelledAt: marker?.at || at, updatedAt: at,
+      cancelReason: clipString(marker?.reason, 40) || 'user', nextAttemptAt: null,
+      ...(settle?.messageId ? { deliveredMessageId: clipString(settle.messageId, 200) } : {}),
+      ...(settle?.chatId ? { deliveryChatId: clipString(settle.chatId, 200) } : {}) };
+    await writeAtomic(donePath(id), next);
+    await fsp.unlink(activePath(id)).catch(() => {});
+    await fsp.unlink(cancelPath(id)).catch(() => {});
+    await removeLockIfOwned(id, token);
+    return next;
+  }
+
+  /** Stop pressed while this process holds the delivery (see cancel). */
+  async function isCancelRequested(id) {
+    assertDeliveryId(id);
+    return exists(cancelPath(id));
+  }
+
+  /** The holder honours a Stop it found at a checkpoint. */
+  async function markCancelled(id, token) {
+    assertDeliveryId(id);
+    if (!(await holds(id, token))) return null;
+    const record = await readActive(id);
+    if (!record) {
+      await removeLockIfOwned(id, token);
+      return null;
+    }
+    return closeCancelled(id, token, record, await readCancelMarker(id));
+  }
+
+  /**
+   * Stop («Detener») on a delivery still waiting on its recordings. Owner
+   * scoped. A free record is closed now ('cancelled'); one a holder is
+   * delivering at this very moment gets a marker that holder honours at its
+   * next checkpoint (or the next claim does), so nothing is posted after
+   * the user said stop. Returns { outcome, record }: 'cancelled',
+   * 'cancel_requested', 'already_cancelled', 'already_terminal' or
+   * 'missing'.
+   */
+  async function cancel(id, { userId = null, reason = 'user', tries = 5, waitMs = 150, beforeClose = null } = {}) {
+    assertDeliveryId(id);
+    const terminal = async () => {
+      const done = await readRecord(donePath(id), id);
+      if (!done || (userId && done.userId !== userId)) return { outcome: 'missing', record: null };
+      return { outcome: done.status === 'cancelled' ? 'already_cancelled' : 'already_terminal', record: done };
+    };
+    const before = await readActive(id);
+    if (!before) return terminal();
+    if (userId && before.userId !== userId) return { outcome: 'missing', record: null };
+    if (before.status !== 'pending' && before.status !== 'delivering') return terminal();
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        let closed = null;
+        try {
+          const fresh = await readActive(id);
+          if (!fresh) return terminal();
+          // The Stop is durable before anything is posted: a crash after the
+          // chat line leaves a marker that a follow-up (amend), the next
+          // claim and the delivery sweep all honour, never an open record.
+          const marker = await markCancel(id, reason);
+          // The chat line that settles the turn goes first, under the lock:
+          // a crash before the close leaves a record whose next attempt finds
+          // that line (findDeliveredMessage) and posts nothing else.
+          let settle = null;
+          if (typeof beforeClose === 'function') {
+            try { settle = await beforeClose(fresh); } catch (err) { settle = { error: err?.code || 'settle_failed' }; }
+          }
+          // The line did not reach the chat (a DB blip): the record stays
+          // open with its marker, so the next Stop finds it among the chat's
+          // open ones and the sweep posts the line, for a while.
+          const markedAt = Date.parse(marker.at);
+          if (settle?.error && !(Number.isFinite(markedAt) && now() - markedAt >= cancelSettleRetryMs)) {
+            return { outcome: 'cancel_requested', record: fresh, settle, settleFailed: true };
+          }
+          closed = await closeCancelled(id, token, fresh, marker, settle?.error ? null : settle);
+          return { outcome: 'cancelled', record: closed, settle };
+        } finally {
+          if (!closed) await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (attempt < tries - 1) await pause(waitMs);
+    }
+    await markCancel(id, reason);
+    // The holder may have finished between the last try and the marker.
+    const still = await readActive(id);
+    if (!still) {
+      await fsp.unlink(cancelPath(id)).catch(() => {});
+      return terminal();
+    }
+    return { outcome: 'cancel_requested', record: still };
+  }
+
+  /**
+   * Fold a follow-up into a delivery still waiting on its recordings (see
+   * mergeDeliveryAmendment). Taken under the claim lock so it never races a
+   * holder's read-modify-write; a holder that is only probing is waited out
+   * briefly. Returns { outcome, record, changes }: 'amended', 'unchanged',
+   * 'too_late' (already being delivered), 'cancelled', 'unsupported'
+   * (a refine), 'busy' or 'missing'.
+   */
+  async function amend(id, { userId = null, amendment = {}, tries = 8, waitMs = 150 } = {}) {
+    assertDeliveryId(id);
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const last = attempt >= Math.max(1, tries) - 1;
+      const before = await readActive(id);
+      if (!before || (userId && before.userId !== userId)) return { outcome: 'missing', record: null, changes: [] };
+      if (before.kind === 'refine') return { outcome: 'unsupported', record: before, changes: [] };
+      if (await exists(cancelPath(id))) return { outcome: 'cancelled', record: before, changes: [] };
+      if (before.status !== 'pending') {
+        // A claim that finds the files still pending hands it back at once.
+        if (!last) { await pause(waitMs); continue; }
+        return { outcome: 'too_late', record: before, changes: [] };
+      }
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        try {
+          const fresh = await readActive(id);
+          if (!fresh) return { outcome: 'missing', record: null, changes: [] };
+          if (fresh.status !== 'pending') return { outcome: 'too_late', record: fresh, changes: [] };
+          const { record: merged, changes } = mergeDeliveryAmendment(fresh, amendment);
+          if (!changes.length && merged.goal === fresh.goal) return { outcome: 'unchanged', record: fresh, changes };
+          const at = isoAt(now());
+          const history = Array.isArray(fresh.amendments) ? fresh.amendments : [];
+          const next = { ...merged, amendments: [...history, { at, changes }].slice(-AMENDMENTS_KEPT), updatedAt: at };
+          await writeAtomic(activePath(id), next);
+          return { outcome: changes.length ? 'amended' : 'unchanged', record: next, changes };
+        } finally {
+          await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (!last) await pause(waitMs);
+    }
+    return { outcome: 'busy', record: null, changes: [] };
+  }
+
+  /** The user's deliveries still open for a chat (its own or its replacement). */
+  async function listActiveForChat(chatId, { userId = null, limit } = {}) {
+    if (typeof chatId !== 'string' || !chatId) return [];
+    const records = await listActive({ limit });
+    return records.filter(record => (record.chatId === chatId || record.deliveryChatId === chatId)
+      && (!userId || record.userId === userId));
   }
 
   /**
@@ -589,7 +1012,7 @@ function createMediaDeliveryStore({
     const names = await fsp.readdir(baseDir).catch(() => []);
     for (const name of names) {
       const full = path.join(baseDir, name);
-      const lockId = /^(md_[0-9a-f-]{36})\.lock$/.exec(name)?.[1];
+      const lockId = /^(md_[0-9a-f-]{36})\.(?:lock|cancel)$/.exec(name)?.[1];
       const leftover = /\.tmp$/.test(name) || /\.lock\.reap-[0-9a-f-]{36}$/.test(name);
       if (!leftover && !(lockId && isValidDeliveryId(lockId))) continue;
       const stat = await fsp.stat(full).catch(() => null);
@@ -609,8 +1032,15 @@ function createMediaDeliveryStore({
     create,
     get,
     listActive,
+    listActiveForChat,
     findPendingByFile,
     claim,
+    cancel,
+    cancelMarker,
+    noteJobsStopped,
+    isCancelRequested,
+    markCancelled,
+    amend,
     holds,
     refresh,
     patch,
@@ -625,6 +1055,8 @@ function createMediaDeliveryStore({
 module.exports = {
   createMediaDeliveryStore,
   normalizeNewRecord,
+  mergeDeliveryAmendment,
+  normalizeTranslationTarget,
   normalizeRefineOutcome,
   normalizeRefineRange,
   isValidDeliveryId,

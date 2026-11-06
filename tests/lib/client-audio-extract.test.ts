@@ -51,24 +51,46 @@ type FakeOptions = {
   probeHang?: boolean
   /** Every audio track of the source (default: the primary alone). */
   audioTracks?: Array<{ language?: string; name?: string | null; commentary?: boolean; visuallyImpaired?: boolean }>
+  /** The conversion waits on a read that only disposing the input rejects (mediabunny's pending reads). */
+  readHang?: boolean
 }
 
 function fakeMediabunny(opts: FakeOptions = {}) {
-  const calls: { conversions: any[]; cancels: number; disposed: number; readBacks: number; executed: number; sourceComputes: number } = { conversions: [], cancels: 0, disposed: 0, readBacks: 0, executed: 0, sourceComputes: 0 }
+  const sources: Array<{ readListeners: number }> = []
+  const calls: { conversions: any[]; cancels: number; disposed: number; readBacks: number; executed: number; sourceComputes: number; readListenersLeft: () => number } = {
+    conversions: [], cancels: 0, disposed: 0, readBacks: 0, executed: 0, sourceComputes: 0,
+    readListenersLeft: () => sources.reduce((sum, source) => sum + source.readListeners, 0),
+  }
   let inputs = 0
-  class BlobSource { constructor(public blob: Blob) {} }
+  class BlobSource {
+    private readonly listeners = new Set<(range: { start: number; end: number }) => unknown>()
+    constructor(public blob: Blob) { sources.push(this) }
+    on(event: string, listener: (range: { start: number; end: number }) => unknown) {
+      if (event !== "read") return () => {}
+      this.listeners.add(listener)
+      return () => { this.listeners.delete(listener) }
+    }
+    read(start: number, end: number) { for (const listener of this.listeners) listener({ start, end }) }
+    get readListeners() { return this.listeners.size }
+  }
   class BufferTarget { buffer: ArrayBuffer | null = null }
   const format = (name: string) => class { name = name; constructor(public options?: unknown) {} }
   const PRIMARY = { id: 2, codec: opts.codec === undefined ? "aac" : opts.codec, canDecode: async () => opts.canDecode ?? true }
   class Input {
     private readonly blob: Blob
+    readonly source: BlobSource
     private readonly isReadBack: boolean
     constructor(options: { source: BlobSource }) {
+      this.source = options.source
       this.blob = options.source.blob
       this.isReadBack = inputs > 0
       inputs += 1
     }
     private rejectProbe: ((err: Error) => void) | null = null
+    private readonly pendingReads = new Set<(err: Error) => void>()
+    private disposedOnce = false
+    /** A read that resolves only when `release` is called; disposing rejects it. */
+    pendingRead() { return new Promise<void>((_resolve, reject) => { this.pendingReads.add(reject) }) }
     async getFormat() {
       if (opts.unreadable && !this.isReadBack) throw new Error("unreadable")
       if (opts.probeHang && !this.isReadBack) return new Promise((_resolve, reject) => { this.rejectProbe = reject })
@@ -100,7 +122,15 @@ function fakeMediabunny(opts: FakeOptions = {}) {
       if (!this.isReadBack) { calls.sourceComputes += 1; return opts.sourceDuration === undefined ? 3600 : opts.sourceDuration }
       return this.getDurationFromMetadata()
     }
-    dispose() { calls.disposed += 1; this.rejectProbe?.(new Error("InputDisposedError")) }
+    // Idempotent, like mediabunny's: a second dispose does nothing.
+    dispose() {
+      if (this.disposedOnce) return
+      this.disposedOnce = true
+      calls.disposed += 1
+      this.rejectProbe?.(new Error("InputDisposedError"))
+      for (const reject of this.pendingReads) reject(new Error("InputDisposedError"))
+      this.pendingReads.clear()
+    }
   }
   class Output { constructor(public options: { format: any; target: BufferTarget }) {} get target() { return this.options.target } }
   class Conversion {
@@ -116,6 +146,16 @@ function fakeMediabunny(opts: FakeOptions = {}) {
     }
     async execute() {
       calls.executed += 1
+      // Like mediabunny: progress needs the total duration, and without one
+      // in the metadata it is computed (a full read of the source) first.
+      if (this.onProgress) {
+        const input = this.options.input
+        if ((await input.getDurationFromMetadata()) == null) await input.computeDuration()
+      }
+      const source = this.options.input.source
+      const size = Number(source?.blob?.size) || 0
+      source?.read?.(0, Math.floor(size / 2))
+      if (opts.readHang) await this.options.input.pendingRead()
       const audio = typeof this.options.audio === "function" ? this.options.audio(PRIMARY) : this.options.audio
       const tier = audio && audio.codec === "opus" ? "opus" : "copy"
       if (typeof audio?.process === "function") {
@@ -130,6 +170,7 @@ function fakeMediabunny(opts: FakeOptions = {}) {
       }
       const bytes = opts.outputBytes?.[tier] ?? (tier === "opus" ? 1 * MB : 20 * MB)
       this.options.output.target.buffer = new ArrayBuffer(bytes)
+      source?.read?.(Math.floor(size / 2), size)
       this.onProgress?.(1, 3600)
     }
     async cancel() { this.cancelled = true; calls.cancels += 1 }
@@ -290,8 +331,15 @@ describe("extractAudioForTranscription", () => {
 
   it("the source duration comes from metadata only: without it the whole file is never read twice, and the output's duration decides", async () => {
     const live = fakeMediabunny({ codec: "aac", metadataDuration: null, sourceDuration: 3600 })
-    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: live.load })).tier).toBe("opus")
+    const progress: string[] = []
+    expect((await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: live.load, onProgress: (p) => progress.push(`${p.phase}:${p.progress}`) })).tier).toBe("opus")
+    // Neither the probe nor the conversion computes it (mediabunny would, for its progress).
     expect(live.calls.sourceComputes).toBe(0)
+    expect(live.calls.conversions).toHaveLength(1)
+    // The share of the file read stands in for the progress, and stops with the conversion.
+    expect(progress).toContain("converting:0.5")
+    expect(progress).toContain("converting:1")
+    expect(live.calls.readListenersLeft()).toBe(0)
     const shortLive = fakeMediabunny({ codec: "aac", metadataDuration: null, extractedDuration: 5 * 60 })
     expect(await extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: shortLive.load })).toMatchObject({ tier: "none", reason: "short_video" })
   })
@@ -340,6 +388,21 @@ describe("extractAudioForTranscription", () => {
     expect(source).toMatch(/NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT: process\.env\.NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT,/)
     expect(source).toMatch(/export function isClientAudioExtractionEnabled\(env: Readonly<Record<string, string \| undefined>> = BUILD_ENV\)/)
     expect(source).not.toMatch(/= process\.env\)/)
+  })
+
+  it("✕ during a conversion stops the reads in flight too: the input is disposed at once", async () => {
+    // A long file with no duration in its metadata: mediabunny's cancel winds
+    // the pumps down, but only disposing the input rejects a pending read.
+    const fake = fakeMediabunny({ codec: "aac", metadataDuration: null, readHang: true })
+    const ctrl = new AbortController()
+    const pending = extractAudioForTranscription(withSize(video(), 900 * MB), { loadMediabunny: fake.load, signal: ctrl.signal })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(fake.calls.executed).toBe(1)
+    ctrl.abort()
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    expect(fake.calls.cancels).toBe(1)
+    expect(fake.calls.disposed).toBe(1)
+    expect(fake.calls.readListenersLeft()).toBe(0)
   })
 
   it("abort: the running conversion is cancelled and the call rejects with an AbortError; the input is disposed", async () => {

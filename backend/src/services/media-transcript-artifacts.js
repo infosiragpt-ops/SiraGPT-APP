@@ -51,9 +51,36 @@ function stripAccentsLower(value) {
 function defaultFormatter() { return require('./media-transcript-format'); }
 function defaultStore() { return require('./media-transcript-store'); }
 
+// A format turned down: «sin Word», «sin subtítulos», «no quiero
+// subtítulos», «no necesito el Word», «nada de PDF», «sin Word ni PDF»,
+// «quita los subtítulos», «Word no, PDF sí», «without subtitles». The
+// refusal covers its clause (request-negation), and gives way to the same
+// format asked for elsewhere in the message («tengo videos sin subtítulos,
+// dame el SRT», «quiero el Word, sin Word no puedo editarlo»). «no, mejor en
+// Word» still asks for one.
+const FORMAT_WORD_RE = /\b(word|docx|pdf|subtitul\w*|subtitles?|srt|vtt|webvtt|subs|captions?)\b/;
+
+function formatOfWord(word) {
+  if (word === 'pdf') return 'pdf';
+  if (word === 'word' || word === 'docx') return 'docx';
+  return 'subtitles';
+}
+
+/** The document formats and subtitles a goal turns down: { documents: ['docx'|'pdf'], subtitles }. */
+function negatedTranscriptFormats(goal) {
+  const { refused, asked } = require('./request-negation').splitMentions(goal, FORMAT_WORD_RE);
+  const askedFormats = new Set(asked.map(formatOfWord));
+  const refusedFormats = new Set(refused.map(formatOfWord).filter(format => !askedFormats.has(format)));
+  return {
+    documents: ['docx', 'pdf'].filter(format => refusedFormats.has(format)),
+    subtitles: refusedFormats.has('subtitles'),
+  };
+}
+
 /** What the user asked for: document format, subtitles and an optional time range. */
 function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null } = {}) {
   const text = stripAccentsLower(goal);
+  const negated = negatedTranscriptFormats(goal);
   let documentFormat = null;
   try {
     documentFormat = require('./message-attachments').transcriptionFileOutputFormat(goal);
@@ -65,7 +92,13 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
   const policyFormat = String(documentPolicy?.format || '').toLowerCase();
   if (!documentFormat && documentPolicy?.autoGenerate && (policyFormat === 'docx' || policyFormat === 'pdf')) documentFormat = policyFormat;
   if (documentFormat && documentFormat !== 'docx' && documentFormat !== 'pdf') documentFormat = null;
-  const wantsSubtitles = /\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text);
+  // Turned down: the other format if the goal asks for it («no en Word, en PDF»).
+  if (documentFormat && negated.documents.includes(documentFormat)) {
+    const other = documentFormat === 'docx' ? 'pdf' : 'docx';
+    const mentionsOther = other === 'pdf' ? /\bpdf\b/.test(text) : /\b(word|docx)\b/.test(text);
+    documentFormat = mentionsOther && !negated.documents.includes(other) ? other : null;
+  }
+  const wantsSubtitles = !negated.subtitles && (/\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text));
   let range = null;
   try {
     const parsed = (formatter || defaultFormatter()).parseTimeRange?.(goal);
@@ -73,7 +106,17 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
     if (parsed && Number.isFinite(parsed.start) && parsed.start >= 0
       && (parsed.end == null || (Number.isFinite(parsed.end) && parsed.end > parsed.start))) range = { start: parsed.start, end: parsed.end ?? null };
   } catch (_) { range = null; }
-  return { documentFormat, wantsSubtitles, range };
+  // What was turned down also stops the automatic Word and subtitles of a
+  // long recording or a video.
+  return { documentFormat, wantsSubtitles, range,
+    ...(negated.documents.length ? { declinedDocuments: negated.documents } : {}),
+    ...(negated.subtitles ? { declinedSubtitles: true } : {}) };
+}
+
+/** A format the user turned down (resolveTranscriptOutput, or a follow-up stored on the delivery). */
+function declinedFormat(output, format) {
+  if (format === 'subtitles') return output?.declinedSubtitles === true;
+  return Array.isArray(output?.declinedDocuments) && output.declinedDocuments.includes(format);
 }
 
 /** Accepts the sidecar shape ({s,e,t,spk,conf}) or the engine shape. */
@@ -558,11 +601,12 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
   });
   const totalSeconds = entries.reduce((sum, entry) => sum + (Number(entry.result.durationSec) || 0), 0);
   const long = totalSeconds >= LONG_RECORDING_SECONDS;
-  const wantsDocx = output.documentFormat === 'docx' || (!output.documentFormat && long);
+  const wantsDocx = output.documentFormat === 'docx' || (!output.documentFormat && long && !declinedFormat(output, 'docx'));
   const wantsPdf = output.documentFormat === 'pdf';
   const single = entries.length === 1;
   const timed = (entry) => entry.result.segments.length > 0;
-  const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row, transcripts.get(entries[0].row.id)) || long);
+  const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row, transcripts.get(entries[0].row.id)) || long)
+    && !declinedFormat(output, 'subtitles');
   const subtitleEntries = output.wantsSubtitles ? entries.filter(timed) : autoSubtitles ? entries : [];
   if (output.wantsSubtitles && entries.some((entry) => !timed(entry))) {
     notes.push('Algunas transcripciones no tienen marcas de tiempo, así que no se pudieron generar sus subtítulos.');
@@ -640,7 +684,7 @@ async function buildTranslationArtifacts({ files = [], target, output = {}, user
     : usable.map((file, index) => `${index + 1}. ${file.name}\n${'='.repeat(48)}\n${file.text.trim()}`).join('\n\n');
   const artifacts = [toArtifact(name('txt'), `${txt}\n`, 'txt', 'translation')];
   const long = txt.length >= 20000;
-  const wanted = output.documentFormat || (long ? 'docx' : null);
+  const wanted = output.documentFormat || (long && !declinedFormat(output, 'docx') ? 'docx' : null);
   if (wanted === 'docx' || wanted === 'pdf') {
     const markdown = [`# ${usable.length === 1 ? `Traducción al ${target.name} — ${sourceStem(usable[0].name)}` : `Traducciones al ${target.name}`}`,
       ...usable.map((file) => `${usable.length === 1 ? '' : `## ${sourceStem(file.name)}\n\n`}${file.text.trim().split(/\n+/).join('\n\n')}`)].join('\n\n');
@@ -742,7 +786,11 @@ function previewReportBlock(report) {
 function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output = {}, formatter = null,
   transcriptFilesAttached = true } = {}) {
   const fmt = formatter || defaultFormatter();
-  const ready = rows.filter((row) => String(row?.extractedText || '').trim());
+  // Headed with what the user uploaded («Clase 3.mp4»), like the files below.
+  const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
+    const sourceName = transcripts?.get?.(row.id)?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName } : row;
+  });
   if (!ready.length) return '';
   const single = ready.length === 1;
   const parts = [];
@@ -797,6 +845,8 @@ async function loadTranscripts(prisma, { userId, rows = [], store = null } = {})
 module.exports = {
   resolveTranscriptOutput,
   buildMediaTranscriptArtifacts,
+  negatedTranscriptFormats,
+  declinedFormat,
   buildTranscriptChatPreview,
   buildTranslationArtifacts,
   escapeChatMarkdown,
