@@ -396,6 +396,7 @@ import {
   isMediaUnderstandingTurn,
   resolveComposerMediaSrc,
   resolveMediaFollowupFiles,
+  mayReachMediaBatch,
   resolveUploadFileId,
   shouldCreateLocalMediaPreview,
   snapshotComposerFilesForMessage,
@@ -12611,6 +12612,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // Media follow-ups need the opened chat's full attachment history and
       // durable agent-task path, not the background inline generate shortcut.
       if (!(item.files || []).length && isMediaFollowupPrompt(item.msg)) return false;
+      // So do a resume after «Detuve…» and a short instruction for a batch
+      // still transcribing: drained here they would reach the plain chat
+      // with no recordings. Without that chat's messages, any that could.
+      if (!(item.files || []).length) {
+        const queuedChatMessages = ((chats || []).find((c: any) => c?.id === item.chatId) as any)?.messages;
+        const reachesRecordings = Array.isArray(queuedChatMessages) && queuedChatMessages.length
+          ? resolveMediaFollowupFiles(item.msg, queuedChatMessages).length > 0
+          : mayReachMediaBatch(item.msg);
+        if (reachesRecordings) return false;
+      }
       if (isMediaUnderstandingTurn(item.msg, item.files || [])) return false;
       return true;
     });

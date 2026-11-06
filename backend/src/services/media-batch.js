@@ -553,6 +553,19 @@ const MOMENT_CLAUSE_BREAK_RE = /[;.?!¿¡]|,\s*(?:dime|dinos|decime|cuentame|exp
 // «tradúcelo al inglés, todo bien» are not.
 const WHOLE_TRANSLATION_RE = /\b(?:tradu[cz](?!cion|tor)\w*|translat(?!ion|or)\w*)\s+(?:\w+\s+){0,3}?(?:complet[ao]s?|enter[ao]s?|integr[ao]s?|integramente|tod[ao]s?|whole|entire|full|all)\b|\b(?:traduccion|translation)\s+(?:\w+\s+){0,2}?(?:complet[ao]|enter[ao]|integr[ao]|whole|entire|full)\b|\b(?:complet[ao]s?|enter[ao]s?|integr[ao]s?)\s+(?:\w+\s+){0,2}?(?:tradu[cz]\w*|translat\w*)|\btod[ao]s?\s+(?:el|la|los|las)\s+(?:audio|clase|video|grabacion|archivo|reunion|conferencia|charla|transcripcion)(?:es|s)?\b|\b(?:the\s+)?(?:whole|entire|full)\s+(?:thing|recording|audio|class|video|transcript)\b/;
 
+// «el audio está en inglés y español», «habla en español y quechua»: the
+// languages of the recording, with no single one for the engine (it detects
+// them). A statement about the recording, never an ask for an analysis.
+const LANGUAGES_STATED_RE = /\b(?:esta|estan|es|son|habla|hablan|hablo|hablaron|grabad[oa]s?)\s+(?:en\s+)?([a-z]+)\s*(?:,|y|e)\s*(?:en\s+)?([a-z]+)\b/;
+
+/** The recording is said to be in two languages. Pure; never throws. */
+function statesRecordingLanguages(goal) {
+  try {
+    const match = LANGUAGES_STATED_RE.exec(foldGoal(goal));
+    return Boolean(match && sourceLanguageIn(match[1]) && sourceLanguageIn(match[2]));
+  } catch (_) { return false; }
+}
+
 /** «tradúcela completa»: the whole recording is to be translated. Pure; never throws. */
 function asksWholeTranslation(goal) {
   try {
@@ -1933,7 +1946,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   loadPresentedNames, presentRows, asksForDeliverable, refusesTranslationWord, isResumeGoal,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,

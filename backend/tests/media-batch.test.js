@@ -1876,6 +1876,19 @@ test('a translation follow-up reads its moment; only an explicit «completa» tr
   }
 });
 
+test('a statement of two languages joins a pending delivery as a fact, never the catch-all analysis', async () => {
+  for (const goal of ['el audio está en inglés y español', 'habla en español y quechua', 'los audios están en español y en inglés',
+    'está en inglés e italiano']) {
+    const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    assert.ok(calls.amends.length > 0, goal);
+    assert.ok(calls.amends.every(call => call.amendment.wantsAnalysis !== true), `${goal}: no summary nobody asked for`);
+  }
+  const mb = require('../src/services/media-batch');
+  assert.equal(mb.statesRecordingLanguages('el profesor habla de Alemania y Francia'), false);
+  assert.equal(mb.statesRecordingLanguages('está en inglés'), false, 'one language is a hint, read elsewhere');
+});
+
 test('a document switched to another format replaces it; turned down later, neither comes back', async () => {
   const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
   const delivery = require('../src/services/media-delivery');

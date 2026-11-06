@@ -3147,7 +3147,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           || amendment.wantsAnalysis || amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
           || amendment.removeSubtitles || amendment.range || amendment.analysisRange || amendment.translationRange
           || ownHints.language || saysHints || saysTxt
-          || (typeof mediaBatch.refusesTranslationWord === 'function' && mediaBatch.refusesTranslationWord(mediaGoal)));
+          || (typeof mediaBatch.refusesTranslationWord === 'function' && mediaBatch.refusesTranslationWord(mediaGoal))
+          // «el audio está en inglés y español»: a fact, never the catch-all analysis.
+          || (typeof mediaBatch.statesRecordingLanguages === 'function' && mediaBatch.statesRecordingLanguages(mediaGoal)));
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
           // A moment it names («¿y en el minuto 45?») is read too; the window
           // an earlier question asked about stays when it names none

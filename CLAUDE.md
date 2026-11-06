@@ -3529,7 +3529,15 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   comparte con una corrección abierta del mismo tramo en otro chat. Tras «Detuve…», «retómala»,
   «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
   después de esa línea; «continúa» a secas sigue en el chat) y el runner las lee como transcripción,
-  sin análisis pagado. Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
+  sin análisis pagado. Cuánto después cuenta (`turnsSinceStop` → `resumeAnswersStop`): lo que nombra
+  la transcripción o las grabaciones, hasta 4 turnos sobre otra cosa; «retómala», justo después o tras
+  un pedido sobre esas mismas grabaciones (su mensaje las lleva y no corta la búsqueda); «continúalo»
+  o una palabra de clase («continúa la clase», «sigue profe»), solo justo después de la línea. Un
+  hecho con muletilla o dos puntos («Por cierto, está en inglés», «Ojo: son 3 hablantes», «Los nombres
+  son: Juan…») llega al lote pendiente; uno de dos idiomas («está en inglés y español») se queda en el
+  chat y, si llega, cuenta como leído (`statesRecordingLanguages`, nunca el análisis de reserva). Un
+  mensaje en cola que retoma o modifica un lote espera a que se abra su chat (`mayReachMediaBatch` en
+  el drenado de fondo). Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
   clase», «no lo traduzcas, solo dime qué dice el profesor»; también junto a «transcribe…», un tramo,
   el idioma o nombres) pide el análisis solo con un entregable o una pregunta real
   (`asksForDeliverable`: «que es más fácil de editar», «porque…», «de acuerdo» no lo son); la opción

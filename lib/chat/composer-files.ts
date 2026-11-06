@@ -445,7 +445,8 @@ const NAMES_FACT_RE = /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nom
 
 function namesListed(prompt: string): boolean {
   if (/\bcorrect[oa]s\s+son\b/.test(foldRoutingPrompt(prompt))) return true
-  const after = String(prompt || "").match(/\b(?:son|ser[aá]n)\s+(\S)/i)
+  // «los nombres son: Juan Pérez y María López» too.
+  const after = String(prompt || "").match(/\b(?:son|ser[aá]n)\s*:?\s*(\S)/i)
   return Boolean(after && /[A-ZÁÉÍÓÚÑÜ"'“«]/.test(after[1]))
 }
 
@@ -453,10 +454,17 @@ function namesListed(prompt: string): boolean {
 // hablantes: Juan y María», «el audio está en inglés y son tres hablantes»,
 // «está en inglés 🙏». A question is never a fact («¿los nombres son
 // importantes en una marca?»).
-const FACT_CLAUSE_END_RE = /[,;:]|\s(?:y|e|pero|gracias|porfa|por favor|ok|ojo)\b|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u
+// «y» before another language belongs to the fact: «el audio está en inglés y
+// español» states two languages and is no single-language fact.
+const FACT_CLAUSE_END_RE = new RegExp(
+  `[,;:]|\\s(?:y|e)\\b(?!\\s+(?:en\\s+)?${LANGUAGE_WORD}\\b)|\\s(?:pero|gracias|porfa|por favor|ok|ojo)\\b|[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}]`,
+  "u",
+)
+// «Por cierto, está en inglés», «Ojo: son 3 hablantes», «Ah, y el audio…».
+const FACT_LEAD_IN_RE = /^(?:(?:y|ah|ojo|oye|por cierto)\s*[,:;]?\s+)+/
 
 function factClause(prompt: string): string {
-  return normalizeRoutingPrompt(foldRoutingPrompt(prompt).split(FACT_CLAUSE_END_RE)[0] || "")
+  return normalizeRoutingPrompt(foldRoutingPrompt(prompt).replace(FACT_LEAD_IN_RE, "").split(FACT_CLAUSE_END_RE)[0] || "")
 }
 const PENDING_OUTPUT_RE = anyOf([
   /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
@@ -505,6 +513,15 @@ export function isMediaFollowupPrompt(prompt: string): boolean {
   return classifyMediaFollowupPrompt(prompt) !== null
 }
 
+/**
+ * Could reach a chat's recordings with no file of its own: a media follow-up,
+ * a short instruction for a batch still transcribing, or a resume after
+ * «Detuve…» (whether it does depends on the chat; see resolveMediaFollowupFiles).
+ */
+export function mayReachMediaBatch(prompt: string): boolean {
+  return isMediaFollowupPrompt(prompt) || isPendingDeliveryAmendPrompt(prompt) || isResumePrompt(prompt) !== null
+}
+
 // User turns allowed between the media batch and the follow-up, per kind.
 const MEDIA_FOLLOWUP_MAX_LATER_TURNS: Record<MediaFollowupKind, number> = {
   explicit: Number.POSITIVE_INFINITY,
@@ -527,21 +544,40 @@ const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|
  */
 // The answer to «Detuve la transcripción… pídemela de nuevo y retomo donde
 // quedó»: «retómala», «sí, reanúdala», «retoma la transcripción», «sigue
-// transcribiendo las clases», «continúa con los audios». Only right after
-// such a stop: elsewhere «continúalo» continues the answer just given.
+// transcribiendo las clases», «continúa con los audios». A pronoun
+// («continúalo») or a word that only fits a class («continúa la clase»,
+// «sigue profe») answers the stop line only right after it: elsewhere it
+// continues the answer just given. One that names the transcript or the
+// recordings reaches them a few turns later too (RESUME_MAX_LATER_TURNS).
 const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro) )*`
-const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`)
+const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*?(lo|la|los|las)\\b`)
 const RESUME_VERB_RE = new RegExp(`${RESUME_LEAD}(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|segui)\\b`)
 const RESUME_OBJECT_RE = /\b(?:transcri\w*|trascri\w*)\b/
 
-function isResumePrompt(prompt: string): "explicit" | "contextual" | null {
+const RESUME_MAX_LATER_TURNS = 4
+
+type ResumeKind = "transcript" | "context" | "her" | "him"
+
+// «retómala» (la transcripción, la grabación) still answers the stop line
+// after a follow-up about those recordings; «continúalo» may be the summary
+// just given, so only right after the line.
+function isResumePrompt(prompt: string): ResumeKind | null {
   const text = normalizeRoutingPrompt(prompt)
   if (!text || text.length > 160 || LINK_RE.test(text)) return null
   if (RESUME_VERB_RE.test(text) && !FOREIGN_SOURCE_RE.test(text)) {
     const instruction = normalizeRoutingPrompt(splitInstruction(prompt).instruction)
-    if (RESUME_OBJECT_RE.test(instruction) || MEDIA_NOUN_RE.test(instruction) || RECORDING_CONTEXT_RE.test(instruction)) return "explicit"
+    if (RESUME_OBJECT_RE.test(instruction) || MEDIA_NOUN_RE.test(instruction)) return "transcript"
+    if (RECORDING_CONTEXT_RE.test(instruction)) return "context"
   }
-  return RESUME_PRONOUN_RE.test(text) ? "contextual" : null
+  const pronoun = RESUME_PRONOUN_RE.exec(text)?.[1]
+  return pronoun ? (pronoun.startsWith("la") ? "her" : "him") : null
+}
+
+/** A resume prompt answers the stop line `turns` after it (see turnsSinceStop). */
+function resumeAnswersStop(kind: ResumeKind, turns: { all: number; unrelated: number }): boolean {
+  if (kind === "transcript") return turns.unrelated <= RESUME_MAX_LATER_TURNS
+  if (kind === "her") return turns.unrelated === 0
+  return turns.all === 0
 }
 
 function messageMetadata(value: unknown): Record<string, unknown> {
@@ -553,27 +589,48 @@ function messageMetadata(value: unknown): Record<string, unknown> {
   }
 }
 
-/** A «Detuve la transcripción…» line after the latest user turn with recordings. */
-function stoppedSinceLatestMedia(messages: readonly unknown[]): boolean {
+/**
+ * The user turns since the latest «Detuve la transcripción…» line (`all`),
+ * and those about something else (`unrelated`), or null when there is no
+ * such line since the latest recordings. A turn that carries those same
+ * recordings (a follow-up routed to them) is no other request and never ends
+ * the search; a courtesy («ok gracias») counts for neither.
+ */
+function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated: number } | null {
+  let stopAt = -1
+  let stopped = new Set<string>()
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: unknown; files?: unknown; metadata?: unknown } | null
-    if (!message) continue
-    const role = String(message.role || "").toLowerCase()
-    if (role === "user") {
-      if (parseMessageFiles(message.files).some((file) => Boolean(resolveUploadFileId(file)))) return false
-      continue
-    }
+    const message = messages[index] as { role?: unknown; metadata?: unknown } | null
+    if (!message || String(message.role || "").toLowerCase() === "user") continue
     const metadata = messageMetadata(message.metadata)
-    if (metadata.source === "media-delivery" && (metadata.deliveryKind === "cancelled" || metadata.stoppedReason === "media_delivery_cancelled")) return true
+    if (metadata.source === "media-delivery" && (metadata.deliveryKind === "cancelled" || metadata.stoppedReason === "media_delivery_cancelled")) {
+      stopAt = index
+      stopped = new Set((Array.isArray(metadata.transcriptionFileIds) ? metadata.transcriptionFileIds : []).map((id) => String(id)))
+      break
+    }
   }
-  return false
+  if (stopAt < 0) return null
+  const turns = { all: 0, unrelated: 0 }
+  for (let index = stopAt + 1; index < messages.length; index += 1) {
+    const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
+    if (!message || String(message.role || "").toLowerCase() !== "user") continue
+    if (ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
+    const ids = parseMessageFiles(message.files).map((file) => resolveUploadFileId(file)).filter(Boolean).map((id) => String(id))
+    if (ids.length && !ids.every((id) => stopped.has(id))) return null
+    turns.all += 1
+    if (!ids.length) turns.unrelated += 1
+  }
+  return turns
 }
 
 export function resolveMediaFollowupFiles(prompt: string, messages: readonly unknown[] = []): unknown[] {
   let kind = classifyMediaFollowupPrompt(prompt)
   if (!kind) {
     const resume = isResumePrompt(prompt)
-    if (resume && stoppedSinceLatestMedia(messages)) kind = resume
+    const since = resume ? turnsSinceStop(messages) : null
+    // The stop line anchors the batch: once it answers that line, the
+    // recordings are reached however long ago they were sent.
+    if (resume && since && resumeAnswersStop(resume, since)) kind = "explicit"
   }
   const amendKind = kind ? null : pendingDeliveryAmendKind(prompt)
   const pending = kind || amendKind

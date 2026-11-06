@@ -89,6 +89,13 @@ describe("Stop during a background transcription (source contract)", () => {
     assert.ok(refresh.indexOf("if (stillPending) {") < refresh.indexOf("Se conserva la solicitud de transcripción"))
   })
 
+  it("a queued resume or amendment for the recordings waits for its chat, never the background drain", () => {
+    const drain = between(source, "// 2) Background drain for any other idle chat with queued work.", "if (bgIndex < 0) return;")
+    assert.match(drain, /resolveMediaFollowupFiles\(item\.msg, queuedChatMessages\)\.length > 0/)
+    assert.match(drain, /: mayReachMediaBatch\(item\.msg\);/)
+    assert.match(drain, /if \(reachesRecordings\) return false;/)
+  })
+
   it("the API client posts the cancel for the chat", () => {
     const method = between(api, "async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = [], fileIds: string[] = [])", "\n  }\n")
     assert.match(method, /this\.request\('\/media-deliveries\/cancel', \{\s*method: 'POST',/)
