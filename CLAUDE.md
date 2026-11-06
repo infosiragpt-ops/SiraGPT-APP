@@ -3374,9 +3374,13 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   su notificación y el título de un chat re-creado (la entrega renombra las filas con el
   `sourceName` de la transcripción), y en el turno la etiqueta y el progreso, el hand-off, los
   `fileNames` del registro (la línea «Detuve…») y la vista previa (`loadPresentedNames` lee
-  `clientExtracted` de la subida en una consulta; `presentRows`). Una corrección por nombre encuentra
-  la grabación por lo que subió el usuario («revisa el minuto 12 de Clase 3»; `pickRowByName`
-  ignora el «.audio» de la extracción). Si el audio de un video no
+  `clientExtracted` de la subida en una consulta; `presentRows`). Una grabación que falló o sigue en
+  cola cuando cierra la entrega conserva el nombre que el runner guardó (`record.fileNames`), y las
+  herramientas del chat (`transcript_lookup`, `retranscribe_range`, `rename_speaker`) también nombran y
+  encuentran lo que se subió (`presentedRows`). Una corrección por nombre encuentra la grabación por
+  lo que subió el usuario («revisa el minuto 12 de Clase 3»; `pickRowByName` ignora el «.audio» de la
+  extracción y compara el nombre entero: «Clase 10» nunca es «Clase 1», y «clase2.mp4» responde a «la
+  clase 2»). Si el audio de un video no
   tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
   pantalla quedaron en el video; «vuelve a adjuntar el mismo video: esta vez se sube completo»).
   Las herramientas de cuadros sobre un video del que solo se subió el audio dicen eso y el mismo
@@ -3387,8 +3391,9 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   `tests/lib/prepare-upload-media.test.ts` (7), `tests/lib/extracted-source-memory.test.ts` (4),
   `tests/chat-fast-upload-source.test.ts` (6), `tests/attachment-ingest.test.ts` (100/101),
   `backend/tests/client-extracted-metadata.test.js`, `backend/tests/client-extracted-names.test.js`
-  (6: nombres en la transcripción guardada, sus archivos, la traducción y el análisis; silencio de
-  un audio que no es video), `backend/tests/package-test-script-paths.test.js`
+  (9: nombres en la transcripción guardada, sus archivos, la traducción y el análisis; silencio de
+  un audio que no es video; corrección por nombre, progreso y vista previa),
+  `backend/tests/package-test-script-paths.test.js`
   (cada ruta del script `npm test` existe), casos nuevos en `media-transcript-artifacts`,
   `media-transcript-store`, `media-delivery-store`, `chunked-upload-resumable` y
   `chat-composer-files`.

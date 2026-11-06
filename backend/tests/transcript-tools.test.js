@@ -172,6 +172,42 @@ test('retranscribe_range creates the refine delivery first, then queues the refi
   assert.match(res.userMessage, /720-900 de «Clase de Bioquímica\.mp4»/);
 });
 
+test('the tools name audio the browser extracted after what the user uploaded, and find it by that name', async () => {
+  const s = setup({ rows: [
+    { id: 'clase3', userId: 'u1', originalName: 'Clase 3.audio.ogg', mimeType: 'audio/ogg', processingStage: 'ready',
+      processingError: null, extractedText: '[00:00:00] inicio.', deletedAt: null },
+    { id: 'clase4', userId: 'u1', originalName: 'Clase 4.audio.ogg', mimeType: 'audio/ogg', processingStage: 'ready',
+      processingError: null, extractedText: '[00:00:00] inicio.', deletedAt: null },
+  ] });
+  s.prisma.documentAnalysis = { findMany: async ({ where }) => where.fileId.in.map(fileId => ({ fileId,
+    metadata: { clientExtracted: { tier: 'opus', sourceName: fileId === 'clase3' ? 'Clase 3.mp4' : 'Clase 4.mp4', sourceSize: 900_000_000, sourceType: 'video/mp4' } } })) };
+  await s.write('clase3', 'u1', lectureResult());
+  const log = [];
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    createDelivery: async (record) => { log.push(record); return { id: 'md_refine', ...record }; },
+    refineHandOffMessage: ({ fileName }) => `Voy a volver a transcribir ese tramo de «${fileName}».`,
+  };
+  const tool = tools.buildRetranscribeRangeTool({ ...s.over, refineDeps: { delivery, enqueueRefine: async () => ({ queued: true }), transcriptStore: s.store } });
+  const res = await tool.execute({ file: 'Clase 3.mp4', start: '12:00', end: '15:00' }, s.ctx({ userQuery: 'revisa del minuto 12 al 15 de la Clase 3' }));
+  assert.equal(res.ok, true, JSON.stringify(res));
+  assert.equal(res.file.name, 'Clase 3.mp4');
+  assert.match(res.userMessage, /«Clase 3\.mp4»/);
+  assert.deepEqual(log[0].fileNames, ['Clase 3.mp4']);
+  // Asked without a name, the list the model relays names what was uploaded.
+  const ambiguous = await tools.buildTranscriptLookupTool(s.over).execute({ at: '10:00' }, s.ctx());
+  assert.equal(ambiguous.ok, false);
+  assert.deepEqual(ambiguous.files.map(file => file.name).sort(), ['Clase 3.mp4', 'Clase 4.mp4']);
+});
+
+test('a name that is the start of a longer one never hides it: «Clase 10» among «Clase 1» to «Clase 30»', () => {
+  const rows = Array.from({ length: 30 }, (_, i) => ({ id: `c${i + 1}`, originalName: `Clase ${i + 1}.mp4` }));
+  for (const [text, id] of [['revisa del minuto 12 al 15 de Clase 10, se escuchó mal', 'c10'], ['«Clase 10.mp4»', 'c10'],
+    ['la clase 11', 'c11'], ['Clase 12', 'c12'], ['Clase 1', 'c1'], ['clase 3, minuto 5', 'c3']]) {
+    assert.equal(mediaBatch.pickRowByName(rows, text)?.id, id, text);
+  }
+});
+
 test('retranscribe_range refuses what it cannot do, and a refused queue cancels the delivery silently', async () => {
   const s = setup();
   await s.write('clase1', 'u1', lectureResult());

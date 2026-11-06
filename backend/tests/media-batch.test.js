@@ -2136,7 +2136,8 @@ test('follow-ups: ordinary words next to an option, take-backs, conditions, mome
   };
   for (const goal of ['lo quiero en Word, que es más fácil de editar', 'en Word porque lo tengo que editar', 'pásalo a PDF para que lo pueda imprimir',
     'en Word, de acuerdo', 'no la traduzcas porfa', 'mejor no la traduzcas por ahora', 'no lo traduzcas aún', 'no traduzcas los nombres propios',
-    'no traduzcas las siglas']) {
+    'no traduzcas las siglas', 'quiero que lo pongas en Word', 'en word para que lo pueda editar', 'en Word porque lo voy a imprimir',
+    'en Word, es para una tarea', 'no lo conviertas a Word, que no tengo Office', 'ponlo en Word como te dije']) {
     const amends = await amendOf(goal);
     assert.ok(amends.every(amendment => amendment.wantsAnalysis !== true), `${goal}: no paid analysis`);
   }
