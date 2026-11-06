@@ -146,6 +146,31 @@ describe("historical media batch follow-ups", () => {
     assert.deepEqual(resolveMediaFollowupFiles("la transcripción del pdf", pendingChat), [])
   })
 
+  it("a fact with words after it, a question about a moment, and a courtesy in between still reach the batch", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
+    const later = [...pendingChat, ...Array.from({ length: 12 }, (_, i) => ({ role: "USER", content: `otra cosa ${i}` }))]
+    for (const prompt of ["los audios están en inglés, gracias", "está en inglés 🙏", "esta en ingles porfa", "son 2 hablantes: Juan y María",
+      "el audio está en inglés y son tres hablantes", "está en inglés, tradúcelo al español", "los nombres son Huamán y Quispe"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, later), batch, prompt)
+    }
+    for (const prompt of ["¿qué dice sobre el examen?", "¿y qué dice al final?", "¿qué más dice?", "¿qué es lo que dice?",
+      "¿quién habla primero?", "¿dónde lo dice?", "¿cuándo habla de la guerra?", "¿qué explica de la mitosis?"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // A courtesy or a status ping in between is no answer to be about.
+    const acked = [...pendingChat, { role: "USER", content: "ok gracias" }, { role: "ASSISTANT", content: "¡De nada!" },
+      { role: "USER", content: "¿cuánto falta?" }, { role: "ASSISTANT", content: "Sigue transcribiendo." }]
+    for (const prompt of ["mejor sin resumen", "tradúcelo al inglés", "con subtítulos", "en pdf"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, acked), batch, prompt)
+    }
+    // A question or a lowercase opinion is never a fact about the recording.
+    for (const prompt of ["los términos son confusos, ¿me los explicas?", "¿los nombres son importantes en una marca?", "los términos son confusos"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, later), [], prompt)
+    }
+  })
+
   it("while a batch transcribes, the chat's own questions and requests stay with the chat", () => {
     const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }

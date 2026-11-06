@@ -3521,7 +3521,12 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   un tramo nunca recorta los archivos; «traduce lo del minuto 30 y resúmelo» resume ese momento; el
   tramo de la traducción gana al rango de la entrega y una traducción completa lo borra
   (`translation_whole`); el análisis genérico del catch-all conserva la ventana (`keepWindow`). El
-  compositor envía al lote los rechazos («sin subtítulos», «nada de PDF», «no quiero que lo resumas»).
+  compositor envía al lote los rechazos («sin subtítulos», «nada de PDF», «no quiero que lo resumas»). Un
+  hecho se lee en su primera cláusula («está en inglés, gracias», «son 2 hablantes: Juan y María») y nunca
+  en una pregunta; los nombres llegan si van con mayúscula, comillas o «correctos son» («los términos son
+  confusos» queda en el chat). Una pregunta corta sobre la grabación admite un tema con preposición o un
+  momento («¿qué dice sobre el examen?», «¿y qué dice al final?»), nunca un sujeto ni «se». Un «ok gracias»
+  o «¿cuánto falta?» entre medio no corta el alcance (`ACK_TURN_RE`).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
   casos de la cuarta revisión en `backend/tests/media-batch.test.js` (7) y `tests/chat-composer-files.test.ts`,

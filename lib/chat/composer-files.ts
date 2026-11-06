@@ -436,9 +436,28 @@ const LANGUAGE_WORD = "(?:ingles|espanol|frances|portugues|aleman|italiano|chino
 const RECORDING_WORD = "(?:audio|audios|video|videos|grabacion|grabaciones|clase|clases|reunion|reuniones)"
 const PENDING_FACT_RE = anyOf([
   new RegExp(`^(?:(?:y|ah|ojo|por cierto)\\s+)?(?:(?:el|la|los|las) ${RECORDING_WORD}\\s+)?(?:esta|estan|es|son|habla|hablan)\\s+en\\s+${LANGUAGE_WORD}(?:\\s+(?:casi\\s+)?(?:todo|todos|todas|completo|completa))?$`),
-  /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nombres|apellidos|terminos)\s+(?:son|seran|correctos son)\b/,
   new RegExp(`^(?:(?:y|ah|ojo)\\s+)?(?:son|hay|habla|hablan)\\s+(?:\\d+|dos|tres|cuatro|cinco|seis|siete|ocho)\\s+(?:hablantes|personas|voces|participantes)(?:\\s+(?:en (?:el|la|los|las) ${RECORDING_WORD}|hablando))?$`),
 ])
+// «los nombres son Huamán y Quispe», «los términos correctos son…»: the
+// names themselves follow (capitalized, quoted, or announced as correct).
+// «los términos son confusos» is about something else.
+const NAMES_FACT_RE = /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nombres|apellidos|terminos)\s+(?:son|seran|correctos son)\b/
+
+function namesListed(prompt: string): boolean {
+  if (/\bcorrect[oa]s\s+son\b/.test(foldRoutingPrompt(prompt))) return true
+  const after = String(prompt || "").match(/\b(?:son|ser[aá]n)\s+(\S)/i)
+  return Boolean(after && /[A-ZÁÉÍÓÚÑÜ"'“«]/.test(after[1]))
+}
+
+// A fact reads only the first clause: «está en inglés, gracias», «son 2
+// hablantes: Juan y María», «el audio está en inglés y son tres hablantes»,
+// «está en inglés 🙏». A question is never a fact («¿los nombres son
+// importantes en una marca?»).
+const FACT_CLAUSE_END_RE = /[,;:]|\s(?:y|e|pero|gracias|porfa|por favor|ok|ojo)\b|[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u
+
+function factClause(prompt: string): string {
+  return normalizeRoutingPrompt(foldRoutingPrompt(prompt).split(FACT_CLAUSE_END_RE)[0] || "")
+}
 const PENDING_OUTPUT_RE = anyOf([
   /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
   /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
@@ -448,8 +467,12 @@ const PENDING_OUTPUT_RE = anyOf([
   // resumir», «Word no, PDF sí».
   /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
   /^(?:word|pdf|subtitulos)\s+no\b/,
-  // A bare question: nothing after its verb but «ahí» or the recording.
-  new RegExp(`^(?:y\\s+)?(?:de\\s+)?(?:que|quien|quienes|como|cual|cuales)\\s+(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|cuenta|cuentan|conto|contaron|explica|explican|explico|explicaron)(?:\\s+(?:ahi|alli|aqui|en (?:el|la|los|las) ${RECORDING_WORD}))?$`),
+  // A bare question about the recording: after its verb only a pointer
+  // («al final», «ahí», «en la clase») or a topic opened by a preposition
+  // («¿qué dice sobre el examen?», «¿cuándo habla de la guerra?»). A subject
+  // after the verb («¿qué dice la ley sobre…?») or «se» before it («¿cómo se
+  // explica la fotosíntesis?») is a question for the chat.
+  new RegExp(`^(?:y\\s+)?(?:de\\s+)?(?:que|quien|quienes|como|cual|cuales|cuando|donde)\\s+(?:(?:mas|lo|le|es lo que)\\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|cuenta|cuentan|conto|contaron|explica|explican|explico|explicaron|menciona|mencionan|menciono)(?:\\s+(?:ahi|alli|aqui|eso|al final|al principio|al inicio|primero|despues|en (?:el|la|los|las) ${RECORDING_WORD}|(?:sobre|de|del|acerca de|respecto (?:a|al|de))\\s+.+))?$`),
 ])
 
 type PendingAmendKind = "fact" | "output"
@@ -457,7 +480,8 @@ type PendingAmendKind = "fact" | "output"
 function pendingDeliveryAmendKind(prompt: string): PendingAmendKind | null {
   const text = normalizeRoutingPrompt(prompt)
   if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text)) return null
-  if (PENDING_FACT_RE.test(text)) return "fact"
+  const clause = factClause(prompt)
+  if (!/[¿?]/.test(String(prompt || "")) && (PENDING_FACT_RE.test(clause) || (NAMES_FACT_RE.test(clause) && namesListed(prompt)))) return "fact"
   if (PENDING_OUTPUT_RE.test(text)) return "output"
   return null
 }
@@ -481,6 +505,9 @@ const MEDIA_FOLLOWUP_MAX_LATER_TURNS: Record<MediaFollowupKind, number> = {
 
 // How far back a follow-up looks for the batch a background delivery still waits on.
 const PENDING_BATCH_MAX_LATER_TURNS = 30
+// While a batch transcribes, a courtesy or a status ping in between («ok
+// gracias», «¿cuánto falta?») is no answer the next message could be about.
+const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|genial|dale|bien|de acuerdo|entendido|excelente|super|thanks|thank you)\s*)+$|^(?:y\s+)?(?:cuanto (?:falta|tarda|demora|le falta|te falta)|ya (?:termino|terminaste|esta|acabo|acabaste|casi)|como vas?|en que vas?)$/
 
 /**
  * Reuse only this chat's latest attached USER batch; an intervening document
@@ -504,10 +531,11 @@ export function resolveMediaFollowupFiles(prompt: string, messages: readonly unk
   let laterUserTurns = 0
   let beyondLimit = false
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as { role?: unknown; files?: unknown } | null
+    const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() !== "user") continue
     const files = parseMessageFiles(message.files).filter((file) => Boolean(resolveUploadFileId(file)))
     if (!files.length) {
+      if (pending.size > 0 && ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
       laterUserTurns += 1
       if (laterUserTurns > MEDIA_FOLLOWUP_MAX_LATER_TURNS[kind]) {
         // Only the batch still transcribing may lie beyond the usual reach.
