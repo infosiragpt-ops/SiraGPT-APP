@@ -1209,3 +1209,29 @@ test('a recording deleted since the Stop has nothing to stop: the Stop is noted 
   assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
   assert.equal(calls.length, 1);
 });
+
+test('the delivery translates with the conditions the user gave in the request and its follow-ups', async () => {
+  const runnerPath = require.resolve('../src/services/agents/agent-task-runner');
+  const runtimePath = require.resolve('../src/services/media-analysis-runtime');
+  const saved = new Map([runnerPath, runtimePath].map(p => [p, require.cache[p]]));
+  const fake = (p, exports) => { require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
+  const systems = [];
+  fake(runnerPath, { normalizeAgentRuntimeModel: () => ({ runtimeModel: 'm' }), resolveAgentRuntimeClient: () => ({ client: {}, model: 'm', provider: 'p' }),
+    pinnedModelLabel: () => 'M' });
+  fake(runtimePath, { createMediaAnalysisCompletion: () => ({ complete: async (messages) => {
+    systems.push(messages[0].content);
+    try { return JSON.parse(messages[messages.length - 1].content).transcript || 'nota'; } catch (_) { return 'nota'; }
+  } }) });
+  try {
+    delete require.cache[require.resolve('../src/services/media-delivery')];
+    const { defaultAnalyze } = require('../src/services/media-delivery');
+    const rows = [{ id: 'a', originalName: 'a.mp4', extractedText: '[00:00:00] Hola, soy Juan Pérez de la ONU.', processingStage: 'ready' }];
+    await defaultAnalyze({ rows, prisma: null, delivery: { userId: 'u1', chatId: 'c', mode: 'translation', model: { id: 'm' },
+      goal: 'transcribe y tradúcelo al inglés\n\nno traduzcas los nombres propios', output: { translationTarget: 'en' } } });
+    assert.ok(systems.length > 0);
+    assert.ok(systems.every(system => /«no traduzcas los nombres propios»/.test(system)), systems[0]);
+  } finally {
+    for (const [p, entry] of saved) { if (entry) require.cache[p] = entry; else delete require.cache[p]; }
+    delete require.cache[require.resolve('../src/services/media-delivery')];
+  }
+});

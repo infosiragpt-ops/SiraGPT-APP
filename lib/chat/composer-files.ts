@@ -446,7 +446,7 @@ const NAMES_FACT_RE = /^(?:(?:y|ah|ojo|por cierto)\s+)?(?:(?:los|las)\s+)?(?:nom
 function namesListed(prompt: string): boolean {
   if (/\bcorrect[oa]s\s+son\b/.test(foldRoutingPrompt(prompt))) return true
   // «los nombres son: Juan Pérez y María López» too.
-  const after = String(prompt || "").match(/\b(?:son|ser[aá]n)\s*:?\s*(\S)/i)
+  const after = String(prompt || "").match(/\b(?:son|ser[aá]n)\s*[:\-–—]?\s*(\S)/i)
   return Boolean(after && /[A-ZÁÉÍÓÚÑÜ"'“«]/.test(after[1]))
 }
 
@@ -551,8 +551,14 @@ const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|
 // recordings reaches them a few turns later too (RESUME_MAX_LATER_TURNS).
 const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro) )*`
 const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*?(lo|la|los|las)\\b`)
-const RESUME_VERB_RE = new RegExp(`${RESUME_LEAD}(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|segui)\\b`)
-const RESUME_OBJECT_RE = /\b(?:transcri\w*|trascri\w*)\b/
+const RESUME_VERB = "(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|segui(?:r)?)"
+// The recording is the verb's object, as on the server (RESUME_TRANSCRIPT_RE
+// in media-batch.js): «continúa la clase», «sigue con los audios», «sigue
+// transcribiendo»; never «sigue explicando la clase» or «continúa con la
+// explicación de la clase».
+const RESUME_DETERMINER = "(?:(?:(?:todas|todos) )?(?:la|las|el|los|mi|mis|tu|tus|su|sus|esa|esas|ese|esos|esta|estas|este|estos) |todas |todos )?"
+const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RESUME_DETERMINER}(?:transcri\\w*|trascri\\w*|audios?|videos?|grabaciones|grabacion|notas? de voz|podcasts?|clips?|archivos?)\\b`)
+const RESUME_CONTEXT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RESUME_DETERMINER}(?:clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|seminarios?|talleres|taller|episodios?)\\b`)
 
 const RESUME_MAX_LATER_TURNS = 4
 
@@ -564,10 +570,9 @@ type ResumeKind = "transcript" | "context" | "her" | "him"
 function isResumePrompt(prompt: string): ResumeKind | null {
   const text = normalizeRoutingPrompt(prompt)
   if (!text || text.length > 160 || LINK_RE.test(text)) return null
-  if (RESUME_VERB_RE.test(text) && !FOREIGN_SOURCE_RE.test(text)) {
-    const instruction = normalizeRoutingPrompt(splitInstruction(prompt).instruction)
-    if (RESUME_OBJECT_RE.test(instruction) || MEDIA_NOUN_RE.test(instruction)) return "transcript"
-    if (RECORDING_CONTEXT_RE.test(instruction)) return "context"
+  if (!FOREIGN_SOURCE_RE.test(text)) {
+    if (RESUME_TRANSCRIPT_RE.test(text)) return "transcript"
+    if (RESUME_CONTEXT_RE.test(text)) return "context"
   }
   const pronoun = RESUME_PRONOUN_RE.exec(text)?.[1]
   return pronoun ? (pronoun.startsWith("la") ? "her" : "him") : null

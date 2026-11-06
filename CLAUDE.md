@@ -3529,7 +3529,11 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   la deja. Un pedido de transcripción retoma solo lo que nombra (`resumeScope`: «transcribe la clase 2»
   → esa; «la clase 2» nunca es «Clase 20» y «clase2.mp4» responde a «la clase 2») y nada si habla de
   las terminadas («pasa a PDF las que ya están transcritas», `limitsToFinished`), salvo un «retómalas»
-  o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Un pedido detenido con su línea pendiente no necesita nada: no retiene los
+  o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Un resumen, una
+  traducción o una pregunta también retoman cuando nada más está transcrito ni en curso, o cuando nombran
+  una grabación detenida (solo esa); «no la retomes» o «déjala así» no retoman nada (`refusesResume`). El
+  informe del turno cuenta aparte las detenidas («Una grabación sigue detenida: escribe «retómala»…»),
+  nunca como «no se pudo transcribir». Un pedido detenido con su línea pendiente no necesita nada: no retiene los
   trabajos de otro Detener, y una corrección de tramo detenida en un chat conserva el trabajo que
   comparte con una corrección abierta del mismo tramo en otro chat. Tras «Detuve…», «retómala»,
   «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
@@ -3537,7 +3541,9 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   sin análisis pagado. Cuánto después cuenta (`turnsSinceStop` → `resumeAnswersStop`): lo que nombra
   la transcripción o las grabaciones, hasta 4 turnos sobre otra cosa; «retómala», justo después o tras
   un pedido sobre esas mismas grabaciones (su mensaje las lleva y no corta la búsqueda); «continúalo»
-  o una palabra de clase («continúa la clase», «sigue profe»), solo justo después de la línea. Un
+  o una clase como objeto («continúa la clase», «sigue con la sesión»), solo justo después de la línea.
+  La grabación tiene que ser el objeto del verbo, como en el servidor (`RESUME_TRANSCRIPT_RE`): «sigue
+  explicando la clase», «continúa con la explicación de la clase» o «sigue profe» se quedan en el chat. Un
   hecho con muletilla o dos puntos («Por cierto, está en inglés», «Ojo: son 3 hablantes», «Los nombres
   son: Juan…») llega al lote pendiente; uno de dos idiomas («está en inglés y español») se queda en el
   chat y, si llega, cuenta como leído (`statesRecordingLanguages`, nunca el análisis de reserva). Un
@@ -3564,7 +3570,10 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   inglés lo del minuto 50» son tramos de traducción, sin resumen. Solo «tradúcela completa», «tradúcelo
   todo» o «traduce toda la clase» (`asksWholeTranslation` → `translationWhole`) traducen la grabación
   entera; nombrar el idioma otra vez conserva el tramo y dice cómo pedirla completa
-  (`translation_range_kept`). Cambiar Word por PDF quita el Word de `formats` («en PDF en lugar de
+  (`translation_range_kept`). «no traduzcas los audios / las grabaciones / de momento» retira la
+  traducción; una condición («no traduzcas los nombres propios», «deja las siglas sin traducir», «no
+  traduzcas lo que ya está en inglés») la conserva y llega al traductor (`translationConditions` del
+  pedido y de cada seguimiento → `translateMediaBatch({ conditions })`). Cambiar Word por PDF quita el Word de `formats` («en PDF en lugar de
   Word»), un formato rechazado sale de `formats` aunque otro lo hubiera reemplazado, y la entrega no
   arma ni reporta como faltante un documento rechazado o reemplazado. Una grabación fallida cuyo audio
   extrajo el navegador conserva el nombre que el runner guardó al entregarla (`record.fileNames`).
@@ -3613,9 +3622,9 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   o «¿cuánto falta?» entre medio no corta el alcance (`ACK_TURN_RE`).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
-  casos de la cuarta revisión en `backend/tests/media-batch.test.js` (7) y `tests/chat-composer-files.test.ts`,
-  `backend/tests/media-delivery-stop-review.test.js` (41: un hallazgo de las revisiones adversariales
+  casos de las revisiones en `backend/tests/media-batch.test.js` y `tests/chat-composer-files.test.ts`,
+  `backend/tests/media-delivery-stop-review.test.js` (un hallazgo de las revisiones adversariales
   por prueba; la base simulada lee `NOT` como PostgreSQL), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
-  `tests/lib/media-delivery-refresh.test.ts` (copias), `tests/chat-background-transcription-stop-source.test.ts` (7), casos nuevos en
+  `tests/lib/media-delivery-refresh.test.ts` (copias), `tests/chat-background-transcription-stop-source.test.ts`, casos nuevos en
   `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y
   `tests/chat-composer-files.test.ts` (enrutado al lote pendiente).

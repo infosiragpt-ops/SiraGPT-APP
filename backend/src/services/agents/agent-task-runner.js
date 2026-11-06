@@ -3329,6 +3329,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           translation = await mediaBatch.translateMediaBatch({
             rows: mediaRowsForAnalysis(batch.rows, transcripts, outputRange), target: translationTarget,
             signal: controller.signal, complete: completion.complete,
+            // «…pero no traduzcas los nombres propios»: the user's conditions.
+            conditions: typeof mediaBatch.translationConditions === 'function' ? mediaBatch.translationConditions(mediaGoal) : [],
             onProgress: progress => emit({ type: 'checkpoint',
               label: `Traduciendo ${progress.name} · parte ${progress.part}/${progress.parts}`,
               status: 'saved', payload: { mediaTranslation: progress } }),
@@ -3401,6 +3403,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         }
         return preview;
       };
+      const stoppedFiles = typeof mediaBatch.isUserCancelledRow === 'function'
+        ? (batch.rows || []).filter(row => mediaBatch.stateOf(row) === 'failed' && mediaBatch.isUserCancelledRow(row)).length : 0;
+      const failedFiles = Math.max(0, batch.failed - stoppedFiles);
       const notices = [
         refineNotice,
         `**${batch.ready} de ${batch.total} ${fileWord(batch.total)} ${batch.total === 1 ? 'transcrito' : 'transcritos'}.**`,
@@ -3409,7 +3414,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         transcriptArtifacts.length ? describeTranscriptDownloads(transcriptArtifacts) : '',
         batch.partial ? `${batch.partial === 1 ? 'Una transcripción quedó parcial' : `${batch.partial} transcripciones quedaron parciales`}: los tramos sin transcribir están marcados con su hora. Escribe «reintenta» para recuperar solo esos tramos.` : '',
         ...packNotes,
-        batch.failed ? `${batch.failed} ${fileWord(batch.failed)} no se ${batch.failed === 1 ? 'pudo' : 'pudieron'} transcribir. Escribe «reintenta los audios fallidos» para recuperar solo esos archivos; los demás siguen guardados.` : '',
+        failedFiles ? `${failedFiles} ${fileWord(failedFiles)} no se ${failedFiles === 1 ? 'pudo' : 'pudieron'} transcribir. Escribe «reintenta los audios fallidos» para recuperar solo esos archivos; los demás siguen guardados.` : '',
+        // Stopped with «Detener»: no failure, and «retómala» brings it back.
+        stoppedFiles ? `${stoppedFiles === 1 ? 'Una grabación sigue detenida' : `${stoppedFiles} grabaciones siguen detenidas`}: escribe «${stoppedFiles === 1 ? 'retómala' : 'retómalas'}» para seguir donde ${stoppedFiles === 1 ? 'quedó' : 'quedaron'}.` : '',
         batch.pending ? `${batch.pending} ${fileWord(batch.pending)} ${batch.pending === 1 ? 'sigue' : 'siguen'} pendientes en la cola. Puedes consultar su progreso y volver a pedir el análisis cuando terminen, sin subirlos de nuevo.` : '',
         analysis?.summaries?.length ? `Análisis realizado sobre ${analysis.summaries.length} ${fileWord(analysis.summaries.length)}, incluyendo todos sus fragmentos.` : '',
         analysis?.failed?.length ? `No se pudo analizar: ${analysis.failed.map(row => row.name).join(', ')}. Sus transcripciones siguen disponibles.` : '',

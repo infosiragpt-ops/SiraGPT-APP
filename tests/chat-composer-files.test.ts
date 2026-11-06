@@ -241,7 +241,14 @@ describe("historical media batch follow-ups", () => {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, essay), [], prompt)
     }
     // Right after the stop line they answer it; a courtesy in between is no other request.
-    for (const prompt of ["continúa la clase", "retómala", "continúalo"]) assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), batch, prompt)
+    for (const prompt of ["continúa la clase", "retómala", "continúalo", "sigue con la sesión", "retoma todas las clases"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), batch, prompt)
+    }
+    // The recording must be what is resumed, not a word anywhere in the message.
+    for (const prompt of ["sigue explicando la clase", "continúa con la explicación de la clase", "sigue con el tema de la clase", "sigue profe",
+      "sigue explicando el audio"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), [], prompt)
+    }
     const thanked = [...stopped, { role: "USER", content: "ok gracias" }, { role: "ASSISTANT", content: "De nada" }]
     assert.deepEqual(resolveMediaFollowupFiles("retómala", thanked), batch)
     // Naming the transcript reaches them a few turns later, never forever.
@@ -267,7 +274,8 @@ describe("historical media batch follow-ups", () => {
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
     const pendingChat = [{ role: "USER", content: "transcribe", files: JSON.stringify(batch) }, handoff]
     for (const prompt of ["Por cierto, está en inglés", "Ah, el audio está en inglés", "Ojo, son 3 hablantes", "Ojo: son 3 hablantes",
-      "Los nombres son: Juan Pérez y María López", "los apellidos son: Huamán, Quispe", "Ojo, los nombres son Huamán y Quispe"]) {
+      "Los nombres son: Juan Pérez y María López", "los apellidos son: Huamán, Quispe", "Ojo, los nombres son Huamán y Quispe",
+      "Los nombres son – Huamán y Quispe"]) {
       assert.equal(isPendingDeliveryAmendPrompt(prompt), true, prompt)
       assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
     }

@@ -1889,6 +1889,73 @@ test('a statement of two languages joins a pending delivery as a fact, never the
   assert.equal(mb.statesRecordingLanguages('está en inglés'), false, 'one language is a hint, read elsewhere');
 });
 
+test('a take-back of a pending translation removes it; a condition keeps it, for the translator, never an analysis', async () => {
+  const amendOf = async (goal) => {
+    const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    await runMediaBranch(followupContext({ goal, delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    return calls.amends.map(call => JSON.parse(JSON.stringify(call.amendment)));
+  };
+  for (const goal of ['no traduzcas los audios', 'mejor no traduzcas las grabaciones', 'no la traduzcas por ahora', 'no lo traduzcas porfa',
+    'no lo traduzcas de momento', 'sin traducción por ahora', 'no traduzcas las clases', 'no traduzcas los videos todavía']) {
+    const amends = await amendOf(goal);
+    assert.equal(amends[0].removeTranslation, true, goal);
+    assert.ok(amends.every(amendment => amendment.wantsAnalysis !== true), `${goal}: no paid analysis`);
+  }
+  for (const goal of ['no traduzcas los nombres propios', 'no traduzcas las siglas', 'sin traducir las citas en latín',
+    'deja las siglas sin traducir', 'no traduzcas lo que ya está en inglés']) {
+    const amends = await amendOf(goal);
+    assert.ok(amends.every(amendment => amendment.removeTranslation === false), `${goal}: the translation stays`);
+    assert.ok(amends.every(amendment => amendment.wantsAnalysis !== true), `${goal}: no paid analysis`);
+  }
+  const mb = require('../src/services/media-batch');
+  assert.deepEqual(mb.translationConditions('transcribe y tradúcelo al inglés, pero no traduzcas los nombres propios\n\ndeja las siglas sin traducir'),
+    ['pero no traduzcas los nombres propios', 'deja las siglas sin traducir']);
+  assert.deepEqual(mb.translationConditions('tradúcelo al inglés'), []);
+  assert.deepEqual(mb.translationConditions('no la traduzcas'), [], 'a take-back is no condition');
+  // The translator gets them as the user's instructions.
+  const prompts = [];
+  await mb.translateMediaBatch({ rows: [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: '[00:00:00] Hola, soy Juan Pérez de la ONU.' }],
+    target: { code: 'en', name: 'inglés' }, conditions: ['no traduzcas los nombres propios'],
+    complete: async (messages) => { prompts.push(messages[0].content); return '[00:00:00] Hi, I am Juan Pérez from the ONU.'; } });
+  assert.match(prompts[0], /Indicaciones del usuario sobre la traducción, respétalas: «no traduzcas los nombres propios»/);
+});
+
+test('after a Stop with nothing else transcribed, a summary or a question resumes the recording; the report calls it stopped', async () => {
+  const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
+  const stopped = (id, name) => ({ ...readyRow(id, name), processingStage: 'failed', extractedText: null, processingError: CANCELLED_NOTE });
+  const run = async (rows, displayGoal) => {
+    const waits = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async (args) => { waits.push(args); return { rows, total: rows.length, ready: rows.filter(row => row.processingStage === 'ready').length,
+        failed: rows.filter(row => row.processingStage === 'failed').length, pending: 0, partial: 0 }; } },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => ({ ...artifact, id: 'art' }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+      require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+      ...mediaBranchHelpers({ loadMediaDeliveryService: () => null }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    }).catch(error => ({ error }));
+    return { resume: JSON.parse(JSON.stringify(waits[0]?.resumeStopped ?? null)), result };
+  };
+  const one = [stopped('v1', 'clase.mp4')];
+  for (const goal of ['resúmela', 'hazme un resumen de la clase', 'tradúcela al inglés', '¿de qué trata la clase?']) {
+    assert.equal((await run(one, goal)).resume, true, goal);
+  }
+  assert.equal((await run(one, 'no la retomes, solo dime qué alcanzaste')).resume, false);
+  // With another one ready, only a stopped one it names resumes.
+  const mixed = [readyRow('v0', 'Clase 1.mp4'), stopped('v2', 'Clase 2.mp4')];
+  assert.equal((await run(mixed, '¿de qué trata?')).resume, false);
+  assert.deepEqual((await run(mixed, 'resume la clase 2')).resume, ['v2']);
+  // A recording still stopped is reported as stopped, never as a failure.
+  const { result } = await run(mixed, '¿de qué trata?');
+  const text = String(result?.finalMarkdown || '');
+  assert.match(text, /Una grabación sigue detenida: escribe «retómala» para seguir donde quedó\./);
+  assert.doesNotMatch(text, /no se pudo transcribir/);
+});
+
 test('a document switched to another format replaces it; turned down later, neither comes back', async () => {
   const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
   const delivery = require('../src/services/media-delivery');

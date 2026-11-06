@@ -1392,7 +1392,10 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     // The moment asked to translate wins over the transcript's own range.
     const range = translationRangeOf(delivery) || rangeOf(delivery);
     const translationRows = rowsIn(range);
-    const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete, signal });
+    // «no traduzcas los nombres propios»: what the user said about how to
+    // translate, from the first request and every follow-up (record.goal).
+    const conditions = typeof mediaBatch.translationConditions === 'function' ? mediaBatch.translationConditions(delivery.goal) : [];
+    const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete, signal, conditions });
     // «resume y tradúcelo»: the summary too, with the same model. Its failure
     // never costs the translation.
     let summary = '';
