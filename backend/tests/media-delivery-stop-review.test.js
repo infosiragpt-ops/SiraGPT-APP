@@ -1185,3 +1185,27 @@ test('a failed recording whose audio the browser extracted keeps the uploaded na
   assert.ok(titles.every(title => !/audio\.ogg/.test(String(title || ''))), titles.join(' | '));
   assert.ok(notices.every(notice => !/audio\.ogg/.test(notice)), notices.join(' | '));
 });
+
+test('a recording deleted since the Stop has nothing to stop: the Stop is noted as done for the others', async (t) => {
+  let down = true;
+  const calls = [];
+  const { service, state, store } = await harness(t, { files: [fileRow('a'), fileRow('b')], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      const message = { id: `msg${state.messages.length + 1}`, userId, chatId, content, metadata };
+      state.messages.push(message);
+      return { messageId: message.id, chatId };
+    },
+    cancelMediaJobs: async (args) => {
+      calls.push(args);
+      return { stopped: 1, results: [{ id: 'a', outcome: 'error', code: 'media_not_found' }, { id: 'b', outcome: 'stopped' }] };
+    },
+  } });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  assert.equal((await store.cancelMarker(record.id))?.jobsStopped, true, 'a deleted file is no job left running');
+  // The user asks for «b» again; the sweep that posts the line never stops it again.
+  down = false;
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
+  assert.equal(calls.length, 1);
+});

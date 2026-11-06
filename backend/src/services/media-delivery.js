@@ -377,6 +377,10 @@ function stoppedReasonFor(counts) {
 // «Clase 3.audio.ogg»: the audio the browser extracted from «Clase 3.mp4».
 const EXTRACTED_AUDIO_NAME_RE = /\.audio\.[a-z0-9]{1,6}$/i;
 
+// Stopping these failed for good (the file is gone, or no recording): there
+// is no job to stop, so the Stop is done with them.
+const SETTLED_STOP_CODES = new Set(['media_not_found', 'unsupported_media', 'media_owner_required']);
+
 function displayName(row, delivery = {}, index = 0) {
   return row?.originalName || row?.filename || delivery?.fileNames?.[index] || 'archivo';
 }
@@ -2114,7 +2118,10 @@ function createMediaDeliveryService(deps = {}) {
         && (other.fileIds || []).includes(spec.fileId) && refineJobKeyOf(other) === refineJobKeyOf(spec)));
       if (!free.length && !refinesToStop.length) return { stopped: 0, complete: true };
       const result = await cancelMediaJobs({ fileIds: free, userId, ...(refinesToStop.length ? { refines: refinesToStop } : {}) });
-      const complete = !(Array.isArray(result?.results) && result.results.some(item => item?.outcome === 'error'));
+      // A file deleted since (or no longer a recording) has no job left: only
+      // a transient error (the database) leaves the Stop to retry.
+      const complete = !(Array.isArray(result?.results) && result.results.some(item => item?.outcome === 'error'
+        && !SETTLED_STOP_CODES.has(item?.code)));
       return { stopped: Number(result?.stopped) || 0, complete };
     } catch (err) {
       logger.warn(`[media-delivery] stopping the transcription failed code=${err?.code || 'stop_error'}`);
