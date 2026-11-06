@@ -2919,13 +2919,21 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const hasCompanionAttachments = companionAttachments.length > 0;
       const mediaGoal = String(displayGoal || goal || '');
       const retryRequested = /reintent|retry/i.test(mediaGoal);
-      const explicitNoAnalysis = /\b(?:sin|no|ni|without|never)\s+(?:(?:me|nos|lo|la)\s+)?(?:(?:hagas?|incluyas?|quiero)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m\w*|anal[ií][zc]\w*|an[aá]lisis)\b/i.test(mediaGoal);
+      // «sin resumen», «no quiero que lo resumas», «no hace falta analizar
+      // nada», «nada de resúmenes» (and never «no olvides resumirlo»).
+      const explicitNoAnalysis = typeof mediaBatch.refusesAnalysis === 'function' ? mediaBatch.refusesAnalysis(mediaGoal)
+        : /\b(?:sin|no|ni|without|never)\s+(?:(?:me|nos|lo|la)\s+)?(?:(?:hagas?|incluyas?|quiero)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m\w*|anal[ií][zc]\w*|an[aá]lisis)\b/i.test(mediaGoal);
       // «tradúcelo al inglés» is a full translation, never a summary: next
       // to it only an explicit deliverable («resúmelo», «el acta») or a
       // question about the recording runs the analysis too.
       const translationTarget = mediaBatch.detectTranslationTarget(mediaGoal);
+      // A transcription request with an output format («en Word», «pásalo a
+      // PDF», «pasa estos audios a texto», one turned down) asks for the
+      // transcript in that format, never for a paid analysis of every file.
+      const transcriptRequest = plainTranscriptionRequest
+        || (typeof mediaBatch.isTranscriptGoal === 'function' && mediaBatch.isTranscriptGoal(mediaGoal));
       let wantsAnalysis = translationTarget ? mediaBatch.wantsSummaryWithTranslation(mediaGoal)
-        : (!plainTranscriptionRequest && !retryRequested)
+        : (!transcriptRequest && !retryRequested)
           || mediaBatch.wantsMediaAnalysis(mediaGoal)
           || (hasCompanionAttachments && !retryRequested && !explicitNoAnalysis);
       // A follow-up translation does not re-deliver the transcript files.
@@ -3035,17 +3043,24 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           await mediaBatch.waitForMediaBatch({ prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
             retryFailed: true, language: batchLanguage, hints: jobHints.hints, timeoutMs: 0, readProgress: null }).catch(() => null);
         }
+        // A question about a stretch, also unpunctuated as dictated («qué
+        // dice del minuto 10 al 20», «dime qué dice del 10 al 20»).
+        const asksLookup = followupIntent?.kind === 'lookup';
         // A translation of the moment is the answer itself: no summary
         // unless one is asked for (as on a first request).
-        const explicitAnalysis = Boolean(lookupWindow && !translatesMoment) || mediaBatch.wantsSummaryWithTranslation(mediaGoal);
+        const explicitAnalysis = Boolean((lookupWindow || asksLookup) && !translatesMoment) || mediaBatch.wantsSummaryWithTranslation(mediaGoal);
         // A window in a follow-up cuts the transcript files only when it asks
         // for that part of the transcript («solo del minuto 10 al 20»,
-        // «transcribe del 10 al 20»). A question or a summary of a window
-        // reads it alone, and a translation of one translates it alone: the
-        // transcript the first request asked for stays whole.
-        const onlyWord = /\b(?:solo|s[oó]lo|[uú]nicamente|nada\s+m[aá]s)\b/i.test(mediaGoal);
-        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMoment
-          && (plainTranscriptionRequest || (onlyWord && !translationTarget) || (!explicitAnalysis && !translationTarget));
+        // «transcribe del 10 al 20», «la transcripción del 10 al 20»). A
+        // question or a summary of a window reads it alone, and a translation
+        // of one translates it alone: the transcript the first request asked
+        // for stays whole.
+        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMoment && !explicitAnalysis && !translationTarget;
+        // «desde el minuto 90», «a partir del minuto 100»: an open window runs
+        // to the end of the recording (bounded like a refine's).
+        const OPEN_WINDOW_END_SEC = 7 * 24 * 3600;
+        const askedWindow = mediaOutput.range && Number.isFinite(Number(mediaOutput.range.start))
+          ? { start: mediaOutput.range.start, end: mediaOutput.range.end == null ? OPEN_WINDOW_END_SEC : mediaOutput.range.end } : null;
         const turnedDown = typeof mediaArtifacts.negatedTranscriptFormats === 'function'
           ? mediaArtifacts.negatedTranscriptFormats(mediaGoal) : { documents: [], subtitles: false };
         const courtesy = /^\s*(?:ok(?:ay)?|vale|gracias|muchas gracias|perfecto|listo|genial|dale|bien|de acuerdo|thanks|thank you)[\s.!¡👍🙏]*$/iu.test(mediaGoal);
@@ -3062,10 +3077,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           wantsSubtitles: mediaOutput.wantsSubtitles === true,
           removeSubtitles: turnedDown.subtitles === true,
           range: cutsTranscript ? mediaOutput.range : null,
-          analysisRange: (lookupWindow && !translatesMoment ? lookupWindow : null)
-            || (!cutsTranscript && explicitAnalysis && mediaOutput.range && mediaOutput.range.end != null ? mediaOutput.range : null),
+          // «traduce lo que dice en el minuto 30 y resúmelo»: the summary
+          // reads that moment too.
+          analysisRange: (lookupWindow && (!translatesMoment || explicitAnalysis) ? lookupWindow : null)
+            || (!cutsTranscript && explicitAnalysis && askedWindow ? askedWindow : null),
           translationRange: translatesMoment ? lookupWindow
-            : (!cutsTranscript && translationTarget && mediaOutput.range && mediaOutput.range.end != null ? mediaOutput.range : null),
+            : (!cutsTranscript && translationTarget && askedWindow ? askedWindow : null),
           language: jobHints.language || null,
           hints: jobHints.hints || null,
           model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
@@ -3088,7 +3105,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           || amendment.removeSubtitles || amendment.range || amendment.analysisRange || amendment.translationRange
           || ownHints.language || saysHints);
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
-          amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true } })
+          // The window an earlier question asked about stays: this is not a
+          // question without one («explícamelo mejor», «¿y en el 45?»).
+          amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment: { ...amendment, goal: '', wantsAnalysis: true, keepWindow: true } })
             .catch(() => null) || amended;
         }
         if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged') {
@@ -3164,7 +3183,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // mode also delivers the transcript files and the summary asked for.
             output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
               includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
-              analysisRange: lookupWindow || null, translationTarget: translationTarget?.code || null },
+              analysisRange: lookupWindow || null, translationTarget: translationTarget?.code || null,
+              // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
+              ...(mediaOutput.declinedDocuments ? { declinedDocuments: mediaOutput.declinedDocuments } : {}),
+              ...(mediaOutput.declinedSubtitles ? { declinedSubtitles: true } : {}) },
             model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
           });
         } catch (error) {

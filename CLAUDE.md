@@ -3503,8 +3503,28 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   (atascado tras un despliegue, otro worker) borra la nota sin esperar; un trabajo que terminó por la
   nota de otro proceso no reescribe la fila (`localStop` marca el abort local), y la recuperación lo
   vuelve a correr (`askedAgain`: `failedReason` = nota y fila sin nota).
+- **Negaciones y tramos** (cuarta revisión): `backend/src/services/request-negation.js` lee qué rechaza
+  un pedido (ES/EN, sin acentos): una negación («no», «sin», «ni», «nada de», «no hace falta», «quita»,
+  «without», «don't») cubre su cláusula hasta una coma, un punto, «pero», «sino», «y» u ocho palabras; «Word
+  no» cierra la suya; «no, mejor en PDF», «no solo», «no olvides», «no sé», «sin embargo» y una sugerencia
+  («¿por qué no lo pones en Word?») no rechazan nada. Lo usan `negatedTranscriptFormats` (un formato
+  rechazado cede ante el mismo formato pedido en otra parte), `stripNegatedAnalysis`, `refusesAnalysis`
+  (el `explicitNoAnalysis` del runner) y `negatesTranslation` (solo una retractación: «no traduzcas los
+  nombres propios» o «no lo traduzcas literal» son condiciones y la traducción sigue). Lo rechazado
+  queda en `output.declinedDocuments` / `declinedSubtitles` y apaga también el Word y los subtítulos
+  automáticos (cambio `no_auto_document` → «sin Word»). Un pedido de transcripción con formato («en
+  Word», «pásalo a PDF», «pasa estos audios a texto»: `isTranscriptGoal`) no paga un análisis. Las
+  alternativas de pedido de `wantsMediaAnalysis` abren su cláusula (`CLAUSE_LEAD`): «el profesor explica…»,
+  «el ministro responde las preguntas», «son temas clave», «resume» en tercera persona o «fotosíntesis»
+  (ya no «síntesis») no son pedidos. Tramos del seguimiento: uno abierto («desde el minuto 90») llega al
+  final; una pregunta sin «?» («qué dice del minuto 10 al 20») se responde; una pregunta o un resumen de
+  un tramo nunca recorta los archivos; «traduce lo del minuto 30 y resúmelo» resume ese momento; el
+  tramo de la traducción gana al rango de la entrega y una traducción completa lo borra
+  (`translation_whole`); el análisis genérico del catch-all conserva la ventana (`keepWindow`). El
+  compositor envía al lote los rechazos («sin subtítulos», «nada de PDF», «no quiero que lo resumas»).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
+  casos de la cuarta revisión en `backend/tests/media-batch.test.js` (7) y `tests/chat-composer-files.test.ts`,
   `backend/tests/media-delivery-stop-review.test.js` (28: un hallazgo de la revisión adversarial por
   prueba; las 28 fallan sin el arreglo), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
   `tests/lib/media-delivery-refresh.test.ts` (copias), `tests/chat-background-transcription-stop-source.test.ts` (7), casos nuevos en

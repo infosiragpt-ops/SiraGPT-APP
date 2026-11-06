@@ -137,6 +137,7 @@ function normalizeOutput(output) {
   const analysisRange = normalizeRefineRange(value.analysisRange);
   const translationRange = normalizeRefineRange(value.translationRange);
   const translationTarget = normalizeTranslationTarget(value.translationTarget);
+  const declinedDocuments = ['docx', 'pdf'].filter(format => Array.isArray(value.declinedDocuments) && value.declinedDocuments.includes(format));
   return {
     documentFormat,
     wantsSubtitles: value.wantsSubtitles === true,
@@ -148,6 +149,9 @@ function normalizeOutput(output) {
     // Set when a follow-up changed the language («mejor al francés»): it
     // wins over the target read from the goal, which keeps every request.
     ...(translationTarget ? { translationTarget } : {}),
+    // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
+    ...(declinedDocuments.length ? { declinedDocuments } : {}),
+    ...(value.declinedSubtitles === true ? { declinedSubtitles: true } : {}),
   };
 }
 
@@ -185,7 +189,7 @@ function joinGoals(previous, addition) {
  * when the request already covered it. The transcript the user first asked for is
  * never dropped: turning a transcript into a translation keeps its files.
  */
-const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'analysis', 'analysis_range']);
+const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'translation_whole', 'analysis', 'analysis_range']);
 
 function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const value = amendment && typeof amendment === 'object' ? amendment : {};
@@ -248,7 +252,10 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
       next.output.analysisRange = span;
       changes.push('analysis_range');
     }
-  } else if (value.wantsAnalysis === true && currentAnalysis) {
+  } else if (value.wantsAnalysis === true && value.keepWindow !== true && currentAnalysis) {
+    // A question of its own with no window: the whole recording. The
+    // runner's catch-all for words no rule reads («¿y en el 45?»,
+    // «explícamelo mejor») keeps the window (keepWindow).
     delete next.output.analysisRange;
     changes.push('analysis_range');
   }
@@ -256,20 +263,33 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
     next.output.translationRange = translationRange;
     changes.push('translation_range');
+  } else if (!translationRange && target && out.translationRange) {
+    // «tradúcela completa al inglés» after a moment: the whole translation.
+    delete next.output.translationRange;
+    changes.push('translation_whole');
   }
 
-  // «no lo quiero en Word», «sin subtítulos»: a format turned down goes.
-  const removeDocuments = Array.isArray(value.removeDocument) ? value.removeDocument : [];
-  if (out.documentFormat && removeDocuments.includes(out.documentFormat)) {
-    delete next.output.documentFormat;
-    formats.delete(out.documentFormat);
-    changes.push('no_document');
+  // «no lo quiero en Word», «sin subtítulos»: a format turned down goes, and
+  // so does the automatic one a long recording or a video would get. The
+  // refusal is kept so the delivery never brings it back.
+  const removeDocuments = (Array.isArray(value.removeDocument) ? value.removeDocument : []).filter(format => format === 'docx' || format === 'pdf');
+  const declined = new Set(out.declinedDocuments || []);
+  for (const format of removeDocuments) {
+    if (out.documentFormat === format) {
+      delete next.output.documentFormat;
+      formats.delete(format);
+      changes.push('no_document');
+    } else if (format === 'docx' && !declined.has('docx') && !out.documentFormat) {
+      changes.push('no_auto_document');
+    }
+    declined.add(format);
   }
-  if (value.removeSubtitles === true && out.wantsSubtitles) {
+  if (value.removeSubtitles === true) {
+    if (out.wantsSubtitles || out.declinedSubtitles !== true) changes.push('no_subtitles');
     next.output.wantsSubtitles = false;
+    next.output.declinedSubtitles = true;
     formats.delete('srt');
     formats.delete('vtt');
-    changes.push('no_subtitles');
   }
 
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
@@ -277,10 +297,16 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     next.output.documentFormat = documentFormat;
     changes.push('document');
   }
-  if (documentFormat) formats.add(documentFormat);
+  if (documentFormat) {
+    formats.add(documentFormat);
+    declined.delete(documentFormat);
+  }
+  if (declined.size) next.output.declinedDocuments = ['docx', 'pdf'].filter(format => declined.has(format));
+  else delete next.output.declinedDocuments;
   if (value.wantsSubtitles === true) {
     if (!out.wantsSubtitles) changes.push('subtitles');
     next.output.wantsSubtitles = true;
+    delete next.output.declinedSubtitles;
     formats.add('srt');
     formats.add('vtt');
   }

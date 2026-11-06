@@ -270,12 +270,15 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   const target = record?.output?.translationTarget || null;
   const language = target ? translationName(target) : null;
   const translated = many ? 'traducidas' : 'traducida';
-  const window = list.includes('translation_range') ? ' (la traducción, solo del tramo que indicaste)' : '';
-  if (list.includes('translation') || list.includes('translation_target')) parts.push(`${language ? `${translated} al ${language}` : translated}${window}`);
-  else if (window) parts.push('con la traducción del tramo que indicaste');
+  const window = list.includes('translation_range') ? ' (la traducción, solo del tramo que indicaste)'
+    : list.includes('translation_whole') ? ' (la traducción, completa)' : '';
+  if (list.includes('translation') || list.includes('translation_target') || list.includes('translation_whole')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated}${window}`);
+  } else if (window) parts.push('con la traducción del tramo que indicaste');
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   if (list.includes('document')) parts.push(record?.output?.documentFormat === 'pdf' ? 'en PDF' : 'en Word');
   if (list.includes('no_document')) parts.push('sin el documento que habías pedido');
+  else if (list.includes('no_auto_document')) parts.push('sin Word');
   if (list.includes('subtitles')) parts.push('con subtítulos SRT y VTT');
   if (list.includes('no_subtitles')) parts.push('sin subtítulos');
   if (list.includes('range')) parts.push('solo del tramo que indicaste');
@@ -1187,6 +1190,9 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
         // A refine re-sends the whole updated transcript, not just its window.
         range: !isRefineRecord(delivery) && delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
         timeOffsetSec: Number(output.timeOffsetSec) || 0,
+        // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
+        ...(Array.isArray(output.declinedDocuments) && output.declinedDocuments.length ? { declinedDocuments: output.declinedDocuments } : {}),
+        ...(output.declinedSubtitles === true ? { declinedSubtitles: true } : {}),
       },
       userId: delivery.userId,
     });
@@ -1355,7 +1361,8 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     // moment only shapes the summary that comes with it.
     // A follow-up's «traduce lo que dice en el minuto 30» reads that window;
     // the transcript files stay whole.
-    const range = rangeOf(delivery) || translationRangeOf(delivery);
+    // The moment asked to translate wins over the transcript's own range.
+    const range = translationRangeOf(delivery) || rangeOf(delivery);
     const translationRows = rowsIn(range);
     const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete, signal });
     // «resume y tradúcelo»: the summary too, with the same model. Its failure

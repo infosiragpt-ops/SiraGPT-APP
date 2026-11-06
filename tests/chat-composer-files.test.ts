@@ -131,6 +131,21 @@ describe("historical media batch follow-ups", () => {
     }
   })
 
+  it("while a batch transcribes, a refusal about its result reaches it", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["sin subtítulos", "no quiero subtítulos", "no necesito el Word", "quita los subtítulos", "nada de PDF",
+      "sin Word ni PDF", "no quiero que lo resumas", "no hace falta resumir", "Word no, PDF sí", "sin subtítulos por favor"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    // Nothing pending: the same words are not about a recording.
+    assert.deepEqual(resolveMediaFollowupFiles("no quiero subtítulos", [pendingChat[0], { role: "ASSISTANT", content: "Listo",
+      metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1"] } }]), [])
+    // Another source stays another source.
+    assert.deepEqual(resolveMediaFollowupFiles("la transcripción del pdf", pendingChat), [])
+  })
+
   it("while a batch transcribes, the chat's own questions and requests stay with the chat", () => {
     const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }

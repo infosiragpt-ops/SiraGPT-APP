@@ -1615,3 +1615,158 @@ test('«no lo analices», «no lo quiero en Word» and «sin subtítulos» take 
   assert.equal(subs.removeSubtitles, true);
   assert.equal(batch.wantsMediaAnalysis('transcribe la clase y no la analices'), false);
 });
+
+// ── fourth round: refusals, windows and the analysis default ─────────────
+
+const { isPlainTranscriptionRequest: plainRequest } = require('../src/services/message-attachments');
+const artifacts = require('../src/services/media-transcript-artifacts');
+
+function capturingDelivery() {
+  const created = [];
+  return { created, adapter: { isMediaDeliveryEnabled: () => true, estimateTranscriptionSeconds: () => 600,
+    createDelivery: async (record) => { created.push(record); return { id: `md_${created.length}`, ...record }; },
+    handOffMessage: () => 'Te aviso aquí.' } };
+}
+
+async function firstRequest(goal) {
+  const { created, adapter } = capturingDelivery();
+  await handOffTurn({ goal, plainTranscriptionRequest: plainRequest(goal), delivery: adapter });
+  assert.equal(created.length, 1, goal);
+  return JSON.parse(JSON.stringify(created[0]));
+}
+
+async function followUp(goal, fake = pendingDeliveryFake({ outcome: 'unchanged', changes: [] })) {
+  await runMediaBranch(followupContext({ goal, delivery: fake.delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+  return { amends: fake.calls.amends.map(call => JSON.parse(JSON.stringify(call.amendment))) };
+}
+
+test('the usual refusals of a format turn it down, never ask for it; the same format asked elsewhere wins', () => {
+  const out = goal => {
+    const value = artifacts.resolveTranscriptOutput(goal);
+    return { doc: value.documentFormat, subs: value.wantsSubtitles, declinedDocuments: value.declinedDocuments || [], declinedSubtitles: value.declinedSubtitles === true };
+  };
+  assert.deepEqual(out('transcribe esto, no quiero subtítulos'), { doc: null, subs: false, declinedDocuments: [], declinedSubtitles: true });
+  assert.deepEqual(out('dame la transcripción, no quiero el Word'), { doc: null, subs: false, declinedDocuments: ['docx'], declinedSubtitles: false });
+  assert.deepEqual(out('dame la transcripción sin Word ni PDF'), { doc: null, subs: false, declinedDocuments: ['docx', 'pdf'], declinedSubtitles: false });
+  assert.deepEqual(out('transcribe y quita los subtítulos').subs, false);
+  assert.deepEqual(out('transcribe, nada de PDF').doc, null);
+  assert.deepEqual(out('transcribir sin pasarlo a word').declinedDocuments, ['docx']);
+  assert.equal(out('no Word please').doc, null);
+  // Asked for after all, or elsewhere in the message.
+  assert.equal(out('tengo estos 30 videos sin subtítulos, transcríbelos y dame el SRT de cada uno').subs, true);
+  assert.equal(out('quiero el Word, sin Word no puedo editarlo').doc, 'docx');
+  assert.equal(out('no lo quiero en Word sino en PDF').doc, 'pdf');
+  assert.equal(out('Word no, PDF sí').doc, 'pdf');
+  assert.equal(out('no, mejor en Word').doc, 'docx');
+  assert.equal(out('¿por qué no lo pones en Word?').doc, 'docx');
+  assert.equal(out('porque no lo quiero en Word').doc, null);
+  assert.equal(out('en Word, sin subtítulos').doc, 'docx');
+});
+
+test('a format turned down stops the automatic Word and subtitles of a long recording or a video', async () => {
+  const row = { id: 'clase', originalName: 'clase.mp4', mimeType: 'video/mp4', extractedText: '[00:00] Hola.' };
+  const transcripts = new Map([['clase', { segments: [{ start: 0, end: 4, text: 'Hola.' }], durationSec: 3600, language: 'es' }]]);
+  const build = output => artifacts.buildMediaTranscriptArtifacts({ rows: [row], transcripts, output, userId: 'u1',
+    createDocument: async (_u, name) => { const file = require('node:path').join(require('node:os').tmpdir(), name); require('node:fs').writeFileSync(file, 'docx'); return { filePath: file }; } })
+    .then(built => built.artifacts.map(item => item.format).sort());
+  assert.deepEqual(await build({}), ['docx', 'srt', 'txt', 'vtt'], 'a 1-hour video gets Word and subtitles automatically');
+  assert.deepEqual(await build(artifacts.resolveTranscriptOutput('transcribe este video sin subtítulos, solo el texto')), ['docx', 'txt']);
+  assert.deepEqual(await build(artifacts.resolveTranscriptOutput('transcribe esta clase sin Word, solo el TXT')), ['srt', 'txt', 'vtt']);
+  // A follow-up stored on the delivery does the same.
+  const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
+  const record = normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe', mode: 'transcript', formats: ['txt'] }, Date.now());
+  const word = mergeDeliveryAmendment(record, { goal: 'no lo quiero en Word', removeDocument: ['docx'] });
+  assert.deepEqual(word.changes, ['no_auto_document']);
+  assert.deepEqual(word.record.output.declinedDocuments, ['docx']);
+  assert.match(require('../src/services/media-delivery').amendedMessage(word), /sin Word/);
+  const subs = mergeDeliveryAmendment(word.record, { goal: 'sin subtítulos', removeSubtitles: true });
+  assert.deepEqual(subs.changes, ['no_subtitles']);
+  assert.equal(subs.record.output.declinedSubtitles, true);
+  assert.deepEqual(await build(subs.record.output), ['txt']);
+  // Asked for again, it comes back.
+  const back = mergeDeliveryAmendment(subs.record, { goal: 'en Word y con subtítulos', documentFormat: 'docx', wantsSubtitles: true });
+  assert.equal(back.record.output.declinedDocuments, undefined);
+  assert.equal(back.record.output.declinedSubtitles, undefined);
+});
+
+test('a first request that only names or turns down a format runs no paid analysis', async () => {
+  for (const goal of ['transcribe estos 100 audios, no los quiero en PDF', 'transcribe todo pero no en Word', 'transcribe la clase, no necesito PDF',
+    'transcribe estos audios en Word', 'pasa estos audios a texto', 'pásalos a Word']) {
+    const record = await firstRequest(goal);
+    assert.notEqual(record.mode, 'analysis', goal);
+  }
+  const subs = await firstRequest('transcribe este video, no quiero subtítulos');
+  assert.deepEqual(subs.formats, ['txt']);
+  assert.equal(subs.output.declinedSubtitles, true);
+  assert.equal((await firstRequest('transcribe este audio y resúmelo')).mode, 'analysis', 'an explicit summary still runs');
+});
+
+test('a refusal of the summary never starts one, and a description of the class is no request', async () => {
+  for (const goal of ['transcríbelos, no quiero que los resumas', 'transcribe, no hace falta resumir', 'transcribe, nada de resúmenes',
+    'transcribe la clase, no es necesario un resumen', 'transcribe sin necesidad de resumen', 'transcribe, no hace falta analizar nada',
+    'transcribe estas 20 clases, son temas clave para el examen final', 'transcribe la entrevista donde el ministro responde las preguntas de los periodistas',
+    'transcribe la clase donde el profesor menciona los temas del examen', 'transcribe los audios son mis notas de clase de anatomia',
+    'transcribe la reunión del equipo de Consumer Insights', 'transcribe el video, el profe genera preguntas al final para repasar',
+    'transcribe la clase, el profesor resume los temas al final', 'transcribe la clase donde el profesor explica la fotosíntesis']) {
+    assert.equal(batch.wantsMediaAnalysis(goal), false, goal);
+  }
+  for (const goal of ['transcribe y resúmelo', 'transcribe y no olvides resumirlo', 'transcribe sin resumen, pero analiza las decisiones',
+    'transcribe la reunión con los acuerdos', 'transcribe y hazme 5 preguntas', 'transcribe y quiero que lo resumas', 'transcribe y dime de qué trata']) {
+    assert.equal(batch.wantsMediaAnalysis(goal), true, goal);
+  }
+  const { amends } = await followUp('transcríbelo, no quiero que lo resumas');
+  assert.equal(amends[0].removeAnalysis, true);
+  assert.equal(amends[0].wantsAnalysis, false);
+});
+
+test('a condition on the translation keeps it; only a take-back removes it', async () => {
+  for (const goal of ['no traduzcas los nombres propios', 'no lo traduzcas literal, que suene natural', 'no traduzcas las siglas', 'sin traducir las citas en latín']) {
+    assert.equal(batch.negatesTranslation(goal), false, goal);
+    const { amends } = await followUp(goal);
+    assert.equal(amends[0].removeTranslation, false, goal);
+  }
+  for (const goal of ['ya no la traduzcas', 'no hace falta traducirlo', 'no quiero que lo traduzcas al inglés', 'sin traducción']) {
+    assert.equal(batch.negatesTranslation(goal), true, goal);
+  }
+});
+
+test('follow-up windows: open ones run to the end, a summary with a moment reads it, questions read without cutting the files', async () => {
+  const one = async goal => (await followUp(goal)).amends[0];
+  const fromNinety = await one('resume desde el minuto 90');
+  assert.deepEqual(fromNinety.analysisRange, { start: 5400, end: 7 * 24 * 3600 });
+  assert.equal(fromNinety.range, null);
+  const translated = await one('traduce al inglés a partir del minuto 100');
+  assert.deepEqual(translated.translationRange, { start: 6000, end: 7 * 24 * 3600 });
+  const momentAndSummary = await one('traduce al inglés lo que dice en el minuto 30 y resúmelo');
+  assert.ok(momentAndSummary.translationRange && momentAndSummary.analysisRange, 'both read the moment');
+  assert.deepEqual(momentAndSummary.analysisRange, momentAndSummary.translationRange);
+  for (const goal of ['resume la transcripción del minuto 10 al 20', '¿qué dice la transcripción del minuto 10 al 20?', 'qué dice del minuto 10 al 20', 'dime qué dice del minuto 10 al 20']) {
+    const amendment = await one(goal);
+    assert.equal(amendment.range, null, `${goal}: the transcript files stay whole`);
+    assert.deepEqual(amendment.analysisRange, { start: 600, end: 1200 }, goal);
+    assert.equal(amendment.wantsAnalysis, true, goal);
+  }
+  for (const goal of ['solo del minuto 10 al 20', 'transcribe del minuto 10 al 20']) {
+    assert.deepEqual((await one(goal)).range, { start: 600, end: 1200 }, goal);
+  }
+  // The catch-all for words no rule reads keeps an earlier question's window.
+  const fake = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+  await followUp('explícamelo mejor', fake);
+  const catchAll = fake.calls.amends.map(call => call.amendment).find(amendment => amendment.wantsAnalysis === true);
+  assert.equal(catchAll.keepWindow, true);
+  const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
+  const record = normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe', mode: 'analysis',
+    formats: ['txt'], output: { analysisRange: { start: 1740, end: 2040 } } }, Date.now());
+  assert.deepEqual(mergeDeliveryAmendment(record, { goal: '', wantsAnalysis: true, keepWindow: true }).record.output.analysisRange, { start: 1740, end: 2040 });
+  assert.equal(mergeDeliveryAmendment(record, { goal: '¿y quién es el profesor?', wantsAnalysis: true }).record.output.analysisRange, undefined);
+});
+
+test('a whole translation after a moment translates it all, and says so', () => {
+  const { mergeDeliveryAmendment, normalizeNewRecord } = require('../src/services/media-delivery-store');
+  const record = normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe', mode: 'translation',
+    formats: ['txt'], output: { translationTarget: 'en', translationRange: { start: 1740, end: 2040 } } }, Date.now());
+  const whole = mergeDeliveryAmendment(record, { goal: 'tradúcela completa al inglés', translationTarget: 'en' });
+  assert.ok(whole.changes.includes('translation_whole'));
+  assert.equal(whole.record.output.translationRange, undefined);
+  assert.match(require('../src/services/media-delivery').amendedMessage(whole), /la traducción, completa/);
+});

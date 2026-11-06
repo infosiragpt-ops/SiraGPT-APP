@@ -243,11 +243,32 @@ function transcriptMarkdown(rows) {
   }).join('\n\n');
 }
 
-// Negated deliverables are constraints, not analysis requests. Remove only
-// that clause's action so a separate positive task ("sin resumen, pero
-// analiza las decisiones") still runs after the literal transcription.
+// Negated deliverables are constraints, not analysis requests. The refused
+// clause is blanked (request-negation: «no quiero que lo resumas», «no hace
+// falta resumir», «nada de resúmenes», «sin resumen») so a separate positive
+// task («sin resumen, pero analiza las decisiones», «no olvides resumirlo»)
+// still runs. The result is folded (lowercase, no accents) for the patterns.
 function stripNegatedAnalysis(goal) {
-  return String(goal).replace(/\b(?:sin|no|ni|without|never|don[’']?t|do\s+not)\s+(?:(?:me|nos|te|se|lo|la|los|las|le|les)\s+){0,2}(?:(?:hagas?|hacer|incluyas?|incluir|quiero|queremos|necesito)\s+)?(?:(?:un|una|el|la)\s+)?(?:res[uú]m[a-záéíóúñ]*|anal[ií][zc][a-záéíóúñ]*|an[aá]lisis|summar\w*|analy[sz]\w*)\b/gi, '');
+  return require('./request-negation').withoutRefused(goal);
+}
+
+// What asks for an analysis or a summary by name.
+const ANALYSIS_WORD_RE = /\b(?:res[uú]m\w*|anal[ií][zc]\w*|an[aá]lisis|summar\w*|analy[sz]\w*)\b/;
+
+/** The analysis or summary is turned down and asked for nowhere else in the message. */
+function refusesAnalysis(goal) {
+  const { refused, asked } = require('./request-negation').splitMentions(goal, ANALYSIS_WORD_RE);
+  return refused.length > 0 && asked.length === 0;
+}
+
+// «transcribe…», «pasa estos audios a texto», «convierte el video a texto»,
+// «pásalo a Word»: the transcript itself, in some format. A format belongs
+// to the transcript files, never to an analysis.
+const TO_TEXT_RE = /\b(?:pasa|pasal[oa]s?|pasam[eo]l[oa]s?|pasarl[oa]s?|convierte|conviertel[oa]s?|convertir(?:l[oa]s?)?|vuelca|vuelcal[oa]s?|transforma|lleva|llevalos)\b[^.?!\n]{0,60}?\b(?:a|en)\s+(?:un\s+|una\s+)?(?:texto|word|docx|pdf|documento)\b/;
+
+function isTranscriptGoal(goal) {
+  const raw = String(goal || '');
+  return require('./message-attachments').isTranscriptionRequest(raw) || TO_TEXT_RE.test(require('./request-negation').foldRequest(raw));
 }
 
 // The transcript itself is asked for: «transcribe…», «la transcripción…»,
@@ -260,15 +281,22 @@ const ASKS_TRANSCRIPT_RE = /tran?s?cr[ií]|trnadscr|trnasc|transcirb|trasncri|tr
 // principales»), questions to study with («hazme 5 preguntas») and what it
 // says («dime de qué trata», «cuéntame qué dijo»). Each needs its asking
 // verb: «del tema 3» or «dime cuando termines» run nothing.
+// An ask opens its clause: «dime los temas», «y hazme 5 preguntas»,
+// «, compara las dos clases». The same verbs inside a description are the
+// recording's content, not a request: «la clase donde el profesor explica la
+// fotosíntesis», «el ministro responde las preguntas», «son temas clave».
+const CLAUSE_LEAD = /(?:^|[,;:.!?¿¡]\s*|\b(?:y|e|luego|tambien|ademas|pero|despues|ahora|porfa|por\s+favor|y\s+luego|y\s+tambien|asimismo)\s+)(?:me\s+|nos\s+)?/.source;
 const TRANSCRIPT_EXTRA_DELIVERABLE_RE = new RegExp([
-  /\bcomp[aá]ra|\bextra[eé]|\bexpl[ií]ca|\bdecisiones\b|\bacuerdos\b|\btareas pendientes\b|\bpr[oó]ximos pasos\b|\baction items\b/.source,
-  /\b(?:dime|di|dame|lista|enumera|identifica|menciona|saca|se[nñ]ala|ind[ií]ca(?:me)?|resalta|cu[aá]les\s+son)\s+(?:(?:los|las|sus|cu[aá]les|qu[eé]|son|principales|\d+)\s+){0,2}temas\b/.source,
-  /\btemas\s+(?:principales|centrales|clave|tratados|que\s+(?:se\s+)?(?:tocan?|tratan?|trat[oó]|habla|hablan|hablaron|ven|vieron|explica))\b/.source,
-  /\b(?:hazme|haz|genera|gen[eé]rame|crea|cr[eé]ame|prepara|prep[aá]rame|dame|escribe|redacta|formula|arma|plantea|plant[eé]ame)\s+(?:(?:unas?|algunas|las|\d+|varias|un\s+par\s+de)\s+)?preguntas\b/.source,
-  // The verb list ends in accented letters («habló»): `\b` is ASCII-only,
-  // so a lookahead marks the end of the word instead.
-  /\b(?:dime|di|cu[eé]ntame|expl[ií]came|ind[ií]came|resume(?:me)?)\s+(?:de\s+)?(?:qu[eé]|qui[eé]n(?:es)?|c[oó]mo|cu[aá]l(?:es)?)\s+(?:se\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|habl[oó]|hablaron|trata|tratan|trat[oó]|cuenta|cuentan|explica|explican|explic[oó]|plantea|propone|propuso|opina|opinan|concluye|concluyen|pas[oó]|pasa|temas?|ideas?)(?![a-záéíóúñ])/.source,
-  /\bnotas de (?:la |las )?clases?\b|\binsights?\b|\b(?:responde|resp[oó]ndeme|contesta|cont[eé]stame)\s+(?:a\s+)?(?:(?:las|los|la|el|esta|estas|sus|mis)\s+)?preguntas?\b/.source,
+  `${CLAUSE_LEAD}(?:compar[ae]|comparal[oa]s|extra[ee]|extraem[eo]|explica|explicame|explicanos)\\b`,
+  // A list of what the meeting decided needs its own ask or «con».
+  `${CLAUSE_LEAD}(?:(?:dame|dime|lista|enumera|anota|apunta|saca|sacame|extrae|incluye|con|y)\\s+)?(?:(?:las|los|sus|todas\\s+las|todos\\s+los)\\s+)?(?:decisiones|acuerdos|tareas pendientes|proximos pasos|action items)\\b`,
+  /\bcon\s+(?:(?:las|los|sus)\s+)?(?:decisiones|acuerdos|tareas pendientes|proximos pasos|action items)\b/.source,
+  `${CLAUSE_LEAD}(?:dime|di|dame|lista|enumera|identifica|menciona|saca|sacame|senala|indica(?:me)?|resalta|cuales\\s+son)\\s+(?:(?:los|las|sus|cuales|que|son|principales|\\d+)\\s+){0,2}temas\\b`,
+  `${CLAUSE_LEAD}(?:(?:los|las|sus)\\s+)?temas\\s+(?:principales|centrales|clave|tratados|que\\s+(?:se\\s+)?(?:tocan?|tratan?|trato|habla|hablan|hablaron|ven|vieron|explica))\\b`,
+  `${CLAUSE_LEAD}(?:hazme|haz|genera|generame|crea|creame|prepara|preparame|dame|escribe|redacta|formula|arma|plantea|planteame)\\s+(?:(?:unas?|algunas|las|\\d+|varias|un\\s+par\\s+de)\\s+)?preguntas\\b`,
+  `${CLAUSE_LEAD}(?:dime|di|cuentame|explicame|indicame|resume(?:me)?)\\s+(?:de\\s+)?(?:que|quien(?:es)?|como|cual(?:es)?)\\s+(?:se\\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|trata|tratan|trato|cuenta|cuentan|explica|explican|explico|plantea|propone|propuso|opina|opinan|concluye|concluyen|paso|pasa|temas?|ideas?)(?![a-z])`,
+  `${CLAUSE_LEAD}(?:dame|hazme|haz|saca|sacame|extrae|genera|generame|prepara|preparame|escribe|redacta|arma|crea|creame)\\s+(?:(?:unas?|las|los|tus|mis|\\d+)\\s+)?(?:notas de (?:la |las )?clases?|insights?)\\b`,
+  `${CLAUSE_LEAD}(?:responde|respondeme|contesta|contestame)\\s+(?:a\\s+)?(?:(?:las|los|la|el|esta|estas|sus|mis)\\s+)?preguntas?\\b`,
 ].join('|'), 'i');
 
 function wantsMediaAnalysis(goal) {
@@ -292,7 +320,17 @@ function wantsMediaAnalysis(goal) {
 // («para que lo entienda mi jefe», «todo lo que dice», «es para una
 // tarea») and would run a paid analysis of the whole recording. A course
 // name is not a deliverable: «la clase de análisis», «curso de síntesis».
-const TRANSLATION_DELIVERABLE_RE = /\bres[uú]m|\bsummar|\banal[ií]z|\banaly[sz]|(?<!\bde\s)\ban[aá]lisis|sintet[ií]z|(?<!\bde\s)s[ií]ntesis|conclusi|\bacta\b|minuta|cap[ií]tulos|[ií]ndice|puntos? clave|ideas? (?:principal|clave)|apunte|esquema|mapa conceptual|cuestionario|preguntas de examen|flashcard|key (?:points|takeaways)/i;
+// «resume» is also what the professor does in the recording («el profesor
+// resume los temas al final»): the verb counts at the start of its clause
+// («resúmelo», «y resume…»), the noun with its article («un resumen», «con
+// resumen», «resumen de…») and the forms a request takes («quiero que lo
+// resumas», «puedes resumirlo», «resumido»).
+const TRANSLATION_DELIVERABLE_RE = new RegExp([
+  `${CLAUSE_LEAD}resum[ae](?:l[oa]s?|me|nos)?\\b`,
+  /\b(?:un|el|tu|su|con|y|del|al|en|mi|otro)\s+(?:breve\s+|pequeno\s+|corto\s+|buen\s+)?resumen\b|\bresumen\s+(?:de|del|ejecutivo|breve|corto|general)\b|\bresum(?:ir|irl[oa]s?|as|ido|ida|idos|idas)\b/.source,
+  // Whole words: «fotosíntesis» is no «síntesis», «diminuta» no «minuta».
+  /\bsummar(?:y|ies|ize|ise)\b|\banal[ií]z|\banaly[sz]|(?<!\bde\s)\ban[aá]lisis|\bsintet[ií]z|(?<!\bde\s)\bs[ií]ntesis|\bconclusi|\bacta\b|\bminuta|\bcap[ií]tulos|\b[ií]ndice|puntos? clave|ideas? (?:principal|clave)|\bapuntes?\b|\besquema|mapa conceptual|cuestionario|preguntas de examen|flashcard|key (?:points|takeaways)/.source,
+].join('|'), 'i');
 // A real question about the recording («¿de qué habla?», «¿y quién decide?»,
 // «What are the main topics?») also asks for an answer. Only a clause
 // phrased as a question and opened by an interrogative counts.
@@ -392,10 +430,26 @@ function translationLanguageIn(word) {
  * follow-up takes a pending translation back. A fresh, non-global regex
  * (NEGATED_TRANSLATE_RE is /g and keeps lastIndex between calls).
  */
+// After a refused «traduce…», words that keep it a take-back («ya no la
+// traduzcas», «no hace falta traducirlo al inglés», «sin traducción»).
+// Anything else is a condition on the translation, which stays: «no
+// traduzcas los nombres propios», «no lo traduzcas literal», «sin traducir
+// las citas en latín».
+const TAKE_BACK_TAIL = new Set(['ya', 'mas', 'todavia', 'nada', 'por', 'favor', 'gracias', 'al', 'a', 'en', 'la', 'el', 'lo', 'los', 'las',
+  'transcripcion', 'grabacion', 'audio', 'video', 'clase', 'it', 'them', 'anymore', 'please', 'into', 'to', 'the']);
+
 function negatesTranslation(goal) {
-  const folded = String(goal || '').toLowerCase();
-  return new RegExp(NEGATED_TRANSLATE_RE.source, 'i').test(folded)
-    || /\bsin\s+(?:la\s+)?traducci[oó]n\b/.test(folded);
+  const negation = require('./request-negation');
+  const folded = negation.foldRequest(goal);
+  const ranges = negation.negatedRanges(folded);
+  const languages = new Set(TRANSLATION_LANGUAGES.flatMap(language => [language.name, language.code]).map(name => negation.foldRequest(name)));
+  for (const match of folded.matchAll(/\b(?:traduc\w*|traduz\w*|translat\w*)\b/g)) {
+    const range = ranges.find(candidate => match.index >= candidate.start && match.index < candidate.end);
+    if (!range) continue;
+    const tail = folded.slice(match.index + match[0].length, range.end).split(/[^a-z0-9]+/).filter(Boolean);
+    if (tail.every(word => TAKE_BACK_TAIL.has(word) || languages.has(word))) return true;
+  }
+  return false;
 }
 
 /** A translation target from its code («en»), as detectTranslationTarget returns it, or null. */
@@ -1735,7 +1789,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };

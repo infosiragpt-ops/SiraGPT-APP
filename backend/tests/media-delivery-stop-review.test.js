@@ -403,7 +403,7 @@ test('a translation of a moment is stored apart: the transcript keeps its whole 
   if (typeof normalizeOutput === 'function') assert.deepEqual(normalizeOutput(next.output).translationRange, { start: 1740, end: 2040 });
   assert.match(amendedMessage({ changes, record: next }), /traducida al inglés \(la traducción, solo del tramo que indicaste\)/);
   const source = require('node:fs').readFileSync(path.join(__dirname, '..', 'src', 'services', 'media-delivery.js'), 'utf8');
-  assert.match(source, /const range = rangeOf\(delivery\) \|\| translationRangeOf\(delivery\);/, 'the translation reads that window');
+  assert.match(source, /const range = translationRangeOf\(delivery\) \|\| rangeOf\(delivery\);/, 'the translation reads that window, over the transcript\'s range');
 });
 
 test('a turned-down format goes; the model changes only for model work', () => {

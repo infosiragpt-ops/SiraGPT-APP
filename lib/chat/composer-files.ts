@@ -343,9 +343,10 @@ const PRONOUN_FOLLOWUP_RE = new RegExp(
   `^${FOLLOWUP_LEAD_IN.source}(?:(?:resum|traduc|transcrib|analiz|sintetiz|subtitul|explic)\\w*(?:lo|la|los|las)|ponle subtitulos)\\b`,
 )
 const LINK_RE = /https?:\/\/|\bwww\.|\b(?:youtube|youtu|tiktok|vimeo|instagram|facebook|twitch|spotify)\b/
-// «la transcripción del documento», «subtítulos para mi app»: another source.
+// «la transcripción del documento», «subtítulos para mi app»: another source
+// («nada de PDF» refuses a format instead).
 const FOREIGN_SOURCE_RE =
-  /\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
+  /(?<!\bnada )\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
 // A bare request about the answer just given: «transcribe y resume», «hazme
 // el acta», «dame un resumen con los puntos clave», «traduce al inglés». Any
 // other word («analiza las ventas de hoy») makes it a new task.
@@ -441,6 +442,12 @@ const PENDING_FACT_RE = anyOf([
 const PENDING_OUTPUT_RE = anyOf([
   /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
   /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
+  // A refusal of a format or of the summary: «sin subtítulos», «no quiero
+  // subtítulos», «no necesito el Word», «nada de PDF», «sin Word ni PDF»,
+  // «quita los subtítulos», «no quiero que lo resumas», «no hace falta
+  // resumir», «Word no, PDF sí».
+  /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
+  /^(?:word|pdf|subtitulos)\s+no\b/,
   // A bare question: nothing after its verb but «ahí» or the recording.
   new RegExp(`^(?:y\\s+)?(?:de\\s+)?(?:que|quien|quienes|como|cual|cuales)\\s+(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|cuenta|cuentan|conto|contaron|explica|explican|explico|explicaron)(?:\\s+(?:ahi|alli|aqui|en (?:el|la|los|las) ${RECORDING_WORD}))?$`),
 ])
