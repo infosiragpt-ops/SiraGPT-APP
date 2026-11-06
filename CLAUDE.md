@@ -3446,8 +3446,9 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   trabajo detenido que sobrevivió (un corte de Redis). Abortar solo una corrección de tramo deja
   la fila escrita (un reintento de huecos que esperaba detrás vuelve a `ready` + nota parcial).
   El chip muestra «Transcripción detenida» sin guardarlo como terminal y lo vuelve a leer (15 s,
-  luego 30 s, 60 s y cada 2 min); un chip nuevo de la grabación (el del mensaje que la pide de
-  nuevo) la lee al instante, y todos los chips lo siguen. Detener durante la espera en línea del turno (antes del
+  luego 30 s, 60 s y cada 2 min; tras un día detenida, cada 30 min); un chip nuevo de la grabación
+  (el del mensaje que la pide de nuevo) la lee al instante, todos los chips lo siguen, y el trabajo
+  retomado tiene su propia ventana de 24 h contada desde que se retomó. Detener durante la espera en línea del turno (antes del
   hand-off) también detiene esos trabajos: `claimTaskCancel` marca `cancelClaimed` en el registro
   de la tarea, así un vencimiento o un apagado no los toca.
 - **Seguimientos** (`agent-task-runner.js`, antes de `step_start media_transcription`): con una
@@ -3523,8 +3524,10 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
   después de esa línea; «continúa» a secas sigue en el chat) y el runner las lee como transcripción,
   sin análisis pagado. Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
-  clase», «no lo traduzcas, solo dime qué dice el profesor») pide el análisis: la opción sola ya no
-  marca el mensaje como leído. Un momento de una grabación que la entrega ya traduce completa al
+  clase», «no lo traduzcas, solo dime qué dice el profesor»; también junto a «transcribe…», un tramo,
+  el idioma o nombres) pide el análisis: la opción sola ya no marca el mensaje como leído. «ponlo en
+  txt» ya es así (el TXT siempre va) y nunca dispara el análisis de reserva. Recién hecho el aviso, un
+  pedido suelto («¿de qué trata?», «dime los temas», «hazme 5 preguntas») llega al lote pendiente. Un momento de una grabación que la entrega ya traduce completa al
   mismo idioma no estrecha la traducción (`translation_moment_covered`: «completa (incluye ese
   momento)»). «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
   transcripción ya terminó o se detuvo». Un Detener que el dueño honró a mitad del análisis y cuya
@@ -3570,7 +3573,7 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
   casos de la cuarta revisión en `backend/tests/media-batch.test.js` (7) y `tests/chat-composer-files.test.ts`,
-  `backend/tests/media-delivery-stop-review.test.js` (36: un hallazgo de las revisiones adversariales
+  `backend/tests/media-delivery-stop-review.test.js` (41: un hallazgo de las revisiones adversariales
   por prueba; la base simulada lee `NOT` como PostgreSQL), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
   `tests/lib/media-delivery-refresh.test.ts` (copias), `tests/chat-background-transcription-stop-source.test.ts` (7), casos nuevos en
   `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y

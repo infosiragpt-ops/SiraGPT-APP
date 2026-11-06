@@ -3098,12 +3098,23 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           hints: jobHints.hints || null,
           model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
         };
+        // What THIS message says: the job hints also carry names and a
+        // language read from earlier turns, which say nothing about it.
+        const ownHints = typeof mediaBatch.extractTranscriptionHints === 'function' && typeof mediaBatch.hintsForJob === 'function'
+          ? mediaBatch.hintsForJob(mediaBatch.extractTranscriptionHints(mediaGoal, [])) : { language: null, hints: null };
+        const saysHints = Boolean(ownHints.hints && typeof ownHints.hints === 'object'
+          && Object.values(ownHints.hints).some(value => (Array.isArray(value) ? value.length > 0 : value != null && value !== false && value !== '')));
+        // TXT is always delivered: «ponlo en txt» is already so, never an
+        // instruction for the catch-all analysis.
+        const saysTxt = /\b(?:txt|texto\s+plano)\b/i.test(mediaGoal);
         // An option the delivery may already have («en Word», «no lo
-        // traduzcas») next to a deliverable or a question («… y dime de qué
-        // trata la clase», «… y hazme 5 preguntas»): that ask is the analysis.
-        // The option alone would mark the message as read (see recognised).
+        // traduzcas», a window, the language, names, «transcribe…», TXT) next
+        // to a deliverable or a question («… y dime de qué trata la clase»,
+        // «… y hazme 5 preguntas»): that ask is the analysis. The option alone
+        // would mark the message as read (see recognised).
         const saysOption = Boolean(amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
-          || amendment.removeSubtitles || amendment.removeTranslation);
+          || amendment.removeSubtitles || amendment.removeTranslation || amendment.range || mediaOutput.range
+          || ownHints.language || saysHints || saysTxt || plainTranscriptionRequest || transcriptRequest);
         if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !translationTarget && mediaBatch.wantsMediaAnalysis(mediaGoal)) {
           amendment.wantsAnalysis = true;
           if (askedWindow && !amendment.range && !amendment.analysisRange) amendment.analysisRange = askedWindow;
@@ -3115,16 +3126,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // «transcribe», «reintenta» or a courtesy is not, and neither is one
         // the rules did read and that was already so («en Word» twice, «sin
         // traducción» with nothing to translate): it changes nothing.
-        // What THIS message says: the job hints also carry names and a
-        // language read from earlier turns, which say nothing about it.
-        const ownHints = typeof mediaBatch.extractTranscriptionHints === 'function' && typeof mediaBatch.hintsForJob === 'function'
-          ? mediaBatch.hintsForJob(mediaBatch.extractTranscriptionHints(mediaGoal, [])) : { language: null, hints: null };
-        const saysHints = Boolean(ownHints.hints && typeof ownHints.hints === 'object'
-          && Object.values(ownHints.hints).some(value => (Array.isArray(value) ? value.length > 0 : value != null && value !== false && value !== '')));
         const recognised = Boolean(amendment.translationTarget || amendment.removeTranslation || amendment.removeAnalysis
           || amendment.wantsAnalysis || amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
           || amendment.removeSubtitles || amendment.range || amendment.analysisRange || amendment.translationRange
-          || ownHints.language || saysHints);
+          || ownHints.language || saysHints || saysTxt);
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
           // The window an earlier question asked about stays: this is not a
           // question without one («explícamelo mejor», «¿y en el 45?»).

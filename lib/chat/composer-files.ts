@@ -473,6 +473,11 @@ const PENDING_OUTPUT_RE = anyOf([
   // after the verb («¿qué dice la ley sobre…?») or «se» before it («¿cómo se
   // explica la fotosíntesis?») is a question for the chat.
   new RegExp(`^(?:y\\s+)?(?:de\\s+)?(?:que|quien|quienes|como|cual|cuales|cuando|donde)\\s+(?:(?:mas|lo|le|es lo que)\\s+)?(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|cuenta|cuentan|conto|contaron|explica|explican|explico|explicaron|menciona|mencionan|menciono)(?:\\s+(?:ahi|alli|aqui|eso|al final|al principio|al inicio|primero|despues|en (?:el|la|los|las) ${RECORDING_WORD}|(?:sobre|de|del|acerca de|respecto (?:a|al|de))\\s+.+))?$`),
+  // A bare ask about what was said, right after the hand-off: «¿de qué
+  // trata?», «dime los temas», «hazme 5 preguntas», «dame las ideas
+  // principales», «sácame las conclusiones». Nothing else in the message.
+  /^(?:y\s+)?de que (?:trata|tratan|va|van)$/,
+  /^(?:(?:y|e|ok|ahora|tambien|ademas|porfa|por favor|luego)\s+)*(?:dime|dame|damelos|damelas|hazme|haz|sacame|saca|preparame|prepara|generame|genera)\s+(?:(?:los|las|el|la|un|una|unos|unas|\d+|tres|cinco|diez)\s+)?(?:temas(?: principales)?|ideas(?: principales| clave)?|puntos clave|conclusiones|acuerdos|tareas|pendientes|preguntas(?: de repaso| de examen)?|cuestionario|examen|de que (?:trata|tratan|va|habla|hablan))(?:\s+(?:porfa|por favor|gracias))?$/,
 ])
 
 type PendingAmendKind = "fact" | "output"

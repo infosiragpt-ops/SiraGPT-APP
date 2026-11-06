@@ -109,7 +109,8 @@ describe("historical media batch follow-ups", () => {
     const handoff = { role: "ASSISTANT", content: "Recibí 2 archivos…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1", "v2"], stoppedReason: "media_delivery_handoff" } }
     const pendingChat = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff]
     for (const prompt of ["en Word", "y en pdf", "mejor con subtítulos", "está en inglés", "el audio está en portugués",
-      "los nombres son Huamán y Quispe", "son 3 hablantes", "ya no la traduzcas", "sin resumen", "¿de qué hablan?"]) {
+      "los nombres son Huamán y Quispe", "son 3 hablantes", "ya no la traduzcas", "sin resumen", "¿de qué hablan?",
+      "¿de qué trata?", "dime los temas", "hazme 5 preguntas", "dime de qué trata", "dame las ideas principales", "sácame las conclusiones"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
     }
     // Nothing pending: the same words are a new request.
@@ -117,6 +118,8 @@ describe("historical media batch follow-ups", () => {
     // Settled by its delivery: not pending any more.
     const delivered = [...pendingChat, { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"] } }]
     assert.deepEqual(resolveMediaFollowupFiles("en Word", delivered), [])
+    // A bare ask reaches it only right after the hand-off; after another turn it is the chat's.
+    assert.deepEqual(resolveMediaFollowupFiles("hazme 5 preguntas", [...pendingChat, { role: "USER", content: "¿qué es una célula?" }, { role: "ASSISTANT", content: "…" }]), [])
     // Ambiguous or unrelated words stay unrouted.
     for (const prompt of ["en inglés", "hola", "¿qué hora es?", "en word el informe del documento"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)

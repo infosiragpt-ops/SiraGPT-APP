@@ -1815,13 +1815,15 @@ test('a moment of a recording already translated whole keeps the whole translati
 
 test('an option the delivery already has next to a question still asks for the analysis', async () => {
   for (const goal of ['en Word y dime de qué trata la clase', 'en word y hazme 5 preguntas', 'en Word, y dime los temas de la clase',
-    'no lo traduzcas, solo dime qué dice el profesor']) {
+    'no lo traduzcas, solo dime qué dice el profesor', 'transcribe los audios y dime los temas', 'del minuto 10 al 20 y hazme 5 preguntas',
+    'está en inglés, hazme 5 preguntas']) {
     const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
-    await runMediaBranch(followupContext({ goal, delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    await runMediaBranch(followupContext({ goal, delivery, plain: /^transcribe/.test(goal), waitForMediaBatch: async () => { throw new Error('no wait'); } }));
     assert.equal(calls.amends[0].amendment.wantsAnalysis, true, goal);
   }
-  // The option alone stays an option.
-  for (const goal of ['en Word', 'en Word, gracias', 'no lo traduzcas', 'sin subtítulos']) {
+  // The option alone stays an option. TXT is always delivered: «ponlo en txt» is already so.
+  for (const goal of ['en Word', 'en Word, gracias', 'no lo traduzcas', 'sin subtítulos', 'ponlo en txt', 'dámelo en txt',
+    'lo quiero en txt', 'está en inglés']) {
     const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
     await runMediaBranch(followupContext({ goal, delivery, waitForMediaBatch: async () => { throw new Error('no wait'); } }));
     assert.ok(calls.amends.every(call => call.amendment.wantsAnalysis !== true), goal);

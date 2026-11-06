@@ -498,7 +498,9 @@ test('a follow-up the rules read and that was already so adds no analysis', () =
   assert.match(branch, /const recognised = Boolean\(amendment\.translationTarget \|\| amendment\.removeTranslation \|\| amendment\.removeAnalysis/);
   assert.match(branch, /amended\?\.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest/);
   // Names or a language from earlier turns say nothing about this message.
-  assert.match(branch, /mediaBatch\.extractTranscriptionHints\(mediaGoal, \[\]\)/);
+  const block = source.slice(source.indexOf('const ownHints = '), source.indexOf("if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged')"));
+  assert.match(block, /mediaBatch\.extractTranscriptionHints\(mediaGoal, \[\]\)/);
+  assert.ok(block.indexOf('const ownHints = ') >= 0 && block.indexOf('const ownHints = ') < block.indexOf('let amended = await pendingService.amendDelivery('));
   assert.doesNotMatch(branch.slice(branch.indexOf('const recognised')), /amendment\.language|amendment\.hints/);
   const mediaBatch = require('../src/services/media-batch');
   const own = goal => mediaBatch.hintsForJob(mediaBatch.extractTranscriptionHints(goal, []));
@@ -974,4 +976,140 @@ test('a copy of a hand-off saved from a share keeps its words, not the sharer\'s
   const route = require('node:fs').readFileSync(path.join(__dirname, '..', 'src', 'routes', 'chats.js'), 'utf8');
   const save = route.slice(route.indexOf("router.post('/save-shared'"), route.indexOf('// Return the new chat with its messages'));
   assert.equal((save.match(/metadata: withoutMediaDeliveryState\(/g) || []).length, 3, 'message, reply and whole-chat copies');
+});
+
+// The real analysis and translation (defaultAnalyze), not a stub: a Stop
+// aborts their model calls, so a 100-recording translation stops paying.
+test('Stop aborts the real translation and analysis model calls, not only a stub', async () => {
+  const runnerPath = require.resolve('../src/services/agents/agent-task-runner');
+  const runtimePath = require.resolve('../src/services/media-analysis-runtime');
+  const saved = new Map([runnerPath, runtimePath].map(p => [p, require.cache[p]]));
+  const fake = (p, exports) => { require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
+  let controller;
+  let calls = 0;
+  const signals = [];
+  fake(runnerPath, { normalizeAgentRuntimeModel: () => ({ runtimeModel: 'm' }), resolveAgentRuntimeClient: () => ({ client: {}, model: 'm', provider: 'p' }),
+    pinnedModelLabel: () => 'M' });
+  fake(runtimePath, { createMediaAnalysisCompletion: () => ({ complete: async (messages, signal) => {
+    calls += 1;
+    signals.push(signal);
+    if (calls === 2) controller.abort(Object.assign(new Error('Stop'), { code: 'delivery_cancelled' }));
+    await new Promise(resolve => setTimeout(resolve, 5));
+    if (signal?.aborted) throw signal.reason || new Error('aborted');
+    // Echo the fragment as its own «translation» or note.
+    try { return JSON.parse(messages[messages.length - 1].content).transcript || 'nota'; } catch (_) { return 'nota'; }
+  } }) });
+  try {
+    delete require.cache[require.resolve('../src/services/media-delivery')];
+    const { defaultAnalyze } = require('../src/services/media-delivery');
+    const long = Array.from({ length: 4000 }, (_, i) => `[01:${String(i % 60).padStart(2, '0')}:00] Frase ${i} del profesor sobre la célula y la mitocondria.`).join('\n');
+    const rows = [{ id: 'a', originalName: 'a.mp4', extractedText: long, processingStage: 'ready' }];
+    for (const delivery of [
+      { userId: 'u1', chatId: 'c', mode: 'translation', goal: 'tradúcelo al inglés', output: { translationTarget: 'en' }, model: { id: 'm' } },
+      { userId: 'u1', chatId: 'c', mode: 'analysis', goal: 'resume la clase', output: {}, model: { id: 'm' } },
+    ]) {
+      calls = 0;
+      signals.length = 0;
+      controller = new AbortController();
+      await assert.rejects(defaultAnalyze({ rows, delivery, prisma: null, signal: controller.signal }));
+      assert.ok(calls >= 2 && calls <= 6, `${delivery.mode}: ${calls} calls, the rest never ran`);
+      assert.ok(signals.every(signal => signal && typeof signal.aborted === 'boolean'), 'every call carries the abort signal');
+    }
+  } finally {
+    for (const [p, entry] of saved) { if (entry) require.cache[p] = entry; else delete require.cache[p]; }
+    delete require.cache[require.resolve('../src/services/media-delivery')];
+  }
+});
+
+// ── coverage the review of the fixes asked for: each fails without its fix ──
+
+function slowAnalyze(record) {
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const analyze = async ({ signal }) => new Promise((resolve, reject) => {
+    record.signal = signal;
+    started();
+    const timer = setTimeout(() => resolve('análisis'), 15_000);
+    signal?.addEventListener('abort', () => { record.abortedAt = Date.now(); clearTimeout(timer); reject(signal.reason || new Error('aborted')); }, { once: true });
+  });
+  return { analyze, ready };
+}
+
+test('a Stop written by another process (its marker) aborts the analysis this process is running', async (t) => {
+  const seen = {};
+  const { analyze, ready } = slowAnalyze(seen);
+  const { service, state, store } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })], overrides: { analyze } });
+  const record = await service.createDelivery(request({ mode: 'analysis', goal: 'resume la clase' }));
+  const run = service.deliverOne(record.id);
+  await ready;
+  // Another process (its own store on the same disk) presses Stop: the lock is held here, so it leaves the marker.
+  const other = createMediaDeliveryStore({ root: store.root, now: () => T0 });
+  assert.equal((await other.cancel(record.id, { userId: 'u1', tries: 1, waitMs: 1 })).outcome, 'cancel_requested');
+  const outcome = await run;
+  assert.ok(seen.abortedAt, 'the holder watched the marker and aborted its analysis');
+  assert.equal(outcome.status, 'cancelled');
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind !== 'cancelled').length, 0, 'no transcript after the Stop');
+});
+
+test('a Stop in this process aborts the analysis at once, before the lock retries', async (t) => {
+  const seen = {};
+  const { analyze, ready } = slowAnalyze(seen);
+  const { service } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })], overrides: { analyze } });
+  const record = await service.createDelivery(request({ mode: 'analysis', goal: 'resume la clase' }));
+  const run = service.deliverOne(record.id);
+  await ready;
+  const pressed = Date.now();
+  const stop = service.cancelDelivery(record.id, { userId: 'u1', waitMs: 2000 });
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.ok(seen.abortedAt && seen.abortedAt - pressed < 60, `aborted ${seen.abortedAt ? seen.abortedAt - pressed : 'never'} ms after Stop`);
+  await Promise.all([run, stop]);
+});
+
+test('Stop aborts a running refine of its own delivery and leaves another delivery\'s refine alone', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT, path: '/tmp/a.mp4', mimeType: 'audio/mpeg' })]]);
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const service = createMediaTranscriptionService({ prisma: strictFilePrisma(rows), getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }),
+    createCheckpoint: () => ({ clear: async () => {}, dir: '/ckpt/a' }), logger: { info() {}, warn() {} },
+    processFile: (_file, { signal }) => new Promise((_resolve, reject) => { started(); signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }),
+  });
+  const refine = service.processMediaJob({ data: { fileId: 'a', userId: 'u1', refine: true, range: { start: 720, end: 900 }, deliveryId: 'd1' }, opts: { attempts: 1 }, attemptsMade: 0 });
+  let settled = false;
+  refine.then(() => { settled = true; }, () => { settled = true; });
+  await ready;
+  const other = await service.cancelMediaTranscription({ userId: 'u1', refines: [{ fileId: 'a', range: { start: 720, end: 900 }, deliveryId: 'd2' }] });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(settled, false, 'another delivery\'s Stop leaves it running');
+  assert.notEqual(other.results[0].outcome, 'aborted');
+  const own = await service.cancelMediaTranscription({ userId: 'u1', refines: [{ fileId: 'a', range: { start: 720, end: 900 }, deliveryId: 'd1' }] });
+  assert.equal(own.results[0].outcome, 'aborted');
+  await assert.rejects(refine);
+  assert.equal(rows.get('a').extractedText, TRANSCRIPT, 'the transcript stays as it was');
+});
+
+test('a deploy park never erases a Stop another worker noted meanwhile', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'uploaded', path: '/tmp/a.mp4', mimeType: 'audio/mpeg' })]]);
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  let fail;
+  const service = createMediaTranscriptionService({ prisma: strictFilePrisma(rows), getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }),
+    createCheckpoint: () => ({ clear: async () => {}, dir: '/ckpt/a' }), logger: { info() {}, warn() {} },
+    processFile: () => new Promise((_resolve, reject) => { started(); fail = reject; }),
+  });
+  const parked = [];
+  const job = { data: { fileId: 'a', userId: 'u1' }, opts: { attempts: 3 }, attemptsMade: 0, discard() {},
+    moveToDelayed: async (at, token) => { parked.push([at, token]); } };
+  const run = service.processMediaJob(job, 'tok-1');
+  await ready;
+  // Another worker's Stop wrote the note; then this process shuts down for a deploy.
+  Object.assign(rows.get('a'), { processingStage: 'failed', processingError: CANCELLED_NOTE });
+  fail(Object.assign(new Error('deploy'), { code: 'media_shutdown' }));
+  await run.catch(() => {});
+  assert.equal(parked.length, 1, 'parked for the next worker');
+  assert.equal(rows.get('a').processingStage, 'failed');
+  assert.equal(rows.get('a').processingError, CANCELLED_NOTE, 'the Stop stays');
 });

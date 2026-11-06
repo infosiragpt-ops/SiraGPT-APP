@@ -107,6 +107,27 @@ describe("useFileProcessingStatus · shared polling", () => {
     idle.unmount()
   })
 
+  it("a recording asked for again a day after it was stopped gets a fresh window, and a day stopped slows the re-reads", async () => {
+    const stopped = () => statusResponse({ fileId: "f11", stage: "failed", error: "Transcripción detenida. Pídela de nuevo para retomarla donde quedó.", stageAt: null, isTerminal: true })
+    transport.fetch.mockImplementation(async () => stopped())
+    const chip = renderHook(() => useFileProcessingStatus("f11"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    // A day and a half stopped: from the first day on, one re-read every 30 min.
+    await act(async () => { await vi.advanceTimersByTimeAsync(24 * 60 * 60_000) })
+    const afterDay = transport.fetch.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60_000) })
+    expect(transport.fetch.mock.calls.length - afterDay).toBeLessThanOrEqual(3)
+    // Asked for again: the job runs and the chip follows it to the end instead of giving up at once.
+    transport.fetch.mockImplementation(async () => indexing("f11"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(30 * 60_000) })
+    expect(chip.result.current).toMatchObject({ stage: "indexing" })
+    expect(chip.result.current.timedOut).toBeFalsy()
+    transport.fetch.mockImplementation(async () => ready("f11"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(chip.result.current).toMatchObject({ stage: "ready", isTerminal: true })
+    chip.unmount()
+  })
+
   it("a terminal answer is reused across remounts without a request; a running one is not", async () => {
     transport.fetch.mockImplementation(async () => ready("f2"))
     const first = renderHook(() => useFileProcessingStatus("f2"))
