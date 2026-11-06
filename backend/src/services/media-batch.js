@@ -266,9 +266,16 @@ function refusesAnalysis(goal) {
 // to the transcript files, never to an analysis.
 const TO_TEXT_RE = /\b(?:pasa|pasal[oa]s?|pasam[eo]l[oa]s?|pasarl[oa]s?|convierte|conviertel[oa]s?|convertir(?:l[oa]s?)?|vuelca|vuelcal[oa]s?|transforma|lleva|llevalos)\b[^.?!\n]{0,60}?\b(?:a|en)\s+(?:un\s+|una\s+)?(?:texto|word|docx|pdf|documento)\b/;
 
+// «retómala», «reanúdala», «continúala»: the answer to «Detuve la
+// transcripción… pídemela de nuevo y retomo donde quedó». It resumes the
+// transcript, never starts a paid analysis of every recording.
+const RESUME_TRANSCRIPT_RE = /^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|por favor|perfecto|listo)\b[\s,]*)*(?:(?:me\s+)?(?:puedes|podrias)\s+)?(?:retom|reanud|continu|prosigu)\w*(?:lo|la|los|las)\b/;
+
 function isTranscriptGoal(goal) {
   const raw = String(goal || '');
-  return require('./message-attachments').isTranscriptionRequest(raw) || TO_TEXT_RE.test(require('./request-negation').foldRequest(raw));
+  const folded = require('./request-negation').foldRequest(raw);
+  return require('./message-attachments').isTranscriptionRequest(raw) || TO_TEXT_RE.test(folded)
+    || RESUME_TRANSCRIPT_RE.test(folded.replace(/^[\s¿¡]+/, ''));
 }
 
 // The transcript itself is asked for: «transcribe…», «la transcripción…»,

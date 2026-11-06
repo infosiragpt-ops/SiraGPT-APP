@@ -58,7 +58,11 @@ function scanPendingMediaDeliveries(messages: readonly MediaDeliveryMessage[]): 
   const pending = assistants.flatMap(({ message, index, metadata }) => {
     const task = parseAgentTaskContent(message.content);
     const deliveryId = idOf(metadata.mediaDeliveryHandoff) || idOf(task.mediaDeliveryHandoff);
-    const fileIds = idsOf(metadata.transcriptionFileIds).length
+    // A refine's hand-off waits on the one recording its delivery covers.
+    // Older ones listed the whole batch the follow-up was attached to, and
+    // never settled: the refine delivers (or stops) that recording only.
+    const refinedFileId = deliveryId ? idOf(metadataOf(metadata.mediaRefine).fileId) : '';
+    const fileIds = refinedFileId ? [refinedFileId] : idsOf(metadata.transcriptionFileIds).length
       ? idsOf(metadata.transcriptionFileIds) : idsOf(task.transcriptionFileIds);
     const isHandoff = Boolean(deliveryId) || metadata.stoppedReason === 'media_delivery_handoff'
       || (task.done && !task.error && task.stoppedReason === 'media_delivery_handoff');

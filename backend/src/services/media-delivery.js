@@ -1838,6 +1838,8 @@ function createMediaDeliveryService(deps = {}) {
     // A Stop left for a holder that went away (or interrupted by a restart):
     // finish it here, with its chat line and the jobs it stops.
     if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(id).catch(() => false)) {
+      // Read before the close removes it: did this Stop already stop its jobs?
+      const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
       const closed = await store.cancel(id, { userId: record.userId, reason: 'user',
         beforeClose: rec => postCancelNote(rec, rec.userId).catch(err => settleFailure(err, id)) }).catch(() => null);
       if (closed?.outcome === 'already_terminal') return { id, status: closed.record?.status || 'delivered' };
@@ -1845,9 +1847,14 @@ function createMediaDeliveryService(deps = {}) {
       // Once its marker exists the Stop is durable: the jobs stop whatever
       // the store answered (the lock of a process that died mid-Stop, a line
       // still to post, a holder elsewhere honouring it). A later sweep
-      // closes the record; nothing is claimed or delivered meanwhile.
-      await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
-        refines: refineSpecsOf(record) });
+      // closes the record; nothing is claimed or delivered meanwhile. Once
+      // per Stop: a sweep that only retries the chat line never stops a
+      // recording the user asked for again since.
+      if (marker?.jobsStopped !== true) {
+        await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+          refines: refineSpecsOf(record) });
+        await noteJobsStopped(id);
+      }
       if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') return { id, status: 'cancelled' };
       return { id, status: 'cancelling' };
     }
@@ -2053,13 +2060,23 @@ function createMediaDeliveryService(deps = {}) {
     const ownRefines = Array.isArray(refines) ? refines.filter(spec => spec && spec.fileId) : [];
     if (!userId || (!ids.length && !ownRefines.length)) return { stopped: 0 };
     try {
-      const others = (await getStore().listActive()).filter(other => other.id !== exceptDeliveryId && other.userId === userId);
+      const store = getStore();
+      const mine = (await store.listActive()).filter(other => other.id !== exceptDeliveryId && other.userId === userId);
+      // A request stopped too (its line still to post) wants nothing.
+      const others = [];
+      for (const other of mine) {
+        if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(other.id).catch(() => false)) continue;
+        others.push(other);
+      }
       const needed = new Set(others.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
       const free = ids.filter(fileId => !needed.has(fileId));
-      // A refine job serves only its own delivery: it stops even when another
-      // request still waits on the same recording.
-      if (!free.length && !ownRefines.length) return { stopped: 0 };
-      return { stopped: Number((await cancelMediaJobs({ fileIds: free, userId, ...(ownRefines.length ? { refines: ownRefines } : {}) }))?.stopped) || 0 };
+      // A refine job serves its own delivery: it stops even when another
+      // request still waits on the same recording, unless an open refine of
+      // the same window and hints (another chat, a branch) shares that job.
+      const refinesToStop = ownRefines.filter(spec => !others.some(other => isRefineRecord(other)
+        && (other.fileIds || []).includes(spec.fileId) && refineJobKeyOf(other) === refineJobKeyOf(spec)));
+      if (!free.length && !refinesToStop.length) return { stopped: 0 };
+      return { stopped: Number((await cancelMediaJobs({ fileIds: free, userId, ...(refinesToStop.length ? { refines: refinesToStop } : {}) }))?.stopped) || 0 };
     } catch (err) {
       logger.warn(`[media-delivery] stopping the transcription failed code=${err?.code || 'stop_error'}`);
       return { stopped: 0 };
@@ -2078,6 +2095,13 @@ function createMediaDeliveryService(deps = {}) {
         taskId: failed.taskId || null, deliveryMode: failed.mode,
         deliveryKind: 'failed', stoppedReason: 'media_delivery_failed' } });
     return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
+  }
+
+  /** Best effort: the marker remembers this Stop already stopped its jobs. */
+  async function noteJobsStopped(id) {
+    const store = getStore();
+    if (typeof store.noteJobsStopped !== 'function') return;
+    await store.noteJobsStopped(id).catch(() => {});
   }
 
   /**
@@ -2142,6 +2166,7 @@ function createMediaDeliveryService(deps = {}) {
     if (result?.settleFailed && record) {
       const { stopped } = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
         refines: refineSpecsOf(record) });
+      await noteJobsStopped(id);
       return { id, outcome: 'cancel_requested', stoppedFiles: stopped, messageId: null,
         chatId: record.deliveryChatId || record.chatId || null };
     }
@@ -2215,7 +2240,13 @@ function createMediaDeliveryService(deps = {}) {
     const file = String(fileId || (asked.fileIds || [])[0] || '');
     try {
       const open = typeof store.findPendingByFile === 'function' ? await store.findPendingByFile(file, { userId: asked.userId }) : [];
-      return open.some(record => record.id !== asked.id && isRefineRecord(record) && refineJobKeyOf(record) === key);
+      for (const record of open) {
+        if (record.id === asked.id || !isRefineRecord(record) || refineJobKeyOf(record) !== key) continue;
+        // Stopped too, its line still to post: it wants nothing.
+        if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(record.id).catch(() => false)) continue;
+        return true;
+      }
+      return false;
     } catch (_) {
       return true;
     }

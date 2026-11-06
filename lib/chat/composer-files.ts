@@ -516,8 +516,56 @@ const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|
  * however many turns ago it was sent, and also for the short instructions
  * of PENDING_DELIVERY_AMEND_RE: they join that pending delivery.
  */
+// The answer to «Detuve la transcripción… pídemela de nuevo y retomo donde
+// quedó»: «retómala», «sí, reanúdala», «retoma la transcripción», «sigue
+// transcribiendo las clases», «continúa con los audios». Only right after
+// such a stop: elsewhere «continúalo» continues the answer just given.
+const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro) )*`
+const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`)
+const RESUME_VERB_RE = new RegExp(`${RESUME_LEAD}(?:retoma|reanuda|continua|prosigue|sigue)\\b`)
+const RESUME_OBJECT_RE = /\b(?:transcri\w*|trascri\w*)\b/
+
+function isResumePrompt(prompt: string): "explicit" | "contextual" | null {
+  const text = normalizeRoutingPrompt(prompt)
+  if (!text || text.length > 160 || LINK_RE.test(text)) return null
+  if (RESUME_VERB_RE.test(text) && !FOREIGN_SOURCE_RE.test(text)) {
+    const instruction = normalizeRoutingPrompt(splitInstruction(prompt).instruction)
+    if (RESUME_OBJECT_RE.test(instruction) || MEDIA_NOUN_RE.test(instruction) || RECORDING_CONTEXT_RE.test(instruction)) return "explicit"
+  }
+  return RESUME_PRONOUN_RE.test(text) ? "contextual" : null
+}
+
+function messageMetadata(value: unknown): Record<string, unknown> {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+/** A «Detuve la transcripción…» line after the latest user turn with recordings. */
+function stoppedSinceLatestMedia(messages: readonly unknown[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; files?: unknown; metadata?: unknown } | null
+    if (!message) continue
+    const role = String(message.role || "").toLowerCase()
+    if (role === "user") {
+      if (parseMessageFiles(message.files).some((file) => Boolean(resolveUploadFileId(file)))) return false
+      continue
+    }
+    const metadata = messageMetadata(message.metadata)
+    if (metadata.source === "media-delivery" && (metadata.deliveryKind === "cancelled" || metadata.stoppedReason === "media_delivery_cancelled")) return true
+  }
+  return false
+}
+
 export function resolveMediaFollowupFiles(prompt: string, messages: readonly unknown[] = []): unknown[] {
   let kind = classifyMediaFollowupPrompt(prompt)
+  if (!kind) {
+    const resume = isResumePrompt(prompt)
+    if (resume && stoppedSinceLatestMedia(messages)) kind = resume
+  }
   const amendKind = kind ? null : pendingDeliveryAmendKind(prompt)
   const pending = kind || amendKind
     ? pendingMediaDeliveryFileIds(messages as Parameters<typeof pendingMediaDeliveryFileIds>[0]) : new Set<string>()

@@ -3489,14 +3489,25 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   `withoutMediaDeliveryState` (`lib/chat/branch-metadata.ts` y `backend/src/utils/copied-message-metadata.js`
   en `/chats/save-shared`) quita `mediaDeliveryHandoff`/`mediaDeliveryAmended` y el `stoppedReason`
   de entrega y deja `mediaDeliveryCopy: true`, que `pendingMediaDeliveries` y la guarda de «Regenerar»
-  ignoran. Un «Detener» que no encuentra nada abierto oculta Detener para esos hand-offs en la pestaña
-  (`settledHandoffKeys`, `pendingHandoffKey`).
+  ignoran. Un «Detener» que no encuentra nada abierto oculta Detener para esos hand-offs en la pestaña,
+  solo en ese chat (`settledHandoffKeys` por `chatId:pendingHandoffKey`: una rama vieja que nombra el
+  trabajo del chat original no oculta el Detener de este). El hand-off de una corrección de tramo espera
+  solo la grabación corregida (`transcriptionFileIds: [fileId]`; los viejos que listaban el lote se
+  leen por `mediaRefine.fileId`).
 - **Detener ante fallos**: si la línea no se pudo publicar (`settleFailure`: un `chat_unavailable`
   cierra; lo demás no), `store.cancel` deja el registro abierto con su marca (`settleFailed`,
   `cancel_requested`) hasta 6 h (`cancelSettleRetryMs`; la marca conserva la hora del primer Detener):
   el siguiente Detener lo encuentra entre los abiertos del chat y el barrido publica la línea. Con la
   marca, el barrido detiene los trabajos aunque `cancel` no consiga el lock (un proceso que murió a
-  mitad) y no entrega nada (`cancelling`). Una corrección de tramo que sobrevivió al Detener termina
+  mitad) y no entrega nada (`cancelling`). Los detiene una sola vez por Detener (`jobsStopped` en la
+  marca, `noteJobsStopped`): el barrido que solo reintenta la línea nunca detiene una grabación que el
+  usuario volvió a pedir. Un pedido detenido con su línea pendiente no necesita nada: no retiene los
+  trabajos de otro Detener, y una corrección de tramo detenida en un chat conserva el trabajo que
+  comparte con una corrección abierta del mismo tramo en otro chat. Tras «Detuve…», «retómala»,
+  «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
+  después de esa línea; «continúa» a secas sigue en el chat) y el runner las lee como transcripción,
+  sin análisis pagado. «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
+  transcripción ya terminó o se detuvo». Una corrección de tramo que sobrevivió al Detener termina
   antes de llamar a un proveedor y la que corre en otro worker se detiene en su chequeo
   (`isRefineJobWanted` → `isRefineWanted` en la cola; otra entrega abierta con la misma clave de
   trabajo la mantiene). Pedirla de nuevo con el trabajo detenido aún `active` sin abort local

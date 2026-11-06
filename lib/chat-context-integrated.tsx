@@ -72,7 +72,7 @@ import { safeUUID } from "./safe-uuid"
 import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
 import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
-import { pendingMediaDeliveryRefreshKey } from "./media-delivery-refresh"
+import { pendingMediaDeliveries, pendingMediaDeliveryRefreshKey } from "./media-delivery-refresh"
 import { awaitCancellableChatStep } from "./chat/turn-cancellation"
 import { mentionPayloadForGenerate } from "./apps-mentions"
 
@@ -3429,7 +3429,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setCurrentChat(prev => prev?.id === chatId ? mergeChatPreservingUserMessages(freshChat, prev) : prev);
         setChats(prev => prev.map(chat => chat.id === chatId ? mergeChatPreservingUserMessages(freshChat, chat) : chat));
         if (currentChatRef.current?.id === chatId) {
-          toast.info('Conversación actualizada. Se conserva la solicitud de transcripción sin reiniciar el trabajo.');
+          // Only a job that still runs keeps the request: once it was
+          // delivered, failed or stopped («Detener»), nothing else arrives.
+          const jobId = [targetMetadata.mediaDeliveryHandoff, targetMetadata.mediaDeliveryAmended]
+            .find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim() || '';
+          const stillPending = pendingMediaDeliveries(Array.isArray(freshChat.messages) ? freshChat.messages : [])
+            .some(delivery => !jobId || delivery.deliveryId === jobId);
+          if (stillPending) {
+            toast.info('Conversación actualizada. Se conserva la solicitud de transcripción sin reiniciar el trabajo.');
+          } else {
+            toast.info('Esa transcripción ya terminó o se detuvo. Si la necesitas, pídela de nuevo.');
+          }
         }
       } catch {
         if (currentChatRef.current?.id === chatId) {

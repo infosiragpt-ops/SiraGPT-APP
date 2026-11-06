@@ -548,6 +548,38 @@ test('a Stop line that cannot be posted keeps the request open: the next Stop or
   assert.equal((await gone.store.get(lone.id)).status, 'cancelled');
 });
 
+test('a Stop stops its jobs once: the sweep that posts its line never stops a recording asked for again since', async (t) => {
+  let down = true;
+  const { service, state, store } = await harness(t, { files: [fileRow('a')], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      const message = { id: `msg${state.messages.length + 1}`, userId, chatId, content, metadata };
+      state.messages.push(message);
+      return { messageId: message.id, chatId };
+    } } });
+  const record = await service.createDelivery(request());
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  assert.equal(state.stopped.filter(args => (args.fileIds || []).includes('a')).length, 1, 'the jobs stop with the Stop');
+  assert.equal((await store.cancelMarker(record.id))?.jobsStopped, true);
+  // The user asks for the recording again; its new request is not open yet.
+  state.files.get('a').processingStage = 'uploaded';
+  down = false;
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled', 'the sweep posts the line and closes it');
+  assert.equal(state.stopped.filter(args => (args.fileIds || []).includes('a')).length, 1, 'and stops nothing again');
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind === 'cancelled').length, 1);
+  assert.equal(await store.cancelMarker(record.id), null, 'closed: no marker left behind');
+  assert.equal(await store.noteJobsStopped(record.id), false, 'never a marker for a closed record');
+
+  // A restart mid-Stop (its lock left behind): the first sweep stops the jobs, the next ones do not.
+  const again = await harness(t, { files: [fileRow('b', { processingStage: 'ready', extractedText: TRANSCRIPT })] });
+  const held = await again.service.createDelivery(request({ fileIds: ['b'], fileNames: ['b.mp4'] }));
+  await again.store.claim(held.id);
+  assert.equal((await again.store.cancel(held.id, { userId: 'u1', tries: 1, waitMs: 1 })).outcome, 'cancel_requested');
+  assert.equal((await again.service.deliverOne(held.id)).status, 'cancelling');
+  assert.equal((await again.service.deliverOne(held.id)).status, 'cancelling');
+  assert.equal(again.state.stopped.filter(args => (args.fileIds || []).includes('b')).length, 1);
+});
+
 test('a Stop line that keeps failing closes the request after the retry window', async (t) => {
   const root = await tempRoot(t);
   let clock = T0;
@@ -596,6 +628,36 @@ test('a refine stopped with its request does not run later, unless another open 
   // Unknown or someone else's: the job runs.
   assert.equal(await service.isRefineJobWanted({ deliveryId: 'md_unknown', fileId: 'a', userId: 'u1' }), true);
   assert.equal(await service.isRefineJobWanted({ deliveryId: stopped.id, fileId: 'a', userId: 'u2' }), true);
+});
+
+test('Stop of a refine in one chat leaves the job another chat\'s open refine of the same window shares', async (t) => {
+  const { service, state, store } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })] });
+  const refine = { kind: 'refine', range: { start: 720, end: 900 }, language: 'en', hints: null };
+  const first = await service.createDelivery(request({ ...refine, chatId: 'chat1' }));
+  const branch = await service.createDelivery(request({ ...refine, chatId: 'chat2', taskId: 'task2' }));
+  const refinesStopped = () => state.stopped.flatMap(args => args.refines || []);
+  await service.cancelDelivery(first.id, { userId: 'u1' });
+  assert.equal((await store.get(first.id)).status, 'cancelled');
+  assert.deepEqual(refinesStopped(), [], 'chat2 still waits on the same job');
+  assert.equal(await service.isRefineJobWanted({ deliveryId: first.id, fileId: 'a', userId: 'u1' }), true);
+  await service.cancelDelivery(branch.id, { userId: 'u1' });
+  assert.deepEqual(refinesStopped().map(spec => spec.deliveryId), [branch.id], 'the last one stops it');
+
+  // A twin stopped too (its line still to post) wants nothing: the job goes.
+  let down = true;
+  const other = await harness(t, { files: [fileRow('b', { processingStage: 'ready', extractedText: TRANSCRIPT })], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      other.state.messages.push({ id: `m${other.state.messages.length + 1}`, userId, chatId, content, metadata });
+      return { messageId: `m${other.state.messages.length}`, chatId };
+    } } });
+  const one = await other.service.createDelivery(request({ ...refine, chatId: 'chat1', fileIds: ['b'], fileNames: ['b.mp4'] }));
+  const two = await other.service.createDelivery(request({ ...refine, chatId: 'chat2', taskId: 'task2', fileIds: ['b'], fileNames: ['b.mp4'] }));
+  assert.equal((await other.service.cancelDelivery(two.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  down = false;
+  await other.service.cancelDelivery(one.id, { userId: 'u1' });
+  assert.ok(other.state.stopped.flatMap(args => args.refines || []).some(spec => spec.deliveryId === one.id));
+  assert.equal(await other.service.isRefineJobWanted({ deliveryId: one.id, fileId: 'b', userId: 'u1' }), false);
 });
 
 // The ownership check runs on an unref'd interval: a test waiting on it keeps

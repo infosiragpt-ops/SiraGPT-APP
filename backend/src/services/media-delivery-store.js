@@ -729,9 +729,32 @@ function createMediaDeliveryStore({
   async function markCancel(id, reason) {
     const previous = await readCancelMarker(id);
     const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
-      reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user' };
+      reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user',
+      ...(previous?.jobsStopped === true ? { jobsStopped: true } : {}) };
     await writeAtomic(cancelPath(id), marker);
     return marker;
+  }
+
+  /** The Stop marker of a record still open, or null. */
+  async function cancelMarker(id) {
+    assertDeliveryId(id);
+    return readCancelMarker(id);
+  }
+
+  /**
+   * This Stop's jobs were stopped. A record left open by its line (a DB
+   * blip, or the lock of a process that died mid-Stop) is retried by the
+   * sweep, which must not stop them again: by then the user may have asked
+   * for the recording again. No lock (a dead holder's lock may still be
+   * fresh): only while the record is open, and a marker left behind a record
+   * closed meanwhile is never read (every reader reads the record first).
+   */
+  async function noteJobsStopped(id) {
+    assertDeliveryId(id);
+    const previous = await readCancelMarker(id);
+    if (!previous || !(await readActive(id))) return false;
+    if (previous.jobsStopped !== true) await writeAtomic(cancelPath(id), { ...previous, jobsStopped: true });
+    return true;
   }
 
   /** Write the terminal 'cancelled' copy and drop the active one (lock held). */
@@ -988,6 +1011,8 @@ function createMediaDeliveryStore({
     findPendingByFile,
     claim,
     cancel,
+    cancelMarker,
+    noteJobsStopped,
     isCancelRequested,
     markCancelled,
     amend,

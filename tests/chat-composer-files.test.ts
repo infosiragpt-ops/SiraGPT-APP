@@ -194,6 +194,34 @@ describe("historical media batch follow-ups", () => {
     assert.deepEqual(resolveMediaFollowupFiles("en Word", amended), batch)
   })
 
+  it("after «Detener», the resume the stop line invites reaches the recordings; elsewhere it stays with the chat", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }, { id: "v2", name: "taller.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Recibí 2 archivos…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1", "v2"], stoppedReason: "media_delivery_handoff" } }
+    const stopLine = { role: "ASSISTANT", content: "Detuve la transcripción de 2 archivos (clase.mp4 y taller.mp4). Si la necesitas, pídemela de nuevo y retomo donde quedó.",
+      metadata: JSON.stringify({ source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"], deliveryKind: "cancelled", stoppedReason: "media_delivery_cancelled" }) }
+    const stopped = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff, stopLine]
+    for (const prompt of ["retómala", "sí, retómala", "Sí, retómala, por favor", "reanúdala", "continúala", "retoma la transcripción",
+      "reanuda la transcripción", "continúa con la transcripción", "sigue con la transcripción", "sigue transcribiendo las clases",
+      "retoma los audios", "ok, reanuda las grabaciones"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), batch, prompt)
+    }
+    // A few turns later the explicit forms still reach it.
+    const later = [...stopped, { role: "USER", content: "¿qué es la fotosíntesis?" }, { role: "ASSISTANT", content: "…" }]
+    assert.deepEqual(resolveMediaFollowupFiles("retoma la transcripción", later), batch)
+    // Bare «continúa» / «sigue» continue the chat; so does any resume without a stop.
+    for (const prompt of ["continúa", "sigue", "continúa por favor", "sigue con la receta"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), [], prompt)
+    }
+    const delivered = [stopped[0], { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1", "v2"] } }]
+    for (const prompt of ["continúalo", "retómala", "sigue con la transcripción del documento"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, delivered), [], prompt)
+    }
+    // A stop that came before the latest recordings belongs to another batch.
+    const newer = [...stopped, { role: "USER", content: "y este", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) },
+      { role: "ASSISTANT", content: "Listo", metadata: { source: "media-delivery", mediaDelivery: "md_2", transcriptionFileIds: ["v3"] } }]
+    assert.deepEqual(resolveMediaFollowupFiles("retómala", newer), [])
+  })
+
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {
     assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", [
       ...history, { role: "USER", files: [{ id: "new-doc", name: "brief.pdf" }] },

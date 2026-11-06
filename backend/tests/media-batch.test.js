@@ -969,6 +969,34 @@ test('the runner re-transcribes a heard-wrong stretch without waiting or re-send
   assert.equal(result.metadata.mediaDelivery, undefined, 'the hand-off never counts as the delivered transcript');
 });
 
+test('a refine on one recording of a batch hands off only that recording', async () => {
+  // The follow-up carries the whole batch; the refine delivery covers one file.
+  // A hand-off listing all three never settles and keeps Stop on for good.
+  const rows = [readyRow('v0', 'clase1.mp4'), readyRow('v1', 'clase2.mp4'), readyRow('v2', 'clase3.mp4')];
+  const delivery = { isMediaDeliveryEnabled: () => true };
+  const run = (refinedReply) => runMediaBranch({
+    mediaBatchRows: rows, displayGoal: 'revisa del minuto 12 al 15 de clase3, se escuchó mal', goal: 'x',
+    mediaBatch: { ...batch,
+      waitForMediaBatch: async () => assert.fail('a refine never waits for the batch'),
+      requestMediaRefine: async () => refinedReply },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => assert.fail('no files for a refine request'), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  const handed = await run({ handled: true, ok: true, fileId: 'v2', range: { start: 720, end: 900 }, deliveryId: 'md_ref', message: 'Voy a volver a transcribir el tramo.' });
+  assert.equal(handed.metadata.mediaDeliveryHandoff, 'md_ref');
+  assert.deepEqual([...handed.metadata.transcriptionFileIds], ['v2']);
+  // Without a delivery the message is not a hand-off and keeps naming the batch.
+  const queued = await run({ handled: true, ok: true, fileId: 'v2', range: { start: 720, end: 900 }, deliveryId: null, message: 'Lo vuelvo a transcribir.' });
+  assert.equal(queued.metadata.mediaDeliveryHandoff, undefined);
+  assert.deepEqual([...queued.metadata.transcriptionFileIds].sort(), ['v0', 'v1', 'v2']);
+});
+
 test('the runner answers «¿qué dijo en el minuto 95?» from that window, without re-sending the transcript files', async () => {
   // «la transcripción» named as what the question reads from is not a request for it.
   for (const displayGoal of ['¿qué dijo el profesor en el minuto 95?', '¿qué dice la transcripción en el minuto 95?',
@@ -1769,4 +1797,14 @@ test('a whole translation after a moment translates it all, and says so', () => 
   assert.ok(whole.changes.includes('translation_whole'));
   assert.equal(whole.record.output.translationRange, undefined);
   assert.match(require('../src/services/media-delivery').amendedMessage(whole), /la traducción, completa/);
+});
+
+test('«retómala» after a Stop resumes the transcript, never a paid analysis of every recording', () => {
+  const mb = require('../src/services/media-batch');
+  for (const goal of ['retómala', 'Sí, retómala, por favor', 'reanúdala', 'continúala', '¿puedes retomarla?', 'retoma la transcripción',
+    'reanuda la transcripción', 'sigue transcribiendo las clases']) {
+    assert.equal(mb.isTranscriptGoal(goal), true, goal);
+    assert.equal(mb.wantsMediaAnalysis(goal), false, goal);
+  }
+  for (const goal of ['continúa', 'sigue', 'resúmelo', 'retoma el tema de ayer']) assert.equal(mb.isTranscriptGoal(goal), false, goal);
 });

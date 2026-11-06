@@ -3020,7 +3020,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             stoppedReason: refined.ok && refined.deliveryId ? 'media_delivery_handoff' : refined.ok ? 'transcription_refine_queued' : 'transcription_refine_unavailable',
             steps: 1, artifactsList: artifacts,
             // Never `mediaDelivery`: that key marks the message the delivery posts.
-            metadata: { transcriptionFileIds: ids, ...(refined.deliveryId ? { mediaDeliveryHandoff: refined.deliveryId } : {}),
+            // The hand-off waits on what its delivery covers: the refined
+            // recording, not the whole batch the follow-up was attached to
+            // (else a refine on one of 100 recordings never settles).
+            metadata: { transcriptionFileIds: refined.deliveryId && refined.fileId ? [String(refined.fileId)] : ids,
+              ...(refined.deliveryId ? { mediaDeliveryHandoff: refined.deliveryId } : {}),
               mediaRefine: { fileId: refined.fileId || null, range: refined.range || null, queued: Boolean(refined.ok), reason: refined.reason || null } },
           });
         }

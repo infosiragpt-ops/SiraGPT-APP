@@ -19,7 +19,8 @@ describe("Stop during a background transcription (source contract)", () => {
     assert.match(source, /import \{ pendingMediaDeliveries, pendingHandoffKey as handoffKeyOf \} from "@\/lib\/media-delivery-refresh"/)
     const pending = between(source, "const hasPendingMediaDelivery = React.useMemo(", "const backgroundDeliveryStopRef")
     // Not recomputed per frame while a stream runs; Stop shows then anyway.
-    assert.match(pending, /!isCurrentChatStreaming\s*&& pendingMediaDeliveries\(currentChat\?\.messages \|\| \[\]\)\.some\(\(delivery\) => !settledHandoffKeys\.has\(handoffKeyOf\(delivery\)\)\)/)
+    // Per chat: an old branch naming the same job never hides the original chat's Stop.
+    assert.match(pending, /!isCurrentChatStreaming\s*&& pendingMediaDeliveries\(currentChat\?\.messages \|\| \[\]\)\.some\(\(delivery\) => !settledHandoffKeys\.has\(`\$\{currentChatId\}:\$\{handoffKeyOf\(delivery\)\}`\)\)/)
     assert.match(pending, /\[currentChatId, isCurrentChatStreaming, currentChat\?\.messages, settledHandoffKeys\]/)
     const visible = between(source, "const isStopButtonVisible = !isIdlePlaceholderComposer && (", "// Shared props bundle")
     assert.match(visible, /isCurrentChatMediaBusy \|\|[\s\S]{0,260}hasPendingMediaDelivery\s*\);/)
@@ -49,10 +50,10 @@ describe("Stop during a background transcription (source contract)", () => {
   it("a Stop that finds nothing open for a hand-off stops showing for it", () => {
     const cancel = between(source, "const cancelPendingMediaDeliveries = React.useCallback(async (chatId: string) => {", "const stopActiveGeneration = React.useCallback")
     // Only the hand-offs still shown are sent.
-    assert.match(cancel, /\.filter\(\(delivery\) => !settledHandoffKeysRef\.current\.has\(handoffKeyOf\(delivery\)\)\)/)
+    assert.match(cancel, /\.filter\(\(delivery\) => !settledHandoffKeysRef\.current\.has\(`\$\{chatId\}:\$\{handoffKeyOf\(delivery\)\}`\)\)/)
     const settled = between(cancel, "if (stopped > 0)", "if (currentChatIdRef.current === chatId)")
     const nothing = settled.indexOf("toast.info('La transcripción ya había terminado');")
-    const remember = settled.indexOf("setSettledHandoffKeys((current) => new Set([...current, ...pending.map(handoffKeyOf)]));")
+    const remember = settled.indexOf("setSettledHandoffKeys((current) => new Set([...current, ...pending.map((delivery) => `${chatId}:${handoffKeyOf(delivery)}`)]));")
     assert.ok(nothing > 0 && remember > nothing, "remembered only when nothing was open")
     // A failed request never hides Stop.
     const failed = between(cancel, "} catch (err) {", "} finally {")
@@ -80,6 +81,12 @@ describe("Stop during a background transcription (source contract)", () => {
     assert.match(guard, /targetMetadata\.mediaDeliveryAmended/)
     assert.match(guard, /targetMetadata\.stoppedReason === 'media_delivery_amended'/)
     assert.match(guard, /targetTask\.stoppedReason === 'media_delivery_amended'/)
+    // After a Stop (or once the job finished) the toast does not promise a delivery.
+    const refresh = between(context, "if (isMediaHandoff) {", "} finally {")
+    assert.match(refresh, /pendingMediaDeliveries\(Array\.isArray\(freshChat\.messages\) \? freshChat\.messages : \[\]\)/)
+    assert.match(refresh, /delivery\.deliveryId === jobId/)
+    assert.match(refresh, /'Esa transcripción ya terminó o se detuvo\. Si la necesitas, pídela de nuevo\.'/)
+    assert.ok(refresh.indexOf("if (stillPending) {") < refresh.indexOf("Se conserva la solicitud de transcripción"))
   })
 
   it("the API client posts the cancel for the chat", () => {

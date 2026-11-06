@@ -58,6 +58,22 @@ describe('durable transcription refresh identity', () => {
     expect(pendingMediaDeliveryRefreshKey([...messages, delivery()])).toBe('')
   })
 
+  it('a refine on one recording of a batch settles on that recording\'s delivery or its stop line', () => {
+    // Older refine hand-offs listed the whole batch the follow-up was attached to.
+    const refine = { id: 'refine', role: 'ASSISTANT', content: 'Voy a volver a transcribir del minuto 12 al 15.', metadata: {
+      mediaDeliveryHandoff: 'md_ref', transcriptionFileIds: ['v0', 'v1', 'v2'], stoppedReason: 'media_delivery_handoff',
+      mediaRefine: { fileId: 'v2', range: { start: 720, end: 900 }, queued: true, reason: null } } }
+    expect(pendingMediaDeliveries([refine]).map(({ fileIds }) => fileIds)).toEqual([['v2']])
+    expect(pendingMediaDeliveries([refine, delivery('md_ref', ['v2'])])).toEqual([])
+    const stopped = { ...delivery('md_ref', ['v2']), content: 'Detuve la corrección del tramo.', metadata: {
+      source: 'media-delivery', mediaDelivery: 'md_ref', transcriptionFileIds: ['v2'], stoppedReason: 'media_delivery_cancelled', artifacts: [] } }
+    expect(pendingMediaDeliveries([refine, stopped])).toEqual([])
+    // A refine queued without a delivery is not a hand-off at all.
+    const queued = { ...refine, metadata: { transcriptionFileIds: ['v0', 'v1', 'v2'], stoppedReason: 'transcription_refine_queued',
+      mediaRefine: { fileId: 'v2', range: null, queued: true, reason: null } } }
+    expect(pendingMediaDeliveries([queued])).toEqual([])
+  })
+
   it('settles a failed transcription published by media-delivery without requiring artifacts', () => {
     const failed = { ...delivery(), content: 'No pude transcribir el audio.', metadata: {
       source: 'media-delivery', mediaDelivery: 'md_current', transcriptionFileIds: ['audio-1'],

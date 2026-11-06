@@ -5311,13 +5311,15 @@ function ChatInterfaceContent() {
   // termine») is still work of this chat: Stop stays available for it. Not
   // recomputed per frame while a stream is running (Stop shows then anyway).
   // Hand-offs a Stop found nothing open for (its line never posted, a record
-  // long gone): Stop no longer shows for them in this tab.
+  // long gone): Stop no longer shows for them in this tab. Per chat: an old
+  // branch that still names the original chat's job must not hide that
+  // chat's own Stop.
   const [settledHandoffKeys, setSettledHandoffKeys] = React.useState<ReadonlySet<string>>(() => new Set())
   const settledHandoffKeysRef = React.useRef(settledHandoffKeys)
   settledHandoffKeysRef.current = settledHandoffKeys
   const hasPendingMediaDelivery = React.useMemo(
     () => Boolean(currentChatId) && !isCurrentChatStreaming
-      && pendingMediaDeliveries(currentChat?.messages || []).some((delivery) => !settledHandoffKeys.has(handoffKeyOf(delivery))),
+      && pendingMediaDeliveries(currentChat?.messages || []).some((delivery) => !settledHandoffKeys.has(`${currentChatId}:${handoffKeyOf(delivery)}`)),
     [currentChatId, isCurrentChatStreaming, currentChat?.messages, settledHandoffKeys],
   )
   // True when Stop has nothing to stop but that background transcription.
@@ -6775,7 +6777,7 @@ function ChatInterfaceContent() {
   const cancelPendingMediaDeliveries = React.useCallback(async (chatId: string) => {
     if (cancellingDeliveriesRef.current.has(chatId)) return;
     const pending = pendingMediaDeliveries(currentChatRef.current?.messages || [])
-      .filter((delivery) => !settledHandoffKeysRef.current.has(handoffKeyOf(delivery)));
+      .filter((delivery) => !settledHandoffKeysRef.current.has(`${chatId}:${handoffKeyOf(delivery)}`));
     if (!pending.length) return;
     const deliveryIds = [...new Set(pending.map((delivery) => delivery.deliveryId).filter(Boolean))];
     // Their recordings too: two links handed off in one turn are two
@@ -6790,7 +6792,7 @@ function ChatInterfaceContent() {
       else {
         toast.info('La transcripción ya había terminado');
         // Nothing of these hand-offs is open on the server: Stop stops showing.
-        setSettledHandoffKeys((current) => new Set([...current, ...pending.map(handoffKeyOf)]));
+        setSettledHandoffKeys((current) => new Set([...current, ...pending.map((delivery) => `${chatId}:${handoffKeyOf(delivery)}`)]));
       }
       if (currentChatIdRef.current === chatId) await selectChat(chatId);
     } catch (err) {
