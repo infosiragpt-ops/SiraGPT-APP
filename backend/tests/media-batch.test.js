@@ -2090,6 +2090,132 @@ test('after a Stop, a request resumes only the recording it names, and none for 
   assert.equal(named?.id, 'b', 'a refine of «la clase 20» is not ambiguous either');
 });
 
+// ── the eighth review: which stopped recordings a message resumes ──────────
+
+function resumeHarness(rowsSpec) {
+  const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
+  const make = () => rowsSpec.map(([id, name, state]) => ({ ...readyRow(id, name),
+    ...(state === 'stopped' ? { processingStage: 'failed', extractedText: null, processingError: CANCELLED_NOTE } : {}),
+    ...(state === 'failed' ? { processingStage: 'failed', extractedText: null, processingError: 'No se detectó voz en este archivo.' } : {}),
+    ...(state === 'pending' ? { processingStage: 'extracting', extractedText: null } : {}) }));
+  return async (displayGoal, { delivery = null } = {}) => {
+    const rows = make();
+    const requeued = [];
+    const amends = [];
+    const result = await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: (args) => batch.waitForMediaBatch({ ...args, timeoutMs: 0, readProgress: null, wait: async () => {},
+        // Only a retry re-runs a recording; a pending one is only ensured in the queue.
+        enqueue: async ({ fileId, retry }) => { if (retry) requeued.push(fileId); return { queued: true }; } }) },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => ({ ...artifact, id: 'art' }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+      require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+      ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    }).catch(error => ({ error }));
+    if (delivery?.__amends) amends.push(...delivery.__amends);
+    return { requeued: [...new Set(requeued)], result, amends };
+  };
+}
+
+test('after a Stop, a message resumes the recordings it names, all but the ones it leaves out, or none', async () => {
+  const run = resumeHarness([['v1', 'Clase 1.mp4', 'ready'], ['v2', 'Clase 2.mp4', 'stopped'], ['v3', 'Clase 3.mp4', 'stopped'],
+    ['v4', 'Clase 4.mp4', 'stopped'], ['v5', 'Clase 5.mp4', 'failed']]);
+  const cases = [
+    ['transcribe todas menos la clase 4', ['v2', 'v3']],
+    ['retómalas, menos la clase 4', ['v2', 'v3']],
+    ['transcribe todas, la clase 4 no', ['v2', 'v3']],
+    ['retoma la transcripción sin la clase 4', ['v2', 'v3']],
+    ['transcribe la clase 2 y la 3', ['v2', 'v3']],
+    ['quiero la transcripción de la clase 2 y de la 3', ['v2', 'v3']],
+    ['transcribe la clase 2 y la clase 3', ['v2', 'v3']],
+    ['transcribe solo la clase 2, no transcribas las demás', ['v2']],
+    ['transcribe la clase 2, no sigas con las demás', ['v2']],
+    ['retoma la transcripción, la clase 2 quedó sin transcribir', ['v2']],
+    ['dame la transcripción de las que están listas', []],
+    ['dame la transcripción de las que ya terminaron', []],
+    ['dame la transcripción parcial', []],
+    ['dame la transcripción de lo que llevas', []],
+    ['dame la transcripción de las que ya están listas y retoma las demás', ['v2', 'v3', 'v4']],
+    // «reintenta los audios fallidos» retries what failed, never what was stopped.
+    ['reintenta los audios fallidos', ['v5']],
+    ['no la retomes, solo dime qué alcanzaste', []],
+  ];
+  for (const [goal, expected] of cases) {
+    const { requeued } = await run(goal);
+    assert.deepEqual(requeued.sort(), expected, goal);
+  }
+});
+
+test('after a Stop, a name inside a longer one never resumes the wrong recording', async () => {
+  const pairs = [
+    [[['a', 'Clase 2.mp4', 'stopped'], ['b', 'Clase 2B.mp4', 'stopped'], ['c', 'Clase 3.mp4', 'stopped']], 'transcribe la clase 2B', ['b']],
+    [[['a', 'Clase 2.mp4', 'stopped'], ['b', 'Clase 2B.mp4', 'stopped'], ['c', 'Clase 3.mp4', 'stopped']], 'transcribe la clase 2', ['a']],
+    [[['a', 'Reunión.m4a', 'stopped'], ['b', 'Reunión 2.m4a', 'stopped']], 'transcribe la reunión 2', ['b']],
+    [[['a', 'Reunión.m4a', 'stopped'], ['b', 'Reunión 2.m4a', 'stopped']], 'transcribe Reunión 2.m4a', ['b']],
+    [[['a', 'Clase.mp4', 'stopped'], ['b', 'Clase 2.mp4', 'ready']], 'transcribe la clase 2', []],
+    [[['a', 'Clase de Física.mp4', 'stopped'], ['b', 'Clase de Física (2).mp4', 'stopped']], 'transcribe la clase de física 2', ['b']],
+    [[['a', 'Clase 2.mp4', 'stopped'], ['b', 'Clase 2 - ejercicios.mp4', 'stopped']], 'transcribe los ejercicios de la clase 2', ['b']],
+  ];
+  for (const [spec, goal, expected] of pairs) {
+    const { requeued } = await resumeHarness(spec)(goal);
+    assert.deepEqual(requeued.sort(), expected, `${goal} over ${spec.map(([, name]) => name).join(', ')}`);
+  }
+  // Refine by name and the transcript tools find the longer name too.
+  const rows = [{ id: 'a', originalName: 'Reunión.m4a' }, { id: 'b', originalName: 'Reunión 2.m4a' }];
+  assert.equal(batch.pickRowByName(rows, 'revisa del minuto 12 al 15 de la reunión 2, se escuchó mal')?.id, 'b');
+  assert.equal(batch.pickRowByName(rows, 'Reunión 2.m4a, del minuto 12 al 15')?.id, 'b');
+  assert.equal(batch.pickRowByName(rows, 'la reunión')?.id, 'a');
+});
+
+test('a turn that leaves the recordings stopped completes, and is never reported as a failed task', async () => {
+  const { result } = await resumeHarness([['v1', 'clase.mp4', 'stopped']])('no la retomes, solo dime qué alcanzaste');
+  assert.notEqual(result.stoppedReason, 'media_batch_failed');
+  assert.equal(result.metadata?.mediaBatch?.stopped, 1);
+  assert.match(String(result.finalMarkdown), /Una grabación sigue detenida/);
+});
+
+test('with a delivery open, asking for another stopped recording resumes it; «retómalas» never buys a summary', async () => {
+  const run = resumeHarness([['v1', 'Clase 1.mp4', 'ready'], ['v2', 'Clase 2.mp4', 'pending'], ['v3', 'Clase 3.mp4', 'stopped'], ['v4', 'Clase 4.mp4', 'stopped']]);
+  for (const [goal, expected] of [['transcribe también la clase 3', ['v3']], ['retómalas', ['v3', 'v4']]]) {
+    const { delivery, calls } = pendingDeliveryFake({ outcome: 'unchanged', changes: [] });
+    const { requeued, result } = await run(goal, { delivery });
+    assert.deepEqual(requeued.sort(), expected, goal);
+    assert.ok(calls.amends.every(call => call.amendment.wantsAnalysis !== true), `${goal}: no paid summary`);
+    assert.match(String(result.finalMarkdown), /^Retomo la transcripción de /, goal);
+    assert.doesNotMatch(String(result.finalMarkdown), /Ya estoy transcribiendo/, goal);
+  }
+});
+
+test('a hand-off after resuming some recordings says which ones stay stopped', async () => {
+  const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
+  const rows = [readyRow('v1', 'Clase 1.mp4'),
+    ...['v2', 'v3', 'v4'].map((id, i) => ({ ...readyRow(id, `Clase ${i + 2}.mp4`), processingStage: 'failed', extractedText: null, processingError: CANCELLED_NOTE }))];
+  const adapter = { isMediaDeliveryEnabled: () => true, createDelivery: async () => ({ id: 'md_resume' }),
+    handOffMessage: () => 'Te aviso aquí cuando terminen.', estimateTranscriptionSeconds: () => 900 };
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, displayGoal: 'transcribe la clase 2', goal: 'x',
+    mediaBatch: { ...batch, waitForMediaBatch: async (args) => {
+      const out = await batch.waitForMediaBatch({ ...args, timeoutMs: 0, readProgress: null, wait: async () => {},
+        enqueue: async ({ fileId }) => { const row = rows.find(item => item.id === fileId); Object.assign(row, { processingStage: 'uploaded', processingError: null }); return { queued: true }; } });
+      return { ...out, stoppedEarly: true };
+    } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ ...artifact, id: 'art' }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: true, openai: {}, task: {}, documentPolicy: {},
+    require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => adapter }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(result.stoppedReason, 'media_delivery_handoff');
+  assert.match(result.finalMarkdown, /2 grabaciones siguen detenidas \(«Clase 3\.mp4», «Clase 4\.mp4»\): escribe «retómalas» si las quieres\./);
+});
+
 test('«retómala» after a Stop resumes the transcript, never a paid analysis of every recording', () => {
   const mb = require('../src/services/media-batch');
   for (const goal of ['retómala', 'Sí, retómala, por favor', 'reanúdala', 'continúala', '¿puedes retomarla?', 'retoma la transcripción',

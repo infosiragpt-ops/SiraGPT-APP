@@ -137,7 +137,10 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     // A question or a summary of the ready ones never restarts the rest.
     // `resumeStopped` is true (every stopped one) or the ids the request names.
     const resumeThis = resumeStopped === true || (Array.isArray(resumeStopped) && resumeStopped.includes(row.id));
-    const retryThis = (retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row))) || (resumeThis && isUserCancelledRow(row));
+    // «reintenta» retries what failed; a recording the user stopped comes
+    // back only through resumeStopped (resumeScope).
+    const retryThis = (retryFailed && !isUserCancelledRow(row) && (stateOf(row) === 'failed' || isPartialTranscript(row)))
+      || (resumeThis && isUserCancelledRow(row));
     if (stateOf(row) !== 'pending' && !retryThis) continue;
     try {
       const result = await enqueue({ fileId: row.id, userId, retry: retryThis, ...media });
@@ -281,13 +284,26 @@ const RESUME_LEAD = '^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|
 const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}(?:(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`
   + '|(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|seguir)\\s+(?:con\\s+)?'
   + '(?:(?:la|las|el|los|mis|tus|todas|todos|esas|esos|estas|estos)\\s+)?'
-  + '(?:audios?|videos?|grabacion(?:es)?|clases?|reunion(?:es)?|archivos?|transcripci\\w*|transcrib\\w*)\\b)');
+  + '(?:audios?|videos?|grabacion(?:es)?|clases?|reunion(?:es)?|archivos?|transcripci\\w*|transcrib\\w*|demas|otras|otros|restantes|resto|que\\s+faltan)\\b)');
 
 // «ponlo en Word», «dámelo en PDF», «lo quiero en Word», «expórtalo a Word»:
 // the transcript in a format, like TO_TEXT_RE, when nothing else is asked.
 const EXPORT_FORMAT_RE = /^(?:(?:y|e|ok|okay|vale|bueno|ahora|porfa|por favor|mejor|tambien)\b[\s,]*)*(?:(?:me\s+)?(?:puedes|podrias)\s+)?(?:(?:lo|la|los|las)\s+quiero|quiero(?:lo|la|los|las)?|pon(?:lo|la|los|las|melo|mela|melos|melas)?|da(?:me|melo|mela|melos|melas)|pasa(?:me|melo|mela|melos|melas)|manda(?:me|melo|mela)|envia(?:me|melo|mela)|exporta(?:lo|la|los|las)?|descarga(?:lo|la|los|las)?|guarda(?:lo|la|los|las)?)\b[^.?!\n]{0,30}?\b(?:en|a|como)\s+(?:un\s+|una\s+|formato\s+)?(?:word|docx|pdf|txt|texto)\b/;
 // A report or «lo más importante» is more than the transcript in a format.
 const DELIVERABLE_NOUN_RE = /\b(?:informe|reporte|acta|minuta|resumen|lo mas importante|puntos (?:mas )?importantes|ideas (?:principales|clave)|conclusiones|lo esencial)\b/;
+
+/**
+ * A clause of the message asks to resume: «retómala», «… y retoma las
+ * demás», «reintenta» (not «reintenta los fallidos», which retries only what
+ * failed). Pure; never throws.
+ */
+function asksToResume(goal) {
+  try {
+    const text = String(goal || '');
+    if (/reintent|retry/i.test(text) && !/\b(?:fallid[oa]s?|con\s+errore?s?|que\s+fallaron|que\s+no\s+se\s+pudieron|failed)\b/i.test(foldGoal(text))) return true;
+    return text.split(/\s*(?:[,;.]|\by\b|\be\b|\bpero\b|\bluego\b)\s*/i).some(clause => clause && isResumeGoal(clause));
+  } catch (_) { return false; }
+}
 
 /** «retómala», «reanuda la transcripción», «sigue con los audios» (see RESUME_TRANSCRIPT_RE). */
 function isResumeGoal(goal) {
@@ -1743,6 +1759,128 @@ function containsWhole(text, needle) {
 // «Clase 3.audio.ogg» (audio extracted in the browser) answers to «Clase 3».
 const nameStem = row => foldGoal(rowName(row)).replace(/(?:\.audio)?\.[a-z0-9]{1,6}$/, '').trim();
 
+// Names compared word by word: accents folded, punctuation as spaces and
+// digits apart from letters («Clase de Física (2).mp4» → «clase de fisica 2»,
+// «clase2» → «clase 2»).
+const nameWords = text => spaceDigits(foldGoal(text).replace(/[^a-z0-9]+/g, ' ')).replace(/\s+/g, ' ').trim();
+const nameKey = row => nameWords(nameStem(row));
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Every whole-word occurrence of `needle` in `text` (both nameWords): [{ start, end }]. */
+function wholeMatches(text, needle) {
+  const out = [];
+  if (!needle) return out;
+  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) {
+    const freeBefore = !isWordChar(needle[0]) || !isWordChar(text[at - 1]);
+    const freeAfter = !isWordChar(needle[needle.length - 1]) || !isWordChar(text[at + needle.length]);
+    if (freeBefore && freeAfter) out.push({ start: at, end: at + needle.length });
+  }
+  return out;
+}
+
+// «todas menos la clase 4», «excepto la 3», «sin la clase 2», «no
+// transcribas la clase 4»: what comes right before a name leaves it out.
+const EXCLUDE_BEFORE_RE = /(?:\b(?:menos|excepto|salvo|sin|fuera de|aparte de|que no sea|except|but not|without)|\bno\s+(?:(?:la|lo|las|los|me|te|nos)\s+)?(?:transcrib\w*|retom\w*|reanud\w*|sig\w*|continu\w*|incluy\w*|hag\w*|toqu\w*))\s+(?:(?:con|de)\s+)?(?:(?:la|el|las|los|del|al|a)\s+)?$/;
+// «todas», «las demás», «el resto», «las que faltan».
+const ALL_NAMED_RE = /\b(?:todas|todos|las demas|los demas|el resto|las que faltan|los que faltan|las otras|los otros|all|the rest)\b/;
+// A number after a name that is a time, never a sibling: «la clase 2 y 3 minutos».
+const TIME_AFTER_NUMBER_RE = /^\s*(?:min|minutos?|h|horas?|hrs?|seg|segundos?|s|am|pm)\b/;
+
+/**
+ * The recordings a message names and the ones it leaves out, as ids in the
+ * batch's order: `{ named, excluded, all }`. A name inside a longer one
+ * matched at the same place is the longer one («la reunión 2» is
+ * «Reunión 2», never «Reunión»; «la clase 2b» is «Clase 2B»); a number
+ * coordinated after a name is its sibling («la clase 2 y la 3», «las clases 2
+ * y 3», «clase 2, 3 y 4»); a name right after «menos / excepto / salvo / sin
+ * / no transcribas» or before «… no» is left out. `all`: «todas», «las
+ * demás». Pure; never throws.
+ */
+function namedRecordings(rows = [], text = '') {
+  const empty = { named: [], excluded: [], all: false };
+  try {
+    const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
+    // Clause breaks stay as «|» so «la clase 2, no transcribas las demás»
+    // never reads as «la clase 2 no».
+    const goal = spaceDigits(foldGoal(text).replace(/[.,;:!?¿¡\n]+/g, ' | ').replace(/[^a-z0-9|]+/g, ' ')).replace(/\s+/g, ' ').trim();
+    if (!goal || !list.length) return empty;
+    const hits = [];
+    for (const row of list) {
+      const key = nameKey(row);
+      if (key.length < 3) continue;
+      for (const match of wholeMatches(goal, key)) hits.push({ row, ...match, group: null });
+    }
+    // Siblings by number: rows named «<prefix> <n>».
+    const families = new Map();
+    for (const row of list) {
+      const parts = /^(.*[a-z])\s(\d+)$/.exec(nameKey(row));
+      if (!parts) continue;
+      if (!families.has(parts[1])) families.set(parts[1], new Map());
+      families.get(parts[1]).set(parts[2], row);
+    }
+    let groupId = 0;
+    for (const [prefix, byNumber] of families) {
+      const p = escapeRegex(prefix);
+      const sibling = new RegExp(`\\b${p}(?:s|es)?\\s+\\d+(?:(?:\\s*\\|\\s*(?:(?:y|e|o)\\s+)?|\\s+(?:y|e|o)\\s+|\\s+)(?:(?:de|a)\\s+)?(?:(?:la|el|las|los|del|al)\\s+)?(?:${p}(?:s|es)?\\s+)?\\d+)*`, 'g');
+      const coordinations = [...goal.matchAll(sibling)];
+      // With one numbered family in the batch, a bare number after «menos /
+      // excepto / salvo / sin» is one of it too («todas menos la 3 y la 4»).
+      if (families.size === 1) {
+        for (const bare of goal.matchAll(/\b(?:menos|excepto|salvo|sin)\s+(?:(?:la|el|las|los)\s+)?\d+(?:(?:\s*\|\s*(?:(?:y|e|o)\s+)?|\s+(?:y|e|o)\s+)(?:(?:la|el|las|los)\s+)?\d+)*/g)) {
+          coordinations.push(Object.assign([bare[0]], { index: bare.index }));
+        }
+      }
+      for (const coordination of coordinations) {
+        groupId += 1;
+        const base = coordination.index;
+        for (const number of coordination[0].matchAll(/\d+/g)) {
+          const at = base + number.index;
+          if (TIME_AFTER_NUMBER_RE.test(goal.slice(at + number[0].length))) continue;
+          const row = byNumber.get(number[0]);
+          if (row) hits.push({ row, start: at, end: at + number[0].length, group: groupId, groupStart: base, coordinated: true });
+        }
+      }
+    }
+    // The longest name wins where two overlap («reunion 2» over «reunion»).
+    const kept = hits.filter(hit => !hits.some(other => other !== hit && other.row !== hit.row
+      && other.start <= hit.start && other.end >= hit.end && (other.end - other.start) > (hit.end - hit.start)));
+    // A name that another row's name extends, when the text also says the
+    // extra words («los ejercicios de la clase 2» is «Clase 2 - ejercicios»).
+    const words = new Set(goal.split(' '));
+    const resolved = kept.map((hit) => {
+      const key = nameKey(hit.row);
+      const longer = list.filter(row => row !== hit.row && nameKey(row).startsWith(`${key} `)
+        && nameKey(row).slice(key.length + 1).split(' ').every(word => words.has(word) && !/^\d+$/.test(word)));
+      return longer.length === 1 ? { ...hit, row: longer[0] } : hit;
+    });
+    const excludedGroups = new Set();
+    const excludedHits = new Set();
+    for (const hit of resolved) {
+      const from = hit.groupStart != null ? hit.groupStart : hit.start;
+      const before = goal.slice(Math.max(0, from - 40), from);
+      // «… la clase 4 no», «la clase 4 no | las demás sí»: «no» closing the clause.
+      if (EXCLUDE_BEFORE_RE.test(before) || EXCLUDE_BEFORE_RE.test(goal.slice(Math.max(0, hit.start - 40), hit.start))
+        || /^\s+no\s*(?:\||$)/.test(goal.slice(hit.end))) {
+        excludedHits.add(hit);
+        if (hit.group != null) excludedGroups.add(hit.group);
+      }
+    }
+    // A coordinated list after «menos» is left out whole («menos la 3 y la 4»).
+    for (const hit of resolved) if (hit.group != null && excludedGroups.has(hit.group)) excludedHits.add(hit);
+    const excluded = new Set(resolved.filter(hit => excludedHits.has(hit)).map(hit => hit.row.id));
+    const named = new Set(resolved.filter(hit => !excludedHits.has(hit) && !excluded.has(hit.row.id)).map(hit => hit.row.id));
+    const order = list.map(row => row.id);
+    return {
+      named: order.filter(id => named.has(id)),
+      excluded: order.filter(id => excluded.has(id)),
+      all: ALL_NAMED_RE.test(goal),
+    };
+  } catch (_) {
+    return empty;
+  }
+}
+
+/** The one row the text names (by id, full name or a distinctive word of it), or null. */
 function pickRowByName(rows = [], text = '') {
   const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
   if (list.length === 1) return list[0];
@@ -1750,13 +1888,11 @@ function pickRowByName(rows = [], text = '') {
   const byId = list.filter(row => String(row.id || '').length >= 8 && String(text).includes(String(row.id)));
   if (byId.length === 1) return byId[0];
   // A whole name, never part of a longer one: «la clase 2» is not «Clase 20»,
-  // and «clase2.mp4» answers to «la clase 2».
-  const spacedGoal = spaceDigits(f);
-  const byFull = list.filter((row) => {
-    const stem = nameStem(row);
-    return stem.length >= 3 && containsWhole(spacedGoal, spaceDigits(stem));
-  });
-  if (byFull.length === 1) return byFull[0];
+  // «la reunión 2» is «Reunión 2» and not «Reunión», and «clase2.mp4»
+  // answers to «la clase 2» (namedRecordings).
+  const { named } = namedRecordings(list, text);
+  if (named.length === 1) return list.find(row => row.id === named[0]) || null;
+  if (named.length > 1) return null;
   const byWord = list.filter((row) => {
     const words = nameStem(row).split(/[^a-z0-9]+/)
       .filter(word => word.length >= 4 && !NAME_STOPWORDS.has(word) && !/^\d+$/.test(word));
@@ -1768,44 +1904,49 @@ function pickRowByName(rows = [], text = '') {
 // A request about the finished ones only («pasa a PDF las que ya están
 // transcritas», «las que ya tienen transcripción»). A «ya» that is only a
 // filler («ya, listo: transcribe la clase 2») is not one.
-const ONLY_FINISHED_RE = /\b(?:(?:que|las|los)\s+ya\s+(?:esta|estan|fueron|han\s+sido|quedaron|se)?\s*(?:transcrib|transcrit|list|terminad|hech|complet)|(?:que|las|los)\s+(?:ya\s+)?(?:tienen|tengan)\s+(?:la\s+|su\s+)?transcripci|que\s+(?:si\s+)?(?:se\s+)?(?:terminaron|transcribieron|completaron|alcanzaron\s+a\s+transcribirse)|(?:las|los)\s+(?:transcrit|terminad|completad)[oa]s\b)/;
+const ONLY_FINISHED_RE = /\b(?:(?:que|las|los)\s+ya\s+(?:esta|estan|fueron|han\s+sido|quedaron|se)?\s*(?:transcrib|transcrit|list|terminad|hech|complet)|(?:que|las|los)\s+(?:esta|estan)\s+(?:list|transcrit|terminad|complet)|(?:que|las|los)\s+(?:ya\s+)?(?:tienen|tengan)\s+(?:la\s+|su\s+)?transcripci|que\s+(?:ya\s+)?(?:si\s+)?(?:se\s+)?(?:terminaron|acabaron|completaron|transcribieron|alcanzaron\s+a\s+transcribirse)|(?:las|los)\s+(?:transcrit|terminad|completad)[oa]s\b|transcripci\w*\s+parcial|lo\s+que\s+(?:ya\s+)?(?:llevas|tienes|tengas|hay|alcanzaste|alcanzo)|hasta\s+(?:donde|el\s+momento|aqui|ahora)\b)/;
 
 function limitsToFinished(goal = '') {
   return ONLY_FINISHED_RE.test(foldGoal(goal));
 }
 
-// «no la retomes», «no sigas transcribiendo», «déjala así»: the Stop stands.
+// «no la retomes», «no sigas transcribiendo», «déjala así»: the Stop stands,
+// unless the same message asks to resume or transcribe something
+// («transcribe la clase 2, no sigas con las demás»). «quedó / sigue / está
+// sin transcribir» describes a recording, never a refusal.
+const RESUME_VERB_WORD_RE = /\b(?:retom\w*|reanud\w*|continu\w*|sig(?:as|a|ue|uir)|transcrib\w*)\b/;
 function refusesResume(goal = '') {
   try {
     const negation = require('./request-negation');
-    const folded = negation.foldRequest(goal);
-    const ranges = negation.negatedRanges(folded);
-    for (const match of folded.matchAll(/\b(?:retom\w*|reanud\w*|continu\w*|sig(?:as|a|ue|uir)|transcrib\w*)\b/g)) {
-      if (ranges.some(range => match.index >= range.start && match.index < range.end)) return true;
-    }
-    return /\bdej(?:a|e)(?:l[ao]s?)?\s+(?:asi|como\s+esta)\b/.test(folded);
+    const stated = String(goal || '').replace(/\b(?:qued[oó]|quedaron|sigue|siguen|est[aá]n?|esta[n]?)\s+sin\s+(?:transcribir(?:se)?|terminar)\b/gi, ' ');
+    const { refused, asked } = negation.splitMentions(stated, RESUME_VERB_WORD_RE);
+    if (refused.length && !asked.length) return true;
+    return /\bdej(?:a|e)(?:l[ao]s?)?\s+(?:asi|como\s+esta)\b/.test(negation.foldRequest(stated)) && !asked.length;
   } catch (_) { return false; }
 }
 
 /**
  * Which recordings stopped with «Detener» a turn resumes: false (none),
- * true (every stopped one) or the ids of the one it names. A turn that asks
+ * true (every stopped one) or the ids it names (namedRecordings: «la clase
+ * 2 y la 3»; «todas menos la clase 4» resumes the others). A turn that asks
  * for the transcript again resumes them (`askedAgain`); so does one that
  * needs what they say (a summary, a translation, a question) when nothing
  * else is transcribed or on its way, or when it names a stopped one. One
  * about the finished ones resumes none unless it says to resume (`explicit`:
  * «retómalas», «reintenta»), and «no la retomes» none at all.
- * «transcribe la clase 2» resumes only that one.
  */
 function resumeScope({ goal = '', rows = [], names = null, askedAgain = false, explicit = false } = {}) {
   const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
   if (refusesResume(goal)) return false;
   if (!explicit && limitsToFinished(goal)) return false;
-  const named = list.length > 1 ? pickRowByName(names ? presentRows(list, names) : list, goal) : null;
+  const stopped = list.filter(row => isUserCancelledRow(row)).map(row => row.id);
+  const selection = list.length > 1 ? namedRecordings(names ? presentRows(list, names) : list, goal) : { named: [], excluded: [], all: false };
   const nothingElse = !list.some(row => stateOf(row) === 'ready' || stateOf(row) === 'pending');
-  const needed = list.some(row => isUserCancelledRow(row)) && (nothingElse || Boolean(named && isUserCancelledRow(named)));
+  const needed = stopped.length > 0 && (nothingElse || selection.named.some(id => stopped.includes(id)));
   if (!askedAgain && !needed) return false;
-  return named ? [named.id] : true;
+  if (selection.named.length) return selection.named.filter(id => !selection.excluded.includes(id));
+  if (selection.excluded.length) return stopped.filter(id => !selection.excluded.includes(id));
+  return true;
 }
 
 /**
@@ -2009,4 +2150,4 @@ module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, re
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES,
-  limitsToFinished, resumeScope, refusesResume, isUserCancelledRow };
+  limitsToFinished, resumeScope, refusesResume, isUserCancelledRow, namedRecordings, asksToResume };

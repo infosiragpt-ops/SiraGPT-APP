@@ -3045,6 +3045,21 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // never a second transcription of the same files, a second delivery or
       // a 4-minute wait. Not for a refine or a turn with other attachments
       // (those keep their own path), nor once every recording is done.
+      // Which recordings stopped with «Detener» this turn resumes
+      // (mediaBatch.resumeScope): «reintenta», «retómala», «… y retoma las
+      // demás» in any clause (never «reintenta los audios fallidos», which
+      // retries only what failed), a transcript request («transcribe la clase
+      // 2 y la 3» resumes those; «todas menos la 4», the others), or a summary
+      // or question with nothing else to answer from.
+      const resumeAsked = typeof mediaBatch.asksToResume === 'function' ? mediaBatch.asksToResume(mediaGoal)
+        : Boolean(retryRequested || (typeof mediaBatch.isResumeGoal === 'function' && mediaBatch.isResumeGoal(mediaGoal)));
+      const stoppedToResume = typeof mediaBatch.resumeScope === 'function'
+        ? mediaBatch.resumeScope({ goal: mediaGoal, rows: mediaBatchRows, names: presentedNames,
+          askedAgain: resumeAsked || asksTranscriptByRequest, explicit: resumeAsked })
+        : Boolean(resumeAsked || asksTranscriptByRequest);
+      const isStoppedRow = row => typeof mediaBatch.isUserCancelledRow === 'function' && mediaBatch.isUserCancelledRow(row);
+      const rowsToResume = mediaBatchRows.filter(row => isStoppedRow(row)
+        && (stoppedToResume === true || (Array.isArray(stoppedToResume) && stoppedToResume.includes(row.id))));
       const pendingService = chatId && !refineNotice && followupIntent?.kind !== 'refine' && !hasCompanionAttachments
         && mediaBatchRows.some(row => mediaBatch.stateOf(row) === 'pending' || (retryRequested && mediaBatch.stateOf(row) === 'failed'))
         ? loadMediaDeliveryService() : null;
@@ -3052,10 +3067,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         && typeof pendingService.amendDelivery === 'function'
         ? await pendingService.findOpenDelivery({ userId: user.id, chatId, fileIds: ids }).catch(() => null) : null;
       if (openDelivery) {
-        // «reintenta» re-queues the failed recordings; the same delivery waits for them.
-        if (retryRequested) {
+        // «reintenta» re-queues the failed recordings, and a resume of stopped
+        // ones («transcribe también la clase 3», «retómalas») re-queues those:
+        // the same open delivery waits for them.
+        if (retryRequested || rowsToResume.length) {
           await mediaBatch.waitForMediaBatch({ prisma, userId: user.id, rows: mediaBatchRows, signal: controller.signal,
-            retryFailed: true, language: batchLanguage, hints: jobHints.hints, timeoutMs: 0, readProgress: null }).catch(() => null);
+            retryFailed: retryRequested, resumeStopped: rowsToResume.length ? stoppedToResume : false,
+            language: batchLanguage, hints: jobHints.hints, timeoutMs: 0, readProgress: null }).catch(() => null);
         }
         // A question about a stretch, also unpunctuated as dictated («qué
         // dice del minuto 10 al 20», «dime qué dice del 10 al 20»).
@@ -3149,7 +3167,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           || ownHints.language || saysHints || saysTxt
           || (typeof mediaBatch.refusesTranslationWord === 'function' && mediaBatch.refusesTranslationWord(mediaGoal))
           // «el audio está en inglés y español»: a fact, never the catch-all analysis.
-          || (typeof mediaBatch.statesRecordingLanguages === 'function' && mediaBatch.statesRecordingLanguages(mediaGoal)));
+          || (typeof mediaBatch.statesRecordingLanguages === 'function' && mediaBatch.statesRecordingLanguages(mediaGoal))
+          // «retómalas», «transcribe también la clase 3»: a transcript, never a summary.
+          || resumeAsked || asksTranscriptByRequest || rowsToResume.length > 0);
         if (amended?.outcome === 'unchanged' && !recognised && !plainTranscriptionRequest && !retryRequested && !courtesy && !explicitNoAnalysis) {
           // A moment it names («¿y en el minuto 45?») is read too; the window
           // an earlier question asked about stays when it names none
@@ -3162,9 +3182,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         }
         if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged') {
           const names = mediaBatchRows.map(presentedName);
-          const text = amended.outcome === 'amended' && amended.changes?.length
-            ? pendingService.amendedMessage({ changes: amended.changes, record: amended.record })
-            : pendingService.stillRunningMessage({ fileNames: names });
+          const resumedNames = rowsToResume.map(presentedName).filter(Boolean);
+          const resumedLine = resumedNames.length
+            ? `Retomo la transcripción de ${resumedNames.length === 1 ? `«${resumedNames[0]}»` : `${resumedNames.length} grabaciones (${resumedNames.slice(0, 3).map(name => `«${name}»`).join(', ')}${resumedNames.length > 3 ? ` y ${resumedNames.length - 3} más` : ''})`} donde quedó; la entrego en este chat junto con lo demás.`
+            : '';
+          const changed = amended.outcome === 'amended' && amended.changes?.length;
+          const text = [resumedLine, changed ? pendingService.amendedMessage({ changes: amended.changes, record: amended.record })
+            : (resumedLine ? '' : pendingService.stillRunningMessage({ fileNames: names }))].filter(Boolean).join('\n\n');
           return await finishDeterministicTask({
             finalMarkdown: text,
             stoppedReason: 'media_delivery_amended',
@@ -3186,8 +3210,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const mediaDeliveryService = loadMediaDeliveryService();
       const deliveryEnabled = Boolean(mediaDeliveryService?.isMediaDeliveryEnabled?.(process.env));
       const inlineWaitMs = deliveryEnabled ? Math.min(mediaWaitBudgetMs, mediaInlineWaitMs(process.env)) : mediaWaitBudgetMs;
-      const resumeAsked = Boolean(retryRequested
-        || (typeof mediaBatch.isResumeGoal === 'function' && mediaBatch.isResumeGoal(mediaGoal)));
       const waitOptions = {
         prisma, userId: user.id, signal: controller.signal, retryFailed: retryRequested,
         // Recordings stopped with «Detener» resume only when the transcript
@@ -3197,10 +3219,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // Only the one it names («transcribe la clase 2»), and none for a
         // request about the finished ones («pasa a PDF las que ya están
         // transcritas»): see mediaBatch.resumeScope.
-        resumeStopped: typeof mediaBatch.resumeScope === 'function'
-          ? mediaBatch.resumeScope({ goal: mediaGoal, rows: mediaBatchRows, names: presentedNames,
-            askedAgain: resumeAsked || asksTranscriptByRequest, explicit: resumeAsked })
-          : Boolean(resumeAsked || asksTranscriptByRequest),
+        resumeStopped: stoppedToResume,
         language: batchLanguage, hints: jobHints.hints, names: presentedNames,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),
@@ -3264,8 +3283,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             durationSec: durationSec || null, etaSeconds,
           });
           const readyNote = batch.ready ? `${batch.ready} de ${batch.total} ya están transcritos; los entrego todos juntos cuando terminen los demás.` : '';
+          // Stopped ones this turn did not resume stay so, and the hand-off says it.
+          const stillStopped = (batch.rows || []).filter(isStoppedRow).map(presentedName).filter(Boolean);
+          const stoppedNote = stillStopped.length
+            ? `${stillStopped.length === 1 ? `«${stillStopped[0]}» sigue detenida` : `${stillStopped.length} grabaciones siguen detenidas (${stillStopped.slice(0, 3).map(name => `«${name}»`).join(', ')}${stillStopped.length > 3 ? ` y ${stillStopped.length - 3} más` : ''})`}: escribe «${stillStopped.length === 1 ? 'retómala' : 'retómalas'}» si ${stillStopped.length === 1 ? 'la' : 'las'} quieres.`
+            : '';
           return await finishDeterministicTask({
-            finalMarkdown: [refineNotice, handOff, readyNote].filter(Boolean).join('\n\n'),
+            finalMarkdown: [refineNotice, handOff, readyNote, stoppedNote].filter(Boolean).join('\n\n'),
             stoppedReason: 'media_delivery_handoff',
             steps: 1, artifactsList: artifacts,
             // Not `mediaDelivery`: that key marks the message the delivery
@@ -3448,13 +3472,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         reason: 'Transcripción persistida por archivo y análisis de todos sus fragmentos.' };
       task.documentPolicy = documentPolicy;
       return await finishDeterministicTask({ finalMarkdown: notices.join('\n\n'),
-        stoppedReason: batch.failed === batch.total && !hasCompanionAttachments ? 'media_batch_failed'
+        // A recording stopped with «Detener» is no failure: a turn that leaves
+        // them stopped completes (partial), never as a failed task.
+        stoppedReason: failedFiles === batch.total && !hasCompanionAttachments ? 'media_batch_failed'
           : batch.failed || batch.pending || batch.partial || analysisUnavailable || analysis?.failed?.length
             || translationUnavailable || translation?.failed?.length ? 'media_batch_partial' : 'transcription_finalize',
         steps: analysis ? 2 : 1, artifactsList: artifacts,
         metadata: { transcriptionFileIds: ids,
           ...(hasCompanionAttachments ? { companionFileIds: companionAttachments.map(item => item.id) } : {}),
-          mediaBatch: { total: batch.total, ready: batch.ready,
+          mediaBatch: { total: batch.total, ready: batch.ready, ...(stoppedFiles ? { stopped: stoppedFiles } : {}),
           failed: batch.failed, pending: batch.pending, partial: batch.partial || 0, analyzed: analysis?.summaries?.length || 0,
           translated: translation?.files?.length || 0, translationLanguage: translationTarget?.code || null },
         mediaAnalysis: analysis?.summaries || [], mediaAnalysisUsage },

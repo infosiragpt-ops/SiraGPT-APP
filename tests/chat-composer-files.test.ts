@@ -261,6 +261,11 @@ describe("historical media batch follow-ups", () => {
     }
     // «continúalo» there may be the summary just given.
     assert.deepEqual(resolveMediaFollowupFiles("continúalo", summarised), [])
+    // «retoma las demás» after a summary of the ready ones is the stopped ones; after an essay it is not.
+    for (const prompt of ["retoma las demás", "sigue con el resto", "continúa con las que faltan"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, summarised), batch, prompt)
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, essay), [], prompt)
+    }
     // Other recordings sent since: that stop line is no longer the one answered.
     const other = [...stopped, { role: "USER", content: "y este", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) }]
     assert.deepEqual(resolveMediaFollowupFiles("retoma la transcripción", other), [])

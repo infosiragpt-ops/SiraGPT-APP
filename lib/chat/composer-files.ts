@@ -562,6 +562,10 @@ const RESUME_CONTEXT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RE
 
 const RESUME_MAX_LATER_TURNS = 4
 
+// «retoma las demás», «sigue con el resto»: the stopped ones, also after a
+// follow-up about the ready ones (like «retómala»).
+const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)\\b`)
+
 type ResumeKind = "transcript" | "context" | "her" | "him"
 
 // «retómala» (la transcripción, la grabación) still answers the stop line
@@ -573,6 +577,7 @@ function isResumePrompt(prompt: string): ResumeKind | null {
   if (!FOREIGN_SOURCE_RE.test(text)) {
     if (RESUME_TRANSCRIPT_RE.test(text)) return "transcript"
     if (RESUME_CONTEXT_RE.test(text)) return "context"
+    if (RESUME_REST_RE.test(text)) return "her"
   }
   const pronoun = RESUME_PRONOUN_RE.exec(text)?.[1]
   return pronoun ? (pronoun.startsWith("la") ? "her" : "him") : null

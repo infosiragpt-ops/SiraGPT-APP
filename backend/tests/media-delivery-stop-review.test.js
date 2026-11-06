@@ -1235,3 +1235,16 @@ test('the delivery translates with the conditions the user gave in the request a
     delete require.cache[require.resolve('../src/services/media-delivery')];
   }
 });
+
+test('the delivery names a recording stopped with «Detener» as stopped, never as a failure', () => {
+  const { deliveryMessage } = require('../src/services/media-delivery');
+  const rows = [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT, deliveryState: 'ready' }),
+    fileRow('b', { processingStage: 'failed', processingError: CANCELLED_NOTE, deliveryState: 'failed' }),
+    fileRow('c', { processingStage: 'failed', processingError: 'No se detectó voz en este archivo.', deliveryState: 'failed' })];
+  const text = deliveryMessage({ delivery: { fileIds: ['a', 'b', 'c'], fileNames: ['a.mp4', 'b.mp4', 'c.mp4'], formats: ['txt'] }, rows,
+    artifacts: [{ filename: 'a.txt', format: 'txt' }] });
+  assert.match(text, /1 completo, 1 con error, 1 detenido/);
+  assert.match(text, /«b\.mp4»: detenida \(escribe «retómala» para seguir donde quedó\)/);
+  assert.match(text, /«c\.mp4»: no se pudo transcribir/);
+  assert.doesNotMatch(text, /«b\.mp4»: no se pudo transcribir/);
+});

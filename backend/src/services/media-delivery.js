@@ -377,6 +377,11 @@ function stoppedReasonFor(counts) {
 // «Clase 3.audio.ogg»: the audio the browser extracted from «Clase 3.mp4».
 const EXTRACTED_AUDIO_NAME_RE = /\.audio\.[a-z0-9]{1,6}$/i;
 
+/** Stopped with «Detener» (its row carries the stop note), never a failure. */
+function isStoppedByUser(row) {
+  try { return require('./media-transcription-queue').isUserCancelledRow(row); } catch (_) { return false; }
+}
+
 // Stopping these failed for good (the file is gone, or no recording): there
 // is no job to stop, so the Stop is done with them.
 const SETTLED_STOP_CODES = new Set(['media_not_found', 'unsupported_media', 'media_owner_required']);
@@ -735,13 +740,17 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
     if (state === 'failed' && row?.processingError) blocks.push(`Motivo: ${cleanReason(row.processingError)}`);
   } else {
     const n = counts.total;
+    // Stopped with «Detener»: no failure, named apart.
+    const stopped = list.filter(row => stateOf(row) === 'failed' && isStoppedByUser(row)).length;
+    const failedOnly = counts.failed - stopped;
     if (counts.ready === n) blocks.push(`**Las transcripciones de tus ${n} archivos están listas.**`);
-    else if (counts.failed === n) blocks.push(`**No pude transcribir ninguno de tus ${n} archivos.**`);
+    else if (failedOnly === n) blocks.push(`**No pude transcribir ninguno de tus ${n} archivos.**`);
     else {
       const parts = [
         counts.ready ? `${counts.ready} ${counts.ready === 1 ? 'completo' : 'completos'}` : '',
         counts.partial ? `${counts.partial} ${counts.partial === 1 ? 'parcial' : 'parciales'}` : '',
-        counts.failed ? `${counts.failed} con error` : '',
+        failedOnly ? `${failedOnly} con error` : '',
+        stopped ? `${stopped} ${stopped === 1 ? 'detenido' : 'detenidos'}` : '',
         counts.pending ? `${counts.pending} ${counts.pending === 1 ? 'pendiente' : 'pendientes'}` : '',
       ].filter(Boolean);
       blocks.push(`**Terminé con tus ${n} archivos: ${parts.join(', ')}.**`);
@@ -769,6 +778,7 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
           transcriptFilesAttached: filesAttached }));
         return `- ${name}: parcial (${detail})${quality}`;
       }
+      if (state === 'failed' && isStoppedByUser(row)) return `- ${name}: detenida (escribe «retómala» para seguir donde quedó)`;
       if (state === 'failed') return `- ${name}: no se pudo transcribir${row?.processingError ? ` (${cleanReason(row.processingError, 120)})` : ''}`;
       return `- ${name}: sigue en la cola`;
     }).join('\n'));

@@ -3529,7 +3529,18 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   la deja. Un pedido de transcripción retoma solo lo que nombra (`resumeScope`: «transcribe la clase 2»
   → esa; «la clase 2» nunca es «Clase 20» y «clase2.mp4» responde a «la clase 2») y nada si habla de
   las terminadas («pasa a PDF las que ya están transcritas», `limitsToFinished`), salvo un «retómalas»
-  o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Un resumen, una
+  o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Los nombres se leen
+  con `namedRecordings`: varios a la vez («la clase 2 y la 3», «las clases 2 y 3»), exclusiones
+  («todas menos la clase 4», «la clase 4 no», «sin la clase 4», «no transcribas la clase 4») y el
+  nombre más largo gana donde dos coinciden («la reunión 2» es «Reunión 2», «la clase 2b» es «Clase
+  2B», «los ejercicios de la clase 2» es «Clase 2 - ejercicios»); `pickRowByName` (correcciones por
+  nombre y herramientas del chat) usa la misma lectura. «reintenta los audios fallidos» reintenta solo
+  lo que falló; una grabación detenida vuelve solo por `resumeStopped`. «… y retoma las demás»
+  retoma aunque el verbo no abra el mensaje (`asksToResume`, por cláusula). Con una entrega abierta,
+  «transcribe también la clase 3» o «retómalas» vuelven a poner en cola esas grabaciones («Retomo la
+  transcripción de…») y nunca compran un resumen; el hand-off nombra las que siguen detenidas, la
+  entrega las lista como «detenida (escribe «retómala»…)» y una tarea que las deja detenidas termina
+  como parcial, no como fallida. Un resumen, una
   traducción o una pregunta también retoman cuando nada más está transcrito ni en curso, o cuando nombran
   una grabación detenida (solo esa); «no la retomes» o «déjala así» no retoman nada (`refusesResume`). El
   informe del turno cuenta aparte las detenidas («Una grabación sigue detenida: escribe «retómala»…»),
