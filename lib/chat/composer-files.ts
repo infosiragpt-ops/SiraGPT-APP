@@ -522,7 +522,7 @@ const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|
 // such a stop: elsewhere «continúalo» continues the answer just given.
 const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro) )*`
 const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`)
-const RESUME_VERB_RE = new RegExp(`${RESUME_LEAD}(?:retoma|reanuda|continua|prosigue|sigue)\\b`)
+const RESUME_VERB_RE = new RegExp(`${RESUME_LEAD}(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|segui)\\b`)
 const RESUME_OBJECT_RE = /\b(?:transcri\w*|trascri\w*)\b/
 
 function isResumePrompt(prompt: string): "explicit" | "contextual" | null {

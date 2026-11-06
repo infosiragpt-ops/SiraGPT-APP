@@ -269,7 +269,12 @@ const TO_TEXT_RE = /\b(?:pasa|pasal[oa]s?|pasam[eo]l[oa]s?|pasarl[oa]s?|conviert
 // «retómala», «reanúdala», «continúala»: the answer to «Detuve la
 // transcripción… pídemela de nuevo y retomo donde quedó». It resumes the
 // transcript, never starts a paid analysis of every recording.
-const RESUME_TRANSCRIPT_RE = /^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|por favor|perfecto|listo)\b[\s,]*)*(?:(?:me\s+)?(?:puedes|podrias)\s+)?(?:retom|reanud|continu|prosigu)\w*(?:lo|la|los|las)\b/;
+const RESUME_LEAD = '^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|por favor|perfecto|listo)\\b[\\s,]*)*'
+  + '(?:(?:me\\s+)?(?:puedes|podrias)\\s+|(?:quiero|necesito)\\s+que\\s+)?';
+const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}(?:(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`
+  + '|(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|seguir)\\s+(?:con\\s+)?'
+  + '(?:(?:la|las|el|los|mis|tus|todas|todos|esas|esos|estas|estos)\\s+)?'
+  + '(?:audios?|videos?|grabacion(?:es)?|clases?|reunion(?:es)?|archivos?|transcripci\\w*|transcrib\\w*)\\b)');
 
 function isTranscriptGoal(goal) {
   const raw = String(goal || '');

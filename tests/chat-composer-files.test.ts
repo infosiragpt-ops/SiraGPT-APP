@@ -202,7 +202,8 @@ describe("historical media batch follow-ups", () => {
     const stopped = [{ role: "USER", content: "transcribir", files: JSON.stringify(batch) }, handoff, stopLine]
     for (const prompt of ["retómala", "sí, retómala", "Sí, retómala, por favor", "reanúdala", "continúala", "retoma la transcripción",
       "reanuda la transcripción", "continúa con la transcripción", "sigue con la transcripción", "sigue transcribiendo las clases",
-      "retoma los audios", "ok, reanuda las grabaciones"]) {
+      "retoma los audios", "ok, reanuda las grabaciones", "¿puedes retomar la transcripción?", "¿puedes retomarla?",
+      "por favor continúa con la transcripción", "quiero que sigas transcribiendo"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, stopped), batch, prompt)
     }
     // A few turns later the explicit forms still reach it.

@@ -1802,9 +1802,12 @@ test('a whole translation after a moment translates it all, and says so', () => 
 test('«retómala» after a Stop resumes the transcript, never a paid analysis of every recording', () => {
   const mb = require('../src/services/media-batch');
   for (const goal of ['retómala', 'Sí, retómala, por favor', 'reanúdala', 'continúala', '¿puedes retomarla?', 'retoma la transcripción',
-    'reanuda la transcripción', 'sigue transcribiendo las clases']) {
+    'reanuda la transcripción', 'sigue transcribiendo las clases', 'retoma los audios', 'ok, reanuda las grabaciones',
+    'continúa con los audios', 'quiero que sigas con la transcripción']) {
     assert.equal(mb.isTranscriptGoal(goal), true, goal);
     assert.equal(mb.wantsMediaAnalysis(goal), false, goal);
   }
-  for (const goal of ['continúa', 'sigue', 'resúmelo', 'retoma el tema de ayer']) assert.equal(mb.isTranscriptGoal(goal), false, goal);
+  for (const goal of ['continúa', 'sigue', 'resúmelo', 'retoma el tema de ayer', 'siguiente pregunta', 'continúa con la explicación']) {
+    assert.equal(mb.isTranscriptGoal(goal), false, goal);
+  }
 });
