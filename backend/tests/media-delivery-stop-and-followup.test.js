@@ -349,13 +349,17 @@ test('cancelMediaTranscription removes the queued job and marks the row stopped'
   assert.equal(isTransientMediaError({ code: 'media_cancelled' }), false, 'a Stop is never retried by the queue');
 });
 
-test('a stopped recording resumes when the user asks for it again', async () => {
+test('a stopped recording resumes when the user asks for it again, and only then', async () => {
   const mediaBatch = require('../src/services/media-batch');
   const enqueued = [];
   const rows = [fileRow('a', { processingStage: 'failed', processingError: CANCELLED_NOTE })];
+  const enqueue = async payload => { enqueued.push(payload); return { queued: true }; };
+  // A question or a summary of the ready ones never restarts (and bills) it.
+  const kept = await mediaBatch.waitForMediaBatch({ prisma: null, userId: 'u1', rows, timeoutMs: 0, readProgress: null, enqueue });
+  assert.equal(enqueued.length, 0);
+  assert.equal(kept.rows[0].processingStage, 'failed');
   const out = await mediaBatch.waitForMediaBatch({
-    prisma: null, userId: 'u1', rows, timeoutMs: 0, readProgress: null,
-    enqueue: async payload => { enqueued.push(payload); return { queued: true }; },
+    prisma: null, userId: 'u1', rows, timeoutMs: 0, readProgress: null, resumeStopped: true, enqueue,
   });
   assert.equal(enqueued.length, 1);
   assert.equal(enqueued[0].retry, true);

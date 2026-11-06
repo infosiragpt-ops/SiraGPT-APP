@@ -119,7 +119,7 @@ function batchCounts(rows) {
 async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = () => {},
   enqueue = enqueueMediaTranscription, wait = delay, now = Date.now,
   timeoutMs = 90 * 60_000, stallMs = MEDIA_WAIT_STALL_MS, pollMs = 4000, retryFailed = false,
-  readProgress = defaultReadProgress, shouldStop = null, language = null, hints = null }) {
+  readProgress = defaultReadProgress, shouldStop = null, language = null, hints = null, resumeStopped = false }) {
   const ids = rows.map(row => row.id);
   let current = rows;
   const enqueueErrors = new Map();
@@ -129,8 +129,10 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
   for (const row of rows) {
     throwIfAborted(signal);
     // «reintenta» also re-runs the missing segments of a partial transcript.
-    // A recording the user stopped («Detener») resumes when asked again.
-    const retryThis = (retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row))) || isUserCancelledRow(row);
+    // A recording the user stopped («Detener») resumes only when asked again
+    // (`resumeStopped`: a transcription request, «retómala», «reintenta»).
+    // A question or a summary of the ready ones never restarts the rest.
+    const retryThis = (retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row))) || (resumeStopped && isUserCancelledRow(row));
     if (stateOf(row) !== 'pending' && !retryThis) continue;
     try {
       const result = await enqueue({ fileId: row.id, userId, retry: retryThis, ...media });

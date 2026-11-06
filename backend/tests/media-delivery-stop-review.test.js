@@ -320,6 +320,85 @@ test('a refine running while a gap retry waits: Stop settles the row, so recover
   assert.ok(!jobs.has(jobIdFor('a', 'u1')), 'the parked gap retry is gone');
 });
 
+// A prisma fake that honours the filters the queue's guarded writes use.
+function strictFilePrisma(rows, { staleReads = new Map() } = {}) {
+  const fits = (row, where) => Object.entries(where).every(([key, value]) => {
+    if (key === 'OR') return value.some(clause => fits(row, clause));
+    if (value === null) return row[key] == null;
+    if (value && typeof value === 'object' && 'in' in value) return value.in.includes(row[key]);
+    if (value && typeof value === 'object' && 'not' in value) return row[key] != null && row[key] !== value.not;
+    return row[key] === value;
+  });
+  return { file: {
+    async findFirst({ where }) {
+      const row = staleReads.get(where.id) || rows.get(where.id);
+      return row && row.userId === where.userId && !row.deletedAt ? { ...row } : null;
+    },
+    async updateMany({ where, data }) {
+      const row = rows.get(where.id);
+      if (!row || !fits(row, where)) return { count: 0 };
+      Object.assign(row, data);
+      return { count: 1 };
+    },
+  } };
+}
+
+test('Stop writes the stop state itself: an aborted job that never writes the row leaves nothing to re-queue', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'uploaded', mimeType: 'audio/mpeg', path: '/tmp/a.mp3' })]]);
+  const prisma = strictFilePrisma(rows);
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  let finish;
+  const service = createMediaTranscriptionService({ prisma, getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    validate: async (_l, file) => file.mimeType, offload: async file => file.path,
+    materialize: async source => ({ path: source, cleanup: async () => {} }),
+    createCheckpoint: () => ({ clear: async () => {}, dir: '/ckpt/a' }), logger: { info() {}, warn() {} },
+    // An offload or a park that ignores the abort: the job's own failure path never runs.
+    processFile: () => new Promise((_resolve, reject) => { started(); finish = reject; }),
+  });
+  const job = service.processMediaJob({ data: { fileId: 'a', userId: 'u1' }, opts: { attempts: 1 }, attemptsMade: 0 });
+  await ready;
+  const out = await service.cancelMediaTranscription({ fileIds: ['a'], userId: 'u1' });
+  assert.equal(out.results[0].outcome, 'aborted');
+  assert.equal(rows.get('a').processingStage, 'failed', 'stopped at once, not when the job gets to it');
+  assert.equal(rows.get('a').processingError, CANCELLED_NOTE);
+  finish(Object.assign(new Error('x'), { code: 'media_cancelled' }));
+  await job.catch(() => {});
+  // A gap retry marked meanwhile goes back to its partial transcript.
+  rows.set('b', fileRow('b', { processingStage: 'uploaded', extractedText: TRANSCRIPT, processingError: RETRYING_PARTIAL, mimeType: 'audio/mpeg' }));
+  await service.cancelMediaTranscription({ fileIds: ['b'], userId: 'u1' });
+  assert.equal(rows.get('b').processingStage, 'ready');
+  assert.match(rows.get('b').processingError, /^Parcial:/);
+});
+
+test('Stop never writes its note over a transcript that finished between its read and its write', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT, mimeType: 'audio/mpeg' })]]);
+  // Stop read the row while it was still extracting.
+  const prisma = strictFilePrisma(rows, { staleReads: new Map([['a', fileRow('a', { processingStage: 'extracting', mimeType: 'audio/mpeg' })]]) });
+  const service = createMediaTranscriptionService({ prisma, getQueue: () => ({ getJob: async () => null, add: async () => ({}) }), now: () => T0,
+    processFile: async () => ({}), logger: { info() {}, warn() {} } });
+  await service.cancelMediaTranscription({ fileIds: ['a'], userId: 'u1' });
+  assert.equal(rows.get('a').processingStage, 'ready');
+  assert.equal(rows.get('a').processingError ?? null, null);
+});
+
+test('the recovery pass never erases a Stop that landed after it read the row, nor queues the recording', async () => {
+  const rows = new Map([['a', fileRow('a', { processingStage: 'failed', processingError: CANCELLED_NOTE, mimeType: 'audio/mpeg' })]]);
+  // The 60 s tick read it as uploaded, just before the Stop.
+  const prisma = strictFilePrisma(rows, { staleReads: new Map([['a', fileRow('a', { processingStage: 'uploaded', mimeType: 'audio/mpeg' })]]) });
+  const added = [];
+  const service = createMediaTranscriptionService({ prisma, now: () => T0, processFile: async () => ({}), logger: { info() {}, warn() {} },
+    getQueue: () => ({ getJob: async () => null, add: async (name, data) => { added.push(data); return {}; } }) });
+  const out = await service.enqueueMediaTranscription({ fileId: 'a', userId: 'u1' });
+  assert.equal(out.queued, false);
+  assert.deepEqual(added, []);
+  assert.equal(rows.get('a').processingError, CANCELLED_NOTE, 'the Stop stays');
+  // An explicit request after the Stop still resumes it.
+  const asked = await service.enqueueMediaTranscription({ fileId: 'a', userId: 'u1', retry: true });
+  assert.equal(asked.queued, true);
+  assert.equal(added.length, 1);
+});
+
 test('asked again after Stop, a stopped job that survived is replaced and the recording transcribes', async () => {
   const { service, files, removed, added } = queueHarness({
     rows: [fileRow('a', { processingStage: 'failed', processingError: CANCELLED_NOTE, mimeType: 'audio/mpeg' })],

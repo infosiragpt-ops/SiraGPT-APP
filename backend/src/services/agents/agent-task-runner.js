@@ -3142,6 +3142,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const inlineWaitMs = deliveryEnabled ? Math.min(mediaWaitBudgetMs, mediaInlineWaitMs(process.env)) : mediaWaitBudgetMs;
       const waitOptions = {
         prisma, userId: user.id, signal: controller.signal, retryFailed: retryRequested,
+        // Recordings stopped with «Detener» resume only when the transcript
+        // is asked for again: «resume las clases ya transcritas» or a
+        // question about one of them never restarts (and bills) the rest.
+        resumeStopped: Boolean(retryRequested || transcriptRequest),
         language: batchLanguage, hints: jobHints.hints,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),

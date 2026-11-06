@@ -1526,7 +1526,10 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
           await stage(fileId, userId, 'failed', 'La transcripción se interrumpió. Puedes reintentar este archivo.');
           return { id: fileId, queued: false, stage: 'failed' };
         }
-        await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null, extractedText: null });
+        const reset = { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null, extractedText: null };
+        // Only an explicit retry resumes a row a Stop noted after we read it.
+        if (retry) await writeOwned(fileId, userId, reset);
+        else if (!(await writeUnlessStopped(fileId, userId, reset))) return { id: fileId, queued: false, stage: 'failed' };
         await previous.retry('failed', { resetAttemptsMade: true });
         return { id: fileId, queued: true, stage: 'uploaded' };
       }
@@ -1535,8 +1538,12 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       // also permits recovery after a deployment of an older, broken worker.
       await previous.remove();
     }
-    await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null,
-      ...(row.processingStage === 'failed' ? { extractedText: null } : {}) });
+    const reset = { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null,
+      ...(row.processingStage === 'failed' ? { extractedText: null } : {}) };
+    // The recovery pass (no retry) read the row before a Stop wrote its note:
+    // it never erases that note nor queues the recording again.
+    if (retry) await writeOwned(fileId, userId, reset);
+    else if (!(await writeUnlessStopped(fileId, userId, reset))) return { id: fileId, queued: false, stage: 'failed' };
     const offset = clipOffset(timeOffsetSec);
     const target = await chooseLane(row, lanes);
     await target.queue.add('transcribe', { fileId, userId, ...(offset ? { timeOffsetSec: offset } : {}), ...mediaJobFields(media),
@@ -2288,6 +2295,22 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
    * leaves it alone, and asking for it again resumes from its checkpoints.
    * Owner-scoped; never throws. Returns { stopped, results }.
    */
+  /**
+   * The stop state of a recording, written only while its row is still
+   * pending: a job that finished meanwhile (here or on another worker)
+   * keeps its transcript. A gap retry goes back to its partial transcript.
+   */
+  const settleStoppedRow = async (fileId, userId, row) => {
+    const owned = { id: fileId, userId, deletedAt: null, processingStage: { in: PENDING_STAGES } };
+    if (isReprocessingPartial(row)) {
+      await prisma.file.updateMany({ where: { ...owned, processingError: RETRYING_PARTIAL }, data: {
+        processingStage: 'ready', processingStageAt: new Date(now()),
+        processingError: `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.` } });
+      return;
+    }
+    await prisma.file.updateMany({ where: owned, data: { processingStage: 'failed', processingStageAt: new Date(now()), processingError: CANCELLED_NOTE } });
+  };
+
   async function cancelMediaTranscription({ fileIds = [], userId, refines = [] } = {}) {
     const ids = [...new Set((Array.isArray(fileIds) ? fileIds : [])
       .filter(id => typeof id === 'string' && id && id.length <= 200))].slice(0, 500);
@@ -2357,17 +2380,16 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
           // A transcription job's own failure path writes the row (and keeps
           // a gap retry's partial text). A refine's never does: a gap retry
           // waiting behind it is settled below, or recovery would re-queue it.
+          // An aborted job may still never write it (it finishes an offload
+          // as 'ready', parks behind a refine or a deploy, handles a
+          // transient failure): the stop state is written here as well.
           if (writesRow) {
+            await settleStoppedRow(fileId, userId, row);
             results.push({ id: fileId, outcome: 'aborted' });
             continue;
           }
         }
-        if (isReprocessingPartial(row)) {
-          await writeOwned(fileId, userId, { processingStage: 'ready', processingStageAt: new Date(now()),
-            processingError: `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.` });
-        } else {
-          await stage(fileId, userId, 'failed', CANCELLED_NOTE);
-        }
+        await settleStoppedRow(fileId, userId, row);
         results.push({ id: fileId, outcome: removed ? 'removed' : 'stopped' });
       } catch (err) {
         results.push({ id: fileId, outcome: 'error', code: err?.code || null });

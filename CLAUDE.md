@@ -3519,7 +3519,13 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   transcripción ya terminó o se detuvo». Un Detener que el dueño honró a mitad del análisis y cuya
   línea no se publicó cuenta como detenido (`cancel_requested`, nunca «ya había terminado»): el
   hand-off conserva Detener y el siguiente lo publica. El manejador `failed` de BullMQ no reescribe
-  la nota de un trabajo detenido (`media_cancelled`): la fila ya la tiene o se volvió a pedir. Una corrección de tramo que sobrevivió al Detener termina
+  la nota de un trabajo detenido (`media_cancelled`): la fila ya la tiene o se volvió a pedir. Una
+  grabación detenida solo se reanuda cuando se vuelve a pedir la transcripción
+  (`waitForMediaBatch({ resumeStopped })`: el runner lo pasa con un pedido de transcripción,
+  «retómala» o «reintenta»); un resumen o una pregunta sobre las listas no reinicia (ni cobra) las
+  demás. Detener escribe el estado detenido él mismo (`settleStoppedRow`, solo sobre una fila aún
+  pendiente: una que terminó entretanto conserva su transcripción), y el barrido de recuperación
+  (sin `retry`) nunca borra una nota escrita después de leer la fila (`writeUnlessStopped`). Una corrección de tramo que sobrevivió al Detener termina
   antes de llamar a un proveedor y la que corre en otro worker se detiene en su chequeo
   (`isRefineJobWanted` → `isRefineWanted` en la cola; otra entrega abierta con la misma clave de
   trabajo la mantiene). Pedirla de nuevo con el trabajo detenido aún `active` sin abort local

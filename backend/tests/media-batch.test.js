@@ -1799,6 +1799,37 @@ test('a whole translation after a moment translates it all, and says so', () => 
   assert.match(require('../src/services/media-delivery').amendedMessage(whole), /la traducción, completa/);
 });
 
+test('after a Stop, a summary or a question about the ready recordings never restarts the stopped ones', async () => {
+  const stopped = (id) => ({ ...readyRow(id, `${id}.mp4`), processingStage: 'failed', extractedText: null,
+    processingError: require('../src/services/media-transcription-queue').CANCELLED_NOTE });
+  const rows = [readyRow('v0', 'clase1.mp4'), stopped('v1'), stopped('v2')];
+  const run = async (displayGoal) => {
+    const waits = [];
+    await runMediaBranch({
+      mediaBatchRows: rows, displayGoal, goal: 'x',
+      mediaBatch: { ...batch, waitForMediaBatch: async (args) => { waits.push(args); return { rows, ready: 1, failed: 2, pending: 0, partial: 0 }; } },
+      prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+      backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+      controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+      saveArtifact: (artifact) => ({ ...artifact, id: 'art' }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+      plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+      require: (name) => require(name === '../media-transcript-artifacts' ? '../src/services/media-transcript-artifacts' : name),
+      ...mediaBranchHelpers({ loadMediaDeliveryService: () => null }),
+      throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+    }).catch(() => null);
+    return waits.map(args => Boolean(args.resumeStopped));
+  };
+  for (const goal of ['resume las clases que ya están transcritas', '¿qué dijo el profesor en el minuto 10?', 'en Word']) {
+    const waits = await run(goal);
+    assert.ok(waits.length > 0, goal);
+    assert.ok(waits.every(resume => resume === false), goal);
+  }
+  for (const goal of ['transcribe las clases', 'retómala', 'reintenta']) {
+    const waits = await run(goal);
+    assert.ok(waits.length > 0 && waits.every(resume => resume === true), goal);
+  }
+});
+
 test('«retómala» after a Stop resumes the transcript, never a paid analysis of every recording', () => {
   const mb = require('../src/services/media-batch');
   for (const goal of ['retómala', 'Sí, retómala, por favor', 'reanúdala', 'continúala', '¿puedes retomarla?', 'retoma la transcripción',
