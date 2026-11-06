@@ -1598,9 +1598,24 @@ function createMediaDeliveryService(deps = {}) {
     }
 
     await stopIfCancelled(id);
-    const rows = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
+    const loaded = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
       .map(row => ({ ...row, deliveryState: classifyFileRow(row) }));
     checkpoint();
+
+    const transcripts = {};
+    for (const row of loaded) {
+      if (!isUsableRow(row)) continue;
+      transcripts[row.id] = await Promise.resolve(loadTranscript(transcriptPrisma(), { userId, fileId: row.id }))
+        .catch(() => null) || null;
+    }
+    checkpoint();
+    // Audio extracted in the browser is named after what the user uploaded
+    // («Clase 3.mp4», never «Clase 3.audio.ogg») in the message, the
+    // notification and the chat title, as it already is in the files.
+    const rows = loaded.map((row) => {
+      const sourceName = transcripts[row.id]?.sourceName;
+      return sourceName ? { ...row, originalName: sourceName } : row;
+    });
 
     const preferred = record.deliveryChatId || record.chatId || null;
     const ensured = await ensureChat({ userId, chatId: preferred, title: chatTitleFor(record, rows), model: record.model?.id || null });
@@ -1611,14 +1626,6 @@ function createMediaDeliveryService(deps = {}) {
       throw err;
     }
     if (targetChatId !== preferred) await store.patch(id, token, { deliveryChatId: targetChatId });
-    checkpoint();
-
-    const transcripts = {};
-    for (const row of rows) {
-      if (!isUsableRow(row)) continue;
-      transcripts[row.id] = await Promise.resolve(loadTranscript(transcriptPrisma(), { userId, fileId: row.id }))
-        .catch(() => null) || null;
-    }
     checkpoint();
 
     const usable = rows.filter(isUsableRow);

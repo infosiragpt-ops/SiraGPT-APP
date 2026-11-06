@@ -91,7 +91,7 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
-- Audio the browser extracted keeps the name of what was uploaded everywhere. A translation or analysis of a video's extracted audio said «Clase 3.audio» instead of «Clase 3». A large audio file re-encoded in the browser lost its own name in every deliverable: «Entrevista.audio (transcripción).txt» instead of «Entrevista (transcripción).txt».
+- Audio the browser extracted keeps the name of what was uploaded everywhere. A translation or analysis of a video's extracted audio said «Clase 3.audio» instead of «Clase 3». A large audio file re-encoded in the browser lost its own name in every deliverable: «Entrevista.audio (transcripción).txt» instead of «Entrevista (transcripción).txt». The chat copy follows: the delivery message and its notification, the progress line, the hand-off, the Stop line and the inline preview say «Clase 3.mp4», and «revisa el minuto 12 de Clase 3» finds that recording instead of asking which one.
 - Extracting the audio of a recording with no duration in its metadata (a browser screen recording, a cut-off OBS file) no longer reads the file twice, and the chip shows progress while it runs. ✕ during that extraction now stops it at once.
 - Installing a sandbox package that is not approved, not found, or blocked by
   the network now reports that reason. On a loaded host it could be reported

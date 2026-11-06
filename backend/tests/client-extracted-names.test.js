@@ -152,3 +152,45 @@ test('the background delivery translates and analyses under the recordings\' own
   assert.doesNotMatch(rowsIn, /if \(!range\) return rows;/, 'without a range the rows are still renamed');
   assert.match(rowsIn, /mediaRowsForAnalysis\(rows, transcripts, range \|\| null\)/);
 });
+
+// ── the turn, the delivery and a refine by name (review of #1134) ───────
+
+const extracted = (sourceName) => ({ tier: 'opus', sourceName, sourceSize: 900_000_000, sourceType: 'video/mp4', durationSeconds: 3600 });
+
+test('a refine by name finds an extracted recording by what the user uploaded', async () => {
+  const batch = require('../src/services/media-batch');
+  const rows = [{ id: 'f3', originalName: 'Clase 3.audio.ogg' }, { id: 'f4', originalName: 'Clase 4.audio.ogg' }];
+  // The upload's own name answers to «Clase 3» too.
+  assert.equal(batch.pickRowByName(rows, 'revisa del minuto 12 al 15 de Clase 3, se escuchó mal')?.id, 'f3');
+  const prisma = { documentAnalysis: { findMany: async ({ where }) => where.fileId.in.map(fileId => ({ fileId,
+    metadata: { clientExtracted: extracted(fileId === 'f3' ? 'Clase 3.mp4' : 'Clase 4.mp4') } })) } };
+  const names = await batch.loadPresentedNames(prisma, { userId: 'u1', rows });
+  assert.deepEqual([...names.entries()], [['f3', 'Clase 3.mp4'], ['f4', 'Clase 4.mp4']]);
+  const presented = batch.presentRows(rows, names);
+  assert.equal(batch.pickRowByName(presented, 'revisa el minuto 12 de «Clase 4.mp4»')?.id, 'f4');
+  // Unknown or unreadable: no names, never a throw.
+  assert.equal((await batch.loadPresentedNames({ documentAnalysis: { findMany: async () => { throw new Error('db'); } } }, { userId: 'u1', rows })).size, 0);
+  assert.equal((await batch.loadPresentedNames(null, { userId: 'u1', rows })).size, 0);
+});
+
+test('the live progress names what the user uploaded', async () => {
+  const batch = require('../src/services/media-batch');
+  const labels = [];
+  await batch.waitForMediaBatch({ prisma: null, userId: 'u1', timeoutMs: 0, enqueue: async () => ({ queued: false }),
+    rows: [{ id: 'f3', originalName: 'Clase 3.audio.ogg', processingStage: 'extracting' }],
+    names: new Map([['f3', 'Clase 3.mp4']]),
+    readProgress: async () => ({ f3: { stage: 'transcribing', percent: 40, completed: 2, total: 5 } }),
+    onProgress: progress => labels.push(batch.describeBatchProgress(progress)) });
+  assert.ok(labels.some(label => label.includes('«Clase 3.mp4»')), labels.join(' | '));
+  assert.ok(labels.every(label => !label.includes('.audio.ogg')));
+});
+
+test('the inline preview is headed with what the user uploaded', () => {
+  const artifacts = require('../src/services/media-transcript-artifacts');
+  const rows = [{ id: 'f3', originalName: 'Clase 3.audio.ogg', processingStage: 'ready', extractedText: '[00:00:01] Buenos días.' },
+    { id: 'f4', originalName: 'Clase 4.audio.ogg', processingStage: 'ready', extractedText: '[00:00:01] Hola.' }];
+  const transcripts = new Map([['f3', { sourceName: 'Clase 3.mp4' }], ['f4', { sourceName: 'Clase 4.mp4' }]]);
+  const preview = artifacts.buildTranscriptChatPreview({ rows, transcripts, output: {} });
+  assert.match(preview, /Clase 3\.mp4/);
+  assert.doesNotMatch(preview, /\.audio\.ogg/);
+});

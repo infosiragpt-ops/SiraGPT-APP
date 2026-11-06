@@ -1842,3 +1842,63 @@ test('«retómala» after a Stop resumes the transcript, never a paid analysis o
     assert.equal(mb.isTranscriptGoal(goal), false, goal);
   }
 });
+
+test('an extracted recording is named after what the user uploaded in the hand-off, the record and the delivery', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { createMediaDeliveryStore } = require('../src/services/media-delivery-store');
+  const mediaDelivery = require('../src/services/media-delivery');
+  const rows = [{ id: 'clase', originalName: 'Clase 3.audio.ogg', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+  const prisma = { documentAnalysis: { findMany: async () => [{ fileId: 'clase',
+    metadata: { clientExtracted: { tier: 'opus', sourceName: 'Clase 3.mp4', sourceSize: 900_000_000, sourceType: 'video/mp4' } } }] } };
+  const created = [];
+  const handOffs = [];
+  const labels = [];
+  const adapter = { isMediaDeliveryEnabled: () => true,
+    createDelivery: async (record) => { created.push(record); return { id: 'md_names' }; },
+    handOffMessage: (args) => { handOffs.push(args); return 'Te aviso aquí.'; },
+    estimateTranscriptionSeconds: () => 900 };
+  await runMediaBranch({
+    mediaBatchRows: rows,
+    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 0, failed: 0, pending: 1, partial: 0, progress: {}, stoppedEarly: true }) },
+    prisma, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: 'transcribe', goal: 'transcribe',
+    backfillUserMessageFilesForTranscription: async () => {}, emit: (event) => { if (event?.label) labels.push(event.label); },
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: () => { throw new Error('no artifacts before the transcript exists'); },
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: true, openai: {}, task: {}, documentPolicy: {},
+    require: mediaRuntime(async () => { throw new Error('no model call before the transcript exists'); }),
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => adapter }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.deepEqual([...created[0].fileNames], ['Clase 3.mp4'], 'the Stop line names it too');
+  assert.deepEqual([...handOffs[0].fileNames], ['Clase 3.mp4']);
+  assert.ok(labels.some(label => label === 'Transcribiendo «Clase 3.mp4»'), labels.join(' | '));
+
+  // The delivery: its message, its notification and a re-created chat's title.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mb-names-'));
+  const posted = [];
+  const notified = [];
+  const titles = [];
+  const service = mediaDelivery.createMediaDeliveryService({
+    env: { SIRAGPT_MEDIA_DELIVERY: '1' }, logger: { info() {}, warn() {} }, store: createMediaDeliveryStore({ root }),
+    prisma: { message: { findFirst: async () => null } },
+    loadFiles: async () => [{ id: 'clase', userId: 'owner', originalName: 'Clase 3.audio.ogg', mimeType: 'audio/ogg', processingStage: 'ready', extractedText: 'Hola a todos.' }],
+    loadTranscript: async () => ({ sourceName: 'Clase 3.mp4' }),
+    buildArtifacts: async () => [{ filename: 'Clase 3 (transcripción).txt', base64: 'eA==', mime: 'text/plain' }],
+    saveArtifact: ({ filename, mime }) => ({ id: 'a1', filename, mime, format: 'txt' }),
+    persistArtifact: async () => {},
+    postMessage: async ({ chatId, content }) => { posted.push(content); return { messageId: 'm1', chatId }; },
+    ensureChat: async ({ chatId, title }) => { titles.push(title); return { chatId: 'chat2', created: true }; },
+    notify: async (payload) => { notified.push(payload); },
+  });
+  const record = await service.createDelivery({ userId: 'owner', chatId: 'gone', taskId: null, fileIds: ['clase'], fileNames: ['Clase 3.audio.ogg'],
+    goal: 'transcribe', mode: 'transcript', formats: ['txt'] });
+  assert.equal((await service.deliverOne(record.id)).status, 'delivered');
+  assert.match(posted[0], /Clase 3\.mp4/);
+  assert.doesNotMatch(posted[0], /\.audio\.ogg/);
+  assert.equal(titles[0], 'Transcripción: Clase 3.mp4');
+  assert.doesNotMatch(JSON.stringify(notified), /\.audio\.ogg/);
+  fs.rmSync(root, { recursive: true, force: true });
+});

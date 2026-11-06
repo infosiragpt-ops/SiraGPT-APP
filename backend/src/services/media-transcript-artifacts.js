@@ -786,7 +786,11 @@ function previewReportBlock(report) {
 function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output = {}, formatter = null,
   transcriptFilesAttached = true } = {}) {
   const fmt = formatter || defaultFormatter();
-  const ready = rows.filter((row) => String(row?.extractedText || '').trim());
+  // Headed with what the user uploaded («Clase 3.mp4»), like the files below.
+  const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
+    const sourceName = transcripts?.get?.(row.id)?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName } : row;
+  });
   if (!ready.length) return '';
   const single = ready.length === 1;
   const parts = [];

@@ -119,8 +119,11 @@ function batchCounts(rows) {
 async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = () => {},
   enqueue = enqueueMediaTranscription, wait = delay, now = Date.now,
   timeoutMs = 90 * 60_000, stallMs = MEDIA_WAIT_STALL_MS, pollMs = 4000, retryFailed = false,
-  readProgress = defaultReadProgress, shouldStop = null, language = null, hints = null, resumeStopped = false }) {
+  readProgress = defaultReadProgress, shouldStop = null, language = null, hints = null, resumeStopped = false,
+  names = null }) {
   const ids = rows.map(row => row.id);
+  // «Clase 3.mp4» for the audio the browser extracted from it (loadPresentedNames).
+  const nameOf = row => names?.get?.(row.id) || row.originalName || row.filename;
   let current = rows;
   const enqueueErrors = new Map();
   // What the user said about the recordings («está en inglés», «los nombres
@@ -163,7 +166,7 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     }).join('|');
     if (stamp !== lastProgress) {
       await onProgress({ ...counts, files: current.map(row => ({ id: row.id,
-        name: row.originalName || row.filename, stage: stateOf(row),
+        name: nameOf(row), stage: stateOf(row),
         ...(progressById[row.id] ? { progress: progressById[row.id] } : {}) })) });
       lastProgress = stamp;
       lastMovedAt = now();
@@ -175,7 +178,7 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     if (typeof shouldStop === 'function') {
       let stop = false;
       try { stop = Boolean(await shouldStop({ ...counts, elapsedMs: now() - startedAt, files: current.map(row => ({ id: row.id,
-        name: row.originalName || row.filename, stage: stateOf(row), size: Number(row.size) || 0,
+        name: nameOf(row), stage: stateOf(row), size: Number(row.size) || 0,
         ...(progressById[row.id] ? { progress: progressById[row.id] } : {}) })) })); } catch (_) { stop = false; }
       if (stop) return { rows: current, ...batchCounts(current), enqueueErrors, progress: progressById, stoppedEarly: true };
     }
@@ -1617,6 +1620,9 @@ const NAME_STOPWORDS = new Set(['audio', 'audios', 'video', 'videos', 'clase', '
   'parte', 'final', 'nota', 'notas', 'voz', 'whatsapp', 'record', 'recording', 'meeting', 'sesion', 'copia']);
 
 /** The one row the text names (by id, full name or a distinctive word of it), or null. */
+// «Clase 3.audio.ogg» (audio extracted in the browser) answers to «Clase 3».
+const nameStem = row => foldGoal(rowName(row)).replace(/(?:\.audio)?\.[a-z0-9]{1,6}$/, '').trim();
+
 function pickRowByName(rows = [], text = '') {
   const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
   if (list.length === 1) return list[0];
@@ -1624,16 +1630,45 @@ function pickRowByName(rows = [], text = '') {
   const byId = list.filter(row => String(row.id || '').length >= 8 && String(text).includes(String(row.id)));
   if (byId.length === 1) return byId[0];
   const byFull = list.filter((row) => {
-    const stem = foldGoal(rowName(row)).replace(/\.[a-z0-9]{1,6}$/, '').trim();
+    const stem = nameStem(row);
     return stem.length >= 3 && f.includes(stem);
   });
   if (byFull.length === 1) return byFull[0];
   const byWord = list.filter((row) => {
-    const words = foldGoal(rowName(row)).replace(/\.[a-z0-9]{1,6}$/, '').split(/[^a-z0-9]+/)
+    const words = nameStem(row).split(/[^a-z0-9]+/)
       .filter(word => word.length >= 4 && !NAME_STOPWORDS.has(word) && !/^\d+$/.test(word));
     return words.some(word => new RegExp(`\\b${word}\\b`).test(f));
   });
   return byWord.length === 1 ? byWord[0] : null;
+}
+
+/**
+ * What the user uploaded, for audio the browser extracted («Clase 3.mp4» for
+ * «Clase 3.audio.ogg»): one query, from the upload's clientExtracted. A Map
+ * of fileId → name; empty when unknown. Never throws.
+ */
+async function loadPresentedNames(prisma, { userId, rows = [] } = {}) {
+  const names = new Map();
+  const ids = (Array.isArray(rows) ? rows : []).map(row => row?.id).filter(id => typeof id === 'string' && id);
+  if (!userId || !ids.length || typeof prisma?.documentAnalysis?.findMany !== 'function') return names;
+  try {
+    const found = await prisma.documentAnalysis.findMany({ where: { fileId: { in: ids }, userId: String(userId) },
+      select: { fileId: true, metadata: true } });
+    const { normalizeClientExtracted } = require('./client-extracted-metadata');
+    for (const entry of Array.isArray(found) ? found : []) {
+      const metadata = entry?.metadata && typeof entry.metadata === 'object' ? entry.metadata : {};
+      const sourceName = normalizeClientExtracted(metadata.clientExtracted)?.sourceName;
+      if (sourceName) names.set(entry.fileId, sourceName);
+    }
+  } catch (_) {
+    return new Map();
+  }
+  return names;
+}
+
+/** Rows named after what the user uploaded (see loadPresentedNames). */
+function presentRows(rows = [], names = new Map()) {
+  return (Array.isArray(rows) ? rows : []).map(row => (row && names?.has?.(row.id) ? { ...row, originalName: names.get(row.id) } : row));
 }
 
 function clockLabel(seconds) {
@@ -1804,6 +1839,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
   wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  loadPresentedNames, presentRows,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };

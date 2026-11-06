@@ -3370,7 +3370,13 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   (`spliceRefinedRange` los conserva); `isVideoRow` lo respeta (los subtítulos automáticos
   siguen) y los entregables llevan el nombre de la fuente, no «Clase 3.audio.ogg»: la
   transcripción y también la traducción y el análisis (`mediaRowsForAnalysis` renombra las filas
-  con o sin tramo; la entrega durable lo llama siempre). Si el audio de un video no
+  con o sin tramo; la entrega durable lo llama siempre). También el texto: el mensaje de la entrega,
+  su notificación y el título de un chat re-creado (la entrega renombra las filas con el
+  `sourceName` de la transcripción), y en el turno la etiqueta y el progreso, el hand-off, los
+  `fileNames` del registro (la línea «Detuve…») y la vista previa (`loadPresentedNames` lee
+  `clientExtracted` de la subida en una consulta; `presentRows`). Una corrección por nombre encuentra
+  la grabación por lo que subió el usuario («revisa el minuto 12 de Clase 3»; `pickRowByName`
+  ignora el «.audio» de la extracción). Si el audio de un video no
   tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
   pantalla quedaron en el video; «vuelve a adjuntar el mismo video: esta vez se sube completo»).
   Las herramientas de cuadros sobre un video del que solo se subió el audio dicen eso y el mismo

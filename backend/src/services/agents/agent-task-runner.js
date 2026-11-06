@@ -2915,6 +2915,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // Do not send an empty transcript or the first few seconds to the LLM
       // while the remaining recordings are still being transcribed.
       const ids = mediaBatchRows.map(row => row.id);
+      // Audio extracted in the browser is named after what the user uploaded
+      // («Clase 3.mp4», never «Clase 3.audio.ogg»): the step label, the
+      // hand-off, the Stop line and a refine by name all read these.
+      const presentedNames = typeof mediaBatch.loadPresentedNames === 'function'
+        ? await mediaBatch.loadPresentedNames(prisma, { userId: user.id, rows: mediaBatchRows }).catch(() => new Map()) : new Map();
+      const presentedName = row => presentedNames.get(row?.id) || row?.originalName || row?.filename || row?.id;
       const companionAttachments = Array.isArray(task?.companionAttachments) ? task.companionAttachments : [];
       const hasCompanionAttachments = companionAttachments.length > 0;
       const mediaGoal = String(displayGoal || goal || '');
@@ -3006,7 +3012,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       if (followupIntent?.kind === 'refine' && typeof mediaBatch.requestMediaRefine === 'function') {
         const refineDelivery = loadMediaDeliveryService();
         const refined = await mediaBatch.requestMediaRefine({
-          prisma, userId: user.id, chatId, taskId, rows: mediaBatchRows, goal: mediaGoal, intent: followupIntent,
+          prisma, userId: user.id, chatId, taskId, goal: mediaGoal, intent: followupIntent,
+          rows: typeof mediaBatch.presentRows === 'function' ? mediaBatch.presentRows(mediaBatchRows, presentedNames) : mediaBatchRows,
           language: jobHints.language, hints: jobHints.hints, deps: { delivery: refineDelivery },
         });
         if (refined?.handled && refineAlongside) {
@@ -3115,7 +3122,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             .catch(() => null) || amended;
         }
         if (amended?.outcome === 'amended' || amended?.outcome === 'unchanged') {
-          const names = mediaBatchRows.map(row => row.originalName || row.filename || row.id);
+          const names = mediaBatchRows.map(presentedName);
           const text = amended.outcome === 'amended' && amended.changes?.length
             ? pendingService.amendedMessage({ changes: amended.changes, record: amended.record })
             : pendingService.stillRunningMessage({ fileNames: names });
@@ -3130,7 +3137,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // Being delivered right now, cancelled, or busy: the usual path below.
       }
       emit({ type: 'step_start', id: 'media_transcription',
-        label: ids.length === 1 ? `Transcribiendo «${mediaBatchRows[0].originalName || mediaBatchRows[0].filename || 'el archivo'}»` : `Transcribiendo ${ids.length} archivos`,
+        label: ids.length === 1 ? `Transcribiendo «${presentedName(mediaBatchRows[0]) || 'el archivo'}»` : `Transcribiendo ${ids.length} archivos`,
         icon: 'file-text' });
       const mediaWaitBudgetMs = Math.max(0, Math.min(mediaBatch.MEDIA_WAIT_MAX_MS, runtimeBudgetMs - (Date.now() - startedAt) - 20 * 60_000));
       // Long recordings are handed to the durable delivery: the turn ends
@@ -3146,7 +3153,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // is asked for again: «resume las clases ya transcritas» or a
         // question about one of them never restarts (and bills) the rest.
         resumeStopped: Boolean(retryRequested || transcriptRequest),
-        language: batchLanguage, hints: jobHints.hints,
+        language: batchLanguage, hints: jobHints.hints, names: presentedNames,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),
           status: 'saved', payload: { mediaBatch: progress } }),
@@ -3174,7 +3181,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         try {
           deliveryRecord = await mediaDeliveryService.createDelivery({
             userId: user.id, chatId, taskId, assistantMessageId: assistantMessageId || null,
-            fileIds: ids, fileNames: batch.rows.map(row => row.originalName || row.filename || row.id),
+            fileIds: ids, fileNames: batch.rows.map(presentedName),
             goal: mediaGoal,
             mode: translationTarget ? 'translation' : wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
             formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
@@ -3205,7 +3212,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           const etaSeconds = estimateMediaBatchEta(batch, mediaDeliveryService);
           const durationSec = totalProgressDuration(batch);
           const handOff = mediaDeliveryService.handOffMessage({
-            fileNames: batch.rows.map(row => row.originalName || row.filename || row.id),
+            fileNames: batch.rows.map(presentedName),
             durationSec: durationSec || null, etaSeconds,
           });
           const readyNote = batch.ready ? `${batch.ready} de ${batch.total} ya están transcritos; los entrego todos juntos cuando terminen los demás.` : '';
