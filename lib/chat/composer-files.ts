@@ -614,9 +614,9 @@ function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated:
   for (let index = stopAt + 1; index < messages.length; index += 1) {
     const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() !== "user") continue
-    if (ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
     const ids = parseMessageFiles(message.files).map((file) => resolveUploadFileId(file)).filter(Boolean).map((id) => String(id))
     if (ids.length && !ids.every((id) => stopped.has(id))) return null
+    if (ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
     turns.all += 1
     if (!ids.length) turns.unrelated += 1
   }

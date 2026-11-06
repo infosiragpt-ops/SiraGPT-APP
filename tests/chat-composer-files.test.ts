@@ -257,6 +257,9 @@ describe("historical media batch follow-ups", () => {
     // Other recordings sent since: that stop line is no longer the one answered.
     const other = [...stopped, { role: "USER", content: "y este", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) }]
     assert.deepEqual(resolveMediaFollowupFiles("retoma la transcripción", other), [])
+    // Even when the message that brought them only said thanks.
+    const thanksWithFiles = [...stopped, { role: "USER", content: "ok gracias", files: JSON.stringify([{ id: "v3", name: "otro.mp4", mimeType: "video/mp4" }]) }]
+    assert.deepEqual(resolveMediaFollowupFiles("retómala", thanksWithFiles), [])
   })
 
   it("a fact after a lead-in or a colon reaches a pending batch; one about two languages stays in the chat", () => {
