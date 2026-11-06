@@ -3106,6 +3106,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             || (!cutsTranscript && explicitAnalysis && askedWindow ? askedWindow : null),
           translationRange: translatesMoment ? lookupWindow
             : (!cutsTranscript && translationTarget && askedWindow ? askedWindow : null),
+          // «tradúcela completa» after a moment translates it all; a follow-up
+          // that only names the language («tradúcelo al inglés en Word») keeps it.
+          translationWhole: Boolean(translationTarget && !translatesMoment && !mediaOutput.range
+            && typeof mediaBatch.asksWholeTranslation === 'function' && mediaBatch.asksWholeTranslation(mediaGoal)),
           language: jobHints.language || null,
           hints: jobHints.hints || null,
           model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
@@ -3180,14 +3184,21 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const mediaDeliveryService = loadMediaDeliveryService();
       const deliveryEnabled = Boolean(mediaDeliveryService?.isMediaDeliveryEnabled?.(process.env));
       const inlineWaitMs = deliveryEnabled ? Math.min(mediaWaitBudgetMs, mediaInlineWaitMs(process.env)) : mediaWaitBudgetMs;
+      const resumeAsked = Boolean(retryRequested
+        || (typeof mediaBatch.isResumeGoal === 'function' && mediaBatch.isResumeGoal(mediaGoal)));
       const waitOptions = {
         prisma, userId: user.id, signal: controller.signal, retryFailed: retryRequested,
         // Recordings stopped with «Detener» resume only when the transcript
         // is asked for again («transcribe…», «dame la transcripción»,
         // «retómala», «reintenta»): «resume la transcripción de la clase 1»,
         // a question or «pásalo a Word» never restarts (and bills) the rest.
-        resumeStopped: Boolean(retryRequested || asksTranscriptByRequest
-          || (typeof mediaBatch.isResumeGoal === 'function' && mediaBatch.isResumeGoal(mediaGoal))),
+        // Only the one it names («transcribe la clase 2»), and none for a
+        // request about the finished ones («pasa a PDF las que ya están
+        // transcritas»): see mediaBatch.resumeScope.
+        resumeStopped: typeof mediaBatch.resumeScope === 'function'
+          ? mediaBatch.resumeScope({ goal: mediaGoal, rows: mediaBatchRows, names: presentedNames,
+            askedAgain: resumeAsked || asksTranscriptByRequest, explicit: resumeAsked })
+          : Boolean(resumeAsked || asksTranscriptByRequest),
         language: batchLanguage, hints: jobHints.hints, names: presentedNames,
         onProgress: progress => emit({ type: 'checkpoint',
           label: mediaBatch.describeBatchProgress(progress),

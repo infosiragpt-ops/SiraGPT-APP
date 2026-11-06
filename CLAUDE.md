@@ -3518,7 +3518,13 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   marca, el barrido detiene los trabajos aunque `cancel` no consiga el lock (un proceso que murió a
   mitad) y no entrega nada (`cancelling`). Los detiene una sola vez por Detener (`jobsStopped` en la
   marca, `noteJobsStopped`): el barrido que solo reintenta la línea nunca detiene una grabación que el
-  usuario volvió a pedir. Un pedido detenido con su línea pendiente no necesita nada: no retiene los
+  usuario volvió a pedir. La marca solo se escribe si todos los trabajos quedaron detenidos
+  (`cancelUnneededMediaJobs` → `complete`): una caída de la base de datos a mitad del Detener deja que
+  el barrido los vuelva a detener, y un Detener que espera a otro proceso (`cancel_requested`) también
+  la deja. Un pedido de transcripción retoma solo lo que nombra (`resumeScope`: «transcribe la clase 2»
+  → esa; «la clase 2» nunca es «Clase 20» y «clase2.mp4» responde a «la clase 2») y nada si habla de
+  las terminadas («pasa a PDF las que ya están transcritas», `limitsToFinished`), salvo un «retómalas»
+  o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Un pedido detenido con su línea pendiente no necesita nada: no retiene los
   trabajos de otro Detener, y una corrección de tramo detenida en un chat conserva el trabajo que
   comparte con una corrección abierta del mismo tramo en otro chat. Tras «Detuve…», «retómala»,
   «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
@@ -3538,7 +3544,18 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   txt» ya es así (el TXT siempre va) y nunca dispara el análisis de reserva. Recién hecho el aviso, un
   pedido suelto («¿de qué trata?», «dime los temas», «hazme 5 preguntas») llega al lote pendiente. Un momento de una grabación que la entrega ya traduce completa al
   mismo idioma no estrecha la traducción (`translation_moment_covered`: «completa (incluye ese
-  momento)»). «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
+  momento)»). Los tramos de traducción se suman como los del análisis: el que la traducción ya lee
+  (su tramo, el rango de la transcripción o toda la grabación) nunca se achica; un momento dentro no
+  cambia nada (`translation_moment_included`) y uno fuera lo amplía al tramo que cubre ambos
+  (`translation_range_added`). «traduce también al inglés lo que dice en el minuto 50» y «traduce al
+  inglés lo del minuto 50» son tramos de traducción, sin resumen. Solo «tradúcela completa», «tradúcelo
+  todo» o «traduce toda la clase» (`asksWholeTranslation` → `translationWhole`) traducen la grabación
+  entera; nombrar el idioma otra vez conserva el tramo y dice cómo pedirla completa
+  (`translation_range_kept`). Cambiar Word por PDF quita el Word de `formats` («en PDF en lugar de
+  Word»), un formato rechazado sale de `formats` aunque otro lo hubiera reemplazado, y la entrega no
+  arma ni reporta como faltante un documento rechazado o reemplazado. Una grabación fallida cuyo audio
+  extrajo el navegador conserva el nombre que el runner guardó al entregarla (`record.fileNames`).
+  «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
   transcripción ya terminó o se detuvo». Un Detener que el dueño honró a mitad del análisis y cuya
   línea no se publicó cuenta como detenido (`cancel_requested`, nunca «ya había terminado»): el
   hand-off conserva Detener y el siguiente lo publica. El manejador `failed` de BullMQ no reescribe

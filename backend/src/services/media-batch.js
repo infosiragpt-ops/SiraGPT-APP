@@ -135,7 +135,9 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     // A recording the user stopped («Detener») resumes only when asked again
     // (`resumeStopped`: a transcription request, «retómala», «reintenta»).
     // A question or a summary of the ready ones never restarts the rest.
-    const retryThis = (retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row))) || (resumeStopped && isUserCancelledRow(row));
+    // `resumeStopped` is true (every stopped one) or the ids the request names.
+    const resumeThis = resumeStopped === true || (Array.isArray(resumeStopped) && resumeStopped.includes(row.id));
+    const retryThis = (retryFailed && (stateOf(row) === 'failed' || isPartialTranscript(row))) || (resumeThis && isUserCancelledRow(row));
     if (stateOf(row) !== 'pending' && !retryThis) continue;
     try {
       const result = await enqueue({ fileId: row.id, userId, retry: retryThis, ...media });
@@ -536,7 +538,8 @@ function detectTranslationTarget(goal) {
 // asked about IS what to translate (the verb's direct object). Never
 // «tradúcela y dime qué dice en el minuto 30» or «traduce la clase y…»,
 // which translate the recording and ask about a moment.
-const MOMENT_TRANSLATION_RE = /\b(?:tradu[cz](?!cion|tor)\w*|translat(?!ion|or)\w*)\s+(?:(?:me|nos|le|les)\s+)?(?:(?:al|a|en|into|to|in)\s+(?:el\s+)?(?:idioma\s+)?[a-z]+\s*:?\s+)?(?:(?:me|nos)\s+)?(?:todo\s+)?(?:lo\s+que|que|what|everything\s+(?:that\s+)?)(?![a-z])/;
+// «traduce también al inglés lo que dice…», «traduce al inglés lo del minuto 50».
+const MOMENT_TRANSLATION_RE = /\b(?:tradu[cz](?!cion|tor)\w*|translat(?!ion|or)\w*)\s+(?:(?:me|nos|le|les)\s+)?(?:(?:tambien|ademas|igualmente|also)\s+)?(?:(?:al|a|en|into|to|in)\s+(?:el\s+)?(?:idioma\s+)?[a-z]+\s*:?\s+)?(?:(?:tambien|ademas|igualmente|also)\s+)?(?:(?:me|nos)\s+)?(?:todo\s+)?(?:lo\s+que|que|what|everything\s+(?:that\s+)?|lo(?=\s+de(?:l|\s+la)?\s))(?![a-z])/;
 // The moment must belong to that object: its time cue comes before any
 // other clause («traduce al inglés todo lo que dicen en la clase y dime qué
 // pasa en el minuto 30» translates the whole speech and asks about a moment).
@@ -544,6 +547,18 @@ const MOMENT_TIME_CUE_RE = /\b(?:minutos?|min|hora|horas|segundos?|minutes?|hour
 // A new request after a comma («…, dime qué pasa en el minuto 30») or an
 // opening «¿» / «¡» ends the object too.
 const MOMENT_CLAUSE_BREAK_RE = /[;.?!¿¡]|,\s*(?:dime|dinos|decime|cuentame|explica\w*|resume\w*|quiero|necesito|me\s+(?:dices|explicas|cuentas)|que|como|tell|explain|what)\b|\b(?:y|e|and|pero|but|tambien|ademas|luego|despues|then|also)\b/;
+
+// «tradúcela completa», «tradúcelo todo», «traduce toda la clase»: the whole
+// recording, over a moment asked for before. «tradúcelo al inglés en Word»,
+// «tradúcelo al inglés, todo bien» are not.
+const WHOLE_TRANSLATION_RE = /\b(?:tradu[cz](?!cion|tor)\w*|translat(?!ion|or)\w*)\s+(?:\w+\s+){0,3}?(?:complet[ao]s?|enter[ao]s?|integr[ao]s?|integramente|tod[ao]s?|whole|entire|full|all)\b|\b(?:traduccion|translation)\s+(?:\w+\s+){0,2}?(?:complet[ao]|enter[ao]|integr[ao]|whole|entire|full)\b|\b(?:complet[ao]s?|enter[ao]s?|integr[ao]s?)\s+(?:\w+\s+){0,2}?(?:tradu[cz]\w*|translat\w*)|\btod[ao]s?\s+(?:el|la|los|las)\s+(?:audio|clase|video|grabacion|archivo|reunion|conferencia|charla|transcripcion)(?:es|s)?\b|\b(?:the\s+)?(?:whole|entire|full)\s+(?:thing|recording|audio|class|video|transcript)\b/;
+
+/** «tradúcela completa»: the whole recording is to be translated. Pure; never throws. */
+function asksWholeTranslation(goal) {
+  try {
+    return WHOLE_TRANSLATION_RE.test(foldGoal(goal).replace(NEGATED_TRANSLATE_RE, ' '));
+  } catch (_) { return false; }
+}
 
 /** The translation asked for is of the moment the turn asks about. Pure; never throws. */
 function translatesTheMoment(goal) {
@@ -1631,7 +1646,8 @@ function detectMediaFollowupIntent(goal) {
   }
   // «Revisa el minuto 12 y dime si el profesor tiene razón», «en el minuto 20
   // dice algo que no tiene sentido, explícame por qué»: read that window.
-  if (hasTime && (lookupCue || CONTENT_QUESTION_RE.test(f))) {
+  // «lo del minuto 50» is what is said there.
+  if (hasTime && (lookupCue || CONTENT_QUESTION_RE.test(f) || /\blo\s+de(?:l|\s+la)?\s+(?:minutos?|min|horas?|segundos?)\b/.test(f))) {
     if (range) return { kind: 'lookup', range: { start: range.start, end: range.end != null ? range.end : range.start + OPEN_LOOKUP_SEC } };
     return { kind: 'lookup', range: { start: Math.max(0, at - LOOKUP_BEFORE_SEC), end: at + LOOKUP_AFTER_SEC }, at };
   }
@@ -1653,6 +1669,21 @@ function rowName(row) {
 const NAME_STOPWORDS = new Set(['audio', 'audios', 'video', 'videos', 'clase', 'clases', 'grabacion', 'archivo', 'reunion',
   'parte', 'final', 'nota', 'notas', 'voz', 'whatsapp', 'record', 'recording', 'meeting', 'sesion', 'copia']);
 
+const spaceDigits = text => String(text).replace(/([a-z])(\d)/g, '$1 $2').replace(/(\d)([a-z])/g, '$1 $2');
+const isWordChar = ch => /[a-z0-9]/.test(ch || '');
+/** `needle` in `text` with no letter or digit glued to either end. */
+function containsWhole(text, needle) {
+  if (!needle) return false;
+  for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + 1)) {
+    const before = text[at - 1];
+    const after = text[at + needle.length];
+    const freeBefore = !isWordChar(needle[0]) || !isWordChar(before);
+    const freeAfter = !isWordChar(needle[needle.length - 1]) || !isWordChar(after);
+    if (freeBefore && freeAfter) return true;
+  }
+  return false;
+}
+
 /** The one row the text names (by id, full name or a distinctive word of it), or null. */
 // «Clase 3.audio.ogg» (audio extracted in the browser) answers to «Clase 3».
 const nameStem = row => foldGoal(rowName(row)).replace(/(?:\.audio)?\.[a-z0-9]{1,6}$/, '').trim();
@@ -1663,9 +1694,12 @@ function pickRowByName(rows = [], text = '') {
   const f = foldGoal(text);
   const byId = list.filter(row => String(row.id || '').length >= 8 && String(text).includes(String(row.id)));
   if (byId.length === 1) return byId[0];
+  // A whole name, never part of a longer one: «la clase 2» is not «Clase 20»,
+  // and «clase2.mp4» answers to «la clase 2».
+  const spacedGoal = spaceDigits(f);
   const byFull = list.filter((row) => {
     const stem = nameStem(row);
-    return stem.length >= 3 && f.includes(stem);
+    return stem.length >= 3 && containsWhole(spacedGoal, spaceDigits(stem));
   });
   if (byFull.length === 1) return byFull[0];
   const byWord = list.filter((row) => {
@@ -1674,6 +1708,33 @@ function pickRowByName(rows = [], text = '') {
     return words.some(word => new RegExp(`\\b${word}\\b`).test(f));
   });
   return byWord.length === 1 ? byWord[0] : null;
+}
+
+// A request about the finished ones only («pasa a PDF las que ya están
+// transcritas», «las que ya tienen transcripción»). A «ya» that is only a
+// filler («ya, listo: transcribe la clase 2») is not one.
+const ONLY_FINISHED_RE = /\b(?:(?:que|las|los)\s+ya\s+(?:esta|estan|fueron|han\s+sido|quedaron|se)?\s*(?:transcrib|transcrit|list|terminad|hech|complet)|(?:que|las|los)\s+(?:ya\s+)?(?:tienen|tengan)\s+(?:la\s+|su\s+)?transcripci|que\s+(?:si\s+)?(?:se\s+)?(?:terminaron|transcribieron|completaron|alcanzaron\s+a\s+transcribirse)|(?:las|los)\s+(?:transcrit|terminad|completad)[oa]s\b)/;
+
+function limitsToFinished(goal = '') {
+  return ONLY_FINISHED_RE.test(foldGoal(goal));
+}
+
+/**
+ * Which recordings stopped with «Detener» a turn resumes: false (none),
+ * true (every stopped one) or the ids of the one it names. Only a turn that
+ * asks for the transcript again resumes any (`askedAgain`); one about the
+ * finished ones resumes none, unless it says to resume (`explicit`:
+ * «retómalas», «reintenta»); «transcribe la clase 2» resumes only that one.
+ */
+function resumeScope({ goal = '', rows = [], names = null, askedAgain = false, explicit = false } = {}) {
+  if (!askedAgain) return false;
+  if (!explicit && limitsToFinished(goal)) return false;
+  const list = (Array.isArray(rows) ? rows : []).filter(Boolean);
+  if (list.length > 1) {
+    const named = pickRowByName(names ? presentRows(list, names) : list, goal);
+    if (named) return [named.id];
+  }
+  return true;
 }
 
 /**
@@ -1872,8 +1933,9 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   loadPresentedNames, presentRows, asksForDeliverable, refusesTranslationWord, isResumeGoal,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
-  requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES };
+  requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES,
+  limitsToFinished, resumeScope };

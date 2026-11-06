@@ -181,15 +181,17 @@ function joinGoals(previous, addition) {
  * transcription. Pure. `amendment`:
  *   { goal, translationTarget, removeTranslation, wantsAnalysis, removeAnalysis,
  *     documentFormat, removeDocument, wantsSubtitles, removeSubtitles, range,
- *     analysisRange, translationRange, language, hints, model }
+ *     analysisRange, translationRange, translationWhole, language, hints, model }
  * Returns { record, changes }: `changes` names what the follow-up changed
- * ('translation', 'translation_target', 'translation_range', 'analysis',
+ * ('translation', 'translation_target', 'translation_range', 'translation_range_added',
+ * 'translation_moment_included', 'translation_moment_covered', 'translation_whole', 'translation_range_kept', 'analysis',
  * 'analysis_range', 'document', 'subtitles', 'range', 'language', 'hints',
  * 'no_translation', 'no_analysis', 'no_document', 'no_subtitles'); empty
  * when the request already covered it. The transcript the user first asked for is
  * never dropped: turning a transcript into a translation keeps its files.
  */
-const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'translation_whole', 'analysis', 'analysis_range']);
+const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'translation_range_added', 'translation_whole',
+  'analysis', 'analysis_range']);
 
 function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const value = amendment && typeof amendment === 'object' ? amendment : {};
@@ -260,20 +262,33 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     changes.push('analysis_range');
   }
   const translationRange = normalizeRefineRange(value.translationRange);
-  // A moment of a recording this delivery already translates whole, to the
-  // same language: the whole translation stays (it includes that moment),
-  // never narrowed to five minutes.
-  const translatesWhole = mode === 'translation' && !out.translationRange && Boolean(out.translationTarget)
-    && (!target || target === out.translationTarget);
-  if (translationRange && translatesWhole) {
-    changes.push('translation_moment_covered');
+  // A moment of a recording this delivery already translates to the same
+  // language: the window it reads (its own moments, else the transcript's
+  // range, else the whole recording) is never narrowed. A moment inside it
+  // changes nothing; one outside it widens it to the span of both, as a
+  // second question widens the analysis window.
+  const translatesAlready = mode === 'translation' && Boolean(out.translationTarget) && (!target || target === out.translationTarget);
+  if (translationRange && translatesAlready) {
+    const current = out.translationRange || normalizeRange(record.range);
+    const currentEnd = current ? (current.end == null ? MAX_REFINE_END_SEC : current.end) : null;
+    if (!current) {
+      changes.push('translation_moment_covered');
+    } else if (current.start <= translationRange.start && currentEnd >= translationRange.end) {
+      changes.push('translation_moment_included');
+    } else {
+      next.output.translationRange = { start: Math.min(current.start, translationRange.start), end: Math.max(currentEnd, translationRange.end) };
+      changes.push('translation_range_added');
+    }
   } else if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
     next.output.translationRange = translationRange;
     changes.push('translation_range');
-  } else if (!translationRange && target && out.translationRange) {
+  } else if (!translationRange && value.translationWhole === true && out.translationRange) {
     // «tradúcela completa al inglés» after a moment: the whole translation.
     delete next.output.translationRange;
     changes.push('translation_whole');
+  } else if (!translationRange && target && target === out.translationTarget && out.translationRange) {
+    // Only said: «tradúcelo al inglés en Word» keeps the moment (and says how to get it all).
+    changes.push('translation_range_kept');
   }
 
   // «no lo quiero en Word», «sin subtítulos»: a format turned down goes, and
@@ -284,11 +299,12 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   for (const format of removeDocuments) {
     if (out.documentFormat === format) {
       delete next.output.documentFormat;
-      formats.delete(format);
       changes.push('no_document');
     } else if (format === 'docx' && !declined.has('docx') && !out.documentFormat) {
       changes.push('no_auto_document');
     }
+    // Also a format a switch left behind (an older record): never delivered.
+    formats.delete(format);
     declined.add(format);
   }
   if (value.removeSubtitles === true) {
@@ -301,6 +317,8 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
 
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
   if (documentFormat && documentFormat !== out.documentFormat) {
+    // «mejor en PDF»: the PDF replaces the Word, never both.
+    if (out.documentFormat) formats.delete(out.documentFormat);
     next.output.documentFormat = documentFormat;
     changes.push('document');
   }

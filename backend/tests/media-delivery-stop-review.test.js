@@ -1113,3 +1113,75 @@ test('a deploy park never erases a Stop another worker noted meanwhile', async (
   assert.equal(rows.get('a').processingStage, 'failed');
   assert.equal(rows.get('a').processingError, CANCELLED_NOTE, 'the Stop stays');
 });
+
+// ── the seventh round: a Stop is noted as done only once its jobs stopped ──
+
+test('a Stop whose jobs did not all stop (a database outage) is never noted as done: the sweep stops them', async (t) => {
+  let down = true;
+  let outage = 'result';
+  const calls = [];
+  const { service, state, store } = await harness(t, { files: [fileRow('a')], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      const message = { id: `msg${state.messages.length + 1}`, userId, chatId, content, metadata };
+      state.messages.push(message);
+      return { messageId: message.id, chatId };
+    },
+    cancelMediaJobs: async (args) => {
+      calls.push(args);
+      if (outage === 'result') return { stopped: 0, results: [{ id: 'a', outcome: 'error', code: 'P1001' }] };
+      if (outage === 'throw') throw Object.assign(new Error('db'), { code: 'P1001' });
+      return { stopped: (args.fileIds || []).length, results: (args.fileIds || []).map(id => ({ id, outcome: 'stopped' })) };
+    },
+  } });
+  const record = await service.createDelivery(request());
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  assert.equal(calls.length, 1, 'the Stop tried to stop the jobs');
+  assert.notEqual((await store.cancelMarker(record.id))?.jobsStopped, true, 'a job left running is not «stopped»');
+  // The next sweep still cannot post the line; this time stopping throws.
+  outage = 'throw';
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelling');
+  assert.equal(calls.length, 2, 'the sweep tries again');
+  assert.notEqual((await store.cancelMarker(record.id))?.jobsStopped, true);
+  // The database is back: the sweep stops the jobs, posts the line and closes the request.
+  outage = null;
+  down = false;
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
+  assert.equal(calls.length, 3, 'and the jobs really stop');
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind === 'cancelled').length, 1);
+});
+
+test('a Stop left for a busy holder notes its jobs as stopped: a later sweep never stops a recording asked for again', async (t) => {
+  const { service, state, store } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })] });
+  const record = await service.createDelivery(request());
+  // Another process holds the delivery (it is posting, or it died holding the lock).
+  await store.claim(record.id);
+  const out = await service.cancelDelivery(record.id, { userId: 'u1', waitMs: 0 });
+  assert.equal(out.outcome, 'cancel_requested');
+  assert.equal(state.stopped.filter(args => (args.fileIds || []).includes('a')).length, 1, 'the jobs stop with the Stop');
+  assert.equal((await store.cancelMarker(record.id))?.jobsStopped, true);
+  // The user asks for the recording again; the sweep that finishes this Stop leaves it alone.
+  state.files.get('a').processingStage = 'uploaded';
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelling');
+  assert.equal(state.stopped.filter(args => (args.fileIds || []).includes('a')).length, 1, 'nothing is stopped twice');
+});
+
+test('a failed recording whose audio the browser extracted keeps the uploaded name in the delivery, its notice and the chat title', async (t) => {
+  const titles = [];
+  const notices = [];
+  const { service, state } = await harness(t, {
+    files: [fileRow('a', { originalName: 'Clase 4.audio.ogg', filename: 'Clase 4.audio.ogg', mimeType: 'audio/ogg',
+      processingStage: 'failed', processingError: 'No se detectó voz en este archivo.' })],
+    overrides: {
+      ensureChat: async ({ chatId, title }) => { titles.push(title); return { chatId, created: false }; },
+      notify: async (notice) => { notices.push(JSON.stringify(notice)); },
+    },
+  });
+  const record = await service.createDelivery(request({ fileNames: ['Clase 4.mp4'] }));
+  await service.deliverOne(record.id);
+  const posted = state.messages.map(message => message.content).join('\n');
+  assert.match(posted, /Clase 4\.mp4/);
+  assert.doesNotMatch(posted, /audio\.ogg/);
+  assert.ok(titles.every(title => !/audio\.ogg/.test(String(title || ''))), titles.join(' | '));
+  assert.ok(notices.every(notice => !/audio\.ogg/.test(notice)), notices.join(' | '));
+});

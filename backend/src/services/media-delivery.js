@@ -277,10 +277,20 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   } else if (window) parts.push('con la traducción del tramo que indicaste');
   else if (list.includes('translation_moment_covered')) {
     parts.push(`${language ? `${translated} al ${language}` : translated}, ${many ? 'completas' : 'completa'} (incluye ese momento)`);
+  } else if (list.includes('translation_moment_included')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción ya incluye ese momento)`);
+  } else if (list.includes('translation_range_added')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción incluye también ese momento)`);
+  } else if (list.includes('translation_range_kept')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción, solo del tramo que indicaste; si la quieres completa, dime «tradúcela completa»)`);
   }
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
-  if (list.includes('document')) parts.push(record?.output?.documentFormat === 'pdf' ? 'en PDF' : 'en Word');
-  if (list.includes('no_document')) parts.push('sin el documento que habías pedido');
+  // «Word no, PDF sí»: one swap, never «en PDF y sin el documento que habías pedido».
+  const pdf = record?.output?.documentFormat === 'pdf';
+  if (list.includes('document')) {
+    parts.push(`${pdf ? 'en PDF' : 'en Word'}${list.includes('no_document') ? ` en lugar de ${pdf ? 'Word' : 'PDF'}` : ''}`);
+  }
+  if (list.includes('no_document') && !list.includes('document')) parts.push('sin el documento que habías pedido');
   else if (list.includes('no_auto_document')) parts.push('sin Word');
   if (list.includes('subtitles')) parts.push('con subtítulos SRT y VTT');
   if (list.includes('no_subtitles')) parts.push('sin subtítulos');
@@ -363,6 +373,9 @@ function stoppedReasonFor(counts) {
   if (counts.partial || counts.failed || counts.pending) return 'media_batch_partial';
   return 'transcription_finalize';
 }
+
+// «Clase 3.audio.ogg»: the audio the browser extracted from «Clase 3.mp4».
+const EXTRACTED_AUDIO_NAME_RE = /\.audio\.[a-z0-9]{1,6}$/i;
 
 function displayName(row, delivery = {}, index = 0) {
   return row?.originalName || row?.filename || delivery?.fileNames?.[index] || 'archivo';
@@ -812,7 +825,12 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
   const files = (Array.isArray(artifacts) ? artifacts : []).filter(artifact => artifact?.filename);
   if (usable.length) {
     const produced = new Set(files.map(artifact => String(artifact.format || artifact.filename.split('.').pop() || '').toLowerCase()));
-    const missing = (Array.isArray(delivery?.formats) ? delivery.formats : []).filter(format => !produced.has(format));
+    // What the request still asks for: never a format turned down, nor the
+    // document another one replaced («mejor en PDF» on an older record).
+    const declinedDocs = new Set(Array.isArray(delivery?.output?.declinedDocuments) ? delivery.output.declinedDocuments : []);
+    const chosenDoc = delivery?.output?.documentFormat || null;
+    const missing = (Array.isArray(delivery?.formats) ? delivery.formats : []).filter(format => !produced.has(format)
+      && !declinedDocs.has(format) && !(chosenDoc && (format === 'docx' || format === 'pdf') && format !== chosenDoc));
     if (files.length && missing.length) {
       blocks.push(`No pude generar ${missing.map(format => FORMAT_LABELS[format] || format.toUpperCase()).join(' ni ')}; te dejo la transcripción en ${produced.has('txt') ? 'TXT' : 'los archivos adjuntos'}.`);
     }
@@ -1188,7 +1206,9 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
       rows: rows.filter(isUsableRow),
       transcripts: new Map(Object.entries(transcripts || {})),
       output: {
-        documentFormat: output.documentFormat || (formats.has('pdf') ? 'pdf' : formats.has('docx') ? 'docx' : null),
+        // A format turned down is never built from `formats` either.
+        documentFormat: output.documentFormat || ['pdf', 'docx'].find(format => formats.has(format)
+          && !(Array.isArray(output.declinedDocuments) && output.declinedDocuments.includes(format))) || null,
         wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
         // A refine re-sends the whole updated transcript, not just its window.
         range: !isRefineRecord(delivery) && delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
@@ -1615,8 +1635,12 @@ function createMediaDeliveryService(deps = {}) {
     // Audio extracted in the browser is named after what the user uploaded
     // («Clase 3.mp4», never «Clase 3.audio.ogg») in the message, the
     // notification and the chat title, as it already is in the files.
-    const rows = loaded.map((row) => {
-      const sourceName = transcripts[row.id]?.sourceName;
+    // A recording with no transcript (it failed, or had no timed segments)
+    // keeps the name the runner stored when it handed it off.
+    const rows = loaded.map((row, index) => {
+      const presented = EXTRACTED_AUDIO_NAME_RE.test(String(row.originalName || '')) ? record.fileNames?.[index] : null;
+      const sourceName = transcripts[row.id]?.sourceName
+        || (typeof presented === 'string' && presented.trim() && !EXTRACTED_AUDIO_NAME_RE.test(presented) ? presented : null);
       return sourceName ? { ...row, originalName: sourceName } : row;
     });
 
@@ -1862,9 +1886,9 @@ function createMediaDeliveryService(deps = {}) {
       // per Stop: a sweep that only retries the chat line never stops a
       // recording the user asked for again since.
       if (marker?.jobsStopped !== true) {
-        await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+        const stop = await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
           refines: refineSpecsOf(record) });
-        await noteJobsStopped(id);
+        await noteJobsStopped(id, stop);
       }
       if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') return { id, status: 'cancelled' };
       return { id, status: 'cancelling' };
@@ -2069,7 +2093,9 @@ function createMediaDeliveryService(deps = {}) {
   async function cancelUnneededMediaJobs({ userId = null, fileIds = [], exceptDeliveryId = null, refines = [] } = {}) {
     const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean))];
     const ownRefines = Array.isArray(refines) ? refines.filter(spec => spec && spec.fileId) : [];
-    if (!userId || (!ids.length && !ownRefines.length)) return { stopped: 0 };
+    // `complete`: every job this Stop owns was settled (a DB outage leaves it
+    // false, and the Stop is retried with its line, never marked as done).
+    if (!userId || (!ids.length && !ownRefines.length)) return { stopped: 0, complete: true };
     try {
       const store = getStore();
       const mine = (await store.listActive()).filter(other => other.id !== exceptDeliveryId && other.userId === userId);
@@ -2086,11 +2112,13 @@ function createMediaDeliveryService(deps = {}) {
       // the same window and hints (another chat, a branch) shares that job.
       const refinesToStop = ownRefines.filter(spec => !others.some(other => isRefineRecord(other)
         && (other.fileIds || []).includes(spec.fileId) && refineJobKeyOf(other) === refineJobKeyOf(spec)));
-      if (!free.length && !refinesToStop.length) return { stopped: 0 };
-      return { stopped: Number((await cancelMediaJobs({ fileIds: free, userId, ...(refinesToStop.length ? { refines: refinesToStop } : {}) }))?.stopped) || 0 };
+      if (!free.length && !refinesToStop.length) return { stopped: 0, complete: true };
+      const result = await cancelMediaJobs({ fileIds: free, userId, ...(refinesToStop.length ? { refines: refinesToStop } : {}) });
+      const complete = !(Array.isArray(result?.results) && result.results.some(item => item?.outcome === 'error'));
+      return { stopped: Number(result?.stopped) || 0, complete };
     } catch (err) {
       logger.warn(`[media-delivery] stopping the transcription failed code=${err?.code || 'stop_error'}`);
-      return { stopped: 0 };
+      return { stopped: 0, complete: false };
     }
   }
 
@@ -2108,8 +2136,9 @@ function createMediaDeliveryService(deps = {}) {
     return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
   }
 
-  /** Best effort: the marker remembers this Stop already stopped its jobs. */
-  async function noteJobsStopped(id) {
+  /** Best effort: the marker remembers this Stop already stopped its jobs (only when all were settled). */
+  async function noteJobsStopped(id, stop = { complete: true }) {
+    if (stop?.complete !== true) return;
     const store = getStore();
     if (typeof store.noteJobsStopped !== 'function') return;
     await store.noteJobsStopped(id).catch(() => {});
@@ -2164,7 +2193,8 @@ function createMediaDeliveryService(deps = {}) {
       // the jobs stop anyway (best-effort), and the client reports the error.
       const known = await readRecordQuietly(id);
       if (known && known.userId === userId) {
-        await cancelUnneededMediaJobs({ userId, fileIds: known.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(known) });
+        const stop = await cancelUnneededMediaJobs({ userId, fileIds: known.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(known) });
+        await noteJobsStopped(id, stop);
       }
       return empty('error');
     }
@@ -2175,9 +2205,10 @@ function createMediaDeliveryService(deps = {}) {
     // (found by the next Stop and the sweep, which post it); no holder to
     // wait for. The jobs stop now.
     if (result?.settleFailed && record) {
-      const { stopped } = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+      const stop = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
         refines: refineSpecsOf(record) });
-      await noteJobsStopped(id);
+      const { stopped } = stop;
+      await noteJobsStopped(id, stop);
       return { id, outcome: 'cancel_requested', stoppedFiles: stopped, messageId: null,
         chatId: record.deliveryChatId || record.chatId || null };
     }
@@ -2236,8 +2267,12 @@ function createMediaDeliveryService(deps = {}) {
     if (!record || (outcome !== 'cancelled' && outcome !== 'cancel_requested')) {
       return { ...empty(outcome), chatId: record?.deliveryChatId || record?.chatId || null };
     }
-    const { stopped: stoppedFiles } = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+    const finalStop = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
       refines: refineSpecsOf(record) });
+    const stoppedFiles = finalStop.stopped;
+    // Left open with its marker (a holder, or a lock a dead process left):
+    // the sweep that closes it must not stop a recording asked for again.
+    if (outcome === 'cancel_requested') await noteJobsStopped(id, finalStop);
     logger.info(`[media-delivery] cancelled id=${id} files=${(record.fileIds || []).length} stopped=${stoppedFiles} outcome=${outcome}`);
     return { id, outcome, stoppedFiles, messageId: settle?.messageId || null, chatId: settle?.chatId || record.deliveryChatId || record.chatId || null };
   }
