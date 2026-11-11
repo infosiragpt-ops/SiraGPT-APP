@@ -78,7 +78,7 @@ const LANGUAGE_LABELS = Object.freeze({
   ca: 'catalán', gl: 'gallego', eu: 'euskera', nl: 'neerlandés', ru: 'ruso', ja: 'japonés',
   zh: 'chino', ko: 'coreano', ar: 'árabe',
 });
-const FORMAT_LABELS = Object.freeze({ docx: 'Word (DOCX)', srt: 'subtítulos SRT', vtt: 'subtítulos VTT', txt: 'TXT' });
+const FORMAT_LABELS = Object.freeze({ docx: 'Word (DOCX)', pdf: 'PDF', srt: 'subtítulos SRT', vtt: 'subtítulos VTT', txt: 'TXT', zip: 'paquete ZIP' });
 
 // ── configuration ──────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ function inlineWaitMs(env = process.env) {
 
 function engineFamily(engine) {
   const name = String(engine || 'local').trim().toLowerCase();
-  if (/^(cloud|openai|groq|xai|grok|elevenlabs|scribe|deepgram|assembly|meta|gemini|voicestudio)/.test(name)) return 'cloud';
+  if (/^(cloud|openai|groq|xai|grok|elevenlabs|scribe|deepgram|assembly|mistral|voxtral|meta|gemini|voicestudio)/.test(name)) return 'cloud';
   if (/turbo|large/.test(name)) return 'local-turbo';
   return 'local';
 }
@@ -296,7 +296,7 @@ function stoppedReasonFor(counts) {
 }
 
 function displayName(row, delivery = {}, index = 0) {
-  return row?.originalName || row?.filename || delivery?.fileNames?.[index] || 'archivo';
+  return row?.sourceName || row?.originalName || row?.filename || delivery?.fileNames?.[index] || 'archivo';
 }
 
 function cleanReason(text, max = 200) {
@@ -613,7 +613,10 @@ function qualitySuffix(report) {
  */
 function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false,
   analysisNotes = [], translationFailed = [], summaryText = '', summaryFailed = false, transcriptFilesAttached = null } = {}) {
-  const list = Array.isArray(rows) ? rows : [];
+  const list = (Array.isArray(rows) ? rows : []).map(row => {
+    const sourceName = transcripts?.[row?.id]?.sourceName || row?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName, sourceName } : row;
+  });
   // The report may point at a section of the transcript files only when they are attached.
   const filesAttached = typeof transcriptFilesAttached === 'boolean' ? transcriptFilesAttached : transcriptFilesIn(artifacts);
   const counts = summarizeStates(list);
@@ -660,32 +663,52 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
       ].filter(Boolean);
       blocks.push(`**Terminé con tus ${n} archivos: ${parts.join(', ')}.**`);
     }
-    blocks.push(list.map((row, index) => {
+    const capStatusRows = list.length > 30;
+    const maxReadyStatusRows = 20;
+    let shownReadyCount = 0;
+    let hiddenReadyCount = 0;
+    const statusLines = [];
+    list.forEach((row, index) => {
       const name = quoteName(displayName(row, delivery, index));
       const state = stateOf(row);
       const transcript = transcriptOf(row);
       const outside = spanOutsideRange(delivery, viewFor(row));
       if (state === 'ready') {
+        if (capStatusRows && !outside && shownReadyCount >= maxReadyStatusRows) {
+          hiddenReadyCount += 1;
+          return;
+        }
+        shownReadyCount += 1;
         const details = fileDetails(row, transcript, delivery, viewFor(row));
         const where = outside ? ` · el tramo pedido ${outsideRecordingDetail(delivery, outside).where}` : '';
         const quality = qualitySuffix(qualityReportFor(row, transcript, delivery, { artifacts, coverageShown: true,
           transcriptFilesAttached: filesAttached }));
-        return `- ${name}: lista${details.length ? ` · ${details.join(' · ')}` : ''}${quality}${where}`;
+        statusLines.push(`- ${name}: lista${details.length ? ` · ${details.join(' · ')}` : ''}${quality}${where}`);
+        return;
       }
       if (state === 'partial') {
         const gaps = visibleGaps(transcript, delivery);
-        if (!gaps.length && outside) return `- ${name}: el tramo pedido ${outsideRecordingDetail(delivery, outside).where}`;
+        if (!gaps.length && outside) { statusLines.push(`- ${name}: el tramo pedido ${outsideRecordingDetail(delivery, outside).where}`); return; }
         if (!gaps.length && rangeOf(delivery) && gapsOf(transcript).length) {
-          return `- ${name}: tramo pedido completo (faltan otros tramos de la grabación)`;
+          statusLines.push(`- ${name}: tramo pedido completo (faltan otros tramos de la grabación)`);
+          return;
         }
         const detail = gaps.length ? `faltan ${formatGaps(gaps, 4)}` : (partialDetail(row) || 'faltan algunos tramos');
         const quality = qualitySuffix(qualityReportFor(row, transcript, delivery, { artifacts, coverageShown: true,
           transcriptFilesAttached: filesAttached }));
-        return `- ${name}: parcial (${detail})${quality}`;
+        statusLines.push(`- ${name}: parcial (${detail})${quality}`);
+        return;
       }
-      if (state === 'failed') return `- ${name}: no se pudo transcribir${row?.processingError ? ` (${cleanReason(row.processingError, 120)})` : ''}`;
-      return `- ${name}: sigue en la cola`;
-    }).join('\n'));
+      if (state === 'failed') {
+        statusLines.push(`- ${name}: no se pudo transcribir${row?.processingError ? ` (${cleanReason(row.processingError, 120)})` : ''}`);
+        return;
+      }
+      statusLines.push(`- ${name}: sigue en la cola`);
+    });
+    if (hiddenReadyCount > 0) {
+      statusLines.push(`- …y ${hiddenReadyCount} ${hiddenReadyCount === 1 ? 'archivo completo más' : 'archivos completos más'} (incluidos en los adjuntos).`);
+    }
+    blocks.push(statusLines.join('\n'));
   }
 
   const range = delivery?.range;
@@ -880,7 +903,9 @@ function refineWindowPreview(row, transcript, delivery) {
  * the updated downloads; or an honest «no pude» / «no cambió».
  */
 function refineMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], outcome = null } = {}) {
-  const row = (Array.isArray(rows) ? rows : [])[0] || null;
+  const rawRow = (Array.isArray(rows) ? rows : [])[0] || null;
+  const sourceName = rawRow ? (transcripts?.[rawRow.id]?.sourceName || rawRow.sourceName) : null;
+  const row = rawRow && sourceName ? { ...rawRow, originalName: sourceName, sourceName } : rawRow;
   const name = quoteName(displayName(row, delivery, 0));
   const label = refineRangeLabel(rangeOf(delivery));
   const result = outcome || resolveRefineOutcome(delivery, row);
@@ -1102,10 +1127,13 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
     const output = delivery.output || {};
     const built = await pack.buildMediaTranscriptArtifacts({
       rows: rows.filter(isUsableRow),
+      allRows: rows,
       transcripts: new Map(Object.entries(transcripts || {})),
       output: {
-        documentFormat: output.documentFormat || (formats.has('pdf') ? 'pdf' : formats.has('docx') ? 'docx' : null),
+        documentFormat: output.documentFormat || (formats.has('pdf') && !formats.has('docx') ? 'pdf' : formats.has('docx') ? 'docx' : null),
+        alsoPdf: Boolean(output.alsoPdf) || (formats.has('docx') && formats.has('pdf')),
         wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
+        wantsZip: Boolean(output.wantsZip) || formats.has('zip'),
         // A refine re-sends the whole updated transcript, not just its window.
         range: !isRefineRecord(delivery) && delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
         timeOffsetSec: Number(output.timeOffsetSec) || 0,
@@ -1121,8 +1149,8 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
 
 // ── default side effects (lazy; never loaded by tests that inject fakes) ──
 
-function defaultLoadFiles(prisma, userId, fileIds, { includeText = true } = {}) {
-  return prisma.file.findMany({
+async function defaultLoadFiles(prisma, userId, fileIds, { includeText = true } = {}) {
+  const rows = await prisma.file.findMany({
     where: { userId, id: { in: fileIds }, deletedAt: null },
     select: {
       id: true, userId: true, originalName: true, filename: true, mimeType: true, size: true,
@@ -1130,6 +1158,13 @@ function defaultLoadFiles(prisma, userId, fileIds, { includeText = true } = {}) 
       ...(includeText ? { extractedText: true } : {}),
     },
   });
+  try {
+    const store = require('./media-transcript-store');
+    if (typeof store.hydrateClientExtractedRows === 'function') {
+      return await store.hydrateClientExtractedRows(prisma, { userId, rows });
+    }
+  } catch (_) { /* best-effort: sidecar still carries sourceName */ }
+  return rows;
 }
 
 async function defaultLoadTranscript(prisma, args) {
@@ -1230,7 +1265,7 @@ function analysisRangeOf(delivery) {
 async function defaultAnalyze({ rows, delivery, prisma }) {
   const runner = require('./agents/agent-task-runner');
   const profile = runner.normalizeAgentRuntimeModel(delivery?.model?.id || '');
-  const resolution = runner.resolveAgentRuntimeClient(profile);
+  const resolution = runner.resolveAgentRuntimeClient(profile, { pinned: Boolean(delivery?.model?.pinned) });
   if (!resolution?.client) {
     const err = new Error('selected_model_unavailable');
     err.code = 'selected_model_unavailable';
@@ -1473,9 +1508,24 @@ function createMediaDeliveryService(deps = {}) {
       }
     }
 
-    const rows = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
+    const rawRows = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
       .map(row => ({ ...row, deliveryState: classifyFileRow(row) }));
     checkpoint();
+
+    const transcripts = {};
+    const usableRaw = rawRows.filter(isUsableRow);
+    for (let i = 0; i < usableRaw.length; i += 8) {
+      const slice = usableRaw.slice(i, i + 8);
+      await Promise.all(slice.map(async (row) => {
+        transcripts[row.id] = await Promise.resolve(loadTranscript(transcriptPrisma(), { userId, fileId: row.id }))
+          .catch(() => null) || null;
+      }));
+      checkpoint();
+    }
+    const rows = rawRows.map(row => {
+      const sourceName = transcripts[row.id]?.sourceName || row?.sourceName;
+      return sourceName ? { ...row, originalName: sourceName, sourceName } : row;
+    });
 
     const preferred = record.deliveryChatId || record.chatId || null;
     const ensured = await ensureChat({ userId, chatId: preferred, title: chatTitleFor(record, rows), model: record.model?.id || null });
@@ -1486,14 +1536,6 @@ function createMediaDeliveryService(deps = {}) {
       throw err;
     }
     if (targetChatId !== preferred) await store.patch(id, token, { deliveryChatId: targetChatId });
-    checkpoint();
-
-    const transcripts = {};
-    for (const row of rows) {
-      if (!isUsableRow(row)) continue;
-      transcripts[row.id] = await Promise.resolve(loadTranscript(transcriptPrisma(), { userId, fileId: row.id }))
-        .catch(() => null) || null;
-    }
     checkpoint();
 
     const usable = rows.filter(isUsableRow);
@@ -1911,6 +1953,7 @@ module.exports = {
   // Pure helpers
   isMediaDeliveryEnabled,
   inlineWaitMs,
+  engineFamily,
   estimateTranscriptionSeconds,
   estimateBatchEtaSeconds,
   shouldHandOff,

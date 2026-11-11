@@ -33,7 +33,7 @@ const KINDS = Object.freeze(['transcript', 'refine']);
 const REFINE_STATUSES = Object.freeze(['ok', 'failed']);
 // A refine window is at most a week of recording clock, like a clip offset.
 const MAX_REFINE_END_SEC = 7 * 24 * 3600;
-const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf']);
+const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf', 'zip']);
 const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
 // The chat batches up to SIRAGPT_MEDIA_BATCH_MAX recordings (100 by
 // default, 500 at most); one delivery must hold the whole batch.
@@ -111,7 +111,11 @@ function normalizeModel(model) {
   if (!model || typeof model !== 'object') return null;
   const id = clipString(model.id, 200);
   if (!id) return null;
-  return { id, provider: clipString(model.provider, 80) };
+  return {
+    id,
+    provider: clipString(model.provider, 80),
+    ...(model.pinned === true ? { pinned: true } : {}),
+  };
 }
 
 /**
@@ -134,6 +138,8 @@ function normalizeOutput(output) {
     timeOffsetSec: Number.isFinite(offset) && offset > 0 ? Math.min(offset, 7 * 24 * 3600) : 0,
     includeTranscript: value.includeTranscript === true,
     alsoAnalysis: value.alsoAnalysis === true,
+    ...(value.wantsZip === true ? { wantsZip: true } : {}),
+    ...(value.alsoPdf === true ? { alsoPdf: true } : {}),
     ...(analysisRange ? { analysisRange } : {}),
   };
 }

@@ -218,8 +218,113 @@ test('audio the browser extracted from a short video still gets the automatic SR
 test('the files of an extracted video carry the video\'s name, not «.audio.ogg»', async () => {
   const short = { language: 'es', durationSec: 300, sourceMedia: 'video', sourceName: 'Clase 3 (final).mp4',
     segments: [{ start: 0, end: 300, text: 'Clase corta.' }] };
-  const built = await artifacts.buildMediaTranscriptArtifacts({ rows: [row('clip', { originalName: 'Clase 3 (final).audio.ogg', mimeType: 'audio/ogg' })],
+  const extractedRow = row('clip', { originalName: 'Clase 3 (final).audio.ogg', mimeType: 'audio/ogg' });
+  const built = await artifacts.buildMediaTranscriptArtifacts({ rows: [extractedRow],
     transcripts: new Map([['clip', short]]), output: artifacts.resolveTranscriptOutput('transcribe'), userId: 'u1' });
   assert.deepEqual(built.artifacts.map(a => a.filename), ['Clase 3 (final) (transcripción).txt', 'Clase 3 (final) (transcripción).srt', 'Clase 3 (final) (transcripción).vtt']);
   assert.match(decode(built.artifacts[0]), /Clase 3 \(final\)\.mp4/);
+  const preview = artifacts.buildTranscriptChatPreview({ rows: [extractedRow], transcripts: new Map([['clip', short]]), output: {} });
+  assert.match(preview, /#### Clase 3 \(final\)\.mp4/);
+  assert.doesNotMatch(preview, /audio\.ogg/);
+});
+
+test('audio extracted from a large WAV keeps its source name without turning into a video; Mistral is named cleanly', async () => {
+  const shortAudio = { language: 'es', durationSec: 180, sourceMedia: 'audio', sourceName: 'Entrevista_fiscal.wav',
+    quality: { level: 'alta', score: 0.96, enginesUsed: ['mistral:voxtral-mini-latest'], lowConfidence: [], notes: [] },
+    segments: [{ start: 0, end: 180, text: 'Declaración grabada en WAV sin comprimir.' }] };
+  const extractedWebm = row('wav1', { originalName: 'Entrevista_fiscal.audio.webm', mimeType: 'audio/webm' });
+  const built = await artifacts.buildMediaTranscriptArtifacts({ rows: [extractedWebm],
+    transcripts: new Map([['wav1', shortAudio]]), output: artifacts.resolveTranscriptOutput('transcribe'), userId: 'u1' });
+  assert.deepEqual(built.artifacts.map(a => a.filename), ['Entrevista_fiscal (transcripción).txt']);
+  assert.equal(artifacts.engineNameEs('mistral:voxtral-mini-latest'), 'Mistral');
+  assert.match(artifacts.transcriptQualityReport(artifacts.transcriptResultFor(extractedWebm, shortAudio)).line, /motor: Mistral/);
+});
+
+test('PR3 batch ZIP: >= 5 files produces a structured ZIP with 00-INDICE.md, BOM 00-INDICE.csv, per-file txt/ and video srt/vtt/', async () => {
+  const PizZip = require('pizzip');
+  const readyRows = [
+    row('c1', { originalName: 'Clase 1.mp4', mimeType: 'video/mp4' }),
+    row('c2', { originalName: 'Clase 2.mp3', mimeType: 'audio/mpeg' }),
+    row('c3', { originalName: 'Clase 3.audio.ogg', mimeType: 'audio/ogg' }),
+    row('c4', { originalName: 'Clase 4.m4a', mimeType: 'audio/mp4' }),
+    row('c5', { originalName: 'Clase 5.mp3', mimeType: 'audio/mpeg', processingError: 'Parcial: 1 tramo falló' }),
+  ];
+  const failedRow = { id: 'c6', originalName: 'Clase 6 dañada.mp4', mimeType: 'video/mp4', processingStage: 'failed',
+    processingError: 'El archivo no tiene pista de audio.', extractedText: null };
+  const transcripts = new Map([
+    ['c1', lecture({ hours: 1 })],
+    ['c2', { language: 'es', durationSec: 300, segments: [{ start: 0, end: 60, text: 'Segunda grabación.' }] }],
+    ['c3', { language: 'es', durationSec: 400, sourceMedia: 'video', sourceName: 'Clase 3 real.mp4', segments: [{ start: 0, end: 80, text: 'Tercera en video.' }] }],
+    ['c4', { language: 'en', durationSec: 240, segments: [{ start: 0, end: 50, text: 'Fourth recording in English.' }] }],
+    ['c5', lecture({ hours: 1, gaps: [{ start: 600, end: 900, reason: 'timeout' }] })],
+  ]);
+  const built = await artifacts.buildMediaTranscriptArtifacts({
+    rows: readyRows,
+    allRows: [...readyRows, failedRow],
+    transcripts,
+    output: artifacts.resolveTranscriptOutput('transcribe'),
+    userId: 'u1',
+    createDocument: fakeDocument([]),
+  });
+  assert.deepEqual(built.artifacts.map(a => a.filename), [
+    'Transcripciones (5 archivos).txt',
+    'Transcripciones (5 archivos).docx',
+    'Transcripciones (5 archivos).zip',
+  ]);
+  const zipArtifact = built.artifacts.find(a => a.format === 'zip');
+  assert.equal(zipArtifact.mime, 'application/zip');
+  const zip = new PizZip(Buffer.from(zipArtifact.base64, 'base64'));
+  const names = Object.keys(zip.files).filter(k => !zip.files[k].dir).sort();
+  assert.ok(names.includes('00-INDICE.md'));
+  assert.ok(names.includes('00-INDICE.csv'));
+  assert.ok(names.includes('txt/01 - Clase 1.txt'));
+  assert.ok(names.includes('txt/03 - Clase 3 real.txt'), 'extracted video keeps its real name inside ZIP');
+  assert.ok(names.includes('srt/01 - Clase 1.srt') && names.includes('vtt/01 - Clase 1.vtt'), 'videos get SRT/VTT inside the batch ZIP');
+  assert.ok(names.includes('srt/03 - Clase 3 real.srt') && names.includes('vtt/03 - Clase 3 real.vtt'));
+  assert.equal(names.some(n => n.startsWith('srt/02 -')), false, 'audio-only files omit subtitles unless asked');
+  const csv = zip.file('00-INDICE.csv').asText();
+  assert.equal(csv.startsWith('\uFEFFN,Archivo,Estado,'), true, 'UTF-8 BOM for Excel');
+  assert.match(csv, /Clase 3 real\.mp4,Completo/);
+  assert.match(csv, /Clase 5\.mp3,Parcial/);
+  assert.match(csv, /Clase 6 dañada\.mp4,Con incidencia/);
+  const indexMd = zip.file('00-INDICE.md').asText();
+  assert.match(indexMd, /Índice de transcripciones \(6 archivos\)/);
+  assert.match(indexMd, /Con incidencia:\*\* 1/);
+});
+
+test('explicit ZIP request, > 20 subtitle files preserved in ZIP, dual Word+PDF, and massive-batch document OOM guard', async () => {
+  const PizZip = require('pizzip');
+  const two = [row('u1a'), row('u1b')];
+  const twoMap = new Map([['u1a', { language: 'es', durationSec: 120, segments: [{ start: 0, end: 20, text: 'Uno.' }] }],
+    ['u1b', { language: 'es', durationSec: 120, segments: [{ start: 0, end: 20, text: 'Dos.' }] }]]);
+  const dualDocs = [];
+  const dualOut = artifacts.resolveTranscriptOutput('transcribe en Word y PDF y dámelo en un zip');
+  assert.equal(dualOut.documentFormat, 'docx');
+  assert.equal(dualOut.alsoPdf, true);
+  assert.equal(dualOut.wantsZip, true);
+  const dualBuilt = await artifacts.buildMediaTranscriptArtifacts({ rows: two, transcripts: twoMap, output: dualOut, userId: 'u1',
+    createDocument: fakeDocument(dualDocs) });
+  assert.deepEqual(dualBuilt.artifacts.map(a => a.format), ['txt', 'docx', 'pdf', 'zip']);
+
+  // 25 files with explicit subtitle request: loose chat cards capped at 20, ZIP holds all 25 SRT + 25 VTT.
+  const manyRows = Array.from({ length: 25 }, (_, i) => row(`v${i + 1}`, { originalName: `Sesion_${i + 1}.mp3`, mimeType: 'audio/mpeg' }));
+  const manyMap = new Map(manyRows.map((r, i) => [r.id, { language: 'es', durationSec: 180, segments: [{ start: 0, end: 30, text: `Sesión número ${i + 1}.` }] }]));
+  const manyDocs = [];
+  const manyBuilt = await artifacts.buildMediaTranscriptArtifacts({
+    rows: manyRows,
+    transcripts: manyMap,
+    output: artifacts.resolveTranscriptOutput('transcribe con subtítulos srt'),
+    userId: 'u1',
+    maxDocumentMarkdownChars: 1500,
+    createDocument: fakeDocument(manyDocs),
+  });
+  assert.equal(manyBuilt.artifacts.filter(a => a.format === 'srt').length, 20, 'loose SRT attachments stay capped at 20');
+  assert.match(manyBuilt.notes.join(' '), /paquete ZIP contiene los subtítulos SRT y VTT de los 25 archivos/);
+  assert.match(manyBuilt.notes.join(' '), /Por la extensión del lote, el documento incluye el índice maestro/);
+  assert.match(manyDocs[0].markdown, /Índice de transcripciones \(25 archivos\)/);
+  const zip25 = new PizZip(Buffer.from(manyBuilt.artifacts.find(a => a.format === 'zip').base64, 'base64'));
+  const srtInZip = Object.keys(zip25.files).filter(name => /^srt\/.*\.srt$/.test(name));
+  const vttInZip = Object.keys(zip25.files).filter(name => /^vtt\/.*\.vtt$/.test(name));
+  assert.equal(srtInZip.length, 25, 'every single file gets its SRT in the batch ZIP');
+  assert.equal(vttInZip.length, 25, 'every single file gets its VTT in the batch ZIP');
 });

@@ -121,7 +121,7 @@ function mediaRowsForAnalysis(rows = [], transcripts = new Map(), range = null, 
   });
 }
 
-const FORMAT_LABELS = Object.freeze({ txt: 'TXT', docx: 'Word', pdf: 'PDF', srt: 'SRT', vtt: 'VTT' });
+const FORMAT_LABELS = Object.freeze({ txt: 'TXT', docx: 'Word', pdf: 'PDF', srt: 'SRT', vtt: 'VTT', zip: 'ZIP' });
 
 /** «Descarga la transcripción completa en TXT, Word, SRT y VTT (adjuntos).» */
 function describeTranscriptDownloads(artifacts = []) {

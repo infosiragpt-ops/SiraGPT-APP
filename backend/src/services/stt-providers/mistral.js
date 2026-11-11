@@ -40,6 +40,10 @@ function httpError(status, message, headers = null, body = null) {
   return err;
 }
 
+function abortError() {
+  return Object.assign(new Error('aborted by user'), { name: 'AbortError', code: 'ABORT_ERR' });
+}
+
 function segmentsFromMistral(payload) {
   const timed = (item) => Number.isFinite(Number(item?.start)) && Number.isFinite(Number(item?.end));
   const segments = Array.isArray(payload?.segments) ? payload.segments : [];
@@ -47,6 +51,10 @@ function segmentsFromMistral(payload) {
     const out = { start: round3(segment.start), end: round3(segment.end), text: String(segment.text || '').trim() };
     const speaker = segment.speaker ?? segment.speaker_id;
     if (speaker != null && speaker !== '') out.speaker = String(speaker);
+    const confidence = Number(segment.confidence);
+    if (segment.confidence != null && Number.isFinite(confidence) && confidence > 0) {
+      out.confidence = Math.round(Math.min(1, confidence) * 1000) / 1000;
+    }
     return out;
   }).filter((segment) => segment.text);
 }
@@ -55,8 +63,10 @@ async function transcribeMistralFile({ filePath, mimeType, fileName, language, s
   if (!filePath) throw Object.assign(new Error('Audio file path is required for Mistral STT.'), { code: 'mistral_audio_file_required' });
   const key = mistralApiKey(env);
   if (!key) throw Object.assign(new Error('MISTRAL_API_KEY is required.'), { code: 'mistral_key_required', status: 401 });
+  if (signal?.aborted) throw abortError();
   const chosenModel = String(model || '').trim() || mistralTranscribeModel(env);
   const buffer = await fs.promises.readFile(filePath);
+  if (signal?.aborted) throw abortError();
   const form = new FormData();
   form.append('model', chosenModel);
   const forced = String(language || '').trim().toLowerCase();

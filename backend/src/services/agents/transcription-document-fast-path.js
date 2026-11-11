@@ -115,12 +115,19 @@ function buildTranscriptionDeliveryMarkdown({ fileCount = 1, format = '', artifa
  * generateAutoDocument, minus the authoring pipeline.
  */
 async function buildVerbatimTranscriptionDocument({ task, filename, markdown, format, emit }) {
+  const crypto = require('node:crypto');
   const fs = require('fs');
   const { createDocument } = require('../document-service');
   const { saveArtifact, EXTENSION_TO_MIME } = require('./task-tools');
   const persistence = require('./agent-task-persistence');
-  const { filePath } = await createDocument(task.userId, filename, markdown);
-  const buffer = await fs.promises.readFile(filePath);
+  const workingName = `transcript-${crypto.randomUUID()}.${format}`;
+  const { filePath } = await createDocument(task.userId, workingName, markdown);
+  let buffer;
+  try {
+    buffer = await fs.promises.readFile(filePath);
+  } finally {
+    await fs.promises.rm(filePath, { force: true }).catch(() => {});
+  }
   const mime = MIME_BY_FORMAT[format] || EXTENSION_TO_MIME[format] || 'application/octet-stream';
   const artifact = saveArtifact({
     filename,
