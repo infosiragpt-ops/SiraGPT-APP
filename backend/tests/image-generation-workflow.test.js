@@ -26,12 +26,21 @@ const fixtureDir = fs.mkdtemp(path.join(os.tmpdir(), 'image-handler-'));
 after(async () => fs.rm(await fixtureDir, { recursive: true, force: true }));
 const image = (color, width = 8, height = 4) => sharp({ create: { width, height, channels: 4, background: color } }).png().toBuffer();
 
-async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [], sourceAspect = '16:9', history = null } = {}) {
+async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [], documents = {}, sourceAspect = '16:9', history = null } = {}) {
   const sourceBytes = await image('#de2070'); const outputBytes = await image('#1040fa');
   const sourcePath = path.join(await fixtureDir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
   const calls = { generate: [], edit: [], saves: [], messages: [], reads: 0 };
   const records = source ? { beach: { id: 'beach', filename: 'generated-beach.png', mimeType: 'image/png', path: sourcePath } } : {};
   for (const id of references) records[id] = { id, filename: `${id}.png`, mimeType: 'image/png', path: sourcePath };
+  for (const [id, doc] of Object.entries(documents)) {
+    records[id] = {
+      id,
+      originalName: doc.originalName || `${id}.pdf`,
+      filename: doc.filename || `${id}.pdf`,
+      mimeType: doc.mimeType || 'application/pdf',
+      extractedText: doc.extractedText || '',
+    };
+  }
   const prisma = {
     chat: { findFirst: async () => chatOwned ? { id: 'chat', title: 'Image' } : null, update: async () => ({}) },
     file: { findFirst: async ({ where }) => records[where.id] || null },
@@ -302,4 +311,82 @@ test('composer: a catalog slug edits and generates through OpenRouter whatever f
   // A bare id keeps its provider.
   await request({ prompt: 'un gato', provider: 'Gemini', model: 'gemini-2.5-flash-image' });
   assert.equal(calls.generate[1].provider, 'gemini');
+});
+
+test('composer Image RAG: PDF attached with Imágenes chip grounds generation instead of failing source validation', async () => {
+  const { request, calls } = await harness({
+    source: false,
+    documents: {
+      'brand-pdf': {
+        originalName: 'manual-marca.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'Perfume Solaris: frasco octogonal en vidrio esmerilado con tapa de latón cepillado y paleta corporativa #0F172A y #38BDF8.',
+      },
+    },
+  });
+  const res = await request({
+    prompt: 'genera una foto de estudio del perfume descrito en el documento',
+    fileId: 'brand-pdf',
+    referenceFileIds: ['brand-pdf'],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.generate.length, 1);
+  assert.equal(calls.edit.length, 0);
+  assert.match(calls.generate[0].prompt, /#0F172A, #38BDF8/);
+  assert.match(calls.generate[0].prompt, /vidrio esmerilado/i);
+  assert.equal(res.body.files[0].ragGrounded, true);
+  assert.equal(res.body.files[0].ragArchetype, 'commercial_product_studio');
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((f) => f.id), ['brand-pdf']);
+});
+
+test('composer Image RAG: PDF + photo attached together edits the photo grounded with the PDF brand palette', async () => {
+  const { request, calls } = await harness({
+    source: false,
+    references: ['foto'],
+    documents: {
+      'brand-pdf': {
+        originalName: 'brand-book.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'Guía de marca: fondos limpios con colores corporativos #1E293B y #F59E0B.',
+      },
+    },
+  });
+  const res = await request({
+    prompt: 'cambia el fondo aplicando los colores corporativos del manual de marca',
+    fileId: 'brand-pdf',
+    referenceFileIds: ['brand-pdf', 'foto'],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(calls.generate.length, 0);
+  assert.equal(res.body.files[0].parentFileId, 'foto');
+  assert.match(calls.edit[0].prompt, /#1E293B, #F59E0B/);
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((f) => f.id), ['brand-pdf', 'foto']);
+});
+
+test('composer Image RAG: cross-turn strict continuity carries prior character visual bible', async () => {
+  const { request, calls } = await harness({
+    history: [
+      {
+        files: JSON.stringify([
+          {
+            type: 'image',
+            prompt: 'Capitán espacial con traje blanco mate, casco dorado y parche azul cobalto',
+            aspectRatio: '16:9',
+          },
+        ]),
+      },
+    ],
+  });
+  const res = await request({
+    prompt: 'crea una escena nueva con el mismo personaje explorando un cañón marciano al atardecer',
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.generate.length, 1);
+  assert.ok(calls.reads >= 1);
+  assert.match(calls.generate[0].prompt, /Series visual continuity:[\s\S]*Capitán espacial con traje blanco mate/);
+  assert.equal(res.body.files[0].continuityMode, 'strict');
 });

@@ -347,7 +347,8 @@ const generateImage = {
     emitEvent(ctx, 'tool_call', { tool: 'generate_image', preview: prompt });
 
     try {
-      // Enhance prompt with style hint
+      // Enhance prompt with Two-Tier Image Generation RAG (document/chat RAG
+      // grounding + cross-turn visual continuity + curated domain direction).
       const styleHints = {
         realistic: 'Photorealistic, highly detailed.',
         vivid: 'Vivid colors, striking composition.',
@@ -359,7 +360,27 @@ const generateImage = {
         'line-art': 'Clean line art, no fill, minimalist.',
       };
       const styleDesc = styleHints[style] || 'Vivid colors, striking composition.';
-      const enhancedPrompt = `${styleDesc} ${prompt}`;
+      const baseStyledPrompt = `${styleDesc} ${prompt}`;
+      const { directImagePrompt } = require('../media/image-rag-director');
+      const ragDirection = await directImagePrompt({
+        prompt: baseStyledPrompt,
+        rawUserPrompt: `${ctx.userQuery || ''} ${rawPrompt}`.trim(),
+        style,
+        imageType: directive.imageType,
+        aspectRatio: directive.frame || aspectRatio,
+        quality: ctx.imageQuality || directive.qualityApp || quality,
+        model: ctx.imageModel || model || undefined,
+        userId: ctx.userId,
+        chatId: ctx.chatId,
+        projectId: ctx.projectId,
+        gptId: ctx.gptId,
+        collection: ctx.collection,
+        prisma: ctx.prisma,
+        fileIds: ctx.fileIds,
+        fileMetadata: ctx.fileMetadata,
+        ragHits: ctx.ragHits,
+      });
+      const enhancedPrompt = ragDirection.prompt || baseStyledPrompt;
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: count > 1 ? `Generando ${count} imágenes…` : 'Generando imagen…', partial: true });
 
@@ -395,6 +416,9 @@ const generateImage = {
         const filename = `image_${crypto.randomBytes(4).toString('hex')}${result.images.length > 1 ? `_${index + 1}` : ''}.png`;
         const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
           model: result.model, provider: result.provider, aspectRatio, quality: ctx.imageQuality || quality,
+          ragArchetype: ragDirection.archetype || null,
+          continuityMode: ragDirection.continuityMode || 'none',
+          ragGrounded: Boolean(ragDirection.grounded),
         } });
         artifacts.push({
           id: artifact.id,
@@ -536,6 +560,23 @@ const editImage = {
       if (sources.arrangement && sources.arrangement.confidence !== 'low' && sources.canvasOrigin === 'ranked') {
         const { _internal: { displayNameOf } } = require('../media/image-canvas-selection');
         emitEvent(ctx, 'tool_output', { tool: 'edit_image', preview: `Lienzo: ${displayNameOf(sources[0], 0)}; material: ${sources.slice(1).map((s, i) => displayNameOf(s, i + 1)).join(', ')}`, partial: true });
+      }
+      if (!reframe) {
+        const { directImageEditPrompt } = require('../media/image-rag-director');
+        const ragEdit = await directImageEditPrompt({
+          editPrompt: editDirective.prompt,
+          rawInstruction: `${ctx.userQuery || ''} ${cleanInstruction}`.trim(),
+          userId: ctx.userId,
+          chatId: ctx.chatId,
+          projectId: ctx.projectId,
+          gptId: ctx.gptId,
+          collection: ctx.collection,
+          prisma,
+          fileIds: ctx.fileIds,
+          fileMetadata: ctx.fileMetadata,
+          ragHits: ctx.ragHits,
+        });
+        if (ragEdit.prompt) editDirective.prompt = ragEdit.prompt;
       }
       // A plain edit keeps the source frame: the model's aspectRatio only
       // counts for reframes, when the user's own words name an orientation,

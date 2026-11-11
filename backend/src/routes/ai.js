@@ -10826,6 +10826,8 @@ router.post(
     body('fileId').optional().isString().isLength({ min: 1, max: 160 }),
     body('referenceFileIds').optional().isArray({ max: 8 }),
     body('referenceFileIds.*').isString().isLength({ min: 1, max: 160 }),
+    body('documentFileIds').optional().isArray({ max: 6 }),
+    body('documentFileIds.*').isString().isLength({ min: 1, max: 160 }),
     body('operation').optional().isIn(['generate', 'edit', 'reframe']),
     body('background').optional().isIn(['transparent']),
     body('maskDataUrl').optional().isString().isLength({ max: 8 * 1024 * 1024 + 32 }),
@@ -10881,7 +10883,44 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, referenceFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      let { prompt, chatId, provider, model, fileId, referenceFileIds, documentFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      const originalAttachmentOrder = [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
+      let attachedDocRecords = [];
+      // Composer uploads put ALL attached IDs (including PDFs/DOCX/TXT) into
+      // fileId + referenceFileIds. Partition owned non-image documents into
+      // documentFileIds so PDF+Imágenes grounds generation/editing via RAG
+      // instead of failing image-source validation.
+      if (!requestedOperation && originalAttachmentOrder.length > 0 && req.user?.id) {
+        try {
+          const uniqueCandidateIds = [...new Set(originalAttachmentOrder)];
+          let fetchedRecords = [];
+          if (typeof prisma.file?.findMany === 'function') {
+            fetchedRecords = await prisma.file.findMany({ where: { id: { in: uniqueCandidateIds }, userId: req.user.id } });
+          } else if (typeof prisma.file?.findFirst === 'function') {
+            const loaded = await Promise.all(uniqueCandidateIds.map((id) => prisma.file.findFirst({ where: { id, userId: req.user.id } }).catch(() => null)));
+            fetchedRecords = loaded.filter(Boolean);
+          }
+          attachedDocRecords = (Array.isArray(fetchedRecords) ? fetchedRecords : []).filter((rec) => {
+            if (!rec || (rec.userId && String(rec.userId) !== String(req.user.id))) return false;
+            const mime = String(rec.mimeType || '').toLowerCase().trim();
+            return Boolean(mime) && !mime.startsWith('image/') && !mime.startsWith('audio/') && !mime.startsWith('video/');
+          });
+          if (attachedDocRecords.length > 0) {
+            const docIdSet = new Set(attachedDocRecords.map((rec) => String(rec.id)));
+            documentFileIds = [...new Set([...(Array.isArray(documentFileIds) ? documentFileIds.map(String) : []), ...docIdSet])];
+            const wasComposerUploadOrder = Boolean(fileId) && Array.isArray(referenceFileIds) && String(referenceFileIds[0]) === String(fileId);
+            if (Array.isArray(referenceFileIds)) {
+              const remainingRefs = referenceFileIds.filter((id) => !docIdSet.has(String(id)));
+              referenceFileIds = remainingRefs.length > 0 ? remainingRefs : undefined;
+            }
+            if (fileId && docIdSet.has(String(fileId))) {
+              fileId = (wasComposerUploadOrder && Array.isArray(referenceFileIds) && referenceFileIds.length > 0)
+                ? referenceFileIds[0]
+                : undefined;
+            }
+          }
+        } catch (_) { /* best-effort: leave fileId/referenceFileIds untouched */ }
+      }
       // «ahora en azul» from the composer arrives with no fileId: one bounded
       // history read, only for follow-up phrasings, keeps it an edit.
       let hasRecentImage = false;
@@ -10997,9 +11036,13 @@ router.post(
       }
       // The user's bubble lists the attachments in the order they were sent,
       // whatever order the editor received them in.
-      const requestOrder = [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
-      const uploadedReferences = sourceImages
-        .filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || ''))
+      const requestOrder = originalAttachmentOrder.length
+        ? originalAttachmentOrder
+        : [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
+      const uploadedReferences = [
+        ...sourceImages.filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || '')),
+        ...attachedDocRecords.map((rec) => ({ fileId: rec.id, record: rec })),
+      ]
         .slice()
         .sort((a, b) => {
           const ia = requestOrder.indexOf(String(a.fileId)); const ib = requestOrder.indexOf(String(b.fileId));
@@ -11136,6 +11179,7 @@ router.post(
         }, 200000);
       });
 
+      let ragMeta = null;
       const generateSingleImage = async () => {
         if (sourceImage) {
           const imageDirective = require('../services/agents/image-directive');
@@ -11153,6 +11197,24 @@ router.post(
             if (origin !== 'upload-order' && origin !== 'explicit' && !isCompositionRequest(prompt)) {
               editPrompt = `${editPrompt}${describeInputRoles(sourceImages, { language: imageDirective.pickEditLanguage(prompt) })}`.trim();
             }
+          }
+          if (operation !== 'reframe') {
+            try {
+              const { directImageEditPrompt } = require('../services/media/image-rag-director');
+              const ragEdit = await directImageEditPrompt({
+                editPrompt,
+                rawInstruction: prompt,
+                userId,
+                chatId,
+                projectId: preValidatedChat?.projectId || undefined,
+                gptId: preValidatedChat?.customGptId || preValidatedChat?.gptId || undefined,
+                prisma,
+                documentFileIds,
+                chatPreValidated: Boolean(preValidatedChat),
+              });
+              if (ragEdit && ragEdit.prompt) editPrompt = ragEdit.prompt;
+              ragMeta = ragEdit || null;
+            } catch (_) { /* best-effort: keep base editPrompt */ }
           }
           const result = await imageEngine.editImage({
             prompt: editPrompt,
@@ -11179,8 +11241,33 @@ router.post(
             attempts: result.attempts || [],
           }));
         }
+        let directedImagePrompt = imagePrompt;
+        try {
+          const imageDirective = require('../services/agents/image-directive');
+          const { directImagePrompt } = require('../services/media/image-rag-director');
+          const detectedType = imageDirective.detectImageType(prompt);
+          const detectedStyle = imageDirective.detectImageStyle(prompt);
+          const ragResult = await directImagePrompt({
+            prompt: imagePrompt,
+            rawUserPrompt: prompt,
+            style: detectedStyle || undefined,
+            imageType: detectedType ? detectedType.type : undefined,
+            aspectRatio,
+            quality,
+            model,
+            userId,
+            chatId,
+            projectId: preValidatedChat?.projectId || undefined,
+            gptId: preValidatedChat?.customGptId || preValidatedChat?.gptId || undefined,
+            prisma,
+            documentFileIds,
+            chatPreValidated: Boolean(preValidatedChat),
+          });
+          if (ragResult && ragResult.prompt) directedImagePrompt = ragResult.prompt;
+          ragMeta = ragResult || null;
+        } catch (_) { /* best-effort: keep base imagePrompt */ }
         let result = await imageEngine.generateImage({
-          prompt: imagePrompt,
+          prompt: directedImagePrompt,
           model: grokImageRequested ? model.replace(/^(?:x-ai|xai)\//i, '') : model,
           provider: engineProviderForPick(),
           aspectRatio,
@@ -11196,7 +11283,7 @@ router.post(
             const alt = await pickImageAuthFallback({ prismaClient: prisma, failedProvider: engineProviderForPick(), excludeModel: model });
             if (alt) {
               const retry = await imageEngine.generateImage({
-                prompt: imagePrompt,
+                prompt: directedImagePrompt,
                 model: alt.engineModel,
                 provider: alt.engineProvider,
                 aspectRatio,
@@ -11295,6 +11382,9 @@ router.post(
           quality,
           requestedQuality: quality,
           ...(background ? { background } : {}),
+          ...(ragMeta?.archetype ? { ragArchetype: ragMeta.archetype } : {}),
+          ...(ragMeta?.continuityMode && ragMeta.continuityMode !== 'none' ? { continuityMode: ragMeta.continuityMode } : {}),
+          ...(ragMeta?.grounded ? { ragGrounded: true } : {}),
         });
       }
 
