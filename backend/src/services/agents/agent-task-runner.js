@@ -3045,7 +3045,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             fileIds: ids, fileNames: batch.rows.map(row => row.originalName || row.filename || row.id),
             goal: mediaGoal,
             mode: translationTarget ? 'translation' : wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
-            formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
+            formats: [
+              'txt',
+              mediaOutput.documentFormat,
+              mediaOutput.alsoPdf ? 'pdf' : null,
+              mediaOutput.wantsSubtitles ? 'srt' : null,
+              mediaOutput.wantsSubtitles ? 'vtt' : null,
+              (mediaOutput.wantsZip || ids.length >= 5) ? 'zip' : null,
+            ].filter(Boolean),
             // The recording's language and the names / speakers / «literal»
             // the user gave travel with the delivery and reach every job.
             language: batchLanguage,
@@ -3057,10 +3064,20 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             range: outputRange,
             // «transcribe y tradúcelo» / «resume y tradúcelo»: the translation
             // mode also delivers the transcript files and the summary asked for.
-            output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
-              includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
-              analysisRange: lookupWindow || null },
-            model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
+            output: {
+              documentFormat: mediaOutput.documentFormat,
+              wantsSubtitles: mediaOutput.wantsSubtitles,
+              ...(mediaOutput.wantsZip ? { wantsZip: true } : {}),
+              ...(mediaOutput.alsoPdf ? { alsoPdf: true } : {}),
+              includeTranscript: wantsTranscriptPack,
+              alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
+              analysisRange: lookupWindow || null,
+            },
+            model: {
+              id: runtimeModelProfile.runtimeModel || model || null,
+              provider: runtimeModelProfile.runtimeProvider || null,
+              ...(typeof modelPinned !== 'undefined' && modelPinned === true && runtimeModelProfile.remapped !== true ? { pinned: true } : {}),
+            },
           });
         } catch (error) {
           console.warn('[agent-task-runner] media delivery not created; waiting inline', error?.code || error?.message || 'delivery_error');
@@ -3096,7 +3113,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const saveTranscriptPack = async () => {
         let built = null;
         try {
-          built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, transcripts, output: mediaOutput, userId: user.id });
+          built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, allRows: batch.rows, transcripts, output: mediaOutput, userId: user.id });
         } catch (error) {
           throwIfAborted(controller.signal);
           console.warn('[agent-task-runner] professional transcript pack failed; plain TXT fallback', error?.message || error);

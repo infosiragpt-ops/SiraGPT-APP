@@ -194,3 +194,47 @@ test('priority: an interactive request enters the line ahead of batch waiters an
   (await b).release('ok');
   assert.deepEqual(order, ['c', 'd', 'e', 'a', 'b']);
 });
+
+test('an interactive waiter with a shorter maxWaitMs wakes on its own deadline while a long batch sleep is already pending', async () => {
+  let nowMs = 0;
+  const timers = [];
+  const sleep = (ms) => new Promise((resolve) => {
+    timers.push({ wakeAt: nowMs + ms, resolve });
+    timers.sort((x, y) => x.wakeAt - y.wakeAt);
+  });
+  const advanceTo = async (targetMs) => {
+    while (timers.length && timers[0].wakeAt <= targetMs) {
+      const next = timers.shift();
+      nowMs = next.wakeAt;
+      next.resolve();
+      await flush();
+    }
+    nowMs = targetMs;
+    await flush();
+  };
+  const g = gov.createTranscriptionGovernor({
+    env: { TRANSCRIBE_GROQ_RPM: '1', TRANSCRIBE_GROQ_IN_FLIGHT: '10' },
+    now: () => nowMs,
+    sleep,
+  });
+  (await g.acquire('groq')).release('ok'); // consumes the 1 RPM slot until t = 60_000
+  const batchWaiter = g.acquire('groq', { maxWaitMs: 120_000, priority: 0 });
+  await flush();
+  // Interactive dictation arrives at t = 100 with a 500 ms ceiling while the 60 s sleep is pending.
+  nowMs = 100;
+  let interactiveRejectedAt = null;
+  const interactiveDone = assert.rejects(
+    g.acquire('groq', { maxWaitMs: 500, priority: 2 }).catch((err) => {
+      interactiveRejectedAt = nowMs;
+      throw err;
+    }),
+    { code: 'governor_wait_timeout' },
+  );
+  await advanceTo(600);
+  await interactiveDone;
+  assert.equal(interactiveRejectedAt, 600, 'wakes right at 100 + 500 ms instead of hanging until 60_000 ms');
+  // The batch waiter stays in line and gets its permit when the minute window clears.
+  await advanceTo(60_000);
+  const permit = await batchWaiter;
+  permit.release('ok');
+});

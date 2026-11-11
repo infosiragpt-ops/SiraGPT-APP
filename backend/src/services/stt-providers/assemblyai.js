@@ -68,6 +68,16 @@ function segmentsFromAssemblyAi(payload) {
   if (!words.some(timed)) return [];
   const out = [];
   let current = null;
+  let confSum = 0;
+  let confCount = 0;
+  const flushCurrent = () => {
+    if (!current) return;
+    if (confCount > 0) current.confidence = Math.round(Math.min(1, Math.max(0, confSum / confCount)) * 1000) / 1000;
+    out.push(current);
+    current = null;
+    confSum = 0;
+    confCount = 0;
+  };
   for (const word of words.filter(timed)) {
     const text = String(word.text || '').trim();
     if (!text) continue;
@@ -75,13 +85,17 @@ function segmentsFromAssemblyAi(payload) {
     const end = msToSec(word.end);
     const speaker = word.speaker != null ? String(word.speaker) : undefined;
     if (current && (start - current.end >= 1 || end - current.start > 12 || speaker !== current.speaker || /[.!?…]$/.test(current.text))) {
-      out.push(current);
-      current = null;
+      flushCurrent();
     }
     if (!current) current = { start, end, text, ...(speaker !== undefined ? { speaker } : {}) };
     else { current.end = end; current.text = `${current.text} ${text}`; }
+    const conf = Number(word.confidence);
+    if (word.confidence != null && Number.isFinite(conf) && conf > 0) {
+      confSum += Math.min(1, conf);
+      confCount += 1;
+    }
   }
-  if (current) out.push(current);
+  flushCurrent();
   return out;
 }
 
@@ -119,10 +133,11 @@ function isTransientPollError(err) {
  * One piece → AssemblyAI. `language`: an ISO-639-1 code forces it; null asks
  * for detection. `keyterms` (names, jargon) go to `keyterms_prompt`.
  */
-async function transcribeAssemblyAiFile({ filePath, mimeType, language, signal, timeoutMs, model, keyterms = [], env = process.env, fetchImpl = globalThis.fetch, sleep = null, pollMs = DEFAULT_POLL_MS } = {}) {
+async function transcribeAssemblyAiFile({ filePath, mimeType, language, signal, timeoutMs, model, keyterms = [], speakersExpected = null, disfluencies = false, env = process.env, fetchImpl = globalThis.fetch, sleep = null, pollMs = DEFAULT_POLL_MS } = {}) {
   if (!filePath) throw Object.assign(new Error('Audio file path is required for AssemblyAI STT.'), { code: 'assemblyai_audio_file_required' });
   const key = assemblyAiApiKey(env);
   if (!key) throw Object.assign(new Error('ASSEMBLYAI_API_KEY is required.'), { code: 'assemblyai_key_required', status: 401 });
+  if (signal?.aborted) throw abortError();
   const base = cleanBaseUrl(env.ASSEMBLYAI_BASE_URL);
   const budget = Number(timeoutMs) > 0 ? Number(timeoutMs) : 300_000;
   const startedAt = Date.now();
@@ -141,11 +156,17 @@ async function transcribeAssemblyAiFile({ filePath, mimeType, language, signal, 
   const speechModel = String(model || '').trim() || assemblyAiSpeechModel(env);
   const forced = String(language || '').trim().toLowerCase();
   const terms = (Array.isArray(keyterms) ? keyterms : []).map((t) => String(t || '').trim()).filter(Boolean).slice(0, 200);
+  const speakerLabels = String(env.TRANSCRIBE_ASSEMBLYAI_DIARIZE || '') !== '0';
+  const expectedSpeakers = speakerLabels && Number.isFinite(Number(speakersExpected)) && Number(speakersExpected) >= 1
+    ? Math.min(32, Math.round(Number(speakersExpected)))
+    : null;
   const createBody = {
     audio_url: uploadUrl,
     punctuate: true,
     format_text: true,
-    speaker_labels: String(env.TRANSCRIBE_ASSEMBLYAI_DIARIZE || '') !== '0',
+    speaker_labels: speakerLabels,
+    ...(expectedSpeakers ? { speakers_expected: expectedSpeakers } : {}),
+    ...(disfluencies === true ? { disfluencies: true } : {}),
     ...(speechModel ? { speech_model: speechModel } : {}),
     ...(forced ? { language_code: forced } : { language_detection: true }),
     ...(terms.length ? { keyterms_prompt: terms } : {}),

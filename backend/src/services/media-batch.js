@@ -37,7 +37,8 @@ async function loadMediaBatch(prisma, { userId, fileIds = [] }) {
   if (rows.length !== ids.length) throw new Error('Uno de los archivos no está disponible en tu cuenta.');
   if (ids.length > MAX_MEDIA_FILES) throw new Error(MEDIA_BATCH_LIMIT_MESSAGE);
   const byId = new Map(rows.map(row => [row.id, row]));
-  return ids.map(id => byId.get(id));
+  const ordered = ids.map(id => byId.get(id));
+  return require('./media-transcript-store').hydrateClientExtractedRows(prisma, { userId, rows: ordered });
 }
 
 /**
@@ -53,10 +54,11 @@ async function loadMixedAttachmentBatch(prisma, { userId, fileIds = [] }) {
   if (rows.length !== ids.length) throw new Error('Uno de los archivos no está disponible en tu cuenta.');
   const byId = new Map(rows.map(row => [row.id, row]));
   const ordered = ids.map(id => byId.get(id)).filter(Boolean);
-  const mediaRows = ordered.filter(isMediaFile);
+  const mediaRowsRaw = ordered.filter(isMediaFile);
   const companionRows = ordered.filter(row => !isMediaFile(row));
-  if (!mediaRows.length || !companionRows.length) return null;
-  if (mediaRows.length > MAX_MEDIA_FILES) throw new Error(MEDIA_BATCH_LIMIT_MESSAGE);
+  if (!mediaRowsRaw.length || !companionRows.length) return null;
+  if (mediaRowsRaw.length > MAX_MEDIA_FILES) throw new Error(MEDIA_BATCH_LIMIT_MESSAGE);
+  const mediaRows = await require('./media-transcript-store').hydrateClientExtractedRows(prisma, { userId, rows: mediaRowsRaw });
   return { mediaRows, companionRows };
 }
 
@@ -179,8 +181,17 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     await wait(Math.min(pollMs, Math.max(1, deadline - now())), undefined, { signal });
     const fresh = await prisma.file.findMany({ where: { userId, id: { in: ids }, deletedAt: null } });
     const byId = new Map(fresh.map(row => [row.id, row]));
-    current = ids.map(id => byId.get(id) || { id, originalName: rows.find(row => row.id === id)?.originalName,
-      processingStage: 'failed', processingError: 'El archivo ya no está disponible.' });
+    current = ids.map(id => {
+      const initial = rows.find(row => row.id === id);
+      const next = byId.get(id);
+      if (!next) {
+        return { id, originalName: initial?.originalName, processingStage: 'failed', processingError: 'El archivo ya no está disponible.' };
+      }
+      if (initial?.sourceName) {
+        return { ...next, originalName: initial.sourceName, sourceName: initial.sourceName, ...(initial.sourceMedia ? { sourceMedia: initial.sourceMedia } : {}) };
+      }
+      return next;
+    });
   }
   return { rows: current, ...batchCounts(current), enqueueErrors, progress: progressById };
 }

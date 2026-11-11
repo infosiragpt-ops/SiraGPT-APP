@@ -1446,3 +1446,46 @@ test('mixed audio + image and audio + document with «trnadscririrbi» transcrib
     assert.equal(result.stoppedReason, 'transcription_finalize');
   }
 });
+
+test('loadMediaBatch and waitForMediaBatch preserve browser-extracted sourceName across polls (never «.audio.ogg»)', async () => {
+  let polls = 0;
+  const prisma = {
+    file: {
+      findMany: async () => {
+        polls += 1;
+        return [{
+          id: 'ext1',
+          userId: 'u1',
+          originalName: 'Clase_Magistral.audio.ogg',
+          filename: 'ext1.ogg',
+          mimeType: 'audio/ogg',
+          processingStage: polls >= 2 ? 'ready' : 'extracting',
+          extractedText: polls >= 2 ? '[00:00] Bienvenidos a la clase magistral.' : null,
+          deletedAt: null,
+        }];
+      },
+    },
+    documentAnalysis: {
+      findMany: async () => [{
+        fileId: 'ext1',
+        userId: 'u1',
+        metadata: { clientExtracted: { tier: 'opus', sourceName: 'Clase_Magistral.mp4', sourceSize: 250_000_000, sourceType: 'video/mp4' } },
+      }],
+    },
+  };
+  const loaded = await batch.loadMediaBatch(prisma, { userId: 'u1', fileIds: ['ext1'] });
+  assert.equal(loaded[0].originalName, 'Clase_Magistral.mp4');
+  assert.equal(loaded[0].sourceMedia, 'video');
+  const labels = [];
+  const waited = await batch.waitForMediaBatch({
+    prisma,
+    userId: 'u1',
+    rows: loaded,
+    enqueue: async () => ({ id: 'ext1', queued: true, stage: 'extracting' }),
+    readProgress: async () => ({ ext1: { stage: 'transcribe', percent: 50, completed: 1, total: 2 } }),
+    onProgress: (p) => labels.push(batch.describeBatchProgress(p)),
+    wait: async () => {},
+  });
+  assert.ok(labels.some((l) => l.includes('Clase_Magistral.mp4') && !l.includes('.audio.ogg')));
+  assert.equal(waited.rows[0].originalName, 'Clase_Magistral.mp4');
+});

@@ -36,9 +36,13 @@ const MIME = Object.freeze({
   vtt: 'text/vtt',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pdf: 'application/pdf',
+  zip: 'application/zip',
 });
 const LONG_RECORDING_SECONDS = 10 * 60;
 const SUBTITLE_FILE_CAP = 20;
+const BATCH_ZIP_THRESHOLD = 5;
+const MAX_COMBINED_DOC_MARKDOWN_CHARS = 1_200_000;
+const LOAD_TRANSCRIPTS_CONCURRENCY = 8;
 const PREVIEW_FULL_MAX_CHARS = 12000;
 const PREVIEW_HEAD_CHARS = 3500;
 const PREVIEW_BATCH_HEAD_CHARS = 1200;
@@ -51,21 +55,30 @@ function stripAccentsLower(value) {
 function defaultFormatter() { return require('./media-transcript-format'); }
 function defaultStore() { return require('./media-transcript-store'); }
 
-/** What the user asked for: document format, subtitles and an optional time range. */
+/** What the user asked for: document format, subtitles, batch ZIP and an optional time range. */
 function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null } = {}) {
   const text = stripAccentsLower(goal);
+  const asksWord = /\b(word|docx)\b/.test(text);
+  const asksPdf = /\bpdf\b/.test(text);
   let documentFormat = null;
-  try {
-    documentFormat = require('./message-attachments').transcriptionFileOutputFormat(goal);
-  } catch (_) { documentFormat = null; }
-  if (!documentFormat) {
-    if (/\bpdf\b/.test(text)) documentFormat = 'pdf';
-    else if (/\b(word|docx|documento)\b/.test(text)) documentFormat = 'docx';
+  let alsoPdf = false;
+  if (asksWord && asksPdf) {
+    documentFormat = 'docx';
+    alsoPdf = true;
+  } else {
+    try {
+      documentFormat = require('./message-attachments').transcriptionFileOutputFormat(goal);
+    } catch (_) { documentFormat = null; }
+    if (!documentFormat) {
+      if (asksPdf) documentFormat = 'pdf';
+      else if (asksWord || /\bdocumento\b/.test(text)) documentFormat = 'docx';
+    }
   }
   const policyFormat = String(documentPolicy?.format || '').toLowerCase();
   if (!documentFormat && documentPolicy?.autoGenerate && (policyFormat === 'docx' || policyFormat === 'pdf')) documentFormat = policyFormat;
   if (documentFormat && documentFormat !== 'docx' && documentFormat !== 'pdf') documentFormat = null;
   const wantsSubtitles = /\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text);
+  const wantsZip = /\b(zip|comprimid\w*|archivos?\s+separados?|por\s+separado|un\s+archivo\s+por\s+(?:cada|audio|video|grabacion))\b/.test(text);
   let range = null;
   try {
     const parsed = (formatter || defaultFormatter()).parseTimeRange?.(goal);
@@ -73,7 +86,13 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
     if (parsed && Number.isFinite(parsed.start) && parsed.start >= 0
       && (parsed.end == null || (Number.isFinite(parsed.end) && parsed.end > parsed.start))) range = { start: parsed.start, end: parsed.end ?? null };
   } catch (_) { range = null; }
-  return { documentFormat, wantsSubtitles, range };
+  return {
+    documentFormat,
+    wantsSubtitles,
+    range,
+    ...(wantsZip ? { wantsZip: true } : {}),
+    ...(alsoPdf ? { alsoPdf: true } : {}),
+  };
 }
 
 /** Accepts the sidecar shape ({s,e,t,spk,conf}) or the engine shape. */
@@ -92,8 +111,12 @@ function rowName(row) {
 }
 
 function isVideoRow(row, transcript = null) {
-  // Audio the browser extracted from a video is still that video.
+  // Audio the browser extracted from a video is still that video; audio extracted
+  // from a large WAV/FLAC stays audio even when transcoded to .ogg/.webm.
   if (transcript?.sourceMedia === 'video') return true;
+  if (transcript?.sourceMedia === 'audio') return false;
+  if (row?.sourceMedia === 'video') return true;
+  if (row?.sourceMedia === 'audio') return false;
   return /^video\//i.test(String(row?.mimeType || '')) || /\.(mp4|mov|mkv|webm|avi|m4v|mpe?g|ts)$/i.test(rowName(row));
 }
 
@@ -290,6 +313,7 @@ function deliverableName(rows, ext, range) {
 const ENGINE_NAMES_ES = Object.freeze({
   openai: 'OpenAI', groq: 'Groq', xai: 'xAI', grok: 'xAI', meta: 'Meta', elevenlabs: 'ElevenLabs',
   scribe: 'ElevenLabs', gemini: 'Gemini', voicestudio: 'VoiceStudio', deepgram: 'Deepgram', assemblyai: 'AssemblyAI',
+  mistral: 'Mistral', voxtral: 'Mistral',
   local: 'Whisper local', 'local-whisper': 'Whisper local', 'whisper-cpp': 'Whisper local', whisper: 'Whisper',
   'local-strong': 'Whisper local reforzado', local_strong: 'Whisper local reforzado',
   subtitles: 'subtítulos incrustados', captions: 'subtítulos de la plataforma', platform_captions: 'subtítulos de la plataforma',
@@ -536,16 +560,239 @@ async function renderDocument({ userId, filename, markdown, format, createDocume
   }
 }
 
+function csvCell(value) {
+  const raw = String(value ?? '').replace(/[\r\n]+/g, ' ').trim();
+  const safe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return /[",;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+function mdTableCell(value) {
+  return String(value ?? '').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').trim() || '—';
+}
+
+function batchManifestEntries({ packs = [], allRows = null, transcripts = new Map() } = {}) {
+  const packById = new Map(packs.map((item) => [item.row?.id, item]));
+  const baseRows = Array.isArray(allRows) && allRows.length ? allRows : packs.map((item) => item.row);
+  const seen = new Set();
+  const ordered = [];
+  for (const row of baseRows) {
+    if (!row) continue;
+    const key = row.id || ordered.length;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ordered.push(row);
+  }
+  for (const item of packs) {
+    if (item.row?.id && !seen.has(item.row.id)) ordered.push(item.row);
+  }
+  return ordered.map((rawRow, idx) => {
+    const packed = rawRow?.id ? packById.get(rawRow.id) : null;
+    const tr = rawRow?.id ? transcripts.get(rawRow.id) : null;
+    const name = packed?.name || tr?.sourceName || rawRow?.sourceName || rowName(rawRow);
+    if (!packed) {
+      const stage = String(rawRow?.deliveryState || rawRow?.processingStage || '').toLowerCase();
+      const failed = stage === 'failed' || Boolean(rawRow?.processingError);
+      const detail = String(rawRow?.processingError || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 160);
+      return {
+        index: idx + 1,
+        name,
+        status: failed ? 'Con incidencia' : 'Pendiente',
+        durationLabel: '',
+        durationSec: '',
+        language: '',
+        words: 0,
+        speakers: '',
+        coveragePct: '',
+        quality: '',
+        doubtfulCount: 0,
+        gapsCount: 0,
+        detail: detail || (failed ? 'No se pudo transcribir' : 'En cola'),
+        packed: null,
+      };
+    }
+    const res = packed.result || {};
+    const stats = packed.pack?.stats || {};
+    const partial = Boolean(res.partial) || (Array.isArray(res.gaps) && res.gaps.length > 0);
+    const covNum = res.coverage == null || AUTHORED_SOURCES.has(res.source) ? NaN : Number(res.coverage);
+    const coveragePct = Number.isFinite(covNum) && res.segments?.length ? `${Math.round(covNum * 100)} %` : '';
+    const words = Number(stats.words) || String(res.text || '').trim().split(/\s+/).filter(Boolean).length;
+    const speakers = Number(stats.speakers) > 1 ? String(stats.speakers) : '';
+    const doubtfulCount = Array.isArray(res.quality?.lowConfidence) ? res.quality.lowConfidence.length : 0;
+    const gaps = Array.isArray(res.gaps) ? res.gaps : [];
+    const gapText = gaps.length
+      ? gaps.slice(0, 4).map((g) => rangeLabel({ start: Number(g.start), end: Number(g.end) })).join(', ') + (gaps.length > 4 ? '…' : '')
+      : '';
+    return {
+      index: idx + 1,
+      name,
+      status: partial ? 'Parcial' : 'Completo',
+      durationLabel: durationLabel(res.durationSec),
+      durationSec: Number.isFinite(Number(res.durationSec)) && Number(res.durationSec) > 0 ? String(Math.round(Number(res.durationSec))) : '',
+      language: languageName(res.language),
+      words,
+      speakers,
+      coveragePct,
+      quality: res.quality?.level || '',
+      doubtfulCount,
+      gapsCount: gaps.length,
+      detail: gapText ? `Faltan: ${gapText}` : '',
+      packed,
+    };
+  });
+}
+
+function buildBatchIndexCsv(manifest = []) {
+  const header = [
+    'N', 'Archivo', 'Estado', 'Duracion', 'DuracionSegundos', 'Idioma',
+    'Palabras', 'Hablantes', 'Cobertura', 'Calidad', 'TramosDudosos',
+    'TramosSinTranscribir', 'Detalle',
+  ].join(',');
+  const lines = manifest.map((item) => [
+    item.index,
+    item.name,
+    item.status,
+    item.durationLabel,
+    item.durationSec,
+    item.language,
+    item.words || '',
+    item.speakers,
+    item.coveragePct,
+    item.quality,
+    item.doubtfulCount || '',
+    item.gapsCount || '',
+    item.detail,
+  ].map(csvCell).join(','));
+  // UTF-8 BOM so Excel opens Spanish accents cleanly on Windows and macOS.
+  return `\uFEFF${[header, ...lines].join('\r\n')}\r\n`;
+}
+
+function buildBatchIndexMarkdown(manifest = [], { range = null, hasSubtitles = false, hasEmbedded = false } = {}) {
+  const total = manifest.length;
+  const completed = manifest.filter((m) => m.status === 'Completo').length;
+  const partial = manifest.filter((m) => m.status === 'Parcial').length;
+  const failed = manifest.filter((m) => m.status === 'Con incidencia').length;
+  const pending = manifest.filter((m) => m.status === 'Pendiente').length;
+  const totalSec = manifest.reduce((sum, m) => sum + (Number(m.durationSec) || 0), 0);
+  const totalWords = manifest.reduce((sum, m) => sum + (Number(m.words) || 0), 0);
+  const summaryParts = [
+    `**Archivos en el lote:** ${total}`,
+    completed ? `**Completos:** ${completed}` : '',
+    partial ? `**Parciales:** ${partial}` : '',
+    failed ? `**Con incidencia:** ${failed}` : '',
+    pending ? `**Pendientes:** ${pending}` : '',
+    totalSec ? `**Duración total:** ${durationLabel(totalSec)}` : '',
+    totalWords ? `**Palabras totales:** ${totalWords.toLocaleString('es-PE')}` : '',
+    range ? `**Tramo:** ${rangeLabel(range)}` : '',
+  ].filter(Boolean);
+
+  const folders = [
+    '- `txt/`: transcripción completa con encabezado, marcas de tiempo y hablantes (un archivo por grabación).',
+    hasSubtitles ? '- `srt/` y `vtt/`: subtítulos sincronizados listos para reproductores y editores de video.' : '',
+    hasEmbedded ? '- `subtitulos-incrustados/`: pista de subtítulos original extraída del contenedor de video.' : '',
+    '- `00-INDICE.csv`: tabla maestra compatible con Excel y hojas de cálculo.',
+  ].filter(Boolean);
+
+  const tableHeader = [
+    '| # | Archivo | Estado | Duración | Idioma | Palabras | Cobertura | Calidad | Observaciones |',
+    '|---:|---|---|---|---|---:|---|---|---|',
+  ];
+  const tableRows = manifest.map((m) => {
+    const notes = [
+      m.speakers ? `${m.speakers} hablantes` : '',
+      m.doubtfulCount ? `${m.doubtfulCount} dudosos` : '',
+      m.detail || '',
+    ].filter(Boolean).join(' · ');
+    return `| ${m.index} | ${mdTableCell(m.name)} | ${mdTableCell(m.status)} | ${mdTableCell(m.durationLabel)} | ${mdTableCell(m.language)} | ${m.words ? m.words.toLocaleString('es-PE') : '—'} | ${mdTableCell(m.coveragePct)} | ${mdTableCell(m.quality)} | ${mdTableCell(notes)} |`;
+  });
+
+  return [
+    `# Índice de transcripciones (${total} ${total === 1 ? 'archivo' : 'archivos'})`,
+    summaryParts.join(' · '),
+    '## Estructura del paquete\n\n' + folders.join('\n'),
+    '## Resumen por archivo\n\n' + [...tableHeader, ...tableRows].join('\n'),
+  ].join('\n\n') + '\n';
+}
+
+function buildCompactBatchDocumentMarkdown(packs, manifest, { range = null, hasZip = false } = {}) {
+  const indexMd = buildBatchIndexMarkdown(manifest, { range, hasSubtitles: false, hasEmbedded: false });
+  const whereComplete = hasZip
+    ? 'en el archivo TXT combinado y por separado dentro del paquete ZIP adjunto (`txt/`)'
+    : 'en el archivo TXT adjunto';
+  const excerpts = packs.map((entry, idx) => {
+    const snippet = headAtParagraph(entry.result?.text || '', 600);
+    const meta = [
+      durationLabel(entry.result?.durationSec),
+      languageName(entry.result?.language),
+      entry.pack?.stats?.words ? `${Number(entry.pack.stats.words).toLocaleString('es-PE')} palabras` : '',
+      entry.result?.quality?.level ? `calidad ${entry.result.quality.level}` : '',
+    ].filter(Boolean).join(' · ');
+    return [
+      `## ${idx + 1}. ${entry.name}`,
+      meta ? `_${meta}_` : '',
+      snippet.text ? `${snippet.text}${snippet.cut ? '…' : ''}` : '_Sin extracto disponible._',
+    ].filter(Boolean).join('\n\n');
+  });
+  return [
+    indexMd.trim(),
+    `> **Nota sobre lotes extensos:** Por el volumen total de texto del lote, este documento reúne el índice maestro, las métricas de calidad y el inicio de cada grabación. Las transcripciones íntegras palabra por palabra están disponibles ${whereComplete}.`,
+    ...excerpts,
+  ].join('\n\n');
+}
+
+function buildTranscriptBatchZip({ packs = [], manifest = [], transcripts = new Map(), output = {}, fmt = null } = {}) {
+  const PizZip = require('pizzip');
+  const zip = new PizZip();
+  const range = output.range || null;
+  const padWidth = Math.max(2, String(Math.max(manifest.length, packs.length)).length);
+  const padIndex = (n) => String(n).padStart(padWidth, '0');
+  const orderByRowId = new Map();
+  manifest.forEach((m) => {
+    if (m.packed?.row?.id) orderByRowId.set(m.packed.row.id, m.index);
+  });
+  let hasSubtitles = false;
+  let hasEmbedded = false;
+  const windowSuffix = range ? ` (${rangeLabel(range).replace(/:/g, '.')})` : '';
+
+  packs.forEach((entry, fallbackIdx) => {
+    const num = orderByRowId.get(entry.row?.id) || (fallbackIdx + 1);
+    const prefix = `${padIndex(num)} - ${sourceStem(entry.name)}${windowSuffix}`;
+    if (entry.pack?.txt) {
+      zip.file(`txt/${prefix}.txt`, entry.pack.txt);
+    }
+    const tr = transcripts.get(entry.row?.id);
+    const includeSubs = entry.result.segments.length > 0 && (Boolean(output.wantsSubtitles) || isVideoRow(entry.row, tr));
+    if (includeSubs) {
+      if (entry.pack?.srt) {
+        zip.file(`srt/${prefix}.srt`, entry.pack.srt);
+        hasSubtitles = true;
+      }
+      if (entry.pack?.vtt) {
+        zip.file(`vtt/${prefix}.vtt`, entry.pack.vtt);
+        hasSubtitles = true;
+      }
+    }
+    const embedded = entry.embeddedSrt || (!AUTHORED_SOURCES.has(entry.result.source) && fmt ? embeddedSubtitlesSrt(entry.result, fmt) : '');
+    if (embedded) {
+      zip.file(`subtitulos-incrustados/${prefix} (subtitulos incrustados).srt`, embedded);
+      hasEmbedded = true;
+    }
+  });
+
+  zip.file('00-INDICE.md', buildBatchIndexMarkdown(manifest, { range, hasSubtitles, hasEmbedded }));
+  zip.file('00-INDICE.csv', buildBatchIndexCsv(manifest));
+  return zip.generate({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+}
+
 /**
  * @returns {Promise<{artifacts: Array<{filename, base64, mime, format, sizeBytes}>, notes: string[], formats: string[]}>}
  */
-async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(), output = {}, userId,
-  formatter = null, createDocument = null, logger = console } = {}) {
+async function buildMediaTranscriptArtifacts({ rows = [], allRows = null, transcripts = new Map(), output = {}, userId,
+  formatter = null, createDocument = null, maxDocumentMarkdownChars = MAX_COMBINED_DOC_MARKDOWN_CHARS, logger = console } = {}) {
   const fmt = formatter || defaultFormatter();
-  // Audio extracted in the browser carries its video's name («Clase 3.mp4»):
-  // the files are named after what the user uploaded, not «Clase 3.audio.ogg».
+  // Audio extracted in the browser carries its source name («Clase 3.mp4»,
+  // «Entrevista.wav»): deliverables use what the user uploaded, never «.audio.ogg».
   const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
-    const sourceName = transcripts.get(row.id)?.sourceName;
+    const sourceName = transcripts.get(row.id)?.sourceName || row?.sourceName;
     return sourceName ? { ...row, originalName: sourceName } : row;
   });
   const notes = [];
@@ -559,7 +806,7 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
   const totalSeconds = entries.reduce((sum, entry) => sum + (Number(entry.result.durationSec) || 0), 0);
   const long = totalSeconds >= LONG_RECORDING_SECONDS;
   const wantsDocx = output.documentFormat === 'docx' || (!output.documentFormat && long);
-  const wantsPdf = output.documentFormat === 'pdf';
+  const wantsPdf = output.documentFormat === 'pdf' || output.alsoPdf === true;
   const single = entries.length === 1;
   const timed = (entry) => entry.result.segments.length > 0;
   const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row, transcripts.get(entries[0].row.id)) || long);
@@ -568,12 +815,16 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
     notes.push('Algunas transcripciones no tienen marcas de tiempo, así que no se pudieron generar sus subtítulos.');
   }
 
+  const wantsBatchZip = Boolean(output.wantsZip)
+    || entries.length >= BATCH_ZIP_THRESHOLD
+    || subtitleEntries.length > SUBTITLE_FILE_CAP;
+
   // A text subtitle track kept next to a voice transcript goes out as its
-  // own SRT when subtitles were asked for (the header says so).
+  // own SRT when subtitles were asked for (or inside the batch ZIP).
   const subtitledIds = new Set(subtitleEntries.slice(0, SUBTITLE_FILE_CAP).map((entry) => entry.row.id));
   const packs = entries.map((entry) => {
-    const embeddedSrt = output.wantsSubtitles && subtitledIds.has(entry.row.id) && !AUTHORED_SOURCES.has(entry.result.source)
-      ? embeddedSubtitlesSrt(entry.result, fmt) : '';
+    const allowEmbedded = !AUTHORED_SOURCES.has(entry.result.source) && (wantsBatchZip || (output.wantsSubtitles && subtitledIds.has(entry.row.id)));
+    const embeddedSrt = allowEmbedded ? embeddedSubtitlesSrt(entry.result, fmt) : '';
     let headed = entry.result;
     try {
       const meta = fmt.normalizeTranscriptResult ? fmt.normalizeTranscriptResult(entry.result) : null;
@@ -587,12 +838,22 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
   });
   const artifacts = [];
   const range = output.range || null;
+  const manifest = wantsBatchZip || (!single && (wantsDocx || wantsPdf))
+    ? batchManifestEntries({ packs, allRows: allRows || rows, transcripts })
+    : [];
+
   const txt = single ? packs[0].pack.txt : packs.map((entry, index) => `${index + 1}. ${entry.name}\n${'='.repeat(48)}\n${entry.pack.txt}`).join('\n\n');
   artifacts.push(toArtifact(deliverableName(ready, 'txt', range), txt, 'txt', 'transcript'));
 
-  const markdown = single ? packs[0].pack.md : [`# Transcripciones (${packs.length} archivos)`, ...packs.map((entry) => entry.pack.md
+  let markdown = single ? packs[0].pack.md : [`# Transcripciones (${packs.length} archivos)`, ...packs.map((entry) => entry.pack.md
     // Each file keeps its own section; its title drops one level.
     .replace(/^# /m, '## '))].join('\n\n');
+  const maxDocChars = Number(maxDocumentMarkdownChars) > 0 ? Number(maxDocumentMarkdownChars) : MAX_COMBINED_DOC_MARKDOWN_CHARS;
+  let compactedDoc = false;
+  if (!single && (wantsDocx || wantsPdf) && markdown.length > maxDocChars) {
+    markdown = buildCompactBatchDocumentMarkdown(packs, manifest, { range, hasZip: wantsBatchZip });
+    compactedDoc = true;
+  }
   for (const [wanted, ext] of [[wantsDocx, 'docx'], [wantsPdf, 'pdf']]) {
     if (!wanted) continue;
     try {
@@ -604,31 +865,51 @@ async function buildMediaTranscriptArtifacts({ rows = [], transcripts = new Map(
       notes.push(`No pude generar el ${ext === 'docx' ? 'Word' : 'PDF'}; el TXT tiene la transcripción completa.`);
     }
   }
+  if (compactedDoc && artifacts.some((a) => a.format === 'docx' || a.format === 'pdf')) {
+    notes.push(`Por la extensión del lote, el documento incluye el índice maestro y extractos por archivo; las transcripciones completas están en el TXT${wantsBatchZip ? ' y por separado en el ZIP' : ''}.`);
+  }
+
+  let zipAttached = false;
+  if (wantsBatchZip) {
+    try {
+      const zipBuffer = buildTranscriptBatchZip({ packs, manifest, transcripts, output, fmt });
+      const zipName = deliverableName(ready, 'zip', range);
+      artifacts.push(toArtifact(zipName, zipBuffer, 'zip', 'transcript'));
+      zipAttached = true;
+    } catch (err) {
+      logger?.warn?.('[media-transcript-artifacts] batch zip failed', err?.code || err?.message || 'zip_error');
+      notes.push('No pude empaquetar el archivo ZIP por separado; el TXT adjunto conserva todas las transcripciones completas.');
+    }
+  }
 
   const subtitled = subtitleEntries.slice(0, SUBTITLE_FILE_CAP);
   for (const entry of subtitled) {
-    const pack = packs.find((candidate) => candidate.row.id === entry.row.id).pack;
+    const packed = packs.find((candidate) => candidate.row.id === entry.row.id);
+    const pack = packed.pack;
     const names = [entry.row];
     if (pack.srt) artifacts.push(toArtifact(deliverableName(names, 'srt', range), pack.srt, 'srt', 'subtitles'));
     if (pack.vtt) artifacts.push(toArtifact(deliverableName(names, 'vtt', range), pack.vtt, 'vtt', 'subtitles'));
-    const embeddedSrt = packs.find((candidate) => candidate.row.id === entry.row.id).embeddedSrt;
+    const embeddedSrt = output.wantsSubtitles ? packed.embeddedSrt : '';
     if (embeddedSrt) {
       artifacts.push({ ...toArtifact(embeddedSubtitlesName(entry.row, range), embeddedSrt, 'srt', 'embedded_subtitles'),
         ...(entry.row?.id ? { sourceFileId: String(entry.row.id) } : {}) });
     }
   }
   if (subtitleEntries.length > SUBTITLE_FILE_CAP) {
-    notes.push(`Generé subtítulos para los primeros ${SUBTITLE_FILE_CAP} archivos; pide los demás por nombre si los necesitas.`);
+    notes.push(zipAttached
+      ? `Adjunté los primeros ${SUBTITLE_FILE_CAP} subtítulos sueltos en el chat; el paquete ZIP contiene los subtítulos SRT y VTT de los ${subtitleEntries.length} archivos.`
+      : `Generé subtítulos para los primeros ${SUBTITLE_FILE_CAP} archivos; pide los demás por nombre si los necesitas.`);
   }
   return { artifacts, notes, formats: [...new Set(artifacts.map((artifact) => artifact.format))] };
 }
 
 /**
  * Deliverables of a translation: one TXT per batch (each file under its own
- * heading) and a Word copy for long texts or when asked.
+ * heading) and a Word/PDF copy for long texts or when asked.
  * @param {{files: Array<{id, name, text}>, target: {code, name}}} input
  */
-async function buildTranslationArtifacts({ files = [], target, output = {}, userId, createDocument = null, logger = console } = {}) {
+async function buildTranslationArtifacts({ files = [], target, output = {}, userId, createDocument = null,
+  maxDocumentMarkdownChars = MAX_COMBINED_DOC_MARKDOWN_CHARS, logger = console } = {}) {
   const usable = files.filter((file) => String(file?.text || '').trim());
   if (!usable.length || !target?.name) return { artifacts: [], notes: [] };
   const notes = [];
@@ -640,16 +921,45 @@ async function buildTranslationArtifacts({ files = [], target, output = {}, user
     : usable.map((file, index) => `${index + 1}. ${file.name}\n${'='.repeat(48)}\n${file.text.trim()}`).join('\n\n');
   const artifacts = [toArtifact(name('txt'), `${txt}\n`, 'txt', 'translation')];
   const long = txt.length >= 20000;
-  const wanted = output.documentFormat || (long ? 'docx' : null);
-  if (wanted === 'docx' || wanted === 'pdf') {
-    const markdown = [`# ${usable.length === 1 ? `Traducción al ${target.name} — ${sourceStem(usable[0].name)}` : `Traducciones al ${target.name}`}`,
+  const primary = output.documentFormat || (long ? 'docx' : null);
+  const docFormats = [
+    ...(primary === 'docx' || primary === 'pdf' ? [primary] : []),
+    ...(output.alsoPdf === true && primary !== 'pdf' ? ['pdf'] : []),
+  ];
+  if (docFormats.length) {
+    let markdown = [`# ${usable.length === 1 ? `Traducción al ${target.name} — ${sourceStem(usable[0].name)}` : `Traducciones al ${target.name}`}`,
       ...usable.map((file) => `${usable.length === 1 ? '' : `## ${sourceStem(file.name)}\n\n`}${file.text.trim().split(/\n+/).join('\n\n')}`)].join('\n\n');
+    const maxDocChars = Number(maxDocumentMarkdownChars) > 0 ? Number(maxDocumentMarkdownChars) : MAX_COMBINED_DOC_MARKDOWN_CHARS;
+    if (usable.length > 1 && markdown.length > maxDocChars) {
+      markdown = [
+        `# Traducciones al ${target.name} (${usable.length} archivos)`,
+        '> **Nota:** Por el volumen del lote, este documento muestra el inicio de cada traducción; el archivo TXT adjunto contiene el texto íntegro.',
+        ...usable.map((file, idx) => `## ${idx + 1}. ${sourceStem(file.name)}\n\n${headAtParagraph(file.text, 600).text}`),
+      ].join('\n\n');
+    }
+    for (const wanted of docFormats) {
+      try {
+        const filename = name(wanted);
+        artifacts.push(toArtifact(filename, await renderDocument({ userId, filename, markdown, format: wanted, createDocument }), wanted, 'translation'));
+      } catch (err) {
+        logger?.warn?.('[media-transcript-artifacts] translation document failed', err?.code || err?.message || 'render_error');
+        notes.push(`No pude generar el ${wanted === 'docx' ? 'Word' : 'PDF'} de la traducción; el TXT la tiene completa.`);
+      }
+    }
+  }
+  if (usable.length >= BATCH_ZIP_THRESHOLD || output.wantsZip) {
     try {
-      const filename = name(wanted);
-      artifacts.push(toArtifact(filename, await renderDocument({ userId, filename, markdown, format: wanted, createDocument }), wanted, 'translation'));
+      const PizZip = require('pizzip');
+      const zip = new PizZip();
+      const padWidth = Math.max(2, String(usable.length).length);
+      usable.forEach((file, idx) => {
+        const prefix = `${String(idx + 1).padStart(padWidth, '0')} - ${sourceStem(file.name)}`;
+        zip.file(`txt/${prefix} (${label}).txt`, `${file.text.trim()}\n`);
+      });
+      const zipBuffer = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+      artifacts.push(toArtifact(name('zip'), zipBuffer, 'zip', 'translation'));
     } catch (err) {
-      logger?.warn?.('[media-transcript-artifacts] translation document failed', err?.code || err?.message || 'render_error');
-      notes.push(`No pude generar el ${wanted === 'docx' ? 'Word' : 'PDF'} de la traducción; el TXT la tiene completa.`);
+      logger?.warn?.('[media-transcript-artifacts] translation zip failed', err?.code || err?.message || 'zip_error');
     }
   }
   return { artifacts, notes };
@@ -742,7 +1052,10 @@ function previewReportBlock(report) {
 function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output = {}, formatter = null,
   transcriptFilesAttached = true } = {}) {
   const fmt = formatter || defaultFormatter();
-  const ready = rows.filter((row) => String(row?.extractedText || '').trim());
+  const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
+    const sourceName = transcripts.get(row.id)?.sourceName || row?.sourceName;
+    return sourceName ? { ...row, originalName: sourceName } : row;
+  });
   if (!ready.length) return '';
   const single = ready.length === 1;
   const parts = [];
@@ -779,24 +1092,31 @@ function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output
   return parts.join('\n\n');
 }
 
-/** Owner-scoped sidecars for the ready rows; a missing or broken one is null. */
+/** Owner-scoped sidecars for the ready rows; bounded-parallel so 100 files never spike gunzip RAM. */
 async function loadTranscripts(prisma, { userId, rows = [], store = null } = {}) {
   const loader = store || (() => { try { return defaultStore(); } catch (_) { return null; } })();
   const map = new Map();
   if (!loader?.loadMediaTranscript) return map;
-  await Promise.all(rows.filter((row) => String(row?.extractedText || '').trim()).map(async (row) => {
-    try {
-      map.set(row.id, await loader.loadMediaTranscript(prisma, { userId, fileId: row.id }) || null);
-    } catch (_) {
-      map.set(row.id, null);
-    }
-  }));
+  const usable = rows.filter((row) => String(row?.extractedText || '').trim());
+  for (let i = 0; i < usable.length; i += LOAD_TRANSCRIPTS_CONCURRENCY) {
+    const slice = usable.slice(i, i + LOAD_TRANSCRIPTS_CONCURRENCY);
+    await Promise.all(slice.map(async (row) => {
+      try {
+        map.set(row.id, await loader.loadMediaTranscript(prisma, { userId, fileId: row.id }) || null);
+      } catch (_) {
+        map.set(row.id, null);
+      }
+    }));
+  }
   return map;
 }
 
 module.exports = {
   resolveTranscriptOutput,
   buildMediaTranscriptArtifacts,
+  buildTranscriptBatchZip,
+  buildBatchIndexMarkdown,
+  buildBatchIndexCsv,
   buildTranscriptChatPreview,
   buildTranslationArtifacts,
   escapeChatMarkdown,
@@ -812,6 +1132,8 @@ module.exports = {
   MIME,
   LONG_RECORDING_SECONDS,
   SUBTITLE_FILE_CAP,
+  BATCH_ZIP_THRESHOLD,
+  MAX_COMBINED_DOC_MARKDOWN_CHARS,
   shiftResult,
   transcriptQualityReport,
   reportExtraNotes,
@@ -820,5 +1142,5 @@ module.exports = {
   embeddedSubtitlesName,
   engineNameEs,
   ARTIFACT_ROLES,
-  _internals: { applyRange, headAtParagraph, sourceStem, isVideoRow, withHeaderNotes, reportFieldsOf, previewReportBlock },
+  _internals: { applyRange, headAtParagraph, sourceStem, isVideoRow, withHeaderNotes, reportFieldsOf, previewReportBlock, batchManifestEntries },
 };
