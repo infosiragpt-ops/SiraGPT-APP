@@ -3685,48 +3685,61 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   confusos» queda en el chat). Una pregunta corta sobre la grabación admite un tema con preposición o un
   momento («¿qué dice sobre el examen?», «¿y qué dice al final?»), nunca un sujeto ni «se». Un «ok gracias»
   o «¿cuánto falta?» entre medio no corta el alcance (`ACK_TURN_RE`).
-- **Novena revisión (2026-11-12, 14 hallazgos)**:
+- **Novena y décima revisión (2026-11-12; 14 y 15 hallazgos, la décima revisó la novena)**:
   - **Traducción**:
     - Un cambio de idioma con tramo («mejor tradúcela al francés del minuto 10 al 20», «no la
-      traduzcas al inglés sino al francés…», «en vez de inglés…») reemplaza el idioma y toma ese tramo
-      (`translationSwitch`, `replacesTranslation`); nunca suma uno nuevo cobrando el rechazado.
-    - «ya no la traduzcas al francés» quita solo ese idioma (`refusedTranslationTarget` →
+      traduzcas al inglés sino al francés…», «en vez de (al) inglés…») reemplaza el idioma y toma ese
+      tramo (`translationSwitch`, `replacesTranslation`); nunca suma uno nuevo cobrando el rechazado. La
+      señal debe nombrar el idioma correcto (el nuevo tras «mejor»/«cámbiala», el pendiente tras «en vez
+      de»: «el profesor cambia al inglés» no cambia nada) y «también» siempre suma.
+    - «ya no la traduzcas al francés» quita solo ese idioma (`refusedTranslationTargets`: si nombra
+      todos los pendientes, «… al francés ni al inglés», «…, tampoco al inglés», los quita todos;
+      `refusedTranslationTarget` →
       `removeTranslationTarget`, cambio `no_translation:<código>`, «sin la traducción al francés (sigue
       la traducción al inglés)»). Quitar el primero promueve el agregado con sus tramos; un idioma que no
       estaba pendiente no cambia nada.
-    - Un idioma agregado guarda sus tramos: ninguno con «completa» (lista vacía = toda la grabación,
-      también en `defaultAnalyze`), si no los de la traducción pendiente, y la respuesta dice cuál.
+    - Un idioma agregado guarda sus tramos propios; sin tramo propio lee los de la primera traducción
+      (también un rango puesto después), y solo «completa» lo marca como toda la grabación (`whole`).
+      La respuesta dice cuál.
     - El traductor recibe hasta 5 indicaciones, las mismas que lee `translationConditions`.
   - **Formatos**:
     - «pásalo de Word a PDF», «conviértelo de PDF a Word» y «cambia el PDF por un documento Word»
       convierten: el formato de origen queda rechazado (`SOURCE_FORMAT_RE`) y el compositor las manda al
-      lote pendiente («de PDF a Word» no es otro PDF en `FOREIGN_SOURCE_RE`).
+      lote pendiente (`FORMAT_CONVERSION_RE`: solo «de PDF a Word» pelado tras el verbo; «la
+      transcripción de mi PDF en Word» sigue siendo otra fuente).
     - Un «no» después del formato lo rechaza (`request-negation`: «el Word sí, el PDF no», «… que el
       PDF no me sirve», «el PDF no lo necesito»; «el PDF no se ve bien» no), y «solo en …» nunca deja
-      los dos (`documentOnly` antes que `bothAsked`).
-    - «también lo quiero en PDF» y «el PDF también lo quiero» suman el PDF (`ALSO_FORMAT_RE`: pocas
-      palabras dentro de la cláusula).
+      los dos (`documentOnly` antes que `bothAsked`; «solo en Word y PDF» pide ambos). El compositor
+      enruta solo esas formas de cierre (`FORMAT_CHOICE`, `FORMAT_CHOICE_END`).
+    - «también lo quiero en PDF», «el PDF también lo quiero» y «el PDF también mándamelo» suman el PDF
+      (`ALSO_FORMAT_RE`: pocas palabras dentro de la cláusula).
     - «también en PDF» sin documento elegido conserva el Word automático de una grabación larga
       (`professionalBuildArtifacts` deja `documentFormat` nulo con `alsoPdf`).
   - **Detener**:
     - Una grabación que el Detener aún no pudo parar se lee como detenida en el turno
       (`pendingStopFileIds` → `asStoppedRows`, y la espera la mantiene así). Un seguimiento sobre las
       otras nunca la encola, espera ni entrega; solo pedirla de nuevo la retoma y la libera, incluido
-      «todas menos la clase 4».
-    - Un pedido creado después del Detener no la protege del barrido (`stoppedAt`).
+      «todas menos la clase 4». No cuenta la que otro pedido abierto, anterior al Detener, sigue
+      necesitando, y un reintento parcial detenido se lee como su transcripción parcial.
+    - Un pedido creado después del Detener no la protege del barrido (`stoppedAt`), salvo una corrección
+      del mismo tramo, que sigue compartiendo su trabajo de refine.
     - Las escrituras del marcador van en serie por entrega (`withMarker`). La lista que reescribe un
       reintento nunca vuelve a agregar lo liberado: la marca guarda `released`. La cola revisa la marca
       justo antes de detener cada grabación (`cancelMediaTranscription({ shouldStop })` → `released`).
   - **Compositor**:
     - El servidor lee como retomar todo lo que el compositor enruta: rellenos, «la junta», «la
-      audiencia» (`RESUME_TRANSCRIPT_RE` con `RESUME_FILLER` y `RESUME_RECORDING_WORDS`).
-    - «las demás / el resto» retoma solo si después no viene más que una palabra de grabación: «sigue
-      con los otros puntos» continúa la respuesta, en ambos lados.
-    - Una respuesta o una entrega con `stoppedFileIds` ancla solo la transcripción o «retómala»
-      (`StopAnchor` `answer`, `RESUME_NAMED_RE`), nunca «continúalo». Un turno con archivos del mismo
-      lote (`transcriptionFileIds` ∪ `stoppedFileIds`) no corta la búsqueda.
-    - Una exclamación («qué bien, ponlo en Word») no es una pregunta dictada: `UNPUNCTUATED_QUESTION_RE`
-      pide un verbo de lo dicho u ocurrido, y «como/cuando/donde» sin tilde siguen siendo conjunciones.
+      audiencia» (`RESUME_TRANSCRIPT_RE` con `RESUME_FILLER` y `RESUME_RECORDING_WORDS`). Un retomar con
+      un entregable («sigue con esta entrevista y dame los puntos importantes») no es solo transcripción.
+    - «las demás / el resto» retoma si después viene una palabra de grabación («de las grabaciones»,
+      «transcripciones»), «que detuve» o un relleno; «sigue con los otros puntos» continúa la respuesta,
+      en ambos lados (`RESUME_TAIL_WORDS`).
+    - Una respuesta o una entrega con `stoppedFileIds` ancla la transcripción o cualquier retomar con
+      «retoma/reanuda» (`StopAnchor` `answer`, `RESUME_NAMED_RE`), nunca «continúalo» ni «sigue con la
+      clase». Un turno con archivos del mismo lote (`transcriptionFileIds` ∪ `stoppedFileIds`) no corta
+      la búsqueda.
+    - Una exclamación o un «cuánto falta» no es una pregunta dictada (`EXCLAMATION_OPENING_RE`); una
+      pregunta con tilde al inicio sí lo es («cuándo es el examen y pásalo a Word»), y «como/cuando/donde»
+      sin tilde necesitan un verbo de lo dicho.
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
   casos de las revisiones en `backend/tests/media-batch.test.js` y `tests/chat-composer-files.test.ts`,
