@@ -55,11 +55,88 @@ function stripAccentsLower(value) {
 function defaultFormatter() { return require('./media-transcript-format'); }
 function defaultStore() { return require('./media-transcript-store'); }
 
+// A format turned down: «sin Word», «sin subtítulos», «no quiero
+// subtítulos», «no necesito el Word», «nada de PDF», «sin Word ni PDF»,
+// «quita los subtítulos», «Word no, PDF sí», «without subtitles». The
+// refusal covers its clause (request-negation), and gives way to the same
+// format asked for elsewhere in the message («tengo videos sin subtítulos,
+// dame el SRT», «quiero el Word, sin Word no puedo editarlo»). «no, mejor en
+// Word» still asks for one.
+// «documento» names the deliverable document, whichever it is («ya no lo
+// quiero en documento», «sin documento, solo el txt»).
+const FORMAT_WORD_RE = /\b(word|docx|pdf|documentos?|subtitul\w*|subtitles?|srt|vtt|webvtt|subs|captions?)\b/;
+
+function formatOfWord(word) {
+  if (word === 'pdf') return 'pdf';
+  if (word === 'word' || word === 'docx') return 'docx';
+  if (/^documentos?$/.test(word)) return 'document';
+  return 'subtitles';
+}
+
+// The format a swap replaces is turned down: «en PDF en lugar de Word», «en
+// vez del Word», «mejor en PDF que en Word», «prefiero PDF antes que Word»,
+// «… y no en Word», «instead of Word».
+const REPLACED_FORMAT_RE = /\b(?:en\s+lugar\s+del?|en\s+vez\s+del?|antes\s+que(?:\s+en)?|y\s+no\s+(?:en\s+)?|instead\s+of|rather\s+than)\s+(?:(?:el|la|un|una|the|a)\s+)?(word|docx|pdf|documento)\b|\b(?:mejor|prefiero|preferible|mas\s+\w+)\s+(?:\w+\s+){0,4}?que\s+(?:en\s+)?(?:(?:el|la|un|una)\s+)?(word|docx|pdf|documento)\b/g;
+// «pasa el Word a PDF», «convierte el PDF en Word», «cambia el Word por PDF»:
+// the source format is replaced by the other one.
+// «pásalo de PDF a Word», «conviértelo de Word a PDF», «cambia el PDF por
+// un documento Word» too.
+const SOURCE_FORMAT_RE = /\b(?:pas\w*|conviert\w*|convertir\w*|cambi\w*|transform\w*|turn|convert|change)\s+(?:(?:el|la|ese|esa|este|esta|mi|tu|the|my|that|this)\s+)?(word|docx|pdf|documento)\s+(?:a|en|por|al|into|to)\s+(?:(?:un|una|el|la|a|an)\s+)?(?:(?:documento|archivo)\s+(?:de\s+|en\s+)?)?(word|docx|pdf)\b|\b(?:pas\w*|conviert\w*|convertir\w*|cambi\w*|transform\w*|turn\w*|convert\w*|change)\s+(?:(?:el|la|lo|ese|esa|este|esta|mi|tu|it|the)\s+)?(?:(?:archivo|documento|transcripcion|texto|file)\s+)?(?:de|del|desde|from)\s+(?:(?:un|una|el|la)\s+)?(word|docx|pdf)\s+(?:a|en|al|por|to|into)\s+(?:(?:un|una|el|la|a|an)\s+)?(?:(?:documento|archivo)\s+(?:de\s+|en\s+)?)?(word|docx|pdf)\b/g;
+
+/** The document formats and subtitles a goal turns down: { documents: ['docx'|'pdf'], subtitles }. */
+function negatedTranscriptFormats(goal) {
+  const negation = require('./request-negation');
+  const { refused, asked } = negation.splitMentions(goal, FORMAT_WORD_RE);
+  const replaced = [];
+  const folded = negation.foldRequest(goal);
+  for (const match of folded.matchAll(REPLACED_FORMAT_RE)) replaced.push(match[1] || match[2]);
+  for (const match of folded.matchAll(SOURCE_FORMAT_RE)) {
+    const from = match[1] || match[3];
+    const to = match[2] || match[4];
+    if (formatOfWord(from) !== formatOfWord(to)) replaced.push(from);
+  }
+  const replacedFormats = new Set(replaced.map(formatOfWord));
+  // A replaced format is no ask for it: «en PDF en lugar de Word» asks for the PDF only.
+  const askedFormats = new Set(asked.map(formatOfWord).filter(format => !replacedFormats.has(format)));
+  // «documento» refused: every document not asked for elsewhere («no quiero
+  // el documento de Word, mejor PDF» keeps the PDF).
+  const expand = format => (format === 'document' ? ['docx', 'pdf'] : [format]);
+  const refusedFormats = new Set([...refused, ...replaced].map(formatOfWord).flatMap(expand)
+    .filter(format => !askedFormats.has(format) || replacedFormats.has(format)));
+  return {
+    documents: ['docx', 'pdf'].filter(format => refusedFormats.has(format) && !(askedFormats.has(format) && !replacedFormats.has(format))),
+    subtitles: refusedFormats.has('subtitles'),
+  };
+}
+
+// «también en PDF», «y en PDF también», «mándamelo en PDF además», «también
+// lo quiero en PDF», «el PDF también lo quiero»: a document next to the one
+// already asked for, never instead of it. Within one clause: «en Word y
+// también subtítulos» adds no PDF.
+const ALSO_FORMAT_RE = /\b(?:tambien|ademas|igualmente|also)\s+(?:[^\s.,;!?]+\s+){0,4}?(?:word|docx|pdf)\b|\b(?:word|docx|pdf)\s+(?:tambien|ademas|igualmente|too|also)(?=\s*(?:$|[.,;!?]|porfa\b|por\s+favor\b|pls\b|plis\b|gracias\b|please\b|(?:me\s+)?(?:lo|la|los|las)\s+(?:quiero|necesito|mandas|mandes|pasas|pases|envias|envies)\b|(?:lo|la)\s+quisiera\b|(?:quiero|necesito|mandamel[oa]|damel[oa]|pasamel[oa]|enviamel[oa]|ponmel[oa]|ponl[oa]|agregal[oa]|incluyel[oa])(?=\s*(?:$|[.,;!?]|porfa\b|por\s+favor\b|gracias\b|please\b))))/;
+// «solo en Word», «únicamente el PDF», «nada más en Word».
+// «solo en Word y PDF» asks for both: never one.
+// …unless the second one is turned down right after («solo en Word y el PDF
+// no lo mandes», «… y el PDF ya no», «… y el PDF quítalo»).
+const ONLY_FORMAT_RE = /\b(?:solo|solamente|unicamente|nada\s+mas|only|just)\s+(?:(?:en|el|la|un|una|como|in|the|a)\s+)?(?:word|docx|pdf)\b(?!\s*(?:y|e|o|and|or|\+|&)\s*(?:(?:en|el|la|un|una|a)\s+)?(?:word|docx|pdf)\b(?!\s+(?:no|ya\s+no|nada|quital\w*|borral\w*|olvidal\w*|sacal\w*|nunca)\b))/;
+
+/** The goal adds a document next to the one asked before («también en PDF»). Pure. */
+function addsDocumentFormat(goal) {
+  return ALSO_FORMAT_RE.test(require('./request-negation').foldRequest(goal));
+}
+
+/** The goal keeps one document only («solo en Word»). Pure. */
+function onlyDocumentFormat(goal) {
+  return ONLY_FORMAT_RE.test(require('./request-negation').foldRequest(goal));
+}
+
 /** What the user asked for: document format, subtitles, batch ZIP and an optional time range. */
 function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null } = {}) {
   const text = stripAccentsLower(goal);
-  const asksWord = /\b(word|docx)\b/.test(text);
-  const asksPdf = /\bpdf\b/.test(text);
+  const negated = negatedTranscriptFormats(goal);
+  // «en Word y PDF»: both documents. A format turned down is never one of them.
+  const asksWord = /\b(word|docx)\b/.test(text) && !negated.documents.includes('docx');
+  const asksPdf = /\bpdf\b/.test(text) && !negated.documents.includes('pdf');
   let documentFormat = null;
   let alsoPdf = false;
   if (asksWord && asksPdf) {
@@ -71,13 +148,19 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
     } catch (_) { documentFormat = null; }
     if (!documentFormat) {
       if (asksPdf) documentFormat = 'pdf';
-      else if (asksWord || /\bdocumento\b/.test(text)) documentFormat = 'docx';
+      else if (asksWord || (/\bdocumento\b/.test(text) && !negated.documents.includes('docx'))) documentFormat = 'docx';
     }
   }
   const policyFormat = String(documentPolicy?.format || '').toLowerCase();
   if (!documentFormat && documentPolicy?.autoGenerate && (policyFormat === 'docx' || policyFormat === 'pdf')) documentFormat = policyFormat;
   if (documentFormat && documentFormat !== 'docx' && documentFormat !== 'pdf') documentFormat = null;
-  const wantsSubtitles = /\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text);
+  // Turned down: the other format if the goal asks for it («no en Word, en PDF»).
+  if (documentFormat && negated.documents.includes(documentFormat)) {
+    const other = documentFormat === 'docx' ? 'pdf' : 'docx';
+    const mentionsOther = other === 'pdf' ? /\bpdf\b/.test(text) : /\b(word|docx)\b/.test(text);
+    documentFormat = mentionsOther && !negated.documents.includes(other) ? other : null;
+  }
+  const wantsSubtitles = !negated.subtitles && (/\b(subtitul\w*|srt|vtt|webvtt|subs?)\b/.test(text) || /\bclosed caption/.test(text));
   const wantsZip = /\b(zip|comprimid\w*|archivos?\s+separados?|por\s+separado|un\s+archivo\s+por\s+(?:cada|audio|video|grabacion))\b/.test(text);
   let range = null;
   try {
@@ -86,13 +169,23 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
     if (parsed && Number.isFinite(parsed.start) && parsed.start >= 0
       && (parsed.end == null || (Number.isFinite(parsed.end) && parsed.end > parsed.start))) range = { start: parsed.start, end: parsed.end ?? null };
   } catch (_) { range = null; }
+  // What was turned down also stops the automatic Word and subtitles of a
+  // long recording or a video.
   return {
     documentFormat,
     wantsSubtitles,
     range,
     ...(wantsZip ? { wantsZip: true } : {}),
     ...(alsoPdf ? { alsoPdf: true } : {}),
+    ...(negated.documents.length ? { declinedDocuments: negated.documents } : {}),
+    ...(negated.subtitles ? { declinedSubtitles: true } : {}),
   };
+}
+
+/** A format the user turned down (resolveTranscriptOutput, or a follow-up stored on the delivery). */
+function declinedFormat(output, format) {
+  if (format === 'subtitles') return output?.declinedSubtitles === true;
+  return Array.isArray(output?.declinedDocuments) && output.declinedDocuments.includes(format);
 }
 
 /** Accepts the sidecar shape ({s,e,t,spk,conf}) or the engine shape. */
@@ -294,6 +387,14 @@ function rangeLabel(range) {
   if (range.end == null) return `desde ${clock(range.start, range.start >= 3600)}`;
   const withHours = range.end >= 3600;
   return `${clock(range.start, withHours)}–${clock(range.end, withHours)}`;
+}
+
+/** Several windows on one clock: «00:09:00–00:14:00, 02:29:00–02:34:00», «09:00–14:00, desde 30:00». */
+function rangesLabel(windows) {
+  const list = (Array.isArray(windows) ? windows : []).filter(Boolean);
+  if (list.length <= 1) return list[0] ? rangeLabel(list[0]) : '';
+  const withHours = list.some(range => (range.end == null ? range.start : range.end) >= 3600);
+  return list.map(range => (range.end == null ? `desde ${clock(range.start, withHours)}` : `${clock(range.start, withHours)}–${clock(range.end, withHours)}`)).join(', ');
 }
 
 function sourceStem(name) {
@@ -805,11 +906,12 @@ async function buildMediaTranscriptArtifacts({ rows = [], allRows = null, transc
   });
   const totalSeconds = entries.reduce((sum, entry) => sum + (Number(entry.result.durationSec) || 0), 0);
   const long = totalSeconds >= LONG_RECORDING_SECONDS;
-  const wantsDocx = output.documentFormat === 'docx' || (!output.documentFormat && long);
-  const wantsPdf = output.documentFormat === 'pdf' || output.alsoPdf === true;
+  const wantsDocx = output.documentFormat === 'docx' || (!output.documentFormat && long && !declinedFormat(output, 'docx'));
+  const wantsPdf = output.documentFormat === 'pdf' || (output.alsoPdf === true && !declinedFormat(output, 'pdf'));
   const single = entries.length === 1;
   const timed = (entry) => entry.result.segments.length > 0;
-  const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row, transcripts.get(entries[0].row.id)) || long);
+  const autoSubtitles = single && timed(entries[0]) && (isVideoRow(entries[0].row, transcripts.get(entries[0].row.id)) || long)
+    && !declinedFormat(output, 'subtitles');
   const subtitleEntries = output.wantsSubtitles ? entries.filter(timed) : autoSubtitles ? entries : [];
   if (output.wantsSubtitles && entries.some((entry) => !timed(entry))) {
     notes.push('Algunas transcripciones no tienen marcas de tiempo, así que no se pudieron generar sus subtítulos.');
@@ -915,16 +1017,18 @@ async function buildTranslationArtifacts({ files = [], target, output = {}, user
   const notes = [];
   const label = `traducción al ${target.name}`;
   const base = usable.length === 1 ? `${sourceStem(usable[0].name)} (${label}` : `Traducciones al ${target.name} (${usable.length} archivos`;
-  const window = output.range ? ` ${rangeLabel(output.range).replace(/:/g, '.')}` : '';
+  // Moments far apart: each window in the name («00.09.00–00.14.00, 02.29.00–02.34.00»).
+  const windows = Array.isArray(output.ranges) && output.ranges.length ? output.ranges : output.range ? [output.range] : [];
+  const window = windows.length ? ` ${rangesLabel(windows).replace(/:/g, '.')}` : '';
   const name = (ext) => `${base}${window}).${ext}`;
   const txt = usable.length === 1 ? usable[0].text.trim()
     : usable.map((file, index) => `${index + 1}. ${file.name}\n${'='.repeat(48)}\n${file.text.trim()}`).join('\n\n');
   const artifacts = [toArtifact(name('txt'), `${txt}\n`, 'txt', 'translation')];
   const long = txt.length >= 20000;
-  const primary = output.documentFormat || (long ? 'docx' : null);
+  const primary = output.documentFormat || (long && !declinedFormat(output, 'docx') ? 'docx' : null);
   const docFormats = [
     ...(primary === 'docx' || primary === 'pdf' ? [primary] : []),
-    ...(output.alsoPdf === true && primary !== 'pdf' ? ['pdf'] : []),
+    ...(output.alsoPdf === true && primary !== 'pdf' && !declinedFormat(output, 'pdf') ? ['pdf'] : []),
   ];
   if (docFormats.length) {
     let markdown = [`# ${usable.length === 1 ? `Traducción al ${target.name} — ${sourceStem(usable[0].name)}` : `Traducciones al ${target.name}`}`,
@@ -1052,8 +1156,9 @@ function previewReportBlock(report) {
 function buildTranscriptChatPreview({ rows = [], transcripts = new Map(), output = {}, formatter = null,
   transcriptFilesAttached = true } = {}) {
   const fmt = formatter || defaultFormatter();
+  // Headed with what the user uploaded («Clase 3.mp4»), like the files below.
   const ready = rows.filter((row) => String(row?.extractedText || '').trim()).map((row) => {
-    const sourceName = transcripts.get(row.id)?.sourceName || row?.sourceName;
+    const sourceName = transcripts?.get?.(row.id)?.sourceName || row?.sourceName;
     return sourceName ? { ...row, originalName: sourceName } : row;
   });
   if (!ready.length) return '';
@@ -1114,6 +1219,10 @@ async function loadTranscripts(prisma, { userId, rows = [], store = null } = {})
 module.exports = {
   resolveTranscriptOutput,
   buildMediaTranscriptArtifacts,
+  negatedTranscriptFormats,
+  declinedFormat,
+  addsDocumentFormat,
+  onlyDocumentFormat,
   buildTranscriptBatchZip,
   buildBatchIndexMarkdown,
   buildBatchIndexCsv,
@@ -1128,6 +1237,7 @@ module.exports = {
   normalizeSegments,
   deliverableName,
   rangeLabel,
+  rangesLabel,
   durationLabel,
   MIME,
   LONG_RECORDING_SECONDS,

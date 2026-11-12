@@ -408,6 +408,17 @@ function hasTranscript(file) {
 // retry re-runs only the missing segments (the checkpoints are kept).
 const PARTIAL_PREFIX = 'Parcial:';
 const RETRYING_PARTIAL = 'Reintentando los tramos sin transcribir…';
+// «Detener» on a handed-off transcription. The row reads `failed` with this
+// note: nothing re-queues it on its own, and asking for it again resumes
+// from its checkpoints (media-batch treats it as retryable).
+const CANCELLED_NOTE = 'Transcripción detenida. Pídela de nuevo para retomarla donde quedó.';
+// How long a re-request after «Detener» waits for the stopped job to settle.
+const STOPPED_JOB_SETTLE_MS = 5000;
+
+/** The user stopped this recording's transcription («Detener»). */
+function isUserCancelledRow(row) {
+  return Boolean(row && row.processingStage === 'failed' && row.processingError === CANCELLED_NOTE);
+}
 // Below this length a timestamped layout is noise («[00:00] hola»); a voice
 // note keeps its plain text.
 const TIMESTAMPED_TEXT_MIN_SECONDS = 120;
@@ -1084,6 +1095,7 @@ function publicFailureMessage(err) {
   if (unread && err?.code === 'no_audio_track') return `Este video no tiene pista de audio y ${unread}. Puedes reintentar este archivo.`;
   switch (err?.code) {
     case 'extracted_audio_no_speech': return String(err?.message || 'No se detectó voz en este archivo.');
+    case 'media_cancelled': return CANCELLED_NOTE;
     case 'no_speech': return err?.videoChecked
       ? 'No se detectó voz ni texto legible en pantalla en este video.'
       : 'No se detectó voz en este archivo.';
@@ -1107,7 +1119,7 @@ function isTransientMediaError(err) {
   // A video whose text could not be read (OCR/ffmpeg down, no frame decoded)
   // is retried: the verdict about its voice stands, the reading did not happen.
   if (err?.textUnread && err?.retryable === true && /^(no_speech|no_audio_track)$/.test(String(err?.code || ''))) return true;
-  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required|extracted_audio_no_speech)$/i.test(String(err?.code || ''))) return false;
+  if (/^(no_speech|no_audio_track|truncated_container|drm_protected|file_empty|file_unavailable|audio_decode_failed|unsupported_media|invalid_media|invalid_range|refine_not_ready|refine_untimed|refine_incomplete|media_not_found|media_owner_required|extracted_audio_no_speech|media_cancelled)$/i.test(String(err?.code || ''))) return false;
   if (typeof err?.retryable === 'boolean') return err.retryable;
   const status = Number(err?.status || err?.statusCode || err?.response?.status);
   if (status === 429 || status === 408 || status >= 500 && status <= 599) return true;
@@ -1260,8 +1272,15 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
   readLinkCaptions = null,
   // Keep the checkpointed segment texts after a complete transcript (the cut
   // audio is removed), so a refine re-transcribes one piece, not the file.
-  keepPartsAfterSuccess = false }) {
+  keepPartsAfterSuccess = false,
+  // ({ deliveryId, fileId, userId }) → false when the refine's delivery was
+  // stopped and no other open request wants the same job (media-delivery
+  // isRefineJobWanted). null: a refine always runs (today's behaviour).
+  isRefineWanted = null }) {
   const activeControllers = new Set();
+  // The controllers of the jobs running here, by file («Detener» aborts them).
+  const runningByFile = new Map();
+  const controllerKinds = new WeakMap();
   // Files with a job running in this process (a refine and a gap retry of the
   // same recording share its checkpoints and its sidecar).
   const busyFiles = new Set();
@@ -1345,9 +1364,11 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const out = { ...(media.language ? { language: media.language } : {}), ...(media.hints || {}) };
     return Object.keys(out).length ? out : null;
   };
-  // Audio the browser extracted from a video or large audio file
-  // (DocumentAnalysis.metadata.clientExtracted) keeps its real source name and
-  // media kind ({ sourceMedia: 'video' | 'audio', sourceName }) or null.
+  // Audio the browser extracted from a video or a large audio file
+  // (DocumentAnalysis.metadata.clientExtracted) keeps the name of what the
+  // user uploaded in the deliverables, and one extracted from a video stays
+  // that video (the automatic SRT/VTT). { sourceMedia: 'video' | 'audio',
+  // sourceName? } or null.
   async function sourceMediaOf(row) {
     if (typeof transcriptStore?.readMediaAnalysisInfo !== 'function') return null;
     try {
@@ -1396,6 +1417,15 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     }
     throw failure('media_busy', 'El archivo se está procesando; se reintentará en unos segundos.');
   }
+  // A reset that must never undo «Detener» (written by another worker):
+  // one conditional write, nothing written when the row reads as stopped
+  // (failed + CANCELLED_NOTE). Spelled as an OR so a NULL stage or error
+  // matches: a bare `not` on a nullable column excludes NULL (SQL `<>`).
+  const writeUnlessStopped = async (fileId, userId, data) => {
+    const result = await prisma.file.updateMany({ where: { id: fileId, userId, deletedAt: null,
+      OR: [{ processingStage: null }, { processingStage: { not: 'failed' } }, { processingError: null }, { processingError: { not: CANCELLED_NOTE } }] }, data });
+    return result.count === 1;
+  };
   const loadOwned = async (fileId, userId) => {
     if (!fileId || !userId) throw failure('media_owner_required', 'Falta el archivo o su propietario.');
     const row = await prisma.file.findFirst({ where: { id: fileId, userId, deletedAt: null } });
@@ -1466,15 +1496,43 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const lanes = laneQueues(); // Must throw honestly if durable Redis is absent.
     const jobId = jobIdFor(fileId, userId);
     const found = await findJob(jobId, lanes);
-    const previous = found?.job || null;
+    let previous = found?.job || null;
+    if (previous && retry && isUserCancelledRow(row)) {
+      // Asked again after «Detener». A job that survived the Stop (Redis
+      // blip) would start, read the stop note and end: replace it. One still
+      // settling its abort is waited out briefly first.
+      let state = await previous.getState().catch(() => 'unknown');
+      for (let waited = 0; state === 'active' && runningByFile.get(fileId)?.size && waited < STOPPED_JOB_SETTLE_MS; waited += 250) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        state = await previous.getState().catch(() => 'unknown');
+      }
+      if (['waiting', 'delayed', 'prioritized', 'waiting-children', 'paused'].includes(state)) {
+        await previous.remove().catch(() => {});
+        previous = null;
+      } else if (state === 'active' && !runningByFile.get(fileId)?.size) {
+        // Still active with no abort in flight here: stalled by a deploy or a
+        // crash, or running on another worker. Without the note it carries
+        // on (a stalled one resumes from its checkpoints); one that already
+        // ended on the note leaves the row pending and the recovery pass
+        // runs it again (see askedAgain below).
+        await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null });
+        return { id: fileId, queued: true, stage: 'uploaded' };
+      }
+    }
     if (previous) {
       const state = await previous.getState();
       if (state === 'failed') {
-        if (!retry) {
+        // It ended on a Stop and the recording was asked for again since
+        // (the row lost its note): running it again is that request.
+        const askedAgain = previous.failedReason === CANCELLED_NOTE && !isUserCancelledRow(row) && row.processingStage !== 'failed';
+        if (!retry && !askedAgain) {
           await stage(fileId, userId, 'failed', 'La transcripción se interrumpió. Puedes reintentar este archivo.');
           return { id: fileId, queued: false, stage: 'failed' };
         }
-        await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null, extractedText: null });
+        const reset = { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null, extractedText: null };
+        // Only an explicit retry resumes a row a Stop noted after we read it.
+        if (retry) await writeOwned(fileId, userId, reset);
+        else if (!(await writeUnlessStopped(fileId, userId, reset))) return { id: fileId, queued: false, stage: 'failed' };
         await previous.retry('failed', { resetAttemptsMade: true });
         return { id: fileId, queued: true, stage: 'uploaded' };
       }
@@ -1483,8 +1541,12 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       // also permits recovery after a deployment of an older, broken worker.
       await previous.remove();
     }
-    await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null,
-      ...(row.processingStage === 'failed' ? { extractedText: null } : {}) });
+    const reset = { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null,
+      ...(row.processingStage === 'failed' ? { extractedText: null } : {}) };
+    // The recovery pass (no retry) read the row before a Stop wrote its note:
+    // it never erases that note nor queues the recording again.
+    if (retry) await writeOwned(fileId, userId, reset);
+    else if (!(await writeUnlessStopped(fileId, userId, reset))) return { id: fileId, queued: false, stage: 'failed' };
     const offset = clipOffset(timeOffsetSec);
     const target = await chooseLane(row, lanes);
     await target.queue.add('transcribe', { fileId, userId, ...(offset ? { timeOffsetSec: offset } : {}), ...mediaJobFields(media),
@@ -1801,16 +1863,43 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
   }
 
   // Abort controller, 12 h budget and the deleted-file watch of one job.
-  function openJobContext(fileId, userId) {
+  // `refine` marks a refine job (and its delivery): a Stop on that delivery
+  // aborts it alone, and its abort never writes the row.
+  // A refine whose request was stopped («Detener») after its job was queued,
+  // or on another worker: it never runs, or stops at its next check. A
+  // failed lookup lets it run.
+  async function refineStopped(deliveryId, fileId, userId) {
+    if (!deliveryId || typeof isRefineWanted !== 'function') return false;
+    try { return (await isRefineWanted({ deliveryId, fileId, userId })) === false; } catch (_) { return false; }
+  }
+
+  function openJobContext(fileId, userId, { refine = false, deliveryId = null } = {}) {
     const controller = new AbortController();
     activeControllers.add(controller);
+    controllerKinds.set(controller, { refine: Boolean(refine), deliveryId: deliveryId || null });
+    if (fileId) {
+      if (!runningByFile.has(fileId)) runningByFile.set(fileId, new Set());
+      runningByFile.get(fileId).add(controller);
+    }
     const timer = setTimeout(() => controller.abort(failure('media_timeout', 'La transcripción superó el tiempo permitido.')), timeoutMs);
     timer.unref?.();
     let ownershipTimer = null;
     if (ownershipCheckMs > 0 && fileId && userId) {
       ownershipTimer = setInterval(() => {
-        void prisma.file.findFirst({ where: { id: fileId, userId, deletedAt: null }, select: { id: true } })
-          .then(found => { if (!found && !controller.signal.aborted) controller.abort(failure('media_not_found', 'El archivo se eliminó durante la transcripción.')); })
+        void prisma.file.findFirst({ where: { id: fileId, userId, deletedAt: null }, select: { id: true, processingError: true } })
+          .then(found => {
+            if (controller.signal.aborted) return;
+            if (!found) controller.abort(failure('media_not_found', 'El archivo se eliminó durante la transcripción.'));
+            // Stopped from another process: its note is on the row.
+            else if (found.processingError === CANCELLED_NOTE) controller.abort(failure('media_cancelled', CANCELLED_NOTE));
+            // A refine leaves its row ready: its stopped delivery tells.
+            else if (refine && deliveryId) {
+              return refineStopped(deliveryId, fileId, userId).then((stopped) => {
+                if (stopped && !controller.signal.aborted) controller.abort(failure('media_cancelled', CANCELLED_NOTE));
+              });
+            }
+            return null;
+          })
           .catch(() => { /* a DB blip never aborts a transcription */ });
       }, ownershipCheckMs);
       ownershipTimer.unref?.();
@@ -1821,6 +1910,11 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         clearTimeout(timer);
         if (ownershipTimer) clearInterval(ownershipTimer);
         activeControllers.delete(controller);
+        const running = fileId ? runningByFile.get(fileId) : null;
+        if (running) {
+          running.delete(controller);
+          if (!running.size) runningByFile.delete(fileId);
+        }
       },
     };
   }
@@ -1841,6 +1935,9 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const jobStartedAt = now();
     try {
       const row = await loadOwned(fileId, userId);
+      // Stopped («Detener») after this job was queued, or on another worker
+      // while it was being removed: it never runs. Asking again re-queues it.
+      if (isUserCancelledRow(row)) throw failure('media_cancelled', CANCELLED_NOTE);
       // The row, not the job, says whether gaps are being retried: a replayed
       // gap retry of a file that is already ready is a cache hit, and any job
       // that meets the retry marker runs the gap retry.
@@ -1914,7 +2011,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
           // keeps its marker, or recovery and delivery would take the old
           // partial text for a complete transcript.
           if (claimed) {
-            await writeOwned(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()),
+            await writeUnlessStopped(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()),
               processingError: forced ? RETRYING_PARTIAL : null }).catch(() => {});
           }
           const { DelayedError } = require('bullmq');
@@ -1933,20 +2030,26 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
       }
       // A deleted/foreign file must never be resurrected or mutated. A job
       // that never claimed the row has nothing to undo before its next
-      // attempt (writing `uploaded` would wipe a gap retry's marker).
-      if (err.code !== 'media_not_found' && err.code !== 'media_owner_required' && (claimed || !willRetry)) {
+      // attempt (writing `uploaded` would wipe a gap retry's marker). One
+      // that ended on a Stop noted on the row by another process leaves the
+      // row alone: it says so already, or was asked for again since.
+      const stopNotedElsewhere = err?.code === 'media_cancelled' && !err.localStop;
+      if (!stopNotedElsewhere && err.code !== 'media_not_found' && err.code !== 'media_owner_required' && (claimed || !willRetry)) {
         if (forced && previousRow) {
           // A failed retry of a partial transcript never loses the partial
           // text: it goes back to `ready` with its original note.
-          await writeOwned(fileId, userId, willRetry
-            ? { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: RETRYING_PARTIAL }
-            : { processingStage: 'ready', processingStageAt: new Date(now()),
-              processingError: job.data?.previousError || `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.` }).catch(() => {});
+          await (willRetry
+            ? writeUnlessStopped(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: RETRYING_PARTIAL })
+            : writeOwned(fileId, userId, { processingStage: 'ready', processingStageAt: new Date(now()),
+              processingError: job.data?.previousError || `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.` })).catch(() => {});
           if (!willRetry) notifyTerminal(fileId, userId, 'partial');
+        } else if (willRetry) {
+          // Stopped from another worker before this one heard it: the reset
+          // never erases the stop note, so the next attempt reads it and ends.
+          await writeUnlessStopped(fileId, userId, { processingStage: 'uploaded', processingStageAt: new Date(now()), processingError: null });
         } else {
-          await stage(fileId, userId, willRetry ? 'uploaded' : 'failed',
-            willRetry ? null : publicFailureMessage(err));
-          if (!willRetry) notifyTerminal(fileId, userId, 'failed');
+          await stage(fileId, userId, 'failed', publicFailureMessage(err));
+          notifyTerminal(fileId, userId, 'failed');
         }
       }
       throw err;
@@ -1971,7 +2074,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     let checkpoint = null;
     let holdsFile = false;
     let sidecarWritten = false;
-    const context = openJobContext(fileId, userId);
+    const context = openJobContext(fileId, userId, { refine: true, deliveryId });
     const { controller } = context;
     const jobStartedAt = now();
     try {
@@ -1982,6 +2085,9 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
         if (PENDING_STAGES.includes(row.processingStage)) await parkBusy(job, token);
         throw failure('refine_not_ready', 'La transcripción de este archivo no está lista.');
       }
+      // Stopped after it was queued (a job that survived the Stop: a deploy,
+      // a Redis blip, another worker): no provider call, no splice.
+      if (await refineStopped(deliveryId, fileId, userId)) throw failure('media_cancelled', CANCELLED_NOTE);
       if (busyFiles.has(fileId)) await parkBusy(job, token);
       busyFiles.add(fileId);
       holdsFile = true;
@@ -2183,7 +2289,127 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     } finally { clearTimeout(timer); }
   }
 
+  /**
+   * «Detener»: stop these recordings' transcription. A queued job is
+   * removed; one running here is aborted at once, one running on another
+   * worker at its next ownership check (the row's note tells it). A row that
+   * already has its text keeps it, and a gap retry keeps its partial text.
+   * A stopped row reads `failed` with CANCELLED_NOTE: the 60 s recovery
+   * leaves it alone, and asking for it again resumes from its checkpoints.
+   * Owner-scoped; never throws. Returns { stopped, results }.
+   */
+  /**
+   * The stop state of a recording, written only while its row is still
+   * pending: a job that finished meanwhile (here or on another worker)
+   * keeps its transcript. A gap retry goes back to its partial transcript.
+   */
+  const settleStoppedRow = async (fileId, userId, row) => {
+    const owned = { id: fileId, userId, deletedAt: null, processingStage: { in: PENDING_STAGES } };
+    if (isReprocessingPartial(row)) {
+      await prisma.file.updateMany({ where: { ...owned, processingError: RETRYING_PARTIAL }, data: {
+        processingStage: 'ready', processingStageAt: new Date(now()),
+        processingError: `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.` } });
+      return;
+    }
+    await prisma.file.updateMany({ where: owned, data: { processingStage: 'failed', processingStageAt: new Date(now()), processingError: CANCELLED_NOTE } });
+  };
+
+  async function cancelMediaTranscription({ fileIds = [], userId, refines = [], shouldStop = null } = {}) {
+    const ids = [...new Set((Array.isArray(fileIds) ? fileIds : [])
+      .filter(id => typeof id === 'string' && id && id.length <= 200))].slice(0, 500);
+    const refineSpecs = (Array.isArray(refines) ? refines : [])
+      .filter(spec => spec && typeof spec.fileId === 'string' && spec.fileId && spec.fileId.length <= 200).slice(0, 50);
+    if (!userId || (!ids.length && !refineSpecs.length)) return { stopped: 0, results: [] };
+    let lanes = [];
+    try { lanes = laneQueues(); } catch (_) { lanes = []; }
+    const results = [];
+    // A refine («revisa el minuto 12») stopped with its delivery: its queued
+    // job goes, a running one is aborted. The stored transcript stays as it
+    // was (a refine only writes on success).
+    for (const spec of refineSpecs) {
+      try {
+        let removed = false;
+        const window = normalizeRange(spec.range);
+        if (window && lanes.length) {
+          const media = requestMedia({ language: spec.language || null, hints: spec.hints || null }, now());
+          const found = await findJob(refineJobIdFor(spec.fileId, userId, window, media), lanes).catch(() => null);
+          const state = found ? await found.job.getState().catch(() => 'unknown') : null;
+          if (found && ['waiting', 'delayed', 'prioritized', 'waiting-children', 'paused'].includes(state)) {
+            removed = await found.job.remove().then(() => true, () => false);
+          }
+        }
+        let aborted = false;
+        for (const controller of runningByFile.get(spec.fileId) || []) {
+          const kind = controllerKinds.get(controller);
+          if (!kind?.refine || (spec.deliveryId && kind.deliveryId && kind.deliveryId !== spec.deliveryId)) continue;
+          controller.abort(failure('media_cancelled', CANCELLED_NOTE));
+          aborted = true;
+        }
+        results.push({ id: spec.fileId, refine: true, outcome: aborted ? 'aborted' : removed ? 'removed' : 'idle' });
+      } catch (err) {
+        results.push({ id: spec.fileId, refine: true, outcome: 'error', code: err?.code || null });
+      }
+    }
+    for (const fileId of ids) {
+      try {
+        const row = await loadOwned(fileId, userId);
+        // Asked for again while this stop waited on the database: it stays.
+        if (typeof shouldStop === 'function' && !(await Promise.resolve(shouldStop(fileId)).catch(() => true))) {
+          results.push({ id: fileId, outcome: 'released' });
+          continue;
+        }
+        if (hasTranscript(row) && !isReprocessingPartial(row)) {
+          results.push({ id: fileId, outcome: 'ready' });
+          continue;
+        }
+        // Already failed (DRM, no audio track, an earlier Stop): no job is
+        // left, and its own reason stays («Transcripción detenida» would
+        // hide it and make the next turn re-queue it).
+        if (row.processingStage === 'failed') {
+          results.push({ id: fileId, outcome: 'failed' });
+          continue;
+        }
+        let removed = false;
+        const found = lanes.length ? await findJob(jobIdFor(fileId, userId), lanes).catch(() => null) : null;
+        if (found) {
+          const state = await found.job.getState().catch(() => 'unknown');
+          if (['waiting', 'delayed', 'prioritized', 'waiting-children', 'paused'].includes(state)) {
+            removed = await found.job.remove().then(() => true, () => false);
+          }
+        }
+        const running = runningByFile.get(fileId);
+        if (running?.size) {
+          let writesRow = false;
+          for (const controller of running) {
+            // This process stopped it: the job's own failure path writes the note.
+            controller.abort(Object.assign(failure('media_cancelled', CANCELLED_NOTE), { localStop: true }));
+            if (!controllerKinds.get(controller)?.refine) writesRow = true;
+          }
+          // A transcription job's own failure path writes the row (and keeps
+          // a gap retry's partial text). A refine's never does: a gap retry
+          // waiting behind it is settled below, or recovery would re-queue it.
+          // An aborted job may still never write it (it finishes an offload
+          // as 'ready', parks behind a refine or a deploy, handles a
+          // transient failure): the stop state is written here as well.
+          if (writesRow) {
+            await settleStoppedRow(fileId, userId, row);
+            results.push({ id: fileId, outcome: 'aborted' });
+            continue;
+          }
+        }
+        await settleStoppedRow(fileId, userId, row);
+        results.push({ id: fileId, outcome: removed ? 'removed' : 'stopped' });
+      } catch (err) {
+        results.push({ id: fileId, outcome: 'error', code: err?.code || null });
+      }
+    }
+    const stopped = results.filter(result => ['aborted', 'removed', 'stopped'].includes(result.outcome)).length;
+    logger?.info?.(`[media-transcription-queue] stopped files=${stopped}/${ids.length}`);
+    return { stopped, results };
+  }
+
   return { enqueueMediaTranscription, enqueueRefine, processMediaJob, reconcilePendingMedia, readMediaProgress, readMediaJobStates,
+    cancelMediaTranscription,
     abortActive: () => {
       const count = activeControllers.size;
       for (const controller of activeControllers) controller.abort(failure('media_shutdown', 'La transcripción se reanudará después del reinicio.'));
@@ -2329,7 +2555,8 @@ function getService() {
       keepPartsAfterSuccess: envFlagOn(process.env.SIRAGPT_MEDIA_KEEP_REFINE_PARTS, true),
       processFile: (...args) => require('./fileProcessor').processFile(...args),
       transcriptStore: store, formatter,
-      onTerminal: payload => require('./media-delivery').onMediaTerminal(payload) });
+      onTerminal: payload => require('./media-delivery').onMediaTerminal(payload),
+      isRefineWanted: options => require('./media-delivery').isRefineJobWanted(options) });
   }
   return service;
 }
@@ -2362,9 +2589,15 @@ function onWorkerFailed(job, err) {
       return;
     }
     if (!row || hasTranscript(row)) return;
-    await prisma.file.updateMany({ where: { id: row.id, userId: row.userId, deletedAt: null }, data: {
-      processingStage: 'failed', processingStageAt: new Date(), processingError: publicFailureMessage(err),
-    } });
+    // A job that ended on a Stop: the processor already settled the row (a
+    // local Stop wrote the note; otherwise the row says so, or the user
+    // asked for the recording again since). Writing the note here would
+    // undo that request.
+    if (err?.code !== 'media_cancelled') {
+      await prisma.file.updateMany({ where: { id: row.id, userId: row.userId, deletedAt: null }, data: {
+        processingStage: 'failed', processingStageAt: new Date(), processingError: publicFailureMessage(err),
+      } });
+    }
     // The chat that waits for this file learns about it through delivery.
     await Promise.resolve(require('./media-delivery').onMediaTerminal({ fileId: row.id, userId: row.userId, stage: 'failed' }))
       .catch(() => console.warn('[media-transcription-worker] delivery hook pending recovery'));
@@ -2462,14 +2695,15 @@ async function closeMediaTranscriptionQueue() {
 
 module.exports = {
   isMediaFile, hasTranscript, isPartialTranscript, isReprocessingPartial, partialFailureMessage, transcriptTextFor, onRecordingClock, createRecoveryTick,
-  keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, publicFailureMessage, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
+  keytermsFromFileName, linkCaptionsTranscription, PARTIAL_PREFIX, RETRYING_PARTIAL, CANCELLED_NOTE, isUserCancelledRow, TIMESTAMPED_TEXT_MIN_SECONDS, jobIdFor, isTransientMediaError, publicFailureMessage, materializeMedia, configureMediaQueue, createMediaTranscriptionService,
   createDiskCheckpoint, createStagedCheckpoint, checkpointFor, checkpointRoot, sweepStaleCheckpoints, createProgressTracker,
   readMediaProgress: payload => getService().readMediaProgress(payload),
   readMediaJobStates: payload => getService().readMediaJobStates(payload),
   enqueueMediaTranscription: payload => getService().enqueueMediaTranscription(payload),
   enqueueRefine: payload => getService().enqueueRefine(payload),
+  cancelMediaTranscription: payload => getService().cancelMediaTranscription(payload),
   reconcilePendingMedia: () => getService().reconcilePendingMedia(),
-  startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere,
+  startMediaTranscriptionWorker, closeMediaTranscriptionQueue, pendingMediaWhere, onWorkerFailed,
   // lanes, hints, refine and video fallbacks (contract C5)
   keytermsFor, cleanTranscription, spliceRefinedRange, refineSpliceWindow, refineLosesText, refineHeardNothing, normalizeRange, refineJobIdFor, requestMedia, pickSubtitleTrack,
   subtitleTranscription, onScreenTranscription, estimateDurationFromSize, laneForDuration, shortLaneEnabled,

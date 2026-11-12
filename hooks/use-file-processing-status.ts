@@ -9,6 +9,7 @@ import {
 } from "@/lib/file-processing-vocab"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import {
+  LONG_JOB_MAX_POLL_MS,
   ProcessingStatusMemo,
   buildFileProcessingStatusUrl,
   decideProcessingStatusPoll,
@@ -113,6 +114,10 @@ type FilePoller = {
   timer: ReturnType<typeof setTimeout> | null
   onVisible: (() => void) | null
   stopped: boolean
+  /** Re-reads of a stopped recording so far (they back off). */
+  stoppedRechecks?: number
+  /** When the recording was first seen stopped (the re-reads end after a day). */
+  stoppedSince?: number | null
 }
 
 const statusMemo = new ProcessingStatusMemo<FileProcessingStatus, PollOutcome>()
@@ -202,7 +207,17 @@ function elapsedMs(poller: FilePoller): number {
   return Math.max(0, Date.now() - poller.startedAt)
 }
 
-function schedule(poller: FilePoller): void {
+// A recording stopped with «Detener» (the queue's CANCELLED_NOTE).
+const STOPPED_NOTE_RE = /^Transcripci[oó]n detenida\b/
+const STOPPED_RECHECK_MS = 15_000
+const STOPPED_RECHECK_MAX_MS = 120_000
+const STOPPED_DORMANT_RECHECK_MS = 30 * 60_000
+
+function isResumableStop(status: FileProcessingStatus): boolean {
+  return status.stage === "failed" && STOPPED_NOTE_RE.test(String(status.error || ""))
+}
+
+function schedule(poller: FilePoller, delayMs?: number): void {
   if (poller.stopped) return
   if (isDocumentHidden()) {
     // Nobody is looking: wait for the tab to come back instead of polling
@@ -217,7 +232,7 @@ function schedule(poller: FilePoller): void {
     document.addEventListener("visibilitychange", poller.onVisible)
     return
   }
-  const delay = processingPollDelayMs({ longJob: poller.longJob, elapsedMs: elapsedMs(poller) })
+  const delay = delayMs ?? processingPollDelayMs({ longJob: poller.longJob, elapsedMs: elapsedMs(poller) })
   poller.timer = setTimeout(() => { poller.timer = null; void tick(poller) }, delay)
 }
 
@@ -246,6 +261,27 @@ async function tick(poller: FilePoller): Promise<void> {
         ...(poller.longJob ? { longJob: true } : {}),
       }
       publish(poller, next)
+      if (isTerminal && isResumableStop(next)) {
+        // «Transcripción detenida»: shown as it is, never remembered, and
+        // re-read now and then (15 s, backing off to 2 min: a stopped batch
+        // of 100 must not poll the server for hours): asking for it again
+        // resumes it, and every chip of the recording follows. After a day
+        // stopped they slow to one every 30 min (never endless every 2 min).
+        poller.stoppedSince = poller.stoppedSince ?? Date.now()
+        const rechecks = poller.stoppedRechecks ?? 0
+        poller.stoppedRechecks = rechecks + 1
+        const dormant = Date.now() - poller.stoppedSince >= LONG_JOB_MAX_POLL_MS
+        schedule(poller, dormant ? STOPPED_DORMANT_RECHECK_MS : Math.min(STOPPED_RECHECK_MAX_MS, STOPPED_RECHECK_MS * 2 ** rechecks))
+        return
+      }
+      if ((poller.stoppedRechecks ?? 0) > 0 || poller.stoppedSince) {
+        // Asked for again after a stop: the resumed job gets the usual fast
+        // window and its own 24 h ceiling, counted from now.
+        poller.startedAt = Date.now()
+        poller.polls = 0
+        poller.stoppedSince = null
+      }
+      poller.stoppedRechecks = 0
       if (isTerminal) {
         // Only a real server verdict is remembered; give-up states are not,
         // so a re-login or a recovered worker is seen again.
@@ -288,6 +324,13 @@ function subscribeToFileStatus(fileId: string, subscriber: Subscriber): () => vo
     }
     pollers.set(fileId, poller)
     // Kick off the first read immediately; subsequent reads are paced.
+    void tick(poller)
+  } else if ((poller.stoppedRechecks ?? 0) > 0 && poller.timer && !poller.stopped) {
+    // A new chip for a recording shown as stopped (the message that asks
+    // for it again): read it now, not at the end of a back-off of up to 2 min.
+    clearTimeout(poller.timer)
+    poller.timer = null
+    poller.stoppedRechecks = 0
     void tick(poller)
   }
   poller.subscribers.add(subscriber)

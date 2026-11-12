@@ -3317,8 +3317,12 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   copia de pista (`copy`) no mide silencio; la de AAC escribe con `fastStart: false` (con
   «in-memory» el muxer retenía los buffers de lectura de la fuente: ≈ el video entero en RAM).
   La duración de la fuente sale solo de los metadatos (calcularla lee el archivo entero); sin
-  ella, la regla de 20 min usa la duración leída de la salida. El sondeo se cancela al instante
-  (✕ libera la entrada). Abort real, también durante `Conversion.init`. Gate
+  ella, la regla de 20 min usa la duración leída de la salida, y la conversión no usa el
+  `onProgress` de mediabunny (que la calcularía leyendo el archivo entero antes de convertir): el
+  progreso es la parte del archivo leída (`followReads`, eventos `read` de la fuente, cada 1 % y
+  al menos una vez por segundo, así el vigilante de 60 s la ve viva). El sondeo se cancela al
+  instante (✕ libera la entrada), y la conversión también: el ✕ la cancela y libera la entrada,
+  lo que rechaza las lecturas en vuelo. Abort real, también durante `Conversion.init`. Gate
   puro `planAudioExtraction` (video ≥ 100 MB, audio ≥ 32 MB); el interruptor
   `NEXT_PUBLIC_CLIENT_AUDIO_EXTRACT` se lee con un acceso literal (`BUILD_ENV`): Next solo
   inyecta así las `NEXT_PUBLIC_*` en el navegador. `extractedFileName` («Clase 3.mp4» →
@@ -3358,22 +3362,38 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   `POST /upload/chunked/init` (viaja en la sesión, `chunked-upload-store`) y en `POST /upload`
   (por índice; el mapa por nombre solo para pestañas viejas) y lo guarda en
   `DocumentAnalysis.metadata.clientExtracted` con `archiveMediaExpander.mergeAnalysisMetadata`.
-  El trabajo de transcripción marca `sourceMedia: 'video'` y `sourceName` (el nombre del video)
-  cuando la fuente era video (`readMediaAnalysisInfo` + `isExtractedFromVideo`: por el tipo, o por
+  El trabajo de transcripción guarda `sourceName` (el nombre de lo que subió el usuario) de todo
+  audio extraído, también de un audio re-codificado («Entrevista.mp3»), y marca `sourceMedia:
+  'video'` cuando la fuente era video (`readMediaAnalysisInfo` + `isExtractedFromVideo`: por el tipo, o por
   la extensión cuando el navegador no dio tipo, como un `.mkv` vacío o `application/octet-stream`;
   un tipo `audio/*` gana), también en una corrección de tramo
   (`spliceRefinedRange` los conserva); `isVideoRow` lo respeta (los subtítulos automáticos
-  siguen) y los entregables llevan el nombre del video, no «Clase 3.audio.ogg». Si ese audio no
+  siguen) y los entregables llevan el nombre de la fuente, no «Clase 3.audio.ogg»: la
+  transcripción y también la traducción y el análisis (`mediaRowsForAnalysis` renombra las filas
+  con o sin tramo; la entrega durable lo llama siempre). También el texto: el mensaje de la entrega,
+  su notificación y el título de un chat re-creado (la entrega renombra las filas con el
+  `sourceName` de la transcripción), y en el turno la etiqueta y el progreso, el hand-off, los
+  `fileNames` del registro (la línea «Detuve…») y la vista previa (`loadPresentedNames` lee
+  `clientExtracted` de la subida en una consulta; `presentRows`). Una grabación que falló o sigue en
+  cola cuando cierra la entrega conserva el nombre que el runner guardó (`record.fileNames`), y las
+  herramientas del chat (`transcript_lookup`, `retranscribe_range`, `rename_speaker`) también nombran y
+  encuentran lo que se subió (`presentedRows`). Una corrección por nombre encuentra la grabación por
+  lo que subió el usuario («revisa el minuto 12 de Clase 3»; `pickRowByName` ignora el «.audio» de la
+  extracción y compara el nombre entero: «Clase 10» nunca es «Clase 1», y «clase2.mp4» responde a «la
+  clase 2»). Si el audio de un video no
   tiene voz, el fallo es final y lo explica (`extracted_audio_no_speech`: subtítulos y texto en
   pantalla quedaron en el video; «vuelve a adjuntar el mismo video: esta vez se sube completo»).
   Las herramientas de cuadros sobre un video del que solo se subió el audio dicen eso y el mismo
   remedio (`MEDIA_ORIGINAL_NOT_UPLOADED`) en vez de «no encontrado».
   La entrega durable admite 500 archivos (`MAX_FILES`; antes 50, por debajo del lote de 100), y
   el seguimiento del compositor reconoce el lote de 100 (`resolveMediaFollowupFiles`).
-- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (13),
+- Tests: `tests/lib/upload-scheduler.test.ts` (6), `tests/lib/client-audio-extract.test.ts` (14),
   `tests/lib/prepare-upload-media.test.ts` (7), `tests/lib/extracted-source-memory.test.ts` (4),
   `tests/chat-fast-upload-source.test.ts` (6), `tests/attachment-ingest.test.ts` (100/101),
-  `backend/tests/client-extracted-metadata.test.js`, `backend/tests/package-test-script-paths.test.js`
+  `backend/tests/client-extracted-metadata.test.js`, `backend/tests/client-extracted-names.test.js`
+  (9: nombres en la transcripción guardada, sus archivos, la traducción y el análisis; silencio de
+  un audio que no es video; corrección por nombre, progreso y vista previa),
+  `backend/tests/package-test-script-paths.test.js`
   (cada ruta del script `npm test` existe), casos nuevos en `media-transcript-artifacts`,
   `media-transcript-store`, `media-delivery-store`, `chunked-upload-resumable` y
   `chat-composer-files`.
@@ -3400,3 +3420,346 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   - `media-transcription-queue.js` + `media-transcript-store.js` + `media-batch.js` + `media-delivery.js`: preserva `sourceMedia: 'audio'` + `sourceName` también cuando el navegador recodifica audios grandes (`≥ 32 MB`, p. ej. `Entrevista.wav` → `.audio.ogg`) sin tratarlos como video ni disparar `extracted_audio_no_speech`, e hidrata `DocumentAnalysis.metadata.clientExtracted` en lote (`hydrateClientExtractedRows`) para que progreso, hand-off, vista previa (`buildTranscriptChatPreview`), título del chat, mensaje de entrega (acotado para lotes `> 30` sin ocultar incidencias) y notificaciones muestren siempre el nombre real.
   - `transcription-governor.js`: reprograma el despertar cuando entra un waiter interactivo con `maxWaitMs` menor que el sleep de lote en curso (`wakeSeq`), evitando bloqueos de dictado.
   - `audio-transcriber.js` + `stt-providers/{assemblyai,deepgram,mistral}.js`: propaga `hints.speakers` (`speakers_expected` en AssemblyAI, `numSpeakers` en ElevenLabs Scribe) y `hints.verbatim` (`disfluencies: true` en AssemblyAI), preserva `confidence` promediada al agrupar palabras en AssemblyAI/Deepgram, clasifica `mistral`/`voxtral` como motor cloud (`Mistral`) y verifica `signal.aborted` antes de leer disco; `media-delivery.js` respeta `model.pinned` en análisis/traducción diferida (`AGENTS.md` §13) y `transcription-document-fast-path.js` usa copia temporal UUID con limpieza en `finally`.
+
+## Detener y seguimientos durante una transcripción en segundo plano (added 2026-11-05)
+
+Pedido de Luis con captura: tras «te aviso aquí cuando termine», Detener quedaba gris y un mensaje
+nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
+- **Detener** (`components/chat-interface-enhanced.tsx`): `hasPendingMediaDelivery` (memo de
+  `pendingMediaDeliveries`, no se recalcula durante un stream) mantiene `isStopButtonVisible`;
+  `isForegroundWorkRunning` (lo mismo sin la entrega) alimenta el ícono de la computadora. Si solo
+  queda la entrega, Detener llama `apiClient.cancelMediaDeliveries` y vuelve a leer el chat. Enviar
+  no se encola por la entrega (`isBusy` no la incluye). Mientras corre la cancelación, el disco de
+  Detener muestra su spinner (`cancellingDeliveryChatId` → `pendingStop`). Toasts: «Sigo
+  transcribiendo…» para un hand-off, «Anotado…» para un seguimiento.
+- **Servidor**: `POST /api/media-deliveries/cancel` `{ chatId, deliveryIds?, fileIds? }` (auth + CSRF,
+  solo entregas del usuario). Con ids, detiene también toda entrega abierta del chat con la misma
+  tarea o los mismos archivos: dos enlaces en un turno son dos entregas y el hand-off nombra solo la
+  primera (el compositor manda los `sourceFileIds` de los pendientes). Store: estado `cancelled`; `cancel` cierra bajo el lock y, si un holder está
+  entregando, deja `md_<id>.cancel`, que el holder honra antes de publicar y que `claim` cierra;
+  `amend` solo con `pending`; `listActiveForChat`; `mergeDeliveryAmendment` puro; `MAX_FILES` 500.
+  `cancelDelivery` publica la línea que cierra el pendiente (`source: 'media-delivery'` +
+  `mediaDelivery` + `deliveryKind: 'cancelled'`, sin `servedBy`) ANTES de cerrar el registro, bajo
+  el lock (`beforeClose`): un corte entre ambos pasos deja un registro cuyo siguiente intento
+  encuentra esa línea y no publica nada más. Luego detiene los trabajos de los archivos que ninguna
+  otra entrega abierta necesita (`cancelUnneededMediaJobs`). Un fallo definitivo publica otra
+  línea (`'failed'`). La marca `.cancel` se escribe bajo el lock antes de la línea: un reinicio
+  entre la línea y el cierre deja una entrega detenida (el seguimiento recibe `cancelled`, y el
+  barrido la cierra con su línea y detiene los trabajos), nunca una abierta. Un «Detener» sobre una
+  entrega ya cerrada sin línea en el chat (un post fallido, o un fallo de antes de que hubiera
+  línea) la publica ahora y el pendiente se cierra. El holder de una entrega vigila la marca cada
+  2 s y aborta el análisis o la traducción en curso (`signal` en `analyze` → `translateMediaBatch`
+  / `analyzeMediaBatch`): «Detener» no sigue pagando cada fragmento ni retiene la compuerta de
+  entregas. Una corrección de tramo detenida detiene su trabajo (`refines` en
+  `cancelMediaTranscription`: el job `refineJobIdFor` en espera se quita y el que corre se aborta;
+  la transcripción guardada no cambia).
+- **Cola**: `cancelMediaTranscription` quita el trabajo en espera y aborta el que corre
+  (`media_cancelled`, sin reintento, conserva checkpoints); otro proceso lo ve en su chequeo de
+  propiedad. La fila queda `failed` + `CANCELLED_NOTE`: la recuperación de 60 s no la toca y
+  `waitForMediaBatch` la reencola cuando se pide de nuevo (`isUserCancelledRow`). Un trabajo que
+  llega a una fila detenida no corre. Una fila que ya había fallado (DRM, sin audio) conserva su
+  motivo y no se reencola. Un reintento transitorio o un apagado en otro worker nunca borra la
+  nota de Detener (`writeUnlessStopped`, escritura condicional). Pedirla de nuevo reemplaza un
+  trabajo detenido que sobrevivió (un corte de Redis). Abortar solo una corrección de tramo deja
+  la fila escrita (un reintento de huecos que esperaba detrás vuelve a `ready` + nota parcial).
+  El chip muestra «Transcripción detenida» sin guardarlo como terminal y lo vuelve a leer (15 s,
+  luego 30 s, 60 s y cada 2 min; tras un día detenida, cada 30 min); un chip nuevo de la grabación
+  (el del mensaje que la pide de nuevo) la lee al instante, todos los chips lo siguen, y el trabajo
+  retomado tiene su propia ventana de 24 h contada desde que se retomó. Detener durante la espera en línea del turno (antes del
+  hand-off) también detiene esos trabajos: `claimTaskCancel` marca `cancelClaimed` en el registro
+  de la tarea, así un vencimiento o un apagado no los toca.
+- **Seguimientos** (`agent-task-runner.js`, antes de `step_start media_transcription`): con una
+  entrega abierta que cubre esos archivos, `amendDelivery` suma traducción
+  (`output.translationTarget` gana sobre el objetivo leído del goal), resumen o pregunta (solo
+  entregable explícito), Word/PDF, subtítulos, rango, idioma y nombres, y también quita
+  («ya no la traduzcas» → `no_translation`, «sin resumen» → `no_analysis`). «reintenta» reencola
+  lo fallido y la misma entrega lo espera. Una instrucción que ninguna regla nombra («solo lo que
+  dice el profesor») pide el análisis, que la responde; un «gracias», un «transcribe» repetido o
+  una instrucción que las reglas sí leyeron y que ya estaba así («en Word» dos veces, «sin
+  traducción» sin traducción pendiente) no. El idioma se confirma con su nombre («al catalán»).
+  Un tramo en el seguimiento recorta los archivos de la transcripción solo si pide esa parte
+  («solo del minuto 10 al 20», «transcribe del 10 al 20», un tramo a secas). Una pregunta o un
+  resumen de un tramo lo leen solo (`output.analysisRange`; dos preguntas sobre dos momentos
+  leen ambos, su extensión; una sin tramo después de una con tramo lee toda la grabación). Una
+  traducción de un momento o de un tramo lo traduce solo (`output.translationRange`), y la
+  traducción de un momento no suma resumen. «no lo analices» (también con «c»), «no lo quiero
+  en Word» o «sin subtítulos» quitan, nunca agregan (`negatedTranscriptFormats` en
+  `resolveTranscriptOutput`: también en un primer pedido). El modelo de la entrega cambia solo si
+  el seguimiento pide trabajo del modelo (traducción, resumen, su tramo) o si la entrega no tenía
+  ninguno: «en Word» o los nombres no cambian el modelo que debía escribir un resumen (AGENTS.md
+  sección 13). «Regenerar» sobre
+  un «Anotado» vuelve a leer el chat como en un hand-off. Un «Detener» que el almacén no pudo
+  registrar responde 500 (`cancel_failed`, nunca «ya había terminado») y detiene igual los
+  trabajos. El modelo del turno del seguimiento escribe el análisis o la traducción. Si el usuario lo
+  eligió (`model.pinned`, el indicador que guarda el runner y lee `defaultAnalyze`), la entrega lo
+  resuelve fijado: sin conexión falla con «X no pudo responder: su conexión no está configurada. No
+  cambié de modelo…» en vez de pasar en silencio a DeepSeek u otro proveedor. Un modelo que el
+  usuario no eligió, o una entrega sin modelo (enlaces, notas de voz), conserva la escalera. Responde
+  `amendedMessage`/`stillRunningMessage` con `stoppedReason: 'media_delivery_amended'`
+  (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre. No aplica
+  a una corrección de tramo ni a un turno con otros adjuntos.
+- **Análisis no pedido** (`media-batch.wantsMediaAnalysis`): un pedido de transcripción («transcribe…»,
+  «la transcripción», «subtítulos») solo suma un análisis con un entregable explícito (resumen, acta,
+  capítulos, puntos clave, comparar, extraer, decisiones, próximos pasos…) o una pregunta real sobre la
+  grabación. Antes «todo lo que dicen», «del tema 3», «es para una tarea» o «sistemas operativos» («tema»
+  dentro de la palabra) disparaban un análisis pagado de todo el lote; en 100 × 10 h topaba con el límite
+  de llamadas y terminaba en «No pude terminar el análisis que pediste». También cuentan los temas,
+  preguntas para estudiar y lo que dice, pedidos con su verbo («dime los temas», «hazme 5 preguntas»,
+  «dime de qué trata», «cuéntame qué dijo»); «dime cuando termines» o «del tema 3» no. En los demás
+  pedidos sigue la lectura amplia, ahora con «qué» acentuado.
+- **Compositor** (`lib/chat/composer-files.ts`): mientras el lote se transcribe, una instrucción
+  corta sobre su resultado va a ese lote (`isPendingDeliveryAmendPrompt`: vocabulario cerrado,
+  ≤ 10 palabras, sin enlace). Un hecho de la grabación («está en inglés», «los nombres son…»,
+  «son 3 hablantes») la alcanza aunque haya pasado varios turnos (hasta 30), igual que un pedido
+  que nombra la grabación. Un deseo sobre el resultado («en Word», «sin resumen») o un
+  «tradúcelo» solo justo después del lote o de otra enmienda (cuyo mensaje lleva el lote): pueden
+  ser sobre la respuesta de arriba (un correo escrito mientras tanto). Una pregunta solo si es
+  corta y sin nada después del verbo («¿de qué hablan?», «¿qué dijo?»); «¿cómo se explica la
+  fotosíntesis?» o «hay 3 personas en mi equipo, ¿cómo…?» quedan en el chat. Un «en inglés» a
+  secas no se enruta. `pendingMediaDeliveries` se memoiza por arreglo de mensajes
+  (`pendingMediaDeliveryFileIds`).
+- **Quién detiene qué** (tercera revisión): el aborto en el mismo proceso es solo del dueño
+  (`stops` guarda `{ stopper, userId }`); un id pedido que no está abierto en el chat se reporta
+  `missing` sin efectos (una rama o un compartido guardado copian el hand-off). Las copias se marcan:
+  `withoutMediaDeliveryState` (`lib/chat/branch-metadata.ts` y `backend/src/utils/copied-message-metadata.js`
+  en `/chats/save-shared`) quita `mediaDeliveryHandoff`/`mediaDeliveryAmended` y el `stoppedReason`
+  de entrega y deja `mediaDeliveryCopy: true`, que `pendingMediaDeliveries` y la guarda de «Regenerar»
+  ignoran. Un «Detener» que no encuentra nada abierto oculta Detener para esos hand-offs en la pestaña,
+  solo en ese chat (`settledHandoffKeys` por `chatId:pendingHandoffKey`: una rama vieja que nombra el
+  trabajo del chat original no oculta el Detener de este). El hand-off de una corrección de tramo espera
+  solo la grabación corregida (`transcriptionFileIds: [fileId]`; los viejos que listaban el lote se
+  leen por `mediaRefine.fileId`).
+- **Detener ante fallos**: si la línea no se pudo publicar (`settleFailure`: un `chat_unavailable`
+  cierra; lo demás no), `store.cancel` deja el registro abierto con su marca (`settleFailed`,
+  `cancel_requested`) hasta 6 h (`cancelSettleRetryMs`; la marca conserva la hora del primer Detener):
+  el siguiente Detener lo encuentra entre los abiertos del chat y el barrido publica la línea. Con la
+  marca, el barrido detiene los trabajos aunque `cancel` no consiga el lock (un proceso que murió a
+  mitad) y no entrega nada (`cancelling`). Los detiene una sola vez por Detener (`jobsStopped` en la
+  marca, `noteJobsStopped`): el barrido que solo reintenta la línea nunca detiene una grabación que el
+  usuario volvió a pedir. La marca solo se escribe si todos los trabajos quedaron detenidos
+  (`cancelUnneededMediaJobs` → `complete`); si una caída de la base de datos deja alguno corriendo, la
+  marca anota solo esos (`pendingStops`, `unsettled`) y el barrido, el siguiente Detener o el holder
+  detienen únicamente lo que quedó (`stopWhatTheStopLeft`; una marca anterior sin la lista conserva el
+  barrido completo). Los trabajos se detienen antes de cerrar: dentro del `beforeClose` de
+  `store.cancel` (Detener y barrido) y antes de `markCancelled` (un holder que honra el Detener); con uno
+  todavía corriendo, la línea se publica igual pero el registro queda abierto (`stop_incomplete`), así
+  nunca dice «Detuve…» mientras una grabación sigue facturando. Pedir de nuevo la transcripción
+  (`resumeScope`) libera esas grabaciones de un Detener pendiente (`releasePendingStops`), y un
+  Detener que espera a otro proceso (`cancel_requested`) sigue sin marcarse como hecho. Un pedido de transcripción retoma solo lo que nombra (`resumeScope`: «transcribe la clase 2»
+  → esa; «la clase 2» nunca es «Clase 20» y «clase2.mp4» responde a «la clase 2») y nada si habla de
+  las terminadas («pasa a PDF las que ya están transcritas», `limitsToFinished`), salvo un «retómalas»
+  o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Los nombres se leen
+  con `namedRecordings`: varios a la vez («la clase 2 y la 3», «las clases 2 y 3»), exclusiones
+  («todas menos la clase 4», «la clase 4 no», «sin la clase 4», «no transcribas la clase 4») y el
+  nombre más largo gana donde dos coinciden («la reunión 2» es «Reunión 2», «la clase 2b» es «Clase
+  2B», «los ejercicios de la clase 2» es «Clase 2 - ejercicios»); `pickRowByName` (correcciones por
+  nombre y herramientas del chat) usa la misma lectura. «reintenta los audios fallidos» reintenta solo
+  lo que falló; una grabación detenida vuelve solo por `resumeStopped`. «… y retoma las demás»
+  retoma aunque el verbo no abra el mensaje (`asksToResume`, por cláusula). Con una entrega abierta,
+  «transcribe también la clase 3» o «retómalas» vuelven a poner en cola esas grabaciones («Retomo la
+  transcripción de…») y nunca compran un resumen; el hand-off nombra las que siguen detenidas, la
+  entrega las lista como «detenida (escribe «retómala»…)» y una tarea que las deja detenidas termina
+  como parcial, no como fallida. Un resumen, una
+  traducción o una pregunta también retoman cuando nada más está transcrito ni en curso, o cuando nombran
+  una grabación detenida (solo esa); «no la retomes» o «déjala así» no retoman nada (`refusesResume`). El
+  informe del turno cuenta aparte las detenidas («Una grabación sigue detenida: escribe «retómala»…»),
+  nunca como «no se pudo transcribir». Un pedido detenido con su línea pendiente no necesita nada: no retiene los
+  trabajos de otro Detener, y una corrección de tramo detenida en un chat conserva el trabajo que
+  comparte con una corrección abierta del mismo tramo en otro chat. Tras «Detuve…», «retómala»,
+  «reanuda la transcripción» o «sigue transcribiendo las clases» llegan a las grabaciones (solo
+  después de esa línea; «continúa» a secas sigue en el chat) y el runner las lee como transcripción,
+  sin análisis pagado. Cuánto después cuenta (`turnsSinceStop` → `resumeAnswersStop`): lo que nombra
+  la transcripción o las grabaciones, hasta 4 turnos sobre otra cosa; «retómala», justo después o tras
+  un pedido sobre esas mismas grabaciones (su mensaje las lleva y no corta la búsqueda); «continúalo»
+  o una clase como objeto («continúa la clase», «sigue con la sesión»), solo justo después de la línea.
+  La grabación tiene que ser el objeto del verbo, como en el servidor (`RESUME_TRANSCRIPT_RE`): «sigue
+  explicando la clase», «continúa con la explicación de la clase» o «sigue profe» se quedan en el chat;
+  una muletilla en medio no corta («retoma por favor la transcripción», «retoma de nuevo…», «retoma
+  también los audios», «Sí, por favor, retómala»; `RESUME_FILLER`), y «la junta», «la audiencia» o «el
+  archivo» cuentan como una clase (solo justo después de la línea: «sigue con el archivo» tras pedir un
+  Excel es ese Excel). La línea ancla las grabaciones que nombra (`stoppedBatchFiles`): un audio o un PDF
+  enviados mientras se transcribía nunca la reemplazan. Una respuesta que pide «escribe «retómala»» (el
+  aviso, una respuesta sobre las listas o la entrega con una «detenida») lleva `metadata.stoppedFileIds`
+  y cuenta como esa línea, también tras un Detener durante la espera en línea. Un
+  hecho con muletilla o dos puntos («Por cierto, está en inglés», «Ojo: son 3 hablantes», «Los nombres
+  son: Juan…») llega al lote pendiente; uno de dos idiomas («está en inglés y español») se queda en el
+  chat y, si llega, cuenta como leído (`statesRecordingLanguages`, nunca el análisis de reserva). Un
+  mensaje en cola que retoma o modifica un lote espera a que se abra su chat (`mayReachMediaBatch` en
+  el drenado de fondo, siempre: la fila de la lista de chats que deja una recarga trae un solo
+  mensaje), y el drenado de fondo solo toma el primer mensaje en cola de cada chat: uno posterior nunca
+  se adelanta a uno retenido. Una pregunta dictada sin «?» («qué dice el profesor cuando habla en
+  inglés») es una pregunta (`asksForDeliverable`), también junto a un idioma o a dos. Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
+  clase», «no lo traduzcas, solo dime qué dice el profesor»; también junto a «transcribe…», un tramo,
+  el idioma o nombres) pide el análisis solo con un entregable o una pregunta real
+  (`asksForDeliverable`: «que es más fácil de editar», «porque…», «de acuerdo» no lo son); la opción
+  sola ya no marca el mensaje como leído. «no la traduzcas porfa / por ahora / aún» retira la
+  traducción, y una condición («no traduzcas los nombres propios») cuenta como leída, nunca como
+  análisis de reserva. «¿y en el minuto 45?» lee ese momento, no la ventana anterior. «traduce lo
+  que dice del 10 al 20» no agrega resumen, «transcribe lo que dice del 10 al 20» recorta, y
+  «transcribe del 10 al 20 y dime de qué trata» recorta y analiza. En el primer pedido, un formato
+  solo («ponlo en Word», `EXPORT_FORMAT_RE`) es transcripción y uno con informe o «lo más
+  importante» no; «resúmemelo», «me la resumes», «menciona los acuerdos» y «compárala» piden su
+  análisis. «ponlo en
+  txt» ya es así (el TXT siempre va) y nunca dispara el análisis de reserva. Recién hecho el aviso, un
+  pedido suelto («¿de qué trata?», «dime los temas», «hazme 5 preguntas») llega al lote pendiente. Un momento de una grabación que la entrega ya traduce completa al
+  mismo idioma no estrecha la traducción (`translation_moment_covered`: «completa (incluye ese
+  momento)»). Los tramos de traducción se suman: los que la traducción ya lee (sus tramos, el rango
+  de la transcripción o toda la grabación) nunca se achican; un momento dentro no cambia nada
+  (`translation_moment_included`) y uno fuera se agrega como tramo propio (`translation_range_added`,
+  `output.translationRanges`: dos momentos lejanos se traducen cada uno, nunca lo que hay entre ellos,
+  y un tramo abierto sigue abierto: «desde 30.00»). El momento de un primer pedido («traduce al inglés
+  lo que dice en el minuto 30») se guarda igual, como tramo de la traducción (`output.translationRange`),
+  sin recortar la transcripción. «traduce también al inglés lo que dice en el minuto 50» y «traduce al
+  inglés lo del minuto 50» son tramos de traducción, sin resumen; «lo del minuto 30» solo es un momento
+  junto a una traducción («transcribe lo del minuto 30» o «solo lo del minuto 10 al 20» no compran un
+  análisis). Solo «tradúcela completa», «tradúcelo todo», «traduce toda la clase» o «quiero la
+  traducción completa» (`asksWholeTranslation` → `translationWhole`) traducen la grabación entera, sin
+  nombrar el idioma: un seguimiento que pide traducir sin idioma toma el de la traducción pendiente
+  (`asksToTranslate`: un pedido, nunca «la traduzco yo» ni «¿la traducción estará completa?») y nunca
+  llega al análisis de reserva; sin traducción pendiente, se pregunta el idioma («¿A qué idioma la
+  traduzco?»). Nombrar el idioma otra vez, o cambiarlo («mejor al francés»),
+  conserva el tramo y dice cómo pedirla completa (`translation_range_kept`). Un momento en otro idioma
+  («traduce también al francés lo del minuto 30») es una segunda traducción (`output.extraTranslations`,
+  cada una con sus tramos; «también» cuenta junto al verbo o al idioma, `asksAlsoTranslation`: «… y
+  también en Word» cambia el idioma): la primera sigue completa. «no lo traduzcas al inglés sino al francés»
+  cambia el idioma (`switchedTranslationTarget`). Un «traduce…» rechazado retira la traducción salvo
+  que nombre una parte o una manera (`CONDITION_OBJECT_RE` o un determinante con algo que no es la
+  grabación): «no la traduzcas porfavor / por fa / para nada / en absoluto / a ningún idioma» y «no
+  traduzcas los audios / de momento» la retiran («sin la traducción»); una condición («no traduzcas
+  los nombres propios», «no traduzcas el saludo inicial», «deja las siglas sin traducir», «no lo
+  traduzcas literal») la conserva y llega al traductor, igual que una indicación positiva («tradúcelo
+  literal», «deja las siglas en inglés», «mantén los términos técnicos en español»): `translationConditions`
+  del pedido y de cada seguimiento → `translateMediaBatch({ conditions })`; la última sobre la misma
+  parte gana («incluidos los nombres» deshace «no traduzcas los nombres propios») y la respuesta dice
+  «con tus indicaciones para la traducción». Cambiar Word por PDF quita el Word de `formats` y la respuesta lo dice
+  («en PDF en lugar de Word», `document_replaced`), un formato rechazado sale de `formats` aunque otro lo
+  hubiera reemplazado, y la entrega no arma ni reporta como faltante un documento rechazado o
+  reemplazado. El formato que un cambio reemplaza queda rechazado (`negatedTranscriptFormats`: «en PDF en
+  lugar de / en vez de Word», «mejor en PDF que en Word», «pasa el Word a PDF»), también el Word
+  automático. «también en PDF» (o «en Word y PDF», `alsoPdf` de #1137) conserva el Word y suma el PDF
+  («en Word y en PDF», `document_added`; «también» cuenta solo junto al formato, `addsDocumentFormat`); «sin
+  el PDF», «sin Word» y «solo en Word» los quitan de a uno. «documento» nombra el documento entregable:
+  «ya no lo quiero en documento» o «sin documento» rechazan Word y PDF (nunca agregan un Word) y llegan
+  al lote desde el compositor. Una grabación fallida cuyo audio
+  extrajo el navegador conserva el nombre que el runner guardó al entregarla (`record.fileNames`).
+  «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
+  transcripción ya terminó o se detuvo». Un Detener que el dueño honró a mitad del análisis y cuya
+  línea no se publicó cuenta como detenido (`cancel_requested`, nunca «ya había terminado»): el
+  hand-off conserva Detener y el siguiente lo publica. El manejador `failed` de BullMQ no reescribe
+  la nota de un trabajo detenido (`media_cancelled`): la fila ya la tiene o se volvió a pedir. Una
+  grabación detenida solo se reanuda cuando se vuelve a pedir la transcripción
+  (`waitForMediaBatch({ resumeStopped })`: el runner lo pasa con un pedido de transcripción,
+  «retómala» o «reintenta»); un resumen o una pregunta sobre las listas no reinicia (ni cobra) las
+  demás; nombrar «la transcripción» («resume la transcripción de la clase 1») o «pásalo a Word» no es
+  pedirla de nuevo: solo un verbo de pedido («transcribe…», «dame la transcripción»), `isResumeGoal`
+  o «reintenta». Detener escribe el estado detenido él mismo (`settleStoppedRow`, solo sobre una fila aún
+  pendiente: una que terminó entretanto conserva su transcripción), y el barrido de recuperación
+  (sin `retry`) nunca borra una nota escrita después de leer la fila (`writeUnlessStopped`). Una corrección de tramo que sobrevivió al Detener termina
+  antes de llamar a un proveedor y la que corre en otro worker se detiene en su chequeo
+  (`isRefineJobWanted` → `isRefineWanted` en la cola; otra entrega abierta con la misma clave de
+  trabajo la mantiene). Pedirla de nuevo con el trabajo detenido aún `active` sin abort local
+  (atascado tras un despliegue, otro worker) borra la nota sin esperar; un trabajo que terminó por la
+  nota de otro proceso no reescribe la fila (`localStop` marca el abort local), y la recuperación lo
+  vuelve a correr (`askedAgain`: `failedReason` = nota y fila sin nota).
+- **Negaciones y tramos** (cuarta revisión): `backend/src/services/request-negation.js` lee qué rechaza
+  un pedido (ES/EN, sin acentos): una negación («no», «sin», «ni», «nada de», «no hace falta», «quita»,
+  «without», «don't») cubre su cláusula hasta una coma, un punto, «pero», «sino», «y» u ocho palabras; «Word
+  no» cierra la suya; «no, mejor en PDF», «no solo», «no olvides», «no sé», «sin embargo» y una sugerencia
+  («¿por qué no lo pones en Word?») no rechazan nada. Lo usan `negatedTranscriptFormats` (un formato
+  rechazado cede ante el mismo formato pedido en otra parte), `stripNegatedAnalysis`, `refusesAnalysis`
+  (el `explicitNoAnalysis` del runner) y `negatesTranslation` (solo una retractación: «no traduzcas los
+  nombres propios» o «no lo traduzcas literal» son condiciones y la traducción sigue). Lo rechazado
+  queda en `output.declinedDocuments` / `declinedSubtitles` y apaga también el Word y los subtítulos
+  automáticos (cambio `no_auto_document` → «sin Word»). Un pedido de transcripción con formato («en
+  Word», «pásalo a PDF», «pasa estos audios a texto»: `isTranscriptGoal`) no paga un análisis. Las
+  alternativas de pedido de `wantsMediaAnalysis` abren su cláusula (`CLAUSE_LEAD`): «el profesor explica…»,
+  «el ministro responde las preguntas», «son temas clave», «resume» en tercera persona o «fotosíntesis»
+  (ya no «síntesis») no son pedidos. Tramos del seguimiento: uno abierto («desde el minuto 90») llega al
+  final; una pregunta sin «?» («qué dice del minuto 10 al 20») se responde; una pregunta o un resumen de
+  un tramo nunca recorta los archivos; «traduce lo del minuto 30 y resúmelo» resume ese momento; el
+  tramo de la traducción gana al rango de la entrega y una traducción completa lo borra
+  (`translation_whole`); el análisis genérico del catch-all conserva la ventana (`keepWindow`). El
+  compositor envía al lote los rechazos («sin subtítulos», «nada de PDF», «no quiero que lo resumas»). Un
+  hecho se lee en su primera cláusula («está en inglés, gracias», «son 2 hablantes: Juan y María») y nunca
+  en una pregunta; los nombres llegan si van con mayúscula, comillas o «correctos son» («los términos son
+  confusos» queda en el chat). Una pregunta corta sobre la grabación admite un tema con preposición o un
+  momento («¿qué dice sobre el examen?», «¿y qué dice al final?»), nunca un sujeto ni «se». Un «ok gracias»
+  o «¿cuánto falta?» entre medio no corta el alcance (`ACK_TURN_RE`).
+- **Novena y décima revisión (2026-11-12; 14 y 15 hallazgos, la décima revisó la novena)**:
+  - **Traducción**:
+    - Un cambio de idioma con tramo («mejor tradúcela al francés del minuto 10 al 20», «no la
+      traduzcas al inglés sino al francés…», «en vez de (al) inglés…») reemplaza el idioma y toma ese
+      tramo (`translationSwitch`, `replacesTranslation`); nunca suma uno nuevo cobrando el rechazado. La
+      señal debe nombrar el idioma correcto (el nuevo tras «mejor»/«cámbiala», el pendiente tras «en vez
+      de»: «el profesor cambia al inglés» no cambia nada) y «también» siempre suma.
+    - «ya no la traduzcas al francés» quita solo ese idioma (`refusedTranslationTargets`: si nombra
+      todos los pendientes, «… al francés ni al inglés», «…, tampoco al inglés», los quita todos;
+      `refusedTranslationTarget` →
+      `removeTranslationTarget`, cambio `no_translation:<código>`, «sin la traducción al francés (sigue
+      la traducción al inglés)»). Quitar el primero promueve el agregado con sus tramos; un idioma que no
+      estaba pendiente no cambia nada.
+    - Un idioma agregado guarda sus tramos propios; sin tramo propio lee los de la primera traducción
+      (también un rango puesto después), y solo «completa» lo marca como toda la grabación (`whole`).
+      La respuesta dice cuál.
+    - El traductor recibe hasta 5 indicaciones, las mismas que lee `translationConditions`.
+  - **Formatos**:
+    - «pásalo de Word a PDF», «conviértelo de PDF a Word» y «cambia el PDF por un documento Word»
+      convierten: el formato de origen queda rechazado (`SOURCE_FORMAT_RE`) y el compositor las manda al
+      lote pendiente (`FORMAT_CONVERSION_RE`: solo «de PDF a Word» pelado tras el verbo; «la
+      transcripción de mi PDF en Word» sigue siendo otra fuente).
+    - Un «no» después del formato lo rechaza (`request-negation`: «el Word sí, el PDF no», «… que el
+      PDF no me sirve», «el PDF no lo necesito»; «el PDF no se ve bien» no), y «solo en …» nunca deja
+      los dos (`documentOnly` antes que `bothAsked`; «solo en Word y PDF» pide ambos). El compositor
+      enruta solo esas formas de cierre (`FORMAT_CHOICE`, `FORMAT_CHOICE_END`).
+    - «también lo quiero en PDF», «el PDF también lo quiero» y «el PDF también mándamelo» suman el PDF
+      (`ALSO_FORMAT_RE`: pocas palabras dentro de la cláusula).
+    - «también en PDF» sin documento elegido conserva el Word automático de una grabación larga
+      (`professionalBuildArtifacts` deja `documentFormat` nulo con `alsoPdf`).
+  - **Detener**:
+    - Una grabación que el Detener aún no pudo parar se lee como detenida en el turno
+      (`pendingStopFileIds` → `asStoppedRows`, y la espera la mantiene así). Un seguimiento sobre las
+      otras nunca la encola, espera ni entrega; solo pedirla de nuevo la retoma y la libera, incluido
+      «todas menos la clase 4». No cuenta la que otro pedido abierto, anterior al Detener, sigue
+      necesitando, y un reintento parcial detenido se lee como su transcripción parcial.
+    - Un pedido creado después del Detener no la protege del barrido (`stoppedAt`), salvo una corrección
+      del mismo tramo, que sigue compartiendo su trabajo de refine.
+    - Las escrituras del marcador van en serie por entrega (`withMarker`). La lista que reescribe un
+      reintento nunca vuelve a agregar lo liberado: la marca guarda `released`. La cola revisa la marca
+      justo antes de detener cada grabación (`cancelMediaTranscription({ shouldStop })` → `released`).
+  - **Compositor**:
+    - El servidor lee como retomar todo lo que el compositor enruta: rellenos, «la junta», «la
+      audiencia» (`RESUME_TRANSCRIPT_RE` con `RESUME_FILLER` y `RESUME_RECORDING_WORDS`). Un retomar con
+      un entregable («sigue con esta entrevista y dame los puntos importantes») no es solo transcripción.
+    - «las demás / el resto» retoma si después viene una palabra de grabación («de las grabaciones»,
+      «transcripciones»), «que detuve» o un relleno; «sigue con los otros puntos» continúa la respuesta,
+      en ambos lados (`RESUME_TAIL_WORDS`).
+    - Una respuesta o una entrega con `stoppedFileIds` ancla la transcripción o cualquier retomar con
+      «retoma/reanuda» (`StopAnchor` `answer`, `RESUME_NAMED_RE`), nunca «continúalo» ni «sigue con la
+      clase». Un turno con archivos del mismo lote (`transcriptionFileIds` ∪ `stoppedFileIds`) no corta
+      la búsqueda.
+    - Una exclamación o un «cuánto falta» no es una pregunta dictada (`EXCLAMATION_OPENING_RE`); una
+      pregunta con tilde al inicio sí lo es («cuándo es el examen y pásalo a Word»), y «como/cuando/donde»
+      sin tilde necesitan un verbo de lo dicho.
+- **Undécima revisión (2026-11-12; 10 hallazgos sobre los arreglos de la décima)**:
+  - Traducción: «ya no la traduzcas al francés solo al inglés» quita el francés y conserva el inglés
+    (la cláusula del rechazo termina en «solo/sino/mejor/déjala…»); con tres idiomas, nombrar dos quita
+    solo esos (`removeTranslationTargets`, una lista). «cambia/cámbiame la traducción al francés» y
+    «puedes cambiar la traducción…» cambian el idioma; un cambio explícito gana a un «también» que habla
+    de una parte («traduce también los títulos»): `ALSO_TRANSLATE_RE` exige un idioma.
+  - Formatos: «solo en Word y el PDF no lo mandes» entrega solo el Word; «en Word también quiero el
+    resumen» no suma un PDF (el «también» posterior debe cerrar la cláusula). En el compositor, una
+    conversión con otra fuente («pásame de PDF a Word el documento de mi tesis») y una elección sin coma
+    ni «y» («el pdf no el word sí», «PDF no tiene portada») quedan en el chat.
+  - Preguntas y retomar: «cómo vas, ponlo en Word» no compra un análisis (una pregunta con tilde necesita
+    un verbo de lo dicho o de contenido); «Retómala, la necesito para mi informe» sigue siendo
+    transcripción (`DELIVERABLE_ASK_RE`: un entregable pedido, no un propósito). «retómala» sobre un
+    reintento de huecos que el Detener aún no paró lo vuelve a encolar y espera la transcripción entera
+    (`stopPending` cuenta como detenida).
+- Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
+  `backend/tests/media-delivery-pinned-model.test.js` (2),
+  casos de las revisiones en `backend/tests/media-batch.test.js` y `tests/chat-composer-files.test.ts`,
+  `backend/tests/media-delivery-stop-review.test.js` (un hallazgo de las revisiones adversariales
+  por prueba; la base simulada lee `NOT` como PostgreSQL), `tests/lib/file-processing-status-hook.test.tsx` (chip detenido),
+  `tests/lib/media-delivery-refresh.test.ts` (copias), `tests/chat-background-transcription-stop-source.test.ts`, casos nuevos en
+  `backend/tests/media-batch.test.js` (rama del runner con la entrega abierta) y
+  `tests/chat-composer-files.test.ts` (enrutado al lote pendiente).

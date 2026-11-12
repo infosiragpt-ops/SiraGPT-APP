@@ -9,7 +9,9 @@
 // dot-directories are never served by the /uploads static handler):
 //   md_<uuid>.json        active record (pending | delivering)
 //   md_<uuid>.lock        claim lock, opened with 'wx' (one holder at a time)
-//   done/md_<uuid>.json   terminal record (delivered | failed), kept 30 days
+//   md_<uuid>.cancel      Stop pressed while a holder was delivering: the
+//                         holder (or the next claim) closes the record
+//   done/md_<uuid>.json   terminal record (delivered | failed | cancelled), kept 30 days
 // Every write is tmp + rename, so a crash never leaves half a record. The
 // pending scan reads only the active directory, which holds the few
 // deliveries still waiting, never the 30-day history.
@@ -34,7 +36,7 @@ const REFINE_STATUSES = Object.freeze(['ok', 'failed']);
 // A refine window is at most a week of recording clock, like a clip offset.
 const MAX_REFINE_END_SEC = 7 * 24 * 3600;
 const FORMATS = Object.freeze(['txt', 'srt', 'vtt', 'docx', 'pdf', 'zip']);
-const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed']);
+const STATUSES = Object.freeze(['pending', 'delivering', 'delivered', 'failed', 'cancelled']);
 // The chat batches up to SIRAGPT_MEDIA_BATCH_MAX recordings (100 by
 // default, 500 at most); one delivery must hold the whole batch.
 const MAX_FILES = 500;
@@ -45,6 +47,9 @@ const MIN_STALE_MS = 30 * 1000;
 const RETRY_BACKOFF_MS = Object.freeze([1, 5, 15, 60, 120].map(minutes => minutes * 60 * 1000));
 const MAX_ATTEMPTS = 5;
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// A Stop whose chat line keeps failing to post (see cancel) stays open this
+// long, retried by every sweep; then it closes without its line.
+const CANCEL_SETTLE_RETRY_MS = 6 * 60 * 60 * 1000;
 const ORPHAN_TMP_MS = 60 * 60 * 1000;
 const DEFAULT_MAX_SCAN = 1000;
 
@@ -125,13 +130,20 @@ function normalizeModel(model) {
  * `alsoAnalysis` adds the requested summary («resume y tradúcelo»).
  * `analysisRange` is the moment the user asked about («qué dice en el
  * minuto 30»), on the recording clock: only the analysis reads it; the
- * transcript files follow `range`. Kept only when valid (closed, start < end).
+ * transcript files follow `range`. `translationRange` is the window a
+ * follow-up asked to translate («traduce lo que dice en el minuto 30»):
+ * only the translation reads it. Kept only when valid (closed, start < end).
  */
 function normalizeOutput(output) {
   const value = output && typeof output === 'object' ? output : {};
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
   const offset = Number(value.timeOffsetSec);
   const analysisRange = normalizeRefineRange(value.analysisRange);
+  const translationRange = normalizeRefineRange(value.translationRange);
+  const translationRanges = normalizeWindows(value.translationRanges);
+  const translationTarget = normalizeTranslationTarget(value.translationTarget);
+  const extraTranslations = normalizeExtraTranslations(value.extraTranslations);
+  const declinedDocuments = ['docx', 'pdf'].filter(format => Array.isArray(value.declinedDocuments) && value.declinedDocuments.includes(format));
   return {
     documentFormat,
     wantsSubtitles: value.wantsSubtitles === true,
@@ -141,7 +153,402 @@ function normalizeOutput(output) {
     ...(value.wantsZip === true ? { wantsZip: true } : {}),
     ...(value.alsoPdf === true ? { alsoPdf: true } : {}),
     ...(analysisRange ? { analysisRange } : {}),
+    ...(translationRange ? { translationRange } : {}),
+    // Moments far apart are translated each on its own, never their span.
+    ...(translationRanges.length ? { translationRanges } : {}),
+    // Set when a follow-up changed the language («mejor al francés»): it
+    // wins over the target read from the goal, which keeps every request.
+    ...(translationTarget ? { translationTarget } : {}),
+    // «traduce también al francés lo del minuto 30»: other languages, each
+    // with its own windows (none: the whole recording).
+    ...(extraTranslations.length ? { extraTranslations } : {}),
+    // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
+    ...(declinedDocuments.length ? { declinedDocuments } : {}),
+    ...(value.declinedSubtitles === true ? { declinedSubtitles: true } : {}),
   };
+}
+
+const MAX_TRANSLATION_WINDOWS = 8;
+const MAX_EXTRA_TRANSLATIONS = 3;
+
+/**
+ * Translation windows: sorted, the ones that overlap or touch merged, at most
+ * eight. An open end (null) runs to the end of the recording.
+ */
+function normalizeWindows(list) {
+  const windows = (Array.isArray(list) ? list : []).map(normalizeRange)
+    .filter(window => window && (window.end == null || window.end <= MAX_REFINE_END_SEC))
+    .sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const window of windows) {
+    const last = merged[merged.length - 1];
+    if (last && window.start <= (last.end == null ? Infinity : last.end)) {
+      if (last.end != null) last.end = window.end == null ? null : Math.max(last.end, window.end);
+    } else merged.push({ start: window.start, end: window.end });
+  }
+  return merged.slice(0, MAX_TRANSLATION_WINDOWS);
+}
+
+function normalizeExtraTranslations(list) {
+  const out = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const target = normalizeTranslationTarget(item?.target);
+    if (!target || out.some(existing => existing.target === target)) continue;
+    // `whole`: «tradúcela también al francés completa», the whole recording
+    // whatever the first translation reads; no windows and no `whole`: the
+    // same windows as the first translation (its own, else the transcript's
+    // range, else the whole recording).
+    const ranges = normalizeWindows(item?.ranges);
+    out.push({ target, ranges: item?.whole === true ? [] : ranges, ...(item?.whole === true ? { whole: true } : {}) });
+    if (out.length >= MAX_EXTRA_TRANSLATIONS) break;
+  }
+  return out;
+}
+
+/** The windows a translation reads that the delivery stores for it (not the transcript's range). */
+function ownTranslationWindows(output) {
+  if (Array.isArray(output?.translationRanges) && output.translationRanges.length) return output.translationRanges;
+  return output?.translationRange ? [output.translationRange] : [];
+}
+
+function setTranslationWindows(output, windows) {
+  delete output.translationRange;
+  delete output.translationRanges;
+  if (windows.length === 1 && windows[0].end != null) output.translationRange = windows[0];
+  else if (windows.length) output.translationRanges = windows;
+}
+
+/** A translation target as a language code («en», «pt»), or null. */
+function normalizeTranslationTarget(value) {
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[a-z]{2,3}$/.test(text) ? text : null;
+}
+
+const GOAL_MAX = 4000;
+const AMENDMENTS_KEPT = 20;
+
+/** The request so far plus the follow-up, the follow-up always whole (bounded). */
+function joinGoals(previous, addition) {
+  const before = String(previous || '').trim();
+  const add = String(addition || '').trim().slice(0, GOAL_MAX / 2);
+  if (!add) return before.slice(0, GOAL_MAX);
+  if (!before) return add;
+  if (before.split(/\n{2,}/).some(part => part.trim() === add)) return before.slice(0, GOAL_MAX);
+  return `${before.slice(0, GOAL_MAX - add.length - 2)}\n\n${add}`;
+}
+
+/**
+ * A follow-up sent while a delivery waits on its recordings («y tradúcelo al
+ * inglés», «en Word», «resúmelo», «solo del minuto 10 al 20», «son 3
+ * hablantes») joins that request instead of starting a second
+ * transcription. Pure. `amendment`:
+ *   { goal, translationTarget, removeTranslation, wantsAnalysis, removeAnalysis,
+ *     documentFormat, removeDocument, wantsSubtitles, removeSubtitles, range,
+ *     analysisRange, translationRange, translationWhole, language, hints, model }
+ * Returns { record, changes }: `changes` names what the follow-up changed
+ * ('translation', 'translation_target', 'translation_range', 'translation_range_added',
+ * 'translation_moment_included', 'translation_moment_covered', 'translation_whole', 'translation_range_kept', 'analysis',
+ * 'analysis_range', 'document', 'subtitles', 'range', 'language', 'hints',
+ * 'no_translation', 'no_analysis', 'no_document', 'no_subtitles'); empty
+ * when the request already covered it. The transcript the user first asked for is
+ * never dropped: turning a transcript into a translation keeps its files.
+ */
+const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'translation_range_added', 'translation_whole',
+  'translation_added', 'translation_conditions', 'analysis', 'analysis_range']);
+
+function mergeDeliveryAmendment(record = {}, amendment = {}) {
+  const value = amendment && typeof amendment === 'object' ? amendment : {};
+  const out = normalizeOutput(record.output);
+  const next = { ...record, output: { ...out } };
+  const changes = [];
+  const formats = new Set(['txt', ...(Array.isArray(record.formats) ? record.formats : [])
+    .filter(format => FORMATS.includes(format))]);
+  const mode = MODES.includes(record.mode) ? record.mode : 'transcript';
+  next.mode = mode;
+
+  // A moment translation handed off before its window was stored apart kept
+  // the moment as the transcript range, next to the same analysis window.
+  if (mode === 'translation' && !ownTranslationWindows(out).length && !(Array.isArray(record.amendments) && record.amendments.length)
+    && out.analysisRange && normalizeRefineRange(record.range)
+    && JSON.stringify(normalizeRefineRange(record.range)) === JSON.stringify(out.analysisRange)) {
+    out.translationRange = out.analysisRange;
+    next.output.translationRange = out.analysisRange;
+    next.range = null;
+  }
+  const target = normalizeTranslationTarget(value.translationTarget);
+  // «ya no la traduzcas»: back to what the first request asked for. «ya no
+  // la traduzcas al francés» next to the English one takes only the French
+  // back; a language not pending changes nothing.
+  // The languages a take-back names («… al francés», «… al francés ni al
+  // portugués»); none named: all of them.
+  const refusedCodes = [...new Set([...(Array.isArray(value.removeTranslationTargets) ? value.removeTranslationTargets : []),
+    value.removeTranslationTarget].map(normalizeTranslationTarget).filter(Boolean))];
+  const pendingExtras = (out.extraTranslations || []).map(item => ({ ...item, ranges: [...item.ranges] }));
+  if (!target && value.removeTranslation === true && mode === 'translation') {
+    const languages = [out.translationTarget, ...pendingExtras.map(item => item.target)].filter(Boolean);
+    const dropped = languages.filter(code => refusedCodes.includes(code));
+    if (refusedCodes.length && dropped.length && dropped.length < languages.length) {
+      // Only those go; the first that stays becomes the translation.
+      const kept = pendingExtras.filter(item => !dropped.includes(item.target));
+      if (dropped.includes(out.translationTarget)) {
+        const [promoted, ...rest] = kept;
+        next.output.translationTarget = promoted.target;
+        // Its own windows, or the whole recording; one that followed the
+        // first translation keeps reading those windows.
+        if (promoted.whole || promoted.ranges.length) setTranslationWindows(next.output, promoted.ranges);
+        if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
+      } else if (kept.length) next.output.extraTranslations = kept;
+      else delete next.output.extraTranslations;
+      for (const code of dropped) changes.push(`no_translation:${code}`);
+    } else if (!refusedCodes.length || dropped.length) {
+      next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
+      next.output.alsoAnalysis = false;
+      delete next.output.translationTarget;
+      delete next.output.extraTranslations;
+      changes.push('no_translation');
+    }
+  }
+  const translationRange = normalizeRefineRange(value.translationRange);
+  // «traduce también al francés lo del minuto 30» while the English
+  // translation is pending: a second language, never a silent replacement.
+  // A bare «mejor al francés» still switches the language.
+  // «mejor tradúcela al francés del minuto 10 al 20», «no la traduzcas al
+  // inglés sino al francés…» replace it (translationSwitch).
+  const addsLanguage = Boolean(target) && mode === 'translation' && Boolean(out.translationTarget) && target !== out.translationTarget
+    && value.translationSwitch !== true && (Boolean(translationRange) || value.translationAlso === true);
+  if (addsLanguage) {
+    const extras = pendingExtras.map(item => ({ ...item, ranges: [...item.ranges] }));
+    const index = extras.findIndex(item => item.target === target);
+    const existing = index >= 0 ? extras.splice(index, 1)[0] : null;
+    // An added language's windows: its stretch; «completa», the whole
+    // recording (`whole`); else none of its own, so it reads the same
+    // windows as the first translation (also a range set later), as the
+    // reply says.
+    const whole = value.translationWhole === true;
+    // The first translation's windows: its own, else the transcript's range.
+    const pendingWindows = ownTranslationWindows(out).length ? ownTranslationWindows(out)
+      : normalizeRange(record.range) ? [normalizeRange(record.range)] : [];
+    let entry;
+    if (whole) entry = { target, ranges: [], whole: true };
+    else if (existing?.whole) entry = existing;
+    else if (translationRange) {
+      // A moment added to a language that follows the first translation's
+      // windows joins them; one that reads the whole recording keeps it.
+      const base = existing ? (existing.ranges.length ? existing.ranges : pendingWindows) : [];
+      entry = { target, ranges: existing && !base.length ? [] : normalizeWindows([...base, translationRange]) };
+    } else entry = existing || { target, ranges: [] };
+    // The language touched last goes last (the reply names it).
+    if (existing || extras.length < MAX_EXTRA_TRANSLATIONS) extras.push(entry);
+    next.output.extraTranslations = extras;
+    if (index >= 0 || extras.some(item => item.target === target)) changes.push('translation_added');
+  } else if (target) {
+    // A language that was added becomes the translation: never twice.
+    if (pendingExtras.some(item => item.target === target)) {
+      const rest = pendingExtras.filter(item => item.target !== target);
+      if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
+    }
+    if (mode !== 'translation') {
+      next.mode = 'translation';
+      // What the first request delivered stays: the transcript files, and
+      // the summary when it was an analysis.
+      next.output.includeTranscript = true;
+      next.output.alsoAnalysis = out.alsoAnalysis || mode === 'analysis';
+      changes.push('translation');
+    } else if (out.translationTarget && out.translationTarget !== target) {
+      changes.push('translation_target');
+    } else if (!out.translationTarget) {
+      // Same mode: the goal already named a target; only a different one is news.
+      changes.push('translation_target');
+    }
+    next.output.translationTarget = target;
+  }
+
+  // «sin resumen»: the summary is dropped (a translation stays a translation).
+  if (value.removeAnalysis === true && value.wantsAnalysis !== true) {
+    if (next.mode === 'analysis') { next.mode = 'transcript'; changes.push('no_analysis'); }
+    else if (next.mode === 'translation' && next.output.alsoAnalysis) { next.output.alsoAnalysis = false; changes.push('no_analysis'); }
+  }
+  if (value.wantsAnalysis === true) {
+    if (next.mode === 'translation') {
+      if (!next.output.alsoAnalysis) { next.output.alsoAnalysis = true; changes.push('analysis'); }
+    } else if (next.mode !== 'analysis') {
+      next.mode = 'analysis';
+      changes.push('analysis');
+    }
+  }
+  // A question about a moment reads that window. A second one about another
+  // moment reads both (their span), never only the latest; one with no
+  // window after a windowed one reads the whole recording.
+  const analysisRange = normalizeRefineRange(value.analysisRange);
+  const currentAnalysis = out.analysisRange || null;
+  if (analysisRange) {
+    const span = currentAnalysis
+      ? { start: Math.min(currentAnalysis.start, analysisRange.start), end: Math.max(currentAnalysis.end, analysisRange.end) }
+      : analysisRange;
+    if (JSON.stringify(span) !== JSON.stringify(currentAnalysis)) {
+      next.output.analysisRange = span;
+      changes.push('analysis_range');
+    }
+  } else if (value.wantsAnalysis === true && value.keepWindow !== true && currentAnalysis) {
+    // A question of its own with no window: the whole recording. The
+    // runner's catch-all for words no rule reads («¿y en el 45?»,
+    // «explícamelo mejor») keeps the window (keepWindow).
+    delete next.output.analysisRange;
+    changes.push('analysis_range');
+  }
+  // A moment of a recording this delivery already translates to the same
+  // language: the windows it reads (its own moments, else the transcript's
+  // range, else the whole recording) are never narrowed. A moment inside one
+  // changes nothing; one outside them is added as a window of its own (two
+  // moments far apart are never their whole span).
+  const ownWindows = ownTranslationWindows(out);
+  const translatesAlready = mode === 'translation' && Boolean(out.translationTarget) && (!target || target === out.translationTarget);
+  if (addsLanguage) {
+    // The window belongs to the added language.
+  } else if (translationRange && translatesAlready) {
+    const transcriptRange = normalizeRange(record.range);
+    const current = ownWindows.length ? ownWindows : transcriptRange ? [transcriptRange] : [];
+    if (!current.length) {
+      changes.push('translation_moment_covered');
+    } else if (current.some(window => window.start <= translationRange.start && (window.end == null || window.end >= translationRange.end))) {
+      changes.push('translation_moment_included');
+    } else {
+      setTranslationWindows(next.output, normalizeWindows([...current, translationRange]));
+      changes.push('translation_range_added');
+    }
+  } else if (translationRange && JSON.stringify([translationRange]) !== JSON.stringify(ownWindows)) {
+    setTranslationWindows(next.output, [translationRange]);
+    changes.push('translation_range');
+  } else if (!translationRange && value.translationWhole === true && ownWindows.length) {
+    // «tradúcela completa» after a moment: the whole translation.
+    setTranslationWindows(next.output, []);
+    changes.push('translation_whole');
+  } else if (!translationRange && target && ownWindows.length) {
+    // «tradúcelo al inglés en Word», «mejor al francés»: the moment stays
+    // (and the reply says how to get it all).
+    changes.push('translation_range_kept');
+  }
+  // «tradúcelo literal», «no traduzcas los nombres propios»: the translator
+  // reads them from the goal; the reply says they were noted.
+  if (next.mode === 'translation' && Array.isArray(value.translationConditions) && value.translationConditions.some(item => String(item || '').trim())) {
+    changes.push('translation_conditions');
+  }
+
+  // «no lo quiero en Word», «sin subtítulos»: a format turned down goes, and
+  // so does the automatic one a long recording or a video would get. The
+  // refusal is kept so the delivery never brings it back.
+  const removeDocuments = (Array.isArray(value.removeDocument) ? value.removeDocument : []).filter(format => format === 'docx' || format === 'pdf');
+  const declined = new Set(out.declinedDocuments || []);
+  for (const format of removeDocuments) {
+    if (format === 'pdf' && out.alsoPdf === true && out.documentFormat !== 'pdf') {
+      // «Word y PDF», then «sin el PDF»: the Word stays.
+      delete next.output.alsoPdf;
+      changes.push('no_pdf');
+    } else if (out.documentFormat === format) {
+      delete next.output.documentFormat;
+      // «Word y PDF», then «sin Word»: the PDF stays as the document.
+      if (format === 'docx' && out.alsoPdf === true && !removeDocuments.includes('pdf')) {
+        next.output.documentFormat = 'pdf';
+        delete next.output.alsoPdf;
+        changes.push('document', 'document_replaced');
+      } else changes.push('no_document');
+    } else if (format === 'docx' && !declined.has('docx') && !out.documentFormat) {
+      changes.push('no_auto_document');
+    }
+    // Also a format a switch left behind (an older record): never delivered.
+    formats.delete(format);
+    declined.add(format);
+  }
+  if (value.removeSubtitles === true) {
+    if (out.wantsSubtitles || out.declinedSubtitles !== true) changes.push('no_subtitles');
+    next.output.wantsSubtitles = false;
+    next.output.declinedSubtitles = true;
+    formats.delete('srt');
+    formats.delete('vtt');
+  }
+
+  const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
+  // «en Word y PDF», «también en PDF», «… en Word también»: both documents
+  // (the Word with `alsoPdf`); a new format alone replaces the one asked
+  // before and says so («en PDF en lugar de Word»).
+  // «solo en Word, el PDF no lo necesito» names both and keeps one.
+  const bothAsked = value.documentOnly !== true && (value.alsoPdf === true || (value.documentAlso === true && Boolean(documentFormat)));
+  const keptDocument = next.output.documentFormat || null;
+  if (bothAsked && documentFormat) {
+    const wantsWord = documentFormat === 'docx' || keptDocument === 'docx' || value.alsoPdf === true;
+    const before = `${keptDocument || ''}:${next.output.alsoPdf === true}`;
+    if (wantsWord) {
+      next.output.documentFormat = 'docx';
+      next.output.alsoPdf = true;
+      formats.add('docx');
+    } else {
+      // «también en PDF» with no document asked: next to the automatic Word, if any.
+      next.output.alsoPdf = true;
+    }
+    formats.add('pdf');
+    declined.delete('pdf');
+    if (wantsWord) declined.delete('docx');
+    if (before !== `${next.output.documentFormat || ''}:${next.output.alsoPdf === true}`) changes.push('document_added');
+  } else if (documentFormat && documentFormat !== out.documentFormat) {
+    // «mejor en PDF»: the PDF replaces the Word, never both.
+    if (out.documentFormat) formats.delete(out.documentFormat);
+    if (out.documentFormat || (out.alsoPdf === true && documentFormat === 'pdf')) changes.push('document_replaced');
+    next.output.documentFormat = documentFormat;
+    delete next.output.alsoPdf;
+    if (documentFormat === 'docx') formats.delete('pdf');
+    changes.push('document');
+  } else if (documentFormat && next.output.alsoPdf === true && value.documentOnly === true) {
+    // «solo en Word» after «Word y PDF»: the PDF goes.
+    delete next.output.alsoPdf;
+    formats.delete('pdf');
+    changes.push('no_pdf');
+  }
+  if (documentFormat) {
+    formats.add(documentFormat);
+    declined.delete(documentFormat);
+  }
+  if (declined.size) next.output.declinedDocuments = ['docx', 'pdf'].filter(format => declined.has(format));
+  else delete next.output.declinedDocuments;
+  if (value.wantsSubtitles === true) {
+    if (!out.wantsSubtitles) changes.push('subtitles');
+    next.output.wantsSubtitles = true;
+    delete next.output.declinedSubtitles;
+    formats.add('srt');
+    formats.add('vtt');
+  }
+  const range = normalizeRange(value.range);
+  if (range && JSON.stringify(range) !== JSON.stringify(normalizeRange(record.range))) {
+    next.range = range;
+    changes.push('range');
+  }
+  const language = normalizeLanguage(value.language);
+  if (language && language !== record.language) {
+    next.language = language;
+    changes.push('language');
+  }
+  const hints = normalizeHints(value.hints);
+  if (hints) {
+    // Names add up; the latest speaker count and «literal» win.
+    const merged = normalizeHints({
+      ...(record.hints || {}),
+      ...hints,
+      terms: [...new Set([...(record.hints?.terms || []), ...(hints.terms || [])])],
+    });
+    if (JSON.stringify(merged) !== JSON.stringify(record.hints || null)) {
+      next.hints = merged;
+      changes.push('hints');
+    }
+  }
+  next.formats = FORMATS.filter(format => formats.has(format));
+  next.goal = joinGoals(record.goal, value.goal);
+  // The model picked on the follow-up turn writes the delivery's analysis
+  // or translation when the follow-up asks for that work (the user's pick
+  // runs it), or when the delivery had none (the internal ladder otherwise).
+  // «en Word» or the names never swap the model that a turn asked to write
+  // a summary (AGENTS.md section 13).
+  const model = normalizeModel(value.model);
+  if (model && changes.length && (changes.some(change => MODEL_WORK_CHANGES.has(change)) || !normalizeModel(record.model))) next.model = model;
+  return { record: next, changes };
 }
 
 /** Where a link clip came from (shown in the delivered message). */
@@ -248,6 +655,7 @@ function createMediaDeliveryStore({
   now = () => Date.now(),
   staleMs = null,
   maxScan = DEFAULT_MAX_SCAN,
+  cancelSettleRetryMs = CANCEL_SETTLE_RETRY_MS,
   fsp = fs.promises,
   pid = process.pid,
   host = os.hostname(),
@@ -260,6 +668,8 @@ function createMediaDeliveryStore({
   const activePath = id => path.join(baseDir, `${assertDeliveryId(id)}.json`);
   const donePath = id => path.join(doneDir, `${assertDeliveryId(id)}.json`);
   const lockPath = id => path.join(baseDir, `${assertDeliveryId(id)}.lock`);
+  const cancelPath = id => path.join(baseDir, `${assertDeliveryId(id)}.cancel`);
+  const pause = ms => new Promise((resolve) => { setTimeout(resolve, Math.max(0, ms)); });
 
   async function writeAtomic(target, value) {
     await fsp.mkdir(path.dirname(target), { recursive: true });
@@ -431,6 +841,11 @@ function createMediaDeliveryStore({
         await removeLockIfOwned(id, token);
         return null;
       }
+      // Stop was pressed while another holder had it: close it here.
+      if (await exists(cancelPath(id))) {
+        await closeCancelled(id, token, fresh, await readCancelMarker(id));
+        return null;
+      }
       const at = isoAt(now());
       const record = { ...fresh, status: 'delivering', claimedAt: at, updatedAt: at };
       await writeAtomic(activePath(id), record);
@@ -509,6 +924,287 @@ function createMediaDeliveryStore({
     }
     await removeLockIfOwned(id, token);
     return next;
+  }
+
+  async function readCancelMarker(id) {
+    const info = await readJson(cancelPath(id)).catch(() => null);
+    return info && typeof info === 'object' ? info : null;
+  }
+
+  // The Stop marker is read, changed and written back by the Stop, the
+  // sweep, a holder and a turn that asks for a recording again: one at a
+  // time per delivery in this process.
+  const markerChains = new Map();
+  function withMarker(id, fn) {
+    const previous = markerChains.get(id) || Promise.resolve();
+    const run = previous.then(fn, fn);
+    const settled = run.catch(() => {});
+    markerChains.set(id, settled);
+    settled.then(() => { if (markerChains.get(id) === settled) markerChains.delete(id); });
+    return run;
+  }
+
+  /** Write (or keep) the Stop marker; a repeated Stop keeps the first time. */
+  function markCancel(id, reason) {
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      const pendingStops = normalizePendingStops(previous?.pendingStops);
+      const released = normalizeReleased(previous?.released);
+      const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
+        reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user',
+        ...(previous?.jobsStopped === true ? { jobsStopped: true } : pendingStops ? { pendingStops } : {}),
+        ...(released.length ? { released } : {}) };
+      await writeAtomic(cancelPath(id), marker);
+      return marker;
+    });
+  }
+
+  /** The recordings asked for again since the Stop: never stopped by it. */
+  function normalizeReleased(value) {
+    return [...new Set((Array.isArray(value) ? value : []).filter(fileId => typeof fileId === 'string' && fileId && fileId.length <= 200))].slice(0, MAX_FILES);
+  }
+
+  /**
+   * The jobs a Stop could not stop yet (a database blip): { fileIds, refines }
+   * or null. Only these are retried, so a recording the user asked for again
+   * since is never stopped twice.
+   */
+  function normalizePendingStops(value) {
+    if (!value || typeof value !== 'object') return null;
+    const fileIds = [...new Set((Array.isArray(value.fileIds) ? value.fileIds : [])
+      .filter(fileId => typeof fileId === 'string' && fileId && fileId.length <= 200))].slice(0, MAX_FILES);
+    const refines = (Array.isArray(value.refines) ? value.refines : [])
+      .filter(spec => spec && typeof spec.fileId === 'string' && spec.fileId && spec.fileId.length <= 200)
+      .map(spec => ({ fileId: spec.fileId, range: normalizeRange(spec.range), language: normalizeLanguage(spec.language),
+        hints: normalizeHints(spec.hints), deliveryId: typeof spec.deliveryId === 'string' ? clipString(spec.deliveryId, 200) : null }))
+      .slice(0, 50);
+    return fileIds.length || refines.length ? { fileIds, refines } : null;
+  }
+
+  /** The Stop marker of a record still open, or null. */
+  async function cancelMarker(id) {
+    assertDeliveryId(id);
+    return readCancelMarker(id);
+  }
+
+  /**
+   * This Stop's jobs were stopped. A record left open by its line (a DB
+   * blip, or the lock of a process that died mid-Stop) is retried by the
+   * sweep, which must not stop them again: by then the user may have asked
+   * for the recording again. No lock (a dead holder's lock may still be
+   * fresh): only while the record is open, and a marker left behind a record
+   * closed meanwhile is never read (every reader reads the record first).
+   */
+  function noteJobsStopped(id) {
+    assertDeliveryId(id);
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      if (!previous || !(await readActive(id))) return false;
+      if (previous.jobsStopped !== true || previous.pendingStops) {
+        const { pendingStops, ...rest } = previous;
+        await writeAtomic(cancelPath(id), { ...rest, jobsStopped: true });
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Some of this Stop's jobs could not be stopped (a database blip): only
+   * those are left for the sweep. Same rules as noteJobsStopped.
+   */
+  function notePendingStops(id, pending) {
+    assertDeliveryId(id);
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      if (!previous || previous.jobsStopped === true || !(await readActive(id))) return false;
+      // Never more than the marker still lists (a stop that ran while the
+      // user asked for a recording again writes back no stale list), nor a
+      // recording asked for again.
+      const current = normalizePendingStops(previous.pendingStops);
+      const released = new Set(normalizeReleased(previous.released));
+      const asked = normalizePendingStops(pending);
+      const keep = fileId => !released.has(fileId) && (!current || current.fileIds.includes(fileId)
+        || current.refines.some(spec => spec.fileId === fileId));
+      const pendingStops = asked ? normalizePendingStops({ fileIds: asked.fileIds.filter(keep), refines: asked.refines.filter(spec => keep(spec.fileId)) }) : null;
+      const { pendingStops: _old, ...rest } = previous;
+      await writeAtomic(cancelPath(id), pendingStops ? { ...rest, pendingStops } : { ...rest, jobsStopped: true });
+      return true;
+    });
+  }
+
+  /**
+   * The user asked for these recordings again: a Stop still pending on
+   * them never stops them. Returns true when the marker changed.
+   */
+  function releasePendingStops(id, fileIds = []) {
+    assertDeliveryId(id);
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      if (!previous || previous.jobsStopped === true || !(await readActive(id))) return false;
+      const asked = new Set((Array.isArray(fileIds) ? fileIds : []).filter(fileId => typeof fileId === 'string' && fileId));
+      const record = await readActive(id);
+      const inRecord = new Set([...(record?.fileIds || []), ...(normalizePendingStops(previous.pendingStops)?.fileIds || [])]);
+      const newlyReleased = [...asked].filter(fileId => inRecord.has(fileId));
+      if (!newlyReleased.length) return false;
+      // Remembered even before the Stop wrote what it left: a stop still
+      // running when the user asked again never stops these.
+      const released = normalizeReleased([...normalizeReleased(previous.released), ...newlyReleased]);
+      const { pendingStops: _old, ...rest } = previous;
+      const pending = normalizePendingStops(previous.pendingStops);
+      const next = { ...rest, released };
+      if (pending) {
+        const left = { fileIds: pending.fileIds.filter(fileId => !asked.has(fileId)), refines: pending.refines.filter(spec => !asked.has(spec.fileId)) };
+        if (left.fileIds.length || left.refines.length) next.pendingStops = left; else next.jobsStopped = true;
+      }
+      await writeAtomic(cancelPath(id), next);
+      return true;
+    });
+  }
+
+  /** Write the terminal 'cancelled' copy and drop the active one (lock held). */
+  async function closeCancelled(id, token, record, marker = null, settle = null) {
+    const at = isoAt(now());
+    const next = { ...record, status: 'cancelled', cancelledAt: marker?.at || at, updatedAt: at,
+      cancelReason: clipString(marker?.reason, 40) || 'user', nextAttemptAt: null,
+      ...(settle?.messageId ? { deliveredMessageId: clipString(settle.messageId, 200) } : {}),
+      ...(settle?.chatId ? { deliveryChatId: clipString(settle.chatId, 200) } : {}) };
+    await writeAtomic(donePath(id), next);
+    await fsp.unlink(activePath(id)).catch(() => {});
+    await fsp.unlink(cancelPath(id)).catch(() => {});
+    await removeLockIfOwned(id, token);
+    return next;
+  }
+
+  /** Stop pressed while this process holds the delivery (see cancel). */
+  async function isCancelRequested(id) {
+    assertDeliveryId(id);
+    return exists(cancelPath(id));
+  }
+
+  /** The holder honours a Stop it found at a checkpoint. */
+  async function markCancelled(id, token) {
+    assertDeliveryId(id);
+    if (!(await holds(id, token))) return null;
+    const record = await readActive(id);
+    if (!record) {
+      await removeLockIfOwned(id, token);
+      return null;
+    }
+    return closeCancelled(id, token, record, await readCancelMarker(id));
+  }
+
+  /**
+   * Stop («Detener») on a delivery still waiting on its recordings. Owner
+   * scoped. A free record is closed now ('cancelled'); one a holder is
+   * delivering at this very moment gets a marker that holder honours at its
+   * next checkpoint (or the next claim does), so nothing is posted after
+   * the user said stop. Returns { outcome, record }: 'cancelled',
+   * 'cancel_requested', 'already_cancelled', 'already_terminal' or
+   * 'missing'.
+   */
+  async function cancel(id, { userId = null, reason = 'user', tries = 5, waitMs = 150, beforeClose = null } = {}) {
+    assertDeliveryId(id);
+    const terminal = async () => {
+      const done = await readRecord(donePath(id), id);
+      if (!done || (userId && done.userId !== userId)) return { outcome: 'missing', record: null };
+      return { outcome: done.status === 'cancelled' ? 'already_cancelled' : 'already_terminal', record: done };
+    };
+    const before = await readActive(id);
+    if (!before) return terminal();
+    if (userId && before.userId !== userId) return { outcome: 'missing', record: null };
+    if (before.status !== 'pending' && before.status !== 'delivering') return terminal();
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        let closed = null;
+        try {
+          const fresh = await readActive(id);
+          if (!fresh) return terminal();
+          // The Stop is durable before anything is posted: a crash after the
+          // chat line leaves a marker that a follow-up (amend), the next
+          // claim and the delivery sweep all honour, never an open record.
+          const marker = await markCancel(id, reason);
+          // The chat line that settles the turn goes first, under the lock:
+          // a crash before the close leaves a record whose next attempt finds
+          // that line (findDeliveredMessage) and posts nothing else.
+          let settle = null;
+          if (typeof beforeClose === 'function') {
+            try { settle = await beforeClose(fresh); } catch (err) { settle = { error: err?.code || 'settle_failed' }; }
+          }
+          // The line did not reach the chat (a DB blip): the record stays
+          // open with its marker, so the next Stop finds it among the chat's
+          // open ones and the sweep posts the line, for a while.
+          const markedAt = Date.parse(marker.at);
+          if (settle?.error && !(Number.isFinite(markedAt) && now() - markedAt >= cancelSettleRetryMs)) {
+            return { outcome: 'cancel_requested', record: fresh, settle, settleFailed: true };
+          }
+          closed = await closeCancelled(id, token, fresh, marker, settle?.error ? null : settle);
+          return { outcome: 'cancelled', record: closed, settle };
+        } finally {
+          if (!closed) await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (attempt < tries - 1) await pause(waitMs);
+    }
+    await markCancel(id, reason);
+    // The holder may have finished between the last try and the marker.
+    const still = await readActive(id);
+    if (!still) {
+      await fsp.unlink(cancelPath(id)).catch(() => {});
+      return terminal();
+    }
+    return { outcome: 'cancel_requested', record: still };
+  }
+
+  /**
+   * Fold a follow-up into a delivery still waiting on its recordings (see
+   * mergeDeliveryAmendment). Taken under the claim lock so it never races a
+   * holder's read-modify-write; a holder that is only probing is waited out
+   * briefly. Returns { outcome, record, changes }: 'amended', 'unchanged',
+   * 'too_late' (already being delivered), 'cancelled', 'unsupported'
+   * (a refine), 'busy' or 'missing'.
+   */
+  async function amend(id, { userId = null, amendment = {}, tries = 8, waitMs = 150 } = {}) {
+    assertDeliveryId(id);
+    for (let attempt = 0; attempt < Math.max(1, tries); attempt++) {
+      const last = attempt >= Math.max(1, tries) - 1;
+      const before = await readActive(id);
+      if (!before || (userId && before.userId !== userId)) return { outcome: 'missing', record: null, changes: [] };
+      if (before.kind === 'refine') return { outcome: 'unsupported', record: before, changes: [] };
+      if (await exists(cancelPath(id))) return { outcome: 'cancelled', record: before, changes: [] };
+      if (before.status !== 'pending') {
+        // A claim that finds the files still pending hands it back at once.
+        if (!last) { await pause(waitMs); continue; }
+        return { outcome: 'too_late', record: before, changes: [] };
+      }
+      const token = crypto.randomUUID();
+      if (await acquireLock(id, token)) {
+        try {
+          const fresh = await readActive(id);
+          if (!fresh) return { outcome: 'missing', record: null, changes: [] };
+          if (fresh.status !== 'pending') return { outcome: 'too_late', record: fresh, changes: [] };
+          const { record: merged, changes } = mergeDeliveryAmendment(fresh, amendment);
+          if (!changes.length && merged.goal === fresh.goal) return { outcome: 'unchanged', record: fresh, changes };
+          const at = isoAt(now());
+          const history = Array.isArray(fresh.amendments) ? fresh.amendments : [];
+          const next = { ...merged, amendments: [...history, { at, changes }].slice(-AMENDMENTS_KEPT), updatedAt: at };
+          await writeAtomic(activePath(id), next);
+          return { outcome: changes.length ? 'amended' : 'unchanged', record: next, changes };
+        } finally {
+          await removeLockIfOwned(id, token).catch(() => {});
+        }
+      }
+      if (!last) await pause(waitMs);
+    }
+    return { outcome: 'busy', record: null, changes: [] };
+  }
+
+  /** The user's deliveries still open for a chat (its own or its replacement). */
+  async function listActiveForChat(chatId, { userId = null, limit } = {}) {
+    if (typeof chatId !== 'string' || !chatId) return [];
+    const records = await listActive({ limit });
+    return records.filter(record => (record.chatId === chatId || record.deliveryChatId === chatId)
+      && (!userId || record.userId === userId));
   }
 
   /**
@@ -595,7 +1291,7 @@ function createMediaDeliveryStore({
     const names = await fsp.readdir(baseDir).catch(() => []);
     for (const name of names) {
       const full = path.join(baseDir, name);
-      const lockId = /^(md_[0-9a-f-]{36})\.lock$/.exec(name)?.[1];
+      const lockId = /^(md_[0-9a-f-]{36})\.(?:lock|cancel)$/.exec(name)?.[1];
       const leftover = /\.tmp$/.test(name) || /\.lock\.reap-[0-9a-f-]{36}$/.test(name);
       if (!leftover && !(lockId && isValidDeliveryId(lockId))) continue;
       const stat = await fsp.stat(full).catch(() => null);
@@ -615,8 +1311,17 @@ function createMediaDeliveryStore({
     create,
     get,
     listActive,
+    listActiveForChat,
     findPendingByFile,
     claim,
+    cancel,
+    cancelMarker,
+    noteJobsStopped,
+    notePendingStops,
+    releasePendingStops,
+    isCancelRequested,
+    markCancelled,
+    amend,
     holds,
     refresh,
     patch,
@@ -631,6 +1336,8 @@ function createMediaDeliveryStore({
 module.exports = {
   createMediaDeliveryStore,
   normalizeNewRecord,
+  mergeDeliveryAmendment,
+  normalizeTranslationTarget,
   normalizeRefineOutcome,
   normalizeRefineRange,
   isValidDeliveryId,

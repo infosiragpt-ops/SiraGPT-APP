@@ -72,7 +72,7 @@ import { safeUUID } from "./safe-uuid"
 import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
 import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
-import { pendingMediaDeliveryRefreshKey } from "./media-delivery-refresh"
+import { pendingMediaDeliveries, pendingMediaDeliveryRefreshKey } from "./media-delivery-refresh"
 import { awaitCancellableChatStep } from "./chat/turn-cancellation"
 import { mentionPayloadForGenerate } from "./apps-mentions"
 
@@ -3404,10 +3404,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const targetAssistant = currentChat.messages[targetAiMessageIndex];
     const targetMetadata = parseMessageMetadata(targetAssistant.metadata);
     const targetTask = parseAgentTaskContent(targetAssistant.content);
-    const isMediaHandoff = (typeof targetMetadata.mediaDeliveryHandoff === 'string'
+    // A follow-up folded into that job («Anotado: …») acknowledged it too:
+    // regenerating would ask a text model to answer it with no transcript.
+    // A copy in another chat (a branch, a saved share) owns no job: it regenerates.
+    const isMediaHandoff = targetMetadata.mediaDeliveryCopy !== true && ((typeof targetMetadata.mediaDeliveryHandoff === 'string'
       && targetMetadata.mediaDeliveryHandoff.trim().length > 0)
+      || (typeof targetMetadata.mediaDeliveryAmended === 'string' && targetMetadata.mediaDeliveryAmended.trim().length > 0)
       || targetMetadata.stoppedReason === 'media_delivery_handoff'
-      || (targetTask.done && !targetTask.error && targetTask.stoppedReason === 'media_delivery_handoff');
+      || targetMetadata.stoppedReason === 'media_delivery_amended'
+      || (targetTask.done && !targetTask.error
+        && (targetTask.stoppedReason === 'media_delivery_handoff' || targetTask.stoppedReason === 'media_delivery_amended')));
     if (isMediaHandoff) {
       // This answer acknowledged a durable job; it was not the transcript.
       // Deleting it (and later turns) then calling /ai/generate loses the
@@ -3423,7 +3429,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setCurrentChat(prev => prev?.id === chatId ? mergeChatPreservingUserMessages(freshChat, prev) : prev);
         setChats(prev => prev.map(chat => chat.id === chatId ? mergeChatPreservingUserMessages(freshChat, chat) : chat));
         if (currentChatRef.current?.id === chatId) {
-          toast.info('Conversación actualizada. Se conserva la solicitud de transcripción sin reiniciar el trabajo.');
+          // Only a job that still runs keeps the request: once it was
+          // delivered, failed or stopped («Detener»), nothing else arrives.
+          const jobId = [targetMetadata.mediaDeliveryHandoff, targetMetadata.mediaDeliveryAmended]
+            .find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim() || '';
+          const stillPending = pendingMediaDeliveries(Array.isArray(freshChat.messages) ? freshChat.messages : [])
+            .some(delivery => !jobId || delivery.deliveryId === jobId);
+          if (stillPending) {
+            toast.info('Conversación actualizada. Se conserva la solicitud de transcripción sin reiniciar el trabajo.');
+          } else {
+            toast.info('Esa transcripción ya terminó o se detuvo. Si la necesitas, pídela de nuevo.');
+          }
         }
       } catch {
         if (currentChatRef.current?.id === chatId) {

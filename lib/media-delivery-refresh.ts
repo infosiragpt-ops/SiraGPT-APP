@@ -23,7 +23,33 @@ export type PendingMediaDelivery = { messageId: string; deliveryId: string; file
  * files are not delivery evidence. Batch handoffs expose one primary delivery
  * id, so every source file must be accounted for before polling stops.
  */
+// One scan per messages array: the chat context, the message list, the
+// composer's Stop and the follow-up router all read the same array.
+// The length and last element guard an array someone appended to in place.
+type PendingMemo = { length: number; last: unknown; result: PendingMediaDelivery[] }
+const pendingByMessages = new WeakMap<readonly MediaDeliveryMessage[], PendingMemo>()
+
 export function pendingMediaDeliveries(messages: readonly MediaDeliveryMessage[] = []): PendingMediaDelivery[] {
+  if (!Array.isArray(messages)) return []
+  const last = messages[messages.length - 1]
+  const cached = pendingByMessages.get(messages)
+  if (cached && cached.length === messages.length && cached.last === last) return cached.result
+  const result = scanPendingMediaDeliveries(messages)
+  pendingByMessages.set(messages, { length: messages.length, last, result })
+  return result
+}
+
+/** One key per pending hand-off: its delivery id, or its message when it names none. */
+export function pendingHandoffKey(delivery: Pick<PendingMediaDelivery, 'deliveryId' | 'messageId'>): string {
+  return delivery.deliveryId || `msg:${delivery.messageId}`
+}
+
+/** The source recordings of the deliveries a chat still waits on. */
+export function pendingMediaDeliveryFileIds(messages: readonly MediaDeliveryMessage[] = []): Set<string> {
+  return new Set(pendingMediaDeliveries(messages).flatMap((delivery) => delivery.sourceFileIds))
+}
+
+function scanPendingMediaDeliveries(messages: readonly MediaDeliveryMessage[]): PendingMediaDelivery[] {
   const assistants = messages.flatMap((message, index) => String(message.role).toUpperCase() === 'ASSISTANT'
     ? [{ message, index, metadata: metadataOf(message.metadata) }]
     : []);
@@ -32,11 +58,16 @@ export function pendingMediaDeliveries(messages: readonly MediaDeliveryMessage[]
   const pending = assistants.flatMap(({ message, index, metadata }) => {
     const task = parseAgentTaskContent(message.content);
     const deliveryId = idOf(metadata.mediaDeliveryHandoff) || idOf(task.mediaDeliveryHandoff);
-    const fileIds = idsOf(metadata.transcriptionFileIds).length
+    // A refine's hand-off waits on the one recording its delivery covers.
+    // Older ones listed the whole batch the follow-up was attached to, and
+    // never settled: the refine delivers (or stops) that recording only.
+    const refinedFileId = deliveryId ? idOf(metadataOf(metadata.mediaRefine).fileId) : '';
+    const fileIds = refinedFileId ? [refinedFileId] : idsOf(metadata.transcriptionFileIds).length
       ? idsOf(metadata.transcriptionFileIds) : idsOf(task.transcriptionFileIds);
     const isHandoff = Boolean(deliveryId) || metadata.stoppedReason === 'media_delivery_handoff'
       || (task.done && !task.error && task.stoppedReason === 'media_delivery_handoff');
-    if (!isHandoff || metadata.source === 'media-delivery') return [];
+    // A copy (a branch, a saved share) never waits on the original chat's work.
+    if (!isHandoff || metadata.source === 'media-delivery' || metadata.mediaDeliveryCopy === true) return [];
 
     // A later request can reuse the same audio. Its older transcript must not
     // settle new work. An exact delivery id also handles fast jobs whose

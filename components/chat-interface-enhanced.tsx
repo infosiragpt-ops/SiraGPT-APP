@@ -224,6 +224,7 @@ import {
 } from "@/components/ui/tooltip"
 import MessageComponent from "./message-component"
 import { useMediaDeliveryProgress } from "@/hooks/use-media-delivery-progress"
+import { pendingMediaDeliveries, pendingHandoffKey as handoffKeyOf } from "@/lib/media-delivery-refresh"
 import { imageAssetsFromMessages, type WorkspaceImage } from '@/lib/image-workspace'
 const ImageWorkspace = dynamic(() => import('./images/ImageWorkspace'), { ssr: false })
 import { ErrorBoundary } from "./error-boundary"
@@ -395,6 +396,7 @@ import {
   isMediaUnderstandingTurn,
   resolveComposerMediaSrc,
   resolveMediaFollowupFiles,
+  mayReachMediaBatch,
   resolveUploadFileId,
   shouldCreateLocalMediaPreview,
   snapshotComposerFilesForMessage,
@@ -5306,6 +5308,26 @@ function ChatInterfaceContent() {
   selectedModelRef.current = selectedModel
   const isCurrentChatStreaming = Boolean(currentChatId && activeStreamingChatIds.includes(currentChatId))
   const isCurrentChatLoading = isCurrentChatStreaming
+  // A transcription handed off to the background («te aviso aquí cuando
+  // termine») is still work of this chat: Stop stays available for it. Not
+  // recomputed per frame while a stream is running (Stop shows then anyway).
+  // Hand-offs a Stop found nothing open for (its line never posted, a record
+  // long gone): Stop no longer shows for them in this tab. Per chat: an old
+  // branch that still names the original chat's job must not hide that
+  // chat's own Stop.
+  const [settledHandoffKeys, setSettledHandoffKeys] = React.useState<ReadonlySet<string>>(() => new Set())
+  const settledHandoffKeysRef = React.useRef(settledHandoffKeys)
+  settledHandoffKeysRef.current = settledHandoffKeys
+  const hasPendingMediaDelivery = React.useMemo(
+    () => Boolean(currentChatId) && !isCurrentChatStreaming
+      && pendingMediaDeliveries(currentChat?.messages || []).some((delivery) => !settledHandoffKeys.has(`${currentChatId}:${handoffKeyOf(delivery)}`)),
+    [currentChatId, isCurrentChatStreaming, currentChat?.messages, settledHandoffKeys],
+  )
+  // True when Stop has nothing to stop but that background transcription.
+  const backgroundDeliveryStopRef = React.useRef(false)
+  const cancellingDeliveriesRef = React.useRef<Set<string>>(new Set())
+  // The Stop disc shows its existing spinner while the cancel request runs.
+  const [cancellingDeliveryChatId, setCancellingDeliveryChatId] = React.useState<string | null>(null)
   const chatDecisionRequest = React.useMemo(
     () => extractChatDecisionRequestFromMessages(currentChat?.messages),
     [currentChat?.messages],
@@ -6750,11 +6772,50 @@ function ChatInterfaceContent() {
     });
   }, [setCurrentChat]);
 
+  // «Detener» on the transcriptions this chat handed off: the server closes
+  // their deliveries, stops the recordings and leaves one line that settles
+  // the turn; the chat is re-read so the spinner stops at once.
+  const cancelPendingMediaDeliveries = React.useCallback(async (chatId: string) => {
+    if (cancellingDeliveriesRef.current.has(chatId)) return;
+    const pending = pendingMediaDeliveries(currentChatRef.current?.messages || [])
+      .filter((delivery) => !settledHandoffKeysRef.current.has(`${chatId}:${handoffKeyOf(delivery)}`));
+    if (!pending.length) return;
+    const deliveryIds = [...new Set(pending.map((delivery) => delivery.deliveryId).filter(Boolean))];
+    // Their recordings too: two links handed off in one turn are two
+    // deliveries, and the hand-off names only the first.
+    const fileIds = [...new Set(pending.flatMap((delivery) => delivery.sourceFileIds).filter(Boolean))];
+    cancellingDeliveriesRef.current.add(chatId);
+    setCancellingDeliveryChatId(chatId);
+    try {
+      const result = await apiClient.cancelMediaDeliveries(chatId, deliveryIds, fileIds);
+      const stopped = Number(result?.cancelled) || 0;
+      if (stopped > 0) toast.info(stopped > 1 ? 'Transcripciones detenidas' : 'Transcripción detenida');
+      else {
+        toast.info('La transcripción ya había terminado');
+        // Nothing of these hand-offs is open on the server: Stop stops showing.
+        setSettledHandoffKeys((current) => new Set([...current, ...pending.map((delivery) => `${chatId}:${handoffKeyOf(delivery)}`)]));
+      }
+      if (currentChatIdRef.current === chatId) await selectChat(chatId);
+    } catch (err) {
+      console.warn('Failed to stop the background transcription:', err);
+      toast.error('No se pudo detener la transcripción. Vuelve a intentarlo.');
+    } finally {
+      cancellingDeliveriesRef.current.delete(chatId);
+      setCancellingDeliveryChatId(current => (current === chatId ? null : current));
+    }
+  }, [selectChat]);
+
   const stopActiveGeneration = React.useCallback(() => {
     window.dispatchEvent(new CustomEvent(GITHUB_CONNECTION_CANCEL_EVENT, { detail: { userId: user?.id, chatId: currentChatId } }));
     const targetChatId = currentChatId;
     // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
     if (stopDocumentSandbox(targetChatId)) return;
+    // Nothing runs here but a transcription handed off to the background:
+    // Stop cancels it (a running turn is stopped first, by the code below).
+    if (targetChatId && backgroundDeliveryStopRef.current) {
+      void cancelPendingMediaDeliveries(targetChatId);
+      return;
+    }
     const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
 
@@ -6870,7 +6931,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, user?.id, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, user?.id, stopDocumentSandbox, cancelPendingMediaDeliveries, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -8831,7 +8892,7 @@ But first, you need to connect your Spotify account securely using the button be
             requiresPromptBeforePrimarySend={requiresPromptBeforePrimarySend}
             busy={isUploading}
             isStopButtonVisible={isStopButtonVisible}
-            pendingStop={pendingStop}
+            pendingStop={pendingStop || (Boolean(currentChatId) && cancellingDeliveryChatId === currentChatId)}
             isCurrentChatStreaming={isCurrentChatStreaming}
             onSend={() => {
               void handleSend();
@@ -12538,8 +12599,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     // 2) Background drain for any other idle chat with queued work.
+    // Only the first queued item of each chat: a later one never goes ahead
+    // of one kept for its opened chat (the order is the user's).
+    const seenQueueChats = new Set<string>();
     const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
       if (!item.chatId) return false;
+      if (seenQueueChats.has(item.chatId)) return false;
+      seenQueueChats.add(item.chatId);
       if (isComposerQueueChatPaused(pendingMsgQueueRef.current, item.chatId)) return false;
       if (item.chatId === queueChatId) return false;
       if (queueDrainClaims.has(item.id)) return false;
@@ -12551,6 +12617,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // Media follow-ups need the opened chat's full attachment history and
       // durable agent-task path, not the background inline generate shortcut.
       if (!(item.files || []).length && isMediaFollowupPrompt(item.msg)) return false;
+      // So do a resume after «Detuve…» and a short instruction for a batch
+      // still transcribing: drained here they would reach the plain chat
+      // with no recordings. The background never has that chat's whole
+      // history (a chat-list row keeps one message): any that could wait.
+      if (!(item.files || []).length && mayReachMediaBatch(item.msg)) return false;
       if (isMediaUnderstandingTurn(item.msg, item.files || [])) return false;
       return true;
     });
@@ -12801,8 +12872,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isSendingForCurrentChat ||
     isNewChatAdmissionPending ||
     isCurrentChatLocalJobBusy ||
+    isCurrentChatMediaBusy ||
+    // A transcription handed off to the background is still this chat's work.
+    // Sending stays live meanwhile (handleSend only queues behind foreground
+    // work), so a follow-up joins it at once.
+    hasPendingMediaDelivery
+  );
+  // The same without that background transcription: a running turn, a send,
+  // an upload or a media job. The computer badge and the Stop that cancels
+  // the transcription read it.
+  const isForegroundWorkRunning = !isIdlePlaceholderComposer && (
+    isCurrentChatStreaming ||
+    isSendingForCurrentChat ||
+    isNewChatAdmissionPending ||
+    isCurrentChatLocalJobBusy ||
     isCurrentChatMediaBusy
   );
+  backgroundDeliveryStopRef.current = hasPendingMediaDelivery && !isForegroundWorkRunning;
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
   // but the prop contract is identical, so centralising it avoids
@@ -14404,6 +14490,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         toast.info('Tarea detenida');
       } else if (state.error) {
         toast.error(state.error);
+      } else if (state.stoppedReason === 'media_delivery_handoff') {
+        // The transcription goes on in the background; nothing finished yet.
+        toast.info('Sigo transcribiendo: te aviso aquí cuando termine');
+      } else if (state.stoppedReason === 'media_delivery_amended') {
+        toast.info('Anotado: lo sumo a la transcripción en curso');
       } else {
         toast.success('Tarea completada');
       }
@@ -14536,7 +14627,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   </button>
                 ) : null}
                 {/* Claude-style: laptop = this chat's computer, then the title menu. */}
-                <ChatComputerBadge working={isStopButtonVisible} active={computerPanelOpen && !computerBrowserMode} onOpen={toggleComputerPanel} />
+                <ChatComputerBadge working={isForegroundWorkRunning} active={computerPanelOpen && !computerBrowserMode} onOpen={toggleComputerPanel} />
                 <ChatTitleMenu
                   chat={currentChat?.id ? { id: currentChat.id, title: currentChat.title, isPinned: (currentChat as any).isPinned } : null}
                 />

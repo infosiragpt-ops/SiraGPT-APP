@@ -42,6 +42,8 @@ const PARTIAL_RE = /^\s*parcial\b/i;
 // matches only these: the turn's «te aviso aquí» message also names the
 // delivery and must never count as the delivered transcript.
 const DELIVERY_SOURCE = 'media-delivery';
+// How often a delivering holder checks for a Stop left by another process.
+const CANCEL_WATCH_MS = 2000;
 const DEFAULT_INLINE_WAIT_MS = 240000;
 // Only orphaned files may expire here. A queued/active job can legitimately
 // outlive a day (a batch, or up to 3 attempts × 12 h) and must still deliver.
@@ -251,6 +253,107 @@ function handOffMessage({ fileNames = [], durationSec = null, etaSeconds = null 
   return `${received} ${timing}; te aviso aquí y en notificaciones cuando ${many ? 'terminen' : 'termine'}. Puedes seguir usando el chat.`;
 }
 
+/** The chat line left by «Detener» on a handed-off transcription. */
+function cancelledMessage({ fileNames = [] } = {}) {
+  const names = (Array.isArray(fileNames) ? fileNames : []).filter(name => typeof name === 'string' && name.trim());
+  const many = names.length > 1;
+  const what = !names.length ? 'la transcripción'
+    : many ? `la transcripción de ${names.length} archivos (${listNames(names)})` : `la transcripción de ${quoteName(names[0])}`;
+  return `Detuve ${what}. Si la necesitas, pídemela de nuevo y retomo donde quedó.`;
+}
+
+/** What a follow-up added to a pending delivery, in the user's words. */
+function amendedMessage({ changes = [], record = {} } = {}) {
+  const list = Array.isArray(changes) ? changes : [];
+  const many = (Array.isArray(record.fileIds) ? record.fileIds.length : 0) > 1;
+  const parts = [];
+  const target = record?.output?.translationTarget || null;
+  const language = target ? translationName(target) : null;
+  const translated = many ? 'traducidas' : 'traducida';
+  const kept = ' (la traducción, solo del tramo que indicaste; si la quieres completa, dime «tradúcela completa»)';
+  if (list.includes('translation') || list.includes('translation_target') || list.includes('translation_whole')) {
+    // «mejor al francés» after a moment: the new language keeps that moment, and says so.
+    const window = list.includes('translation_range') ? ' (la traducción, solo del tramo que indicaste)'
+      : list.includes('translation_whole') ? ' (la traducción, completa)'
+        : list.includes('translation_range_kept') ? kept : '';
+    parts.push(`${language ? `${translated} al ${language}` : translated}${window}`);
+  } else if (list.includes('translation_range')) parts.push('con la traducción del tramo que indicaste');
+  else if (list.includes('translation_moment_covered')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated}, ${many ? 'completas' : 'completa'} (incluye ese momento)`);
+  } else if (list.includes('translation_moment_included')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción ya incluye ese momento)`);
+  } else if (list.includes('translation_range_added')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción incluye también ese momento)`);
+  } else if (list.includes('translation_range_kept')) {
+    parts.push(`${language ? `${translated} al ${language}` : translated}${kept}`);
+  }
+  // «traduce también al francés lo del minuto 30»: the language added last.
+  const addedLanguages = Array.isArray(record?.output?.extraTranslations) ? record.output.extraTranslations : [];
+  const added = list.includes('translation_added') ? addedLanguages[addedLanguages.length - 1] : null;
+  if (added?.target) {
+    // Its own stretch, or the first translation's windows when it follows them.
+    const firstWindows = (Array.isArray(record?.output?.translationRanges) && record.output.translationRanges.length)
+      || record?.output?.translationRange || (record?.range && Number.isFinite(Number(record.range.start)));
+    const narrow = added.whole !== true && ((Array.isArray(added.ranges) && added.ranges.length) || Boolean(firstWindows));
+    parts.push(`también ${translated} al ${translationName(added.target)}${narrow ? ' (solo del tramo que indicaste)' : added.whole === true ? ' (completa)' : ''}${language ? `, además de la traducción al ${language}` : ''}`);
+  }
+  if (list.includes('translation_conditions')) parts.push('con tus indicaciones para la traducción');
+  if (list.includes('no_translation')) parts.push('sin la traducción');
+  // «ya no la traduzcas al francés» next to another language: only that one goes.
+  const removed = list.filter(change => typeof change === 'string' && change.startsWith('no_translation:')).map(change => change.slice('no_translation:'.length));
+  if (removed.length) {
+    const staying = [target, ...addedLanguages.map(item => item?.target)].filter(Boolean).map(translationName);
+    parts.push(`sin la traducción al ${joinList(removed.map(translationName))}${staying.length ? ` (sigue la traducción al ${joinList(staying)})` : ''}`);
+  }
+  if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
+  // «Word no, PDF sí»: one swap, never «en PDF y sin el documento que habías pedido».
+  const pdf = record?.output?.documentFormat === 'pdf';
+  if (list.includes('document_added')) {
+    parts.push(record?.output?.documentFormat === 'docx' ? 'en Word y en PDF' : 'también en PDF');
+  } else if (list.includes('document')) {
+    parts.push(`${pdf ? 'en PDF' : 'en Word'}${list.includes('no_document') || list.includes('document_replaced') ? ` en lugar de ${pdf ? 'Word' : 'PDF'}` : ''}`);
+  }
+  if (list.includes('no_document') && !list.includes('document')) parts.push('sin el documento que habías pedido');
+  else if (list.includes('no_auto_document')) parts.push('sin Word');
+  if (list.includes('no_pdf')) parts.push('sin el PDF');
+  if (list.includes('subtitles')) parts.push('con subtítulos SRT y VTT');
+  if (list.includes('no_subtitles')) parts.push('sin subtítulos');
+  if (list.includes('range')) parts.push('solo del tramo que indicaste');
+  const subject = many ? 'las transcripciones' : 'la transcripción';
+  const extras = [];
+  if (list.includes('language')) extras.push('Tomo en cuenta el idioma que indicaste.');
+  if (list.includes('hints')) extras.push('Tomo en cuenta los nombres y datos que diste.');
+  const lead = parts.length
+    ? `Anotado: cuando ${many ? 'terminen' : 'termine'} ${subject} te ${many ? 'las' : 'la'} entrego ${joinList(parts)}.`
+    : `Anotado: lo tengo en cuenta para ${subject} en curso.`;
+  return [lead, ...extras, 'Sigo trabajando; te aviso aquí cuando esté listo.'].join(' ');
+}
+
+/** A repeated request for recordings still being transcribed. */
+function stillRunningMessage({ fileNames = [] } = {}) {
+  const names = (Array.isArray(fileNames) ? fileNames : []).filter(name => typeof name === 'string' && name.trim());
+  const many = names.length > 1;
+  const what = !names.length ? 'la grabación' : many ? `${names.length} archivos (${listNames(names)})` : quoteName(names[0]);
+  return `Ya estoy transcribiendo ${what}; te aviso aquí cuando ${many ? 'terminen' : 'termine'}. Puedes seguir usando el chat.`;
+}
+
+const TRANSLATION_NAMES = Object.freeze({ en: 'inglés', es: 'español', pt: 'portugués', fr: 'francés', it: 'italiano',
+  de: 'alemán', zh: 'chino', ja: 'japonés', ko: 'coreano', ru: 'ruso', ar: 'árabe', qu: 'quechua' });
+
+/** «al catalán», never «al ca»: the detector's own list first (media-batch). */
+function translationName(code) {
+  try {
+    const name = require('./media-batch').translationTargetByCode?.(code)?.name;
+    if (name) return name;
+  } catch (_) { /* the local list below */ }
+  return TRANSLATION_NAMES[code] || code;
+}
+
+function joinList(items) {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} y ${items[items.length - 1]}`;
+}
+
 // ── file states ────────────────────────────────────────────────────────
 
 function hasUsableTranscript(row) {
@@ -294,6 +397,18 @@ function stoppedReasonFor(counts) {
   if (counts.partial || counts.failed || counts.pending) return 'media_batch_partial';
   return 'transcription_finalize';
 }
+
+// «Clase 3.audio.ogg»: the audio the browser extracted from «Clase 3.mp4».
+const EXTRACTED_AUDIO_NAME_RE = /\.audio\.[a-z0-9]{1,6}$/i;
+
+/** Stopped with «Detener» (its row carries the stop note), never a failure. */
+function isStoppedByUser(row) {
+  try { return require('./media-transcription-queue').isUserCancelledRow(row); } catch (_) { return false; }
+}
+
+// Stopping these failed for good (the file is gone, or no recording): there
+// is no job to stop, so the Stop is done with them.
+const SETTLED_STOP_CODES = new Set(['media_not_found', 'unsupported_media', 'media_owner_required']);
 
 function displayName(row, delivery = {}, index = 0) {
   return row?.sourceName || row?.originalName || row?.filename || delivery?.fileNames?.[index] || 'archivo';
@@ -611,7 +726,7 @@ function qualitySuffix(report) {
  * (gaps for partial files, reasons for failures), the quality report, the
  * analysis or a preview, the downloads and the retry hint.
  */
-function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false,
+function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts = [], analysisText = '', analysisFailed = false, analysisFailureReason = null,
   analysisNotes = [], translationFailed = [], summaryText = '', summaryFailed = false, transcriptFilesAttached = null } = {}) {
   const list = (Array.isArray(rows) ? rows : []).map(row => {
     const sourceName = transcripts?.[row?.id]?.sourceName || row?.sourceName;
@@ -652,13 +767,17 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
     if (state === 'failed' && row?.processingError) blocks.push(`Motivo: ${cleanReason(row.processingError)}`);
   } else {
     const n = counts.total;
+    // Stopped with «Detener»: no failure, named apart.
+    const stopped = list.filter(row => stateOf(row) === 'failed' && isStoppedByUser(row)).length;
+    const failedOnly = counts.failed - stopped;
     if (counts.ready === n) blocks.push(`**Las transcripciones de tus ${n} archivos están listas.**`);
-    else if (counts.failed === n) blocks.push(`**No pude transcribir ninguno de tus ${n} archivos.**`);
+    else if (failedOnly === n) blocks.push(`**No pude transcribir ninguno de tus ${n} archivos.**`);
     else {
       const parts = [
         counts.ready ? `${counts.ready} ${counts.ready === 1 ? 'completo' : 'completos'}` : '',
         counts.partial ? `${counts.partial} ${counts.partial === 1 ? 'parcial' : 'parciales'}` : '',
-        counts.failed ? `${counts.failed} con error` : '',
+        failedOnly ? `${failedOnly} con error` : '',
+        stopped ? `${stopped} ${stopped === 1 ? 'detenido' : 'detenidos'}` : '',
         counts.pending ? `${counts.pending} ${counts.pending === 1 ? 'pendiente' : 'pendientes'}` : '',
       ].filter(Boolean);
       blocks.push(`**Terminé con tus ${n} archivos: ${parts.join(', ')}.**`);
@@ -699,6 +818,10 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
         statusLines.push(`- ${name}: parcial (${detail})${quality}`);
         return;
       }
+      if (state === 'failed' && isStoppedByUser(row)) {
+        statusLines.push(`- ${name}: detenida (escribe «retómala» para seguir donde quedó)`);
+        return;
+      }
       if (state === 'failed') {
         statusLines.push(`- ${name}: no se pudo transcribir${row?.processingError ? ` (${cleanReason(row.processingError, 120)})` : ''}`);
         return;
@@ -722,7 +845,12 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
   const usable = list.filter(isUsableRow);
   const translating = delivery?.mode === 'translation';
   const hasAnalysis = Boolean(analysisText && String(analysisText).trim());
-  const analysisFailedCopy = 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.';
+  // Why it failed, when the cause is known («X no pudo responder: su conexión
+  // no está configurada. No cambié de modelo…»), else the generic line.
+  const failureReason = typeof analysisFailureReason === 'string' && analysisFailureReason.trim() ? `${analysisFailureReason.trim()} ` : '';
+  const analysisFailedCopy = failureReason
+    ? `${failureReason}La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.`
+    : 'No pude terminar el análisis que pediste. La transcripción está guardada; vuelve a pedírmelo en este chat cuando quieras.';
   // «resume y tradúcelo»: the summary leads, the translation follows.
   if (summaryText && String(summaryText).trim()) blocks.push(`### Análisis\n\n${String(summaryText).trim()}`);
   else if (summaryFailed && usable.length) blocks.push(analysisFailedCopy);
@@ -730,7 +858,9 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
     blocks.push(`### ${translating ? 'Traducción' : 'Análisis'}\n\n${String(analysisText).trim()}`);
   } else if (analysisFailed && usable.length) {
     blocks.push(translating
-      ? 'No pude terminar la traducción que pediste. La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.'
+      ? (failureReason
+        ? `${failureReason}La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.`
+        : 'No pude terminar la traducción que pediste. La transcripción está guardada; vuelve a pedírmela en este chat cuando quieras.')
       : analysisFailedCopy);
   }
   const untranslated = (Array.isArray(translationFailed) ? translationFailed : [])
@@ -759,7 +889,12 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
   const files = (Array.isArray(artifacts) ? artifacts : []).filter(artifact => artifact?.filename);
   if (usable.length) {
     const produced = new Set(files.map(artifact => String(artifact.format || artifact.filename.split('.').pop() || '').toLowerCase()));
-    const missing = (Array.isArray(delivery?.formats) ? delivery.formats : []).filter(format => !produced.has(format));
+    // What the request still asks for: never a format turned down, nor the
+    // document another one replaced («mejor en PDF» on an older record).
+    const declinedDocs = new Set(Array.isArray(delivery?.output?.declinedDocuments) ? delivery.output.declinedDocuments : []);
+    const chosenDoc = delivery?.output?.documentFormat || null;
+    const missing = (Array.isArray(delivery?.formats) ? delivery.formats : []).filter(format => !produced.has(format)
+      && !declinedDocs.has(format) && !(chosenDoc && (format === 'docx' || format === 'pdf') && format !== chosenDoc));
     if (files.length && missing.length) {
       blocks.push(`No pude generar ${missing.map(format => FORMAT_LABELS[format] || format.toUpperCase()).join(' ni ')}; te dejo la transcripción en ${produced.has('txt') ? 'TXT' : 'los archivos adjuntos'}.`);
     }
@@ -780,6 +915,14 @@ function deliveryMessage({ delivery = {}, rows = [], transcripts = {}, artifacts
 
 function isRefineRecord(record) {
   return record?.kind === 'refine';
+}
+
+/** The refine job a refine delivery waits on, for cancelMediaTranscription. */
+function refineSpecsOf(record) {
+  if (!isRefineRecord(record)) return [];
+  return (Array.isArray(record.fileIds) ? record.fileIds : []).filter(Boolean).map(fileId => ({
+    fileId, range: record.range || null, language: record.language || null, hints: record.hints || null, deliveryId: record.id,
+  }));
 }
 
 /** «00:12:00–00:15:00»: a refined window always prints hh:mm:ss. */
@@ -1125,18 +1268,28 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
     const pack = require('./media-transcript-artifacts');
     const formats = new Set(Array.isArray(delivery.formats) ? delivery.formats : []);
     const output = delivery.output || {};
+    const declinedDocs = Array.isArray(output.declinedDocuments) ? output.declinedDocuments : [];
+    const offered = format => formats.has(format) && !declinedDocs.includes(format);
     const built = await pack.buildMediaTranscriptArtifacts({
       rows: rows.filter(isUsableRow),
       allRows: rows,
       transcripts: new Map(Object.entries(transcripts || {})),
       output: {
-        documentFormat: output.documentFormat || (formats.has('pdf') && !formats.has('docx') ? 'pdf' : formats.has('docx') ? 'docx' : null),
-        alsoPdf: Boolean(output.alsoPdf) || (formats.has('docx') && formats.has('pdf')),
+        // A format turned down is never built from `formats` either. Both
+        // documents in `formats` («Word y PDF») build the Word and the PDF.
+        // «también en PDF» with no document chosen: the automatic Word of a
+        // long recording stays, and the PDF comes next to it.
+        documentFormat: output.documentFormat || (output.alsoPdf === true && !declinedDocs.includes('pdf') ? null
+          : offered('pdf') && !offered('docx') ? 'pdf' : offered('docx') ? 'docx' : null),
+        alsoPdf: (Boolean(output.alsoPdf) && !declinedDocs.includes('pdf')) || (offered('docx') && offered('pdf')),
         wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
         wantsZip: Boolean(output.wantsZip) || formats.has('zip'),
         // A refine re-sends the whole updated transcript, not just its window.
         range: !isRefineRecord(delivery) && delivery.range && Number.isFinite(Number(delivery.range.start)) ? delivery.range : null,
         timeOffsetSec: Number(output.timeOffsetSec) || 0,
+        // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
+        ...(Array.isArray(output.declinedDocuments) && output.declinedDocuments.length ? { declinedDocuments: output.declinedDocuments } : {}),
+        ...(output.declinedSubtitles === true ? { declinedSubtitles: true } : {}),
       },
       userId: delivery.userId,
     });
@@ -1250,6 +1403,44 @@ function defaultNotify(prisma, { userId, title, body, actionUrl, type, metadata 
  * transcript files, the chat view and a translation follow `delivery.range`
  * only (rangeOf).
  */
+function translationRangeOf(delivery) {
+  const asked = delivery?.output?.translationRange;
+  if (!asked || typeof asked !== 'object') return null;
+  const start = Number(asked.start);
+  const end = Number(asked.end);
+  return Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start ? { start, end } : null;
+}
+
+/** Valid translation windows ({start, end|null}); an open end runs to the end. */
+function windowList(list) {
+  return (Array.isArray(list) ? list : []).map((asked) => {
+    const start = Number(asked?.start);
+    const end = asked?.end == null ? null : Number(asked.end);
+    if (!Number.isFinite(start) || start < 0 || (end != null && (!Number.isFinite(end) || end <= start))) return null;
+    return { start, end };
+  }).filter(Boolean);
+}
+
+/**
+ * The windows the translation reads: the moments asked to translate (each on
+ * its own when far apart), else the transcript's range; [] is the whole
+ * recording.
+ */
+function translationWindowsOf(delivery) {
+  const several = windowList(delivery?.output?.translationRanges);
+  if (several.length) return several;
+  const one = translationRangeOf(delivery);
+  if (one) return [one];
+  const range = rangeOf(delivery);
+  return range ? [range] : [];
+}
+
+/** The `range` / `ranges` the translation files are named after. */
+function windowOutput(windows) {
+  if (windows.length > 1) return { range: null, ranges: windows };
+  return { range: windows[0] || null };
+}
+
 function analysisRangeOf(delivery) {
   const asked = delivery?.output?.analysisRange;
   if (asked && typeof asked === 'object') {
@@ -1262,61 +1453,117 @@ function analysisRangeOf(delivery) {
 }
 
 /** Summary/minutes with the model the user picked (plan quota enforced). */
-async function defaultAnalyze({ rows, delivery, prisma }) {
+async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
   const runner = require('./agents/agent-task-runner');
   const profile = runner.normalizeAgentRuntimeModel(delivery?.model?.id || '');
-  const resolution = runner.resolveAgentRuntimeClient(profile, { pinned: Boolean(delivery?.model?.pinned) });
+  // The model the user picked writes the analysis, or nobody does (AGENTS.md
+  // section 13): never a silent substitute. A delivery whose model the user
+  // did not pick (the default, a link, a voice note) keeps the internal ladder.
+  const pinned = Boolean(delivery?.model?.pinned);
+  const resolution = runner.resolveAgentRuntimeClient(profile, { pinned });
   if (!resolution?.client) {
     const err = new Error('selected_model_unavailable');
     err.code = 'selected_model_unavailable';
+    if (pinned) {
+      try {
+        const label = typeof runner.pinnedModelLabel === 'function' ? runner.pinnedModelLabel(profile) : '';
+        err.userMessage = require('./ai/billing-failover').buildFailureMessage({ modelLabel: label, reason: 'unconfigured' }) || null;
+      } catch (_) { err.userMessage = null; }
+    }
     throw err;
   }
   const completion = require('./media-analysis-runtime').createMediaAnalysisCompletion({
     client: resolution.client, model: resolution.model, provider: resolution.provider,
     userId: delivery.userId, chatId: delivery.deliveryChatId || delivery.chatId, prisma,
   });
+  // The recordings' own names (audio extracted in the browser) and, with a
+  // range, only that window.
   const rowsIn = (range) => {
-    if (!range) return rows;
     try {
       const transcripts = new Map(Object.entries(delivery.transcripts || {}));
-      return require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range);
+      return require('./media-handoff').mediaRowsForAnalysis(rows, transcripts, range || null);
     } catch (_) { return rows; }
   };
   // A requested range («del minuto 30 al 45») or moment is analysed alone.
   const analysisRows = rowsIn(analysisRangeOf(delivery));
   const mediaBatch = require('./media-batch');
-  const target = delivery?.mode === 'translation' ? mediaBatch.detectTranslationTarget(delivery.goal) : null;
+  const target = delivery?.mode === 'translation'
+    ? (mediaBatch.translationTargetByCode?.(delivery.output?.translationTarget) || mediaBatch.detectTranslationTarget(delivery.goal))
+    : null;
   if (target) {
     // The translation is of the transcript the user asked for (their range,
     // or the whole recording), never cut to the moment they asked about: that
     // moment only shapes the summary that comes with it.
-    const range = rangeOf(delivery);
-    const translationRows = rowsIn(range);
-    const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete });
+    // A follow-up's «traduce lo que dice en el minuto 30» reads that window;
+    // the transcript files stay whole.
+    // The moments asked to translate win over the transcript's own range.
+    const windows = translationWindowsOf(delivery);
+    const translationRows = rowsIn(windows.length ? windows : null);
+    // «no traduzcas los nombres propios»: what the user said about how to
+    // translate, from the first request and every follow-up (record.goal).
+    const conditions = typeof mediaBatch.translationConditions === 'function' ? mediaBatch.translationConditions(delivery.goal) : [];
+    const translation = await mediaBatch.translateMediaBatch({ rows: translationRows, target, complete: completion.complete, signal, conditions });
     // «resume y tradúcelo»: the summary too, with the same model. Its failure
     // never costs the translation.
     let summary = '';
     if (delivery.output?.alsoAnalysis === true) {
       try {
-        summary = (await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete }))?.text || '';
-      } catch (_) { summary = ''; }
+        summary = (await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete, signal }))?.text || '';
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        summary = '';
+      }
     }
     const failed = translation.failed || [];
     if (!translation.files.length) return { text: '', artifacts: [], failed, summary };
     const pack = require('./media-transcript-artifacts');
     const built = await pack.buildTranslationArtifacts({ files: translation.files, target,
-      output: { ...(delivery.output || {}), range }, userId: delivery.userId });
-    const firstFile = translation.files[0];
-    const first = firstFile.text;
-    const preview = first.length > 3000
-      ? `${pack.escapeChatMarkdown(`${first.slice(0, 3000)}…`)}\n\n_Vista previa: el archivo adjunto tiene la traducción completa._`
-      : pack.escapeChatMarkdown(first);
-    // In a batch the preview names the file it shows.
-    const label = translationRows.length > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : '';
-    return { text: `${label}${preview}`, artifacts: built.artifacts,
-      notes: Array.isArray(built.notes) ? built.notes : [], failed, summary };
+      output: { ...(delivery.output || {}), ...windowOutput(windows) }, userId: delivery.userId });
+    const previewOf = (files, rowCount) => {
+      const firstFile = files[0];
+      const first = firstFile.text;
+      const preview = first.length > 3000
+        ? `${pack.escapeChatMarkdown(`${first.slice(0, 3000)}…`)}\n\n_Vista previa: el archivo adjunto tiene la traducción completa._`
+        : pack.escapeChatMarkdown(first);
+      // In a batch the preview names the file it shows.
+      return `${rowCount > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : ''}${preview}`;
+    };
+    const artifacts = [...(built.artifacts || [])];
+    const notes = Array.isArray(built.notes) ? [...built.notes] : [];
+    // «traduce también al francés lo del minuto 30»: each language added
+    // after the first, with its own windows. Its failure never costs the
+    // first translation.
+    const added = [];
+    for (const extra of Array.isArray(delivery.output?.extraTranslations) ? delivery.output.extraTranslations : []) {
+      const extraTarget = mediaBatch.translationTargetByCode?.(extra?.target);
+      if (!extraTarget || extraTarget.code === target.code) continue;
+      // Its own windows; «completa» (`whole`) the whole recording; none of
+      // its own, the same windows as the first translation (also a range
+      // the user set after adding it).
+      const extraWindows = extra?.whole === true ? [] : windowList(extra.ranges).length ? windowList(extra.ranges) : windows;
+      const extraRows = rowsIn(extraWindows.length ? extraWindows : null);
+      try {
+        const extraTranslation = await mediaBatch.translateMediaBatch({ rows: extraRows, target: extraTarget, complete: completion.complete, signal, conditions });
+        if (!extraTranslation.files.length) {
+          notes.push(`No pude terminar la traducción al ${extraTarget.name}; pídemela de nuevo en este chat cuando quieras.`);
+          continue;
+        }
+        const extraBuilt = await pack.buildTranslationArtifacts({ files: extraTranslation.files, target: extraTarget,
+          output: { ...(delivery.output || {}), ...windowOutput(extraWindows) }, userId: delivery.userId });
+        artifacts.push(...(extraBuilt.artifacts || []));
+        if (Array.isArray(extraBuilt.notes)) notes.push(...extraBuilt.notes);
+        const where = extraWindows.length ? ` (${pack.rangesLabel(extraWindows)})` : '';
+        added.push(`#### Al ${extraTarget.name}${where}\n\n${previewOf(extraTranslation.files, extraRows.length)}`);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        notes.push(`No pude terminar la traducción al ${extraTarget.name}; pídemela de nuevo en este chat cuando quieras.`);
+      }
+    }
+    const main = previewOf(translation.files, translationRows.length);
+    const text = added.length ? [`#### Al ${target.name}\n\n${main}`, ...added].join('\n\n') : main;
+    return { text, artifacts, notes, failed, summary };
   }
-  const result = await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete });
+  const result = await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete, signal });
   return result?.text || '';
 }
 
@@ -1394,9 +1641,13 @@ function createMediaDeliveryService(deps = {}) {
   const notify = deps.notify || (args => defaultNotify(getPrisma(), args));
   const analyze = deps.analyze === undefined ? (args => defaultAnalyze({ ...args, prisma: getPrisma() })) : deps.analyze;
   const recordHints = deps.recordHints || (args => require('./media-transcript-store').recordMediaHints(deps.prisma || getPrisma(), args));
+  const cancelMediaJobs = deps.cancelMediaJobs || (args => require('./media-transcription-queue').cancelMediaTranscription(args));
 
   const inflight = new Map();
   const held = new Map();
+  // The abort of each delivery this process holds, with its owner: only the
+  // owner's Stop may trip it (see runDelivery, cancelDelivery).
+  const stops = new Map();
   let closing = false;
   let sweeping = false;
   let lastSweepOldAt = 0;
@@ -1404,6 +1655,15 @@ function createMediaDeliveryService(deps = {}) {
 
   const enabled = () => isMediaDeliveryEnabled(env);
   const checkpoint = () => { if (closing) throw shutdownError(); };
+  // «Detener» pressed while this process delivers: stop before posting.
+  async function stopIfCancelled(id) {
+    const store = getStore();
+    if (typeof store.isCancelRequested !== 'function') return;
+    if (!(await store.isCancelRequested(id).catch(() => false))) return;
+    const err = new Error('delivery_cancelled');
+    err.code = 'delivery_cancelled';
+    throw err;
+  }
 
   async function createDelivery(record) {
     if (!enabled()) return null;
@@ -1485,7 +1745,7 @@ function createMediaDeliveryService(deps = {}) {
 
   const isWaiting = probe => (probe.pending > 0 || probe.awaitingRefine) && !probe.overdue;
 
-  async function attempt(record, token) {
+  async function attempt(record, token, { signal = null } = {}) {
     const store = getStore();
     const { id, userId } = record;
     const ids = record.fileIds;
@@ -1508,22 +1768,30 @@ function createMediaDeliveryService(deps = {}) {
       }
     }
 
-    const rawRows = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
+    await stopIfCancelled(id);
+    const loaded = alignRows(ids, await loadFiles(userId, ids, { includeText: true }), record)
       .map(row => ({ ...row, deliveryState: classifyFileRow(row) }));
     checkpoint();
 
     const transcripts = {};
-    const usableRaw = rawRows.filter(isUsableRow);
-    for (let i = 0; i < usableRaw.length; i += 8) {
-      const slice = usableRaw.slice(i, i + 8);
+    const usableLoaded = loaded.filter(isUsableRow);
+    for (let i = 0; i < usableLoaded.length; i += 8) {
+      const slice = usableLoaded.slice(i, i + 8);
       await Promise.all(slice.map(async (row) => {
         transcripts[row.id] = await Promise.resolve(loadTranscript(transcriptPrisma(), { userId, fileId: row.id }))
           .catch(() => null) || null;
       }));
       checkpoint();
     }
-    const rows = rawRows.map(row => {
-      const sourceName = transcripts[row.id]?.sourceName || row?.sourceName;
+    // Audio extracted in the browser is named after what the user uploaded
+    // («Clase 3.mp4», never «Clase 3.audio.ogg») in the message, the
+    // notification and the chat title, as it already is in the files.
+    // A recording with no transcript (it failed, or had no timed segments)
+    // keeps the name the runner stored when it handed it off.
+    const rows = loaded.map((row, index) => {
+      const presented = EXTRACTED_AUDIO_NAME_RE.test(String(row.originalName || '')) ? record.fileNames?.[index] : null;
+      const sourceName = transcripts[row.id]?.sourceName || row?.sourceName
+        || (typeof presented === 'string' && presented.trim() && !EXTRACTED_AUDIO_NAME_RE.test(presented) ? presented : null);
       return sourceName ? { ...row, originalName: sourceName, sourceName } : row;
     });
 
@@ -1545,6 +1813,7 @@ function createMediaDeliveryService(deps = {}) {
     const alsoAnalysis = translating && record.output?.alsoAnalysis === true;
     let analysisText = '';
     let analysisFailed = false;
+    let analysisFailureReason = null;
     let analysisArtifacts = [];
     let analysisNotes = [];
     let translationFailed = [];
@@ -1556,7 +1825,8 @@ function createMediaDeliveryService(deps = {}) {
         summaryFailed = alsoAnalysis;
       } else {
         try {
-          const result = await analyze({ rows: usable, transcripts, delivery: { ...record, deliveryChatId: targetChatId, transcripts } });
+          const result = await analyze({ rows: usable, transcripts, delivery: { ...record, deliveryChatId: targetChatId, transcripts },
+            ...(signal ? { signal } : {}) });
           analysisText = String(typeof result === 'string' ? result : result?.text || '').trim();
           // A translation returns its own files (TXT/Word) next to a preview.
           if (Array.isArray(result?.artifacts)) analysisArtifacts = result.artifacts;
@@ -1569,12 +1839,21 @@ function createMediaDeliveryService(deps = {}) {
           }
           if (!analysisText) analysisFailed = true;
         } catch (err) {
+          // «Detener» during the analysis: its calls stop at once, and the
+          // delivery closes as cancelled instead of posting a partial result.
+          if (signal?.aborted) {
+            const cancelled = new Error('delivery_cancelled');
+            cancelled.code = 'delivery_cancelled';
+            throw cancelled;
+          }
           analysisFailed = true;
           summaryFailed = alsoAnalysis;
+          if (typeof err?.userMessage === 'string' && err.userMessage.trim()) analysisFailureReason = err.userMessage.trim();
           logger.warn(`[media-delivery] analysis unavailable id=${id} code=${err?.code || 'analysis_error'}`);
         }
       }
       checkpoint();
+      await stopIfCancelled(id);
     }
 
     // A translation alone does not re-send the transcript files, unless the
@@ -1594,11 +1873,13 @@ function createMediaDeliveryService(deps = {}) {
     checkpoint();
 
     const counts = summarizeStates(rows);
-    const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed,
+    const content = deliveryMessage({ delivery: record, rows, transcripts, artifacts: saved, analysisText, analysisFailed, analysisFailureReason,
       analysisNotes, translationFailed, summaryText, summaryFailed,
       transcriptFilesAttached: saved.some(artifact => artifact?.role === 'transcript') });
     return postAndFinish({ record, token, rows, counts, content, saved, targetChatId,
-      extraMetadata: { deliveryKind: 'transcript', stoppedReason: stoppedReasonFor(counts) } });
+      extraMetadata: { deliveryKind: 'transcript', stoppedReason: stoppedReasonFor(counts),
+        // «detenida (escribe «retómala»…)»: the composer reads it as about these.
+        ...(rows.some(isStoppedByUser) ? { stoppedFileIds: rows.filter(isStoppedByUser).map(row => row.id) } : {}) } });
   }
 
   async function saveSpecs(specs, { userId, targetChatId }) {
@@ -1652,6 +1933,7 @@ function createMediaDeliveryService(deps = {}) {
       err.code = 'lock_lost';
       throw err;
     }
+    await stopIfCancelled(id);
     const metadata = {
       source: DELIVERY_SOURCE,
       mediaDelivery: id,
@@ -1692,6 +1974,21 @@ function createMediaDeliveryService(deps = {}) {
       await store.release(id, token).catch(() => null);
       return { id, status: 'closing' };
     }
+    if (err?.code === 'delivery_cancelled' && typeof store.markCancelled === 'function') {
+      // The jobs stop before the record closes: one still running (a
+      // database blip) keeps the record open with its marker, and the sweep
+      // stops it later.
+      const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
+      const stop = await stopWhatTheStopLeft(record, marker);
+      if (!stop.complete) {
+        await store.release(id, token).catch(() => null);
+        logger.warn(`[media-delivery] cancelled mid-delivery, jobs left to stop id=${id}`);
+        return { id, status: 'cancelling' };
+      }
+      await store.markCancelled(id, token).catch(() => null);
+      logger.info(`[media-delivery] cancelled mid-delivery id=${id}`);
+      return { id, status: 'cancelled' };
+    }
     const failed = await store.markFailed(id, token, err, { maxAttempts, backoffMs }).catch(() => null);
     const code = err?.code || 'delivery_error';
     if (!failed) {
@@ -1713,6 +2010,15 @@ function createMediaDeliveryService(deps = {}) {
     } catch (notifyErr) {
       logger.warn(`[media-delivery] notification failed id=${id} code=${notifyErr?.code || 'notify_error'}`);
     }
+    // The chat's live «Transcribiendo…» ends too: one line that carries the
+    // delivery id settles the turn (best-effort; the chat may be gone).
+    if (chatId) {
+      try {
+        await postFailureNote({ ...failed, id });
+      } catch (postErr) {
+        logger.warn(`[media-delivery] failure note not posted id=${id} code=${postErr?.code || 'post_error'}`);
+      }
+    }
     return { id, status: 'failed', attempts: failed.attempts };
   }
 
@@ -1726,7 +2032,30 @@ function createMediaDeliveryService(deps = {}) {
       return { id, status: 'error' };
     }
     if (!record) return { id, status: 'missing' };
-    if (record.status === 'delivered' || record.status === 'failed') return { id, status: record.status };
+    if (record.status === 'delivered' || record.status === 'failed' || record.status === 'cancelled') return { id, status: record.status };
+    // A Stop left for a holder that went away (or interrupted by a restart):
+    // finish it here, with its chat line and the jobs it stops.
+    if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(id).catch(() => false)) {
+      // Once its marker exists the Stop is durable: the jobs stop first,
+      // whatever the store answers next (the lock of a process that died
+      // mid-Stop, a line still to post, a holder elsewhere honouring it).
+      // Only what the Stop left (marker.pendingStops): a sweep that retries
+      // never stops a recording the user asked for again since.
+      const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
+      const stop = await stopWhatTheStopLeft(record, marker);
+      // The record closes once its line is posted and every job stopped; a
+      // job still running keeps it open for the next sweep.
+      const closed = await store.cancel(id, { userId: record.userId, reason: 'user',
+        beforeClose: async (rec) => {
+          const line = await postCancelNote(rec, rec.userId).catch(err => settleFailure(err, id));
+          if (line?.error || stop.complete) return line;
+          return { error: 'stop_incomplete', messageId: line?.messageId || null, chatId: line?.chatId || null };
+        } }).catch(() => null);
+      if (closed?.outcome === 'already_terminal') return { id, status: closed.record?.status || 'delivered' };
+      if (closed?.outcome === 'missing') return { id, status: 'missing' };
+      if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') return { id, status: 'cancelled' };
+      return { id, status: 'cancelling' };
+    }
     const asOf = Number.isFinite(at) ? at : now();
     const nextAt = Date.parse(record.nextAttemptAt || '');
     if (!force && Number.isFinite(nextAt) && nextAt > asOf) return { id, status: 'backoff', nextAttemptAt: record.nextAttemptAt };
@@ -1751,16 +2080,28 @@ function createMediaDeliveryService(deps = {}) {
     if (!claimed) return { id, status: 'busy' };
     const { token } = claimed;
     held.set(id, token);
+    // «Detener» while this process delivers: the analysis or translation in
+    // flight stops at once (it would keep paying for every chunk and hold
+    // the delivery gate), whether the Stop came from here or left a marker.
+    const stopper = new AbortController();
+    const stopEntry = { stopper, userId: claimed.record.userId };
+    stops.set(id, stopEntry);
     const refreshEvery = Math.max(1000, Math.floor(store.staleMs / 3));
     const timer = setInterval(() => { store.refresh(id, token).catch(() => {}); }, refreshEvery);
     timer.unref?.();
+    const watch = typeof store.isCancelRequested === 'function' ? setInterval(() => {
+      store.isCancelRequested(id).then((asked) => { if (asked) stopper.abort(); }, () => {});
+    }, CANCEL_WATCH_MS) : null;
+    watch?.unref?.();
     try {
-      return await attempt(claimed.record, token);
+      return await attempt(claimed.record, token, { signal: stopper.signal });
     } catch (err) {
       return await recordFailure(claimed.record, token, err);
     } finally {
       clearInterval(timer);
+      if (watch) clearInterval(watch);
       held.delete(id);
+      if (stops.get(id) === stopEntry) stops.delete(id);
     }
   }
 
@@ -1899,6 +2240,446 @@ function createMediaDeliveryService(deps = {}) {
   }
 
   /**
+   * «Detener» on a transcription the chat handed off. Closes the delivery
+   * (nothing is posted for it afterwards), stops the transcription of its
+   * recordings unless another open request of the user still waits on them,
+   * and leaves one short line in the chat. That line carries the delivery
+   * id, so the chat — and a reload — sees the turn as finished. Owner
+   * scoped; never throws. Returns { id, outcome, stoppedFiles, messageId,
+   * chatId }.
+   */
+  /**
+   * Stop the transcription of the recordings no other open request of the
+   * user still waits on (another chat's delivery keeps its files going).
+   * Never throws; returns { stopped }.
+   */
+  async function cancelUnneededMediaJobs({ userId = null, fileIds = [], exceptDeliveryId = null, refines = [], stoppedAt = null, shouldStop = null } = {}) {
+    const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean))];
+    const ownRefines = Array.isArray(refines) ? refines.filter(spec => spec && spec.fileId) : [];
+    // `complete`: every job this Stop owns was settled (a DB outage leaves it
+    // false, and the Stop is retried with its line, never marked as done).
+    if (!userId || (!ids.length && !ownRefines.length)) return { stopped: 0, complete: true };
+    try {
+      const store = getStore();
+      const mine = (await store.listActive()).filter(other => other.id !== exceptDeliveryId && other.userId === userId);
+      // A request stopped too (its line still to post) wants nothing.
+      const others = [];
+      for (const other of mine) {
+        if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(other.id).catch(() => false)) continue;
+        others.push(other);
+      }
+      // Retrying what a Stop left: a request made after it never shields a
+      // recording still listed (asking for one again releases it first). A
+      // correction asked again after the Stop still shares its refine job.
+      const stopTime = stoppedAt ? Date.parse(stoppedAt) : NaN;
+      const fileShields = Number.isFinite(stopTime) ? others.filter(other => !(Date.parse(other.createdAt || '') > stopTime)) : others;
+      const needed = new Set(fileShields.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
+      const free = ids.filter(fileId => !needed.has(fileId));
+      // A refine job serves its own delivery: it stops even when another
+      // request still waits on the same recording, unless an open refine of
+      // the same window and hints (another chat, a branch) shares that job.
+      const refinesToStop = ownRefines.filter(spec => !others.some(other => isRefineRecord(other)
+        && (other.fileIds || []).includes(spec.fileId) && refineJobKeyOf(other) === refineJobKeyOf(spec)));
+      if (!free.length && !refinesToStop.length) return { stopped: 0, complete: true };
+      const result = await cancelMediaJobs({ fileIds: free, userId, ...(refinesToStop.length ? { refines: refinesToStop } : {}),
+        ...(typeof shouldStop === 'function' ? { shouldStop } : {}) });
+      // A file deleted since (or no longer a recording) has no job left: only
+      // a transient error (the database) leaves the Stop to retry, and only
+      // for the jobs it hit (`unsettled`).
+      const transient = (Array.isArray(result?.results) ? result.results : [])
+        .filter(item => item?.outcome === 'error' && !SETTLED_STOP_CODES.has(item?.code));
+      const unsettled = {
+        fileIds: [...new Set(transient.filter(item => !item.refine).map(item => item.id).filter(Boolean))],
+        refines: refinesToStop.filter(spec => transient.some(item => item.refine && item.id === spec.fileId)),
+      };
+      return { stopped: Number(result?.stopped) || 0, complete: !transient.length, unsettled };
+    } catch (err) {
+      logger.warn(`[media-delivery] stopping the transcription failed code=${err?.code || 'stop_error'}`);
+      return { stopped: 0, complete: false, unsettled: { fileIds: ids, refines: ownRefines } };
+    }
+  }
+
+  /**
+   * What is left of a Stop's jobs to stop (the sweep, a later Stop): the
+   * ones its marker lists as pending, or all of them for a marker written
+   * before the list existed; nothing once they were all stopped.
+   */
+  async function stopWhatTheStopLeft(record, marker) {
+    if (marker?.jobsStopped === true) return { stopped: 0, complete: true };
+    const pending = marker?.pendingStops && typeof marker.pendingStops === 'object' ? marker.pendingStops : null;
+    // Never a recording the user asked for again since the Stop.
+    const released = new Set(Array.isArray(marker?.released) ? marker.released : []);
+    const store = getStore();
+    // Re-read right before each recording stops: the user may ask for it
+    // again while the stop waits on the database.
+    const stillListed = async (fileId) => {
+      const now = typeof store.cancelMarker === 'function' ? await store.cancelMarker(record.id).catch(() => null) : null;
+      if (!now) return true;
+      if (now.jobsStopped === true || (Array.isArray(now.released) && now.released.includes(fileId))) return false;
+      return !now.pendingStops || (Array.isArray(now.pendingStops.fileIds) && now.pendingStops.fileIds.includes(fileId));
+    };
+    const stop = await cancelUnneededMediaJobs({ userId: record.userId,
+      fileIds: (pending ? (pending.fileIds || []) : record.fileIds || []).filter(fileId => !released.has(fileId)), exceptDeliveryId: record.id,
+      refines: (pending ? (pending.refines || []) : refineSpecsOf(record)).filter(spec => !released.has(spec.fileId)),
+      ...(pending ? { stoppedAt: marker.at || null } : {}),
+      ...(marker ? { shouldStop: stillListed } : {}) });
+    await noteJobsStopped(record.id, stop);
+    return stop;
+  }
+
+  /**
+   * The recordings a Stop still has to stop (its job stop failed for a
+   * moment): for a turn about them they are stopped, not pending, unless it
+   * asks for them again. Never throws; [] when unknown.
+   */
+  async function pendingStopFileIds({ userId = null, fileIds = [] } = {}) {
+    const ids = new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean));
+    if (!enabled() || !userId || !ids.size) return [];
+    const store = getStore();
+    if (typeof store.cancelMarker !== 'function') return [];
+    const out = new Set();
+    try {
+      const active = (await store.listActive()).filter(record => record.userId === userId);
+      const markers = new Map();
+      for (const record of active) markers.set(record.id, await store.cancelMarker(record.id).catch(() => null));
+      for (const record of active) {
+        if (!(record.fileIds || []).some(fileId => ids.has(fileId))) continue;
+        const marker = markers.get(record.id);
+        if (!marker || marker.jobsStopped === true) continue;
+        const released = new Set(Array.isArray(marker.released) ? marker.released : []);
+        const listed = marker.pendingStops && Array.isArray(marker.pendingStops.fileIds) ? marker.pendingStops.fileIds : [];
+        // A recording another open request made before this Stop still
+        // needs keeps transcribing (the retry never stops it): not stopped.
+        const stopTime = Date.parse(marker.at || '');
+        const shielded = new Set(active.filter(other => other.id !== record.id && !markers.get(other.id)
+          && !(Number.isFinite(stopTime) && Date.parse(other.createdAt || '') > stopTime))
+          .flatMap(other => other.fileIds || []));
+        for (const fileId of listed) if (ids.has(fileId) && !released.has(fileId) && !shielded.has(fileId)) out.add(fileId);
+      }
+    } catch (err) {
+      logger.warn(`[media-delivery] pending stops not read code=${err?.code || 'read_error'}`);
+    }
+    return [...out];
+  }
+
+  /**
+   * The user asked for these recordings again: an open Stop that could not
+   * stop them yet never stops them later. Best effort; never throws.
+   */
+  async function releasePendingStops({ userId = null, fileIds = [] } = {}) {
+    const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean))];
+    if (!enabled() || !userId || !ids.length) return 0;
+    const store = getStore();
+    if (typeof store.releasePendingStops !== 'function') return 0;
+    let released = 0;
+    try {
+      for (const record of await store.listActive()) {
+        if (record.userId !== userId || !(record.fileIds || []).some(fileId => ids.includes(fileId))) continue;
+        if (await store.releasePendingStops(record.id, ids).catch(() => false)) released += 1;
+      }
+    } catch (err) {
+      logger.warn(`[media-delivery] pending stops not released code=${err?.code || 'release_error'}`);
+    }
+    return released;
+  }
+
+  /** The line that settles a delivery that failed for good (see recordFailure). */
+  async function postFailureNote(failed) {
+    const chatId = failed.deliveryChatId || failed.chatId || null;
+    if (!chatId) return null;
+    const existing = await findDeliveredMessage(chatId, failed.id);
+    if (existing?.id) return { messageId: existing.id, chatId: existing.chatId || chatId };
+    const copy = deliveryFailureCopy({ delivery: failed });
+    const posted = await postMessage({ userId: failed.userId, chatId, artifacts: [], content: copy.body,
+      metadata: { source: DELIVERY_SOURCE, mediaDelivery: failed.id, transcriptionFileIds: failed.fileIds || [],
+        taskId: failed.taskId || null, deliveryMode: failed.mode,
+        deliveryKind: 'failed', stoppedReason: 'media_delivery_failed' } });
+    return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
+  }
+
+  /**
+   * Best effort: the marker remembers this Stop already stopped its jobs
+   * (all settled), or which ones it could not stop yet (only those are
+   * retried).
+   */
+  async function noteJobsStopped(id, stop = { complete: true }) {
+    const store = getStore();
+    if (stop?.complete === true) {
+      if (typeof store.noteJobsStopped === 'function') await store.noteJobsStopped(id).catch(() => {});
+      return;
+    }
+    if (stop?.unsettled && typeof store.notePendingStops === 'function') await store.notePendingStops(id, stop.unsettled).catch(() => {});
+  }
+
+  /**
+   * The Stop line could not be posted. A deleted chat has nothing left to
+   * settle (null: the record closes); anything else (a DB blip) leaves the
+   * record open with its marker, so the next Stop or sweep posts it.
+   */
+  function settleFailure(err, id) {
+    if (err?.code === 'chat_unavailable') return null;
+    logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+    return { error: err?.code || 'post_error' };
+  }
+
+  /** The chat line that settles a stopped transcription (never a delivery: no servedBy). */
+  async function postCancelNote(record, userId) {
+    const chatId = record.deliveryChatId || record.chatId || null;
+    if (!chatId) return null;
+    const existing = await findDeliveredMessage(chatId, record.id);
+    if (existing?.id) return { messageId: existing.id, chatId: existing.chatId || chatId };
+    const posted = await postMessage({ userId, chatId, artifacts: [],
+      content: cancelledMessage({ fileNames: record.fileNames }),
+      metadata: { source: DELIVERY_SOURCE, mediaDelivery: record.id, transcriptionFileIds: record.fileIds || [],
+        taskId: record.taskId || null, deliveryMode: record.mode,
+        deliveryKind: 'cancelled', stoppedReason: 'media_delivery_cancelled' } });
+    return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
+  }
+
+  async function cancelDelivery(id, { userId = null, waitMs = 10_000 } = {}) {
+    const empty = outcome => ({ id, outcome, stoppedFiles: 0, messageId: null, chatId: null });
+    if (!userId || !isValidDeliveryId(String(id || ''))) return empty('missing');
+    const store = getStore();
+    if (typeof store.cancel !== 'function') return empty('unsupported');
+    // Delivered by this process right now: its analysis stops before the
+    // store even tries the lock (the holder then closes it as cancelled).
+    // Only for its owner: a copied hand-off (a shared chat saved by someone
+    // else) carries the id, never the right to stop it.
+    const ownStop = () => {
+      const entry = held.has(id) ? stops.get(id) : null;
+      if (entry && entry.userId === userId) entry.stopper.abort();
+    };
+    ownStop();
+    let result;
+    // The jobs stop under the lock, before the record closes: a job still
+    // running (a database blip) keeps the record open with its marker, and
+    // the sweep stops what is left (only that: marker.pendingStops).
+    let stoppedInside = null;
+    try {
+      result = await store.cancel(id, { userId, reason: 'user',
+        beforeClose: async (record) => {
+          const line = await postCancelNote(record, userId).catch(err => settleFailure(err, id));
+          // A second press stops only what the first one left.
+          const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
+          stoppedInside = await stopWhatTheStopLeft(record, marker);
+          if (line?.error || stoppedInside.complete) return line;
+          return { error: 'stop_incomplete', messageId: line?.messageId || null, chatId: line?.chatId || null };
+        } });
+    } catch (err) {
+      logger.warn(`[media-delivery] cancel failed id=${id} code=${err?.code || 'cancel_error'}`);
+      // The record could not be closed (a full disk), but the user said stop:
+      // the jobs stop anyway (best-effort), and the client reports the error.
+      const known = await readRecordQuietly(id);
+      if (known && known.userId === userId) {
+        const stop = await cancelUnneededMediaJobs({ userId, fileIds: known.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(known) });
+        await noteJobsStopped(id, stop);
+      }
+      return empty('error');
+    }
+    let record = result?.record || null;
+    let outcome = result?.outcome || 'missing';
+    let settle = result?.settle || null;
+    // Its line did not reach the chat: the record stays open with its marker
+    // (found by the next Stop and the sweep, which post it); no holder to
+    // wait for. The jobs stop now.
+    if (result?.settleFailed && record) {
+      const stop = stoppedInside || await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+        refines: refineSpecsOf(record) });
+      if (!stoppedInside) await noteJobsStopped(id, stop);
+      return { id, outcome: 'cancel_requested', stoppedFiles: stop.stopped, messageId: settle?.messageId || null,
+        chatId: settle?.chatId || record.deliveryChatId || record.chatId || null };
+    }
+    // Held by this process: its analysis stops now, not at the next checkpoint.
+    if (outcome === 'cancel_requested') ownStop();
+    // Closed earlier without its chat line (the post failed, or a restart
+    // cut the Stop short): the chat would wait forever. Settle it now.
+    if ((outcome === 'already_cancelled' || outcome === 'already_terminal') && record && record.userId === userId) {
+      const chatId = record.deliveryChatId || record.chatId || null;
+      const existing = chatId ? await findDeliveredMessage(chatId, id).catch(() => null) : null;
+      let lineMissing = false;
+      if (chatId && !existing?.id) {
+        if (record.status === 'cancelled') {
+          settle = await postCancelNote(record, userId).catch((err) => {
+            logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+            return null;
+          });
+          if (settle?.messageId) outcome = 'cancelled';
+          else lineMissing = true;
+        } else if (record.status === 'failed') {
+          settle = await postFailureNote(record).catch(() => null);
+        }
+      }
+      if (record.status === 'cancelled') {
+        await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(record) });
+      }
+      // Stopped (the holder honoured it mid-analysis), but its line did not
+      // reach the chat: still a Stop to report, never «ya había terminado»,
+      // and the hand-off keeps Stop so the next press posts the line.
+      if (lineMissing) return { ...empty('cancel_requested'), chatId };
+      if (outcome !== 'cancelled') {
+        return { ...empty(outcome), messageId: settle?.messageId || null, chatId: settle?.chatId || chatId };
+      }
+      logger.info(`[media-delivery] settled a stopped delivery id=${id}`);
+      return { id, outcome, stoppedFiles: 0, messageId: settle?.messageId || null, chatId: settle?.chatId || chatId };
+    }
+    if (outcome === 'cancel_requested') {
+      // A holder is delivering right now: give it a moment to honour the
+      // Stop (or to finish, in which case the result is already in the chat).
+      const deadline = now() + Math.max(0, waitMs);
+      while (now() < deadline) {
+        await delay(250);
+        const current = await readRecordQuietly(id);
+        if (!current || current.status === 'cancelled') { outcome = 'cancelled'; record = current || record; break; }
+        if (current.status === 'delivered' || current.status === 'failed') { outcome = 'already_terminal'; record = current; break; }
+      }
+      // Cancelled by the holder, or still running (it honours the Stop before
+      // posting anything): the settle line comes from here.
+      if (outcome === 'cancelled' || outcome === 'cancel_requested') {
+        settle = await postCancelNote(record, userId).catch((err) => {
+          logger.warn(`[media-delivery] cancel note not posted id=${id} code=${err?.code || 'post_error'}`);
+          return null;
+        });
+      }
+    }
+    if (!record || (outcome !== 'cancelled' && outcome !== 'cancel_requested')) {
+      return { ...empty(outcome), chatId: record?.deliveryChatId || record?.chatId || null };
+    }
+    // Already stopped under the lock when the record closed here.
+    const finalStop = stoppedInside && outcome === 'cancelled' ? stoppedInside
+      : await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(record) });
+    const stoppedFiles = finalStop.stopped;
+    // Left open with its marker (a holder, or a lock a dead process left):
+    // the sweep that closes it must not stop a recording asked for again.
+    if (outcome === 'cancel_requested') await noteJobsStopped(id, finalStop);
+    logger.info(`[media-delivery] cancelled id=${id} files=${(record.fileIds || []).length} stopped=${stoppedFiles} outcome=${outcome}`);
+    return { id, outcome, stoppedFiles, messageId: settle?.messageId || null, chatId: settle?.chatId || record.deliveryChatId || record.chatId || null };
+  }
+
+  /**
+   * May a refine job still run? No when the request it was queued for was
+   * stopped («Detener») and no other open refine of the user wants the same
+   * job (same window, language and hints: refineJobKeyOf). Unknown (no id,
+   * a record long gone, the store down) lets it run.
+   */
+  async function isRefineJobWanted({ deliveryId = null, fileId = null, userId = null } = {}) {
+    if (!enabled() || !isValidDeliveryId(String(deliveryId || ''))) return true;
+    const store = getStore();
+    const asked = await readRecordQuietly(deliveryId);
+    if (!isRefineRecord(asked) || (userId && asked.userId !== userId)) return true;
+    const stopped = asked.status === 'cancelled'
+      || (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(asked.id).catch(() => false));
+    if (!stopped) return true;
+    const key = refineJobKeyOf(asked);
+    const file = String(fileId || (asked.fileIds || [])[0] || '');
+    try {
+      const open = typeof store.findPendingByFile === 'function' ? await store.findPendingByFile(file, { userId: asked.userId }) : [];
+      for (const record of open) {
+        if (record.id === asked.id || !isRefineRecord(record) || refineJobKeyOf(record) !== key) continue;
+        // Stopped too, its line still to post: it wants nothing.
+        if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(record.id).catch(() => false)) continue;
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /**
+   * «Detener» for every transcription a chat is still waiting on, or for the
+   * ids given and every other open delivery of the same request: one with
+   * the same task, or one for the same recordings (`fileIds`, the pending
+   * hand-offs' sources). Two links handed off in one turn are two
+   * deliveries, and the hand-off names only the first.
+   */
+  async function cancelChatDeliveries({ userId = null, chatId = null, deliveryIds = null, fileIds = null } = {}) {
+    if (!userId || !chatId) return { cancelled: 0, results: [] };
+    const store = getStore();
+    let records = [];
+    try {
+      records = typeof store.listActiveForChat === 'function' ? await store.listActiveForChat(chatId, { userId }) : [];
+    } catch (err) {
+      logger.warn(`[media-delivery] chat listing failed code=${err?.code || 'list_error'}`);
+      return { cancelled: 0, results: [], error: 'unavailable' };
+    }
+    const wanted = Array.isArray(deliveryIds) && deliveryIds.length
+      ? new Set(deliveryIds.filter(value => isValidDeliveryId(String(value || '')))) : null;
+    let targets = records;
+    if (wanted) {
+      const named = records.filter(record => wanted.has(record.id));
+      const tasks = new Set(named.map(record => record.taskId).filter(Boolean));
+      const files = new Set([...(Array.isArray(fileIds) ? fileIds : []), ...named.flatMap(record => record.fileIds || [])].filter(Boolean));
+      targets = records.filter(record => wanted.has(record.id) || (record.taskId && tasks.has(record.taskId))
+        || (record.fileIds || []).some(fileId => files.has(fileId)));
+    }
+    const results = [];
+    for (const record of targets) results.push(await cancelDelivery(record.id, { userId }));
+    // Ids asked for that are no longer open: what they became. One of this
+    // chat that never got its chat line is settled now (cancelDelivery); one
+    // of another chat (a branch or a saved share copies the hand-off) is
+    // only reported: a Stop here never stops or posts into another chat.
+    if (wanted) {
+      for (const id of wanted) {
+        if (targets.some(record => record.id === id)) continue;
+        const known = await readRecordQuietly(id);
+        if (known && known.userId === userId && (known.chatId === chatId || known.deliveryChatId === chatId)) {
+          results.push(await cancelDelivery(id, { userId }));
+          continue;
+        }
+        results.push({ id, outcome: 'missing', stoppedFiles: 0, messageId: null, chatId: null });
+      }
+    }
+    return { cancelled: results.filter(result => result.outcome === 'cancelled' || result.outcome === 'cancel_requested').length, results };
+  }
+
+  /**
+   * The open (still waiting) transcript delivery of this chat that covers
+   * these recordings, newest first, or null. A follow-up joins it instead of
+   * starting a second transcription.
+   */
+  async function findOpenDelivery({ userId = null, chatId = null, fileIds = [] } = {}) {
+    if (!enabled() || !userId || !chatId) return null;
+    const store = getStore();
+    if (typeof store.listActiveForChat !== 'function') return null;
+    const ids = (Array.isArray(fileIds) ? fileIds : []).filter(Boolean);
+    try {
+      const records = await store.listActiveForChat(chatId, { userId });
+      const matches = records.filter(record => record.kind !== 'refine'
+        && (!ids.length || ids.every(fileId => (record.fileIds || []).includes(fileId))));
+      matches.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+      return matches[0] || null;
+    } catch (err) {
+      logger.warn(`[media-delivery] open delivery lookup failed code=${err?.code || 'lookup_error'}`);
+      return null;
+    }
+  }
+
+  /**
+   * Fold a follow-up into a pending delivery (store.amend). New language or
+   * names also reach the jobs that have not started. Never throws.
+   */
+  async function amendDelivery(id, { userId = null, amendment = {} } = {}) {
+    if (!enabled() || !userId || !isValidDeliveryId(String(id || ''))) return { outcome: 'missing', record: null, changes: [] };
+    const store = getStore();
+    if (typeof store.amend !== 'function') return { outcome: 'unsupported', record: null, changes: [] };
+    let result;
+    try {
+      result = await store.amend(id, { userId, amendment });
+    } catch (err) {
+      logger.warn(`[media-delivery] amend failed id=${id} code=${err?.code || 'amend_error'}`);
+      return { outcome: 'error', record: null, changes: [] };
+    }
+    if (result?.outcome === 'amended' && result.record
+      && (result.changes.includes('language') || result.changes.includes('hints'))) {
+      await rememberHints(result.record);
+    }
+    if (result?.outcome === 'amended') {
+      logger.info(`[media-delivery] amended id=${id} changes=${result.changes.join(',') || 'goal'}`);
+    }
+    return result || { outcome: 'missing', record: null, changes: [] };
+  }
+
+  /**
    * Shutdown: stop new claims, give in-flight deliveries `graceMs`, then
    * hand every still-held record back as pending (no attempt is spent) so
    * the next process picks it up immediately instead of after the stale window.
@@ -1919,6 +2700,14 @@ function createMediaDeliveryService(deps = {}) {
     onMediaTerminal,
     sweepPendingDeliveries,
     deliverOne,
+    cancelDelivery,
+    cancelChatDeliveries,
+    cancelUnneededMediaJobs,
+    releasePendingStops,
+    pendingStopFileIds,
+    isRefineJobWanted,
+    findOpenDelivery,
+    amendDelivery,
     close,
     get store() { return getStore(); },
   };
@@ -1950,6 +2739,16 @@ module.exports = {
   sweepPendingDeliveries: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().sweepPendingDeliveries(options)
     : Promise.resolve({ status: 'disabled' })),
   closeMediaDelivery: options => (defaultService ? defaultService.close(options) : Promise.resolve({ released: 0 })),
+  cancelChatDeliveries: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().cancelChatDeliveries(options)
+    : Promise.resolve({ cancelled: 0, results: [], error: 'disabled' })),
+  findOpenDelivery: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().findOpenDelivery(options) : Promise.resolve(null)),
+  // Also with the delivery switched off: Stop during an inline wait still stops the jobs.
+  cancelUnneededMediaJobs: options => getMediaDeliveryService().cancelUnneededMediaJobs(options),
+  releasePendingStops: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().releasePendingStops(options) : Promise.resolve(0)),
+  pendingStopFileIds: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().pendingStopFileIds(options) : Promise.resolve([])),
+  amendDelivery: (id, options) => (isMediaDeliveryEnabled() ? getMediaDeliveryService().amendDelivery(id, options)
+    : Promise.resolve({ outcome: 'disabled', record: null, changes: [] })),
+  isRefineJobWanted: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().isRefineJobWanted(options) : Promise.resolve(true)),
   // Pure helpers
   isMediaDeliveryEnabled,
   inlineWaitMs,
@@ -1958,10 +2757,15 @@ module.exports = {
   estimateBatchEtaSeconds,
   shouldHandOff,
   handOffMessage,
+  cancelledMessage,
+  amendedMessage,
+  stillRunningMessage,
   deliveryMessage,
   refineMessage,
   refineHandOffMessage,
   analysisRangeOf,
+  // Test seam: the analysis on the picked model (pinned) or an explained failure.
+  defaultAnalyze,
   resolveRefineOutcome,
   awaitingRefineOutcome,
   refineJobKeyOf,
