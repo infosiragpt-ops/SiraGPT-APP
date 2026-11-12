@@ -574,7 +574,13 @@ const RESUME_MAX_LATER_TURNS = 4
 
 // «retoma las demás», «sigue con el resto»: the stopped ones, also after a
 // follow-up about the ready ones (like «retómala»).
-const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)\\b`)
+// Only a recording word (or nothing) after it: «sigue con los otros puntos»
+// or «… el resto de la explicación» continue the answer just given.
+const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)(?: (?:dos|tres|cuatro|\\d+))?(?: (?:grabaciones|grabacion|audios?|videos?|clases?|reuniones|reunion|archivos?|notas de voz))?(?: (?:por favor|porfa|gracias|tambien))*$`)
+// The words a reply's copy names («escribe «retómala»»): after an answer or a
+// delivery that only mentions the stopped recordings, a pronoun with
+// «continúa» or «sigue» continues that answer instead.
+const RESUME_NAMED_RE = new RegExp(`${RESUME_LEAD}(?:retoma|reanuda)(?:la|las|lo|los)(?: (?:por favor|porfa|gracias|ya|entonces))*$`)
 
 type ResumeKind = "transcript" | "context" | "her" | "him"
 
@@ -594,7 +600,10 @@ function isResumePrompt(prompt: string): ResumeKind | null {
 }
 
 /** A resume prompt answers the stop line `turns` after it (see turnsSinceStop). */
-function resumeAnswersStop(kind: ResumeKind, turns: { all: number; unrelated: number }): boolean {
+function resumeAnswersStop(kind: ResumeKind, turns: { all: number; unrelated: number; anchor?: StopAnchor }, prompt = ""): boolean {
+  // An answer or a delivery is no stop line: only the transcript, or the
+  // exact words its copy names, answer it.
+  if (turns.anchor === "answer" && kind !== "transcript" && !RESUME_NAMED_RE.test(normalizeRoutingPrompt(prompt))) return false
   if (kind === "transcript") return turns.unrelated <= RESUME_MAX_LATER_TURNS
   if (kind === "her") return turns.unrelated === 0
   return turns.all === 0
@@ -616,9 +625,15 @@ function messageMetadata(value: unknown): Record<string, unknown> {
  * recordings (a follow-up routed to them) is no other request and never ends
  * the search; a courtesy («ok gracias») counts for neither.
  */
-function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated: number; stopped: Set<string> } | null {
+type StopAnchor = "line" | "handoff" | "answer"
+
+function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated: number; stopped: Set<string>; anchor: StopAnchor } | null {
   let stopAt = -1
   let stopped = new Set<string>()
+  // The whole batch the stopped recordings belong to: a follow-up that carries
+  // it (with the finished ones) is about them too.
+  let batch = new Set<string>()
+  let anchor: StopAnchor = "line"
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] as { role?: unknown; metadata?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() === "user") continue
@@ -626,6 +641,8 @@ function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated:
     if (metadata.source === "media-delivery" && (metadata.deliveryKind === "cancelled" || metadata.stoppedReason === "media_delivery_cancelled")) {
       stopAt = index
       stopped = new Set((Array.isArray(metadata.transcriptionFileIds) ? metadata.transcriptionFileIds : []).map((id) => String(id)))
+      batch = new Set(stopped)
+      anchor = "line"
       break
     }
     // A reply that says «escribe «retómala»» about recordings still stopped
@@ -633,16 +650,18 @@ function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated:
     if (Array.isArray(metadata.stoppedFileIds) && metadata.stoppedFileIds.length) {
       stopAt = index
       stopped = new Set(metadata.stoppedFileIds.map((id) => String(id)))
+      batch = new Set([...stopped, ...(Array.isArray(metadata.transcriptionFileIds) ? metadata.transcriptionFileIds : []).map((id) => String(id))])
+      anchor = metadata.mediaDeliveryHandoff || metadata.stoppedReason === "media_delivery_handoff" ? "handoff" : "answer"
       break
     }
   }
   if (stopAt < 0) return null
-  const turns = { all: 0, unrelated: 0, stopped }
+  const turns = { all: 0, unrelated: 0, stopped, anchor }
   for (let index = stopAt + 1; index < messages.length; index += 1) {
     const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() !== "user") continue
     const ids = parseMessageFiles(message.files).map((file) => resolveUploadFileId(file)).filter(Boolean).map((id) => String(id))
-    if (ids.length && !ids.every((id) => stopped.has(id))) return null
+    if (ids.length && !ids.every((id) => batch.has(id))) return null
     if (ACK_TURN_RE.test(normalizeRoutingPrompt(String(message.content || "")))) continue
     turns.all += 1
     if (!ids.length) turns.unrelated += 1
@@ -658,7 +677,7 @@ export function resolveMediaFollowupFiles(prompt: string, messages: readonly unk
     // The stop line anchors the batch: once it answers that line, the
     // recordings it names are reached however long ago they were sent, past
     // any other upload sent while they transcribed.
-    if (resume && since && resumeAnswersStop(resume, since)) return stoppedBatchFiles(messages, since.stopped)
+    if (resume && since && resumeAnswersStop(resume, since, prompt)) return stoppedBatchFiles(messages, since.stopped)
   }
   const amendKind = kind ? null : pendingDeliveryAmendKind(prompt)
   const pending = kind || amendKind

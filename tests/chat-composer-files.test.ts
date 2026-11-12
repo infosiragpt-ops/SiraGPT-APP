@@ -346,6 +346,42 @@ describe("historical media batch follow-ups", () => {
     assert.deepEqual(resolveMediaFollowupFiles("retómala", answered), batch)
   })
 
+  it("after an answer that only mentions the stopped recordings, «continúalo» continues the answer; «retómala» still resumes", () => {
+    const batch = [{ id: "v0", name: "Clase 1.mp4", mimeType: "video/mp4" }, { id: "v2", name: "Clase 2.mp4", mimeType: "video/mp4" }]
+    const answered = [{ role: "USER", content: "transcribe", files: JSON.stringify(batch) },
+      { role: "ASSISTANT", content: "Tarea detenida.", metadata: { stoppedReason: "cancelled" } },
+      { role: "USER", content: "¿de qué trata la clase 1?", files: JSON.stringify(batch) },
+      { role: "ASSISTANT", content: "La clase 1 trata de: 1) la mitocondria… Una grabación sigue detenida: escribe «retómala» para seguir donde quedó.",
+        metadata: { transcriptionFileIds: ["v0", "v2"], stoppedFileIds: ["v2"] } }]
+    for (const prompt of ["continúalo", "sigue con los otros puntos", "continúa con los demás temas", "sigue con el resto de la explicación", "continúala", "sigue con la clase"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, answered), [], prompt)
+    }
+    for (const prompt of ["retómala", "sí, retómala", "retoma la transcripción"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, answered), batch, prompt)
+    }
+  })
+
+  it("a follow-up that carries the whole batch between the stop line and «retómalas» keeps the resume reaching it", () => {
+    const batch = [1, 2, 3].map(n => ({ id: `c${n}`, name: `Clase ${n}.mp4`, mimeType: "video/mp4" }))
+    const files = JSON.stringify(batch)
+    const ids = ["c1", "c2", "c3"]
+    const chat = [
+      { role: "USER", content: "transcribe estas 3 clases", files },
+      { role: "ASSISTANT", content: "Te aviso aquí cuando termine.", metadata: { mediaDeliveryHandoff: "md_A", transcriptionFileIds: ids, stoppedReason: "media_delivery_handoff" } },
+      { role: "ASSISTANT", content: "Detuve la transcripción de 3 grabaciones.",
+        metadata: JSON.stringify({ source: "media-delivery", mediaDelivery: "md_A", transcriptionFileIds: ids, deliveryKind: "cancelled", stoppedReason: "media_delivery_cancelled" }) },
+      { role: "USER", content: "transcribe la clase 3", files },
+      { role: "ASSISTANT", content: "Te aviso aquí cuando termine.\n\n2 grabaciones siguen detenidas: escribe «retómalas» si las quieres.",
+        metadata: { transcriptionFileIds: ids, mediaDeliveryHandoff: "md_B", stoppedFileIds: ["c1", "c2"] } },
+      { role: "USER", content: "ponlo en Word", files },
+      { role: "ASSISTANT", content: "Anotado: cuando termine la transcripción te la entrego en Word.",
+        metadata: { transcriptionFileIds: ids, mediaDeliveryAmended: "md_B", mediaDeliveryChanges: ["document"] } },
+    ]
+    for (const prompt of ["retómalas", "retoma las demás", "sí, retómalas"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, chat), batch, prompt)
+    }
+  })
+
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {
     assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", [
       ...history, { role: "USER", files: [{ id: "new-doc", name: "brief.pdf" }] },

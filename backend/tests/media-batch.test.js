@@ -2887,6 +2887,45 @@ test('«retómalas todas menos la clase 4» releases the recording whose stop fa
   }
 });
 
+// ── ninth review: the server reads every resume the composer routes ─────────
+
+test('every resume the composer routes («retoma también los audios», «retoma la junta») resumes on the server, never buys an analysis', async () => {
+  const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
+  for (const goal of ['retoma también los audios', 'retoma la junta', 'retoma la audiencia', 'sigue entonces con la clase', 'retoma ya los videos', 'porfis retoma la clase']) {
+    const waits = [];
+    let analyses = 0;
+    const rows = [readyRow('v0', 'Clase 1.mp4', { extractedText: 'x'.repeat(50) }),
+      { id: 'v2', originalName: 'Clase 2.mp4', processingStage: 'failed', processingError: CANCELLED_NOTE, extractedText: null }];
+    const { context } = pendingStopContext({ goal, rows, pendingStops: [],
+      waitForMediaBatch: async (options) => {
+        waits.push(options);
+        return { rows: options.rows.map(row => ({ ...row, processingStage: 'ready', processingError: null, extractedText: 'y'.repeat(50) })),
+          total: 2, ready: 2, failed: 0, pending: 0, partial: 0, progress: {} };
+      },
+      extraBatch: { analyzeMediaBatch: async () => { analyses += 1; return { text: 'RESUMEN PAGADO', summaries: [{}], failed: [] }; } } });
+    await runMediaBranch(context);
+    assert.ok(waits.length && (waits[0].resumeStopped === true || (Array.isArray(waits[0].resumeStopped) && waits[0].resumeStopped.includes('v2'))),
+      `${goal}: ${JSON.stringify(waits[0]?.resumeStopped)}`);
+    assert.equal(analyses, 0, `${goal}: no analysis nobody asked for`);
+  }
+  // «sigue con los otros puntos» continues an answer, never the recordings.
+  for (const goal of ['sigue con los otros puntos', 'continúa con los demás temas', 'sigue con el resto de la explicación']) {
+    assert.equal(batch.asksToResume(goal), false, goal);
+  }
+  assert.equal(batch.asksToResume('retoma las demás'), true);
+});
+
+test('an exclamation before a format («qué bien, ponlo en Word») only notes the format: no paid summary', async () => {
+  for (const goal of ['qué bien, ponlo en Word', 'qué bueno, pásalo a PDF', 'cuánto falta ponlo en word']) {
+    const { result, amends } = await followUpOn({ mode: 'transcript', goal: 'transcribe esta clase', formats: ['txt'] }, goal);
+    assert.equal(amends[0].wantsAnalysis, false, goal);
+    assert.doesNotMatch(result.finalMarkdown, /resumen/, `${goal}: ${result.finalMarkdown}`);
+  }
+  // A dictated question still asks («qué pasó en la reunión», «qué dice el profesor cuando habla en inglés»).
+  assert.equal(batch.asksForDeliverable('qué pasó en la reunión'), true);
+  assert.equal(batch.asksForDeliverable('qué dice el profesor cuando habla en inglés'), true);
+});
+
 test('asking for the transcript again releases what a Stop could not stop yet; a summary releases nothing', async () => {
   for (const [goal, expected] of [['transcribe la clase', [['clase']]], ['y tradúcelo al inglés', []]]) {
     const released = [];

@@ -308,12 +308,19 @@ const TO_TEXT_RE = /\b(?:pasa|pasal[oa]s?|pasam[eo]l[oa]s?|pasarl[oa]s?|conviert
 // «retómala», «reanúdala», «continúala»: the answer to «Detuve la
 // transcripción… pídemela de nuevo y retomo donde quedó». It resumes the
 // transcript, never starts a paid analysis of every recording.
-const RESUME_LEAD = '^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|por favor|perfecto|listo)\\b[\\s,]*)*'
+// The same words the composer routes as a resume (lib/chat/composer-files.ts
+// RESUME_*): fillers after the verb, the class words («la junta», «la
+// audiencia»), and «las demás» only when nothing but a recording word follows
+// («sigue con los otros puntos» continues an answer).
+const RESUME_LEAD = '^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|porfis|pls|plis|por favor|perfecto|listo|entonces|pues)\\b[\\s,]*)*'
   + '(?:(?:me\\s+)?(?:puedes|podrias)\\s+|(?:quiero|necesito)\\s+que\\s+)?';
+const RESUME_FILLER = '(?:(?:por\\s+favor|porfa|porfis|de\\s+nuevo|otra\\s+vez|tambien|ya|entonces|ahora|pues)\\s+)*';
+const RESUME_RECORDING_WORDS = 'audios?|videos?|grabacion(?:es)?|notas?\\s+de\\s+voz|podcasts?|clips?|clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|seminarios?|talleres|taller|episodios?|juntas?|audiencias?|archivos?';
 const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}(?:(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`
-  + '|(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|seguir)\\s+(?:con\\s+)?'
-  + '(?:(?:la|las|el|los|mis|tus|todas|todos|esas|esos|estas|estos)\\s+)?'
-  + '(?:audios?|videos?|grabacion(?:es)?|clases?|reunion(?:es)?|archivos?|transcripci\\w*|transcrib\\w*|demas|otras|otros|restantes|resto|que\\s+faltan)\\b)');
+  + `|(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|seguir)\\s+${RESUME_FILLER}(?:con\\s+)?`
+  + '(?:(?:(?:todas|todos)\\s+)?(?:la|las|el|los|mi|mis|tu|tus|su|sus|esa|esas|ese|esos|esta|estas|este|estos)\\s+|todas\\s+|todos\\s+)?'
+  + `(?:(?:${RESUME_RECORDING_WORDS}|transcripci\\w*|trascri\\w*|transcrib\\w*)\\b`
+  + `|(?:demas|otras|otros|restantes|resto|que\\s+faltan)(?:\\s+(?:dos|tres|cuatro|\\d+))?(?:\\s+(?:${RESUME_RECORDING_WORDS}))?(?=\\s*(?:$|[,.;!?]|por\\s+favor\\b|porfa\\b|gracias\\b|y\\b|tambien\\b))))`);
 
 // «ponlo en Word», «dámelo en PDF», «lo quiero en Word», «expórtalo a Word»:
 // the transcript in a format, like TO_TEXT_RE, when nothing else is asked.
@@ -446,7 +453,13 @@ function wantsSummaryWithTranslation(goal) {
 // inglés», «cómo explica el tema»): an accented interrogative opening the
 // message, or an unaccented one before a speech verb. Never «como dice el
 // profesor, …» or «cuando habla en inglés, …» (a conjunction).
-const UNPUNCTUATED_QUESTION_RE = /^(?:(?:y|e|pero|ok)\s+)?(?:(?:de|sobre|en)\s+)?(?:(?:qué|quién|quiénes|cuál|cuáles|cómo|cuándo|dónde|cuánto|cuántos|cuánta|cuántas)\s|(?:que|quien|quienes|cual|cuales)\s+(?:mas\s+)?(?:\S+\s+){0,2}?(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|explica|explican|explico|explicaron|cuenta|cuentan|conto|menciona|mencionan|menciono)\b)/;
+// A dictated question names what was said or happened («qué dice el
+// profesor…», «de qué trata la clase», «qué pasó en la reunión»); an
+// exclamation or a status ping («qué bien, ponlo en Word», «cuánto falta»)
+// buys no analysis. «como», «cuando», «donde» without their accent are
+// conjunctions («como dice el profesor, transcríbelo literal»).
+const SAID_VERB_SOURCE = '(?:dice|dicen|dijo|dijeron|decia|decían|decian|habla|hablan|habl[oó]|hablaron|explica|explican|explic[oó]|explicaron|cuenta|cuentan|cont[oó]|contaron|menciona|mencionan|mencion[oó]|mencionaron|trata|tratan|pasa|pas[oó]|ocurre|ocurri[oó]|sucede|sucedi[oó]|decide|decidi[oó]|decidieron|acordaron|propone|propuso|opina|opinan|piensa|pide|pidi[oó]|recomienda|recomend[oó]|concluye|conclu[yí]?[oó]|significa)';
+const UNPUNCTUATED_QUESTION_RE = new RegExp(`^(?:(?:y|e|pero|ok)\\s+)?(?:(?:de|sobre|en)\\s+)?(?:qu[eé]|qui[eé]n|qui[eé]nes|cu[aá]l|cu[aá]les|cómo|cuándo|dónde|cuánto|cuántos|cuánta|cuántas)\\s+(?:m[aá]s\\s+)?(?:\\S+\\s+){0,3}?${SAID_VERB_SOURCE}(?![a-záéíóúñü])`);
 
 function asksForDeliverable(goal) {
   const text = String(goal || '');
