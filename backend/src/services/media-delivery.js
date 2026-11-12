@@ -1861,7 +1861,9 @@ function createMediaDeliveryService(deps = {}) {
       analysisNotes, translationFailed, summaryText, summaryFailed,
       transcriptFilesAttached: saved.some(artifact => artifact?.role === 'transcript') });
     return postAndFinish({ record, token, rows, counts, content, saved, targetChatId,
-      extraMetadata: { deliveryKind: 'transcript', stoppedReason: stoppedReasonFor(counts) } });
+      extraMetadata: { deliveryKind: 'transcript', stoppedReason: stoppedReasonFor(counts),
+        // «detenida (escribe «retómala»…)»: the composer reads it as about these.
+        ...(rows.some(isStoppedByUser) ? { stoppedFileIds: rows.filter(isStoppedByUser).map(row => row.id) } : {}) } });
   }
 
   async function saveSpecs(specs, { userId, targetChatId }) {

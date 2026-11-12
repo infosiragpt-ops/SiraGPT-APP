@@ -1426,3 +1426,13 @@ test('a second press of Stop stops only what the first one left', async (t) => {
   assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b'], ['b']]);
   assert.equal((await store.get(record.id))?.status, 'cancelled');
 });
+
+test('the delivery that lists a recording as «detenida» names it for the composer\'s «retómala»', async (t) => {
+  const { service, state } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT }),
+    fileRow('b', { processingStage: 'failed', processingError: CANCELLED_NOTE })] });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  assert.equal((await service.deliverOne(record.id)).status, 'delivered');
+  const posted = state.messages.find(message => message.metadata?.deliveryKind === 'transcript');
+  assert.match(posted.content, /«b\.mp4»: detenida \(escribe «retómala»/);
+  assert.deepEqual(posted.metadata.stoppedFileIds, ['b']);
+});

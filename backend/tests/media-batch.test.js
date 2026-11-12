@@ -2657,3 +2657,40 @@ test('asking for the transcript again releases what a Stop could not stop yet; a
     assert.deepEqual(JSON.parse(JSON.stringify(released)), expected, goal);
   }
 });
+
+// ── eighth review: the composer's reach after a Stop ─────────────────────────
+
+test('a reply that asks for «retómala» names the stopped recordings for the composer', async () => {
+  const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
+  const stopped = (id, name) => ({ id, originalName: name, processingStage: 'failed', extractedText: null, processingError: CANCELLED_NOTE });
+  // An answer about the finished one.
+  const rows = [readyRow('v0', 'Clase 1.mp4'), stopped('v2', 'Clase 2.mp4')];
+  const answer = await runMediaBranch({ mediaBatchRows: rows, displayGoal: '¿de qué trata la clase 1?', goal: '¿de qué trata la clase 1?',
+    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 2, ready: 1, failed: 1, pending: 0, partial: 0 }) },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ ...artifact, id: 'art' }), artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: {}, task: {}, documentPolicy: {},
+    require: mediaRuntime(async () => 'La clase trata de la fotosíntesis.'),
+    ...mediaBranchHelpers(), throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.match(answer.finalMarkdown, /escribe «retómala»/);
+  assert.deepEqual(JSON.parse(JSON.stringify(answer.metadata.stoppedFileIds)), ['v2']);
+  // A hand-off that leaves one stopped.
+  const pendingRows = [{ id: 'p1', originalName: 'Clase 3.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }, stopped('v2', 'Clase 2.mp4')];
+  const { adapter } = capturingDelivery();
+  const handOff = await handOffTurn({ goal: 'transcribe la clase 3', delivery: adapter, rows: pendingRows, plainTranscriptionRequest: true });
+  assert.match(handOff.finalMarkdown, /escribe «retómala»/);
+  assert.deepEqual(JSON.parse(JSON.stringify(handOff.metadata.stoppedFileIds)), ['v2']);
+});
+
+test('a question dictated without «?» next to a language is answered, never taken as the fact alone', async () => {
+  for (const goal of ['qué dice el profesor cuando habla en inglés y en español', 'qué dice el profesor cuando habla en inglés',
+    'qué explica el profe cuando habla en quechua y español']) {
+    const { amends } = await followUp(goal);
+    assert.ok(amends.some(amendment => amendment.wantsAnalysis === true), goal);
+  }
+  // A conjunction is no question.
+  assert.equal(batch.asksForDeliverable('cuando habla en inglés, transcríbelo literal'), false);
+  assert.equal(batch.asksForDeliverable('como dice el profesor, transcríbelo literal'), false);
+});

@@ -12599,8 +12599,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
 
     // 2) Background drain for any other idle chat with queued work.
+    // Only the first queued item of each chat: a later one never goes ahead
+    // of one kept for its opened chat (the order is the user's).
+    const seenQueueChats = new Set<string>();
     const bgIndex = pendingMsgQueueRef.current.findIndex((item) => {
       if (!item.chatId) return false;
+      if (seenQueueChats.has(item.chatId)) return false;
+      seenQueueChats.add(item.chatId);
       if (isComposerQueueChatPaused(pendingMsgQueueRef.current, item.chatId)) return false;
       if (item.chatId === queueChatId) return false;
       if (queueDrainClaims.has(item.id)) return false;
@@ -12614,14 +12619,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (!(item.files || []).length && isMediaFollowupPrompt(item.msg)) return false;
       // So do a resume after «Detuve…» and a short instruction for a batch
       // still transcribing: drained here they would reach the plain chat
-      // with no recordings. Without that chat's messages, any that could.
-      if (!(item.files || []).length) {
-        const queuedChatMessages = ((chats || []).find((c: any) => c?.id === item.chatId) as any)?.messages;
-        const reachesRecordings = Array.isArray(queuedChatMessages) && queuedChatMessages.length
-          ? resolveMediaFollowupFiles(item.msg, queuedChatMessages).length > 0
-          : mayReachMediaBatch(item.msg);
-        if (reachesRecordings) return false;
-      }
+      // with no recordings. The background never has that chat's whole
+      // history (a chat-list row keeps one message): any that could wait.
+      if (!(item.files || []).length && mayReachMediaBatch(item.msg)) return false;
       if (isMediaUnderstandingTurn(item.msg, item.files || [])) return false;
       return true;
     });

@@ -424,9 +424,16 @@ function wantsSummaryWithTranslation(goal) {
  * recording. Never ordinary words («que es más fácil de editar», «es para
  * mi tarea», «de acuerdo»): those must not start a paid analysis.
  */
+// A question dictated without «?» («qué dice el profesor cuando habla en
+// inglés», «cómo explica el tema»): an accented interrogative opening the
+// message, or an unaccented one before a speech verb. Never «como dice el
+// profesor, …» or «cuando habla en inglés, …» (a conjunction).
+const UNPUNCTUATED_QUESTION_RE = /^(?:(?:y|e|pero|ok)\s+)?(?:(?:de|sobre|en)\s+)?(?:(?:qué|quién|quiénes|cuál|cuáles|cómo|cuándo|dónde|cuánto|cuántos|cuánta|cuántas)\s|(?:que|quien|quienes|cual|cuales)\s+(?:mas\s+)?(?:\S+\s+){0,2}?(?:dice|dicen|dijo|dijeron|habla|hablan|hablo|hablaron|explica|explican|explico|explicaron|cuenta|cuentan|conto|menciona|mencionan|menciono)\b)/;
+
 function asksForDeliverable(goal) {
   const text = String(goal || '');
-  return wantsSummaryWithTranslation(text) || TRANSCRIPT_EXTRA_DELIVERABLE_RE.test(stripNegatedAnalysis(text.toLowerCase()));
+  return wantsSummaryWithTranslation(text) || TRANSCRIPT_EXTRA_DELIVERABLE_RE.test(stripNegatedAnalysis(text.toLowerCase()))
+    || (!/[¿?]/.test(text) && UNPUNCTUATED_QUESTION_RE.test(text.trim().toLowerCase()) && !GREETING_QUESTION_RE.test(text.trim().toLowerCase()));
 }
 
 /** A translate verb turned down anywhere («no la traduzcas porfa», «no traduzcas los nombres»). */

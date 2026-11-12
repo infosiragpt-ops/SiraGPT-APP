@@ -298,6 +298,41 @@ describe("historical media batch follow-ups", () => {
     assert.equal(mayReachMediaBatch("escríbeme un poema"), false)
   })
 
+  it("a resume reaches the recordings its stop line names, past other uploads, with fillers, and after a reply that asks for it", () => {
+    const stopped = [{ id: "a1", name: "clase-larga.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine.", metadata: { mediaDeliveryHandoff: "md_A", transcriptionFileIds: ["a1"], stoppedReason: "media_delivery_handoff" } }
+    const stopLine = { role: "ASSISTANT", content: "Detuve la transcripción de «clase-larga.mp4».",
+      metadata: JSON.stringify({ source: "media-delivery", mediaDelivery: "md_A", transcriptionFileIds: ["a1"], deliveryKind: "cancelled", stoppedReason: "media_delivery_cancelled" }) }
+    // A voice note or a PDF sent while it transcribed, before the Stop.
+    for (const between of [[{ id: "b1", name: "nota.ogg", mimeType: "audio/ogg" }], [{ id: "d1", name: "informe.pdf", mimeType: "application/pdf" }]]) {
+      const chat = [{ role: "USER", content: "transcribe", files: JSON.stringify(stopped) }, handoff,
+        { role: "USER", content: "y esto", files: JSON.stringify(between) }, { role: "ASSISTANT", content: "Listo." }, stopLine]
+      for (const prompt of ["retoma la transcripción", "retómala"]) {
+        assert.deepEqual(resolveMediaFollowupFiles(prompt, chat), stopped, `${prompt} (${between[0].name})`)
+      }
+    }
+    const chat = [{ role: "USER", content: "transcribe", files: JSON.stringify(stopped) }, handoff, stopLine]
+    for (const prompt of ["retoma por favor la transcripción", "retoma de nuevo la transcripción", "continúa por favor con la transcripción",
+      "retoma también los audios", "Sí, por favor, retómala", "retoma la junta", "retoma la audiencia"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, chat), stopped, prompt)
+    }
+    // «el archivo» after a request about another file is that file.
+    const spreadsheet = [...chat, { role: "USER", content: "hazme un Excel con mis gastos del mes" }, { role: "ASSISTANT", content: "Listo, aquí está gastos.xlsx." }]
+    for (const prompt of ["sigue con el archivo y agrégale una columna de totales", "continúa con el archivo"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, spreadsheet), [], prompt)
+    }
+    assert.deepEqual(resolveMediaFollowupFiles("continúa con el archivo", chat), stopped, "right after the stop line it is the recording")
+    // A reply that says «escribe «retómala»» (its stoppedFileIds) is a stop line too, also after another request.
+    const batch = [{ id: "v0", name: "Clase 1.mp4", mimeType: "video/mp4" }, { id: "v2", name: "Clase 2.mp4", mimeType: "video/mp4" }]
+    const answered = [{ role: "USER", content: "transcribe", files: JSON.stringify(batch) },
+      { role: "ASSISTANT", content: "Tarea detenida.", metadata: { stoppedReason: "cancelled" } },
+      { role: "USER", content: "escríbeme un correo para mi profesor" }, { role: "ASSISTANT", content: "Estimado profesor…" },
+      { role: "USER", content: "¿de qué trata la clase 1?", files: JSON.stringify(batch) },
+      { role: "ASSISTANT", content: "Una grabación sigue detenida: escribe «retómala» para seguir donde quedó.",
+        metadata: { transcriptionFileIds: ["v0", "v2"], stoppedFileIds: ["v2"] } }]
+    assert.deepEqual(resolveMediaFollowupFiles("retómala", answered), batch)
+  })
+
   it("stops at the newest attached nonmedia batch and never borrows another chat's files", () => {
     assert.deepEqual(resolveMediaFollowupFiles("analiza los audios", [
       ...history, { role: "USER", files: [{ id: "new-doc", name: "brief.pdf" }] },

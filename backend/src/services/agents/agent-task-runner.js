@@ -3183,7 +3183,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // would mark the message as read (see recognised).
         const saysOption = Boolean(amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
           || amendment.removeSubtitles || amendment.removeTranslation || amendment.range || mediaOutput.range
-          || ownHints.language || saysHints || saysTxt || plainTranscriptionRequest || transcriptRequest);
+          || ownHints.language || saysHints || saysTxt || plainTranscriptionRequest || transcriptRequest
+          // «qué dice cuando habla en inglés y en español»: the languages are no answer.
+          || (typeof mediaBatch.statesRecordingLanguages === 'function' && mediaBatch.statesRecordingLanguages(mediaGoal)));
         const asksBesides = typeof mediaBatch.asksForDeliverable === 'function' ? mediaBatch.asksForDeliverable(mediaGoal) : false;
         if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !amendTarget && asksBesides) {
           amendment.wantsAnalysis = true;
@@ -3358,7 +3360,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // Not `mediaDelivery`: that key marks the message the delivery
             // itself posts, and a hand-off must never count as delivered.
             metadata: { transcriptionFileIds: ids, mediaDeliveryHandoff: deliveryRecord.id,
-              mediaBatch: { total: batch.total, ready: batch.ready, failed: batch.failed, pending: batch.pending } },
+              mediaBatch: { total: batch.total, ready: batch.ready, failed: batch.failed, pending: batch.pending },
+              // The composer reads «retómala» after this reply as about these.
+              ...(stillStopped.length ? { stoppedFileIds: (batch.rows || []).filter(isStoppedRow).map(row => row.id) } : {}) },
           });
         }
         // Delivery unavailable: keep the previous behaviour and wait inline.
@@ -3543,6 +3547,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         steps: analysis ? 2 : 1, artifactsList: artifacts,
         metadata: { transcriptionFileIds: ids,
           ...(hasCompanionAttachments ? { companionFileIds: companionAttachments.map(item => item.id) } : {}),
+          // «escribe «retómala»» above: the composer reads it as about these.
+          ...(stoppedFiles ? { stoppedFileIds: (batch.rows || []).filter(row => mediaBatch.isUserCancelledRow(row)).map(row => row.id) } : {}),
           mediaBatch: { total: batch.total, ready: batch.ready, ...(stoppedFiles ? { stopped: stoppedFiles } : {}),
           failed: batch.failed, pending: batch.pending, partial: batch.partial || 0, analyzed: analysis?.summaries?.length || 0,
           translated: translation?.files?.length || 0, translationLanguage: translationTarget?.code || null },

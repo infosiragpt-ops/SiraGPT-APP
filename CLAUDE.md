@@ -3573,12 +3573,22 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   un pedido sobre esas mismas grabaciones (su mensaje las lleva y no corta la búsqueda); «continúalo»
   o una clase como objeto («continúa la clase», «sigue con la sesión»), solo justo después de la línea.
   La grabación tiene que ser el objeto del verbo, como en el servidor (`RESUME_TRANSCRIPT_RE`): «sigue
-  explicando la clase», «continúa con la explicación de la clase» o «sigue profe» se quedan en el chat. Un
+  explicando la clase», «continúa con la explicación de la clase» o «sigue profe» se quedan en el chat;
+  una muletilla en medio no corta («retoma por favor la transcripción», «retoma de nuevo…», «retoma
+  también los audios», «Sí, por favor, retómala»; `RESUME_FILLER`), y «la junta», «la audiencia» o «el
+  archivo» cuentan como una clase (solo justo después de la línea: «sigue con el archivo» tras pedir un
+  Excel es ese Excel). La línea ancla las grabaciones que nombra (`stoppedBatchFiles`): un audio o un PDF
+  enviados mientras se transcribía nunca la reemplazan. Una respuesta que pide «escribe «retómala»» (el
+  aviso, una respuesta sobre las listas o la entrega con una «detenida») lleva `metadata.stoppedFileIds`
+  y cuenta como esa línea, también tras un Detener durante la espera en línea. Un
   hecho con muletilla o dos puntos («Por cierto, está en inglés», «Ojo: son 3 hablantes», «Los nombres
   son: Juan…») llega al lote pendiente; uno de dos idiomas («está en inglés y español») se queda en el
   chat y, si llega, cuenta como leído (`statesRecordingLanguages`, nunca el análisis de reserva). Un
   mensaje en cola que retoma o modifica un lote espera a que se abra su chat (`mayReachMediaBatch` en
-  el drenado de fondo). Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
+  el drenado de fondo, siempre: la fila de la lista de chats que deja una recarga trae un solo
+  mensaje), y el drenado de fondo solo toma el primer mensaje en cola de cada chat: uno posterior nunca
+  se adelanta a uno retenido. Una pregunta dictada sin «?» («qué dice el profesor cuando habla en
+  inglés») es una pregunta (`asksForDeliverable`), también junto a un idioma o a dos. Una opción ya pedida junto a una pregunta («en Word y dime de qué trata la
   clase», «no lo traduzcas, solo dime qué dice el profesor»; también junto a «transcribe…», un tramo,
   el idioma o nombres) pide el análisis solo con un entregable o una pregunta real
   (`asksForDeliverable`: «que es más fácil de editar», «porque…», «de acuerdo» no lo son); la opción

@@ -91,9 +91,11 @@ describe("Stop during a background transcription (source contract)", () => {
 
   it("a queued resume or amendment for the recordings waits for its chat, never the background drain", () => {
     const drain = between(source, "// 2) Background drain for any other idle chat with queued work.", "if (bgIndex < 0) return;")
-    assert.match(drain, /resolveMediaFollowupFiles\(item\.msg, queuedChatMessages\)\.length > 0/)
-    assert.match(drain, /: mayReachMediaBatch\(item\.msg\);/)
-    assert.match(drain, /if \(reachesRecordings\) return false;/)
+    // Never decided from the chat-list row a reload leaves (one message, no files).
+    assert.doesNotMatch(drain, /resolveMediaFollowupFiles\(item\.msg/)
+    assert.match(drain, /if \(!\(item\.files \|\| \[\]\)\.length && mayReachMediaBatch\(item\.msg\)\) return false;/)
+    // FIFO per chat: only the first queued item of each chat may drain.
+    assert.match(drain, /if \(seenQueueChats\.has\(item\.chatId\)\) return false;\s*seenQueueChats\.add\(item\.chatId\);/)
   })
 
   it("the API client posts the cancel for the chat", () => {

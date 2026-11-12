@@ -549,7 +549,7 @@ const ACK_TURN_RE = /^(?:(?:ok|okay|okey|vale|gracias|muchas|mil|perfecto|listo|
 // «sigue profe») answers the stop line only right after it: elsewhere it
 // continues the answer just given. One that names the transcript or the
 // recordings reaches them a few turns later too (RESUME_MAX_LATER_TURNS).
-const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro) )*`
+const RESUME_LEAD = `^${FOLLOWUP_LEAD_IN.source}(?:(?:si|dale|claro|ok|okay|vale|bueno|por favor|porfa|porfis|pls|plis) )*`
 const RESUME_PRONOUN_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud|continu|prosigu)\\w*?(lo|la|los|las)\\b`)
 const RESUME_VERB = "(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|segui(?:r)?)"
 // The recording is the verb's object, as on the server (RESUME_TRANSCRIPT_RE
@@ -557,14 +557,18 @@ const RESUME_VERB = "(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|
 // transcribiendo»; never «sigue explicando la clase» or «continúa con la
 // explicación de la clase».
 const RESUME_DETERMINER = "(?:(?:(?:todas|todos) )?(?:la|las|el|los|mi|mis|tu|tus|su|sus|esa|esas|ese|esos|esta|estas|este|estos) |todas |todos )?"
-const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RESUME_DETERMINER}(?:transcri\\w*|trascri\\w*|audios?|videos?|grabaciones|grabacion|notas? de voz|podcasts?|clips?|archivos?)\\b`)
-const RESUME_CONTEXT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?${RESUME_DETERMINER}(?:clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|seminarios?|talleres|taller|episodios?)\\b`)
+// «retoma por favor la transcripción», «retoma de nuevo…», «retoma también los audios».
+const RESUME_FILLER = "(?:(?:por favor|porfa|de nuevo|otra vez|tambien|ya|entonces|ahora|pues) )*"
+// «archivo» may be any file the chat made since: it answers the stop line
+// only right after it, like a class word.
+const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?${RESUME_DETERMINER}(?:transcri\\w*|trascri\\w*|audios?|videos?|grabaciones|grabacion|notas? de voz|podcasts?|clips?)\\b`)
+const RESUME_CONTEXT_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?${RESUME_DETERMINER}(?:clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|seminarios?|talleres|taller|episodios?|juntas?|audiencias?|archivos?)\\b`)
 
 const RESUME_MAX_LATER_TURNS = 4
 
 // «retoma las demás», «sigue con el resto»: the stopped ones, also after a
 // follow-up about the ready ones (like «retómala»).
-const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} (?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)\\b`)
+const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)\\b`)
 
 type ResumeKind = "transcript" | "context" | "her" | "him"
 
@@ -606,7 +610,7 @@ function messageMetadata(value: unknown): Record<string, unknown> {
  * recordings (a follow-up routed to them) is no other request and never ends
  * the search; a courtesy («ok gracias») counts for neither.
  */
-function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated: number } | null {
+function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated: number; stopped: Set<string> } | null {
   let stopAt = -1
   let stopped = new Set<string>()
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -618,9 +622,16 @@ function turnsSinceStop(messages: readonly unknown[]): { all: number; unrelated:
       stopped = new Set((Array.isArray(metadata.transcriptionFileIds) ? metadata.transcriptionFileIds : []).map((id) => String(id)))
       break
     }
+    // A reply that says «escribe «retómala»» about recordings still stopped
+    // (a hand-off, an answer, a delivery) is a stop line too.
+    if (Array.isArray(metadata.stoppedFileIds) && metadata.stoppedFileIds.length) {
+      stopAt = index
+      stopped = new Set(metadata.stoppedFileIds.map((id) => String(id)))
+      break
+    }
   }
   if (stopAt < 0) return null
-  const turns = { all: 0, unrelated: 0 }
+  const turns = { all: 0, unrelated: 0, stopped }
   for (let index = stopAt + 1; index < messages.length; index += 1) {
     const message = messages[index] as { role?: unknown; files?: unknown; content?: unknown } | null
     if (!message || String(message.role || "").toLowerCase() !== "user") continue
@@ -639,8 +650,9 @@ export function resolveMediaFollowupFiles(prompt: string, messages: readonly unk
     const resume = isResumePrompt(prompt)
     const since = resume ? turnsSinceStop(messages) : null
     // The stop line anchors the batch: once it answers that line, the
-    // recordings are reached however long ago they were sent.
-    if (resume && since && resumeAnswersStop(resume, since)) kind = "explicit"
+    // recordings it names are reached however long ago they were sent, past
+    // any other upload sent while they transcribed.
+    if (resume && since && resumeAnswersStop(resume, since)) return stoppedBatchFiles(messages, since.stopped)
   }
   const amendKind = kind ? null : pendingDeliveryAmendKind(prompt)
   const pending = kind || amendKind
@@ -671,6 +683,18 @@ export function resolveMediaFollowupFiles(prompt: string, messages: readonly unk
     const pendingBatch = pending.size > 0 && files.every((file) => pending.has(String(resolveUploadFileId(file))))
     if ((beyondLimit || pendingOnly) && !pendingBatch) return []
     // The whole batch the composer accepts (100 recordings) is one follow-up target.
+    return files.length <= MAX_MEDIA_FILES_PER_MESSAGE && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
+  }
+  return []
+}
+
+/** The latest user batch that carries the recordings a stop line names. */
+function stoppedBatchFiles(messages: readonly unknown[], stopped: Set<string>): unknown[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as { role?: unknown; files?: unknown } | null
+    if (!message || String(message.role || "").toLowerCase() !== "user") continue
+    const files = parseMessageFiles(message.files).filter((file) => Boolean(resolveUploadFileId(file)))
+    if (!files.length || !files.some((file) => stopped.has(String(resolveUploadFileId(file))))) continue
     return files.length <= MAX_MEDIA_FILES_PER_MESSAGE && files.every((file) => isAudioComposerFile(file) || isVideoComposerFile(file)) ? files : []
   }
   return []
