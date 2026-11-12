@@ -101,10 +101,13 @@ function totalProgressDuration(batch = {}) {
  */
 function mediaRowsForAnalysis(rows = [], transcripts = new Map(), range = null, { formatter = null } = {}) {
   const named = rows.map((row) => {
-    const sourceName = transcripts?.get?.(row?.id)?.sourceName;
+    const sourceName = transcripts?.get?.(row?.id)?.sourceName || row?.sourceName;
     return sourceName ? { ...row, originalName: sourceName } : row;
   });
-  if (!range) return named;
+  // One window, or several (moments far apart are read each on its own).
+  const windows = (Array.isArray(range) ? range : range ? [range] : [])
+    .filter(window => window && Number.isFinite(Number(window.start)));
+  if (!windows.length) return named;
   let fmt = formatter;
   try { fmt = fmt || require('./media-transcript-format'); } catch (_) { return named; }
   const { transcriptResultFor } = require('./media-transcript-artifacts');
@@ -112,15 +115,20 @@ function mediaRowsForAnalysis(rows = [], transcripts = new Map(), range = null, 
     const result = transcriptResultFor(row, transcripts.get(row.id));
     if (!result.segments.length) return row;
     try {
-      const window = { start: range.start, end: range.end ?? null };
-      const segments = fmt.sliceSegments(result.segments, window);
-      if (!segments?.length) return row;
-      // The whole window, not just its speech: the text read on screen in
-      // those minutes («Texto en pantalla») comes with it, never the rest.
-      const sliced = typeof fmt.sliceResult === 'function' ? fmt.sliceResult(result, window) : null;
-      const text = fmt.renderText(sliced ? { ...sliced, segments } : { ...result, segments, onScreenText: [] },
-        { fileName: row.originalName || row.filename, header: false });
-      return String(text || '').trim() ? { ...row, extractedText: text } : row;
+      const parts = [];
+      for (const asked of windows) {
+        const window = { start: Number(asked.start), end: asked.end ?? null };
+        const segments = fmt.sliceSegments(result.segments, window);
+        if (!segments?.length) continue;
+        // The whole window, not just its speech: the text read on screen in
+        // those minutes («Texto en pantalla») comes with it, never the rest.
+        const sliced = typeof fmt.sliceResult === 'function' ? fmt.sliceResult(result, window) : null;
+        const text = fmt.renderText(sliced ? { ...sliced, segments } : { ...result, segments, onScreenText: [] },
+          { fileName: row.originalName || row.filename, header: false });
+        if (String(text || '').trim()) parts.push(String(text).trim());
+      }
+      // A window outside the recording reads it whole, as before.
+      return parts.length ? { ...row, extractedText: parts.join('\n\n[…]\n\n') } : row;
     } catch (_) {
       return row;
     }

@@ -1342,10 +1342,12 @@ test('«traduce al inglés lo que dice en el minuto 30» translates exactly that
     assert.match(result.finalMarkdown, /Traducción al (?:inglés|portugués) del tramo que pediste \(sin resumir\)/, displayGoal);
     assert.doesNotMatch(result.finalMarkdown, /Traducción completa/, displayGoal);
   }
-  // A long recording hands off the translation of that moment only.
+  // A long recording hands off the translation of that moment only: the
+  // moment is the translation's window, never the transcript's range.
   const moment = await handOff('traduce al inglés lo que dice en el minuto 30');
   assert.equal(moment.mode, 'translation');
-  assert.deepEqual(moment.range, { start: 1740, end: 2040 });
+  assert.equal(moment.range, null);
+  assert.deepEqual(moment.output.translationRange, { start: 1740, end: 2040 });
   assert.equal(moment.output.alsoAnalysis, false);
   // A comma before the moment alone keeps it the object.
   assert.equal(batch.translatesTheMoment('traduce al inglés lo que dice, en el minuto 30'), true);
@@ -1822,10 +1824,12 @@ test('translation windows add up and never shrink: a moment inside is already th
   const base = extra => normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe',
     mode: 'translation', formats: ['txt'], ...extra }, Date.now());
   const moment = (start, end) => ({ goal: 'traduce al inglés lo que dice en ese minuto', translationTarget: 'en', translationRange: { start, end } });
-  // The first hour translated (the transcript's range): minute 90 widens it.
+  // The first hour translated (the transcript's range): minute 90 is added
+  // as a window of its own, never the span of both.
   const hour = base({ range: { start: 0, end: 3600 }, output: { translationTarget: 'en' } });
   const late = mergeDeliveryAmendment(hour, moment(5340, 5640));
-  assert.deepEqual(late.record.output.translationRange, { start: 0, end: 5640 });
+  assert.deepEqual(late.record.output.translationRanges, [{ start: 0, end: 3600 }, { start: 5340, end: 5640 }]);
+  assert.equal(late.record.output.translationRange, undefined);
   assert.deepEqual(late.changes, ['translation_range_added']);
   assert.match(amendedMessage(late), /traducida al inglés \(la traducción incluye también ese momento\)/);
   // Minute 30 is inside that hour: nothing changes, and it never says «completa».
@@ -1834,17 +1838,19 @@ test('translation windows add up and never shrink: a moment inside is already th
   assert.deepEqual(inside.changes, ['translation_moment_included']);
   assert.match(amendedMessage(inside), /ya incluye ese momento/);
   assert.doesNotMatch(amendedMessage(inside), /completa/);
-  // Two moments: their span, never only the latest.
+  // Two moments: both windows, never only the latest (and never what lies between).
   const first = base({ output: { translationTarget: 'en', translationRange: { start: 1740, end: 2040 } } });
-  assert.deepEqual(mergeDeliveryAmendment(first, moment(2940, 3240)).record.output.translationRange, { start: 1740, end: 3240 });
+  assert.deepEqual(mergeDeliveryAmendment(first, moment(2940, 3240)).record.output.translationRanges,
+    [{ start: 1740, end: 2040 }, { start: 2940, end: 3240 }]);
+  // Moments that touch are one window.
+  assert.deepEqual(mergeDeliveryAmendment(first, moment(2040, 2340)).record.output.translationRange, { start: 1740, end: 2340 });
   // A moment inside a translated hour keeps the hour.
   const hourWindow = base({ output: { translationTarget: 'en', translationRange: { start: 0, end: 3600 } } });
   assert.deepEqual(mergeDeliveryAmendment(hourWindow, moment(1740, 2040)).record.output.translationRange, { start: 0, end: 3600 });
-  // «desde el minuto 30»: an earlier moment widens the open range back, to the end.
+  // «desde el minuto 30»: an earlier moment joins the open range, which stays open.
   const open = base({ range: { start: 1800, end: null }, output: { translationTarget: 'en' } });
-  const earlier = mergeDeliveryAmendment(open, moment(540, 840)).record.output.translationRange;
-  assert.equal(earlier.start, 540);
-  assert.equal(earlier.end, 7 * 24 * 3600);
+  assert.deepEqual(mergeDeliveryAmendment(open, moment(540, 840)).record.output.translationRanges,
+    [{ start: 540, end: 840 }, { start: 1800, end: null }]);
   // Naming the language again keeps the moment, and says how to get it all.
   const kept = mergeDeliveryAmendment(first, { goal: 'tradúcelo al inglés en Word', translationTarget: 'en', documentFormat: 'docx' });
   assert.deepEqual(kept.record.output.translationRange, { start: 1740, end: 2040 });
@@ -1997,9 +2003,13 @@ test('a moment of a recording already translated whole keeps the whole translati
   assert.equal(moment.record.output.translationRange, undefined, 'never narrowed to five minutes');
   assert.deepEqual(moment.changes, ['translation_moment_covered']);
   assert.match(require('../src/services/media-delivery').amendedMessage(moment), /traducida al inglés, completa \(incluye ese momento\)/);
-  // Another language is a new translation of that moment.
+  // Another language is a second translation of that moment: the whole
+  // English one stays.
   const other = mergeDeliveryAmendment(record, { goal: 'traduce al francés lo del minuto 30', translationTarget: 'fr', translationRange: { start: 1740, end: 2040 } });
-  assert.deepEqual(other.record.output.translationRange, { start: 1740, end: 2040 });
+  assert.equal(other.record.output.translationTarget, 'en');
+  assert.equal(other.record.output.translationRange, undefined);
+  assert.deepEqual(other.record.output.extraTranslations, [{ target: 'fr', ranges: [{ start: 1740, end: 2040 }] }]);
+  assert.deepEqual(other.changes, ['translation_added']);
 });
 
 test('an option the delivery already has next to a question still asks for the analysis', async () => {
@@ -2397,4 +2407,180 @@ test('loadMediaBatch and waitForMediaBatch preserve browser-extracted sourceName
   });
   assert.ok(labels.some((l) => l.includes('Clase_Magistral.mp4') && !l.includes('.audio.ogg')));
   assert.equal(waited.rows[0].originalName, 'Clase_Magistral.mp4');
+});
+
+// ── eighth review: translation follow-ups ────────────────────────────────────
+
+// A pending delivery that amends like the real store (mergeDeliveryAmendment)
+// and answers with the real copy.
+function storeBackedDelivery(initial) {
+  const store = require('../src/services/media-delivery-store');
+  const real = require('../src/services/media-delivery');
+  const state = { record: store.normalizeNewRecord({ userId: 'owner', chatId: 'chat', fileIds: ['clase'], fileNames: ['clase.mp4'],
+    formats: ['txt'], ...initial }, Date.now()), amends: [] };
+  state.record.id = 'md_open';
+  return {
+    state,
+    delivery: {
+      isMediaDeliveryEnabled: () => true,
+      estimateTranscriptionSeconds: () => 60,
+      findOpenDelivery: async () => state.record,
+      amendDelivery: async (id, { amendment }) => {
+        state.amends.push(JSON.parse(JSON.stringify(amendment)));
+        const { record, changes } = store.mergeDeliveryAmendment(state.record, amendment);
+        if (!changes.length) return { outcome: 'unchanged', changes: [], record: state.record };
+        state.record = { ...record, id: 'md_open', amendments: [...(state.record.amendments || []), { at: 'now', changes }] };
+        return { outcome: 'amended', changes, record: state.record };
+      },
+      amendedMessage: (args) => real.amendedMessage(args),
+      stillRunningMessage: (args) => real.stillRunningMessage(args),
+      createDelivery: async () => { throw new Error('no second delivery'); },
+      handOffMessage: () => 'Te aviso aquí.',
+      cancelUnneededMediaJobs: async () => ({ stopped: 0 }),
+    },
+  };
+}
+
+async function followUpOn(initial, goal) {
+  const pending = storeBackedDelivery(initial);
+  const result = await runMediaBranch(followupContext({ goal, delivery: pending.delivery,
+    waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+  return { result, record: pending.state.record, amends: pending.state.amends };
+}
+
+const ENGLISH_MOMENT = { mode: 'translation', goal: 'transcribe y traduce al inglés lo que dice en el minuto 30',
+  output: { translationTarget: 'en', translationRange: { start: 1740, end: 2040 }, includeTranscript: true } };
+
+test('«tradúcela completa», as the reply says, translates the whole recording: no language needed, no summary', async () => {
+  for (const goal of ['tradúcela completa', 'tradúcelo todo', 'tradúcela toda', 'tradúcelo completo', 'traduce toda la clase',
+    'quiero la traducción completa']) {
+    const { result, record, amends } = await followUpOn(ENGLISH_MOMENT, goal);
+    assert.equal(amends.length, 1, `${goal}: never the catch-all analysis`);
+    assert.equal(amends[0].translationTarget, 'en', `${goal}: the pending language`);
+    assert.equal(amends[0].translationWhole, true, goal);
+    assert.equal(amends[0].wantsAnalysis, false, goal);
+    assert.equal(record.output.translationRange, undefined, `${goal}: the whole recording`);
+    assert.equal(record.mode, 'translation');
+    assert.equal(record.output.alsoAnalysis, false, `${goal}: no summary nobody asked for`);
+    assert.match(result.finalMarkdown, /traducida al inglés \(la traducción, completa\)/, goal);
+  }
+});
+
+test('a first request\'s moment is the translation\'s window: «tradúcela completa al inglés» then translates it all', async () => {
+  const handedOff = await firstRequest('traduce al inglés lo que dice en el minuto 30');
+  assert.equal(handedOff.range, null, 'the transcript is never cut to the moment');
+  assert.deepEqual(handedOff.output.translationRange, { start: 1740, end: 2040 });
+  const { result, record } = await followUpOn(handedOff, 'tradúcela completa al inglés');
+  assert.equal(record.output.translationRange, undefined);
+  assert.equal(record.range, null);
+  assert.match(result.finalMarkdown, /traducida al inglés \(la traducción, completa\)/);
+  // A record handed off before this change kept the moment as its range.
+  const legacy = await followUpOn({ mode: 'translation', goal: 'traduce al inglés lo que dice en el minuto 30', range: { start: 1740, end: 2040 },
+    output: { translationTarget: 'en', analysisRange: { start: 1740, end: 2040 } } }, 'tradúcela completa al inglés');
+  assert.equal(legacy.record.range, null);
+  assert.equal(legacy.record.output.translationRange, undefined);
+  assert.match(legacy.result.finalMarkdown, /\(la traducción, completa\)/);
+});
+
+test('«lo del minuto N» alone is no question: «transcribe lo del minuto 30» and «solo lo del minuto 10 al 20» buy no analysis', async () => {
+  const transcript = await firstRequest('transcribe lo del minuto 30');
+  assert.equal(transcript.mode, 'transcript');
+  for (const goal of ['solo lo del minuto 10 al 20', 'quiero solo lo del minuto 10 al 20']) {
+    const { amends } = await followUp(goal);
+    assert.deepEqual(amends[0].range, { start: 600, end: 1200 }, `${goal}: the transcript of that stretch`);
+    assert.equal(amends[0].wantsAnalysis, false, goal);
+  }
+  for (const goal of ['transcribe lo del minuto 30', 'solo lo del minuto 10 al 20', 'dame lo del minuto 10 al 20 en Word', 'pásame lo del minuto 30 en Word', 'corrige lo del minuto 5']) {
+    assert.equal(batch.detectMediaFollowupIntent(goal), null, goal);
+  }
+  // What is said there is what to translate.
+  assert.equal(batch.detectMediaFollowupIntent('traduce al inglés lo del minuto 50')?.kind, 'lookup');
+});
+
+test('a take-back with the usual fillers drops the translation and is never sent to the translator', async () => {
+  const pending = { mode: 'translation', goal: 'transcribe y tradúcelo al inglés', output: { translationTarget: 'en', includeTranscript: true } };
+  for (const goal of ['no la traduzcas porfavor', 'no la traduzcas por fa', 'no la traduzcas porfis', 'no la traduzcas plz',
+    'no lo traduzcas para nada', 'no la traduzcas en absoluto', 'no la traduzcas a ningún idioma']) {
+    const { result, record, amends } = await followUpOn(pending, goal);
+    assert.equal(amends[0].removeTranslation, true, goal);
+    assert.equal(record.mode, 'transcript', goal);
+    assert.match(result.finalMarkdown, /sin la traducción/, goal);
+    assert.deepEqual(batch.translationConditions(record.goal), [], `${goal}: no instruction for a translation that no longer runs`);
+  }
+  // A part or a manner keeps the translation, as a condition.
+  for (const goal of ['no traduzcas los nombres propios', 'no lo traduzcas literal', 'no traduzcas el saludo inicial', 'deja las siglas sin traducir']) {
+    assert.equal(batch.negatesTranslation(goal), false, goal);
+    assert.deepEqual(batch.translationConditions(goal), [goal], goal);
+  }
+});
+
+test('how to translate reaches the translator, said either way; the latest about a part wins; never a summary', async () => {
+  const pending = { mode: 'translation', goal: 'transcribe y tradúcelo al inglés', output: { translationTarget: 'en', includeTranscript: true } };
+  const literal = await followUpOn(pending, 'tradúcelo literal');
+  assert.equal(literal.amends.length, 1, 'never the catch-all analysis');
+  assert.equal(literal.amends[0].wantsAnalysis, false);
+  assert.equal(literal.record.mode, 'translation');
+  assert.equal(literal.record.output.alsoAnalysis, false);
+  assert.match(literal.result.finalMarkdown, /con tus indicaciones para la traducción/);
+  assert.deepEqual(batch.translationConditions(literal.record.goal), ['tradúcelo literal']);
+  assert.deepEqual(batch.translationConditions('transcribe y tradúcelo al español, pero deja las siglas en inglés'), ['pero deja las siglas en inglés']);
+  assert.deepEqual(batch.translationConditions('tradúcelo al inglés, mantén los términos técnicos en español'), ['mantén los términos técnicos en español']);
+  // «incluidos los nombres» undoes the earlier «no traduzcas los nombres propios».
+  const names = { ...pending, goal: 'transcribe y tradúcelo al inglés, pero no traduzcas los nombres propios' };
+  const all = await followUpOn(names, 'tradúcelo todo, incluidos los nombres');
+  assert.equal(all.amends.length, 1);
+  assert.deepEqual(batch.translationConditions(all.record.goal), ['incluidos los nombres']);
+  // «déjalo en Word» is a format, never a condition.
+  assert.deepEqual(batch.translationConditions('tradúcelo al inglés y déjalo en Word'), []);
+});
+
+test('a moment in another language is a second translation; a new language for a moment says it keeps the moment', async () => {
+  const whole = { mode: 'translation', goal: 'transcribe y tradúcelo al inglés', output: { translationTarget: 'en', includeTranscript: true } };
+  for (const goal of ['traduce también al francés lo que dice en el minuto 30', 'traduce al francés lo del minuto 30']) {
+    const { result, record } = await followUpOn(whole, goal);
+    assert.equal(record.output.translationTarget, 'en', `${goal}: the English one stays`);
+    assert.equal(record.output.translationRange, undefined, `${goal}: and stays whole`);
+    assert.deepEqual(record.output.extraTranslations, [{ target: 'fr', ranges: [{ start: 1740, end: 2040 }] }], goal);
+    assert.match(result.finalMarkdown, /también traducida al francés \(solo del tramo que indicaste\), además de la traducción al inglés/, goal);
+  }
+  const { result, record } = await followUpOn(ENGLISH_MOMENT, 'y tradúcelo al francés');
+  assert.equal(record.output.translationTarget, 'fr');
+  assert.deepEqual(record.output.translationRange, { start: 1740, end: 2040 });
+  assert.match(result.finalMarkdown, /traducida al francés \(la traducción, solo del tramo que indicaste; si la quieres completa, dime «tradúcela completa»\)/);
+});
+
+test('«no lo traduzcas al inglés sino al francés» switches the language; a take-back says so; no language asks for it', async () => {
+  const pending = { mode: 'translation', goal: 'transcribe y tradúcelo al inglés', output: { translationTarget: 'en', includeTranscript: true } };
+  for (const goal of ['no lo traduzcas al inglés sino al francés', 'no la traduzcas al inglés, mejor al francés']) {
+    const { result, record, amends } = await followUpOn(pending, goal);
+    assert.equal(amends[0].translationTarget, 'fr', goal);
+    assert.equal(amends[0].removeTranslation, false, goal);
+    assert.equal(record.mode, 'translation', goal);
+    assert.equal(record.output.translationTarget, 'fr', goal);
+    assert.match(result.finalMarkdown, /traducida al francés/, goal);
+    assert.deepEqual(batch.translationConditions(record.goal), [], `${goal}: the language is no instruction`);
+  }
+  const back = await followUpOn(pending, 'ya no la traduzcas');
+  assert.match(back.result.finalMarkdown, /^Anotado: cuando termine la transcripción te la entrego sin la traducción\./);
+  // «tradúcela» with nothing that says the language: asked, never a paid analysis.
+  const transcriptOnly = storeBackedDelivery({ mode: 'transcript', goal: 'transcribe esta clase' });
+  const asked = await runMediaBranch(followupContext({ goal: 'tradúcela', delivery: transcriptOnly.delivery,
+    waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+  assert.equal(transcriptOnly.state.amends.length, 0);
+  assert.match(asked.finalMarkdown, /^¿A qué idioma la traduzco\?/);
+  assert.equal(asked.metadata.mediaDeliveryAmended, 'md_open');
+});
+
+test('only a request to translate counts: a question, the user\'s own plan and «… y también en Word» are read as they are', async () => {
+  const asked = await followUpOn(ENGLISH_MOMENT, '¿la traducción estará completa?');
+  assert.deepEqual(asked.record.output.translationRange, { start: 1740, end: 2040 }, 'a question never buys the whole translation');
+  assert.doesNotMatch(asked.result.finalMarkdown, /\(la traducción, completa\)/);
+  const transcriptOnly = { mode: 'transcript', goal: 'transcribe esta clase' };
+  const own = await followUpOn(transcriptOnly, 'transcríbelo, la traduzco yo');
+  assert.doesNotMatch(own.result.finalMarkdown, /A qué idioma/, 'the user translates it themselves');
+  const whole = { mode: 'translation', goal: 'transcribe y tradúcelo al inglés', output: { translationTarget: 'en', includeTranscript: true } };
+  const word = await followUpOn(whole, 'tradúcelo al francés, y también en Word');
+  assert.equal(word.record.output.translationTarget, 'fr', '«también» is about the Word: the language switches');
+  assert.equal(word.record.output.extraTranslations, undefined);
+  assert.equal(word.record.output.documentFormat, 'docx');
 });

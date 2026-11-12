@@ -140,7 +140,9 @@ function normalizeOutput(output) {
   const offset = Number(value.timeOffsetSec);
   const analysisRange = normalizeRefineRange(value.analysisRange);
   const translationRange = normalizeRefineRange(value.translationRange);
+  const translationRanges = normalizeWindows(value.translationRanges);
   const translationTarget = normalizeTranslationTarget(value.translationTarget);
+  const extraTranslations = normalizeExtraTranslations(value.extraTranslations);
   const declinedDocuments = ['docx', 'pdf'].filter(format => Array.isArray(value.declinedDocuments) && value.declinedDocuments.includes(format));
   return {
     documentFormat,
@@ -152,13 +154,63 @@ function normalizeOutput(output) {
     ...(value.alsoPdf === true ? { alsoPdf: true } : {}),
     ...(analysisRange ? { analysisRange } : {}),
     ...(translationRange ? { translationRange } : {}),
+    // Moments far apart are translated each on its own, never their span.
+    ...(translationRanges.length ? { translationRanges } : {}),
     // Set when a follow-up changed the language («mejor al francés»): it
     // wins over the target read from the goal, which keeps every request.
     ...(translationTarget ? { translationTarget } : {}),
+    // «traduce también al francés lo del minuto 30»: other languages, each
+    // with its own windows (none: the whole recording).
+    ...(extraTranslations.length ? { extraTranslations } : {}),
     // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
     ...(declinedDocuments.length ? { declinedDocuments } : {}),
     ...(value.declinedSubtitles === true ? { declinedSubtitles: true } : {}),
   };
+}
+
+const MAX_TRANSLATION_WINDOWS = 8;
+const MAX_EXTRA_TRANSLATIONS = 3;
+
+/**
+ * Translation windows: sorted, the ones that overlap or touch merged, at most
+ * eight. An open end (null) runs to the end of the recording.
+ */
+function normalizeWindows(list) {
+  const windows = (Array.isArray(list) ? list : []).map(normalizeRange)
+    .filter(window => window && (window.end == null || window.end <= MAX_REFINE_END_SEC))
+    .sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const window of windows) {
+    const last = merged[merged.length - 1];
+    if (last && window.start <= (last.end == null ? Infinity : last.end)) {
+      if (last.end != null) last.end = window.end == null ? null : Math.max(last.end, window.end);
+    } else merged.push({ start: window.start, end: window.end });
+  }
+  return merged.slice(0, MAX_TRANSLATION_WINDOWS);
+}
+
+function normalizeExtraTranslations(list) {
+  const out = [];
+  for (const item of Array.isArray(list) ? list : []) {
+    const target = normalizeTranslationTarget(item?.target);
+    if (!target || out.some(existing => existing.target === target)) continue;
+    out.push({ target, ranges: normalizeWindows(item?.ranges) });
+    if (out.length >= MAX_EXTRA_TRANSLATIONS) break;
+  }
+  return out;
+}
+
+/** The windows a translation reads that the delivery stores for it (not the transcript's range). */
+function ownTranslationWindows(output) {
+  if (Array.isArray(output?.translationRanges) && output.translationRanges.length) return output.translationRanges;
+  return output?.translationRange ? [output.translationRange] : [];
+}
+
+function setTranslationWindows(output, windows) {
+  delete output.translationRange;
+  delete output.translationRanges;
+  if (windows.length === 1 && windows[0].end != null) output.translationRange = windows[0];
+  else if (windows.length) output.translationRanges = windows;
 }
 
 /** A translation target as a language code («en», «pt»), or null. */
@@ -197,7 +249,7 @@ function joinGoals(previous, addition) {
  * never dropped: turning a transcript into a translation keeps its files.
  */
 const MODEL_WORK_CHANGES = new Set(['translation', 'translation_target', 'translation_range', 'translation_range_added', 'translation_whole',
-  'analysis', 'analysis_range']);
+  'translation_added', 'translation_conditions', 'analysis', 'analysis_range']);
 
 function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const value = amendment && typeof amendment === 'object' ? amendment : {};
@@ -209,15 +261,43 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const mode = MODES.includes(record.mode) ? record.mode : 'transcript';
   next.mode = mode;
 
+  // A moment translation handed off before its window was stored apart kept
+  // the moment as the transcript range, next to the same analysis window.
+  if (mode === 'translation' && !ownTranslationWindows(out).length && !(Array.isArray(record.amendments) && record.amendments.length)
+    && out.analysisRange && normalizeRefineRange(record.range)
+    && JSON.stringify(normalizeRefineRange(record.range)) === JSON.stringify(out.analysisRange)) {
+    out.translationRange = out.analysisRange;
+    next.output.translationRange = out.analysisRange;
+    next.range = null;
+  }
   const target = normalizeTranslationTarget(value.translationTarget);
   // «ya no la traduzcas»: back to what the first request asked for.
   if (!target && value.removeTranslation === true && mode === 'translation') {
     next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
     next.output.alsoAnalysis = false;
     delete next.output.translationTarget;
+    delete next.output.extraTranslations;
     changes.push('no_translation');
   }
-  if (target) {
+  const translationRange = normalizeRefineRange(value.translationRange);
+  // «traduce también al francés lo del minuto 30» while the English
+  // translation is pending: a second language, never a silent replacement.
+  // A bare «mejor al francés» still switches the language.
+  const addsLanguage = Boolean(target) && mode === 'translation' && Boolean(out.translationTarget) && target !== out.translationTarget
+    && (Boolean(translationRange) || value.translationAlso === true);
+  if (addsLanguage) {
+    const extras = (out.extraTranslations || []).map(item => ({ target: item.target, ranges: [...item.ranges] }));
+    const index = extras.findIndex(item => item.target === target);
+    const existing = index >= 0 ? extras.splice(index, 1)[0] : null;
+    // The language touched last goes last (the reply names it).
+    if (existing) {
+      extras.push({ target, ranges: existing.ranges.length && translationRange ? normalizeWindows([...existing.ranges, translationRange]) : [] });
+    } else if (extras.length < MAX_EXTRA_TRANSLATIONS) {
+      extras.push({ target, ranges: translationRange ? [translationRange] : [] });
+    }
+    next.output.extraTranslations = extras;
+    if (index >= 0 || extras.some(item => item.target === target)) changes.push('translation_added');
+  } else if (target) {
     if (mode !== 'translation') {
       next.mode = 'translation';
       // What the first request delivered stays: the transcript files, and
@@ -267,34 +347,42 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     delete next.output.analysisRange;
     changes.push('analysis_range');
   }
-  const translationRange = normalizeRefineRange(value.translationRange);
   // A moment of a recording this delivery already translates to the same
-  // language: the window it reads (its own moments, else the transcript's
-  // range, else the whole recording) is never narrowed. A moment inside it
-  // changes nothing; one outside it widens it to the span of both, as a
-  // second question widens the analysis window.
+  // language: the windows it reads (its own moments, else the transcript's
+  // range, else the whole recording) are never narrowed. A moment inside one
+  // changes nothing; one outside them is added as a window of its own (two
+  // moments far apart are never their whole span).
+  const ownWindows = ownTranslationWindows(out);
   const translatesAlready = mode === 'translation' && Boolean(out.translationTarget) && (!target || target === out.translationTarget);
-  if (translationRange && translatesAlready) {
-    const current = out.translationRange || normalizeRange(record.range);
-    const currentEnd = current ? (current.end == null ? MAX_REFINE_END_SEC : current.end) : null;
-    if (!current) {
+  if (addsLanguage) {
+    // The window belongs to the added language.
+  } else if (translationRange && translatesAlready) {
+    const transcriptRange = normalizeRange(record.range);
+    const current = ownWindows.length ? ownWindows : transcriptRange ? [transcriptRange] : [];
+    if (!current.length) {
       changes.push('translation_moment_covered');
-    } else if (current.start <= translationRange.start && currentEnd >= translationRange.end) {
+    } else if (current.some(window => window.start <= translationRange.start && (window.end == null || window.end >= translationRange.end))) {
       changes.push('translation_moment_included');
     } else {
-      next.output.translationRange = { start: Math.min(current.start, translationRange.start), end: Math.max(currentEnd, translationRange.end) };
+      setTranslationWindows(next.output, normalizeWindows([...current, translationRange]));
       changes.push('translation_range_added');
     }
-  } else if (translationRange && JSON.stringify(translationRange) !== JSON.stringify(out.translationRange || null)) {
-    next.output.translationRange = translationRange;
+  } else if (translationRange && JSON.stringify([translationRange]) !== JSON.stringify(ownWindows)) {
+    setTranslationWindows(next.output, [translationRange]);
     changes.push('translation_range');
-  } else if (!translationRange && value.translationWhole === true && out.translationRange) {
-    // «tradúcela completa al inglés» after a moment: the whole translation.
-    delete next.output.translationRange;
+  } else if (!translationRange && value.translationWhole === true && ownWindows.length) {
+    // «tradúcela completa» after a moment: the whole translation.
+    setTranslationWindows(next.output, []);
     changes.push('translation_whole');
-  } else if (!translationRange && target && target === out.translationTarget && out.translationRange) {
-    // Only said: «tradúcelo al inglés en Word» keeps the moment (and says how to get it all).
+  } else if (!translationRange && target && ownWindows.length) {
+    // «tradúcelo al inglés en Word», «mejor al francés»: the moment stays
+    // (and the reply says how to get it all).
     changes.push('translation_range_kept');
+  }
+  // «tradúcelo literal», «no traduzcas los nombres propios»: the translator
+  // reads them from the goal; the reply says they were noted.
+  if (next.mode === 'translation' && Array.isArray(value.translationConditions) && value.translationConditions.some(item => String(item || '').trim())) {
+    changes.push('translation_conditions');
   }
 
   // «no lo quiero en Word», «sin subtítulos»: a format turned down goes, and

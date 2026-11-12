@@ -504,30 +504,49 @@ function translationLanguageIn(word) {
 }
 
 /**
- * «ya no la traduzcas», «sin traducción», «no hace falta traducirlo»: the
- * follow-up takes a pending translation back. A fresh, non-global regex
- * (NEGATED_TRANSLATE_RE is /g and keeps lastIndex between calls).
+ * «ya no la traduzcas», «sin traducción», «no hace falta traducirlo», «no la
+ * traduzcas porfavor», «… para nada», «… a ningún idioma»: the follow-up
+ * takes a pending translation back. A refused «traduce…» is a take-back
+ * unless it names what not to translate or how («no traduzcas los nombres
+ * propios», «no lo traduzcas literal», «sin traducir las citas en latín»), or
+ * another language follows («no lo traduzcas al inglés sino al francés»).
  */
-// After a refused «traduce…», words that keep it a take-back («ya no la
-// traduzcas», «no hace falta traducirlo al inglés», «sin traducción»).
-// Anything else is a condition on the translation, which stays: «no
-// traduzcas los nombres propios», «no lo traduzcas literal», «sin traducir
-// las citas en latín».
-const TAKE_BACK_TAIL = new Set(['ya', 'mas', 'todavia', 'nada', 'por', 'favor', 'gracias', 'al', 'a', 'en', 'la', 'el', 'lo', 'los', 'las',
-  'transcripcion', 'grabacion', 'audio', 'video', 'clase', 'it', 'them', 'anymore', 'please', 'into', 'to', 'the',
-  // «no la traduzcas porfa», «… por ahora», «… aún», «mejor no, entonces»
-  'porfa', 'xfa', 'pls', 'plis', 'aun', 'ahora', 'entonces', 'mejor', 'ok', 'okay', 'vale',
-  // «no traduzcas los audios», «… las grabaciones», «… de momento», «… hoy»
-  'transcripciones', 'grabaciones', 'audios', 'videos', 'clases', 'archivo', 'archivos', 'reunion', 'reuniones',
-  'entrevista', 'entrevistas', 'sesion', 'sesiones', 'conferencia', 'conferencias', 'charla', 'charlas',
-  'mis', 'tus', 'sus', 'ese', 'esa', 'esos', 'esas', 'este', 'esta', 'estos', 'estas', 'del', 'de', 'un', 'una',
-  'momento', 'hoy', 'nunca', 'tampoco', 'yet', 'now', 'for', 'today', 'thanks', 'recording', 'recordings']);
+// A part of what is said, never the recording itself: «los nombres propios»,
+// «las siglas», «las citas en latín», «lo que dice el invitado», or a manner
+// («literal», «palabra por palabra»).
+const CONDITION_OBJECT_RE = /\b(?:nombres?|siglas?|acronimos?|abreviaturas?|abreviaciones?|citas?|terminos?|tecnicismos?|titulos?|palabras?|frases?|expresiones?|refranes?|dichos?|modismos?|marcas?|apellidos?|lugares?|ciudades?|paises?|empresas?|productos?|canciones?|letras?|versos?|poemas?|codigos?|comandos?|formulas?|cifras?|numeros?|unidades?|groserias?|insultos?|chistes?|partes?|fragmentos?|trozos?|saludos?|despedidas?|ejemplos?|definiciones?|conceptos?|textos?|carteles?|diapositivas?|referencias?|lo\s+que|lo\s+de(?:l|\s+la)?|literal\w*|palabra\s+por\s+palabra|al\s+pie\s+de\s+la\s+letra|textual\w*|formal\w*|informal\w*)\b/;
+// Words after a refused verb that keep it a take-back: courtesies, time,
+// the recording itself and the target language.
+const TAKE_BACK_FILLERS = new Set(['ya', 'mas', 'todavia', 'aun', 'nada', 'por', 'favor', 'porfavor', 'porfa', 'fa', 'porfis', 'plis', 'pls', 'plz',
+  'please', 'xfa', 'xf', 'gracias', 'thanks', 'para', 'en', 'absoluto', 'a', 'al', 'ningun', 'ninguno', 'ninguna', 'idioma', 'idiomas', 'lengua',
+  'otro', 'otra', 'nomas', 'ahora', 'entonces', 'mejor', 'ok', 'okay', 'vale', 'momento', 'hoy', 'nunca', 'tampoco', 'final', 'fin', 'ultimo',
+  'de', 'del', 'la', 'el', 'lo', 'los', 'las', 'le', 'les', 'me', 'nos', 'un', 'una', 'it', 'them', 'anymore', 'into', 'to', 'the', 'yet', 'now',
+  'for', 'today', 'at', 'all']);
+// The recording as the refused verb's object: «no traduzcas los audios».
+const RECORDING_WORD_RE = /^(?:transcripci\w*|grabaci\w*|audios?|videos?|clases?|archivos?|reunion\w*|entrevistas?|sesion\w*|conferencias?|charlas?|traducci\w*|ponencias?|seminarios?|llamadas?|podcasts?|notas?|recordings?|files?)$/;
+const DETERMINER_WORDS = new Set(['el', 'la', 'los', 'las', 'sus', 'mis', 'tus', 'esos', 'esas', 'estos', 'estas', 'aquellos', 'aquellas', 'unos', 'unas',
+  'su', 'mi', 'tu', 'ese', 'esa', 'este', 'esta']);
+
+function languageWordSet(negation) {
+  return new Set(TRANSLATION_LANGUAGES.flatMap(language => [language.name, language.code]).map(name => negation.foldRequest(name)));
+}
+
+/** A refused «traduce…» tail that names a part of the content or a manner. Pure. */
+function namesConditionObject(tail, languages) {
+  if (CONDITION_OBJECT_RE.test(tail)) return true;
+  const words = tail.split(/[^a-z0-9]+/).filter(Boolean);
+  // «no traduzcas el saludo inicial», «… la primera parte»: a determiner and
+  // something that is neither the recording, a courtesy nor a language.
+  return words.some((word, index) => DETERMINER_WORDS.has(word) && words[index + 1]
+    && !TAKE_BACK_FILLERS.has(words[index + 1]) && !languages.has(words[index + 1]) && !RECORDING_WORD_RE.test(words[index + 1])
+    && !/^\d+$/.test(words[index + 1]));
+}
 
 function negatesTranslation(goal) {
   const negation = require('./request-negation');
   const folded = negation.foldRequest(goal);
   const ranges = negation.negatedRanges(folded);
-  const languages = new Set(TRANSLATION_LANGUAGES.flatMap(language => [language.name, language.code]).map(name => negation.foldRequest(name)));
+  const languages = languageWordSet(negation);
   for (const match of folded.matchAll(/\b(?:traduc\w*|traduz\w*|translat\w*)\b/g)) {
     const range = ranges.find(candidate => match.index >= candidate.start && match.index < candidate.end);
     if (!range) continue;
@@ -535,10 +554,64 @@ function negatesTranslation(goal) {
     // stays untranslated comes before «sin»; a condition, never a take-back.
     const clauseStart = Math.max(0, ...['.', ';', '!', '?', '\n', ','].map(mark => folded.lastIndexOf(mark, range.start)));
     if (KEEPS_PART_RE.test(folded.slice(clauseStart, range.start))) continue;
-    const tail = folded.slice(match.index + match[0].length, range.end).split(/[^a-z0-9]+/).filter(Boolean);
-    if (tail.every(word => TAKE_BACK_TAIL.has(word) || languages.has(word))) return true;
+    // «no lo traduzcas al inglés sino al francés»: a switch, never a take-back.
+    if (switchedTargetAfter(folded, match.index + match[0].length)) continue;
+    const tail = folded.slice(match.index + match[0].length, range.end);
+    if (!namesConditionObject(tail, languages)) return true;
   }
   return false;
+}
+
+// «no lo traduzcas al inglés sino al francés», «no la traduzcas al inglés,
+// mejor al francés», «no al inglés, al francés»: after a refused «traduce…»,
+// the language a switch names is the one asked for.
+const SWITCH_TARGET_RE = /\b(?:sino|mejor|si\s+no|en\s+cambio|prefiero)\s+(?:(?:que\s+)?(?:me\s+)?(?:lo|la|los|las)\s+)?(?:(?:tradu[cz]\w*|pas\w*)\s+)?(?:al|a|en|into|to)\s+(?:el\s+|idioma\s+)?([a-z]+)|,\s*(?:(?:mejor|sino)\s+)?(?:al|a)\s+(?:el\s+|idioma\s+)?([a-z]+)/g;
+
+function switchedTargetAfter(folded, from) {
+  const sentence = folded.slice(from).split(/[.?!;](?:\s|$)|\n/)[0];
+  for (const match of sentence.matchAll(SWITCH_TARGET_RE)) {
+    const hit = translationLanguageIn(match[1] || match[2]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** The language a refused «traduce…» switches to («… sino al francés»), or null. Pure; never throws. */
+function switchedTranslationTarget(goal) {
+  try {
+    const folded = foldGoal(goal);
+    for (const match of folded.matchAll(new RegExp(NEGATED_TRANSLATE_RE.source, 'g'))) {
+      const hit = switchedTargetAfter(folded, match.index + match[0].length);
+      if (hit) return hit;
+    }
+  } catch (_) { /* a cue check never fails the turn */ }
+  return null;
+}
+
+/**
+ * The follow-up asks to translate, with or without naming the language
+ * («tradúcela completa», «tradúcelo literal», «quiero la traducción
+ * completa»): a translate verb that is not turned down. Pure; never throws.
+ */
+// A request, never the speaker's own plan («la traduzco yo», «luego la traduje»).
+const REQUEST_TRANSLATE_RE = /\b(?!(?:traduzco|traduje|tradujimos|traducimos|traducire|traduciremos|traduciria|traduciriamos)\b)(?:tradu[cz](?!cion|tor)\w*|translat(?!ion|or)\w*)/;
+
+function asksToTranslate(goal) {
+  try {
+    const f = foldGoal(goal).replace(new RegExp(NEGATED_TRANSLATE_RE.source, 'g'), ' ');
+    if (REQUEST_TRANSLATE_RE.test(f)) return true;
+    // «quiero la traducción completa» asks; «¿la traducción estará completa?» does not.
+    return !/[¿?]/.test(f) && WHOLE_TRANSLATION_RE.test(f);
+  } catch (_) { return false; }
+}
+
+// «traduce también al francés…», «y también al francés»: another language
+// next to the pending one, never «… y también en Word».
+const ALSO_TRANSLATE_RE = new RegExp(`\\b(?:tradu[cz]\\w*|translat\\w*)\\s+(?:\\w+\\s+){0,2}?(?:tambien|ademas|igualmente|also)\\b|\\b(?:tambien|ademas|igualmente|also)\\s+(?:(?:\\w+\\s+){0,2}?(?:tradu[cz]\\w*|translat\\w*)|(?:al|a|en|into|to)\\s+(?:el\\s+|idioma\\s+)?(?:${TRANSLATION_LANGUAGES.map(language => language.re.source).join('|')}))`);
+
+/** The follow-up asks for another language besides the pending one. Pure; never throws. */
+function asksAlsoTranslation(goal) {
+  try { return ALSO_TRANSLATE_RE.test(foldGoal(goal)); } catch (_) { return false; }
 }
 
 // Before «sin traducir»: a verb that keeps a part, or a part of the text
@@ -547,26 +620,51 @@ const KEEPS_PART_RE = /\b(?:deja|dejes|dejalos|dejalas|manten|mantengas|mantenlo
 
 /**
  * What the user said about HOW to translate («no traduzcas los nombres
- * propios», «sin traducir las citas en latín», «deja las siglas en inglés»):
- * the clauses that qualify a translation without taking it back, in the
- * user's words, for the translator. At most three, 300 characters each.
+ * propios», «sin traducir las citas en latín», «deja las siglas en inglés»,
+ * «tradúcelo literal», «… palabra por palabra»): the clauses that qualify a
+ * translation without taking it back, in the user's words, for the
+ * translator. The latest clause about a part wins («tradúcelo todo,
+ * incluidos los nombres» undoes «no traduzcas los nombres propios»). At most
+ * five, 300 characters each.
  */
+// «tradúcelo literal», «… de forma natural», «traducción formal».
+const MANNER_CONDITION_RE = /\b(?:tradu[cz]\w*|traduccion|translat\w*)\b[^.;!?\n]{0,40}\b(?:literal\w*|palabra\s+por\s+palabra|al\s+pie\s+de\s+la\s+letra|textual\w*|formal\w*|informal\w*|natural\w*|fiel\w*|neutr[oa]|coloquial\w*|sencill[oa]|simple)\b/;
+const KEEP_VERB_SOURCE = '(?:deja|dejes|dejalos|dejalas|dejalo|dejala|dejame|dejanos|manten|mantengas|mantenlos|mantenlas|mantenlo|mantenla|conserva|conserves|conservalos|conservalas|respeta|respetes|respetalos|respetalas)';
+// «deja las siglas en inglés», «mantén los términos técnicos en español»,
+// «los nombres propios déjalos en español», «… como están».
+const KEEP_IN_LANGUAGE_RE = new RegExp(`\\b${KEEP_VERB_SOURCE}\\b[^.;!?\\n]{0,60}\\b(?:sin traducir|en (?:su )?(?:idioma )?(?:original|${TRANSLATION_LANGUAGES.map(language => language.re.source).join('|')}|latin|griego)|como (?:esta|estan|aparece|aparecen|se dice|se dicen))\\b`);
+// «incluidos los nombres», «incluyendo las siglas», «también los títulos».
+const INCLUDES_PART_RE = /\b(?:incluid[oa]s?|incluyendo|incluye|tambien|ademas)\s+(?:a\s+)?(?:los|las|el|la|sus)\s+([a-z]+)/;
+
+/** The part a condition is about («nombre» for «los nombres propios»), or ''. */
+function conditionPart(folded) {
+  const match = /\b(nombre|sigla|acronimo|abreviatura|cita|termino|tecnicismo|titulo|palabra|frase|expresion|refran|dicho|modismo|marca|apellido|lugar|ciudad|pais|empresa|producto|cancion|letra|verso|poema|codigo|comando|formula|cifra|numero|unidad|parte|fragmento|saludo|ejemplo|definicion|concepto|texto|cartel|diapositiva|referencia)(?:s|es)?\b/.exec(folded);
+  return match ? match[1] : '';
+}
+
 function translationConditions(goal) {
   try {
     const negation = require('./request-negation');
     const text = String(goal || '').slice(0, 4000);
     const out = [];
-    for (const clause of text.split(/(?<=[.;!?\n])\s+|,\s*(?=(?:pero|y|e|aunque|solo|sin|no)\b)/i)) {
+    for (const clause of text.split(/(?<=[.;!?\n])\s+|,\s*(?=(?:pero|y|e|aunque|solo|sin|no|d[eé]ja\w*|d[eé]jes|mant[eé]n\w*|conserva\w*|respeta\w*|incluid\w*|incluyendo|tambi[eé]n)(?![a-záéíóúñ]))/i)) {
       const folded = negation.foldRequest(clause);
-      const qualifies = /\b(?:deja|dejes|manten|mantengas|conserva|conserves|respeta|respetes)\b[^.?!]{0,60}\b(?:sin traducir|en (?:su )?(?:idioma )?original|como (?:esta|estan|aparece|aparecen))/.test(folded)
-        || (/\b(?:traduc|traduz|translat)\w*/.test(folded) && !negatesTranslation(clause)
-          && negation.negatedRanges(folded).some(range => /\b(?:traduc|traduz|translat)\w*/.test(folded.slice(range.start, range.end))));
-      if (!qualifies) continue;
       const value = clause.replace(/\s+/g, ' ').trim().slice(0, 300);
-      if (value && !out.includes(value)) out.push(value);
-      if (out.length >= 3) break;
+      // «no lo traduzcas al inglés sino al francés» picks the language: no instruction.
+      if (!value || switchedTranslationTarget(clause)) continue;
+      const negated = /\b(?:traduc|traduz|translat)\w*/.test(folded) && !negatesTranslation(clause)
+        && negation.negatedRanges(folded).some(range => /\b(?:traduc|traduz|translat)\w*/.test(folded.slice(range.start, range.end)));
+      const includes = INCLUDES_PART_RE.exec(folded);
+      const qualifies = negated || KEEP_IN_LANGUAGE_RE.test(folded) || MANNER_CONDITION_RE.test(folded) || Boolean(includes);
+      if (!qualifies) continue;
+      // The latest about the same part wins; a manner replaces a manner.
+      const part = conditionPart(includes ? includes[1] : folded) || (MANNER_CONDITION_RE.test(folded) && !negated ? 'manner' : '');
+      for (let i = out.length - 1; i >= 0; i -= 1) {
+        if (part && out[i].part === part) out.splice(i, 1);
+      }
+      if (!out.some(item => item.value === value)) out.push({ value, part });
     }
-    return out;
+    return out.slice(-5).map(item => item.value);
   } catch (_) { return []; }
 }
 
@@ -577,6 +675,9 @@ function translationTargetByCode(code) {
 }
 
 function detectTranslationTarget(goal) {
+  // «no lo traduzcas al inglés sino al francés»: the language it switches to.
+  const switched = switchedTranslationTarget(goal);
+  if (switched) return switched;
   const text = String(goal || '').toLowerCase().replace(NEGATED_TRANSLATE_RE, ' ');
   const verb = TRANSLATE_VERB_RE.exec(text);
   if (verb) {
@@ -1728,8 +1829,11 @@ function detectMediaFollowupIntent(goal) {
   }
   // «Revisa el minuto 12 y dime si el profesor tiene razón», «en el minuto 20
   // dice algo que no tiene sentido, explícame por qué»: read that window.
-  // «lo del minuto 50» is what is said there.
-  if (hasTime && (lookupCue || CONTENT_QUESTION_RE.test(f) || /\blo\s+de(?:l|\s+la)?\s+(?:minutos?|min|horas?|segundos?)\b/.test(f))) {
+  // «traduce al inglés lo del minuto 50»: what is said there is what to
+  // translate. On its own («transcribe lo del minuto 30», «solo lo del minuto
+  // 10 al 20», «pásame lo del minuto 30 en Word») it asks for no answer.
+  const translatesSaid = /\blo\s+de(?:l|\s+la)?\s+(?:minutos?|min|horas?|segundos?)\b/.test(f) && translatesTheMoment(text);
+  if (hasTime && (lookupCue || CONTENT_QUESTION_RE.test(f) || translatesSaid)) {
     if (range) return { kind: 'lookup', range: { start: range.start, end: range.end != null ? range.end : range.start + OPEN_LOOKUP_SEC } };
     return { kind: 'lookup', range: { start: Math.max(0, at - LOOKUP_BEFORE_SEC), end: at + LOOKUP_AFTER_SEC }, at };
   }
@@ -2156,7 +2260,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translationConditions, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translationConditions, asksToTranslate, asksAlsoTranslation, switchedTranslationTarget, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   loadPresentedNames, presentRows, asksForDeliverable, refusesTranslationWord, isResumeGoal,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,

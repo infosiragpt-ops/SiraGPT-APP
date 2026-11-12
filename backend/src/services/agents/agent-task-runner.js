@@ -3082,6 +3082,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             retryFailed: retryRequested, resumeStopped: rowsToResume.length ? stoppedToResume : false,
             language: batchLanguage, hints: jobHints.hints, timeoutMs: 0, readProgress: null }).catch(() => null);
         }
+        // «tradúcela completa», «tradúcelo literal», «traduce lo del minuto
+        // 30»: a pending translation keeps its language when the follow-up
+        // names none.
+        const openTranslation = openDelivery.mode === 'translation'
+          ? ((typeof mediaBatch.translationTargetByCode === 'function' && mediaBatch.translationTargetByCode(openDelivery.output?.translationTarget))
+            || mediaBatch.detectTranslationTarget(openDelivery.goal || '')) : null;
+        const asksTranslation = typeof mediaBatch.asksToTranslate === 'function' && mediaBatch.asksToTranslate(mediaGoal);
+        const amendTarget = translationTarget || (asksTranslation && openTranslation ? openTranslation : null);
+        const translatesMomentHere = translatesMoment || Boolean(lookupWindow && amendTarget
+          && typeof mediaBatch.translatesTheMoment === 'function' && mediaBatch.translatesTheMoment(mediaGoal));
         // A question about a stretch, also unpunctuated as dictated («qué
         // dice del minuto 10 al 20», «dime qué dice del 10 al 20»).
         const asksLookup = followupIntent?.kind === 'lookup';
@@ -3092,7 +3102,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // for that transcript: neither is an analysis. A transcript asked for
         // with a deliverable («transcribe del 10 al 20 y dime de qué trata»)
         // is.
-        const explicitAnalysis = Boolean((lookupWindow || (asksLookup && !translationTarget && !asksTranscriptByRequest)) && !translatesMoment)
+        const explicitAnalysis = Boolean((lookupWindow || (asksLookup && !amendTarget && !asksTranscriptByRequest)) && !translatesMomentHere)
           || mediaBatch.wantsSummaryWithTranslation(mediaGoal)
           || (asksTranscriptByRequest && (typeof mediaBatch.asksForDeliverable === 'function'
             ? mediaBatch.asksForDeliverable(mediaGoal) : mediaBatch.wantsMediaAnalysis(mediaGoal)));
@@ -3102,7 +3112,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // question or a summary of a window reads it alone, and a translation
         // of one translates it alone: the transcript the first request asked
         // for stays whole.
-        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMoment && !translationTarget
+        const cutsTranscript = Boolean(mediaOutput.range) && !translatesMomentHere && !amendTarget
           && (!explicitAnalysis || asksTranscriptByRequest);
         // «desde el minuto 90», «a partir del minuto 100»: an open window runs
         // to the end of the recording (bounded like a refine's).
@@ -3114,8 +3124,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         const courtesy = /^\s*(?:ok(?:ay)?|vale|gracias|muchas gracias|perfecto|listo|genial|dale|bien|de acuerdo|thanks|thank you)[\s.!¡👍🙏]*$/iu.test(mediaGoal);
         const amendment = {
           goal: mediaGoal,
-          translationTarget: translationTarget?.code || null,
-          removeTranslation: !translationTarget && typeof mediaBatch.negatesTranslation === 'function' && mediaBatch.negatesTranslation(mediaGoal),
+          translationTarget: amendTarget?.code || null,
+          removeTranslation: !amendTarget && typeof mediaBatch.negatesTranslation === 'function' && mediaBatch.negatesTranslation(mediaGoal),
+          // «traduce también al francés…»: another language next to the pending one.
+          translationAlso: Boolean(amendTarget) && typeof mediaBatch.asksAlsoTranslation === 'function' && mediaBatch.asksAlsoTranslation(mediaGoal),
+          // How to translate («literal», «no traduzcas los nombres propios»): the reply says it was noted.
+          translationConditions: amendTarget && typeof mediaBatch.translationConditions === 'function' ? mediaBatch.translationConditions(mediaGoal) : [],
           removeAnalysis: explicitNoAnalysis,
           // Only an explicit deliverable or a question about the recording
           // adds an analysis (the default would run one for «en Word»).
@@ -3127,13 +3141,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           range: cutsTranscript ? mediaOutput.range : null,
           // «traduce lo que dice en el minuto 30 y resúmelo»: the summary
           // reads that moment too.
-          analysisRange: (lookupWindow && (!translatesMoment || explicitAnalysis) ? lookupWindow : null)
+          analysisRange: (lookupWindow && (!translatesMomentHere || explicitAnalysis) ? lookupWindow : null)
             || (!cutsTranscript && explicitAnalysis && askedWindow ? askedWindow : null),
-          translationRange: translatesMoment ? lookupWindow
-            : (!cutsTranscript && translationTarget && askedWindow ? askedWindow : null),
-          // «tradúcela completa» after a moment translates it all; a follow-up
-          // that only names the language («tradúcelo al inglés en Word») keeps it.
-          translationWhole: Boolean(translationTarget && !translatesMoment && !mediaOutput.range
+          translationRange: translatesMomentHere ? lookupWindow
+            : (!cutsTranscript && amendTarget && askedWindow ? askedWindow : null),
+          // «tradúcela completa» after a moment translates it all, with or
+          // without the language; a follow-up that only names the language
+          // («tradúcelo al inglés en Word») keeps it.
+          translationWhole: Boolean(amendTarget && !translatesMomentHere && !mediaOutput.range
             && typeof mediaBatch.asksWholeTranslation === 'function' && mediaBatch.asksWholeTranslation(mediaGoal)),
           language: jobHints.language || null,
           hints: jobHints.hints || null,
@@ -3157,9 +3172,20 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           || amendment.removeSubtitles || amendment.removeTranslation || amendment.range || mediaOutput.range
           || ownHints.language || saysHints || saysTxt || plainTranscriptionRequest || transcriptRequest);
         const asksBesides = typeof mediaBatch.asksForDeliverable === 'function' ? mediaBatch.asksForDeliverable(mediaGoal) : false;
-        if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !translationTarget && asksBesides) {
+        if (!amendment.wantsAnalysis && saysOption && !explicitNoAnalysis && !amendTarget && asksBesides) {
           amendment.wantsAnalysis = true;
           if (askedWindow && !amendment.range && !amendment.analysisRange) amendment.analysisRange = askedWindow;
+        }
+        // «tradúcela» with no language to read anywhere: ask it, never a
+        // paid analysis of the instruction.
+        if (asksTranslation && !amendTarget && !amendment.removeTranslation) {
+          const many = mediaBatchRows.length > 1;
+          return await finishDeterministicTask({
+            finalMarkdown: `¿A qué idioma ${many ? 'las' : 'la'} traduzco? Escríbeme, por ejemplo, «${many ? 'tradúcelas' : 'tradúcela'} al inglés», y ${many ? 'las' : 'la'} entrego junto con ${many ? 'las transcripciones' : 'la transcripción'}.`,
+            stoppedReason: 'media_delivery_amended',
+            steps: 1, artifactsList: artifacts,
+            metadata: { transcriptionFileIds: ids, mediaDeliveryAmended: openDelivery.id, mediaDeliveryChanges: [] },
+          });
         }
         let amended = await pendingService.amendDelivery(openDelivery.id, { userId: user.id, amendment }).catch(() => null);
         // An instruction the rules do not name («solo lo que dice el
@@ -3169,6 +3195,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         // the rules did read and that was already so («en Word» twice, «sin
         // traducción» with nothing to translate): it changes nothing.
         const recognised = Boolean(amendment.translationTarget || amendment.removeTranslation || amendment.removeAnalysis
+          || amendment.translationConditions.length
           || amendment.wantsAnalysis || amendment.documentFormat || amendment.removeDocument.length || amendment.wantsSubtitles
           || amendment.removeSubtitles || amendment.range || amendment.analysisRange || amendment.translationRange
           || ownHints.language || saysHints || saysTxt
@@ -3272,9 +3299,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             hints: jobHints.hints,
             // The transcript files follow the range the user asked for; the
             // moment a question is about («¿qué dice en el minuto 30?») only
-            // narrows the analysis (`output.analysisRange`), unless that
-            // moment is what to translate.
-            range: outputRange,
+            // narrows the analysis (`output.analysisRange`), and the moment
+            // to translate is the translation's window
+            // (`output.translationRange`), as a follow-up stores it.
+            range: mediaOutput.range || null,
             // «transcribe y tradúcelo» / «resume y tradúcelo»: the translation
             // mode also delivers the transcript files and the summary asked for.
             output: {
@@ -3286,6 +3314,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
               alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
               analysisRange: lookupWindow || null,
               translationTarget: translationTarget?.code || null,
+              ...(translatesMoment && lookupWindow ? { translationRange: lookupWindow } : {}),
               // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
               ...(mediaOutput.declinedDocuments ? { declinedDocuments: mediaOutput.declinedDocuments } : {}),
               ...(mediaOutput.declinedSubtitles ? { declinedSubtitles: true } : {}),

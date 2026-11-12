@@ -270,11 +270,14 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   const target = record?.output?.translationTarget || null;
   const language = target ? translationName(target) : null;
   const translated = many ? 'traducidas' : 'traducida';
-  const window = list.includes('translation_range') ? ' (la traducción, solo del tramo que indicaste)'
-    : list.includes('translation_whole') ? ' (la traducción, completa)' : '';
+  const kept = ' (la traducción, solo del tramo que indicaste; si la quieres completa, dime «tradúcela completa»)';
   if (list.includes('translation') || list.includes('translation_target') || list.includes('translation_whole')) {
+    // «mejor al francés» after a moment: the new language keeps that moment, and says so.
+    const window = list.includes('translation_range') ? ' (la traducción, solo del tramo que indicaste)'
+      : list.includes('translation_whole') ? ' (la traducción, completa)'
+        : list.includes('translation_range_kept') ? kept : '';
     parts.push(`${language ? `${translated} al ${language}` : translated}${window}`);
-  } else if (window) parts.push('con la traducción del tramo que indicaste');
+  } else if (list.includes('translation_range')) parts.push('con la traducción del tramo que indicaste');
   else if (list.includes('translation_moment_covered')) {
     parts.push(`${language ? `${translated} al ${language}` : translated}, ${many ? 'completas' : 'completa'} (incluye ese momento)`);
   } else if (list.includes('translation_moment_included')) {
@@ -282,8 +285,16 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   } else if (list.includes('translation_range_added')) {
     parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción incluye también ese momento)`);
   } else if (list.includes('translation_range_kept')) {
-    parts.push(`${language ? `${translated} al ${language}` : translated} (la traducción, solo del tramo que indicaste; si la quieres completa, dime «tradúcela completa»)`);
+    parts.push(`${language ? `${translated} al ${language}` : translated}${kept}`);
   }
+  // «traduce también al francés lo del minuto 30»: the language added last.
+  const addedLanguages = Array.isArray(record?.output?.extraTranslations) ? record.output.extraTranslations : [];
+  const added = list.includes('translation_added') ? addedLanguages[addedLanguages.length - 1] : null;
+  if (added?.target) {
+    parts.push(`también ${translated} al ${translationName(added.target)}${Array.isArray(added.ranges) && added.ranges.length ? ' (solo del tramo que indicaste)' : ''}${language ? `, además de la traducción al ${language}` : ''}`);
+  }
+  if (list.includes('translation_conditions')) parts.push('con tus indicaciones para la traducción');
+  if (list.includes('no_translation')) parts.push('sin la traducción');
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   // «Word no, PDF sí»: one swap, never «en PDF y sin el documento que habías pedido».
   const pdf = record?.output?.documentFormat === 'pdf';
@@ -1384,6 +1395,36 @@ function translationRangeOf(delivery) {
   return Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start ? { start, end } : null;
 }
 
+/** Valid translation windows ({start, end|null}); an open end runs to the end. */
+function windowList(list) {
+  return (Array.isArray(list) ? list : []).map((asked) => {
+    const start = Number(asked?.start);
+    const end = asked?.end == null ? null : Number(asked.end);
+    if (!Number.isFinite(start) || start < 0 || (end != null && (!Number.isFinite(end) || end <= start))) return null;
+    return { start, end };
+  }).filter(Boolean);
+}
+
+/**
+ * The windows the translation reads: the moments asked to translate (each on
+ * its own when far apart), else the transcript's range; [] is the whole
+ * recording.
+ */
+function translationWindowsOf(delivery) {
+  const several = windowList(delivery?.output?.translationRanges);
+  if (several.length) return several;
+  const one = translationRangeOf(delivery);
+  if (one) return [one];
+  const range = rangeOf(delivery);
+  return range ? [range] : [];
+}
+
+/** The `range` / `ranges` the translation files are named after. */
+function windowOutput(windows) {
+  if (windows.length > 1) return { range: null, ranges: windows };
+  return { range: windows[0] || null };
+}
+
 function analysisRangeOf(delivery) {
   const asked = delivery?.output?.analysisRange;
   if (asked && typeof asked === 'object') {
@@ -1439,9 +1480,9 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     // moment only shapes the summary that comes with it.
     // A follow-up's «traduce lo que dice en el minuto 30» reads that window;
     // the transcript files stay whole.
-    // The moment asked to translate wins over the transcript's own range.
-    const range = translationRangeOf(delivery) || rangeOf(delivery);
-    const translationRows = rowsIn(range);
+    // The moments asked to translate win over the transcript's own range.
+    const windows = translationWindowsOf(delivery);
+    const translationRows = rowsIn(windows.length ? windows : null);
     // «no traduzcas los nombres propios»: what the user said about how to
     // translate, from the first request and every follow-up (record.goal).
     const conditions = typeof mediaBatch.translationConditions === 'function' ? mediaBatch.translationConditions(delivery.goal) : [];
@@ -1461,16 +1502,47 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     if (!translation.files.length) return { text: '', artifacts: [], failed, summary };
     const pack = require('./media-transcript-artifacts');
     const built = await pack.buildTranslationArtifacts({ files: translation.files, target,
-      output: { ...(delivery.output || {}), range }, userId: delivery.userId });
-    const firstFile = translation.files[0];
-    const first = firstFile.text;
-    const preview = first.length > 3000
-      ? `${pack.escapeChatMarkdown(`${first.slice(0, 3000)}…`)}\n\n_Vista previa: el archivo adjunto tiene la traducción completa._`
-      : pack.escapeChatMarkdown(first);
-    // In a batch the preview names the file it shows.
-    const label = translationRows.length > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : '';
-    return { text: `${label}${preview}`, artifacts: built.artifacts,
-      notes: Array.isArray(built.notes) ? built.notes : [], failed, summary };
+      output: { ...(delivery.output || {}), ...windowOutput(windows) }, userId: delivery.userId });
+    const previewOf = (files, rowCount) => {
+      const firstFile = files[0];
+      const first = firstFile.text;
+      const preview = first.length > 3000
+        ? `${pack.escapeChatMarkdown(`${first.slice(0, 3000)}…`)}\n\n_Vista previa: el archivo adjunto tiene la traducción completa._`
+        : pack.escapeChatMarkdown(first);
+      // In a batch the preview names the file it shows.
+      return `${rowCount > 1 ? `#### ${pack.escapeChatMarkdown(quoteName(firstFile.name))}\n\n` : ''}${preview}`;
+    };
+    const artifacts = [...(built.artifacts || [])];
+    const notes = Array.isArray(built.notes) ? [...built.notes] : [];
+    // «traduce también al francés lo del minuto 30»: each language added
+    // after the first, with its own windows. Its failure never costs the
+    // first translation.
+    const added = [];
+    for (const extra of Array.isArray(delivery.output?.extraTranslations) ? delivery.output.extraTranslations : []) {
+      const extraTarget = mediaBatch.translationTargetByCode?.(extra?.target);
+      if (!extraTarget || extraTarget.code === target.code) continue;
+      const extraWindows = windowList(extra.ranges);
+      const extraRows = rowsIn(extraWindows.length ? extraWindows : windows.length ? windows : null);
+      try {
+        const extraTranslation = await mediaBatch.translateMediaBatch({ rows: extraRows, target: extraTarget, complete: completion.complete, signal, conditions });
+        if (!extraTranslation.files.length) {
+          notes.push(`No pude terminar la traducción al ${extraTarget.name}; pídemela de nuevo en este chat cuando quieras.`);
+          continue;
+        }
+        const extraBuilt = await pack.buildTranslationArtifacts({ files: extraTranslation.files, target: extraTarget,
+          output: { ...(delivery.output || {}), ...windowOutput(extraWindows.length ? extraWindows : windows) }, userId: delivery.userId });
+        artifacts.push(...(extraBuilt.artifacts || []));
+        if (Array.isArray(extraBuilt.notes)) notes.push(...extraBuilt.notes);
+        const where = extraWindows.length ? ` (${pack.rangesLabel(extraWindows)})` : '';
+        added.push(`#### Al ${extraTarget.name}${where}\n\n${previewOf(extraTranslation.files, extraRows.length)}`);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        notes.push(`No pude terminar la traducción al ${extraTarget.name}; pídemela de nuevo en este chat cuando quieras.`);
+      }
+    }
+    const main = previewOf(translation.files, translationRows.length);
+    const text = added.length ? [`#### Al ${target.name}\n\n${main}`, ...added].join('\n\n') : main;
+    return { text, artifacts, notes, failed, summary };
   }
   const result = await mediaBatch.analyzeMediaBatch({ rows: analysisRows, goal: delivery.goal, complete: completion.complete, signal });
   return result?.text || '';

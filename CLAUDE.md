@@ -3587,17 +3587,35 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   txt» ya es así (el TXT siempre va) y nunca dispara el análisis de reserva. Recién hecho el aviso, un
   pedido suelto («¿de qué trata?», «dime los temas», «hazme 5 preguntas») llega al lote pendiente. Un momento de una grabación que la entrega ya traduce completa al
   mismo idioma no estrecha la traducción (`translation_moment_covered`: «completa (incluye ese
-  momento)»). Los tramos de traducción se suman como los del análisis: el que la traducción ya lee
-  (su tramo, el rango de la transcripción o toda la grabación) nunca se achica; un momento dentro no
-  cambia nada (`translation_moment_included`) y uno fuera lo amplía al tramo que cubre ambos
-  (`translation_range_added`). «traduce también al inglés lo que dice en el minuto 50» y «traduce al
-  inglés lo del minuto 50» son tramos de traducción, sin resumen. Solo «tradúcela completa», «tradúcelo
-  todo» o «traduce toda la clase» (`asksWholeTranslation` → `translationWhole`) traducen la grabación
-  entera; nombrar el idioma otra vez conserva el tramo y dice cómo pedirla completa
-  (`translation_range_kept`). «no traduzcas los audios / las grabaciones / de momento» retira la
-  traducción; una condición («no traduzcas los nombres propios», «deja las siglas sin traducir», «no
-  traduzcas lo que ya está en inglés») la conserva y llega al traductor (`translationConditions` del
-  pedido y de cada seguimiento → `translateMediaBatch({ conditions })`). Cambiar Word por PDF quita el Word de `formats` («en PDF en lugar de
+  momento)»). Los tramos de traducción se suman: los que la traducción ya lee (sus tramos, el rango
+  de la transcripción o toda la grabación) nunca se achican; un momento dentro no cambia nada
+  (`translation_moment_included`) y uno fuera se agrega como tramo propio (`translation_range_added`,
+  `output.translationRanges`: dos momentos lejanos se traducen cada uno, nunca lo que hay entre ellos,
+  y un tramo abierto sigue abierto: «desde 30.00»). El momento de un primer pedido («traduce al inglés
+  lo que dice en el minuto 30») se guarda igual, como tramo de la traducción (`output.translationRange`),
+  sin recortar la transcripción. «traduce también al inglés lo que dice en el minuto 50» y «traduce al
+  inglés lo del minuto 50» son tramos de traducción, sin resumen; «lo del minuto 30» solo es un momento
+  junto a una traducción («transcribe lo del minuto 30» o «solo lo del minuto 10 al 20» no compran un
+  análisis). Solo «tradúcela completa», «tradúcelo todo», «traduce toda la clase» o «quiero la
+  traducción completa» (`asksWholeTranslation` → `translationWhole`) traducen la grabación entera, sin
+  nombrar el idioma: un seguimiento que pide traducir sin idioma toma el de la traducción pendiente
+  (`asksToTranslate`: un pedido, nunca «la traduzco yo» ni «¿la traducción estará completa?») y nunca
+  llega al análisis de reserva; sin traducción pendiente, se pregunta el idioma («¿A qué idioma la
+  traduzco?»). Nombrar el idioma otra vez, o cambiarlo («mejor al francés»),
+  conserva el tramo y dice cómo pedirla completa (`translation_range_kept`). Un momento en otro idioma
+  («traduce también al francés lo del minuto 30») es una segunda traducción (`output.extraTranslations`,
+  cada una con sus tramos; «también» cuenta junto al verbo o al idioma, `asksAlsoTranslation`: «… y
+  también en Word» cambia el idioma): la primera sigue completa. «no lo traduzcas al inglés sino al francés»
+  cambia el idioma (`switchedTranslationTarget`). Un «traduce…» rechazado retira la traducción salvo
+  que nombre una parte o una manera (`CONDITION_OBJECT_RE` o un determinante con algo que no es la
+  grabación): «no la traduzcas porfavor / por fa / para nada / en absoluto / a ningún idioma» y «no
+  traduzcas los audios / de momento» la retiran («sin la traducción»); una condición («no traduzcas
+  los nombres propios», «no traduzcas el saludo inicial», «deja las siglas sin traducir», «no lo
+  traduzcas literal») la conserva y llega al traductor, igual que una indicación positiva («tradúcelo
+  literal», «deja las siglas en inglés», «mantén los términos técnicos en español»): `translationConditions`
+  del pedido y de cada seguimiento → `translateMediaBatch({ conditions })`; la última sobre la misma
+  parte gana («incluidos los nombres» deshace «no traduzcas los nombres propios») y la respuesta dice
+  «con tus indicaciones para la traducción». Cambiar Word por PDF quita el Word de `formats` («en PDF en lugar de
   Word»), un formato rechazado sale de `formats` aunque otro lo hubiera reemplazado, y la entrega no
   arma ni reporta como faltante un documento rechazado o reemplazado. Una grabación fallida cuyo audio
   extrajo el navegador conserva el nombre que el runner guardó al entregarla (`record.fileNames`).

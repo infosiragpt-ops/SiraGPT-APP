@@ -340,6 +340,14 @@ function rangeLabel(range) {
   return `${clock(range.start, withHours)}–${clock(range.end, withHours)}`;
 }
 
+/** Several windows on one clock: «00:09:00–00:14:00, 02:29:00–02:34:00», «09:00–14:00, desde 30:00». */
+function rangesLabel(windows) {
+  const list = (Array.isArray(windows) ? windows : []).filter(Boolean);
+  if (list.length <= 1) return list[0] ? rangeLabel(list[0]) : '';
+  const withHours = list.some(range => (range.end == null ? range.start : range.end) >= 3600);
+  return list.map(range => (range.end == null ? `desde ${clock(range.start, withHours)}` : `${clock(range.start, withHours)}–${clock(range.end, withHours)}`)).join(', ');
+}
+
 function sourceStem(name) {
   const raw = String(name || '').trim().replace(/[\\/:*?"<>|]+/g, ' ');
   const clean = raw.replace(/\.[A-Za-z0-9]{1,6}$/, '').replace(/\s+/g, ' ').trim();
@@ -960,7 +968,9 @@ async function buildTranslationArtifacts({ files = [], target, output = {}, user
   const notes = [];
   const label = `traducción al ${target.name}`;
   const base = usable.length === 1 ? `${sourceStem(usable[0].name)} (${label}` : `Traducciones al ${target.name} (${usable.length} archivos`;
-  const window = output.range ? ` ${rangeLabel(output.range).replace(/:/g, '.')}` : '';
+  // Moments far apart: each window in the name («00.09.00–00.14.00, 02.29.00–02.34.00»).
+  const windows = Array.isArray(output.ranges) && output.ranges.length ? output.ranges : output.range ? [output.range] : [];
+  const window = windows.length ? ` ${rangesLabel(windows).replace(/:/g, '.')}` : '';
   const name = (ext) => `${base}${window}).${ext}`;
   const txt = usable.length === 1 ? usable[0].text.trim()
     : usable.map((file, index) => `${index + 1}. ${file.name}\n${'='.repeat(48)}\n${file.text.trim()}`).join('\n\n');
@@ -1176,6 +1186,7 @@ module.exports = {
   normalizeSegments,
   deliverableName,
   rangeLabel,
+  rangesLabel,
   durationLabel,
   MIME,
   LONG_RECORDING_SECONDS,

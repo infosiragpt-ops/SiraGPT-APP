@@ -534,7 +534,7 @@ test('a translation of a moment is stored apart: the transcript keeps its whole 
   if (typeof normalizeOutput === 'function') assert.deepEqual(normalizeOutput(next.output).translationRange, { start: 1740, end: 2040 });
   assert.match(amendedMessage({ changes, record: next }), /traducida al inglés \(la traducción, solo del tramo que indicaste\)/);
   const source = require('node:fs').readFileSync(path.join(__dirname, '..', 'src', 'services', 'media-delivery.js'), 'utf8');
-  assert.match(source, /const range = translationRangeOf\(delivery\) \|\| rangeOf\(delivery\);/, 'the translation reads that window, over the transcript\'s range');
+  assert.match(source, /const windows = translationWindowsOf\(delivery\);/, 'the translation reads its windows, over the transcript\'s range');
 });
 
 test('a turned-down format goes; the model changes only for model work', () => {
@@ -1247,4 +1247,75 @@ test('the delivery names a recording stopped with «Detener» as stopped, never 
   assert.match(text, /«b\.mp4»: detenida \(escribe «retómala» para seguir donde quedó\)/);
   assert.match(text, /«c\.mp4»: no se pudo transcribir/);
   assert.doesNotMatch(text, /«b\.mp4»: no se pudo transcribir/);
+});
+
+// The real analysis step with the model calls faked: what each translation
+// call reads, and the files it names.
+async function translateWith(delivery, rows) {
+  const runnerPath = require.resolve('../src/services/agents/agent-task-runner');
+  const runtimePath = require.resolve('../src/services/media-analysis-runtime');
+  const saved = new Map([runnerPath, runtimePath].map(p => [p, require.cache[p]]));
+  const fake = (p, exports) => { require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
+  const calls = [];
+  fake(runnerPath, { normalizeAgentRuntimeModel: () => ({ runtimeModel: 'm' }), resolveAgentRuntimeClient: () => ({ client: {}, model: 'm', provider: 'p' }),
+    pinnedModelLabel: () => 'M' });
+  fake(runtimePath, { createMediaAnalysisCompletion: () => ({ complete: async (messages) => {
+    const system = String(messages[0].content || '');
+    let transcript = '';
+    try { transcript = JSON.parse(messages[messages.length - 1].content).transcript || ''; } catch (_) { transcript = String(messages[messages.length - 1].content || ''); }
+    calls.push({ system, transcript });
+    return transcript.replace(/Hola/g, /francés|french/i.test(system) ? 'Bonjour' : 'Hello');
+  } }) });
+  try {
+    delete require.cache[require.resolve('../src/services/media-delivery')];
+    const { defaultAnalyze } = require('../src/services/media-delivery');
+    const result = await defaultAnalyze({ rows, prisma: null, delivery: { userId: 'u1', chatId: 'c', mode: 'translation', model: { id: 'm' }, ...delivery } });
+    return { result, calls };
+  } finally {
+    for (const [p, entry] of saved) { if (entry) require.cache[p] = entry; else delete require.cache[p]; }
+    delete require.cache[require.resolve('../src/services/media-delivery')];
+  }
+}
+
+const THREE_HOURS_SEGMENTS = [
+  [600, 'Hola, minuto diez.'], [660, 'Hola, todavía el minuto once.'],
+  [3600, 'Hola, la hora uno que nadie pidió.'], [5400, 'Hola, hora y media que nadie pidió.'],
+  [9000, 'Hola, minuto ciento cincuenta.'], [9060, 'Hola, ciento cincuenta y uno.'],
+].map(([start, text]) => ({ start, end: start + 30, text }));
+const THREE_HOURS = THREE_HOURS_SEGMENTS.map(seg => `[${new Date(seg.start * 1000).toISOString().slice(11, 19)}] ${seg.text}`).join('\n');
+const THREE_HOURS_SIDECARS = { a: { language: 'es', durationSec: 10800, segments: THREE_HOURS_SEGMENTS } };
+
+test('two moments far apart translate only those two windows, and the files name both', async () => {
+  const rows = [{ id: 'a', originalName: 'clase.mp4', extractedText: THREE_HOURS, processingStage: 'ready' }];
+  const { result, calls } = await translateWith({ goal: 'traduce al inglés lo del minuto 10\n\ny traduce también al inglés lo del minuto 150',
+    transcripts: THREE_HOURS_SIDECARS, output: { translationTarget: 'en', translationRanges: [{ start: 540, end: 840 }, { start: 8940, end: 9240 }] } }, rows);
+  const read = calls.map(call => call.transcript).join('\n');
+  assert.match(read, /minuto diez/);
+  assert.match(read, /minuto ciento cincuenta/);
+  assert.doesNotMatch(read, /nadie pidió/, 'nothing between the two moments is translated');
+  const names = result.artifacts.map(artifact => artifact.filename);
+  assert.ok(names.some(name => /00\.09\.00–00\.14\.00, 02\.29\.00–02\.34\.00/.test(name)), names.join(' | '));
+  // An open range stays «desde …», never «168.00.00».
+  const open = await translateWith({ goal: 'transcribe desde el minuto 30 y tradúcelo al inglés',
+    transcripts: THREE_HOURS_SIDECARS, output: { translationTarget: 'en', translationRanges: [{ start: 540, end: 840 }, { start: 1800, end: null }] } }, rows);
+  const openNames = open.result.artifacts.map(artifact => artifact.filename).join(' | ');
+  assert.match(openNames, /09\.00–14\.00, desde 30\.00/);
+  assert.doesNotMatch(openNames, /168/);
+});
+
+test('a second language translates its own moment and the first stays whole', async () => {
+  const rows = [{ id: 'a', originalName: 'clase.mp4', extractedText: THREE_HOURS, processingStage: 'ready' }];
+  const { result, calls } = await translateWith({ goal: 'transcribe y tradúcelo al inglés\n\ntraduce también al francés lo del minuto 150',
+    transcripts: THREE_HOURS_SIDECARS, output: { translationTarget: 'en', extraTranslations: [{ target: 'fr', ranges: [{ start: 8940, end: 9240 }] }] } }, rows);
+  const english = calls.filter(call => !/francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
+  const french = calls.filter(call => /francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
+  assert.match(english, /nadie pidió/, 'the English translation is whole');
+  assert.match(french, /minuto ciento cincuenta/);
+  assert.doesNotMatch(french, /minuto diez|nadie pidió/, 'the French one only reads its moment');
+  const names = result.artifacts.map(artifact => artifact.filename);
+  assert.ok(names.some(name => /traducción al inglés\)\.txt$/.test(name)), names.join(' | '));
+  assert.ok(names.some(name => /traducción al francés 02\.29\.00–02\.34\.00\)\.txt$/.test(name)), names.join(' | '));
+  assert.match(result.text, /#### Al inglés/);
+  assert.match(result.text, /#### Al francés \(02:29:00–02:34:00\)/);
+  assert.match(result.text, /Bonjour/);
 });
