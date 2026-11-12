@@ -1243,6 +1243,35 @@ test('«tradúcela y dime qué dice en el minuto 30» translates the WHOLE recor
   }
 });
 
+test('a translation in the same turn hands the translator the user\'s conditions («deja los nombres propios en español»)', async () => {
+  const realArtifacts = require('../src/services/media-transcript-artifacts');
+  const rows = [readyRow('clase', 'clase.mp3', { extractedText: 'x'.repeat(50) })];
+  const asked = [];
+  const result = await runMediaBranch({
+    mediaBatchRows: rows, displayGoal: 'traduce la clase al inglés pero deja los nombres propios en español', goal: 'x',
+    mediaBatch: { ...batch, waitForMediaBatch: async () => ({ rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+      translateMediaBatch: async ({ conditions }) => { asked.push(conditions); return { files: [{ name: 'clase.mp3', text: 'Good morning, Juan Pérez.' }], failed: [] }; } },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [],
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }),
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+    require: (name) => {
+      if (name === '../media-transcript-artifacts') {
+        return { ...realArtifacts, buildTranslationArtifacts: async () => ({ artifacts: [{ filename: 'clase-en.txt', base64: '', mime: 'text/plain' }], notes: [] }) };
+      }
+      if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+      return require(name);
+    },
+    ...mediaBranchHelpers(),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  });
+  assert.equal(asked.length, 1);
+  assert.ok(Array.isArray(asked[0]) && asked[0].some(item => /deja los nombres propios en español/.test(item)), JSON.stringify(asked[0]));
+  assert.match(result.finalMarkdown, /al inglés/);
+});
+
 test('a long «tradúcela y dime qué dice en el minuto 30» hands off a whole translation plus the answer for that moment', async () => {
   const rows = [{ id: 'clase', originalName: 'clase.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
   const created = [];
@@ -1976,6 +2005,16 @@ test('a document switched to another format replaces it; turned down later, neit
   assert.deepEqual(swap.record.formats, ['txt', 'pdf']);
   assert.match(delivery.amendedMessage(swap), /en PDF en lugar de Word/);
   assert.doesNotMatch(delivery.amendedMessage(swap), /sin el documento/);
+  // «Word y PDF», then «sin el PDF»: the record keeps only the Word. And the
+  // Word an older switch left in `formats` goes when it is turned down.
+  const both = normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe en Word y PDF',
+    mode: 'transcript', formats: ['txt', 'docx', 'pdf'], output: { documentFormat: 'docx', alsoPdf: true } }, Date.now());
+  assert.deepEqual(mergeDeliveryAmendment(both, { goal: 'sin el PDF', removeDocument: ['pdf'] }).record.formats, ['txt', 'docx']);
+  const older = normalizeNewRecord({ userId: 'u1', chatId: 'c', fileIds: ['clase'], fileNames: ['clase.mp4'], goal: 'transcribe en PDF',
+    mode: 'transcript', formats: ['txt', 'docx', 'pdf'], output: { documentFormat: 'pdf' } }, Date.now());
+  const noWord = mergeDeliveryAmendment(older, { goal: 'sin Word', removeDocument: ['docx'] });
+  assert.deepEqual(noWord.record.formats, ['txt', 'pdf']);
+  assert.equal(noWord.record.output.documentFormat, 'pdf');
   // A record from before the fix (Word left in its formats): the Word turned
   // down is never built, and the PDF that replaced it is not «missing Word».
   const pack = require('../src/services/media-transcript-artifacts');

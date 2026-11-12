@@ -180,7 +180,7 @@ test('the tools name audio the browser extracted after what the user uploaded, a
       processingError: null, extractedText: '[00:00:00] inicio.', deletedAt: null },
   ] });
   s.prisma.documentAnalysis = { findMany: async ({ where }) => where.fileId.in.map(fileId => ({ fileId,
-    metadata: { clientExtracted: { tier: 'opus', sourceName: fileId === 'clase3' ? 'Clase 3.mp4' : 'Clase 4.mp4', sourceSize: 900_000_000, sourceType: 'video/mp4' } } })) };
+    metadata: { clientExtracted: { tier: 'opus', sourceName: { clase3: 'Clase 3.mp4', clase4: 'Clase 4.mp4', 'clase-cinco': 'Clase 5.mp4' }[fileId], sourceSize: 900_000_000, sourceType: 'video/mp4' } } })) };
   await s.write('clase3', 'u1', lectureResult());
   const log = [];
   const delivery = {
@@ -198,6 +198,14 @@ test('the tools name audio the browser extracted after what the user uploaded, a
   const ambiguous = await tools.buildTranscriptLookupTool(s.over).execute({ at: '10:00' }, s.ctx());
   assert.equal(ambiguous.ok, false);
   assert.deepEqual(ambiguous.files.map(file => file.name).sort(), ['Clase 3.mp4', 'Clase 4.mp4']);
+  // By id from outside the chat's context (the model kept it from an earlier
+  // turn): still named after what was uploaded.
+  s.files.set('clase-cinco', { id: 'clase-cinco', userId: 'u1', originalName: 'Clase 5.audio.ogg', mimeType: 'audio/ogg',
+    processingStage: 'ready', processingError: null, extractedText: '[00:00:00] inicio.', deletedAt: null });
+  await s.write('clase-cinco', 'u1', lectureResult());
+  const byId = await tools.buildTranscriptLookupTool(s.over).execute({ file: 'clase-cinco', start: '1:35:00' }, s.ctx({ fileIds: ['clase3'] }));
+  assert.equal(byId.ok, true, JSON.stringify(byId));
+  assert.equal(byId.file.name, 'Clase 5.mp4');
 });
 
 test('a name that is the start of a longer one never hides it: «Clase 10» among «Clase 1» to «Clase 30»', () => {
