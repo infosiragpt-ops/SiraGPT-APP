@@ -1957,6 +1957,16 @@ function createMediaDeliveryService(deps = {}) {
       return { id, status: 'closing' };
     }
     if (err?.code === 'delivery_cancelled' && typeof store.markCancelled === 'function') {
+      // The jobs stop before the record closes: one still running (a
+      // database blip) keeps the record open with its marker, and the sweep
+      // stops it later.
+      const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
+      const stop = await stopWhatTheStopLeft(record, marker);
+      if (!stop.complete) {
+        await store.release(id, token).catch(() => null);
+        logger.warn(`[media-delivery] cancelled mid-delivery, jobs left to stop id=${id}`);
+        return { id, status: 'cancelling' };
+      }
       await store.markCancelled(id, token).catch(() => null);
       logger.info(`[media-delivery] cancelled mid-delivery id=${id}`);
       return { id, status: 'cancelled' };
@@ -2008,23 +2018,23 @@ function createMediaDeliveryService(deps = {}) {
     // A Stop left for a holder that went away (or interrupted by a restart):
     // finish it here, with its chat line and the jobs it stops.
     if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(id).catch(() => false)) {
-      // Read before the close removes it: did this Stop already stop its jobs?
+      // Once its marker exists the Stop is durable: the jobs stop first,
+      // whatever the store answers next (the lock of a process that died
+      // mid-Stop, a line still to post, a holder elsewhere honouring it).
+      // Only what the Stop left (marker.pendingStops): a sweep that retries
+      // never stops a recording the user asked for again since.
       const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
+      const stop = await stopWhatTheStopLeft(record, marker);
+      // The record closes once its line is posted and every job stopped; a
+      // job still running keeps it open for the next sweep.
       const closed = await store.cancel(id, { userId: record.userId, reason: 'user',
-        beforeClose: rec => postCancelNote(rec, rec.userId).catch(err => settleFailure(err, id)) }).catch(() => null);
+        beforeClose: async (rec) => {
+          const line = await postCancelNote(rec, rec.userId).catch(err => settleFailure(err, id));
+          if (line?.error || stop.complete) return line;
+          return { error: 'stop_incomplete', messageId: line?.messageId || null, chatId: line?.chatId || null };
+        } }).catch(() => null);
       if (closed?.outcome === 'already_terminal') return { id, status: closed.record?.status || 'delivered' };
       if (closed?.outcome === 'missing') return { id, status: 'missing' };
-      // Once its marker exists the Stop is durable: the jobs stop whatever
-      // the store answered (the lock of a process that died mid-Stop, a line
-      // still to post, a holder elsewhere honouring it). A later sweep
-      // closes the record; nothing is claimed or delivered meanwhile. Once
-      // per Stop: a sweep that only retries the chat line never stops a
-      // recording the user asked for again since.
-      if (marker?.jobsStopped !== true) {
-        const stop = await cancelUnneededMediaJobs({ userId: record.userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
-          refines: refineSpecsOf(record) });
-        await noteJobsStopped(id, stop);
-      }
       if (closed?.outcome === 'cancelled' || closed?.outcome === 'already_cancelled') return { id, status: 'cancelled' };
       return { id, status: 'cancelling' };
     }
@@ -2250,14 +2260,55 @@ function createMediaDeliveryService(deps = {}) {
       if (!free.length && !refinesToStop.length) return { stopped: 0, complete: true };
       const result = await cancelMediaJobs({ fileIds: free, userId, ...(refinesToStop.length ? { refines: refinesToStop } : {}) });
       // A file deleted since (or no longer a recording) has no job left: only
-      // a transient error (the database) leaves the Stop to retry.
-      const complete = !(Array.isArray(result?.results) && result.results.some(item => item?.outcome === 'error'
-        && !SETTLED_STOP_CODES.has(item?.code)));
-      return { stopped: Number(result?.stopped) || 0, complete };
+      // a transient error (the database) leaves the Stop to retry, and only
+      // for the jobs it hit (`unsettled`).
+      const transient = (Array.isArray(result?.results) ? result.results : [])
+        .filter(item => item?.outcome === 'error' && !SETTLED_STOP_CODES.has(item?.code));
+      const unsettled = {
+        fileIds: [...new Set(transient.filter(item => !item.refine).map(item => item.id).filter(Boolean))],
+        refines: refinesToStop.filter(spec => transient.some(item => item.refine && item.id === spec.fileId)),
+      };
+      return { stopped: Number(result?.stopped) || 0, complete: !transient.length, unsettled };
     } catch (err) {
       logger.warn(`[media-delivery] stopping the transcription failed code=${err?.code || 'stop_error'}`);
-      return { stopped: 0, complete: false };
+      return { stopped: 0, complete: false, unsettled: { fileIds: ids, refines: ownRefines } };
     }
+  }
+
+  /**
+   * What is left of a Stop's jobs to stop (the sweep, a later Stop): the
+   * ones its marker lists as pending, or all of them for a marker written
+   * before the list existed; nothing once they were all stopped.
+   */
+  async function stopWhatTheStopLeft(record, marker) {
+    if (marker?.jobsStopped === true) return { stopped: 0, complete: true };
+    const pending = marker?.pendingStops && typeof marker.pendingStops === 'object' ? marker.pendingStops : null;
+    const stop = await cancelUnneededMediaJobs({ userId: record.userId,
+      fileIds: pending ? (pending.fileIds || []) : record.fileIds || [], exceptDeliveryId: record.id,
+      refines: pending ? (pending.refines || []) : refineSpecsOf(record) });
+    await noteJobsStopped(record.id, stop);
+    return stop;
+  }
+
+  /**
+   * The user asked for these recordings again: an open Stop that could not
+   * stop them yet never stops them later. Best effort; never throws.
+   */
+  async function releasePendingStops({ userId = null, fileIds = [] } = {}) {
+    const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean))];
+    if (!enabled() || !userId || !ids.length) return 0;
+    const store = getStore();
+    if (typeof store.releasePendingStops !== 'function') return 0;
+    let released = 0;
+    try {
+      for (const record of await store.listActive()) {
+        if (record.userId !== userId || !(record.fileIds || []).some(fileId => ids.includes(fileId))) continue;
+        if (await store.releasePendingStops(record.id, ids).catch(() => false)) released += 1;
+      }
+    } catch (err) {
+      logger.warn(`[media-delivery] pending stops not released code=${err?.code || 'release_error'}`);
+    }
+    return released;
   }
 
   /** The line that settles a delivery that failed for good (see recordFailure). */
@@ -2274,12 +2325,18 @@ function createMediaDeliveryService(deps = {}) {
     return { messageId: posted?.messageId || posted?.id || null, chatId: posted?.chatId || chatId };
   }
 
-  /** Best effort: the marker remembers this Stop already stopped its jobs (only when all were settled). */
+  /**
+   * Best effort: the marker remembers this Stop already stopped its jobs
+   * (all settled), or which ones it could not stop yet (only those are
+   * retried).
+   */
   async function noteJobsStopped(id, stop = { complete: true }) {
-    if (stop?.complete !== true) return;
     const store = getStore();
-    if (typeof store.noteJobsStopped !== 'function') return;
-    await store.noteJobsStopped(id).catch(() => {});
+    if (stop?.complete === true) {
+      if (typeof store.noteJobsStopped === 'function') await store.noteJobsStopped(id).catch(() => {});
+      return;
+    }
+    if (stop?.unsettled && typeof store.notePendingStops === 'function') await store.notePendingStops(id, stop.unsettled).catch(() => {});
   }
 
   /**
@@ -2322,9 +2379,20 @@ function createMediaDeliveryService(deps = {}) {
     };
     ownStop();
     let result;
+    // The jobs stop under the lock, before the record closes: a job still
+    // running (a database blip) keeps the record open with its marker, and
+    // the sweep stops what is left (only that: marker.pendingStops).
+    let stoppedInside = null;
     try {
       result = await store.cancel(id, { userId, reason: 'user',
-        beforeClose: record => postCancelNote(record, userId).catch(err => settleFailure(err, id)) });
+        beforeClose: async (record) => {
+          const line = await postCancelNote(record, userId).catch(err => settleFailure(err, id));
+          // A second press stops only what the first one left.
+          const marker = typeof store.cancelMarker === 'function' ? await store.cancelMarker(id).catch(() => null) : null;
+          stoppedInside = await stopWhatTheStopLeft(record, marker);
+          if (line?.error || stoppedInside.complete) return line;
+          return { error: 'stop_incomplete', messageId: line?.messageId || null, chatId: line?.chatId || null };
+        } });
     } catch (err) {
       logger.warn(`[media-delivery] cancel failed id=${id} code=${err?.code || 'cancel_error'}`);
       // The record could not be closed (a full disk), but the user said stop:
@@ -2343,12 +2411,11 @@ function createMediaDeliveryService(deps = {}) {
     // (found by the next Stop and the sweep, which post it); no holder to
     // wait for. The jobs stop now.
     if (result?.settleFailed && record) {
-      const stop = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
+      const stop = stoppedInside || await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
         refines: refineSpecsOf(record) });
-      const { stopped } = stop;
-      await noteJobsStopped(id, stop);
-      return { id, outcome: 'cancel_requested', stoppedFiles: stopped, messageId: null,
-        chatId: record.deliveryChatId || record.chatId || null };
+      if (!stoppedInside) await noteJobsStopped(id, stop);
+      return { id, outcome: 'cancel_requested', stoppedFiles: stop.stopped, messageId: settle?.messageId || null,
+        chatId: settle?.chatId || record.deliveryChatId || record.chatId || null };
     }
     // Held by this process: its analysis stops now, not at the next checkpoint.
     if (outcome === 'cancel_requested') ownStop();
@@ -2405,8 +2472,9 @@ function createMediaDeliveryService(deps = {}) {
     if (!record || (outcome !== 'cancelled' && outcome !== 'cancel_requested')) {
       return { ...empty(outcome), chatId: record?.deliveryChatId || record?.chatId || null };
     }
-    const finalStop = await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id,
-      refines: refineSpecsOf(record) });
+    // Already stopped under the lock when the record closed here.
+    const finalStop = stoppedInside && outcome === 'cancelled' ? stoppedInside
+      : await cancelUnneededMediaJobs({ userId, fileIds: record.fileIds || [], exceptDeliveryId: id, refines: refineSpecsOf(record) });
     const stoppedFiles = finalStop.stopped;
     // Left open with its marker (a holder, or a lock a dead process left):
     // the sweep that closes it must not stop a recording asked for again.
@@ -2563,6 +2631,7 @@ function createMediaDeliveryService(deps = {}) {
     cancelDelivery,
     cancelChatDeliveries,
     cancelUnneededMediaJobs,
+    releasePendingStops,
     isRefineJobWanted,
     findOpenDelivery,
     amendDelivery,
@@ -2602,6 +2671,7 @@ module.exports = {
   findOpenDelivery: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().findOpenDelivery(options) : Promise.resolve(null)),
   // Also with the delivery switched off: Stop during an inline wait still stops the jobs.
   cancelUnneededMediaJobs: options => getMediaDeliveryService().cancelUnneededMediaJobs(options),
+  releasePendingStops: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().releasePendingStops(options) : Promise.resolve(0)),
   amendDelivery: (id, options) => (isMediaDeliveryEnabled() ? getMediaDeliveryService().amendDelivery(id, options)
     : Promise.resolve({ outcome: 'disabled', record: null, changes: [] })),
   isRefineJobWanted: options => (isMediaDeliveryEnabled() ? getMediaDeliveryService().isRefineJobWanted(options) : Promise.resolve(true)),

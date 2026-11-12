@@ -1319,3 +1319,110 @@ test('a second language translates its own moment and the first stays whole', as
   assert.match(result.text, /#### Al francés \(02:29:00–02:34:00\)/);
   assert.match(result.text, /Bonjour/);
 });
+
+// ── eighth review: a Stop whose job stop failed for a moment ─────────────────
+
+// The first stop of «b» hits a database blip; later ones work.
+function flakyStop(calls, { failFor = ['b'], times = 1 } = {}) {
+  let left = times;
+  return async (args) => {
+    calls.push(JSON.parse(JSON.stringify(args)));
+    const fail = left > 0;
+    if (fail) left -= 1;
+    const results = (args.fileIds || []).map(id => (fail && failFor.includes(id) ? { id, outcome: 'error', code: 'P2024' } : { id, outcome: 'stopped' }));
+    return { stopped: results.filter(item => item.outcome === 'stopped').length, results };
+  };
+}
+
+test('a Stop retries only the jobs it could not stop: a recording asked for again is never stopped twice', async (t) => {
+  let down = true;
+  const calls = [];
+  const { service, state, store } = await harness(t, { files: [fileRow('a'), fileRow('b')], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      const message = { id: `msg${state.messages.length + 1}`, userId, chatId, content, metadata };
+      state.messages.push(message);
+      return { messageId: message.id, chatId };
+    },
+    cancelMediaJobs: flakyStop(calls),
+  } });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  const marker = await store.cancelMarker(record.id);
+  assert.notEqual(marker?.jobsStopped, true);
+  assert.deepEqual(marker?.pendingStops, { fileIds: ['b'], refines: [] }, '«a» stopped; only «b» is left');
+  // The user asks for «a» again; the sweep that posts the line stops «b» only.
+  down = false;
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
+  assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b']]);
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind === 'cancelled').length, 1);
+});
+
+test('asking again for the recording whose stop failed releases it: the sweep never stops it', async (t) => {
+  let down = true;
+  const calls = [];
+  const { service, state, store } = await harness(t, { files: [fileRow('a'), fileRow('b')], overrides: {
+    postMessage: async ({ userId, chatId, content, metadata }) => {
+      if (down) throw Object.assign(new Error('db'), { code: 'P1001' });
+      const message = { id: `msg${state.messages.length + 1}`, userId, chatId, content, metadata };
+      state.messages.push(message);
+      return { messageId: message.id, chatId };
+    },
+    cancelMediaJobs: flakyStop(calls),
+  } });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  await service.cancelDelivery(record.id, { userId: 'u1' });
+  assert.equal(await service.releasePendingStops({ userId: 'u1', fileIds: ['b'] }), 1);
+  assert.equal((await store.cancelMarker(record.id))?.jobsStopped, true);
+  down = false;
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
+  assert.equal(calls.length, 1, '«b», asked for again, is never stopped by the sweep');
+  // Another user's request never releases this one.
+  assert.equal(await service.releasePendingStops({ userId: 'u2', fileIds: ['b'] }), 0);
+});
+
+test('a Stop whose line posts but whose job stop fails keeps the request open until the sweep stops it', async (t) => {
+  const calls = [];
+  const { service, state, store } = await harness(t, { files: [fileRow('a'), fileRow('b')], overrides: { cancelMediaJobs: flakyStop(calls) } });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  const out = await service.cancelDelivery(record.id, { userId: 'u1' });
+  assert.equal(out.outcome, 'cancel_requested', 'not done while «b» still transcribes');
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind === 'cancelled').length, 1, 'the line is in the chat');
+  assert.ok(await store.get(record.id), 'the request stays open');
+  assert.deepEqual((await store.cancelMarker(record.id))?.pendingStops, { fileIds: ['b'], refines: [] });
+  // The sweep stops «b» and only then closes, without a second line.
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
+  assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b']]);
+  assert.equal(state.messages.filter(message => message.metadata.deliveryKind === 'cancelled').length, 1);
+  assert.equal((await store.get(record.id))?.status, 'cancelled');
+});
+
+test('a holder that honours a Stop mid-analysis keeps the request open while a job could not be stopped', async (t) => {
+  const seen = {};
+  const { analyze, ready } = slowAnalyze(seen);
+  const calls = [];
+  const { service, store } = await harness(t, { files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT }),
+    fileRow('b', { processingStage: 'ready', extractedText: TRANSCRIPT })], overrides: { analyze, cancelMediaJobs: flakyStop(calls) } });
+  const record = await service.createDelivery(request({ mode: 'analysis', goal: 'resume la clase', fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  const run = service.deliverOne(record.id);
+  await ready;
+  const other = createMediaDeliveryStore({ root: store.root, now: () => T0 });
+  assert.equal((await other.cancel(record.id, { userId: 'u1', tries: 1, waitMs: 1 })).outcome, 'cancel_requested');
+  const outcome = await run;
+  assert.equal(outcome.status, 'cancelling', 'a job still running keeps it open');
+  assert.ok(await store.get(record.id));
+  assert.equal((await service.deliverOne(record.id)).status, 'cancelled');
+  assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b']]);
+});
+
+test('a second press of Stop stops only what the first one left', async (t) => {
+  const calls = [];
+  const { service, store } = await harness(t, { files: [fileRow('a'), fileRow('b')], overrides: { cancelMediaJobs: flakyStop(calls, { times: 2 }) } });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancel_requested');
+  assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b']], '«a», asked for again in between, is never stopped twice');
+  assert.equal((await service.cancelDelivery(record.id, { userId: 'u1' })).outcome, 'cancelled');
+  assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b'], ['b']]);
+  assert.equal((await store.get(record.id))?.status, 'cancelled');
+});

@@ -884,11 +884,29 @@ function createMediaDeliveryStore({
   /** Write (or keep) the Stop marker; a repeated Stop keeps the first time. */
   async function markCancel(id, reason) {
     const previous = await readCancelMarker(id);
+    const pendingStops = normalizePendingStops(previous?.pendingStops);
     const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
       reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user',
-      ...(previous?.jobsStopped === true ? { jobsStopped: true } : {}) };
+      ...(previous?.jobsStopped === true ? { jobsStopped: true } : pendingStops ? { pendingStops } : {}) };
     await writeAtomic(cancelPath(id), marker);
     return marker;
+  }
+
+  /**
+   * The jobs a Stop could not stop yet (a database blip): { fileIds, refines }
+   * or null. Only these are retried, so a recording the user asked for again
+   * since is never stopped twice.
+   */
+  function normalizePendingStops(value) {
+    if (!value || typeof value !== 'object') return null;
+    const fileIds = [...new Set((Array.isArray(value.fileIds) ? value.fileIds : [])
+      .filter(fileId => typeof fileId === 'string' && fileId && fileId.length <= 200))].slice(0, MAX_FILES);
+    const refines = (Array.isArray(value.refines) ? value.refines : [])
+      .filter(spec => spec && typeof spec.fileId === 'string' && spec.fileId && spec.fileId.length <= 200)
+      .map(spec => ({ fileId: spec.fileId, range: normalizeRange(spec.range), language: normalizeLanguage(spec.language),
+        hints: normalizeHints(spec.hints), deliveryId: typeof spec.deliveryId === 'string' ? clipString(spec.deliveryId, 200) : null }))
+      .slice(0, 50);
+    return fileIds.length || refines.length ? { fileIds, refines } : null;
   }
 
   /** The Stop marker of a record still open, or null. */
@@ -909,7 +927,42 @@ function createMediaDeliveryStore({
     assertDeliveryId(id);
     const previous = await readCancelMarker(id);
     if (!previous || !(await readActive(id))) return false;
-    if (previous.jobsStopped !== true) await writeAtomic(cancelPath(id), { ...previous, jobsStopped: true });
+    if (previous.jobsStopped !== true || previous.pendingStops) {
+      const { pendingStops, ...rest } = previous;
+      await writeAtomic(cancelPath(id), { ...rest, jobsStopped: true });
+    }
+    return true;
+  }
+
+  /**
+   * Some of this Stop's jobs could not be stopped (a database blip): only
+   * those are left for the sweep. Same rules as noteJobsStopped.
+   */
+  async function notePendingStops(id, pending) {
+    assertDeliveryId(id);
+    const previous = await readCancelMarker(id);
+    if (!previous || previous.jobsStopped === true || !(await readActive(id))) return false;
+    const pendingStops = normalizePendingStops(pending);
+    const { pendingStops: _old, ...rest } = previous;
+    await writeAtomic(cancelPath(id), pendingStops ? { ...rest, pendingStops } : { ...rest, jobsStopped: true });
+    return true;
+  }
+
+  /**
+   * The user asked for these recordings again: a Stop still pending on
+   * them never stops them. Returns true when the marker changed.
+   */
+  async function releasePendingStops(id, fileIds = []) {
+    assertDeliveryId(id);
+    const previous = await readCancelMarker(id);
+    const pending = normalizePendingStops(previous?.pendingStops);
+    if (!pending || !(await readActive(id))) return false;
+    const asked = new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean));
+    const left = { fileIds: pending.fileIds.filter(fileId => !asked.has(fileId)),
+      refines: pending.refines.filter(spec => !asked.has(spec.fileId)) };
+    if (left.fileIds.length === pending.fileIds.length && left.refines.length === pending.refines.length) return false;
+    const { pendingStops: _old, ...rest } = previous;
+    await writeAtomic(cancelPath(id), left.fileIds.length || left.refines.length ? { ...rest, pendingStops: left } : { ...rest, jobsStopped: true });
     return true;
   }
 
@@ -1169,6 +1222,8 @@ function createMediaDeliveryStore({
     cancel,
     cancelMarker,
     noteJobsStopped,
+    notePendingStops,
+    releasePendingStops,
     isCancelRequested,
     markCancelled,
     amend,

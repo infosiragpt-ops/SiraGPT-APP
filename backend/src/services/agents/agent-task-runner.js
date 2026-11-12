@@ -3067,6 +3067,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const isStoppedRow = row => typeof mediaBatch.isUserCancelledRow === 'function' && mediaBatch.isUserCancelledRow(row);
       const rowsToResume = mediaBatchRows.filter(row => isStoppedRow(row)
         && (stoppedToResume === true || (Array.isArray(stoppedToResume) && stoppedToResume.includes(row.id))));
+      // Asked for again: a Stop that could not stop these jobs yet (a
+      // database blip) never stops them later.
+      const askedAgainIds = stoppedToResume === true ? ids : Array.isArray(stoppedToResume) ? stoppedToResume : [];
+      if (askedAgainIds.length) {
+        const releaser = loadMediaDeliveryService();
+        if (typeof releaser?.releasePendingStops === 'function') {
+          await releaser.releasePendingStops({ userId: user.id, fileIds: askedAgainIds }).catch(() => 0);
+        }
+      }
       const pendingService = chatId && !refineNotice && followupIntent?.kind !== 'refine' && !hasCompanionAttachments
         && mediaBatchRows.some(row => mediaBatch.stateOf(row) === 'pending' || (retryRequested && mediaBatch.stateOf(row) === 'failed'))
         ? loadMediaDeliveryService() : null;

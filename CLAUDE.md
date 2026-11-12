@@ -3537,9 +3537,15 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   mitad) y no entrega nada (`cancelling`). Los detiene una sola vez por Detener (`jobsStopped` en la
   marca, `noteJobsStopped`): el barrido que solo reintenta la línea nunca detiene una grabación que el
   usuario volvió a pedir. La marca solo se escribe si todos los trabajos quedaron detenidos
-  (`cancelUnneededMediaJobs` → `complete`): una caída de la base de datos a mitad del Detener deja que
-  el barrido los vuelva a detener, y un Detener que espera a otro proceso (`cancel_requested`) también
-  la deja. Un pedido de transcripción retoma solo lo que nombra (`resumeScope`: «transcribe la clase 2»
+  (`cancelUnneededMediaJobs` → `complete`); si una caída de la base de datos deja alguno corriendo, la
+  marca anota solo esos (`pendingStops`, `unsettled`) y el barrido, el siguiente Detener o el holder
+  detienen únicamente lo que quedó (`stopWhatTheStopLeft`; una marca anterior sin la lista conserva el
+  barrido completo). Los trabajos se detienen antes de cerrar: dentro del `beforeClose` de
+  `store.cancel` (Detener y barrido) y antes de `markCancelled` (un holder que honra el Detener); con uno
+  todavía corriendo, la línea se publica igual pero el registro queda abierto (`stop_incomplete`), así
+  nunca dice «Detuve…» mientras una grabación sigue facturando. Pedir de nuevo la transcripción
+  (`resumeScope`) libera esas grabaciones de un Detener pendiente (`releasePendingStops`), y un
+  Detener que espera a otro proceso (`cancel_requested`) sigue sin marcarse como hecho. Un pedido de transcripción retoma solo lo que nombra (`resumeScope`: «transcribe la clase 2»
   → esa; «la clase 2» nunca es «Clase 20» y «clase2.mp4» responde a «la clase 2») y nada si habla de
   las terminadas («pasa a PDF las que ya están transcritas», `limitsToFinished`), salvo un «retómalas»
   o «reintenta» explícito; un «ya» de relleno («ya, listo: transcribe…») no limita. Los nombres se leen

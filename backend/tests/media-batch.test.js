@@ -2647,3 +2647,13 @@ test('a refusal that says «documento» turns the document down, never asks for 
   assert.equal(out.documentFormat, 'pdf');
   assert.deepEqual(out.declinedDocuments, ['docx']);
 });
+
+test('asking for the transcript again releases what a Stop could not stop yet; a summary releases nothing', async () => {
+  for (const [goal, expected] of [['transcribe la clase', [['clase']]], ['y tradúcelo al inglés', []]]) {
+    const released = [];
+    const { delivery } = pendingDeliveryFake();
+    delivery.releasePendingStops = async (args) => { released.push(args.fileIds); return 1; };
+    await runMediaBranch(followupContext({ goal, delivery, plain: /^transcribe/.test(goal), waitForMediaBatch: async () => { throw new Error('no wait'); } }));
+    assert.deepEqual(JSON.parse(JSON.stringify(released)), expected, goal);
+  }
+});
