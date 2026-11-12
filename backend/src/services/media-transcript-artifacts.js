@@ -113,10 +113,12 @@ function negatedTranscriptFormats(goal) {
 // lo quiero en PDF», «el PDF también lo quiero»: a document next to the one
 // already asked for, never instead of it. Within one clause: «en Word y
 // también subtítulos» adds no PDF.
-const ALSO_FORMAT_RE = /\b(?:tambien|ademas|igualmente|also)\s+(?:[^\s.,;!?]+\s+){0,4}?(?:word|docx|pdf)\b|\b(?:word|docx|pdf)\s+(?:tambien|ademas|igualmente|too|also)(?=\s*(?:$|[.,;!?]|porfa\b|por\s+favor\b|pls\b|plis\b|gracias\b|please\b|(?:me\s+)?(?:lo|la|los|las)\s+(?:quiero|necesito|mandas|mandes|pasas|pases|envias|envies)\b|(?:lo|la)\s+quisiera\b|(?:quiero|necesito|mandamel[oa]|damel[oa]|pasamel[oa]|enviamel[oa]|ponmel[oa]|ponl[oa]|agregal[oa]|incluyel[oa])\b))/;
+const ALSO_FORMAT_RE = /\b(?:tambien|ademas|igualmente|also)\s+(?:[^\s.,;!?]+\s+){0,4}?(?:word|docx|pdf)\b|\b(?:word|docx|pdf)\s+(?:tambien|ademas|igualmente|too|also)(?=\s*(?:$|[.,;!?]|porfa\b|por\s+favor\b|pls\b|plis\b|gracias\b|please\b|(?:me\s+)?(?:lo|la|los|las)\s+(?:quiero|necesito|mandas|mandes|pasas|pases|envias|envies)\b|(?:lo|la)\s+quisiera\b|(?:quiero|necesito|mandamel[oa]|damel[oa]|pasamel[oa]|enviamel[oa]|ponmel[oa]|ponl[oa]|agregal[oa]|incluyel[oa])(?=\s*(?:$|[.,;!?]|porfa\b|por\s+favor\b|gracias\b|please\b))))/;
 // «solo en Word», «únicamente el PDF», «nada más en Word».
 // «solo en Word y PDF» asks for both: never one.
-const ONLY_FORMAT_RE = /\b(?:solo|solamente|unicamente|nada\s+mas|only|just)\s+(?:(?:en|el|la|un|una|como|in|the|a)\s+)?(?:word|docx|pdf)\b(?!\s*(?:y|e|o|and|or|\+|&)\s*(?:(?:en|el|la|un|una|a)\s+)?(?:word|docx|pdf)\b)/;
+// …unless the second one is turned down right after («solo en Word y el PDF
+// no lo mandes», «… y el PDF ya no», «… y el PDF quítalo»).
+const ONLY_FORMAT_RE = /\b(?:solo|solamente|unicamente|nada\s+mas|only|just)\s+(?:(?:en|el|la|un|una|como|in|the|a)\s+)?(?:word|docx|pdf)\b(?!\s*(?:y|e|o|and|or|\+|&)\s*(?:(?:en|el|la|un|una|a)\s+)?(?:word|docx|pdf)\b(?!\s+(?:no|ya\s+no|nada|quital\w*|borral\w*|olvidal\w*|sacal\w*|nunca)\b))/;
 
 /** The goal adds a document next to the one asked before («también en PDF»). Pure. */
 function addsDocumentFormat(goal) {

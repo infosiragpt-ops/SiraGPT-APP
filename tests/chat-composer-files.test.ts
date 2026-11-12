@@ -169,6 +169,19 @@ describe("historical media batch follow-ups", () => {
     }
   })
 
+  it("a conversion with another source stays in the chat; two choices need their comma or «y»", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "tesis", files: JSON.stringify([{ id: "p1", name: "tesis.pdf", mimeType: "application/pdf" }]) },
+      { role: "ASSISTANT", content: "Listo." }, { role: "USER", content: "transcribe este video en PDF", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["pásame de PDF a Word el documento de mi tesis", "convierte de PDF a Word las páginas del libro", "el pdf no el word sí", "PDF no tiene portada"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+    for (const prompt of ["pásalo de PDF a Word", "el Word sí, el PDF no", "Word no y PDF sí", "pdf no"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+  })
+
   it("only the closing forms of «el PDF no / también» reach a pending batch; a remark about the PDF, or the user's own PDF, stays in the chat", () => {
     const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }

@@ -300,11 +300,10 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   if (list.includes('translation_conditions')) parts.push('con tus indicaciones para la traducción');
   if (list.includes('no_translation')) parts.push('sin la traducción');
   // «ya no la traduzcas al francés» next to another language: only that one goes.
-  for (const change of list) {
-    const code = typeof change === 'string' && change.startsWith('no_translation:') ? change.slice('no_translation:'.length) : null;
-    if (!code) continue;
+  const removed = list.filter(change => typeof change === 'string' && change.startsWith('no_translation:')).map(change => change.slice('no_translation:'.length));
+  if (removed.length) {
     const staying = [target, ...addedLanguages.map(item => item?.target)].filter(Boolean).map(translationName);
-    parts.push(`sin la traducción al ${translationName(code)}${staying.length ? ` (sigue la traducción al ${joinList(staying)})` : ''}`);
+    parts.push(`sin la traducción al ${joinList(removed.map(translationName))}${staying.length ? ` (sigue la traducción al ${joinList(staying)})` : ''}`);
   }
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   // «Word no, PDF sí»: one swap, never «en PDF y sin el documento que habías pedido».

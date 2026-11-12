@@ -279,25 +279,28 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   // «ya no la traduzcas»: back to what the first request asked for. «ya no
   // la traduzcas al francés» next to the English one takes only the French
   // back; a language not pending changes nothing.
-  const refused = normalizeTranslationTarget(value.removeTranslationTarget);
+  // The languages a take-back names («… al francés», «… al francés ni al
+  // portugués»); none named: all of them.
+  const refusedCodes = [...new Set([...(Array.isArray(value.removeTranslationTargets) ? value.removeTranslationTargets : []),
+    value.removeTranslationTarget].map(normalizeTranslationTarget).filter(Boolean))];
   const pendingExtras = (out.extraTranslations || []).map(item => ({ ...item, ranges: [...item.ranges] }));
   if (!target && value.removeTranslation === true && mode === 'translation') {
     const languages = [out.translationTarget, ...pendingExtras.map(item => item.target)].filter(Boolean);
-    if (refused && languages.length > 1 && languages.includes(refused)) {
-      if (refused === out.translationTarget) {
-        // The next language becomes the translation, with its own windows.
-        const [promoted, ...rest] = pendingExtras;
+    const dropped = languages.filter(code => refusedCodes.includes(code));
+    if (refusedCodes.length && dropped.length && dropped.length < languages.length) {
+      // Only those go; the first that stays becomes the translation.
+      const kept = pendingExtras.filter(item => !dropped.includes(item.target));
+      if (dropped.includes(out.translationTarget)) {
+        const [promoted, ...rest] = kept;
         next.output.translationTarget = promoted.target;
         // Its own windows, or the whole recording; one that followed the
         // first translation keeps reading those windows.
         if (promoted.whole || promoted.ranges.length) setTranslationWindows(next.output, promoted.ranges);
         if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
-      } else {
-        const rest = pendingExtras.filter(item => item.target !== refused);
-        if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
-      }
-      changes.push(`no_translation:${refused}`);
-    } else if (!refused || !languages.length || languages.includes(refused)) {
+      } else if (kept.length) next.output.extraTranslations = kept;
+      else delete next.output.extraTranslations;
+      for (const code of dropped) changes.push(`no_translation:${code}`);
+    } else if (!refusedCodes.length || dropped.length) {
       next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
       next.output.alsoAnalysis = false;
       delete next.output.translationTarget;

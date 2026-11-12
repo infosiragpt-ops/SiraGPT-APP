@@ -474,6 +474,8 @@ const FORMAT_CHOICE_END = "(?:si|no(?: (?:me sirve|me sirven|lo necesito|la nece
 // «de», right after the verb.
 const FORMAT_CONVERSION_RE = /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah) )*(?:pasa\w*|conviert\w*|cambia\w*|transforma\w*) (?:(?:el|la|lo) )?(?:(?:archivo|documento|transcripcion) )?(?:de|del) (?:word|docx|pdf) (?:a|al|en|por) /
 
+const FORMAT_CHOICE_PAIR_RE = new RegExp(`^${FORMAT_CHOICE} ${FORMAT_CHOICE_END}(?:,| y)(?: (?:y )?${FORMAT_CHOICE} ${FORMAT_CHOICE_END}(?:,| y)?)+$`)
+
 const PENDING_OUTPUT_RE = anyOf([
   /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
   /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
@@ -482,12 +484,12 @@ const PENDING_OUTPUT_RE = anyOf([
   // «quita los subtítulos», «no quiero que lo resumas», «no hace falta
   // resumir», «Word no, PDF sí», «no quiero el documento», «sin documento».
   /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas|conviertas|exportes|saques|des|entregues))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|documentos?|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
-  /^(?:word|pdf|documento|subtitulos)\s+no\b/,
+
   // «el Word sí, el PDF no», «el PDF también lo quiero», «solo en Word, el
   // PDF no lo necesito», «pásalo de PDF a Word», «también me lo pasas en PDF».
   // Only the closing forms the server reads as a choice («el PDF no se ve
   // bien» or «el PDF no tiene portada» stay in the chat).
-  new RegExp(`^${FORMAT_CHOICE} ${FORMAT_CHOICE_END}(?: (?:y )?${FORMAT_CHOICE} ${FORMAT_CHOICE_END})*$`),
+  new RegExp(`^${FORMAT_CHOICE} ${FORMAT_CHOICE_END}$`),
   /^(?:(?:el|la)\s+)?(?:word|docx|pdf|documento)\s+tambien(?:\s+(?:(?:me\s+)?(?:lo|la)\s+(?:quiero|necesito|mandas|pasas|envias)|quiero|necesito|mandamel[oa]|damel[oa]|pasamel[oa]|enviamel[oa]|ponmel[oa]|ponl[oa]))?(?:\s+(?:porfa|por favor|gracias))?$/,
   /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:solo|solamente|unicamente)\s+(?:en|el|la|a|como)\s+(?:word|docx|pdf)\b/,
   /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:pasa\w*|conviert\w*|cambia\w*|transforma\w*)\s+(?:(?:el|la|lo|mi)\s+)?(?:(?:archivo|documento|transcripcion)\s+)?(?:(?:de|del)\s+)?(?:word|docx|pdf)\s+(?:a|al|en|por)\s+(?:un |una |formato |documento )*(?:de |en )?(?:word|docx|pdf)\b/,
@@ -515,10 +517,13 @@ function pendingDeliveryAmendKind(prompt: string): PendingAmendKind | null {
   const text = normalizeRoutingPrompt(prompt).replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, " ").replace(/\s+/g, " ").trim()
   // «pásalo de PDF a Word» converts the pending document; «la transcripción
   // de mi PDF» is another source.
-  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || (FOREIGN_SOURCE_RE.test(text) && !FORMAT_CONVERSION_RE.test(text))) return null
+  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text.replace(FORMAT_CONVERSION_RE, " "))) return null
   const clause = factClause(prompt)
   if (!/[¿?]/.test(String(prompt || "")) && (PENDING_FACT_RE.test(clause) || (NAMES_FACT_RE.test(clause) && namesListed(prompt)))) return "fact"
   if (PENDING_OUTPUT_RE.test(text)) return "output"
+  // «el Word sí, el PDF no», «Word no y PDF sí»: two choices, each closed by
+  // its comma or «y» (without one, «el pdf no el word sí» reads backwards).
+  if (FORMAT_CHOICE_PAIR_RE.test(foldRoutingPrompt(prompt).replace(/[.;:!?¿¡]/g, " ").replace(/\s+/g, " ").trim())) return "output"
   return null
 }
 

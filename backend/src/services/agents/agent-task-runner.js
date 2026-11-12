@@ -3074,7 +3074,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         ? mediaBatch.resumeScope({ goal: mediaGoal, rows: mediaBatchRows, names: presentedNames,
           askedAgain: resumeAsked || asksTranscriptByRequest, explicit: resumeAsked })
         : Boolean(resumeAsked || asksTranscriptByRequest);
-      const isStoppedRow = row => typeof mediaBatch.isUserCancelledRow === 'function' && mediaBatch.isUserCancelledRow(row);
+      // Also one whose Stop has not stopped it yet (asStoppedRows): asked
+      // again, it is resumed and waited on like any stopped recording.
+      const isStoppedRow = row => (typeof mediaBatch.isUserCancelledRow === 'function' && mediaBatch.isUserCancelledRow(row)) || row?.stopPending === true;
       const rowsToResume = mediaBatchRows.filter(row => isStoppedRow(row)
         && (stoppedToResume === true || (Array.isArray(stoppedToResume) && stoppedToResume.includes(row.id))));
       // Asked for again: a Stop that could not stop these jobs yet (a
@@ -3146,13 +3148,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           goal: mediaGoal,
           translationTarget: amendTarget?.code || null,
           removeTranslation: !amendTarget && typeof mediaBatch.negatesTranslation === 'function' && mediaBatch.negatesTranslation(mediaGoal),
-          // «ya no la traduzcas al francés»: only that language goes.
-          removeTranslationTarget: !amendTarget && typeof mediaBatch.refusedTranslationTarget === 'function'
-            ? mediaBatch.refusedTranslationTarget(mediaGoal)?.code || null : null,
+          // «ya no la traduzcas al francés»: only the languages it names go
+          // (all of them only when it names every pending one).
+          removeTranslationTargets: !amendTarget && typeof mediaBatch.refusedTranslationTargets === 'function'
+            ? mediaBatch.refusedTranslationTargets(mediaGoal).map(language => language.code) : [],
           // «mejor tradúcela al francés del minuto 10 al 20»: replaces the
-          // pending language; «también» always adds one.
-          translationSwitch: Boolean(amendTarget) && !alsoTranslation && typeof mediaBatch.replacesTranslation === 'function'
-            && mediaBatch.replacesTranslation(mediaGoal, { target: amendTarget.code, pending: openTranslation?.code || null }),
+          // pending language. «también al francés» adds one, unless the
+          // message refuses the pending one outright («no al inglés sino al
+          // francés», «en vez de inglés»).
+          translationSwitch: Boolean(amendTarget) && typeof mediaBatch.replacesTranslation === 'function'
+            && mediaBatch.replacesTranslation(mediaGoal, { target: amendTarget.code, pending: openTranslation?.code || null, explicit: alsoTranslation }),
           // «traduce también al francés…»: another language next to the pending one.
           translationAlso: alsoTranslation,
           // How to translate («literal», «no traduzcas los nombres propios»): the reply says it was noted.
