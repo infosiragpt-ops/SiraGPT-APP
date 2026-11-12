@@ -169,6 +169,22 @@ describe("historical media batch follow-ups", () => {
     }
   })
 
+  it("only the closing forms of «el PDF no / también» reach a pending batch; a remark about the PDF, or the user's own PDF, stays in the chat", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "apuntes", files: JSON.stringify([{ id: "p1", name: "apuntes-escaneados.pdf", mimeType: "application/pdf" }]) },
+      { role: "ASSISTANT", content: "Listo." },
+      { role: "USER", content: "transcribe este video en Word y PDF", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["el PDF no", "el PDF no me sirve", "el PDF también mándamelo", "el PDF también dámelo", "Word sí"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    for (const prompt of ["el PDF no se ve bien", "el PDF no tiene que tener portada", "el PDF no lo quiero con marcas de tiempo",
+      "el documento no tiene que ser muy largo", "el PDF también tiene errores",
+      "dame la transcripción de mi PDF en Word", "quiero la transcripción de este PDF en Word"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+  })
+
   it("a fact with words after it, a question about a moment, and a courtesy in between still reach the batch", () => {
     const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
@@ -356,8 +372,25 @@ describe("historical media batch follow-ups", () => {
     for (const prompt of ["continúalo", "sigue con los otros puntos", "continúa con los demás temas", "sigue con el resto de la explicación", "continúala", "sigue con la clase"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, answered), [], prompt)
     }
-    for (const prompt of ["retómala", "sí, retómala", "retoma la transcripción"]) {
+    for (const prompt of ["retómala", "sí, retómala", "retoma la transcripción",
+      "retómalas todas", "retómala porfis", "retómala de nuevo", "retoma las demás", "retoma la clase 2"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, answered), batch, prompt)
+    }
+  })
+
+  it("«el resto de las grabaciones», «las demás transcripciones» or «… que detuve» resume right after the stop line", () => {
+    const stopped = [{ id: "a1", name: "Clase 1.mp4", mimeType: "video/mp4" }, { id: "a2", name: "Clase 2.mp4", mimeType: "video/mp4" }]
+    const ids = ["a1", "a2"]
+    const chat = [{ role: "USER", content: "transcribe", files: JSON.stringify(stopped) },
+      { role: "ASSISTANT", content: "Te aviso aquí cuando termine.", metadata: { mediaDeliveryHandoff: "md_A", transcriptionFileIds: ids, stoppedReason: "media_delivery_handoff" } },
+      { role: "ASSISTANT", content: "Detuve la transcripción de 2 grabaciones.",
+        metadata: JSON.stringify({ source: "media-delivery", mediaDelivery: "md_A", transcriptionFileIds: ids, deliveryKind: "cancelled", stoppedReason: "media_delivery_cancelled" }) }]
+    for (const prompt of ["sigue con el resto de las grabaciones", "continúa con el resto de los audios", "retoma las demás transcripciones",
+      "retoma las otras dos que detuve", "retoma las demás ahora"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, chat), stopped, prompt)
+    }
+    for (const prompt of ["sigue con los otros puntos", "sigue con el resto de la explicación"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, chat), [], prompt)
     }
   })
 

@@ -1325,12 +1325,21 @@ test('a second language translates its own moment and the first stays whole', as
 test('a language added «completa» next to a moment translates the whole recording, as the reply says', async () => {
   const rows = [{ id: 'a', originalName: 'clase.mp4', extractedText: THREE_HOURS, processingStage: 'ready' }];
   const { calls } = await translateWith({ goal: 'traduce al inglés lo del minuto 10\n\ntradúcela también al francés completa',
-    transcripts: THREE_HOURS_SIDECARS, output: { translationTarget: 'en', translationRange: { start: 540, end: 840 }, extraTranslations: [{ target: 'fr', ranges: [] }] } }, rows);
+    transcripts: THREE_HOURS_SIDECARS, output: { translationTarget: 'en', translationRange: { start: 540, end: 840 }, extraTranslations: [{ target: 'fr', ranges: [], whole: true }] } }, rows);
   const english = calls.filter(call => !/francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
   const french = calls.filter(call => /francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
   assert.doesNotMatch(english, /nadie pidió/, 'the English translation stays the moment');
   assert.match(french, /nadie pidió/, 'the French one is the whole recording');
   assert.match(french, /minuto ciento cincuenta/);
+});
+
+test('a language added with no stretch reads the first translation\'s windows, also the transcript range set later', async () => {
+  const rows = [{ id: 'a', originalName: 'clase.mp4', extractedText: THREE_HOURS, processingStage: 'ready' }];
+  const { calls } = await translateWith({ goal: 'transcribe y tradúcelo al inglés\n\ntraduce también al francés\n\nsolo del minuto 10 al 20',
+    transcripts: THREE_HOURS_SIDECARS, range: { start: 600, end: 1200 }, output: { translationTarget: 'en', extraTranslations: [{ target: 'fr', ranges: [] }] } }, rows);
+  const french = calls.filter(call => /francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
+  assert.match(french, /minuto diez/);
+  assert.doesNotMatch(french, /nadie pidió/, 'never the whole recording the user cut');
 });
 
 // ── eighth review: a Stop whose job stop failed for a moment ─────────────────
@@ -1454,6 +1463,48 @@ test('a request made after the Stop never shields a recording the Stop still has
   await service.createDelivery(request({ taskId: 'task2', fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'], goal: 'y tradúcelo al inglés', mode: 'translation' }));
   await service.deliverOne(first.id);
   assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b']], '«b» is stopped, as the Stop said');
+});
+
+// ── tenth review ──────────────────────────────────────────────────────────────
+
+test('a correction asked again after a Stop whose refine stop failed keeps the shared refine job', async (t) => {
+  let clock = T0;
+  const calls = [];
+  let failRefine = true;
+  const { service } = await harness(t, { storeNow: () => clock, files: [fileRow('a', { processingStage: 'ready', extractedText: TRANSCRIPT })], overrides: {
+    cancelMediaJobs: async (args) => {
+      calls.push(JSON.parse(JSON.stringify({ fileIds: args.fileIds, refines: args.refines || [] })));
+      const results = [...(args.fileIds || []).map(id => ({ id, outcome: 'ready' })),
+        ...(args.refines || []).map(spec => (failRefine ? { id: spec.fileId, refine: true, outcome: 'error', code: 'P2024' } : { id: spec.fileId, refine: true, outcome: 'aborted' }))];
+      failRefine = false;
+      return { stopped: results.filter(item => item.outcome === 'aborted').length, results };
+    },
+  } });
+  const refine = { kind: 'refine', range: { start: 720, end: 900 }, language: 'en', hints: null };
+  const first = await service.createDelivery(request(refine));
+  await service.cancelDelivery(first.id, { userId: 'u1' });
+  // «vuelve a revisar del minuto 12 al 15»: the same window again, after the Stop.
+  clock += 60_000;
+  await service.createDelivery(request({ ...refine, taskId: 'task2' }));
+  await service.deliverOne(first.id);
+  const stoppedAfter = calls.slice(1).flatMap(call => call.refines);
+  assert.deepEqual(stoppedAfter, [], 'the twin still waits on that job');
+});
+
+test('a recording another open request (made before the Stop) keeps transcribing never reads as stopped there', async (t) => {
+  const { service, store } = await harness(t, { files: [fileRow('a'), fileRow('b')] });
+  // chat2 (a branch) waits on «b» too, before the Stop in chat1.
+  await service.createDelivery(request({ chatId: 'chat2', taskId: 'task2', fileIds: ['b'], fileNames: ['b.mp4'] }));
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  // The store cannot list the requests during the Stop (too many open
+  // files): every job of the Stop is left for the retry, «b» included.
+  const listActive = store.listActive.bind(store);
+  let failing = true;
+  store.listActive = async (...args) => { if (failing) throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' }); return listActive(...args); };
+  await service.cancelDelivery(record.id, { userId: 'u1' });
+  failing = false;
+  assert.deepEqual((await store.cancelMarker(record.id)).pendingStops?.fileIds, ['a', 'b']);
+  assert.deepEqual(await service.pendingStopFileIds({ userId: 'u1', fileIds: ['a', 'b'] }), ['a'], '«b» is still wanted by chat2');
 });
 
 test('the recordings a Stop still has to stop read as pending stops; asked again, they are released', async (t) => {

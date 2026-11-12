@@ -291,7 +291,11 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   const addedLanguages = Array.isArray(record?.output?.extraTranslations) ? record.output.extraTranslations : [];
   const added = list.includes('translation_added') ? addedLanguages[addedLanguages.length - 1] : null;
   if (added?.target) {
-    parts.push(`también ${translated} al ${translationName(added.target)}${Array.isArray(added.ranges) && added.ranges.length ? ' (solo del tramo que indicaste)' : ''}${language ? `, además de la traducción al ${language}` : ''}`);
+    // Its own stretch, or the first translation's windows when it follows them.
+    const firstWindows = (Array.isArray(record?.output?.translationRanges) && record.output.translationRanges.length)
+      || record?.output?.translationRange || (record?.range && Number.isFinite(Number(record.range.start)));
+    const narrow = added.whole !== true && ((Array.isArray(added.ranges) && added.ranges.length) || Boolean(firstWindows));
+    parts.push(`también ${translated} al ${translationName(added.target)}${narrow ? ' (solo del tramo que indicaste)' : added.whole === true ? ' (completa)' : ''}${language ? `, además de la traducción al ${language}` : ''}`);
   }
   if (list.includes('translation_conditions')) parts.push('con tus indicaciones para la traducción');
   if (list.includes('no_translation')) parts.push('sin la traducción');
@@ -1534,9 +1538,10 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     for (const extra of Array.isArray(delivery.output?.extraTranslations) ? delivery.output.extraTranslations : []) {
       const extraTarget = mediaBatch.translationTargetByCode?.(extra?.target);
       if (!extraTarget || extraTarget.code === target.code) continue;
-      // Its own windows; none is the whole recording («completa»), as the
-      // reply said (the store copies the pending windows when it adds one).
-      const extraWindows = windowList(extra.ranges);
+      // Its own windows; «completa» (`whole`) the whole recording; none of
+      // its own, the same windows as the first translation (also a range
+      // the user set after adding it).
+      const extraWindows = extra?.whole === true ? [] : windowList(extra.ranges).length ? windowList(extra.ranges) : windows;
       const extraRows = rowsIn(extraWindows.length ? extraWindows : null);
       try {
         const extraTranslation = await mediaBatch.translateMediaBatch({ rows: extraRows, target: extraTarget, complete: completion.complete, signal, conditions });
@@ -2260,15 +2265,16 @@ function createMediaDeliveryService(deps = {}) {
       const mine = (await store.listActive()).filter(other => other.id !== exceptDeliveryId && other.userId === userId);
       // A request stopped too (its line still to post) wants nothing.
       const others = [];
-      // Retrying what a Stop left: a request made after it never shields a
-      // recording still listed (asking for one again releases it first).
-      const stopTime = stoppedAt ? Date.parse(stoppedAt) : NaN;
       for (const other of mine) {
         if (typeof store.isCancelRequested === 'function' && await store.isCancelRequested(other.id).catch(() => false)) continue;
-        if (Number.isFinite(stopTime) && Date.parse(other.createdAt || '') > stopTime) continue;
         others.push(other);
       }
-      const needed = new Set(others.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
+      // Retrying what a Stop left: a request made after it never shields a
+      // recording still listed (asking for one again releases it first). A
+      // correction asked again after the Stop still shares its refine job.
+      const stopTime = stoppedAt ? Date.parse(stoppedAt) : NaN;
+      const fileShields = Number.isFinite(stopTime) ? others.filter(other => !(Date.parse(other.createdAt || '') > stopTime)) : others;
+      const needed = new Set(fileShields.flatMap(other => (Array.isArray(other.fileIds) ? other.fileIds : [])));
       const free = ids.filter(fileId => !needed.has(fileId));
       // A refine job serves its own delivery: it stops even when another
       // request still waits on the same recording, unless an open refine of
@@ -2334,13 +2340,22 @@ function createMediaDeliveryService(deps = {}) {
     if (typeof store.cancelMarker !== 'function') return [];
     const out = new Set();
     try {
-      for (const record of await store.listActive()) {
-        if (record.userId !== userId || !(record.fileIds || []).some(fileId => ids.has(fileId))) continue;
-        const marker = await store.cancelMarker(record.id).catch(() => null);
+      const active = (await store.listActive()).filter(record => record.userId === userId);
+      const markers = new Map();
+      for (const record of active) markers.set(record.id, await store.cancelMarker(record.id).catch(() => null));
+      for (const record of active) {
+        if (!(record.fileIds || []).some(fileId => ids.has(fileId))) continue;
+        const marker = markers.get(record.id);
         if (!marker || marker.jobsStopped === true) continue;
         const released = new Set(Array.isArray(marker.released) ? marker.released : []);
         const listed = marker.pendingStops && Array.isArray(marker.pendingStops.fileIds) ? marker.pendingStops.fileIds : [];
-        for (const fileId of listed) if (ids.has(fileId) && !released.has(fileId)) out.add(fileId);
+        // A recording another open request made before this Stop still
+        // needs keeps transcribing (the retry never stops it): not stopped.
+        const stopTime = Date.parse(marker.at || '');
+        const shielded = new Set(active.filter(other => other.id !== record.id && !markers.get(other.id)
+          && !(Number.isFinite(stopTime) && Date.parse(other.createdAt || '') > stopTime))
+          .flatMap(other => other.fileIds || []));
+        for (const fileId of listed) if (ids.has(fileId) && !released.has(fileId) && !shielded.has(fileId)) out.add(fileId);
       }
     } catch (err) {
       logger.warn(`[media-delivery] pending stops not read code=${err?.code || 'read_error'}`);

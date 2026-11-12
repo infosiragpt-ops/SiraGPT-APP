@@ -194,7 +194,12 @@ function normalizeExtraTranslations(list) {
   for (const item of Array.isArray(list) ? list : []) {
     const target = normalizeTranslationTarget(item?.target);
     if (!target || out.some(existing => existing.target === target)) continue;
-    out.push({ target, ranges: normalizeWindows(item?.ranges) });
+    // `whole`: «tradúcela también al francés completa», the whole recording
+    // whatever the first translation reads; no windows and no `whole`: the
+    // same windows as the first translation (its own, else the transcript's
+    // range, else the whole recording).
+    const ranges = normalizeWindows(item?.ranges);
+    out.push({ target, ranges: item?.whole === true ? [] : ranges, ...(item?.whole === true ? { whole: true } : {}) });
     if (out.length >= MAX_EXTRA_TRANSLATIONS) break;
   }
   return out;
@@ -275,7 +280,7 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   // la traduzcas al francés» next to the English one takes only the French
   // back; a language not pending changes nothing.
   const refused = normalizeTranslationTarget(value.removeTranslationTarget);
-  const pendingExtras = (out.extraTranslations || []).map(item => ({ target: item.target, ranges: [...item.ranges] }));
+  const pendingExtras = (out.extraTranslations || []).map(item => ({ ...item, ranges: [...item.ranges] }));
   if (!target && value.removeTranslation === true && mode === 'translation') {
     const languages = [out.translationTarget, ...pendingExtras.map(item => item.target)].filter(Boolean);
     if (refused && languages.length > 1 && languages.includes(refused)) {
@@ -283,7 +288,9 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
         // The next language becomes the translation, with its own windows.
         const [promoted, ...rest] = pendingExtras;
         next.output.translationTarget = promoted.target;
-        setTranslationWindows(next.output, promoted.ranges);
+        // Its own windows, or the whole recording; one that followed the
+        // first translation keeps reading those windows.
+        if (promoted.whole || promoted.ranges.length) setTranslationWindows(next.output, promoted.ranges);
         if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
       } else {
         const rest = pendingExtras.filter(item => item.target !== refused);
@@ -307,25 +314,28 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const addsLanguage = Boolean(target) && mode === 'translation' && Boolean(out.translationTarget) && target !== out.translationTarget
     && value.translationSwitch !== true && (Boolean(translationRange) || value.translationAlso === true);
   if (addsLanguage) {
-    const extras = pendingExtras.map(item => ({ target: item.target, ranges: [...item.ranges] }));
+    const extras = pendingExtras.map(item => ({ ...item, ranges: [...item.ranges] }));
     const index = extras.findIndex(item => item.target === target);
     const existing = index >= 0 ? extras.splice(index, 1)[0] : null;
-    // An added language's windows: its stretch; «completa», none (the whole
-    // recording); else the same windows as the pending translation, said
-    // in the reply. An empty list always means the whole recording.
+    // An added language's windows: its stretch; «completa», the whole
+    // recording (`whole`); else none of its own, so it reads the same
+    // windows as the first translation (also a range set later), as the
+    // reply says.
     const whole = value.translationWhole === true;
-    let ranges;
-    if (existing) {
-      ranges = whole ? [] : translationRange ? (existing.ranges.length ? normalizeWindows([...existing.ranges, translationRange]) : [])
-        : existing.ranges;
-    } else {
-      // The pending translation reads its own windows, else the transcript's range.
-      const pendingWindows = ownTranslationWindows(out).length ? ownTranslationWindows(out)
-        : normalizeRange(record.range) ? [normalizeRange(record.range)] : [];
-      ranges = whole ? [] : translationRange ? [translationRange] : pendingWindows.map(window => ({ ...window }));
-    }
+    // The first translation's windows: its own, else the transcript's range.
+    const pendingWindows = ownTranslationWindows(out).length ? ownTranslationWindows(out)
+      : normalizeRange(record.range) ? [normalizeRange(record.range)] : [];
+    let entry;
+    if (whole) entry = { target, ranges: [], whole: true };
+    else if (existing?.whole) entry = existing;
+    else if (translationRange) {
+      // A moment added to a language that follows the first translation's
+      // windows joins them; one that reads the whole recording keeps it.
+      const base = existing ? (existing.ranges.length ? existing.ranges : pendingWindows) : [];
+      entry = { target, ranges: existing && !base.length ? [] : normalizeWindows([...base, translationRange]) };
+    } else entry = existing || { target, ranges: [] };
     // The language touched last goes last (the reply names it).
-    if (existing || extras.length < MAX_EXTRA_TRANSLATIONS) extras.push({ target, ranges });
+    if (existing || extras.length < MAX_EXTRA_TRANSLATIONS) extras.push(entry);
     next.output.extraTranslations = extras;
     if (index >= 0 || extras.some(item => item.target === target)) changes.push('translation_added');
   } else if (target) {

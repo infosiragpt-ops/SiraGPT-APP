@@ -346,7 +346,7 @@ const LINK_RE = /https?:\/\/|\bwww\.|\b(?:youtube|youtu|tiktok|vimeo|instagram|f
 // «la transcripción del documento», «subtítulos para mi app»: another source
 // («nada de PDF» refuses a format instead).
 const FOREIGN_SOURCE_RE =
-  /(?<!\bnada )\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf(?! (?:a|al|en|por) (?:un |una |formato |documento )?(?:word|docx|txt))|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
+  /(?<!\bnada )\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
 // A bare request about the answer just given: «transcribe y resume», «hazme
 // el acta», «dame un resumen con los puntos clave», «traduce al inglés». Any
 // other word («analiza las ventas de hoy») makes it a new task.
@@ -466,6 +466,14 @@ const FACT_LEAD_IN_RE = /^(?:(?:y|ah|ojo|oye|por cierto)\s*[,:;]?\s+)+/
 function factClause(prompt: string): string {
   return normalizeRoutingPrompt(foldRoutingPrompt(prompt).replace(FACT_LEAD_IN_RE, "").split(FACT_CLAUSE_END_RE)[0] || "")
 }
+// «el Word sí», «el PDF no», «el PDF no me sirve», «Word no gracias».
+const FORMAT_CHOICE = "(?:(?:el|la) )?(?:word|docx|pdf|documento|subtitulos)"
+const FORMAT_CHOICE_END = "(?:si|no(?: (?:me sirve|me sirven|lo necesito|la necesito|lo quiero|la quiero|hace falta|gracias|porfa|por favor))?)"
+
+// «pásalo de PDF a Word», «conviértelo de Word a PDF»: a bare format after
+// «de», right after the verb.
+const FORMAT_CONVERSION_RE = /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah) )*(?:pasa\w*|conviert\w*|cambia\w*|transforma\w*) (?:(?:el|la|lo) )?(?:(?:archivo|documento|transcripcion) )?(?:de|del) (?:word|docx|pdf) (?:a|al|en|por) /
+
 const PENDING_OUTPUT_RE = anyOf([
   /^(?:(?:y|tambien|ademas|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:(?:lo|la|los|las) quiero |(?:dame|damelo|damela|damelos|damelas|pasamelo|pasamela) )?(?:en|a|como|con) (?:un |una |formato |los |las )?(?:word|docx|pdf|srt|vtt|subtitulos)\b/,
   /^(?:(?:y|mejor|ya|ok|ah)\s+)*(?:sin|no)\s+(?:(?:la|lo|el|las|los|me|la quiero)\s+)?(?:tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
@@ -477,7 +485,10 @@ const PENDING_OUTPUT_RE = anyOf([
   /^(?:word|pdf|documento|subtitulos)\s+no\b/,
   // «el Word sí, el PDF no», «el PDF también lo quiero», «solo en Word, el
   // PDF no lo necesito», «pásalo de PDF a Word», «también me lo pasas en PDF».
-  /^(?:(?:el|la)\s+)?(?:word|docx|pdf|documento|subtitulos)\s+(?:si|no|tambien)\b/,
+  // Only the closing forms the server reads as a choice («el PDF no se ve
+  // bien» or «el PDF no tiene portada» stay in the chat).
+  new RegExp(`^${FORMAT_CHOICE} ${FORMAT_CHOICE_END}(?: (?:y )?${FORMAT_CHOICE} ${FORMAT_CHOICE_END})*$`),
+  /^(?:(?:el|la)\s+)?(?:word|docx|pdf|documento)\s+tambien(?:\s+(?:(?:me\s+)?(?:lo|la)\s+(?:quiero|necesito|mandas|pasas|envias)|quiero|necesito|mandamel[oa]|damel[oa]|pasamel[oa]|enviamel[oa]|ponmel[oa]|ponl[oa]))?(?:\s+(?:porfa|por favor|gracias))?$/,
   /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:solo|solamente|unicamente)\s+(?:en|el|la|a|como)\s+(?:word|docx|pdf)\b/,
   /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:pasa\w*|conviert\w*|cambia\w*|transforma\w*)\s+(?:(?:el|la|lo|mi)\s+)?(?:(?:archivo|documento|transcripcion)\s+)?(?:(?:de|del)\s+)?(?:word|docx|pdf)\s+(?:a|al|en|por)\s+(?:un |una |formato |documento )*(?:de |en )?(?:word|docx|pdf)\b/,
   /^(?:(?:y|ok|porfa|por favor|ahora|ah)\s+)*(?:tambien|ademas)\s+(?:me\s+)?(?:lo|la|los|las)\s+(?:pasas|pases|mandas|mandes|envias|envies|quiero|necesito|das|des)\s+(?:en|como)\s+(?:un |una |formato )?(?:word|docx|pdf)\b/,
@@ -502,7 +513,9 @@ type PendingAmendKind = "fact" | "output"
 function pendingDeliveryAmendKind(prompt: string): PendingAmendKind | null {
   // An emoji at the end («¿de qué hablan? 🤔») is no word of the request.
   const text = normalizeRoutingPrompt(prompt).replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, " ").replace(/\s+/g, " ").trim()
-  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || FOREIGN_SOURCE_RE.test(text)) return null
+  // «pásalo de PDF a Word» converts the pending document; «la transcripción
+  // de mi PDF» is another source.
+  if (!text || text.split(" ").length > 10 || LINK_RE.test(text) || (FOREIGN_SOURCE_RE.test(text) && !FORMAT_CONVERSION_RE.test(text))) return null
   const clause = factClause(prompt)
   if (!/[¿?]/.test(String(prompt || "")) && (PENDING_FACT_RE.test(clause) || (NAMES_FACT_RE.test(clause) && namesListed(prompt)))) return "fact"
   if (PENDING_OUTPUT_RE.test(text)) return "output"
@@ -576,11 +589,11 @@ const RESUME_MAX_LATER_TURNS = 4
 // follow-up about the ready ones (like «retómala»).
 // Only a recording word (or nothing) after it: «sigue con los otros puntos»
 // or «… el resto de la explicación» continue the answer just given.
-const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)(?: (?:dos|tres|cuatro|\\d+))?(?: (?:grabaciones|grabacion|audios?|videos?|clases?|reuniones|reunion|archivos?|notas de voz))?(?: (?:por favor|porfa|gracias|tambien))*$`)
-// The words a reply's copy names («escribe «retómala»»): after an answer or a
-// delivery that only mentions the stopped recordings, a pronoun with
-// «continúa» or «sigue» continues that answer instead.
-const RESUME_NAMED_RE = new RegExp(`${RESUME_LEAD}(?:retoma|reanuda)(?:la|las|lo|los)(?: (?:por favor|porfa|gracias|ya|entonces))*$`)
+const RESUME_REST_RE = new RegExp(`${RESUME_LEAD}${RESUME_VERB} ${RESUME_FILLER}(?:con )?(?:(?:las|los|el) )?(?:demas|otras|otros|restantes|resto|que faltan)(?: (?:dos|tres|cuatro|\\d+))?(?: (?:de (?:las|los) )?(?:grabaciones|grabacion|audios?|videos?|clases?|reuniones|reunion|archivos?|notas de voz|transcri\\w*))?(?: que (?:detuve|detuviste|pare|paraste|quedaron|faltan|faltaban))?(?: (?:por favor|porfa|porfis|pls|plis|gracias|tambien|ahora|ya|de nuevo|otra vez|entonces|pues|todas|todos))*$`)
+// The verb a reply's copy names («escribe «retómala»»): after an answer or a
+// delivery that only mentions the stopped recordings, «continúa» or «sigue»
+// («continúalo», «sigue con la clase») continue that answer instead.
+const RESUME_NAMED_RE = new RegExp(`${RESUME_LEAD}(?:retom|reanud)`)
 
 type ResumeKind = "transcript" | "context" | "her" | "him"
 

@@ -197,9 +197,9 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
       const next = byId.get(id);
       // Stopped and not asked for again: stays stopped for this turn, also
       // one whose Stop is still waiting to stop its job (asStoppedRows).
-      const keptStopped = initial && isUserCancelledRow(initial)
+      const keptStopped = initial && (isUserCancelledRow(initial) || initial.stopPending === true)
         && !(resumeStopped === true || (Array.isArray(resumeStopped) && resumeStopped.includes(id)));
-      if (keptStopped && next && !hasTranscript(next)) return initial;
+      if (keptStopped && next && !(hasTranscript(next) && !isReprocessingPartial(next))) return initial;
       if (!next) {
         return { id, originalName: initial?.originalName, processingStage: 'failed', processingError: 'El archivo ya no está disponible.' };
       }
@@ -220,9 +220,16 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
 function asStoppedRows(rows, fileIds = []) {
   const stopped = new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean));
   if (!stopped.size || !Array.isArray(rows)) return rows;
-  const { CANCELLED_NOTE } = require('./media-transcription-queue');
-  return rows.map(row => (row && stopped.has(row.id) && stateOf(row) === 'pending'
-    ? { ...row, processingStage: 'failed', processingError: CANCELLED_NOTE } : row));
+  const { CANCELLED_NOTE, PARTIAL_PREFIX } = require('./media-transcription-queue');
+  return rows.map(row => {
+    if (!row || !stopped.has(row.id) || stateOf(row) !== 'pending') return row;
+    // A gap retry stopped goes back to its partial transcript, as the Stop
+    // itself leaves it (settleStoppedRow).
+    if (isReprocessingPartial(row)) {
+      return { ...row, processingStage: 'ready', processingError: `${PARTIAL_PREFIX} la transcripción quedó incompleta. Reintentar recupera solo esos tramos.`, stopPending: true };
+    }
+    return { ...row, processingStage: 'failed', processingError: CANCELLED_NOTE, stopPending: true };
+  });
 }
 
 function formatRemaining(seconds) {
@@ -316,17 +323,21 @@ const RESUME_LEAD = '^(?:(?:y|e|ok|okay|vale|bueno|ahora|ya|si|dale|claro|porfa|
   + '(?:(?:me\\s+)?(?:puedes|podrias)\\s+|(?:quiero|necesito)\\s+que\\s+)?';
 const RESUME_FILLER = '(?:(?:por\\s+favor|porfa|porfis|de\\s+nuevo|otra\\s+vez|tambien|ya|entonces|ahora|pues)\\s+)*';
 const RESUME_RECORDING_WORDS = 'audios?|videos?|grabacion(?:es)?|notas?\\s+de\\s+voz|podcasts?|clips?|clases?|reunion(?:es)?|charlas?|conferencias?|entrevistas?|ponencias?|sesion(?:es)?|llamadas?|exposicion(?:es)?|webinars?|leccion(?:es)?|seminarios?|talleres|taller|episodios?|juntas?|audiencias?|archivos?';
+// After «las demás / el resto»: a courtesy or a filler, never another noun.
+const RESUME_TAIL_WORDS = 'por\\s+favor|porfa|porfis|pls|plis|gracias|y|tambien|ahora|ya|de\\s+nuevo|otra\\s+vez|entonces|pues|todas|todos';
 const RESUME_TRANSCRIPT_RE = new RegExp(`${RESUME_LEAD}(?:(?:retom|reanud|continu|prosigu)\\w*(?:lo|la|los|las)\\b`
   + `|(?:retom(?:a|ar|e|es)|reanud(?:a|ar|e|es)|continu(?:a|ar|e|es)|prosig(?:ue|uir|as)|sig(?:ue|uir|as)|seguir)\\s+${RESUME_FILLER}(?:con\\s+)?`
   + '(?:(?:(?:todas|todos)\\s+)?(?:la|las|el|los|mi|mis|tu|tus|su|sus|esa|esas|ese|esos|esta|estas|este|estos)\\s+|todas\\s+|todos\\s+)?'
   + `(?:(?:${RESUME_RECORDING_WORDS}|transcripci\\w*|trascri\\w*|transcrib\\w*)\\b`
-  + `|(?:demas|otras|otros|restantes|resto|que\\s+faltan)(?:\\s+(?:dos|tres|cuatro|\\d+))?(?:\\s+(?:${RESUME_RECORDING_WORDS}))?(?=\\s*(?:$|[,.;!?]|por\\s+favor\\b|porfa\\b|gracias\\b|y\\b|tambien\\b))))`);
+  + `|(?:demas|otras|otros|restantes|resto|que\\s+faltan)(?:\\s+(?:dos|tres|cuatro|\\d+))?`
+  + `(?:\\s+(?:de\\s+(?:las|los)\\s+)?(?:${RESUME_RECORDING_WORDS}|transcripci\\w*))?`
+  + `(?=\\s*(?:$|[,.;!?]|(?:${RESUME_TAIL_WORDS})\\b|que\\s+(?:detuve|detuviste|pare|paraste|quedaron|faltan|faltaban)\\b))))`);
 
 // «ponlo en Word», «dámelo en PDF», «lo quiero en Word», «expórtalo a Word»:
 // the transcript in a format, like TO_TEXT_RE, when nothing else is asked.
 const EXPORT_FORMAT_RE = /^(?:(?:y|e|ok|okay|vale|bueno|ahora|porfa|por favor|mejor|tambien)\b[\s,]*)*(?:(?:me\s+)?(?:puedes|podrias)\s+)?(?:(?:lo|la|los|las)\s+quiero|quiero(?:lo|la|los|las)?|pon(?:lo|la|los|las|melo|mela|melos|melas)?|da(?:me|melo|mela|melos|melas)|pasa(?:me|melo|mela|melos|melas)|manda(?:me|melo|mela)|envia(?:me|melo|mela)|exporta(?:lo|la|los|las)?|descarga(?:lo|la|los|las)?|guarda(?:lo|la|los|las)?)\b[^.?!\n]{0,30}?\b(?:en|a|como)\s+(?:un\s+|una\s+|formato\s+)?(?:word|docx|pdf|txt|texto)\b/;
 // A report or «lo más importante» is more than the transcript in a format.
-const DELIVERABLE_NOUN_RE = /\b(?:informe|reporte|acta|minuta|resumen|lo mas importante|puntos (?:mas )?importantes|ideas (?:principales|clave)|conclusiones|lo esencial)\b/;
+const DELIVERABLE_NOUN_RE = /\b(?:informe|reporte|acta|minuta|resumen|lo mas importante|puntos (?:mas )?(?:importantes|principales|clave|centrales)|ideas (?:principales|clave|centrales|importantes)|conclusiones|lo esencial)\b/;
 
 /**
  * A clause of the message asks to resume: «retómala», «… y retoma las
@@ -350,7 +361,10 @@ function isResumeGoal(goal) {
 function isTranscriptGoal(goal) {
   const raw = String(goal || '');
   const folded = require('./request-negation').foldRequest(raw);
-  if (require('./message-attachments').isTranscriptionRequest(raw) || isResumeGoal(raw)) return true;
+  if (require('./message-attachments').isTranscriptionRequest(raw)) return true;
+  // «retómala» asks for the transcript; «sigue con esta entrevista y dame los
+  // puntos importantes» asks for more.
+  if (isResumeGoal(raw)) return !DELIVERABLE_NOUN_RE.test(folded) && !asksForDeliverable(raw) && !wantsMediaAnalysis(raw);
   // A format alone («pásalo a Word», «ponlo en PDF») asks for the transcript in
   // it; with a report or a deliverable it asks for more («pásalo a un informe»,
   // «… con lo más importante»).
@@ -459,12 +473,18 @@ function wantsSummaryWithTranslation(goal) {
 // buys no analysis. «como», «cuando», «donde» without their accent are
 // conjunctions («como dice el profesor, transcríbelo literal»).
 const SAID_VERB_SOURCE = '(?:dice|dicen|dijo|dijeron|decia|decían|decian|habla|hablan|habl[oó]|hablaron|explica|explican|explic[oó]|explicaron|cuenta|cuentan|cont[oó]|contaron|menciona|mencionan|mencion[oó]|mencionaron|trata|tratan|pasa|pas[oó]|ocurre|ocurri[oó]|sucede|sucedi[oó]|decide|decidi[oó]|decidieron|acordaron|propone|propuso|opina|opinan|piensa|pide|pidi[oó]|recomienda|recomend[oó]|concluye|conclu[yí]?[oó]|significa)';
-const UNPUNCTUATED_QUESTION_RE = new RegExp(`^(?:(?:y|e|pero|ok)\\s+)?(?:(?:de|sobre|en)\\s+)?(?:qu[eé]|qui[eé]n|qui[eé]nes|cu[aá]l|cu[aá]les|cómo|cuándo|dónde|cuánto|cuántos|cuánta|cuántas)\\s+(?:m[aá]s\\s+)?(?:\\S+\\s+){0,3}?${SAID_VERB_SOURCE}(?![a-záéíóúñü])`);
+// An accented interrogative opening the message asks («cuándo es el
+// examen…», «quién ganó la votación…»); an unaccented one needs a verb about
+// what was said (it may be a conjunction). Exclamations and status pings
+// («qué bien», «cuánto falta») ask nothing.
+const UNPUNCTUATED_QUESTION_RE = new RegExp(`^(?:(?:y|e|pero|ok)\\s+)?(?:(?:de|sobre|en)\\s+)?(?:(?:qué|quién|quiénes|cuál|cuáles|cómo|cuándo|dónde|cuánto|cuántos|cuánta|cuántas)\\s|(?:que|quien|quienes|cual|cuales)\\s+(?:mas\\s+)?(?:\\S+\\s+){0,3}?${SAID_VERB_SOURCE}(?![a-záéíóúñü]))`);
+const EXCLAMATION_OPENING_RE = /^(?:(?:y|e|pero|ok)\s+)?(?:qu[eé]\s+(?:bien|bueno|buena|buenisimo|buenísimo|genial|padre|chevere|chévere|bacan|bacán|rapido|rápido|bonito|lindo|mal|pena|horror|lastima|lástima|increible|increíble|maravilla|suerte|alivio|emocion|emoción|gusto|crack|top)\b|cu[aá]nto\s+(?:falta|tarda|demora|queda|tiempo)\b)/;
 
 function asksForDeliverable(goal) {
   const text = String(goal || '');
   return wantsSummaryWithTranslation(text) || TRANSCRIPT_EXTRA_DELIVERABLE_RE.test(stripNegatedAnalysis(text.toLowerCase()))
-    || (!/[¿?]/.test(text) && UNPUNCTUATED_QUESTION_RE.test(text.trim().toLowerCase()) && !GREETING_QUESTION_RE.test(text.trim().toLowerCase()));
+    || (!/[¿?]/.test(text) && UNPUNCTUATED_QUESTION_RE.test(text.trim().toLowerCase()) && !GREETING_QUESTION_RE.test(text.trim().toLowerCase())
+      && !EXCLAMATION_OPENING_RE.test(text.trim().toLowerCase()));
 }
 
 /** A translate verb turned down anywhere («no la traduzcas porfa», «no traduzcas los nombres»). */
@@ -631,41 +651,78 @@ function switchedTranslationTarget(goal) {
  * traducción al francés»): only that one goes when another stays pending.
  * Null when the take-back names none, or for a switch. Pure; never throws.
  */
-function refusedTranslationTarget(goal) {
+function refusedTranslationTargets(goal) {
+  const out = [];
   try {
-    if (!negatesTranslation(goal)) return null;
+    if (!negatesTranslation(goal)) return out;
     const negation = require('./request-negation');
     const folded = negation.foldRequest(goal);
     const ranges = negation.negatedRanges(folded);
+    const add = (word) => {
+      const hit = translationLanguageIn(word);
+      if (hit && !out.some(item => item.code === hit.code)) out.push(hit);
+    };
     for (const match of folded.matchAll(/\b(?:traduc\w*|traduz\w*|translat\w*)\b/g)) {
       const range = ranges.find(candidate => match.index >= candidate.start && match.index < candidate.end);
       if (!range || switchedTargetAfter(folded, match.index + match[0].length)) continue;
+      // «al francés ni al inglés»: every language its clause names.
       const tail = folded.slice(match.index + match[0].length, range.end).split(/[,;.!?\n]|\b(?:sino|mejor|pero)\b/)[0];
-      const named = tail.match(/\b(?:al|a|en|into|to)\s+(?:el\s+|idioma\s+)?([a-z]+)/);
-      const hit = named ? translationLanguageIn(named[1]) : null;
-      if (hit) return hit;
+      for (const named of tail.matchAll(/\b(?:al|a|en|into|to)\s+(?:el\s+|idioma\s+)?([a-z]+)/g)) add(named[1]);
+      // «…, tampoco al inglés», «… y ni al inglés»: the refusal goes on.
+      let rest = folded.slice(range.end);
+      for (let more = rest.match(/^\s*[,;]?\s*(?:y\s+)?(?:ni|tampoco)(?:\s+(?:tampoco|ni))?\s+(?:al|a|en)\s+(?:el\s+|idioma\s+)?([a-z]+)/); more;
+        more = rest.match(/^\s*[,;]?\s*(?:y\s+)?(?:ni|tampoco)(?:\s+(?:tampoco|ni))?\s+(?:al|a|en)\s+(?:el\s+|idioma\s+)?([a-z]+)/)) {
+        add(more[1]);
+        rest = rest.slice(more[0].length);
+      }
     }
   } catch (_) { /* a cue check never fails the turn */ }
-  return null;
+  return out;
 }
 
-// «mejor tradúcela al francés», «mejor al francés», «en vez de inglés, …»,
-// «en lugar del inglés…», «cámbiala al francés», «cambia el idioma al
-// francés»: the new language replaces the pending one, with or without a
-// stretch, never next to it.
-const LANGUAGE_WORD_SOURCE = `(?:${TRANSLATION_LANGUAGES.map(language => language.re.source).join('|')})`;
-const REPLACE_TRANSLATION_RE = new RegExp([
-  `(?:^|[,;:.!?]\\s*|\\b(?:y|pero|o|ahora|entonces|bueno)\\s+)mejor\\s+(?:(?:que\\s+)?(?:me\\s+)?(?:lo|la|los|las)\\s+)?(?:(?:tradu[cz]\\w*|pas\\w*)\\s+)?(?:al|a|en)\\s+(?:el\\s+|idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
-  `\\ben\\s+(?:vez|lugar)\\s+del?\\s+(?:(?:la\\s+)?traduccion\\s+(?:al|a|en)\\s+)?(?:idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
-  `\\bcambi\\w*\\s+(?:(?:el|la)\\s+(?:idioma|traduccion)\\s+)?(?:al|a)\\s+(?:el\\s+|idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
-].join('|'));
+/**
+ * The language a take-back names («ya no la traduzcas al francés», «sin la
+ * traducción al francés»): only that one goes when another stays pending.
+ * Null when the take-back names none, or several («… al francés ni al
+ * inglés»: all of them go), or for a switch. Pure; never throws.
+ */
+function refusedTranslationTarget(goal) {
+  const all = refusedTranslationTargets(goal);
+  return all.length === 1 ? all[0] : null;
+}
 
-/** The follow-up replaces the pending translation's language (see above). Pure; never throws. */
-function replacesTranslation(goal) {
+// «mejor tradúcela al francés», «en vez de inglés, …», «en vez de al
+// inglés», «en lugar del inglés…», «cámbiala al francés», «cambia el idioma
+// al francés»: the new language replaces the pending one, with or without a
+// stretch, never next to it. Each cue must name the right language: the new
+// one after «mejor» or «cambia», the pending one after «en vez de»; «el
+// profesor cambia al inglés a veces» switches nothing.
+const LANGUAGE_WORD_SOURCE = `(${TRANSLATION_LANGUAGES.map(language => language.re.source).join('|')})`;
+const REPLACE_NEW_LANGUAGE_RE = new RegExp([
+  `(?:^|[,;:.!?]\\s*|\\b(?:y|pero|o|ahora|entonces|bueno)\\s+)mejor\\s+(?:(?:que\\s+)?(?:me\\s+)?(?:lo|la|los|las)\\s+)?(?:(?:tradu[cz]\\w*|pas\\w*)\\s+)?(?:al|a|en)\\s+(?:el\\s+|idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
+  `(?:^|[,;:.!?]\\s*|\\b(?:y|pero|o|ahora|entonces|bueno|mejor|porfa)\\s+)cambia(?:la|lo|las|los)?\\s+(?:(?:el|la)\\s+(?:idioma|traduccion)\\s+)?(?:al|a)\\s+(?:el\\s+|idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
+].join('|'), 'g');
+const REPLACE_OLD_LANGUAGE_RE = new RegExp(`\\ben\\s+(?:vez|lugar)\\s+del?\\s+(?:(?:al|a)\\s+)?(?:(?:la\\s+)?traduccion\\s+(?:al|a|en)\\s+)?(?:idioma\\s+)?${LANGUAGE_WORD_SOURCE}`, 'g');
+
+/**
+ * The follow-up replaces the pending translation (`pending`, a language
+ * code) with `target` (see above). Pure; never throws.
+ */
+function replacesTranslation(goal, { target = null, pending = null } = {}) {
   try {
-    if (switchedTranslationTarget(goal)) return true;
-    return REPLACE_TRANSLATION_RE.test(foldGoal(goal));
-  } catch (_) { return false; }
+    const switched = switchedTranslationTarget(goal);
+    if (switched && (!target || switched.code === target)) return true;
+    const folded = foldGoal(goal);
+    for (const match of folded.matchAll(REPLACE_NEW_LANGUAGE_RE)) {
+      const hit = translationLanguageIn(match[1] || match[2]);
+      if (hit && (!target || hit.code === target)) return true;
+    }
+    for (const match of folded.matchAll(REPLACE_OLD_LANGUAGE_RE)) {
+      const hit = translationLanguageIn(match[1]);
+      if (hit && (pending ? hit.code === pending : hit.code !== target)) return true;
+    }
+  } catch (_) { /* a cue check never fails the turn */ }
+  return false;
 }
 
 /**
@@ -2340,7 +2397,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translationConditions, asksToTranslate, asksAlsoTranslation, switchedTranslationTarget, refusedTranslationTarget, replacesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translationConditions, asksToTranslate, asksAlsoTranslation, switchedTranslationTarget, refusedTranslationTarget, refusedTranslationTargets, replacesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   loadPresentedNames, presentRows, asksForDeliverable, refusesTranslationWord, isResumeGoal,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,

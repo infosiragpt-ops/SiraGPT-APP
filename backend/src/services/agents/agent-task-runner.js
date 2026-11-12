@@ -3140,6 +3140,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           ? { start: mediaOutput.range.start, end: mediaOutput.range.end == null ? OPEN_WINDOW_END_SEC : mediaOutput.range.end } : null;
         const turnedDown = typeof mediaArtifacts.negatedTranscriptFormats === 'function'
           ? mediaArtifacts.negatedTranscriptFormats(mediaGoal) : { documents: [], subtitles: false };
+        const alsoTranslation = Boolean(amendTarget) && typeof mediaBatch.asksAlsoTranslation === 'function' && mediaBatch.asksAlsoTranslation(mediaGoal);
         const courtesy = /^\s*(?:ok(?:ay)?|vale|gracias|muchas gracias|perfecto|listo|genial|dale|bien|de acuerdo|thanks|thank you)[\s.!¡👍🙏]*$/iu.test(mediaGoal);
         const amendment = {
           goal: mediaGoal,
@@ -3148,10 +3149,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           // «ya no la traduzcas al francés»: only that language goes.
           removeTranslationTarget: !amendTarget && typeof mediaBatch.refusedTranslationTarget === 'function'
             ? mediaBatch.refusedTranslationTarget(mediaGoal)?.code || null : null,
-          // «mejor tradúcela al francés del minuto 10 al 20»: replaces the pending language.
-          translationSwitch: Boolean(amendTarget) && typeof mediaBatch.replacesTranslation === 'function' && mediaBatch.replacesTranslation(mediaGoal),
+          // «mejor tradúcela al francés del minuto 10 al 20»: replaces the
+          // pending language; «también» always adds one.
+          translationSwitch: Boolean(amendTarget) && !alsoTranslation && typeof mediaBatch.replacesTranslation === 'function'
+            && mediaBatch.replacesTranslation(mediaGoal, { target: amendTarget.code, pending: openTranslation?.code || null }),
           // «traduce también al francés…»: another language next to the pending one.
-          translationAlso: Boolean(amendTarget) && typeof mediaBatch.asksAlsoTranslation === 'function' && mediaBatch.asksAlsoTranslation(mediaGoal),
+          translationAlso: alsoTranslation,
           // How to translate («literal», «no traduzcas los nombres propios»): the reply says it was noted.
           translationConditions: amendTarget && typeof mediaBatch.translationConditions === 'function' ? mediaBatch.translationConditions(mediaGoal) : [],
           removeAnalysis: explicitNoAnalysis,

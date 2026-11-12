@@ -2538,11 +2538,56 @@ test('«ya no la traduzcas al francés» takes back only the French: the English
 
 test('a language added next to a moment: «completa» is the whole recording, without it the same moment, as the reply says', async () => {
   const whole = await followUpOn(ENGLISH_MOMENT, 'tradúcela también al francés completa');
-  assert.deepEqual(whole.record.output.extraTranslations, [{ target: 'fr', ranges: [] }]);
+  assert.deepEqual(whole.record.output.extraTranslations, [{ target: 'fr', ranges: [], whole: true }]);
   assert.doesNotMatch(whole.result.finalMarkdown, /solo del tramo/);
+  // No stretch of its own: it reads the same windows as the first one.
   const same = await followUpOn(ENGLISH_MOMENT, 'traduce también al francés');
-  assert.deepEqual(same.record.output.extraTranslations, [{ target: 'fr', ranges: [{ start: 1740, end: 2040 }] }]);
+  assert.deepEqual(same.record.output.extraTranslations, [{ target: 'fr', ranges: [] }]);
   assert.match(same.result.finalMarkdown, /también traducida al francés \(solo del tramo que indicaste\)/);
+});
+
+// ── tenth review: what the ninth round's translation fixes got wrong ─────────
+
+test('a take-back that names every pending language («… al francés ni al inglés») drops them all', async () => {
+  const { record: both } = await followUpOn(ENGLISH_WHOLE, 'traduce también al francés');
+  for (const goal of ['ya no la traduzcas al francés ni al inglés', 'ya no la traduzcas ni al francés ni al inglés', 'no las traduzcas al inglés ni al francés',
+    'ya no hace falta traducirla al francés, tampoco al inglés', 'ya no quiero la traducción al francés ni al inglés']) {
+    const { result, record } = await followUpOn(both, goal);
+    assert.equal(record.mode, 'transcript', goal);
+    assert.equal(record.output.translationTarget, undefined, goal);
+    assert.equal(record.output.extraTranslations, undefined, goal);
+    assert.match(result.finalMarkdown, /sin la traducción\b/, goal);
+    assert.doesNotMatch(result.finalMarkdown, /sigue la traducción/, goal);
+  }
+});
+
+test('«también» always adds a language, and a switch cue must name the language it switches', async () => {
+  for (const goal of ['mejor tradúcela al francés también', 'tradúcela también al francés; ojo, a veces el profesor cambia al inglés',
+    'tradúcela también al francés, sin cambios al inglés', 'tradúcela también al portugués. Mejor en portugués de Brasil']) {
+    const { record, amends } = await followUpOn(ENGLISH_WHOLE, goal);
+    assert.equal(amends[0].translationSwitch, false, goal);
+    assert.equal(record.output.translationTarget, 'en', `${goal}: the English one stays`);
+    assert.ok(record.output.extraTranslations?.length === 1, goal);
+  }
+  // «la clase cambia al inglés a veces» describes the recording: no switch cue for French.
+  const described = await followUpOn(ENGLISH_WHOLE, 'tradúcela al francés del minuto 10 al 20, la clase cambia al inglés a veces');
+  assert.equal(described.amends[0].translationSwitch, false);
+  // «en vez de al inglés» names the language replaced.
+  for (const goal of ['tradúcela al francés en vez de al inglés, solo del minuto 10 al 20', 'tradúcela al francés en lugar de al inglés, del minuto 10 al 20',
+    'en vez de al inglés, tradúcela al francés del minuto 10 al 20']) {
+    const { record } = await followUpOn(ENGLISH_WHOLE, goal);
+    assert.equal(record.output.translationTarget, 'fr', goal);
+    assert.equal(record.output.extraTranslations, undefined, goal);
+    assert.deepEqual(record.output.translationRange, { start: 600, end: 1200 }, goal);
+  }
+});
+
+test('a language added with no stretch follows a range set later («solo del minuto 10 al 20»); «completa» stays whole', async () => {
+  const { record: added } = await followUpOn(ENGLISH_WHOLE, 'traduce también al francés');
+  const { record, result } = await followUpOn(added, 'solo del minuto 10 al 20');
+  assert.deepEqual(record.range, { start: 600, end: 1200 });
+  assert.deepEqual(record.output.extraTranslations, [{ target: 'fr', ranges: [] }], 'it follows the first translation');
+  assert.match(result.finalMarkdown, /solo del tramo que indicaste/);
 });
 
 test('the translator gets up to five of the user\'s conditions, as many as are read', async () => {
@@ -2797,6 +2842,21 @@ test('«también en PDF» with no document chosen keeps the automatic Word of a 
   assert.equal(asked[0].alsoPdf, true);
 });
 
+test('«solo en Word y PDF» asks for both documents; «el PDF también mándamelo» adds the PDF', async () => {
+  const both = { mode: 'document', goal: 'transcribe esta clase en Word y PDF', formats: ['txt', 'docx', 'pdf'], output: { documentFormat: 'docx', alsoPdf: true } };
+  for (const [initial, goal] of [[both, 'ponlo solo en Word y PDF'], [WORD_PENDING, 'ponlo solo en Word y PDF'], [PDF_PENDING_DOC, 'pásalo solo a Word y PDF']]) {
+    const { record } = await followUpOn(initial, goal);
+    assert.equal(record.output.documentFormat, 'docx', `${goal} (${initial.goal})`);
+    assert.equal(record.output.alsoPdf, true, `${goal} (${initial.goal})`);
+  }
+  for (const goal of ['el PDF también mándamelo', 'el PDF también dámelo']) {
+    const { result, record } = await followUpOn(WORD_PENDING, goal);
+    assert.equal(record.output.documentFormat, 'docx', goal);
+    assert.equal(record.output.alsoPdf, true, goal);
+    assert.match(result.finalMarkdown, /en Word y en PDF/, goal);
+  }
+});
+
 test('a refusal that says «documento» turns the document down, never asks for a Word', async () => {
   const PDF_PENDING = { mode: 'document', goal: 'transcribe esta clase en PDF', formats: ['txt', 'pdf'], output: { documentFormat: 'pdf' } };
   for (const goal of ['ya no lo quiero en documento', 'transcríbelo sin documento, solo el txt']) {
@@ -2870,6 +2930,17 @@ test('a follow-up about the others never restarts a recording whose Stop has not
   assert.match(result.finalMarkdown, /detenida/);
 });
 
+test('a gap retry whose Stop has not finished reads as its partial transcript, as the Stop leaves it', async () => {
+  const { RETRYING_PARTIAL } = require('../src/services/media-transcription-queue');
+  const partial = '[00:00:00] Hola, esta es la parte que sí se transcribió de la clase dos.';
+  const rows = [readyRow('c1', 'Clase 1.mp4', { extractedText: 'x'.repeat(50) }),
+    { id: 'c2', originalName: 'Clase 2.mp4', processingStage: 'extracting', processingError: RETRYING_PARTIAL, extractedText: partial }];
+  const marked = batch.asStoppedRows(rows, ['c2']);
+  assert.equal(batch.stateOf(marked[1]), 'ready', 'the partial transcript stays usable');
+  assert.equal(batch.isUserCancelledRow(marked[1]), false);
+  assert.equal(marked[1].extractedText, partial);
+});
+
 test('«retómalas todas menos la clase 4» releases the recording whose stop failed and resumes it with the others', async () => {
   const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
   const stopped = (id, name) => ({ id, originalName: name, processingStage: 'failed', processingError: CANCELLED_NOTE, extractedText: null });
@@ -2913,6 +2984,30 @@ test('every resume the composer routes («retoma también los audios», «retoma
     assert.equal(batch.asksToResume(goal), false, goal);
   }
   assert.equal(batch.asksToResume('retoma las demás'), true);
+});
+
+test('a resume with a deliverable («sigue con esta entrevista y dame los puntos importantes») gets the deliverable too', async () => {
+  for (const goal of ['sigue con esta entrevista y dame los puntos importantes', 'continúa con la sesión 2, dame los puntos principales',
+    'sigue con mi podcast, dame las ideas centrales']) {
+    let analyses = 0;
+    const rows = [readyRow('v0', 'entrevista.mp4', { extractedText: 'x'.repeat(50) })];
+    const { context } = pendingStopContext({ goal, rows, pendingStops: [],
+      waitForMediaBatch: async (options) => ({ rows: options.rows, total: 1, ready: 1, failed: 0, pending: 0, partial: 0, progress: {} }),
+      extraBatch: { analyzeMediaBatch: async () => { analyses += 1; return { text: 'Puntos: 1) …', summaries: [{}], failed: [] }; } } });
+    await runMediaBranch(context);
+    assert.equal(analyses, 1, goal);
+  }
+  // «el resto de las grabaciones», «las demás transcripciones», «… que detuve» resume on the server too.
+  for (const goal of ['sigue con el resto de las grabaciones', 'retoma las demás transcripciones', 'retoma las otras dos que detuve', 'retoma las demás ahora']) {
+    assert.equal(batch.asksToResume(goal), true, goal);
+  }
+});
+
+test('a dictated question with any verb next to a format is answered («cuándo es el examen y pásalo a Word»)', async () => {
+  for (const goal of ['cuándo es el examen y pásalo a Word', 'quién ganó la votación, ponlo en PDF']) {
+    const { amends } = await followUpOn({ mode: 'transcript', goal: 'transcribe esta clase', formats: ['txt'] }, goal);
+    assert.equal(amends[0].wantsAnalysis, true, goal);
+  }
 });
 
 test('an exclamation before a format («qué bien, ponlo en Word») only notes the format: no paid summary', async () => {
