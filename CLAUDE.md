@@ -3409,6 +3409,18 @@ lógica tocados: `components/chat-interface-enhanced.tsx` (bucle de subida), `li
   re-adjuntándolo. Una opción visible por archivo («subir el original») o subir el video en
   segundo plano tras el audio es UI, decisión de Luis.
 
+### Entregables profesionales por lote (PR3), fidelidad de nombre extraído y ajustes del pool STT (2026-11-11)
+
+- **Paquete ZIP por lote e índice maestro (`backend/src/services/media-transcript-artifacts.js`, `media-delivery.js`, `media-delivery-store.js`, `media-handoff.js`, `agents/agent-task-runner.js`)**:
+  - Completa el **PR3** pendiente de transcripciones por lote sin añadir dependencias nuevas (usa `pizzip` ya instalado).
+  - Genera `Transcripciones (N archivos).zip` (`application/zip`) automáticamente a partir de `BATCH_ZIP_THRESHOLD = 5` archivos listos/parciales, cuando el usuario pide paquete/archivos separados (`wantsZip`), o cuando hay `> 20` archivos con subtítulos (`SUBTITLE_FILE_CAP`).
+  - Incluye `00-INDICE.md` y `00-INDICE.csv` (UTF-8 con BOM `\uFEFF` para Excel) con estado honesto de **todo** el lote (`allRows`: completos, parciales, con incidencia y pendientes, duración, idioma, palabras, hablantes, cobertura, calidad y tramos dudosos/faltantes), `txt/<NN> - <Nombre>.txt` individual por grabación, `srt/` y `vtt/` para todos los videos del lote y para los 25–100 archivos cuando se piden subtítulos (eliminando la pérdida a partir del archivo 21 sin inundar las tarjetas sueltas del chat), y `subtitulos-incrustados/` cuando hay pista embebida.
+  - Soporta solicitud dual `Word y PDF` (`alsoPdf: true` conserva `docx` + añade `pdf`) y protege a Pandoc/`docx` frente a OOM en lotes masivos (`MAX_COMBINED_DOC_MARKDOWN_CHARS = 1_200_000`) generando un documento compacto de índice + extractos mientras el texto íntegro queda en TXT y ZIP; carga de sidecars acotada en paralelo (`8` a la vez).
+- **Fidelidad de `sourceName` / `sourceMedia` sin fugas `.audio.ogg` y mejoras del pool STT**:
+  - `media-transcription-queue.js` + `media-transcript-store.js` + `media-batch.js` + `media-delivery.js`: preserva `sourceMedia: 'audio'` + `sourceName` también cuando el navegador recodifica audios grandes (`≥ 32 MB`, p. ej. `Entrevista.wav` → `.audio.ogg`) sin tratarlos como video ni disparar `extracted_audio_no_speech`, e hidrata `DocumentAnalysis.metadata.clientExtracted` en lote (`hydrateClientExtractedRows`) para que progreso, hand-off, vista previa (`buildTranscriptChatPreview`), título del chat, mensaje de entrega (acotado para lotes `> 30` sin ocultar incidencias) y notificaciones muestren siempre el nombre real.
+  - `transcription-governor.js`: reprograma el despertar cuando entra un waiter interactivo con `maxWaitMs` menor que el sleep de lote en curso (`wakeSeq`), evitando bloqueos de dictado.
+  - `audio-transcriber.js` + `stt-providers/{assemblyai,deepgram,mistral}.js`: propaga `hints.speakers` (`speakers_expected` en AssemblyAI, `numSpeakers` en ElevenLabs Scribe) y `hints.verbatim` (`disfluencies: true` en AssemblyAI), preserva `confidence` promediada al agrupar palabras en AssemblyAI/Deepgram, clasifica `mistral`/`voxtral` como motor cloud (`Mistral`) y verifica `signal.aborted` antes de leer disco; `media-delivery.js` respeta `model.pinned` en análisis/traducción diferida (`AGENTS.md` §13) y `transcription-document-fast-path.js` usa copia temporal UUID con limpieza en `finally`.
+
 ## Detener y seguimientos durante una transcripción en segundo plano (added 2026-11-05)
 
 Pedido de Luis con captura: tras «te aviso aquí cuando termine», Detener quedaba gris y un mensaje
@@ -3478,10 +3490,11 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   sección 13). «Regenerar» sobre
   un «Anotado» vuelve a leer el chat como en un hand-off. Un «Detener» que el almacén no pudo
   registrar responde 500 (`cancel_failed`, nunca «ya había terminado») y detiene igual los
-  trabajos. El modelo del turno del seguimiento escribe el análisis o la traducción, y la entrega lo
-  resuelve fijado (`defaultAnalyze`, `pinned: true`): sin conexión falla con «X no pudo responder:
-  su conexión no está configurada. No cambié de modelo…» en vez de pasar en silencio a DeepSeek
-  u otro proveedor. Una entrega sin modelo registrado (enlaces, notas de voz) conserva la escalera. Responde
+  trabajos. El modelo del turno del seguimiento escribe el análisis o la traducción. Si el usuario lo
+  eligió (`model.pinned`, el indicador que guarda el runner y lee `defaultAnalyze`), la entrega lo
+  resuelve fijado: sin conexión falla con «X no pudo responder: su conexión no está configurada. No
+  cambié de modelo…» en vez de pasar en silencio a DeepSeek u otro proveedor. Un modelo que el
+  usuario no eligió, o una entrega sin modelo (enlaces, notas de voz), conserva la escalera. Responde
   `amendedMessage`/`stillRunningMessage` con `stoppedReason: 'media_delivery_amended'`
   (notificación diferida). `too_late`, `cancelled` y `busy` siguen el camino de siempre. No aplica
   a una corrección de tramo ni a un turno con otros adjuntos.

@@ -323,3 +323,52 @@ test('a request that outlives its budget fails as a TIMEOUT (ETIMEDOUT, no «abo
   assert.equal(forwarded.timedOut(), false);
   forwarded.dispose();
 });
+
+test('word-grouping confidence averaging, AssemblyAI speakers_expected/disfluencies hints, and pre-read abort before disk I/O', async (t) => {
+  const dgSegs = deepgram.segmentsFromDeepgram({
+    results: {
+      channels: [{
+        alternatives: [{
+          words: [
+            { word: 'hola', punctuated_word: 'Hola', start: 0, end: 0.4, speaker: 0, confidence: 0.9 },
+            { word: 'equipo', punctuated_word: 'equipo.', start: 0.5, end: 0.9, speaker: 0, confidence: 0.7 },
+          ],
+        }],
+      }],
+    },
+  });
+  assert.equal(dgSegs.length, 1);
+  assert.equal(dgSegs[0].confidence, 0.8);
+
+  const aaiSegs = assembly.segmentsFromAssemblyAi({
+    words: [
+      { text: 'Buenos', start: 0, end: 400, speaker: 'A', confidence: 0.95 },
+      { text: 'días.', start: 450, end: 900, speaker: 'A', confidence: 0.85 },
+    ],
+  });
+  assert.equal(aaiSegs.length, 1);
+  assert.equal(aaiSegs[0].confidence, 0.9);
+
+  const file = tempFile(t);
+  const server = assemblyServer({ pollsBeforeDone: 0 });
+  await assembly.transcribeAssemblyAiFile({
+    filePath: file,
+    speakersExpected: 3,
+    disfluencies: true,
+    env: { ASSEMBLYAI_API_KEY: 'k' },
+    fetchImpl: server.fetchImpl,
+    sleep: async () => {},
+  });
+  const createCall = server.calls.find((c) => c.url.pathname === '/v2/transcript' && c.init.method === 'POST');
+  const createJson = JSON.parse(createCall.init.body);
+  assert.equal(createJson.speakers_expected, 3);
+  assert.equal(createJson.disfluencies, true);
+
+  // Pre-aborted signal throws AbortError immediately without reading a missing file path.
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const missingPath = '/tmp/siragpt-nonexistent-preaborted-audio.flac';
+  await assert.rejects(mistral.transcribeMistralFile({ filePath: missingPath, signal: preAborted.signal, env: { MISTRAL_API_KEY: 'k' } }), { name: 'AbortError' });
+  await assert.rejects(deepgram.transcribeDeepgramFile({ filePath: missingPath, signal: preAborted.signal, env: { DEEPGRAM_API_KEY: 'k' } }), { name: 'AbortError' });
+  await assert.rejects(assembly.transcribeAssemblyAiFile({ filePath: missingPath, signal: preAborted.signal, env: { ASSEMBLYAI_API_KEY: 'k' } }), { name: 'AbortError' });
+});

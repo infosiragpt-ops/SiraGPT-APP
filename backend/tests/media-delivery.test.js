@@ -1009,3 +1009,55 @@ test('fallback Word render: a unique working copy that is removed afterwards', a
   assert.ok(names.every(name => /^transcript-[0-9a-f-]{36}\.docx$/.test(name)));
   assert.deepEqual(await fs.readdir(dir), [], 'no working copy left behind');
 });
+
+test('Mistral cloud RTF, extracted sourceName fidelity, >30-file status cap, and pinned model fidelity', async (t) => {
+  const { engineFamily, estimateTranscriptionSeconds } = require('../src/services/media-delivery');
+  assert.equal(engineFamily('mistral'), 'cloud');
+  assert.equal(engineFamily('voxtral-mini-latest'), 'cloud');
+  assert.ok(estimateTranscriptionSeconds({ durationSec: 3600, engine: 'mistral' }) < estimateTranscriptionSeconds({ durationSec: 3600, engine: 'local' }));
+
+  // Extracted video delivered into a fresh chat uses sourceName in chat title, message, and push notification.
+  const extractedFile = Object.assign(ready('ext-vid', { originalName: 'Seminario_IA.audio.ogg', mimeType: 'audio/ogg' }), {});
+  let createdChatTitle = null;
+  const h = await harness(t, {
+    chats: ['chat1', 'fresh-chat'],
+    files: [extractedFile],
+    transcripts: { 'ext-vid': { language: 'es', durationSec: 900, sourceMedia: 'video', sourceName: 'Seminario_IA.mp4',
+      segments: [{ start: 0, end: 30, text: 'Bienvenidos al seminario de inteligencia artificial.' }] } },
+    overrides: {
+      ensureChat: async ({ title }) => { createdChatTitle = title; return { chatId: 'fresh-chat', created: true }; },
+    },
+  });
+  const rec = await h.service.createDelivery(newDelivery({ fileIds: ['ext-vid'], fileNames: ['Seminario_IA.audio.ogg'], chatId: null }));
+  const delivered = await h.service.deliverOne(rec.id);
+  assert.equal(delivered.status, 'delivered');
+  assert.match(createdChatTitle, /Seminario_IA\.mp4/);
+  assert.doesNotMatch(createdChatTitle, /audio\.ogg/);
+  assert.match(h.state.messages[0].content, /Seminario\\_IA\.mp4|Seminario_IA\.mp4/);
+  assert.doesNotMatch(h.state.messages[0].content, /audio\.ogg/);
+  assert.match(h.state.notifications[0].title, /Seminario_IA\.mp4/);
+
+  // >30 files: every failed and partial row is preserved while ready rows are bounded cleanly.
+  const { deliveryMessage } = require('../src/services/media-delivery');
+  const bulkRows = [
+    ...Array.from({ length: 34 }, (_, i) => ({ id: `r${i + 1}`, originalName: `Audio_${i + 1}.mp3`, processingStage: 'ready',
+      deliveryState: 'ready', extractedText: `Texto completo del archivo ${i + 1}.` })),
+    { id: 'f-err', originalName: 'Audio_Roto.mp3', processingStage: 'failed', deliveryState: 'failed', processingError: 'Archivo dañado', extractedText: null },
+  ];
+  const msg = deliveryMessage({ delivery: { mode: 'transcript', formats: ['txt', 'zip'] }, rows: bulkRows, transcripts: {}, artifacts: [] });
+  assert.match(msg, /Audio_Roto\.mp3.*Archivo dañado/, 'failed rows are never hidden');
+  assert.match(msg, /…y 14 archivos completos más \(incluidos en los adjuntos\)/);
+
+  // Pinned model flag survives store normalization and reaches resolveAgentRuntimeClient.
+  const pinnedRecord = await h.service.createDelivery(newDelivery({
+    fileIds: ['ext-vid'],
+    mode: 'analysis',
+    model: { id: 'deepseek-v4-pro', provider: 'deepseek', pinned: true },
+    output: { wantsZip: true, alsoPdf: true },
+    formats: ['txt', 'docx', 'pdf', 'zip'],
+  }));
+  assert.equal(pinnedRecord.model.pinned, true);
+  assert.equal(pinnedRecord.output.wantsZip, true);
+  assert.equal(pinnedRecord.output.alsoPdf, true);
+  assert.ok(pinnedRecord.formats.includes('zip'));
+});

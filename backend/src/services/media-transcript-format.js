@@ -210,6 +210,7 @@ function languageNameEs(value) {
 const PROVIDER_LABELS = Object.freeze({
   openai: 'OpenAI', groq: 'Groq', xai: 'xAI', elevenlabs: 'ElevenLabs', meta: 'Meta',
   voicestudio: 'VoiceStudio', deepgram: 'Deepgram', assemblyai: 'AssemblyAI', gemini: 'Gemini',
+  mistral: 'Mistral', voxtral: 'Mistral',
   local: 'Whisper local', 'local-whisper': 'Whisper local', whisper: 'Whisper', 'whisper-cpp': 'Whisper local',
   'faster-whisper': 'Whisper local',
 });

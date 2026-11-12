@@ -2957,6 +2957,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const asksTranscript = asksTranscriptByRequest
         || /(?<!\b(?:dice|dicen|dec[ií]a|dijo|sale|salen|aparece|pone|seg[uú]n|en|de|del|in|from|does|says)\s+(?:(?:la|el|los|las|mi|tu|su|esa|ese|esta|este|esas|esos|estas|estos|the|my|your|this)\s+)?(?:texto\s+)?)(?:tran?s?cr[ií](?:pci|t)|trnadscr\w*|trnasc\w*|transcip\w*|trascr[ií]pci|transcript|subt[ií]t[uú]l)(?!\S*\s+(?:qu[eé]\s+)?(?:dice|dicen|dec[ií]a|dijo|pone|says?)\b)/i.test(mediaGoal);
       const mediaArtifacts = require('../media-transcript-artifacts');
+      // The model a delivery's analysis or translation is written with: the one
+      // this turn runs, pinned when the user picked it (never a remapped one).
+      const deliveryModel = {
+        id: runtimeModelProfile.runtimeModel || model || null,
+        provider: runtimeModelProfile.runtimeProvider || null,
+        ...(typeof modelPinned !== 'undefined' && modelPinned === true && runtimeModelProfile.remapped !== true ? { pinned: true } : {}),
+      };
       const mediaOutput = mediaArtifacts.resolveTranscriptOutput(mediaGoal, { documentPolicy });
       // What the user said about the recordings (contract C7): «está en
       // inglés», «los nombres son…», «son 3 hablantes», «literal». They reach
@@ -3130,7 +3137,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             && typeof mediaBatch.asksWholeTranslation === 'function' && mediaBatch.asksWholeTranslation(mediaGoal)),
           language: jobHints.language || null,
           hints: jobHints.hints || null,
-          model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
+          model: deliveryModel,
         };
         // What THIS message says: the job hints also carry names and a
         // language read from earlier turns, which say nothing about it.
@@ -3251,7 +3258,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             fileIds: ids, fileNames: batch.rows.map(presentedName),
             goal: mediaGoal,
             mode: translationTarget ? 'translation' : wantsAnalysis ? 'analysis' : mediaOutput.wantsSubtitles ? 'subtitles' : mediaOutput.documentFormat ? 'document' : 'transcript',
-            formats: ['txt', mediaOutput.documentFormat, mediaOutput.wantsSubtitles ? 'srt' : null, mediaOutput.wantsSubtitles ? 'vtt' : null].filter(Boolean),
+            formats: [
+              'txt',
+              mediaOutput.documentFormat,
+              mediaOutput.alsoPdf ? 'pdf' : null,
+              mediaOutput.wantsSubtitles ? 'srt' : null,
+              mediaOutput.wantsSubtitles ? 'vtt' : null,
+              (mediaOutput.wantsZip || ids.length >= 5) ? 'zip' : null,
+            ].filter(Boolean),
             // The recording's language and the names / speakers / «literal»
             // the user gave travel with the delivery and reach every job.
             language: batchLanguage,
@@ -3263,13 +3277,20 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             range: outputRange,
             // «transcribe y tradúcelo» / «resume y tradúcelo»: the translation
             // mode also delivers the transcript files and the summary asked for.
-            output: { documentFormat: mediaOutput.documentFormat, wantsSubtitles: mediaOutput.wantsSubtitles,
-              includeTranscript: wantsTranscriptPack, alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
-              analysisRange: lookupWindow || null, translationTarget: translationTarget?.code || null,
+            output: {
+              documentFormat: mediaOutput.documentFormat,
+              wantsSubtitles: mediaOutput.wantsSubtitles,
+              ...(mediaOutput.wantsZip ? { wantsZip: true } : {}),
+              ...(mediaOutput.alsoPdf ? { alsoPdf: true } : {}),
+              includeTranscript: wantsTranscriptPack,
+              alsoAnalysis: Boolean(translationTarget && wantsAnalysis),
+              analysisRange: lookupWindow || null,
+              translationTarget: translationTarget?.code || null,
               // Turned down («sin Word», «no quiero subtítulos»): no automatic one either.
               ...(mediaOutput.declinedDocuments ? { declinedDocuments: mediaOutput.declinedDocuments } : {}),
-              ...(mediaOutput.declinedSubtitles ? { declinedSubtitles: true } : {}) },
-            model: { id: runtimeModelProfile.runtimeModel || model || null, provider: runtimeModelProfile.runtimeProvider || null },
+              ...(mediaOutput.declinedSubtitles ? { declinedSubtitles: true } : {}),
+            },
+            model: deliveryModel,
           });
         } catch (error) {
           console.warn('[agent-task-runner] media delivery not created; waiting inline', error?.code || error?.message || 'delivery_error');
@@ -3315,7 +3336,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       const saveTranscriptPack = async () => {
         let built = null;
         try {
-          built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, transcripts, output: mediaOutput, userId: user.id });
+          built = await mediaArtifacts.buildMediaTranscriptArtifacts({ rows: readyRows, allRows: batch.rows, transcripts, output: mediaOutput, userId: user.id });
         } catch (error) {
           throwIfAborted(controller.signal);
           console.warn('[agent-task-runner] professional transcript pack failed; plain TXT fallback', error?.message || error);

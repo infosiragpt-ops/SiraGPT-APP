@@ -66,6 +66,16 @@ function segmentsFromDeepgram(payload) {
   // sentence ends, speaker changes, a 12 s ceiling.
   const out = [];
   let current = null;
+  let confSum = 0;
+  let confCount = 0;
+  const flushCurrent = () => {
+    if (!current) return;
+    if (confCount > 0) current.confidence = Math.round(Math.min(1, Math.max(0, confSum / confCount)) * 1000) / 1000;
+    out.push(current);
+    current = null;
+    confSum = 0;
+    confCount = 0;
+  };
   for (const word of words.filter(timed)) {
     const text = String(word.punctuated_word || word.word || '').trim();
     if (!text) continue;
@@ -73,13 +83,17 @@ function segmentsFromDeepgram(payload) {
     const end = Number(word.end);
     const speaker = word.speaker != null ? String(word.speaker) : undefined;
     if (current && (start - current.end >= 1 || end - current.start > 12 || speaker !== current.speaker || /[.!?…]$/.test(current.text))) {
-      out.push(current);
-      current = null;
+      flushCurrent();
     }
     if (!current) current = { start: round3(start), end: round3(end), text, ...(speaker !== undefined ? { speaker } : {}) };
     else { current.end = round3(end); current.text = `${current.text} ${text}`; }
+    const conf = Number(word.confidence);
+    if (word.confidence != null && Number.isFinite(conf) && conf > 0) {
+      confSum += Math.min(1, conf);
+      confCount += 1;
+    }
   }
-  if (current) out.push(current);
+  flushCurrent();
   return out;
 }
 
@@ -123,6 +137,7 @@ async function transcribeDeepgramFile({ filePath, mimeType, language, signal, ti
     if (value) params.append('keyterm', value);
   }
   const url = `${cleanBaseUrl(env.DEEPGRAM_BASE_URL)}/listen?${params.toString()}`;
+  if (signal?.aborted) throw Object.assign(new Error('aborted by user'), { name: 'AbortError', code: 'ABORT_ERR' });
   const body = await fs.promises.readFile(filePath);
   if (signal?.aborted) throw Object.assign(new Error('aborted by user'), { name: 'AbortError', code: 'ABORT_ERR' });
   // A budget overrun is a TIMEOUT (transient to the engine), never an abort.

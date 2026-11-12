@@ -193,9 +193,10 @@ function sidecarExtras(result, meta = normalizeTranscriptResult(result)) {
   if (audioStream) out.audioStream = audioStream;
   const hints = normalizeStoredHints(r.hints);
   if (hints) out.hints = hints;
-  // Audio the browser extracted: the deliverables keep the name of what the
-  // user uploaded, and one extracted from a video stays that video.
-  if (r.sourceMedia === 'video') out.sourceMedia = 'video';
+  // Audio the browser extracted (from a video or a large audio file): the
+  // deliverables keep the name of what the user uploaded, and one extracted
+  // from a video stays that video.
+  if (r.sourceMedia === 'video' || r.sourceMedia === 'audio') out.sourceMedia = r.sourceMedia;
   const sourceName = cleanSourceName(r.sourceName);
   if (sourceName) out.sourceName = sourceName;
   if (meta.embeddedSubtitles) {
@@ -412,7 +413,7 @@ function normalizedSidecarExtras(sidecar) {
   if (audioStream) out.audioStream = audioStream;
   const hints = normalizeStoredHints(sidecar.hints);
   if (hints) out.hints = hints;
-  if (sidecar.sourceMedia === 'video') out.sourceMedia = 'video';
+  if (sidecar.sourceMedia === 'video' || sidecar.sourceMedia === 'audio') out.sourceMedia = sidecar.sourceMedia;
   const sourceName = cleanSourceName(sidecar.sourceName);
   if (sourceName) out.sourceName = sourceName;
   const embedded = normalizeEmbeddedSubtitles(sidecar.embeddedSubtitles);
@@ -671,6 +672,58 @@ async function readMediaHints(prisma, ref = {}) {
   return (await readMediaAnalysisInfo(prisma, ref)).mediaHints;
 }
 
+/**
+ * Overlay `DocumentAnalysis.metadata.clientExtracted` (`sourceName`,
+ * `sourceMedia`) onto `File` rows in a single batch query so browser-extracted
+ * `.audio.ogg` uploads appear under their real source name (`Clase 3.mp4`,
+ * `Entrevista.wav`) in progress labels, handoff messages, titles, and failures
+ * even before the transcript sidecar exists. Never throws; returns `rows` as-is
+ * when `prisma.documentAnalysis` is absent.
+ */
+async function hydrateClientExtractedRows(prisma, { userId, rows } = {}) {
+  if (!Array.isArray(rows) || !rows.length || !userId || !prisma?.documentAnalysis) return rows;
+  const owner = String(userId);
+  const ids = [...new Set(rows.map((r) => r?.id).filter((id) => isValidFileId(id)))];
+  if (!ids.length) return rows;
+  try {
+    let analysisRows = [];
+    if (typeof prisma.documentAnalysis.findMany === 'function') {
+      analysisRows = await prisma.documentAnalysis.findMany({
+        where: { userId: owner, fileId: { in: ids } },
+        select: { fileId: true, userId: true, metadata: true },
+      });
+    } else if (typeof prisma.documentAnalysis.findUnique === 'function') {
+      const lookedUp = await Promise.all(ids.map((fileId) =>
+        prisma.documentAnalysis.findUnique({ where: { fileId }, select: { fileId: true, userId: true, metadata: true } }).catch(() => null)));
+      analysisRows = lookedUp.filter(Boolean);
+    } else {
+      return rows;
+    }
+    if (!Array.isArray(analysisRows) || !analysisRows.length) return rows;
+    const { normalizeClientExtracted, isExtractedFromVideo } = require('./client-extracted-metadata');
+    const byFileId = new Map();
+    for (const item of analysisRows) {
+      if (!item || (item.userId && String(item.userId) !== owner)) continue;
+      const fid = item.fileId;
+      const extracted = normalizeClientExtracted(plainObject(item.metadata).clientExtracted);
+      if (fid && extracted?.sourceName) {
+        byFileId.set(String(fid), {
+          sourceName: extracted.sourceName,
+          sourceMedia: isExtractedFromVideo(extracted) ? 'video' : 'audio',
+        });
+      }
+    }
+    if (!byFileId.size) return rows;
+    return rows.map((row) => {
+      const extra = row?.id ? byFileId.get(String(row.id)) : null;
+      if (!extra) return row;
+      return { ...row, originalName: extra.sourceName, sourceName: extra.sourceName, sourceMedia: extra.sourceMedia };
+    });
+  } catch (_) {
+    return rows;
+  }
+}
+
 // ── kept checkpoints (refine) ───────────────────────────────────────────────
 //
 // The media queue keeps a file's checkpointed segment texts after it
@@ -747,6 +800,7 @@ module.exports = {
   recordMediaHints,
   readMediaHints,
   readMediaAnalysisInfo,
+  hydrateClientExtractedRows,
   recordCheckpointPointer,
   purgeCheckpointPointer,
   // helpers (pure) for callers and tests

@@ -1364,19 +1364,22 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     const out = { ...(media.language ? { language: media.language } : {}), ...(media.hints || {}) };
     return Object.keys(out).length ? out : null;
   };
-  // Audio the browser extracted (DocumentAnalysis.metadata.clientExtracted)
-  // keeps the name of what the user uploaded in the deliverables, and one
-  // extracted from a video stays that video (the automatic SRT/VTT).
-  // { sourceMedia?: 'video', sourceName? } or null.
+  // Audio the browser extracted from a video or a large audio file
+  // (DocumentAnalysis.metadata.clientExtracted) keeps the name of what the
+  // user uploaded in the deliverables, and one extracted from a video stays
+  // that video (the automatic SRT/VTT). { sourceMedia: 'video' | 'audio',
+  // sourceName? } or null.
   async function sourceMediaOf(row) {
     if (typeof transcriptStore?.readMediaAnalysisInfo !== 'function') return null;
     try {
       const info = await transcriptStore.readMediaAnalysisInfo(prisma, { fileId: row.id, userId: row.userId });
       const extracted = info?.clientExtracted;
-      const video = require('./client-extracted-metadata').isExtractedFromVideo(extracted);
-      const sourceName = extracted?.sourceName ? String(extracted.sourceName).slice(0, 255) : '';
-      if (!video && !sourceName) return null;
-      return { ...(video ? { sourceMedia: 'video' } : {}), ...(sourceName ? { sourceName } : {}) };
+      if (!extracted || typeof extracted !== 'object') return null;
+      const { isExtractedFromVideo } = require('./client-extracted-metadata');
+      const sourceMedia = isExtractedFromVideo(extracted) ? 'video' : 'audio';
+      const sourceName = extracted.sourceName ? String(extracted.sourceName).slice(0, 255) : '';
+      if (sourceMedia === 'audio' && !sourceName) return null;
+      return { sourceMedia, ...(sourceName ? { sourceName } : {}) };
     } catch (_) {
       return null;
     }

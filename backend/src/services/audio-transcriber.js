@@ -751,6 +751,17 @@ function hintTermsOf(options = {}) {
   return normalizeKeyterms(list.flatMap((item) => String(item ?? '').split(/[,;\n]/)));
 }
 
+function hintSpeakersOf(options = {}) {
+  const raw = options.hints && typeof options.hints === 'object' ? options.hints.speakers : options.speakers;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.min(32, Math.round(n)) : null;
+}
+
+function hintVerbatimOf(options = {}) {
+  const raw = options.hints && typeof options.hints === 'object' ? options.hints.verbatim : options.verbatim;
+  return typeof raw === 'boolean' ? raw : null;
+}
+
 /**
  * The vocabulary the prompt carries: file-name key terms and the user's hint
  * terms (C4 `hints.terms`), device identifiers dropped, deduplicated case-
@@ -1249,15 +1260,21 @@ function cloudProviders(options = {}) {
         // An async job (upload → queue → poll): more time per piece than a
         // synchronous request, whatever the piece's length.
         requestTimeoutMs: (seconds) => Math.max(300_000, Math.ceil(90_000 + 1000 * seconds)),
-        transcribeFile: options.assemblyaiTranscribe || ((filePath, mimeType, _fileName, language, _prompt, extra = {}) => assembly.transcribeAssemblyAiFile({
-          filePath, mimeType,
-          // Automatic language detection wants a minimum of audio; a clip
-          // shorter than that goes with the configured hint (es by default).
-          language: language || (Number(extra.durationSeconds) > 0 && Number(extra.durationSeconds) < ASSEMBLYAI_DETECT_MIN_SECONDS ? languageHint(options) || null : null),
-          signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
-          keyterms: keytermsEnabled(options, 'assemblyai') ? promptTerms(options) : [], env,
-          ...(typeof options.sttFetch === 'function' ? { fetchImpl: options.sttFetch } : {}),
-        })),
+        transcribeFile: options.assemblyaiTranscribe || ((filePath, mimeType, _fileName, language, _prompt, extra = {}) => {
+          const speakersExpected = hintSpeakersOf(options);
+          const verbatim = hintVerbatimOf(options);
+          return assembly.transcribeAssemblyAiFile({
+            filePath, mimeType,
+            // Automatic language detection wants a minimum of audio; a clip
+            // shorter than that goes with the configured hint (es by default).
+            language: language || (Number(extra.durationSeconds) > 0 && Number(extra.durationSeconds) < ASSEMBLYAI_DETECT_MIN_SECONDS ? languageHint(options) || null : null),
+            signal: extra.signal || options.signal, timeoutMs: extra.timeoutMs,
+            keyterms: keytermsEnabled(options, 'assemblyai') ? promptTerms(options) : [], env,
+            ...(speakersExpected ? { speakersExpected } : {}),
+            ...(verbatim === true ? { disfluencies: true } : {}),
+            ...(typeof options.sttFetch === 'function' ? { fetchImpl: options.sttFetch } : {}),
+          });
+        }),
       });
     } else if (name === 'deepgram' && (deepgramKey(options) || options.deepgramTranscribe) && String(env.TRANSCRIBE_DEEPGRAM_DISABLED || '') !== '1') {
       const deepgram = require('./stt-providers/deepgram');
@@ -1354,12 +1371,15 @@ async function transcribeWithElevenLabs({ filePath, mimeType, language, signal, 
   // Speakers come with Scribe at no extra cost (TRANSCRIBE_ELEVENLABS_DIARIZE=0
   // turns them off); key terms are a paid surcharge, so they are opt-in.
   const keyterms = keytermsEnabled(options, 'elevenlabs') ? sanitizeElevenLabsKeyterms(promptTerms(options)) : [];
+  const diarize = String(envOf(options).TRANSCRIBE_ELEVENLABS_DIARIZE || '') !== '0';
+  const numSpeakers = diarize ? hintSpeakersOf(options) : null;
   const request = {
     file,
     modelId: model,
     tagAudioEvents: true,
     timestampsGranularity: 'word',
-    diarize: String(envOf(options).TRANSCRIBE_ELEVENLABS_DIARIZE || '') !== '0',
+    diarize,
+    ...(numSpeakers ? { numSpeakers } : {}),
     ...(language ? { languageCode: language } : {}),
     ...(keyterms.length ? { keyterms } : {}),
   };

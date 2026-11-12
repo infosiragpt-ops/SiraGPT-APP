@@ -1,9 +1,10 @@
 'use strict';
 
 // The analysis or translation of a background delivery runs on the model the
-// user picked, or fails saying why (AGENTS.md section 13). Before, the
-// delivery resolved its client without `pinned`, so a picked model with no
-// connection was replaced in silence by another provider's model.
+// user picked (`model.pinned`, set by the runner), or fails saying why
+// (AGENTS.md section 13). Before, the delivery resolved its client without
+// `pinned`, so a picked model with no connection was replaced in silence by
+// another provider's model.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -29,7 +30,7 @@ test('a picked model without a connection is never swapped for another provider:
   const rows = [{ id: 'f1', userId: 'u1', originalName: 'Clase.mp4', processingStage: 'ready', extractedText: '[00:00:00] Hola a todos.' }];
   await assert.rejects(
     delivery.defaultAnalyze({ rows, prisma: null, delivery: { userId: 'u1', chatId: 'c1', mode: 'analysis', goal: 'resúmelo',
-      model: { id: 'claude-sonnet-4-6', provider: 'Anthropic' } } }),
+      model: { id: 'claude-sonnet-4-6', provider: 'Anthropic', pinned: true } } }),
     (err) => err.code === 'selected_model_unavailable'
       && /no pudo responder: su conexión no está configurada\. No cambié de modelo/.test(String(err.userMessage)));
 });

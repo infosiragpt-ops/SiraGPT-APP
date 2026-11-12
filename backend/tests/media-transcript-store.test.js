@@ -563,3 +563,42 @@ test('readMediaAnalysisInfo returns the normalized clientExtracted of the file',
   const foreign = await store.readMediaAnalysisInfo(prisma, { fileId: 'f1', userId: 'u2' });
   assert.equal(foreign.clientExtracted, null);
 });
+
+test('extracted audio keeps sourceMedia: audio + sourceName, and hydrateClientExtractedRows overlays names in one batch query', async (t) => {
+  const root = tmpRoot(t);
+  const { sidecar } = await store.writeSidecar({ fileId: 'fa1', userId: 'u1',
+    result: { ...RESULT, sourceMedia: 'audio', sourceName: 'Audiencia_04.wav' } }, { root, now: NOW });
+  assert.equal(sidecar.sourceMedia, 'audio');
+  assert.equal(sidecar.sourceName, 'Audiencia_04.wav');
+  const back = store.normalizeSidecar(await store.readSidecar('fa1', { root }));
+  assert.equal(back.sourceMedia, 'audio');
+  assert.equal(back.sourceName, 'Audiencia_04.wav');
+
+  let queries = 0;
+  const prisma = {
+    documentAnalysis: {
+      findMany: async () => {
+        queries += 1;
+        return [
+          { fileId: 'f-vid', userId: 'u1', metadata: { clientExtracted: { tier: 'opus', sourceName: 'Clase 3.mp4', sourceSize: 500_000_000, sourceType: 'video/mp4' } } },
+          { fileId: 'f-aud', userId: 'u1', metadata: { clientExtracted: { tier: 'opus', sourceName: 'Entrevista.wav', sourceSize: 80_000_000, sourceType: 'audio/wav' } } },
+          { fileId: 'f-foreign', userId: 'u2', metadata: { clientExtracted: { tier: 'opus', sourceName: 'Ajeno.mp4', sourceSize: 100, sourceType: 'video/mp4' } } },
+        ];
+      },
+    },
+  };
+  const hydrated = await store.hydrateClientExtractedRows(prisma, {
+    userId: 'u1',
+    rows: [
+      { id: 'f-vid', originalName: 'Clase 3.audio.ogg', mimeType: 'audio/ogg' },
+      { id: 'f-aud', originalName: 'Entrevista.audio.ogg', mimeType: 'audio/ogg' },
+      { id: 'f-foreign', originalName: 'raw.ogg', mimeType: 'audio/ogg' },
+    ],
+  });
+  assert.equal(queries, 1);
+  assert.equal(hydrated[0].originalName, 'Clase 3.mp4');
+  assert.equal(hydrated[0].sourceMedia, 'video');
+  assert.equal(hydrated[1].originalName, 'Entrevista.wav');
+  assert.equal(hydrated[1].sourceMedia, 'audio');
+  assert.equal(hydrated[2].originalName, 'raw.ogg', 'foreign metadata is ignored');
+});

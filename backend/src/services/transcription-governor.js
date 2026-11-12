@@ -271,14 +271,21 @@ function createTranscriptionGovernor({ env = process.env, now = Date.now, sleep 
       const deadline = earliestDeadline(state);
       const wakeAt = Math.min(change == null ? Infinity : change, deadline);
       if (!Number.isFinite(wakeAt)) return;
-      if (state.wakePending) return;
+      if (state.wakePending && wakeAt >= state.wakeAt) return;
+      const token = (state.wakeSeq = (state.wakeSeq || 0) + 1);
       state.wakePending = true;
       state.wakeAt = wakeAt;
       const wait = Math.max(0, wakeAt - at);
       Promise.resolve(sleep(wait)).catch(() => {}).then(() => {
-        state.wakePending = false;
-        // A fake clock did not move: the sleep still counts as the wait served.
-        if (now() < state.wakeAt && change != null && wakeAt === change && blocker(state, now()) === reason) expire(state, reason);
+        if (token === state.wakeSeq) {
+          state.wakePending = false;
+          state.wakeAt = Infinity;
+          // A fake clock did not move: the sleep still counts as the wait served.
+          if (now() < wakeAt) {
+            if (change != null && wakeAt === change && blocker(state, now()) === reason) expire(state, reason);
+            if (wakeAt === deadline) expireWaiters(state, wakeAt);
+          }
+        }
         pump(state);
       });
       return;

@@ -87,7 +87,7 @@ test('re-encoded audio keeps its own name in the stored transcript and stays aud
   await f.run();
   const saved = f.sidecars.get('ent');
   assert.equal(saved.sourceName, 'Entrevista.mp3');
-  assert.equal(saved.sourceMedia, undefined, 'an audio source is never a video');
+  assert.equal(saved.sourceMedia, 'audio', 'an audio source stays audio, never a video');
   const video = fixture(upload('cls', 'Clase 3.audio.ogg'), VIDEO_SOURCE, async () => ({ success: true, extractedText: 'x', transcription: SPEECH }));
   await video.run();
   assert.equal(video.sidecars.get('cls').sourceName, 'Clase 3.mp4');
