@@ -1274,7 +1274,10 @@ async function professionalBuildArtifacts({ rows = [], transcripts = {}, deliver
       output: {
         // A format turned down is never built from `formats` either. Both
         // documents in `formats` («Word y PDF») build the Word and the PDF.
-        documentFormat: output.documentFormat || (offered('pdf') && !offered('docx') ? 'pdf' : offered('docx') ? 'docx' : null),
+        // «también en PDF» with no document chosen: the automatic Word of a
+        // long recording stays, and the PDF comes next to it.
+        documentFormat: output.documentFormat || (output.alsoPdf === true && !declinedDocs.includes('pdf') ? null
+          : offered('pdf') && !offered('docx') ? 'pdf' : offered('docx') ? 'docx' : null),
         alsoPdf: (Boolean(output.alsoPdf) && !declinedDocs.includes('pdf')) || (offered('docx') && offered('pdf')),
         wantsSubtitles: Boolean(output.wantsSubtitles) || formats.has('srt') || formats.has('vtt'),
         wantsZip: Boolean(output.wantsZip) || formats.has('zip'),

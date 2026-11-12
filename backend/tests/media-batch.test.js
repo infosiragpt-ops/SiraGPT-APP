@@ -2736,6 +2736,67 @@ test('«también en PDF» keeps the Word and adds the PDF; the two documents can
   assert.equal(subs.record.output.alsoPdf, undefined);
 });
 
+// ── ninth review: conversions, a refusal after the format, «también …» with a verb ──
+
+const PDF_PENDING_DOC = { mode: 'document', goal: 'transcribe esta clase en PDF', formats: ['txt', 'pdf'], output: { documentFormat: 'pdf' } };
+
+test('«pásalo de Word a PDF» and «cambia el PDF por un documento Word» convert: one document, never both', async () => {
+  for (const [initial, goal, format, other] of [[WORD_PENDING, 'mejor pásalo de Word a PDF', 'pdf', 'Word'], [WORD_PENDING, 'conviértelo de Word a PDF', 'pdf', 'Word'],
+    [PDF_PENDING_DOC, 'pásalo de PDF a Word', 'docx', 'PDF'], [PDF_PENDING_DOC, 'cámbialo de PDF a Word', 'docx', 'PDF'],
+    [PDF_PENDING_DOC, 'cambia el PDF por un documento Word', 'docx', 'PDF']]) {
+    const { result, record } = await followUpOn(initial, goal);
+    assert.equal(record.output.documentFormat, format, goal);
+    assert.equal(record.output.alsoPdf, undefined, `${goal}: one document`);
+    assert.deepEqual(record.formats.filter(f => f === 'docx' || f === 'pdf'), [format], `${goal}: ${record.formats}`);
+    assert.match(result.finalMarkdown, new RegExp(`en ${format === 'pdf' ? 'PDF' : 'Word'} en lugar de ${other}`), `${goal}: ${result.finalMarkdown}`);
+  }
+});
+
+test('a refusal after the format («el Word sí, el PDF no», «… que el PDF no me sirve», «solo en Word, el PDF no lo necesito») keeps one document', async () => {
+  for (const goal of ['el Word sí, el PDF no', 'en Word, que el PDF no me sirve', 'mejor en Word, el PDF no lo necesito']) {
+    const { result, record } = await followUpOn(PDF_PENDING_DOC, goal);
+    assert.equal(record.output.documentFormat, 'docx', goal);
+    assert.equal(record.output.alsoPdf, undefined, goal);
+    assert.ok(!record.formats.includes('pdf'), `${goal}: ${record.formats}`);
+    assert.match(result.finalMarkdown, /en Word en lugar de PDF/, `${goal}: ${result.finalMarkdown}`);
+  }
+  const both = { mode: 'document', goal: 'transcribe esta clase en Word y PDF', formats: ['txt', 'docx', 'pdf'], output: { documentFormat: 'docx', alsoPdf: true } };
+  const onlyWord = await followUpOn(both, 'solo en Word, el PDF no lo necesito');
+  assert.equal(onlyWord.record.output.documentFormat, 'docx');
+  assert.equal(onlyWord.record.output.alsoPdf, undefined);
+  assert.ok(!onlyWord.record.formats.includes('pdf'));
+  assert.match(onlyWord.result.finalMarkdown, /sin el PDF/);
+  // «el PDF no se ve bien» refuses nothing.
+  assert.deepEqual(artifacts.negatedTranscriptFormats('el PDF no se ve bien').documents, []);
+});
+
+test('«también lo quiero en PDF» and «el PDF también lo quiero» add the PDF next to the Word', async () => {
+  for (const goal of ['también lo quiero en PDF', 'y también lo necesito en PDF', 'también me lo pasas en PDF', 'el PDF también lo quiero']) {
+    const { result, record } = await followUpOn(WORD_PENDING, goal);
+    assert.equal(record.output.documentFormat, 'docx', goal);
+    assert.equal(record.output.alsoPdf, true, goal);
+    assert.match(result.finalMarkdown, /en Word y en PDF/, `${goal}: ${result.finalMarkdown}`);
+  }
+});
+
+test('«también en PDF» with no document chosen keeps the automatic Word of a long recording and adds the PDF', async () => {
+  const { record } = await followUpOn(AUTO_WORD_PENDING, 'también en PDF');
+  assert.equal(record.output.documentFormat, null);
+  assert.equal(record.output.alsoPdf, true);
+  const delivery = require('../src/services/media-delivery');
+  const pack = require('../src/services/media-transcript-artifacts');
+  const original = pack.buildMediaTranscriptArtifacts;
+  const asked = [];
+  pack.buildMediaTranscriptArtifacts = async ({ output }) => { asked.push(output); return { artifacts: [] }; };
+  try {
+    await delivery.professionalBuildArtifacts({ rows: [], transcripts: {}, delivery: record });
+  } finally {
+    pack.buildMediaTranscriptArtifacts = original;
+  }
+  assert.equal(asked[0].documentFormat, null, 'the automatic Word rule stays');
+  assert.equal(asked[0].alsoPdf, true);
+});
+
 test('a refusal that says «documento» turns the document down, never asks for a Word', async () => {
   const PDF_PENDING = { mode: 'document', goal: 'transcribe esta clase en PDF', formats: ['txt', 'pdf'], output: { documentFormat: 'pdf' } };
   for (const goal of ['ya no lo quiero en documento', 'transcríbelo sin documento, solo el txt']) {

@@ -346,7 +346,7 @@ const LINK_RE = /https?:\/\/|\bwww\.|\b(?:youtube|youtu|tiktok|vimeo|instagram|f
 // «la transcripción del documento», «subtítulos para mi app»: another source
 // («nada de PDF» refuses a format instead).
 const FOREIGN_SOURCE_RE =
-  /(?<!\bnada )\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
+  /(?<!\bnada )\b(?:del?|de la|de este|de esta|de ese|de esa|de mi|de tu|para (?:mi|tu|la|el|una|un))(?: \w+)? (?:documentos?|pdf(?! (?:a|al|en|por) (?:un |una |formato |documento )?(?:word|docx|txt))|imagen(?:es)?|fotos?|capturas?|excel|presentacion|diapositivas|codigo|app|aplicacion|web|pagina|libro|articulo|paper|tesis|informe)\b/
 // A bare request about the answer just given: «transcribe y resume», «hazme
 // el acta», «dame un resumen con los puntos clave», «traduce al inglés». Any
 // other word («analiza las ventas de hoy») makes it a new task.
@@ -475,6 +475,12 @@ const PENDING_OUTPUT_RE = anyOf([
   // resumir», «Word no, PDF sí», «no quiero el documento», «sin documento».
   /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas|conviertas|exportes|saques|des|entregues))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|documentos?|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
   /^(?:word|pdf|documento|subtitulos)\s+no\b/,
+  // «el Word sí, el PDF no», «el PDF también lo quiero», «solo en Word, el
+  // PDF no lo necesito», «pásalo de PDF a Word», «también me lo pasas en PDF».
+  /^(?:(?:el|la)\s+)?(?:word|docx|pdf|documento|subtitulos)\s+(?:si|no|tambien)\b/,
+  /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:solo|solamente|unicamente)\s+(?:en|el|la|a|como)\s+(?:word|docx|pdf)\b/,
+  /^(?:(?:y|mejor|ok|porfa|por favor|ahora|ah)\s+)*(?:pasa\w*|conviert\w*|cambia\w*|transforma\w*)\s+(?:(?:el|la|lo|mi)\s+)?(?:(?:archivo|documento|transcripcion)\s+)?(?:(?:de|del)\s+)?(?:word|docx|pdf)\s+(?:a|al|en|por)\s+(?:un |una |formato |documento )*(?:de |en )?(?:word|docx|pdf)\b/,
+  /^(?:(?:y|ok|porfa|por favor|ahora|ah)\s+)*(?:tambien|ademas)\s+(?:me\s+)?(?:lo|la|los|las)\s+(?:pasas|pases|mandas|mandes|envias|envies|quiero|necesito|das|des)\s+(?:en|como)\s+(?:un |una |formato )?(?:word|docx|pdf)\b/,
   // A bare question about the recording: after its verb only a pointer
   // («al final», «ahí», «en la clase») or a topic opened by a preposition
   // («¿qué dice sobre el examen?», «¿cuándo habla de la guerra?»). A subject

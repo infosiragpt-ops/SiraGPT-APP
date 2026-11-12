@@ -46,6 +46,22 @@ const SINGLE_STARTERS = new Set([
 ]);
 const NOT_A_REFUSAL_AFTER_SIN = new Set(['embargo', 'falta', 'duda', 'problema']);
 
+const POSTFIX_DETERMINERS = new Set(['el', 'la', 'los', 'las', 'lo', 'ese', 'esa', 'eso', 'esos', 'esas', 'este', 'esta', 'un', 'una', 'the', 'that', 'this']);
+// After a closing «no»: words that only say the thing is not wanted.
+const POSTFIX_REFUSAL_TAILS = [
+  ['me', 'sirve'], ['me', 'sirven'], ['nos', 'sirve'], ['hace', 'falta'], ['es', 'necesario'],
+  ['lo', 'necesito'], ['la', 'necesito'], ['los', 'necesito'], ['las', 'necesito'],
+  ['lo', 'quiero'], ['la', 'quiero'], ['los', 'quiero'], ['las', 'quiero'],
+  ['necesito'], ['quiero'], ['gracias'], ['porfa'], ['por', 'favor'], ['please'], ['thanks'],
+];
+
+/** Is the «no» before token i closing (its clause ends, or only says «I don't need it»)? */
+function closesRefusal(tokens, i) {
+  if (isBoundary(tokens[i])) return true;
+  return POSTFIX_REFUSAL_TAILS.some(seq => seq.every((word, k) => tokens[i + k]?.word && tokens[i + k].text === word)
+    && isBoundary(tokens[i + seq.length]));
+}
+
 function tokenize(folded) {
   const tokens = [];
   for (const match of folded.matchAll(/[a-z0-9]+|[.,;:!?¿¡()[\]{}"«»\n]/g)) {
@@ -103,13 +119,21 @@ function negatedRanges(folded) {
       i = last;
       continue;
     }
-    // «Word no, PDF sí», «subtítulos no»: one word refused right before a closing «no».
+    // «Word no, PDF sí», «subtítulos no», «el Word sí, el PDF no», «que el
+    // PDF no me sirve», «el PDF no lo necesito»: one word (with its article)
+    // refused right before a closing «no», or a «no» that only says it is
+    // not wanted. «el PDF no se ve bien» refuses nothing.
     const token = tokens[i];
     const next = tokens[i + 1];
-    if (token.word && next?.word && (next.text === 'no' || next.text === 'not') && isBoundary(tokens[i + 2])
-      && (i === 0 || isBoundary(tokens[i - 1]))) {
-      ranges.push({ start: token.start, end: next.end });
-      i += 1;
+    if (token.word && next?.word && (next.text === 'no' || next.text === 'not') && closesRefusal(tokens, i + 2)) {
+      const before = tokens[i - 1];
+      const opensClause = i === 0 || isBoundary(before);
+      const withArticle = before?.word && POSTFIX_DETERMINERS.has(before.text)
+        && (i - 1 === 0 || isBoundary(tokens[i - 2]) || tokens[i - 2]?.text === 'que');
+      if (opensClause || withArticle) {
+        ranges.push({ start: (withArticle && !opensClause ? before : token).start, end: next.end });
+        i += 1;
+      }
     }
   }
   return ranges;

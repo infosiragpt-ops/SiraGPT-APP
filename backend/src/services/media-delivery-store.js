@@ -458,7 +458,8 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   // «en Word y PDF», «también en PDF», «… en Word también»: both documents
   // (the Word with `alsoPdf`); a new format alone replaces the one asked
   // before and says so («en PDF en lugar de Word»).
-  const bothAsked = value.alsoPdf === true || (value.documentAlso === true && Boolean(documentFormat));
+  // «solo en Word, el PDF no lo necesito» names both and keeps one.
+  const bothAsked = value.documentOnly !== true && (value.alsoPdf === true || (value.documentAlso === true && Boolean(documentFormat)));
   const keptDocument = next.output.documentFormat || null;
   if (bothAsked && documentFormat) {
     const wantsWord = documentFormat === 'docx' || keptDocument === 'docx' || value.alsoPdf === true;
@@ -483,7 +484,7 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     delete next.output.alsoPdf;
     if (documentFormat === 'docx') formats.delete('pdf');
     changes.push('document');
-  } else if (documentFormat && out.alsoPdf === true && value.documentOnly === true) {
+  } else if (documentFormat && next.output.alsoPdf === true && value.documentOnly === true) {
     // «solo en Word» after «Word y PDF»: the PDF goes.
     delete next.output.alsoPdf;
     formats.delete('pdf');

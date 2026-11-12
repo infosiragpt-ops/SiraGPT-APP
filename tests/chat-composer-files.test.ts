@@ -156,6 +156,19 @@ describe("historical media batch follow-ups", () => {
     assert.deepEqual(resolveMediaFollowupFiles("la transcripción del pdf", pendingChat), [])
   })
 
+  it("while a batch transcribes, a conversion or a refusal after the format reaches it; another PDF stays another source", () => {
+    const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
+    const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
+    const pendingChat = [{ role: "USER", content: "transcribe este video en PDF", files: JSON.stringify(batch) }, handoff]
+    for (const prompt of ["pásalo de PDF a Word", "conviértelo de PDF a Word", "cámbialo de PDF a Word", "cambia el PDF por un documento Word",
+      "el Word sí, el PDF no", "solo en Word, el PDF no lo necesito", "también me lo pasas en PDF", "el PDF también lo quiero"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
+    for (const prompt of ["resume el PDF de la clase", "pásame el resumen del PDF a Word", "dame el informe del PDF"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), [], prompt)
+    }
+  })
+
   it("a fact with words after it, a question about a moment, and a courtesy in between still reach the batch", () => {
     const batch = [{ id: "v1", name: "clase.mp4", mimeType: "video/mp4" }]
     const handoff = { role: "ASSISTANT", content: "Te aviso aquí cuando termine…", metadata: { mediaDeliveryHandoff: "md_1", transcriptionFileIds: ["v1"], stoppedReason: "media_delivery_handoff" } }
