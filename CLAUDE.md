@@ -3740,6 +3740,21 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
     - Una exclamación o un «cuánto falta» no es una pregunta dictada (`EXCLAMATION_OPENING_RE`); una
       pregunta con tilde al inicio sí lo es («cuándo es el examen y pásalo a Word»), y «como/cuando/donde»
       sin tilde necesitan un verbo de lo dicho.
+- **Undécima revisión (2026-11-12; 10 hallazgos sobre los arreglos de la décima)**:
+  - Traducción: «ya no la traduzcas al francés solo al inglés» quita el francés y conserva el inglés
+    (la cláusula del rechazo termina en «solo/sino/mejor/déjala…»); con tres idiomas, nombrar dos quita
+    solo esos (`removeTranslationTargets`, una lista). «cambia/cámbiame la traducción al francés» y
+    «puedes cambiar la traducción…» cambian el idioma; un cambio explícito gana a un «también» que habla
+    de una parte («traduce también los títulos»): `ALSO_TRANSLATE_RE` exige un idioma.
+  - Formatos: «solo en Word y el PDF no lo mandes» entrega solo el Word; «en Word también quiero el
+    resumen» no suma un PDF (el «también» posterior debe cerrar la cláusula). En el compositor, una
+    conversión con otra fuente («pásame de PDF a Word el documento de mi tesis») y una elección sin coma
+    ni «y» («el pdf no el word sí», «PDF no tiene portada») quedan en el chat.
+  - Preguntas y retomar: «cómo vas, ponlo en Word» no compra un análisis (una pregunta con tilde necesita
+    un verbo de lo dicho o de contenido); «Retómala, la necesito para mi informe» sigue siendo
+    transcripción (`DELIVERABLE_ASK_RE`: un entregable pedido, no un propósito). «retómala» sobre un
+    reintento de huecos que el Detener aún no paró lo vuelve a encolar y espera la transcripción entera
+    (`stopPending` cuenta como detenida).
 - Tests: `backend/tests/media-delivery-stop-and-followup.test.js` (19),
   `backend/tests/media-delivery-pinned-model.test.js` (2),
   casos de las revisiones en `backend/tests/media-batch.test.js` y `tests/chat-composer-files.test.ts`,
