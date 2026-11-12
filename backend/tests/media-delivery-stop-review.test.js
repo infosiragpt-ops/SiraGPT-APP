@@ -32,7 +32,7 @@ function fileRow(id, extra = {}) {
     processingStage: 'extracting', processingError: null, extractedText: null, deletedAt: null, ...extra };
 }
 
-async function harness(t, { files = [], overrides = {} } = {}) {
+async function harness(t, { files = [], overrides = {}, storeNow = () => T0 } = {}) {
   const root = await tempRoot(t);
   const state = { files: new Map(files.map(row => [row.id, { ...row }])), chats: new Set(['chat1']), messages: [], stopped: [] };
   const metadataFilters = where => [where.metadata, ...(Array.isArray(where.AND) ? where.AND.map(clause => clause.metadata) : [])]
@@ -42,7 +42,7 @@ async function harness(t, { files = [], overrides = {} } = {}) {
     const found = state.messages.find(m => m.chatId === where.chatId && filters.every(filter => m.metadata?.[filter.path[0]] === filter.equals));
     return found ? { id: found.id, chatId: found.chatId } : null;
   } } };
-  const store = createMediaDeliveryStore({ root, now: () => T0 });
+  const store = createMediaDeliveryStore({ root, now: storeNow });
   const service = createMediaDeliveryService({
     env: ENABLED, now: Date.now, prisma, store, logger: { info() {}, warn() {} },
     loadFiles: async (userId, ids) => ids.map(id => state.files.get(id)).filter(row => row && row.userId === userId).map(row => ({ ...row })),
@@ -1392,6 +1392,79 @@ test('asking again for the recording whose stop failed releases it: the sweep ne
   assert.equal(calls.length, 1, '«b», asked for again, is never stopped by the sweep');
   // Another user's request never releases this one.
   assert.equal(await service.releasePendingStops({ userId: 'u2', fileIds: ['b'] }), 0);
+});
+
+// ── ninth review: a stop already running while the user asks again ───────────
+
+// Stop: «b» and «c» hit a database blip. The sweep's retry then waits on the
+// database (the gate) while the user asks for «b» again; like the queue, the
+// fake checks shouldStop after that wait.
+function gatedStop({ retryFails }) {
+  const calls = [];
+  const stoppedAfterStop = [];
+  let open; const gate = new Promise(resolve => { open = resolve; });
+  let entered; const inside = new Promise(resolve => { entered = resolve; });
+  const stop = async (args) => {
+    const n = calls.push(JSON.parse(JSON.stringify(args.fileIds)));
+    if (n === 2) { entered(); await gate; }
+    const results = [];
+    for (const id of args.fileIds || []) {
+      if (typeof args.shouldStop === 'function' && !(await args.shouldStop(id))) { results.push({ id, outcome: 'released' }); continue; }
+      const fails = (n === 1 || (n === 2 && retryFails)) && id !== 'a';
+      results.push(fails ? { id, outcome: 'error', code: 'P2024' } : { id, outcome: 'stopped' });
+      if (!fails && n > 1) stoppedAfterStop.push(id);
+    }
+    return { stopped: results.filter(item => item.outcome === 'stopped').length, results };
+  };
+  return { stop, open, inside, calls, stoppedAfterStop };
+}
+
+for (const retryFails of [true, false]) {
+  test(`a recording asked for again while a stop retry waits is never stopped by it (retry ${retryFails ? 'fails again' : 'goes through'})`, async (t) => {
+    const gated = gatedStop({ retryFails });
+    const { service, store } = await harness(t, { files: [fileRow('a'), fileRow('b'), fileRow('c')], overrides: { cancelMediaJobs: gated.stop } });
+    const record = await service.createDelivery(request({ fileIds: ['a', 'b', 'c'], fileNames: ['a.mp4', 'b.mp4', 'c.mp4'] }));
+    await service.cancelDelivery(record.id, { userId: 'u1' });
+    assert.deepEqual((await store.cancelMarker(record.id)).pendingStops, { fileIds: ['b', 'c'], refines: [] });
+    const sweep = service.deliverOne(record.id);
+    await gated.inside;
+    assert.equal(await service.releasePendingStops({ userId: 'u1', fileIds: ['b'] }), 1);
+    gated.open();
+    await sweep;
+    if (retryFails) {
+      // The failed retry writes back only what is still listed.
+      assert.deepEqual((await store.cancelMarker(record.id))?.pendingStops, { fileIds: ['c'], refines: [] });
+      await service.deliverOne(record.id);
+      assert.deepEqual(gated.calls[gated.calls.length - 1], ['c'], 'the next sweep stops «c» only');
+    }
+    assert.ok(!gated.stoppedAfterStop.includes('b'), `«b» was asked for again: ${JSON.stringify(gated.stoppedAfterStop)}`);
+    assert.ok(gated.stoppedAfterStop.includes('c'));
+  });
+}
+
+test('a request made after the Stop never shields a recording the Stop still has to stop', async (t) => {
+  const calls = [];
+  let clock = T0;
+  const { service, store } = await harness(t, { storeNow: () => clock, files: [fileRow('a'), fileRow('b')], overrides: { cancelMediaJobs: flakyStop(calls) } });
+  const first = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  await service.cancelDelivery(first.id, { userId: 'u1' });
+  assert.deepEqual((await store.cancelMarker(first.id)).pendingStops, { fileIds: ['b'], refines: [] });
+  // A later follow-up («y tradúcelo») created another request for the batch.
+  clock += 60_000;
+  await service.createDelivery(request({ taskId: 'task2', fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'], goal: 'y tradúcelo al inglés', mode: 'translation' }));
+  await service.deliverOne(first.id);
+  assert.deepEqual(calls.map(call => call.fileIds), [['a', 'b'], ['b']], '«b» is stopped, as the Stop said');
+});
+
+test('the recordings a Stop still has to stop read as pending stops; asked again, they are released', async (t) => {
+  const calls = [];
+  const { service } = await harness(t, { files: [fileRow('a'), fileRow('b')], overrides: { cancelMediaJobs: flakyStop(calls) } });
+  const record = await service.createDelivery(request({ fileIds: ['a', 'b'], fileNames: ['a.mp4', 'b.mp4'] }));
+  await service.cancelDelivery(record.id, { userId: 'u1' });
+  assert.deepEqual(await service.pendingStopFileIds({ userId: 'u1', fileIds: ['a', 'b'] }), ['b']);
+  assert.deepEqual(await service.pendingStopFileIds({ userId: 'u2', fileIds: ['a', 'b'] }), []);
+  await service.releasePendingStops({ userId: 'u1', fileIds: ['b'] });
+  assert.deepEqual(await service.pendingStopFileIds({ userId: 'u1', fileIds: ['a', 'b'] }), []);
 });
 
 test('a Stop whose line posts but whose job stop fails keeps the request open until the sweep stops it', async (t) => {

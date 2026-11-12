@@ -918,15 +918,37 @@ function createMediaDeliveryStore({
     return info && typeof info === 'object' ? info : null;
   }
 
+  // The Stop marker is read, changed and written back by the Stop, the
+  // sweep, a holder and a turn that asks for a recording again: one at a
+  // time per delivery in this process.
+  const markerChains = new Map();
+  function withMarker(id, fn) {
+    const previous = markerChains.get(id) || Promise.resolve();
+    const run = previous.then(fn, fn);
+    const settled = run.catch(() => {});
+    markerChains.set(id, settled);
+    settled.then(() => { if (markerChains.get(id) === settled) markerChains.delete(id); });
+    return run;
+  }
+
   /** Write (or keep) the Stop marker; a repeated Stop keeps the first time. */
-  async function markCancel(id, reason) {
-    const previous = await readCancelMarker(id);
-    const pendingStops = normalizePendingStops(previous?.pendingStops);
-    const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
-      reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user',
-      ...(previous?.jobsStopped === true ? { jobsStopped: true } : pendingStops ? { pendingStops } : {}) };
-    await writeAtomic(cancelPath(id), marker);
-    return marker;
+  function markCancel(id, reason) {
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      const pendingStops = normalizePendingStops(previous?.pendingStops);
+      const released = normalizeReleased(previous?.released);
+      const marker = { at: typeof previous?.at === 'string' && Number.isFinite(Date.parse(previous.at)) ? previous.at : isoAt(now()),
+        reason: clipString(reason, 40) || clipString(previous?.reason, 40) || 'user',
+        ...(previous?.jobsStopped === true ? { jobsStopped: true } : pendingStops ? { pendingStops } : {}),
+        ...(released.length ? { released } : {}) };
+      await writeAtomic(cancelPath(id), marker);
+      return marker;
+    });
+  }
+
+  /** The recordings asked for again since the Stop: never stopped by it. */
+  function normalizeReleased(value) {
+    return [...new Set((Array.isArray(value) ? value : []).filter(fileId => typeof fileId === 'string' && fileId && fileId.length <= 200))].slice(0, MAX_FILES);
   }
 
   /**
@@ -960,47 +982,70 @@ function createMediaDeliveryStore({
    * fresh): only while the record is open, and a marker left behind a record
    * closed meanwhile is never read (every reader reads the record first).
    */
-  async function noteJobsStopped(id) {
+  function noteJobsStopped(id) {
     assertDeliveryId(id);
-    const previous = await readCancelMarker(id);
-    if (!previous || !(await readActive(id))) return false;
-    if (previous.jobsStopped !== true || previous.pendingStops) {
-      const { pendingStops, ...rest } = previous;
-      await writeAtomic(cancelPath(id), { ...rest, jobsStopped: true });
-    }
-    return true;
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      if (!previous || !(await readActive(id))) return false;
+      if (previous.jobsStopped !== true || previous.pendingStops) {
+        const { pendingStops, ...rest } = previous;
+        await writeAtomic(cancelPath(id), { ...rest, jobsStopped: true });
+      }
+      return true;
+    });
   }
 
   /**
    * Some of this Stop's jobs could not be stopped (a database blip): only
    * those are left for the sweep. Same rules as noteJobsStopped.
    */
-  async function notePendingStops(id, pending) {
+  function notePendingStops(id, pending) {
     assertDeliveryId(id);
-    const previous = await readCancelMarker(id);
-    if (!previous || previous.jobsStopped === true || !(await readActive(id))) return false;
-    const pendingStops = normalizePendingStops(pending);
-    const { pendingStops: _old, ...rest } = previous;
-    await writeAtomic(cancelPath(id), pendingStops ? { ...rest, pendingStops } : { ...rest, jobsStopped: true });
-    return true;
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      if (!previous || previous.jobsStopped === true || !(await readActive(id))) return false;
+      // Never more than the marker still lists (a stop that ran while the
+      // user asked for a recording again writes back no stale list), nor a
+      // recording asked for again.
+      const current = normalizePendingStops(previous.pendingStops);
+      const released = new Set(normalizeReleased(previous.released));
+      const asked = normalizePendingStops(pending);
+      const keep = fileId => !released.has(fileId) && (!current || current.fileIds.includes(fileId)
+        || current.refines.some(spec => spec.fileId === fileId));
+      const pendingStops = asked ? normalizePendingStops({ fileIds: asked.fileIds.filter(keep), refines: asked.refines.filter(spec => keep(spec.fileId)) }) : null;
+      const { pendingStops: _old, ...rest } = previous;
+      await writeAtomic(cancelPath(id), pendingStops ? { ...rest, pendingStops } : { ...rest, jobsStopped: true });
+      return true;
+    });
   }
 
   /**
    * The user asked for these recordings again: a Stop still pending on
    * them never stops them. Returns true when the marker changed.
    */
-  async function releasePendingStops(id, fileIds = []) {
+  function releasePendingStops(id, fileIds = []) {
     assertDeliveryId(id);
-    const previous = await readCancelMarker(id);
-    const pending = normalizePendingStops(previous?.pendingStops);
-    if (!pending || !(await readActive(id))) return false;
-    const asked = new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean));
-    const left = { fileIds: pending.fileIds.filter(fileId => !asked.has(fileId)),
-      refines: pending.refines.filter(spec => !asked.has(spec.fileId)) };
-    if (left.fileIds.length === pending.fileIds.length && left.refines.length === pending.refines.length) return false;
-    const { pendingStops: _old, ...rest } = previous;
-    await writeAtomic(cancelPath(id), left.fileIds.length || left.refines.length ? { ...rest, pendingStops: left } : { ...rest, jobsStopped: true });
-    return true;
+    return withMarker(id, async () => {
+      const previous = await readCancelMarker(id);
+      if (!previous || previous.jobsStopped === true || !(await readActive(id))) return false;
+      const asked = new Set((Array.isArray(fileIds) ? fileIds : []).filter(fileId => typeof fileId === 'string' && fileId));
+      const record = await readActive(id);
+      const inRecord = new Set([...(record?.fileIds || []), ...(normalizePendingStops(previous.pendingStops)?.fileIds || [])]);
+      const newlyReleased = [...asked].filter(fileId => inRecord.has(fileId));
+      if (!newlyReleased.length) return false;
+      // Remembered even before the Stop wrote what it left: a stop still
+      // running when the user asked again never stops these.
+      const released = normalizeReleased([...normalizeReleased(previous.released), ...newlyReleased]);
+      const { pendingStops: _old, ...rest } = previous;
+      const pending = normalizePendingStops(previous.pendingStops);
+      const next = { ...rest, released };
+      if (pending) {
+        const left = { fileIds: pending.fileIds.filter(fileId => !asked.has(fileId)), refines: pending.refines.filter(spec => !asked.has(spec.fileId)) };
+        if (left.fileIds.length || left.refines.length) next.pendingStops = left; else next.jobsStopped = true;
+      }
+      await writeAtomic(cancelPath(id), next);
+      return true;
+    });
   }
 
   /** Write the terminal 'cancelled' copy and drop the active one (lock held). */

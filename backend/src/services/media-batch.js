@@ -195,6 +195,11 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     current = ids.map(id => {
       const initial = rows.find(row => row.id === id);
       const next = byId.get(id);
+      // Stopped and not asked for again: stays stopped for this turn, also
+      // one whose Stop is still waiting to stop its job (asStoppedRows).
+      const keptStopped = initial && isUserCancelledRow(initial)
+        && !(resumeStopped === true || (Array.isArray(resumeStopped) && resumeStopped.includes(id)));
+      if (keptStopped && next && !hasTranscript(next)) return initial;
       if (!next) {
         return { id, originalName: initial?.originalName, processingStage: 'failed', processingError: 'El archivo ya no está disponible.' };
       }
@@ -205,6 +210,19 @@ async function waitForMediaBatch({ prisma, userId, rows, signal, onProgress = ()
     });
   }
   return { rows: current, ...batchCounts(current), enqueueErrors, progress: progressById };
+}
+
+/**
+ * The rows a Stop has not stopped yet (its job stop failed for a moment),
+ * shown as stopped: a turn about the others never queues, waits on or hands
+ * them off, and only asking for them again resumes them. Pure.
+ */
+function asStoppedRows(rows, fileIds = []) {
+  const stopped = new Set((Array.isArray(fileIds) ? fileIds : []).filter(Boolean));
+  if (!stopped.size || !Array.isArray(rows)) return rows;
+  const { CANCELLED_NOTE } = require('./media-transcription-queue');
+  return rows.map(row => (row && stopped.has(row.id) && stateOf(row) === 'pending'
+    ? { ...row, processingStage: 'failed', processingError: CANCELLED_NOTE } : row));
 }
 
 function formatRemaining(seconds) {
@@ -2314,4 +2332,4 @@ module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, re
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,
   requestMediaRefine, forwardHintsToPendingMedia, pickRowByName, cancelDeliveryRecord, SOURCE_LANGUAGES,
-  limitsToFinished, resumeScope, refusesResume, isUserCancelledRow, namedRecordings, asksToResume };
+  limitsToFinished, resumeScope, refusesResume, isUserCancelledRow, namedRecordings, asksToResume, asStoppedRows };

@@ -329,6 +329,16 @@ function queueHarness({ rows, jobs = {} } = {}) {
   return { service, files, removed };
 }
 
+test('cancelMediaTranscription leaves a recording asked for again while it waited (shouldStop)', async () => {
+  const { jobIdFor } = require('../src/services/media-transcription-queue');
+  const jobs = { [jobIdFor('a', 'u1')]: { state: 'waiting' }, [jobIdFor('b', 'u1')]: { state: 'waiting' } };
+  const { service, files, removed } = queueHarness({ rows: [fileRow('a', { processingStage: 'uploaded' }), fileRow('b', { processingStage: 'uploaded' })], jobs });
+  const out = await service.cancelMediaTranscription({ fileIds: ['a', 'b'], userId: 'u1', shouldStop: async (id) => id !== 'b' });
+  assert.deepEqual(removed, [jobIdFor('a', 'u1')]);
+  assert.equal(files.get('b').processingStage, 'uploaded', '«b» keeps transcribing');
+  assert.deepEqual(out.results.find(item => item.id === 'b'), { id: 'b', outcome: 'released' });
+});
+
 test('cancelMediaTranscription removes the queued job and marks the row stopped', async () => {
   const { jobIdFor } = require('../src/services/media-transcription-queue');
   const jobs = { [jobIdFor('a', 'u1')]: { state: 'waiting' } };

@@ -2915,6 +2915,16 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // Do not send an empty transcript or the first few seconds to the LLM
       // while the remaining recordings are still being transcribed.
       const ids = mediaBatchRows.map(row => row.id);
+      // A recording whose Stop could not stop its job yet (a database blip)
+      // reads as stopped: a turn about the others never queues, waits on or
+      // hands it off, and only asking for it again resumes it (and releases
+      // it from that Stop).
+      const pendingStopService = typeof loadMediaDeliveryService === 'function' ? loadMediaDeliveryService() : null;
+      const pendingStopIds = typeof pendingStopService?.pendingStopFileIds === 'function'
+        ? await pendingStopService.pendingStopFileIds({ userId: user.id, fileIds: ids }).catch(() => []) : [];
+      if (Array.isArray(pendingStopIds) && pendingStopIds.length && typeof mediaBatch.asStoppedRows === 'function') {
+        mediaBatchRows = mediaBatch.asStoppedRows(mediaBatchRows, pendingStopIds);
+      }
       // Audio extracted in the browser is named after what the user uploaded
       // («Clase 3.mp4», never «Clase 3.audio.ogg»): the step label, the
       // hand-off, the Stop line and a refine by name all read these.

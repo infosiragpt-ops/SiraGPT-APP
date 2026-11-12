@@ -2314,7 +2314,7 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     await prisma.file.updateMany({ where: owned, data: { processingStage: 'failed', processingStageAt: new Date(now()), processingError: CANCELLED_NOTE } });
   };
 
-  async function cancelMediaTranscription({ fileIds = [], userId, refines = [] } = {}) {
+  async function cancelMediaTranscription({ fileIds = [], userId, refines = [], shouldStop = null } = {}) {
     const ids = [...new Set((Array.isArray(fileIds) ? fileIds : [])
       .filter(id => typeof id === 'string' && id && id.length <= 200))].slice(0, 500);
     const refineSpecs = (Array.isArray(refines) ? refines : [])
@@ -2353,6 +2353,11 @@ function createMediaTranscriptionService({ prisma, getQueue, processFile, materi
     for (const fileId of ids) {
       try {
         const row = await loadOwned(fileId, userId);
+        // Asked for again while this stop waited on the database: it stays.
+        if (typeof shouldStop === 'function' && !(await Promise.resolve(shouldStop(fileId)).catch(() => true))) {
+          results.push({ id: fileId, outcome: 'released' });
+          continue;
+        }
         if (hasTranscript(row) && !isReprocessingPartial(row)) {
           results.push({ id: fileId, outcome: 'ready' });
           continue;

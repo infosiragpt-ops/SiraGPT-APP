@@ -2813,6 +2813,80 @@ test('a refusal that says «documento» turns the document down, never asks for 
   assert.deepEqual(out.declinedDocuments, ['docx']);
 });
 
+// ── ninth review: a recording whose Stop has not stopped its job yet ─────────
+
+function pendingStopContext({ goal, rows, pendingStops, waitForMediaBatch, extraBatch = {} }) {
+  const realArtifacts = require('../src/services/media-transcript-artifacts');
+  const log = { released: [], created: [], openLookups: 0 };
+  const delivery = {
+    isMediaDeliveryEnabled: () => true,
+    estimateTranscriptionSeconds: () => 60,
+    pendingStopFileIds: async ({ fileIds }) => pendingStops.filter(id => fileIds.includes(id)),
+    releasePendingStops: async ({ fileIds }) => { log.released.push(fileIds); return 1; },
+    findOpenDelivery: async () => { log.openLookups += 1; return null; },
+    createDelivery: async (record) => { log.created.push(record); return { id: 'md_new', ...record }; },
+    handOffMessage: () => 'Te aviso aquí.',
+    cancelUnneededMediaJobs: async () => ({ stopped: 0 }),
+  };
+  const context = {
+    mediaBatchRows: rows,
+    mediaBatch: { ...batch, waitForMediaBatch,
+      translateMediaBatch: async () => ({ files: [{ name: 'Clase 1.mp4', text: 'Hello.' }], failed: [] }), ...extraBatch },
+    prisma: {}, user: { id: 'owner' }, taskId: 'task', chatId: 'chat', fileMetadata: [], displayGoal: goal, goal,
+    backfillUserMessageFilesForTranscription: async () => {}, emit() {},
+    controller: new AbortController(), runtimeBudgetMs: 13 * 60 * 60_000, startedAt: Date.now(), Buffer,
+    saveArtifact: (artifact) => ({ id: 'a', filename: artifact.filename }),
+    artifacts: [], persistence: { persistGeneratedArtifact: async () => {} },
+    plainTranscriptionRequest: false, openai: { chat: { completions: { create: async () => ({}) } } }, task: {}, documentPolicy: {},
+    require: (name) => {
+      if (name === '../media-transcript-artifacts') {
+        return { ...realArtifacts, buildTranslationArtifacts: async () => ({ artifacts: [{ filename: 'clase-en.txt', base64: '', mime: 'text/plain' }], notes: [] }) };
+      }
+      if (name === '../media-analysis-runtime') return { createMediaAnalysisCompletion: () => ({ complete: async () => 'ok', usage: null }) };
+      return require(name);
+    },
+    ...mediaBranchHelpers({ loadMediaDeliveryService: () => delivery }),
+    throwIfAborted: (signal) => signal.throwIfAborted(), finishDeterministicTask: async (value) => value,
+  };
+  return { context, log };
+}
+
+test('a follow-up about the others never restarts a recording whose Stop has not stopped its job yet', async () => {
+  const waits = [];
+  const rows = [readyRow('c1', 'Clase 1.mp4', { extractedText: 'x'.repeat(50) }), { id: 'clase', originalName: 'Clase 2.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 }];
+  const { context, log } = pendingStopContext({ goal: 'y tradúcelo al inglés', rows, pendingStops: ['clase'],
+    waitForMediaBatch: async (options) => {
+      waits.push(options);
+      return { rows: options.rows, total: 2, ready: 1, failed: 1, pending: 0, partial: 0, progress: {} };
+    } });
+  const result = await runMediaBranch(context);
+  assert.equal(log.created.length, 0, 'no new request shields it from the Stop');
+  assert.deepEqual(log.released, [], 'not asked for again');
+  for (const wait of waits) {
+    const row = wait.rows.find(item => item.id === 'clase');
+    assert.equal(batch.isUserCancelledRow(row), true, 'it reads as stopped');
+    assert.ok(wait.resumeStopped === false || (Array.isArray(wait.resumeStopped) && !wait.resumeStopped.includes('clase')));
+  }
+  assert.match(result.finalMarkdown, /detenida/);
+});
+
+test('«retómalas todas menos la clase 4» releases the recording whose stop failed and resumes it with the others', async () => {
+  const { CANCELLED_NOTE } = require('../src/services/media-transcription-queue');
+  const stopped = (id, name) => ({ id, originalName: name, processingStage: 'failed', processingError: CANCELLED_NOTE, extractedText: null });
+  const rows = [stopped('c1', 'Clase 1.mp4'), { id: 'c2', originalName: 'Clase 2.mp4', processingStage: 'extracting', extractedText: null, size: 4e9 },
+    stopped('c3', 'Clase 3.mp4'), stopped('c4', 'Clase 4.mp4')];
+  for (const goal of ['retómalas todas menos la clase 4', 'transcribe todas menos la clase 4']) {
+    const waits = [];
+    const { context, log } = pendingStopContext({ goal, rows: rows.map(row => ({ ...row })), pendingStops: ['c2'],
+      waitForMediaBatch: async (options) => { waits.push(options); throw new Error('stop at the wait'); } });
+    await runMediaBranch(context).catch(() => null);
+    const released = log.released.flat();
+    assert.deepEqual([...released].sort(), ['c1', 'c2', 'c3'], `${goal}: ${JSON.stringify(log.released)}`);
+    assert.ok(waits.length && Array.isArray(waits[0].resumeStopped) && waits[0].resumeStopped.includes('c2') && !waits[0].resumeStopped.includes('c4'),
+      `${goal}: ${JSON.stringify(waits[0]?.resumeStopped)}`);
+  }
+});
+
 test('asking for the transcript again releases what a Stop could not stop yet; a summary releases nothing', async () => {
   for (const [goal, expected] of [['transcribe la clase', [['clase']]], ['y tradúcelo al inglés', []]]) {
     const released = [];
