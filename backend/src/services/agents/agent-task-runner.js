@@ -3135,6 +3135,10 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           // adds an analysis (the default would run one for «en Word»).
           wantsAnalysis: explicitAnalysis,
           documentFormat: mediaOutput.documentFormat || null,
+          // «en Word y PDF», «también en PDF»: both documents; «solo en Word»: one.
+          alsoPdf: mediaOutput.alsoPdf === true,
+          documentAlso: typeof mediaArtifacts.addsDocumentFormat === 'function' && mediaArtifacts.addsDocumentFormat(mediaGoal),
+          documentOnly: typeof mediaArtifacts.onlyDocumentFormat === 'function' && mediaArtifacts.onlyDocumentFormat(mediaGoal),
           removeDocument: turnedDown.documents,
           wantsSubtitles: mediaOutput.wantsSubtitles === true,
           removeSubtitles: turnedDown.subtitles === true,

@@ -2584,3 +2584,66 @@ test('only a request to translate counts: a question, the user\'s own plan and �
   assert.equal(word.record.output.extraTranslations, undefined);
   assert.equal(word.record.output.documentFormat, 'docx');
 });
+
+// ── eighth review: document formats in follow-ups ───────────────────────────
+
+const WORD_PENDING = { mode: 'document', goal: 'transcribe esta clase en Word', formats: ['txt', 'docx'], output: { documentFormat: 'docx' } };
+const AUTO_WORD_PENDING = { mode: 'transcript', goal: 'transcribe esta clase', formats: ['txt'] };
+
+test('«en PDF en lugar de Word» and its kin swap the Word for a PDF, and the reply says so', async () => {
+  for (const goal of ['mejor en PDF en lugar de Word', 'en PDF en vez de Word', 'pásalo a PDF en vez de Word', 'mejor en PDF que en Word', 'pasa el Word a PDF']) {
+    for (const initial of [WORD_PENDING, AUTO_WORD_PENDING]) {
+      const { result, record } = await followUpOn(initial, goal);
+      assert.equal(record.output.documentFormat, 'pdf', `${goal} (${initial.mode})`);
+      assert.ok(record.formats.includes('pdf') && !record.formats.includes('docx'), `${goal} (${initial.mode}): ${record.formats}`);
+      assert.deepEqual(record.output.declinedDocuments, ['docx'], `${goal} (${initial.mode}): no automatic Word either`);
+      assert.match(result.finalMarkdown, /en PDF/, goal);
+      assert.doesNotMatch(result.finalMarkdown, /en Word\b(?! )|Ya estoy transcribiendo/, `${goal} (${initial.mode}): ${result.finalMarkdown}`);
+    }
+    const { result } = await followUpOn(WORD_PENDING, goal);
+    assert.match(result.finalMarkdown, /en PDF en lugar de Word/, goal);
+  }
+  // A plain «en PDF» after «en Word» says it replaces the Word too.
+  assert.match((await followUpOn(WORD_PENDING, 'mejor en PDF')).result.finalMarkdown, /en PDF en lugar de Word/);
+});
+
+test('«también en PDF» keeps the Word and adds the PDF; the two documents can be taken back one at a time', async () => {
+  for (const goal of ['también en PDF', 'y pásamelo también en PDF porfa', 'mándamelo en PDF también']) {
+    const { result, record } = await followUpOn(WORD_PENDING, goal);
+    assert.equal(record.output.documentFormat, 'docx', goal);
+    assert.equal(record.output.alsoPdf, true, goal);
+    assert.ok(record.formats.includes('docx') && record.formats.includes('pdf'), `${goal}: ${record.formats}`);
+    assert.match(result.finalMarkdown, /en Word y en PDF/, goal);
+  }
+  const both = { mode: 'document', goal: 'transcribe esta clase en Word y PDF', formats: ['txt', 'docx', 'pdf'], output: { documentFormat: 'docx', alsoPdf: true } };
+  const noPdf = await followUpOn(both, 'sin el PDF');
+  assert.equal(noPdf.record.output.alsoPdf, undefined);
+  assert.equal(noPdf.record.output.documentFormat, 'docx');
+  assert.match(noPdf.result.finalMarkdown, /sin el PDF/);
+  const noWord = await followUpOn(both, 'sin Word');
+  assert.equal(noWord.record.output.documentFormat, 'pdf');
+  assert.equal(noWord.record.output.alsoPdf, undefined);
+  assert.match(noWord.result.finalMarkdown, /en PDF en lugar de Word/);
+  const onlyWord = await followUpOn(both, 'solo en Word');
+  assert.equal(onlyWord.record.output.alsoPdf, undefined);
+  assert.ok(!onlyWord.record.formats.includes('pdf'));
+  // «en Word y también subtítulos» adds subtitles, never a PDF.
+  const subs = await followUpOn(WORD_PENDING, 'en Word y también subtítulos');
+  assert.equal(subs.record.output.alsoPdf, undefined);
+});
+
+test('a refusal that says «documento» turns the document down, never asks for a Word', async () => {
+  const PDF_PENDING = { mode: 'document', goal: 'transcribe esta clase en PDF', formats: ['txt', 'pdf'], output: { documentFormat: 'pdf' } };
+  for (const goal of ['ya no lo quiero en documento', 'transcríbelo sin documento, solo el txt']) {
+    for (const initial of [AUTO_WORD_PENDING, PDF_PENDING, WORD_PENDING]) {
+      const { result, record } = await followUpOn(initial, goal);
+      assert.ok(!record.output.documentFormat, `${goal} (${initial.goal}): ${record.output.documentFormat}`);
+      assert.deepEqual(record.output.declinedDocuments, ['docx', 'pdf'], `${goal} (${initial.goal})`);
+      assert.ok(!record.formats.includes('docx') && !record.formats.includes('pdf'), `${goal}: ${record.formats}`);
+      assert.doesNotMatch(result.finalMarkdown, /en Word|en PDF/, `${goal} (${initial.goal}): ${result.finalMarkdown}`);
+    }
+  }
+  const out = artifacts.resolveTranscriptOutput('no quiero el documento de Word, mejor PDF');
+  assert.equal(out.documentFormat, 'pdf');
+  assert.deepEqual(out.declinedDocuments, ['docx']);
+});

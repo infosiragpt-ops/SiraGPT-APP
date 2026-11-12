@@ -62,23 +62,63 @@ function defaultStore() { return require('./media-transcript-store'); }
 // format asked for elsewhere in the message («tengo videos sin subtítulos,
 // dame el SRT», «quiero el Word, sin Word no puedo editarlo»). «no, mejor en
 // Word» still asks for one.
-const FORMAT_WORD_RE = /\b(word|docx|pdf|subtitul\w*|subtitles?|srt|vtt|webvtt|subs|captions?)\b/;
+// «documento» names the deliverable document, whichever it is («ya no lo
+// quiero en documento», «sin documento, solo el txt»).
+const FORMAT_WORD_RE = /\b(word|docx|pdf|documentos?|subtitul\w*|subtitles?|srt|vtt|webvtt|subs|captions?)\b/;
 
 function formatOfWord(word) {
   if (word === 'pdf') return 'pdf';
   if (word === 'word' || word === 'docx') return 'docx';
+  if (/^documentos?$/.test(word)) return 'document';
   return 'subtitles';
 }
 
+// The format a swap replaces is turned down: «en PDF en lugar de Word», «en
+// vez del Word», «mejor en PDF que en Word», «prefiero PDF antes que Word»,
+// «… y no en Word», «instead of Word».
+const REPLACED_FORMAT_RE = /\b(?:en\s+lugar\s+del?|en\s+vez\s+del?|antes\s+que(?:\s+en)?|y\s+no\s+(?:en\s+)?|instead\s+of|rather\s+than)\s+(?:(?:el|la|un|una|the|a)\s+)?(word|docx|pdf|documento)\b|\b(?:mejor|prefiero|preferible|mas\s+\w+)\s+(?:\w+\s+){0,4}?que\s+(?:en\s+)?(?:(?:el|la|un|una)\s+)?(word|docx|pdf|documento)\b/g;
+// «pasa el Word a PDF», «convierte el PDF en Word», «cambia el Word por PDF»:
+// the source format is replaced by the other one.
+const SOURCE_FORMAT_RE = /\b(?:pas\w*|conviert\w*|convertir\w*|cambi\w*|transform\w*|turn|convert|change)\s+(?:(?:el|la|ese|esa|este|esta|mi|tu|the|my|that|this)\s+)?(word|docx|pdf|documento)\s+(?:a|en|por|al|into|to)\s+(?:(?:un|una|el|la|a|an)\s+)?(word|docx|pdf)\b/g;
+
 /** The document formats and subtitles a goal turns down: { documents: ['docx'|'pdf'], subtitles }. */
 function negatedTranscriptFormats(goal) {
-  const { refused, asked } = require('./request-negation').splitMentions(goal, FORMAT_WORD_RE);
-  const askedFormats = new Set(asked.map(formatOfWord));
-  const refusedFormats = new Set(refused.map(formatOfWord).filter(format => !askedFormats.has(format)));
+  const negation = require('./request-negation');
+  const { refused, asked } = negation.splitMentions(goal, FORMAT_WORD_RE);
+  const replaced = [];
+  const folded = negation.foldRequest(goal);
+  for (const match of folded.matchAll(REPLACED_FORMAT_RE)) replaced.push(match[1] || match[2]);
+  for (const match of folded.matchAll(SOURCE_FORMAT_RE)) {
+    if (formatOfWord(match[1]) !== formatOfWord(match[2])) replaced.push(match[1]);
+  }
+  const replacedFormats = new Set(replaced.map(formatOfWord));
+  // A replaced format is no ask for it: «en PDF en lugar de Word» asks for the PDF only.
+  const askedFormats = new Set(asked.map(formatOfWord).filter(format => !replacedFormats.has(format)));
+  // «documento» refused: every document not asked for elsewhere («no quiero
+  // el documento de Word, mejor PDF» keeps the PDF).
+  const expand = format => (format === 'document' ? ['docx', 'pdf'] : [format]);
+  const refusedFormats = new Set([...refused, ...replaced].map(formatOfWord).flatMap(expand)
+    .filter(format => !askedFormats.has(format) || replacedFormats.has(format)));
   return {
-    documents: ['docx', 'pdf'].filter(format => refusedFormats.has(format)),
+    documents: ['docx', 'pdf'].filter(format => refusedFormats.has(format) && !(askedFormats.has(format) && !replacedFormats.has(format))),
     subtitles: refusedFormats.has('subtitles'),
   };
+}
+
+// «también en PDF», «y en PDF también», «mándamelo en PDF además»: a document
+// next to the one already asked for, never instead of it.
+const ALSO_FORMAT_RE = /\b(?:tambien|ademas|igualmente|also)\s+(?:\S+\s+){0,2}?(?:word|docx|pdf)\b|\b(?:word|docx|pdf)\s+(?:tambien|ademas|igualmente|too|also)(?=\s*(?:$|[.,;!?]|porfa\b|por\s+favor\b|pls\b|plis\b|gracias\b|please\b))/;
+// «solo en Word», «únicamente el PDF», «nada más en Word».
+const ONLY_FORMAT_RE = /\b(?:solo|solamente|unicamente|nada\s+mas|only|just)\s+(?:(?:en|el|la|un|una|como|in|the|a)\s+)?(?:word|docx|pdf)\b/;
+
+/** The goal adds a document next to the one asked before («también en PDF»). Pure. */
+function addsDocumentFormat(goal) {
+  return ALSO_FORMAT_RE.test(require('./request-negation').foldRequest(goal));
+}
+
+/** The goal keeps one document only («solo en Word»). Pure. */
+function onlyDocumentFormat(goal) {
+  return ONLY_FORMAT_RE.test(require('./request-negation').foldRequest(goal));
 }
 
 /** What the user asked for: document format, subtitles, batch ZIP and an optional time range. */
@@ -99,7 +139,7 @@ function resolveTranscriptOutput(goal, { documentPolicy = null, formatter = null
     } catch (_) { documentFormat = null; }
     if (!documentFormat) {
       if (asksPdf) documentFormat = 'pdf';
-      else if (asksWord || /\bdocumento\b/.test(text)) documentFormat = 'docx';
+      else if (asksWord || (/\bdocumento\b/.test(text) && !negated.documents.includes('docx'))) documentFormat = 'docx';
     }
   }
   const policyFormat = String(documentPolicy?.format || '').toLowerCase();
@@ -1172,6 +1212,8 @@ module.exports = {
   buildMediaTranscriptArtifacts,
   negatedTranscriptFormats,
   declinedFormat,
+  addsDocumentFormat,
+  onlyDocumentFormat,
   buildTranscriptBatchZip,
   buildBatchIndexMarkdown,
   buildBatchIndexCsv,

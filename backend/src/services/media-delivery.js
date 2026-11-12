@@ -298,11 +298,14 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   // «Word no, PDF sí»: one swap, never «en PDF y sin el documento que habías pedido».
   const pdf = record?.output?.documentFormat === 'pdf';
-  if (list.includes('document')) {
-    parts.push(`${pdf ? 'en PDF' : 'en Word'}${list.includes('no_document') ? ` en lugar de ${pdf ? 'Word' : 'PDF'}` : ''}`);
+  if (list.includes('document_added')) {
+    parts.push(record?.output?.documentFormat === 'docx' ? 'en Word y en PDF' : 'también en PDF');
+  } else if (list.includes('document')) {
+    parts.push(`${pdf ? 'en PDF' : 'en Word'}${list.includes('no_document') || list.includes('document_replaced') ? ` en lugar de ${pdf ? 'Word' : 'PDF'}` : ''}`);
   }
   if (list.includes('no_document') && !list.includes('document')) parts.push('sin el documento que habías pedido');
   else if (list.includes('no_auto_document')) parts.push('sin Word');
+  if (list.includes('no_pdf')) parts.push('sin el PDF');
   if (list.includes('subtitles')) parts.push('con subtítulos SRT y VTT');
   if (list.includes('no_subtitles')) parts.push('sin subtítulos');
   if (list.includes('range')) parts.push('solo del tramo que indicaste');

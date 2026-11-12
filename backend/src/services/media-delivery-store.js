@@ -391,9 +391,18 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   const removeDocuments = (Array.isArray(value.removeDocument) ? value.removeDocument : []).filter(format => format === 'docx' || format === 'pdf');
   const declined = new Set(out.declinedDocuments || []);
   for (const format of removeDocuments) {
-    if (out.documentFormat === format) {
+    if (format === 'pdf' && out.alsoPdf === true && out.documentFormat !== 'pdf') {
+      // «Word y PDF», then «sin el PDF»: the Word stays.
+      delete next.output.alsoPdf;
+      changes.push('no_pdf');
+    } else if (out.documentFormat === format) {
       delete next.output.documentFormat;
-      changes.push('no_document');
+      // «Word y PDF», then «sin Word»: the PDF stays as the document.
+      if (format === 'docx' && out.alsoPdf === true && !removeDocuments.includes('pdf')) {
+        next.output.documentFormat = 'pdf';
+        delete next.output.alsoPdf;
+        changes.push('document', 'document_replaced');
+      } else changes.push('no_document');
     } else if (format === 'docx' && !declined.has('docx') && !out.documentFormat) {
       changes.push('no_auto_document');
     }
@@ -410,11 +419,39 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
   }
 
   const documentFormat = value.documentFormat === 'docx' || value.documentFormat === 'pdf' ? value.documentFormat : null;
-  if (documentFormat && documentFormat !== out.documentFormat) {
+  // «en Word y PDF», «también en PDF», «… en Word también»: both documents
+  // (the Word with `alsoPdf`); a new format alone replaces the one asked
+  // before and says so («en PDF en lugar de Word»).
+  const bothAsked = value.alsoPdf === true || (value.documentAlso === true && Boolean(documentFormat));
+  const keptDocument = next.output.documentFormat || null;
+  if (bothAsked && documentFormat) {
+    const wantsWord = documentFormat === 'docx' || keptDocument === 'docx' || value.alsoPdf === true;
+    const before = `${keptDocument || ''}:${next.output.alsoPdf === true}`;
+    if (wantsWord) {
+      next.output.documentFormat = 'docx';
+      next.output.alsoPdf = true;
+      formats.add('docx');
+    } else {
+      // «también en PDF» with no document asked: next to the automatic Word, if any.
+      next.output.alsoPdf = true;
+    }
+    formats.add('pdf');
+    declined.delete('pdf');
+    if (wantsWord) declined.delete('docx');
+    if (before !== `${next.output.documentFormat || ''}:${next.output.alsoPdf === true}`) changes.push('document_added');
+  } else if (documentFormat && documentFormat !== out.documentFormat) {
     // «mejor en PDF»: the PDF replaces the Word, never both.
     if (out.documentFormat) formats.delete(out.documentFormat);
+    if (out.documentFormat || (out.alsoPdf === true && documentFormat === 'pdf')) changes.push('document_replaced');
     next.output.documentFormat = documentFormat;
+    delete next.output.alsoPdf;
+    if (documentFormat === 'docx') formats.delete('pdf');
     changes.push('document');
+  } else if (documentFormat && out.alsoPdf === true && value.documentOnly === true) {
+    // «solo en Word» after «Word y PDF»: the PDF goes.
+    delete next.output.alsoPdf;
+    formats.delete('pdf');
+    changes.push('no_pdf');
   }
   if (documentFormat) {
     formats.add(documentFormat);

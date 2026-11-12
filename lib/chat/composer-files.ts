@@ -472,9 +472,9 @@ const PENDING_OUTPUT_RE = anyOf([
   // A refusal of a format or of the summary: «sin subtítulos», «no quiero
   // subtítulos», «no necesito el Word», «nada de PDF», «sin Word ni PDF»,
   // «quita los subtítulos», «no quiero que lo resumas», «no hace falta
-  // resumir», «Word no, PDF sí».
-  /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas|conviertas|exportes|saques|des|entregues))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
-  /^(?:word|pdf|subtitulos)\s+no\b/,
+  // resumir», «Word no, PDF sí», «no quiero el documento», «sin documento».
+  /^(?:(?:y|mejor|ya|ok|ah|pero|porfa|por favor)\s+)*(?:sin|nada de|ni|quita(?:le|les)?|elimina|no(?:\s+(?:me|te|lo|la|los|las|le|les))*(?:\s+(?:quiero|queremos|necesito|hace falta|es necesario|pongas|pases|mandes|incluyas|agregues|generes|hagas|conviertas|exportes|saques|des|entregues))?(?:\s+que(?:\s+(?:me|lo|la|los|las|le|les))*)?)\s+(?:(?:el|la|los|las|un|una|en|a|formato)\s+)?(?:word|docx|pdf|documentos?|srt|vtt|subtitulos|tradu[cz]\w*|traduccion|resum\w*|resumen|analisis|anali[zc]\w*)\b/,
+  /^(?:word|pdf|documento|subtitulos)\s+no\b/,
   // A bare question about the recording: after its verb only a pointer
   // («al final», «ahí», «en la clase») or a topic opened by a preposition
   // («¿qué dice sobre el examen?», «¿cuándo habla de la guerra?»). A subject

@@ -3615,9 +3615,16 @@ nuevo esperaba hasta 4 min y terminaba en una segunda entrega.
   literal», «deja las siglas en inglés», «mantén los términos técnicos en español»): `translationConditions`
   del pedido y de cada seguimiento → `translateMediaBatch({ conditions })`; la última sobre la misma
   parte gana («incluidos los nombres» deshace «no traduzcas los nombres propios») y la respuesta dice
-  «con tus indicaciones para la traducción». Cambiar Word por PDF quita el Word de `formats` («en PDF en lugar de
-  Word»), un formato rechazado sale de `formats` aunque otro lo hubiera reemplazado, y la entrega no
-  arma ni reporta como faltante un documento rechazado o reemplazado. Una grabación fallida cuyo audio
+  «con tus indicaciones para la traducción». Cambiar Word por PDF quita el Word de `formats` y la respuesta lo dice
+  («en PDF en lugar de Word», `document_replaced`), un formato rechazado sale de `formats` aunque otro lo
+  hubiera reemplazado, y la entrega no arma ni reporta como faltante un documento rechazado o
+  reemplazado. El formato que un cambio reemplaza queda rechazado (`negatedTranscriptFormats`: «en PDF en
+  lugar de / en vez de Word», «mejor en PDF que en Word», «pasa el Word a PDF»), también el Word
+  automático. «también en PDF» (o «en Word y PDF», `alsoPdf` de #1137) conserva el Word y suma el PDF
+  («en Word y en PDF», `document_added`; «también» cuenta solo junto al formato, `addsDocumentFormat`); «sin
+  el PDF», «sin Word» y «solo en Word» los quitan de a uno. «documento» nombra el documento entregable:
+  «ya no lo quiero en documento» o «sin documento» rechazan Word y PDF (nunca agregan un Word) y llegan
+  al lote desde el compositor. Una grabación fallida cuyo audio
   extrajo el navegador conserva el nombre que el runner guardó al entregarla (`record.fileNames`).
   «Regenerar» sobre un «Anotado» de un trabajo ya cerrado avisa «Esa
   transcripción ya terminó o se detuvo». Un Detener que el dueño honró a mitad del análisis y cuya

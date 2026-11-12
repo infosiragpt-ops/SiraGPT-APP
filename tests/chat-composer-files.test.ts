@@ -145,6 +145,10 @@ describe("historical media batch follow-ups", () => {
       "sin Word ni PDF", "no quiero que lo resumas", "no hace falta resumir", "Word no, PDF sí", "sin subtítulos por favor"]) {
       assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
     }
+    // «documento» is the deliverable document: its refusal reaches the batch too.
+    for (const prompt of ["no quiero el documento", "sin documento", "documento no", "ya no lo quiero en documento"]) {
+      assert.deepEqual(resolveMediaFollowupFiles(prompt, pendingChat), batch, prompt)
+    }
     // Nothing pending: the same words are not about a recording.
     assert.deepEqual(resolveMediaFollowupFiles("no quiero subtítulos", [pendingChat[0], { role: "ASSISTANT", content: "Listo",
       metadata: { source: "media-delivery", mediaDelivery: "md_1", transcriptionFileIds: ["v1"] } }]), [])
