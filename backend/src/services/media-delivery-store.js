@@ -271,33 +271,69 @@ function mergeDeliveryAmendment(record = {}, amendment = {}) {
     next.range = null;
   }
   const target = normalizeTranslationTarget(value.translationTarget);
-  // «ya no la traduzcas»: back to what the first request asked for.
+  // «ya no la traduzcas»: back to what the first request asked for. «ya no
+  // la traduzcas al francés» next to the English one takes only the French
+  // back; a language not pending changes nothing.
+  const refused = normalizeTranslationTarget(value.removeTranslationTarget);
+  const pendingExtras = (out.extraTranslations || []).map(item => ({ target: item.target, ranges: [...item.ranges] }));
   if (!target && value.removeTranslation === true && mode === 'translation') {
-    next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
-    next.output.alsoAnalysis = false;
-    delete next.output.translationTarget;
-    delete next.output.extraTranslations;
-    changes.push('no_translation');
+    const languages = [out.translationTarget, ...pendingExtras.map(item => item.target)].filter(Boolean);
+    if (refused && languages.length > 1 && languages.includes(refused)) {
+      if (refused === out.translationTarget) {
+        // The next language becomes the translation, with its own windows.
+        const [promoted, ...rest] = pendingExtras;
+        next.output.translationTarget = promoted.target;
+        setTranslationWindows(next.output, promoted.ranges);
+        if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
+      } else {
+        const rest = pendingExtras.filter(item => item.target !== refused);
+        if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
+      }
+      changes.push(`no_translation:${refused}`);
+    } else if (!refused || !languages.length || languages.includes(refused)) {
+      next.mode = out.alsoAnalysis ? 'analysis' : 'transcript';
+      next.output.alsoAnalysis = false;
+      delete next.output.translationTarget;
+      delete next.output.extraTranslations;
+      changes.push('no_translation');
+    }
   }
   const translationRange = normalizeRefineRange(value.translationRange);
   // «traduce también al francés lo del minuto 30» while the English
   // translation is pending: a second language, never a silent replacement.
   // A bare «mejor al francés» still switches the language.
+  // «mejor tradúcela al francés del minuto 10 al 20», «no la traduzcas al
+  // inglés sino al francés…» replace it (translationSwitch).
   const addsLanguage = Boolean(target) && mode === 'translation' && Boolean(out.translationTarget) && target !== out.translationTarget
-    && (Boolean(translationRange) || value.translationAlso === true);
+    && value.translationSwitch !== true && (Boolean(translationRange) || value.translationAlso === true);
   if (addsLanguage) {
-    const extras = (out.extraTranslations || []).map(item => ({ target: item.target, ranges: [...item.ranges] }));
+    const extras = pendingExtras.map(item => ({ target: item.target, ranges: [...item.ranges] }));
     const index = extras.findIndex(item => item.target === target);
     const existing = index >= 0 ? extras.splice(index, 1)[0] : null;
-    // The language touched last goes last (the reply names it).
+    // An added language's windows: its stretch; «completa», none (the whole
+    // recording); else the same windows as the pending translation, said
+    // in the reply. An empty list always means the whole recording.
+    const whole = value.translationWhole === true;
+    let ranges;
     if (existing) {
-      extras.push({ target, ranges: existing.ranges.length && translationRange ? normalizeWindows([...existing.ranges, translationRange]) : [] });
-    } else if (extras.length < MAX_EXTRA_TRANSLATIONS) {
-      extras.push({ target, ranges: translationRange ? [translationRange] : [] });
+      ranges = whole ? [] : translationRange ? (existing.ranges.length ? normalizeWindows([...existing.ranges, translationRange]) : [])
+        : existing.ranges;
+    } else {
+      // The pending translation reads its own windows, else the transcript's range.
+      const pendingWindows = ownTranslationWindows(out).length ? ownTranslationWindows(out)
+        : normalizeRange(record.range) ? [normalizeRange(record.range)] : [];
+      ranges = whole ? [] : translationRange ? [translationRange] : pendingWindows.map(window => ({ ...window }));
     }
+    // The language touched last goes last (the reply names it).
+    if (existing || extras.length < MAX_EXTRA_TRANSLATIONS) extras.push({ target, ranges });
     next.output.extraTranslations = extras;
     if (index >= 0 || extras.some(item => item.target === target)) changes.push('translation_added');
   } else if (target) {
+    // A language that was added becomes the translation: never twice.
+    if (pendingExtras.some(item => item.target === target)) {
+      const rest = pendingExtras.filter(item => item.target !== target);
+      if (rest.length) next.output.extraTranslations = rest; else delete next.output.extraTranslations;
+    }
     if (mode !== 'translation') {
       next.mode = 'translation';
       // What the first request delivered stays: the transcript files, and

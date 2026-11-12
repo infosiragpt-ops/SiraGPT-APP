@@ -596,6 +596,48 @@ function switchedTranslationTarget(goal) {
 }
 
 /**
+ * The language a take-back names («ya no la traduzcas al francés», «sin la
+ * traducción al francés»): only that one goes when another stays pending.
+ * Null when the take-back names none, or for a switch. Pure; never throws.
+ */
+function refusedTranslationTarget(goal) {
+  try {
+    if (!negatesTranslation(goal)) return null;
+    const negation = require('./request-negation');
+    const folded = negation.foldRequest(goal);
+    const ranges = negation.negatedRanges(folded);
+    for (const match of folded.matchAll(/\b(?:traduc\w*|traduz\w*|translat\w*)\b/g)) {
+      const range = ranges.find(candidate => match.index >= candidate.start && match.index < candidate.end);
+      if (!range || switchedTargetAfter(folded, match.index + match[0].length)) continue;
+      const tail = folded.slice(match.index + match[0].length, range.end).split(/[,;.!?\n]|\b(?:sino|mejor|pero)\b/)[0];
+      const named = tail.match(/\b(?:al|a|en|into|to)\s+(?:el\s+|idioma\s+)?([a-z]+)/);
+      const hit = named ? translationLanguageIn(named[1]) : null;
+      if (hit) return hit;
+    }
+  } catch (_) { /* a cue check never fails the turn */ }
+  return null;
+}
+
+// «mejor tradúcela al francés», «mejor al francés», «en vez de inglés, …»,
+// «en lugar del inglés…», «cámbiala al francés», «cambia el idioma al
+// francés»: the new language replaces the pending one, with or without a
+// stretch, never next to it.
+const LANGUAGE_WORD_SOURCE = `(?:${TRANSLATION_LANGUAGES.map(language => language.re.source).join('|')})`;
+const REPLACE_TRANSLATION_RE = new RegExp([
+  `(?:^|[,;:.!?]\\s*|\\b(?:y|pero|o|ahora|entonces|bueno)\\s+)mejor\\s+(?:(?:que\\s+)?(?:me\\s+)?(?:lo|la|los|las)\\s+)?(?:(?:tradu[cz]\\w*|pas\\w*)\\s+)?(?:al|a|en)\\s+(?:el\\s+|idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
+  `\\ben\\s+(?:vez|lugar)\\s+del?\\s+(?:(?:la\\s+)?traduccion\\s+(?:al|a|en)\\s+)?(?:idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
+  `\\bcambi\\w*\\s+(?:(?:el|la)\\s+(?:idioma|traduccion)\\s+)?(?:al|a)\\s+(?:el\\s+|idioma\\s+)?${LANGUAGE_WORD_SOURCE}`,
+].join('|'));
+
+/** The follow-up replaces the pending translation's language (see above). Pure; never throws. */
+function replacesTranslation(goal) {
+  try {
+    if (switchedTranslationTarget(goal)) return true;
+    return REPLACE_TRANSLATION_RE.test(foldGoal(goal));
+  } catch (_) { return false; }
+}
+
+/**
  * The follow-up asks to translate, with or without naming the language
  * («tradúcela completa», «tradúcelo literal», «quiero la traducción
  * completa»): a translate verb that is not turned down. Pure; never throws.
@@ -789,7 +831,7 @@ async function translateMediaBatch({ rows, target, complete, signal, onProgress 
   const failed = [];
   // The user's own conditions («no traduzcas los nombres propios»): theirs,
   // so instructions, unlike the transcript.
-  const asked = (Array.isArray(conditions) ? conditions : []).map(item => String(item || '').replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean).slice(0, 3);
+  const asked = (Array.isArray(conditions) ? conditions : []).map(item => String(item || '').replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean).slice(0, 5);
   const askedNote = asked.length ? ` Indicaciones del usuario sobre la traducción, respétalas: ${asked.map(item => `«${item}»`).join('; ')}.` : '';
   const chunkChars = DENSE_TRANSLATION_TARGETS.has(target?.code) ? TRANSLATION_CHUNK_CHARS_DENSE : TRANSLATION_CHUNK_CHARS;
   for (const row of rows.filter(usableTranscript)) {
@@ -2267,7 +2309,7 @@ async function forwardHintsToPendingMedia({ userId, rows = [], language = null, 
 
 module.exports = { MAX_MEDIA_FILES, loadMediaBatch, loadMixedAttachmentBatch, resolveChatMediaFileIds, usableTranscript, stateOf, batchCounts,
   waitForMediaBatch, describeBatchProgress, formatRemaining, MEDIA_WAIT_MAX_MS, MEDIA_WAIT_STALL_MS, transcriptBundle, transcriptMarkdown, wantsMediaAnalysis, isMediaFollowup, shouldResolveMediaBatchFromHistory, splitTranscript, analyzeMediaBatch, analysisParallel,
-  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translationConditions, asksToTranslate, asksAlsoTranslation, switchedTranslationTarget, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
+  wantsSummaryWithTranslation, detectTranslationTarget, translationTargetByCode, negatesTranslation, translationConditions, asksToTranslate, asksAlsoTranslation, switchedTranslationTarget, refusedTranslationTarget, replacesTranslation, refusesAnalysis, isTranscriptGoal, translatesTheMoment, asksWholeTranslation, statesRecordingLanguages, translateMediaBatch, TRANSLATION_CHUNK_CHARS, TRANSLATION_CHUNK_CHARS_DENSE,
   loadPresentedNames, presentRows, asksForDeliverable, refusesTranslationWord, isResumeGoal,
   // contract C7: hints, follow-up intents (refine / lookup) and refine requests
   extractTranscriptionHints, extractChatTranscriptionHints, hintsForJob, loadRecentUserTurns, earliestRowTime, parseTimePoint, detectMediaFollowupIntent,

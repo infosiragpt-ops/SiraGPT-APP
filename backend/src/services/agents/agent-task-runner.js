@@ -3135,6 +3135,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           goal: mediaGoal,
           translationTarget: amendTarget?.code || null,
           removeTranslation: !amendTarget && typeof mediaBatch.negatesTranslation === 'function' && mediaBatch.negatesTranslation(mediaGoal),
+          // «ya no la traduzcas al francés»: only that language goes.
+          removeTranslationTarget: !amendTarget && typeof mediaBatch.refusedTranslationTarget === 'function'
+            ? mediaBatch.refusedTranslationTarget(mediaGoal)?.code || null : null,
+          // «mejor tradúcela al francés del minuto 10 al 20»: replaces the pending language.
+          translationSwitch: Boolean(amendTarget) && typeof mediaBatch.replacesTranslation === 'function' && mediaBatch.replacesTranslation(mediaGoal),
           // «traduce también al francés…»: another language next to the pending one.
           translationAlso: Boolean(amendTarget) && typeof mediaBatch.asksAlsoTranslation === 'function' && mediaBatch.asksAlsoTranslation(mediaGoal),
           // How to translate («literal», «no traduzcas los nombres propios»): the reply says it was noted.

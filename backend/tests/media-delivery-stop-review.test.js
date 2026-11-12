@@ -1320,6 +1320,19 @@ test('a second language translates its own moment and the first stays whole', as
   assert.match(result.text, /Bonjour/);
 });
 
+// ── ninth review: an added language with no windows of its own ───────────────
+
+test('a language added «completa» next to a moment translates the whole recording, as the reply says', async () => {
+  const rows = [{ id: 'a', originalName: 'clase.mp4', extractedText: THREE_HOURS, processingStage: 'ready' }];
+  const { calls } = await translateWith({ goal: 'traduce al inglés lo del minuto 10\n\ntradúcela también al francés completa',
+    transcripts: THREE_HOURS_SIDECARS, output: { translationTarget: 'en', translationRange: { start: 540, end: 840 }, extraTranslations: [{ target: 'fr', ranges: [] }] } }, rows);
+  const english = calls.filter(call => !/francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
+  const french = calls.filter(call => /francés|french/i.test(call.system)).map(call => call.transcript).join('\n');
+  assert.doesNotMatch(english, /nadie pidió/, 'the English translation stays the moment');
+  assert.match(french, /nadie pidió/, 'the French one is the whole recording');
+  assert.match(french, /minuto ciento cincuenta/);
+});
+
 // ── eighth review: a Stop whose job stop failed for a moment ─────────────────
 
 // The first stop of «b» hits a database blip; later ones work.

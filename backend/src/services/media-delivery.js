@@ -295,6 +295,13 @@ function amendedMessage({ changes = [], record = {} } = {}) {
   }
   if (list.includes('translation_conditions')) parts.push('con tus indicaciones para la traducción');
   if (list.includes('no_translation')) parts.push('sin la traducción');
+  // «ya no la traduzcas al francés» next to another language: only that one goes.
+  for (const change of list) {
+    const code = typeof change === 'string' && change.startsWith('no_translation:') ? change.slice('no_translation:'.length) : null;
+    if (!code) continue;
+    const staying = [target, ...addedLanguages.map(item => item?.target)].filter(Boolean).map(translationName);
+    parts.push(`sin la traducción al ${translationName(code)}${staying.length ? ` (sigue la traducción al ${joinList(staying)})` : ''}`);
+  }
   if (list.includes('analysis') || list.includes('analysis_range')) parts.push('con el resumen que pediste');
   // «Word no, PDF sí»: one swap, never «en PDF y sin el documento que habías pedido».
   const pdf = record?.output?.documentFormat === 'pdf';
@@ -1524,8 +1531,10 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
     for (const extra of Array.isArray(delivery.output?.extraTranslations) ? delivery.output.extraTranslations : []) {
       const extraTarget = mediaBatch.translationTargetByCode?.(extra?.target);
       if (!extraTarget || extraTarget.code === target.code) continue;
+      // Its own windows; none is the whole recording («completa»), as the
+      // reply said (the store copies the pending windows when it adds one).
       const extraWindows = windowList(extra.ranges);
-      const extraRows = rowsIn(extraWindows.length ? extraWindows : windows.length ? windows : null);
+      const extraRows = rowsIn(extraWindows.length ? extraWindows : null);
       try {
         const extraTranslation = await mediaBatch.translateMediaBatch({ rows: extraRows, target: extraTarget, complete: completion.complete, signal, conditions });
         if (!extraTranslation.files.length) {
@@ -1533,7 +1542,7 @@ async function defaultAnalyze({ rows, delivery, prisma, signal = null }) {
           continue;
         }
         const extraBuilt = await pack.buildTranslationArtifacts({ files: extraTranslation.files, target: extraTarget,
-          output: { ...(delivery.output || {}), ...windowOutput(extraWindows.length ? extraWindows : windows) }, userId: delivery.userId });
+          output: { ...(delivery.output || {}), ...windowOutput(extraWindows) }, userId: delivery.userId });
         artifacts.push(...(extraBuilt.artifacts || []));
         if (Array.isArray(extraBuilt.notes)) notes.push(...extraBuilt.notes);
         const where = extraWindows.length ? ` (${pack.rangesLabel(extraWindows)})` : '';

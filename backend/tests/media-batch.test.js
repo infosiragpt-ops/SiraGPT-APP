@@ -2490,6 +2490,71 @@ async function followUpOn(initial, goal) {
 const ENGLISH_MOMENT = { mode: 'translation', goal: 'transcribe y traduce al inglés lo que dice en el minuto 30',
   output: { translationTarget: 'en', translationRange: { start: 1740, end: 2040 }, includeTranscript: true } };
 
+// ── ninth review: a switch with a stretch, one language taken back, an added language «completa» ──
+
+const ENGLISH_WHOLE = { mode: 'translation', goal: 'transcribe este video y tradúcelo al inglés', output: { translationTarget: 'en', includeTranscript: true } };
+
+test('a switch that names a stretch replaces the language, never adds one: the English nobody wants is not billed', async () => {
+  for (const goal of ['no la traduzcas al inglés sino al francés, del minuto 10 al 20', 'mejor tradúcela al francés, solo del minuto 10 al 20',
+    'en vez de inglés, tradúcela al francés del minuto 10 al 20', 'no la traduzcas al inglés, mejor al francés del minuto 10 al 20']) {
+    const { result, record, amends } = await followUpOn(ENGLISH_WHOLE, goal);
+    assert.equal(amends[0].translationSwitch, true, goal);
+    assert.equal(record.output.translationTarget, 'fr', goal);
+    assert.equal(record.output.extraTranslations, undefined, `${goal}: no second language`);
+    assert.deepEqual(record.output.translationRange, { start: 600, end: 1200 }, goal);
+    assert.match(result.finalMarkdown, /traducida al francés \(la traducción, solo del tramo que indicaste\)/, goal);
+    assert.doesNotMatch(result.finalMarkdown, /además de la traducción al inglés/, goal);
+  }
+  // «traduce también al francés lo del minuto 30» still adds it.
+  const added = await followUpOn(ENGLISH_WHOLE, 'traduce también al francés lo del minuto 30');
+  assert.equal(added.record.output.translationTarget, 'en');
+  assert.equal(added.record.output.extraTranslations[0].target, 'fr');
+});
+
+test('«ya no la traduzcas al francés» takes back only the French: the English translation stays', async () => {
+  const { record: both } = await followUpOn(ENGLISH_WHOLE, 'traduce también al francés');
+  assert.equal(both.output.extraTranslations[0].target, 'fr');
+  for (const goal of ['ya no la traduzcas al francés', 'ya no hace falta traducirla al francés', 'sin la traducción al francés']) {
+    const { result, record, amends } = await followUpOn(both, goal);
+    assert.equal(amends[0].removeTranslationTarget, 'fr', goal);
+    assert.equal(record.mode, 'translation', goal);
+    assert.equal(record.output.translationTarget, 'en', goal);
+    assert.equal(record.output.extraTranslations, undefined, goal);
+    assert.match(result.finalMarkdown, /sin la traducción al francés \(sigue la traducción al inglés\)/, goal);
+  }
+  // Taking back the first language keeps the added one, with its own windows.
+  const { record: moment } = await followUpOn(ENGLISH_WHOLE, 'traduce también al francés lo del minuto 30');
+  const noEnglish = await followUpOn(moment, 'ya no la traduzcas al inglés');
+  assert.equal(noEnglish.record.mode, 'translation');
+  assert.equal(noEnglish.record.output.translationTarget, 'fr');
+  assert.deepEqual(noEnglish.record.output.translationRange, { start: 1740, end: 2040 });
+  assert.equal(noEnglish.record.output.extraTranslations, undefined);
+  // A language that is not pending changes nothing; «ya no la traduzcas» takes them all back.
+  assert.equal((await followUpOn(ENGLISH_WHOLE, 'no la traduzcas al alemán')).record.output.translationTarget, 'en');
+  const none = await followUpOn(both, 'ya no la traduzcas');
+  assert.equal(none.record.mode, 'transcript');
+  assert.equal(none.record.output.extraTranslations, undefined);
+});
+
+test('a language added next to a moment: «completa» is the whole recording, without it the same moment, as the reply says', async () => {
+  const whole = await followUpOn(ENGLISH_MOMENT, 'tradúcela también al francés completa');
+  assert.deepEqual(whole.record.output.extraTranslations, [{ target: 'fr', ranges: [] }]);
+  assert.doesNotMatch(whole.result.finalMarkdown, /solo del tramo/);
+  const same = await followUpOn(ENGLISH_MOMENT, 'traduce también al francés');
+  assert.deepEqual(same.record.output.extraTranslations, [{ target: 'fr', ranges: [{ start: 1740, end: 2040 }] }]);
+  assert.match(same.result.finalMarkdown, /también traducida al francés \(solo del tramo que indicaste\)/);
+});
+
+test('the translator gets up to five of the user\'s conditions, as many as are read', async () => {
+  const batch = require('../src/services/media-batch');
+  const systems = [];
+  await batch.translateMediaBatch({ rows: [{ id: 'a', originalName: 'a.mp4', processingStage: 'ready', extractedText: '[00:00:00] Hola.' }],
+    target: { code: 'en', name: 'inglés' }, conditions: ['uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis'],
+    complete: async (messages) => { systems.push(String(messages[0].content || '')); return 'Hello.'; } });
+  assert.match(systems[0], /«cinco»/);
+  assert.doesNotMatch(systems[0], /«seis»/);
+});
+
 test('«tradúcela completa», as the reply says, translates the whole recording: no language needed, no summary', async () => {
   for (const goal of ['tradúcela completa', 'tradúcelo todo', 'tradúcela toda', 'tradúcelo completo', 'traduce toda la clase',
     'quiero la traducción completa']) {
