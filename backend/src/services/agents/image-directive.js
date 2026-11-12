@@ -494,6 +494,10 @@ const IMAGE_TYPES = [
   ['sticker', /\b(stickers?|pegatinas?)\b/, 'die-cut sticker with a thick white outline'],
   ['wallpaper', /\b(wallpapers?|fondo de pantalla)\b/, 'wallpaper composition, no text'],
   ['cover', /\b(portada(?:s)?|cover|banner|banners|cabecera|miniatura|thumbnail)\b/, 'wide cover composition with space for a title'],
+  ['infographic', /\b(infografi(?:a|as)|infographics?)\b/, 'structured infographic layout with clear visual modules'],
+  ['diagram', /\b(diagrama(?:s)?|esquema(?:s)?|mapa(?:s)? mental(?:es)?|schematics?)\b/, 'clean schematic diagram with clear visual hierarchy'],
+  ['packaging', /\b(empaque(?:s)?|packaging|envase(?:s)?)\b/, 'commercial packaging design presentation'],
+  ['ui', /\b(interfaz|dashboard|wireframe|ui mockup|app screen)\b/, 'clean digital interface presentation'],
 ];
 
 /** Detect the kind of visual requested (logo, poster, photo, …). */

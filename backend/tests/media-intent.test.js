@@ -560,3 +560,31 @@ test('isImageMediaRequest / isImageAttachment are the shared gates for route and
   assert.match('edit the screenshot', _internal.ANY_IMAGE_REF);
   assert.ok(typeof _internal.CREATE_VERB_SOURCE === 'string' && _internal.CREATE_VERB_SOURCE.includes('gener'));
 });
+
+test('buildMediaIntentHint preserves literal quoted lettering and document/brand grounding cues for image tools', () => {
+  const posterIntent = detectMediaIntent('crea un póster para mi cafetería que diga "CAFÉ AURORA" según el manual de marca');
+  assert.equal(posterIntent.kind, 'image');
+  assert.deepEqual(posterIntent.specs.quotedText, ['CAFÉ AURORA']);
+  assert.equal(posterIntent.specs.documentGrounded, true);
+
+  const posterHint = buildMediaIntentHint(posterIntent);
+  assert.match(posterHint, /texto literal en la imagen: incluye exactamente "CAFÉ AURORA"/);
+  assert.match(posterHint, /anclaje documental\/marca detectado/);
+
+  const editBrandIntent = detectMediaIntents('edita esta foto aplicando los colores corporativos del manual de marca y que el letrero diga "ABIERTO"', {
+    hasImageAttachment: true,
+  })[0];
+  assert.equal(editBrandIntent.kind, 'image-edit');
+  assert.deepEqual(editBrandIntent.specs.quotedText, ['ABIERTO']);
+  assert.equal(editBrandIntent.specs.documentGrounded, true);
+
+  const editHint = buildMediaIntentHint(editBrandIntent);
+  assert.match(editHint, /texto literal en la edición: conserva exactamente "ABIERTO"/);
+  assert.match(editHint, /anclaje documental\/marca detectado/);
+
+  // Plain image requests do not emit quotedText or documentGrounded bullets.
+  const plainIntent = detectMediaIntent('crea una imagen de un bosque nevado');
+  assert.equal(plainIntent.specs.quotedText, undefined);
+  assert.equal(plainIntent.specs.documentGrounded, undefined);
+  assert.doesNotMatch(buildMediaIntentHint(plainIntent), /texto literal|anclaje documental/);
+});

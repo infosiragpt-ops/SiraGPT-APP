@@ -405,6 +405,27 @@ function detectImageEditIntent(text, opts = {}) {
   return false;
 }
 
+const QUOTED_LETTERING_CUE_RE = /\b(?:que\s+diga|con\s+el\s+texto|con\s+la\s+frase|con\s+el\s+titulo|con\s+las\s+palabras|letrero|rotulo|cartel\s+con|texto\s*:|titulo\s*:|with\s+(?:the\s+)?text|that\s+says|reading|saying|titled|headline)\b/;
+const QUOTED_TYPO_DELIVERABLE_RE = /\b(?:logos?|logotipos?|posters?|cartel(?:es)?|afiches?|flyers?|portadas?|covers?|banners?|miniaturas?|thumbnails?|infografi(?:a|as)|etiquetas?|packaging|empaque|camisetas?|letreros?|neones?)\b/;
+const IMAGE_DOCUMENT_GROUNDING_RE = new RegExp([
+  '\\b(?:segun|basad[oa]s?\\s+en|a\\s+partir\\s+de|tomando\\s+de|descrit[oa]s?\\s+en|mencionad[oa]s?\\s+en)\\s+(?:el\\s+|la\\s+|los\\s+|las\\s+|mi\\s+|nuestro\\s+|este\\s+|esta\\s+)?(?:documento|documentos|pdf|informe|reporte|manual(?:\\s+de\\s+marca)?|guia(?:\\s+de\\s+estilo)?|brand\\s*book|presentacion|deck|archivo|ficha\\s+tecnica|brief)\\b',
+  '\\b(?:manual\\s+de\\s+marca|identidad\\s+de\\s+(?:la\\s+)?marca|paleta\\s+de\\s+(?:la\\s+)?marca|colores\\s+corporativos|brand\\s+guidelines|brand\\s+book|style\\s+guide)\\b',
+  '\\b(?:according\\s+to|based\\s+on|described\\s+in)\\s+(?:the\\s+|this\\s+|my\\s+|our\\s+)?(?:document|pdf|report|brand\\s+book|style\\s+guide|deck|attached\\s+file|spec|brief)\\b',
+].join('|'));
+
+function extractQuotedImageText(rawText, norm) {
+  if (!rawText || !norm) return null;
+  if (!QUOTED_LETTERING_CUE_RE.test(norm) && !QUOTED_TYPO_DELIVERABLE_RE.test(norm)) return null;
+  const out = [];
+  for (const re of [/"([^"\n]{1,72})"/g, /«([^»\n]{1,72})»/g, /“([^”\n]{1,72})”/g]) {
+    for (const m of String(rawText).matchAll(re)) {
+      const val = String(m[1] || '').replace(/\s+/g, ' ').trim();
+      if (val && !out.includes(val)) out.push(val);
+    }
+  }
+  return out.length ? out.slice(0, 3) : null;
+}
+
 /** Extract the per-kind specs the user stated in natural language. */
 function buildSpecsForKind(kind, norm, rawText) {
   const durationSeconds = parseDurationSeconds(norm);
@@ -419,6 +440,9 @@ function buildSpecsForKind(kind, norm, rawText) {
     const count = detectImageCount(norm);
     if (count && count > 1) specs.count = count;
     if (style) specs.style = style;
+    const quotedText = extractQuotedImageText(rawText, norm);
+    if (quotedText) specs.quotedText = quotedText;
+    if (IMAGE_DOCUMENT_GROUNDING_RE.test(norm)) specs.documentGrounded = true;
     // Exact spoken image directive: concrete frame, typo-tolerant count and
     // — for edits — an explicit target. Never overrides the coarse specs
     // above when they already agree; it only fills gaps and adds detail.
@@ -674,6 +698,12 @@ function buildMediaIntentHint(intent) {
     }
     if (s.editTarget) params.push(`- objetivo de la edición: "${s.editTarget}" — pásalo como \`target\` y aplica el cambio solo ahí, conservando el resto.`);
     if (s.editReplacement) params.push(`- resultado esperado en el objetivo: "${s.editReplacement}".`);
+    if (Array.isArray(s.quotedText) && s.quotedText.length) {
+      params.push(`- texto literal en la edición: conserva exactamente ${s.quotedText.map((q) => `"${q}"`).join(', ')} entre comillas dentro de \`instruction\` sin traducirlo ni modificarlo.`);
+    }
+    if (s.documentGrounded) {
+      params.push('- anclaje documental/marca detectado: conserva en `instruction` la referencia al manual/documento, nombres propios y colores HEX (#RRGGBB) o materiales indicados.');
+    }
   } else if (intent.kind === 'image') {
     if (s.aspectRatio) params.push(`- aspectRatio: "${s.aspectRatio}"`);
     if (s.frame) params.push(`- frame exacto: "${s.frame}" (inclúyelo en el prompt como requisito de encuadre).`);
@@ -681,6 +711,12 @@ function buildMediaIntentHint(intent) {
     if (s.style) params.push(`- style: "${s.style}"`);
     if (s.imageType) params.push(`- tipo de visual: "${s.imageType}" (conserva ese formato en el prompt).`);
     if (s.count) params.push(`- el usuario pidió ${s.count} imágenes: pasa \`count: ${s.count}\` a \`generate_image\` en UNA sola llamada (devuelve las ${s.count} como artefactos).`);
+    if (Array.isArray(s.quotedText) && s.quotedText.length) {
+      params.push(`- texto literal en la imagen: incluye exactamente ${s.quotedText.map((q) => `"${q}"`).join(', ')} entre comillas dentro de \`prompt\` sin traducirlo ni abreviarlo.`);
+    }
+    if (s.documentGrounded) {
+      params.push('- anclaje documental/marca detectado: conserva en `prompt` la referencia al documento/marca, nombres propios, materiales y códigos HEX (#RRGGBB) mencionados para que el RAG visual los aplique con exactitud.');
+    }
   } else if (intent.kind === 'video') {
     params.push(`- model: "${s.model || DEFAULT_VIDEO_MODEL}" (Veo Fast).`);
     params.push(`- duration: ${s.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS} (segundos; por defecto Veo Fast 8s, ajústalo al rango válido de la herramienta solo si el usuario pidió otra duración).`);
