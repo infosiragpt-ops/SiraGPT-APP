@@ -370,6 +370,7 @@ const generateImage = {
         aspectRatio: directive.frame || aspectRatio,
         quality: ctx.imageQuality || directive.qualityApp || quality,
         model: ctx.imageModel || model || undefined,
+        count,
         userId: ctx.userId,
         chatId: ctx.chatId,
         projectId: ctx.projectId,
@@ -417,7 +418,9 @@ const generateImage = {
         const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
           model: result.model, provider: result.provider, aspectRatio, quality: ctx.imageQuality || quality,
           ragArchetype: ragDirection.archetype || null,
+          ragFacets: ragDirection.facets || [],
           continuityMode: ragDirection.continuityMode || 'none',
+          visualAnchor: ragDirection.visualAnchor || null,
           ragGrounded: Boolean(ragDirection.grounded),
         } });
         artifacts.push({

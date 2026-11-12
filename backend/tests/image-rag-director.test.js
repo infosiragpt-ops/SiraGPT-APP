@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const ragStore = require('../src/services/rag-store');
 const {
   IMAGE_RAG_ARCHETYPES,
+  detectVisualFacetModifiers,
   searchVisualDirectionCorpus,
   resolveModelFamilyGuidance,
 } = require('../src/services/media/image-rag-corpus');
@@ -20,6 +21,9 @@ const {
   directImageEditPrompt,
   retrieveImageDocumentGrounding,
   resolveVisualContinuity,
+  expandVisualRagQuery,
+  selectDiverseVisualChunks,
+  normalizeHexColor,
   detectDocumentGroundingCue,
   detectVisualContinuityMode,
   extractQuotedTypography,
@@ -400,3 +404,179 @@ test('visual-media-tools generate_image: grounds agentic tool execution with att
   }
 });
 
+// ── Round 2: 32 Archetypes, Orthogonal Facets, Cross-Lingual MMR & Multi-Turn Ledger ──
+
+test('image-rag-corpus: covers all 32 specialized archetypes and orthogonal optical/studio facets', async () => {
+  assert.equal(IMAGE_RAG_ARCHETYPES.length, 32);
+
+  assert.equal(
+    searchVisualDirectionCorpus('anillo de oro con diamante solitario y zafiro en alta joyería').primary.id,
+    'jewelry_horology_luxury'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('superdeportivo en circuito con carrocería de fibra de carbono').primary.id,
+    'automotive_transport_studio'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('sala de estar con sofá bouclé, alfombra de lana e interiorismo cálido').primary.id,
+    'interior_real_estate_staging'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('gráfico de barras ejecutivo con métricas KPI trimestrales').primary.id,
+    'data_chart_executive_slide'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('ilustración para cuento infantil de animalitos amigables en bosque encantado').primary.id,
+    'childrens_storybook_whimsical'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('escena pixel art 16bit retro de videojuego arcade').primary.id,
+    'pixel_art_retro_game'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('fotografía vintage analógica en película 35mm con grano nostálgico de los años 70').primary.id,
+    'vintage_analog_film_polaroid'
+  );
+  assert.equal(
+    searchVisualDirectionCorpus('escultura digital de arte abstracto contemporáneo con ondas fluidas').primary.id,
+    'abstract_generative_editorial_art'
+  );
+
+  const facets = detectVisualFacetModifiers('toma en vista cenital flat lay en blanco y negro sobre fondo blanco puro');
+  assert.deepEqual(facets.map((f) => f.id), ['flat_lay_overhead', 'monochrome_bw', 'pure_white_cutout']);
+
+  const batchDirected = await directImagePrompt({
+    prompt: 'taza artesanal de cerámica',
+    rawUserPrompt: 'dame 3 fotos en vista cenital en hora dorada sobre fondo blanco puro de una taza artesanal',
+    count: 3,
+    aspectRatio: '1:1',
+  });
+  assert.deepEqual(batchDirected.facets, ['flat_lay_overhead', 'golden_hour', 'pure_white_cutout']);
+  assert.match(batchDirected.prompt, /90° zenithal overhead flat-lay/);
+  assert.match(batchDirected.prompt, /golden-hour directional light/);
+  assert.match(batchDirected.prompt, /pure #FFFFFF white studio sweep/);
+  assert.match(batchDirected.prompt, /Multi-variant set \(3 images\)/);
+});
+
+test('expandVisualRagQuery & cross-lingual RAG: Spanish query retrieves English brand PDF chunks and vice versa', async () => {
+  const expandedEs = expandVisualRagQuery('envase según el manual de marca con paleta de colores');
+  assert.match(expandedEs, /\bpackaging\b/);
+  assert.match(expandedEs, /\bbrand\b/);
+  assert.match(expandedEs, /\bpalette\b/);
+
+  const userId = 'u_cross_lingual';
+  const chatId = 'chat_en_pdf';
+  await ragStore.clearCollection(userId, `chat:${chatId}`);
+  await ragStore.appendChunks(userId, `chat:${chatId}`, [
+    {
+      text: 'Quarterly HR payroll calendar and holiday reimbursement policy for regional offices.',
+      source: 'corporate-guide.pdf',
+      chunkIndex: 0,
+    },
+    {
+      text: 'Brand Identity Guidelines — Aurora Botanics: Cylindrical bottle in frosted glass with brushed brass cap. Official primary palette #0FA and Pantone 289 C, geometric sans-serif wordmark.',
+      source: 'aurora-brand-guidelines.pdf',
+      chunkIndex: 1,
+    },
+  ]);
+
+  const resEsToEn = await directImagePrompt({
+    prompt: 'genera una foto comercial del envase con los colores corporativos del manual de marca',
+    userId,
+    chatId,
+    lexicalOnly: true,
+  });
+
+  assert.equal(resEsToEn.grounded, true);
+  assert.equal(normalizeHexColor('#0fa'), '#00FFAA');
+  assert.deepEqual(resEsToEn.hexColors, ['#00FFAA'], 'normalizes 3-digit #0FA hex to #00FFAA');
+  assert.ok(resEsToEn.colorSpecs.some((s) => /Pantone 289 C/i.test(s)));
+  assert.match(resEsToEn.prompt, /#00FFAA, Pantone 289 C/);
+  assert.match(resEsToEn.prompt, /frosted glass/i);
+  assert.match(resEsToEn.prompt, /form cylindrical bottle/i);
+  assert.match(resEsToEn.prompt, /typography geometric sans-serif/i);
+  assert.doesNotMatch(resEsToEn.prompt, /payroll|reimbursement/i);
+
+  await ragStore.clearCollection(userId, `chat:${chatId}`);
+});
+
+test('selectDiverseVisualChunks: MMR avoids near-duplicate paragraphs and captures complementary visual sections', () => {
+  const candidates = [
+    {
+      text: 'Sección 1 Paleta: Colores primarios oficiales de la marca #112233 y #445566 para todas las piezas gráficas.',
+      source: 'manual.pdf',
+      score: 6.0,
+    },
+    {
+      text: 'Sección 1 Resumen Paleta: Colores primarios oficiales de la marca #112233 y #445566 aplicados en piezas gráficas.',
+      source: 'manual.pdf',
+      score: 5.9,
+    },
+    {
+      text: 'Sección 4 Envase Industrial: Frasco octogonal de 250 ml en vidrio esmerilado con tapa de madera de nogal.',
+      source: 'manual.pdf',
+      score: 4.6,
+    },
+  ];
+
+  const picked = selectDiverseVisualChunks(candidates, 2, 0.72);
+  assert.equal(picked.length, 2);
+  assert.match(picked[0].text, /#112233/);
+  assert.match(picked[1].text, /Frasco octogonal de 250 ml/, 'MMR skips near-duplicate palette chunk in favor of complementary geometry/material chunk');
+});
+
+test('resolveVisualContinuity: 3+ turn storyboard ledger preserves founding protagonist anchor without mixing unrelated earlier images', async () => {
+  // Ordered newest-first (as returned by `ORDER BY timestamp DESC`):
+  //   - Turn 3 (priors[0]): sequel scene ("el mismo personaje mirando un engranaje dorado")
+  //   - Turn 2 (priors[1]): founding protagonist ("Valeria, relojera suiza con gafas de carey y delantal verde oliva")
+  //   - Turn 1 (priors[2]): unrelated earlier chart ("gráfico financiero trimestral de ventas")
+  const mockPrisma = {
+    chat: { findFirst: async () => ({ id: 'chat_storyboard' }) },
+    message: {
+      findMany: async () => [
+        {
+          files: JSON.stringify([
+            {
+              type: 'image',
+              prompt: 'el mismo personaje examinando un engranaje dorado bajo una lámpara',
+              aspectRatio: '16:9',
+            },
+          ]),
+        },
+        {
+          files: JSON.stringify([
+            {
+              type: 'image',
+              prompt: 'Valeria, relojera suiza con gafas de carey, cabello rizado cobrizo y delantal verde oliva en su taller',
+              aspectRatio: '16:9',
+            },
+          ]),
+        },
+        {
+          files: JSON.stringify([
+            {
+              type: 'image',
+              prompt: 'gráfico financiero trimestral de ventas corporativas',
+              aspectRatio: '16:9',
+            },
+          ]),
+        },
+      ],
+    },
+  };
+
+  const turn4 = await directImagePrompt({
+    prompt: 'el mismo personaje saliendo a una calle nevada de noche',
+    rawUserPrompt: 'ahora genera otra escena con el mismo personaje saliendo a una calle nevada de noche',
+    userId: 'u_story',
+    chatId: 'chat_storyboard',
+    prisma: mockPrisma,
+    aspectRatio: '16:9',
+  });
+
+  assert.equal(turn4.continuityMode, 'strict');
+  assert.match(turn4.visualAnchor, /Valeria, relojera suiza con gafas de carey/);
+  assert.match(turn4.prompt, /origin anchor \("Valeria, relojera suiza con gafas de carey/);
+  assert.match(turn4.prompt, /latest frame \("el mismo personaje examinando un engranaje dorado/);
+  assert.doesNotMatch(turn4.prompt, /gráfico financiero/, 'never contaminates chain with unrelated older images');
+});

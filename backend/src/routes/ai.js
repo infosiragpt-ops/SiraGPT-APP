@@ -11255,6 +11255,7 @@ router.post(
             aspectRatio,
             quality,
             model,
+            count: imageCount,
             userId,
             chatId,
             projectId: preValidatedChat?.projectId || undefined,
@@ -11383,7 +11384,9 @@ router.post(
           requestedQuality: quality,
           ...(background ? { background } : {}),
           ...(ragMeta?.archetype ? { ragArchetype: ragMeta.archetype } : {}),
+          ...(Array.isArray(ragMeta?.facets) && ragMeta.facets.length ? { ragFacets: ragMeta.facets } : {}),
           ...(ragMeta?.continuityMode && ragMeta.continuityMode !== 'none' ? { continuityMode: ragMeta.continuityMode } : {}),
+          ...(ragMeta?.visualAnchor ? { visualAnchor: ragMeta.visualAnchor } : {}),
           ...(ragMeta?.grounded ? { ragGrounded: true } : {}),
         });
       }

@@ -35,6 +35,7 @@
 const ragStore = require('../rag-store');
 const ragService = require('../rag-service');
 const {
+  documentTokens,
   searchDocumentLexical,
   diversifyDocumentSources,
   queryFocusedExcerpt,
@@ -328,35 +329,272 @@ function detectVisualContinuityMode(text) {
   return 'none';
 }
 
+// ── Cross-Lingual ES↔EN Visual Query Expansion & MMR Chunk Diversity ──────
+
+const VISUAL_BILINGUAL_CLUSTERS = [
+  {
+    es: ['marca', 'manual de marca', 'identidad', 'corporativo', 'corporativos', 'logotipo'],
+    en: ['brand', 'guidelines', 'identity', 'corporate', 'palette', 'logo'],
+  },
+  {
+    es: ['color', 'colores', 'paleta', 'tono', 'tonos', 'acento', 'primario', 'secundario'],
+    en: ['color', 'colors', 'palette', 'tone', 'accent', 'primary', 'secondary', 'hex', 'pantone'],
+  },
+  {
+    es: ['envase', 'empaque', 'botella', 'frasco', 'caja', 'etiqueta', 'tapa', 'bolsa', 'lata'],
+    en: ['packaging', 'container', 'bottle', 'jar', 'box', 'label', 'cap', 'lid', 'pouch'],
+  },
+  {
+    es: ['producto', 'dispositivo', 'cargador', 'cafetera', 'reloj', 'termo', 'auriculares', 'calzado', 'perfume', 'cosmetico'],
+    en: ['product', 'device', 'charger', 'espresso', 'coffee', 'watch', 'thermos', 'headphones', 'footwear', 'perfume', 'fragrance', 'skincare'],
+  },
+  {
+    es: ['material', 'materiales', 'vidrio', 'acero', 'aluminio', 'madera', 'nogal', 'roble', 'ceramica', 'cuero', 'laton', 'hormigon', 'marmol', 'lino', 'papel'],
+    en: ['material', 'materials', 'glass', 'steel', 'aluminum', 'wood', 'walnut', 'oak', 'ceramic', 'leather', 'brass', 'concrete', 'marble', 'linen', 'kraft'],
+  },
+  {
+    es: ['mate', 'cepillado', 'esmerilado', 'anodizado', 'brillante', 'textura', 'acabado'],
+    en: ['matte', 'brushed', 'frosted', 'anodized', 'glossy', 'polished', 'texture', 'finish'],
+  },
+  {
+    es: ['arquitectura', 'pabellon', 'edificio', 'fachada', 'interior', 'sala', 'habitacion', 'oficina', 'mobiliario'],
+    en: ['architecture', 'pavilion', 'building', 'facade', 'interior', 'room', 'living', 'office', 'furniture'],
+  },
+  {
+    es: ['tipografia', 'fuente', 'letra', 'titulo', 'portada', 'cartel', 'poster', 'infografia', 'diagrama'],
+    en: ['typography', 'typeface', 'font', 'headline', 'title', 'cover', 'poster', 'infographic', 'diagram'],
+  },
+  {
+    es: ['personaje', 'protagonista', 'vestuario', 'ropa', 'retrato', 'modelo'],
+    en: ['character', 'protagonist', 'wardrobe', 'apparel', 'garment', 'portrait', 'subject'],
+  },
+  {
+    es: ['vehiculo', 'coche', 'auto', 'joya', 'anillo', 'diamante'],
+    en: ['vehicle', 'car', 'automotive', 'jewelry', 'ring', 'diamond', 'gemstone'],
+  },
+];
+
+function escapeRegexLiteral(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsClusterTerm(normQuery, terms) {
+  for (const t of terms) {
+    const re = new RegExp(`\\b${escapeRegexLiteral(t)}\\b`, 'i');
+    if (re.test(normQuery)) return true;
+  }
+  return false;
+}
+
+/**
+ * Deterministic <0.5ms bilingual ES↔EN visual query expansion so Spanish
+ * prompts retrieve English brand/product/architecture PDF chunks in lexical
+ * BM25 mode and vice versa — zero LLM roundtrips.
+ */
+function expandVisualRagQuery(query) {
+  const base = collapseSpaces(query);
+  if (!base) return '';
+  const norm = normalizePlain(base);
+  const existingWords = new Set(norm.split(/\W+/).filter(Boolean));
+  const added = [];
+
+  for (const cluster of VISUAL_BILINGUAL_CLUSTERS) {
+    const hasEs = containsClusterTerm(norm, cluster.es);
+    const hasEn = containsClusterTerm(norm, cluster.en);
+    if (hasEs) {
+      for (const term of cluster.en) {
+        for (const token of term.split(/\s+/)) {
+          if (token && !existingWords.has(token) && !added.includes(token)) {
+            added.push(token);
+            if (added.length >= 18) break;
+          }
+        }
+        if (added.length >= 18) break;
+      }
+    }
+    if (hasEn && added.length < 18) {
+      for (const term of cluster.es) {
+        for (const token of term.split(/\s+/)) {
+          if (token && !existingWords.has(token) && !added.includes(token)) {
+            added.push(token);
+            if (added.length >= 18) break;
+          }
+        }
+        if (added.length >= 18) break;
+      }
+    }
+    if (added.length >= 18) break;
+  }
+
+  return added.length > 0 ? `${base} ${added.join(' ')}` : base;
+}
+
 // ── Visual Fact & Palette Extraction from Retrieved Chunks ────────────────
 
 const HEX_COLOR_RE = /#(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})\b/g;
-const MATERIAL_CUE_RE = /\b(?:vidrio(?:\s+esmerilado)?|acero(?:\s+inoxidable|\s+cepillado)?|aluminio(?:\s+anodizado|\s+cepillado)?|madera(?:\s+de\s+[a-záéíóúñ]+)?|ceramica(?:\s+mate)?|porcelana|cuero|piel|algodon(?:\s+organico)?|lino|seda|terciopelo|papel\s+kraft|carton\s+reciclado|marmol|travertino|hormigon|concreto|laton|bronce|oro\s+mate|titanio|fibra\s+de\s+carbono|brushed\s+(?:aluminum|steel|brass)|frosted\s+glass|matte\s+(?:ceramic|black|white)|oak\s+wood|walnut|linen|kraft\s+paper|travertine|terracotta)\b/gi;
+const COLOR_SPEC_RE = /\b(?:Pantone\s+[0-9A-Za-z][0-9A-Za-z\s-]{0,14}?(?=\s*(?:[,.;)|]|$|\band\b|\by\b))|PMS\s+[0-9]{2,4}\s*[CUcu]?|RAL\s+[0-9]{4})\b/gi;
+const MATERIAL_CUE_RE = /\b(?:vidrio(?:\s+esmerilado|\s+ahumado)?|acero(?:\s+inoxidable|\s+cepillado)?|aluminio(?:\s+anodizado|\s+cepillado)?|madera(?:\s+de\s+[a-záéíóúñ]+)?|ceramica(?:\s+mate)?|porcelana|cuero(?:\s+vegetal)?|piel|algodon(?:\s+organico)?|lino|seda|terciopelo|papel\s+kraft|carton\s+reciclado|marmol|travertino|hormigon(?:\s+blanco|\s+visto)?|concreto|laton(?:\s+cepillado)?|bronce|oro\s+(?:mate|18k|rosa)|platino|titanio|fibra\s+de\s+carbono|brushed\s+(?:aluminum|steel|brass|titanium)|anodized\s+aluminum|frosted\s+glass|smoked\s+glass|matte\s+(?:ceramic|black|white|porcelain)|oak\s+wood|walnut(?:\s+wood)?|linen|kraft\s+paper|travertine|terracotta|carbon\s+fiber)\b/gi;
+const GEOMETRY_CUE_RE = /\b(?:(?:frasco|envase|cuerpo|botella|estructura|silueta|caja|diseño)\s+(?:octogonal|cilindric[oa]|hexagonal|rectangular|esferic[oa]|cubica|minimalista|curv[oa]|modular)|(?:octagonal|cylindrical|hexagonal|spherical|modular|beveled)\s+(?:bottle|jar|body|vessel|housing|form|silhouette)|esquinas?\s+redondeadas?|bordes?\s+biselados?|rounded\s+corners?|beveled\s+edges?|\d{2,4}\s?(?:ml|mm|cm|oz))\b/gi;
+const TYPOGRAPHY_STYLE_CUE_RE = /\b(?:sans[\s-]?serif\s+geometrica|geometric\s+sans(?:[\s-]?serif)?|serif\s+editorial|editorial\s+serif|high[\s-]?contrast\s+serif|grotesca\s+moderna|neo[\s-]?grotesque|tipografia\s+(?:condensada|minimalista|monoespaciada)|condensed\s+sans|monospace\s+typeface)\b/gi;
+
+function normalizeHexColor(rawHex) {
+  const clean = String(rawHex || '').trim().toUpperCase();
+  if (/^#[0-9A-F]{6}$/.test(clean)) return clean;
+  if (/^#[0-9A-F]{3}$/.test(clean)) {
+    return `#${clean[1]}${clean[1]}${clean[2]}${clean[2]}${clean[3]}${clean[3]}`;
+  }
+  return clean;
+}
+
+function jaccardSetSimilarity(setA, setB) {
+  if (!setA || !setB || setA.size === 0 || setB.size === 0) return 0;
+  let inter = 0;
+  const [small, large] = setA.size <= setB.size ? [setA, setB] : [setB, setA];
+  for (const tok of small) {
+    if (large.has(tok)) inter += 1;
+  }
+  const union = setA.size + setB.size - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+function computeVisualSpecDensityBonus(text) {
+  if (!text) return 0;
+  let bonus = 0;
+  HEX_COLOR_RE.lastIndex = 0;
+  COLOR_SPEC_RE.lastIndex = 0;
+  MATERIAL_CUE_RE.lastIndex = 0;
+  GEOMETRY_CUE_RE.lastIndex = 0;
+  if (HEX_COLOR_RE.test(text) || COLOR_SPEC_RE.test(text)) bonus += 0.07;
+  if (MATERIAL_CUE_RE.test(text)) bonus += 0.05;
+  if (GEOMETRY_CUE_RE.test(text)) bonus += 0.03;
+  HEX_COLOR_RE.lastIndex = 0;
+  COLOR_SPEC_RE.lastIndex = 0;
+  MATERIAL_CUE_RE.lastIndex = 0;
+  GEOMETRY_CUE_RE.lastIndex = 0;
+  return bonus;
+}
+
+/**
+ * Token-Jaccard Maximal Marginal Relevance (MMR) selector over candidate RAG
+ * chunks (`lambda = 0.72`). Ensures multi-chunk retrieval from long documents
+ * captures complementary visual facets (e.g. brand palette chunk + material/form
+ * chunk + typography/mood chunk) instead of near-duplicate paragraphs.
+ */
+function selectDiverseVisualChunks(candidates, k = 4, lambda = 0.72) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return [];
+  const limit = Math.max(1, k);
+
+  // Deduplicate exact normalized chunk bodies first.
+  const unique = [];
+  const seenText = new Set();
+  for (const c of candidates) {
+    const raw = String(c?.text || '').trim();
+    if (!raw) continue;
+    const key = normalizePlain(raw);
+    if (!key || seenText.has(key)) continue;
+    seenText.add(key);
+    unique.push(c);
+  }
+  if (unique.length <= limit) return unique;
+
+  const maxRawScore = Math.max(...unique.map((c) => Number(c.score) || 0), 1e-6);
+  const prepared = unique.map((chunk, idx) => {
+    const rawScore = Number(chunk.score);
+    const rel = Number.isFinite(rawScore) && rawScore > 0
+      ? rawScore / maxRawScore
+      : Math.max(0.25, 1 - idx * 0.1);
+    return {
+      chunk,
+      tokens: new Set(documentTokens(chunk.text)),
+      relevance: Math.min(1.15, rel + computeVisualSpecDensityBonus(chunk.text)),
+      source: chunk.source ? String(chunk.source) : '',
+    };
+  });
+
+  const selected = [];
+  const used = new Set();
+
+  while (selected.length < limit && used.size < prepared.length) {
+    let bestIdx = -1;
+    let bestScore = -Infinity;
+
+    for (let i = 0; i < prepared.length; i += 1) {
+      if (used.has(i)) continue;
+      const item = prepared[i];
+      let maxSim = 0;
+      let sameSourceCount = 0;
+      for (const sel of selected) {
+        const sim = jaccardSetSimilarity(item.tokens, sel.tokens);
+        if (sim > maxSim) maxSim = sim;
+        if (item.source && sel.source && item.source === sel.source) sameSourceCount += 1;
+      }
+      const mmrScore = selected.length === 0
+        ? item.relevance
+        : (lambda * item.relevance) - ((1 - lambda) * maxSim) - (sameSourceCount > 0 ? 0.03 * sameSourceCount : 0);
+      if (mmrScore > bestScore) {
+        bestScore = mmrScore;
+        bestIdx = i;
+      }
+    }
+
+    if (bestIdx < 0) break;
+    used.add(bestIdx);
+    selected.push(prepared[bestIdx]);
+  }
+
+  return selected.map((s) => s.chunk);
+}
 
 function extractVisualFactsFromChunks(chunks, query) {
   if (!Array.isArray(chunks) || chunks.length === 0) {
-    return { summary: '', hexColors: [], materials: [], sources: [] };
+    return {
+      summary: '',
+      hexColors: [],
+      colorSpecs: [],
+      materials: [],
+      geometryCues: [],
+      typographyCues: [],
+      sources: [],
+    };
   }
 
+  const expandedQuery = expandVisualRagQuery(query || '');
   const hexSet = new Set();
+  const colorSpecSet = new Set();
   const materialSet = new Set();
+  const geometrySet = new Set();
+  const typographySet = new Set();
   const sourceSet = new Set();
   const excerpts = [];
 
-  for (const hit of chunks.slice(0, 4)) {
+  const diverseChunks = selectDiverseVisualChunks(chunks, 4);
+
+  for (const hit of diverseChunks) {
     const rawText = String(hit?.text || '');
     if (!rawText.trim()) continue;
 
     for (const hexMatch of rawText.matchAll(HEX_COLOR_RE)) {
-      if (hexSet.size < 5) hexSet.add(hexMatch[0].toUpperCase());
+      if (hexSet.size < 5) hexSet.add(normalizeHexColor(hexMatch[0]));
+    }
+    for (const csMatch of rawText.matchAll(COLOR_SPEC_RE)) {
+      const cleanedSpec = collapseSpaces(csMatch[0]);
+      if (cleanedSpec && colorSpecSet.size < 4) colorSpecSet.add(cleanedSpec);
     }
     for (const matMatch of rawText.matchAll(MATERIAL_CUE_RE)) {
       const cleanedMat = collapseSpaces(matMatch[0].toLowerCase());
       if (cleanedMat && materialSet.size < 5) materialSet.add(cleanedMat);
     }
+    for (const geoMatch of rawText.matchAll(GEOMETRY_CUE_RE)) {
+      const cleanedGeo = collapseSpaces(geoMatch[0].toLowerCase());
+      if (cleanedGeo && geometrySet.size < 4) geometrySet.add(cleanedGeo);
+    }
+    for (const typoMatch of rawText.matchAll(TYPOGRAPHY_STYLE_CUE_RE)) {
+      const cleanedTypo = collapseSpaces(typoMatch[0].toLowerCase());
+      if (cleanedTypo && typographySet.size < 3) typographySet.add(cleanedTypo);
+    }
     if (hit.source) sourceSet.add(String(hit.source));
 
-    const focused = queryFocusedExcerpt(rawText, query || '', 210);
+    const focused = queryFocusedExcerpt(rawText, expandedQuery || query || '', 210);
     const sanitized = sanitizeRetrievedVisualData(focused, 210);
     if (sanitized && !excerpts.includes(sanitized)) {
       excerpts.push(sanitized);
@@ -364,17 +602,27 @@ function extractVisualFactsFromChunks(chunks, query) {
   }
 
   const hexColors = [...hexSet];
+  const colorSpecs = [...colorSpecSet];
   const materials = [...materialSet];
+  const geometryCues = [...geometrySet];
+  const typographyCues = [...typographySet];
+
   const parts = [];
-  if (hexColors.length > 0) parts.push(`palette ${hexColors.join(', ')}`);
+  const paletteTokens = [...hexColors, ...colorSpecs];
+  if (paletteTokens.length > 0) parts.push(`palette ${paletteTokens.join(', ')}`);
   if (materials.length > 0) parts.push(`materials ${materials.join(', ')}`);
+  if (geometryCues.length > 0) parts.push(`form ${geometryCues.join(', ')}`);
+  if (typographyCues.length > 0) parts.push(`typography ${typographyCues.join(', ')}`);
   if (excerpts.length > 0) parts.push(excerpts.slice(0, 2).join(' | '));
 
   const combined = sanitizeRetrievedVisualData(parts.join('; '), MAX_GROUNDING_CHARS);
   return {
     summary: combined,
     hexColors,
+    colorSpecs,
     materials,
+    geometryCues,
+    typographyCues,
     sources: [...sourceSet].slice(0, 4),
   };
 }
@@ -434,6 +682,7 @@ function collectNonImageFileIds({ documentFileIds, fileIds, fileMetadata }) {
 
 async function retrieveFromRagCollection(userId, collection, query, k = 4, { lexicalOnly = false } = {}) {
   if (!userId || !collection) return [];
+  const expandedQuery = expandVisualRagQuery(query);
   try {
     const stats = await Promise.resolve(ragStore.stats(userId, collection));
     if (!stats || !stats.chunks || stats.chunks <= 0) return [];
@@ -443,7 +692,7 @@ async function retrieveFromRagCollection(userId, collection, query, k = 4, { lex
       try {
         const timeoutSentinel = Symbol('rag_timeout');
         const raced = await Promise.race([
-          ragService.retrieve(userId, collection, query, k, {
+          ragService.retrieve(userId, collection, expandedQuery, k, {
             hybrid: true,
             mmr: true,
             documentMode: true,
@@ -457,7 +706,7 @@ async function retrieveFromRagCollection(userId, collection, query, k = 4, { lex
           }),
         ]);
         if (raced !== timeoutSentinel && Array.isArray(raced) && raced.length > 0) {
-          return raced;
+          return selectDiverseVisualChunks(raced, k);
         }
       } catch {
         // Fall through to deterministic lexical BM25 over stored chunks.
@@ -468,13 +717,13 @@ async function retrieveFromRagCollection(userId, collection, query, k = 4, { lex
 
     const entries = await Promise.resolve(ragStore.getAll(userId, collection));
     if (!Array.isArray(entries) || entries.length === 0) return [];
-    const lexHits = searchDocumentLexical(entries, query, Math.max(k * 2, 8))
+    const lexHits = searchDocumentLexical(entries, expandedQuery, Math.max(k * 3, 10))
       .filter((h) => h && h.doc && Number.isInteger(h.doc._idx) && h.score > 0)
       .map((h) => ({
         ...entries[h.doc._idx],
         score: h.score,
       }));
-    return diversifyDocumentSources(lexHits, k);
+    return selectDiverseVisualChunks(diversifyDocumentSources(lexHits, Math.max(k * 2, 8)), k);
   } catch {
     return [];
   }
@@ -661,18 +910,29 @@ async function retrieveImageDocumentGrounding({
       chatPreValidated,
     });
     if (fileChunks.length > 0) {
-      const lexRanked = searchDocumentLexical(fileChunks, query, 8)
+      const expandedQuery = expandVisualRagQuery(query);
+      const lexRanked = searchDocumentLexical(fileChunks, expandedQuery, 12)
         .filter((h) => h && h.doc && Number.isInteger(h.doc._idx) && h.score > 0)
         .map((h) => ({ ...fileChunks[h.doc._idx], score: h.score }));
       const selected = lexRanked.length > 0
-        ? diversifyDocumentSources(lexRanked, 4)
-        : fileChunks.slice(0, 2);
+        ? selectDiverseVisualChunks(diversifyDocumentSources(lexRanked, 8), 4)
+        : selectDiverseVisualChunks(fileChunks, 3);
       for (const s of selected) collectedHits.push(s);
     }
   }
 
   if (collectedHits.length === 0) {
-    return { grounded: false, summary: '', hexColors: [], materials: [], sources: [], chunkCount: 0 };
+    return {
+      grounded: false,
+      summary: '',
+      hexColors: [],
+      colorSpecs: [],
+      materials: [],
+      geometryCues: [],
+      typographyCues: [],
+      sources: [],
+      chunkCount: 0,
+    };
   }
 
   const extracted = extractVisualFactsFromChunks(collectedHits, query);
@@ -680,13 +940,16 @@ async function retrieveImageDocumentGrounding({
     grounded: Boolean(extracted.summary),
     summary: extracted.summary,
     hexColors: extracted.hexColors,
+    colorSpecs: extracted.colorSpecs,
     materials: extracted.materials,
+    geometryCues: extracted.geometryCues,
+    typographyCues: extracted.typographyCues,
     sources: extracted.sources,
     chunkCount: collectedHits.length,
   };
 }
 
-// ── Cross-Turn Visual Continuity Bible ────────────────────────────────────
+// ── Cross-Turn Multi-Frame Visual Continuity Ledger ───────────────────────
 
 function extractPriorImagePromptsFromMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return [];
@@ -697,23 +960,61 @@ function extractPriorImagePromptsFromMessages(messages) {
       const isImg = f.type === 'image' || String(f.mimeType || f.type || '').startsWith('image/') || Boolean(f.aspectRatio);
       if (!isImg) continue;
       const rawPrompt = stripPreviousImageDirection(String(f.prompt || '').trim());
-      if (rawPrompt) {
+      const storedAnchor = f.visualAnchor ? stripPreviousImageDirection(String(f.visualAnchor).trim()) : null;
+      if (rawPrompt || storedAnchor) {
         found.push({
-          prompt: rawPrompt,
+          prompt: rawPrompt || storedAnchor,
+          visualAnchor: storedAnchor || null,
           aspectRatio: f.aspectRatio || null,
           archetype: f.ragArchetype || null,
         });
       }
     }
-    if (found.length >= 3) break;
+    if (found.length >= 6) break;
   }
   return found;
 }
 
 /**
+ * Walk backward from `priors[0]` (most recent frame) along contiguous sequel
+ * frames to recover the founding character/style origin anchor of the active
+ * series without mixing in unrelated images from earlier in the chat.
+ */
+function resolveOriginAndLatestAnchors(priors) {
+  if (!Array.isArray(priors) || priors.length === 0) {
+    return { originAnchor: '', latestScene: '' };
+  }
+  const latestScene = sanitizeRetrievedVisualData(priors[0].prompt, 180);
+  if (priors[0].visualAnchor) {
+    const stored = sanitizeRetrievedVisualData(priors[0].visualAnchor, 180);
+    if (stored) {
+      return { originAnchor: stored, latestScene: latestScene || stored };
+    }
+  }
+
+  let chainOriginIdx = 0;
+  while (
+    chainOriginIdx < priors.length - 1
+    && detectVisualContinuityMode(priors[chainOriginIdx].prompt) !== 'none'
+  ) {
+    chainOriginIdx += 1;
+    if (priors[chainOriginIdx].visualAnchor) {
+      const stored = sanitizeRetrievedVisualData(priors[chainOriginIdx].visualAnchor, 180);
+      if (stored) {
+        return { originAnchor: stored, latestScene: latestScene || stored };
+      }
+    }
+  }
+
+  const originAnchor = sanitizeRetrievedVisualData(priors[chainOriginIdx].prompt, 180) || latestScene;
+  return { originAnchor, latestScene };
+}
+
+/**
  * Resolve cross-turn visual continuity when the user explicitly asks to keep
  * the same character/subject (`strict`) or aesthetic/palette (`style`).
- * Returns `mode: 'none'` with ZERO DB reads for standalone prompts.
+ * Preserves the founding character/style `visualAnchor` across 3+ turn chains
+ * while returning `mode: 'none'` with ZERO DB reads for standalone prompts.
  */
 async function resolveVisualContinuity({
   prompt,
@@ -725,16 +1026,20 @@ async function resolveVisualContinuity({
 } = {}) {
   const mode = detectVisualContinuityMode(prompt);
   if (mode === 'none') {
-    return { mode: 'none', clause: '', priorCount: 0 };
+    return { mode: 'none', clause: '', priorCount: 0, visualAnchor: null };
   }
 
   let priors = [];
   if (Array.isArray(historyPrompts) && historyPrompts.length > 0) {
     priors = historyPrompts
       .map((item) => (typeof item === 'string'
-        ? { prompt: stripPreviousImageDirection(item) }
-        : { prompt: stripPreviousImageDirection(item?.prompt || ''), aspectRatio: item?.aspectRatio || null }))
-      .filter((p) => p.prompt);
+        ? { prompt: stripPreviousImageDirection(item), visualAnchor: null }
+        : {
+          prompt: stripPreviousImageDirection(item?.prompt || ''),
+          visualAnchor: item?.visualAnchor ? stripPreviousImageDirection(item.visualAnchor) : null,
+          aspectRatio: item?.aspectRatio || null,
+        }))
+      .filter((p) => p.prompt || p.visualAnchor);
   } else if (prisma && userId && chatId && typeof prisma.message?.findMany === 'function') {
     try {
       let owned = Boolean(chatPreValidated);
@@ -751,7 +1056,7 @@ async function resolveVisualContinuity({
         const rows = await prisma.message.findMany({
           where: { chatId, role: 'ASSISTANT', deletedAt: null },
           orderBy: { timestamp: 'desc' },
-          take: 8,
+          take: 10,
           select: { files: true },
         });
         priors = extractPriorImagePromptsFromMessages(rows);
@@ -762,22 +1067,35 @@ async function resolveVisualContinuity({
   }
 
   if (priors.length === 0) {
-    return { mode, clause: '', priorCount: 0 };
+    return { mode, clause: '', priorCount: 0, visualAnchor: null };
   }
 
-  const latestAnchor = sanitizeRetrievedVisualData(priors[0].prompt, 200);
-  if (!latestAnchor) {
-    return { mode, clause: '', priorCount: 0 };
+  const { originAnchor, latestScene } = resolveOriginAndLatestAnchors(priors);
+  if (!originAnchor) {
+    return { mode, clause: '', priorCount: 0, visualAnchor: null };
   }
 
-  const clause = mode === 'strict'
-    ? `Series visual continuity: Maintain exact character/subject identity, facial/structural features, signature wardrobe/materials, color palette, and art style established in the prior frame ("${latestAnchor}"), adapting only the new scene action and staging.`
-    : `Series visual continuity: Maintain the exact visual style, color palette, lighting mood, and rendering craft established in the prior series ("${latestAnchor}"), applied cleanly to this new subject.`;
+  const hasMultiStepChain = Boolean(
+    latestScene
+    && normalizePlain(originAnchor) !== normalizePlain(latestScene)
+  );
+
+  let clause;
+  if (mode === 'strict') {
+    clause = hasMultiStepChain
+      ? `Series visual continuity: Maintain exact character/subject identity, facial/structural features, signature wardrobe/materials, color palette, and art style from origin anchor ("${originAnchor}") and latest frame ("${latestScene}"), adapting only the new scene action and staging.`
+      : `Series visual continuity: Maintain exact character/subject identity, facial/structural features, signature wardrobe/materials, color palette, and art style established in the prior frame ("${originAnchor}"), adapting only the new scene action and staging.`;
+  } else {
+    clause = hasMultiStepChain
+      ? `Series visual continuity: Maintain the exact visual style, color palette, lighting mood, and rendering craft from origin style anchor ("${originAnchor}") and latest frame ("${latestScene}"), applied cleanly to this new subject.`
+      : `Series visual continuity: Maintain the exact visual style, color palette, lighting mood, and rendering craft established in the prior series ("${originAnchor}"), applied cleanly to this new subject.`;
+  }
 
   return {
     mode,
-    clause: clause.slice(0, MAX_CONTINUITY_CHARS + 60),
+    clause: clause.slice(0, MAX_CONTINUITY_CHARS + 120),
     priorCount: priors.length,
+    visualAnchor: originAnchor,
   };
 }
 
@@ -790,16 +1108,28 @@ function retrieveVisualDirection(query, {
   quality = '2K',
   model,
   quotedTexts = [],
+  facetQuery,
+  count = 1,
 } = {}) {
-  const hit = searchVisualDirectionCorpus(query, { style, imageType, aspectRatio, model });
+  const hit = searchVisualDirectionCorpus(query, {
+    style,
+    imageType,
+    aspectRatio,
+    model,
+    facetQuery: facetQuery !== undefined ? facetQuery : query,
+  });
   const primary = hit.primary;
   const secondary = hit.secondary;
+  const facets = Array.isArray(hit.facets) ? hit.facets : [];
 
   const segments = [
     primary.cameraAndOptics,
     primary.lightingAndColor,
     primary.surfaceAndMaterial,
   ];
+  for (const facet of facets) {
+    segments.push(facet.clause);
+  }
   if (secondary) {
     segments.push(`Complementary craft (${secondary.category}): ${secondary.surfaceAndMaterial}`);
   }
@@ -823,6 +1153,13 @@ function retrieveVisualDirection(query, {
     segments.push(primary.antiArtifacts);
   }
 
+  const parsedCount = Number.parseInt(count, 10);
+  if (Number.isFinite(parsedCount) && parsedCount > 1) {
+    segments.push(
+      `Multi-variant set (${Math.min(5, parsedCount)} images): Keep subject fidelity and visual style cohesive while varying subtle camera framing or pose across variants.`
+    );
+  }
+
   const normalizedQuality = String(quality || '').toUpperCase();
   if (normalizedQuality === '4K' || normalizedQuality === 'HD') {
     segments.push('Ultra-high 4K master resolution clarity and crisp micro-detail.');
@@ -833,6 +1170,7 @@ function retrieveVisualDirection(query, {
     secondaryArchetypeId: secondary ? secondary.id : null,
     category: primary.category,
     modelFamily: hit.modelGuidance.family,
+    facets: facets.map((f) => f.id),
     score: hit.score,
     directionClause: `Visual direction: ${collapseSpaces(segments.join(' '))}`,
   };
@@ -852,6 +1190,7 @@ async function directImagePrompt({
   aspectRatio = '1:1',
   quality = '2K',
   model,
+  count = 1,
   userId,
   chatId,
   projectId,
@@ -872,7 +1211,9 @@ async function directImagePrompt({
     return {
       prompt: '',
       archetype: null,
+      facets: [],
       continuityMode: 'none',
+      visualAnchor: null,
       grounded: false,
       groundedSourcesCount: 0,
       artistGuardApplied: false,
@@ -904,7 +1245,7 @@ async function directImagePrompt({
     lexicalOnly,
   });
 
-  // 4. Cross-Turn Visual Continuity Bible (zero DB reads unless explicit cue).
+  // 4. Cross-Turn Multi-Frame Visual Continuity Ledger (zero DB reads unless explicit cue).
   const continuity = await resolveVisualContinuity({
     prompt: intentSource,
     prisma,
@@ -916,7 +1257,7 @@ async function directImagePrompt({
 
   // 5. Tier-2 Curated Visual Direction BM25 RAG (augmented by grounded domain terms).
   const corpusQuery = grounding.grounded
-    ? `${intentSource} ${grounding.materials.join(' ')} ${grounding.summary.slice(0, 140)}`
+    ? `${intentSource} ${intentSource} ${grounding.materials.join(' ')} ${grounding.summary.slice(0, 140)}`
     : intentSource;
   const visualDirection = retrieveVisualDirection(corpusQuery, {
     style,
@@ -925,6 +1266,8 @@ async function directImagePrompt({
     quality,
     model,
     quotedTexts: quotedTypography,
+    facetQuery: intentSource,
+    count,
   });
 
   // 6. Assemble provider prompt with user subject FIRST for top attention weight,
@@ -955,15 +1298,22 @@ async function directImagePrompt({
     }
   }
 
+  const effectiveVisualAnchor = continuity.visualAnchor
+    || sanitizeRetrievedVisualData(safeBasePrompt, 180)
+    || null;
+
   return {
     prompt: finalPrompt,
     archetype: visualDirection.archetypeId,
     secondaryArchetype: visualDirection.secondaryArchetypeId,
     category: visualDirection.category,
+    facets: visualDirection.facets,
     continuityMode: continuity.mode,
+    visualAnchor: effectiveVisualAnchor,
     grounded: grounding.grounded,
     groundedSourcesCount: grounding.sources.length,
     hexColors: grounding.hexColors,
+    colorSpecs: grounding.colorSpecs,
     artistGuardApplied: artistGuard.neutralized,
     quotedTypography,
   };
@@ -1056,6 +1406,9 @@ module.exports = {
   retrieveImageDocumentGrounding,
   resolveVisualContinuity,
   retrieveVisualDirection,
+  expandVisualRagQuery,
+  selectDiverseVisualChunks,
+  normalizeHexColor,
   detectDocumentGroundingCue,
   detectVisualContinuityMode,
   extractQuotedTypography,

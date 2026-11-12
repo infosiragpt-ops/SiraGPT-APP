@@ -389,4 +389,64 @@ test('composer Image RAG: cross-turn strict continuity carries prior character v
   assert.ok(calls.reads >= 1);
   assert.match(calls.generate[0].prompt, /Series visual continuity:[\s\S]*Capitán espacial con traje blanco mate/);
   assert.equal(res.body.files[0].continuityMode, 'strict');
+  assert.match(res.body.files[0].visualAnchor, /Capitán espacial con traje blanco mate/);
+});
+
+test('composer Image RAG: 3-turn storyboard preserves Turn 1 visualAnchor in Turn 3 without anchor decay', async () => {
+  // Simulate Turn 1 having established protagonist, Turn 2 having stored visualAnchor, and now Turn 3 continuing.
+  const { request, calls } = await harness({
+    history: [
+      {
+        files: JSON.stringify([
+          {
+            type: 'image',
+            prompt: 'el mismo personaje reparando el motor de la nave',
+            visualAnchor: 'Elena, ingeniera orbital con chaqueta naranja reflectante y casco blanco',
+            aspectRatio: '16:9',
+          },
+        ]),
+      },
+    ],
+  });
+  const turn3 = await request({
+    prompt: 'el mismo personaje observando la Tierra desde la cúpula espacial',
+  });
+  assert.equal(turn3.statusCode, 200);
+  assert.ok(!turn3.body.error, turn3.body.error);
+  assert.equal(turn3.body.files[0].continuityMode, 'strict');
+  assert.equal(
+    turn3.body.files[0].visualAnchor,
+    'Elena, ingeniera orbital con chaqueta naranja reflectante y casco blanco'
+  );
+  assert.match(
+    calls.generate[0].prompt,
+    /Elena, ingeniera orbital con chaqueta naranja reflectante y casco blanco/
+  );
+  assert.match(
+    calls.generate[0].prompt,
+    /reparando el motor de la nave/
+  );
+});
+
+test('composer Image RAG: Spanish prompt grounds against an English brand guidelines PDF via cross-lingual expansion', async () => {
+  const { request, calls } = await harness({
+    source: false,
+    documents: {
+      'en-brand-pdf': {
+        originalName: 'brand-guidelines-en.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'Vesper Watch Co. Brand Guidelines: Octagonal bottle and brushed titanium watch case with primary palette #0F172A and Pantone 429 C.',
+      },
+    },
+  });
+  const res = await request({
+    prompt: 'genera una fotografía comercial del reloj siguiendo los colores del manual de marca',
+    fileId: 'en-brand-pdf',
+    referenceFileIds: ['en-brand-pdf'],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(res.body.files[0].ragGrounded, true);
+  assert.match(calls.generate[0].prompt, /#0F172A, Pantone 429 C/);
+  assert.match(calls.generate[0].prompt, /brushed titanium/i);
 });
