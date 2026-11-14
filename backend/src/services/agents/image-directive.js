@@ -221,16 +221,36 @@ function detectReferenceCue(text) {
 // has its own shape («crea un banner con este logo»): the output frame comes
 // from the deliverable, never from the reference's pixels.
 const FRAMED_DELIVERABLE_RE = /\b(banners?|portadas?|covers?|cabeceras?|encabezados?|posters?|carteles|cartel|flyers?|afiches?|miniaturas?|thumbnails?|wallpapers?|fondos? de pantalla|histori(?:a|as)|story|stories|reels?|avatar(?:es)?|iconos?|icons?|stickers?|fotos? de perfil|profile pictures?)\b/;
+const FOLLOWUP_DELIVERABLE_PREP_RE = /\b(?:como|para|en formato|convertirl[oa] en|pasarl[oa] a|adaptarl[oa] (?:a|para)|as a|into a)\s+(?:una?\s+|la\s+|el\s+|mi\s+)?(banners?|portadas?|covers?|cabeceras?|encabezados?|posters?|carteles|cartel|flyers?|afiches?|miniaturas?|thumbnails?|wallpapers?|fondos? de pantalla|histori(?:a|as)|story|stories|reels?|avatar(?:es)?|iconos?|icons?|stickers?|fotos? de perfil|profile pictures?)\b/;
+
+function deliverableNounToFrame(noun) {
+  if (/^(?:histori|story|stories|reel)/.test(noun)) return { frame: '9:16', orientation: 'portrait', deliverable: noun };
+  if (/^(?:avatar|icon|sticker|foto|profile)/.test(noun)) return { frame: '1:1', orientation: 'square', deliverable: noun };
+  return { frame: '16:9', orientation: 'landscape', deliverable: noun };
+}
+
 function detectReferenceDeliverableFrame(text) {
   const norm = canonicalText(text);
   if (!norm || !detectReferenceCue(text) || !REFERENCE_CREATE_VERB_RE.test(norm)) return null;
   const withoutMaterial = norm.replace(new RegExp(`\\b(?:con|de|usando|from|with|sobre|desde|a partir de|basad[ao]s? en)\\s+(?:este|esta|estos|estas|mi|mis|this|my|la|el)\\s+${REFERENCE_IMAGE_NOUN}\\b`, 'g'), ' ');
   const match = withoutMaterial.match(FRAMED_DELIVERABLE_RE);
   if (!match) return null;
-  const noun = match[1];
-  if (/^(?:histori|story|stories|reel)/.test(noun)) return { frame: '9:16', orientation: 'portrait', deliverable: noun };
-  if (/^(?:avatar|icon|sticker|foto|profile)/.test(noun)) return { frame: '1:1', orientation: 'square', deliverable: noun };
-  return { frame: '16:9', orientation: 'landscape', deliverable: noun };
+  return deliverableNounToFrame(match[1]);
+}
+
+/**
+ * Conversational deliverable adaptation of an existing chat image
+ * («quiero el gato como portada de Facebook», «ahora para historia de Instagram»):
+ * requires an explicit conversion preposition (`como`, `para`, `en formato`,
+ * `as a`, `into a`) so object mentions inside a scene («con el logo más grande»)
+ * never accidentally reframe the image.
+ */
+function detectFollowupDeliverableFrame(text) {
+  const norm = canonicalText(text);
+  if (!norm || /\b(?:inserta(?:r)?|pega(?:r)?|incrusta(?:r)?|adjunta(?:r)?)\b/.test(norm)) return null;
+  const match = norm.match(FOLLOWUP_DELIVERABLE_PREP_RE);
+  if (!match) return null;
+  return deliverableNounToFrame(match[1]);
 }
 
 // The user names the PREVIOUS image as the thing to edit while attaching a
@@ -942,5 +962,6 @@ module.exports = {
   detectPreviousImageCue,
   detectSpokenImageFrame,
   detectReferenceDeliverableFrame,
+  detectFollowupDeliverableFrame,
   pickEditLanguage,
 };

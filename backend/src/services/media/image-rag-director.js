@@ -41,6 +41,11 @@ const {
   queryFocusedExcerpt,
 } = require('../rag/document-retrieval');
 const { searchVisualDirectionCorpus } = require('./image-rag-corpus');
+const {
+  extractMultimodalVisualDna,
+  compileCumulativeVisualState,
+  neutralizeConflictingColorRealism,
+} = require('./image-visual-dna');
 
 const MAX_GROUNDING_CHARS = 480;
 const MAX_CONTINUITY_CHARS = 300;
@@ -64,7 +69,8 @@ function collapseSpaces(text) {
 
 // ── Idempotent Direction Stripping ────────────────────────────────────────
 
-const DIRECTION_TAIL_RE = /\s*(?:Reference visual attributes:|Series visual continuity:|Visual direction:|\n\nReference visual attributes:|\n\nSeries visual continuity:|\n\nVisual direction:)[\s\S]*$/i;
+const DIRECTION_HEAD_RE = /^(?:Reference continuity lock:\s*Depict the exact same subject[\s\S]*?or signature markings(?:;\s*mandatory active attributes:[^.]+)?\.(?:\s*Compose as a clean [0-9:]+ \([^)]+\) layout with balanced breathing room around the subject and zero unintended text or UI chrome\.)?\s*|Mandatory chromatic specification:\s*[^.]+\.\s*)/i;
+const DIRECTION_TAIL_RE = /\s*(?:Subject visual DNA \(keep consistent[^:]*\):|Mandatory visual state:|Reference visual attributes:|Series visual continuity:|Visual direction:|\n\nReference visual attributes:|\n\nSeries visual continuity:|\n\nVisual direction:)[\s\S]*$/i;
 
 /**
  * Strip any previously appended Image RAG enrichment so re-directing a prompt
@@ -72,7 +78,10 @@ const DIRECTION_TAIL_RE = /\s*(?:Reference visual attributes:|Series visual cont
  */
 function stripPreviousImageDirection(prompt) {
   if (typeof prompt !== 'string' || !prompt) return '';
-  return prompt.replace(DIRECTION_TAIL_RE, '').trim();
+  return prompt
+    .replace(DIRECTION_HEAD_RE, '')
+    .replace(DIRECTION_TAIL_RE, '')
+    .trim();
 }
 
 // ── AGENTS.md §17 & §12: Prompt-Injection & Secret Sanitizer ──────────────
@@ -961,10 +970,14 @@ function extractPriorImagePromptsFromMessages(messages) {
       if (!isImg) continue;
       const rawPrompt = stripPreviousImageDirection(String(f.prompt || '').trim());
       const storedAnchor = f.visualAnchor ? stripPreviousImageDirection(String(f.visualAnchor).trim()) : null;
-      if (rawPrompt || storedAnchor) {
+      const storedDna = typeof f.visualDna === 'string' && f.visualDna.trim() ? f.visualDna.trim() : null;
+      const storedOverrides = Array.isArray(f.activeOverrides) ? f.activeOverrides : null;
+      if (rawPrompt || storedAnchor || storedDna) {
         found.push({
-          prompt: rawPrompt || storedAnchor,
+          prompt: rawPrompt || storedAnchor || '',
           visualAnchor: storedAnchor || null,
+          visualDna: storedDna,
+          activeOverrides: storedOverrides,
           aspectRatio: f.aspectRatio || null,
           archetype: f.ragArchetype || null,
         });
@@ -973,6 +986,53 @@ function extractPriorImagePromptsFromMessages(messages) {
     if (found.length >= 6) break;
   }
   return found;
+}
+
+async function loadPriorImageHistoryEntries({
+  prisma,
+  userId,
+  chatId,
+  historyPrompts,
+  chatPreValidated = false,
+} = {}) {
+  if (Array.isArray(historyPrompts) && historyPrompts.length > 0) {
+    return historyPrompts
+      .map((item) => (typeof item === 'string'
+        ? { prompt: stripPreviousImageDirection(item), visualAnchor: null, visualDna: null, activeOverrides: null }
+        : {
+          prompt: stripPreviousImageDirection(item?.prompt || ''),
+          visualAnchor: item?.visualAnchor ? stripPreviousImageDirection(item.visualAnchor) : null,
+          visualDna: typeof item?.visualDna === 'string' ? item.visualDna : null,
+          activeOverrides: Array.isArray(item?.activeOverrides) ? item.activeOverrides : null,
+          aspectRatio: item?.aspectRatio || null,
+        }))
+      .filter((p) => p.prompt || p.visualAnchor || p.visualDna);
+  }
+  if (!prisma || !userId || !chatId || typeof prisma.message?.findMany !== 'function') {
+    return [];
+  }
+  try {
+    let owned = Boolean(chatPreValidated);
+    if (!owned && typeof prisma.chat?.findFirst === 'function') {
+      const chat = await prisma.chat.findFirst({
+        where: { id: chatId, userId, deletedAt: null },
+        select: { id: true },
+      });
+      owned = Boolean(chat);
+    } else if (!owned) {
+      owned = true;
+    }
+    if (!owned) return [];
+    const rows = await prisma.message.findMany({
+      where: { chatId, role: 'ASSISTANT', deletedAt: null },
+      orderBy: { timestamp: 'desc' },
+      take: 10,
+      select: { files: true },
+    });
+    return extractPriorImagePromptsFromMessages(rows);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -1029,42 +1089,13 @@ async function resolveVisualContinuity({
     return { mode: 'none', clause: '', priorCount: 0, visualAnchor: null };
   }
 
-  let priors = [];
-  if (Array.isArray(historyPrompts) && historyPrompts.length > 0) {
-    priors = historyPrompts
-      .map((item) => (typeof item === 'string'
-        ? { prompt: stripPreviousImageDirection(item), visualAnchor: null }
-        : {
-          prompt: stripPreviousImageDirection(item?.prompt || ''),
-          visualAnchor: item?.visualAnchor ? stripPreviousImageDirection(item.visualAnchor) : null,
-          aspectRatio: item?.aspectRatio || null,
-        }))
-      .filter((p) => p.prompt || p.visualAnchor);
-  } else if (prisma && userId && chatId && typeof prisma.message?.findMany === 'function') {
-    try {
-      let owned = Boolean(chatPreValidated);
-      if (!owned && typeof prisma.chat?.findFirst === 'function') {
-        const chat = await prisma.chat.findFirst({
-          where: { id: chatId, userId, deletedAt: null },
-          select: { id: true },
-        });
-        owned = Boolean(chat);
-      } else if (!owned) {
-        owned = true;
-      }
-      if (owned) {
-        const rows = await prisma.message.findMany({
-          where: { chatId, role: 'ASSISTANT', deletedAt: null },
-          orderBy: { timestamp: 'desc' },
-          take: 10,
-          select: { files: true },
-        });
-        priors = extractPriorImagePromptsFromMessages(rows);
-      }
-    } catch {
-      priors = [];
-    }
-  }
+  const priors = await loadPriorImageHistoryEntries({
+    prisma,
+    userId,
+    chatId,
+    historyPrompts,
+    chatPreValidated,
+  });
 
   if (priors.length === 0) {
     return { mode, clause: '', priorCount: 0, visualAnchor: null };
@@ -1202,11 +1233,14 @@ async function directImagePrompt({
   fileMetadata,
   ragHits,
   historyPrompts,
+  historyAnchorSource = null,
+  visionComplete = null,
+  signal = null,
   chatPreValidated = false,
   lexicalOnly = false,
 } = {}) {
   const cleanSubjectBase = stripPreviousImageDirection(String(prompt || rawUserPrompt || '').trim());
-  const intentSource = String(rawUserPrompt || cleanSubjectBase).trim();
+  const intentSource = stripPreviousImageDirection(String(rawUserPrompt || cleanSubjectBase).trim()) || cleanSubjectBase;
   if (!cleanSubjectBase) {
     return {
       prompt: '',
@@ -1214,6 +1248,8 @@ async function directImagePrompt({
       facets: [],
       continuityMode: 'none',
       visualAnchor: null,
+      visualDna: null,
+      activeOverrides: [],
       grounded: false,
       groundedSourcesCount: 0,
       artistGuardApplied: false,
@@ -1245,20 +1281,71 @@ async function directImagePrompt({
     lexicalOnly,
   });
 
-  // 4. Cross-Turn Multi-Frame Visual Continuity Ledger (zero DB reads unless explicit cue).
-  const continuity = await resolveVisualContinuity({
-    prompt: intentSource,
-    prisma,
-    userId,
-    chatId,
-    historyPrompts,
-    chatPreValidated,
-  });
+  // 4. Cross-Turn Continuity & Multimodal Visual DNA State Compiler.
+  //    - Standalone prompts (`!historyAnchorSource` and `continuityMode === 'none'`)
+  //      perform ZERO DB reads (`calls.reads === 0` invariant).
+  //    - Implicit history follow-ups on generation-only models pass `historyAnchorSource`
+  //      (prior image buffer + metadata), extracting Multimodal Visual DNA + pixel
+  //      colorimetry and compiling cumulative chromatic/trait deltas across turns.
+  let visualState;
+  let continuity;
+  if (historyAnchorSource) {
+    const priorEntries = await loadPriorImageHistoryEntries({
+      prisma,
+      userId,
+      chatId,
+      historyPrompts,
+      chatPreValidated,
+    });
+    const foundingPrompt = priorEntries.length > 0
+      ? priorEntries[priorEntries.length - 1].prompt
+      : (historyAnchorSource.metadata?.prompt || '');
+    const extractedDna = await extractMultimodalVisualDna(
+      historyAnchorSource.buffer,
+      historyAnchorSource.mimeType || 'image/png',
+      {
+        cachedVisualDna: historyAnchorSource.metadata?.visualDna || null,
+        priorPrompt: foundingPrompt,
+        visionComplete,
+        signal,
+      }
+    );
+    visualState = compileCumulativeVisualState({
+      currentPrompt: intentSource,
+      historyAnchorSource,
+      historyEntries: priorEntries,
+      extractedDna,
+      aspectRatio,
+    });
+    continuity = {
+      mode: 'strict',
+      clause: '',
+      priorCount: Math.max(1, priorEntries.length),
+      visualAnchor: visualState.originSubject || sanitizeRetrievedVisualData(foundingPrompt, 180) || null,
+    };
+  } else {
+    continuity = await resolveVisualContinuity({
+      prompt: intentSource,
+      prisma,
+      userId,
+      chatId,
+      historyPrompts,
+      chatPreValidated,
+    });
+    visualState = compileCumulativeVisualState({
+      currentPrompt: intentSource,
+      aspectRatio,
+    });
+  }
 
-  // 5. Tier-2 Curated Visual Direction BM25 RAG (augmented by grounded domain terms).
-  const corpusQuery = grounding.grounded
-    ? `${intentSource} ${intentSource} ${grounding.materials.join(' ')} ${grounding.summary.slice(0, 140)}`
+  // 5. Tier-2 Curated Visual Direction BM25 RAG (augmented by grounded domain terms
+  //    and, on history continuations like "ahora en celeste", the founding subject).
+  const subjectContextForCorpus = visualState.originSubject
+    ? `${intentSource} ${visualState.originSubject}`
     : intentSource;
+  const corpusQuery = grounding.grounded
+    ? `${subjectContextForCorpus} ${intentSource} ${grounding.materials.join(' ')} ${grounding.summary.slice(0, 140)}`
+    : subjectContextForCorpus;
   const visualDirection = retrieveVisualDirection(corpusQuery, {
     style,
     imageType,
@@ -1269,22 +1356,31 @@ async function directImagePrompt({
     facetQuery: intentSource,
     count,
   });
+  const harmonizedDirectionClause = neutralizeConflictingColorRealism(
+    visualDirection.directionClause,
+    visualState.activeOverrides
+  );
 
-  // 6. Assemble provider prompt with user subject FIRST for top attention weight,
-  //    bounded safely within MAX_PROVIDER_PROMPT_CHARS without ever truncating
-  //    the user's own core prompt.
+  // 6. Assemble provider prompt with mandatory subject/chromatic lock + user core
+  //    prompt FIRST for top T5/CLIP attention weight, bounded within MAX_PROVIDER_PROMPT_CHARS.
   const tailBlocks = [];
+  if (visualState.identityLockClause) {
+    tailBlocks.push(visualState.identityLockClause);
+  }
   if (grounding.grounded && grounding.summary) {
     tailBlocks.push(`Reference visual attributes: ${grounding.summary}`);
   }
   if (continuity.clause) {
     tailBlocks.push(continuity.clause);
   }
-  if (visualDirection.directionClause) {
-    tailBlocks.push(visualDirection.directionClause);
+  if (harmonizedDirectionClause) {
+    tailBlocks.push(harmonizedDirectionClause);
   }
 
-  let finalPrompt = safeBasePrompt;
+  let finalPrompt = visualState.frontLockPrefix
+    ? collapseSpaces(`${visualState.frontLockPrefix} ${safeBasePrompt}`)
+    : safeBasePrompt;
+
   for (const block of tailBlocks) {
     const candidate = `${finalPrompt} ${block}`.replace(/\s+/g, ' ').trim();
     if (candidate.length <= MAX_PROVIDER_PROMPT_CHARS) {
@@ -1310,6 +1406,8 @@ async function directImagePrompt({
     facets: visualDirection.facets,
     continuityMode: continuity.mode,
     visualAnchor: effectiveVisualAnchor,
+    visualDna: visualState.visualDna || null,
+    activeOverrides: visualState.activeOverrides || [],
     grounded: grounding.grounded,
     groundedSourcesCount: grounding.sources.length,
     hexColors: grounding.hexColors,
@@ -1324,6 +1422,7 @@ async function directImagePrompt({
  * edit mode). Strictly preserves all scoped target, selection, reference, and
  * canvas-role clauses, adding ONLY:
  *   - AGENTS.md §10.3 named-artist neutralization,
+ *   - Cumulative chromatic & deliverable state reinforcement across turns,
  *   - Document/brand RAG attributes (e.g. brand hex colors) when explicitly
  *     requested or attached,
  *   - Quoted typography precision when exact on-image text is quoted.
@@ -1331,6 +1430,8 @@ async function directImagePrompt({
 async function directImageEditPrompt({
   editPrompt,
   rawInstruction,
+  sourceImage = null,
+  aspectRatio = null,
   userId,
   chatId,
   projectId,
@@ -1341,17 +1442,50 @@ async function directImageEditPrompt({
   fileIds,
   fileMetadata,
   ragHits,
+  historyPrompts,
   chatPreValidated = false,
   lexicalOnly = false,
 } = {}) {
   const baseEditPrompt = stripPreviousImageDirection(String(editPrompt || rawInstruction || '').trim());
-  const intentSource = String(rawInstruction || baseEditPrompt).trim();
+  const intentSource = stripPreviousImageDirection(String(rawInstruction || baseEditPrompt).trim()) || baseEditPrompt;
   if (!baseEditPrompt) {
-    return { prompt: '', grounded: false, groundedSourcesCount: 0, artistGuardApplied: false };
+    return {
+      prompt: '',
+      grounded: false,
+      groundedSourcesCount: 0,
+      artistGuardApplied: false,
+      activeOverrides: [],
+      visualDna: null,
+    };
   }
 
   const artistGuard = neutralizeNamedArtistImitation(baseEditPrompt);
   let finalPrompt = artistGuard.prompt || baseEditPrompt;
+
+  // When editing a chat-history image across multiple turns, recover prior
+  // cumulative overrides (e.g. Turn 2 "color celeste" -> Turn 3 "portada de Facebook").
+  const isHistorySource = Boolean(
+    sourceImage && (
+      sourceImage.source === 'chat-history'
+      || Array.isArray(sourceImage.metadata?.activeOverrides)
+      || sourceImage.metadata?.visualDna
+    )
+  );
+  const priorEntries = isHistorySource
+    ? await loadPriorImageHistoryEntries({
+      prisma,
+      userId,
+      chatId,
+      historyPrompts,
+      chatPreValidated,
+    })
+    : [];
+  const visualState = compileCumulativeVisualState({
+    currentPrompt: intentSource,
+    historyAnchorSource: isHistorySource ? sourceImage : null,
+    historyEntries: priorEntries,
+    aspectRatio: aspectRatio || sourceImage?.metadata?.aspectRatio || '1:1',
+  });
 
   // For edits, query document grounding on explicit document/brand cues OR
   // when non-image documents were explicitly attached alongside the image.
@@ -1376,6 +1510,9 @@ async function directImageEditPrompt({
 
   const quotedTypography = extractQuotedTypography(intentSource);
   const extras = [];
+  if (visualState.editEnhancementClause) {
+    extras.push(visualState.editEnhancementClause);
+  }
   if (grounding.grounded && grounding.summary) {
     extras.push(`Reference visual attributes: ${grounding.summary}`);
   }
@@ -1397,6 +1534,8 @@ async function directImageEditPrompt({
     groundedSourcesCount: grounding.sources.length,
     artistGuardApplied: artistGuard.neutralized,
     quotedTypography,
+    activeOverrides: visualState.activeOverrides || [],
+    visualDna: sourceImage?.metadata?.visualDna || visualState.visualDna || null,
   };
 }
 

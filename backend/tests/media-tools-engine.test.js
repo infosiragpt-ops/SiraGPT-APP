@@ -700,3 +700,87 @@ test('edit_image: ties and compositions get no placement clause and no «Lienzo�
   assert.equal(engineCalls.edit[0].imageBuffer.toString(), 'a-pixels');
   assert.match(engineCalls.edit[0].prompt, /Input image 1 \(«photo\.jpg»\) is the canvas to edit; input image 2 \(«logo\.png»\) is material/);
 });
+
+test('edit_image pivots implicit chat-history follow-ups on generation-only models (FLUX 1.1 Pro) to Visual-DNA locked generateImage while still rejecting explicit fileId edits', async () => {
+  engineCanEdit = () => false;
+  const catPng = await require('sharp')({ create: { width: 64, height: 64, channels: 4, background: '#92400e' } }).png().toBuffer();
+  const catPath = path.join(ARTIFACT_DIR, 'flux-cat-turn1.png');
+  fs.writeFileSync(catPath, catPng);
+
+  const history = [
+    {
+      files: JSON.stringify([{
+        type: 'image',
+        fileId: 'flux-cat-1',
+        prompt: 'crea una imagen de un gato',
+        aspectRatio: '1:1',
+        version: 1,
+      }]),
+    },
+  ];
+  const filesById = {
+    'flux-cat-1': { id: 'flux-cat-1', userId: 'user-1', mimeType: 'image/png', path: catPath, filename: 'generated-cat.png' },
+  };
+  const prisma = {
+    chat: { findFirst: async () => ({ id: 'chat-1', userId: 'user-1', deletedAt: null }) },
+    file: {
+      findMany: async () => [],
+      findFirst: async ({ where }) => filesById[where.id] || null,
+    },
+    message: { findMany: async () => history },
+  };
+
+  // Turn 2: implicit chat-history continuation ("el gato de color celeste") on FLUX 1.1 Pro.
+  const ctx2 = fakeCtx({
+    prisma,
+    imageModel: 'fal-ai/flux-pro/v1.1',
+    imageProvider: 'fal',
+    userQuery: 'el gato de color celeste',
+  });
+  const r2 = await tool('edit_image').execute({ instruction: 'el gato de color celeste' }, ctx2);
+  assert.equal(r2.ok, true, r2.error);
+  assert.equal(engineCalls.edit.length, 0, 'generation-only model never calls pixel editImage');
+  assert.equal(engineCalls.generate.length, 1, 'pivots cleanly to generateImage');
+  assert.equal(engineCalls.generate[0].model, 'fal-ai/flux-pro/v1.1', 'keeps user selected model');
+  assert.equal(engineCalls.generate[0].provider, 'fal');
+  assert.equal(engineCalls.generate[0].failover, false);
+  assert.match(engineCalls.generate[0].prompt, /#7DD3FC/);
+  assert.equal(r2.parentFileId, 'flux-cat-1');
+
+  const meta2 = JSON.parse(fs.readFileSync(path.join(ARTIFACT_DIR, `${r2.id}.json`), 'utf8'));
+  assert.ok(Array.isArray(meta2.activeOverrides) && meta2.activeOverrides.some((o) => o.id === 'sky_blue'));
+
+  // Turn 3: "quiero el gato como portada de Facebook" -> 16:9 + cumulative sky-blue state!
+  history.unshift({
+    files: JSON.stringify([{
+      type: 'image',
+      fileId: `artifact:${r2.id}`,
+      prompt: 'el gato de color celeste',
+      aspectRatio: '1:1',
+      version: 2,
+      rootFileId: 'flux-cat-1',
+      visualDna: meta2.visualDna,
+      activeOverrides: meta2.activeOverrides,
+    }]),
+  });
+  const ctx3 = fakeCtx({
+    prisma,
+    imageModel: 'fal-ai/flux-pro/v1.1',
+    imageProvider: 'fal',
+    userQuery: 'quiero el gato como portada de Facebook',
+  });
+  const r3 = await tool('edit_image').execute({ instruction: 'quiero el gato como portada de Facebook' }, ctx3);
+  assert.equal(r3.ok, true, r3.error);
+  assert.equal(engineCalls.generate.length, 2);
+  assert.equal(engineCalls.generate[1].aspectRatio, '16:9');
+  assert.match(engineCalls.generate[1].prompt, /#7DD3FC/, 'retains Turn 2 sky-blue override');
+
+  // Explicit fileId edit on FLUX 1.1 Pro STILL returns image_edit_unsupported!
+  engineEditResult = { ok: false, code: 'image_edit_unsupported', error: 'El modelo seleccionado no permite esta edición.' };
+  const explicit = await tool('edit_image').execute(
+    { instruction: 'quita el fondo', fileId: 'flux-cat-1' },
+    fakeCtx({ prisma, imageModel: 'fal-ai/flux-pro/v1.1', imageProvider: 'fal' })
+  );
+  assert.equal(explicit.ok, false);
+  assert.equal(explicit.code, 'image_edit_unsupported');
+});
