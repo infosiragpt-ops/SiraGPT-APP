@@ -46,6 +46,10 @@ const {
   compileCumulativeVisualState,
   neutralizeConflictingColorRealism,
 } = require('./image-visual-dna');
+const {
+  compilePromptFidelitySpec,
+  compileEditFidelityClause,
+} = require('./image-prompt-fidelity');
 
 const MAX_GROUNDING_CHARS = 480;
 const MAX_CONTINUITY_CHARS = 300;
@@ -70,6 +74,7 @@ function collapseSpaces(text) {
 // ── Idempotent Direction Stripping ────────────────────────────────────────
 
 const DIRECTION_HEAD_RE = /^(?:Reference continuity lock:\s*Depict the exact same subject[\s\S]*?or signature markings(?:;\s*mandatory active attributes:[^.]+)?\.(?:\s*Compose as a clean [0-9:]+ \([^)]+\) layout with balanced breathing room around the subject and zero unintended text or UI chrome\.)?\s*|Mandatory chromatic specification:\s*[^.]+\.\s*)/i;
+const INLINE_FIDELITY_RE = /\s*(?:Exact scene specification:|Exact edit target:)\s*[\s\S]*?(?=\s*(?:Image framing requirement:|Subject visual DNA \(keep consistent[^:]*\):|Mandatory visual state:|Reference visual attributes:|Series visual continuity:|Visual direction:|$))/i;
 const DIRECTION_TAIL_RE = /\s*(?:Subject visual DNA \(keep consistent[^:]*\):|Mandatory visual state:|Reference visual attributes:|Series visual continuity:|Visual direction:|\n\nReference visual attributes:|\n\nSeries visual continuity:|\n\nVisual direction:)[\s\S]*$/i;
 
 /**
@@ -80,6 +85,7 @@ function stripPreviousImageDirection(prompt) {
   if (typeof prompt !== 'string' || !prompt) return '';
   return prompt
     .replace(DIRECTION_HEAD_RE, '')
+    .replace(INLINE_FIDELITY_RE, '')
     .replace(DIRECTION_TAIL_RE, '')
     .trim();
 }
@@ -1152,19 +1158,22 @@ function retrieveVisualDirection(query, {
   const primary = hit.primary;
   const secondary = hit.secondary;
   const facets = Array.isArray(hit.facets) ? hit.facets : [];
+  const isFaithfulDefault = primary.id === 'faithful_subject_focus';
 
   const segments = [
     primary.cameraAndOptics,
     primary.lightingAndColor,
-    primary.surfaceAndMaterial,
   ];
+  if (!isFaithfulDefault && primary.surfaceAndMaterial) {
+    segments.push(primary.surfaceAndMaterial);
+  }
   for (const facet of facets) {
     segments.push(facet.clause);
   }
-  if (secondary) {
+  if (!isFaithfulDefault && secondary) {
     segments.push(`Complementary craft (${secondary.category}): ${secondary.surfaceAndMaterial}`);
   }
-  if (hit.frameSpec) {
+  if (!isFaithfulDefault && hit.frameSpec) {
     segments.push(hit.frameSpec);
   }
   if (hit.modelGuidance && hit.modelGuidance.hint) {
@@ -1176,7 +1185,7 @@ function retrieveVisualDirection(query, {
     segments.push(
       `Typography precision: Render exact legible text ${quotedList} with accurate spelling, balanced kerning, and high figure-ground contrast; do not invent extra words or garbled lettering.`
     );
-  } else if (primary.preferTextFree) {
+  } else if (!isFaithfulDefault && primary.preferTextFree) {
     segments.push('Clean composition free of watermarks, signatures, UI overlays, or unintended text.');
   }
 
@@ -1235,6 +1244,7 @@ async function directImagePrompt({
   historyPrompts,
   historyAnchorSource = null,
   visionComplete = null,
+  translateComplete = null,
   signal = null,
   chatPreValidated = false,
   lexicalOnly = false,
@@ -1340,11 +1350,17 @@ async function directImagePrompt({
 
   // 5. Tier-2 Curated Visual Direction BM25 RAG (augmented by grounded domain terms
   //    and, on history continuations like "ahora en celeste", the founding subject).
+  //    Strip quoted on-image text literals before BM25 lookup so words inside
+  //    quotes (e.g. `"CAFÉ AURORA"`) never trigger unrelated landscape archetypes.
+  const unquotedIntentForCorpus = intentSource
+    .replace(/«[^«»\n]{1,80}»|“[^“”\n]{1,80}”|"[^"\n]{1,80}"/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   const subjectContextForCorpus = visualState.originSubject
-    ? `${intentSource} ${visualState.originSubject}`
-    : intentSource;
+    ? `${unquotedIntentForCorpus} ${visualState.originSubject}`
+    : unquotedIntentForCorpus;
   const corpusQuery = grounding.grounded
-    ? `${subjectContextForCorpus} ${intentSource} ${grounding.materials.join(' ')} ${grounding.summary.slice(0, 140)}`
+    ? `${subjectContextForCorpus} ${unquotedIntentForCorpus} ${grounding.materials.join(' ')} ${grounding.summary.slice(0, 140)}`
     : subjectContextForCorpus;
   const visualDirection = retrieveVisualDirection(corpusQuery, {
     style,
@@ -1353,16 +1369,49 @@ async function directImagePrompt({
     quality,
     model,
     quotedTexts: quotedTypography,
-    facetQuery: intentSource,
+    facetQuery: unquotedIntentForCorpus,
     count,
   });
-  const harmonizedDirectionClause = neutralizeConflictingColorRealism(
+  let harmonizedDirectionClause = neutralizeConflictingColorRealism(
     visualDirection.directionClause,
     visualState.activeOverrides
   );
 
-  // 6. Assemble provider prompt with mandatory subject/chromatic lock + user core
-  //    prompt FIRST for top T5/CLIP attention weight, bounded within MAX_PROVIDER_PROMPT_CHARS.
+  // 6. Bilingual Prompt Obedience & Positive Attribute-Binding Scene Spec:
+  //    Places a concise, 100% literal pre-nominal English visual scene spec
+  //    immediately after the user's core subject (inside CLIP-L's prime Tokens
+  //    4–36, BEFORE `Image framing requirement:` and `Visual direction:`),
+  //    binding non-natural colors, materials, exact counts, spatial relations,
+  //    and verbatim quoted literals with zero negative-color cross-attention pollution.
+  const framingIdx = safeBasePrompt.search(/\s*Image framing requirement:/i);
+  const coreSubjectPart = framingIdx >= 0
+    ? safeBasePrompt.slice(0, framingIdx).trim()
+    : safeBasePrompt;
+  const framingTailPart = framingIdx >= 0
+    ? safeBasePrompt.slice(framingIdx).trim()
+    : '';
+
+  const inheritedSubjectColor = visualState.hasHistoryContext
+    ? (visualState.activeOverrides || []).find((o) => o && o.kind === 'color' && o.scope === 'subject') || null
+    : null;
+  const fidelityInput = neutralizeNamedArtistImitation(intentSource).prompt || coreSubjectPart;
+  const fidelitySpec = await compilePromptFidelitySpec(fidelityInput, {
+    translateComplete,
+    inheritedSubjectColor,
+    signal,
+  });
+  if (fidelitySpec.forbidsPeople && harmonizedDirectionClause) {
+    harmonizedDirectionClause = collapseSpaces(
+      harmonizedDirectionClause
+        .replace(/Authentic human expressions and background crowd coherence;?\s*/gi, 'Uninhabited architectural and street geometry; ')
+        .replace(/,\s*authentic environmental context framing the subject in action/gi, '')
+        .replace(/,\s*shallow depth of field isolating the protagonist/gi, '')
+    );
+  }
+
+  // 7. Assemble provider prompt with mandatory subject/chromatic lock + user core
+  //    subject + English scene specification FIRST for top CLIP/T5 attention weight,
+  //    bounded within MAX_PROVIDER_PROMPT_CHARS.
   const tailBlocks = [];
   if (visualState.identityLockClause) {
     tailBlocks.push(visualState.identityLockClause);
@@ -1377,9 +1426,12 @@ async function directImagePrompt({
     tailBlocks.push(harmonizedDirectionClause);
   }
 
-  let finalPrompt = visualState.frontLockPrefix
-    ? collapseSpaces(`${visualState.frontLockPrefix} ${safeBasePrompt}`)
-    : safeBasePrompt;
+  const headSegments = [];
+  if (visualState.frontLockPrefix) headSegments.push(visualState.frontLockPrefix);
+  headSegments.push(coreSubjectPart);
+  if (fidelitySpec.clause) headSegments.push(fidelitySpec.clause);
+  if (framingTailPart) headSegments.push(framingTailPart);
+  let finalPrompt = collapseSpaces(headSegments.join(' '));
 
   for (const block of tailBlocks) {
     const candidate = `${finalPrompt} ${block}`.replace(/\s+/g, ' ').trim();
@@ -1395,7 +1447,7 @@ async function directImagePrompt({
   }
 
   const effectiveVisualAnchor = continuity.visualAnchor
-    || sanitizeRetrievedVisualData(safeBasePrompt, 180)
+    || sanitizeRetrievedVisualData(coreSubjectPart, 180)
     || null;
 
   return {
@@ -1467,6 +1519,9 @@ async function directImageEditPrompt({
   const isHistorySource = Boolean(
     sourceImage && (
       sourceImage.source === 'chat-history'
+      || sourceImage.metadata?.version
+      || sourceImage.metadata?.rootFileId
+      || sourceImage.metadata?.prompt
       || Array.isArray(sourceImage.metadata?.activeOverrides)
       || sourceImage.metadata?.visualDna
     )
@@ -1509,7 +1564,11 @@ async function directImageEditPrompt({
     : { grounded: false, summary: '', sources: [] };
 
   const quotedTypography = extractQuotedTypography(intentSource);
+  const editFidelityClause = compileEditFidelityClause(neutralizeNamedArtistImitation(intentSource).prompt || intentSource);
   const extras = [];
+  if (editFidelityClause) {
+    extras.push(editFidelityClause);
+  }
   if (visualState.editEnhancementClause) {
     extras.push(visualState.editEnhancementClause);
   }

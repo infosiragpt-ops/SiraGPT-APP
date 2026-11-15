@@ -29,12 +29,16 @@
  */
 
 const sharp = require('sharp');
-const { createVisionRuntime, visionRuntimeCandidates } = require('../ai/vision-runtime');
+const OpenAI = require('openai');
+const { visionClientConfig, visionRuntimeCandidates } = require('../ai/vision-runtime');
 
 const MAX_DNA_CHARS = 380;
 const DEFAULT_VISION_DNA_TIMEOUT_MS = 3200;
 const PIXEL_SAMPLE_SIZE = 48;
 const MAX_INPUT_PIXELS = 40 * 1024 * 1024;
+const IS_TEST_RUNTIME = process.env.NODE_ENV === 'test'
+  || Boolean(process.env.NODE_TEST_CONTEXT)
+  || process.execArgv.includes('--test');
 
 const STANDARD_RATIOS = [
   ['1:1', 1],
@@ -525,6 +529,14 @@ function extractChromaticAndTraitOverrides(prompt) {
     const start = m.index;
     const end = start + m[0].length;
     if (overlapsConsumed(start, end)) continue;
+    // Guard Spanish noun homographs ("una rosa azul" = rose flower, "una naranja" = orange fruit).
+    const beforeSlice = norm.slice(Math.max(0, start - 22), start);
+    if (entry.id === 'pink' && /^rosas?$/.test(m[0]) && /\b(?:una|unas|la|las|dos|tres|cuatro|ramo\s+de)\s+$/.test(beforeSlice)) {
+      continue;
+    }
+    if (entry.id === 'orange' && /^naranjas?$/.test(m[0]) && /\b(?:una|unas|la|las|dos|tres|jugo\s+de|zumo\s+de)\s+$/.test(beforeSlice)) {
+      continue;
+    }
     consumedSpans.push([start, end]);
     const { scope, targetNoun } = classifyColorScope(norm, start, m[0].length);
     overrides.push({
@@ -620,7 +632,7 @@ async function extractMultimodalVisualDna(imageBuffer, mimeType = 'image/png', {
   env = process.env,
   timeoutMs = DEFAULT_VISION_DNA_TIMEOUT_MS,
   visionComplete = null,
-  allowLiveVision = process.env.NODE_ENV !== 'test',
+  allowLiveVision = !IS_TEST_RUNTIME,
   signal = null,
 } = {}) {
   const pixelSignature = Buffer.isBuffer(imageBuffer)
@@ -657,26 +669,36 @@ async function extractMultimodalVisualDna(imageBuffer, mimeType = 'image/png', {
           return visionComplete({ dataUrl, mimeType, systemPrompt: VISION_DNA_SYSTEM_PROMPT, priorPrompt });
         }
         const candidates = visionRuntimeCandidates(env);
-        const picked = candidates[0];
-        if (!picked) return '';
-        const runtime = createVisionRuntime({ env, provider: picked.provider });
-        if (!runtime) return '';
-        const completion = await runtime.client.chat.completions.create({
-          model: runtime.model,
-          temperature: 0,
-          max_tokens: 180,
-          messages: [
-            { role: 'system', content: VISION_DNA_SYSTEM_PROMPT },
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Extract the compact visual continuity description of this image.' },
-                { type: 'image_url', image_url: { url: dataUrl } },
+        for (const candidate of candidates) {
+          const cfg = visionClientConfig(candidate.provider, env);
+          if (!cfg || !cfg.apiKey || cfg.protocol === 'anthropic') continue;
+          try {
+            const client = new OpenAI({
+              apiKey: cfg.apiKey,
+              ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}),
+            });
+            const completion = await client.chat.completions.create({
+              model: candidate.model,
+              temperature: 0,
+              max_tokens: 180,
+              messages: [
+                { role: 'system', content: VISION_DNA_SYSTEM_PROMPT },
+                {
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: 'Extract the compact visual continuity description of this image.' },
+                    { type: 'image_url', image_url: { url: dataUrl } },
+                  ],
+                },
               ],
-            },
-          ],
-        }, signal ? { signal } : undefined);
-        return completion?.choices?.[0]?.message?.content || '';
+            }, signal ? { signal } : undefined);
+            const content = completion?.choices?.[0]?.message?.content || '';
+            if (content && content.trim()) return content;
+          } catch {
+            // Try next configured vision runtime candidate before offline fallback.
+          }
+        }
+        return '';
       };
 
       const timeoutSentinel = Symbol('vision_dna_timeout');
@@ -718,7 +740,7 @@ async function extractMultimodalVisualDna(imageBuffer, mimeType = 'image/png', {
 
 // ── 4. Cumulative Multi-Turn Visual State & Chromatic Compiler ────────────
 
-const NATURAL_SUBJECT_COLOR_WORDS_RE = /\b(?:warm\s+chestnut\s+brown|terracotta\s+amber\s+brown|golden[\s-]?brown|dark\s+brown|light\s+brown|chestnut\s+brown|ginger|orange[\s-]?and[\s-]?white|orange|brown|tan|tawny|beige|fawn|gray|grey|black|white|marron|cafe|naranja|anaranjad[oa]|gris|blanco|negro|pardo)\b/gi;
+const NATURAL_SUBJECT_COLOR_WORDS_RE = /\b(?:warm\s+chestnut\s+brown|terracotta\s+amber\s+brown|golden[\s-]?brown|dark\s+brown|light\s+brown|chestnut\s+brown|blue[\s-]?merle|merle|tricolor|bicolor|calico|tortoiseshell|ginger|orange[\s-]?and[\s-]?white|orange|brown|tan|tawny|beige|fawn|gray|grey|black|white|marron|cafe|naranja|anaranjad[oa]|gris|blanco|negro|pardo)\b/gi;
 
 /**
  * When a new `scope === 'subject'` color override is active (e.g. `sky_blue`),
@@ -865,15 +887,17 @@ function compileCumulativeVisualState({
     || effectiveVisualDna
   );
 
-  // Build mandatory chromatic specification fragments (used both standalone and in follow-ups!).
+  // Build 100% positive chromatic specification fragments (NEVER emit negative
+  // color words like "brown/orange/tan/gray", which activate unwanted channels
+  // in rectified-flow CLIP/T5 encoders!).
   const mandatoryAttributeFragments = [];
   if (subjectColor) {
     const hexPart = subjectColor.hex ? ` (${subjectColor.hex})` : '';
-    const antiNatural = subjectColor.nonNatural
-      ? ' — render the subject surface/coat/body distinctly in this exact color, never defaulting to brown, orange, tan, or gray'
+    const positiveSaturation = subjectColor.nonNatural
+      ? ' uniformly saturated across the entire fur, coat, plumage, skin, or body surface'
       : '';
     mandatoryAttributeFragments.push(
-      `primary subject color strictly ${subjectColor.en}${hexPart}${antiNatural}`
+      `primary subject color strictly ${subjectColor.en}${hexPart}${positiveSaturation}`
     );
   }
   if (eyesColor) {
@@ -918,10 +942,6 @@ function compileCumulativeVisualState({
     if (effectiveVisualDna) {
       identityLockClause = `Subject visual DNA (keep consistent, do not vary into a different subject): ${effectiveVisualDna}.`;
     }
-  } else if (mandatoryAttributeFragments.length > 0 && subjectColor?.nonNatural) {
-    // Even on Turn 1 ("crea un gato de color celeste"), reinforce non-natural
-    // Spanish hues so T5/CLIP renders vivid sky-blue instead of natural brown!
-    frontLockPrefix = `Mandatory chromatic specification: ${mandatoryAttributeFragments.join('; ')}.`;
   }
 
   let editEnhancementClause = '';

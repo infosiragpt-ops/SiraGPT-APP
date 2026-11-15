@@ -596,3 +596,29 @@ test('universal context continuity (GPT Image / edit-capable): 3-turn cat flow e
   assert.equal(turn3.body.files[0].rootFileId, 'result-1');
   assert.equal(turn3.body.files[0].version, 3);
 });
+
+test('composer prompt obedience (FLUX 1.1 Pro): "crea una imagen de un perro celeste" compiles positive English sky-blue fur coat lock (#7DD3FC) before framing with zero brown/gray/merle poisoning', async () => {
+  const { request, calls } = await harness({ source: false, editable: false });
+
+  const res = await request({
+    prompt: 'crea una imagen de un perro celeste',
+    provider: 'Fal',
+    model: 'fal-ai/flux-pro/v1.1',
+    aspectRatio: '1:1',
+    quality: '2K',
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.reads, 0, 'standalone prompt performs zero history DB reads');
+  assert.equal(calls.generate.length, 1);
+  assert.equal(calls.generate[0].model, 'fal-ai/flux-pro/v1.1');
+
+  const sentPrompt = calls.generate[0].prompt;
+  assert.match(sentPrompt, /^un perro celeste Exact scene specification: A vivid sky-blue dog \(#7DD3FC\) with a bright light-cerulean sky-blue fur coat covering its entire head, ears, body, legs, and tail/);
+  assert.ok(
+    sentPrompt.indexOf('Exact scene specification:') < sentPrompt.indexOf('Visual direction:'),
+    'sky-blue dog coat lock sits inside prime CLIP tokens ahead of visual direction'
+  );
+  assert.doesNotMatch(sentPrompt, /\bbrown\b|\borange\b|\btan\b|\bgray\b|\bgrey\b|\bmerle\b|chiaroscuro|warm tungsten/i);
+  assert.equal(res.body.files[0].ragArchetype, 'faithful_subject_focus');
+});

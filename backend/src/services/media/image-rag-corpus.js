@@ -396,6 +396,26 @@ const IMAGE_RAG_ARCHETYPES = [
 const ARCHETYPE_BY_ID = new Map(IMAGE_RAG_ARCHETYPES.map((item) => [item.id, item]));
 
 /**
+ * Neutral, high-obedience default archetype used whenever a prompt does not
+ * request a specialized genre/medium (e.g. `"un perro celeste"`, `"tres pingüinos"`).
+ * Keeps `IMAGE_RAG_ARCHETYPES` at 32 specialized domain playbooks while avoiding
+ * dark chiaroscuro / warm-tungsten color casts on literal subject prompts.
+ */
+const FAITHFUL_SUBJECT_ARCHETYPE = {
+  id: 'faithful_subject_focus',
+  category: 'photography',
+  title: 'Faithful Subject Focus & True Attribute Clarity',
+  keywords: '',
+  cameraAndOptics: 'Natural-perspective focal clarity on the primary subject with crisp edge separation and balanced depth of field.',
+  lightingAndColor: 'Even daylight-balanced illumination preserving exact requested subject colors, material finishes, and clean shadow gradients without color-cast distortion.',
+  surfaceAndMaterial: 'Crisp tactile surface micro-detail across fur, plumage, fabric, glass, metal, foliage, and skin.',
+  antiArtifacts: 'Accurate anatomy, proportions, and object count; free of watermarks or unintended text.',
+  preferTextFree: true,
+};
+
+const CREATURE_FOREGROUND_RE = /\b(?:perr[oa]s?|perrit[oa]s?|cachorr[oa]s?|gat[oa]s?|gatit[oa]s?|elefantes?|leon(?:a|es|as)?|tigres?|tigresas?|os[oa]s?|pandas?|lob[oa]s?|zorr[oa]s?|conej[oa]s?|caballos?|yeguas?|unicornios?|dragon(?:es)?|dinosaurios?|pinguin[oa]s?|aguilas?|buhos?|lechuzas?|loros?|guacamayos?|flamencos?|cisnes?|patos?|patitos?|colibri(?:es)?|tucan(?:es)?|delfin(?:es)?|ballenas?|tiburon(?:es)?|tortugas?|ranas?|mariposas?|pulpos?|mon[oa]s?|gorilas?|jirafas?|ciervos?|venados?|ovejas?|vacas?|cerdos?|camaleon(?:es)?|serpientes?|koalas?|mapaches?|ardillas?|hamsters?|nutrias?|erizos?|dogs?|pupp(?:y|ies)|cats?|kittens?|elephants?|lions?|tigers?|bears?|wol(?:f|ves)|fox(?:es)?|rabbits?|bunn(?:y|ies)|horses?|unicorns?|dragons?|dinosaurs?|penguins?|eagles?|owls?|parrots?|flamingos?|swans?|ducks?|dolphins?|whales?|sharks?|turtles?|frogs?|butterfl(?:y|ies)|octopus(?:es)?|monkeys?|gorillas?|giraffes?|deer)\b/i;
+
+/**
  * Orthogonal optical, lighting, color-mode, and studio-background facet
  * modifiers. Composed on top of the primary domain archetype whenever the
  * user's prompt requests a specific camera angle, lighting hour, color
@@ -603,16 +623,50 @@ function resolveModelFamilyGuidance(model) {
  */
 function searchVisualDirectionCorpus(query, opts = {}) {
   const index = getCorpusIndex();
-  const rawHits = index.search(String(query || ''), { topK: 6 });
+  const rawQuery = String(query || '');
+  const normQuery = normalizeFacetQuery(rawQuery);
+  const rawHits = index.search(rawQuery, { topK: 6 });
   const scoreMap = new Map(rawHits.map((h) => [h.id, h.score]));
 
   const styleKey = String(opts.style || '').trim().toLowerCase();
-  const boostedIds = STYLE_ENUM_BOOSTS[styleKey] || [];
-  for (const id of boostedIds) {
-    scoreMap.set(id, (scoreMap.get(id) || 0) + (styleKey === 'anime' || styleKey === 'oil-painting' ? 4.5 : 1.6));
+  const typeKey = String(opts.imageType || '').trim().toLowerCase();
+
+  // Prevent incidental background/material/prop words ("en la playa", "de cristal",
+  // "con traje", "tomando café") from hijacking a foreground animal/creature prompt
+  // into landscape astrophotography, 100mm insect macro, runway fashion, or food plating.
+  if (CREATURE_FOREGROUND_RE.test(normQuery) && !typeKey) {
+    if (!/\b(?:macro|microscop|primerisimo\s+plano|extreme\s+close[\s-]?up)\b/.test(normQuery)) {
+      scoreMap.delete('macro_scientific_botanical');
+    }
+    if (!/\b(?:paisaje|panoramica|gran\s+angular|astrofotografia|landscape|wide[\s-]?angle|astrophotography)\b/.test(normQuery)) {
+      scoreMap.delete('landscape_nature_astrophotography');
+    }
+    if (!/\b(?:moda|pasarela|lookbook|campana\s+editorial|fashion|runway|couture)\b/.test(normQuery)) {
+      scoreMap.delete('fashion_lookbook_campaign');
+    }
+    if (!/\b(?:gastronomi|fotografia\s+culinaria|plato\s+gourmet|food\s+photography)\b/.test(normQuery)) {
+      scoreMap.delete('culinary_gastronomy');
+    }
+    if (!/\b(?:joya|joyeria|alta\s+relojeria|jewelry|horology)\b/.test(normQuery)) {
+      scoreMap.delete('jewelry_horology_luxury');
+    }
+    if (!/\b(?:arquitectur|fachada|interiorismo|inmobiliaria|architecture|real\s+estate)\b/.test(normQuery)) {
+      scoreMap.delete('architectural_exterior_interior');
+      scoreMap.delete('interior_real_estate_staging');
+    }
   }
 
-  const typeKey = String(opts.imageType || '').trim().toLowerCase();
+  const boostedIds = STYLE_ENUM_BOOSTS[styleKey] || [];
+  const isMediumStyle = styleKey === 'anime' || styleKey === 'oil-painting' || styleKey === 'line-art' || styleKey === 'digital-art';
+  for (const id of boostedIds) {
+    const existing = scoreMap.get(id) || 0;
+    // Generic realism styles ('realistic', 'photographic', 'natural') only boost
+    // domain archetypes that already matched the subject (avoiding boosting human
+    // `editorial_portrait` skin-pore cues onto animal/object prompts).
+    if (!isMediumStyle && existing <= 0) continue;
+    scoreMap.set(id, existing + (styleKey === 'anime' || styleKey === 'oil-painting' ? 4.5 : 1.6));
+  }
+
   const boostedType = IMAGE_TYPE_BOOSTS[typeKey];
   if (boostedType) {
     scoreMap.set(boostedType, (scoreMap.get(boostedType) || 0) + 3.2);
@@ -630,7 +684,7 @@ function searchVisualDirectionCorpus(query, opts = {}) {
     else if (styleKey === 'oil-painting') primary = ARCHETYPE_BY_ID.get('fine_art_oil_impasto');
     else if (styleKey === 'line-art') primary = ARCHETYPE_BY_ID.get('watercolor_ink_editorial');
     else if (styleKey === 'digital-art') primary = ARCHETYPE_BY_ID.get('concept_art_worldbuilding');
-    else primary = ARCHETYPE_BY_ID.get('cinematic_film_still');
+    else primary = FAITHFUL_SUBJECT_ARCHETYPE;
   }
 
   let secondary = null;
@@ -658,6 +712,7 @@ function searchVisualDirectionCorpus(query, opts = {}) {
 
 module.exports = {
   IMAGE_RAG_ARCHETYPES,
+  FAITHFUL_SUBJECT_ARCHETYPE,
   ARCHETYPE_BY_ID,
   FRAME_COMPOSITION_SPECS,
   VISUAL_FACET_MODIFIERS,
