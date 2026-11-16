@@ -486,6 +486,7 @@ const hostingRoutes = require('./src/routes/hosting');
 const xSearchRoutes = require('./src/routes/x-search');
 const chatSkillsRoutes = require('./src/routes/chat-skills');
 const automationsRoutes = require('./src/routes/automations');
+const mediaDeliveriesRoutes = require('./src/routes/media-deliveries');
 const accountingRoutes = require('./src/routes/accounting');
 const linkPreviewRoutes = require('./src/routes/link-preview');
 const adminSecurityRoutes = require('./src/routes/admin/security');
@@ -990,6 +991,7 @@ app.use('/api/projects', requireCsrf);
 app.use('/api/skills', requireCsrf);
 // Automations (reminders, recurring jobs, heartbeat) are cookie-auth mutations too.
 app.use('/api/automations', requireCsrf);
+app.use('/api/media-deliveries', requireCsrf);
 app.use('/api/payments', createPaymentsCsrfMiddleware(requireCsrf));
 app.use('/api/bookmarks', requireCsrf);
 app.use('/api/orgs', requireCsrf);
@@ -1385,6 +1387,8 @@ app.use('/api/x-search', xSearchRoutes);
 app.use('/api/skills', chatSkillsRoutes);
 // Agent-created automations (reminders, recurring jobs, loops, heartbeat) — delivered into the originating chat.
 app.use('/api/automations', automationsRoutes);
+// «Detener» on a transcription handed off to the background (te aviso aquí cuando termine).
+app.use('/api/media-deliveries', mediaDeliveriesRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/link-preview', linkPreviewRoutes);
 app.use('/api/doc-agent', docAgentRoutes);

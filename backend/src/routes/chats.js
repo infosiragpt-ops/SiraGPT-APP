@@ -9,6 +9,7 @@ const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
 const { hydrateChatMessageAttachments } = require('../services/message-attachments');
+const { withoutMediaDeliveryState } = require('../utils/copied-message-metadata');
 const streamCache = require('../services/stream-cache');
 const taskStore = require('../services/agents/task-store');
 const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
@@ -1942,7 +1943,7 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
             role: shareData.userMessage.role,
             content: shareData.userMessage.content,
             files: shareData.userMessage.files,
-            metadata: shareData.userMessage.metadata,
+            metadata: withoutMediaDeliveryState(shareData.userMessage.metadata),
             timestamp: new Date()
           }
         });
@@ -1956,7 +1957,8 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
             role: shareData.assistantMessage.role,
             content: shareData.assistantMessage.content,
             files: shareData.assistantMessage.files,
-            metadata: shareData.assistantMessage.metadata,
+            // A pending transcription stays the sharer's (its result, its Stop).
+            metadata: withoutMediaDeliveryState(shareData.assistantMessage.metadata),
             timestamp: new Date()
           }
         });
@@ -1974,7 +1976,7 @@ router.post('/save-shared', authenticateToken, async (req, res) => {
         role: msgData.role,
         content: msgData.content,
         files: msgData.files,
-        metadata: msgData.metadata,
+        metadata: withoutMediaDeliveryState(msgData.metadata),
         timestamp: new Date(baseTs + idx),
       }));
       if (rows.length > 0) {

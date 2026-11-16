@@ -57,6 +57,77 @@ describe("useFileProcessingStatus · shared polling", () => {
     a.unmount(); b.unmount(); c.unmount()
   })
 
+  it("«Transcripción detenida» is shown but never remembered: the chip re-reads it, and follows a re-request", async () => {
+    // A Response body reads once: a fresh one per request.
+    const stopped = () => statusResponse({ fileId: "f9", stage: "failed", error: "Transcripción detenida. Pídela de nuevo para retomarla donde quedó.", stageAt: null, isTerminal: true })
+    transport.fetch.mockImplementation(async () => stopped())
+    const chip = renderHook(() => useFileProcessingStatus("f9"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(chip.result.current).toMatchObject({ stage: "failed", isTerminal: true, loading: false })
+    expect(transport.fetch).toHaveBeenCalledTimes(1)
+    // Nothing is remembered: with every chip gone, a new one asks the server.
+    chip.unmount()
+    const later = renderHook(() => useFileProcessingStatus("f9"))
+    expect(later.result.current.pending).toBe(true)
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(transport.fetch).toHaveBeenCalledTimes(2)
+    // Two chips of the recording (the old bubble and the re-request's own).
+    const other = renderHook(() => useFileProcessingStatus("f9"))
+    expect(other.result.current.stage).toBe("failed")
+    // Asked for again: both chips see it transcribing, then ready.
+    transport.fetch.mockImplementation(async () => indexing("f9"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000) })
+    expect(later.result.current.stage).toBe("indexing")
+    expect(other.result.current.stage).toBe("indexing")
+    transport.fetch.mockImplementation(async () => ready("f9"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(later.result.current).toMatchObject({ stage: "ready", isTerminal: true })
+    expect(other.result.current).toMatchObject({ stage: "ready", isTerminal: true })
+    later.unmount(); other.unmount()
+
+    // Left stopped, the re-reads back off: 15 s, 30 s, 60 s, then every 2 min.
+    transport.fetch.mockReset()
+    transport.fetch.mockImplementation(async () => stopped())
+    const idle = renderHook(() => useFileProcessingStatus("f10"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000 + 30_000 + 60_000) })
+    expect(transport.fetch).toHaveBeenCalledTimes(4)
+    await act(async () => { await vi.advanceTimersByTimeAsync(119_000) })
+    expect(transport.fetch).toHaveBeenCalledTimes(4)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    expect(transport.fetch).toHaveBeenCalledTimes(5)
+    // A new chip (the message that asks for it again) reads it at once, not at the end of the back-off.
+    transport.fetch.mockImplementation(async () => indexing("f10"))
+    const asked = renderHook(() => useFileProcessingStatus("f10"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(transport.fetch).toHaveBeenCalledTimes(6)
+    expect(asked.result.current.stage).toBe("indexing")
+    expect(idle.result.current.stage).toBe("indexing")
+    asked.unmount()
+    idle.unmount()
+  })
+
+  it("a recording asked for again a day after it was stopped gets a fresh window, and a day stopped slows the re-reads", async () => {
+    const stopped = () => statusResponse({ fileId: "f11", stage: "failed", error: "Transcripción detenida. Pídela de nuevo para retomarla donde quedó.", stageAt: null, isTerminal: true })
+    transport.fetch.mockImplementation(async () => stopped())
+    const chip = renderHook(() => useFileProcessingStatus("f11"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    // A day and a half stopped: from the first day on, one re-read every 30 min.
+    await act(async () => { await vi.advanceTimersByTimeAsync(24 * 60 * 60_000) })
+    const afterDay = transport.fetch.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(60 * 60_000) })
+    expect(transport.fetch.mock.calls.length - afterDay).toBeLessThanOrEqual(3)
+    // Asked for again: the job runs and the chip follows it to the end instead of giving up at once.
+    transport.fetch.mockImplementation(async () => indexing("f11"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(30 * 60_000) })
+    expect(chip.result.current).toMatchObject({ stage: "indexing" })
+    expect(chip.result.current.timedOut).toBeFalsy()
+    transport.fetch.mockImplementation(async () => ready("f11"))
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(chip.result.current).toMatchObject({ stage: "ready", isTerminal: true })
+    chip.unmount()
+  })
+
   it("a terminal answer is reused across remounts without a request; a running one is not", async () => {
     transport.fetch.mockImplementation(async () => ready("f2"))
     const first = renderHook(() => useFileProcessingStatus("f2"))

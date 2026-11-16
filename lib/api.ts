@@ -1991,6 +1991,23 @@ class ApiClient {
     return this.request(`/chats/${encodeURIComponent(chatId)}/pending-stream`);
   }
 
+  /**
+   * «Detener» on the transcriptions a chat handed off («te aviso aquí cuando
+   * termine»). The server closes those deliveries, stops their recordings
+   * unless another open request needs them, and leaves one line in the chat
+   * that settles the pending turn.
+   */
+  async cancelMediaDeliveries(chatId: string, deliveryIds: string[] = [], fileIds: string[] = []): Promise<{
+    ok: boolean
+    cancelled: number
+    results: Array<{ id: string; outcome: string; messageId?: string | null }>
+  }> {
+    return this.request('/media-deliveries/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ chatId, ...(deliveryIds.length ? { deliveryIds } : {}), ...(fileIds.length ? { fileIds } : {}) }),
+    });
+  }
+
   async updateChat(id: string, data: { title?: string; model?: string }): Promise<any> {
     return this.request(`/chats/${id}`, {
       method: 'PUT',

@@ -372,7 +372,9 @@ function buildTerminalNotification(task, status) {
 // Turns that ended by handing their work to a durable delivery (a 5-hour
 // transcription) notify when the RESULT is posted, not when the turn ends:
 // «Tarea terminada» would arrive hours before anything is ready.
-const DEFERRED_NOTIFICATION_STOP_REASONS = new Set(['media_delivery_handoff']);
+// A follow-up folded into that pending delivery («y tradúcelo») is the same:
+// its result arrives with the delivery.
+const DEFERRED_NOTIFICATION_STOP_REASONS = new Set(['media_delivery_handoff', 'media_delivery_amended']);
 
 function deferredNotification(task) {
   const reason = String(task?.stats?.stoppedReason || task?.streamState?.stoppedReason || '').split(':', 1)[0].trim();
