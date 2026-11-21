@@ -347,7 +347,8 @@ const generateImage = {
     emitEvent(ctx, 'tool_call', { tool: 'generate_image', preview: prompt });
 
     try {
-      // Enhance prompt with style hint
+      // Enhance prompt with Two-Tier Image Generation RAG (document/chat RAG
+      // grounding + cross-turn visual continuity + curated domain direction).
       const styleHints = {
         realistic: 'Photorealistic, highly detailed.',
         vivid: 'Vivid colors, striking composition.',
@@ -359,7 +360,28 @@ const generateImage = {
         'line-art': 'Clean line art, no fill, minimalist.',
       };
       const styleDesc = styleHints[style] || 'Vivid colors, striking composition.';
-      const enhancedPrompt = `${styleDesc} ${prompt}`;
+      const baseStyledPrompt = `${styleDesc} ${prompt}`;
+      const { directImagePrompt } = require('../media/image-rag-director');
+      const ragDirection = await directImagePrompt({
+        prompt: baseStyledPrompt,
+        rawUserPrompt: `${ctx.userQuery || ''} ${rawPrompt}`.trim(),
+        style,
+        imageType: directive.imageType,
+        aspectRatio: directive.frame || aspectRatio,
+        quality: ctx.imageQuality || directive.qualityApp || quality,
+        model: ctx.imageModel || model || undefined,
+        count,
+        userId: ctx.userId,
+        chatId: ctx.chatId,
+        projectId: ctx.projectId,
+        gptId: ctx.gptId,
+        collection: ctx.collection,
+        prisma: ctx.prisma,
+        fileIds: ctx.fileIds,
+        fileMetadata: ctx.fileMetadata,
+        ragHits: ctx.ragHits,
+      });
+      const enhancedPrompt = ragDirection.prompt || baseStyledPrompt;
 
       emitEvent(ctx, 'tool_output', { tool: 'generate_image', preview: count > 1 ? `Generando ${count} imágenes…` : 'Generando imagen…', partial: true });
 
@@ -395,6 +417,13 @@ const generateImage = {
         const filename = `image_${crypto.randomBytes(4).toString('hex')}${result.images.length > 1 ? `_${index + 1}` : ''}.png`;
         const artifact = finalizeArtifact({ filename, buffer, mime: 'image/png', ctx, imageMetadata: {
           model: result.model, provider: result.provider, aspectRatio, quality: ctx.imageQuality || quality,
+          ragArchetype: ragDirection.archetype || null,
+          ragFacets: ragDirection.facets || [],
+          continuityMode: ragDirection.continuityMode || 'none',
+          visualAnchor: ragDirection.visualAnchor || null,
+          visualDna: ragDirection.visualDna || null,
+          activeOverrides: Array.isArray(ragDirection.activeOverrides) ? ragDirection.activeOverrides : [],
+          ragGrounded: Boolean(ragDirection.grounded),
         } });
         artifacts.push({
           id: artifact.id,
@@ -539,32 +568,114 @@ const editImage = {
       }
       // A plain edit keeps the source frame: the model's aspectRatio only
       // counts for reframes, when the user's own words name an orientation,
-      // or when the attachment is material for a framed deliverable («crea
-      // un banner con este logo» → 16:9, «una historia con esta foto» → 9:16).
+      // or when the attachment/history image is adapted into a framed deliverable
+      // («crea un banner con este logo» → 16:9, «quiero el gato como portada de Facebook» → 16:9).
+      const isImplicitHistoryContinuation = Boolean(
+        sources.length === 1
+        && !imageUrl
+        && !fileId
+        && (!Array.isArray(referenceFileIds) || referenceFileIds.length === 0)
+        && !selection
+        && freshImageIds === 0
+        && editDirective.operation !== 'remove-background'
+      );
       const spokenFrame = reframe ? null : imageDirective.detectSpokenImageFrame(cleanInstruction);
-      const deliverableFrame = (reframe || spokenFrame) ? null : imageDirective.detectReferenceDeliverableFrame(cleanInstruction);
+      const deliverableFrame = (reframe || spokenFrame)
+        ? null
+        : (imageDirective.detectReferenceDeliverableFrame(cleanInstruction)
+          || (isImplicitHistoryContinuation ? imageDirective.detectFollowupDeliverableFrame(cleanInstruction) : null));
       const wordedFrame = spokenFrame || deliverableFrame;
       const ratio = reframe ? (aspectRatio || reframe.frame) : (wordedFrame ? (aspectRatio || wordedFrame.frame) : null);
+
+      const selectedModel = ctx.imageModel || model || undefined;
+      const hasCanEditHook = Object.prototype.hasOwnProperty.call(engine, 'canEditImage')
+        && typeof engine.canEditImage === 'function';
+      const canPixelEdit = !hasCanEditHook
+        || !selectedModel
+        || engine.canEditImage({ model: selectedModel, provider: ctx.imageProvider || undefined });
+
+      let ragEditMeta = null;
+      let result;
+      let canvas = null;
       const { prepareEditCanvas, finishEditCanvas } = require('../media/image-edit-canvas');
-      const canvas = (reframe || selection) ? await prepareEditCanvas({
-        imageBuffer: source.buffer, operation: reframe ? 'reframe' : 'edit',
-        aspectRatio: ratio, selection,
-      }) : null;
-      const result = await engine.editImage({
-        prompt: editDirective.prompt,
-        imageBuffer: canvas?.imageBuffer || source.buffer,
-        mimeType: canvas?.mimeType || source.mimeType,
-        referenceImages: sources.slice(1).map((image) => ({ buffer: image.buffer, mimeType: image.mimeType })),
-        maskBuffer: canvas?.maskBuffer,
-        model: ctx.imageModel || model || undefined,
-        provider: ctx.imageProvider || undefined,
-        quality: ctx.imageQuality || quality || undefined,
-        background: editDirective.operation === 'remove-background' ? 'transparent' : undefined,
-        n: count || 1,
-        failover: false,
-        aspectRatio: ratio,
-        signal: ctx.signal,
-      });
+
+      if (isImplicitHistoryContinuation && !canPixelEdit) {
+        // Generation-only model selected in chat continuation (e.g. FLUX 1.1 Pro,
+        // Flux Schnell, Imagen 4, Grok 2 Image): preserve the user's chosen model
+        // (AGENTS.md §13) and lock continuity via Multimodal Visual DNA + Cumulative State.
+        const { directImagePrompt } = require('../media/image-rag-director');
+        const effectiveRatio = ratio || source.metadata?.aspectRatio || '1:1';
+        const lockedRag = await directImagePrompt({
+          prompt: cleanInstruction,
+          rawUserPrompt: `${ctx.userQuery || ''} ${cleanInstruction}`.trim(),
+          aspectRatio: effectiveRatio,
+          quality: ctx.imageQuality || quality || 'hd',
+          model: selectedModel,
+          count: count || 1,
+          userId: ctx.userId,
+          chatId: ctx.chatId,
+          projectId: ctx.projectId,
+          gptId: ctx.gptId,
+          collection: ctx.collection,
+          prisma,
+          fileIds: ctx.fileIds,
+          fileMetadata: ctx.fileMetadata,
+          ragHits: ctx.ragHits,
+          historyAnchorSource: source,
+          signal: ctx.signal,
+        });
+        ragEditMeta = lockedRag;
+        result = await engine.generateImage({
+          prompt: lockedRag.prompt || cleanInstruction,
+          model: selectedModel,
+          provider: ctx.imageProvider || undefined,
+          failover: false,
+          aspectRatio: effectiveRatio,
+          quality: ctx.imageQuality || quality || 'hd',
+          n: count || 1,
+          signal: ctx.signal,
+        });
+      } else {
+        if (!reframe) {
+          const { directImageEditPrompt } = require('../media/image-rag-director');
+          const ragEdit = await directImageEditPrompt({
+            editPrompt: editDirective.prompt,
+            rawInstruction: `${ctx.userQuery || ''} ${cleanInstruction}`.trim(),
+            sourceImage: source,
+            aspectRatio: ratio,
+            userId: ctx.userId,
+            chatId: ctx.chatId,
+            projectId: ctx.projectId,
+            gptId: ctx.gptId,
+            collection: ctx.collection,
+            prisma,
+            fileIds: ctx.fileIds,
+            fileMetadata: ctx.fileMetadata,
+            ragHits: ctx.ragHits,
+          });
+          if (ragEdit.prompt) editDirective.prompt = ragEdit.prompt;
+          ragEditMeta = ragEdit;
+        }
+        canvas = (reframe || selection) ? await prepareEditCanvas({
+          imageBuffer: source.buffer, operation: reframe ? 'reframe' : 'edit',
+          aspectRatio: ratio, selection,
+        }) : null;
+        result = await engine.editImage({
+          prompt: editDirective.prompt,
+          imageBuffer: canvas?.imageBuffer || source.buffer,
+          mimeType: canvas?.mimeType || source.mimeType,
+          referenceImages: sources.slice(1).map((image) => ({ buffer: image.buffer, mimeType: image.mimeType })),
+          maskBuffer: canvas?.maskBuffer,
+          model: selectedModel,
+          provider: ctx.imageProvider || undefined,
+          quality: ctx.imageQuality || quality || undefined,
+          background: editDirective.operation === 'remove-background' ? 'transparent' : undefined,
+          n: count || 1,
+          failover: false,
+          aspectRatio: ratio,
+          signal: ctx.signal,
+        });
+      }
 
       if (!result.ok || !result.images?.length) {
         // NO_PROVIDER (missing credentials for a model that CAN edit) keeps
@@ -589,12 +700,31 @@ const editImage = {
           rootFileId: source.metadata?.rootFileId || source.fileId,
           version: (Number(source.metadata?.version) || 1) + 1,
           model: result.model, provider: result.provider, aspectRatio: lineageRatio, quality: ctx.imageQuality || quality,
+          ...((ragEditMeta?.visualAnchor || source.metadata?.visualAnchor)
+            ? { visualAnchor: ragEditMeta?.visualAnchor || source.metadata?.visualAnchor }
+            : {}),
+          ...((ragEditMeta?.visualDna || source.metadata?.visualDna)
+            ? { visualDna: ragEditMeta?.visualDna || source.metadata?.visualDna }
+            : {}),
+          ...((Array.isArray(ragEditMeta?.activeOverrides) && ragEditMeta.activeOverrides.length)
+            ? { activeOverrides: ragEditMeta.activeOverrides }
+            : (Array.isArray(source.metadata?.activeOverrides) && source.metadata.activeOverrides.length
+              ? { activeOverrides: source.metadata.activeOverrides }
+              : {})),
         } });
         artifacts.push(artifact);
         emitEvent(ctx, 'file_artifact', {
           artifact: { id: artifact.id, fileId: `artifact:${artifact.id}`, filename: artifact.filename, format: 'png', mime: 'image/png', sizeBytes: artifact.sizeBytes,
             downloadUrl: artifact.downloadUrl, parentFileId: source.fileId || null, version: (Number(source.metadata?.version) || 1) + 1,
             model: result.model, provider: result.provider, aspectRatio: lineageRatio, prompt: cleanInstruction,
+            ...((ragEditMeta?.visualDna || source.metadata?.visualDna)
+              ? { visualDna: ragEditMeta?.visualDna || source.metadata?.visualDna }
+              : {}),
+            ...((Array.isArray(ragEditMeta?.activeOverrides) && ragEditMeta.activeOverrides.length)
+              ? { activeOverrides: ragEditMeta.activeOverrides }
+              : (Array.isArray(source.metadata?.activeOverrides) && source.metadata.activeOverrides.length
+                ? { activeOverrides: source.metadata.activeOverrides }
+                : {})),
           },
         });
       }

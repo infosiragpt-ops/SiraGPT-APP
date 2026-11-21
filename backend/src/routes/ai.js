@@ -10826,6 +10826,8 @@ router.post(
     body('fileId').optional().isString().isLength({ min: 1, max: 160 }),
     body('referenceFileIds').optional().isArray({ max: 8 }),
     body('referenceFileIds.*').isString().isLength({ min: 1, max: 160 }),
+    body('documentFileIds').optional().isArray({ max: 6 }),
+    body('documentFileIds.*').isString().isLength({ min: 1, max: 160 }),
     body('operation').optional().isIn(['generate', 'edit', 'reframe']),
     body('background').optional().isIn(['transparent']),
     body('maskDataUrl').optional().isString().isLength({ max: 8 * 1024 * 1024 + 32 }),
@@ -10881,11 +10883,56 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
       }
-      let { prompt, chatId, provider, model, fileId, referenceFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      let { prompt, chatId, provider, model, fileId, referenceFileIds, documentFileIds, aspectRatio, quality, imageCount: rawImageCount, target: editTarget, selection: editSelection, operation: requestedOperation, maskDataUrl, background } = req.body;
+      const originalAttachmentOrder = [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
+      let attachedDocRecords = [];
+      // Composer uploads put ALL attached IDs (including PDFs/DOCX/TXT) into
+      // fileId + referenceFileIds. Partition owned non-image documents into
+      // documentFileIds so PDF+Imágenes grounds generation/editing via RAG
+      // instead of failing image-source validation.
+      if (!requestedOperation && originalAttachmentOrder.length > 0 && req.user?.id) {
+        try {
+          const uniqueCandidateIds = [...new Set(originalAttachmentOrder)];
+          let fetchedRecords = [];
+          if (typeof prisma.file?.findMany === 'function') {
+            fetchedRecords = await prisma.file.findMany({ where: { id: { in: uniqueCandidateIds }, userId: req.user.id } });
+          } else if (typeof prisma.file?.findFirst === 'function') {
+            const loaded = await Promise.all(uniqueCandidateIds.map((id) => prisma.file.findFirst({ where: { id, userId: req.user.id } }).catch(() => null)));
+            fetchedRecords = loaded.filter(Boolean);
+          }
+          attachedDocRecords = (Array.isArray(fetchedRecords) ? fetchedRecords : []).filter((rec) => {
+            if (!rec || (rec.userId && String(rec.userId) !== String(req.user.id))) return false;
+            const mime = String(rec.mimeType || '').toLowerCase().trim();
+            return Boolean(mime) && !mime.startsWith('image/') && !mime.startsWith('audio/') && !mime.startsWith('video/');
+          });
+          if (attachedDocRecords.length > 0) {
+            const docIdSet = new Set(attachedDocRecords.map((rec) => String(rec.id)));
+            documentFileIds = [...new Set([...(Array.isArray(documentFileIds) ? documentFileIds.map(String) : []), ...docIdSet])];
+            const wasComposerUploadOrder = Boolean(fileId) && Array.isArray(referenceFileIds) && String(referenceFileIds[0]) === String(fileId);
+            if (Array.isArray(referenceFileIds)) {
+              const remainingRefs = referenceFileIds.filter((id) => !docIdSet.has(String(id)));
+              referenceFileIds = remainingRefs.length > 0 ? remainingRefs : undefined;
+            }
+            if (fileId && docIdSet.has(String(fileId))) {
+              fileId = (wasComposerUploadOrder && Array.isArray(referenceFileIds) && referenceFileIds.length > 0)
+                ? referenceFileIds[0]
+                : undefined;
+            }
+          }
+        } catch (_) { /* best-effort: leave fileId/referenceFileIds untouched */ }
+      }
       // «ahora en azul» from the composer arrives with no fileId: one bounded
       // history read, only for follow-up phrasings, keeps it an edit.
       let hasRecentImage = false;
-      if (!requestedOperation && !fileId && !referenceFileIds?.length && !editSelection && !maskDataUrl && chatId) {
+      const isImplicitHistoryFollowup = Boolean(
+        !requestedOperation
+        && !fileId
+        && !referenceFileIds?.length
+        && !editSelection
+        && !maskDataUrl
+        && !background
+      );
+      if (isImplicitHistoryFollowup && chatId) {
         try {
           if (require('../services/agents/media-intent').isImageFollowupCandidate(prompt)) {
             hasRecentImage = await require('../services/media/image-followup-context').chatHasRecentImage(prisma, { userId: req.user.id, chatId });
@@ -10937,14 +10984,20 @@ router.post(
       // name («un banner con este logo» → 16:9) beats the visual-type guess
       // («logo» → 1:1) and the picker default.
       let editWordedFrame = null;
+      let explicitPromptAspect = null;
       try {
         const imageDirective = require('../services/agents/image-directive');
-        const deliverable = (fileId || referenceFileIds?.length) ? imageDirective.detectReferenceDeliverableFrame(prompt) : null;
+        const deliverable = (fileId || referenceFileIds?.length)
+          ? imageDirective.detectReferenceDeliverableFrame(prompt)
+          : (hasRecentImage ? imageDirective.detectFollowupDeliverableFrame(prompt) : null);
         editWordedFrame = imageDirective.detectSpokenImageFrame(prompt) || deliverable;
         const promptAspect = (deliverable && deliverable.frame) || require('../services/agents/media-intent').resolveImageAspectRatio(prompt);
-        if (promptAspect) aspectRatio = normalizeImageAspectRatio(promptAspect);
+        if (promptAspect) {
+          explicitPromptAspect = normalizeImageAspectRatio(promptAspect);
+          aspectRatio = explicitPromptAspect;
+        }
       } catch (_) { /* best-effort: keep the picker aspect ratio */ }
-      const imagePrompt = promptWithImageAspectRatio(providerPromptBase, aspectRatio, quality);
+      let imagePrompt = promptWithImageAspectRatio(providerPromptBase, aspectRatio, quality);
       const requestedImageSize = imageGenerationSizeFor(provider, aspectRatio);
       const userId = req.user.id;
       console.log('userId', userId);
@@ -10988,6 +11041,24 @@ router.post(
         operation = 'generate';
         sourceImages = [];
       }
+      // Conversational history follow-up on a text-to-image-only model
+      // (e.g. FLUX 1.1 Pro, Flux Schnell, Imagen 4, Grok 2 Image, DALL-E 3):
+      // keep the user's selected model (AGENTS.md §13) and pivot implicit edit/reframe
+      // to Visual-DNA + Cumulative-State locked generation instead of 400!
+      // Explicit edit inputs (viewer «Editar», fileId, referenceFileIds, mask,
+      // selection, transparent background) still validate and reject below.
+      let historyAnchorSource = null;
+      const modelSupportsPixelEdit = !grokImageRequested
+        && imageEngine.canEditImage({ model, provider: engineProviderForPick(grokImageRequested ? 'xAI' : provider, model) });
+      if (sourceImages.length > 0 && !modelSupportsPixelEdit && isImplicitHistoryFollowup) {
+        historyAnchorSource = sourceImages[0];
+        if (!explicitPromptAspect && !editWordedFrame && historyAnchorSource?.metadata?.aspectRatio) {
+          aspectRatio = normalizeImageAspectRatio(historyAnchorSource.metadata.aspectRatio);
+          imagePrompt = promptWithImageAspectRatio(providerPromptBase, aspectRatio, quality);
+        }
+        sourceImages = [];
+        operation = 'generate';
+      }
       const [sourceImage] = sourceImages;
       if (operation !== 'generate' && !sourceImage) {
         return res.status(400).json({
@@ -10997,9 +11068,13 @@ router.post(
       }
       // The user's bubble lists the attachments in the order they were sent,
       // whatever order the editor received them in.
-      const requestOrder = [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
-      const uploadedReferences = sourceImages
-        .filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || ''))
+      const requestOrder = originalAttachmentOrder.length
+        ? originalAttachmentOrder
+        : [fileId, ...(Array.isArray(referenceFileIds) ? referenceFileIds : [])].filter(Boolean).map(String);
+      const uploadedReferences = [
+        ...sourceImages.filter((source) => source.record && !source.metadata?.operation && !/^(?:generated-|image-)/.test(source.record.filename || '')),
+        ...attachedDocRecords.map((rec) => ({ fileId: rec.id, record: rec })),
+      ]
         .slice()
         .sort((a, b) => {
           const ia = requestOrder.indexOf(String(a.fileId)); const ib = requestOrder.indexOf(String(b.fileId));
@@ -11136,6 +11211,7 @@ router.post(
         }, 200000);
       });
 
+      let ragMeta = null;
       const generateSingleImage = async () => {
         if (sourceImage) {
           const imageDirective = require('../services/agents/image-directive');
@@ -11153,6 +11229,26 @@ router.post(
             if (origin !== 'upload-order' && origin !== 'explicit' && !isCompositionRequest(prompt)) {
               editPrompt = `${editPrompt}${describeInputRoles(sourceImages, { language: imageDirective.pickEditLanguage(prompt) })}`.trim();
             }
+          }
+          if (operation !== 'reframe') {
+            try {
+              const { directImageEditPrompt } = require('../services/media/image-rag-director');
+              const ragEdit = await directImageEditPrompt({
+                editPrompt,
+                rawInstruction: prompt,
+                sourceImage,
+                aspectRatio,
+                userId,
+                chatId,
+                projectId: preValidatedChat?.projectId || undefined,
+                gptId: preValidatedChat?.customGptId || preValidatedChat?.gptId || undefined,
+                prisma,
+                documentFileIds,
+                chatPreValidated: Boolean(preValidatedChat),
+              });
+              if (ragEdit && ragEdit.prompt) editPrompt = ragEdit.prompt;
+              ragMeta = ragEdit || null;
+            } catch (_) { /* best-effort: keep base editPrompt */ }
           }
           const result = await imageEngine.editImage({
             prompt: editPrompt,
@@ -11179,8 +11275,36 @@ router.post(
             attempts: result.attempts || [],
           }));
         }
+        let directedImagePrompt = imagePrompt;
+        try {
+          const imageDirective = require('../services/agents/image-directive');
+          const { directImagePrompt } = require('../services/media/image-rag-director');
+          const detectedType = imageDirective.detectImageType(prompt);
+          const detectedStyle = imageDirective.detectImageStyle(prompt);
+          const ragResult = await directImagePrompt({
+            prompt: imagePrompt,
+            rawUserPrompt: prompt,
+            style: detectedStyle || undefined,
+            imageType: detectedType ? detectedType.type : undefined,
+            aspectRatio,
+            quality,
+            model,
+            count: imageCount,
+            userId,
+            chatId,
+            projectId: preValidatedChat?.projectId || undefined,
+            gptId: preValidatedChat?.customGptId || preValidatedChat?.gptId || undefined,
+            prisma,
+            documentFileIds,
+            historyAnchorSource,
+            signal: requestAbortController.signal,
+            chatPreValidated: Boolean(preValidatedChat),
+          });
+          if (ragResult && ragResult.prompt) directedImagePrompt = ragResult.prompt;
+          ragMeta = ragResult || null;
+        } catch (_) { /* best-effort: keep base imagePrompt */ }
         let result = await imageEngine.generateImage({
-          prompt: imagePrompt,
+          prompt: directedImagePrompt,
           model: grokImageRequested ? model.replace(/^(?:x-ai|xai)\//i, '') : model,
           provider: engineProviderForPick(),
           aspectRatio,
@@ -11196,7 +11320,7 @@ router.post(
             const alt = await pickImageAuthFallback({ prismaClient: prisma, failedProvider: engineProviderForPick(), excludeModel: model });
             if (alt) {
               const retry = await imageEngine.generateImage({
-                prompt: imagePrompt,
+                prompt: directedImagePrompt,
                 model: alt.engineModel,
                 provider: alt.engineProvider,
                 aspectRatio,
@@ -11267,24 +11391,30 @@ router.post(
         return;
       }
 
+      const lineageSource = sourceImage || historyAnchorSource || null;
+      const shouldFinishCanvas = Boolean(
+        editCanvas && (operation === 'reframe' || editSelection || maskDataUrl || !editWordedFrame)
+      );
       const generatedFiles = [];
       for (let index = 0; index < imageResults.length; index += 1) {
         const imageResult = typeof imageResults[index] === 'string'
           ? { b64: imageResults[index], provider, model }
           : imageResults[index];
-        const persistedB64 = editCanvas
+        const persistedB64 = shouldFinishCanvas
           ? (await finishEditCanvas(Buffer.from(imageResult.b64, 'base64'), editCanvas)).toString('base64')
           : imageResult.b64;
-        const { imageUrl, fileId: newFileId, width, height } = await saveBase64Image(persistedB64, userId, prompt, aspectRatio, { preservePixels: Boolean(editCanvas) });
+        const { imageUrl, fileId: newFileId, width, height } = await saveBase64Image(persistedB64, userId, prompt, aspectRatio, { preservePixels: shouldFinishCanvas });
         generatedFiles.push({
           type: 'image',
           url: imageUrl,
           prompt,
           fileId: newFileId,
-          parentFileId: sourceImage?.fileId || null,
-          referenceFileIds: sourceImages.map((source) => source.fileId).filter(Boolean),
-          rootFileId: sourceImage?.metadata?.rootFileId || sourceImage?.fileId || newFileId,
-          version: sourceImage ? (Number(sourceImage.metadata?.version) || 1) + 1 : 1,
+          parentFileId: lineageSource?.fileId || null,
+          referenceFileIds: sourceImages.length
+            ? sourceImages.map((source) => source.fileId).filter(Boolean)
+            : (historyAnchorSource?.fileId ? [historyAnchorSource.fileId] : []),
+          rootFileId: lineageSource?.metadata?.rootFileId || lineageSource?.fileId || newFileId,
+          version: lineageSource ? (Number(lineageSource.metadata?.version) || 1) + 1 : 1,
           operation, width, height,
           aspectRatio,
           index: index + 1,
@@ -11295,6 +11425,21 @@ router.post(
           quality,
           requestedQuality: quality,
           ...(background ? { background } : {}),
+          ...(ragMeta?.archetype ? { ragArchetype: ragMeta.archetype } : {}),
+          ...(Array.isArray(ragMeta?.facets) && ragMeta.facets.length ? { ragFacets: ragMeta.facets } : {}),
+          ...(ragMeta?.continuityMode && ragMeta.continuityMode !== 'none' ? { continuityMode: ragMeta.continuityMode } : {}),
+          ...((ragMeta?.visualAnchor || lineageSource?.metadata?.visualAnchor)
+            ? { visualAnchor: ragMeta?.visualAnchor || lineageSource?.metadata?.visualAnchor }
+            : {}),
+          ...((ragMeta?.visualDna || lineageSource?.metadata?.visualDna)
+            ? { visualDna: ragMeta?.visualDna || lineageSource?.metadata?.visualDna }
+            : {}),
+          ...((Array.isArray(ragMeta?.activeOverrides) && ragMeta.activeOverrides.length)
+            ? { activeOverrides: ragMeta.activeOverrides }
+            : (Array.isArray(lineageSource?.metadata?.activeOverrides) && lineageSource.metadata.activeOverrides.length
+              ? { activeOverrides: lineageSource.metadata.activeOverrides }
+              : {})),
+          ...(ragMeta?.grounded ? { ragGrounded: true } : {}),
         });
       }
 

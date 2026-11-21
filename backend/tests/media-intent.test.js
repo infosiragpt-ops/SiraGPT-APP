@@ -560,3 +560,72 @@ test('isImageMediaRequest / isImageAttachment are the shared gates for route and
   assert.match('edit the screenshot', _internal.ANY_IMAGE_REF);
   assert.ok(typeof _internal.CREATE_VERB_SOURCE === 'string' && _internal.CREATE_VERB_SOURCE.includes('gener'));
 });
+
+test('buildMediaIntentHint preserves literal quoted lettering and document/brand grounding cues for image tools', () => {
+  const posterIntent = detectMediaIntent('crea un póster para mi cafetería que diga "CAFÉ AURORA" según el manual de marca');
+  assert.equal(posterIntent.kind, 'image');
+  assert.deepEqual(posterIntent.specs.quotedText, ['CAFÉ AURORA']);
+  assert.equal(posterIntent.specs.documentGrounded, true);
+
+  const posterHint = buildMediaIntentHint(posterIntent);
+  assert.match(posterHint, /texto literal en la imagen: incluye exactamente "CAFÉ AURORA"/);
+  assert.match(posterHint, /anclaje documental\/marca detectado/);
+
+  const editBrandIntent = detectMediaIntents('edita esta foto aplicando los colores corporativos del manual de marca y que el letrero diga "ABIERTO"', {
+    hasImageAttachment: true,
+  })[0];
+  assert.equal(editBrandIntent.kind, 'image-edit');
+  assert.deepEqual(editBrandIntent.specs.quotedText, ['ABIERTO']);
+  assert.equal(editBrandIntent.specs.documentGrounded, true);
+
+  const editHint = buildMediaIntentHint(editBrandIntent);
+  assert.match(editHint, /texto literal en la edición: conserva exactamente "ABIERTO"/);
+  assert.match(editHint, /anclaje documental\/marca detectado/);
+
+  // Plain image requests do not emit quotedText or documentGrounded bullets.
+  const plainIntent = detectMediaIntent('crea una imagen de un bosque nevado');
+  assert.equal(plainIntent.specs.quotedText, undefined);
+  assert.equal(plainIntent.specs.documentGrounded, undefined);
+  assert.doesNotMatch(buildMediaIntentHint(plainIntent), /texto literal|anclaje documental/);
+});
+
+test('natural definite-article and deliverable follow-ups capture recent chat image context without claiming standalone creations or document cover requests', () => {
+  const followupPhrases = [
+    'el gato de color celeste',
+    'quiero el gato como portada de Facebook',
+    'el perro con sombrero rojo',
+    'the cat in sky blue',
+    'de color celeste',
+    'como portada de Facebook',
+  ];
+  for (const phrase of followupPhrases) {
+    assert.equal(isImageFollowupCandidate(phrase), true, `candidate: ${phrase}`);
+    assert.equal(
+      classifyImageRequest(phrase, { hasRecentImage: true }).operation,
+      'edit',
+      `with recent image: ${phrase}`
+    );
+    assert.notEqual(
+      classifyImageRequest(phrase, { hasRecentImage: false }).operation,
+      'edit',
+      `without recent image must NOT edit: ${phrase}`
+    );
+  }
+
+  // Standalone creations stay 'generate' even when the chat already has a recent image.
+  for (const fresh of [
+    'crea una imagen de un gato',
+    'crea una imagen anime de un gato',
+    'crea otra imagen de una ciudad',
+    'dibuja un paisaje montañoso',
+  ]) {
+    assert.equal(classifyImageRequest(fresh, { hasRecentImage: true }).operation, 'generate', fresh);
+  }
+
+  // Document-runner cover placement veto stays intact.
+  assert.equal(_internal.documentDeliverableVeto('ponle esta foto al word'), true);
+  assert.notEqual(
+    classifyImageRequest('inserta la imagen en la portada', { hasRecentImage: true }).operation,
+    'edit'
+  );
+});
