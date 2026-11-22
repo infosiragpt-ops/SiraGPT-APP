@@ -43,9 +43,9 @@ const PLANS_PATH = "/planes"
 const LOGIN_HREF = `/auth/login?next=${encodeURIComponent(PLANS_PATH)}`
 
 const CTA_BASE =
-  "inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg px-4 text-[15px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/60 focus-visible:ring-offset-2"
-const CTA_PRIMARY = `${CTA_BASE} bg-zinc-900 text-white hover:bg-black active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70`
-const CTA_DISABLED = `${CTA_BASE} cursor-default border border-zinc-200 bg-zinc-100 text-zinc-500`
+  "inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl px-4 text-[14.5px] font-semibold tracking-[-0.01em] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/60 focus-visible:ring-offset-2"
+const CTA_PRIMARY = `${CTA_BASE} bg-zinc-950 text-white shadow-sm hover:bg-zinc-800 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70`
+const CTA_DISABLED = `${CTA_BASE} cursor-default border border-zinc-200 bg-zinc-100/80 text-zinc-500`
 
 function openExternal(href: string) {
   window.open(href, "_blank", "noopener,noreferrer")
@@ -125,33 +125,33 @@ export default function PlanesPage() {
     <div
       // The app shell pins <body> (no document scroll), so the page owns its
       // scroll container — same pattern as /support and /payment/cancel.
-      className="h-[var(--app-viewport-height,100dvh)] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-[#faf9f5] text-zinc-900"
+      className="h-[var(--app-viewport-height,100dvh)] overflow-y-auto overflow-x-hidden overscroll-y-contain bg-white text-zinc-950"
       style={{ colorScheme: "light" }}
     >
       {/* Top bar — back control pinned to the top-left corner */}
-      <header className="sticky top-0 z-10 flex h-14 items-center border-b border-zinc-200/80 bg-[#faf9f5]/90 px-3 backdrop-blur sm:px-5">
+      <header className="sticky top-0 z-10 flex h-14 items-center border-b border-zinc-200/80 bg-white/92 px-3 backdrop-blur sm:px-5">
         <button
           type="button"
           onClick={goBack}
           aria-label="Atrás"
-          className="inline-flex items-center gap-2 rounded-full py-1.5 pl-2 pr-3 text-[15px] font-medium text-zinc-700 transition hover:bg-zinc-900/[0.05] hover:text-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
+          className="inline-flex h-9 items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400/50"
         >
-          <ArrowLeft className="h-[18px] w-[18px]" />
+          <ArrowLeft className="h-4 w-4" />
           Atrás
         </button>
         {user ? (
-          <div className="ml-auto flex items-center gap-1.5 text-xs text-zinc-500">
+          <div className="ml-auto flex items-center gap-1.5 rounded-full border border-zinc-200/90 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
             <span>Plan actual:</span>
-            <span className="font-semibold text-zinc-800">{planDisplayName(currentPlan)}</span>
+            <span className="font-semibold text-zinc-900">{planDisplayName(currentPlan)}</span>
           </div>
         ) : null}
       </header>
 
-      <main className="mx-auto w-full max-w-[1000px] px-4 pb-20 pt-12 sm:px-6 sm:pt-16">
-        <h1 className="text-balance text-center font-serif text-[34px] leading-[1.12] tracking-[-0.02em] text-zinc-900 sm:text-[44px]">
+      <main className="mx-auto w-full max-w-[980px] px-4 pb-20 pt-12 sm:px-6 sm:pt-16">
+        <h1 className="text-balance text-center text-[32px] font-semibold leading-[1.12] tracking-[-0.03em] text-zinc-950 sm:text-[40px]">
           Planes que crecen contigo
         </h1>
-        <p className="mx-auto mt-4 max-w-xl text-pretty text-center text-[15px] leading-6 text-zinc-600">
+        <p className="mx-auto mt-3.5 max-w-xl text-pretty text-center text-[15px] leading-6 text-zinc-500">
           Solo dos opciones y sin letra pequeña: el plan Pro para trabajar sin límites,
           o una propuesta a la medida de tu equipo.
         </p>
@@ -288,12 +288,12 @@ function PlanCard({
   cta,
 }: PlanCardProps) {
   return (
-    <article className="flex flex-col overflow-hidden rounded-[20px] border border-zinc-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_16px_40px_-24px_rgba(0,0,0,0.18)]">
-      <div className="px-7 pb-7 pt-8">
-        <div className="flex h-14 w-14 items-center justify-center text-zinc-900">{icon}</div>
+    <article className="flex flex-col overflow-hidden rounded-2xl border border-zinc-200/90 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04),0_12px_32px_-16px_rgba(0,0,0,0.08)]">
+      <div className="px-7 pb-7 pt-7">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-zinc-200/80 bg-zinc-50 text-zinc-900">{icon}</div>
 
-        <h2 className="mt-6 text-[26px] font-semibold tracking-[-0.02em] text-zinc-900">{name}</h2>
-        <p className="mt-1 text-[15px] leading-6 text-zinc-600">{tagline}</p>
+        <h2 className="mt-5 text-[24px] font-semibold tracking-[-0.025em] text-zinc-950">{name}</h2>
+        <p className="mt-1 text-[14.5px] leading-6 text-zinc-500">{tagline}</p>
 
         <div className="mt-7 flex flex-wrap items-end gap-x-3 gap-y-1">
           <span className="text-[38px] font-semibold leading-none tracking-[-0.03em] text-zinc-900 sm:text-[42px]">

@@ -49,6 +49,23 @@ function sanitizeUploadName(name, index) {
   return clean || `file-${index + 1}`;
 }
 
+/**
+ * Sanitize an attached folder `relativePath` (e.g. `Proyecto/Legal/informe.docx`)
+ * for safe staging inside `/workspace/uploads/<relPath>` without `..` traversal,
+ * allowing identical basenames across distinct subfolders to coexist cleanly.
+ */
+function sanitizeUploadRelativePath(relativePath, fallbackName, index) {
+  if (typeof relativePath === 'string' && relativePath.includes('/') && !relativePath.startsWith('/') && !/[\\\u0000-\u001f\u007f]/.test(relativePath) && !/^[a-z]:/i.test(relativePath)) {
+    const rawParts = relativePath.split('/').filter(Boolean);
+    if (rawParts.length >= 2 && rawParts.length <= 24 && !rawParts.some((p) => p === '.' || p === '..')) {
+      const cleanDirs = rawParts.slice(0, -1).map((seg) => seg.replace(/[^\w.\-() À-ɏ]/g, '_').slice(0, 80) || 'dir');
+      const cleanLeaf = sanitizeUploadName(rawParts[rawParts.length - 1], index);
+      return `${cleanDirs.join('/')}/${cleanLeaf}`;
+    }
+  }
+  return sanitizeUploadName(fallbackName, index);
+}
+
 async function listConversationArtifacts(prisma, { userId, chatId, take = 8 } = {}) {
   const limit = Math.max(1, Math.min(20, Number(take) || 8));
   if (prisma?.generatedArtifact && userId && chatId) {
@@ -510,4 +527,5 @@ module.exports = {
   persistOutputs,
   mimeToExt,
   sanitizeUploadName,
+  sanitizeUploadRelativePath,
 };

@@ -2538,10 +2538,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     : await buildUploadedFileContext(prisma, {
       userId: user.id,
       fileIds: files,
+      fileMetadata,
       // Transcription-to-file wants the whole document, not query-matched
       // excerpts (the request's words are never in the transcript itself).
       query: deterministicAttachmentAnswer || transcriptionToFileRequest ? '' : displayGoal || goal,
-      maxChars: deterministicAttachmentAnswer || transcriptionToFileRequest ? 120000 : 36000,
+      maxChars: deterministicAttachmentAnswer || transcriptionToFileRequest
+        ? 120000
+        : (Array.isArray(files) && files.length > 1 ? Math.max(36000, Math.min(120000, files.length * 6000)) : 36000),
     });
 
   // ── Image-only turns go to VISION ─────────────────────────────────
@@ -3811,6 +3814,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           userId: user.id,
           chatId,
           fileIds: agentRunnerFileIds,
+          fileMetadata,
           instruction: runnerText,
           conversationContext: agentRunnerConversationContext,
           // Engines follow the model picked in the composer (the ladder
@@ -4879,7 +4883,14 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       ) + (generatedArtifactRefs.length
         ? `\n\n${buildGeneratedArtifactReadContext(generatedArtifactRefs, displayGoal || goal)}`
         : '') + (conversationHistory ? `\n\n${conversationHistory}` : '')
-        + require('../chat-skills').selectedSkillsSuffix({ userId: user && user.id, names: skills }),
+        + require('../chat-skills').selectedSkillsSuffix({
+          userId: user && user.id,
+          names: skills,
+          autoGoal: displayGoal || goal,
+          attachmentNames: Array.isArray(fileMetadata)
+            ? fileMetadata.map((m) => (m && (m.relativePath || m.name)) || '').filter(Boolean)
+            : [],
+        }),
       ctx: toolCtx,
       finalizeGuard: ({ steps, unavailableTools }) => validateAgentTaskFinalize({
         finalizeProfile,

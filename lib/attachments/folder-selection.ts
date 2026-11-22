@@ -17,6 +17,36 @@ export function getAttachmentRelativePath(file: unknown): string | null {
     || normalizeAttachmentRelativePath(nativeFile?.webkitRelativePath)
 }
 
+const IGNORED_FOLDER_SEGMENTS = new Set([
+  "__MACOSX",
+  "node_modules",
+  ".next",
+  ".git",
+  ".svn",
+  ".hg",
+  "dist",
+  "build",
+  "coverage",
+  "__pycache__",
+  ".venv",
+  "venv",
+  "target",
+  ".turbo",
+  ".cache",
+])
+
+const IGNORED_FOLDER_FILENAMES = new Set([
+  ".ds_store",
+  "thumbs.db",
+  "desktop.ini",
+])
+
+export function isIgnoredFolderSegment(segment: string): boolean {
+  if (!segment) return true
+  if (segment.startsWith(".")) return true
+  return IGNORED_FOLDER_SEGMENTS.has(segment)
+}
+
 /** Keep the native File objects: copying them discards webkitRelativePath. */
 export function prepareFolderSelection(files: readonly File[]): { files: File[]; skipped: number } {
   const accepted: File[] = []
@@ -24,10 +54,15 @@ export function prepareFolderSelection(files: readonly File[]): { files: File[];
   for (const file of files) {
     const relativePath = getAttachmentRelativePath(file)
     const segments = relativePath?.split("/") || []
-    // Folder picking may include hidden credentials and macOS resource forks.
+    const lowerName = String(file.name || "").toLowerCase()
+    // Folder picking may include hidden credentials, macOS resource forks, and build/dependency caches.
     // Explicit single-file selection remains unchanged.
-    if (!relativePath || segments[segments.length - 1] !== file.name
-      || segments.some((part) => part.startsWith(".") || part === "__MACOSX")) {
+    if (
+      !relativePath
+      || segments[segments.length - 1] !== file.name
+      || IGNORED_FOLDER_FILENAMES.has(lowerName)
+      || segments.some(isIgnoredFolderSegment)
+    ) {
       skipped += 1
       continue
     }

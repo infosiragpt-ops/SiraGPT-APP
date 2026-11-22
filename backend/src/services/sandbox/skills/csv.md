@@ -1,74 +1,46 @@
-# Skill: CSV editing
+# Skill: Datos y CSV — Limpieza, Cruce Multi-Archivo y Analítica Ejecutiva
 
-## Read a CSV
+## Protocolo operativo (estilo Cowork)
+1. **Perfilado completo del entorno de datos**: antes de transformar o responder, inspecciona **todas** las columnas, tipos de datos, conteo de filas, valores nulos, duplicados, rangos de fechas y codificación (`utf-8-sig` / `latin-1`) de cada archivo CSV o carpeta adjunta.
+2. **Planificación visible (`≤ 7` fases en español)**: para cruces de varios archivos, limpiezas complejas o reportes analíticos, publica el plan con `update_plan` (`Inspección de esquema`, `Limpieza y normalización`, `Cruce y agregaciones`, `Verificación de totales`, `Entrega`).
+3. **Rigor numérico absoluto**:
+   - Calcula todas las métricas reales con `pandas` / Python en lugar de estimarlas a ojo.
+   - Verifica que las sumas parciales cuadren con el total general antes de citar cualquier cifra.
+   - Si cruzas varios archivos de una carpeta (`merge` / `join`), reporta cuántas claves coincidieron y cuántas quedaron huérfanas.
+
+## Recetas verificadas en sandbox
+
+### Carga robusta (autodetección de delimitador y BOM de Excel)
 ```python
 import csv
-
-with open('file.csv', newline='', encoding='utf-8-sig') as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        print(row)
-```
-
-`utf-8-sig` handles BOM (common in Excel-exported CSVs).
-
-## Detect delimiter automatically
-```python
-import csv
-
-with open('file.csv', newline='') as f:
-    sample = f.read(2048)
-    dialect = csv.Sniffer().sniff(sample)
-    f.seek(0)
-    reader = csv.reader(f, dialect)
-    for row in reader:
-        print(row)
-```
-
-## Use pandas (preferred for analysis)
-```python
 import pandas as pd
 
-df = pd.read_csv('file.csv', encoding='utf-8-sig')
-print(df.head())
-print(df.dtypes)
+def load_csv_robust(path: str) -> pd.DataFrame:
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            with open(path, "r", encoding=enc, newline="") as f:
+                sample = f.read(4096)
+                sep = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+            return pd.read_csv(path, encoding=enc, sep=sep)
+        except Exception:
+            continue
+    return pd.read_csv(path, encoding="utf-8-sig")
 ```
 
-## Filter and export
+### Auditoría completa de columnas y calidad de datos
 ```python
-import pandas as pd
-
-df = pd.read_csv('file.csv')
-filtered = df[df['status'] == 'active']
-filtered.to_csv('filtered.csv', index=False)
+df = load_csv_robust("datos.csv")
+resumen_campos = pd.DataFrame({
+    "tipo": df.dtypes.astype(str),
+    "no_nulos": df.notna().sum(),
+    "nulos_%": (df.isna().mean() * 100).round(2),
+    "unicos": df.nunique(dropna=True),
+})
+print(f"Filas: {len(df):,} | Columnas: {df.shape[1]}")
+print(resumen_campos)
 ```
 
-## Edit a column
-```python
-import pandas as pd
-
-df = pd.read_csv('file.csv')
-df['price'] = df['price'] * 1.1  # 10% increase
-df.to_csv('file_edited.csv', index=False)
-```
-
-## Add/rename columns
-```python
-df['new_col'] = df['col_a'] + df['col_b']
-df.rename(columns={'old_name': 'new_name'}, inplace=True)
-```
-
-## Write CSV from scratch
-```python
-import csv
-
-rows = [['name', 'age'], ['Alice', 30], ['Bob', 25]]
-with open('output.csv', 'w', newline='', encoding='utf-8') as f:
-    writer = csv.writer(f)
-    writer.writerows(rows)
-```
-
-## Common pitfalls
-- Always specify `encoding='utf-8-sig'` when the file came from Excel.
-- `index=False` prevents pandas from writing row numbers as a column.
-- Large CSVs (>100k rows): use `chunksize` parameter to avoid memory issues.
+### Exportación limpia lista para Excel y BI
+- Usa `df.to_csv("salida_limpia.csv", index=False, encoding="utf-8-sig")` para preservar tildes y `ñ` al abrir directamente en Excel.
+- Estandariza nombres de columnas (`snake_case` o encabezados ejecutivos consistentes según pida el usuario), formatos ISO `YYYY-MM-DD` para fechas y decimales numéricos limpios sin símbolos mezclados.
+- Verifica siempre `len(df_salida)` y que no se hayan introducido `NaN` inesperados tras un `merge` o conversión de tipos.

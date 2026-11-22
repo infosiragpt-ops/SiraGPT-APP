@@ -63,3 +63,30 @@ test('deterministic fallback for «resumen en 2 párrafos» returns exactly two 
   assert.doesNotMatch(answer, /###|trn:oid|escritura con IA|Página \d+ de 38/i);
   assert.equal(answer.trim().split(/\n\s*\n/).length, 2);
 });
+
+test('dedupeRepeatedPageHeaders & messageAttachments strip repeated page headers across multi-page PDFs while keeping verbatim transcription intact', () => {
+  const { dedupeRepeatedPageHeaders, cleanExtractedDocumentText } = require('../src/services/document-report-scaffolding');
+  const messageAttachments = require('../src/services/message-attachments');
+
+  const multiPagePdf = Array.from({ length: 6 }, (_, i) => [
+    '202602 - DISTANCIA - H - LIMA NORTE - MAESTRÍA EN EDUCACIÓN - TRABAJO DE INVESTIGACIÓN II - A11 (Moodle TT)',
+    `Página ${i + 1} de 38`,
+    `Capítulo ${i + 1}: El análisis de la muestra evidenció avances sostenidos en las competencias pedagógicas del profesorado.`,
+    'Universidad César Vallejo — Escuela de Posgrado — Informe Académico Anual',
+  ].join('\n')).join('\n\n');
+
+  const deduped = dedupeRepeatedPageHeaders(multiPagePdf);
+  assert.doesNotMatch(deduped, /Moodle TT/i, 'Moodle running header dropped completely');
+  assert.doesNotMatch(deduped, /^Página \d+ de 38$/m, 'standalone page counters dropped');
+  const ucvMatches = deduped.match(/Universidad César Vallejo — Escuela de Posgrado/g) || [];
+  assert.equal(ucvMatches.length, 1, 'non-LMS running header kept at most once across 6 pages');
+  assert.match(deduped, /Capítulo 6: El análisis de la muestra/);
+
+  // Verbatim mode leaves raw text untouched for literal transcription requests.
+  assert.equal(cleanExtractedDocumentText(multiPagePdf, { preserveVerbatim: true }), multiPagePdf);
+
+  // Synthesis prep runs report + header cleaning automatically.
+  const synthPrepared = messageAttachments.prepareDocumentTextForProfessionalSynthesis(TURNITIN_EXPORT);
+  assert.doesNotMatch(synthPrepared, /trn:oid|escritura con IA|Moodle TT/i);
+  assert.match(synthPrepared, /liderazgo pedagógico/);
+});

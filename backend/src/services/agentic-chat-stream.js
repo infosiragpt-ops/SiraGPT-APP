@@ -2601,7 +2601,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     let skillsPolicyLine = '';
     try {
       if (require('./agent-harness/run-agent-turn').harnessEnabled()) {
-        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill del usuario (las suyas o las que instaló en Ajustes → Skills), carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno. Si el usuario quiere convertir un procedimiento repetible en una skill, redáctala con él y, cuando la apruebe, guárdala con `save_skill`. Marketplace: si pregunta si existe una skill para algo, quiere explorar o añadir skills de la comunidad (ClawHub), o pega un enlace de ClawHub/GitHub/SKILL.md para instalarla, busca con `search_skills_marketplace` y, solo cuando lo pida, instala con `install_skill` (pide confirmación; las skills bloqueadas por el marketplace se rechazan). Nunca afirmes que una skill quedó instalada sin haber llamado a la herramienta.';
+        const catalogHint = require('./chat-skills').buildAvailableSkillsCatalogHint({
+          userId,
+          excludeNames: req?.body?.skills || [],
+        });
+        skillsPolicyLine = 'Skills: antes de crear o editar un Word, PowerPoint, Excel, PDF o CSV, o si la tarea encaja con una skill del usuario (las suyas o las que instaló en Ajustes → Skills), carga su playbook con `use_skill` (sin nombre lista las disponibles) y sigue sus instrucciones. No la cargues si ya está activa en este turno. Si el usuario quiere convertir un procedimiento repetible en una skill, redáctala con él y, cuando la apruebe, guárdala con `save_skill`. Marketplace: si pregunta si existe una skill para algo, quiere explorar o añadir skills de la comunidad (ClawHub), o pega un enlace de ClawHub/GitHub/SKILL.md para instalarla, busca con `search_skills_marketplace` y, solo cuando lo pida, instala con `install_skill` (pide confirmación; las skills bloqueadas por el marketplace se rechazan). Nunca afirmes que una skill quedó instalada sin haber llamado a la herramienta.' + catalogHint;
       }
     } catch (_) { skillsPolicyLine = ''; }
     const extraSystem = codingWorkspace

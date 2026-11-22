@@ -40,6 +40,7 @@
 import * as React from "react"
 import { createPortal } from "react-dom"
 import { DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
+import { OfficeFileIcon, officeKindForMime, officeKindForName } from "@/components/office-file-icon"
 import { statisticalPreviewPath, readStatisticalPreviewResponse } from "@/lib/tabular-preview"
 import { Button } from "@/components/ui/button"
 import {
@@ -231,6 +232,8 @@ export interface AttachmentLike {
   artifactId?: string | null
   /** File name with extension. */
   name: string
+  /** Relative folder path when uploaded via folder selection or drag-and-drop. */
+  relativePath?: string | null
   /** MIME type as reported by the browser / backend. */
   mimeType?: string | null
   /** Byte size (for the header badge). */
@@ -312,28 +315,28 @@ function formatSize(n: number | null | undefined) {
 const VIEWER_INLINE_TOOLBAR_MIN_WIDTH = 720
 
 const liquidViewerHeaderClass =
-  "border-b border-white/55 bg-white/78 shadow-[0_18px_54px_rgba(23,23,23,0.08),inset_0_-1px_0_rgba(255,255,255,0.82)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/62 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-[0_18px_54px_rgba(0,0,0,0.28),inset_0_-1px_0_rgba(255,255,255,0.06)]"
+  "border-b border-zinc-200/80 bg-white/95 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/90"
 
 const liquidFileBadgeClass =
-  "grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/65 bg-white/72 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.88),0_12px_28px_rgba(23,23,23,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200"
+  "grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-zinc-200/80 bg-zinc-50 text-zinc-700 dark:border-white/10 dark:bg-white/10 dark:text-zinc-200"
 
 const liquidMetaPillClass =
-  "inline-flex h-5 items-center rounded-full border border-white/58 bg-white/56 px-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-zinc-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-xl dark:border-white/10 dark:bg-white/8 dark:text-zinc-400"
+  "inline-flex h-5 shrink-0 items-center rounded-md bg-zinc-100 px-1.5 text-[10.5px] font-medium uppercase tracking-[0.04em] text-zinc-600 dark:bg-white/10 dark:text-zinc-300"
 
 const liquidIconButtonClass =
-  "inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/55 bg-white/56 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.78),0_10px_24px_rgba(23,23,23,0.08)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-white/78 hover:text-zinc-950 hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_14px_32px_rgba(23,23,23,0.12)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200/80 bg-white text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
 
 const liquidGhostButtonClass =
-  "h-8 w-8 rounded-full border border-white/50 bg-white/54 text-zinc-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_8px_20px_rgba(23,23,23,0.07)] backdrop-blur-xl hover:bg-white/78 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-40 dark:border-white/10 dark:bg-white/10 dark:text-zinc-300 dark:hover:bg-white/16 dark:hover:text-white"
+  "h-7 w-7 rounded-md text-zinc-600 hover:bg-zinc-100 hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-40 dark:text-zinc-300 dark:hover:bg-white/14 dark:hover:text-white"
 
 const liquidControlShellClass =
-  "rounded-[999px] border border-white/70 bg-white/72 px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_20px_54px_rgba(23,23,23,0.18)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/64 dark:shadow-[0_20px_54px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.08)]"
+  "rounded-xl border border-zinc-200/90 bg-white px-1.5 py-1 shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:border-white/10 dark:bg-zinc-900/90"
 
 const liquidMetricPillClass =
-  "flex h-8 min-w-[4.75rem] items-center justify-center rounded-full border border-white/58 bg-white/62 px-3 text-[11px] font-semibold tabular-nums text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.78)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-100"
+  "flex h-7 min-w-[3.4rem] items-center justify-center rounded-md bg-zinc-100/80 px-2 text-[11px] font-semibold tabular-nums text-zinc-700 dark:bg-white/10 dark:text-zinc-100"
 
 const liquidControlDividerClass =
-  "mx-1 h-6 w-px bg-zinc-300/70 dark:bg-white/10"
+  "mx-1 h-4 w-px bg-zinc-200 dark:bg-white/12"
 
 function absUrl(u: string) {
   // Routes through the shared `normalizeBackendAssetUrl` so the
@@ -441,6 +444,7 @@ export default function UnifiedDocumentViewer({
   if (variant === "modal" && typeof document === "undefined") return null
 
   const kind = detectKind(attachment)
+  const officeKind = officeKindForName(attachment.name) || officeKindForMime(attachment.mimeType)
   const Icon = iconForKind(kind)
   const previewGate = resolvePreviewGate(attachment)
 
@@ -492,20 +496,24 @@ export default function UnifiedDocumentViewer({
         onClick={(e) => e.stopPropagation()}
       >
         <div ref={viewerHeaderRef} data-testid="unified-viewer-header" data-toolbar-layout={headerWide ? "inline" : "stacked"} className={cn(
-          "relative isolate flex min-h-16 flex-row items-center gap-3 overflow-hidden px-4 py-2.5",
+          "relative isolate flex min-h-14 flex-row items-center gap-2.5 overflow-hidden px-3.5 py-2",
           liquidViewerHeaderClass,
         )}>
-          <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-white/80 dark:bg-white/10" aria-hidden="true" />
-          <div className={liquidFileBadgeClass}>
-            {kind === "spss" ? <DocumentArtifactIcon format="sav" /> : <Icon className="h-[18px] w-[18px]" />}
-          </div>
-          <div className="min-w-0 flex-1">
-            <h2 id="unified-document-viewer-title" className="truncate text-[14.5px] font-semibold leading-5 text-zinc-950 dark:text-zinc-50">
+          {officeKind ? (
+            <OfficeFileIcon kind={officeKind} size={36} className="h-9 w-9 shrink-0" />
+          ) : kind === "spss" ? (
+            <div className={liquidFileBadgeClass}><DocumentArtifactIcon format="sav" /></div>
+          ) : (
+            <div className={liquidFileBadgeClass}><Icon className="h-[18px] w-[18px]" /></div>
+          )}
+          <div className="min-w-[7rem] flex-1">
+            <h2 id="unified-document-viewer-title" title={attachment.name} className="truncate text-[14px] font-semibold leading-5 text-zinc-950 dark:text-zinc-50">
               {attachment.name}
             </h2>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-              {kind !== "unknown" && <span className={liquidMetaPillClass}>{kind}</span>}
-              {attachment.size ? <span className={liquidMetaPillClass}>{formatSize(attachment.size)}</span> : null}
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-[11.5px] font-medium text-zinc-500 dark:text-zinc-400">
+              {kind !== "unknown" && <span className="uppercase">{kind}</span>}
+              {kind !== "unknown" && attachment.size ? <span aria-hidden="true">·</span> : null}
+              {attachment.size ? <span className="tabular-nums">{formatSize(attachment.size)}</span> : null}
               {previewGate.phase === "indexing" ? (
                 <span className={liquidMetaPillClass}>{INDEXING_STATUS_LABEL}</span>
               ) : null}
@@ -520,7 +528,7 @@ export default function UnifiedDocumentViewer({
           )}
 
           {siblings && siblings.length > 1 && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1">
               <button
                 type="button"
                 className={liquidIconButtonClass}
@@ -580,17 +588,6 @@ export default function UnifiedDocumentViewer({
               aria-label="Descargar"
             >
               <Download className="h-4 w-4" />
-            </button>
-          )}
-          {downloadUrl && (
-            <button
-              type="button"
-              className={liquidIconButtonClass}
-              onClick={() => window.open(downloadUrl, "_blank", "noopener,noreferrer")}
-              title="Abrir en nueva pestaña"
-              aria-label="Abrir en nueva pestaña"
-            >
-              <ExternalLink className="h-4 w-4" />
             </button>
           )}
           <button
@@ -1684,7 +1681,7 @@ export function PdfRenderer({ a, toolbarContainer: toolbarContainerProp, compact
             aria-label="Página anterior" title="Página anterior">
             <ChevronLeft className="h-3.5 w-3.5" />
           </Button>
-          <div className={cn("gap-1 px-1.5", liquidMetricPillClass)}>
+          <div className={cn("gap-0.5 px-1.5", liquidMetricPillClass)}>
             <input
               type="number"
               min={1}
@@ -1696,10 +1693,10 @@ export function PdfRenderer({ a, toolbarContainer: toolbarContainerProp, compact
               }}
               onKeyDown={e => { if (e.key === "Enter") goToPage(activePage) }}
               onBlur={() => goToPage(activePage)}
-              className="h-6 w-10 rounded-full border border-transparent bg-transparent px-1 text-center text-[11px] font-semibold tabular-nums focus:border-white/70 focus:bg-white/70 focus:outline-none dark:focus:border-white/20 dark:focus:bg-white/10"
+              className="h-6 w-7 rounded-md border border-transparent bg-transparent px-0.5 text-center text-[11px] font-semibold tabular-nums focus:border-zinc-300 focus:bg-white focus:outline-none dark:focus:border-white/20 dark:focus:bg-white/10"
               aria-label="Número de página"
             />
-            <span className="pr-1 text-muted-foreground">/ {numPages || "…"}</span>
+            <span className="pr-0.5 text-muted-foreground">/ {numPages || "…"}</span>
           </div>
           <Button size="icon" variant="ghost" className={liquidGhostButtonClass}
             disabled={activePage >= numPages}

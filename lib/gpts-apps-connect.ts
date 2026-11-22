@@ -20,6 +20,7 @@ export type FirstPartyProvider =
   | "github"
   | "gmail"
   | "google-services"
+  | "spotify"
 
 export type ConnectPlan =
   | { kind: "oauth"; provider: FirstPartyProvider; startPath: string }
@@ -91,6 +92,7 @@ const FIRST_PARTY_START: Record<FirstPartyProvider, string> = {
   github: "/github/connect",
   gmail: "/auth/gmail",
   "google-services": "/auth/google-services",
+  spotify: "/spotify/connect",
 }
 
 function normalizeHost(domain: string): string {
@@ -125,9 +127,14 @@ export function resolveFirstPartyProvider(app: ConnectableApp): FirstPartyProvid
   if (id === "facebook" || hostMatches(host, "facebook.com")) return "facebook"
   if (id === "github" || hostMatches(host, "github.com")) return "github"
   if (id === "gmail" || host === "gmail.com" || host === "mail.google.com") return "gmail"
+  if (id === "spotify" || hostMatches(host, "spotify.com")) return "spotify"
   if (
     id === "gcalendar"
+    || id === "googlecalendar"
+    || id === "google-calendar"
     || id === "gdrive"
+    || id === "googledrive"
+    || id === "google-drive"
     || id === "google"
     || id === "google-services"
     || host === "google.com"

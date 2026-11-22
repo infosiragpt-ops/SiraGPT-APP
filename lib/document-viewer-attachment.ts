@@ -1,7 +1,10 @@
+import { getAttachmentRelativePath } from "@/lib/attachments/folder-selection"
+
 export interface DocumentViewerAttachment {
   id?: string | null
   artifactId?: string | null
   name: string
+  relativePath?: string | null
   mimeType?: string | null
   size?: number | null
   file?: File | null
@@ -121,6 +124,7 @@ export function toDocumentViewerAttachment(
       record.temp_id,
     ),
     name,
+    relativePath: getAttachmentRelativePath(source),
     mimeType: firstString(
       record.mimeType,
       record.mime_type,

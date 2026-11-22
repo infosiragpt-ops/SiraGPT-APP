@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
 const requirePaidPlan = require('../middleware/require-paid-plan');
+const { cleanExtractedDocumentText } = require('../services/document-report-scaffolding');
 const {
   createGenerateLogger,
   summarizeGenerateRequest,
@@ -6423,10 +6424,12 @@ router.post(
 
       let finalPrompt = prompt;
       if (processedFiles.length > 0) {
+        const preserveVerbatimExtract = messageAttachments.isExactDocumentExtractionQuestion(prompt);
         const describeFileForText = (f) => {
+          const displayPath = f.relativePath || f.name;
           const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
             ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
-            : '';
+            : cleanExtractedDocumentText(f.extractedText || '', { preserveVerbatim: preserveVerbatimExtract });
           const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
           // OCR text is labelled with its engine(s) and confidence so it is
           // never taken as exact: a low-confidence read can contradict the
@@ -6436,9 +6439,9 @@ router.post(
             : null;
           if (ocrProvenance && (ocrProvenance.header || isImageFileRecord(f))) {
             const pixelsNote = isImageFileRecord(f) && keepImagesForVision ? '; la imagen adjunta manda' : '';
-            return `File: ${f.name}\nContent (${imageAttachmentVision.describeOcrProvenance(ocrProvenance)}${pixelsNote}): ${content}`;
+            return `File: ${displayPath}\nContent (${imageAttachmentVision.describeOcrProvenance(ocrProvenance)}${pixelsNote}): ${content}`;
           }
-          return `File: ${f.name}\nContent: ${content}`;
+          return `File: ${displayPath}\nContent: ${content}`;
         };
 
         // Images that will be handed to a vision model are sent as real
@@ -6459,7 +6462,15 @@ router.post(
           });
           fileContext = textContextFiles.map(describeFileForText).join('\n\n');
         } else if (processedFiles.length > 1) {
-          fileContext = rawFileContext;
+          const folderEntries = processedFiles.filter((f) => f && typeof f.relativePath === 'string' && f.relativePath.includes('/'));
+          const folderHeader = folderEntries.length > 0
+            ? [
+              `Complete attached folder environment (${processedFiles.length} files across subfolders — analyze all files and fields cohesively):`,
+              ...processedFiles.slice(0, 120).map((f) => `- ${f.relativePath || f.name} (${f.mimeType || 'file'})`),
+              '',
+            ].join('\n')
+            : '';
+          fileContext = `${folderHeader}${rawFileContext}`;
         } else {
           // Single attachment: the uploaded-file context carries the OCR
           // provenance label too (a low-confidence read on a text-only turn

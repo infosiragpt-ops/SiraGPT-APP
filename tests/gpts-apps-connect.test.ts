@@ -143,6 +143,24 @@ describe("gpts apps real connect", () => {
       provider: "google-services",
       startPath: "/auth/google-services",
     })
+    assert.deepEqual(resolveConnectPlan({
+      id: "googledrive",
+      name: "Google Drive",
+      domain: "drive.google.com",
+    }), {
+      kind: "oauth",
+      provider: "google-services",
+      startPath: "/auth/google-services",
+    })
+    assert.deepEqual(resolveConnectPlan({
+      id: "spotify",
+      name: "Spotify",
+      domain: "spotify.com",
+    }), {
+      kind: "oauth",
+      provider: "spotify",
+      startPath: "/spotify/connect",
+    })
     assert.deepEqual(resolveConnectPlan(indeed), {
       kind: "computer",
       url: "https://indeed.com",

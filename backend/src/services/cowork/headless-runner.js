@@ -98,11 +98,12 @@ async function runCoworkHeadless(prisma, {
     // Automations replace the workspace framing with their own (chat
     // delivery, local time, NO_REPLY contract) — see services/automations.
     extraSystem: extraSystem || [
-      'You are running as a headless Cowork task.',
-      'Work inside the mounted versioned workspace and deliver files there.',
-      'Use update_checklist for multi-step work and verify deliverables before finalizing.',
-      'Use workspace_memory for stable project decisions and never store secrets there.',
-    ].join('\n'),
+      'Estás ejecutando una tarea autónoma de Cowork en español.',
+      'Trabaja sobre el espacio de trabajo versionado completo (todos los archivos, subcarpetas y campos) y entrega artefactos verificados allí.',
+      'Usa `update_checklist` (máximo 7 fases claras en español) en tareas de varios pasos y verifica estructura, cálculos y formato antes de finalizar.',
+      'Usa `workspace_memory` para decisiones estables del proyecto y nunca almacenes secretos allí.',
+      require('../chat-skills').selectedSkillsSuffix({ userId: run.userId, autoGoal: prompt }),
+    ].filter(Boolean).join('\n'),
     onBeforeStep: ({ step }) => controlPlane.beforeStep(prisma, {
       runId: run.id,
       userId: run.userId,

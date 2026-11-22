@@ -171,6 +171,7 @@ import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { describeComposerDocumentThumb, isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
+  extractFilesFromDataTransferAsync,
   extractFromClipboardEvent,
   validateBatch,
   isMediaUpload,
@@ -9702,7 +9703,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     if (!dtHasFiles(e.dataTransfer)) {
       setIsDragging(false);
       dragCounter.current = 0;
@@ -9712,11 +9713,9 @@ But first, you need to connect your Spotify account securely using the button be
     e.stopPropagation();
     setIsDragging(false);
     dragCounter.current = 0;
-    // Use the unified extractor — pulls from BOTH .files and .items so
-    // we catch files dragged from sources where one is empty (Linux
-    // Firefox + Edge legacy expose only via .items; Safari often only
-    // via .files). Then run the validate-batch gate for clean errors.
-    const all = extractFilesFromDataTransfer(e.dataTransfer);
+    // Traverse dropped directories + subfolders synchronously captured from DataTransfer
+    // before awaiting, or fall back to flat file extraction.
+    const all = await extractFilesFromDataTransferAsync(e.dataTransfer);
     if (all.length === 0) return;
     const { accepted, rejected } = validateBatch(all, {
       existingCount: uploadedFilesRef.current.length,
@@ -9778,7 +9777,7 @@ But first, you need to connect your Spotify account securely using the button be
       dragCounter.current = Math.max(0, dragCounter.current - 1);
       if (dragCounter.current === 0) setIsDragging(false);
     };
-    const onDrop = (e: DragEvent) => {
+    const onDrop = async (e: DragEvent) => {
       if (!e.dataTransfer) return;
       const target = e.target;
       if (
@@ -9789,7 +9788,7 @@ But first, you need to connect your Spotify account securely using the button be
       e.preventDefault();
       setIsDragging(false);
       dragCounter.current = 0;
-      const all = extractFilesFromDataTransfer(e.dataTransfer);
+      const all = await extractFilesFromDataTransferAsync(e.dataTransfer);
       if (all.length === 0) return;
       const { accepted, rejected } = validateBatch(all, {
         existingCount: uploadedFilesRef.current.length,

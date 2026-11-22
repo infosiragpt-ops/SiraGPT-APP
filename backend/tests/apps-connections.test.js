@@ -472,3 +472,71 @@ test('a body that stalls after the headers is a timeout, never an empty success'
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test('direct OAuth provider health & disconnect support gmail, googledrive, googlecalendar, spotify, facebook and slack without leaking tokens', async () => {
+  const appsRouter = require('../src/routes/apps');
+  const userState = {
+    gmailTokens: 'ya29.SUPER_SECRET_GMAIL_TOKEN',
+    googleServicesTokens: 'ya29.SUPER_SECRET_DRIVE_TOKEN',
+    spotifyTokens: 'BQA_SUPER_SECRET_SPOTIFY_TOKEN',
+  };
+  let fbConnected = true;
+  let slackActive = true;
+
+  const mockDb = {
+    user: {
+      findUnique: async () => ({ ...userState }),
+      update: async ({ data }) => {
+        Object.assign(userState, data);
+        return { ...userState };
+      },
+    },
+    socialConnection: {
+      findMany: async ({ where }) => (fbConnected && where.platform === 'facebook'
+        ? [{ id: 'fb-1', expiresAt: new Date(Date.now() + 60_000) }]
+        : []),
+      deleteMany: async ({ where }) => {
+        if (where.platform === 'facebook') fbConnected = false;
+        return { count: 1 };
+      },
+    },
+    slackIntegration: {
+      findFirst: async () => (slackActive ? { id: 'slack-1' } : null),
+      deleteMany: async () => {
+        slackActive = false;
+        return { count: 1 };
+      },
+    },
+  };
+
+  const listed = await appsRouter.listDirectOAuthProviderConnections(mockDb, 'user-direct-1');
+  assert.deepEqual(
+    listed.map((row) => row.app),
+    ['gmail', 'googledrive', 'googlecalendar', 'spotify', 'facebook', 'slack']
+  );
+  const serialized = JSON.stringify(listed);
+  assert.doesNotMatch(serialized, /SUPER_SECRET|ya29\.|BQA_/);
+
+  const gmailDisc = await appsRouter.disconnectDirectOAuthProvider(mockDb, 'user-direct-1', 'gmail');
+  assert.deepEqual(gmailDisc, { ok: true, app: 'gmail', disconnected: true });
+  assert.equal(userState.gmailTokens, null);
+
+  const driveDisc = await appsRouter.disconnectDirectOAuthProvider(mockDb, 'user-direct-1', 'googledrive');
+  assert.deepEqual(driveDisc, { ok: true, app: 'googledrive', disconnected: true });
+  assert.equal(userState.googleServicesTokens, null);
+
+  const spotifyDisc = await appsRouter.disconnectDirectOAuthProvider(mockDb, 'user-direct-1', 'spotify');
+  assert.deepEqual(spotifyDisc, { ok: true, app: 'spotify', disconnected: true });
+  assert.equal(userState.spotifyTokens, null);
+
+  const fbDisc = await appsRouter.disconnectDirectOAuthProvider(mockDb, 'user-direct-1', 'facebook');
+  assert.deepEqual(fbDisc, { ok: true, app: 'facebook', disconnected: true });
+  assert.equal(fbConnected, false);
+
+  const slackDisc = await appsRouter.disconnectDirectOAuthProvider(mockDb, 'user-direct-1', 'slack');
+  assert.deepEqual(slackDisc, { ok: true, app: 'slack', disconnected: true });
+  assert.equal(slackActive, false);
+
+  const after = await appsRouter.listDirectOAuthProviderConnections(mockDb, 'user-direct-1');
+  assert.deepEqual(after, []);
+});

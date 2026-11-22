@@ -813,10 +813,36 @@ const MessageDocChipsInner = ({
                     />
                 );
             })}
+            {(() => {
+                const folderPaths = attachments
+                    .map((a) => (typeof a.relativePath === "string" && a.relativePath.includes("/") ? a.relativePath : null))
+                    .filter((p): p is string => Boolean(p));
+                if (folderPaths.length < 2) return null;
+                const roots = Array.from(new Set(folderPaths.map((p) => p.split("/")[0])));
+                const subdirs = new Set(
+                    folderPaths
+                        .map((p) => p.split("/").slice(0, -1).join("/"))
+                        .filter((d) => d.includes("/")),
+                );
+                const rootLabel = roots.length === 1 ? roots[0] : `${roots.length} carpetas`;
+                return (
+                    <div
+                        data-testid="sent-folder-summary"
+                        className="flex w-full items-center justify-end gap-1.5 text-[12px] font-medium text-muted-foreground"
+                    >
+                        <span>Carpeta {rootLabel}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{folderPaths.length} archivos{subdirs.size > 0 ? ` · ${subdirs.size} subcarpetas` : ""}</span>
+                    </div>
+                );
+            })()}
             {attachments.map((att, i) => {
                 const mime = (att as any)?.mimeType || (att as any)?.type;
                 const kindLabel = sentDocumentKindLabel(att.name, mime);
                 const sizeLabel = formatSentDocumentSize((att as any)?.size);
+                const relDir = typeof att.relativePath === "string" && att.relativePath.includes("/")
+                    ? att.relativePath.split("/").slice(0, -1).join("/")
+                    : "";
                 return (
                 <button
                     key={att.id || i}
@@ -836,15 +862,15 @@ const MessageDocChipsInner = ({
                         "dark:border-border/60 sm:w-auto sm:min-w-[15rem] sm:max-w-[22rem]",
                     )}
                     aria-label={`Abrir ${att.name}`}
-                    title={att.name}
+                    title={att.relativePath || att.name}
                 >
                     <span className="shrink-0">
                         {getDocumentChipIcon(att.name, mime, 40)}
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="truncate text-[15px] font-medium leading-snug text-foreground">{att.name}</span>
-                        <span className="flex items-center gap-1.5 text-[13px] leading-tight text-muted-foreground">
-                            <span>{kindLabel}{sizeLabel ? ` ${sizeLabel}` : ""}</span>
+                        <span className="flex items-center gap-1.5 truncate text-[13px] leading-tight text-muted-foreground">
+                            <span className="truncate">{relDir ? `${relDir} · ` : ""}{kindLabel}{sizeLabel ? ` ${sizeLabel}` : ""}</span>
                             <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
                         </span>
                     </span>

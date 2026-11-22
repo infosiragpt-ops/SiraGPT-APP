@@ -29,7 +29,7 @@ import {
   type GptStoreAppCategory,
 } from "@/lib/gpts-apps-catalog"
 
-const INITIAL_VISIBLE = 16
+const INITIAL_VISIBLE = 24
 
 const AVATAR_TONES = [
   "bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-100",
@@ -60,13 +60,13 @@ function AppLogo({ app }: { app: GptStoreApp }) {
 
   if (src && sourceIndex < sources.length) {
     return (
-      <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-white p-2 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
+      <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-2xl border border-zinc-200/90 bg-white p-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] dark:border-zinc-700 dark:bg-zinc-800">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
           alt={`${app.name} logo`}
-          width={64}
-          height={64}
+          width={56}
+          height={56}
           loading="lazy"
           decoding="async"
           onError={() => setSourceIndex((index) => index + 1)}
@@ -77,7 +77,7 @@ function AppLogo({ app }: { app: GptStoreApp }) {
   }
 
   return (
-    <div className={cn("grid h-16 w-16 shrink-0 place-items-center rounded-2xl text-[0.92rem] font-semibold", toneFor(app.id))}>
+    <div className={cn("grid h-14 w-14 shrink-0 place-items-center rounded-2xl text-[0.9rem] font-semibold", toneFor(app.id))}>
       {initials(app.name)}
     </div>
   )
@@ -96,17 +96,25 @@ function AppCard({
   onConnect: (app: GptStoreApp) => void
   onDisconnect: (app: GptStoreApp) => void
 }) {
+  const isOfficialOAuth = Boolean(resolveFirstPartyProvider(app))
   return (
     <article
       data-testid={`gpts-app-card-${app.id}`}
-      className="group relative flex min-h-[104px] items-center gap-4 rounded-2xl bg-[#f8f8f8] p-4 transition duration-200 hover:bg-[#f1f1f1] dark:bg-zinc-900 dark:hover:bg-zinc-800/80"
+      className="group relative flex min-h-[104px] items-center gap-4 rounded-2xl border border-zinc-200/90 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition duration-200 hover:border-zinc-300 hover:shadow-[0_4px_14px_-6px_rgba(0,0,0,0.08)] dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
     >
       <AppLogo app={app} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
-          <h3 className="line-clamp-1 text-[1rem] font-semibold leading-tight tracking-[-0.025em] text-zinc-950 dark:text-zinc-50">
-            {app.name}
-          </h3>
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="line-clamp-1 text-[0.98rem] font-semibold leading-tight tracking-[-0.02em] text-zinc-950 dark:text-zinc-50">
+              {app.name}
+            </h3>
+            {isOfficialOAuth && (
+              <span className="shrink-0 rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                OAuth
+              </span>
+            )}
+          </div>
           {connected ? (
             <div className="flex shrink-0 items-center gap-1">
               {/* The connect button itself turns green once the app has a
@@ -140,16 +148,16 @@ function AppCard({
               data-testid={`gpts-app-connect-${app.id}`}
               disabled={connecting}
               onClick={() => onConnect(app)}
-              className="h-8 shrink-0 rounded-full bg-black px-3 text-[0.78rem] font-semibold text-white hover:bg-zinc-800 disabled:opacity-70 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+              className="h-8 shrink-0 rounded-full bg-zinc-950 px-3.5 text-[0.78rem] font-semibold text-white hover:bg-zinc-800 disabled:opacity-70 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
             >
               {connectButtonLabel({ connected: false, connecting })}
             </Button>
           )}
         </div>
-        <p className="mt-1 line-clamp-2 max-w-[22rem] text-[0.82rem] leading-[1.22rem] text-zinc-800 dark:text-zinc-300">
+        <p className="mt-1 line-clamp-2 max-w-[22rem] text-[0.82rem] leading-[1.22rem] text-zinc-600 dark:text-zinc-300">
           {app.description}
         </p>
-        <p className="mt-1.5 text-[0.78rem] text-zinc-400 dark:text-zinc-500">{app.category}</p>
+        <p className="mt-1.5 text-[0.75rem] font-medium text-zinc-400 dark:text-zinc-500">{app.category}</p>
       </div>
     </article>
   )

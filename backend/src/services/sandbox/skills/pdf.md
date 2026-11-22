@@ -1,85 +1,42 @@
-# Skill: PDF editing
+# Skill: PDF — Estudio Ejecutivo de Análisis, Edición y Maquetación
 
-## Golden rule: pick the cheapest of three levels
-(a) STRUCTURAL ops (merge/split/rotate/watermark/numbering/forms/annotations/
-redaction) → total fidelity with pypdf/qpdf. (b) TEXT MICRO-EDITS → PyMuPDF
-locates the area, redacts it and inserts with the same embedded font
-(similar-length, single-line only — no paragraph reflow). (c) REWRITES → edit
-the source .docx when available, else PDF→DOCX→edit→export (warn about
-fidelity loss). Scanned PDFs: OCR first. Save with incremental update.
+## Protocolo operativo (estilo Cowork)
+1. **Inspección íntegra antes de actuar**: lee todas las páginas relevantes, tablas, anexos y metadatos; si el archivo es un reporte exportado (p. ej. Turnitin/Moodle), ignora la portada de similitud y trabaja sobre el contenido real del autor.
+2. **Planificación visible (`≤ 7` fases en español)**: en tareas multi-paso (auditoría, combinación, extracción masiva o generación de entregable) registra primero el plan con `update_plan` y actualízalo al cerrar cada fase.
+3. **Regla de oro para modificar un PDF existente (elige el nivel de mayor fidelidad)**:
+   - **(A) Operaciones estructurales** (unir, dividir, reordenar, rotar, numerar páginas, marca de agua, rellenar formularios AcroForm, redactar datos sensibles): usa `pypdf` / `pymupdf` (`fitz`) conservando el 100 % de la tipografía y vectores originales.
+   - **(B) Micro-ediciones puntuales de una línea** (fechas, importes, nombres de longitud similar): localiza la caja exacta con `fitz` (`page.search_for`), aplica redacción limpia sobre el rectángulo e inserta con métrica y fuente equivalentes.
+   - **(C) Reescrituras profundas o inserción de secciones largas** («agrega una conclusión de 2 páginas», «reestructura los capítulos»): si no hay `.docx` fuente, convierte con fidelidad o maqueta una edición limpia advirtiendo si algún elemento decorativo requiere revisión.
 
-## Read text from PDF
-Use `pypdf` (formerly PyPDF2):
+## Maquetación de PDFs nuevos con calidad editorial
+- Usa `reportlab.platypus` (`SimpleDocTemplate`, `Paragraph`, `Spacer`, `Table`, `TableStyle`, `KeepTogether`) o HTML→PDF con márgenes generosos (`20–25 mm`), jerarquía tipográfica clara (título `18–22 pt`, H1 `14 pt`, cuerpo `10.5–11 pt`, interlineado `1.35×`) y paleta sobria de alto contraste.
+- **Tablas profesionales**: encabezado con fondo sutil (`#F4F4F5` o primario corporativo), alineación derecha en importes/cifras, `repeatRows=1` para saltos de página y nunca celdas cortadas a mitad de fila.
+- **Cero texto de relleno**: prohibido entregar `Lorem ipsum`, `[INSERTAR AQUÍ]` o cifras inventadas; toda cifra proviene del material del usuario o se declara como supuesto explícito.
+
+## Recetas verificadas en sandbox
+
+### Inspección y extracción estructurada por página (`pypdf` / `fitz`)
 ```python
 from pypdf import PdfReader
-reader = PdfReader('file.pdf')
-for i, page in enumerate(reader.pages):
-    text = page.extract_text()
-    print(f'--- Page {i+1} ---')
-    print(text)
+
+reader = PdfReader("entrada.pdf")
+for idx, page in enumerate(reader.pages, start=1):
+    txt = (page.extract_text() or "").strip()
+    print(f"=== Página {idx}/{len(reader.pages)} ({len(txt)} chars) ===")
 ```
 
-## Merge PDFs
-```python
-from pypdf import PdfMerger
-merger = PdfMerger()
-merger.append('file1.pdf')
-merger.append('file2.pdf')
-merger.write('merged.pdf')
-merger.close()
-```
-
-## Extract specific pages
+### Combinar, reordenar o extraer rangos preservando calidad vectorial
 ```python
 from pypdf import PdfReader, PdfWriter
-reader = PdfReader('file.pdf')
+
 writer = PdfWriter()
-for page_num in [0, 2, 4]:  # 0-indexed
-    writer.add_page(reader.pages[page_num])
-with open('extracted.pdf', 'wb') as f:
+for path in ["parte_1.pdf", "parte_2.pdf"]:
+    r = PdfReader(path)
+    for page in r.pages:
+        writer.add_page(page)
+with open("documento_unificado.pdf", "wb") as f:
     writer.write(f)
 ```
 
-## Add text overlay (stamp/watermark)
-```python
-from reportlab.pdfgen import canvas
-from pypdf import PdfReader, PdfWriter
-import io
-
-packet = io.BytesIO()
-c = canvas.Canvas(packet)
-c.setFont('Helvetica', 12)
-c.drawString(100, 700, 'CONFIDENTIAL')
-c.save()
-packet.seek(0)
-
-stamp = PdfReader(packet)
-reader = PdfReader('file.pdf')
-writer = PdfWriter()
-
-for page in reader.pages:
-    page.merge_page(stamp.pages[0])
-    writer.add_page(page)
-
-with open('stamped.pdf', 'wb') as f:
-    writer.write(f)
-```
-
-## Generate a new PDF from scratch
-```python
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
-
-c = canvas.Canvas('output.pdf', pagesize=A4)
-width, height = A4
-c.setFont('Helvetica-Bold', 16)
-c.drawString(72, height - 72, 'Title')
-c.setFont('Helvetica', 12)
-c.drawString(72, height - 100, 'Body text goes here.')
-c.save()
-```
-
-## Limitations
-- PDF is a presentation format — text extraction may lose layout/order.
-- Scanned PDFs require OCR (not available in sandbox).
-- True in-place text editing is not supported by pypdf — generate a new PDF or use overlay approach.
+### Verificación obligatoria antes de entregar
+- Comprueba que el archivo abre con `PdfReader`, tiene `len(reader.pages) >= 1`, ningún texto se superpone ni sale de los márgenes, y el texto clave solicitado está presente en las páginas finales.
