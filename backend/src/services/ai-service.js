@@ -12,6 +12,7 @@ const PptxGenJS = require('pptxgenjs');
 const vectorPPTService = require('./vector-ppt-service');
 const { fitMessagesToContext, getCompletionLimit } = require('./context-window');
 const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
+const { checkFormatCompliance, buildFormatRepairPrompt, reflowIntoParagraphs } = require('./format-compliance');
 const { getBreaker, CircuitBreakerError } = require('./circuit-breaker');
 const {
     buildProviderChatPayload,
@@ -1497,6 +1498,52 @@ class AIService {
                                 }
                                 progress({ type: 'quality_done', replaced: qualityReplaced });
                             }
+
+                            // Format obedience — the user asked for an exact
+                            // shape («dame un resumen en 2 párrafos», «en un
+                            // solo párrafo», «máximo 100 palabras»). Verify the
+                            // finished answer; if it drifted, one repair pass on
+                            // the SAME model with the answer + context kept,
+                            // then a zero-model reflow of its own sentences.
+                            // Same model, same API: never a provider switch.
+                            const noticePrefix = billingFailover && billingFailover.to.model === currentModel
+                                && fullResponseContent.startsWith(billingFailover.noticeText)
+                                ? billingFailover.noticeText
+                                : '';
+                            const answerBody = fullResponseContent.slice(noticePrefix.length);
+                            const formatCheck = checkFormatCompliance(answerBody, userPrompt || '');
+                            if (formatCheck.applicable && !formatCheck.compliant) {
+                                console.warn(`🧪 format-compliance flagged: ${formatCheck.reasons.join(',')} — running repair pass`);
+                                progress({ type: 'quality_pass', reason: null });
+                                let repaired = '';
+                                const corrected = await this._runCorrectivePass({
+                                    provider: currentProvider,
+                                    model: currentRuntimeModel,
+                                    baseMessages: workingMessages,
+                                    userPrompt,
+                                    language,
+                                    signal,
+                                    temperature: Math.min(normalizedTemperature, 0.3),
+                                    messagesOverride: [
+                                        ...workingMessages,
+                                        { role: 'assistant', content: answerBody },
+                                        { role: 'user', content: buildFormatRepairPrompt(formatCheck, language) },
+                                    ],
+                                });
+                                const cleanCorrected = String(corrected || '').trim();
+                                if (cleanCorrected && checkFormatCompliance(cleanCorrected, formatCheck.spec).compliant) {
+                                    repaired = cleanCorrected;
+                                } else if (formatCheck.wantedParagraphs) {
+                                    const reflowed = reflowIntoParagraphs(cleanCorrected || answerBody, formatCheck.wantedParagraphs);
+                                    if (reflowed && checkFormatCompliance(reflowed, formatCheck.spec).compliant) repaired = reflowed;
+                                }
+                                if (repaired && !(signal && signal.aborted)) {
+                                    const replacement = `${noticePrefix}${repaired}`;
+                                    res.write(`data: ${JSON.stringify({ replace: true, content: replacement })}\n\n`);
+                                    fullResponseContent = replacement;
+                                }
+                                progress({ type: 'quality_done', replaced: Boolean(repaired) });
+                            }
                         }
 
                         return fullResponseContent;
@@ -1817,7 +1864,7 @@ class AIService {
      * committing it back to the user's chat stream. This is NOT streamed
      * to the UI — the caller streams the returned string itself.
      */
-    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal, temperature = 0.55 }) {
+    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal, temperature = 0.55, messagesOverride = null }) {
         // The corrective pass runs AFTER the user-visible stream finished, on
         // the same SSE connection — the client only gets [DONE] (and
         // un-pins the stop button) when this returns. Without a hard ceiling,
@@ -1837,10 +1884,12 @@ class AIService {
         try {
             const client = this.getClient(provider);
             const correctivePrompt = buildCorrectivePrompt(userPrompt || '', language);
-            const messages = [
-                ...baseMessages.slice(0, -1),
-                { role: 'user', content: correctivePrompt },
-            ];
+            const messages = Array.isArray(messagesOverride) && messagesOverride.length
+                ? messagesOverride
+                : [
+                    ...baseMessages.slice(0, -1),
+                    { role: 'user', content: correctivePrompt },
+                ];
             const providerPayload = buildProviderChatPayload({
                 provider,
                 model,

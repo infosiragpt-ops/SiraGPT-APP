@@ -140,6 +140,7 @@ const {
   hasConversationArtifacts,
   getConversationArtifactFormat,
   sanitizeUploadName,
+  sanitizeUploadRelativePath,
 } = require('./artifacts');
 const {
   isAsyncEnabled,
@@ -1419,7 +1420,7 @@ async function runAgentRunner({
     for (let i = 0; i < files.length; i += 1) {
       const f = files[i];
       if (!f || !Buffer.isBuffer(f.buffer)) continue;
-      const name = sanitizeUploadName(f.name, i);
+      const name = sanitizeUploadRelativePath(f.relativePath, f.name, i);
       if (names.some((staged) => staged.toLowerCase() === name.toLowerCase())) {
         const error = new Error(`Hay varios archivos llamados ${name}. Indica cuál deseas editar; no modifiqué ninguno.`);
         error.code = 'DOCUMENT_EDIT_SOURCE_AMBIGUOUS';
@@ -1988,6 +1989,7 @@ async function runAgentRunnerForChat({
   userId,
   chatId,
   fileIds = [],
+  fileMetadata = [],
   attachedFiles = [],
   instruction,
   conversationContext,
@@ -2020,7 +2022,7 @@ async function runAgentRunnerForChat({
   // Resolve explicit pair IDs from their owner-scoped records even if an
   // in-memory attachment array was supplied without fileId metadata.
   if ((selectedPair || !loaded || !loaded.length) && prisma && userId && Array.isArray(fileIds) && fileIds.length) {
-    loaded = await loadFilesByIds({ prisma, userId, fileIds });
+    loaded = await loadFilesByIds({ prisma, userId, fileIds, fileMetadata });
   }
   assertSelectedSavXlsxInputs({ instruction, fileIds, loadedFiles: loaded });
   const resolved = await resolveTurnFiles({
@@ -2441,22 +2443,27 @@ async function runAgentRunnerForDocRoute({
  * that would drop it anyway (the chat sandbox caps uploads at 64 MB) never
  * pull a 1 GB video into this process just to throw it away.
  */
-async function loadFilesByIds({ prisma, userId, fileIds, maxBytesPerFile = null }) {
+async function loadFilesByIds({ prisma, userId, fileIds, fileMetadata = [], maxBytesPerFile = null }) {
   if (!prisma?.file || !userId) return [];
   const ids = fileIds.map(String).filter(Boolean);
   if (!ids.length) return [];
+  const normalizedMeta = require('../message-attachments').normalizeClientMetadata(fileMetadata, ids);
+  const metaMap = new Map(normalizedMeta.map((m) => [String(m.id), m]));
   const rows = await prisma.file.findMany({
     where: { id: { in: ids }, userId: String(userId) },
   });
+  const rowById = new Map(rows.map((r) => [String(r.id), r]));
+  const orderedRows = ids.map((id) => rowById.get(id)).filter(Boolean);
   const out = [];
   const { readSourceBuffer } = require('../source-preserving-document-edit');
   const objectStorage = require('../object-storage');
   const fs = require('fs/promises');
   const cap = Number(maxBytesPerFile) > 0 ? Number(maxBytesPerFile) : null;
-  for (const row of rows) {
+  for (const row of orderedRows) {
+    const relativePath = metaMap.get(String(row.id))?.relativePath || undefined;
     const declared = Number(row.size);
     if (cap && Number.isFinite(declared) && declared > cap) {
-      out.push({ name: row.originalName || row.filename, fileId: row.id, skipped: 'too_large', size: declared });
+      out.push({ name: row.originalName || row.filename, ...(relativePath ? { relativePath } : {}), fileId: row.id, skipped: 'too_large', size: declared });
       continue;
     }
     try {
@@ -2471,9 +2478,9 @@ async function loadFilesByIds({ prisma, userId, fileIds, maxBytesPerFile = null 
       if (Buffer.isBuffer(buffer) && buffer.length) {
         if (cap && buffer.length > cap) {
           // The stored size was stale or missing: still report, never deliver.
-          out.push({ name: row.originalName || row.filename, fileId: row.id, skipped: 'too_large', size: buffer.length });
+          out.push({ name: row.originalName || row.filename, ...(relativePath ? { relativePath } : {}), fileId: row.id, skipped: 'too_large', size: buffer.length });
         } else {
-          out.push({ name: row.originalName || row.filename, buffer, fileId: row.id });
+          out.push({ name: row.originalName || row.filename, ...(relativePath ? { relativePath } : {}), buffer, fileId: row.id });
         }
       }
     } catch (_) { /* skip unreadable */ }

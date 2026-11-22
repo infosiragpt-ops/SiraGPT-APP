@@ -137,3 +137,34 @@ test('GET /api/skills lists the catalog and GET /api/skills/:name returns one bo
     server.close();
   }
 });
+
+test('Cowork skill auto-matching & catalog hint resolve matching playbooks without overriding explicit picks or disabled skills', () => {
+  const { recommendSkillsForTurn, buildAvailableSkillsCatalogHint, selectedSkillsSuffix, setSkillEnabled } = chatSkills;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-cowork-skills-'));
+
+  assert.deepEqual(
+    recommendSkillsForTurn({ userId: 'u_cowork', prompt: 'prepara un modelo financiero en Excel y una presentación ejecutiva', root }),
+    ['xlsx', 'pptx'],
+  );
+  assert.deepEqual(
+    recommendSkillsForTurn({ userId: 'u_cowork', prompt: 'analiza y limpia todos los campos', attachmentNames: ['Ventas/datos_2026.csv'], root }),
+    ['csv'],
+  );
+
+  // Disabled skill is respected even on auto-match.
+  setSkillEnabled({ userId: 'u_cowork', name: 'xlsx', enabled: false, root });
+  assert.deepEqual(
+    recommendSkillsForTurn({ userId: 'u_cowork', prompt: 'arma un presupuesto en Excel', root }),
+    [],
+  );
+
+  const hint = buildAvailableSkillsCatalogHint({ userId: 'u_cowork', excludeNames: ['docx'], root });
+  assert.match(hint, /pptx \(PowerPoint:/);
+  assert.doesNotMatch(hint, /\bdocx \(Word:/);
+  assert.doesNotMatch(hint, /\bxlsx \(Excel:/, 'disabled skill omitted from catalog hint');
+
+  // Auto-suffix injects playbook when `names` is empty and `autoGoal` matches.
+  const autoBlock = selectedSkillsSuffix({ userId: null, names: [], autoGoal: 'combina estos archivos .pdf y limpia el dataset .csv' });
+  assert.match(autoBlock, /### Skill: PDF \(pdf\)/);
+  assert.match(autoBlock, /### Skill: CSV \(csv\)/);
+});

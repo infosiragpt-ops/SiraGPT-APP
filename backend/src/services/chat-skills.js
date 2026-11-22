@@ -325,14 +325,96 @@ function buildSelectedSkillsBlock(skills = []) {
   ].join('\n');
 }
 
+const SKILL_AUTO_MATCH_RULES = [
+  { name: 'docx', re: /(?:^|[\s(/])\.docx?\b|\b(?:word|docx|informe\s+(?:en\s+)?word|acta\s+de\s+reunion|carta\s+formal|oficio|memorando)\b/i },
+  { name: 'xlsx', re: /(?:^|[\s(/])\.xlsx?\b|\b(?:excel|xlsx|hoja\s+de\s+calculo|presupuesto|flujo\s+de\s+caja|modelo\s+financiero|tabla\s+dinamica)\b/i },
+  { name: 'pptx', re: /(?:^|[\s(/])\.pptx?\b|\b(?:powerpoint|pptx|diapositivas?|presentacion(?:\s+ejecutiva)?|slide\s*deck|pitch\s*deck)\b/i },
+  { name: 'pdf', re: /(?:^|[\s(/])\.pdf\b|\b(?:pdfs?|combinar\s+pdfs?|unir\s+pdfs?|dividir\s+pdf|formulario\s+pdf)\b/i },
+  { name: 'csv', re: /(?:^|[\s(/])\.csv\b|\b(?:csvs?|datos\s+csv|limpiar\s+(?:el\s+)?dataset|cruzar?\s+(?:tablas|csvs?))\b/i },
+  { name: 'skill-creator', re: /\b(?:crea(?:r)?\s+una?\s+(?:skill|habilidad)|guardar?\s+como\s+skill)\b/i },
+];
+
 /**
- * Append the user's picked skills to an agent system prompt (agent-task
- * runner / inline task loop). Never throws; returns the prompt unchanged
- * when nothing was picked or nothing resolves.
+ * Deterministic `<1ms` Cowork skill auto-matcher (zero LLM calls).
+ * Returns up to `max` enabled skill names matching the prompt or attached filenames.
  */
-function selectedSkillsSuffix({ userId = null, names = [] } = {}) {
+function recommendSkillsForTurn({
+  userId = null,
+  prompt = '',
+  attachmentNames = [],
+  max = 2,
+  persist = null,
+  root = undefined,
+} = {}) {
   try {
-    const clean = normalizeSelectedSkillNames(names);
+    const enabled = listChatSkills({ userId, persist, root });
+    if (!enabled.length) return [];
+    const enabledSet = new Set(enabled.map((s) => s.name));
+    const text = `${String(prompt || '')} ${(Array.isArray(attachmentNames) ? attachmentNames.join(' ') : '')}`
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (!text.trim()) return [];
+
+    const matched = [];
+    for (const rule of SKILL_AUTO_MATCH_RULES) {
+      if (enabledSet.has(rule.name) && rule.re.test(text)) {
+        matched.push(rule.name);
+        if (matched.length >= max) return matched;
+      }
+    }
+
+    // Match user/installed catalog skills when >= 2 significant words of title/name appear in the prompt.
+    for (const skill of enabled) {
+      if (matched.includes(skill.name) || BUILTIN_BY_NAME.has(skill.name)) continue;
+      const tokens = `${skill.name.replace(/[-_]/g, ' ')} ${skill.title || ''}`
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length >= 4);
+      const hits = new Set(tokens.filter((w) => text.includes(w)));
+      if (hits.size >= 2 || (tokens.length === 1 && hits.size === 1)) {
+        matched.push(skill.name);
+        if (matched.length >= max) break;
+      }
+    }
+    return matched;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Compact catalog index injected into `skillsPolicyLine` so Cowork/agent turns
+ * know every enabled skill up front without a blind `use_skill({})` roundtrip.
+ */
+function buildAvailableSkillsCatalogHint({ userId = null, excludeNames = [], persist = null, root = undefined } = {}) {
+  try {
+    const excluded = new Set(normalizeSelectedSkillNames(excludeNames));
+    const available = listChatSkills({ userId, persist, root }).filter((s) => !excluded.has(s.name));
+    if (!available.length) return '';
+    const summary = available
+      .slice(0, 14)
+      .map((s) => `${s.name} (${s.title || s.name}: ${String(s.description || '').slice(0, 90)})`)
+      .join('; ');
+    return ` Catálogo activo del usuario listo para \`use_skill({ name })\`: ${summary}.`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Append the user's picked skills (or auto-matched Cowork playbooks when
+ * `autoGoal` is provided and no explicit skills were picked) to an agent system
+ * prompt. Never throws; returns '' when nothing applies.
+ */
+function selectedSkillsSuffix({ userId = null, names = [], autoGoal = '', attachmentNames = [] } = {}) {
+  try {
+    let clean = normalizeSelectedSkillNames(names);
+    if (!clean.length && autoGoal) {
+      clean = recommendSkillsForTurn({ userId, prompt: autoGoal, attachmentNames, max: 2 });
+    }
     if (!clean.length) return '';
     const { skills } = resolveSelectedSkills({ userId, names: clean });
     return buildSelectedSkillsBlock(skills);
@@ -633,5 +715,7 @@ module.exports = {
   resolveSelectedSkills,
   buildSelectedSkillsBlock,
   selectedSkillsSuffix,
+  recommendSkillsForTurn,
+  buildAvailableSkillsCatalogHint,
   formatSkillsCatalog,
 };

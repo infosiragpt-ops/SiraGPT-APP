@@ -11,6 +11,7 @@ const {
 } = require('./agents/agent-task-runner');
 const { evaluateResponse } = require('./quality-guard');
 const imageAttachmentVision = require('./image-attachment-vision');
+const { cleanExtractedDocumentText } = require('./document-report-scaffolding');
 
 const FILE_READ_FAILURE_RE = /\b(?:no\s+pude\s+leer\w*|no\s+puedo\s+leer\w*|recib[ií]\s+tu\s+archivo.{0,80}no\s+pude\s+leer|no\s+(?:pude|puedo)\s+(?:procesar|abrir|analizar|acceder\s+al\s+contenido\s+de(?:l)?|acceder\s+a|ver)\s+(?:tu\s+)?(?:archivo|adjunto|documento|file)|no\s+encontr[eé]\s+texto|binary file|content not available|file content could not be extracted|no\s+tengo\s+acceso\s+al\s+(?:archivo|adjunto|documento)|cannot\s+(?:read|access)\s+(?:the\s+)?(?:file|attachment)|unable\s+to\s+(?:read|access))\b/i;
 const OPERATIONAL_DISCLOSURE_RE = /nota operativa|runtime principal|respuesta segura/i;
@@ -66,7 +67,8 @@ function splitSummarySentences(text = '') {
 function buildDirectExtractedSummaryAnswer(prompt = '', rawText = '') {
   const request = normalizeKey(prompt);
   if (!/\b(?:resumen|resume|sintesis|summary|de que trata|que dice)\b/.test(request)) return '';
-  const sentences = splitSummarySentences(rawText)
+  const cleanedRaw = cleanExtractedDocumentText(rawText);
+  const sentences = splitSummarySentences(cleanedRaw)
     .filter((sentence) => sentence.length >= 24)
     .filter((sentence) => !/^[A-ZÁÉÍÓÚÑ0-9\s\-–—:]{8,}$/.test(sentence));
   if (!sentences.length) return '';
@@ -181,12 +183,13 @@ function shouldRecoverAttachmentResponse({ prompt, response, processedFiles = []
 function buildProcessedFilesContext(processedFiles = [], prompt = '') {
   if (!Array.isArray(processedFiles) || processedFiles.length === 0) return '';
   const synthesisRequest = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt);
+  const preserveVerbatim = messageAttachments.isExactDocumentExtractionQuestion(prompt);
   const blocks = processedFiles
     .map((file, index) => {
       const rawText = String(file?.extractedText || '').trim();
       const text = synthesisRequest
         ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(rawText)
-        : rawText;
+        : cleanExtractedDocumentText(rawText, { preserveVerbatim });
       if (!text || looksLikeUnsupportedExtractionPlaceholder(text)) return '';
       return [
         `### Archivo adjunto ${index + 1}: ${file.name || file.originalName || file.id || 'archivo'}`,
@@ -310,10 +313,18 @@ async function buildChatUploadedFileContext(prisma, { userId, processedFiles, pr
   if (!userId || !processedFiles?.length) return '';
   const fileIds = processedFiles.map((f) => f.id).filter(Boolean);
   if (fileIds.length === 0) return buildProcessedFilesContext(processedFiles, prompt);
+  const fileMetadata = processedFiles
+    .filter((f) => f && f.id && f.relativePath)
+    .map((f) => ({ id: f.id, relativePath: f.relativePath }));
+  const dynamicBudget = fileIds.length > 1
+    ? Math.max(36000, Math.min(120000, fileIds.length * 6000))
+    : 36000;
   const enrichedContext = await messageAttachments.buildUploadedFileContext(prisma, {
     userId,
     fileIds,
+    fileMetadata,
     query: prompt,
+    maxChars: dynamicBudget,
     // Chat turns send images to the model as pixels: never hold the turn
     // for OCR text the upload pipeline is still producing.
     imageTextWaitMs: 0,

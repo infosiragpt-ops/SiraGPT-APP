@@ -24,6 +24,7 @@ import {
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { SkillGlyph } from "@/components/chat/skills-menu"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -323,11 +324,14 @@ function SkillRow({
         className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-border/70 bg-background">
-          <ScrollText aria-hidden="true" className="h-[18px] w-[18px] text-foreground/80" />
+          <SkillGlyph skill={skill} className="h-5 w-5" />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
-            <span className="truncate text-[15px] font-medium text-foreground">{skill.name}</span>
+            <span className="truncate text-[15px] font-medium text-foreground">{skill.title || skill.name}</span>
+            {skill.title && skill.title !== skill.name ? (
+              <span className="shrink-0 text-xs font-normal text-muted-foreground">/{skill.name}</span>
+            ) : null}
             {!skill.enabled ? (
               <span className="shrink-0 rounded-full border border-border px-1.5 py-px text-[10.5px] font-medium text-muted-foreground">Desactivada</span>
             ) : null}

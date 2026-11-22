@@ -54,4 +54,54 @@ describe('folder attachment selection', () => {
     expect(snapshotComposerFilesForMessage([file])[0]).not.toHaveProperty('relativePath')
     expect(prepareFolderSelection([])).toEqual({ files: [], skipped: 0 })
   })
+
+  it('skips build/dependency caches (node_modules, __pycache__, Thumbs.db) and traverses nested dropped directories', async () => {
+    const { extractFilesFromDataTransferAsync } = await import('@/lib/attachment-ingest')
+    const { toDocumentViewerAttachment } = await import('@/lib/document-viewer-attachment')
+
+    const validA = folderFile('Proyecto/Legal/contrato.pdf')
+    const validB = folderFile('Proyecto/Finanzas/presupuesto.xlsx')
+    const junk = [
+      folderFile('Proyecto/node_modules/pkg/index.js'),
+      folderFile('Proyecto/__pycache__/mod.pyc'),
+      folderFile('Proyecto/Thumbs.db'),
+    ]
+    const prepared = prepareFolderSelection([validA, validB, ...junk])
+    expect(prepared.files).toEqual([validA, validB])
+    expect(prepared.skipped).toBe(3)
+
+    // Viewer attachment preserves relativePath for sent-bubble subfolder display
+    const viewerAtt = toDocumentViewerAttachment({ id: 'f1', name: 'contrato.pdf', relativePath: 'Proyecto/Legal/contrato.pdf' })
+    expect(viewerAtt.relativePath).toBe('Proyecto/Legal/contrato.pdf')
+
+    // Async DataTransfer folder traversal (`webkitGetAsEntry`)
+    const leafFile = new File(['datos'], 'balance.csv', { type: 'text/csv' })
+    const fakeDirEntry = {
+      isDirectory: true,
+      name: 'Contabilidad',
+      createReader: () => {
+        let readOnce = false
+        return {
+          readEntries: (cb: (entries: unknown[]) => void) => {
+            if (readOnce) return cb([])
+            readOnce = true
+            cb([
+              {
+                isFile: true,
+                name: 'balance.csv',
+                file: (ok: (f: File) => void) => ok(leafFile),
+              },
+            ])
+          },
+        }
+      },
+    }
+    const fakeDt = {
+      files: [] as unknown as FileList,
+      items: [{ kind: 'file', getAsFile: () => null, webkitGetAsEntry: () => fakeDirEntry }],
+    } as unknown as DataTransfer
+    const dropped = await extractFilesFromDataTransferAsync(fakeDt)
+    expect(dropped).toHaveLength(1)
+    expect(getAttachmentRelativePath(dropped[0])).toBe('Contabilidad/balance.csv')
+  })
 })

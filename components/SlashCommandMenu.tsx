@@ -16,8 +16,9 @@
  */
 
 import * as React from "react"
-import { Target, Search, FileText, ScrollText } from "lucide-react"
+import { Target, Search, FileText } from "lucide-react"
 
+import { SkillGlyph } from "@/components/chat/skills-menu"
 import type { ChatSkillSummary } from "@/lib/api"
 
 export type SlashCommand = {
@@ -193,7 +194,7 @@ export function SlashCommandMenu({ open, filter, onCommandPick, onClose, skills 
                     highlighted ? "bg-accent" : "hover:bg-accent/50"
                   }`}
                 >
-                  <ScrollText aria-hidden="true" className="h-4 w-4 shrink-0 text-foreground/80" />
+                  <SkillGlyph skill={item.skill} />
                   <span className="min-w-0 flex-1 truncate text-sm text-foreground">{item.skill.name}</span>
                   <span className="hidden max-w-[55%] truncate text-xs text-muted-foreground sm:block">{item.skill.description}</span>
                 </button>

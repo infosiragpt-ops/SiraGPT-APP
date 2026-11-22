@@ -279,6 +279,102 @@ export function extractFilesFromDataTransfer(
   return out
 }
 
+interface WebkitFileSystemEntryLike {
+  isFile?: boolean
+  isDirectory?: boolean
+  name: string
+  file?: (success: (file: File) => void, error?: (err: unknown) => void) => void
+  createReader?: () => {
+    readEntries: (success: (entries: WebkitFileSystemEntryLike[]) => void, error?: (err: unknown) => void) => void
+  }
+}
+
+async function readDirectoryEntryRecursive(
+  entry: WebkitFileSystemEntryLike,
+  prefix: string,
+  out: File[],
+  depth = 0,
+): Promise<void> {
+  if (!entry || depth > 24 || out.length >= DEFAULT_MAX_COUNT * 2) return
+  const segment = String(entry.name || "").trim()
+  if (!segment || segment.startsWith(".") || segment === "__MACOSX" || segment === "node_modules" || segment === ".next" || segment === "__pycache__" || segment === "venv" || segment === ".venv") {
+    return
+  }
+  const currentPath = prefix ? `${prefix}/${segment}` : segment
+  if (entry.isFile && typeof entry.file === "function") {
+    const file = await new Promise<File | null>((resolve) => {
+      try {
+        entry.file!((f) => resolve(f), () => resolve(null))
+      } catch {
+        resolve(null)
+      }
+    })
+    if (file) {
+      if (prefix) {
+        try {
+          Object.defineProperty(file, "relativePath", {
+            value: currentPath,
+            enumerable: true,
+            configurable: true,
+          })
+        } catch { /* non-configurable File host object */ }
+      }
+      out.push(file)
+    }
+    return
+  }
+  if (entry.isDirectory && typeof entry.createReader === "function") {
+    const reader = entry.createReader()
+    // FileSystemDirectoryReader.readEntries returns at most ~100 entries per call in Chromium; loop until empty.
+    while (out.length < DEFAULT_MAX_COUNT * 2) {
+      const batch = await new Promise<WebkitFileSystemEntryLike[]>((resolve) => {
+        try {
+          reader.readEntries((entries) => resolve(Array.isArray(entries) ? entries : []), () => resolve([]))
+        } catch {
+          resolve([])
+        }
+      })
+      if (batch.length === 0) break
+      for (const child of batch) {
+        await readDirectoryEntryRecursive(child, currentPath, out, depth + 1)
+        if (out.length >= DEFAULT_MAX_COUNT * 2) break
+      }
+    }
+  }
+}
+
+/**
+ * Async folder-aware DataTransfer extractor for drag & drop: traverses nested
+ * subfolders via `webkitGetAsEntry` while preserving `relativePath` on every
+ * child file, falling back cleanly to `extractFilesFromDataTransfer` for plain files.
+ */
+export async function extractFilesFromDataTransferAsync(
+  dt: DataTransfer | null,
+): Promise<File[]> {
+  if (!dt) return []
+  const syncFiles = extractFilesFromDataTransfer(dt)
+  const items = dt.items ? Array.from(dt.items) : []
+  const entries: WebkitFileSystemEntryLike[] = []
+  for (const item of items) {
+    if (item.kind !== "file") continue
+    const getEntry = (item as unknown as { webkitGetAsEntry?: () => WebkitFileSystemEntryLike | null }).webkitGetAsEntry
+    if (typeof getEntry === "function") {
+      try {
+        const entry = getEntry.call(item)
+        if (entry) entries.push(entry)
+      } catch { /* ignore */ }
+    }
+  }
+  if (!entries.some((e) => e && e.isDirectory)) {
+    return syncFiles
+  }
+  const traversed: File[] = []
+  for (const entry of entries) {
+    await readDirectoryEntryRecursive(entry, "", traversed, 0)
+  }
+  return traversed.length > 0 ? traversed : syncFiles
+}
+
 /**
  * Extract everything useful from a paste event:
  *   - files (OS-clipboard files, screenshot blobs)
