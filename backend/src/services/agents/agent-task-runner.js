@@ -33,6 +33,8 @@ const { buildAgenticOperatingCore } = require('./agentic-operating-core');
 const durableExecutionStore = require('./durable-execution-store');
 const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence, isAttachedFactQuestion } = require('./document-delivery-policy');
 const outputFormat = require('../output-format-contract');
+const { checkFormatCompliance, reflowIntoParagraphs } = require('../format-compliance');
+const { stripReportScaffolding } = require('../document-report-scaffolding');
 const { getQueueName } = require('./agent-task-queue');
 const {
   createHonestProgressTracker,
@@ -1093,8 +1095,9 @@ function pickAttachmentRecoveryRuntime(env = process.env) {
  */
 async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env = process.env, clientFactory = null, pinnedRuntime = null }) {
   const question = String(goal || '').trim();
-  const material = stripScaffolding(uploadedFileContext);
+  const material = stripReportScaffolding(stripScaffolding(uploadedFileContext));
   if (!question || !material || countUsefulWords(uploadedFileContext) < 8) return null;
+  const formatLines = outputFormat.buildFormatDirectiveLines(question, { lang: 'es' });
   const pinned = Boolean(pinnedRuntime && pinnedRuntime.client && pinnedRuntime.model);
   const runtime = pinned
     ? (attachmentRecoveryEnabled(env) ? { provider: pinnedRuntime.provider || null, model: pinnedRuntime.model } : null)
@@ -1120,7 +1123,13 @@ async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env
             + 'significa SIEMPRE referencia bibliográfica, nunca una cita de calendario. '
             + 'Solo para preguntas de contenido cuya respuesta no aparece en el material: dilo explícitamente en una '
             + 'frase y resume en otra qué contiene el material. '
-            + 'No inventes datos que no estén en el material.',
+            + 'No inventes datos que no estén en el material. '
+            + 'Si el material es la exportación de un reporte de similitud o de detección de IA (Turnitin u otro), '
+            + 'ignora la portada del reporte, identificadores de entrega, encabezados de página, contadores y avisos '
+            + 'sobre detección de IA: resume y analiza el trabajo del autor, no el reporte. '
+            + 'Escribe en prosa profesional, sin título ni encabezados salvo que el usuario los pida, sin repetir '
+            + 'nombres de archivo y sin ofrecimientos al final.'
+            + (formatLines.length ? ` ${formatLines.join(' ')}` : ''),
         },
         {
           role: 'user',
@@ -1129,7 +1138,15 @@ async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env
       ],
     });
     const text = completion?.choices?.[0]?.message?.content;
-    return typeof text === 'string' && text.trim().length >= 20 ? text.trim() : null;
+    if (typeof text !== 'string' || text.trim().length < 20) return null;
+    const answer = text.trim();
+    // «en 2 párrafos»: if the model drifted, reflow its own sentences.
+    const check = checkFormatCompliance(answer, question);
+    if (check.applicable && !check.compliant && check.wantedParagraphs) {
+      const reflowed = reflowIntoParagraphs(answer, check.wantedParagraphs);
+      if (reflowed && checkFormatCompliance(reflowed, check.spec).compliant) return reflowed;
+    }
+    return answer;
   } catch (err) {
     console.warn('[agent-task] LLM attachment recovery falló:', err?.message || err);
     return null;
@@ -1219,7 +1236,7 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   const bibliographyAnswer = buildBibliographyFallbackAnswer({ goal: request, uploadedFileContext });
   if (bibliographyAnswer) return bibliographyAnswer;
 
-  const cleanedRaw = stripScaffolding(uploadedFileContext);
+  const cleanedRaw = stripReportScaffolding(stripScaffolding(uploadedFileContext));
   const structuredAnswer = buildStructuredAttachmentAnalysisAnswer({
     goal: request,
     uploadedFileContext,
@@ -1297,7 +1314,8 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
           const recBlock = wantsRecommendations
             ? '\n**Siguiente paso recomendado.** Usa estos hallazgos como base y pídeme una matriz, informe Word/PDF o tabla comparativa si necesitas un entregable descargable.'
             : '';
-          return [heading, '', summaryParagraphs.join('\n\n'), recBlock].filter(Boolean).join('\n');
+          // An explicit «N párrafos» means exactly N paragraphs: no heading.
+          return [summaryParagraphs.join('\n\n'), recBlock].filter(Boolean).join('\n');
         }
       }
       const summaryBlock = executiveSummary
@@ -4534,7 +4552,21 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     }
 
     if (deterministicAttachmentAnswer) {
-      const recoveredMarkdown = buildBibliographyFallbackAnswer({
+      // The picked model writes the answer (summaries, analysis, «en 2
+      // párrafos»). Sentence extraction is only the no-model / failure
+      // fallback: on its own it quoted report scaffolding (Turnitin cover,
+      // submission ids, AI-detection disclaimers) as if it were a summary.
+      const fastPathPinnedKept = modelPinned === true && runtimeModelProfile.remapped !== true;
+      const modelWrittenMarkdown = openai
+        ? await buildLlmAttachmentRecoveryAnswer({
+          goal: displayGoal || goal,
+          uploadedFileContext,
+          pinnedRuntime: fastPathPinnedKept
+            ? { client: openai, model: runtimeModelProfile.runtimeModel, provider: runtimeModelProfile.detected?.provider || null }
+            : null,
+        })
+        : null;
+      const recoveredMarkdown = modelWrittenMarkdown || buildBibliographyFallbackAnswer({
         goal: displayGoal || goal,
         uploadedFileContext,
       }) || buildAttachmentGroundedFallbackAnswer({
