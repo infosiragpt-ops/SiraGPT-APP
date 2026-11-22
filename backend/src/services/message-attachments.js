@@ -1304,7 +1304,7 @@ async function buildUploadedFileContext(prisma, {
       ...enrichedRows.slice(0, 80).map((r) => {
         const p = safeText(r.relativePath || r.originalName || r.id, '').slice(0, 200);
         const cols = Array.isArray(r.documentAnalysis?.tables) && r.documentAnalysis.tables.length
-          ? ` | campos/columnas: ${r.documentAnalysis.tables.flatMap((t) => t.columns || []).slice(0, 8).join(', ')}`
+          ? ` | campos/columnas: ${r.documentAnalysis.tables.flatMap((t) => t.columns || []).slice(0, 12).join(', ')}`
           : '';
         return `- ${p} [${r.mimeType || 'archivo'}]${cols}`;
       }),
@@ -1562,6 +1562,7 @@ module.exports = {
   parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
+  cleanExtractedDocumentText,
   describeUnextractedAttachment,
   extractFileIdsFromMessageFiles,
   ensureImageOcr,

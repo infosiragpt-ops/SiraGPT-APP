@@ -3,7 +3,6 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
 const requirePaidPlan = require('../middleware/require-paid-plan');
-const { cleanExtractedDocumentText } = require('../services/document-report-scaffolding');
 const {
   createGenerateLogger,
   summarizeGenerateRequest,
@@ -6429,7 +6428,7 @@ router.post(
           const displayPath = f.relativePath || f.name;
           const preparedContent = messageAttachments.isProfessionalDocumentSynthesisRequest(prompt)
             ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(f.extractedText || '')
-            : cleanExtractedDocumentText(f.extractedText || '', { preserveVerbatim: preserveVerbatimExtract });
+            : messageAttachments.cleanExtractedDocumentText(f.extractedText || '', { preserveVerbatim: preserveVerbatimExtract });
           const content = preparedContent || f.extractedText || messageAttachments.describeUnextractedAttachment(f);
           // OCR text is labelled with its engine(s) and confidence so it is
           // never taken as exact: a low-confidence read can contradict the
