@@ -26,8 +26,6 @@ function prewarmUnifiedDocumentPreview(attachment: AttachmentLike): void {
     }).catch(() => { /* noop */ })
 }
 import { FileProcessingBadge } from "@/components/file-processing-badge"
-import { DocumentPageThumb } from "@/components/document-page-thumb"
-import { isPagePreviewDocument } from "@/lib/document-first-page"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -381,16 +379,35 @@ const extractRenderableAgentTaskContent = (content: string) => {
     return raw;
 };
 
-const getDocumentChipIcon = (name: string, mime?: string) => {
+const getDocumentChipIcon = (name: string, mime?: string, size: 32 | 40 = 32) => {
     const kind = officeKindForName(name) || officeKindForMime(mime);
+    const box = size === 40 ? "h-10 w-10" : "h-8 w-8";
     if (kind) {
-        return <OfficeFileIcon kind={kind} size={32} className="h-8 w-8 shrink-0" />;
+        return <OfficeFileIcon kind={kind} size={size} className={`${box} shrink-0`} />;
     }
     return (
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+        <span className={`flex ${box} shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground`}>
             <FileText className="h-4 w-4" />
         </span>
     );
+};
+
+// Sent-document chip subtitle: "PDF 515.26KB" (type + size), like a mail attachment.
+const sentDocumentKindLabel = (name: string, mime?: string) => {
+    const kind = officeKindForName(name) || officeKindForMime(mime);
+    if (kind === "pdf") return "PDF";
+    const ext = String(name || "").split(".").pop() || "";
+    if (ext && ext !== name && ext.length <= 5) return ext.toUpperCase();
+    return kind ? officeKindLabel(kind) : "Archivo";
+};
+
+const formatSentDocumentSize = (bytes: unknown) => {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    if (n < 1024) return `${Math.round(n)}B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(2)}KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)}MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)}GB`;
 };
 
 function escapePreviewHtml(value: unknown) {
@@ -797,7 +814,9 @@ const MessageDocChipsInner = ({
                 );
             })}
             {attachments.map((att, i) => {
-                const showPage = isPagePreviewDocument(att.name, att.mimeType);
+                const mime = (att as any)?.mimeType || (att as any)?.type;
+                const kindLabel = sentDocumentKindLabel(att.name, mime);
+                const sizeLabel = formatSentDocumentSize((att as any)?.size);
                 return (
                 <button
                     key={att.id || i}
@@ -809,35 +828,26 @@ const MessageDocChipsInner = ({
                             setIdx(i);
                         }
                     }}
+                    data-testid="sent-document-chip"
                     className={cn(
-                        "group/chip text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:shadow-sm",
-                        showPage
-                            ? "w-[5.7rem] overflow-hidden rounded-[0.9rem] border border-gray-200 bg-background dark:border-border/60"
-                            : "inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-sm dark:border-border/60 sm:max-w-[360px]",
+                        "group/chip inline-flex w-full max-w-full items-center gap-3 rounded-2xl border border-gray-200 bg-background px-3.5 py-3 text-left",
+                        "shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-gray-300 hover:shadow-sm",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                        "dark:border-border/60 sm:w-auto sm:min-w-[15rem] sm:max-w-[22rem]",
                     )}
                     aria-label={`Abrir ${att.name}`}
+                    title={att.name}
                 >
-                    {showPage ? (
-                        <>
-                            <span className="block h-[7.4rem] w-full">
-                                <DocumentPageThumb source={att} />
-                            </span>
-                            <span className="block truncate px-1.5 py-1 text-[10.5px] font-medium leading-tight text-foreground">
-                                {att.name}
-                            </span>
-                        </>
-                    ) : (
-                        <>
-                            {getDocumentChipIcon(att.name, (att as any)?.mimeType || (att as any)?.type)}
-                            <span className="flex min-w-0 flex-col">
-                                <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
-                                <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                                    <span>{(att.name.split('.').pop() || 'file').slice(0, 4)}</span>
-                                    <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
-                                </span>
-                            </span>
-                        </>
-                    )}
+                    <span className="shrink-0">
+                        {getDocumentChipIcon(att.name, mime, 40)}
+                    </span>
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                        <span className="truncate text-[15px] font-medium leading-snug text-foreground">{att.name}</span>
+                        <span className="flex items-center gap-1.5 text-[13px] leading-tight text-muted-foreground">
+                            <span>{kindLabel}{sizeLabel ? ` ${sizeLabel}` : ""}</span>
+                            <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
+                        </span>
+                    </span>
                 </button>
                 );
             })}
@@ -3305,7 +3315,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 className={cn(
                                 "chat-user-bubble relative rounded-[18px] rounded-br-[8px]",
                                 "px-[14px] py-2.5",
-                                "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
+                                "bg-[#EDF2FD] text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
                                 "text-[15px] leading-[1.45] tracking-[-0.005em]",
                                 "transition-colors duration-base ease-smooth",

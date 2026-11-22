@@ -5,7 +5,7 @@ import test from "node:test"
 
 const source = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8")
 
-test("sent documents keep page previews while composer documents use compact rows", () => {
+test("sent documents render as a compact professional chip (icon + name + type/size) that opens the viewer", () => {
   const composer = source("components/chat-interface-enhanced.tsx")
   const message = source("components/message-component.tsx")
   const thumb = source("components/document-page-thumb.tsx")
@@ -13,8 +13,14 @@ test("sent documents keep page previews while composer documents use compact row
 
   assert.match(composer, /ComposerDocumentRow/)
   assert.doesNotMatch(composer, /DocumentPageThumb/)
-  assert.match(message, /DocumentPageThumb/)
-  assert.match(message, /isPagePreviewDocument/)
+  // The user bubble shows a mail-style chip, not a cropped first-page thumbnail.
+  assert.doesNotMatch(message, /DocumentPageThumb/)
+  assert.match(message, /data-testid="sent-document-chip"/)
+  assert.match(message, /sentDocumentKindLabel/)
+  assert.match(message, /formatSentDocumentSize/)
+  assert.match(message, /aria-label=\{`Abrir \$\{att\.name\}`\}/)
+  assert.match(message, /onAttachmentPreview\(att, attachments, i\)/)
+  // The full page preview lives in the document viewer.
   assert.match(thumb, /Generando vista previa/)
   assert.match(lib, /export function isPagePreviewDocument/)
   assert.match(lib, /renderPdfFirstPage/)
