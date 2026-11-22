@@ -2052,13 +2052,19 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;
+    // Prewarm media always, plus small batches of uploaded documents (<= 4)
+    // once they have a stable server id so opening preview is instant instead
+    // of waiting on a cold LibreOffice/pdf.js fetch after the click. Large
+    // folder batches stay deferred to avoid flooding conversion workers.
+    const allowDocumentPrewarm = uploadedFiles.length <= 4;
     const readyAttachments = viewerSiblings.filter((attachment, index) => {
       const file = uploadedFiles[index];
-      // Document rows don't render pages. Defer parsing their previews until
-      // the user opens one instead of warming every workbook in a batch.
-      const isMedia = String(file?.type || file?.mimeType || "").startsWith("image/")
+      if (!file || file.status === "uploading" || file.status === "failed") return false;
+      if (!attachmentHasPreviewSource(attachment)) return false;
+      const isMedia = String(file.type || file.mimeType || "").startsWith("image/")
         || isAudioComposerFile(file) || isVideoComposerFile(file);
-      return isMedia && file?.status !== "uploading" && file?.status !== "failed" && attachmentHasPreviewSource(attachment);
+      if (isMedia) return true;
+      return allowDocumentPrewarm && canOpenComposerPreview({ id: resolveUploadFileId(file), status: file.status });
     });
     if (readyAttachments.length === 0) return;
 
@@ -2067,16 +2073,12 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
       if (cancelled) return;
       readyAttachments.forEach((attachment) => prewarmUnifiedDocumentPreview(attachment));
     };
-    const requestIdle = (window as any).requestIdleCallback;
-    const cancelIdle = (window as any).cancelIdleCallback;
-    const handle = typeof requestIdle === "function"
-      ? requestIdle(prewarm, { timeout: 1500 })
-      : window.setTimeout(prewarm, 120);
+    // Warm immediately (micro-delay) when a single/few docs just finished uploading.
+    const handle = window.setTimeout(prewarm, allowDocumentPrewarm ? 40 : 120);
 
     return () => {
       cancelled = true;
-      if (typeof cancelIdle === "function") cancelIdle(handle);
-      else window.clearTimeout(handle);
+      window.clearTimeout(handle);
     };
   }, [viewerSiblings, uploadedFiles]);
 

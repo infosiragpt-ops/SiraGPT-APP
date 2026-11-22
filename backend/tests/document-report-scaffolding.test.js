@@ -90,3 +90,79 @@ test('dedupeRepeatedPageHeaders & messageAttachments strip repeated page headers
   assert.doesNotMatch(synthPrepared, /trn:oid|escritura con IA|Moodle TT/i);
   assert.match(synthPrepared, /liderazgo pedagógico/);
 });
+
+test('thesis TOC («Población, muestra y muestreo 16») is stripped and GPT-6-Luna strips temperature in attachment recovery', async () => {
+  const messageAttachments = require('../src/services/message-attachments');
+  const runner = require('../src/services/agents/agent-task-runner');
+
+  const thesisDocx = [
+    'UNIVERSIDAD PRIVADA DEL NORTE',
+    'FACULTAD DE NEGOCIOS',
+    'CARRERA DE ADMINISTRACIÓN',
+    'PROYECTO DE TESIS',
+    'Relación entre la experiencia del usuario y el comportamiento de compra en línea en una ferretería de Trujillo, 2026.',
+    'Autor: Estudiante UPN',
+    'Asesor: Mg. Docente UPN',
+    'ÍNDICE',
+    'CAPÍTULO I. INTRODUCCIÓN 4',
+    '1.1. Realidad problemática 5',
+    '1.2. Formulación del problema 7',
+    'CAPÍTULO II. METODOLOGÍA 12',
+    'Población, muestra y muestreo 16',
+    'Técnicas e instrumentos de recolección de datos 18',
+    'CAPÍTULO I. INTRODUCCIÓN',
+    'Actualmente, el comercio electrónico en el sector ferretero de Trujillo ha crecido de manera acelerada, impulsando a las empresas a mejorar sus canales digitales para sostener su competitividad.',
+    'El presente estudio tiene como objetivo determinar la relación entre la experiencia del usuario y el comportamiento de compra en línea de los clientes de una ferretería en Trujillo durante el año 2026.',
+    'La investigación adopta un enfoque cuantitativo, de diseño no experimental y alcance correlacional, evaluando una muestra probabilística de 140 compradores digitales mediante dos cuestionarios validados.',
+    'Los hallazgos preliminares evidencian que una navegación ágil, tiempos de carga reducidos y transparencia en los costos de envío incrementan significativamente la intención de recompra y la satisfacción del cliente.',
+  ].join('\n');
+
+  const prepared = messageAttachments.prepareDocumentTextForProfessionalSynthesis(thesisDocx);
+  assert.doesNotMatch(prepared, /Población, muestra y muestreo 16/i);
+  assert.doesNotMatch(prepared, /Realidad problemática 5/i);
+  assert.match(prepared, /comercio electrónico en el sector ferretero de Trujillo/);
+  assert.match(prepared, /intención de recompra/);
+
+  // Deterministic fallback never quotes TOC lines even if LLM is unavailable.
+  if (typeof runner.buildAttachmentGroundedFallbackAnswer === 'function') {
+    const fallback = runner.buildAttachmentGroundedFallbackAnswer({
+      goal: 'dame un resumen en 2 párrafos',
+      uploadedFileContext: thesisDocx,
+    });
+    assert.doesNotMatch(fallback, /Población, muestra y muestreo 16/i);
+    assert.doesNotMatch(fallback, /Realidad problemática 5/i);
+    assert.equal(fallback.trim().split(/\n\s*\n/).length, 2);
+  }
+
+  // LLM recovery with gpt-6-luna must strip unsupported `temperature` and pass clean thesis body.
+  if (typeof runner.buildLlmAttachmentRecoveryAnswer === 'function') {
+    let seenPayload = null;
+    const fakeClient = {
+      chat: {
+        completions: {
+          create: async (payload) => {
+            seenPayload = payload;
+            return {
+              choices: [{
+                message: {
+                  content: 'El proyecto de tesis analiza cómo la experiencia del usuario en canales digitales se relaciona con el comportamiento de compra en línea en una ferretería de Trujillo durante 2026.\n\nCon un diseño cuantitativo correlacional sobre 140 compradores digitales, el estudio concluye que una navegación ágil, carga rápida y transparencia de envíos elevan la intención de recompra.',
+                },
+              }],
+            };
+          },
+        },
+      },
+    };
+    const llmAnswer = await runner.buildLlmAttachmentRecoveryAnswer({
+      goal: 'dame un resumen en 2 párrafos',
+      uploadedFileContext: thesisDocx,
+      env: { AGENT_TASK_LLM_RECOVERY: '1' },
+      pinnedRuntime: { client: fakeClient, model: 'gpt-6-luna', provider: 'OpenAI' },
+    });
+    assert.ok(seenPayload, 'gpt-6-luna client was invoked');
+    assert.equal(Object.prototype.hasOwnProperty.call(seenPayload, 'temperature'), false, 'gpt-6-luna must not receive temperature: 0.3');
+    assert.doesNotMatch(seenPayload.messages[1].content, /Población, muestra y muestreo 16/i);
+    assert.match(llmAnswer, /ferretería de Trujillo/);
+    assert.equal(llmAnswer.trim().split(/\n\s*\n/).length, 2);
+  }
+});

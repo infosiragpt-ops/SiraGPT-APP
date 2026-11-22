@@ -150,3 +150,12 @@ test("unified viewer puts PDF page/zoom controls in the header row at button hei
   assert.match(viewer, /toolbarContainer: toolbarEl, inlineToolbar: headerWide/)
   assert.match(viewer, /compactToolbar && "h-9 flex-nowrap/)
 })
+
+test("document preview prewarms small uploads and avoids stalling DOCX on cold LibreOffice", () => {
+  const viewer = viewerSource()
+  const composer = readFileSync(path.join(process.cwd(), "components/chat-interface-enhanced.tsx"), "utf8")
+  assert.match(viewer, /DOCX_INSTANT_CLIENT_FALLBACK_MS/)
+  assert.match(viewer, /const initialCachedPdf = cacheKey \? \(convertedPdfCache\.get\(cacheKey\) \?\? null\) : null/)
+  assert.match(composer, /allowDocumentPrewarm/)
+  assert.match(composer, /prewarmUnifiedDocumentPreview\(attachment\)/)
+})

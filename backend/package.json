@@ -225,7 +225,8 @@
     "@xmldom/xmldom@0.8": "0.8.15",
     "fast-uri": "3.1.7",
     "@prisma/config": {
-      "deepmerge-ts": "8.0.2"
+      "deepmerge-ts": "8.0.2",
+      "effect": "^3.22.5"
     },
     "officeparser": {
       "pdfjs-dist": "6.2.108"

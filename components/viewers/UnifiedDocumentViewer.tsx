@@ -808,17 +808,32 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike, previewUrl?:
   return promise
 }
 
+const DOCX_INSTANT_CLIENT_FALLBACK_MS = 900
+
 export function ServerConvertedPdfRenderer({
   a, fallback, previewUrl, toolbarContainer, compactToolbar,
 }: { a: AttachmentLike; fallback: React.ReactNode; previewUrl?: string; toolbarContainer?: HTMLElement | null; compactToolbar?: boolean }) {
-  const [state, setState] = React.useState<"probing" | "ok" | "unavailable">("probing")
-  const [pdfAttachment, setPdfAttachment] = React.useState<AttachmentLike | null>(null)
+  const cacheKey = previewUrl || (a.id ? String(a.id) : "")
+  const initialCachedPdf = cacheKey ? (convertedPdfCache.get(cacheKey) ?? null) : null
+  const [state, setState] = React.useState<"probing" | "ok" | "unavailable">(initialCachedPdf ? "ok" : "probing")
+  const [pdfAttachment, setPdfAttachment] = React.useState<AttachmentLike | null>(initialCachedPdf)
   const [unavailableReason, setUnavailableReason] = React.useState<string>("")
+  const [softClientFallback, setSoftClientFallback] = React.useState(false)
 
   React.useEffect(() => {
+    const key = previewUrl || (a.id ? String(a.id) : "")
+    const cached = key ? (convertedPdfCache.get(key) ?? null) : null
+    if (cached) {
+      setPdfAttachment(cached)
+      setState("ok")
+      setUnavailableReason("")
+      setSoftClientFallback(false)
+      return
+    }
     setState("probing")
     setPdfAttachment(null)
     setUnavailableReason("")
+    setSoftClientFallback(false)
     if (!canUseServerPdfConversion(a, previewUrl)) {
       setState("unavailable")
       setUnavailableReason(a.id ? "temporary-id" : "no-id")
@@ -826,12 +841,24 @@ export function ServerConvertedPdfRenderer({
     }
 
     let cancelled = false
+    // Once the upload is already persisted (RendererDispatch gates mid-upload
+    // via resolvePreviewGate), never strand a DOCX user on a blank skeleton
+    // for 10s while LibreOffice cold-starts: paint the crisp client docx-preview
+    // after 900ms while the server PDF finishes warming in the background.
+    const canInstantDocxFallback = detectKind(a) === "docx" && hasClientPreviewSource(a)
+    const softTimer = canInstantDocxFallback
+      ? window.setTimeout(() => {
+        if (!cancelled) setSoftClientFallback(true)
+      }, DOCX_INSTANT_CLIENT_FALLBACK_MS)
+      : undefined
+
     ;(async () => {
       const maxAttempts = detectKind(a) === "xlsx" ? 1 : 8
       for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
         try {
           const pdfAtt = await fetchServerConvertedPdfAttachment(a, previewUrl)
           if (cancelled) return
+          if (softTimer !== undefined) window.clearTimeout(softTimer)
           setPdfAttachment(pdfAtt)
           setState("ok")
           return
@@ -843,6 +870,7 @@ export function ServerConvertedPdfRenderer({
             continue
           }
           if (!cancelled) {
+            if (softTimer !== undefined) window.clearTimeout(softTimer)
             setUnavailableReason(e?.message || "fetch-failed")
             setState("unavailable")
           }
@@ -850,7 +878,10 @@ export function ServerConvertedPdfRenderer({
         }
       }
     })()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (softTimer !== undefined) window.clearTimeout(softTimer)
+    }
   }, [a, previewUrl])
 
   // Never paint client-side office pages while the server object is
@@ -858,6 +889,9 @@ export function ServerConvertedPdfRenderer({
   // the moment the user picks the document — that is what used to show
   // a finished 1/N thesis page at 80% upload.
   if (state === "probing") {
+    if (softClientFallback && hasClientPreviewSource(a)) {
+      return <>{fallback}</>
+    }
     const canWaitForServer = canUseServerPdfConversion(a, previewUrl) || !hasClientPreviewSource(a)
     if (canWaitForServer) {
       return <LoadingState label={CONVERSION_LOADING_LABEL} />

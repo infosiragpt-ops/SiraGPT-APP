@@ -924,7 +924,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `e2b` | 1.13.2 | MIT | [link](https://github.com/e2b-dev/e2b) |
 | `eastasianwidth` | 0.2.0 | MIT | [link](https://github.com/komagata/eastasianwidth) |
 | `ee-first` | 1.1.1 | MIT | [link](https://github.com/jonathanong/ee-first) |
-| `effect` | 3.21.0 | MIT | [link](https://github.com/Effect-TS/effect) |
+| `effect` | 3.22.5 | MIT | [link](https://github.com/Effect-TS/effect) |
 | `emoji-regex` | 10.6.0, 8.0.0, 9.2.2 | MIT | [link](https://github.com/mathiasbynens/emoji-regex) |
 | `emoji-regex-xs` | 1.0.0 | MIT | [link](https://github.com/slevithan/emoji-regex-xs) |
 | `empathic` | 2.0.0 | MIT | [link](https://github.com/lukeed/empathic) |

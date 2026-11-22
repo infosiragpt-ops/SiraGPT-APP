@@ -1,5 +1,11 @@
 const OpenAI = require('openai');
-const { wrapOpenAIChatClient } = require('../ai/openai-sampling-params');
+const {
+  wrapOpenAIChatClient,
+  stripUnsupportedSampling,
+  unsupportedSamplingParamFromError,
+  rememberUnsupported,
+} = require('../ai/openai-sampling-params');
+const messageAttachments = require('../message-attachments');
 const reactAgent = require('../react-agent');
 const { statusForAgentStopReason, canRecoverAgentStopReason } = require('./react-run-outcome');
 const { buildTaskTools, saveArtifact } = require('./task-tools');
@@ -254,12 +260,27 @@ function normalizedKey(value) {
     .trim();
 }
 
+function looksLikeTocOrHeadingFragment(sentence) {
+  const raw = String(sentence || '').trim();
+  if (!raw) return true;
+  if (/\.{3,}\s*(?:[ivxlcdm]{1,6}|\d{1,4})\.?$/i.test(raw)) return true;
+  const words = normalizedKey(raw).split(' ').filter(Boolean);
+  if (words.length <= 12 && /\s+(?:\d{1,3}|[ivxlcdm]{1,5})\.?$/i.test(raw)) {
+    const beforePage = raw.replace(/\s+(?:\d{1,3}|[ivxlcdm]{1,5})\.?$/i, '').trim();
+    const hasUnitOrMoney = /[%$€£=]|S\/\s*\d|\b(?:usd|pen|eur|mxn|años|anos|meses|dias|días|millones|personas|casos|usuarios)\b/i.test(raw);
+    const hasFiniteVerb = /\b(?:es|son|fue|fueron|tiene|tienen|indica|demuestra|evidencia|concluye|permite|realizo|realizó|encontro|encontró|obtuvo|presenta|analiza|evalua|evalúa|determina)\b/i.test(beforePage);
+    if (!hasUnitOrMoney && !hasFiniteVerb) return true;
+  }
+  return false;
+}
+
 function splitReadableSentences(text) {
   const seen = new Set();
   return String(text || '')
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?;:])\s+|\n+/)
     .map((sentence) => sentence.trim())
+    .filter((sentence) => !looksLikeTocOrHeadingFragment(sentence))
     .filter((sentence) => sentence.length >= 35 || /\b\d+(?:[.,]\d+)?\b/.test(sentence))
     .filter((sentence) => {
       const key = normalizedKey(sentence);
@@ -273,7 +294,7 @@ function splitReadableSentences(text) {
 function scoreAttachmentSentence(sentence, request = '') {
   const normalized = normalizedKey(sentence);
   let score = 0;
-  if (/\b(se encontro|se evidencio|se identifico|se observo|muestra|indica|concluye|recomienda|sugiere|resultado|resultados|hallazgo|hallazgos|asocia|asociacion|relacion significativa|incrementa|reduce|mejora)\b/.test(normalized)) score += 5;
+  if (/\b(se encontro|se evidencio|se identifico|se observo|se muestra|muestra que|indica|concluye|recomienda|sugiere|resultado|resultados|hallazgo|hallazgos|asocia|asociacion|relacion significativa|incrementa|reduce|mejora)\b/.test(normalized)) score += 5;
   if (/\b(ansiedad|depresion|estres|riesgo|impacto|efecto|efectos|salud mental|rendimiento|adiccion|vulnerabilidad|malestar)\b/.test(normalized)) score += 2;
   if (/\b(pdf|docx|xlsx|churn|retencion|contrato|contratado|real|total|diferencia|riesgo|legal|dpa|fuente|oficial|preliminar|cliente|norte|sur|este)\b/.test(normalized)) score += 2;
   if (sentence.length >= 80 && sentence.length <= 420) score += 1;
@@ -1095,7 +1116,13 @@ function pickAttachmentRecoveryRuntime(env = process.env) {
  */
 async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env = process.env, clientFactory = null, pinnedRuntime = null }) {
   const question = String(goal || '').trim();
-  const material = stripReportScaffolding(stripScaffolding(uploadedFileContext));
+  const baseMaterial = stripReportScaffolding(stripScaffolding(uploadedFileContext));
+  const synthesizedMaterial = messageAttachments.isProfessionalDocumentSynthesisRequest(question)
+    ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(baseMaterial)
+    : '';
+  const material = synthesizedMaterial && countUsefulWords(synthesizedMaterial) >= 30
+    ? synthesizedMaterial
+    : baseMaterial;
   if (!question || !material || countUsefulWords(uploadedFileContext) < 8) return null;
   const formatLines = outputFormat.buildFormatDirectiveLines(question, { lang: 'es' });
   const pinned = Boolean(pinnedRuntime && pinnedRuntime.client && pinnedRuntime.model);
@@ -1108,7 +1135,7 @@ async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env
     const client = pinned
       ? pinnedRuntime.client
       : (clientFactory ? clientFactory(runtime.provider) : aiService.getClient(runtime.provider));
-    const completion = await client.chat.completions.create({
+    const payload = stripUnsupportedSampling(runtime.model, {
       model: runtime.model,
       stream: false,
       temperature: 0.3,
@@ -1124,9 +1151,10 @@ async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env
             + 'Solo para preguntas de contenido cuya respuesta no aparece en el material: dilo explícitamente en una '
             + 'frase y resume en otra qué contiene el material. '
             + 'No inventes datos que no estén en el material. '
-            + 'Si el material es la exportación de un reporte de similitud o de detección de IA (Turnitin u otro), '
-            + 'ignora la portada del reporte, identificadores de entrega, encabezados de página, contadores y avisos '
-            + 'sobre detección de IA: resume y analiza el trabajo del autor, no el reporte. '
+            + 'En reportes de similitud/IA (Turnitin u otro) o documentos académicos, ignora la portada del reporte, '
+            + 'carátulas institucionales, índices de contenido con números de página, encabezados repetidos y avisos '
+            + 'de detección de IA: sintetiza y analiza el contenido sustantivo real del documento (objetivo, '
+            + 'metodología, hallazgos y conclusiones). '
             + 'Escribe en prosa profesional, sin título ni encabezados salvo que el usuario los pida, sin repetir '
             + 'nombres de archivo y sin ofrecimientos al final.'
             + (formatLines.length ? ` ${formatLines.join(' ')}` : ''),
@@ -1137,6 +1165,20 @@ async function buildLlmAttachmentRecoveryAnswer({ goal, uploadedFileContext, env
         },
       ],
     });
+    let completion;
+    try {
+      completion = await client.chat.completions.create(payload);
+    } catch (callErr) {
+      const badParam = unsupportedSamplingParamFromError(callErr);
+      if (badParam && Object.prototype.hasOwnProperty.call(payload, badParam)) {
+        rememberUnsupported(runtime.model, badParam);
+        const retryPayload = { ...payload };
+        delete retryPayload[badParam];
+        completion = await client.chat.completions.create(retryPayload);
+      } else {
+        throw callErr;
+      }
+    }
     const text = completion?.choices?.[0]?.message?.content;
     if (typeof text !== 'string' || text.trim().length < 20) return null;
     const answer = text.trim();
@@ -1236,7 +1278,13 @@ function buildAttachmentGroundedFallbackAnswer({ goal, uploadedFileContext, reas
   const bibliographyAnswer = buildBibliographyFallbackAnswer({ goal: request, uploadedFileContext });
   if (bibliographyAnswer) return bibliographyAnswer;
 
-  const cleanedRaw = stripReportScaffolding(stripScaffolding(uploadedFileContext));
+  const cleanedRawBase = stripReportScaffolding(stripScaffolding(uploadedFileContext));
+  const synthesizedFallback = messageAttachments.isProfessionalDocumentSynthesisRequest(request)
+    ? messageAttachments.prepareDocumentTextForProfessionalSynthesis(cleanedRawBase)
+    : '';
+  const cleanedRaw = synthesizedFallback && countUsefulWords(synthesizedFallback) >= 30
+    ? synthesizedFallback
+    : cleanedRawBase;
   const structuredAnswer = buildStructuredAttachmentAnalysisAnswer({
     goal: request,
     uploadedFileContext,

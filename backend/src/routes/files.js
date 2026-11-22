@@ -487,10 +487,13 @@ function schedulePostExtractEnrichment({
   thumbnailPath,
   analyzeTimeoutMs,
 }) {
+  // Start PDF preview warm-up immediately in parallel instead of waiting
+  // behind slow embedded-image OCR so clicking the document chip is instant.
+  const warmPreviewPromise = warmLibreOfficePreview(file, fileRecord);
   enqueueAsyncFileProcessing(async () => {
     try {
       fileRecord = await appendDeferredOfficeImageOcr(file.path, fileRecord, prismaClient);
-      await warmLibreOfficePreview(file, fileRecord);
+      await warmPreviewPromise;
       try {
         await withTimeout(
           documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
@@ -867,6 +870,12 @@ function scheduleFileAfterFastUpload(file, userId, prismaClient, fileRecord) {
     void mediaTranscription.enqueueMediaTranscription({ fileId: fileRecord.id, userId })
       .catch(() => console.warn('[files] media queued for reconciliation', fileRecord.id));
     return;
+  }
+  // Start LibreOffice PDF preview warm-up immediately upon fast-upload
+  // completion (in parallel with text extraction); in-flight dedup inside
+  // documentRenderer guarantees a click on /:id/render joins this exact job.
+  if (documentRenderer.isConvertible(file?.mimetype || fileRecord?.mimeType, file?.originalname || fileRecord?.originalName)) {
+    void warmLibreOfficePreview(file, fileRecord);
   }
   enqueueAsyncFileProcessing(() => processFileAfterFastUpload(file, userId, prismaClient, fileRecord));
 }
