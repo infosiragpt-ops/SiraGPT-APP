@@ -113,6 +113,18 @@ const HIGHLIGHT_EDIT_RE = /\b(?:resalt|subray)\w*\b[^.;\n]{0,60}?\b(?:celdas?|fi
 const EDIT_COURTESY_RE = /^(?:(?:por favor|ahora|quiero que|necesito que|te pido que|deseo que|quiero|necesito|puedes|podrias|podras|me puedes|me podrias)\s*[, :]?\s*)+/
 const QUOTED_EDIT_TEXT_RE = /"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|«[^»\n]*»/g
 
+// «Resume en 2 párrafos y agrégalo al inicio», «traduce el resumen y ponlo al
+// final del documento»: the leading verb reads, but the second clause places
+// the result INTO the file, so the turn is an edit. A bare «resume el
+// documento» (no placement) stays a chat answer. Accent-free, lowercased.
+const TRANSFORM_LEAD_RE = /^(?:resume(?:lo|la|me)?|haz(?:me)? un resumen|sintetiza(?:lo|la)?|redacta(?:me)?|escribe(?:me)?|traduce(?:lo|la)?|genera(?:me)? un (?:resumen|parrafo|abstract)|elabora(?:me)? un (?:resumen|parrafo|abstract))\b/
+const PLACE_IN_DOCUMENT_RE = /\b(?:y|luego|despues|e)\s+(?:(?:lo|la|los|las)\s+)?(?:agrega(?:lo|la|los|las|r)?|agregues|anade(?:lo|la|los|las)?|anadir|inserta(?:lo|la|los|las|r)?|insertes|pon(?:lo|la|los|las)?|coloca(?:lo|la|los|las|r)?|incluye(?:lo|la|los|las)?|incorpora(?:lo|la|los|las)?|mete(?:lo|la)?|reemplaza(?:lo|la)?|sustituye(?:lo|la)?)\b[^.;\n]{0,80}?\b(?:al (?:inicio|principio|comienzo|final)|antes de|despues de|debajo de|encima de|en (?:el|la|mi|este|esta) (?:documento|word|pdf|archivo|informe|trabajo|tesis|portada|introduccion|primera pagina|seccion)|como (?:introduccion|resumen|abstract|conclusion|primer parrafo))\b/
+
+function transformThenPlaceInDocument(text: string): boolean {
+  const command = text.replace(QUOTED_EDIT_TEXT_RE, " ").replace(/^[¿¡]\s*/, "").replace(EDIT_COURTESY_RE, "").trim()
+  return TRANSFORM_LEAD_RE.test(command) && PLACE_IN_DOCUMENT_RE.test(command)
+}
+
 /** "Crea un Word e incorpora la gráfica" creates a file; inclusion verbs describe its contents. */
 export function isNewDocumentCreationRequest(prompt: string): boolean {
   const command = prompt.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -136,6 +148,7 @@ export function looksLikeExplicitDocumentEdit(prompt: string): boolean {
   if (isNewDocumentCreationRequest(prompt)) return false
   if (/^no (?:cambies|cambiar|modifiques) nada\b/.test(text)) return true
   if (reviewRequestsCorrection(text)) return true
+  if (transformThenPlaceInDocument(text)) return true
   if (clauseLooksLikeEdit(text)) return true
   if (HIGHLIGHT_EDIT_RE.test(text.replace(QUOTED_EDIT_TEXT_RE, '""'))) return true
   // Real follow-ups name the file first and ask later ("en el mismo documento
@@ -220,7 +233,7 @@ function clauseLooksLikeEdit(text: string): boolean {
   command = command.replace(EDIT_COURTESY_RE, "")
   // A location before the verb is still a direct instruction, not an inferred edit.
   command = command.replace(/^(?:en|sobre)\s+(?:el|la|los|las|mi|este|esta)\s+(?:mismo\s+)?(?:titulo|portada|documento|word|archivo|informe|tabla|celda|hoja|diapositiva|pdf)\b[^,;.!?\n]{0,100}?(?=\s+(?:cambi|edit|modific|corrig|correg|reempla|sustitu|mejor|actualiz|pon|coloc))\s*[, :]?\s*/, "")
-  const action = /^(?:cambia(?:r|me|lo|la)?|cambies|edita(?:r|lo|la)?|edites|modifica(?:r|lo|la)?|modifiques|corrige(?:lo|la)?|corrijas|corregir|mejora(?:r|lo|la)?|mejores|reemplaza(?:r)?|reemplaces|sustituye|sustituyas|sustituir|renombra(?:r)?|renombres|borra(?:r)?|borres|elimina(?:r)?|elimines|quita(?:r)?|quites|agrega(?:r)?|agregues|anade|anadas|anadir|inserta(?:r)?|insertes|reescribe|reescribas|reescribir|actualiza(?:r)?|actualices|traduce|traduzcas|traducir|parafrasea(?:r)?|parafrasees|une|unas|unir|fusiona(?:r)?|fusiones|numera(?:r)?|numeres|rota(?:r)?|rotes|pon|poner|coloca(?:r)?|completa(?:r|lo|la|me)?|completes|llena(?:r|lo|la)?|llenes|rellena(?:r|lo|la)?|rellenes|marca(?:r|lo|la)?|marques|incorpora(?:r)?|incorpores|incluye|incluyas|replace|edit|modify|rewrite|rename|remove|merge|rotate|fill)\b/
+  const action = /^(?:cambia(?:r|me|lo|la)?|cambies|edita(?:r|lo|la)?|edites|modifica(?:r|lo|la)?|modifiques|corrige(?:lo|la)?|corrijas|corregir|mejora(?:r|lo|la)?|mejores|reemplaza(?:r)?|reemplaces|sustituye|sustituyas|sustituir|renombra(?:r)?|renombres|borra(?:r)?|borres|elimina(?:r)?|elimines|quita(?:r)?|quites|agrega(?:r|lo|la|los|las)?|agregues|anade(?:lo|la|los|las)?|anadas|anadir|inserta(?:r|lo|la|los|las)?|insertes|reescribe|reescribas|reescribir|actualiza(?:r)?|actualices|traduce|traduzcas|traducir|parafrasea(?:r)?|parafrasees|une|unas|unir|fusiona(?:r)?|fusiones|numera(?:r)?|numeres|rota(?:r)?|rotes|pon|poner|coloca(?:r)?|completa(?:r|lo|la|me)?|completes|llena(?:r|lo|la)?|llenes|rellena(?:r|lo|la)?|rellenes|marca(?:r|lo|la)?|marques|incorpora(?:r)?|incorpores|incluye|incluyas|replace|edit|modify|rewrite|rename|remove|merge|rotate|fill)\b/
   const match = command.match(action)
   if (!match) return false
   // "¿Puedes editar documentos?" asks about capability; a concrete requested

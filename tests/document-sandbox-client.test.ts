@@ -547,3 +547,30 @@ test("SPEC eval prompts are explicit edits; bare highlight requests stay answers
     "resalta los puntos clave del documento", "destaca las ideas principales del texto", "sube el archivo a drive",
   ]) assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
 })
+
+test("transform + placement phrasings edit the attached document; a bare summary stays a chat answer", () => {
+  const attached = { attachments: [{ id: "tesis-pdf", name: "TRABAJO DE INVESTIGACION.pdf" }] }
+  for (const prompt of [
+    "resume en 2 párrafos y agrégalo al inicio",
+    "Resume el documento en un párrafo y ponlo como introducción",
+    "haz un resumen de 150 palabras y añádelo al final del documento",
+    "traduce el abstract al inglés y colócalo después de la portada",
+    "por favor redacta una conclusión y agrégala al final",
+    "agrégalo al inicio del documento",
+  ]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), true, prompt)
+    assert.equal(resolveDocumentSandboxAdmission(prompt, attached).route, "edit", prompt)
+  }
+  // Follow-up on a document already in the chat: naming the document is enough.
+  assert.equal(resolveDocumentSandboxAdmission("resume en 2 párrafos y agrégalo al inicio del documento", {
+    historyAttachments: [{ id: "tesis-pdf", name: "TRABAJO DE INVESTIGACION.pdf" }],
+  }).route, "edit")
+  for (const prompt of [
+    "dame un resumen en 2 párrafos",
+    "resume el documento en 2 párrafos",
+    "resume la introducción y dime qué opinas",
+    "¿de qué trata el documento?",
+  ]) {
+    assert.equal(looksLikeExplicitDocumentEdit(prompt), false, prompt)
+  }
+})
