@@ -142,8 +142,12 @@ async function convertViaGotenberg(srcPath, originalName) {
 
 // ─── Local LibreOffice engine ────────────────────────────────────────
 
+const binaryExistsCache = new Map();
+const inFlightRenders = new Map();
+
 async function commandExists(bin) {
-  return new Promise((resolve) => {
+  if (binaryExistsCache.get(bin) === true) return true;
+  const ok = await new Promise((resolve) => {
     try {
       const child = spawn(bin, ['--version'], { stdio: 'ignore' });
       child.on('error', () => resolve(false));
@@ -152,9 +156,11 @@ async function commandExists(bin) {
       resolve(false);
     }
   });
+  if (ok) binaryExistsCache.set(bin, true);
+  return ok;
 }
 
-async function convertViaLibreOffice(srcPath) {
+async function convertViaLibreOffice(srcPath, bin = LIBREOFFICE_BIN) {
   // Per-invocation user profile dir avoids the "another instance is
   // running" lock when concurrent uploads hit the renderer. Cleaned up
   // in the finally block. (LibreOffice's lockfile is in the profile.)
@@ -168,7 +174,7 @@ async function convertViaLibreOffice(srcPath) {
         outDir,
         profileDir,
       });
-      const child = spawn(LIBREOFFICE_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], env: sofficeSpawnEnv(profileDir) });
+      const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], env: sofficeSpawnEnv(profileDir) });
       let stderr = '';
       child.stderr.on('data', (d) => { stderr += d.toString(); });
 
@@ -203,9 +209,12 @@ async function convertViaLibreOffice(srcPath) {
 
 /**
  * Render a source document to PDF. Returns the cached PDF path.
+ * Concurrent calls for the same `file.id` share a single conversion promise so
+ * eager upload warm-up and an immediate user click never spawn duplicate
+ * LibreOffice processes.
  *
  * @param {{ id: string, path: string, mimeType: string, originalName: string }} file
- * @returns {Promise<{ pdfPath: string, fromCache: boolean, engine: 'gotenberg'|'libreoffice' }>}
+ * @returns {Promise<{ pdfPath: string, fromCache: boolean, engine: 'gotenberg'|'libreoffice'|'cache' }>}
  */
 async function renderToPdf(file) {
   if (!isConvertible(file.mimeType, file.originalName)) {
@@ -219,28 +228,44 @@ async function renderToPdf(file) {
     return { pdfPath, fromCache: true, engine: 'cache' };
   }
 
-  // Pick engine.
-  let engine;
-  let pdfBuffer;
-  if (GOTENBERG_URL) {
-    engine = 'gotenberg';
-    pdfBuffer = await convertViaGotenberg(file.path, file.originalName);
-  } else if (await commandExists(LIBREOFFICE_BIN)) {
-    engine = 'libreoffice';
-    pdfBuffer = await convertViaLibreOffice(file.path);
-  } else {
-    throw new RendererUnavailableError(
-      `No conversion engine available. Install LibreOffice (\`${LIBREOFFICE_BIN}\`) on the backend host, or set GOTENBERG_URL to point at a Gotenberg instance.`
-    );
+  const key = String(file.id || '');
+  if (key && inFlightRenders.has(key)) {
+    return inFlightRenders.get(key);
   }
 
-  // Atomic write — write to a sibling tmp then rename. Prevents partial
-  // PDFs from being served if two requests for the same file race.
-  const tmpPath = `${pdfPath}.tmp-${process.pid}-${Date.now()}`;
-  await fsp.writeFile(tmpPath, pdfBuffer);
-  await fsp.rename(tmpPath, pdfPath);
+  const work = (async () => {
+    const gotenbergUrl = process.env.GOTENBERG_URL || GOTENBERG_URL;
+    const loBin = process.env.LIBREOFFICE_BIN || LIBREOFFICE_BIN;
+    let engine;
+    let pdfBuffer;
+    if (gotenbergUrl) {
+      engine = 'gotenberg';
+      pdfBuffer = await convertViaGotenberg(file.path, file.originalName);
+    } else if (await commandExists(loBin)) {
+      engine = 'libreoffice';
+      pdfBuffer = await convertViaLibreOffice(file.path, loBin);
+    } else {
+      throw new RendererUnavailableError(
+        `No conversion engine available. Install LibreOffice (\`${loBin}\`) on the backend host, or set GOTENBERG_URL to point at a Gotenberg instance.`
+      );
+    }
 
-  return { pdfPath, fromCache: false, engine };
+    // Atomic write — write to a sibling tmp then rename. Prevents partial
+    // PDFs from being served if two requests for the same file race.
+    const tmpPath = `${pdfPath}.tmp-${process.pid}-${Date.now()}`;
+    await fsp.writeFile(tmpPath, pdfBuffer);
+    await fsp.rename(tmpPath, pdfPath);
+
+    return { pdfPath, fromCache: false, engine };
+  })();
+
+  if (key) {
+    inFlightRenders.set(key, work);
+    work.finally(() => {
+      if (inFlightRenders.get(key) === work) inFlightRenders.delete(key);
+    }).catch(() => {});
+  }
+  return work;
 }
 
 module.exports = {

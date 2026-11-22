@@ -565,30 +565,58 @@ function stripDocumentExtractorHeader(text) {
     .replace(/^---\s*\n/, '');
 }
 
+const TOC_HEADING_RE = /\b(?:indice de contenidos|indice de contenido|indice general|tabla de contenidos?|table of contents|declaratoria de autenticidad|lista de tablas|lista de figuras)\b|(?:^|\n)\s*(?:indice|contenido|contenidos)\s*(?:\n|$)/i;
+
+function looksLikeTocEntryLine(raw, normalized) {
+  // Dotted leader + page number anywhere: "1.1. Realidad problemática ........ 5"
+  if (/\.{3,}\s*(?:[ivxlcdm]{1,6}|\d{1,4})\.?$/i.test(raw)) return true;
+  // Never drop data/financial/numeric rows or real sentences with clauses.
+  if (/[%$€£=]|S\/\s*\d|\b(?:usd|pen|eur|mxn|cop|clp|hrs?|años|anos|meses|dias|días|millones|porcentaje|casos|personas|usuarios|encuestados)\b/i.test(raw)) {
+    return false;
+  }
+  // Short TOC entry ending in a standalone page number or roman numeral:
+  // e.g. "Población, muestra y muestreo 16", "CAPÍTULO II. METODOLOGÍA 12",
+  // "1.2. Formulación del problema 7."
+  const words = normalized.split(' ').filter(Boolean);
+  if (words.length >= 2 && words.length <= 15 && /\s+(?:\d{1,3}|[ivxlcdm]{1,5})\.?$/i.test(raw)) {
+    // Reject only if it looks like a heading/topic entry (not a full sentence with a period mid-line).
+    const beforePage = raw.replace(/\s+(?:\d{1,3}|[ivxlcdm]{1,5})\.?$/i, '').trim();
+    if (!/[!?]/.test(beforePage) && !/\b(?:se|fue|fueron|es|son|tiene|tienen|indica|demuestra|evidencia|concluye|permite|realizo|realizó|encontro|encontró|obtuvo|presenta)\b/i.test(beforePage)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function looksLikeFrontMatterLine(line, index = 0) {
   const raw = String(line || '').trim();
   if (!raw) return true;
   const normalized = normalizeForSearch(raw).replace(/[^a-z0-9]+/g, ' ').trim();
   if (!normalized) return true;
   const linkCount = (raw.match(/\]\(/g) || []).length;
-  if (index < 90 && linkCount >= 2) return true;
-  if (/^(indice de contenidos|indice general|tabla de contenido|table of contents|index|indice de tablas|indice de figuras)\b/.test(normalized)) return true;
-  if (index < 90 && /\b(declaratoria de autenticidad|dedicatoria|agradecimientos?|asesor|autores?|bachiller|jurado|facultad|escuela profesional)\b/.test(normalized)) return true;
-  if (index < 90 && /^(?:[ivxlcdm]+|\d{1,3})$/.test(normalized)) return true;
-  if (index < 90 && /^(?:declaratoria|dedicatoria|agradecimiento|indice|tabla de contenido)\b.*\b(?:[ivxlcdm]+|\d{1,3})$/.test(normalized)) return true;
+  if (index < 120 && linkCount >= 2) return true;
+  if (/^(?:indice|indice de contenidos?|indice general|tabla de contenidos?|table of contents|contenido|contenidos|index|indice de tablas|indice de figuras|lista de tablas|lista de figuras)$/.test(normalized)) return true;
+  if (/^(indice de contenidos?|indice general|tabla de contenidos?|table of contents|indice de tablas|indice de figuras)\b/.test(normalized)) return true;
+  if (index < 120 && /\b(declaratoria de autenticidad|dedicatoria|agradecimientos?|asesor|autores?|bachiller|jurado|facultad|escuela profesional|para optar el titulo|para optar el grado|universidad privada|universidad nacional|proyecto de tesis|linea de investigacion)\b/.test(normalized) && normalized.split(' ').length <= 22) return true;
+  if (index < 120 && /^(?:[ivxlcdm]+|\d{1,3})$/.test(normalized)) return true;
+  if (index < 120 && /^(?:declaratoria|dedicatoria|agradecimiento|indice|tabla de contenido)\b.*\b(?:[ivxlcdm]+|\d{1,3})$/.test(normalized)) return true;
+  if (index < 180 && looksLikeTocEntryLine(raw, normalized)) return true;
   return false;
 }
 
 function dropLeadingTocBlob(text) {
   const source = String(text || '');
-  const head = source.slice(0, 5000);
-  if (!/\b(?:indice de contenidos|indice general|tabla de contenido|table of contents|declaratoria de autenticidad)\b/i.test(head.normalize('NFD').replace(/[\u0300-\u036f]/g, ''))) {
+  const head = source.slice(0, 18000);
+  const headNormalized = head.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (!TOC_HEADING_RE.test(headNormalized)) {
     return source;
   }
+  // Anchor on the first real body section followed by prose (NOT a TOC line ending in a page number).
   const bodyAnchorPatterns = [
-    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:\d+(?:\.\d+)*\s*)?introducci[oó]n(?:\s|\n)+(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir)\b/i,
-    /(?:^|\n|\s)(?:#{1,6}\s*)?cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)\s+(?:planteamiento\s+del\s+problema|marco\s+te[oó]rico|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)\b/i,
-    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:resumen|abstract)\s+(?:el|la|este|esta|en|se|la\s+presente|el\s+presente)\b/i,
+    /(?:^|\n)(?:#{1,6}\s*)?(?:cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+)?(?:[ivxlcdm]+\.\s*|\d+(?:\.\d+)*\.?\s*)?introducci[oó]n(?:\s*\n+|\s+)(?:(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir|hoy|durante|con|el\s+presente|la\s+presente)\b)/i,
+    /(?:^|\n)(?:#{1,6}\s*)?(?:cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+)?(?:realidad\s+problem[aá]tica|planteamiento\s+del\s+problema)(?:\s*\n+|\s+)(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}\s+\S+\s+\S+\s+\S+)/i,
+    /(?:^|\n)(?:#{1,6}\s*)?cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+(?:planteamiento\s+del\s+problema|marco\s+te[oó]rico|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)(?:\s*\n+)(?![^\n]{0,90}\s\d{1,3}\s*$)/i,
+    /(?:^|\n)(?:#{1,6}\s*)?(?:resumen|abstract)(?:\s*\n+|\s+)(?:el|la|este|esta|en|se|la\s+presente|el\s+presente|this\s+study|the\s+present)\b/i,
   ];
 
   const bodyStart = bodyAnchorPatterns
@@ -626,7 +654,7 @@ function prepareDocumentTextForProfessionalSynthesis(text) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  const originalLooksLikeToc = /\b(?:indice de contenidos|indice general|tabla de contenido|table of contents|declaratoria de autenticidad)\b/i.test(
+  const originalLooksLikeToc = TOC_HEADING_RE.test(
     original.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
   );
   const cleanedHasBodyAnchor = /\b(?:introducci[oó]n|cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)\s+(?:planteamiento|marco|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)|resumen|abstract)\b/i.test(cleaned);
