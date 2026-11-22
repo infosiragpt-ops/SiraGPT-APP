@@ -612,11 +612,12 @@ function dropLeadingTocBlob(text) {
     return source;
   }
   // Anchor on the first real body section followed by prose (NOT a TOC line ending in a page number).
+  // Supports both multi-line DOCX/PDF text and flattened single-line DOCX extracts.
   const bodyAnchorPatterns = [
-    /(?:^|\n)(?:#{1,6}\s*)?(?:cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+)?(?:[ivxlcdm]+\.\s*|\d+(?:\.\d+)*\.?\s*)?introducci[oó]n(?:\s*\n+|\s+)(?:(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir|hoy|durante|con|el\s+presente|la\s+presente)\b)/i,
-    /(?:^|\n)(?:#{1,6}\s*)?(?:cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+)?(?:realidad\s+problem[aá]tica|planteamiento\s+del\s+problema)(?:\s*\n+|\s+)(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}\s+\S+\s+\S+\s+\S+)/i,
-    /(?:^|\n)(?:#{1,6}\s*)?cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+(?:planteamiento\s+del\s+problema|marco\s+te[oó]rico|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)(?:\s*\n+)(?![^\n]{0,90}\s\d{1,3}\s*$)/i,
-    /(?:^|\n)(?:#{1,6}\s*)?(?:resumen|abstract)(?:\s*\n+|\s+)(?:el|la|este|esta|en|se|la\s+presente|el\s+presente|this\s+study|the\s+present)\b/i,
+    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+)?(?:[ivxlcdm]+\.\s*|\d+(?:\.\d+)*\.?\s*)?introducci[oó]n(?:\s*\n+|\s+)(?:(?:actualmente|el|la|los|las|este|esta|en|se|a\s+partir|hoy|durante|con|el\s+presente|la\s+presente)\b)/i,
+    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+)?(?:realidad\s+problem[aá]tica|planteamiento\s+del\s+problema)(?:\s*\n+|\s+)(?!\d{1,3}(?:\s|$))(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{1,}\s+\S+\s+\S+)/i,
+    /(?:^|\n|\s)(?:#{1,6}\s*)?cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)[.:\-\s]+(?:planteamiento\s+del\s+problema|marco\s+te[oó]rico|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)(?:\s*\n+|\s+)(?!\d{1,3}(?:\s|$))(?:[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{1,}\s+\S+\s+\S+)/i,
+    /(?:^|\n|\s)(?:#{1,6}\s*)?(?:resumen|abstract)(?:\s*\n+|\s+)(?:el|la|este|esta|en|se|la\s+presente|el\s+presente|this\s+study|the\s+present)\b/i,
   ];
 
   const bodyStart = bodyAnchorPatterns
