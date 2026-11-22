@@ -304,7 +304,47 @@ const FOLLOWUP_ATTRIBUTE_RE = /\b(?:fondo|background|luz|iluminacion|brillo|cont
 const FOLLOWUP_SAME_RE = /\b(?:(?:la|el|lo|esa|ese|esta|este) mism[ao](?:\s+(?:imagen|foto|fotografia|ilustracion|dibujo|logo|retrato|image|photo|picture))? pero|igual pero|otra vez pero|de nuevo pero|(?:the |that |this )?same(?:\s+(?:image|photo|picture|one))? but)\b/;
 // A connector that leads a continuation, with or without a lead word:
 // «ahora en azul», «pero más oscura», «now in blue», «but darker».
-const FOLLOWUP_LEAD_RE = /^(?:(?:ahora|y|pero|mejor|ok|vale|si|now|and|but|also)\b[\s,]*(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|make it|in|with|without|more|less)?|(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|make it|in|with|without|more|less))\b/;
+const FOLLOWUP_LEAD_RE = /^(?:(?:ahora|y|pero|mejor|ok|vale|si|now|and|but|also)\b[\s,]*(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|de color|en color|make it|in|with|without|more|less)?|(?:que (?:sea|tenga|este|quede)|en|con|sin|mas|menos|de color|en color|make it|in|with|without|more|less))\b/;
+// Conversational deliverable framing adaptation after an image («como portada de Facebook», «ahora para historia de Instagram»).
+const FOLLOWUP_DELIVERABLE_ADAPT_RE = /^(?:(?:ahora|y|pero|mejor|ok|vale|si|now|and|but|pasal[oa] a|adaptal[oa] (?:a|para)|conviertel[oa] en|hazl[oa]|make it)\s+)?(?:como|para|en formato|as a|into a)\s+(?:una?\s+|la\s+|el\s+|mi\s+)?(?:portadas?(?:\s+de\s+[a-z0-9]+)?|banners?(?:\s+de\s+[a-z0-9]+)?|covers?(?:\s+(?:de|for)\s+[a-z0-9]+)?|cabeceras?|posters?|cartel(?:es)?|miniaturas?|thumbnails?|wallpapers?|fondos? de pantalla|histori(?:a|as)(?:\s+de\s+[a-z0-9]+)?|story|stories|reels?|tiktok|fotos? de perfil|profile pictures?|avatar(?:es)?|stickers?)\b/;
+// Definite-article subject continuations («el gato de color celeste», «quiero el gato como portada de Facebook», «the cat in sky blue»).
+const DEFINITE_SUBJECT_NOUN_SOURCE = [
+  'gat[oa]s?', 'gatit[oa]s?', 'michis?', 'perr[oa]s?', 'perrit[oa]s?', 'cachorr[oa]s?',
+  'caball[oa]s?', 'leon(?:es|as)?', 'tigres?', 'lob[oa]s?', 'os[oa]s?', 'zorr[oa]s?',
+  'conej[oa]s?', 'pajar[oa]s?', 'aves?', 'aguilas?', 'buhos?', 'colibri(?:es)?', 'peces?',
+  'tiburon(?:es)?', 'ballenas?', 'delfin(?:es)?', 'tortugas?', 'ranas?', 'dragon(?:es)?',
+  'unicornios?', 'dinosaurios?', 'monstruos?', 'criaturas?', 'animales?', 'mascotas?',
+  'mariposas?', 'elefantes?', 'jirafas?', 'monos?', 'pandas?', 'ciervos?', 'venados?',
+  'cats?', 'kittens?', 'dogs?', 'puppies', 'horses?', 'lions?', 'tigers?', 'wolves', 'wolf',
+  'bears?', 'fox(?:es)?', 'rabbits?', 'birds?', 'eagles?', 'owls?', 'dragons?', 'creatures?', 'animals?', 'pets?',
+  'personajes?', 'protagonistas?', 'sujetos?', 'personas?', 'chic[oa]s?', 'nin[oa]s?',
+  'bebes?', 'hombres?', 'mujer(?:es)?', 'joven(?:es)?', 'ancian[oa]s?', 'rey(?:es)?',
+  'reinas?', 'princesas?', 'principes?', 'guerrer[oa]s?', 'caballer[oa]s?', 'astronautas?',
+  'robots?', 'androides?', 'mag[oa]s?', 'brujas?', 'superheroes?', 'heroes?', 'heroinas?',
+  'modelos?', 'doctora?s?', 'chefs?', 'pilotos?', 'piratas?', 'samurais?', 'ninjas?',
+  'characters?', 'protagonists?', 'subjects?', 'persons?', 'girls?', 'boys?', 'men', 'man',
+  'women', 'woman', 'kids?', 'warriors?', 'knights?', 'astronauts?', 'wizards?', 'models?',
+  'autos?', 'coches?', 'carros?', 'camionetas?', 'motos?', 'motocicletas?', 'bicicletas?',
+  'avion(?:es)?', 'naves?', 'barcos?', 'trenes?', 'casas?', 'edificios?', 'castillos?',
+  'cabanas?', 'tiendas?', 'cafeterias?', 'habitacion(?:es)?', 'salas?', 'cocinas?', 'jardines?',
+  'bosques?', 'playas?', 'montanas?', 'ciudades?', 'paisajes?', 'escenas?', 'productos?',
+  'botellas?', 'frascos?', 'perfumes?', 'relojes?', 'zapatos?', 'zapatillas?', 'camisetas?',
+  'vestidos?', 'trajes?', 'chaquetas?', 'tazas?', 'flores?', 'rosas?', 'arboles?', 'espadas?',
+  'cars?', 'trucks?', 'bikes?', 'planes?', 'spaceships?', 'houses?', 'buildings?', 'castles?',
+  'rooms?', 'forests?', 'beaches?', 'scenes?', 'products?', 'bottles?', 'watches?', 'shoes?', 'flowers?',
+].join('|');
+const DEFINITE_SUBJECT_LEAD_RE = new RegExp(
+  `^(?:(?:ahora|y|pero|mejor|ok|vale|si|now|and|but)\\s+)?`
+  + `(?:(?:quiero|dame|haz(?:me)?|pon(?:me)?|muestrame|dejame|pasame|necesito|i want|give me|show me|make)\\s+)?`
+  + `(?:a\\s+)?(?:el|la|los|las|al|ese|esa|esos|esas|este|esta|the|that|this)\\s+(?:mism[oa]s?\\s+)?(?:${DEFINITE_SUBJECT_NOUN_SOURCE})\\b`
+);
+const DEFINITE_SUBJECT_MODIFIER_RE = new RegExp([
+  FOLLOWUP_ATTRIBUTE_RE.source,
+  '#[0-9a-f]{3,6}\\b',
+  '\\b(?:como|para|en formato|en version|version|formato|as a|into a|for a?)\\s+(?:una?\\s+|la\\s+|el\\s+|mi\\s+)?(?:portadas?|banners?|covers?|cabeceras?|posters?|cartel(?:es)?|miniaturas?|thumbnails?|wallpapers?|fondos? de pantalla|histori(?:a|as)|story|stories|reels?|tiktok|fotos? de perfil|avatar(?:es)?|stickers?|vertical|horizontal|cuadrad[oa]|panoramic[oa]|16:9|9:16|1:1|3:4)\\b',
+  '\\b(?:corriendo|caminando|sentad[oa]|acostad[oa]|durmiendo|jugando|volando|saltando|nadando|mirando|sonriendo|riendo|leyendo|bailando|conduciendo|en (?:la|el|un|una) (?:playa|nieve|lluvia|bosque|jardin|espacio|luna|ciudad|calle|cama|sofa|mesa|montana|mar|parque|oficina|cocina|sala)|running|walking|sitting|sleeping|playing|flying|jumping|looking|smiling|on the beach|in (?:the )?(?:snow|rain|forest|garden|space|city|street|park))\\b',
+].join('|'));
+const NEW_SUBJECT_CREATION_GUARD_RE = /\b(?:otra|otro|nuev[oa]s?|another|different|new)\s+[a-z]{3,}\b|\b(?:crea(?:me)?|genera(?:me)?|dibuja(?:me)?|disena(?:me)?|make|create|generate|draw|design)\s+(?:una?|unas?|unos?|el|la|a|an|another)\s+(?:imagen|foto|fotografia|ilustracion|dibujo|retrato|poster|banner|portada|logo|image|photo|picture|portrait|drawing)\b|\b(?:inserta(?:r)?|pega(?:r)?|incrusta(?:r)?|adjunta(?:r)?)\b/;
 // Words that make a short follow-up about something other than the image.
 const FOLLOWUP_EXCLUDE_RE = /\b(?:diapositivas?|laminas?|slides?|ppt|pptx|presentacion(?:es)?|documento|docx|word|excel|xlsx|hoja|celdas?|paginas?|parrafos?|codigo|script|funcion|programa|python|javascript|html|css|sql|videos?|clips?|cancion(?:es)?|musica|audio|voz|narracion|tabla|grafic[oa]s?|informe|reporte|archivo|texto del|redaccion|resumen)\b/;
 // A deck / document / code deliverable: never an image request, even when
@@ -331,6 +371,26 @@ function documentDeliverableVeto(norm) {
   return ref < 0 || doc < ref;
 }
 
+function detectDefiniteSubjectFollowup(norm) {
+  if (!norm || QUESTION_START.test(norm) || /[?¿]/.test(norm)) return false;
+  if (NEW_SUBJECT_CREATION_GUARD_RE.test(norm)) return false;
+  if (FOLLOWUP_EXCLUDE_RE.test(norm) || LOOK_REQUEST_RE.test(norm)) return false;
+  if (VIDEO_NOUNS.test(norm) || MUSIC_NOUNS.test(norm) || AUDIO_NOUNS.test(norm)) return false;
+  const leadMatch = norm.match(DEFINITE_SUBJECT_LEAD_RE);
+  if (!leadMatch) return false;
+  const tail = norm.slice(leadMatch[0].length).trim();
+  if (!tail) return false;
+  return DEFINITE_SUBJECT_MODIFIER_RE.test(tail);
+}
+
+function detectFollowupDeliverableAdaptation(norm) {
+  if (!norm || /[?¿]/.test(norm)) return false;
+  if (QUESTION_START.test(norm) && !FOLLOWUP_DELIVERABLE_ADAPT_RE.test(norm)) return false;
+  if (NEW_SUBJECT_CREATION_GUARD_RE.test(norm) || FOLLOWUP_EXCLUDE_RE.test(norm)) return false;
+  if (VIDEO_NOUNS.test(norm) || MUSIC_NOUNS.test(norm) || AUDIO_NOUNS.test(norm)) return false;
+  return FOLLOWUP_DELIVERABLE_ADAPT_RE.test(norm);
+}
+
 /**
  * Short continuation that only makes sense as an edit of the image the chat
  * already has. Pure text check; the caller supplies the image context.
@@ -339,9 +399,12 @@ function detectImageFollowupEdit(norm) {
   if (!norm) return false;
   const words = norm.split(/\s+/).filter(Boolean);
   if (!words.length || words.length > 16) return false;
-  if (STRICT_CREATE_VERB.test(norm) && IMAGE_NOUNS.test(norm) && !FOLLOWUP_SAME_RE.test(norm)) return false;
   if (FOLLOWUP_EXCLUDE_RE.test(norm)) return false;
   if (VIDEO_NOUNS.test(norm) || MUSIC_NOUNS.test(norm) || AUDIO_NOUNS.test(norm)) return false;
+  const definiteSubject = detectDefiniteSubjectFollowup(norm);
+  const deliverableAdapt = detectFollowupDeliverableAdaptation(norm);
+  if (STRICT_CREATE_VERB.test(norm) && IMAGE_NOUNS.test(norm) && !FOLLOWUP_SAME_RE.test(norm) && !definiteSubject && !deliverableAdapt) return false;
+  if (definiteSubject || deliverableAdapt) return true;
   const attribute = FOLLOWUP_ATTRIBUTE_RE.test(norm) || IMAGE_NOUNS.test(norm);
   if (EDIT_VERB.test(norm) && attribute) return true;
   if (FOLLOWUP_SAME_RE.test(norm)) return true;
@@ -405,6 +468,27 @@ function detectImageEditIntent(text, opts = {}) {
   return false;
 }
 
+const QUOTED_LETTERING_CUE_RE = /\b(?:que\s+diga|con\s+el\s+texto|con\s+la\s+frase|con\s+el\s+titulo|con\s+las\s+palabras|letrero|rotulo|cartel\s+con|texto\s*:|titulo\s*:|with\s+(?:the\s+)?text|that\s+says|reading|saying|titled|headline)\b/;
+const QUOTED_TYPO_DELIVERABLE_RE = /\b(?:logos?|logotipos?|posters?|cartel(?:es)?|afiches?|flyers?|portadas?|covers?|banners?|miniaturas?|thumbnails?|infografi(?:a|as)|etiquetas?|packaging|empaque|camisetas?|letreros?|neones?)\b/;
+const IMAGE_DOCUMENT_GROUNDING_RE = new RegExp([
+  '\\b(?:segun|basad[oa]s?\\s+en|a\\s+partir\\s+de|tomando\\s+de|descrit[oa]s?\\s+en|mencionad[oa]s?\\s+en)\\s+(?:el\\s+|la\\s+|los\\s+|las\\s+|mi\\s+|nuestro\\s+|este\\s+|esta\\s+)?(?:documento|documentos|pdf|informe|reporte|manual(?:\\s+de\\s+marca)?|guia(?:\\s+de\\s+estilo)?|brand\\s*book|presentacion|deck|archivo|ficha\\s+tecnica|brief)\\b',
+  '\\b(?:manual\\s+de\\s+marca|identidad\\s+de\\s+(?:la\\s+)?marca|paleta\\s+de\\s+(?:la\\s+)?marca|colores\\s+corporativos|brand\\s+guidelines|brand\\s+book|style\\s+guide)\\b',
+  '\\b(?:according\\s+to|based\\s+on|described\\s+in)\\s+(?:the\\s+|this\\s+|my\\s+|our\\s+)?(?:document|pdf|report|brand\\s+book|style\\s+guide|deck|attached\\s+file|spec|brief)\\b',
+].join('|'));
+
+function extractQuotedImageText(rawText, norm) {
+  if (!rawText || !norm) return null;
+  if (!QUOTED_LETTERING_CUE_RE.test(norm) && !QUOTED_TYPO_DELIVERABLE_RE.test(norm)) return null;
+  const out = [];
+  for (const re of [/"([^"\n]{1,72})"/g, /«([^»\n]{1,72})»/g, /“([^”\n]{1,72})”/g]) {
+    for (const m of String(rawText).matchAll(re)) {
+      const val = String(m[1] || '').replace(/\s+/g, ' ').trim();
+      if (val && !out.includes(val)) out.push(val);
+    }
+  }
+  return out.length ? out.slice(0, 3) : null;
+}
+
 /** Extract the per-kind specs the user stated in natural language. */
 function buildSpecsForKind(kind, norm, rawText) {
   const durationSeconds = parseDurationSeconds(norm);
@@ -419,6 +503,9 @@ function buildSpecsForKind(kind, norm, rawText) {
     const count = detectImageCount(norm);
     if (count && count > 1) specs.count = count;
     if (style) specs.style = style;
+    const quotedText = extractQuotedImageText(rawText, norm);
+    if (quotedText) specs.quotedText = quotedText;
+    if (IMAGE_DOCUMENT_GROUNDING_RE.test(norm)) specs.documentGrounded = true;
     // Exact spoken image directive: concrete frame, typo-tolerant count and
     // — for edits — an explicit target. Never overrides the coarse specs
     // above when they already agree; it only fills gaps and adds detail.
@@ -573,8 +660,12 @@ function classifyImageRequest(text, opts = {}) {
   const historyReference = !opts.hasImageAttachment && Boolean(opts.hasRecentImage) && DEMONSTRATIVE_RE.test(norm) && detectReferenceCue(raw);
   const editIntent = detectImageEditIntent(raw, opts);
   const hasImageNoun = IMAGE_NOUNS.test(norm);
-  const sameImage = FOLLOWUP_SAME_RE.test(norm) && Boolean(opts.hasImageAttachment || opts.hasRecentImage);
-  if (editIntent && (referenceGuided || historyReference || sameImage || !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm)))) {
+  const contextualContinuation = (
+    FOLLOWUP_SAME_RE.test(norm)
+    || detectDefiniteSubjectFollowup(norm)
+    || detectFollowupDeliverableAdaptation(norm)
+  ) && Boolean(opts.hasImageAttachment || opts.hasRecentImage);
+  if (editIntent && (referenceGuided || historyReference || contextualContinuation || !(hasImageNoun && STRICT_CREATE_VERB.test(norm) && !EXISTING_IMAGE_REF.test(norm)))) {
     return { operation: 'edit', referenceGuided, reason: referenceGuided ? 'reference-guided' : 'edit' };
   }
   if (hasImageNoun || (DRAW_VERB_ONLY.test(norm) && !QUESTION_START.test(norm))) {
@@ -622,7 +713,10 @@ function detectMediaIntents(text, opts = {}) {
   const followupEdit = kinds.includes('image-edit') && Boolean(opts.hasRecentImage || opts.hasImageAttachment) && detectImageFollowupEdit(norm);
   // Only the «que sea …» continuation is exempt from the question penalty;
   // «¿cómo quito el fondo en gimp?» stays a question.
-  const questionWaived = followupEdit && /^[\s¿?]*(?:ahora|y|pero|mejor|ok|vale|si|now|and|but)?[\s,]*que (?:sea|tenga|este|quede)\b/.test(norm);
+  const questionWaived = followupEdit && (
+    /^[\s¿?]*(?:ahora|y|pero|mejor|ok|vale|si|now|and|but)?[\s,]*que (?:sea|tenga|este|quede)\b/.test(norm)
+    || (!/[?¿]/.test(raw) && FOLLOWUP_DELIVERABLE_ADAPT_RE.test(norm))
+  );
   let confidence = 'medium';
   if ((QUESTION_START.test(norm) && !questionWaived) || MEDIA_IDEATION_OR_LEARNING.test(norm)) confidence = 'low';
   else if (hasCreateVerb || kinds.includes('image-edit')) confidence = 'high';
@@ -674,6 +768,12 @@ function buildMediaIntentHint(intent) {
     }
     if (s.editTarget) params.push(`- objetivo de la edición: "${s.editTarget}" — pásalo como \`target\` y aplica el cambio solo ahí, conservando el resto.`);
     if (s.editReplacement) params.push(`- resultado esperado en el objetivo: "${s.editReplacement}".`);
+    if (Array.isArray(s.quotedText) && s.quotedText.length) {
+      params.push(`- texto literal en la edición: conserva exactamente ${s.quotedText.map((q) => `"${q}"`).join(', ')} entre comillas dentro de \`instruction\` sin traducirlo ni modificarlo.`);
+    }
+    if (s.documentGrounded) {
+      params.push('- anclaje documental/marca detectado: conserva en `instruction` la referencia al manual/documento, nombres propios y colores HEX (#RRGGBB) o materiales indicados.');
+    }
   } else if (intent.kind === 'image') {
     if (s.aspectRatio) params.push(`- aspectRatio: "${s.aspectRatio}"`);
     if (s.frame) params.push(`- frame exacto: "${s.frame}" (inclúyelo en el prompt como requisito de encuadre).`);
@@ -681,6 +781,12 @@ function buildMediaIntentHint(intent) {
     if (s.style) params.push(`- style: "${s.style}"`);
     if (s.imageType) params.push(`- tipo de visual: "${s.imageType}" (conserva ese formato en el prompt).`);
     if (s.count) params.push(`- el usuario pidió ${s.count} imágenes: pasa \`count: ${s.count}\` a \`generate_image\` en UNA sola llamada (devuelve las ${s.count} como artefactos).`);
+    if (Array.isArray(s.quotedText) && s.quotedText.length) {
+      params.push(`- texto literal en la imagen: incluye exactamente ${s.quotedText.map((q) => `"${q}"`).join(', ')} entre comillas dentro de \`prompt\` sin traducirlo ni abreviarlo.`);
+    }
+    if (s.documentGrounded) {
+      params.push('- anclaje documental/marca detectado: conserva en `prompt` la referencia al documento/marca, nombres propios, materiales y códigos HEX (#RRGGBB) mencionados para que el RAG visual los aplique con exactitud.');
+    }
   } else if (intent.kind === 'video') {
     params.push(`- model: "${s.model || DEFAULT_VIDEO_MODEL}" (Veo Fast).`);
     params.push(`- duration: ${s.durationSeconds || DEFAULT_VIDEO_DURATION_SECONDS} (segundos; por defecto Veo Fast 8s, ajústalo al rango válido de la herramienta solo si el usuario pidió otra duración).`);

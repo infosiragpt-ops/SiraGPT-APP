@@ -256,6 +256,15 @@ function saveArtifact({ filename, base64, mime, ownerUserId, chatId, validation,
     version: imageMetadata.version || 1,
     model: imageMetadata.model, provider: imageMetadata.provider,
     aspectRatio: imageMetadata.aspectRatio, quality: imageMetadata.quality,
+    ...(typeof imageMetadata.visualAnchor === 'string' && imageMetadata.visualAnchor
+      ? { visualAnchor: imageMetadata.visualAnchor.slice(0, 220) }
+      : {}),
+    ...(typeof imageMetadata.visualDna === 'string' && imageMetadata.visualDna
+      ? { visualDna: imageMetadata.visualDna.slice(0, 420) }
+      : {}),
+    ...(Array.isArray(imageMetadata.activeOverrides) && imageMetadata.activeOverrides.length
+      ? { activeOverrides: imageMetadata.activeOverrides.slice(0, 12) }
+      : {}),
   } : {};
   const stored = `${id}-${clean}`;
   // When a folder code is supplied (professional document cycle) the binary

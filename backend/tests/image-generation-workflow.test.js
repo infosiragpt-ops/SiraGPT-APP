@@ -26,23 +26,45 @@ const fixtureDir = fs.mkdtemp(path.join(os.tmpdir(), 'image-handler-'));
 after(async () => fs.rm(await fixtureDir, { recursive: true, force: true }));
 const image = (color, width = 8, height = 4) => sharp({ create: { width, height, channels: 4, background: color } }).png().toBuffer();
 
-async function harness({ source = true, chatOwned = true, editable = true, user = {}, references = [], sourceAspect = '16:9', history = null } = {}) {
+async function harness({ source = true, chatOwned = true, editable = true, stateful = false, user = {}, references = [], documents = {}, sourceAspect = '16:9', history = null } = {}) {
   const sourceBytes = await image('#de2070'); const outputBytes = await image('#1040fa');
-  const sourcePath = path.join(await fixtureDir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
+  const dir = await fixtureDir;
+  const sourcePath = path.join(dir, 'source.png'); await fs.writeFile(sourcePath, sourceBytes);
   const calls = { generate: [], edit: [], saves: [], messages: [], reads: 0 };
+  const liveHistory = Array.isArray(history) ? [...history] : [];
   const records = source ? { beach: { id: 'beach', filename: 'generated-beach.png', mimeType: 'image/png', path: sourcePath } } : {};
   for (const id of references) records[id] = { id, filename: `${id}.png`, mimeType: 'image/png', path: sourcePath };
+  for (const [id, doc] of Object.entries(documents)) {
+    records[id] = {
+      id,
+      originalName: doc.originalName || `${id}.pdf`,
+      filename: doc.filename || `${id}.pdf`,
+      mimeType: doc.mimeType || 'application/pdf',
+      extractedText: doc.extractedText || '',
+    };
+  }
+  const sizedBytesFor = async (aspectRatio, color = '#1040fa') => {
+    if (!stateful) return outputBytes;
+    if (aspectRatio === '16:9') return image(color, 32, 18);
+    if (aspectRatio === '9:16') return image(color, 18, 32);
+    if (aspectRatio === '3:4') return image(color, 18, 24);
+    return image(color, 16, 16);
+  };
   const prisma = {
     chat: { findFirst: async () => chatOwned ? { id: 'chat', title: 'Image' } : null, update: async () => ({}) },
     file: { findFirst: async ({ where }) => records[where.id] || null },
     message: {
-      findMany: async () => { calls.reads++; if (history) return history; return source ? [
+      findMany: async () => { calls.reads++; if (stateful) return liveHistory; if (history) return history; return source ? [
         { files: [{ type: 'application/pdf', id: 'document' }] },
         { files: [{ type: 'image/png', fileId: 'beach', version: 2, ...(sourceAspect ? { aspectRatio: sourceAspect } : {}), rootFileId: 'original' }] },
       ] : []; },
-      create: async ({ data }) => { calls.messages.push(data); return { id: `message-${calls.messages.length}` }; },
+      create: async ({ data }) => {
+        calls.messages.push(data);
+        if (stateful && data.files) liveHistory.unshift({ role: data.role, content: data.content, files: data.files });
+        return { id: `message-${calls.messages.length}` };
+      },
     },
-    aiModel: { findUnique: async () => ({ name: 'gpt-image-2', provider: 'OpenAI', isActive: true, type: 'IMAGE' }) },
+    aiModel: { findUnique: async ({ where } = {}) => ({ name: where?.name || 'gpt-image-2', provider: editable ? 'OpenAI' : 'Fal', isActive: true, type: 'IMAGE' }) },
   };
   let handler;
   const chain = new Proxy(() => {}, { get: () => () => chain });
@@ -58,18 +80,32 @@ async function harness({ source = true, chatOwned = true, editable = true, user 
     checkPaidTokenCap, prisma, resolveImageOperation, resolveImageSource, prepareEditCanvas, finishEditCanvas,
     ADMIN_MANAGED_IMAGE_MODEL_NAMES: new Set(), isActiveGrokImageModel: () => false,
     isVerifiedChatImageModelName: () => true, normalizeCatalogModelType: () => ({ type: 'IMAGE' }),
-    VERIFIED_CHAT_IMAGE_MODEL_NAMES: new Set(['gpt-image-2']), publicUploadUrl: (url) => url,
+    VERIFIED_CHAT_IMAGE_MODEL_NAMES: new Set(['gpt-image-2', 'fal-ai/flux-pro/v1.1']), publicUploadUrl: (url) => url,
     toImageEngineProvider: (provider) => provider.toLowerCase(), fromImageEngineProvider: (_actual, requested) => requested,
     imageProviderAttemptTimeoutMs: () => 1000,
     imageEngine: {
       canEditImage: (spec) => editable && (!spec.background || spec.provider === 'openai'),
-      generateImage: async (spec) => { calls.generate.push(spec); return { ok: true, images: [{ b64: outputBytes.toString('base64') }], model: spec.model, provider: 'openai' }; },
-      editImage: async (spec) => { calls.edit.push(spec); return { ok: true, images: Array.from({ length: spec.n }, () => ({ b64: outputBytes.toString('base64') })), model: spec.model, provider: 'openai' }; },
+      generateImage: async (spec) => {
+        calls.generate.push(spec);
+        const bytes = await sizedBytesFor(spec.aspectRatio, '#92400e');
+        return { ok: true, images: [{ b64: bytes.toString('base64') }], model: spec.model, provider: spec.provider || 'openai' };
+      },
+      editImage: async (spec) => {
+        calls.edit.push(spec);
+        const bytes = await sizedBytesFor(spec.aspectRatio, '#38bdf8');
+        return { ok: true, images: Array.from({ length: spec.n }, () => ({ b64: bytes.toString('base64') })), model: spec.model, provider: spec.provider || 'openai' };
+      },
     },
     saveBase64Image: async (b64, userId, prompt, aspectRatio, options) => {
       const buffer = Buffer.from(b64, 'base64'); const { width, height } = await sharp(buffer).metadata();
       calls.saves.push({ buffer, userId, prompt, aspectRatio, options });
-      return { imageUrl: `/uploads/images/result-${calls.saves.length}.png`, fileId: `result-${calls.saves.length}`, width, height };
+      const fileId = `result-${calls.saves.length}`;
+      if (stateful) {
+        const savedPath = path.join(dir, `${fileId}.png`);
+        await fs.writeFile(savedPath, buffer);
+        records[fileId] = { id: fileId, filename: `generated-${fileId}.png`, mimeType: 'image/png', path: savedPath };
+      }
+      return { imageUrl: `/uploads/images/${fileId}.png`, fileId, width, height };
     },
     recordApiUsage: async () => ({}), usagePayloadFor: () => ({}), classifyImageGenError,
     // «Fallos de respuesta» hooks (turn-failures) — advisory, stubbed here.
@@ -302,4 +338,287 @@ test('composer: a catalog slug edits and generates through OpenRouter whatever f
   // A bare id keeps its provider.
   await request({ prompt: 'un gato', provider: 'Gemini', model: 'gemini-2.5-flash-image' });
   assert.equal(calls.generate[1].provider, 'gemini');
+});
+
+test('composer Image RAG: PDF attached with Imágenes chip grounds generation instead of failing source validation', async () => {
+  const { request, calls } = await harness({
+    source: false,
+    documents: {
+      'brand-pdf': {
+        originalName: 'manual-marca.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'Perfume Solaris: frasco octogonal en vidrio esmerilado con tapa de latón cepillado y paleta corporativa #0F172A y #38BDF8.',
+      },
+    },
+  });
+  const res = await request({
+    prompt: 'genera una foto de estudio del perfume descrito en el documento',
+    fileId: 'brand-pdf',
+    referenceFileIds: ['brand-pdf'],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.generate.length, 1);
+  assert.equal(calls.edit.length, 0);
+  assert.match(calls.generate[0].prompt, /#0F172A, #38BDF8/);
+  assert.match(calls.generate[0].prompt, /vidrio esmerilado/i);
+  assert.equal(res.body.files[0].ragGrounded, true);
+  assert.equal(res.body.files[0].ragArchetype, 'commercial_product_studio');
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((f) => f.id), ['brand-pdf']);
+});
+
+test('composer Image RAG: PDF + photo attached together edits the photo grounded with the PDF brand palette', async () => {
+  const { request, calls } = await harness({
+    source: false,
+    references: ['foto'],
+    documents: {
+      'brand-pdf': {
+        originalName: 'brand-book.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'Guía de marca: fondos limpios con colores corporativos #1E293B y #F59E0B.',
+      },
+    },
+  });
+  const res = await request({
+    prompt: 'cambia el fondo aplicando los colores corporativos del manual de marca',
+    fileId: 'brand-pdf',
+    referenceFileIds: ['brand-pdf', 'foto'],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.edit.length, 1);
+  assert.equal(calls.generate.length, 0);
+  assert.equal(res.body.files[0].parentFileId, 'foto');
+  assert.match(calls.edit[0].prompt, /#1E293B, #F59E0B/);
+  assert.deepEqual(JSON.parse(calls.messages[0].files).map((f) => f.id), ['brand-pdf', 'foto']);
+});
+
+test('composer Image RAG: cross-turn strict continuity carries prior character visual bible', async () => {
+  const { request, calls } = await harness({
+    history: [
+      {
+        files: JSON.stringify([
+          {
+            type: 'image',
+            prompt: 'Capitán espacial con traje blanco mate, casco dorado y parche azul cobalto',
+            aspectRatio: '16:9',
+          },
+        ]),
+      },
+    ],
+  });
+  const res = await request({
+    prompt: 'crea una escena nueva con el mismo personaje explorando un cañón marciano al atardecer',
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.generate.length, 1);
+  assert.ok(calls.reads >= 1);
+  assert.match(calls.generate[0].prompt, /Series visual continuity:[\s\S]*Capitán espacial con traje blanco mate/);
+  assert.equal(res.body.files[0].continuityMode, 'strict');
+  assert.match(res.body.files[0].visualAnchor, /Capitán espacial con traje blanco mate/);
+});
+
+test('composer Image RAG: 3-turn storyboard preserves Turn 1 visualAnchor in Turn 3 without anchor decay', async () => {
+  // Simulate Turn 1 having established protagonist, Turn 2 having stored visualAnchor, and now Turn 3 continuing.
+  const { request, calls } = await harness({
+    history: [
+      {
+        files: JSON.stringify([
+          {
+            type: 'image',
+            prompt: 'el mismo personaje reparando el motor de la nave',
+            visualAnchor: 'Elena, ingeniera orbital con chaqueta naranja reflectante y casco blanco',
+            aspectRatio: '16:9',
+          },
+        ]),
+      },
+    ],
+  });
+  const turn3 = await request({
+    prompt: 'el mismo personaje observando la Tierra desde la cúpula espacial',
+  });
+  assert.equal(turn3.statusCode, 200);
+  assert.ok(!turn3.body.error, turn3.body.error);
+  assert.equal(turn3.body.files[0].continuityMode, 'strict');
+  assert.equal(
+    turn3.body.files[0].visualAnchor,
+    'Elena, ingeniera orbital con chaqueta naranja reflectante y casco blanco'
+  );
+  assert.match(
+    calls.generate[0].prompt,
+    /Elena, ingeniera orbital con chaqueta naranja reflectante y casco blanco/
+  );
+  assert.match(
+    calls.generate[0].prompt,
+    /reparando el motor de la nave/
+  );
+});
+
+test('composer Image RAG: Spanish prompt grounds against an English brand guidelines PDF via cross-lingual expansion', async () => {
+  const { request, calls } = await harness({
+    source: false,
+    documents: {
+      'en-brand-pdf': {
+        originalName: 'brand-guidelines-en.pdf',
+        mimeType: 'application/pdf',
+        extractedText: 'Vesper Watch Co. Brand Guidelines: Octagonal bottle and brushed titanium watch case with primary palette #0F172A and Pantone 429 C.',
+      },
+    },
+  });
+  const res = await request({
+    prompt: 'genera una fotografía comercial del reloj siguiendo los colores del manual de marca',
+    fileId: 'en-brand-pdf',
+    referenceFileIds: ['en-brand-pdf'],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(res.body.files[0].ragGrounded, true);
+  assert.match(calls.generate[0].prompt, /#0F172A, Pantone 429 C/);
+  assert.match(calls.generate[0].prompt, /brushed titanium/i);
+});
+
+test('universal context continuity (FLUX 1.1 Pro / generation-only): 3-turn cat flow locks identity + sky-blue (#7DD3FC) + 16:9 Facebook cover on the exact selected model', async () => {
+  const { request, calls } = await harness({ source: false, editable: false, stateful: true });
+
+  // Turn 1: "crea una imagen de un gato" -> standalone creation, zero history DB reads.
+  const turn1 = await request({
+    prompt: 'crea una imagen de un gato',
+    provider: 'Fal',
+    model: 'fal-ai/flux-pro/v1.1',
+    aspectRatio: '1:1',
+  });
+  assert.equal(turn1.statusCode, 200);
+  assert.ok(!turn1.body.error, turn1.body.error);
+  assert.equal(calls.reads, 0, 'standalone creation never scans chat history');
+  assert.equal(calls.generate.length, 1);
+  assert.equal(calls.edit.length, 0);
+  assert.equal(calls.generate[0].model, 'fal-ai/flux-pro/v1.1');
+  assert.equal(turn1.body.files[0].fileId, 'result-1');
+  assert.equal(turn1.body.files[0].version, 1);
+
+  // Turn 2: "el gato de color celeste" -> pivots cleanly from implicit edit to Visual-DNA locked generation on FLUX 1.1 Pro!
+  const turn2 = await request({
+    prompt: 'el gato de color celeste',
+    provider: 'Fal',
+    model: 'fal-ai/flux-pro/v1.1',
+    aspectRatio: '1:1',
+  });
+  assert.equal(turn2.statusCode, 200, 'must NOT fail with 400 image_edit_unsupported');
+  assert.ok(!turn2.body.error, turn2.body.error);
+  assert.equal(calls.edit.length, 0);
+  assert.equal(calls.generate.length, 2);
+  assert.equal(calls.generate[1].model, 'fal-ai/flux-pro/v1.1', 'never switches user selected model');
+  assert.match(calls.generate[1].prompt, /^Reference continuity lock:/);
+  assert.match(calls.generate[1].prompt, /#7DD3FC/, 'locks vivid sky-blue hex');
+  assert.match(calls.generate[1].prompt, /vivid sky-blue \/ light cerulean/);
+  assert.match(calls.generate[1].prompt, /Subject visual DNA/);
+  assert.doesNotMatch(calls.generate[1].prompt, /honest uncontrived color/i, 'neutralizes conflicting natural-color realism');
+  assert.equal(turn2.body.files[0].parentFileId, 'result-1');
+  assert.equal(turn2.body.files[0].rootFileId, 'result-1');
+  assert.equal(turn2.body.files[0].version, 2);
+  assert.ok(Array.isArray(turn2.body.files[0].activeOverrides) && turn2.body.files[0].activeOverrides.some((o) => o.id === 'sky_blue'));
+
+  // Turn 3: "quiero el gato como portada de Facebook" -> resolves 16:9 AND retains BOTH Turn 1 cat identity AND Turn 2 sky-blue (#7DD3FC)!
+  const turn3 = await request({
+    prompt: 'quiero el gato como portada de Facebook',
+    provider: 'Fal',
+    model: 'fal-ai/flux-pro/v1.1',
+    aspectRatio: '1:1',
+  });
+  assert.equal(turn3.statusCode, 200);
+  assert.ok(!turn3.body.error, turn3.body.error);
+  assert.equal(calls.edit.length, 0);
+  assert.equal(calls.generate.length, 3);
+  assert.equal(calls.generate[2].model, 'fal-ai/flux-pro/v1.1');
+  assert.equal(calls.generate[2].aspectRatio, '16:9');
+  assert.equal(turn3.body.aspectRatio, '16:9');
+  assert.match(calls.generate[2].prompt, /#7DD3FC/, 'Turn 3 retains Turn 2 sky-blue cumulative state');
+  assert.match(calls.generate[2].prompt, /gato/i, 'Turn 3 retains Turn 1 cat subject');
+  assert.match(calls.generate[2].prompt, /16:9 \(portada de facebook\)/i);
+  assert.equal(turn3.body.files[0].parentFileId, 'result-2');
+  assert.equal(turn3.body.files[0].rootFileId, 'result-1');
+  assert.equal(turn3.body.files[0].version, 3);
+
+  // Explicit viewer/fileId edit on FLUX 1.1 Pro STILL rejects cleanly with 400 image_edit_unsupported!
+  const explicitEdit = await request({
+    operation: 'edit',
+    fileId: 'result-1',
+    prompt: 'cambia el fondo',
+    provider: 'Fal',
+    model: 'fal-ai/flux-pro/v1.1',
+  });
+  assert.equal(explicitEdit.statusCode, 400);
+  assert.equal(explicitEdit.body.code, 'image_edit_unsupported');
+});
+
+test('universal context continuity (GPT Image / edit-capable): 3-turn cat flow edits prior pixels, locks #7DD3FC, and preserves 16:9 Facebook cover without squashing to 1:1', async () => {
+  const { request, calls } = await harness({ source: false, editable: true, stateful: true });
+
+  const turn1 = await request({
+    prompt: 'crea una imagen de un gato',
+    provider: 'OpenAI',
+    model: 'gpt-image-2',
+    aspectRatio: '1:1',
+  });
+  assert.equal(turn1.statusCode, 200);
+  assert.equal(calls.generate.length, 1);
+
+  const turn2 = await request({
+    prompt: 'el gato de color celeste',
+    provider: 'OpenAI',
+    model: 'gpt-image-2',
+    aspectRatio: '1:1',
+  });
+  assert.equal(turn2.statusCode, 200);
+  assert.equal(calls.edit.length, 1);
+  assert.match(calls.edit[0].prompt, /#7DD3FC/);
+  assert.equal(turn2.body.files[0].parentFileId, 'result-1');
+  assert.equal(turn2.body.files[0].version, 2);
+
+  const turn3 = await request({
+    prompt: 'quiero el gato como portada de Facebook',
+    provider: 'OpenAI',
+    model: 'gpt-image-2',
+    aspectRatio: '1:1',
+  });
+  assert.equal(turn3.statusCode, 200);
+  assert.equal(calls.edit.length, 2);
+  assert.equal(calls.edit[1].aspectRatio, '16:9');
+  assert.match(calls.edit[1].prompt, /#7DD3FC/, 'Turn 3 edit prompt keeps cumulative sky-blue state');
+  assert.equal(turn3.body.aspectRatio, '16:9');
+  assert.equal(
+    turn3.body.files[0].width / turn3.body.files[0].height,
+    16 / 9,
+    'finishEditCanvas skipped on deliverable frame change so 16:9 is not squashed back to 1:1'
+  );
+  assert.equal(turn3.body.files[0].parentFileId, 'result-2');
+  assert.equal(turn3.body.files[0].rootFileId, 'result-1');
+  assert.equal(turn3.body.files[0].version, 3);
+});
+
+test('composer prompt obedience (FLUX 1.1 Pro): "crea una imagen de un perro celeste" compiles positive English sky-blue fur coat lock (#7DD3FC) before framing with zero brown/gray/merle poisoning', async () => {
+  const { request, calls } = await harness({ source: false, editable: false });
+
+  const res = await request({
+    prompt: 'crea una imagen de un perro celeste',
+    provider: 'Fal',
+    model: 'fal-ai/flux-pro/v1.1',
+    aspectRatio: '1:1',
+    quality: '2K',
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(!res.body.error, res.body.error);
+  assert.equal(calls.reads, 0, 'standalone prompt performs zero history DB reads');
+  assert.equal(calls.generate.length, 1);
+  assert.equal(calls.generate[0].model, 'fal-ai/flux-pro/v1.1');
+
+  const sentPrompt = calls.generate[0].prompt;
+  assert.match(sentPrompt, /^un perro celeste Exact scene specification: A vivid sky-blue dog \(#7DD3FC\) with a bright light-cerulean sky-blue fur coat covering its entire head, ears, body, legs, and tail/);
+  assert.ok(
+    sentPrompt.indexOf('Exact scene specification:') < sentPrompt.indexOf('Visual direction:'),
+    'sky-blue dog coat lock sits inside prime CLIP tokens ahead of visual direction'
+  );
+  assert.doesNotMatch(sentPrompt, /\bbrown\b|\borange\b|\btan\b|\bgray\b|\bgrey\b|\bmerle\b|chiaroscuro|warm tungsten/i);
+  assert.equal(res.body.files[0].ragArchetype, 'faithful_subject_focus');
 });
