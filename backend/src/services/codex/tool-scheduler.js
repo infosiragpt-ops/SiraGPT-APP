@@ -24,6 +24,7 @@ const GLOBAL_READ_TOOLS = new Set([
   'subagent_status',
 ]);
 const EXCLUSIVE_TOOLS = new Set([
+  'apply_patch',
   'run_command',
   'install_dependencies',
   'type_check',

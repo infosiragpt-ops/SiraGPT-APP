@@ -39,6 +39,8 @@ const { isSafeBranchName, runBranchName, redactGitOutput } = require('./git-work
 
 const OPENCODE_PROVENANCE = Object.freeze({
   upstream: 'https://github.com/sst/opencode',
+  latestSyncedUpstream: 'https://github.com/anomalyco/opencode',
+  latestSnapshotSha: '4cf9db957485dd51a5b195fb6e2c1e03d8da1107',
   license: 'MIT',
   vendorSnapshot: 'vendor/opencode',
   portedFrom: [
@@ -56,6 +58,11 @@ const OPENCODE_PROVENANCE = Object.freeze({
     'packages/opencode/src/tool/websearch.ts',
     'packages/opencode/src/tool/skill.ts',
     'packages/opencode/src/tool/plan.ts',
+    'packages/core/src/tool/plugin/edit.ts',
+    'packages/core/src/tool/plugin/patch.ts',
+    'packages/core/src/tool/plugin/read.ts',
+    'packages/core/src/instruction-discovery.ts',
+    'packages/util/src/patch.ts',
   ],
   note: 'Contracts ported to CommonJS; no Effect-TS runtime copied.',
 });
@@ -64,10 +71,10 @@ const OPENCODE_PROVENANCE = Object.freeze({
 // status: native = ya existe 1:1 · adapted = existe con otro nombre/semántica
 // cercana · missing = gap explícito (no se finge paridad).
 const OPENCODE_TOOL_CATALOG = Object.freeze([
-  { opencodeId: 'read', siraTool: 'read_file', status: 'native', notes: 'offset/limit, cap 50KB-equivalente vía summarise.' },
+  { opencodeId: 'read', siraTool: 'read_file', status: 'native', notes: 'offset/limit, sugerencias difusas en ENOENT y descubrimiento jerárquico de AGENTS.md/CLAUDE.md.' },
   { opencodeId: 'write', siraTool: 'write_file', status: 'native', notes: 'read-before-write enforced en file-state.' },
-  { opencodeId: 'edit', siraTool: 'edit_file', status: 'native', notes: 'ladder exact→line-trimmed en edit-matching.js.' },
-  { opencodeId: 'apply_patch', siraTool: 'edit_file', status: 'adapted', notes: 'OpenCode usa unified-diff; aquí find/replace exacto. Gap: parche multi-hunk.' },
+  { opencodeId: 'edit', siraTool: 'edit_file', status: 'native', notes: 'ladder exact→crlf→unicode→trailing-ws→line-trimmed con LCS CRLF y missHint accionable.' },
+  { opencodeId: 'apply_patch', siraTool: 'apply_patch', status: 'native', notes: 'Parche multi-archivo Begin/End Patch con pre-verificación atómica, seek 4 niveles, @@ contexto, Move/Delete y BOM/CRLF.' },
   { opencodeId: 'glob', siraTool: 'glob', status: 'native', notes: 'safe-glob con pathspec git, respeta .gitignore.' },
   { opencodeId: 'grep', siraTool: 'grep_search', status: 'native', notes: 'git grep -In --untracked.' },
   { opencodeId: 'shell', siraTool: 'run_command', status: 'adapted', notes: 'Allowlist (git,bun,node,npm…) + background tasks; OpenCode shell es abierto.' },

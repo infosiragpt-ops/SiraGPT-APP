@@ -19,6 +19,7 @@ test('toolRegistry projects name/description/parameters for every tool', () => {
   assert.deepEqual(
     reg.map((t) => t.name).sort(),
     [
+      'apply_patch',
       'browser_check',
       'dev_server_check',
       'edit_file',
