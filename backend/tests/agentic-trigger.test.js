@@ -180,3 +180,26 @@ test('descriptive colors are not fuzzy document edits, including prefaced visual
     assert.equal(isDocumentEditRequest(prompt), true, prompt);
   }
 });
+
+test('prod 2026-09-18 (informe UPN): rewrite-around-new-title with typos routes as an edit', () => {
+  const { isDocumentEditRequest } = require('../src/services/agents/agentic-trigger');
+  // Verbatim user message (typos included): «traba», «itulo», «mejroa», «nuievbo ema».
+  const real = 'El docente me observó el título y me indicó un nuevo título, Para el informe de suficiencia, Me indicó rectificar la información presentada, Y que esté en torno al título asignado\n\ntraba en el word 203 577 COR-F-REC-VAC-05.17_8 Todas las facultades excepto Arquitectura - HECTOR CAMPOS CUBAS.docx con el itulo de la imagen de forms profeiosnl y avanzada mejroa todo lo que tenmos porfsvor con el nuievbo ema';
+  assert.equal(isDocumentEditRequest(real), true);
+  for (const prompt of [
+    'traba en el word con el nuevo titulo',
+    'trabaja en el docx',
+    'mejroa todo lo del word',                       // adjacent transposition
+    'rectifica la informacion del informe',
+    'adapta el documento al nuevo tema',
+    'trabaja sobre el informe y alinea todo al titulo nuevo',
+    'reenfoca la tesis al nuevo tema',
+  ]) assert.equal(isDocumentEditRequest(prompt), true, prompt);
+  // «trabajo» the noun is not «trabaja en» the verb.
+  for (const prompt of [
+    'trabajo en una empresa de software, ¿qué opinas del informe?',
+    'mi trabajo es revisar documentos',
+    'el trabajo de investigación habla de puentes',
+    '¿qué dice el documento?', 'resume el archivo', 'explica el word adjunto',
+  ]) assert.equal(isDocumentEditRequest(prompt), false, prompt);
+});
