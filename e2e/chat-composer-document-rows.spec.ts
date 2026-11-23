@@ -115,17 +115,17 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     const rows = composer.getByTestId("composer-document-row")
     await expect(rows).toHaveCount(2)
     await expect.poll(() => state.records.length).toBe(2)
-    const expectedHeight = viewport.width < 640 ? 32 : 24
+    const expectedHeight = 50
     await expect.poll(async () => Math.round((await rowGeometry(rows.first())).height)).toBe(expectedHeight)
     for (const [index, name] of [pdfName, wordName].entries()) {
       const row = rows.nth(index)
       const open = row.getByRole("button", { name: `Abrir ${name}`, exact: true })
       await expect(open).toHaveAttribute("title", new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
       const geometry = await rowGeometry(row)
-      expect(geometry.width).toBeLessThanOrEqual(256)
-      expect(geometry.fontSize).toBe("13px")
-      expect(geometry.iconWidth).toBe(16)
-      expect(geometry.iconHeight).toBe(16)
+      expect(geometry.width).toBeLessThanOrEqual(376)
+      expect(geometry.fontSize).toBe("13.5px")
+      expect(geometry.iconWidth).toBe(24)
+      expect(geometry.iconHeight).toBe(24)
       expect(Math.round(geometry.height)).toBe(expectedHeight)
       const extension = path.extname(name)
       // The tail remains in a visible, unshrinking element when the prefix

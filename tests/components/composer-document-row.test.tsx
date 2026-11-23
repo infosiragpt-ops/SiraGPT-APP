@@ -90,4 +90,22 @@ describe("compact composer documents", () => {
     expect(screen.getByTestId("composer-document-name")).toHaveTextContent(name)
     expect(screen.getByRole("button", { name: `Abrir ${name}` })).toHaveAttribute("title", name)
   })
+
+  it("renders a wider professional Word document card with format and size metadata", () => {
+    const name = "trabajo_investigacion_IA_v3.docx"
+    render(
+      <ComposerDocumentRow
+        {...ready}
+        name={name}
+        mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        details="Documento · 139 KB"
+      />,
+    )
+    const row = screen.getByTestId("composer-document-row")
+    expect(row.className).toContain("max-w-[23.5rem]")
+    expect(row.className).toContain("rounded-xl")
+    expect(screen.getByTestId("composer-document-name")).toHaveTextContent(name)
+    expect(screen.getByTestId("composer-document-meta")).toHaveTextContent("DOCX · 139 KB")
+    expect(screen.getAllByText(name)).toHaveLength(1)
+  })
 })
