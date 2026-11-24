@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ImageModal, type ImageViewerEditRequest } from '@/components/ui/image-modal'
+import { ImageModal, type ImageViewerEditRequest, type ImageViewerOperation } from '@/components/ui/image-modal'
 import { apiClient } from '@/lib/api'
 import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import { downloadBlob } from '@/lib/utils'
@@ -22,10 +22,12 @@ interface ImageWorkspaceProps {
    * picture in the conversation.
    */
   viewOnly?: boolean
+  initialMode?: ImageViewerOperation
+  initialEraseTool?: 'box' | 'brush'
 }
 
 /** Both entry points use the same source-bound requests and persisted versions. */
-export default function ImageWorkspace({ assets, initialAssetId, selectedModel, onClose, onChanged, onViewChat, viewOnly = false }: ImageWorkspaceProps) {
+export default function ImageWorkspace({ assets, initialAssetId, selectedModel, onClose, onChanged, onViewChat, viewOnly = false, initialMode, initialEraseTool }: ImageWorkspaceProps) {
   const router = useRouter()
   const [images, setImages] = useState(assets)
   const [activeId, setActiveId] = useState(initialAssetId)
@@ -114,6 +116,8 @@ export default function ImageWorkspace({ assets, initialAssetId, selectedModel, 
   return <ImageModal
     isOpen onClose={onClose}
     viewOnly={viewOnly}
+    initialMode={initialMode}
+    initialEraseTool={initialEraseTool}
     images={images}
     selectedIndex={Math.max(0, images.findIndex(asset => asset.id === activeId))}
     onSelect={index => setActiveId(images[index].id)}

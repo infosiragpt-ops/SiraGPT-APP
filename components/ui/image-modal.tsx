@@ -4,10 +4,10 @@
 
 import * as React from "react"
 import { createPortal } from "react-dom"
-import { ArrowUp, Check, ChevronDown, Download, Eraser, MessageSquarePlus, Mic, MoreHorizontal, Pencil, RotateCcw, Scan, Share2, Trash2, Undo2, X } from "lucide-react"
+import { ArrowUp, Check, ChevronDown, Download, Eraser, MessageSquarePlus, Mic, MoreHorizontal, Paintbrush, Pencil, RotateCcw, Scan, Share2, Square, Trash2, Undo2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getSpeechRecognitionCtor, resolveDictationLanguage } from "@/lib/chat/composer-dictation"
-import { clampImagePan, imageFitScale, imagePoint, imageSelection, imageSelectionMask, rasterizeImageAnnotations, readImageViewerBlob, type ImageViewerComment, type ImageViewerPoint, type ImageViewerSelection, type ImageViewerStroke } from "@/lib/image-viewer"
+import { clampImagePan, imageBrushMask, imageFitScale, imagePoint, imageSelection, imageSelectionMask, maskBoundingBox, rasterizeImageAnnotations, readImageViewerBlob, type ImageViewerComment, type ImageViewerPoint, type ImageViewerSelection, type ImageViewerStroke } from "@/lib/image-viewer"
 
 export type { ImageViewerComment, ImageViewerSelection, ImageViewerStroke } from "@/lib/image-viewer"
 export type ImageViewerOperation = "edit" | "erase" | "remove-background" | "resize" | "annotate" | "comment"
@@ -64,6 +64,8 @@ export interface ImageModalProps {
   onViewChat?: (asset: ImageViewerAsset) => void | Promise<void>
   onAddReference?: (asset: ImageViewerAsset) => void
   initialQuality?: ImageViewerQuality
+  initialMode?: ImageViewerOperation
+  initialEraseTool?: "box" | "brush"
   unavailableOperations?: Partial<Record<ImageViewerOperation, string>>
   /**
    * Plain lightbox: dark backdrop, the image highlighted, close / zoom /
@@ -77,8 +79,8 @@ const ZOOMS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
 const RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]
 const iconButton = "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-zinc-700 transition hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
 const actionButton = "inline-flex min-h-10 items-center justify-center gap-2 whitespace-nowrap rounded-full px-3 text-[13px] font-medium transition hover:bg-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:opacity-40 sm:text-sm"
-interface Draft { prompt: string; strokes: ImageViewerStroke[]; selection?: ImageViewerSelection; commentPoint?: ImageViewerPoint }
-const EMPTY_DRAFT: Draft = { prompt: "", strokes: [] }
+interface Draft { prompt: string; strokes: ImageViewerStroke[]; maskStrokes: ImageViewerStroke[]; selection?: ImageViewerSelection; commentPoint?: ImageViewerPoint }
+const EMPTY_DRAFT: Draft = { prompt: "", strokes: [], maskStrokes: [] }
 const qualityForAsset = (quality: string | undefined, fallback: ImageViewerQuality): ImageViewerQuality => quality === "1K" || quality === "2K" || quality === "4K" ? quality : fallback
 
 /** Existing public entry point; imageUrl/altText callers remain supported. */
@@ -89,11 +91,13 @@ export function ImageModal(props: ImageModalProps) {
   return createPortal(<ImageViewerSession {...props} images={images} />, document.body)
 }
 
-function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, onDownload, onShare, onDelete, onViewChat, onAddReference, initialQuality = "2K", unavailableOperations, viewOnly = false }: ImageModalProps & { images: ImageViewerAsset[] }) {
+function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, onDownload, onShare, onDelete, onViewChat, onAddReference, initialQuality = "2K", initialMode = "edit", initialEraseTool = "box", unavailableOperations, viewOnly = false }: ImageModalProps & { images: ImageViewerAsset[] }) {
   const [localIndex, setLocalIndex] = React.useState(selectedIndex ?? 0)
   const index = Math.max(0, Math.min(images.length - 1, selectedIndex ?? localIndex))
   const asset = images[index]
-  const [mode, setMode] = React.useState<ImageViewerOperation>("edit")
+  const [mode, setMode] = React.useState<ImageViewerOperation>(initialMode)
+  const [eraseTool, setEraseTool] = React.useState<"box" | "brush">(initialEraseTool)
+  const [maskBrushSize, setMaskBrushSize] = React.useState<number>(3.5)
   const [quality, setQuality] = React.useState<ImageViewerQuality>(() => qualityForAsset(asset.quality, initialQuality))
   const [drafts, setDrafts] = React.useState<Record<string, Draft>>({})
   const draft = drafts[asset.id] || EMPTY_DRAFT
@@ -118,7 +122,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
   const viewportRef = React.useRef<HTMLDivElement>(null)
   const imageRef = React.useRef<HTMLImageElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
-  const gesture = React.useRef<{ kind: "pan" | "erase" | "annotate"; start: ImageViewerPoint; pan: ImageViewerPoint; pointerId: number } | null>(null)
+  const gesture = React.useRef<{ kind: "pan" | "erase" | "mask-brush" | "annotate"; start: ImageViewerPoint; pan: ImageViewerPoint; pointerId: number } | null>(null)
   const speechRef = React.useRef<SpeechRecognition | null>(null)
   const busyRef = React.useRef(false)
   const mounted = React.useRef(true)
@@ -150,20 +154,27 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
     }
   }, [])
 
+  const initializedAssetRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     setZoom("fit")
     setPan({ x: 0, y: 0 })
     setNaturalSize({ width: asset.width || 0, height: asset.height || 0 })
     setDimensions({ width: asset.width || 1024, height: asset.height || 1024 })
     setAspectRatio(undefined)
-    setMode("edit")
+    if (initializedAssetRef.current === null) {
+      initializedAssetRef.current = asset.id
+      setMode(initialMode)
+      setEraseTool(initialEraseTool)
+    } else {
+      setMode("edit")
+    }
     setMenu(null)
     setFeedback(null)
     setImageError(false)
     setConfirmDelete(false)
     gesture.current = null
     speechRef.current?.abort()
-  }, [asset.id, asset.url, asset.width, asset.height])
+  }, [asset.id, asset.url, asset.width, asset.height, initialMode, initialEraseTool])
 
   React.useEffect(() => { setQuality(qualityForAsset(asset.quality, initialQuality)) }, [asset.id, asset.quality, initialQuality])
 
@@ -264,7 +275,9 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
     if (!supports(operation) || !onEdit || busyRef.current) return
     const prompt = draft.prompt.trim()
     if ((operation === "edit" || operation === "comment") && !prompt) { textareaRef.current?.focus(); return }
-    if (operation === "erase" && (!draft.selection || draft.selection.width < 0.5 || draft.selection.height < 0.5)) { setFeedback({ text: "Marca en la imagen la zona que quieres borrar.", error: true }); return }
+    const hasSelectionBox = Boolean(draft.selection && draft.selection.width >= 0.5 && draft.selection.height >= 0.5)
+    const hasBrushMask = draft.maskStrokes.length > 0
+    if (operation === "erase" && !hasSelectionBox && !hasBrushMask) { setFeedback({ text: "Marca en la imagen la zona que quieres editar o borrar.", error: true }); return }
     if (operation === "annotate" && !draft.strokes.length) { setFeedback({ text: "Dibuja sobre la imagen antes de guardar las anotaciones.", error: true }); return }
     if (!imageReady) { setFeedback({ text: "Espera a que termine de cargar la imagen.", error: true }); return }
     if (operation === "resize" && (!Number.isInteger(dimensions.width) || !Number.isInteger(dimensions.height) || dimensions.width < 64 || dimensions.height < 64 || dimensions.width > 8192 || dimensions.height > 8192 || dimensions.width * dimensions.height > 16_777_216)) { setFeedback({ text: "Usa dimensiones entre 64 y 8192 píxeles, con un máximo de 16 megapíxeles.", error: true }); return }
@@ -273,8 +286,13 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
       const request: ImageViewerEditRequest = { operation, quality, prompt }
       if (operation === "erase") {
         request.prompt = prompt || "Elimina el contenido de la zona seleccionada y reconstruye el fondo. Conserva intacto el resto de la imagen."
-        request.selection = draft.selection
-        request.maskDataUrl = imageSelectionMask(naturalSize.width, naturalSize.height, draft.selection!)
+        if (hasBrushMask) {
+          request.selection = maskBoundingBox(draft.maskStrokes, hasSelectionBox ? draft.selection : null)
+          request.maskDataUrl = imageBrushMask(naturalSize.width, naturalSize.height, draft.maskStrokes, hasSelectionBox ? draft.selection : null)
+        } else {
+          request.selection = draft.selection
+          request.maskDataUrl = imageSelectionMask(naturalSize.width, naturalSize.height, draft.selection!)
+        }
       } else if (operation === "remove-background") {
         request.prompt = "Quita el fondo y conserva el sujeto original con transparencia real."
       } else if (operation === "resize") {
@@ -304,11 +322,16 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
     if (mode !== "edit" && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) return
     const point = imagePoint(event.clientX, event.clientY, rect)
     if (mode === "comment") { updateDraft({ commentPoint: point }); textareaRef.current?.focus(); return }
-    const kind = mode === "annotate" ? "annotate" : mode === "erase" ? "erase" : "pan"
+    const kind = mode === "annotate"
+      ? "annotate"
+      : mode === "erase"
+        ? (eraseTool === "brush" ? "mask-brush" : "erase")
+        : "pan"
     event.preventDefault()
     event.currentTarget.setPointerCapture?.(event.pointerId)
     gesture.current = { kind, start: kind === "pan" ? { x: event.clientX, y: event.clientY } : point, pan, pointerId: event.pointerId }
     if (kind === "erase") updateDraft({ selection: { ...point, width: 0, height: 0 } })
+    if (kind === "mask-brush") updateDraft(previous => ({ ...previous, maskStrokes: [...previous.maskStrokes, { points: [point], color: "#38BDF8", width: maskBrushSize }] }))
     if (kind === "annotate") updateDraft(previous => ({ ...previous, strokes: [...previous.strokes, { points: [point], color: annotationColor, width: 0.3 }] }))
   }
 
@@ -320,6 +343,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
     if (!rect) return
     const point = imagePoint(event.clientX, event.clientY, rect)
     if (active.kind === "erase") updateDraft({ selection: imageSelection(active.start, point) })
+    else if (active.kind === "mask-brush") updateDraft(previous => ({ ...previous, maskStrokes: previous.maskStrokes.map((stroke, i) => i === previous.maskStrokes.length - 1 ? { ...stroke, points: [...stroke.points, point] } : stroke) }))
     else updateDraft(previous => ({ ...previous, strokes: previous.strokes.map((stroke, i) => i === previous.strokes.length - 1 ? { ...stroke, points: [...stroke.points, point] } : stroke) }))
   }
 
@@ -361,8 +385,8 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
     window.setTimeout(() => URL.revokeObjectURL(url), 1500)
   })
 
-  const modeLabel = mode === "annotate" ? "Guardar anotaciones" : mode === "comment" ? "Guardar comentario" : mode === "resize" ? "Aplicar tamaño" : mode === "erase" ? "Borrar selección" : "Enviar edición"
-  const modeHint = mode === "annotate" ? "Dibuja sobre la imagen. Se guardará una copia y conservarás el original." : mode === "comment" ? "Marca un punto y escribe tu comentario." : mode === "erase" ? "Arrastra sobre la zona que quieres borrar. El resto de la imagen se conserva." : mode === "resize" ? "Ajustar tamaño conserva todo el contenido; puede añadir transparencia para mantener las proporciones." : null
+  const modeLabel = mode === "annotate" ? "Guardar anotaciones" : mode === "comment" ? "Guardar comentario" : mode === "resize" ? "Aplicar tamaño" : mode === "erase" ? (draft.prompt.trim() ? "Aplicar edición a la zona" : "Borrar selección") : "Enviar edición"
+  const modeHint = mode === "annotate" ? "Dibuja sobre la imagen. Se guardará una copia y conservarás el original." : mode === "comment" ? "Marca un punto y escribe tu comentario." : mode === "erase" ? (eraseTool === "brush" ? "Pinta con el pincel la zona exacta a editar o borrar y describe el cambio abajo. Cada píxel fuera de la máscara permanece intacto." : "Arrastra sobre la zona que quieres editar o borrar. El resto de la imagen se conserva píxel por píxel.") : mode === "resize" ? "Ajustar tamaño conserva todo el contenido; puede añadir transparencia para mantener las proporciones." : null
 
   return (
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="image-viewer" data-view-only={viewOnly ? "true" : undefined} className={cn("fixed inset-0 z-[10000] flex flex-col overflow-hidden bg-white text-zinc-900", viewOnly && "image-lightbox")} style={{ height: "100dvh", colorScheme: viewOnly ? "dark" : "light" }} onClick={() => { if (menu) setMenu(null) }}>
@@ -400,6 +424,13 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
           </div>
         </div>
         {modeHint && <p className="max-w-2xl px-2 text-center text-xs text-zinc-500" role="status">{modeHint}</p>}
+        {mode === "erase" && <div className="flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-2.5 py-1.5 text-xs shadow-sm" aria-label="Herramientas de precisión">
+          <button type="button" aria-pressed={eraseTool === "brush"} onClick={() => setEraseTool("brush")} className={cn("inline-flex h-8 items-center gap-1.5 rounded-full px-3 font-medium transition", eraseTool === "brush" ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-zinc-100")}><Paintbrush className="h-3.5 w-3.5" />Pincel milimétrico</button>
+          <button type="button" aria-pressed={eraseTool === "box"} onClick={() => setEraseTool("box")} className={cn("inline-flex h-8 items-center gap-1.5 rounded-full px-3 font-medium transition", eraseTool === "box" ? "bg-zinc-950 text-white" : "text-zinc-600 hover:bg-zinc-100")}><Square className="h-3.5 w-3.5" />Rectángulo</button>
+          {eraseTool === "brush" && <label className="flex items-center gap-2 pl-1 text-zinc-600"><span>Grosor</span><input type="range" min={1} max={12} step={0.5} value={maskBrushSize} aria-label="Grosor del pincel" onChange={event => setMaskBrushSize(Number(event.target.value))} className="h-1 w-24 cursor-pointer accent-zinc-900" /><span className="w-8 tabular-nums text-zinc-400">{maskBrushSize}%</span></label>}
+          <button type="button" className="inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40" disabled={!draft.maskStrokes.length || busy} aria-label="Deshacer último trazo de máscara" onClick={() => updateDraft(previous => ({ ...previous, maskStrokes: previous.maskStrokes.slice(0, -1) }))}><Undo2 className="h-3.5 w-3.5" />Deshacer</button>
+          <button type="button" className="inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-zinc-600 transition hover:bg-zinc-100 disabled:opacity-40" disabled={(!draft.maskStrokes.length && !draft.selection) || busy} aria-label="Limpiar zona marcada" onClick={() => updateDraft({ maskStrokes: [], selection: undefined })}>Limpiar</button>
+        </div>}
         {mode === "annotate" && <div className="flex items-center gap-2" aria-label="Opciones de anotación">
           {["#898989", "#ef4444", "#a5a5a5", "#18181b"].map(color => <button key={color} type="button" aria-label={`Color ${color}`} aria-pressed={annotationColor === color} className={cn("h-7 w-7 rounded-full border-2 border-white ring-1 ring-zinc-200", annotationColor === color && "ring-2 ring-zinc-700")} style={{ backgroundColor: color }} onClick={() => setAnnotationColor(color)} />)}
           <button type="button" className={iconButton} disabled={!draft.strokes.length || busy} aria-label="Deshacer último trazo" onClick={() => updateDraft(previous => ({ ...previous, strokes: previous.strokes.slice(0, -1) }))}><Undo2 className="h-4 w-4" /></button>
@@ -420,7 +451,10 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
             <img ref={imageRef} key={asset.url} src={asset.url} alt={asset.name} draggable={false} data-testid="image-viewer-image" data-scale={scale} style={{ width: imageReady ? displayedWidth : undefined, height: imageReady ? displayedHeight : undefined, maxWidth: imageReady ? "none" : "100%", maxHeight: imageReady ? "none" : "100%", imageRendering: "auto" }} className={cn("block select-none object-contain", viewOnly && "image-lightbox__frame")} onLoad={event => { const { naturalWidth: width, naturalHeight: height } = event.currentTarget; if (width > 0 && height > 0) { setNaturalSize({ width, height }); setDimensions({ width, height }) } }} onError={() => setImageError(true)} />
             <svg aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${Math.max(1, naturalSize.width)} ${Math.max(1, naturalSize.height)}`} preserveAspectRatio="none">
               {draft.strokes.map((stroke, i) => <polyline key={i} points={stroke.points.map(point => `${point.x * naturalSize.width / 100},${point.y * naturalSize.height / 100}`).join(" ")} fill="none" stroke={stroke.color} strokeWidth={Math.max(1, stroke.width * naturalSize.width / 100)} strokeLinecap="round" strokeLinejoin="round" />)}
-              {mode === "erase" && draft.selection && <rect data-testid="image-viewer-selection" x={draft.selection.x * naturalSize.width / 100} y={draft.selection.y * naturalSize.height / 100} width={draft.selection.width * naturalSize.width / 100} height={draft.selection.height * naturalSize.height / 100} fill="rgba(165,165,165,0.18)" stroke="#6d6d6d" strokeWidth="2" strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />}
+              {mode === "erase" && draft.maskStrokes.map((stroke, i) => stroke.points.length === 1
+                ? <circle key={`mask-dot-${i}`} data-testid="image-viewer-mask-stroke" cx={stroke.points[0].x * naturalSize.width / 100} cy={stroke.points[0].y * naturalSize.height / 100} r={Math.max(2, stroke.width * naturalSize.width / 200)} fill="rgba(56,189,248,0.42)" stroke="#38BDF8" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                : <polyline key={`mask-line-${i}`} data-testid="image-viewer-mask-stroke" points={stroke.points.map(point => `${point.x * naturalSize.width / 100},${point.y * naturalSize.height / 100}`).join(" ")} fill="none" stroke="rgba(56,189,248,0.48)" strokeWidth={Math.max(2, stroke.width * naturalSize.width / 100)} strokeLinecap="round" strokeLinejoin="round" />)}
+              {mode === "erase" && draft.selection && <rect data-testid="image-viewer-selection" x={draft.selection.x * naturalSize.width / 100} y={draft.selection.y * naturalSize.height / 100} width={draft.selection.width * naturalSize.width / 100} height={draft.selection.height * naturalSize.height / 100} fill="rgba(56,189,248,0.18)" stroke="#38BDF8" strokeWidth="2" strokeDasharray="6 3" vectorEffect="non-scaling-stroke" />}
             </svg>
             {savedComments.map((comment, i) => <button key={comment.id} type="button" title={comment.text} aria-label={`Comentario ${i + 1}: ${comment.text}`} className="absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-zinc-900 text-xs text-white shadow" style={{ left: `${comment.x}%`, top: `${comment.y}%` }} onPointerDown={event => event.stopPropagation()} onClick={() => setFeedback({ text: comment.text })}>{i + 1}</button>)}
             {mode === "comment" && draft.commentPoint && <span className="pointer-events-none absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-sky-500 shadow" style={{ left: `${draft.commentPoint.x}%`, top: `${draft.commentPoint.y}%` }} />}
@@ -433,7 +467,7 @@ function ImageViewerSession({ images, selectedIndex, onSelect, onClose, onEdit, 
         {busy && <p role="status" className="mb-2 text-center text-xs text-zinc-500">Aplicando a esta imagen…</p>}
         <form className="mx-auto flex max-w-4xl items-center gap-1 rounded-[28px] border border-zinc-200 bg-white px-2 py-2 shadow-[0_3px_18px_rgba(0,0,0,0.05)] sm:gap-2 sm:px-3" onSubmit={event => { event.preventDefault(); void submit() }}>
           {onAddReference && <button type="button" className={iconButton} disabled={busy} aria-label="Añadir imagen de referencia" onClick={() => onAddReference(asset)}><span className="text-2xl leading-none">+</span></button>}
-          <textarea ref={textareaRef} value={draft.prompt} aria-label={mode === "comment" ? "Escribir comentario" : "Describir ediciones"} placeholder={mode === "comment" ? "Escribir comentario" : mode === "annotate" ? "Describe tus anotaciones (opcional)" : "Describir ediciones"} rows={1} disabled={busy} className="min-h-10 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-6 text-zinc-900 outline-none placeholder:text-zinc-400 disabled:opacity-50" onChange={event => updateDraft({ prompt: event.target.value })} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} />
+          <textarea ref={textareaRef} value={draft.prompt} aria-label={mode === "comment" ? "Escribir comentario" : "Describir ediciones"} placeholder={mode === "comment" ? "Escribir comentario" : mode === "annotate" ? "Describe tus anotaciones (opcional)" : mode === "erase" ? "Describe qué cambiar en la zona marcada (o deja vacío para borrar)…" : "Describir ediciones"} rows={1} disabled={busy} className="min-h-10 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-6 text-zinc-900 outline-none placeholder:text-zinc-400 disabled:opacity-50" onChange={event => updateDraft({ prompt: event.target.value })} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() } }} />
           <select aria-label="Calidad de imagen" value={quality} disabled={busy} className="h-10 max-w-24 rounded-lg bg-transparent px-1 text-xs text-zinc-500 outline-none focus-visible:ring-2 focus-visible:ring-sky-500 sm:max-w-32 sm:text-sm" onChange={event => setQuality(event.target.value as ImageViewerQuality)}><option value="1K">Estándar</option><option value="2K">Alta</option><option value="4K">Muy alta</option></select>
           <button type="button" className={cn(iconButton, recording && "bg-red-50 text-red-600")} disabled={busy} aria-label={recording ? "Detener dictado" : "Dictar edición"} aria-pressed={recording} onClick={dictate}><Mic className="h-5 w-5" /></button>
           <button type="submit" aria-label={modeLabel} title={modeLabel} disabled={busy || ((mode === "edit" || mode === "comment") && !draft.prompt.trim())} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white transition hover:bg-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 disabled:bg-zinc-200 disabled:text-zinc-400"><ArrowUp className="h-5 w-5" /></button>

@@ -3,6 +3,7 @@
 import * as React from "react"
 import { RequestBriefLine, extractRequestBrief } from "@/components/chat/request-brief-line";
 import { RichUserText } from "@/components/chat/rich-user-text";
+import { ImageActionMenu } from "@/components/chat/image-action-menu";
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
@@ -483,7 +484,7 @@ function VideoCardStill({ url, variant }: { url: string; variant: "poster" | "th
     );
 }
 
-function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => void }) {
+function UserChatImage({ file, chatId, messageId, onOpen }: { file: any; chatId?: string; messageId?: string; onOpen: (url: string) => void }) {
     const [failed, setFailed] = React.useState(false);
     // A revoked composer blob or a stale path falls through to the server copy
     // before the grey placeholder is shown.
@@ -507,34 +508,57 @@ function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => v
             </span>
         );
     }
+    const artifact = imageUrl.match(/\/api\/agent\/artifact\/([a-f0-9]{6,64})(?:[/?#]|$)/i)?.[1];
+    const resolvedFileId = file.fileId || (artifact ? `artifact:${artifact}` : file.id);
     // A real button so keyboard / screen-reader users can open the image
     // workspace too (an <img onClick> is neither focusable nor activatable).
     return (
-        <button
-            type="button"
-            onClick={() => onOpen(imageUrl)}
-            aria-label={`Ampliar imagen ${file.name || file.originalName || ""}`.trim()}
-            className="block max-w-full p-0 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        >
-            <img
-                src={imageUrl}
-                alt={file.name || file.originalName || "Image"}
-                className="chat-user-image max-h-[350px] rounded-lg hover:opacity-90 transition-opacity"
-                style={naturalWidth ? { ["--img-natural-width" as string]: `${naturalWidth}px` } : undefined}
-                onLoad={(event) => {
-                    const width = event.currentTarget.naturalWidth;
-                    if (width > 0) setNaturalWidth(width);
+        <div className="group/image relative inline-block max-w-full">
+            <button
+                type="button"
+                onClick={() => onOpen(imageUrl)}
+                aria-label={`Ampliar imagen ${file.name || file.originalName || ""}`.trim()}
+                className="block max-w-full p-0 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+                <img
+                    src={imageUrl}
+                    alt={file.name || file.originalName || "Image"}
+                    className="chat-user-image max-h-[350px] rounded-lg hover:opacity-90 transition-opacity"
+                    style={naturalWidth ? { ["--img-natural-width" as string]: `${naturalWidth}px` } : undefined}
+                    onLoad={(event) => {
+                        const width = event.currentTarget.naturalWidth;
+                        if (width > 0) setNaturalWidth(width);
+                    }}
+                    onError={(event) => {
+                        if (attempt + 1 < candidates.length) {
+                            setAttempt(attempt + 1);
+                            return;
+                        }
+                        event.currentTarget.removeAttribute("src");
+                        setFailed(true);
+                    }}
+                />
+            </button>
+            <ImageActionMenu
+                className="[@media(hover:hover)]:group-hover/image:opacity-100 focus-within:opacity-100"
+                image={{
+                    id: String(resolvedFileId || `${messageId || "user-image"}:${imageUrl}`),
+                    fileId: resolvedFileId ? String(resolvedFileId) : undefined,
+                    url: imageUrl,
+                    name: file.originalName || file.name || file.filename || "Imagen.png",
+                    prompt: file.prompt,
+                    aspectRatio: file.aspectRatio || file.aspect_ratio,
+                    chatId: chatId || file.chatId,
+                    messageId: messageId || file.messageId,
+                    width: file.width,
+                    height: file.height,
+                    model: file.model,
+                    provider: file.provider,
+                    quality: file.quality,
                 }}
-                onError={(event) => {
-                    if (attempt + 1 < candidates.length) {
-                        setAttempt(attempt + 1);
-                        return;
-                    }
-                    event.currentTarget.removeAttribute("src");
-                    setFailed(true);
-                }}
+                onOpen={() => onOpen(imageUrl)}
             />
-        </button>
+        </div>
     );
 }
 
@@ -903,14 +927,20 @@ const GeneratedImageCard = ({
     file,
     src,
     index,
+    chatId,
+    messageId,
     onOpen,
+    onDownload,
     onLoad,
     onError,
 }: {
     file: any;
     src: string;
     index: number;
+    chatId?: string;
+    messageId?: string;
     onOpen: (src: string) => void;
+    onDownload?: () => void | Promise<void>;
     onLoad?: () => void;
     onError?: () => void;
 }) => {
@@ -918,6 +948,8 @@ const GeneratedImageCard = ({
     const [editMode, setEditMode] = React.useState(false);
     const [dragStart, setDragStart] = React.useState<{ x: number; y: number } | null>(null);
     const [selection, setSelection] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null);
+    const artifact = src.match(/\/api\/agent\/artifact\/([a-f0-9]{6,64})(?:[/?#]|$)/i)?.[1];
+    const resolvedFileId = file.fileId || (artifact ? `artifact:${artifact}` : file.id);
 
     const pointFromEvent = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
         const rect = frameRef.current?.getBoundingClientRect();
@@ -994,78 +1026,70 @@ const GeneratedImageCard = ({
         <div
             ref={frameRef}
             className={cn(
-                "group/image relative inline-block overflow-hidden rounded-xl bg-muted/30 shadow-sm",
-                editMode && "cursor-crosshair touch-none ring-2 ring-pink-500/60"
+                "group/image relative inline-block rounded-xl bg-muted/30 shadow-sm",
+                editMode && "cursor-crosshair touch-none ring-2 ring-sky-500/70"
             )}
             onPointerDown={beginSelection}
             onPointerMove={moveSelection}
             onPointerUp={finishSelection}
             onPointerCancel={() => setDragStart(null)}
         >
-            <img
-                src={src}
-                alt={`Generated image ${index + 1}`}
-                className={cn(
-                    "max-w-full h-auto max-h-[250px] sm:max-h-[400px] object-contain transition duration-200",
-                    editMode ? "select-none opacity-90" : "cursor-pointer hover:opacity-90"
-                )}
-                loading="lazy"
-                draggable={false}
-                onLoad={onLoad}
-                onError={onError}
-                onClick={() => {
-                    if (!editMode) onOpen(src);
-                }}
-            />
-
-            {selection && (
-                <div
-                    className="pointer-events-none absolute border-2 border-pink-500 bg-pink-500/20 shadow-[0_0_0_9999px_rgba(15,23,42,0.18)]"
-                    style={{
-                        left: `${selection.x}%`,
-                        top: `${selection.y}%`,
-                        width: `${selection.width}%`,
-                        height: `${selection.height}%`,
+            <div className="relative overflow-hidden rounded-xl">
+                <img
+                    src={src}
+                    alt={`Generated image ${index + 1}`}
+                    className={cn(
+                        "block max-w-full h-auto max-h-[250px] sm:max-h-[400px] object-contain transition duration-200",
+                        editMode ? "select-none opacity-90" : "cursor-pointer hover:opacity-95"
+                    )}
+                    loading="lazy"
+                    draggable={false}
+                    onLoad={onLoad}
+                    onError={onError}
+                    onClick={() => {
+                        if (!editMode) onOpen(src);
                     }}
                 />
-            )}
 
-            {editMode && (
-                <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-[11px] font-semibold text-white backdrop-blur">
-                    Arrastra para marcar la zona
-                </div>
-            )}
+                {selection && (
+                    <div
+                        className="pointer-events-none absolute border-2 border-sky-400 bg-sky-400/20 shadow-[0_0_0_9999px_rgba(15,23,42,0.18)]"
+                        style={{
+                            left: `${selection.x}%`,
+                            top: `${selection.y}%`,
+                            width: `${selection.width}%`,
+                            height: `${selection.height}%`,
+                        }}
+                    />
+                )}
 
-            <div className="absolute right-3 top-3 z-20 flex gap-2 opacity-100 transition-all duration-200 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/image:opacity-100 focus-within:opacity-100">
-                <button
-                    type="button"
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        onOpen(src);
-                    }}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 shadow-lg transition hover:scale-105 hover:bg-white dark:hover:bg-zinc-700"
-                    title="Ampliar imagen"
-                    aria-label="Ampliar imagen"
-                >
-                    <Maximize2 className="h-4 w-4" />
-                </button>
-                <button
-                    type="button"
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        setEditMode((value) => !value);
-                        setSelection(null);
-                    }}
-                    className={cn(
-                        "flex h-9 w-9 items-center justify-center rounded-full shadow-lg transition hover:scale-105",
-                        editMode ? "bg-pink-600 text-white" : "bg-white/90 dark:bg-zinc-800/90 text-gray-800 dark:text-zinc-200 hover:bg-white dark:hover:bg-zinc-700"
-                    )}
-                    title="Seleccionar zona con pincel"
-                    aria-label="Seleccionar zona con pincel"
-                >
-                    <Brush className="h-4 w-4" />
-                </button>
+                {editMode && (
+                    <div className="pointer-events-none absolute left-3 top-3 rounded-full bg-black/70 px-3 py-1 text-[11px] font-semibold text-white backdrop-blur">
+                        Arrastra para marcar la zona
+                    </div>
+                )}
             </div>
+
+            <ImageActionMenu
+                className="[@media(hover:hover)]:group-hover/image:opacity-100 focus-within:opacity-100"
+                image={{
+                    id: String(resolvedFileId || `${messageId || "image"}:${src}`),
+                    fileId: resolvedFileId ? String(resolvedFileId) : undefined,
+                    url: src,
+                    name: file.originalName || file.name || file.filename || `Imagen-${index + 1}.png`,
+                    prompt: file.prompt,
+                    aspectRatio: file.aspectRatio || file.aspect_ratio,
+                    chatId: chatId || file.chatId,
+                    messageId: messageId || file.messageId,
+                    width: file.width,
+                    height: file.height,
+                    model: file.model,
+                    provider: file.provider,
+                    quality: file.quality,
+                }}
+                onOpen={() => onOpen(src)}
+                onDownload={onDownload}
+            />
         </div>
     );
 };
@@ -3206,7 +3230,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     file={file}
                                                     src={src}
                                                     index={index}
+                                                    chatId={message.chatId}
+                                                    messageId={message.id}
                                                     onOpen={(url) => openImage(url, file)}
+                                                    onDownload={handleDownloadImage}
                                                     onError={() => {
                                                         const imgKey = `file-${index}`;
                                                         setImageLoading(prev => ({ ...prev, [imgKey]: false }));
@@ -3283,6 +3310,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 <UserChatImage
                                     key={`img-${index}`}
                                     file={file}
+                                    chatId={message.chatId}
+                                    messageId={message.id}
                                     // Same path as generated images: the chat host opens
                                     // a plain lightbox (or the editor when the image tool
                                     // is active) instead of this component's fallback.

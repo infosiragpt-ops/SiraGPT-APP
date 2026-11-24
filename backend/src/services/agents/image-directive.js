@@ -900,11 +900,30 @@ function resolveEditDirective(instruction, opts = {}) {
   // clause asks for a new composition instead of preserving the old one.
   const deliverable = explicitTarget ? null : detectReferenceDeliverableFrame(original);
   const target = deliverable ? (explicitTarget || null) : resolvedTarget;
+  const hasMask = Boolean(opts.hasMask || opts.maskDataUrl);
+  const maskBounds = opts.maskBounds && typeof opts.maskBounds === 'object' ? opts.maskBounds : null;
+  let intentPlan = null;
+  try {
+    intentPlan = require('../media/image-intent-planner').classifyImageIntent(original, {
+      hasSourceImage: true,
+      hasMask,
+      hasSelection: Boolean(selection),
+      isReplyToImage: Boolean(opts.isReplyToImage),
+    });
+  } catch (_) { /* optional planner */ }
+
   let prompt = original;
   if (deliverable) {
     prompt += language === 'en'
       ? ` Use the attached image as material: keep its identity and colors and build a new ${deliverable.deliverable} composition (${deliverable.frame}) around it.`
       : ` Usa la imagen adjunta como material: conserva su identidad y colores y construye alrededor de ella una nueva composición de ${deliverable.deliverable} (${deliverable.frame}).`;
+  } else if (intentPlan && intentPlan.isCompoundEdit && !explicitTarget) {
+    // Compound multi-clause edit ("cambia el cielo a naranja y agrega un pájaro"):
+    // never narrow the focus clause to only the first clause; preserve every delta.
+    const numbered = intentPlan.deltas.map((delta, i) => `(${i + 1}) ${delta}`).join('; ');
+    prompt += language === 'en'
+      ? ` Apply ALL requested edits faithfully: ${numbered}. Keep every unmentioned part of the image identical (subject identity, composition, lighting and background).`
+      : ` Aplica TODOS los cambios solicitados fielmente: ${numbered}. Conserva todo lo demás exactamente igual (identidad del sujeto, composición, iluminación y fondo).`;
   } else if (target && parsed.operation !== 'remove-background') {
     prompt += language === 'en'
       ? ` Focus the change on ${target}; keep the rest of the image exactly the same (composition, colors, background, lighting and all other elements).`
@@ -922,7 +941,16 @@ function resolveEditDirective(instruction, opts = {}) {
       ? ' Use the attached image as the reference: keep its subject, identity, composition and style, and apply only the requested variation; do not reinvent the subject.'
       : ' Usa la imagen adjunta como referencia: conserva su sujeto, identidad, composición y estilo, y aplica solo la variación pedida; no reinventes el sujeto.';
   }
-  prompt += selectionClause(selection, language);
+  if (selection) {
+    prompt += selectionClause(selection, language);
+  } else if (hasMask) {
+    const where = maskBounds && Number.isFinite(maskBounds.x) && Number.isFinite(maskBounds.width)
+      ? ` (x=${maskBounds.x}%, y=${maskBounds.y}%, width=${maskBounds.width}%, height=${maskBounds.height}%)`
+      : '';
+    prompt += language === 'en'
+      ? ` Apply the edit ONLY inside the provided precision mask${where}; keep everything outside the mask pixel-identical.`
+      : ` Aplica la edición SOLO dentro de la máscara de precisión proporcionada${where}; conserva todo lo que quede fuera píxel por píxel.`;
+  }
   prompt = prompt.replace(/\s+/g, ' ').trim().slice(0, 4000) || original;
 
   return {
@@ -931,8 +959,11 @@ function resolveEditDirective(instruction, opts = {}) {
     operation: parsed.operation,
     target,
     replacement: parsed.replacement,
-    scope: selection ? 'selection' : parsed.scope,
+    scope: selection || hasMask ? 'selection' : parsed.scope,
     selection,
+    hasMask,
+    intent: intentPlan ? intentPlan.intent : null,
+    deltas: intentPlan ? intentPlan.deltas : [original],
     confidence: parsed.confidence,
   };
 }

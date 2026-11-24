@@ -747,6 +747,7 @@ type VideoGenerationOptions = {
   resolution?: '480p' | '720p'
   aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
   duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+  targetDuration?: number
   audio?: boolean
   model?: string
   sourceImageUrls?: string[]
@@ -4404,10 +4405,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       });
 
       // 2) Kick off video generation with files and image URL
+      const targetDuration = options?.targetDuration && options.targetDuration > duration
+        ? Math.min(300, Math.round(options.targetDuration))
+        : undefined
       const videoResponse = await apiClient.generateVideo({
         prompt,
         aspect_ratio: aspectRatio,
         duration,
+        ...(targetDuration ? { target_duration: targetDuration } : {}),
         resolution,
         audio,
         chatId: activeChat.id,

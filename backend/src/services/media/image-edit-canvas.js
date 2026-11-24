@@ -52,18 +52,44 @@ async function prepareEditCanvas({ imageBuffer, operation = 'edit', aspectRatio,
   }
   // Normalize masks to binary alpha so partially transparent paint strokes do
   // not leak changes into pixels the user did not include in the selection.
+  // Also compute normalized bounding coordinates (0..100%) so models without
+  // native alpha-mask inputs still receive exact spatial focus guidance.
+  let maskBounds = null;
   if (protectedMask) {
     const rgba = await read(protectedMask).ensureAlpha().raw().toBuffer();
-    let editable = false;
-    for (let index = 0; index < rgba.length; index += 4) {
+    let editableCount = 0;
+    let minX = width;
+    let minY = height;
+    let maxX = -1;
+    let maxY = -1;
+    for (let pixel = 0; pixel < width * height; pixel += 1) {
+      const index = pixel * 4;
       const alpha = rgba[index + 3] < 128 ? 0 : 255;
       rgba[index] = 255; rgba[index + 1] = 255; rgba[index + 2] = 255; rgba[index + 3] = alpha;
-      if (alpha === 0) editable = true;
+      if (alpha === 0) {
+        editableCount += 1;
+        const px = pixel % width;
+        const py = (pixel - px) / width;
+        if (px < minX) minX = px;
+        if (px > maxX) maxX = px;
+        if (py < minY) minY = py;
+        if (py > maxY) maxY = py;
+      }
     }
-    if (!editable && operation !== 'reframe') throw params('La selección no contiene ninguna zona editable.');
+    if (editableCount === 0 && operation !== 'reframe') throw params('La selección no contiene ninguna zona editable.');
+    if (editableCount > 0 && maxX >= minX && maxY >= minY) {
+      const round1 = (value) => Math.round(value * 10) / 10;
+      maskBounds = {
+        x: round1((minX / width) * 100),
+        y: round1((minY / height) * 100),
+        width: round1(((maxX - minX + 1) / width) * 100),
+        height: round1(((maxY - minY + 1) / height) * 100),
+        coveragePercent: round1((editableCount / (width * height)) * 100),
+      };
+    }
     protectedMask = await sharp(rgba, { raw: { width, height, channels: 4 } }).png().toBuffer();
   }
-  return { imageBuffer: original, mimeType: 'image/png', maskBuffer: protectedMask, width, height, sourceWidth, sourceHeight, operation };
+  return { imageBuffer: original, mimeType: 'image/png', maskBuffer: protectedMask, maskBounds, width, height, sourceWidth, sourceHeight, operation };
 }
 
 /** Restore every protected pixel from the source, independent of the model. */

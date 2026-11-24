@@ -688,6 +688,7 @@ router.post('/generate', [
   body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
   body('resolution').optional().isIn(['360p', '480p', '720p', '1080p', '4k']).withMessage('Invalid resolution'),
   body('duration').optional().isInt({ min: 3, max: 15 }).withMessage('Invalid duration'),
+  body('target_duration').optional().isInt({ min: 3, max: 300 }).withMessage('Invalid target duration'),
   body('audio').optional().isBoolean().withMessage('Audio must be a boolean').toBoolean(),
   body('negative_prompt').optional().isString().withMessage('Negative prompt must be a string'),
   body('image_url').optional().isString().withMessage('Image URL must be a string'),
@@ -900,12 +901,18 @@ router.post('/generate', [
       };
       activeOperations.set(operationId, operationData);
 
+      const requestedTargetDuration = Number(req.body.target_duration);
+      const targetDurationSeconds = Number.isFinite(requestedTargetDuration) && requestedTargetDuration > numericDuration
+        ? Math.min(300, Math.round(requestedTargetDuration))
+        : numericDuration;
+
       // Start video generation with Fal.ai (async)
       generateVideoAsync(operationId, directedPrompt, effectiveAspectRatio, duration, effectiveNegativePrompt, filename, req.user.id, inputImageUrls, resolvedModel, effectiveResolution, effectiveAudio, {
         originalPrompt: prompt,
         continuityMode,
         settingsLocked,
         preparedReferences,
+        targetDurationSeconds,
       })
         .catch((error) => {
           console.error(`❌ Unhandled video generation failure for ${operationId}:`, error);
@@ -1094,76 +1101,213 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
       //  deadline never fires; on a stall it throws into the existing
       //  catch → classifyFalVideoError → op marked 'failed', identical to any
       //  other provider error.
-      const subscribeTimeoutMs = Number(process.env.SIRAGPT_VIDEO_SUBSCRIBE_TIMEOUT_MS) || 600000;
-      const subscribeAbort = new AbortController();
-      let subscribeTimer = null;
-      const result = await Promise.race([
-        fal.subscribe(endpoint, {
-          input: requestPayload,
-          logs: true,
-          abortSignal: subscribeAbort.signal,
-          onQueueUpdate: (update) => {
-            let updateData = activeOperations.get(operationId) || {};
-            if (updateData.status === 'cancelled') return;
-            updateData.queuePosition = update.queue_position;
-            updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
-            updateData.updatedAt = new Date().toISOString();
-            activeOperations.set(operationId, updateData);
+      const clipSeconds = Number.parseInt(String(duration || '8'), 10) || 8;
+      const targetDurationSeconds = Number(opts.targetDurationSeconds);
+      const videoDurationPlanner = require('../services/video-duration-planner');
+      const segmentPlan = (Number.isFinite(targetDurationSeconds) && targetDurationSeconds > clipSeconds)
+        ? videoDurationPlanner.planVideoSegments({
+          targetDurationSeconds,
+          clipDurationSeconds: clipSeconds,
+          prompt,
+          isImageToVideo: processedImageUrls.length > 0,
+        })
+        : null;
 
-            // Log progress updates
-            if (update.logs) {
-              update.logs.forEach(log => {
-                console.log(`📊 ${operationId}: ${log.message}`);
-              });
+      let finalVideoBytes = null;
+      let lastVideoUrl = null;
+      let lastResultData = {};
+      let lastResultVideo = {};
+      let lastRequestId = null;
+      let achievedDurationLabel = duration;
+      let achievedSegments = 1;
+
+      if (segmentPlan && segmentPlan.isMultiSegment) {
+        const segmentBuffers = [];
+        let rollingImageUrls = [...processedImageUrls];
+        for (const seg of segmentPlan.segments) {
+          if (activeOperations.get(operationId)?.status === 'cancelled') {
+            console.log(`🛑 Multi-segment video cancelled at scene ${seg.index + 1}/${seg.total}: ${operationId}`);
+            return;
+          }
+          const progressData = activeOperations.get(operationId) || {};
+          progressData.segmentProgress = {
+            current: seg.index + 1,
+            total: seg.total,
+            plannedDurationSeconds: segmentPlan.plannedDurationSeconds,
+            phase: `Generando escena ${seg.index + 1} de ${seg.total}`,
+          };
+          progressData.updatedAt = new Date().toISOString();
+          activeOperations.set(operationId, progressData);
+
+          const segRouting = resolveFalVideoModelRequest(model, {
+            hasImage: rollingImageUrls.length > 0,
+            imageCount: rollingImageUrls.length,
+          });
+          const segEndpoint = segRouting.ok ? segRouting.endpoint : endpoint;
+          activeEndpoint = segEndpoint;
+          const segPayload = buildFalVideoInputPayload({
+            endpoint: segEndpoint,
+            prompt: seg.prompt,
+            aspectRatio,
+            duration,
+            negativePrompt,
+            imageUrl: rollingImageUrls[0] || null,
+            imageUrls: rollingImageUrls,
+            resolution,
+            audio,
+          });
+
+          const segTimeoutMs = Number(process.env.SIRAGPT_VIDEO_SUBSCRIBE_TIMEOUT_MS) || 600000;
+          const segAbort = new AbortController();
+          let segTimer = null;
+          let segResult;
+          try {
+            segResult = await Promise.race([
+              fal.subscribe(segEndpoint, {
+                input: segPayload,
+                logs: true,
+                abortSignal: segAbort.signal,
+                onQueueUpdate: (update) => {
+                  const updateData = activeOperations.get(operationId) || {};
+                  if (updateData.status === 'cancelled') return;
+                  updateData.queuePosition = update.queue_position;
+                  updateData.status = update.status === 'IN_PROGRESS' ? 'processing' : updateData.status;
+                  updateData.updatedAt = new Date().toISOString();
+                  activeOperations.set(operationId, updateData);
+                },
+              }),
+              new Promise((_resolve, reject) => {
+                segTimer = setTimeout(() => {
+                  try { segAbort.abort(); } catch { /* noop */ }
+                  reject(new Error(`fal.subscribe timed out after ${segTimeoutMs}ms`));
+                }, segTimeoutMs);
+                segTimer.unref?.();
+              }),
+            ]).finally(() => { if (segTimer) clearTimeout(segTimer); });
+          } catch (segErr) {
+            if (segmentBuffers.length > 0) {
+              console.warn(`⚠️ Scene ${seg.index + 1}/${seg.total} failed (${segErr?.message}); delivering ${segmentBuffers.length} completed scenes.`);
+              break;
             }
-          },
-        }),
-        new Promise((_resolve, reject) => {
-          subscribeTimer = setTimeout(() => {
-            try { subscribeAbort.abort(); } catch { /* noop */ }
-            reject(new Error(`fal.subscribe timed out after ${subscribeTimeoutMs}ms`));
-          }, subscribeTimeoutMs);
-          subscribeTimer.unref?.();
-        }),
-      ]).finally(() => { if (subscribeTimer) clearTimeout(subscribeTimer); });
+            throw segErr;
+          }
 
-      console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
-      if (activeOperations.get(operationId)?.status === 'cancelled') {
-        console.log(`🛑 Video generation result ignored because operation was cancelled: ${operationId}`);
-        return;
+          if (activeOperations.get(operationId)?.status === 'cancelled') return;
+          const segVideoUrl = extractFalVideoUrl(segResult);
+          if (!segVideoUrl) {
+            if (segmentBuffers.length > 0) break;
+            throw new Error('Invalid API response: Missing video URL');
+          }
+          const segResp = await fetch(segVideoUrl, { signal: AbortSignal.timeout(Number(process.env.VIDEO_FETCH_TIMEOUT_MS) || 120000) });
+          if (!segResp.ok) {
+            try { await segResp.body?.cancel?.(); } catch { /* noop */ }
+            if (segmentBuffers.length > 0) break;
+            throw new Error(`Failed to download video: ${segResp.status} ${segResp.statusText}`);
+          }
+          const segBytes = Buffer.from(await segResp.arrayBuffer());
+          segmentBuffers.push(segBytes);
+          lastVideoUrl = segVideoUrl;
+          lastResultData = segResult?.data || segResult || {};
+          lastResultVideo = lastResultData.video || {};
+          lastRequestId = segResult?.requestId || lastResultData.request_id || null;
+
+          // Chain next segment seamlessly from the exact last frame of this clip
+          if (seg.index + 1 < segmentPlan.segments.length) {
+            const lastFramePng = await videoDurationPlanner.extractLastFramePng(segBytes);
+            if (lastFramePng) {
+              try {
+                const uploadedFrameUrl = await fal.storage.upload(new Blob([lastFramePng], { type: 'image/png' }));
+                if (uploadedFrameUrl) rollingImageUrls = [uploadedFrameUrl];
+              } catch (frameUploadErr) {
+                console.warn('⚠️ Failed to upload last frame for chaining:', frameUploadErr?.message);
+              }
+            }
+          }
+        }
+
+        if (!segmentBuffers.length) {
+          throw new Error('No se pudo generar ninguna escena del video.');
+        }
+        achievedSegments = segmentBuffers.length;
+        finalVideoBytes = segmentBuffers.length > 1
+          ? await videoDurationPlanner.concatVideoBuffers(segmentBuffers)
+          : segmentBuffers[0];
+        achievedDurationLabel = `${achievedSegments * clipSeconds}s`;
+      } else {
+        const subscribeTimeoutMs = Number(process.env.SIRAGPT_VIDEO_SUBSCRIBE_TIMEOUT_MS) || 600000;
+        const subscribeAbort = new AbortController();
+        let subscribeTimer = null;
+        const result = await Promise.race([
+          fal.subscribe(endpoint, {
+            input: requestPayload,
+            logs: true,
+            abortSignal: subscribeAbort.signal,
+            onQueueUpdate: (update) => {
+              let updateData = activeOperations.get(operationId) || {};
+              if (updateData.status === 'cancelled') return;
+              updateData.queuePosition = update.queue_position;
+              updateData.status = update.status === "IN_PROGRESS" ? 'processing' : updateData.status;
+              updateData.updatedAt = new Date().toISOString();
+              activeOperations.set(operationId, updateData);
+
+              // Log progress updates
+              if (update.logs) {
+                update.logs.forEach(log => {
+                  console.log(`📊 ${operationId}: ${log.message}`);
+                });
+              }
+            },
+          }),
+          new Promise((_resolve, reject) => {
+            subscribeTimer = setTimeout(() => {
+              try { subscribeAbort.abort(); } catch { /* noop */ }
+              reject(new Error(`fal.subscribe timed out after ${subscribeTimeoutMs}ms`));
+            }, subscribeTimeoutMs);
+            subscribeTimer.unref?.();
+          }),
+        ]).finally(() => { if (subscribeTimer) clearTimeout(subscribeTimer); });
+
+        console.log(`✅ Fal.ai API response for ${operationId}:`, JSON.stringify(result, null, 2));
+        if (activeOperations.get(operationId)?.status === 'cancelled') {
+          console.log(`🛑 Video generation result ignored because operation was cancelled: ${operationId}`);
+          return;
+        }
+
+        const videoUrl = extractFalVideoUrl(result);
+        if (!videoUrl) {
+          throw new Error('Invalid API response: Missing video URL');
+        }
+
+        lastVideoUrl = videoUrl;
+        lastResultData = result?.data || result || {};
+        lastResultVideo = lastResultData.video || {};
+        lastRequestId = result.requestId || lastResultData.request_id || null;
+
+        // Download and save the video
+        console.log(`📥 Downloading video from: ${videoUrl}`);
+        const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(Number(process.env.VIDEO_FETCH_TIMEOUT_MS) || 120000) });
+        if (!resp.ok) {
+          // Drain the undici response body so the socket returns to the pool
+          // instead of leaking until GC across retries on a flaky CDN.
+          try { await resp.body?.cancel?.(); } catch { /* noop */ }
+          throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
+        }
+
+        finalVideoBytes = Buffer.from(await resp.arrayBuffer());
       }
 
-      const videoUrl = extractFalVideoUrl(result);
-      if (!videoUrl) {
-        throw new Error('Invalid API response: Missing video URL');
-      }
-
-      const resultData = result?.data || result || {};
-      const resultVideo = resultData.video || {};
-
-      // Download and save the video
-      console.log(`📥 Downloading video from: ${videoUrl}`);
-      const resp = await fetch(videoUrl, { signal: AbortSignal.timeout(Number(process.env.VIDEO_FETCH_TIMEOUT_MS) || 120000) });
-      if (!resp.ok) {
-        // Drain the undici response body so the socket returns to the pool
-        // instead of leaking until GC across retries on a flaky CDN.
-        try { await resp.body?.cancel?.(); } catch { /* noop */ }
-        throw new Error(`Failed to download video: ${resp.status} ${resp.statusText}`);
-      }
-
-      const videoBuffer = await resp.arrayBuffer();
-      const videoBytes = Buffer.from(videoBuffer);
+      const videoBytes = finalVideoBytes;
 
       // Store the generated video off the VM in R2 (key mirrors the filename so
       // /video/watch + /video/download serve it directly from R2). Falls back to
       // local disk only when R2 is disabled (dev without R2 secrets).
       if (objectStorage.enabled()) {
         await objectStorage.putBuffer({ key: objectStorage.videoKey(filename), buffer: videoBytes, contentType: 'video/mp4' });
-        console.log(`☁️ Video stored in R2: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
+        console.log(`☁️ Video stored in R2: ${filename} (${Math.round(videoBytes.byteLength / 1024 / 1024 * 100) / 100} MB)`);
       } else {
         ensureDir(videosDir);
         fs.writeFileSync(path.join(videosDir, filename), videoBytes);
-        console.log(`📁 Video saved successfully: ${filename} (${Math.round(videoBuffer.byteLength / 1024 / 1024 * 100) / 100} MB)`);
+        console.log(`📁 Video saved successfully: ${filename} (${Math.round(videoBytes.byteLength / 1024 / 1024 * 100) / 100} MB)`);
       }
 
       //  Update operation status to completed with enhanced metadata
@@ -1173,14 +1317,15 @@ async function generateVideoAsync(operationId, prompt, aspectRatio, duration, ne
         video_url: `/video/watch/${filename}`,
         download_url: `/video/download/${filename}`,
         filename,
-        duration,
-        file_size: videoBuffer.byteLength,
-        resolution: resultVideo.width && resultVideo.height ?
-          `${resultVideo.width}x${resultVideo.height}` : resolution,
+        duration: achievedDurationLabel,
+        ...(achievedSegments > 1 ? { segments: achievedSegments, targetDurationSeconds } : {}),
+        file_size: videoBytes.byteLength,
+        resolution: lastResultVideo.width && lastResultVideo.height ?
+          `${lastResultVideo.width}x${lastResultVideo.height}` : resolution,
         aspect_ratio: aspectRatio,
         audio: Boolean(audio),
-        fal_video_url: videoUrl,
-        request_id: result.requestId || resultData.request_id || null,
+        fal_video_url: lastVideoUrl,
+        request_id: lastRequestId,
         sourceImageUrl: sourceImageUrls[0] || null,
         sourceImageUrls,
         processedImageUrl,
