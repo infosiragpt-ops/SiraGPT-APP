@@ -1071,6 +1071,7 @@ const GeneratedImageCard = ({
             </div>
 
             <ImageActionMenu
+                preferOutsideRight
                 className="[@media(hover:hover)]:group-hover/image:opacity-100 focus-within:opacity-100"
                 image={{
                     id: String(resolvedFileId || `${messageId || "image"}:${src}`),

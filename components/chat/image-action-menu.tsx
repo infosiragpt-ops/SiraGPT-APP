@@ -46,13 +46,18 @@ export interface ImageActionMenuProps {
   image: ChatImageActionPayload
   onOpen?: () => void
   onDownload?: () => void | Promise<void>
+  /** When true (left-aligned assistant images), opens cleanly beside the right
+   *  edge of the image whenever viewport width permits so the photo stays
+   *  unobstructed. Falls back inside-right on narrow screens or wide images. */
+  preferOutsideRight?: boolean
   className?: string
 }
 
 type MenuPanel = "root" | "video" | "forward"
 
-export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageActionMenuProps) {
+export function ImageActionMenu({ image, onOpen, onDownload, preferOutsideRight = false, className }: ImageActionMenuProps) {
   const [open, setOpen] = React.useState(false)
+  const [openOutsideRight, setOpenOutsideRight] = React.useState(false)
   const [panel, setPanel] = React.useState<MenuPanel>("root")
   const [customValue, setCustomValue] = React.useState("30")
   const [customUnit, setCustomUnit] = React.useState<"seconds" | "minutes">("seconds")
@@ -267,14 +272,23 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
             event.stopPropagation()
             setOpen((prev) => {
               const next = !prev
-              if (!next) setPanel("root")
+              if (next) {
+                if (preferOutsideRight && typeof window !== "undefined" && triggerRef.current) {
+                  const rect = triggerRef.current.getBoundingClientRect()
+                  const scrollParent = triggerRef.current.closest("[data-radix-scroll-area-viewport], main")
+                  const parentRight = scrollParent?.getBoundingClientRect().right ?? 0
+                  const rightBound = parentRight > 0 ? Math.min(window.innerWidth, parentRight) : window.innerWidth
+                  setOpenOutsideRight(rect.right + 310 < rightBound)
+                } else {
+                  setOpenOutsideRight(false)
+                }
+              } else {
+                setPanel("root")
+              }
               return next
             })
           }}
-          className={cn(
-            "flex h-7 w-7 items-center justify-center rounded-full bg-zinc-950/65 text-white shadow-sm backdrop-blur-sm transition duration-150 hover:bg-zinc-950/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/90",
-            open && "bg-zinc-950/90",
-          )}
+          className="image-action-liquid-trigger flex h-8 w-8 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/90"
         >
           <ChevronDown className={cn("h-4 w-4 transition-transform duration-150", open && "rotate-180")} />
         </button>
@@ -284,7 +298,11 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
             role="menu"
             aria-label="Acciones para esta imagen"
             data-testid="image-action-menu"
-            className="absolute right-0 top-9 z-50 w-[268px] overflow-hidden rounded-2xl border border-zinc-200/90 bg-white/98 p-1.5 text-zinc-900 shadow-xl backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/98 dark:text-zinc-100"
+            data-placement={openOutsideRight ? "outside-right" : "inside-right"}
+            className={cn(
+              "image-action-liquid-menu absolute z-50 w-[276px] overflow-hidden rounded-[20px] p-1.5",
+              openOutsideRight ? "left-[calc(100%+18px)] top-0" : "right-0 top-10",
+            )}
           >
             {panel === "root" && (
               <div className="flex flex-col gap-0.5">
@@ -292,12 +310,14 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                   type="button"
                   role="menuitem"
                   onClick={handleReply}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <Reply className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <Reply className="h-3.5 w-3.5" />
+                  </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block font-medium leading-tight">Responder a esta imagen</span>
-                    <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">Llévala al chat para describir cambios</span>
+                    <span className="block font-medium leading-tight text-zinc-950 dark:text-zinc-50">Responder a esta imagen</span>
+                    <span className="block text-[11px] leading-snug text-zinc-600 dark:text-zinc-300">Llévala al chat para describir cambios</span>
                   </span>
                 </button>
 
@@ -305,12 +325,14 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                   type="button"
                   role="menuitem"
                   onClick={handlePrecisionEdit}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <Paintbrush className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <Paintbrush className="h-3.5 w-3.5" />
+                  </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block font-medium leading-tight">Editar algo en concreto</span>
-                    <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">Edición milimétrica con pincel o zona</span>
+                    <span className="block font-medium leading-tight text-zinc-950 dark:text-zinc-50">Editar algo en concreto</span>
+                    <span className="block text-[11px] leading-snug text-zinc-600 dark:text-zinc-300">Edición milimétrica con pincel o zona</span>
                   </span>
                 </button>
 
@@ -318,46 +340,52 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                   type="button"
                   role="menuitem"
                   onClick={() => setPanel("video")}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <Film className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-medium leading-tight">Convertir en video</span>
-                    <span className="block text-[11px] text-zinc-500 dark:text-zinc-400">Elige segundos o minutos</span>
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <Film className="h-3.5 w-3.5" />
                   </span>
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium leading-tight text-zinc-950 dark:text-zinc-50">Convertir en video</span>
+                    <span className="block text-[11px] leading-snug text-zinc-600 dark:text-zinc-300">Elige segundos o minutos</span>
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500 dark:text-zinc-400" />
                 </button>
 
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => setPanel("forward")}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <Forward className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  <span className="min-w-0 flex-1 font-medium leading-tight">Reenviar</span>
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <Forward className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="min-w-0 flex-1 font-medium leading-tight text-zinc-950 dark:text-zinc-50">Reenviar</span>
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500 dark:text-zinc-400" />
                 </button>
 
                 <button
                   type="button"
                   role="menuitem"
                   onClick={handleTogglePin}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 focus-visible:bg-zinc-100 focus-visible:outline-none dark:hover:bg-zinc-900 dark:focus-visible:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  {pinned ? (
-                    <PinOff className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  ) : (
-                    <Pin className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  )}
-                  <span className="min-w-0 flex-1 font-medium leading-tight">
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    {pinned ? (
+                      <PinOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Pin className="h-3.5 w-3.5" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1 font-medium leading-tight text-zinc-950 dark:text-zinc-50">
                     {pinned ? "Desfijar imagen" : "Fijar imagen"}
                   </span>
                 </button>
 
-                <div className="my-1 border-t border-zinc-100 dark:border-zinc-800/80" />
+                <div className="image-action-liquid-sep" />
 
-                <div className="grid grid-cols-2 gap-1">
+                <div className="grid grid-cols-2 gap-1 px-0.5 pt-0.5">
                   {onOpen && (
                     <button
                       type="button"
@@ -366,7 +394,7 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                         closeMenu()
                         onOpen()
                       }}
-                      className="flex items-center justify-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900"
+                      className="image-action-liquid-item flex items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium text-zinc-900 dark:text-zinc-100 focus-visible:outline-none"
                     >
                       <Maximize2 className="h-3.5 w-3.5" />
                       <span>Ampliar</span>
@@ -377,7 +405,7 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                     role="menuitem"
                     onClick={() => void handleDownload()}
                     className={cn(
-                      "flex items-center justify-center gap-1.5 rounded-xl px-2 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900",
+                      "image-action-liquid-item flex items-center justify-center gap-1.5 rounded-xl px-2 py-2 text-xs font-medium text-zinc-900 dark:text-zinc-100 focus-visible:outline-none",
                       !onOpen && "col-span-2",
                     )}
                   >
@@ -393,7 +421,7 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                 <button
                   type="button"
                   onClick={() => setPanel("root")}
-                  className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                  className="image-action-liquid-item flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs font-medium text-zinc-600 dark:text-zinc-300"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                   <span>Duración del video</span>
@@ -405,15 +433,15 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                       key={preset.seconds}
                       type="button"
                       onClick={() => handleConvertToVideo(preset.seconds)}
-                      className="rounded-lg border border-zinc-200 bg-zinc-50/70 px-1.5 py-1.5 text-center text-[12px] font-medium tabular-nums text-zinc-800 transition hover:border-zinc-900 hover:bg-zinc-900 hover:text-white dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:border-white dark:hover:bg-white dark:hover:text-zinc-950"
+                      className="rounded-lg border border-zinc-200/90 bg-white/80 px-1.5 py-1.5 text-center text-[12px] font-medium tabular-nums text-zinc-900 shadow-xs transition hover:border-zinc-900 hover:bg-zinc-900 hover:text-white dark:border-zinc-700/80 dark:bg-zinc-900/80 dark:text-zinc-100 dark:hover:border-white dark:hover:bg-white dark:hover:text-zinc-950"
                     >
                       {preset.label}
                     </button>
                   ))}
                 </div>
 
-                <form onSubmit={handleCustomVideoSubmit} className="mt-0.5 flex flex-col gap-1.5 border-t border-zinc-100 pt-2 dark:border-zinc-800">
-                  <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Duración personalizada (hasta 5 min)</span>
+                <form onSubmit={handleCustomVideoSubmit} className="mt-0.5 flex flex-col gap-1.5 border-t border-zinc-200/70 pt-2 dark:border-zinc-800">
+                  <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400">Duración personalizada (hasta 5 min)</span>
                   <div className="flex items-center gap-1">
                     <input
                       type="number"
@@ -423,9 +451,9 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                       value={customValue}
                       aria-label="Duración personalizada del video"
                       onChange={(event) => setCustomValue(event.target.value)}
-                      className="h-8 w-16 rounded-lg border border-zinc-200 bg-white px-2 text-xs tabular-nums outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-white"
+                      className="h-8 w-16 rounded-lg border border-zinc-300/90 bg-white px-2 text-xs tabular-nums text-zinc-900 outline-none focus:border-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-white"
                     />
-                    <div className="inline-flex h-8 rounded-lg border border-zinc-200 p-0.5 text-[11px] dark:border-zinc-700">
+                    <div className="inline-flex h-8 rounded-lg border border-zinc-300/90 bg-white/80 p-0.5 text-[11px] dark:border-zinc-700 dark:bg-zinc-900/80">
                       <button
                         type="button"
                         onClick={() => {
@@ -434,7 +462,7 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                         }}
                         className={cn(
                           "rounded-md px-2 font-medium transition",
-                          customUnit === "seconds" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-950" : "text-zinc-500",
+                          customUnit === "seconds" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-950" : "text-zinc-600 dark:text-zinc-400",
                         )}
                       >
                         seg
@@ -447,7 +475,7 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                         }}
                         className={cn(
                           "rounded-md px-2 font-medium transition",
-                          customUnit === "minutes" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-950" : "text-zinc-500",
+                          customUnit === "minutes" ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-950" : "text-zinc-600 dark:text-zinc-400",
                         )}
                       >
                         min
@@ -469,7 +497,7 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                 <button
                   type="button"
                   onClick={() => setPanel("root")}
-                  className="mb-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-zinc-100"
+                  className="image-action-liquid-item mb-0.5 flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-zinc-600 dark:text-zinc-300"
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                   <span>Reenviar imagen</span>
@@ -482,10 +510,12 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                     closeMenu()
                     dispatchImageForward({ ...image, mode: "new-chat" })
                   }}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <MessageSquarePlus className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  <span className="font-medium">Nuevo chat con esta imagen</span>
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <MessageSquarePlus className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">Nuevo chat con esta imagen</span>
                 </button>
 
                 <button
@@ -495,30 +525,36 @@ export function ImageActionMenu({ image, onOpen, onDownload, className }: ImageA
                     closeMenu()
                     dispatchImageForward({ ...image, mode: "pick-chat" })
                   }}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <Send className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  <span className="font-medium">Enviar a otro chat…</span>
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <Send className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">Enviar a otro chat…</span>
                 </button>
 
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => void handleCopyImage()}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  {copied ? <Check className="h-4 w-4 shrink-0 text-emerald-600" /> : <Copy className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />}
-                  <span className="font-medium">Copiar imagen</span>
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">Copiar imagen</span>
                 </button>
 
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => void handleNativeShare()}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] transition hover:bg-zinc-100 dark:hover:bg-zinc-900"
+                  className="image-action-liquid-item flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left text-[13px] focus-visible:outline-none"
                 >
-                  <Share2 className="h-4 w-4 shrink-0 text-zinc-600 dark:text-zinc-300" />
-                  <span className="font-medium">Compartir…</span>
+                  <span className="image-action-liquid-icon" aria-hidden="true">
+                    <Share2 className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="font-medium text-zinc-900 dark:text-zinc-50">Compartir…</span>
                 </button>
               </div>
             )}
